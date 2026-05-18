@@ -74,8 +74,14 @@ final class ConfigLoader {
             throw ConfigError.fileNotFound
         }
         let content = try String(contentsOf: configFile, encoding: .utf8)
-        let raw = try Yams.load(yaml: content)
-        return try parseProject(from: raw)
+        do {
+            let raw = try Yams.load(yaml: content)
+            return try parseProject(from: raw)
+        } catch let e as ConfigError {
+            throw e
+        } catch {
+            throw ConfigError.parseError(error.localizedDescription)
+        }
     }
 
     /// 将项目配置序列化并写入磁盘。
@@ -101,7 +107,9 @@ final class ConfigLoader {
         guard let dict = raw as? [String: Any] else {
             throw ConfigError.parseError("Root must be a mapping")
         }
-        let name = dict["name"] as? String ?? "Unnamed"
+        guard let name = dict["name"] as? String else {
+            throw ConfigError.parseError("Project missing required field 'name'")
+        }
         let rawServices = dict["services"] as? [[String: Any]] ?? []
         let services = try rawServices.map { try parseService(from: $0) }
         return Project(name: name, rootPath: rootPath, services: services)
@@ -122,7 +130,9 @@ final class ConfigLoader {
         let required = dict["required"] as? Bool ?? false
         let envFile = dict["env_file"] as? String
         // env 的值可能是任意 scalar 类型，统一转为 String
-        let env = (dict["env"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
+        let env = (dict["env"] as? [String: Any])?.reduce(into: [String: String]()) { result, pair in
+            result[pair.key] = "\(pair.value)"
+        } ?? [:]
         return Service(
             name: name,
             command: command,
