@@ -57,7 +57,12 @@ final class LaunchJsonImporter {
             throw ImportError.fileNotFound
         }
 
-        let data = try Data(contentsOf: launchFile)
+        let data: Data
+        do {
+            data = try Data(contentsOf: launchFile)
+        } catch {
+            throw ImportError.fileNotFound
+        }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let configs = json["configurations"] as? [[String: Any]] else {
