@@ -115,10 +115,19 @@ final class LaunchJsonImporter {
             return args.isEmpty ? runtime : "\(runtime) \(args)"
         }
 
-        // go/python 类型：program + args
-        if let program = config["program"] as? String {
+        // go 类型：用 go run . 替代 program 路径
+        if let type = config["type"] as? String, type == "go" {
             let args = (config["args"] as? [String] ?? []).joined(separator: " ")
-            return args.isEmpty ? program : "\(program) \(args)"
+            return args.isEmpty ? "go run ." : "go run . \(args)"
+        }
+
+        // python 等其他类型：program + args
+        if let program = config["program"] as? String {
+            let resolvedProgram = program
+                .replacingOccurrences(of: "${workspaceFolder}/", with: "./")
+                .replacingOccurrences(of: "${workspaceFolder}", with: ".")
+            let args = (config["args"] as? [String] ?? []).joined(separator: " ")
+            return args.isEmpty ? resolvedProgram : "\(resolvedProgram) \(args)"
         }
 
         return "echo 'unknown command'"

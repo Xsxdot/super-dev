@@ -2,9 +2,9 @@ import SwiftUI
 
 struct PopoverView: View {
     @EnvironmentObject var core: AppCore
+    @EnvironmentObject var menuBarManager: MenuBarManager
     @State private var hoveredProjectId: UUID?
     @State private var selectedServiceIds: Set<UUID> = []
-
     var body: some View {
         HStack(spacing: 0) {
             projectList
@@ -240,11 +240,11 @@ struct PopoverView: View {
     }
 
     private func openMainWindow() {
-        NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
+        menuBarManager.openMainWindow()
     }
 
     private func openAddProject() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        menuBarManager.openSettingsWindow()
     }
 
     private func statusColor(_ status: ServiceStatus) -> Color {
