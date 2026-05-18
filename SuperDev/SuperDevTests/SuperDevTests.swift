@@ -155,4 +155,21 @@ final class LaunchJsonImporterTests: XCTestCase {
             }
         }
     }
+
+    func test_import_throwsInvalidFormatForBadJson() throws {
+        let vscodeDir = tempDir.appendingPathComponent(".vscode")
+        try FileManager.default.createDirectory(at: vscodeDir, withIntermediateDirectories: true)
+        // Valid JSON but missing "configurations" key
+        let json = #"{"version": "0.2.0"}"#
+        try json.write(to: vscodeDir.appendingPathComponent("launch.json"), atomically: true, encoding: .utf8)
+
+        let importer = LaunchJsonImporter(rootPath: tempDir.path)
+        XCTAssertThrowsError(try importer.importServices()) { error in
+            if case LaunchJsonImporter.ImportError.invalidFormat = error {
+                // correct
+            } else {
+                XCTFail("Expected .invalidFormat, got \(error)")
+            }
+        }
+    }
 }
