@@ -16,6 +16,10 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXBuildFile section */
+		9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9B2FBAF96A00256B7F /* GRDB */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		9AE584F22FBAF3EA0089B98E /* SuperDev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SuperDev.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AE585042FBAF4360089B98E /* SuperDevTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SuperDevTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -39,6 +43,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -90,6 +95,7 @@
 			);
 			name = SuperDev;
 			packageProductDependencies = (
+				9AD0DC9B2FBAF96A00256B7F /* GRDB */,
 			);
 			productName = SuperDev;
 			productReference = 9AE584F22FBAF3EA0089B98E /* SuperDev.app */;
@@ -146,6 +152,10 @@
 			);
 			mainGroup = 9AE584E92FBAF3EA0089B98E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */,
+				9AD0DC992FBAF97A00256B7F /* XCLocalSwiftPackageReference "../../temp/Yams" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9AE584F32FBAF3EA0089B98E /* Products */;
 			projectDirPath = "";
@@ -447,6 +457,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9AD0DC9B2FBAF96A00256B7F /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../temp/GRDB.swift;
+		};
+		9AD0DC992FBAF97A00256B7F /* XCLocalSwiftPackageReference "../../temp/Yams" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../temp/Yams;
+		};
+/* End XCLocalSwiftPackageReference section */
 	};
 	rootObject = 9AE584EA2FBAF3EA0089B98E /* Project object */;
 }
