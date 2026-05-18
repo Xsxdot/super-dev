@@ -86,3 +86,73 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(reloaded.services[0].name, "svc")
     }
 }
+
+@MainActor
+final class LaunchJsonImporterTests: XCTestCase {
+
+    var tempDir: URL!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    func test_import_convertsConfigurations() throws {
+        let json = """
+        {
+            "version": "0.2.0",
+            "configurations": [
+                {
+                    "name": "Launch API",
+                    "type": "go",
+                    "request": "launch",
+                    "program": "./cmd/api",
+                    "args": ["--port", "8080"],
+                    "cwd": "${workspaceFolder}",
+                    "env": {
+                        "LOG_LEVEL": "debug"
+                    }
+                },
+                {
+                    "name": "Launch Web",
+                    "type": "node",
+                    "request": "launch",
+                    "runtimeExecutable": "pnpm",
+                    "runtimeArgs": ["dev"],
+                    "cwd": "${workspaceFolder}/web"
+                }
+            ]
+        }
+        """
+        let vscodeDir = tempDir.appendingPathComponent(".vscode")
+        try FileManager.default.createDirectory(at: vscodeDir, withIntermediateDirectories: true)
+        try json.write(to: vscodeDir.appendingPathComponent("launch.json"), atomically: true, encoding: .utf8)
+
+        let importer = LaunchJsonImporter(rootPath: tempDir.path)
+        let services = try importer.importServices()
+
+        XCTAssertEqual(services.count, 2)
+        XCTAssertEqual(services[0].name, "Launch API")
+        XCTAssertTrue(services[0].command.contains("./cmd/api"))
+        XCTAssertEqual(services[0].env["LOG_LEVEL"], "debug")
+        XCTAssertEqual(services[1].name, "Launch Web")
+    }
+
+    func test_import_throwsWhenFileAbsent() {
+        let importer = LaunchJsonImporter(rootPath: tempDir.path)
+        XCTAssertThrowsError(try importer.importServices()) { error in
+            if case LaunchJsonImporter.ImportError.fileNotFound = error {
+                // correct
+            } else {
+                XCTFail("Expected .fileNotFound, got \(error)")
+            }
+        }
+    }
+}
