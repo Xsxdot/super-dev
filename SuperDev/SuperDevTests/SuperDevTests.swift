@@ -173,3 +173,62 @@ final class LaunchJsonImporterTests: XCTestCase {
         }
     }
 }
+
+final class ProcessRunnerTests: XCTestCase {
+
+    func test_run_capturesStdout() async throws {
+        var received: [String] = []
+        let lock = NSLock()
+        let tmpDir = FileManager.default.temporaryDirectory
+        let runner = ProcessRunner(
+            command: "echo hello",
+            workingDir: tmpDir.path,
+            env: [:]
+        ) { line in
+            lock.lock()
+            received.append(line)
+            lock.unlock()
+        }
+        try runner.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue(received.contains(where: { $0.contains("hello") }))
+    }
+
+    func test_run_canBeStopped() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let runner = ProcessRunner(
+            command: "sleep 60",
+            workingDir: tmpDir.path,
+            env: [:]
+        ) { _ in }
+        try runner.start()
+        XCTAssertTrue(runner.isRunning)
+        runner.stop()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(runner.isRunning)
+    }
+
+    func test_run_mergesEnvFile() async throws {
+        let envContent = "TEST_KEY=from_file\n"
+        let tmpDir = FileManager.default.temporaryDirectory
+        let envFileURL = tmpDir.appendingPathComponent("superdev_test_\(UUID().uuidString).env")
+        try envContent.write(to: envFileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: envFileURL) }
+
+        var received: [String] = []
+        let lock = NSLock()
+        let runner = ProcessRunner(
+            command: "sh -c 'echo $TEST_KEY'",
+            workingDir: tmpDir.path,
+            env: [:],
+            envFile: envFileURL.path
+        ) { line in
+            lock.lock()
+            received.append(line)
+            lock.unlock()
+        }
+        try runner.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue(received.contains(where: { $0.contains("from_file") }))
+    }
+}
