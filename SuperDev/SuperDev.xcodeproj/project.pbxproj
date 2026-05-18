@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9B2FBAF96A00256B7F /* GRDB */; };
+		9AD0DC9C2FBAF97A00256B7F /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9D2FBAF97A00256B7F /* Yams */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		9AE585082FBAF4360089B98E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -15,10 +20,6 @@
 			remoteInfo = SuperDev;
 		};
 /* End PBXContainerItemProxy section */
-
-/* Begin PBXBuildFile section */
-		9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9B2FBAF96A00256B7F /* GRDB */; };
-/* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		9AE584F22FBAF3EA0089B98E /* SuperDev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SuperDev.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -44,6 +45,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */,
+				9AD0DC9C2FBAF97A00256B7F /* Yams in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +98,7 @@
 			name = SuperDev;
 			packageProductDependencies = (
 				9AD0DC9B2FBAF96A00256B7F /* GRDB */,
+				9AD0DC9D2FBAF97A00256B7F /* Yams */,
 			);
 			productName = SuperDev;
 			productReference = 9AE584F22FBAF3EA0089B98E /* SuperDev.app */;
@@ -458,14 +461,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		9AD0DC9B2FBAF96A00256B7F /* GRDB */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */;
-			productName = GRDB;
-		};
-/* End XCSwiftPackageProductDependency section */
-
 /* Begin XCLocalSwiftPackageReference section */
 		9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -476,6 +471,19 @@
 			relativePath = ../../temp/Yams;
 		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9AD0DC9B2FBAF96A00256B7F /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */;
+			productName = GRDB;
+		};
+		9AD0DC9D2FBAF97A00256B7F /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9AD0DC992FBAF97A00256B7F /* XCLocalSwiftPackageReference "../../temp/Yams" */;
+			productName = Yams;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9AE584EA2FBAF3EA0089B98E /* Project object */;
 }
