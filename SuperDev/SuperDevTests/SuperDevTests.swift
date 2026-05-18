@@ -61,7 +61,11 @@ final class ConfigLoaderTests: XCTestCase {
     func test_load_throwsWhenConfigMissing() {
         let loader = ConfigLoader(rootPath: tempDir.path)
         XCTAssertThrowsError(try loader.load()) { error in
-            XCTAssertTrue(error is ConfigLoader.ConfigError)
+            if case ConfigLoader.ConfigError.fileNotFound = error {
+                // correct
+            } else {
+                XCTFail("Expected .fileNotFound, got \(error)")
+            }
         }
     }
 
