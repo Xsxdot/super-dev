@@ -60,6 +60,11 @@ final class ProcessRunner {
         self.process = process
 
         try process.run()
+
+        process.terminationHandler = { [weak self] _ in
+            self?.outputPipe?.fileHandleForReading.readabilityHandler = nil
+            self?.errorPipe?.fileHandleForReading.readabilityHandler = nil
+        }
     }
 
     func stop() {
