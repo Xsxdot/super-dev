@@ -22,7 +22,7 @@ struct Project: Identifiable, Codable, Equatable {
     }
 }
 
-enum ProjectStatus {
+enum ProjectStatus: Equatable {
     case stopped, starting, running, failed
 }
 
@@ -34,7 +34,12 @@ struct Service: Identifiable, Codable, Equatable {
     var required: Bool
     var envFile: String?
     var env: [String: String]
-    var status: ServiceStatus
+    var status: ServiceStatus = .stopped  // not persisted
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, command, workingDir, required, envFile, env
+        // status is intentionally excluded
+    }
 
     init(
         id: UUID = UUID(),

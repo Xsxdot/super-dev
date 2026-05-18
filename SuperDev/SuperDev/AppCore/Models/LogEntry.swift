@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 struct LogEntry: Identifiable, Codable, FetchableRecord, PersistableRecord {
-    var id: UUID
+    let id: UUID
     var timestamp: Date
     var serviceId: UUID
     var serviceName: String
