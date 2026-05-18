@@ -54,3 +54,41 @@ enum LogLevel: String, Codable, CaseIterable {
         }
     }
 }
+
+extension LogEntry {
+    enum Columns {
+        static let id = Column("id")
+        static let timestamp = Column("timestamp")
+        static let serviceId = Column("service_id")
+        static let serviceName = Column("service_name")
+        static let level = Column("level")
+        static let message = Column("message")
+        static let normalizedMessage = Column("normalized_message")
+        static let runId = Column("run_id")
+        static let repeatCount = Column("repeat_count")
+    }
+
+    init(row: Row) throws {
+        id = UUID(uuidString: row[Columns.id]) ?? UUID()
+        timestamp = row[Columns.timestamp]
+        serviceId = UUID(uuidString: row[Columns.serviceId]) ?? UUID()
+        serviceName = row[Columns.serviceName]
+        level = LogLevel(rawValue: row[Columns.level]) ?? .unknown
+        message = row[Columns.message]
+        normalizedMessage = row[Columns.normalizedMessage]
+        runId = UUID(uuidString: row[Columns.runId]) ?? UUID()
+        repeatCount = row[Columns.repeatCount]
+    }
+
+    func encode(to container: inout PersistenceContainer) throws {
+        container[Columns.id] = id.uuidString
+        container[Columns.timestamp] = timestamp
+        container[Columns.serviceId] = serviceId.uuidString
+        container[Columns.serviceName] = serviceName
+        container[Columns.level] = level.rawValue
+        container[Columns.message] = message
+        container[Columns.normalizedMessage] = normalizedMessage
+        container[Columns.runId] = runId.uuidString
+        container[Columns.repeatCount] = repeatCount
+    }
+}
