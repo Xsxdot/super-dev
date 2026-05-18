@@ -85,6 +85,13 @@ final class ProcessRunner {
 
     private func buildEnvironment() -> [String: String] {
         var result = ProcessInfo.processInfo.environment
+        // App 启动时 PATH 不含开发工具路径，手动补全常见位置
+        let devPaths = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/go/bin"]
+        let currentPath = result["PATH"] ?? "/usr/bin:/bin"
+        let extraPaths = devPaths.filter { !currentPath.contains($0) }.joined(separator: ":")
+        if !extraPaths.isEmpty {
+            result["PATH"] = extraPaths + ":" + currentPath
+        }
         if let envFile = envFile {
             loadEnvFile(envFile).forEach { result[$0] = $1 }
         }
