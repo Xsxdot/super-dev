@@ -27,7 +27,6 @@ struct SettingsView: View {
         NavigationSplitView {
             List(SettingsTab.allCases, selection: $selectedTab) { tab in
                 Label(tab.rawValue, systemImage: tab.icon)
-                    .tag(tab)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 140, ideal: 150, max: 160)
@@ -47,7 +46,7 @@ struct SettingsView: View {
         .onAppear {
             retentionDays = core.logRetentionDays
         }
-        .frame(width: 600, height: 420)
+        .frame(minWidth: 600, maxWidth: 600, minHeight: 420)
         .sheet(isPresented: $showAddProject) {
             AddProjectView().environmentObject(core)
         }
@@ -115,7 +114,6 @@ struct SettingsView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
-            Spacer(minLength: 0)
         }
         .background(Theme.bgPrimary)
     }
@@ -153,7 +151,6 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.bgPrimary)
     }
 
