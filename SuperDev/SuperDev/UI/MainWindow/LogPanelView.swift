@@ -129,6 +129,14 @@ struct LogPanelView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: !isFollowing && newLogCount > 0)
+            .onChange(of: enabledLevels) { _, _ in
+                isFollowing = true
+                newLogCount = 0
+            }
+            .onChange(of: keyword) { _, _ in
+                isFollowing = true
+                newLogCount = 0
+            }
         }
     }
 
