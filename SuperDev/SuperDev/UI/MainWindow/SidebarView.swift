@@ -2,16 +2,21 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var core: AppCore
+    @Binding var layout: PanelLayout
+    @Binding var focusedPanelId: UUID?
+
     @State private var hoveredServiceId: UUID?
 
     var body: some View {
         List {
             ForEach(core.projects) { project in
-                Section(project.name) {
+                Section {
                     ForEach(project.services) { service in
                         serviceRow(service: service, project: project)
                             .draggable(service.id.uuidString)
                     }
+                } header: {
+                    projectHeader(project: project)
                 }
             }
         }
@@ -20,9 +25,25 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
+    private func projectHeader(project: Project) -> some View {
+        let selected = isProjectSelected(project)
+        Text(project.name)
+            .font(.system(size: 12, weight: .semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .padding(.vertical, 2)
+            .background(selected ? Theme.accent.opacity(0.15) : Color.clear)
+            .cornerRadius(4)
+            .onTapGesture {
+                selectProject(project)
+            }
+    }
+
+    @ViewBuilder
     private func serviceRow(service: Service, project: Project) -> some View {
         let status = serviceStatus(service.id, in: project.id) ?? service.status
         let isHovered = hoveredServiceId == service.id
+        let selected = isServiceSelected(service)
 
         ZStack(alignment: .leading) {
             HStack(spacing: 8) {
@@ -46,6 +67,10 @@ struct SidebarView: View {
             }
         }
         .contentShape(Rectangle())
+        .listRowBackground(selected ? Theme.accent.opacity(0.12) : Color.clear)
+        .onTapGesture {
+            selectService(service, in: project)
+        }
         .onHover { hovering in
             if hovering {
                 hoveredServiceId = service.id
@@ -54,6 +79,39 @@ struct SidebarView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: hoveredServiceId)
+    }
+
+    private func targetPanelId() -> UUID? {
+        if let focused = focusedPanelId, layout.allLeafIds.contains(focused) {
+            return focused
+        }
+        return layout.allLeafIds.first
+    }
+
+    private func selectService(_ service: Service, in project: Project) {
+        guard let panelId = targetPanelId() else { return }
+        layout.replaceScope(panelId: panelId, serviceId: service.id, projectId: project.id)
+        focusedPanelId = panelId
+        core.returnToLiveLogs()
+    }
+
+    private func selectProject(_ project: Project) {
+        guard let panelId = targetPanelId() else { return }
+        layout.replaceScope(panelId: panelId, serviceId: nil, projectId: project.id)
+        focusedPanelId = panelId
+        core.returnToLiveLogs()
+    }
+
+    private func isServiceSelected(_ service: Service) -> Bool {
+        guard let panelId = focusedPanelId ?? layout.allLeafIds.first,
+              let scope = layout.leafScope(panelId: panelId) else { return false }
+        return scope.serviceId == service.id
+    }
+
+    private func isProjectSelected(_ project: Project) -> Bool {
+        guard let panelId = focusedPanelId ?? layout.allLeafIds.first,
+              let scope = layout.leafScope(panelId: panelId) else { return false }
+        return scope.serviceId == nil && scope.projectId == project.id
     }
 
     @ViewBuilder

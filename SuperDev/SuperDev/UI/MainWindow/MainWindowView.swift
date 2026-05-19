@@ -11,15 +11,20 @@ import SwiftUI
 
 struct MainWindowView: View {
     @EnvironmentObject var core: AppCore
-    @State private var layout: PanelLayout = .leaf(id: UUID(), serviceId: nil)
+    @State private var layout: PanelLayout = .leaf(id: UUID(), serviceId: nil, projectId: nil)
+    @State private var focusedPanelId: UUID?
 
     var body: some View {
         NavigationSplitView {
-            SidebarView()
+            SidebarView(layout: $layout, focusedPanelId: $focusedPanelId)
         } detail: {
-            PanelLayoutView(layout: $layout)
+            PanelLayoutView(layout: $layout, focusedPanelId: $focusedPanelId)
                 .onChange(of: layout) { _, newLayout in
                     pruneOrphanBookmarks(layout: newLayout)
+                    ensureFocusedPanel(in: newLayout)
+                }
+                .onAppear {
+                    ensureFocusedPanel(in: layout)
                 }
         }
         .navigationTitle("SuperDev")
@@ -32,5 +37,12 @@ struct MainWindowView: View {
         for panelId in core.bookmarks.keys where !activeIds.contains(panelId) {
             core.clearBookmark(panelId: panelId)
         }
+    }
+
+    private func ensureFocusedPanel(in layout: PanelLayout) {
+        let ids = layout.allLeafIds
+        guard !ids.isEmpty else { return }
+        if let focused = focusedPanelId, ids.contains(focused) { return }
+        focusedPanelId = ids.first
     }
 }

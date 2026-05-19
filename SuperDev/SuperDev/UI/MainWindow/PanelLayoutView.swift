@@ -13,6 +13,7 @@ import SwiftUI
 struct PanelLayoutView: View {
     @EnvironmentObject var core: AppCore
     @Binding var layout: PanelLayout
+    @Binding var focusedPanelId: UUID?
 
     var body: some View {
         layoutView(node: $layout, onClose: nil)
@@ -25,11 +26,10 @@ struct PanelLayoutView: View {
         switch node.wrappedValue {
         case .leaf:
             return AnyView(
-                LeafPanelView(layout: node, onClose: onClose)
+                LeafPanelView(layout: node, focusedPanelId: $focusedPanelId, onClose: onClose)
                     .environmentObject(core)
             )
         case .split(_, let axis, _, _, _):
-            // 子节点关闭时，将父 split 节点替换为另一个孩子（兄弟提升）
             let closeFirst: () -> Void = {
                 if case .split(_, _, _, _, let sibling) = node.wrappedValue {
                     node.wrappedValue = sibling
@@ -89,7 +89,6 @@ struct PanelLayoutView: View {
 
 // MARK: - LeafPanelView
 
-// DropEdge 显式枚举所有情况，center 不再用 Optional nil 表示，避免 nil==nil 误高亮
 private enum DropEdge: Equatable {
     case left, right, top, bottom, center
 }
@@ -97,56 +96,65 @@ private enum DropEdge: Equatable {
 private struct LeafPanelView: View {
     @EnvironmentObject var core: AppCore
     @Binding var layout: PanelLayout
-    /// 父节点提供的关闭回调；nil 时隐藏关闭按钮（单面板根节点不可关闭）
+    @Binding var focusedPanelId: UUID?
     let onClose: (() -> Void)?
     @State private var dropHighlight: DropEdge? = nil
 
     private var panelId: UUID {
-        if case .leaf(let id, _) = layout { return id }
+        if case .leaf(let id, _, _) = layout { return id }
         return UUID()
     }
 
     private var serviceId: UUID? {
-        if case .leaf(_, let sid) = layout { return sid }
+        if case .leaf(_, let sid, _) = layout { return sid }
+        return nil
+    }
+
+    private var projectId: UUID? {
+        if case .leaf(_, _, let pid) = layout { return pid }
         return nil
     }
 
     private var project: Project? {
-        core.project(forServiceId: serviceId)
+        if let projectId, let p = core.project(id: projectId) { return p }
+        return core.project(forServiceId: serviceId)
     }
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
                 panelHeader
-                LogPanelView(panelId: panelId, serviceId: serviceId, project: project)
-                    .environmentObject(core)
+                LogPanelView(
+                    panelId: panelId,
+                    serviceId: serviceId,
+                    projectId: projectId,
+                    project: project
+                )
+                .environmentObject(core)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                focusedPanelId = panelId
             }
 
-            // 拖放覆盖层
             GeometryReader { geo in
                 let w = geo.size.width
                 let h = geo.size.height
                 let edgeFraction: CGFloat = 0.20
 
                 ZStack {
-                    // 左边缘
                     dropZone(edge: .left)
                         .frame(width: w * edgeFraction, height: h)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    // 右边缘
                     dropZone(edge: .right)
                         .frame(width: w * edgeFraction, height: h)
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                    // 上边缘
                     dropZone(edge: .top)
                         .frame(width: w, height: h * edgeFraction)
                         .frame(maxHeight: .infinity, alignment: .top)
-                    // 下边缘
                     dropZone(edge: .bottom)
                         .frame(width: w, height: h * edgeFraction)
                         .frame(maxHeight: .infinity, alignment: .bottom)
-                    // 中心（替换服务）
                     dropZone(edge: .center)
                         .frame(width: w * 0.6, height: h * 0.6)
                 }
@@ -176,11 +184,15 @@ private struct LeafPanelView: View {
     }
 
     private var headerTitle: String {
-        guard let sid = serviceId else { return "未选择" }
-        for project in core.projects {
-            if let svc = project.services.first(where: { $0.id == sid }) {
-                return svc.name
+        if let sid = serviceId {
+            for project in core.projects {
+                if let svc = project.services.first(where: { $0.id == sid }) {
+                    return svc.name
+                }
             }
+        }
+        if let project {
+            return "\(project.name) · 全部服务"
         }
         return "未选择"
     }
@@ -188,7 +200,6 @@ private struct LeafPanelView: View {
     @ViewBuilder
     private func dropZone(edge: DropEdge) -> some View {
         let isHighlighted = dropHighlight == edge
-        // contentShape 让 drop 可命中，allowsHitTesting 只在高亮时开启，平时让点击穿透
         Color.clear
             .contentShape(Rectangle())
             .allowsHitTesting(isHighlighted)
@@ -216,18 +227,29 @@ private struct LeafPanelView: View {
     }
 
     private func handleDrop(serviceId droppedId: UUID, edge: DropEdge) {
-        guard case .leaf(let id, _) = layout else { return }
+        guard case .leaf(let id, _, _) = layout else { return }
+        let droppedProjectId = core.project(forServiceId: droppedId)?.id
         switch edge {
         case .left:
-            layout.splitLeaf(id: id, axis: .horizontal, newServiceId: droppedId, newSide: .first)
+            layout.splitLeaf(
+                id: id, axis: .horizontal, newServiceId: droppedId, newProjectId: droppedProjectId, newSide: .first
+            )
         case .right:
-            layout.splitLeaf(id: id, axis: .horizontal, newServiceId: droppedId, newSide: .second)
+            layout.splitLeaf(
+                id: id, axis: .horizontal, newServiceId: droppedId, newProjectId: droppedProjectId, newSide: .second
+            )
         case .top:
-            layout.splitLeaf(id: id, axis: .vertical, newServiceId: droppedId, newSide: .first)
+            layout.splitLeaf(
+                id: id, axis: .vertical, newServiceId: droppedId, newProjectId: droppedProjectId, newSide: .first
+            )
         case .bottom:
-            layout.splitLeaf(id: id, axis: .vertical, newServiceId: droppedId, newSide: .second)
+            layout.splitLeaf(
+                id: id, axis: .vertical, newServiceId: droppedId, newProjectId: droppedProjectId, newSide: .second
+            )
         case .center:
-            layout.replaceService(panelId: id, newServiceId: droppedId)
+            layout.replaceScope(panelId: id, serviceId: droppedId, projectId: droppedProjectId)
+            focusedPanelId = id
+            core.returnToLiveLogs()
         }
     }
 }

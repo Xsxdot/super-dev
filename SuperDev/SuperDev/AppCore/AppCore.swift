@@ -16,6 +16,8 @@ import SwiftUI
 final class AppCore: ObservableObject {
     @Published var projects: [Project] = []
     @Published var logs: [LogEntry] = []
+    /// Bumps on every live-log ingest (including dedup fold updates). UI uses this instead of `logs.count`.
+    @Published private(set) var logSourceRevision: UInt64 = 0
     @Published var currentRunId: UUID
     @Published var availableRuns: [RunSummary] = []
     @Published var historyLogs: [LogEntry] = []
@@ -34,9 +36,13 @@ final class AppCore: ObservableObject {
     @Published var syncGroupIsRecording: Bool = false
     /// 同步组内每个面板对应的服务 ID（与 syncGroupPanelIds 同步维护）
     private var syncGroupServiceIds: [UUID: UUID?] = [:]
+    private var filteredLogsCacheRevision: UInt64 = 0
+    private var filteredLogsCache: [FilteredLogsQuery: [LogEntry]] = [:]
 
     static let logRetentionDaysKey = "superdev.log_retention_days"
     static let defaultRetentionDays = 7
+    /// Cap in-memory live logs so multi-panel filtering stays bounded during long runs.
+    static let maxInMemoryLogEntries = 8_000
 
     private let projectStore = ProjectStore()
     private let logStore = LogStore()
@@ -78,29 +84,49 @@ final class AppCore: ObservableObject {
 
     func returnToLiveLogs() {
         viewingRunId = nil
+        bumpLogSourceRevision()
     }
 
     func loadHistoryRun(_ runId: UUID) {
         viewingRunId = runId
         historyLogs = []
+        bumpLogSourceRevision()
         let store = logStore
         Task.detached {
             let raw = store.fetchLogs(for: runId)
             await MainActor.run { [weak self] in
                 guard self?.viewingRunId == runId else { return }
                 self?.historyLogs = raw
+                self?.bumpLogSourceRevision()
             }
         }
     }
 
-    func refreshAvailableRuns() {
+    /// Loads history runs for a single service. Returns empty when `serviceId` is nil.
+    func fetchHistoryRuns(serviceId: UUID?) async -> [RunSummary] {
+        guard let serviceId,
+              let project = project(forServiceId: serviceId),
+              let service = project.services.first(where: { $0.id == serviceId }) else { return [] }
+        let filter = Self.runFilter(forServiceId: serviceId, in: project)
         let store = logStore
         let currentRun = currentRunId
-        Task.detached {
-            let runs = store.fetchRuns().filter { $0.runId != currentRun }
-            await MainActor.run { [weak self] in
-                self?.availableRuns = runs
-            }
+        let allProjects = projects
+        let raw = await Task.detached {
+            store.fetchRuns(serviceIds: filter.serviceIds, serviceNames: filter.serviceNames)
+        }.value
+        return Self.filterRunsForService(
+            raw.filter { $0.runId != currentRun },
+            service: service,
+            project: project,
+            allProjects: allProjects
+        )
+    }
+
+    /// Refreshes global `availableRuns` for the given service only. No-op when `serviceId` is nil.
+    func refreshAvailableRuns(serviceId: UUID?) {
+        guard let serviceId else { return }
+        Task {
+            availableRuns = await fetchHistoryRuns(serviceId: serviceId)
         }
     }
 
@@ -116,8 +142,9 @@ final class AppCore: ObservableObject {
                 previousLogs = store.fetchLogs(for: lastRun.runId)
             }
             await MainActor.run { [weak self] in
-                self?.availableRuns = runs
+                self?.availableRuns = []
                 self?.historyLogs = previousLogs
+                self?.bumpLogSourceRevision()
             }
         }
     }
@@ -132,6 +159,7 @@ final class AppCore: ObservableObject {
             byProject[project.id] = config.rules
         }
         logRulesByProjectId = byProject
+        bumpLogSourceRevision()
         if let runId = viewingRunId {
             loadHistoryRun(runId)
         }
@@ -164,9 +192,77 @@ final class AppCore: ObservableObject {
         try saveLogRules(config, for: project)
     }
 
+    func project(id projectId: UUID) -> Project? {
+        projects.first { $0.id == projectId }
+    }
+
     func project(forServiceId serviceId: UUID?) -> Project? {
-        guard let serviceId else { return projects.first }
+        guard let serviceId else { return nil }
         return projects.first { $0.services.contains { $0.id == serviceId } }
+    }
+
+    private struct RunFilter: Sendable {
+        let serviceIds: [UUID]?
+        let serviceNames: [String]?
+    }
+
+    private static func runFilter(forProjectId projectId: UUID?, projects: [Project]) -> RunFilter {
+        guard let projectId,
+              let project = projects.first(where: { $0.id == projectId }) else {
+            return RunFilter(serviceIds: nil, serviceNames: nil)
+        }
+        let ids = project.services.map(\.id)
+        let names = project.services.map(\.name)
+        return RunFilter(
+            serviceIds: ids.isEmpty ? nil : ids,
+            serviceNames: names.isEmpty ? nil : names
+        )
+    }
+
+    private static func runFilter(forServiceId serviceId: UUID, in project: Project) -> RunFilter {
+        let name = project.services.first(where: { $0.id == serviceId })?.name
+        return RunFilter(
+            serviceIds: [serviceId],
+            serviceNames: name.map { [$0] }
+        )
+    }
+
+    /// Keeps runs that include this service and no other project's exclusive services.
+    static func filterRunsForService(
+        _ runs: [RunSummary],
+        service: Service,
+        project: Project,
+        allProjects: [Project]
+    ) -> [RunSummary] {
+        let singleServiceProject = Project(
+            id: project.id,
+            name: project.name,
+            rootPath: project.rootPath,
+            services: [service]
+        )
+        return filterRunsForProject(runs, project: singleServiceProject, allProjects: allProjects)
+    }
+
+    /// Keeps runs that touch this project's services but not another project's exclusive services.
+    static func filterRunsForProject(
+        _ runs: [RunSummary],
+        project: Project,
+        allProjects: [Project]
+    ) -> [RunSummary] {
+        let projectNames = Set(project.services.map(\.name))
+        guard !projectNames.isEmpty else { return [] }
+        let otherNames = Set(
+            allProjects
+                .filter { $0.id != project.id }
+                .flatMap { $0.services.map(\.name) }
+        )
+        /// Service names that belong only to other projects (shared names like "api" are excluded).
+        let otherExclusive = otherNames.subtracting(projectNames)
+        return runs.filter { run in
+            let runNames = Set(run.serviceNames)
+            guard !runNames.isDisjoint(with: projectNames) else { return false }
+            return runNames.isDisjoint(with: otherExclusive)
+        }
     }
 
     // MARK: - Hidden Services
@@ -361,10 +457,47 @@ final class AppCore: ObservableObject {
 
     func filteredLogs(
         serviceId: UUID? = nil,
+        projectId: UUID? = nil,
         levels: Set<LogLevel>? = nil,
         includeChips: [String] = [],
         excludeChips: [String] = [],
         chipLogic: LogFilter.ChipLogic = .or
+    ) -> [LogEntry] {
+        let query = FilteredLogsQuery(
+            serviceId: serviceId,
+            projectId: projectId,
+            levels: levels,
+            includeChips: includeChips,
+            excludeChips: excludeChips,
+            chipLogic: chipLogic,
+            viewingRunId: viewingRunId
+        )
+        if filteredLogsCacheRevision == logSourceRevision, let cached = filteredLogsCache[query] {
+            return cached
+        }
+        if filteredLogsCacheRevision != logSourceRevision {
+            filteredLogsCache.removeAll(keepingCapacity: true)
+            filteredLogsCacheRevision = logSourceRevision
+        }
+        let result = computeFilteredLogs(
+            serviceId: serviceId,
+            projectId: projectId,
+            levels: levels,
+            includeChips: includeChips,
+            excludeChips: excludeChips,
+            chipLogic: chipLogic
+        )
+        filteredLogsCache[query] = result
+        return result
+    }
+
+    private func computeFilteredLogs(
+        serviceId: UUID?,
+        projectId: UUID?,
+        levels: Set<LogLevel>?,
+        includeChips: [String],
+        excludeChips: [String],
+        chipLogic: LogFilter.ChipLogic
     ) -> [LogEntry] {
         let snapshot = logRulesSnapshot()
         var result = activeLogSource.filter { entry in
@@ -377,6 +510,14 @@ final class AppCore: ObservableObject {
             } else {
                 result = result.filter { $0.serviceId == sid }
             }
+        } else if let pid = projectId, let project = project(id: pid) {
+            let serviceIds = Set(project.services.map(\.id))
+            let serviceNames = Set(project.services.map(\.name))
+            if viewingRunId != nil {
+                result = result.filter { serviceNames.contains($0.serviceName) }
+            } else {
+                result = result.filter { serviceIds.contains($0.serviceId) }
+            }
         }
         if let lvls = levels, !lvls.isEmpty { result = result.filter { lvls.contains($0.level) } }
         if !includeChips.isEmpty || !excludeChips.isEmpty {
@@ -385,6 +526,22 @@ final class AppCore: ObservableObject {
             }
         }
         return result
+    }
+
+    private func bumpLogSourceRevision() {
+        logSourceRevision += 1
+    }
+
+    private func ingestLiveLog(_ entry: LogEntry) {
+        logEngine.ingest(entry, into: &logs)
+        if logs.count > Self.maxInMemoryLogEntries {
+            logs.removeFirst(logs.count - Self.maxInMemoryLogEntries)
+        }
+        bumpLogSourceRevision()
+        logStore.append(entry)
+        for panelId in bookmarks.keys where bookmarks[panelId]?.isActive == true {
+            bookmarks[panelId]?.appendLog(entry)
+        }
     }
 
     func lastErrorLog(for serviceId: UUID) -> LogEntry? {
@@ -430,12 +587,7 @@ final class AppCore: ObservableObject {
             onLog: { [weak self] serviceId, serviceName, line in
                 guard let self else { return }
                 let entry = self.logEngine.parseLine(line, serviceId: serviceId, serviceName: serviceName)
-                self.logEngine.ingest(entry, into: &self.logs)
-                self.logStore.append(entry)
-                // 把新日志追加到所有活跃书签
-                for panelId in self.bookmarks.keys where self.bookmarks[panelId]?.isActive == true {
-                    self.bookmarks[panelId]?.appendLog(entry)
-                }
+                self.ingestLiveLog(entry)
             },
             onStatusChange: { [weak self] serviceId, status in
                 guard let self else { return }
@@ -578,4 +730,15 @@ final class AppCore: ObservableObject {
             .map { "=== \($0.name) ===\n\($0.text)" }
             .joined(separator: "\n\n")
     }
+}
+
+/// Cache key for `AppCore.filteredLogs` — identical queries across panels share one filtered array.
+struct FilteredLogsQuery: Hashable {
+    let serviceId: UUID?
+    let projectId: UUID?
+    let levels: Set<LogLevel>?
+    let includeChips: [String]
+    let excludeChips: [String]
+    let chipLogic: LogFilter.ChipLogic
+    let viewingRunId: UUID?
 }

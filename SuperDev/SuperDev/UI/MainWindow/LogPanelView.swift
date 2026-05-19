@@ -43,6 +43,7 @@ struct LogPanelView: View {
     @EnvironmentObject var core: AppCore
     let panelId: UUID
     let serviceId: UUID?
+    let projectId: UUID?
     var project: Project?
 
     @State private var chipInput: String = ""
@@ -51,6 +52,13 @@ struct LogPanelView: View {
     @State private var chipLogic: ChipLogic = .or
     @State private var isFollowing: Bool = true
     @State private var newLogCount: Int = 0
+    /// Drives `.scrollPosition`; kept in sync with the last visible row when following.
+    @State private var scrollAnchorId: UUID?
+    /// Ignore scroll-geometry follow resets briefly after programmatic scroll-to-bottom.
+    @State private var suppressFollowGeometryUntil: Date = .distantPast
+    /// History runs for this panel's current project (not shared globally).
+    @State private var panelHistoryRuns: [RunSummary] = []
+    @State private var historyLoadTask: Task<Void, Never>?
     @State private var showRulesSheet = false
     @State private var showSaveRuleSheet = false
     @State private var saveRuleName: String = ""
@@ -60,6 +68,7 @@ struct LogPanelView: View {
     @State private var activeSelectionRect: CGRect?
     /// 缓存的展示数据，只在依赖变化时重算，避免每次 body 调用都遍历所有日志
     @State private var cachedDisplay: LogDisplay = LogDisplay(items: [], stats: (0, 0, 0, 0))
+    @State private var displayRefreshTask: Task<Void, Never>?
 
     private var includeChips: [String] {
         chips.filter { $0.type == .include }.map(\.keyword)
@@ -70,7 +79,13 @@ struct LogPanelView: View {
     }
 
     private var activeProject: Project? {
-        project ?? core.project(forServiceId: serviceId)
+        if let project { return project }
+        if let projectId, let p = core.project(id: projectId) { return p }
+        return core.project(forServiceId: serviceId)
+    }
+
+    private var effectiveProjectId: UUID? {
+        project?.id ?? projectId ?? activeProject?.id
     }
 
     private var bookmark: LogBookmark? {
@@ -99,6 +114,7 @@ struct LogPanelView: View {
     private func makeLogDisplay() -> LogDisplay {
         let logs = core.filteredLogs(
             serviceId: serviceId,
+            projectId: serviceId == nil ? effectiveProjectId : nil,
             includeChips: includeChips,
             excludeChips: excludeChips,
             chipLogic: chipLogic.logFilterLogic
@@ -165,18 +181,84 @@ struct LogPanelView: View {
             saveRuleSheet
         }
         .onAppear {
-            core.refreshAvailableRuns()
-            cachedDisplay = makeLogDisplay()
+            loadPanelHistoryRuns()
+            isFollowing = true
+            refreshDisplayImmediately()
         }
-        .onChange(of: core.logs.count) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: core.historyLogs.count) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: core.viewingRunId) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: core.bookmarks[panelId]?.lockedLogs.count) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: core.bookmarks[panelId]?.isCompleted) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: chips) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: chipLogic) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: serviceId) { _, _ in cachedDisplay = makeLogDisplay() }
-        .onChange(of: core.logRulesByProjectId) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: cachedDisplay.items.last?.id) { _, newId in
+            guard isFollowing, let newId else { return }
+            suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
+            scrollAnchorId = newId
+        }
+        .onChange(of: core.logSourceRevision) { _, _ in scheduleDisplayRefresh() }
+        .onChange(of: core.bookmarks[panelId]?.lockedLogs.count) { _, _ in scheduleDisplayRefresh() }
+        .onChange(of: core.bookmarks[panelId]?.isCompleted) { _, _ in scheduleDisplayRefresh() }
+        .onChange(of: chips) { _, _ in refreshDisplayImmediately() }
+        .onChange(of: chipLogic) { _, _ in refreshDisplayImmediately() }
+        .onChange(of: serviceId) { _, _ in
+            loadPanelHistoryRuns()
+            isFollowing = true
+            refreshDisplayImmediately()
+        }
+        .onChange(of: projectId) { _, _ in
+            loadPanelHistoryRuns()
+            isFollowing = true
+            refreshDisplayImmediately()
+        }
+        .onChange(of: core.viewingRunId) { _, _ in
+            isFollowing = true
+            refreshDisplayImmediately()
+        }
+        .onChange(of: core.logRulesByProjectId) { _, _ in scheduleDisplayRefresh() }
+        .onDisappear {
+            displayRefreshTask?.cancel()
+            historyLoadTask?.cancel()
+        }
+    }
+
+    private func loadPanelHistoryRuns() {
+        historyLoadTask?.cancel()
+        let sid = serviceId
+        historyLoadTask = Task {
+            let runs = await core.fetchHistoryRuns(serviceId: sid)
+            guard !Task.isCancelled else { return }
+            panelHistoryRuns = runs
+        }
+    }
+
+    /// Coalesce bursty log updates (e.g. multiple panels × high log rate) into one refresh per frame window.
+    private func scheduleDisplayRefresh() {
+        displayRefreshTask?.cancel()
+        displayRefreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(32))
+            guard !Task.isCancelled else { return }
+            cachedDisplay = makeLogDisplay()
+            pinToBottomIfFollowing()
+        }
+    }
+
+    private func refreshDisplayImmediately() {
+        displayRefreshTask?.cancel()
+        cachedDisplay = makeLogDisplay()
+        pinToBottomIfFollowing()
+    }
+
+    private func pinToBottomIfFollowing() {
+        guard isFollowing, let lastId = cachedDisplay.items.last?.id else { return }
+        suppressFollowGeometryUntil = Date().addingTimeInterval(0.4)
+        newLogCount = 0
+        scrollAnchorId = lastId
+        scheduleScrollRetries(lastId: lastId)
+    }
+
+    private func scheduleScrollRetries(lastId: UUID) {
+        Task { @MainActor in
+            for delayMs in [50, 120, 250] {
+                try? await Task.sleep(for: .milliseconds(delayMs))
+                guard isFollowing else { return }
+                scrollAnchorId = cachedDisplay.items.last?.id ?? lastId
+            }
+        }
     }
 
     // MARK: - Toolbar
@@ -335,9 +417,11 @@ struct LogPanelView: View {
             }
             .disabled(core.viewingRunId == nil)
 
-            if !core.availableRuns.isEmpty {
+            if serviceId == nil {
+                Text("请先选择服务")
+            } else if !panelHistoryRuns.isEmpty {
                 Divider()
-                ForEach(core.availableRuns) { run in
+                ForEach(panelHistoryRuns) { run in
                     Button(historyRunLabel(run)) {
                         core.loadHistoryRun(run.runId)
                     }
@@ -351,7 +435,7 @@ struct LogPanelView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .onAppear { core.refreshAvailableRuns() }
+        .onAppear { loadPanelHistoryRuns() }
     }
 
     private var rulesButton: some View {
@@ -589,7 +673,7 @@ struct LogPanelView: View {
         }.first
         let startTime: Date? = {
             if let runId = core.viewingRunId,
-               let summary = core.availableRuns.first(where: { $0.runId == runId }) {
+               let summary = panelHistoryRuns.first(where: { $0.runId == runId }) {
                 return summary.startTime
             }
             return firstEntry?.timestamp
@@ -601,79 +685,93 @@ struct LogPanelView: View {
     // MARK: - Log list
 
     private func logList(items: [LogDisplayItem]) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(items) { item in
-                        switch item {
-                        case .entry(let entry):
-                            logRow(entry, isBookmarked: isInActiveBookmark(entry))
-                                .id(item.id)
-                        case .markerStart(_, let date):
-                            bookmarkMarkerRow(isStart: true, date: date)
-                                .id(item.id)
-                        case .markerEnd(_, let date):
-                            bookmarkMarkerRow(isStart: false, date: date)
-                                .id(item.id)
-                        }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-            }
-            .background(Theme.bgSecondary)
-            .onScrollGeometryChange(for: CGFloat.self) { geo in
-                geo.contentSize.height - geo.containerSize.height - geo.contentOffset.y
-            } action: { _, distanceFromBottom in
-                let wasFollowing = isFollowing
-                isFollowing = distanceFromBottom < 50
-                if isFollowing {
-                    newLogCount = 0
-                }
-                if isFollowing && !wasFollowing {
-                    if let last = items.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(items) { item in
+                    switch item {
+                    case .entry(let entry):
+                        logRow(entry, isBookmarked: isInActiveBookmark(entry))
+                            .id(item.id)
+                    case .markerStart(_, let date):
+                        bookmarkMarkerRow(isStart: true, date: date)
+                            .id(item.id)
+                    case .markerEnd(_, let date):
+                        bookmarkMarkerRow(isStart: false, date: date)
+                            .id(item.id)
                     }
                 }
             }
-            .onChange(of: items.count) { oldCount, newCount in
-                if isFollowing {
-                    newLogCount = 0
-                    if let last = items.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                } else {
-                    newLogCount += max(0, newCount - oldCount)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if !isFollowing && newLogCount > 0 {
-                    Button {
-                        isFollowing = true
-                        newLogCount = 0
-                        if let last = items.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
-                    } label: {
-                        Text("↓ \(newLogCount) 条新日志")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Theme.accent)
-                            .clipShape(Capsule())
-                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 8)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: !isFollowing && newLogCount > 0)
-            .onChange(of: chips) { _, _ in
-                isFollowing = true
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .scrollPosition(id: $scrollAnchorId, anchor: .bottom)
+        .defaultScrollAnchor(.bottom)
+        .background(Theme.bgSecondary)
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentSize.height - geo.containerSize.height - geo.contentOffset.y
+        } action: { _, distanceFromBottom in
+            guard Date() >= suppressFollowGeometryUntil else { return }
+            let wasFollowing = isFollowing
+            isFollowing = distanceFromBottom < 50
+            if isFollowing {
                 newLogCount = 0
+                if !wasFollowing, let last = items.last {
+                    scrollAnchorId = last.id
+                }
+            }
+        }
+        .onChange(of: items.count) { oldCount, newCount in
+            if isFollowing {
+                newLogCount = 0
+                if let last = items.last {
+                    suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
+                    scrollAnchorId = last.id
+                    if oldCount == 0, newCount > 0 {
+                        scheduleScrollRetries(lastId: last.id)
+                    }
+                }
+            } else {
+                newLogCount += max(0, newCount - oldCount)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if !isFollowing && newLogCount > 0 {
+                Button {
+                    isFollowing = true
+                    newLogCount = 0
+                    if let last = items.last {
+                        suppressFollowGeometryUntil = Date().addingTimeInterval(0.4)
+                        scrollAnchorId = last.id
+                        scheduleScrollRetries(lastId: last.id)
+                    }
+                } label: {
+                    Text("↓ \(newLogCount) 条新日志")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Theme.accent)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 12)
+                .padding(.bottom, 8)
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: !isFollowing && newLogCount > 0)
+        .onChange(of: chips) { _, _ in
+            isFollowing = true
+            newLogCount = 0
+            pinToBottomIfFollowing()
+        }
+        .onAppear {
+            isFollowing = true
+            newLogCount = 0
+            if let last = items.last {
+                scrollAnchorId = last.id
+                scheduleScrollRetries(lastId: last.id)
             }
         }
     }
