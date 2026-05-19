@@ -402,8 +402,9 @@ final class AppCore: ObservableObject {
     // MARK: - Log Bookmarks
 
     func startBookmark(panelId: UUID) {
-        bookmarks[panelId] = LogBookmark(panelId: panelId)
-        bookmarks[panelId]?.startTime = Date()
+        var bm = LogBookmark(panelId: panelId)
+        bm.startTime = Date()
+        bookmarks[panelId] = bm
     }
 
     func endBookmark(panelId: UUID) {

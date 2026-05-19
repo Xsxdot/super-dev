@@ -34,8 +34,11 @@ struct LogBookmark {
 
     /// 格式化所有锁定日志为纯文本，用于复制/导出。
     var formattedText: String {
-        lockedLogs.map { entry in
-            let time = entry.timestamp.formatted(.dateTime.hour().minute().second())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return lockedLogs.map { entry in
+            let time = formatter.string(from: entry.timestamp)
             return "\(time) [\(entry.serviceName)] \(entry.level.rawValue) \(entry.message)"
         }.joined(separator: "\n")
     }
