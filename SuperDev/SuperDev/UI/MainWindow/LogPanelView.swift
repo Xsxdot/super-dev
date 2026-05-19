@@ -189,6 +189,17 @@ struct LogPanelView: View {
                 .buttonStyle(.plain)
                 .help("添加关键词")
             }
+
+            // 项目级规则快捷开关（仅在有项目时显示）
+            if let proj = activeProject {
+                let rules = core.logRules(for: proj.id)
+                if !rules.isEmpty {
+                    Divider().frame(height: 14)
+                    ForEach(rules) { rule in
+                        projectRuleChip(rule, project: proj)
+                    }
+                }
+            }
         }
     }
 
@@ -236,6 +247,31 @@ struct LogPanelView: View {
         .padding(.vertical, 3)
         .background(chip.type == .include ? Color.blue.opacity(0.12) : Color.orange.opacity(0.12))
         .cornerRadius(4)
+    }
+
+    private func projectRuleChip(_ rule: LogRule, project: Project) -> some View {
+        Button {
+            toggleProjectRule(rule, project: project)
+        } label: {
+            HStack(spacing: 3) {
+                Text(rule.type == .include ? "↑" : "↓")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(rule.enabled ? (rule.type == .include ? .blue : .green) : .secondary)
+                Text(rule.name.isEmpty ? rule.keywords.first ?? "" : rule.name)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .strikethrough(!rule.enabled, color: .secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(rule.enabled
+                ? (rule.type == .include ? Color.blue.opacity(0.10) : Color.green.opacity(0.10))
+                : Color.secondary.opacity(0.08))
+            .cornerRadius(4)
+            .opacity(rule.enabled ? 1.0 : 0.55)
+        }
+        .buttonStyle(.plain)
+        .help(rule.enabled ? "点击禁用此规则" : "点击启用此规则")
     }
 
     private var historyMenu: some View {
@@ -569,6 +605,17 @@ struct LogPanelView: View {
             try core.addLogRule(rule, to: proj)
         } catch {
             print("[SuperDev] Failed to save rule '\(chip.keyword)': \(error)")
+        }
+    }
+
+    private func toggleProjectRule(_ rule: LogRule, project: Project) {
+        var config = core.logRules(for: project)
+        guard let idx = config.rules.firstIndex(where: { $0.id == rule.id }) else { return }
+        config.rules[idx].enabled.toggle()
+        do {
+            try core.saveLogRules(config, for: project)
+        } catch {
+            print("[SuperDev] Failed to toggle rule '\(rule.name)': \(error)")
         }
     }
 
