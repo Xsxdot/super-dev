@@ -95,7 +95,39 @@ final class ConfigLoader {
     ///   - workingDir 以 snake_case（working_dir）写入 YAML
     func save(_ project: Project) throws {
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        let dict = projectToDict(project)
+        var dict = projectToDict(project)
+        mergePreservedLogRules(into: &dict)
+        let yaml = try Yams.dump(object: dict)
+        try yaml.write(to: configFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Loads the `logRules` section from config.yaml. Returns defaults if absent.
+    func loadLogRules() throws -> LogRulesConfig {
+        guard FileManager.default.fileExists(atPath: configFile.path) else {
+            return LogRulesConfig()
+        }
+        let content = try String(contentsOf: configFile, encoding: .utf8)
+        let raw = try Yams.load(yaml: content)
+        guard let dict = raw as? [String: Any] else { return LogRulesConfig() }
+        return parseLogRules(from: dict["logRules"] as? [String: Any])
+    }
+
+    /// Writes the `logRules` section, preserving other config fields.
+    func saveLogRules(_ config: LogRulesConfig) throws {
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        var dict: [String: Any] = [:]
+        if FileManager.default.fileExists(atPath: configFile.path),
+           let content = try? String(contentsOf: configFile, encoding: .utf8),
+           let raw = try? Yams.load(yaml: content) as? [String: Any] {
+            dict = raw
+        }
+        dict["logRules"] = logRulesToDict(config)
+        if dict["name"] == nil {
+            dict["name"] = URL(fileURLWithPath: rootPath).lastPathComponent
+        }
+        if dict["services"] == nil {
+            dict["services"] = []
+        }
         let yaml = try Yams.dump(object: dict)
         try yaml.write(to: configFile, atomically: true, encoding: .utf8)
     }
@@ -150,6 +182,57 @@ final class ConfigLoader {
         var dict: [String: Any] = ["name": project.name]
         dict["services"] = project.services.map { serviceToDict($0) }
         return dict
+    }
+
+    /// Parses the `logRules` section. Ignores legacy `retentionDays` (global UserDefaults now).
+    private func parseLogRules(from dict: [String: Any]?) -> LogRulesConfig {
+        guard let dict else { return LogRulesConfig() }
+        let rawRules = dict["rules"] as? [[String: Any]] ?? []
+        let rules = rawRules.compactMap { parseLogRule(from: $0) }
+        return LogRulesConfig(rules: rules)
+    }
+
+    private func parseLogRule(from dict: [String: Any]) -> LogRule? {
+        guard let idStr = dict["id"] as? String,
+              let id = UUID(uuidString: idStr),
+              let name = dict["name"] as? String,
+              let typeStr = dict["type"] as? String,
+              let type = LogRule.RuleType(rawValue: typeStr.lowercased()),
+              let logicStr = dict["logic"] as? String else { return nil }
+        let logic: LogRule.RuleLogic
+        switch logicStr.uppercased() {
+        case "AND": logic = .and
+        case "OR": logic = .or
+        default:
+            logic = LogRule.RuleLogic(rawValue: logicStr.lowercased()) ?? .or
+        }
+        let keywords = dict["keywords"] as? [String] ?? []
+        let enabled = dict["enabled"] as? Bool ?? true
+        return LogRule(id: id, name: name, type: type, keywords: keywords, logic: logic, enabled: enabled)
+    }
+
+    private func logRulesToDict(_ config: LogRulesConfig) -> [String: Any] {
+        [
+            "rules": config.rules.map { rule in
+                [
+                    "id": rule.id.uuidString,
+                    "name": rule.name,
+                    "type": rule.type.rawValue,
+                    "keywords": rule.keywords,
+                    "logic": rule.logic == .and ? "AND" : "OR",
+                    "enabled": rule.enabled
+                ] as [String: Any]
+            }
+        ]
+    }
+
+    /// Preserves the existing `logRules` key from disk without re-parsing it.
+    private func mergePreservedLogRules(into dict: inout [String: Any]) {
+        guard FileManager.default.fileExists(atPath: configFile.path),
+              let content = try? String(contentsOf: configFile, encoding: .utf8),
+              let raw = try? Yams.load(yaml: content) as? [String: Any],
+              let logRules = raw["logRules"] else { return }
+        dict["logRules"] = logRules
     }
 
     /// 将 Service 转换为可由 Yams 序列化的字典。

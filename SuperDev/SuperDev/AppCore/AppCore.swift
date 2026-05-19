@@ -17,8 +17,16 @@ final class AppCore: ObservableObject {
     @Published var projects: [Project] = []
     @Published var logs: [LogEntry] = []
     @Published var currentRunId: UUID
+    @Published var availableRuns: [RunSummary] = []
+    @Published var historyLogs: [LogEntry] = []
+    @Published var viewingRunId: UUID? = nil
+    /// Per-project log filter rules (keyed by Project.id).
+    @Published private(set) var logRulesByProjectId: [UUID: [LogRule]] = [:]
     /// 用户选择在 Popover 中隐藏的服务 ID 集合（持久化到 UserDefaults）
     @Published var hiddenServiceIds: Set<UUID> = []
+
+    static let logRetentionDaysKey = "superdev.log_retention_days"
+    static let defaultRetentionDays = 7
 
     private let projectStore = ProjectStore()
     private let logStore = LogStore()
@@ -34,6 +42,108 @@ final class AppCore: ObservableObject {
         hiddenServiceIds = Self.loadHiddenServiceIds()
         killOrphanProcesses()
         loadProjects()
+        reloadLogRules()
+        performStartupLogMaintenance()
+    }
+
+    // MARK: - Log retention & history
+
+    var logRetentionDays: Int {
+        get {
+            let stored = UserDefaults.standard.integer(forKey: Self.logRetentionDaysKey)
+            return stored > 0 ? stored : Self.defaultRetentionDays
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.logRetentionDaysKey)
+            performStartupLogMaintenance()
+        }
+    }
+
+    func returnToLiveLogs() {
+        viewingRunId = nil
+    }
+
+    func loadHistoryRun(_ runId: UUID) {
+        viewingRunId = runId
+        historyLogs = []
+        let store = logStore
+        Task.detached {
+            let raw = store.fetchLogs(for: runId)
+            await MainActor.run { [weak self] in
+                guard self?.viewingRunId == runId else { return }
+                self?.historyLogs = raw
+            }
+        }
+    }
+
+    func refreshAvailableRuns() {
+        let store = logStore
+        let currentRun = currentRunId
+        Task.detached {
+            let runs = store.fetchRuns().filter { $0.runId != currentRun }
+            await MainActor.run { [weak self] in
+                self?.availableRuns = runs
+            }
+        }
+    }
+
+    private func performStartupLogMaintenance() {
+        let days = logRetentionDays
+        let store = logStore
+        let currentRun = currentRunId
+        Task.detached {
+            store.deleteOldEntries(olderThan: days)
+            let runs = store.fetchRuns().filter { $0.runId != currentRun }
+            var previousLogs: [LogEntry] = []
+            if let lastRun = runs.first {
+                previousLogs = store.fetchLogs(for: lastRun.runId)
+            }
+            await MainActor.run { [weak self] in
+                self?.availableRuns = runs
+                self?.historyLogs = previousLogs
+            }
+        }
+    }
+
+    // MARK: - Log rules (per-project config.yaml)
+
+    func reloadLogRules() {
+        var byProject: [UUID: [LogRule]] = [:]
+        for project in projects {
+            let loader = ConfigLoader(rootPath: project.rootPath)
+            let config = (try? loader.loadLogRules()) ?? LogRulesConfig()
+            byProject[project.id] = config.rules
+        }
+        logRulesByProjectId = byProject
+        if let runId = viewingRunId {
+            loadHistoryRun(runId)
+        }
+    }
+
+    func logRules(for projectId: UUID) -> [LogRule] {
+        logRulesByProjectId[projectId] ?? []
+    }
+
+    func logRules(for project: Project) -> LogRulesConfig {
+        let loader = ConfigLoader(rootPath: project.rootPath)
+        return (try? loader.loadLogRules()) ?? LogRulesConfig()
+    }
+
+    func saveLogRules(_ config: LogRulesConfig, for project: Project) throws {
+        let loader = ConfigLoader(rootPath: project.rootPath)
+        try loader.saveLogRules(config)
+        reloadLogRules()
+    }
+
+    func addLogRule(_ rule: LogRule, to project: Project) throws {
+        var config = logRules(for: project)
+        config.rules.append(rule)
+        try saveLogRules(config, for: project)
+    }
+
+    func project(forServiceId serviceId: UUID?) -> Project? {
+        guard let serviceId else { return projects.first }
+        return projects.first { $0.services.contains { $0.id == serviceId } }
     }
 
     // MARK: - Hidden Services
@@ -69,12 +179,14 @@ final class AppCore: ObservableObject {
         project = Project(id: project.id, name: project.name, rootPath: rootPath, services: project.services)
         projects.append(project)
         projectStore.addPath(rootPath)
+        reloadLogRules()
     }
 
     func removeProject(_ project: Project) {
         stopAll(project: project)
         projects.removeAll { $0.id == project.id }
         projectStore.removePath(project.rootPath)
+        reloadLogRules()
     }
 
     func reloadConfig(for project: Project) throws {
@@ -84,6 +196,7 @@ final class AppCore: ObservableObject {
             projects[idx].name = updated.name
             projects[idx].services = updated.services
         }
+        reloadLogRules()
     }
 
     func importFromLaunchJson(rootPath: String) throws {
@@ -104,7 +217,6 @@ final class AppCore: ObservableObject {
     }
 
     func stop(_ service: Service, in project: Project) {
-        // ProcessManager.stop 内部会通过 onStatusChange 回调更新状态，无需在此重复
         processManagers[project.id]?.stop(service.id)
     }
 
@@ -128,27 +240,68 @@ final class AppCore: ObservableObject {
 
     // MARK: - Log Queries
 
+    private var activeLogSource: [LogEntry] {
+        viewingRunId != nil ? historyLogs : logs
+    }
+
     func filteredLogs(
         serviceId: UUID? = nil,
         levels: Set<LogLevel>? = nil,
-        keyword: String? = nil
+        includeChips: [String] = [],
+        excludeChips: [String] = [],
+        chipLogic: LogFilter.ChipLogic = .or
     ) -> [LogEntry] {
-        var result = logs
-        if let sid = serviceId { result = result.filter { $0.serviceId == sid } }
+        let snapshot = logRulesSnapshot()
+        var result = activeLogSource.filter { entry in
+            let rules = LogFilter.rulesForEntry(entry, snapshot: snapshot)
+            return LogFilter.passes(entry, rules: rules)
+        }
+        if let sid = serviceId {
+            if viewingRunId != nil, let name = serviceName(for: sid) {
+                result = result.filter { $0.serviceName == name }
+            } else {
+                result = result.filter { $0.serviceId == sid }
+            }
+        }
         if let lvls = levels, !lvls.isEmpty { result = result.filter { lvls.contains($0.level) } }
-        if let kw = keyword, !kw.isEmpty {
-            result = result.filter { $0.message.localizedCaseInsensitiveContains(kw) }
+        if !includeChips.isEmpty || !excludeChips.isEmpty {
+            result = result.filter {
+                LogFilter.passes($0, includeChips: includeChips, excludeChips: excludeChips, logic: chipLogic)
+            }
         }
         return result
     }
 
-    // TODO: LogStore.fetch 是同步阻塞调用，LogStore 文档要求在后台线程调用。
-    // 当前在 @MainActor 上执行，日志量小时无感知，后续可改为 async/GRDB asyncRead。
     func lastErrorLog(for serviceId: UUID) -> LogEntry? {
         logStore.lastErrorLog(for: serviceId)
     }
 
     // MARK: - Private
+
+    private func logRulesSnapshot() -> LogRulesSnapshot {
+        var serviceIdToProjectId: [UUID: UUID] = [:]
+        var serviceNameToProjectId: [String: UUID] = [:]
+        for project in projects {
+            for service in project.services {
+                serviceIdToProjectId[service.id] = project.id
+                serviceNameToProjectId[service.name] = project.id
+            }
+        }
+        return LogRulesSnapshot(
+            serviceIdToProjectId: serviceIdToProjectId,
+            serviceNameToProjectId: serviceNameToProjectId,
+            rulesByProjectId: logRulesByProjectId
+        )
+    }
+
+    private func serviceName(for serviceId: UUID) -> String? {
+        for project in projects {
+            if let service = project.services.first(where: { $0.id == serviceId }) {
+                return service.name
+            }
+        }
+        return nil
+    }
 
     private func loadProjects() {
         for path in projectStore.loadPaths() {
@@ -190,33 +343,28 @@ final class AppCore: ObservableObject {
 
     // MARK: - Orphan Process Cleanup
 
-    // PID 文件路径，保存上次运行时各服务的 PID
     private var pidFilePath: String {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         return (support?.appendingPathComponent("SuperDev/running_pids.json").path) ?? "/tmp/superdev_pids.json"
     }
 
-    // 记录当前运行中的 PID（在进程启动后调用）
     func recordPid(_ pid: Int32, for serviceId: UUID) {
         var pids = loadSavedPids()
         pids[serviceId.uuidString] = pid
         savePids(pids)
     }
 
-    // 清除某服务的 PID 记录
     func clearPid(for serviceId: UUID) {
         var pids = loadSavedPids()
         pids.removeValue(forKey: serviceId.uuidString)
         savePids(pids)
     }
 
-    // 启动时 kill 上次遗留的孤儿进程
     private func killOrphanProcesses() {
         let pids = loadSavedPids()
         for (_, pid) in pids {
             kill(pid, SIGTERM)
         }
-        // 清空 PID 文件
         savePids([:])
     }
 
