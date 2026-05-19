@@ -92,6 +92,16 @@ final class LogStore {
         }
     }
 
+    // lastErrorLog 返回指定服务最后一条 error 或 unknown 级别的日志。
+    //
+    // 参数：
+    //   - serviceId: 服务 ID
+    //
+    // 返回：最后一条错误日志，若无则为 nil
+    func lastErrorLog(for serviceId: UUID) -> LogEntry? {
+        fetch(serviceId: serviceId, levels: [.error, .unknown], limit: 1).first
+    }
+
     // MARK: - Private
 
     private func setupDatabase() {

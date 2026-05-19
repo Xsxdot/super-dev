@@ -106,6 +106,10 @@ final class AppCore: ObservableObject {
         return result
     }
 
+    func lastErrorLog(for serviceId: UUID) -> LogEntry? {
+        logStore.lastErrorLog(for: serviceId)
+    }
+
     // MARK: - Private
 
     private func loadProjects() {
