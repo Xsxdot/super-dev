@@ -378,28 +378,56 @@ struct LogPanelView: View {
         .disabled(activeProject == nil)
     }
 
+    private var syncToggle: some View {
+        let inSync = core.syncGroupPanelIds.contains(panelId)
+        return Button {
+            core.toggleSyncGroup(panelId: panelId)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: inSync ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 11))
+                    .foregroundColor(inSync ? Theme.accent : .secondary)
+                Text("同步")
+                    .font(.system(size: 11))
+                    .foregroundColor(inSync ? Theme.accent : .secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(inSync ? "退出同步录制组" : "加入同步录制组")
+    }
+
     private var bookmarkControl: some View {
-        Group {
+        HStack(spacing: 6) {
+            syncToggle
+            Group {
             if let bm = bookmark, bm.isCompleted {
+                let inSyncGroup = core.syncGroupPanelIds.contains(panelId)
                 HStack(spacing: 6) {
                     Button {
+                        let text = inSyncGroup
+                            ? core.syncBookmarkFormattedText()
+                            : bm.formattedText
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(bm.formattedText, forType: .string)
+                        NSPasteboard.general.setString(text, forType: .string)
                     } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.plain)
-                    .help("复制标记区间日志")
+                    .help(inSyncGroup ? "复制所有同步分栏日志（按服务分块）" : "复制标记区间日志")
 
                     Button {
-                        exportBookmark(bm)
+                        if inSyncGroup {
+                            exportSyncBookmark()
+                        } else {
+                            exportBookmark(bm)
+                        }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.plain)
-                    .help("导出标记区间日志")
+                    .help(inSyncGroup ? "导出所有同步分栏日志（按服务分块）" : "导出标记区间日志")
 
                     Button {
                         core.clearBookmark(panelId: panelId)
@@ -421,28 +449,42 @@ struct LogPanelView: View {
                         .cornerRadius(4)
                         .foregroundColor(.red)
                     Button {
-                        core.endBookmark(panelId: panelId)
+                        if core.syncGroupIsRecording && core.syncGroupPanelIds.contains(panelId) {
+                            core.endSyncBookmark()
+                        } else {
+                            core.endBookmark(panelId: panelId)
+                        }
                     } label: {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 14))
                             .foregroundColor(.red)
                     }
                     .buttonStyle(.plain)
-                    .help("结束书签标记 (⌘⇧B)")
+                    .help(core.syncGroupIsRecording && core.syncGroupPanelIds.contains(panelId) ? "同步结束所有分栏书签 (⌘⇧B)" : "结束书签标记 (⌘⇧B)")
                     .keyboardShortcut("b", modifiers: [.command, .shift])
                 }
             } else {
                 Button {
-                    core.startBookmark(panelId: panelId, serviceId: serviceId)
+                    if core.syncGroupPanelIds.contains(panelId) {
+                        let serviceIdByPanel = Dictionary(
+                            uniqueKeysWithValues: core.syncGroupPanelIds.map { pid in
+                                (pid, pid == panelId ? serviceId : nil as UUID?)
+                            }
+                        )
+                        core.startSyncBookmark(serviceIdByPanelId: serviceIdByPanel)
+                    } else {
+                        core.startBookmark(panelId: panelId, serviceId: serviceId)
+                    }
                 } label: {
                     Image(systemName: "record.circle")
                         .font(.system(size: 14))
-                        .foregroundColor(.green)
+                        .foregroundColor(core.syncGroupPanelIds.contains(panelId) ? .blue : .green)
                 }
                 .buttonStyle(.plain)
-                .help("开始书签标记 (⌘⇧B)")
+                .help(core.syncGroupPanelIds.contains(panelId) ? "同步开始所有分栏书签 (⌘⇧B)" : "开始书签标记 (⌘⇧B)")
                 .keyboardShortcut("b", modifiers: [.command, .shift])
             }
+        }
         }
     }
 
@@ -453,6 +495,18 @@ struct LogPanelView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             try? bm.formattedText.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func exportSyncBookmark() {
+        let text = core.syncBookmarkFormattedText()
+        guard !text.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "superdev-sync-\(Int(Date().timeIntervalSince1970)).log"
+        panel.allowedContentTypes = [.plainText]
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? text.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 
