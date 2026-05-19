@@ -106,6 +106,8 @@ final class AppCore: ObservableObject {
         return result
     }
 
+    // TODO: LogStore.fetch 是同步阻塞调用，LogStore 文档要求在后台线程调用。
+    // 当前在 @MainActor 上执行，日志量小时无感知，后续可改为 async/GRDB asyncRead。
     func lastErrorLog(for serviceId: UUID) -> LogEntry? {
         logStore.lastErrorLog(for: serviceId)
     }
