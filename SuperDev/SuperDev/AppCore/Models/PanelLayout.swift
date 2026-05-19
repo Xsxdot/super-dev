@@ -81,6 +81,7 @@ indirect enum PanelLayout: Codable, Identifiable {
                 self = .split(id: UUID(), axis: axis, ratio: 0.5, first: original, second: newLeaf)
             }
         case .split(let id, let axis2, let ratio, var first, var second):
+            // UUIDs are unique so at most one branch will mutate; both are visited for simplicity.
             first.splitLeaf(id: leafId, axis: axis, newServiceId: newServiceId, newSide: newSide)
             second.splitLeaf(id: leafId, axis: axis, newServiceId: newServiceId, newSide: newSide)
             self = .split(id: id, axis: axis2, ratio: ratio, first: first, second: second)
@@ -135,6 +136,7 @@ enum SplitSide: String, Codable {
 extension Axis: @retroactive Codable {
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(Int.self)
+        // SwiftUI.Axis is @frozen with .horizontal == 0, .vertical == 1 (stable, matches RawValue)
         self = raw == 0 ? .horizontal : .vertical
     }
     public func encode(to encoder: Encoder) throws {
