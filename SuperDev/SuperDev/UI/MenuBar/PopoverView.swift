@@ -5,6 +5,7 @@ struct PopoverView: View {
     @EnvironmentObject var menuBarManager: MenuBarManager
     @State private var hoveredProjectId: UUID?
     @State private var selectedServiceIds: Set<UUID> = []
+    @State private var searchText: String = ""
     var body: some View {
         HStack(spacing: 0) {
             projectList
@@ -19,60 +20,133 @@ struct PopoverView: View {
     // MARK: - Project list (left panel)
 
     private var projectList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("项目")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+        VStack(spacing: 0) {
+            // 搜索栏
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.textTertiary)
+                TextField("搜索服务…", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Theme.bgElevated)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Theme.borderSecondary, lineWidth: 1)
+            )
+            .cornerRadius(6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
 
-            ForEach(core.projects) { project in
-                projectRow(project)
+            Divider().background(Theme.borderPrimary)
+
+            // 项目列表
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(core.projects) { project in
+                        projectSection(project)
+                    }
+                }
             }
 
-            Divider().padding(.vertical, 4)
+            Divider().background(Theme.borderPrimary)
 
+            // 添加项目
             Button {
                 openAddProject()
             } label: {
-                Label("添加项目", systemImage: "plus")
-                    .font(.subheadline)
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11))
+                    Text("添加项目")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(Theme.accent)
             }
             .buttonStyle(.plain)
-            .foregroundColor(.accentColor)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            Spacer()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 200)
+        .frame(width: 170)
+        .background(Theme.bgPrimary)
     }
 
-    private func projectRow(_ project: Project) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor(project.overallStatus))
-                .frame(width: 8, height: 8)
-            Text(project.name)
-                .lineLimit(1)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary)
+    private func projectSection(_ project: Project) -> some View {
+        let filtered = filteredServices(of: project)
+        guard !filtered.isEmpty || searchText.isEmpty else { return AnyView(EmptyView()) }
+
+        return AnyView(VStack(alignment: .leading, spacing: 0) {
+            // 项目 label
+            HStack {
+                Text(project.name.uppercased())
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(Theme.textTertiary)
+                    .kerning(0.8)
+                Spacer()
+                Circle()
+                    .fill(projectStatusColor(project.overallStatus))
+                    .shadow(color: projectStatusColor(project.overallStatus).opacity(0.6),
+                            radius: 3)
+                    .frame(width: 6, height: 6)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+
+            // 服务行
+            ForEach(filtered) { service in
+                leftServiceRow(service, in: project)
+            }
+        })
+    }
+
+    private func filteredServices(of project: Project) -> [Service] {
+        guard !searchText.isEmpty else { return project.services }
+        return project.services.filter {
+            $0.name.localizedCaseInsensitiveContains(searchText)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(hoveredProjectId == project.id ? Color.accentColor.opacity(0.1) : Color.clear)
+    }
+
+    private func leftServiceRow(_ service: Service, in project: Project) -> some View {
+        let isSelected = hoveredProjectId == project.id
+
+        return HStack(spacing: 7) {
+            Circle()
+                .fill(serviceStatusColor(service.status))
+                .shadow(color: serviceStatusColor(service.status).opacity(
+                    service.status == .running || service.status == .starting ? 0.6 : 0
+                ), radius: 3)
+                .frame(width: 6, height: 6)
+
+            Text(service.name)
+                .font(.system(size: 11))
+                .foregroundColor(isSelected ? Theme.textPrimary : Theme.textSecondary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Text(statusLabel(service.status))
+                .font(.system(size: 9))
+                .foregroundColor(serviceStatusColor(service.status))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isSelected ? Theme.bgElevated : Color.clear)
         .overlay(alignment: .leading) {
-            if hoveredProjectId == project.id {
+            if isSelected {
                 Rectangle()
-                    .frame(width: 3)
-                    .foregroundColor(.accentColor)
+                    .frame(width: 2)
+                    .foregroundColor(Theme.accent)
             }
         }
         .contentShape(Rectangle())
-        .onHover { isHovered in
-            if isHovered {
+        .onHover { hovered in
+            if hovered {
                 hoveredProjectId = project.id
                 selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
             }
@@ -245,6 +319,24 @@ struct PopoverView: View {
 
     private func openAddProject() {
         menuBarManager.openSettingsWindow()
+    }
+
+    private func serviceStatusColor(_ status: ServiceStatus) -> Color {
+        switch status {
+        case .stopped:  return Theme.statusStopped
+        case .starting: return Theme.statusStarting
+        case .running:  return Theme.statusRunning
+        case .failed:   return Theme.statusFailed
+        }
+    }
+
+    private func projectStatusColor(_ status: ProjectStatus) -> Color {
+        switch status {
+        case .stopped:  return Theme.statusStopped
+        case .starting: return Theme.statusStarting
+        case .running:  return Theme.statusRunning
+        case .failed:   return Theme.statusFailed
+        }
     }
 
     private func statusColor(_ status: ServiceStatus) -> Color {
