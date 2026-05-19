@@ -268,7 +268,6 @@ struct LogPanelView: View {
                 ? (rule.type == .include ? Color.blue.opacity(0.10) : Color.green.opacity(0.10))
                 : Color.secondary.opacity(0.08))
             .cornerRadius(4)
-            .opacity(rule.enabled ? 1.0 : 0.55)
         }
         .buttonStyle(.plain)
         .help(rule.enabled ? "点击禁用此规则" : "点击启用此规则")
@@ -609,7 +608,8 @@ struct LogPanelView: View {
     }
 
     private func toggleProjectRule(_ rule: LogRule, project: Project) {
-        var config = core.logRules(for: project)
+        let cached = core.logRules(for: project.id)
+        var config = LogRulesConfig(rules: cached)
         guard let idx = config.rules.firstIndex(where: { $0.id == rule.id }) else { return }
         config.rules[idx].enabled.toggle()
         do {
