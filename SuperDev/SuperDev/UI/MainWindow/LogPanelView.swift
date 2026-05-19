@@ -642,8 +642,8 @@ struct LogPanelView: View {
                 .frame(width: 48, alignment: .leading)
 
             logMessageArea(entry)
-
-            Spacer()
+                .layoutPriority(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if entry.repeatCount > 1 {
                 Text("×\(entry.repeatCount)")
@@ -703,6 +703,7 @@ struct LogPanelView: View {
                 }
             )
             .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
 
             if activeSelectionEntryId == entry.id,
                let text = activeSelectionText,

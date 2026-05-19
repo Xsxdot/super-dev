@@ -35,6 +35,52 @@ final class LogFilterTests: XCTestCase {
         XCTAssertFalse(LogFilter.passes(entry(message: "foo only"), rules: [rule]))
     }
 
+    func test_keywordTokenizer_splitsOnSeparators() {
+        XCTAssertEqual(KeywordTokenizer.split("a, b\nc\td;e"), ["a", "b", "c", "d", "e"])
+    }
+
+    func test_makeRulesFromChips_includeOnly() {
+        let chips = [
+            FilterChip(keyword: "error", type: .include),
+            FilterChip(keyword: "warn", type: .include),
+        ]
+        let rules = LogChipRuleBuilder.makeRulesFromChips(name: "Errors", chips: chips, logic: .and)
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules[0].name, "Errors")
+        XCTAssertEqual(rules[0].type, .include)
+        XCTAssertEqual(rules[0].keywords, ["error", "warn"])
+        XCTAssertEqual(rules[0].logic, .and)
+    }
+
+    func test_makeRulesFromChips_excludeOnly() {
+        let chips = [FilterChip(keyword: "heartbeat", type: .exclude)]
+        let rules = LogChipRuleBuilder.makeRulesFromChips(name: "", chips: chips, logic: .or)
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules[0].name, "快捷过滤")
+        XCTAssertEqual(rules[0].type, .exclude)
+    }
+
+    func test_makeRulesFromChips_mixedTypes() {
+        let chips = [
+            FilterChip(keyword: "error", type: .include),
+            FilterChip(keyword: "ping", type: .exclude),
+        ]
+        let rules = LogChipRuleBuilder.makeRulesFromChips(name: "Filter", chips: chips, logic: .or)
+        XCTAssertEqual(rules.count, 2)
+        XCTAssertEqual(rules[0].name, "Filter (包含)")
+        XCTAssertEqual(rules[0].keywords, ["error"])
+        XCTAssertEqual(rules[1].name, "Filter (排除)")
+        XCTAssertEqual(rules[1].keywords, ["ping"])
+    }
+
+    func test_isDuplicate_matchesTypeKeywordsAndLogic() {
+        let existing = LogRule(name: "x", type: .exclude, keywords: ["a", "b"], logic: .and)
+        let same = LogRule(name: "y", type: .exclude, keywords: ["b", "a"], logic: .and)
+        let different = LogRule(name: "z", type: .exclude, keywords: ["a", "b"], logic: .or)
+        XCTAssertTrue(LogChipRuleBuilder.isDuplicate(same, in: [existing]))
+        XCTAssertFalse(LogChipRuleBuilder.isDuplicate(different, in: [existing]))
+    }
+
     func test_chip_exclude() {
         XCTAssertFalse(
             LogFilter.passes(
@@ -165,6 +211,39 @@ final class ConfigLoaderLogRulesTests: XCTestCase {
         let loaded = try loader.loadLogRules()
         XCTAssertEqual(loaded.rules.count, 1)
         XCTAssertEqual(loaded.rules[0].name, "test")
+    }
+
+    func test_saveLogRules_emptyRulesAfterDelete() throws {
+        let loader = ConfigLoader(rootPath: tempDir.path)
+        let rule = LogRule(
+            id: UUID(uuidString: "A1B2C3D4-E5F6-7890-ABCD-EF1234567890")!,
+            name: "to-remove",
+            type: .exclude,
+            keywords: ["noise"],
+            logic: .or
+        )
+        try loader.saveLogRules(LogRulesConfig(rules: [rule]))
+        try loader.saveLogRules(LogRulesConfig(rules: []))
+        let loaded = try loader.loadLogRules()
+        XCTAssertTrue(loaded.rules.isEmpty)
+    }
+
+    func test_removeOneOfTwoRules_roundTrips() throws {
+        let loader = ConfigLoader(rootPath: tempDir.path)
+        let keepId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let removeId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let keep = LogRule(id: keepId, name: "keep", type: .include, keywords: ["ok"], logic: .or)
+        let remove = LogRule(id: removeId, name: "remove", type: .exclude, keywords: ["noise"], logic: .or)
+        try loader.saveLogRules(LogRulesConfig(rules: [keep, remove]))
+
+        var config = try loader.loadLogRules()
+        config.rules.removeAll { $0.id == removeId }
+        try loader.saveLogRules(config)
+
+        let loaded = try loader.loadLogRules()
+        XCTAssertEqual(loaded.rules.count, 1)
+        XCTAssertEqual(loaded.rules[0].id, keepId)
+        XCTAssertEqual(loaded.rules[0].name, "keep")
     }
 
     func test_saveProject_preservesLogRulesWhenProjectFieldsChange() throws {

@@ -48,6 +48,54 @@ struct SuperDevApp: App {
             EmptyView()
         }
         .defaultSize(width: 0, height: 0)
-        .commandsRemoved()
+        .commands {
+            // 隐藏不需要的系统菜单项；保留 Edit（剪切/拷贝/粘贴）等默认命令。
+            CommandGroup(replacing: .appSettings) { }
+            CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .saveItem) { }
+            CommandGroup(replacing: .importExport) { }
+            StandardEditCommands()
+        }
+    }
+}
+
+/// 显式注册编辑命令，确保 NSHostingController 窗口中的文本控件能响应 Cmd+C/V/X。
+struct StandardEditCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .undoRedo) {
+            Button("撤销") {
+                NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+            }
+            .keyboardShortcut("z", modifiers: .command)
+
+            Button("重做") {
+                NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+
+        CommandGroup(replacing: .pasteboard) {
+            Button("剪切") {
+                NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("x", modifiers: .command)
+
+            Button("拷贝") {
+                NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("c", modifiers: .command)
+
+            Button("粘贴") {
+                NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("v", modifiers: .command)
+
+            Divider()
+
+            Button("全选") {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("a", modifiers: .command)
+        }
     }
 }

@@ -45,7 +45,7 @@ final class MenuBarManager: ObservableObject {
         mainWindow?.makeKeyAndOrderFront(nil)
     }
 
-    func openSettingsWindow() {
+    @objc func openSettingsWindow() {
         popover?.performClose(nil)
         if settingsWindow == nil {
             let vc = NSHostingController(rootView: SettingsView().environmentObject(core))
@@ -144,6 +144,10 @@ final class MenuBarManager: ObservableObject {
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         let menu = NSMenu()
+        let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "退出 SuperDev", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -169,7 +173,7 @@ final class MenuBarManager: ObservableObject {
     @objc private func togglePopover() {
         guard let button = statusItem?.button else { return }
         let event = NSApp.currentEvent
-        // 右键点击 → 显示退出菜单
+        // 右键点击 → 显示设置/退出菜单
         if event?.type == .rightMouseUp {
             if popover?.isShown == true { popover?.performClose(nil) }
             if let menu = rightClickMenu {
