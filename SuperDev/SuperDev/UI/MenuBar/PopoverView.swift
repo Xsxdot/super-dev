@@ -76,33 +76,34 @@ struct PopoverView: View {
         .background(Theme.bgPrimary)
     }
 
+    @ViewBuilder
     private func projectSection(_ project: Project) -> some View {
         let filtered = filteredServices(of: project)
-        guard !filtered.isEmpty || searchText.isEmpty else { return AnyView(EmptyView()) }
+        if !filtered.isEmpty || searchText.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                // 项目 label
+                HStack {
+                    Text(project.name.uppercased())
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Theme.textTertiary)
+                        .kerning(0.8)
+                    Spacer()
+                    Circle()
+                        .fill(projectStatusColor(project.overallStatus))
+                        .shadow(color: projectStatusColor(project.overallStatus).opacity(0.6),
+                                radius: 3)
+                        .frame(width: 6, height: 6)
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 3)
 
-        return AnyView(VStack(alignment: .leading, spacing: 0) {
-            // 项目 label
-            HStack {
-                Text(project.name.uppercased())
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(Theme.textTertiary)
-                    .kerning(0.8)
-                Spacer()
-                Circle()
-                    .fill(projectStatusColor(project.overallStatus))
-                    .shadow(color: projectStatusColor(project.overallStatus).opacity(0.6),
-                            radius: 3)
-                    .frame(width: 6, height: 6)
+                // 服务行
+                ForEach(filtered) { service in
+                    leftServiceRow(service, in: project)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 3)
-
-            // 服务行
-            ForEach(filtered) { service in
-                leftServiceRow(service, in: project)
-            }
-        })
+        }
     }
 
     private func filteredServices(of project: Project) -> [Service] {
@@ -113,7 +114,7 @@ struct PopoverView: View {
     }
 
     private func leftServiceRow(_ service: Service, in project: Project) -> some View {
-        let isSelected = hoveredProjectId == project.id
+        let isProjectHovered = hoveredProjectId == project.id
 
         return HStack(spacing: 7) {
             Circle()
@@ -125,7 +126,7 @@ struct PopoverView: View {
 
             Text(service.name)
                 .font(.system(size: 11))
-                .foregroundColor(isSelected ? Theme.textPrimary : Theme.textSecondary)
+                .foregroundColor(isProjectHovered ? Theme.textPrimary : Theme.textSecondary)
                 .lineLimit(1)
 
             Spacer()
@@ -136,9 +137,9 @@ struct PopoverView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(isSelected ? Theme.bgElevated : Color.clear)
+        .background(isProjectHovered ? Theme.bgElevated : Color.clear)
         .overlay(alignment: .leading) {
-            if isSelected {
+            if isProjectHovered {
                 Rectangle()
                     .frame(width: 2)
                     .foregroundColor(Theme.accent)
