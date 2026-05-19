@@ -253,7 +253,7 @@ struct PopoverView: View {
                 let someSelected = project.services.contains { selectedServiceIds.contains($0.id) }
                 ZStack {
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(allSelected || someSelected ? Theme.accent : Color.clear)
+                        .fill(allSelected ? Theme.accent : Color.clear)
                         .overlay(
                             RoundedRectangle(cornerRadius: 2)
                                 .stroke(allSelected || someSelected ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
@@ -265,7 +265,7 @@ struct PopoverView: View {
                             .frame(width: 8, height: 8)
                     } else if someSelected {
                         Rectangle()
-                            .fill(Color.white)
+                            .fill(Theme.accent)
                             .frame(width: 8, height: 1.5)
                             .cornerRadius(1)
                     }
@@ -402,16 +402,6 @@ struct PopoverView: View {
     private var hoveredProject: Project? {
         guard let id = hoveredProjectId else { return nil }
         return core.projects.first { $0.id == id }
-    }
-
-    private func allSelectedBinding(for project: Project) -> Binding<Bool> {
-        Binding(
-            get: { project.services.allSatisfy { selectedServiceIds.contains($0.id) } },
-            set: { all in
-                if all { project.services.forEach { selectedServiceIds.insert($0.id) } }
-                else { selectedServiceIds.removeAll() }
-            }
-        )
     }
 
     private func toggleInvert(for project: Project) {
