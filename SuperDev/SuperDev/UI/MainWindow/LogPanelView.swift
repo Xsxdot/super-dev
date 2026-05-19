@@ -147,7 +147,7 @@ struct LogPanelView: View {
             toolbar
             Divider()
             if core.viewingRunId != nil {
-                historyBanner
+                historyBanner(info: historyBannerInfo(from: display))
                 Divider()
             }
             logList(items: display.items)
@@ -493,8 +493,8 @@ struct LogPanelView: View {
 
     // MARK: - History banner
 
-    private var historyBanner: some View {
-        let (startTime, logCount) = historyBannerInfo
+    private func historyBanner(info: (startTime: Date?, logCount: Int)) -> some View {
+        let (startTime, logCount) = info
         return HStack(spacing: 8) {
             Image(systemName: "clock")
                 .foregroundColor(.orange)
@@ -516,10 +516,10 @@ struct LogPanelView: View {
         .background(Color.yellow.opacity(0.15))
     }
 
-    /// Uses the same filters as the log list so the banner count matches what is shown.
-    private var historyBannerInfo: (startTime: Date?, logCount: Int) {
-        let displayed = makeLogDisplay()
-        let firstEntry: LogEntry? = displayed.items.compactMap {
+    /// Uses the already-computed display so the banner count matches what is shown
+    /// without triggering a second call to makeLogDisplay().
+    private func historyBannerInfo(from display: LogDisplay) -> (startTime: Date?, logCount: Int) {
+        let firstEntry: LogEntry? = display.items.compactMap {
             if case .entry(let e) = $0 { return e } else { return nil }
         }.first
         let startTime: Date? = {
@@ -529,7 +529,7 @@ struct LogPanelView: View {
             }
             return firstEntry?.timestamp
         }()
-        let entryCount = displayed.items.filter { if case .entry = $0 { true } else { false } }.count
+        let entryCount = display.items.filter { if case .entry = $0 { true } else { false } }.count
         return (startTime, entryCount)
     }
 

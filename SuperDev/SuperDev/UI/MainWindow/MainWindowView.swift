@@ -3,6 +3,7 @@ import SwiftUI
 struct MainWindowView: View {
     @EnvironmentObject var core: AppCore
     @State private var selectedServiceId: UUID?
+    @State private var panelId: UUID = UUID()
 
     private var selectedProject: Project? {
         if let sid = selectedServiceId {
@@ -18,7 +19,7 @@ struct MainWindowView: View {
             )
         } detail: {
             LogPanelView(
-                panelId: UUID(),
+                panelId: panelId,
                 serviceId: selectedServiceId,
                 project: selectedProject
             )
