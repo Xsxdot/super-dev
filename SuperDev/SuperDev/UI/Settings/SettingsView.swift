@@ -16,6 +16,10 @@ struct SettingsView: View {
                 .fill(Theme.borderPrimary)
                 .frame(height: 1)
             addButton
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
+            mcpSection
         }
         .onAppear {
             retentionDays = core.logRetentionDays
@@ -159,5 +163,64 @@ struct SettingsView: View {
             .padding(12)
         }
         .background(Theme.bgPrimary)
+    }
+
+    private var mcpSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("MCP 集成")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Control socket")
+                    .font(.caption)
+                    .foregroundColor(Theme.textSecondary)
+                Text(ControlSocketServer.socketPath)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(Theme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Button {
+                copyMCPConfig()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard")
+                    Text("复制 Claude Code 配置")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .help("复制后粘贴到 .claude/settings.json 的 mcpServers 字段")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Theme.bgElevated)
+    }
+
+    private func copyMCPConfig() {
+        let binaryPath: String
+        if let bundlePath = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("superdev-mcp").path,
+           FileManager.default.fileExists(atPath: bundlePath) {
+            binaryPath = bundlePath
+        } else {
+            binaryPath = "/Applications/SuperDev.app/Contents/MacOS/superdev-mcp"
+        }
+
+        let config = """
+        {
+          "mcpServers": {
+            "superdev": {
+              "command": "\(binaryPath)"
+            }
+          }
+        }
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(config, forType: .string)
     }
 }
