@@ -71,6 +71,7 @@ final class ProcessRunner {
         process?.terminate()
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         errorPipe?.fileHandleForReading.readabilityHandler = nil
+        process = nil
     }
 
     // MARK: - Private

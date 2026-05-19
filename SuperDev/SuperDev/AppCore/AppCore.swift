@@ -17,17 +17,48 @@ final class AppCore: ObservableObject {
     @Published var projects: [Project] = []
     @Published var logs: [LogEntry] = []
     @Published var currentRunId: UUID
+    /// 用户选择在 Popover 中隐藏的服务 ID 集合（持久化到 UserDefaults）
+    @Published var hiddenServiceIds: Set<UUID> = []
 
     private let projectStore = ProjectStore()
     private let logStore = LogStore()
     private let logEngine: LogEngine
     private var processManagers: [UUID: ProcessManager] = [:]  // projectId → manager
 
+    private let hiddenServiceIdsKey = "superdev.hidden_service_ids"
+
     init() {
         let runId = UUID()
         currentRunId = runId
         logEngine = LogEngine(runId: runId)
+        hiddenServiceIds = Self.loadHiddenServiceIds()
+        killOrphanProcesses()
         loadProjects()
+    }
+
+    // MARK: - Hidden Services
+
+    func toggleHidden(_ service: Service) {
+        if hiddenServiceIds.contains(service.id) {
+            hiddenServiceIds.remove(service.id)
+        } else {
+            hiddenServiceIds.insert(service.id)
+        }
+        saveHiddenServiceIds()
+    }
+
+    func isHidden(_ service: Service) -> Bool {
+        hiddenServiceIds.contains(service.id)
+    }
+
+    private func saveHiddenServiceIds() {
+        let strings = hiddenServiceIds.map { $0.uuidString }
+        UserDefaults.standard.set(strings, forKey: hiddenServiceIdsKey)
+    }
+
+    private static func loadHiddenServiceIds() -> Set<UUID> {
+        let strings = UserDefaults.standard.stringArray(forKey: "superdev.hidden_service_ids") ?? []
+        return Set(strings.compactMap { UUID(uuidString: $0) })
     }
 
     // MARK: - Project Management
@@ -73,12 +104,17 @@ final class AppCore: ObservableObject {
     }
 
     func stop(_ service: Service, in project: Project) {
+        // ProcessManager.stop 内部会通过 onStatusChange 回调更新状态，无需在此重复
         processManagers[project.id]?.stop(service.id)
-        updateServiceStatus(service.id, status: .stopped, in: project.id)
     }
 
     func startSelected(services: [Service], in project: Project) {
         services.forEach { start($0, in: project) }
+    }
+
+    func restart(_ service: Service, in project: Project) {
+        let manager = getOrCreateManager(for: project)
+        manager.restart(service, projectRootPath: project.rootPath)
     }
 
     func stopAll(project: Project) {
@@ -132,6 +168,14 @@ final class AppCore: ObservableObject {
             onStatusChange: { [weak self] serviceId, status in
                 guard let self else { return }
                 self.updateServiceStatus(serviceId, status: status, in: project.id)
+            },
+            onPidReady: { [weak self] serviceId, pid in
+                guard let self else { return }
+                if let pid {
+                    self.recordPid(pid, for: serviceId)
+                } else {
+                    self.clearPid(for: serviceId)
+                }
             }
         )
         processManagers[project.id] = manager
@@ -142,5 +186,53 @@ final class AppCore: ObservableObject {
         guard let pi = projects.firstIndex(where: { $0.id == projectId }),
               let si = projects[pi].services.firstIndex(where: { $0.id == serviceId }) else { return }
         projects[pi].services[si].status = status
+    }
+
+    // MARK: - Orphan Process Cleanup
+
+    // PID 文件路径，保存上次运行时各服务的 PID
+    private var pidFilePath: String {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return (support?.appendingPathComponent("SuperDev/running_pids.json").path) ?? "/tmp/superdev_pids.json"
+    }
+
+    // 记录当前运行中的 PID（在进程启动后调用）
+    func recordPid(_ pid: Int32, for serviceId: UUID) {
+        var pids = loadSavedPids()
+        pids[serviceId.uuidString] = pid
+        savePids(pids)
+    }
+
+    // 清除某服务的 PID 记录
+    func clearPid(for serviceId: UUID) {
+        var pids = loadSavedPids()
+        pids.removeValue(forKey: serviceId.uuidString)
+        savePids(pids)
+    }
+
+    // 启动时 kill 上次遗留的孤儿进程
+    private func killOrphanProcesses() {
+        let pids = loadSavedPids()
+        for (_, pid) in pids {
+            kill(pid, SIGTERM)
+        }
+        // 清空 PID 文件
+        savePids([:])
+    }
+
+    private func loadSavedPids() -> [String: Int32] {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: pidFilePath)),
+              let decoded = try? JSONDecoder().decode([String: Int32].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private func savePids(_ pids: [String: Int32]) {
+        let dir = URL(fileURLWithPath: pidFilePath).deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(pids) {
+            try? data.write(to: URL(fileURLWithPath: pidFilePath))
+        }
     }
 }

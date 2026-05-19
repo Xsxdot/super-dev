@@ -34,11 +34,12 @@ struct Service: Identifiable, Codable, Equatable {
     var required: Bool
     var envFile: String?
     var env: [String: String]
+    var hidden: Bool = false              // not persisted — UI-only toggle
     var status: ServiceStatus = .stopped  // not persisted
 
     private enum CodingKeys: String, CodingKey {
         case id, name, command, workingDir, required, envFile, env
-        // status is intentionally excluded
+        // hidden and status are intentionally excluded
     }
 
     init(
@@ -57,6 +58,7 @@ struct Service: Identifiable, Codable, Equatable {
         self.required = required
         self.envFile = envFile
         self.env = env
+        self.hidden = false
         self.status = .stopped
     }
 }
