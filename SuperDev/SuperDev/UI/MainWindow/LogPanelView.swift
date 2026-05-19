@@ -43,6 +43,7 @@ struct LogPanelView: View {
     var project: Project?
 
     @State private var chipInput: String = ""
+    @State private var nextChipType: FilterChip.ChipType = .include
     @State private var chips: [FilterChip] = []
     @State private var chipLogic: ChipLogic = .or
     @State private var enabledLevels: Set<LogLevel> = [.error, .warn, .info]
@@ -140,6 +141,14 @@ struct LogPanelView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
                 .font(.system(size: 11))
+
+            Picker("", selection: $nextChipType) {
+                Text("包含").tag(FilterChip.ChipType.include)
+                Text("排除").tag(FilterChip.ChipType.exclude)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 88)
+            .labelsHidden()
 
             ForEach(chips) { chip in
                 chipView(chip)
@@ -507,15 +516,15 @@ struct LogPanelView: View {
     // MARK: - Helpers
 
     private func addChipFromInput() {
-        addChip(chipInput)
+        addChip(chipInput, type: nextChipType)
         chipInput = ""
     }
 
-    private func addChip(_ text: String) {
+    private func addChip(_ text: String, type: FilterChip.ChipType = .include) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !chips.contains(where: { $0.keyword.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return }
-        chips.append(FilterChip(keyword: trimmed, type: .include))
+        chips.append(FilterChip(keyword: trimmed, type: type))
     }
 
     private func toggleChipType(_ id: UUID) {
