@@ -18,7 +18,8 @@ final class AppState {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        // 无窗口时仅菜单栏，不占用 Dock
+        NSApp.setActivationPolicy(.accessory)
         Task { @MainActor in
             AppState.shared.setupMenuBar()
         }
@@ -41,9 +42,12 @@ struct SuperDevApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // 必须有一个 scene；全部窗口由 MenuBarManager 直接管理
-        Settings {
+        // 占位 scene，所有窗口由 MenuBarManager 直接管理。
+        // 不用 Settings {} 以避免系统应用菜单出现空白的 "Settings..." 入口。
+        WindowGroup {
             EmptyView()
         }
+        .defaultSize(width: 0, height: 0)
+        .commandsRemoved()
     }
 }

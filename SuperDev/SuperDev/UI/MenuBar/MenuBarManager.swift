@@ -11,10 +11,12 @@ final class MenuBarManager: ObservableObject {
     private var mainWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var rightClickMenu: NSMenu?
+    private let windowDelegate = AppWindowDelegate()
     private let core: AppCore
 
     init(core: AppCore) {
         self.core = core
+        windowDelegate.manager = self
         setup()
     }
 
@@ -35,8 +37,10 @@ final class MenuBarManager: ObservableObject {
             window.minSize = NSSize(width: 800, height: 500)
             window.center()
             window.isReleasedWhenClosed = false
+            window.delegate = windowDelegate
             mainWindow = window
         }
+        showInDock()
         NSApp.activate(ignoringOtherApps: true)
         mainWindow?.makeKeyAndOrderFront(nil)
     }
@@ -52,10 +56,38 @@ final class MenuBarManager: ObservableObject {
             window.minSize = NSSize(width: 480, height: 300)
             window.center()
             window.isReleasedWhenClosed = false
+            window.delegate = windowDelegate
             settingsWindow = window
         }
+        showInDock()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 根据主窗口/设置窗口是否仍在前台或最小化，同步 Dock 显示策略。
+    func syncActivationPolicyWithWindows() {
+        if shouldShowInDock {
+            showInDock()
+        } else {
+            hideFromDock()
+        }
+    }
+
+    private var shouldShowInDock: Bool {
+        [mainWindow, settingsWindow].compactMap { $0 }.contains { window in
+            window.isVisible || window.isMiniaturized
+        }
+    }
+
+    private func showInDock() {
+        guard NSApp.activationPolicy() != .regular else { return }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func hideFromDock() {
+        guard NSApp.activationPolicy() != .accessory else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
 
     // 按 superdev-logo-v5-launch.svg 绘制彩色菜单栏图标
@@ -174,5 +206,14 @@ final class MenuBarManager: ObservableObject {
         if let contentView = popoverWindow.contentView {
             disableEffectViews(in: contentView)
         }
+    }
+}
+
+@MainActor
+private final class AppWindowDelegate: NSObject, NSWindowDelegate {
+    weak var manager: MenuBarManager?
+
+    func windowDidClose(_ notification: Notification) {
+        manager?.syncActivationPolicyWithWindows()
     }
 }
