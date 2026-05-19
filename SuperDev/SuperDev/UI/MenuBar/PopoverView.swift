@@ -42,7 +42,9 @@ struct PopoverView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 10)
 
-            Divider().background(Theme.borderPrimary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
 
             // 项目列表
             ScrollView {
@@ -53,7 +55,9 @@ struct PopoverView: View {
                 }
             }
 
-            Divider().background(Theme.borderPrimary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
 
             // 添加项目
             Button {
@@ -159,9 +163,13 @@ struct PopoverView: View {
     private func servicePanel(for project: Project) -> some View {
         VStack(spacing: 0) {
             servicePanelHeader(for: project)
-            Divider().background(Theme.borderPrimary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
             servicePanelToolbar(for: project)
-            Divider().background(Theme.bgElevated)
+            Rectangle()
+                .fill(Theme.bgElevated)
+                .frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     let required = project.services.filter { $0.required }
@@ -180,7 +188,9 @@ struct PopoverView: View {
                     }
                 }
             }
-            Divider().background(Theme.borderPrimary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
             servicePanelFooter()
         }
         .frame(width: 260)
@@ -347,6 +357,7 @@ struct PopoverView: View {
             Text(statusLabel(service.status))
                 .font(.system(size: 9))
                 .foregroundColor(serviceStatusColor(service.status))
+                .help(failureTooltip(for: service))
 
             // 启停按钮（18×18 圆角方块）
             Button {
@@ -433,6 +444,13 @@ struct PopoverView: View {
         case .running:  return Theme.statusRunning
         case .failed:   return Theme.statusFailed
         }
+    }
+
+    private func failureTooltip(for service: Service) -> String {
+        guard service.status == .failed,
+              let entry = core.lastErrorLog(for: service.id) else { return "" }
+        let msg = entry.message
+        return msg.count > 120 ? String(msg.prefix(120)) + "…" : msg
     }
 
     private func statusLabel(_ status: ServiceStatus) -> String {
