@@ -538,7 +538,7 @@ final class AppCore: ObservableObject {
     func startSyncBookmark(serviceIdByPanelId: [UUID: UUID?]) {
         guard !syncGroupIsRecording else { return }
         for panelId in syncGroupPanelIds {
-            let serviceId = serviceIdByPanelId[panelId] ?? nil
+            let serviceId = serviceIdByPanelId[panelId].flatMap { $0 }
             startBookmark(panelId: panelId, serviceId: serviceId)
         }
         syncGroupIsRecording = true
@@ -565,6 +565,7 @@ final class AppCore: ObservableObject {
                   bm.isCompleted,
                   bm.serviceId != nil,
                   !bm.lockedLogs.isEmpty else { continue }
+            // 每个面板的书签绑定到单一服务（serviceId 非 nil），所有 lockedLogs 来自同一服务
             let serviceName = bm.lockedLogs.first?.serviceName ?? "unknown"
             blocksByService.append((name: serviceName, text: bm.formattedText))
         }
