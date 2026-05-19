@@ -32,6 +32,7 @@ final class AppCore: ObservableObject {
     private let logStore = LogStore()
     private let logEngine: LogEngine
     private var processManagers: [UUID: ProcessManager] = [:]  // projectId → manager
+    private var controlServer: ControlSocketServer?
 
     private let hiddenServiceIdsKey = "superdev.hidden_service_ids"
 
@@ -44,6 +45,8 @@ final class AppCore: ObservableObject {
         loadProjects()
         reloadLogRules()
         performStartupLogMaintenance()
+        controlServer = ControlSocketServer(core: self)
+        controlServer?.start()
     }
 
     // MARK: - Log retention & history

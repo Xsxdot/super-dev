@@ -73,3 +73,14 @@ enum ServiceStatus: Codable, Equatable {
         self == .running || self == .starting
     }
 }
+
+extension ServiceStatus {
+    var rawStringValue: String {
+        switch self {
+        case .stopped:  return "stopped"
+        case .starting: return "starting"
+        case .running:  return "running"
+        case .failed:   return "failed"
+        }
+    }
+}
