@@ -4,7 +4,6 @@ struct PopoverView: View {
     @EnvironmentObject var core: AppCore
     @EnvironmentObject var menuBarManager: MenuBarManager
     @State private var hoveredProjectId: UUID?
-    @State private var selectedServiceIds: Set<UUID> = []
     @State private var searchText: String = ""
     var body: some View {
         HStack(spacing: 0) {
@@ -153,11 +152,7 @@ struct PopoverView: View {
         .contentShape(Rectangle())
         .onHover { hovered in
             if hovered {
-                let switchingProject = hoveredProjectId != project.id
                 hoveredProjectId = project.id
-                if switchingProject {
-                    selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
-                }
             }
         }
     }
@@ -219,7 +214,8 @@ struct PopoverView: View {
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.borderSecondary, lineWidth: 1))
                     .cornerRadius(5)
                 Button("▶ 启动选中") {
-                    let toStart = project.services.filter { selectedServiceIds.contains($0.id) }
+                    let selected = core.defaultSelectedServiceIds(for: project)
+                    let toStart = project.services.filter { selected.contains($0.id) }
                     core.startSelected(services: toStart, in: project)
                 }
                 .buttonStyle(.plain)
@@ -257,15 +253,19 @@ struct PopoverView: View {
     private func servicePanelToolbar(for project: Project) -> some View {
         HStack(spacing: 10) {
             let selectableIds = Set(project.services.map { $0.id })
-            let allSelected = !selectableIds.isEmpty && selectableIds.allSatisfy { selectedServiceIds.contains($0) }
-            let someSelected = selectableIds.contains { selectedServiceIds.contains($0) }
+            let selected = core.defaultSelectedServiceIds(for: project)
+            let allSelected = !selectableIds.isEmpty && selectableIds.allSatisfy { selected.contains($0) }
+            let someSelected = selectableIds.contains { selected.contains($0) }
 
             Button {
                 if allSelected {
                     // 全选→取消：只保留必须启动的（不允许取消）
-                    selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
+                    core.setSelectedServiceIds(
+                        Set(project.services.filter { $0.required }.map(\.id)),
+                        for: project
+                    )
                 } else {
-                    selectedServiceIds = selectedServiceIds.union(selectableIds)
+                    core.setSelectedServiceIds(selected.union(selectableIds), for: project)
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -305,17 +305,18 @@ struct PopoverView: View {
     }
 
     private func serviceRow(_ service: Service, in project: Project) -> some View {
-        HStack(spacing: 8) {
+        let selected = core.defaultSelectedServiceIds(for: project)
+        return HStack(spacing: 8) {
             // 自绘 checkbox（必须启动的服务不允许取消选中）
             Button {
                 if service.required { return }
-                if selectedServiceIds.contains(service.id) {
-                    selectedServiceIds = selectedServiceIds.subtracting([service.id])
+                if selected.contains(service.id) {
+                    core.setSelectedServiceIds(selected.subtracting([service.id]), for: project)
                 } else {
-                    selectedServiceIds = selectedServiceIds.union([service.id])
+                    core.setSelectedServiceIds(selected.union([service.id]), for: project)
                 }
             } label: {
-                serviceCheckboxGlyph(checked: selectedServiceIds.contains(service.id))
+                serviceCheckboxGlyph(checked: selected.contains(service.id))
             }
             .buttonStyle(.plain)
 
@@ -464,9 +465,10 @@ struct PopoverView: View {
 
     private func toggleInvert(for project: Project) {
         let all = Set(project.services.map { $0.id })
-        let required = Set(project.services.filter { $0.required }.map { $0.id })
+        let required = Set(project.services.filter { $0.required }.map(\.id))
+        let selected = core.defaultSelectedServiceIds(for: project)
         // 反选后，必须启动的服务始终保持选中
-        selectedServiceIds = all.subtracting(selectedServiceIds).union(required)
+        core.setSelectedServiceIds(all.subtracting(selected).union(required), for: project)
     }
 
     private func openMainWindow() {

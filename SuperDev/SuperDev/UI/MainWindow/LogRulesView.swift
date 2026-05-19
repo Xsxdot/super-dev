@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LogRulesView: View {
     @EnvironmentObject var core: AppCore
@@ -50,8 +52,10 @@ struct LogRulesView: View {
                 ruleRow(rule: $rule)
             }
             .onDelete { indexSet in
-                config.rules.remove(atOffsets: indexSet)
-                persist()
+                let rulesToDelete = indexSet.map { config.rules[$0] }
+                for rule in rulesToDelete {
+                    deleteRule(rule)
+                }
             }
         }
     }
@@ -84,8 +88,34 @@ struct LogRulesView: View {
                 Image(systemName: "pencil")
             }
             .buttonStyle(.plain)
+
+            Button(role: .destructive) {
+                deleteRule(rule.wrappedValue)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundColor(Theme.statusFailed)
+            }
+            .buttonStyle(.plain)
+            .help("删除规则")
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Button("删除", role: .destructive) {
+                deleteRule(rule.wrappedValue)
+            }
+        }
+    }
+
+    private func deleteRule(_ rule: LogRule) {
+        if editingRule?.id == rule.id || draftRule?.id == rule.id {
+            closeEditor()
+        }
+        do {
+            try core.removeLogRule(id: rule.id, from: project)
+            config = core.logRules(for: project)
+        } catch {
+            print("[SuperDev] Failed to delete rule '\(rule.name)': \(error)")
+        }
     }
 
     private func typeBadge(_ type: LogRule.RuleType) -> some View {
@@ -237,24 +267,44 @@ private struct LogRuleEditorView: View {
             TextField("输入关键词，回车添加", text: $keywordInput)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { addKeyword() }
+                .onPasteCommand(of: [.plainText]) { _ in
+                    if let pasted = NSPasteboard.general.string(forType: .string) {
+                        addKeywords(from: pasted)
+                    }
+                }
+                .onChange(of: keywordInput) { _, newValue in
+                    guard newValue.contains(",") || newValue.contains("\n") || newValue.contains("\t") || newValue.contains(";") else { return }
+                    let parts = KeywordTokenizer.split(newValue)
+                    guard parts.count > 1 else { return }
+                    for part in parts.dropLast() {
+                        appendKeyword(part)
+                    }
+                    keywordInput = parts.last ?? ""
+                }
         }
     }
 
     private func addKeyword() {
-        let trimmed = keywordInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !keywords.contains(trimmed) else {
-            keywordInput = ""
-            return
-        }
-        keywords.append(trimmed)
+        appendKeyword(keywordInput)
         keywordInput = ""
+    }
+
+    private func addKeywords(from text: String) {
+        for part in KeywordTokenizer.split(text) {
+            appendKeyword(part)
+        }
+        keywordInput = ""
+    }
+
+    private func appendKeyword(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !keywords.contains(trimmed) else { return }
+        keywords.append(trimmed)
     }
 
     /// Commits text still in the input field when the user saves without pressing Return.
     private func commitPendingKeywordIfNeeded() {
-        let trimmed = keywordInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !keywords.contains(trimmed) else { return }
-        keywords.append(trimmed)
+        appendKeyword(keywordInput)
         keywordInput = ""
     }
 }

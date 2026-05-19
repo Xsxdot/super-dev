@@ -24,6 +24,8 @@ final class AppCore: ObservableObject {
     @Published private(set) var logRulesByProjectId: [UUID: [LogRule]] = [:]
     /// 用户选择在 Popover 中隐藏的服务 ID 集合（持久化到 UserDefaults）
     @Published var hiddenServiceIds: Set<UUID> = []
+    /// Popover 待启动勾选：key 为项目 rootPath，value 为服务名（config 重载后 UUID 会变，名称稳定）
+    @Published private(set) var popoverSelectedServiceNamesByRootPath: [String: Set<String>] = [:]
     /// 每个面板的日志书签（keyed by panelId）
     @Published var bookmarks: [UUID: LogBookmark] = [:]
 
@@ -37,14 +39,18 @@ final class AppCore: ObservableObject {
     private var controlServer: ControlSocketServer?
 
     private let hiddenServiceIdsKey = "superdev.hidden_service_ids"
+    private static let popoverSelectedServiceNamesKey = "superdev.popover_selected_service_names"
+    private static let legacyPopoverSelectedServiceIdsKey = "superdev.popover_selected_service_ids"
 
     init() {
         let runId = UUID()
         currentRunId = runId
         logEngine = LogEngine(runId: runId)
         hiddenServiceIds = Self.loadHiddenServiceIds()
+        popoverSelectedServiceNamesByRootPath = Self.loadPopoverSelectedServiceNames()
         killOrphanProcesses()
         loadProjects()
+        prunePopoverSelections()
         reloadLogRules()
         performStartupLogMaintenance()
         controlServer = ControlSocketServer(core: self)
@@ -182,6 +188,95 @@ final class AppCore: ObservableObject {
         return Set(strings.compactMap { UUID(uuidString: $0) })
     }
 
+    // MARK: - Popover Service Selection
+
+    func setSelectedServiceIds(_ ids: Set<UUID>, for project: Project) {
+        let names = Self.serviceNames(for: ids, in: project)
+        let normalized = Self.normalizeSelectedServiceNames(
+            names,
+            project: project,
+            hiddenServiceIds: hiddenServiceIds
+        )
+        var stored = popoverSelectedServiceNamesByRootPath
+        stored[project.rootPath] = normalized
+        popoverSelectedServiceNamesByRootPath = stored
+        savePopoverSelectedServiceNames()
+    }
+
+    func defaultSelectedServiceIds(for project: Project) -> Set<UUID> {
+        let persistedNames = popoverSelectedServiceNamesByRootPath[project.rootPath] ?? []
+        if !persistedNames.isEmpty {
+            let normalized = Self.normalizeSelectedServiceNames(
+                persistedNames,
+                project: project,
+                hiddenServiceIds: hiddenServiceIds
+            )
+            return Self.serviceIds(for: normalized, in: project)
+        }
+        return Set(project.services.filter(\.required).map(\.id))
+    }
+
+    private func savePopoverSelectedServiceNames() {
+        Self.savePopoverSelectedServiceNames(popoverSelectedServiceNamesByRootPath)
+    }
+
+    static func loadPopoverSelectedServiceNames(
+        from defaults: UserDefaults = .standard
+    ) -> [String: Set<String>] {
+        if let data = defaults.data(forKey: popoverSelectedServiceNamesKey),
+           let raw = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            return raw.mapValues { Set($0) }
+        }
+        return [:]
+    }
+
+    static func savePopoverSelectedServiceNames(
+        _ map: [String: Set<String>],
+        to defaults: UserDefaults = .standard
+    ) {
+        let raw = map.mapValues { Array($0).sorted() }
+        if let data = try? JSONEncoder().encode(raw) {
+            defaults.set(data, forKey: popoverSelectedServiceNamesKey)
+            defaults.removeObject(forKey: legacyPopoverSelectedServiceIdsKey)
+        }
+    }
+
+    static func normalizeSelectedServiceNames(
+        _ names: Set<String>,
+        project: Project,
+        hiddenServiceIds: Set<UUID>
+    ) -> Set<String> {
+        let validNames = Set(project.services.map(\.name))
+        let hiddenNames = Set(
+            project.services.filter { hiddenServiceIds.contains($0.id) }.map(\.name)
+        )
+        let requiredNames = Set(project.services.filter(\.required).map(\.name))
+        return names.intersection(validNames).subtracting(hiddenNames).union(requiredNames)
+    }
+
+    static func serviceNames(for ids: Set<UUID>, in project: Project) -> Set<String> {
+        Set(project.services.filter { ids.contains($0.id) }.map(\.name))
+    }
+
+    static func serviceIds(for names: Set<String>, in project: Project) -> Set<UUID> {
+        Set(project.services.filter { names.contains($0.name) }.map(\.id))
+    }
+
+    private func prunePopoverSelections() {
+        let validPaths = Set(projects.map(\.rootPath))
+        var updated = popoverSelectedServiceNamesByRootPath.filter { validPaths.contains($0.key) }
+        for project in projects {
+            guard let names = updated[project.rootPath] else { continue }
+            updated[project.rootPath] = Self.normalizeSelectedServiceNames(
+                names,
+                project: project,
+                hiddenServiceIds: hiddenServiceIds
+            )
+        }
+        popoverSelectedServiceNamesByRootPath = updated
+        savePopoverSelectedServiceNames()
+    }
+
     // MARK: - Project Management
 
     func addProject(rootPath: String) throws {
@@ -196,6 +291,8 @@ final class AppCore: ObservableObject {
     func removeProject(_ project: Project) {
         stopAll(project: project)
         projects.removeAll { $0.id == project.id }
+        popoverSelectedServiceNamesByRootPath.removeValue(forKey: project.rootPath)
+        savePopoverSelectedServiceNames()
         projectStore.removePath(project.rootPath)
         reloadLogRules()
     }
@@ -207,6 +304,7 @@ final class AppCore: ObservableObject {
             projects[idx].name = updated.name
             projects[idx].services = updated.services
         }
+        prunePopoverSelections()
         reloadLogRules()
     }
 
