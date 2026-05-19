@@ -51,9 +51,9 @@ final class MenuBarManager: ObservableObject {
             let vc = NSHostingController(rootView: SettingsView().environmentObject(core))
             let window = NSWindow(contentViewController: vc)
             window.title = "设置"
-            window.setContentSize(NSSize(width: 480, height: 420))
+            window.setContentSize(NSSize(width: 600, height: 420))
             window.styleMask = [.titled, .closable, .resizable]
-            window.minSize = NSSize(width: 480, height: 300)
+            window.minSize = NSSize(width: 600, height: 420)
             window.center()
             window.isReleasedWhenClosed = false
             window.delegate = windowDelegate
