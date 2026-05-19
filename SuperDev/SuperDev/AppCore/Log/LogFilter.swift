@@ -54,7 +54,7 @@ enum LogFilter {
         case exclude
     }
 
-    enum ChipLogic {
+    enum ChipLogic: Hashable {
         case and
         case or
     }

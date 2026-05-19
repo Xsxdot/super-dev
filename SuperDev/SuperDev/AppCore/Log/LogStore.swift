@@ -106,34 +106,60 @@ final class LogStore: @unchecked Sendable {
 
     /// Returns all runs ordered by start time (newest first).
     nonisolated func fetchRuns() -> [RunSummary] {
+        fetchRuns(serviceIds: nil, serviceNames: nil)
+    }
+
+    /// Returns runs that contain at least one log from the given services (newest first).
+    /// When both filters are nil/empty, returns all runs (same as `fetchRuns()`).
+    /// Matches either `service_id` or `service_name` so history survives config reloads (UUID changes).
+    nonisolated func fetchRuns(serviceIds: [UUID]? = nil, serviceNames: [String]? = nil) -> [RunSummary] {
         (try? db?.read { db in
-            let sql = """
+            var sql = """
                 SELECT run_id,
                        MIN(timestamp) AS start_time,
                        COUNT(*) AS log_count,
                        GROUP_CONCAT(DISTINCT service_name) AS service_names
                 FROM log_entries
-                GROUP BY run_id
-                ORDER BY start_time DESC
                 """
-            let rows = try Row.fetchAll(db, sql: sql)
-            return rows.compactMap { row -> RunSummary? in
-                guard let runIdStr = String.fromDatabaseValue(row["run_id"]),
-                      let runId = UUID(uuidString: runIdStr),
-                      let startTime = Self.parseTimestamp(row["start_time"]) else { return nil }
-                let logCount = (Int64.fromDatabaseValue(row["log_count"]).map(Int.init))
-                    ?? Int.fromDatabaseValue(row["log_count"])
-                    ?? 0
-                let namesStr = String.fromDatabaseValue(row["service_names"]) ?? ""
-                let serviceNames = namesStr.split(separator: ",").map(String.init).sorted()
-                return RunSummary(
-                    runId: runId,
-                    startTime: startTime,
-                    logCount: logCount,
-                    serviceNames: serviceNames
-                )
+            var args: [DatabaseValue] = []
+            var predicates: [String] = []
+            if let serviceIds, !serviceIds.isEmpty {
+                let placeholders = serviceIds.map { _ in "?" }.joined(separator: ",")
+                predicates.append("service_id IN (\(placeholders))")
+                serviceIds.forEach { args.append($0.uuidString.databaseValue) }
             }
+            if let serviceNames, !serviceNames.isEmpty {
+                let placeholders = serviceNames.map { _ in "?" }.joined(separator: ",")
+                predicates.append("service_name IN (\(placeholders))")
+                serviceNames.forEach { args.append($0.databaseValue) }
+            }
+            if !predicates.isEmpty {
+                sql += " WHERE " + predicates.joined(separator: " OR ")
+            }
+            sql += """
+                 GROUP BY run_id
+                 ORDER BY start_time DESC
+                """
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
+            return rows.compactMap { Self.runSummary(from: $0) }
         }) ?? []
+    }
+
+    nonisolated private static func runSummary(from row: Row) -> RunSummary? {
+        guard let runIdStr = String.fromDatabaseValue(row["run_id"]),
+              let runId = UUID(uuidString: runIdStr),
+              let startTime = parseTimestamp(row["start_time"]) else { return nil }
+        let logCount = (Int64.fromDatabaseValue(row["log_count"]).map(Int.init))
+            ?? Int.fromDatabaseValue(row["log_count"])
+            ?? 0
+        let namesStr = String.fromDatabaseValue(row["service_names"]) ?? ""
+        let serviceNames = namesStr.split(separator: ",").map(String.init).sorted()
+        return RunSummary(
+            runId: runId,
+            startTime: startTime,
+            logCount: logCount,
+            serviceNames: serviceNames
+        )
     }
 
     /// Returns all logs for a run in chronological order (oldest first).
