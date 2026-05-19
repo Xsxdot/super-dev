@@ -15,6 +15,7 @@ struct SidebarView: View {
                                 .frame(width: 7, height: 7)
                             Text(service.name)
                         }
+                        .draggable(service.id.uuidString)
                         .tag(Optional(service.id))
                     }
                 }
