@@ -10,7 +10,7 @@
 import Foundation
 import SwiftUI
 
-indirect enum PanelLayout: Codable, Identifiable {
+indirect enum PanelLayout: Codable, Identifiable, Equatable {
     case leaf(id: UUID, serviceId: UUID?)
     case split(id: UUID, axis: Axis, ratio: CGFloat, first: PanelLayout, second: PanelLayout)
 
