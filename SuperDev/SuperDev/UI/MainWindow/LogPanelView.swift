@@ -124,6 +124,22 @@ struct LogPanelView: View {
         .padding(.horizontal, 4)
         .background(rowBackground(entry.level))
         .cornerRadius(2)
+        .contextMenu {
+            Button {
+                let formatted = "\(entry.timestamp.formatted(.dateTime.hour().minute().second())) [\(entry.serviceName)] \(entry.level.rawValue) \(entry.message)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(formatted, forType: .string)
+            } label: {
+                Label("复制此行", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.message, forType: .string)
+            } label: {
+                Label("复制消息", systemImage: "text.quote")
+            }
+        }
     }
 
     private var statusBar: some View {
