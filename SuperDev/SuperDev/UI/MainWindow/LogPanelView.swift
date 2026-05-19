@@ -6,6 +6,8 @@ struct LogPanelView: View {
 
     @State private var keyword: String = ""
     @State private var enabledLevels: Set<LogLevel> = [.error, .warn, .info]
+    @State private var isFollowing: Bool = true
+    @State private var newLogCount: Int = 0
 
     private var filteredLogs: [LogEntry] {
         core.filteredLogs(serviceId: serviceId, levels: enabledLevels,
@@ -78,11 +80,55 @@ struct LogPanelView: View {
                 .padding(.vertical, 4)
             }
             .background(Theme.bgSecondary)
-            .onChange(of: filteredLogs.count) { _, _ in
-                if let last = filteredLogs.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentSize.height - geo.containerSize.height - geo.contentOffset.y
+            } action: { _, distanceFromBottom in
+                let wasFollowing = isFollowing
+                isFollowing = distanceFromBottom < 50
+                if isFollowing {
+                    newLogCount = 0
+                }
+                if isFollowing && !wasFollowing {
+                    if let last = filteredLogs.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
                 }
             }
+            .onChange(of: filteredLogs.count) { _, _ in
+                if isFollowing {
+                    newLogCount = 0
+                    if let last = filteredLogs.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                } else {
+                    newLogCount += 1
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !isFollowing && newLogCount > 0 {
+                    Button {
+                        isFollowing = true
+                        newLogCount = 0
+                        if let last = filteredLogs.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                    } label: {
+                        Text("↓ \(newLogCount) 条新日志")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Theme.accent)
+                            .clipShape(Capsule())
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: !isFollowing && newLogCount > 0)
         }
     }
 
