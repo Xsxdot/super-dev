@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FilterChip: Identifiable, Equatable {
     let id: UUID
@@ -39,6 +41,7 @@ enum ChipLogic {
 
 struct LogPanelView: View {
     @EnvironmentObject var core: AppCore
+    var panelId: UUID = UUID()
     let serviceId: UUID?
     var project: Project?
 
@@ -46,13 +49,15 @@ struct LogPanelView: View {
     @State private var nextChipType: FilterChip.ChipType = .include
     @State private var chips: [FilterChip] = []
     @State private var chipLogic: ChipLogic = .or
-    private let enabledLevels: Set<LogLevel> = [.error, .warn, .info]
     @State private var isFollowing: Bool = true
     @State private var newLogCount: Int = 0
     @State private var showRulesSheet = false
     @State private var showSaveRuleSheet = false
     @State private var saveRuleName: String = ""
-    @State private var saveRuleType: LogRule.RuleType = .exclude
+    @State private var saveRuleStatusMessage: String?
+    @State private var activeSelectionEntryId: UUID?
+    @State private var activeSelectionText: String?
+    @State private var activeSelectionRect: CGRect?
 
     private var includeChips: [String] {
         chips.filter { $0.type == .include }.map(\.keyword)
@@ -74,7 +79,6 @@ struct LogPanelView: View {
     private func makeLogDisplay() -> LogDisplay {
         let logs = core.filteredLogs(
             serviceId: serviceId,
-            levels: enabledLevels,
             includeChips: includeChips,
             excludeChips: excludeChips,
             chipLogic: chipLogic.logFilterLogic
@@ -154,14 +158,19 @@ struct LogPanelView: View {
                 .textFieldStyle(.plain)
                 .frame(minWidth: 80, maxWidth: 140)
                 .onSubmit { addChipFromInput() }
-                .onChange(of: chipInput) { _, newValue in
-                    if newValue.contains(",") {
-                        let parts = newValue.split(separator: ",")
-                        for part in parts.dropLast() {
-                            addChip(String(part), type: nextChipType)
-                        }
-                        chipInput = String(parts.last ?? "")
+                .onPasteCommand(of: [.plainText]) { _ in
+                    if let pasted = NSPasteboard.general.string(forType: .string) {
+                        addChipsFromText(pasted, type: nextChipType)
                     }
+                }
+                .onChange(of: chipInput) { _, newValue in
+                    guard newValue.contains(",") || newValue.contains("\n") || newValue.contains("\t") || newValue.contains(";") else { return }
+                    let parts = KeywordTokenizer.split(newValue)
+                    guard parts.count > 1 else { return }
+                    for part in parts.dropLast() {
+                        addChip(part, type: nextChipType)
+                    }
+                    chipInput = parts.last ?? ""
                 }
 
             if chips.isEmpty {
@@ -217,22 +226,6 @@ struct LogPanelView: View {
             Text(chip.keyword)
                 .font(.system(size: 11))
                 .lineLimit(1)
-
-            // 竖线分隔
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(width: 1, height: 10)
-
-            Button {
-                saveChipToProjectRule(chip)
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 8))
-                    .foregroundColor(.green)
-            }
-            .buttonStyle(.plain)
-            .help("保存到项目规则")
-            .disabled(activeProject == nil)
 
             Button {
                 chips.removeAll { $0.id == chip.id }
@@ -313,50 +306,62 @@ struct LogPanelView: View {
     private var saveAsRuleButton: some View {
         Button {
             saveRuleName = chips.map(\.keyword).joined(separator: ", ")
-            saveRuleType = excludeChips.isEmpty ? .include : .exclude
+            saveRuleStatusMessage = nil
             showSaveRuleSheet = true
         } label: {
             Image(systemName: "square.and.arrow.down")
         }
         .buttonStyle(.plain)
-        .help("保存为持久化规则")
+        .help("将全部临时过滤保存为项目规则")
         .disabled(activeProject == nil)
     }
 
     private var saveRuleSheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("保存为规则")
+        let proposedRules = LogChipRuleBuilder.makeRulesFromChips(
+            name: saveRuleName,
+            chips: chips,
+            logic: chipLogic
+        )
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("保存为项目规则")
                 .font(.headline)
             TextField("规则名称", text: $saveRuleName)
-            Picker("类型", selection: $saveRuleType) {
-                Text("排除").tag(LogRule.RuleType.exclude)
-                Text("包含").tag(LogRule.RuleType.include)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("关键词逻辑：\(chipLogic.label)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if !includeChips.isEmpty {
+                    Text("包含：\(includeChips.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if !excludeChips.isEmpty {
+                    Text("排除：\(excludeChips.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if proposedRules.count > 1 {
+                    Text("将创建 \(proposedRules.count) 条规则（包含 / 排除各一条）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-            .pickerStyle(.segmented)
-            Text("关键词：\(chips.map(\.keyword).joined(separator: ", "))")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            if let saveRuleStatusMessage {
+                Text(saveRuleStatusMessage)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
             HStack {
                 Spacer()
                 Button("取消") { showSaveRuleSheet = false }
                 Button("保存") {
-                    guard let proj = activeProject else { return }
-                    let rule = LogRule(
-                        name: saveRuleName.isEmpty ? "快捷过滤" : saveRuleName,
-                        type: saveRuleType,
-                        keywords: chips.map(\.keyword),
-                        logic: chipLogic == .and ? .and : .or,
-                        enabled: true
-                    )
-                    try? core.addLogRule(rule, to: proj)
-                    showSaveRuleSheet = false
-                    chips = []
+                    saveChipsAsProjectRules()
                 }
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 320)
+        .frame(width: 360)
     }
 
     // MARK: - History banner
@@ -483,11 +488,7 @@ struct LogPanelView: View {
                 .foregroundColor(levelColor(entry.level))
                 .frame(width: 48, alignment: .leading)
 
-            Text(entry.message)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Theme.textPrimary)
-                .textSelection(.enabled)
-                .lineLimit(nil)
+            logMessageArea(entry)
 
             Spacer()
 
@@ -521,7 +522,70 @@ struct LogPanelView: View {
             } label: {
                 Label("复制消息", systemImage: "text.quote")
             }
+
+            if let selected = selectionTextForEntry(entry.id), !selected.isEmpty {
+                Button {
+                    fillChipInputFromSelection(selected)
+                } label: {
+                    Label("填入过滤关键词", systemImage: "plus.magnifyingglass")
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func logMessageArea(_ entry: LogEntry) -> some View {
+        ZStack(alignment: .topLeading) {
+            SelectableLogText(
+                text: entry.message,
+                textColor: NSColor(Theme.textPrimary),
+                onSelectionChange: { text, rect in
+                    if let text, !text.isEmpty {
+                        activeSelectionEntryId = entry.id
+                        activeSelectionText = text
+                        activeSelectionRect = rect
+                    } else if activeSelectionEntryId == entry.id {
+                        clearLogSelection()
+                    }
+                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if activeSelectionEntryId == entry.id,
+               let text = activeSelectionText,
+               !text.isEmpty,
+               let rect = activeSelectionRect {
+                Button {
+                    fillChipInputFromSelection(text)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(4)
+                        .background(Theme.accent)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                }
+                .buttonStyle(.plain)
+                .help("填入过滤关键词输入框")
+                .offset(x: rect.minX, y: max(0, rect.minY - 22))
+            }
+        }
+    }
+
+    private func selectionTextForEntry(_ entryId: UUID) -> String? {
+        activeSelectionEntryId == entryId ? activeSelectionText : nil
+    }
+
+    private func clearLogSelection() {
+        activeSelectionEntryId = nil
+        activeSelectionText = nil
+        activeSelectionRect = nil
+    }
+
+    private func fillChipInputFromSelection(_ text: String) {
+        chipInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        clearLogSelection()
     }
 
     private func statusBar(stats s: (total: Int, folded: Int, errors: Int, warns: Int)) -> some View {
@@ -546,8 +610,49 @@ struct LogPanelView: View {
     // MARK: - Helpers
 
     private func addChipFromInput() {
-        addChip(chipInput, type: nextChipType)
+        let parts = KeywordTokenizer.split(chipInput)
+        if parts.isEmpty {
+            addChip(chipInput, type: nextChipType)
+        } else {
+            for part in parts {
+                addChip(part, type: nextChipType)
+            }
+        }
         chipInput = ""
+    }
+
+    private func addChipsFromText(_ text: String, type: FilterChip.ChipType) {
+        for part in KeywordTokenizer.split(text) {
+            addChip(part, type: type)
+        }
+    }
+
+    private func saveChipsAsProjectRules() {
+        guard let proj = activeProject else { return }
+        let rules = LogChipRuleBuilder.makeRulesFromChips(
+            name: saveRuleName,
+            chips: chips,
+            logic: chipLogic
+        )
+        var existing = core.logRules(for: proj.id)
+        var saved = 0
+        var skipped = 0
+        for rule in rules {
+            if LogChipRuleBuilder.isDuplicate(rule, in: existing) {
+                skipped += 1
+                continue
+            }
+            try? core.addLogRule(rule, to: proj)
+            existing = core.logRules(for: proj.id)
+            saved += 1
+        }
+        if saved > 0 {
+            showSaveRuleSheet = false
+            chips = []
+            saveRuleStatusMessage = nil
+        } else if skipped > 0 {
+            saveRuleStatusMessage = "相同规则已存在，未重复保存"
+        }
     }
 
     private func addChip(_ text: String, type: FilterChip.ChipType = .include) {
@@ -560,30 +665,6 @@ struct LogPanelView: View {
     private func toggleChipType(_ id: UUID) {
         guard let idx = chips.firstIndex(where: { $0.id == id }) else { return }
         chips[idx].type = chips[idx].type == .include ? .exclude : .include
-    }
-
-    private func saveChipToProjectRule(_ chip: FilterChip) {
-        guard let proj = activeProject else { return }
-        let ruleType: LogRule.RuleType = chip.type == .include ? .include : .exclude
-
-        // Check for existing rule with same keyword and type to avoid duplicates
-        let existingRules = core.logRules(for: proj.id)
-        if existingRules.contains(where: { $0.keywords.contains(chip.keyword) && $0.type == ruleType }) {
-            return
-        }
-
-        let rule = LogRule(
-            name: chip.keyword,
-            type: ruleType,
-            keywords: [chip.keyword],
-            logic: .or,
-            enabled: true
-        )
-        do {
-            try core.addLogRule(rule, to: proj)
-        } catch {
-            print("[SuperDev] Failed to save rule '\(chip.keyword)': \(error)")
-        }
     }
 
     private func toggleProjectRule(_ rule: LogRule, project: Project) {
