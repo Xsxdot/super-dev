@@ -111,8 +111,9 @@ struct PopoverView: View {
     }
 
     private func filteredServices(of project: Project) -> [Service] {
-        guard !searchText.isEmpty else { return project.services }
-        return project.services.filter {
+        let visible = project.services.filter { !core.isHidden($0) }
+        guard !searchText.isEmpty else { return visible }
+        return visible.filter {
             $0.name.localizedCaseInsensitiveContains(searchText)
         }
     }
@@ -152,8 +153,11 @@ struct PopoverView: View {
         .contentShape(Rectangle())
         .onHover { hovered in
             if hovered {
+                let switchingProject = hoveredProjectId != project.id
                 hoveredProjectId = project.id
-                selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
+                if switchingProject {
+                    selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
+                }
             }
         }
     }
@@ -172,8 +176,9 @@ struct PopoverView: View {
                 .frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    let required = project.services.filter { $0.required }
-                    let optional = project.services.filter { !$0.required }
+                    let visibleServices = project.services.filter { !core.isHidden($0) }
+                    let required = visibleServices.filter { $0.required }
+                    let optional = visibleServices.filter { !$0.required }
                     if !required.isEmpty {
                         serviceGroupLabel("必须启动")
                         ForEach(required) { service in
@@ -251,43 +256,31 @@ struct PopoverView: View {
 
     private func servicePanelToolbar(for project: Project) -> some View {
         HStack(spacing: 10) {
+            let selectableIds = Set(project.services.map { $0.id })
+            let allSelected = !selectableIds.isEmpty && selectableIds.allSatisfy { selectedServiceIds.contains($0) }
+            let someSelected = selectableIds.contains { selectedServiceIds.contains($0) }
+
             Button {
-                let allSelected = project.services.allSatisfy { selectedServiceIds.contains($0.id) }
                 if allSelected {
-                    selectedServiceIds.removeAll()
+                    // 全选→取消：只保留必须启动的（不允许取消）
+                    selectedServiceIds = Set(project.services.filter { $0.required }.map { $0.id })
                 } else {
-                    project.services.forEach { selectedServiceIds.insert($0.id) }
+                    selectedServiceIds = selectedServiceIds.union(selectableIds)
                 }
             } label: {
-                let allSelected = project.services.allSatisfy { selectedServiceIds.contains($0.id) }
-                let someSelected = project.services.contains { selectedServiceIds.contains($0.id) }
-                ZStack {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(allSelected ? Theme.accent : Color.clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(allSelected || someSelected ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
-                        )
-                        .frame(width: 13, height: 13)
-                    if allSelected {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(Color.white)
-                            .frame(width: 8, height: 8)
-                    } else if someSelected {
-                        Rectangle()
-                            .fill(Theme.accent)
-                            .frame(width: 8, height: 1.5)
-                            .cornerRadius(1)
-                    }
+                HStack(spacing: 6) {
+                    selectAllCheckboxGlyph(allSelected: allSelected, someSelected: someSelected)
+                    Text("全选")
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.textSecondary)
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text("全选")
-                .font(.system(size: 10))
-                .foregroundColor(Theme.textSecondary)
             Rectangle()
                 .fill(Theme.borderPrimary)
                 .frame(width: 1, height: 12)
+            // 反选：不能取消必须启动的
             Button("反选") { toggleInvert(for: project) }
                 .buttonStyle(.plain)
                 .font(.system(size: 10))
@@ -313,29 +306,16 @@ struct PopoverView: View {
 
     private func serviceRow(_ service: Service, in project: Project) -> some View {
         HStack(spacing: 8) {
-            // 自绘 checkbox
+            // 自绘 checkbox（必须启动的服务不允许取消选中）
             Button {
+                if service.required { return }
                 if selectedServiceIds.contains(service.id) {
-                    selectedServiceIds.remove(service.id)
+                    selectedServiceIds = selectedServiceIds.subtracting([service.id])
                 } else {
-                    selectedServiceIds.insert(service.id)
+                    selectedServiceIds = selectedServiceIds.union([service.id])
                 }
             } label: {
-                let checked = selectedServiceIds.contains(service.id)
-                ZStack {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(checked ? Theme.accent : Color.clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(checked ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
-                        )
-                        .frame(width: 13, height: 13)
-                    if checked {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(Color.white)
-                            .frame(width: 8, height: 8)
-                    }
-                }
+                serviceCheckboxGlyph(checked: selectedServiceIds.contains(service.id))
             }
             .buttonStyle(.plain)
 
@@ -358,6 +338,28 @@ struct PopoverView: View {
                 .font(.system(size: 9))
                 .foregroundColor(serviceStatusColor(service.status))
                 .help(failureTooltip(for: service))
+
+            // 重启按钮（运行中才显示）
+            if service.status.isActive {
+                Button {
+                    core.restart(service, in: project)
+                } label: {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.bgElevated)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .stroke(Theme.borderSecondary, lineWidth: 1)
+                            )
+                            .frame(width: 18, height: 18)
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("重启")
+            }
 
             // 启停按钮（18×18 圆角方块）
             Button {
@@ -408,6 +410,51 @@ struct PopoverView: View {
         .padding(.vertical, 7)
     }
 
+    // MARK: - Checkbox glyphs
+
+    private func selectAllCheckboxGlyph(allSelected: Bool, someSelected: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(allSelected ? Theme.accent : Theme.bgSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(allSelected || someSelected ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
+                )
+                .frame(width: 13, height: 13)
+            if allSelected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+            } else if someSelected {
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(width: 8, height: 1.5)
+                    .cornerRadius(1)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .contentShape(Rectangle())
+    }
+
+    private func serviceCheckboxGlyph(checked: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(checked ? Theme.accent : Theme.bgSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(checked ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
+                )
+                .frame(width: 13, height: 13)
+            if checked {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.white)
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .contentShape(Rectangle())
+    }
+
     // MARK: - Helpers
 
     private var hoveredProject: Project? {
@@ -417,7 +464,9 @@ struct PopoverView: View {
 
     private func toggleInvert(for project: Project) {
         let all = Set(project.services.map { $0.id })
-        selectedServiceIds = all.subtracting(selectedServiceIds)
+        let required = Set(project.services.filter { $0.required }.map { $0.id })
+        // 反选后，必须启动的服务始终保持选中
+        selectedServiceIds = all.subtracting(selectedServiceIds).union(required)
     }
 
     private func openMainWindow() {
