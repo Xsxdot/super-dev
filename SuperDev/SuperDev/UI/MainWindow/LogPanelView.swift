@@ -393,18 +393,19 @@ struct LogPanelView: View {
             }
         }
         .buttonStyle(.plain)
-        .help(inSync ? "退出同步录制组" : "加入同步录制组")
+        .disabled(serviceId == nil)
+        .help(serviceId == nil ? "请先选择服务再加入同步组" : (inSync ? "退出同步录制组" : "加入同步录制组"))
     }
 
     private var bookmarkControl: some View {
-        HStack(spacing: 6) {
+        let inSync = core.syncGroupPanelIds.contains(panelId)
+        return HStack(spacing: 6) {
             syncToggle
             Group {
             if let bm = bookmark, bm.isCompleted {
-                let inSyncGroup = core.syncGroupPanelIds.contains(panelId)
                 HStack(spacing: 6) {
                     Button {
-                        let text = inSyncGroup
+                        let text = inSync
                             ? core.syncBookmarkFormattedText()
                             : bm.formattedText
                         NSPasteboard.general.clearContents()
@@ -414,10 +415,10 @@ struct LogPanelView: View {
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.plain)
-                    .help(inSyncGroup ? "复制所有同步分栏日志（按服务分块）" : "复制标记区间日志")
+                    .help(inSync ? "复制所有同步分栏日志（按服务分块）" : "复制标记区间日志")
 
                     Button {
-                        if inSyncGroup {
+                        if inSync {
                             exportSyncBookmark()
                         } else {
                             exportBookmark(bm)
@@ -427,7 +428,7 @@ struct LogPanelView: View {
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.plain)
-                    .help(inSyncGroup ? "导出所有同步分栏日志（按服务分块）" : "导出标记区间日志")
+                    .help(inSync ? "导出所有同步分栏日志（按服务分块）" : "导出标记区间日志")
 
                     Button {
                         core.clearBookmark(panelId: panelId)
@@ -449,7 +450,7 @@ struct LogPanelView: View {
                         .cornerRadius(4)
                         .foregroundColor(.red)
                     Button {
-                        if core.syncGroupIsRecording && core.syncGroupPanelIds.contains(panelId) {
+                        if core.syncGroupIsRecording && inSync {
                             core.endSyncBookmark()
                         } else {
                             core.endBookmark(panelId: panelId)
@@ -460,12 +461,12 @@ struct LogPanelView: View {
                             .foregroundColor(.red)
                     }
                     .buttonStyle(.plain)
-                    .help(core.syncGroupIsRecording && core.syncGroupPanelIds.contains(panelId) ? "同步结束所有分栏书签 (⌘⇧B)" : "结束书签标记 (⌘⇧B)")
+                    .help(core.syncGroupIsRecording && inSync ? "同步结束所有分栏书签 (⌘⇧B)" : "结束书签标记 (⌘⇧B)")
                     .keyboardShortcut("b", modifiers: [.command, .shift])
                 }
             } else {
                 Button {
-                    if core.syncGroupPanelIds.contains(panelId) {
+                    if inSync {
                         core.startSyncBookmark()
                     } else {
                         core.startBookmark(panelId: panelId, serviceId: serviceId)
@@ -473,10 +474,10 @@ struct LogPanelView: View {
                 } label: {
                     Image(systemName: "record.circle")
                         .font(.system(size: 14))
-                        .foregroundColor(core.syncGroupPanelIds.contains(panelId) ? .blue : .green)
+                        .foregroundColor(inSync ? .blue : .green)
                 }
                 .buttonStyle(.plain)
-                .help(core.syncGroupPanelIds.contains(panelId) ? "同步开始所有分栏书签 (⌘⇧B)" : "开始书签标记 (⌘⇧B)")
+                .help(inSync ? "同步开始所有分栏书签 (⌘⇧B)" : "开始书签标记 (⌘⇧B)")
                 .keyboardShortcut("b", modifiers: [.command, .shift])
             }
         }
@@ -501,7 +502,9 @@ struct LogPanelView: View {
         panel.allowedContentTypes = [.plainText]
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
+            Task.detached {
+                try? text.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 
