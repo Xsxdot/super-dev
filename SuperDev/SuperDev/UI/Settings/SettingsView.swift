@@ -27,6 +27,7 @@ struct SettingsView: View {
         NavigationSplitView {
             List(SettingsTab.allCases, selection: $selectedTab) { tab in
                 Label(tab.rawValue, systemImage: tab.icon)
+                    .tag(tab)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 140, ideal: 150, max: 160)

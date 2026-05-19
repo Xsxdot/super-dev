@@ -46,7 +46,7 @@ struct LogPanelView: View {
     @State private var nextChipType: FilterChip.ChipType = .include
     @State private var chips: [FilterChip] = []
     @State private var chipLogic: ChipLogic = .or
-    @State private var enabledLevels: Set<LogLevel> = [.error, .warn, .info]
+    private let enabledLevels: Set<LogLevel> = [.error, .warn, .info]
     @State private var isFollowing: Bool = true
     @State private var newLogCount: Int = 0
     @State private var showRulesSheet = false
@@ -119,11 +119,11 @@ struct LogPanelView: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            chipSearchArea
-            Divider().frame(height: 16)
-            ForEach([LogLevel.error, .warn, .info], id: \.self) { level in
-                levelToggle(level)
+            ScrollView(.horizontal, showsIndicators: false) {
+                chipSearchArea
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             Spacer(minLength: 4)
             historyMenu
             rulesButton
@@ -150,21 +150,6 @@ struct LogPanelView: View {
             .frame(width: 88)
             .labelsHidden()
 
-            ForEach(chips) { chip in
-                chipView(chip)
-            }
-
-            if !chips.isEmpty {
-                Button(chipLogic.label) { chipLogic.toggle() }
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.15))
-                    .cornerRadius(4)
-                    .buttonStyle(.plain)
-                    .help("切换关键词之间的 AND / OR 逻辑")
-            }
-
             TextField(chips.isEmpty ? "关键词过滤，回车添加" : "添加关键词…", text: $chipInput)
                 .textFieldStyle(.plain)
                 .frame(minWidth: 80, maxWidth: 140)
@@ -188,6 +173,21 @@ struct LogPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .help("添加关键词")
+            }
+
+            ForEach(chips) { chip in
+                chipView(chip)
+            }
+
+            if !chips.isEmpty {
+                Button(chipLogic.label) { chipLogic.toggle() }
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .cornerRadius(4)
+                    .buttonStyle(.plain)
+                    .help("切换关键词之间的 AND / OR 逻辑")
             }
 
             // 项目级规则快捷开关（仅在有项目时显示）
@@ -399,23 +399,6 @@ struct LogPanelView: View {
 
     // MARK: - Log list
 
-    private func levelToggle(_ level: LogLevel) -> some View {
-        Button {
-            if enabledLevels.contains(level) { enabledLevels.remove(level) }
-            else { enabledLevels.insert(level) }
-        } label: {
-            Text(level.rawValue)
-                .font(.caption)
-                .fontWeight(.medium)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(enabledLevels.contains(level) ? levelColor(level).opacity(0.15) : Color.clear)
-                .foregroundColor(enabledLevels.contains(level) ? levelColor(level) : .secondary)
-                .cornerRadius(4)
-        }
-        .buttonStyle(.plain)
-    }
-
     private func logList(logs: [LogEntry]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -478,10 +461,6 @@ struct LogPanelView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: !isFollowing && newLogCount > 0)
-            .onChange(of: enabledLevels) { _, _ in
-                isFollowing = true
-                newLogCount = 0
-            }
             .onChange(of: chips) { _, _ in
                 isFollowing = true
                 newLogCount = 0
