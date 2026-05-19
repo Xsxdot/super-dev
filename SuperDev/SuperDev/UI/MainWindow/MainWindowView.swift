@@ -2,13 +2,9 @@ import SwiftUI
 
 struct MainWindowView: View {
     @EnvironmentObject var core: AppCore
-    @State private var selectedProjectId: UUID?
     @State private var selectedServiceId: UUID?
 
     private var selectedProject: Project? {
-        if let id = selectedProjectId {
-            return core.projects.first { $0.id == id }
-        }
         if let sid = selectedServiceId {
             return core.projects.first { $0.services.contains { $0.id == sid } }
         }
@@ -18,7 +14,6 @@ struct MainWindowView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(
-                selectedProjectId: $selectedProjectId,
                 selectedServiceId: $selectedServiceId
             )
         } detail: {
@@ -30,9 +25,20 @@ struct MainWindowView: View {
         .navigationTitle("SuperDev")
         .frame(minWidth: 800, minHeight: 500)
         .onAppear {
-            if selectedServiceId == nil {
-                selectedServiceId = core.projects.first?.services.first?.id
+            autoSelectFirstServiceIfNeeded()
+        }
+        .onChange(of: core.projects) { _, _ in
+            let allServiceIds = core.projects.flatMap(\.services).map(\.id)
+            if let sel = selectedServiceId, !allServiceIds.contains(sel) {
+                selectedServiceId = nil
             }
+            autoSelectFirstServiceIfNeeded()
+        }
+    }
+
+    private func autoSelectFirstServiceIfNeeded() {
+        if selectedServiceId == nil {
+            selectedServiceId = core.projects.first?.services.first?.id
         }
     }
 }
