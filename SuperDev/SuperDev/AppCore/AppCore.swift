@@ -32,6 +32,8 @@ final class AppCore: ObservableObject {
     @Published var syncGroupPanelIds: Set<UUID> = []
     /// 同步组是否正在录制中
     @Published var syncGroupIsRecording: Bool = false
+    /// 同步组内每个面板对应的服务 ID（与 syncGroupPanelIds 同步维护）
+    private var syncGroupServiceIds: [UUID: UUID?] = [:]
 
     static let logRetentionDaysKey = "superdev.log_retention_days"
     static let defaultRetentionDays = 7
@@ -519,26 +521,27 @@ final class AppCore: ObservableObject {
 
     // MARK: - Sync Bookmark
 
-    // toggleSyncGroup 将 panelId 加入或移出同步组。
+    // toggleSyncGroup 将 panelId 加入或移出同步组，同时记录其绑定的服务 ID。
     //
     // 参数：
-    //   - panelId: 目标面板 ID
-    func toggleSyncGroup(panelId: UUID) {
+    //   - panelId:   目标面板 ID
+    //   - serviceId: 面板当前绑定的服务 ID（可为 nil）
+    func toggleSyncGroup(panelId: UUID, serviceId: UUID?) {
         if syncGroupPanelIds.contains(panelId) {
             syncGroupPanelIds.remove(panelId)
+            syncGroupServiceIds.removeValue(forKey: panelId)
         } else {
             syncGroupPanelIds.insert(panelId)
+            syncGroupServiceIds[panelId] = serviceId
         }
     }
 
     // startSyncBookmark 对所有 syncGroupPanelIds 中的面板同时开始书签录制。
-    //
-    // 参数：
-    //   - serviceIdByPanelId: 每个面板对应的服务 ID（可为 nil）
-    func startSyncBookmark(serviceIdByPanelId: [UUID: UUID?]) {
+    // 使用 toggleSyncGroup 时已记录的 syncGroupServiceIds 映射。
+    func startSyncBookmark() {
         guard !syncGroupIsRecording else { return }
         for panelId in syncGroupPanelIds {
-            let serviceId = serviceIdByPanelId[panelId].flatMap { $0 }
+            let serviceId = syncGroupServiceIds[panelId].flatMap { $0 }
             startBookmark(panelId: panelId, serviceId: serviceId)
         }
         syncGroupIsRecording = true
