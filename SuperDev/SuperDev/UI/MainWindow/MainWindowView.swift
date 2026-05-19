@@ -29,5 +29,10 @@ struct MainWindowView: View {
         }
         .navigationTitle("SuperDev")
         .frame(minWidth: 800, minHeight: 500)
+        .onAppear {
+            if selectedServiceId == nil {
+                selectedServiceId = core.projects.first?.services.first?.id
+            }
+        }
     }
 }

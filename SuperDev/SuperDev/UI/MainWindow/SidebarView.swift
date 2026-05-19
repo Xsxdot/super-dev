@@ -3,15 +3,12 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject var core: AppCore
     @Binding var selectedProjectId: UUID?
-    @Binding var selectedServiceId: UUID?  // nil = All Logs
+    @Binding var selectedServiceId: UUID?
 
     var body: some View {
         List(selection: $selectedServiceId) {
             ForEach(core.projects) { project in
                 Section(project.name) {
-                    Label("All Logs", systemImage: "doc.text.magnifyingglass")
-                        .tag(Optional<UUID>.none)
-
                     ForEach(project.services) { service in
                         HStack {
                             Circle()
