@@ -2,65 +2,159 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var core: AppCore
+
+    private enum SettingsTab: String, CaseIterable, Identifiable {
+        case general = "通用"
+        case projects = "项目"
+        case integrations = "集成"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .general: return "gearshape"
+            case .projects: return "folder"
+            case .integrations: return "puzzlepiece"
+            }
+        }
+    }
+
+    @State private var selectedTab: SettingsTab = .general
     @State private var showAddProject = false
     @State private var retentionDays: Int = AppCore.defaultRetentionDays
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            logRetentionSection
-            Rectangle()
-                .fill(Theme.borderPrimary)
-                .frame(height: 1)
-            projectList
-            Rectangle()
-                .fill(Theme.borderPrimary)
-                .frame(height: 1)
-            addButton
-            Rectangle()
-                .fill(Theme.borderPrimary)
-                .frame(height: 1)
-            mcpSection
+        NavigationSplitView {
+            List(SettingsTab.allCases, selection: $selectedTab) { tab in
+                Label(tab.rawValue, systemImage: tab.icon)
+                    .tag(tab)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 140, ideal: 150, max: 160)
+        } detail: {
+            Group {
+                switch selectedTab {
+                case .general:
+                    generalPane
+                case .projects:
+                    projectsPane
+                case .integrations:
+                    integrationsPane
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .onAppear {
             retentionDays = core.logRetentionDays
         }
-        .background(Theme.bgPrimary)
-        .frame(width: 480)
+        .frame(width: 600, height: 420)
         .sheet(isPresented: $showAddProject) {
             AddProjectView().environmentObject(core)
         }
     }
 
-    private var logRetentionSection: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("日志保留天数")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                Text("超过此天数的日志将在启动时自动删除")
-                    .font(.caption)
-                    .foregroundColor(Theme.textSecondary)
-            }
-            Spacer()
-            Stepper("\(retentionDays) 天", value: $retentionDays, in: 1...90)
-                .onChange(of: retentionDays) { _, newValue in
-                    core.logRetentionDays = newValue
+    private var generalPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("日志保留天数")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Theme.textPrimary)
+                    Text("超过此天数的日志将在启动时自动删除")
+                        .font(.caption)
+                        .foregroundColor(Theme.textSecondary)
                 }
+                Spacer()
+                Stepper("\(retentionDays) 天", value: $retentionDays, in: 1...90)
+                    .onChange(of: retentionDays) { _, newValue in
+                        core.logRetentionDays = newValue
+                    }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(Theme.bgElevated)
+            .cornerRadius(8)
+            .padding(16)
+            Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Theme.bgElevated)
+        .background(Theme.bgPrimary)
     }
 
-    private var projectList: some View {
-        ScrollView {
-            VStack(spacing: 1) {
-                ForEach(core.projects) { project in
-                    projectRow(project)
+    private var projectsPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("项目")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Button {
+                    showAddProject = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("添加项目")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.accent)
+                    .cornerRadius(6)
                 }
+                .buttonStyle(.plain)
             }
-            .padding(8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            ScrollView {
+                VStack(spacing: 1) {
+                    ForEach(core.projects) { project in
+                        projectRow(project)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+            Spacer(minLength: 0)
         }
+        .background(Theme.bgPrimary)
+    }
+
+    private var integrationsPane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("MCP 集成")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Control socket")
+                    .font(.caption)
+                    .foregroundColor(Theme.textSecondary)
+                Text(ControlSocketServer.socketPath)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(Theme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Button {
+                copyMCPConfig()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard")
+                    Text("复制 Claude Code 配置")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .help("复制后粘贴到 .claude/settings.json 的 mcpServers 字段")
+
+            Spacer()
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.bgPrimary)
     }
 
     private func projectRow(_ project: Project) -> some View {
@@ -140,64 +234,6 @@ struct SettingsView: View {
             .help(isHidden ? "点击以在菜单栏中显示此服务" : "点击以在菜单栏中隐藏此服务")
         }
         .padding(.vertical, 4)
-    }
-
-    private var addButton: some View {
-        HStack {
-            Spacer()
-            Button {
-                showAddProject = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                    Text("添加项目")
-                }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(Theme.accent)
-                .cornerRadius(6)
-            }
-            .buttonStyle(.plain)
-            .padding(12)
-        }
-        .background(Theme.bgPrimary)
-    }
-
-    private var mcpSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("MCP 集成")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Control socket")
-                    .font(.caption)
-                    .foregroundColor(Theme.textSecondary)
-                Text(ControlSocketServer.socketPath)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(Theme.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Button {
-                copyMCPConfig()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "doc.on.clipboard")
-                    Text("复制 Claude Code 配置")
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(Theme.accent)
-            }
-            .buttonStyle(.plain)
-            .help("复制后粘贴到 .claude/settings.json 的 mcpServers 字段")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Theme.bgElevated)
     }
 
     private func copyMCPConfig() {
