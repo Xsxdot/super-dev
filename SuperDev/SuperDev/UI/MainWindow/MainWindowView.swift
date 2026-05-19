@@ -18,6 +18,7 @@ struct MainWindowView: View {
             )
         } detail: {
             LogPanelView(
+                panelId: UUID(),
                 serviceId: selectedServiceId,
                 project: selectedProject
             )

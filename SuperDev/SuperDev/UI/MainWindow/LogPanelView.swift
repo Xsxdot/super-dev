@@ -41,7 +41,7 @@ enum ChipLogic {
 
 struct LogPanelView: View {
     @EnvironmentObject var core: AppCore
-    var panelId: UUID = UUID()
+    let panelId: UUID
     let serviceId: UUID?
     var project: Project?
 
@@ -71,8 +71,26 @@ struct LogPanelView: View {
         project ?? core.project(forServiceId: serviceId)
     }
 
+    private var bookmark: LogBookmark? {
+        core.bookmarks[panelId]
+    }
+
+    private enum LogDisplayItem: Identifiable {
+        case entry(LogEntry)
+        case markerStart(id: UUID, date: Date)
+        case markerEnd(id: UUID, date: Date)
+
+        var id: UUID {
+            switch self {
+            case .entry(let e): return e.id
+            case .markerStart(let id, _): return id
+            case .markerEnd(let id, _):   return id
+            }
+        }
+    }
+
     private struct LogDisplay {
-        let logs: [LogEntry]
+        let items: [LogDisplayItem]
         let stats: (total: Int, folded: Int, errors: Int, warns: Int)
     }
 
@@ -83,15 +101,44 @@ struct LogPanelView: View {
             excludeChips: excludeChips,
             chipLogic: chipLogic.logFilterLogic
         )
+
+        var items: [LogDisplayItem] = []
         var folded = 0
         var errors = 0
         var warns = 0
-        for entry in logs {
-            if entry.repeatCount > 1 { folded += entry.repeatCount - 1 }
-            if entry.level == .error { errors += 1 }
-            else if entry.level == .warn { warns += 1 }
+
+        if let bm = bookmark, let startTime = bm.startTime {
+            if bm.isCompleted, let endTime = bm.endTime {
+                let before = logs.filter { $0.timestamp < startTime }
+                let after  = logs.filter { $0.timestamp > endTime }
+                items += before.map { .entry($0) }
+                items.append(.markerStart(id: UUID(), date: startTime))
+                items += bm.lockedLogs.map { .entry($0) }
+                items.append(.markerEnd(id: UUID(), date: endTime))
+                items += after.map { .entry($0) }
+            } else {
+                let before = logs.filter { $0.timestamp < startTime }
+                let after  = logs.filter { $0.timestamp >= startTime }
+                items += before.map { .entry($0) }
+                if !after.isEmpty || bm.isActive {
+                    items.append(.markerStart(id: UUID(), date: startTime))
+                }
+                items += after.map { .entry($0) }
+            }
+        } else {
+            items = logs.map { .entry($0) }
         }
-        return LogDisplay(logs: logs, stats: (logs.count, folded, errors, warns))
+
+        for item in items {
+            if case .entry(let e) = item {
+                if e.repeatCount > 1 { folded += e.repeatCount - 1 }
+                if e.level == .error { errors += 1 }
+                else if e.level == .warn { warns += 1 }
+            }
+        }
+
+        let entryCount = items.filter { if case .entry = $0 { true } else { false } }.count
+        return LogDisplay(items: items, stats: (entryCount, folded, errors, warns))
     }
 
     var body: some View {
@@ -103,7 +150,7 @@ struct LogPanelView: View {
                 historyBanner
                 Divider()
             }
-            logList(logs: display.logs)
+            logList(items: display.items)
             Divider()
             statusBar(stats: display.stats)
         }
@@ -134,6 +181,8 @@ struct LogPanelView: View {
             if !chips.isEmpty {
                 saveAsRuleButton
             }
+            Divider().frame(height: 14)
+            bookmarkControl
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -316,6 +365,84 @@ struct LogPanelView: View {
         .disabled(activeProject == nil)
     }
 
+    private var bookmarkControl: some View {
+        Group {
+            if let bm = bookmark, bm.isCompleted {
+                HStack(spacing: 6) {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(bm.formattedText, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .help("复制标记区间日志")
+
+                    Button {
+                        exportBookmark(bm)
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .help("导出标记区间日志")
+
+                    Button {
+                        core.clearBookmark(panelId: panelId)
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("清除书签")
+                }
+            } else if let bm = bookmark, bm.isActive {
+                HStack(spacing: 4) {
+                    Text("\(bm.lockedLogs.count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.15))
+                        .cornerRadius(4)
+                        .foregroundColor(.red)
+                    Button {
+                        core.endBookmark(panelId: panelId)
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .help("结束书签标记 (⌘⇧B)")
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                }
+            } else {
+                Button {
+                    core.startBookmark(panelId: panelId)
+                } label: {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(.green)
+                }
+                .buttonStyle(.plain)
+                .help("开始书签标记 (⌘⇧B)")
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    private func exportBookmark(_ bm: LogBookmark) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "superdev-log-\(Int(bm.startTime?.timeIntervalSince1970 ?? 0)).log"
+        panel.allowedContentTypes = [.plainText]
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? bm.formattedText.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
     private var saveRuleSheet: some View {
         let proposedRules = LogChipRuleBuilder.makeRulesFromChips(
             name: saveRuleName,
@@ -392,25 +519,38 @@ struct LogPanelView: View {
     /// Uses the same filters as the log list so the banner count matches what is shown.
     private var historyBannerInfo: (startTime: Date?, logCount: Int) {
         let displayed = makeLogDisplay()
+        let firstEntry: LogEntry? = displayed.items.compactMap {
+            if case .entry(let e) = $0 { return e } else { return nil }
+        }.first
         let startTime: Date? = {
             if let runId = core.viewingRunId,
                let summary = core.availableRuns.first(where: { $0.runId == runId }) {
                 return summary.startTime
             }
-            return displayed.logs.first?.timestamp
+            return firstEntry?.timestamp
         }()
-        return (startTime, displayed.logs.count)
+        let entryCount = displayed.items.filter { if case .entry = $0 { true } else { false } }.count
+        return (startTime, entryCount)
     }
 
     // MARK: - Log list
 
-    private func logList(logs: [LogEntry]) -> some View {
+    private func logList(items: [LogDisplayItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(logs) { entry in
-                        logRow(entry)
-                            .id(entry.id)
+                    ForEach(items) { item in
+                        switch item {
+                        case .entry(let entry):
+                            logRow(entry, isBookmarked: isInActiveBookmark(entry))
+                                .id(item.id)
+                        case .markerStart(_, let date):
+                            bookmarkMarkerRow(isStart: true, date: date)
+                                .id(item.id)
+                        case .markerEnd(_, let date):
+                            bookmarkMarkerRow(isStart: false, date: date)
+                                .id(item.id)
+                        }
                     }
                 }
                 .padding(.horizontal, 8)
@@ -426,15 +566,15 @@ struct LogPanelView: View {
                     newLogCount = 0
                 }
                 if isFollowing && !wasFollowing {
-                    if let last = logs.last {
+                    if let last = items.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
             }
-            .onChange(of: logs.count) { oldCount, newCount in
+            .onChange(of: items.count) { oldCount, newCount in
                 if isFollowing {
                     newLogCount = 0
-                    if let last = logs.last {
+                    if let last = items.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 } else {
@@ -446,7 +586,7 @@ struct LogPanelView: View {
                     Button {
                         isFollowing = true
                         newLogCount = 0
-                        if let last = logs.last {
+                        if let last = items.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     } label: {
@@ -473,7 +613,7 @@ struct LogPanelView: View {
         }
     }
 
-    private func logRow(_ entry: LogEntry) -> some View {
+    private func logRow(_ entry: LogEntry, isBookmarked: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(entry.timestamp.formatted(.dateTime.hour().minute().second()))
                 .font(.system(size: 11, design: .monospaced))
@@ -505,7 +645,7 @@ struct LogPanelView: View {
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(rowBackground(entry.level))
+        .background(isBookmarked ? bookmarkRowBackground(entry.level) : rowBackground(entry.level))
         .cornerRadius(2)
         .contextMenu {
             Button {
@@ -711,6 +851,42 @@ struct LogPanelView: View {
         case .warn:  return Color.yellow.opacity(0.08)
         default:     return Color.clear
         }
+    }
+
+    private func isInActiveBookmark(_ entry: LogEntry) -> Bool {
+        guard let bm = bookmark else { return false }
+        if bm.isActive, let start = bm.startTime {
+            return entry.timestamp >= start
+        }
+        if bm.isCompleted, let start = bm.startTime, let end = bm.endTime {
+            return entry.timestamp >= start && entry.timestamp <= end
+        }
+        return false
+    }
+
+    private func bookmarkRowBackground(_ level: LogLevel) -> Color {
+        switch level {
+        case .error: return Color.red.opacity(0.18)
+        case .warn:  return Color.yellow.opacity(0.12)
+        default:     return Color(red: 0.12, green: 0.10, blue: 0.04)
+        }
+    }
+
+    private func bookmarkMarkerRow(isStart: Bool, date: Date) -> some View {
+        let label = isStart ? "▶ 开始标记" : "■ 结束标记"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let timeStr = formatter.string(from: date)
+        return HStack {
+            Spacer()
+            Text("\(label)  \(timeStr)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .background(Color(red: 0.47, green: 0.22, blue: 0.04))
     }
 
     private let serviceColors: [Color] = [
