@@ -7,15 +7,15 @@ final class SyncBookmarkTests: XCTestCase {
     func test_toggleSyncGroup_addsPanel() async {
         let core = AppCore()
         let panelId = UUID()
-        core.toggleSyncGroup(panelId: panelId)
+        core.toggleSyncGroup(panelId: panelId, serviceId: nil)
         XCTAssertTrue(core.syncGroupPanelIds.contains(panelId))
     }
 
     func test_toggleSyncGroup_removesPanelIfAlreadyIn() async {
         let core = AppCore()
         let panelId = UUID()
-        core.toggleSyncGroup(panelId: panelId)
-        core.toggleSyncGroup(panelId: panelId)
+        core.toggleSyncGroup(panelId: panelId, serviceId: nil)
+        core.toggleSyncGroup(panelId: panelId, serviceId: nil)
         XCTAssertFalse(core.syncGroupPanelIds.contains(panelId))
     }
 
@@ -23,9 +23,9 @@ final class SyncBookmarkTests: XCTestCase {
         let core = AppCore()
         let p1 = UUID(), p2 = UUID()
         let s1 = UUID(), s2 = UUID()
-        core.toggleSyncGroup(panelId: p1)
-        core.toggleSyncGroup(panelId: p2)
-        core.startSyncBookmark(serviceIdByPanelId: [p1: s1, p2: s2])
+        core.toggleSyncGroup(panelId: p1, serviceId: s1)
+        core.toggleSyncGroup(panelId: p2, serviceId: s2)
+        core.startSyncBookmark()
         XCTAssertTrue(core.syncGroupIsRecording)
         XCTAssertNotNil(core.bookmarks[p1])
         XCTAssertNotNil(core.bookmarks[p2])
@@ -33,13 +33,24 @@ final class SyncBookmarkTests: XCTestCase {
         XCTAssertTrue(core.bookmarks[p2]!.isActive)
     }
 
+    func test_startSyncBookmark_usesRegisteredServiceIds() async {
+        let core = AppCore()
+        let p1 = UUID(), p2 = UUID()
+        let s1 = UUID(), s2 = UUID()
+        core.toggleSyncGroup(panelId: p1, serviceId: s1)
+        core.toggleSyncGroup(panelId: p2, serviceId: s2)
+        core.startSyncBookmark()
+        XCTAssertEqual(core.bookmarks[p1]?.serviceId, s1)
+        XCTAssertEqual(core.bookmarks[p2]?.serviceId, s2)
+    }
+
     func test_endSyncBookmark_completesAllBookmarksAndClearsRecording() async {
         let core = AppCore()
         let p1 = UUID(), p2 = UUID()
         let s1 = UUID(), s2 = UUID()
-        core.toggleSyncGroup(panelId: p1)
-        core.toggleSyncGroup(panelId: p2)
-        core.startSyncBookmark(serviceIdByPanelId: [p1: s1, p2: s2])
+        core.toggleSyncGroup(panelId: p1, serviceId: s1)
+        core.toggleSyncGroup(panelId: p2, serviceId: s2)
+        core.startSyncBookmark()
         core.endSyncBookmark()
         XCTAssertFalse(core.syncGroupIsRecording)
         XCTAssertTrue(core.bookmarks[p1]!.isCompleted)
@@ -50,9 +61,9 @@ final class SyncBookmarkTests: XCTestCase {
         let core = AppCore()
         let p1 = UUID(), p2 = UUID()
         let s1 = UUID(), s2 = UUID()
-        core.toggleSyncGroup(panelId: p1)
-        core.toggleSyncGroup(panelId: p2)
-        core.startSyncBookmark(serviceIdByPanelId: [p1: s1, p2: s2])
+        core.toggleSyncGroup(panelId: p1, serviceId: s1)
+        core.toggleSyncGroup(panelId: p2, serviceId: s2)
+        core.startSyncBookmark()
 
         let ts = Date(timeIntervalSince1970: 3600)
         let entry1 = LogEntry(id: UUID(), timestamp: ts, serviceId: s1,
@@ -78,8 +89,8 @@ final class SyncBookmarkTests: XCTestCase {
     func test_syncBookmarkFormattedText_skipsPanelsWithNilServiceId() async {
         let core = AppCore()
         let p1 = UUID()
-        core.toggleSyncGroup(panelId: p1)
-        core.startSyncBookmark(serviceIdByPanelId: [p1: nil])
+        core.toggleSyncGroup(panelId: p1, serviceId: nil)
+        core.startSyncBookmark()
         core.endSyncBookmark()
         let text = core.syncBookmarkFormattedText()
         XCTAssertTrue(text.isEmpty)

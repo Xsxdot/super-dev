@@ -381,7 +381,7 @@ struct LogPanelView: View {
     private var syncToggle: some View {
         let inSync = core.syncGroupPanelIds.contains(panelId)
         return Button {
-            core.toggleSyncGroup(panelId: panelId)
+            core.toggleSyncGroup(panelId: panelId, serviceId: serviceId)
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: inSync ? "checkmark.square.fill" : "square")
@@ -466,12 +466,7 @@ struct LogPanelView: View {
             } else {
                 Button {
                     if core.syncGroupPanelIds.contains(panelId) {
-                        let serviceIdByPanel = Dictionary(
-                            uniqueKeysWithValues: core.syncGroupPanelIds.map { pid in
-                                (pid, pid == panelId ? serviceId : nil as UUID?)
-                            }
-                        )
-                        core.startSyncBookmark(serviceIdByPanelId: serviceIdByPanel)
+                        core.startSyncBookmark()
                     } else {
                         core.startBookmark(panelId: panelId, serviceId: serviceId)
                     }
