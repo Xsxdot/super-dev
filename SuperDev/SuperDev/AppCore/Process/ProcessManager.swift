@@ -16,13 +16,16 @@ final class ProcessManager {
     private var runners: [UUID: ProcessRunner] = [:]
     private let onLog: (UUID, String, String) -> Void   // (serviceId, serviceName, rawLine)
     private let onStatusChange: (UUID, ServiceStatus) -> Void
+    private let onPidReady: (UUID, Int32?) -> Void      // (serviceId, pid?) — nil means stopped
 
     init(
         onLog: @escaping (UUID, String, String) -> Void,
-        onStatusChange: @escaping (UUID, ServiceStatus) -> Void
+        onStatusChange: @escaping (UUID, ServiceStatus) -> Void,
+        onPidReady: @escaping (UUID, Int32?) -> Void = { _, _ in }
     ) {
         self.onLog = onLog
         self.onStatusChange = onStatusChange
+        self.onPidReady = onPidReady
     }
 
     // Starts a ProcessRunner for the given service if one is not already running.
@@ -61,7 +64,9 @@ final class ProcessManager {
                 guard let self else { return }
                 if runner.isRunning {
                     self.onStatusChange(serviceId, .running)
+                    self.onPidReady(serviceId, runner.pid)
                 } else {
+                    self.runners[serviceId] = nil
                     self.onStatusChange(serviceId, .failed)
                 }
             }
@@ -76,6 +81,7 @@ final class ProcessManager {
         runners[serviceId]?.stop()
         runners[serviceId] = nil
         onStatusChange(serviceId, .stopped)
+        onPidReady(serviceId, nil)
     }
 
     // Stops all running services without emitting individual status changes.
@@ -83,6 +89,14 @@ final class ProcessManager {
     func stopAll() {
         runners.values.forEach { $0.stop() }
         runners.removeAll()
+    }
+
+    // Restarts the runner for the given service: stops it first, then starts again.
+    func restart(_ service: Service, projectRootPath: String) {
+        runners[service.id]?.stop()
+        runners[service.id] = nil
+        onStatusChange(service.id, .stopped)
+        start(service, projectRootPath: projectRootPath)
     }
 
     // Returns whether the runner for the given service is currently running.

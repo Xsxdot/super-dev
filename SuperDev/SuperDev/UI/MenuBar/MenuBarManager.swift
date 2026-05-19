@@ -10,6 +10,7 @@ final class MenuBarManager: ObservableObject {
     private var popover: NSPopover?
     private var mainWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var rightClickMenu: NSMenu?
     private let core: AppCore
 
     init(core: AppCore) {
@@ -46,8 +47,9 @@ final class MenuBarManager: ObservableObject {
             let vc = NSHostingController(rootView: SettingsView().environmentObject(core))
             let window = NSWindow(contentViewController: vc)
             window.title = "设置"
-            window.setContentSize(NSSize(width: 480, height: 320))
-            window.styleMask = [.titled, .closable]
+            window.setContentSize(NSSize(width: 480, height: 420))
+            window.styleMask = [.titled, .closable, .resizable]
+            window.minSize = NSSize(width: 480, height: 300)
             window.center()
             window.isReleasedWhenClosed = false
             settingsWindow = window
@@ -107,24 +109,70 @@ final class MenuBarManager: ObservableObject {
         statusItem?.button?.image = makeMenuBarIcon(status: .stopped)
         statusItem?.button?.action = #selector(togglePopover)
         statusItem?.button?.target = self
+        statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        let menu = NSMenu()
+        let quitItem = NSMenuItem(title: "退出 SuperDev", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+        statusItem?.menu = nil
+        self.rightClickMenu = menu
 
         let popover = NSPopover()
         popover.contentSize = NSSize(width: 440, height: 360)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(
+        popover.appearance = NSAppearance(named: .darkAqua)
+        let hostingController = NSHostingController(
             rootView: PopoverView()
                 .environmentObject(core)
                 .environmentObject(self)
         )
+        // 移除 NSPopover 默认的 NSVisualEffectView 材质背景，让 SwiftUI 背景色完全接管
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.backgroundColor = NSColor(red: 0x0d/255.0, green: 0x11/255.0, blue: 0x17/255.0, alpha: 1).cgColor
+        popover.contentViewController = hostingController
         self.popover = popover
     }
 
     @objc private func togglePopover() {
         guard let button = statusItem?.button else { return }
+        let event = NSApp.currentEvent
+        // 右键点击 → 显示退出菜单
+        if event?.type == .rightMouseUp {
+            if popover?.isShown == true { popover?.performClose(nil) }
+            if let menu = rightClickMenu {
+                statusItem?.menu = menu
+                statusItem?.button?.performClick(nil)
+                statusItem?.menu = nil
+            }
+            return
+        }
+        // 左键点击 → 切换 popover
         if popover?.isShown == true {
             popover?.performClose(nil)
         } else {
             popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // NSPopover 的 NSVisualEffectView 在 show 后才挂载，此处禁用其材质以让 SwiftUI 背景色完全接管
+            disablePopoverVisualEffect()
+        }
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
+    }
+
+    private func disablePopoverVisualEffect() {
+        guard let popoverWindow = popover?.contentViewController?.view.window else { return }
+        func disableEffectViews(in view: NSView) {
+            if let effectView = view as? NSVisualEffectView {
+                effectView.material = .windowBackground
+                effectView.blendingMode = .withinWindow
+                effectView.state = .inactive
+            }
+            view.subviews.forEach { disableEffectViews(in: $0) }
+        }
+        if let contentView = popoverWindow.contentView {
+            disableEffectViews(in: contentView)
         }
     }
 }
