@@ -1,8 +1,7 @@
-// MainWindowView 持有面板布局状态并管理持久化。
+// MainWindowView 持有面板布局状态。
 //
 // 职责：
-//   - 维护 PanelLayout 状态树
-//   - 在布局变更时写入 UserDefaults
+//   - 维护 PanelLayout 状态树（每次启动重置为单面板）
 //   - 渲染 SidebarView + PanelLayoutView
 //
 // 边界：
@@ -12,7 +11,7 @@ import SwiftUI
 
 struct MainWindowView: View {
     @EnvironmentObject var core: AppCore
-    @State private var layout: PanelLayout = Self.loadLayout()
+    @State private var layout: PanelLayout = .leaf(id: UUID(), serviceId: nil)
 
     var body: some View {
         NavigationSplitView {
@@ -20,30 +19,11 @@ struct MainWindowView: View {
         } detail: {
             PanelLayoutView(layout: $layout)
                 .onChange(of: layout) { _, newLayout in
-                    Self.saveLayout(newLayout)
                     pruneOrphanBookmarks(layout: newLayout)
                 }
         }
         .navigationTitle("SuperDev")
         .frame(minWidth: 800, minHeight: 500)
-    }
-
-    // MARK: - Persistence
-
-    private static let layoutKey = "superdev.panel_layout"
-
-    private static func loadLayout() -> PanelLayout {
-        guard let data = UserDefaults.standard.data(forKey: layoutKey),
-              let decoded = try? JSONDecoder().decode(PanelLayout.self, from: data) else {
-            return .leaf(id: UUID(), serviceId: nil)
-        }
-        return decoded
-    }
-
-    private static func saveLayout(_ layout: PanelLayout) {
-        if let data = try? JSONEncoder().encode(layout) {
-            UserDefaults.standard.set(data, forKey: layoutKey)
-        }
     }
 
     // 当面板被关闭时，清理对应的孤立书签

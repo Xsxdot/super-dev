@@ -12,12 +12,15 @@ import Foundation
 
 struct LogBookmark {
     let panelId: UUID
+    /// 绑定的服务，只锁定该服务的日志；nil 表示不过滤（未选择服务时不应开启书签）
+    let serviceId: UUID?
     var startTime: Date?
     var endTime: Date?
     var lockedLogs: [LogEntry] = []
 
-    init(panelId: UUID) {
+    init(panelId: UUID, serviceId: UUID?) {
         self.panelId = panelId
+        self.serviceId = serviceId
     }
 
     /// 已开始且尚未结束。
@@ -26,9 +29,10 @@ struct LogBookmark {
     /// 已开始且已结束。
     var isCompleted: Bool { startTime != nil && endTime != nil }
 
-    /// 仅当 isActive 时追加日志；其余状态忽略。
+    /// 仅当 isActive 且 entry 属于绑定服务时追加。
     mutating func appendLog(_ entry: LogEntry) {
         guard isActive else { return }
+        if let sid = serviceId, entry.serviceId != sid { return }
         lockedLogs.append(entry)
     }
 

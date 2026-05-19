@@ -58,6 +58,8 @@ struct LogPanelView: View {
     @State private var activeSelectionEntryId: UUID?
     @State private var activeSelectionText: String?
     @State private var activeSelectionRect: CGRect?
+    /// 缓存的展示数据，只在依赖变化时重算，避免每次 body 调用都遍历所有日志
+    @State private var cachedDisplay: LogDisplay = LogDisplay(items: [], stats: (0, 0, 0, 0))
 
     private var includeChips: [String] {
         chips.filter { $0.type == .include }.map(\.keyword)
@@ -142,17 +144,16 @@ struct LogPanelView: View {
     }
 
     var body: some View {
-        let display = makeLogDisplay()
         VStack(spacing: 0) {
             toolbar
             Divider()
             if core.viewingRunId != nil {
-                historyBanner(info: historyBannerInfo(from: display))
+                historyBanner(info: historyBannerInfo(from: cachedDisplay))
                 Divider()
             }
-            logList(items: display.items)
+            logList(items: cachedDisplay.items)
             Divider()
-            statusBar(stats: display.stats)
+            statusBar(stats: cachedDisplay.stats)
         }
         .sheet(isPresented: $showRulesSheet) {
             if let proj = activeProject {
@@ -163,7 +164,19 @@ struct LogPanelView: View {
         .sheet(isPresented: $showSaveRuleSheet) {
             saveRuleSheet
         }
-        .onAppear { core.refreshAvailableRuns() }
+        .onAppear {
+            core.refreshAvailableRuns()
+            cachedDisplay = makeLogDisplay()
+        }
+        .onChange(of: core.logs.count) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: core.historyLogs.count) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: core.viewingRunId) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: core.bookmarks[panelId]?.lockedLogs.count) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: core.bookmarks[panelId]?.isCompleted) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: chips) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: chipLogic) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: serviceId) { _, _ in cachedDisplay = makeLogDisplay() }
+        .onChange(of: core.logRulesByProjectId) { _, _ in cachedDisplay = makeLogDisplay() }
     }
 
     // MARK: - Toolbar
@@ -420,7 +433,7 @@ struct LogPanelView: View {
                 }
             } else {
                 Button {
-                    core.startBookmark(panelId: panelId)
+                    core.startBookmark(panelId: panelId, serviceId: serviceId)
                 } label: {
                     Image(systemName: "record.circle")
                         .font(.system(size: 14))

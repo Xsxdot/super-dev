@@ -15,30 +15,43 @@ struct PanelLayoutView: View {
     @Binding var layout: PanelLayout
 
     var body: some View {
-        layoutView(node: $layout)
+        layoutView(node: $layout, onClose: nil)
+            .focusable(false)
     }
 
     // 使用 AnyView 打破递归 opaque return type 的编译限制
-    private func layoutView(node: Binding<PanelLayout>) -> AnyView {
+    // onClose: 父节点提供的关闭回调；nil 表示当前节点是根节点，不可关闭
+    private func layoutView(node: Binding<PanelLayout>, onClose: (() -> Void)?) -> AnyView {
         switch node.wrappedValue {
         case .leaf:
             return AnyView(
-                LeafPanelView(layout: node)
+                LeafPanelView(layout: node, onClose: onClose)
                     .environmentObject(core)
             )
         case .split(_, let axis, _, _, _):
+            // 子节点关闭时，将父 split 节点替换为另一个孩子（兄弟提升）
+            let closeFirst: () -> Void = {
+                if case .split(_, _, _, _, let sibling) = node.wrappedValue {
+                    node.wrappedValue = sibling
+                }
+            }
+            let closeSecond: () -> Void = {
+                if case .split(_, _, _, let sibling, _) = node.wrappedValue {
+                    node.wrappedValue = sibling
+                }
+            }
             if axis == .horizontal {
                 return AnyView(
                     HSplitView {
-                        layoutView(node: firstBinding(node))
-                        layoutView(node: secondBinding(node))
+                        layoutView(node: firstBinding(node), onClose: closeFirst)
+                        layoutView(node: secondBinding(node), onClose: closeSecond)
                     }
                 )
             } else {
                 return AnyView(
                     VSplitView {
-                        layoutView(node: firstBinding(node))
-                        layoutView(node: secondBinding(node))
+                        layoutView(node: firstBinding(node), onClose: closeFirst)
+                        layoutView(node: secondBinding(node), onClose: closeSecond)
                     }
                 )
             }
@@ -76,9 +89,16 @@ struct PanelLayoutView: View {
 
 // MARK: - LeafPanelView
 
+// DropEdge 显式枚举所有情况，center 不再用 Optional nil 表示，避免 nil==nil 误高亮
+private enum DropEdge: Equatable {
+    case left, right, top, bottom, center
+}
+
 private struct LeafPanelView: View {
     @EnvironmentObject var core: AppCore
     @Binding var layout: PanelLayout
+    /// 父节点提供的关闭回调；nil 时隐藏关闭按钮（单面板根节点不可关闭）
+    let onClose: (() -> Void)?
     @State private var dropHighlight: DropEdge? = nil
 
     private var panelId: UUID {
@@ -127,7 +147,7 @@ private struct LeafPanelView: View {
                         .frame(width: w, height: h * edgeFraction)
                         .frame(maxHeight: .infinity, alignment: .bottom)
                     // 中心（替换服务）
-                    dropZone(edge: nil)
+                    dropZone(edge: .center)
                         .frame(width: w * 0.6, height: h * 0.6)
                 }
             }
@@ -141,14 +161,14 @@ private struct LeafPanelView: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Spacer()
-            Button {
-                layout.removeLeaf(id: panelId)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9))
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9))
+                }
+                .buttonStyle(.plain)
+                .help("关闭此面板")
             }
-            .buttonStyle(.plain)
-            .help("关闭此面板")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -166,15 +186,18 @@ private struct LeafPanelView: View {
     }
 
     @ViewBuilder
-    private func dropZone(edge: DropEdge?) -> some View {
+    private func dropZone(edge: DropEdge) -> some View {
         let isHighlighted = dropHighlight == edge
+        // contentShape 让 drop 可命中，allowsHitTesting 只在高亮时开启，平时让点击穿透
         Color.clear
             .contentShape(Rectangle())
+            .allowsHitTesting(isHighlighted)
             .overlay(
                 isHighlighted
                     ? RoundedRectangle(cornerRadius: 4)
                         .fill(Color.accentColor.opacity(0.25))
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 2))
+                        .allowsHitTesting(false)
                     : nil
             )
             .dropDestination(for: String.self) { items, _ in
@@ -184,11 +207,15 @@ private struct LeafPanelView: View {
                 dropHighlight = nil
                 return true
             } isTargeted: { targeted in
-                dropHighlight = targeted ? edge : (dropHighlight == edge ? nil : dropHighlight)
+                if targeted {
+                    dropHighlight = edge
+                } else if dropHighlight == edge {
+                    dropHighlight = nil
+                }
             }
     }
 
-    private func handleDrop(serviceId droppedId: UUID, edge: DropEdge?) {
+    private func handleDrop(serviceId droppedId: UUID, edge: DropEdge) {
         guard case .leaf(let id, _) = layout else { return }
         switch edge {
         case .left:
@@ -199,12 +226,8 @@ private struct LeafPanelView: View {
             layout.splitLeaf(id: id, axis: .vertical, newServiceId: droppedId, newSide: .first)
         case .bottom:
             layout.splitLeaf(id: id, axis: .vertical, newServiceId: droppedId, newSide: .second)
-        case nil:
+        case .center:
             layout.replaceService(panelId: id, newServiceId: droppedId)
         }
     }
-}
-
-private enum DropEdge: Equatable {
-    case left, right, top, bottom
 }

@@ -12,39 +12,39 @@ final class LogBookmarkTests: XCTestCase {
     }
 
     func test_bookmark_initialState_noTimestamps() {
-        let bm = LogBookmark(panelId: UUID())
+        let bm = LogBookmark(panelId: UUID(), serviceId: nil)
         XCTAssertNil(bm.startTime)
         XCTAssertNil(bm.endTime)
         XCTAssertTrue(bm.lockedLogs.isEmpty)
     }
 
     func test_isActive_trueWhenStartedNoEnd() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         XCTAssertTrue(bm.isActive)
     }
 
     func test_isActive_falseWhenCompleted() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         bm.endTime = Date()
         XCTAssertFalse(bm.isActive)
     }
 
     func test_isActive_falseWhenNoStart() {
-        let bm = LogBookmark(panelId: UUID())
+        let bm = LogBookmark(panelId: UUID(), serviceId: nil)
         XCTAssertFalse(bm.isActive)
     }
 
     func test_isCompleted_trueWhenBothTimestampsSet() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         bm.endTime = Date()
         XCTAssertTrue(bm.isCompleted)
     }
 
     func test_appendLog_whenActive_addsToLockedLogs() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         let entry = makeEntry()
         bm.appendLog(entry)
@@ -53,7 +53,7 @@ final class LogBookmarkTests: XCTestCase {
     }
 
     func test_appendLog_whenCompleted_doesNotAdd() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         bm.endTime = Date()
         bm.appendLog(makeEntry())
@@ -61,13 +61,13 @@ final class LogBookmarkTests: XCTestCase {
     }
 
     func test_appendLog_whenNoStart_doesNotAdd() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.appendLog(makeEntry())
         XCTAssertTrue(bm.lockedLogs.isEmpty)
     }
 
     func test_formattedText_formatsCorrectly() {
-        var bm = LogBookmark(panelId: UUID())
+        var bm = LogBookmark(panelId: UUID(), serviceId: nil)
         bm.startTime = Date()
         let ts = Date(timeIntervalSince1970: 0)
         let entry = LogEntry(
