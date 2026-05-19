@@ -207,6 +207,22 @@ struct LogPanelView: View {
                 .font(.system(size: 11))
                 .lineLimit(1)
 
+            // 竖线分隔
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 1, height: 10)
+
+            Button {
+                saveChipToProjectRule(chip)
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 8))
+                    .foregroundColor(.green)
+            }
+            .buttonStyle(.plain)
+            .help("保存到项目规则")
+            .disabled(activeProject == nil)
+
             Button {
                 chips.removeAll { $0.id == chip.id }
             } label: {
@@ -530,6 +546,19 @@ struct LogPanelView: View {
     private func toggleChipType(_ id: UUID) {
         guard let idx = chips.firstIndex(where: { $0.id == id }) else { return }
         chips[idx].type = chips[idx].type == .include ? .exclude : .include
+    }
+
+    private func saveChipToProjectRule(_ chip: FilterChip) {
+        guard let proj = activeProject else { return }
+        let ruleType: LogRule.RuleType = chip.type == .include ? .include : .exclude
+        let rule = LogRule(
+            name: chip.keyword,
+            type: ruleType,
+            keywords: [chip.keyword],
+            logic: .or,
+            enabled: true
+        )
+        try? core.addLogRule(rule, to: proj)
     }
 
     private func historyRunLabel(_ run: RunSummary) -> String {
