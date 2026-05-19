@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		9AB98C6C2FBC4B540087AC8D /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9AB98C6B2FBC4B540087AC8D /* GRDB */; };
 		9AD0DC9A2FBAF96A00256B7F /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9B2FBAF96A00256B7F /* GRDB */; };
 		9AD0DC9C2FBAF97A00256B7F /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = 9AD0DC9D2FBAF97A00256B7F /* Yams */; };
 /* End PBXBuildFile section */
@@ -21,12 +22,30 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		9AB98C612FBC4B1B0087AC8D /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		9AB98C632FBC4B1B0087AC8D /* superdev-mcp */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "superdev-mcp"; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AE584F22FBAF3EA0089B98E /* SuperDev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SuperDev.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AE585042FBAF4360089B98E /* SuperDevTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SuperDevTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		9AB98C642FBC4B1B0087AC8D /* superdev-mcp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "superdev-mcp";
+			sourceTree = "<group>";
+		};
 		9AE584F42FBAF3EA0089B98E /* SuperDev */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = SuperDev;
@@ -40,6 +59,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9AB98C602FBC4B1B0087AC8D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9AB98C6C2FBC4B540087AC8D /* GRDB in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9AE584EF2FBAF3EA0089B98E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -59,11 +86,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		9AB98C6A2FBC4B540087AC8D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		9AE584E92FBAF3EA0089B98E = {
 			isa = PBXGroup;
 			children = (
 				9AE584F42FBAF3EA0089B98E /* SuperDev */,
 				9AE585052FBAF4360089B98E /* SuperDevTests */,
+				9AB98C642FBC4B1B0087AC8D /* superdev-mcp */,
+				9AB98C6A2FBC4B540087AC8D /* Frameworks */,
 				9AE584F32FBAF3EA0089B98E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -73,6 +109,7 @@
 			children = (
 				9AE584F22FBAF3EA0089B98E /* SuperDev.app */,
 				9AE585042FBAF4360089B98E /* SuperDevTests.xctest */,
+				9AB98C632FBC4B1B0087AC8D /* superdev-mcp */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,6 +117,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		9AB98C622FBC4B1B0087AC8D /* superdev-mcp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9AB98C692FBC4B1B0087AC8D /* Build configuration list for PBXNativeTarget "superdev-mcp" */;
+			buildPhases = (
+				9AB98C5F2FBC4B1B0087AC8D /* Sources */,
+				9AB98C602FBC4B1B0087AC8D /* Frameworks */,
+				9AB98C612FBC4B1B0087AC8D /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9AB98C642FBC4B1B0087AC8D /* superdev-mcp */,
+			);
+			name = "superdev-mcp";
+			packageProductDependencies = (
+				9AB98C6B2FBC4B540087AC8D /* GRDB */,
+			);
+			productName = "superdev-mcp";
+			productReference = 9AB98C632FBC4B1B0087AC8D /* superdev-mcp */;
+			productType = "com.apple.product-type.tool";
+		};
 		9AE584F12FBAF3EA0089B98E /* SuperDev */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 9AE584FD2FBAF3EB0089B98E /* Build configuration list for PBXNativeTarget "SuperDev" */;
@@ -137,6 +197,9 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
+					9AB98C622FBC4B1B0087AC8D = {
+						CreatedOnToolsVersion = 26.5;
+					};
 					9AE584F12FBAF3EA0089B98E = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -166,6 +229,7 @@
 			targets = (
 				9AE584F12FBAF3EA0089B98E /* SuperDev */,
 				9AE585032FBAF4360089B98E /* SuperDevTests */,
+				9AB98C622FBC4B1B0087AC8D /* superdev-mcp */,
 			);
 		};
 /* End PBXProject section */
@@ -188,6 +252,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		9AB98C5F2FBC4B1B0087AC8D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9AE584EE2FBAF3EA0089B98E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -213,6 +284,28 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		9AB98C672FBC4B1B0087AC8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		9AB98C682FBC4B1B0087AC8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		9AE584FB2FBAF3EB0089B98E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -432,6 +525,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		9AB98C692FBC4B1B0087AC8D /* Build configuration list for PBXNativeTarget "superdev-mcp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9AB98C672FBC4B1B0087AC8D /* Debug */,
+				9AB98C682FBC4B1B0087AC8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		9AE584ED2FBAF3EA0089B98E /* Build configuration list for PBXProject "SuperDev" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -473,6 +575,11 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		9AB98C6B2FBC4B540087AC8D /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */;
+			productName = GRDB;
+		};
 		9AD0DC9B2FBAF96A00256B7F /* GRDB */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9AD0DC982FBAF96A00256B7F /* XCLocalSwiftPackageReference "../../temp/GRDB.swift" */;
