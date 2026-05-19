@@ -94,14 +94,14 @@ struct LogPanelView: View {
                     }
                 }
             }
-            .onChange(of: filteredLogs.count) { _, _ in
+            .onChange(of: filteredLogs.count) { oldCount, newCount in
                 if isFollowing {
                     newLogCount = 0
                     if let last = filteredLogs.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 } else {
-                    newLogCount += 1
+                    newLogCount += max(0, newCount - oldCount)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
