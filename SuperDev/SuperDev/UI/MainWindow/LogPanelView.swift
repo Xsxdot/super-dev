@@ -173,7 +173,7 @@ struct LogPanelView: View {
                     if newValue.contains(",") {
                         let parts = newValue.split(separator: ",")
                         for part in parts.dropLast() {
-                            addChip(String(part))
+                            addChip(String(part), type: nextChipType)
                         }
                         chipInput = String(parts.last ?? "")
                     }
