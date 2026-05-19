@@ -551,6 +551,13 @@ struct LogPanelView: View {
     private func saveChipToProjectRule(_ chip: FilterChip) {
         guard let proj = activeProject else { return }
         let ruleType: LogRule.RuleType = chip.type == .include ? .include : .exclude
+
+        // Check for existing rule with same keyword and type to avoid duplicates
+        let existingRules = core.logRules(for: proj.id)
+        if existingRules.contains(where: { $0.keywords.contains(chip.keyword) && $0.type == ruleType }) {
+            return
+        }
+
         let rule = LogRule(
             name: chip.keyword,
             type: ruleType,
@@ -558,7 +565,11 @@ struct LogPanelView: View {
             logic: .or,
             enabled: true
         )
-        try? core.addLogRule(rule, to: proj)
+        do {
+            try core.addLogRule(rule, to: proj)
+        } catch {
+            print("[SuperDev] Failed to save rule '\(chip.keyword)': \(error)")
+        }
     }
 
     private func historyRunLabel(_ run: RunSummary) -> String {
