@@ -24,6 +24,8 @@ final class AppCore: ObservableObject {
     @Published private(set) var logRulesByProjectId: [UUID: [LogRule]] = [:]
     /// 用户选择在 Popover 中隐藏的服务 ID 集合（持久化到 UserDefaults）
     @Published var hiddenServiceIds: Set<UUID> = []
+    /// 每个面板的日志书签（keyed by panelId）
+    @Published var bookmarks: [UUID: LogBookmark] = [:]
 
     static let logRetentionDaysKey = "superdev.log_retention_days"
     static let defaultRetentionDays = 7
@@ -141,6 +143,12 @@ final class AppCore: ObservableObject {
     func addLogRule(_ rule: LogRule, to project: Project) throws {
         var config = logRules(for: project)
         config.rules.append(rule)
+        try saveLogRules(config, for: project)
+    }
+
+    func removeLogRule(id: UUID, from project: Project) throws {
+        var config = logRules(for: project)
+        config.rules.removeAll { $0.id == id }
         try saveLogRules(config, for: project)
     }
 
@@ -320,6 +328,10 @@ final class AppCore: ObservableObject {
                 let entry = self.logEngine.parseLine(line, serviceId: serviceId, serviceName: serviceName)
                 self.logEngine.ingest(entry, into: &self.logs)
                 self.logStore.append(entry)
+                // 把新日志追加到所有活跃书签
+                for panelId in self.bookmarks.keys where self.bookmarks[panelId]?.isActive == true {
+                    self.bookmarks[panelId]?.appendLog(entry)
+                }
             },
             onStatusChange: { [weak self] serviceId, status in
                 guard let self else { return }
@@ -385,5 +397,20 @@ final class AppCore: ObservableObject {
         if let data = try? JSONEncoder().encode(pids) {
             try? data.write(to: URL(fileURLWithPath: pidFilePath))
         }
+    }
+
+    // MARK: - Log Bookmarks
+
+    func startBookmark(panelId: UUID) {
+        bookmarks[panelId] = LogBookmark(panelId: panelId)
+        bookmarks[panelId]?.startTime = Date()
+    }
+
+    func endBookmark(panelId: UUID) {
+        bookmarks[panelId]?.endTime = Date()
+    }
+
+    func clearBookmark(panelId: UUID) {
+        bookmarks.removeValue(forKey: panelId)
     }
 }
