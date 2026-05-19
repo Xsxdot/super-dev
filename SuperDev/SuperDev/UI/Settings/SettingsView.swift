@@ -7,8 +7,9 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             projectList
-            Divider()
-                .background(Theme.borderPrimary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
             addButton
         }
         .background(Theme.bgPrimary)
