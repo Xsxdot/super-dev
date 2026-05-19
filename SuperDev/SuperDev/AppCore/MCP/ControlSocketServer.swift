@@ -56,13 +56,18 @@ final class ControlSocketServer {
 
         let source = DispatchSource.makeReadSource(fileDescriptor: serverFD, queue: .global(qos: .utility))
         source.setEventHandler { [weak self] in self?.acceptConnection() }
+        // setCancelHandler 保证 FD 在 source 完全取消后关闭，避免 source 尝试使用已关闭的 FD。
+        let fd = serverFD
+        source.setCancelHandler { close(fd) }
         source.resume()
         dispatchSource = source
     }
 
     func stop() {
         dispatchSource?.cancel()
-        if serverFD >= 0 { close(serverFD); serverFD = -1 }
+        // FD 由 cancelHandler 关闭，这里只需重置标记和删除 socket 文件。
+        serverFD = -1
+        dispatchSource = nil
         unlink(ControlSocketServer.socketPath)
     }
 
