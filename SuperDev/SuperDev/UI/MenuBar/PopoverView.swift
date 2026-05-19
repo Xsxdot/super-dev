@@ -14,7 +14,7 @@ struct PopoverView: View {
                 servicePanel(for: project)
             }
         }
-        .frame(minWidth: hoveredProject == nil ? 200 : 440, minHeight: 300)
+        .frame(minWidth: hoveredProject == nil ? 170 : 430, minHeight: 300)
     }
 
     // MARK: - Project list (left panel)
@@ -157,123 +157,198 @@ struct PopoverView: View {
     // MARK: - Service panel (right panel)
 
     private func servicePanel(for project: Project) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text(project.name).fontWeight(.semibold)
-                Spacer()
-                Button("全部停止") { core.stopAll(project: project) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.red)
-                Button("▶ 启动选中") {
-                    let toStart = project.services.filter { selectedServiceIds.contains($0.id) }
-                    core.startSelected(services: toStart, in: project)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
-
-            Divider()
-
-            // Select all toolbar
-            HStack {
-                Toggle(isOn: allSelectedBinding(for: project)) {
-                    Text("全选").font(.subheadline)
-                }
-                .toggleStyle(.checkbox)
-                Spacer()
-                Button("反选") { toggleInvert(for: project) }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.accentColor)
-                    .font(.subheadline)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            Divider()
-
-            // Service rows
+        VStack(spacing: 0) {
+            servicePanelHeader(for: project)
+            Divider().background(Theme.borderPrimary)
+            servicePanelToolbar(for: project)
+            Divider().background(Theme.bgElevated)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     let required = project.services.filter { $0.required }
                     let optional = project.services.filter { !$0.required }
-
                     if !required.isEmpty {
-                        serviceGroupHeader("必须启动")
+                        serviceGroupLabel("必须启动")
                         ForEach(required) { service in
                             serviceRow(service, in: project)
                         }
                     }
-
                     if !optional.isEmpty {
-                        serviceGroupHeader("可选")
+                        serviceGroupLabel("可选")
                         ForEach(optional) { service in
                             serviceRow(service, in: project)
                         }
                     }
                 }
             }
-
-            Divider()
-
-            // Footer
-            HStack {
-                Spacer()
-                Button {
-                    openMainWindow()
-                } label: {
-                    Label("查看日志", systemImage: "doc.text")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.accentColor)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            Divider().background(Theme.borderPrimary)
+            servicePanelFooter()
         }
         .frame(width: 260)
+        .background(Theme.bgSecondary)
     }
 
-    private func serviceGroupHeader(_ title: String) -> some View {
+    private func servicePanelHeader(for project: Project) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                Text(project.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Button("全停") { core.stopAll(project: project) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.textSecondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(Theme.bgElevated)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.borderSecondary, lineWidth: 1))
+                    .cornerRadius(5)
+                Button("▶ 启动选中") {
+                    let toStart = project.services.filter { selectedServiceIds.contains($0.id) }
+                    core.startSelected(services: toStart, in: project)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(Theme.accent)
+                .cornerRadius(5)
+            }
+            HStack(spacing: 5) {
+                let runningCount  = project.services.filter { $0.status == .running }.count
+                let startingCount = project.services.filter { $0.status == .starting }.count
+                let stoppedCount  = project.services.filter { $0.status == .stopped || $0.status == .failed }.count
+                if runningCount > 0  { statusBadge("● \(runningCount) 运行中", color: Theme.statusRunning) }
+                if startingCount > 0 { statusBadge("● \(startingCount) 启动中", color: Theme.statusStarting) }
+                if stoppedCount > 0  { statusBadge("● \(stoppedCount) 停止", color: Theme.statusStopped) }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    private func statusBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9))
+            .foregroundColor(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.1))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(color.opacity(0.2), lineWidth: 1))
+            .cornerRadius(4)
+    }
+
+    private func servicePanelToolbar(for project: Project) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                let allSelected = project.services.allSatisfy { selectedServiceIds.contains($0.id) }
+                if allSelected {
+                    selectedServiceIds.removeAll()
+                } else {
+                    project.services.forEach { selectedServiceIds.insert($0.id) }
+                }
+            } label: {
+                let allSelected = project.services.allSatisfy { selectedServiceIds.contains($0.id) }
+                let someSelected = project.services.contains { selectedServiceIds.contains($0.id) }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(allSelected || someSelected ? Theme.accent : Color.clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 2)
+                                .stroke(allSelected || someSelected ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
+                        )
+                        .frame(width: 13, height: 13)
+                    if allSelected {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color.white)
+                            .frame(width: 8, height: 8)
+                    } else if someSelected {
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 8, height: 1.5)
+                            .cornerRadius(1)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            Text("全选")
+                .font(.system(size: 10))
+                .foregroundColor(Theme.textSecondary)
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(width: 1, height: 12)
+            Button("反选") { toggleInvert(for: project) }
+                .buttonStyle(.plain)
+                .font(.system(size: 10))
+                .foregroundColor(Theme.textSecondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Theme.bgToolbar)
+    }
+
+    private func serviceGroupLabel(_ title: String) -> some View {
         Text(title)
-            .font(.caption)
-            .foregroundColor(.secondary)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundColor(Theme.textTertiary)
+            .kerning(0.6)
             .textCase(.uppercase)
             .padding(.horizontal, 12)
             .padding(.top, 8)
-            .padding(.bottom, 2)
+            .padding(.bottom, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func serviceRow(_ service: Service, in project: Project) -> some View {
         HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { selectedServiceIds.contains(service.id) },
-                set: { checked in
-                    if checked { selectedServiceIds.insert(service.id) }
-                    else { selectedServiceIds.remove(service.id) }
+            // 自绘 checkbox
+            Button {
+                if selectedServiceIds.contains(service.id) {
+                    selectedServiceIds.remove(service.id)
+                } else {
+                    selectedServiceIds.insert(service.id)
                 }
-            ))
-            .toggleStyle(.checkbox)
-            .labelsHidden()
+            } label: {
+                let checked = selectedServiceIds.contains(service.id)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(checked ? Theme.accent : Color.clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 2)
+                                .stroke(checked ? Theme.accent : Theme.borderSecondary, lineWidth: 1)
+                        )
+                        .frame(width: 13, height: 13)
+                    if checked {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color.white)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
 
+            // 状态点（运行/启动中加 glow）
+            let statusColor = serviceStatusColor(service.status)
+            let hasGlow = service.status == .running || service.status == .starting
             Circle()
-                .fill(statusColor(service.status))
+                .fill(statusColor)
+                .shadow(color: hasGlow ? statusColor.opacity(0.6) : .clear, radius: 3)
                 .frame(width: 7, height: 7)
 
             Text(service.name)
-                .font(.subheadline)
+                .font(.system(size: 11))
+                .foregroundColor(service.status == .stopped ? Theme.textTertiary : Theme.textPrimary)
                 .lineLimit(1)
 
             Spacer()
 
             Text(statusLabel(service.status))
-                .font(.caption)
-                .foregroundColor(statusColor(service.status))
+                .font(.system(size: 9))
+                .foregroundColor(serviceStatusColor(service.status))
 
+            // 启停按钮（18×18 圆角方块）
             Button {
                 if service.status.isActive {
                     core.stop(service, in: project)
@@ -281,15 +356,45 @@ struct PopoverView: View {
                     core.start(service, in: project)
                 }
             } label: {
-                Image(systemName: service.status.isActive ? "stop.fill" : "play.fill")
-                    .font(.caption)
+                let isActive = service.status.isActive
+                let btnColor = isActive ? serviceStatusColor(service.status) : Theme.bgElevated
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(btnColor)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(isActive ? btnColor : Theme.borderSecondary, lineWidth: 1)
+                        )
+                        .frame(width: 18, height: 18)
+                    Image(systemName: isActive ? "stop.fill" : "play.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(isActive ? .black : Theme.textSecondary)
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.mini)
-            .tint(service.status.isActive ? .red : .green)
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
+    }
+
+    private func servicePanelFooter() -> some View {
+        HStack {
+            Spacer()
+            Button {
+                openMainWindow()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 10))
+                    Text("查看日志")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(Theme.accent)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     // MARK: - Helpers
@@ -337,24 +442,6 @@ struct PopoverView: View {
         case .starting: return Theme.statusStarting
         case .running:  return Theme.statusRunning
         case .failed:   return Theme.statusFailed
-        }
-    }
-
-    private func statusColor(_ status: ServiceStatus) -> Color {
-        switch status {
-        case .stopped: return .gray
-        case .starting: return .yellow
-        case .running: return .green
-        case .failed: return .red
-        }
-    }
-
-    private func statusColor(_ status: ProjectStatus) -> Color {
-        switch status {
-        case .stopped: return .gray
-        case .starting: return .yellow
-        case .running: return .green
-        case .failed: return .red
         }
     }
 
