@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var core: AppCore
-    @Binding var selectedProjectId: UUID?
     @Binding var selectedServiceId: UUID?
 
     var body: some View {
