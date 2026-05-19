@@ -66,6 +66,28 @@ final class PanelLayoutTests: XCTestCase {
         if case .leaf(let id, _) = layout { XCTAssertEqual(id, rightId) } else { XCTFail("right child should be promoted") }
     }
 
+    func test_removeLeaf_deepNested_promotesCorrectly() {
+        // Tree: split(split(leafA, leafB), leafC)
+        let leafAId = UUID()
+        let leafBId = UUID()
+        let leafCId = UUID()
+        let leafA = PanelLayout.leaf(id: leafAId, serviceId: nil)
+        let leafB = PanelLayout.leaf(id: leafBId, serviceId: nil)
+        let leafC = PanelLayout.leaf(id: leafCId, serviceId: nil)
+        let innerSplit = PanelLayout.split(id: UUID(), axis: .horizontal, ratio: 0.5, first: leafA, second: leafB)
+        var layout = PanelLayout.split(id: UUID(), axis: .vertical, ratio: 0.5, first: innerSplit, second: leafC)
+
+        // Remove leafA — inner split should collapse to leafB
+        layout.removeLeaf(id: leafAId)
+
+        // Root should still be a split(leafB, leafC)
+        guard case .split(_, _, _, let first, let second) = layout else {
+            XCTFail("Root should remain a split"); return
+        }
+        if case .leaf(let id, _) = first { XCTAssertEqual(id, leafBId) } else { XCTFail("first should be leafB") }
+        if case .leaf(let id, _) = second { XCTAssertEqual(id, leafCId) } else { XCTFail("second should be leafC") }
+    }
+
     func test_removeLeaf_onlyLeaf_doesNothing() {
         let leafId = UUID()
         var layout = PanelLayout.leaf(id: leafId, serviceId: nil)
@@ -76,10 +98,16 @@ final class PanelLayoutTests: XCTestCase {
     // MARK: - Codable round-trip
 
     func test_codable_roundTrip_singleLeaf() throws {
-        let original = PanelLayout.leaf(id: UUID(), serviceId: UUID())
+        let serviceId = UUID()
+        let original = PanelLayout.leaf(id: UUID(), serviceId: serviceId)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(PanelLayout.self, from: data)
         XCTAssertEqual(original.id, decoded.id)
+        if case .leaf(_, let decodedServiceId) = decoded {
+            XCTAssertEqual(serviceId, decodedServiceId)
+        } else {
+            XCTFail("Decoded layout should be a leaf")
+        }
     }
 
     func test_codable_roundTrip_split() throws {
