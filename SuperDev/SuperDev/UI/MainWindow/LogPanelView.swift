@@ -134,15 +134,26 @@ struct LogPanelView: View {
                 .foregroundColor(.secondary)
             Spacer()
             if s.errors > 0 {
-                Text("\(s.errors)E").font(.caption).foregroundColor(.red)
+                statusBadge("● \(s.errors) 错误", color: Theme.statusFailed)
             }
             if s.warns > 0 {
-                Text("\(s.warns)W").font(.caption).foregroundColor(.yellow)
+                statusBadge("● \(s.warns) 警告", color: Theme.statusStarting)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    private func statusBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9))
+            .foregroundColor(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.1))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(color.opacity(0.2), lineWidth: 1))
+            .cornerRadius(4)
     }
 
     private func levelColor(_ level: LogLevel) -> Color {
