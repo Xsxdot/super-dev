@@ -28,6 +28,10 @@ final class AppCore: ObservableObject {
     @Published private(set) var popoverSelectedServiceNamesByRootPath: [String: Set<String>] = [:]
     /// 每个面板的日志书签（keyed by panelId）
     @Published var bookmarks: [UUID: LogBookmark] = [:]
+    /// 已勾选加入同步组的 panelId 集合
+    @Published var syncGroupPanelIds: Set<UUID> = []
+    /// 同步组是否正在录制中
+    @Published var syncGroupIsRecording: Bool = false
 
     static let logRetentionDaysKey = "superdev.log_retention_days"
     static let defaultRetentionDays = 7
@@ -511,5 +515,63 @@ final class AppCore: ObservableObject {
 
     func clearBookmark(panelId: UUID) {
         bookmarks.removeValue(forKey: panelId)
+    }
+
+    // MARK: - Sync Bookmark
+
+    // toggleSyncGroup 将 panelId 加入或移出同步组。
+    //
+    // 参数：
+    //   - panelId: 目标面板 ID
+    func toggleSyncGroup(panelId: UUID) {
+        if syncGroupPanelIds.contains(panelId) {
+            syncGroupPanelIds.remove(panelId)
+        } else {
+            syncGroupPanelIds.insert(panelId)
+        }
+    }
+
+    // startSyncBookmark 对所有 syncGroupPanelIds 中的面板同时开始书签录制。
+    //
+    // 参数：
+    //   - serviceIdByPanelId: 每个面板对应的服务 ID（可为 nil）
+    func startSyncBookmark(serviceIdByPanelId: [UUID: UUID?]) {
+        guard !syncGroupIsRecording else { return }
+        for panelId in syncGroupPanelIds {
+            let serviceId = serviceIdByPanelId[panelId] ?? nil
+            startBookmark(panelId: panelId, serviceId: serviceId)
+        }
+        syncGroupIsRecording = true
+    }
+
+    // endSyncBookmark 对所有 syncGroupPanelIds 中的面板同时结束书签录制。
+    func endSyncBookmark() {
+        for panelId in syncGroupPanelIds {
+            endBookmark(panelId: panelId)
+        }
+        syncGroupIsRecording = false
+    }
+
+    // syncBookmarkFormattedText 返回同步组内所有已完成书签的合并文本。
+    //
+    // 格式：按 serviceName 字母序分块，每块以 "=== <serviceName> ===" 为标题。
+    // serviceId 为 nil 的面板跳过。
+    //
+    // 返回：合并后的纯文本字符串
+    func syncBookmarkFormattedText() -> String {
+        var blocksByService: [(name: String, text: String)] = []
+        for panelId in syncGroupPanelIds {
+            guard let bm = bookmarks[panelId],
+                  bm.isCompleted,
+                  bm.serviceId != nil,
+                  !bm.lockedLogs.isEmpty else { continue }
+            let serviceName = bm.lockedLogs.first?.serviceName ?? "unknown"
+            blocksByService.append((name: serviceName, text: bm.formattedText))
+        }
+        guard !blocksByService.isEmpty else { return "" }
+        return blocksByService
+            .sorted { $0.name < $1.name }
+            .map { "=== \($0.name) ===\n\($0.text)" }
+            .joined(separator: "\n\n")
     }
 }
