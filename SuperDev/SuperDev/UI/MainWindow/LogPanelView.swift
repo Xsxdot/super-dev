@@ -77,7 +77,7 @@ struct LogPanelView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
             }
-            .background(Color(red: 0.12, green: 0.12, blue: 0.12))
+            .background(Theme.bgSecondary)
             .onChange(of: filteredLogs.count) { _, _ in
                 if let last = filteredLogs.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -90,7 +90,7 @@ struct LogPanelView: View {
         HStack(alignment: .top, spacing: 6) {
             Text(entry.timestamp.formatted(.dateTime.hour().minute().second()))
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Color(white: 0.45))
+                .foregroundColor(Theme.textTertiary)
 
             Text("[\(entry.serviceName)]")
                 .font(.system(size: 11, design: .monospaced))
@@ -103,7 +103,7 @@ struct LogPanelView: View {
 
             Text(entry.message)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Color(white: 0.85))
+                .foregroundColor(Theme.textPrimary)
                 .textSelection(.enabled)
                 .lineLimit(nil)
 
