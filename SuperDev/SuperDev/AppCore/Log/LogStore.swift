@@ -12,11 +12,11 @@ import Foundation
 import GRDB
 
 // SQLite log persistence. Database at ~/Library/Application Support/SuperDev/logs.db
-final class LogStore {
-    private var db: DatabaseQueue?
+final class LogStore: @unchecked Sendable {
+    private let db: DatabaseQueue?
 
-    init() {
-        setupDatabase()
+    nonisolated init() {
+        db = Self.openDatabase()
     }
 
     nonisolated deinit {}
@@ -25,7 +25,7 @@ final class LogStore {
     //
     // 参数：
     //   - entry: 待持久化的日志条目
-    func append(_ entry: LogEntry) {
+    nonisolated func append(_ entry: LogEntry) {
         try? db?.write { db in
             try entry.insert(db)
         }
@@ -41,7 +41,7 @@ final class LogStore {
     //   - limit:     最多返回条数，默认 1000
     //
     // 返回：符合条件的 LogEntry 数组（时间倒序）
-    func fetch(
+    nonisolated func fetch(
         serviceId: UUID? = nil,
         runId: UUID? = nil,
         levels: Set<LogLevel>? = nil,
@@ -80,7 +80,7 @@ final class LogStore {
     //
     // 参数：
     //   - count: 保留最近 run 的数量，默认 10
-    func deleteOldRuns(keepLast count: Int = 10) {
+    nonisolated func deleteOldRuns(keepLast count: Int = 10) {
         try? db?.write { db in
             let sql = """
                 DELETE FROM log_entries WHERE run_id NOT IN (
@@ -92,33 +92,90 @@ final class LogStore {
         }
     }
 
+    /// Deletes log entries older than the given number of days.
+    nonisolated func deleteOldEntries(olderThan days: Int) {
+        guard days > 0,
+              let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) else { return }
+        try? db?.write { db in
+            try db.execute(
+                sql: "DELETE FROM log_entries WHERE timestamp < ?",
+                arguments: [cutoff]
+            )
+        }
+    }
+
+    /// Returns all runs ordered by start time (newest first).
+    nonisolated func fetchRuns() -> [RunSummary] {
+        (try? db?.read { db in
+            let sql = """
+                SELECT run_id,
+                       MIN(timestamp) AS start_time,
+                       COUNT(*) AS log_count,
+                       GROUP_CONCAT(DISTINCT service_name) AS service_names
+                FROM log_entries
+                GROUP BY run_id
+                ORDER BY start_time DESC
+                """
+            let rows = try Row.fetchAll(db, sql: sql)
+            return rows.compactMap { row -> RunSummary? in
+                guard let runIdStr = String.fromDatabaseValue(row["run_id"]),
+                      let runId = UUID(uuidString: runIdStr),
+                      let startTime = Self.parseTimestamp(row["start_time"]) else { return nil }
+                let logCount = (Int64.fromDatabaseValue(row["log_count"]).map(Int.init))
+                    ?? Int.fromDatabaseValue(row["log_count"])
+                    ?? 0
+                let namesStr = String.fromDatabaseValue(row["service_names"]) ?? ""
+                let serviceNames = namesStr.split(separator: ",").map(String.init).sorted()
+                return RunSummary(
+                    runId: runId,
+                    startTime: startTime,
+                    logCount: logCount,
+                    serviceNames: serviceNames
+                )
+            }
+        }) ?? []
+    }
+
+    /// Returns all logs for a run in chronological order (oldest first).
+    nonisolated func fetchLogs(for runId: UUID, limit: Int = 10_000) -> [LogEntry] {
+        (try? db?.read { db in
+            let sql = """
+                SELECT * FROM log_entries
+                WHERE run_id = ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+                """
+            return try LogEntry.fetchAll(
+                db,
+                sql: sql,
+                arguments: [runId.uuidString, limit]
+            )
+        }) ?? []
+    }
+
     // lastErrorLog 返回指定服务最后一条 error 或 unknown 级别的日志。
     //
     // 参数：
     //   - serviceId: 服务 ID
     //
     // 返回：最后一条错误日志，若无则为 nil
-    func lastErrorLog(for serviceId: UUID) -> LogEntry? {
+    nonisolated func lastErrorLog(for serviceId: UUID) -> LogEntry? {
         fetch(serviceId: serviceId, levels: [.error, .unknown], limit: 1).first
     }
 
     // MARK: - Private
 
-    private func setupDatabase() {
+    nonisolated private static func openDatabase() -> DatabaseQueue? {
         guard let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first else { return }
+        ).first else { return nil }
 
         let dbDir = appSupport.appendingPathComponent("SuperDev")
         try? FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
         let dbPath = dbDir.appendingPathComponent("logs.db").path
 
-        db = try? DatabaseQueue(path: dbPath)
-        createTableIfNeeded()
-    }
-
-    private func createTableIfNeeded() {
-        try? db?.write { db in
+        guard let queue = try? DatabaseQueue(path: dbPath) else { return nil }
+        try? queue.write { db in
             try db.create(table: "log_entries", ifNotExists: true) { t in
                 t.column("id", .text).primaryKey()
                 t.column("timestamp", .datetime).notNull().indexed()
@@ -131,5 +188,24 @@ final class LogStore {
                 t.column("repeat_count", .integer).notNull().defaults(to: 1)
             }
         }
+        return queue
     }
+
+    /// GRDB may return `MIN(timestamp)` as `Date` or SQLite text depending on the query path.
+    nonisolated static func parseTimestamp(_ value: DatabaseValue) -> Date? {
+        if let date = Date.fromDatabaseValue(value) { return date }
+        guard let text = String.fromDatabaseValue(value) else { return nil }
+        if let date = sqliteDateFormatter.date(from: text) { return date }
+        sqliteDateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        defer { sqliteDateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" }
+        return sqliteDateFormatter.date(from: text)
+    }
+
+    nonisolated private static let sqliteDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
 }

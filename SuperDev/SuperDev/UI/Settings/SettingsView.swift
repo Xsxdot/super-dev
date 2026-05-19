@@ -3,20 +3,49 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var core: AppCore
     @State private var showAddProject = false
+    @State private var retentionDays: Int = AppCore.defaultRetentionDays
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            logRetentionSection
+            Rectangle()
+                .fill(Theme.borderPrimary)
+                .frame(height: 1)
             projectList
             Rectangle()
                 .fill(Theme.borderPrimary)
                 .frame(height: 1)
             addButton
         }
+        .onAppear {
+            retentionDays = core.logRetentionDays
+        }
         .background(Theme.bgPrimary)
         .frame(width: 480)
         .sheet(isPresented: $showAddProject) {
             AddProjectView().environmentObject(core)
         }
+    }
+
+    private var logRetentionSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("日志保留天数")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                Text("超过此天数的日志将在启动时自动删除")
+                    .font(.caption)
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+            Stepper("\(retentionDays) 天", value: $retentionDays, in: 1...90)
+                .onChange(of: retentionDays) { _, newValue in
+                    core.logRetentionDays = newValue
+                }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Theme.bgElevated)
     }
 
     private var projectList: some View {
