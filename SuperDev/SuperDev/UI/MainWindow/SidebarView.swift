@@ -2,10 +2,9 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var core: AppCore
-    @Binding var selectedServiceId: UUID?
 
     var body: some View {
-        List(selection: $selectedServiceId) {
+        List {
             ForEach(core.projects) { project in
                 Section(project.name) {
                     ForEach(project.services) { service in
@@ -16,7 +15,6 @@ struct SidebarView: View {
                             Text(service.name)
                         }
                         .draggable(service.id.uuidString)
-                        .tag(Optional(service.id))
                     }
                 }
             }
