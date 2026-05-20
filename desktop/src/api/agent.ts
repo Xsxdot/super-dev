@@ -91,6 +91,6 @@ export const api = {
     if (params.run) qs.set('run', params.run)
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before) qs.set('before', String(params.before))
-    return request<LogEntry[]>(`/api/logs?${qs}`)
+    return request<LogEntry[]>(`/api/logs${qs.toString() ? '?' + qs : ''}`)
   },
 }
