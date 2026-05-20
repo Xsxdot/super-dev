@@ -179,8 +179,11 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
+                // 关闭时隐藏到托盘，仅对主窗口生效；popover 无关闭按钮
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
             tauri::WindowEvent::Focused(false) => {
                 if window.label() == "popover" {
