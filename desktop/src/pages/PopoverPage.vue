@@ -12,7 +12,10 @@ onMounted(() => agentStore.startPolling())
 onUnmounted(() => agentStore.stopPolling())
 
 function onProjectHover(project: Project | null) {
-  hoveredProject.value = project
+  if (project !== null) {
+    hoveredProject.value = project
+  }
+  // null 由 popover-root @mouseleave 统一清除，防止移向右栏时闪烁
 }
 </script>
 
