@@ -149,6 +149,10 @@ type Service struct {
     PID       int    `json:"pid,omitempty"`
     Command   string `json:"command"`
     WorkDir   string `json:"work_dir"`
+    Required  bool   `json:"required"`    // 必须启动，强制勾选不可取消
+    Order     int    `json:"order"`       // 启动顺序，相同 order 并行，值小的先启动
+    EnvFile   string `json:"env_file,omitempty"`
+    Env       map[string]string `json:"env,omitempty"`
 }
 ```
 
@@ -156,12 +160,19 @@ type Service struct {
 
 ```go
 type Project struct {
-    ID       string    `json:"id"`
-    Name     string    `json:"name"`
-    RootPath string    `json:"root_path"`
-    Services []Service `json:"services"`
+    ID                 string    `json:"id"`
+    Name               string    `json:"name"`
+    RootPath           string    `json:"root_path"`
+    Services           []Service `json:"services"`
+    SelectedServiceIDs []string  `json:"selected_service_ids"` // 用户勾选的待启动服务，持久化到配置文件
 }
 ```
+
+**启动逻辑**：点击"启动选中"时，合并 `required` 服务和 `SelectedServiceIDs` 中的服务，按 `order` 分组，同组并行启动，组间串行等待全部就绪后再启动下一组。
+
+**UI 分组**（对应截图）：
+- **必须启动**：`required: true`，强制勾选，不可取消
+- **可选**：`required: false`，用户勾选状态持久化到 `SelectedServiceIDs`
 
 ### LogRule（项目级日志过滤规则，持久化到配置文件）
 
