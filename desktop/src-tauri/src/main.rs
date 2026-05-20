@@ -119,19 +119,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![show_main_window])
         .setup(|app| {
-            // 启动 agent（仅 release 模式）
             let agent = AgentProcess::new();
-            #[cfg(not(debug_assertions))]
-            {
-                let resource_path = app
-                    .path()
-                    .resource_dir()
-                    .map_err(|e| format!("无法获取资源目录: {e}"))?
-                    .join("binaries/superdev-agent");
-                let path_str = resource_path
-                    .to_str()
-                    .ok_or("资源路径包含非 UTF-8 字符")?;
-                agent.start(path_str)?;
+            if let Err(e) = agent.start(app.handle()) {
+                eprintln!("[SuperDev] {e}");
             }
             app.manage(agent);
 

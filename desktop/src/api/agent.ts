@@ -1,13 +1,22 @@
 // API 封装对 Go agent HTTP 接口的请求，统一处理 baseURL 和错误。
 
-const BASE = 'http://localhost:27017'
+const BASE = 'http://127.0.0.1:27017'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      /* 非 JSON 错误体 */
+    }
+    throw new Error(message)
+  }
   return res.json() as Promise<T>
 }
 

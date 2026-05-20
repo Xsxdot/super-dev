@@ -7,6 +7,16 @@
     "core:default",
     "dialog:default",
     "fs:default",
-    "shell:default"
+    "shell:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "superdev-agent",
+          "sidecar": true,
+          "args": ["--addr", { "validator": "^127\\.0\\.0\\.1:\\d+$" }]
+        }
+      ]
+    }
   ]
 }

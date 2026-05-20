@@ -110,7 +110,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs", a.fetchLogs)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
 
-	return mux
+	return cors(mux)
 }
 
 // Start 加载注册表中的已有项目，然后监听 addr 地址。
