@@ -82,6 +82,22 @@ export const useAgentStore = defineStore('agent', () => {
     await api.startSelected(projectId)
   }
 
+  async function updateSelected(projectId: string, names: string[]) {
+    await api.putSelected(projectId, names)
+    const project = projects.value.find(p => p.id === projectId)
+    if (project) {
+      project.selected_service_ids = names
+    }
+  }
+
+  function isServiceSelectedForStart(projectId: string, serviceName: string): boolean {
+    const project = projects.value.find(p => p.id === projectId)
+    if (!project) return false
+    const service = project.services.find(s => s.name === serviceName)
+    if (service?.required) return true
+    return project.selected_service_ids?.includes(serviceName) ?? false
+  }
+
   const allServices = computed<Service[]>(() =>
     projects.value.flatMap(p => p.services)
   )
@@ -107,6 +123,8 @@ export const useAgentStore = defineStore('agent', () => {
     stopService,
     restartService,
     startSelected,
+    updateSelected,
+    isServiceSelectedForStart,
     serviceById,
     projectById,
   }

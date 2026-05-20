@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
-import { api } from '@/api/agent'
 import type { Project } from '@/api/agent'
 import PopoverServiceRow from './PopoverServiceRow.vue'
 
@@ -38,12 +37,10 @@ const someSelected = computed(() =>
 async function toggleSelectAll() {
   const requiredNames = requiredServices.value.map(s => s.name)
   if (allOptionalSelected.value) {
-    await api.putSelected(props.project.id, requiredNames)
-    props.project.selected_service_ids = requiredNames
+    await agentStore.updateSelected(props.project.id, requiredNames)
   } else {
     const all = props.project.services.map(s => s.name)
-    await api.putSelected(props.project.id, all)
-    props.project.selected_service_ids = all
+    await agentStore.updateSelected(props.project.id, all)
   }
 }
 
@@ -53,8 +50,7 @@ async function invertSelection() {
   const currentOptionalSelected = optionalNames.filter(n => selectedNames.value.includes(n))
   const inverted = optionalNames.filter(n => !currentOptionalSelected.includes(n))
   const next = [...requiredNames, ...inverted]
-  await api.putSelected(props.project.id, next)
-  props.project.selected_service_ids = next
+  await agentStore.updateSelected(props.project.id, next)
 }
 
 async function startSelected() {
