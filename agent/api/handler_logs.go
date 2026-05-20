@@ -17,10 +17,13 @@ import (
 	"github.com/superdev/agent/store"
 )
 
+// maxLimit 是单次日志查询允许的最大条数，防止超大查询打满 SQLite。
+const maxLimit = 5000
+
 // fetchLogs 处理 GET /api/logs，支持以下查询参数：
 //   - service: 按 ServiceID 过滤
 //   - run: 按 RunID 过滤
-//   - limit: 返回条数上限（默认 1000）
+//   - limit: 返回条数上限（默认 1000，最大 5000）
 //   - before: 返回 id < before 的记录（游标分页）
 func (a *App) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -32,6 +35,9 @@ func (a *App) fetchLogs(w http.ResponseWriter, r *http.Request) {
 
 	if limitStr := q.Get("limit"); limitStr != "" {
 		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			if limit > maxLimit {
+				limit = maxLimit
+			}
 			params.Limit = limit
 		}
 	}

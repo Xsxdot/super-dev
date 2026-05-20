@@ -39,10 +39,6 @@ func (a *App) listProjects(w http.ResponseWriter, r *http.Request) {
 	copy(projects, a.projects)
 	a.mu.RUnlock()
 
-	// 确保返回空数组而非 null
-	if projects == nil {
-		projects = []model.Project{}
-	}
 	jsonOK(w, projects)
 }
 
@@ -86,31 +82,53 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, p)
 }
 
-// deleteProject 处理 DELETE /api/projects/{id}，从内存和注册表中移除项目。
+// deleteProject 处理 DELETE /api/projects/{id}，从注册表和内存中移除项目。
+//
+// 操作顺序：先持久化删除（registry.Remove），成功后再修改内存状态，
+// 避免 registry 写失败时内存与磁盘状态不一致。
 func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	a.mu.Lock()
+	// 先在读锁下找到 rootPath，不修改内存状态
+	a.mu.RLock()
 	var rootPath string
-	newProjects := make([]model.Project, 0, len(a.projects))
 	for _, p := range a.projects {
 		if p.ID == id {
 			rootPath = p.RootPath
-		} else {
-			newProjects = append(newProjects, p)
+			break
 		}
 	}
-	a.projects = newProjects
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	if rootPath == "" {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
+	// 先执行持久化删除；若失败则内存状态保持不变，不产生 desync
 	if err := a.registry.Remove(rootPath); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to remove project from registry: "+err.Error())
 		return
+	}
+
+	// 持久化成功后，再修改内存状态并清理 manager
+	a.mu.Lock()
+	newProjects := make([]model.Project, 0, len(a.projects))
+	for _, p := range a.projects {
+		if p.ID != id {
+			newProjects = append(newProjects, p)
+		}
+	}
+	a.projects = newProjects
+	mgr, hasMgr := a.managers[id]
+	if hasMgr {
+		delete(a.managers, id)
+	}
+	a.mu.Unlock()
+
+	// 在锁外停止 manager 的所有 goroutine，避免长时间持锁
+	if hasMgr {
+		mgr.StopAll()
 	}
 
 	jsonOK(w, map[string]string{"status": "deleted"})

@@ -75,6 +75,16 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}, nil
 }
 
+// Close 停止 Buffer 的 flush goroutine 并关闭 Store 数据库连接，释放所有资源。
+//
+// 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
+func (a *App) Close() {
+	a.buf.Close()
+	if a.store != nil {
+		a.store.Close()
+	}
+}
+
 // Handler 构建并返回 HTTP 路由处理器。
 //
 // 使用 Go 1.22 的 "METHOD /path" 路由语法，支持路径参数 {id}。

@@ -12,44 +12,31 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/superdev/agent/model"
 )
 
 // listServices 处理 GET /api/services，返回所有项目的所有服务及其运行时状态。
+//
+// 使用单次 RLock 覆盖整个读取过程（服务快照 + manager 状态查询），
+// 消除两次 RLock 之间的 TOCTOU 窗口。
 func (a *App) listServices(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
-	// 收集所有服务的快照，避免长时间持锁
-	type serviceSnapshot struct {
-		svc       model.Service
-		projectID string
-	}
-	var snapshots []serviceSnapshot
+	result := make([]model.Service, 0)
 	for _, p := range a.projects {
+		mgr, hasMgr := a.managers[p.ID]
 		for _, svc := range p.Services {
-			snapshots = append(snapshots, serviceSnapshot{svc: svc, projectID: p.ID})
+			if hasMgr {
+				svc.Status = mgr.Status(svc.ID)
+				svc.PID = mgr.PID(svc.ID)
+			}
+			result = append(result, svc)
 		}
 	}
 	a.mu.RUnlock()
 
-	// 在锁外填充运行时状态
-	result := make([]model.Service, 0, len(snapshots))
-	for _, snap := range snapshots {
-		svc := snap.svc
-		a.mu.RLock()
-		mgr, hasMgr := a.managers[snap.projectID]
-		a.mu.RUnlock()
-		if hasMgr {
-			svc.Status = mgr.Status(svc.ID)
-			svc.PID = mgr.PID(svc.ID)
-		}
-		result = append(result, svc)
-	}
-
-	if result == nil {
-		result = []model.Service{}
-	}
 	jsonOK(w, result)
 }
 
@@ -89,6 +76,10 @@ func (a *App) stopService(w http.ResponseWriter, r *http.Request) {
 }
 
 // restartService 处理 POST /api/services/{id}/restart，重启指定服务。
+//
+// 注意：Stop 后等待 100ms，让旧进程的监控 goroutine 有机会观察到进程退出，
+// 避免其在新进程启动后将状态回写为 StatusStopped（覆盖 StatusRunning）。
+// 这是一个务实的折中方案；完整解法需要 runner 提供 done channel。
 func (a *App) restartService(w http.ResponseWriter, r *http.Request) {
 	svcID := r.PathValue("id")
 
@@ -100,6 +91,8 @@ func (a *App) restartService(w http.ResponseWriter, r *http.Request) {
 
 	mgr := a.getOrCreateManager(p.ID)
 	mgr.Stop(svc.ID)
+	// 等待旧监控 goroutine 完成状态写入，避免其覆盖新进程的 StatusRunning
+	time.Sleep(100 * time.Millisecond)
 	if err := mgr.Start(svc); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to restart service: "+err.Error())
 		return
