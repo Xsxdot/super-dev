@@ -37,6 +37,11 @@ function onProjectHover(project: Project) {
   hoveredProjectId.value = project.id
   emit('hover', project)
 }
+
+function onProjectLeave() {
+  hoveredProjectId.value = null
+  emit('hover', null)
+}
 </script>
 
 <template>
@@ -57,8 +62,10 @@ function onProjectHover(project: Project) {
     <div class="list-scroll">
       <template v-for="project in agentStore.projects" :key="project.id">
         <div
+          v-if="filteredServices(project).length > 0"
           class="project-section"
           @mouseenter="onProjectHover(project)"
+          @mouseleave="onProjectLeave"
         >
           <!-- 项目 label -->
           <div class="project-label">
