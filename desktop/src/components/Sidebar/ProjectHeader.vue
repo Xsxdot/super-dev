@@ -4,6 +4,9 @@ import { useAgentStore } from '@/stores/agent'
 import type { Project } from '@/api/agent'
 
 const props = defineProps<{ project: Project }>()
+const emit = defineEmits<{
+  search: []
+}>()
 const agentStore = useAgentStore()
 
 const canStartSelected = computed(() =>
@@ -30,6 +33,12 @@ async function stopAll() {
     <span class="project-name">{{ project.name }}</span>
     <div class="project-actions">
       <button title="启动选中" class="action-btn start" :disabled="!canStartSelected" @click.stop="startSelected">▶</button>
+      <button
+        title="搜索项目日志"
+        class="action-btn search"
+        :disabled="project.services.length === 0"
+        @click.stop="emit('search')"
+      >⌕</button>
       <button title="全部停止" class="action-btn stop" @click.stop="stopAll">⏹</button>
     </div>
   </div>
@@ -62,5 +71,6 @@ async function stopAll() {
 .action-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .action-btn.start { color: #3fb950; }
+.action-btn.search { color: #58a6ff; }
 .action-btn.stop { color: var(--text-secondary); }
 </style>

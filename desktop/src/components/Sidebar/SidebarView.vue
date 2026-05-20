@@ -1,27 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
+import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
 import { open, message } from '@tauri-apps/plugin-dialog'
 
 const agentStore = useAgentStore()
 const panelStore = usePanelStore()
-
-const focusedLeaf = computed(() =>
-  panelStore.allLeaves.find(l => l.id === panelStore.focusedPanelId)
-)
+const workspace = useWorkspaceStore()
 
 function isServiceSelected(serviceId: string) {
-  return focusedLeaf.value?.serviceId === serviceId
+  const active = workspace.activeTab
+  if (!active || active.type !== 'project') return false
+  return panelStore.allLeaves.some(leaf => leaf.serviceId === serviceId)
 }
 
 function selectService(serviceId: string, projectId: string) {
-  const panelId = panelStore.targetPanelId()
-  if (!panelId) return
-  panelStore.replaceScope(panelId, serviceId, projectId)
-  panelStore.setFocus(panelId)
+  workspace.openService(projectId, serviceId)
+}
+
+function openProjectSearch(projectId: string) {
+  workspace.openSearch(projectId)
 }
 
 async function addProject() {
@@ -43,7 +43,7 @@ async function addProject() {
   <div class="sidebar">
     <div class="sidebar-scroll">
       <template v-for="project in agentStore.projects" :key="project.id">
-        <ProjectHeader :project="project" />
+        <ProjectHeader :project="project" @search="openProjectSearch(project.id)" />
         <ServiceRow
           v-for="service in project.services"
           :key="service.id"
