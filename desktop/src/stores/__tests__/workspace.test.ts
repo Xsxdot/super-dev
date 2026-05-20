@@ -11,11 +11,12 @@
  *   - 不建立真实 agent 连接
  */
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { api as agentApi } from '@/api/agent'
 import { useAgentStore } from '../agent'
 import { usePanelStore } from '../panel'
 import { useWorkspaceStore } from '../workspace'
-import type { Project, Service } from '@/api/agent'
+import type { LogEntry, Project, Service } from '@/api/agent'
 
 function service(id: string, name: string, projectId = 'proj-1'): Service {
   return {
@@ -40,9 +41,22 @@ function project(services: Service[], id = 'proj-1', name = 'Project'): Project 
   }
 }
 
+function log(id: number, serviceId: string, message: string): LogEntry {
+  return {
+    id,
+    service_id: serviceId,
+    run_id: 'run-1',
+    timestamp: '2026-05-20T22:41:32.000Z',
+    level: 'INFO',
+    message,
+    stream: 'stdout',
+  }
+}
+
 describe('workspaceStore', () => {
   beforeEach(() => {
     localStorage.clear()
+    vi.restoreAllMocks()
     setActivePinia(createPinia())
   })
 
@@ -117,5 +131,55 @@ describe('workspaceStore', () => {
     expect(workspace.searchTab(first.id)?.pinnedServiceIds).toEqual(['svc-api'])
     expect(workspace.searchTab(second.id)?.hiddenServiceIds).toEqual([])
     expect(workspace.searchTab(second.id)?.pinnedServiceIds).toEqual([])
+  })
+
+  it('runSearch 将搜索结果写入当前搜索标签', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    vi.spyOn(agentApi, 'searchLogs').mockResolvedValue({
+      query: 'trace-8f21',
+      total: 1,
+      items: [log(1, 'svc-api', 'trace-8f21 target')],
+      service_counts: { 'svc-api': 1 },
+    })
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+
+    await workspace.runSearch(tab.id, ' trace-8f21 ')
+
+    expect(workspace.searchTab(tab.id)?.status).toBe('results')
+    expect(workspace.searchTab(tab.id)?.query).toBe('trace-8f21')
+    expect(workspace.searchTab(tab.id)?.serviceCounts).toEqual({ 'svc-api': 1 })
+  })
+
+  it('loadContext 只更新未固定的可见服务上下文', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    const billing = service('svc-billing', 'billing')
+    useAgentStore().projects = [project([api, worker, billing])]
+    vi.spyOn(agentApi, 'fetchLogContext').mockResolvedValue({
+      target_id: 9,
+      anchor_time: '2026-05-20T22:41:32.000Z',
+      items_by_service: {
+        'svc-api': [log(9, 'svc-api', 'new api')],
+        'svc-worker': [log(10, 'svc-worker', 'new worker')],
+      },
+    })
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 1, 'svc-worker': 1, 'svc-billing': 1 }
+    tab.contextByService['svc-api'] = [log(1, 'svc-api', 'old api')]
+    workspace.pinService(tab.id, 'svc-api')
+    workspace.hideService(tab.id, 'svc-billing')
+
+    await workspace.loadContext(tab.id, 9)
+
+    expect(agentApi.fetchLogContext).toHaveBeenCalledWith({
+      project: 'proj-1',
+      id: 9,
+      service: ['svc-api', 'svc-worker'],
+    })
+    expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['old api'])
+    expect(tab.contextByService['svc-worker'].map(entry => entry.message)).toEqual(['new worker'])
   })
 })
