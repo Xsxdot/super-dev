@@ -26,4 +26,10 @@
     user-select: none;
     -webkit-user-select: none;
   }
+
+  .log-list,
+  .log-row .selectable-msg {
+    user-select: text;
+    -webkit-user-select: text;
+  }
 }
