@@ -11,7 +11,7 @@
   - 不执行上下文 API 请求
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
@@ -22,6 +22,7 @@ const props = defineProps<{ tabId: string }>()
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
+const columnsEl = ref<HTMLElement | null>(null)
 
 const visibleServiceIds = computed(() => {
   if (!tab.value) return []
@@ -66,10 +67,21 @@ function togglePin(serviceId: string) {
     workspace.pinService(tab.value.id, serviceId)
   }
 }
+
+watch(
+  () => tab.value?.selectedLogId,
+  async selectedLogId => {
+    if (!selectedLogId) return
+    await nextTick()
+    columnsEl.value
+      ?.querySelector(`[data-entry-id="${selectedLogId}"]`)
+      ?.scrollIntoView({ block: 'center', inline: 'nearest' })
+  },
+)
 </script>
 
 <template>
-  <div v-if="tab?.contextAnchorTime" class="columns">
+  <div v-if="tab?.contextAnchorTime" ref="columnsEl" class="columns">
     <div class="columns-grid">
       <div class="columns-header" :style="{ gridTemplateColumns: columnTemplate }">
         <div
@@ -104,6 +116,7 @@ function togglePin(serviceId: string) {
               :key="entry.id"
               class="context-entry"
               :class="{ target: entry.id === tab.selectedLogId }"
+              :data-entry-id="entry.id"
             >
               <span class="entry-time">{{ timeLabel(entry) }}</span>
               <span class="entry-level">{{ entry.level }}</span>
