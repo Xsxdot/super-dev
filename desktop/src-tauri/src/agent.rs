@@ -1,31 +1,39 @@
-use std::process::{Child, Command};
 use std::sync::Mutex;
 
-pub struct AgentProcess(pub Mutex<Option<Child>>);
+use tauri::AppHandle;
+use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
+
+pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
 
 impl AgentProcess {
     pub fn new() -> Self {
         AgentProcess(Mutex::new(None))
     }
 
-    pub fn start(&self, sidecar_path: &str) -> Result<(), std::io::Error> {
+    pub fn start(&self, app: &AppHandle) -> Result<(), String> {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_some() {
             return Ok(());
         }
-        let child = Command::new(sidecar_path)
-            .args(["--addr", ":27017"])
-            .spawn()?;
-        println!("[SuperDev] agent started, pid={}", child.id());
+
+        let (_rx, child) = app
+            .shell()
+            .sidecar("superdev-agent")
+            .map_err(|e| format!("找不到 agent sidecar: {e}"))?
+            .args(["--addr", "127.0.0.1:27017"])
+            .spawn()
+            .map_err(|e| format!("启动 agent 失败: {e}"))?;
+
+        println!("[SuperDev] agent started");
         *guard = Some(child);
         Ok(())
     }
 
     pub fn stop(&self) {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut child) = guard.take() {
+        if let Some(child) = guard.take() {
             let _ = child.kill();
-            let _ = child.wait();
             println!("[SuperDev] agent stopped");
         }
     }

@@ -9,7 +9,7 @@ export default defineConfig({
     alias: { '@': resolve(__dirname, 'src') },
   },
   clearScreen: false,
-  server: { port: 5173, strictPort: true },
+  server: { port: 6688, strictPort: true },
   test: {
     environment: 'jsdom',
     globals: true,

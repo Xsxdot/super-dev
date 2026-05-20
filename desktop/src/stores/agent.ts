@@ -35,8 +35,20 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function startPolling() {
-    fetchProjects()
-    pollTimer = setInterval(refreshServices, 2000)
+    void connectWithRetry()
+    pollTimer = setInterval(() => {
+      if (!connected.value) void fetchProjects()
+      else void refreshServices()
+    }, 2000)
+  }
+
+  /** agent 由 Tauri 异步拉起，启动后需重试几次才能连上 */
+  async function connectWithRetry(maxAttempts = 15, intervalMs = 400) {
+    for (let i = 0; i < maxAttempts; i++) {
+      await fetchProjects()
+      if (connected.value) return
+      await new Promise(r => setTimeout(r, intervalMs))
+    }
   }
 
   function stopPolling() {

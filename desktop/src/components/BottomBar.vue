@@ -125,7 +125,7 @@ const statusColor = (status: string) => {
     <!-- Agent 状态 -->
     <div class="agent-status">
       <span class="agent-dot" :class="{ connected: agentStore.connected }" />
-      <span>localhost:27017</span>
+      <span>127.0.0.1:27017</span>
     </div>
   </div>
 </template>

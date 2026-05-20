@@ -4,7 +4,7 @@ import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, message } from '@tauri-apps/plugin-dialog'
 
 const agentStore = useAgentStore()
 const panelStore = usePanelStore()
@@ -27,7 +27,15 @@ function selectService(serviceId: string, projectId: string) {
 async function addProject() {
   const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
   if (!selected || Array.isArray(selected)) return
-  await agentStore.addProject(selected)
+  try {
+    await agentStore.addProject(selected)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '添加项目失败'
+    await message(
+      msg.includes('config') ? `${msg}\n请确认目录中有 .superdev/config.yaml` : msg,
+      { title: '无法添加项目', kind: 'error' },
+    )
+  }
 }
 </script>
 

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "identifier": "dev.superdev.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build",
-    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "bash scripts/build-agent.sh && pnpm dev",
+    "beforeBuildCommand": "bash scripts/build-agent.sh && pnpm build",
+    "devUrl": "http://localhost:6688",
     "frontendDist": "../dist"
   },
   "app": {

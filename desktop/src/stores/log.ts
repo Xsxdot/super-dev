@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { type LogEntry } from '@/api/agent'
 
-const WS_BASE = 'ws://localhost:27017'
+const WS_BASE = 'ws://127.0.0.1:27017'
 const MAX_LOGS = 8000  // 内存最多保留 8000 条
 
 interface ServiceLog {
