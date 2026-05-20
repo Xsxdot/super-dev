@@ -1,0 +1,307 @@
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import { useFilterStore } from '@/stores/filter'
+import { useBookmarkStore } from '@/stores/bookmark'
+
+const props = defineProps<{
+  panelId: string
+  serviceId: string | null
+  projectId: string | null
+  historyRunIds: string[]
+  viewingRunId: string | null
+}>()
+
+const emit = defineEmits<{
+  selectRun: [runId: string | null]
+}>()
+
+const filterStore = useFilterStore()
+const bookmarkStore = useBookmarkStore()
+
+const chipInput = ref('')
+const panel = computed(() => filterStore.getPanel(props.panelId))
+const bookmark = computed(() => bookmarkStore.getBookmark(props.panelId))
+const rules = computed(() => props.projectId ? (filterStore.projectRules[props.projectId] ?? []) : [])
+
+function submitChip() {
+  const parts = chipInput.value.split(/[,;\t\n]+/).map(s => s.trim()).filter(Boolean)
+  for (const p of parts) {
+    filterStore.addChip(props.panelId, p, panel.value.nextChipType)
+  }
+  chipInput.value = ''
+}
+
+function startBookmark() {
+  bookmarkStore.startBookmark(props.panelId, props.serviceId)
+}
+function endBookmark() {
+  bookmarkStore.endBookmark(props.panelId)
+}
+function clearBookmark() {
+  bookmarkStore.clearBookmark(props.panelId)
+}
+async function copyBookmark() {
+  const text = bookmarkStore.formatBookmark(props.panelId)
+  await navigator.clipboard.writeText(text)
+}
+async function exportBookmark() {
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({ defaultPath: `superdev-log-${Date.now()}.log` })
+  if (path) {
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+    const text = bookmarkStore.formatBookmark(props.panelId)
+    await writeTextFile(path, text)
+  }
+}
+</script>
+
+<template>
+  <div class="toolbar">
+    <!-- 过滤区 -->
+    <div class="filter-area">
+      <svg class="search-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
+        <circle cx="6.5" cy="6.5" r="4.5" stroke="#6e7681" stroke-width="1.5"/>
+        <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="#6e7681" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+
+      <!-- include/exclude picker -->
+      <div class="segmented">
+        <button
+          :class="{ active: panel.nextChipType === 'include' }"
+          @click="filterStore.setNextChipType(panelId, 'include')"
+        >包含</button>
+        <button
+          :class="{ active: panel.nextChipType === 'exclude' }"
+          @click="filterStore.setNextChipType(panelId, 'exclude')"
+        >排除</button>
+      </div>
+
+      <!-- 关键词输入 -->
+      <input
+        v-model="chipInput"
+        class="chip-input"
+        :placeholder="panel.chips.length ? '添加关键词…' : '关键词过滤，回车添加'"
+        @keydown.enter="submitChip"
+      />
+
+      <!-- chips -->
+      <div
+        v-for="chip in panel.chips"
+        :key="chip.id"
+        class="chip"
+        :class="chip.type"
+      >
+        <button class="chip-type" @click="filterStore.toggleChipType(panelId, chip.id)">
+          {{ chip.type === 'include' ? '+' : '−' }}
+        </button>
+        <span>{{ chip.keyword }}</span>
+        <button class="chip-remove" @click="filterStore.removeChip(panelId, chip.id)">✕</button>
+      </div>
+
+      <!-- AND/OR toggle -->
+      <button v-if="panel.chips.length > 1" class="logic-btn" @click="filterStore.toggleLogic(panelId)">
+        {{ panel.logic.toUpperCase() }}
+      </button>
+
+      <!-- 项目规则快捷开关 -->
+      <template v-if="rules.length">
+        <div class="divider" />
+        <button
+          v-for="rule in rules"
+          :key="rule.id"
+          class="rule-chip"
+          :class="{ enabled: rule.enabled }"
+          @click="filterStore.toggleRule(projectId!, rule.id)"
+          :title="rule.enabled ? '点击禁用' : '点击启用'"
+        >
+          <span class="rule-arrow">{{ rule.type === 'include' ? '↑' : '↓' }}</span>
+          <span :class="{ strikethrough: !rule.enabled }">{{ rule.name || rule.keywords[0] }}</span>
+        </button>
+      </template>
+    </div>
+
+    <div class="flex-1" />
+
+    <!-- 操作区 -->
+    <button class="icon-btn" title="历史记录" @click="emit('selectRun', null)">
+      🕐 历史
+    </button>
+    <button class="icon-btn" title="过滤规则">⚙</button>
+    <button v-if="panel.chips.length" class="icon-btn" title="保存为规则">↓</button>
+
+    <div class="divider" />
+
+    <!-- 书签区 -->
+    <template v-if="!bookmark || bookmark.state === 'idle'">
+      <button class="bookmark-btn start" title="开始书签录制" @click="startBookmark">⏺</button>
+    </template>
+    <template v-else-if="bookmark.state === 'recording'">
+      <span class="record-count">● {{ bookmark.lockedLogs.length }} 条</span>
+      <button class="bookmark-btn stop" title="结束录制" @click="endBookmark">⏹</button>
+    </template>
+    <template v-else>
+      <span class="done-count">{{ bookmark.lockedLogs.length }} 条</span>
+      <button class="icon-btn" title="复制" @click="copyBookmark">⎘</button>
+      <button class="icon-btn" title="导出" @click="exportBookmark">↑</button>
+      <button class="icon-btn" title="清除" @click="clearBookmark">✕</button>
+      <button class="bookmark-btn start" title="重新开始" @click="startBookmark">⏺</button>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-secondary);
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 32px;
+}
+.filter-area {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.search-icon { flex-shrink: 0; }
+.segmented {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.segmented button {
+  padding: 2px 7px;
+  font-size: 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.segmented button.active {
+  background: rgba(31,111,235,0.2);
+  color: #58a6ff;
+}
+.chip-input {
+  flex: 1;
+  min-width: 80px;
+  max-width: 150px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 10px;
+  color: var(--text-primary);
+  outline: none;
+}
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.chip.include { background: rgba(31,111,235,0.12); border: 1px solid rgba(31,111,235,0.3); }
+.chip.exclude { background: rgba(210,153,34,0.12); border: 1px solid rgba(210,153,34,0.3); }
+.chip-type {
+  background: transparent;
+  border: none;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+.chip.include .chip-type { color: #58a6ff; }
+.chip.exclude .chip-type { color: #d29922; }
+.chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  cursor: pointer;
+  padding: 0;
+}
+.logic-btn {
+  padding: 2px 6px;
+  background: var(--bg-overlay);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rule-chip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.rule-chip.enabled {
+  background: rgba(31,111,235,0.10);
+  border-color: rgba(31,111,235,0.25);
+}
+.rule-arrow { font-size: 9px; }
+.strikethrough { text-decoration: line-through; opacity: 0.5; }
+
+.divider { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
+.flex-1 { flex: 1; }
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.icon-btn:hover { color: var(--text-primary); background: var(--bg-overlay); }
+
+.bookmark-btn {
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+.bookmark-btn.start { color: #3fb950; }
+.bookmark-btn.stop { color: #f85149; }
+
+.record-count {
+  padding: 2px 8px;
+  background: rgba(248,81,73,0.1);
+  border: 1px solid rgba(248,81,73,0.3);
+  border-radius: 4px;
+  color: #f85149;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.done-count {
+  color: var(--text-secondary);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+</style>
