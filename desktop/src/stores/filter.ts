@@ -90,7 +90,7 @@ export const useFilterStore = defineStore('filter', () => {
   }
 
   // 核心过滤函数：先应用 LogRule，再应用 chip
-  function applyFilters(panelId: string, projectId: string | null, logs: LogEntry[]): LogEntry[] {
+  function applyFilters<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): T[] {
     let result = logs
 
     // 应用项目级 LogRule
