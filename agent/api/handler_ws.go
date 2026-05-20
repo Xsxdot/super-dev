@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/superdev/agent/model"
 )
 
 // wsUpgrader 配置 WebSocket 升级器，允许所有来源（开发模式）。
@@ -76,5 +75,3 @@ func (a *App) wsLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 确保 model 包被正确引用（用于 wsLogs 中的 LogEntry 类型推断）。
-var _ model.LogEntry

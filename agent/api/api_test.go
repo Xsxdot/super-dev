@@ -40,11 +40,14 @@ func writeTestConfig(t *testing.T, dir, name string) {
 }
 
 // newTestApp 创建使用临时目录的 App 实例，并返回对应的测试 HTTP 服务器。
+//
+// 测试结束时会自动关闭 HTTP 服务器并调用 app.Close() 释放所有资源。
 func newTestApp(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	dataDir := t.TempDir()
 	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return srv, dataDir
