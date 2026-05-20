@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
-import { api } from '@/api/agent'
 import type { Service } from '@/api/agent'
 
 const props = defineProps<{
@@ -23,11 +22,9 @@ const statusColor = computed(() => {
   return '#6e7681'
 })
 
-const isChecked = computed(() => {
-  if (props.service.required) return true
-  const project = agentStore.projectById(props.projectId)
-  return project?.selected_service_ids?.includes(props.service.name) ?? false
-})
+const isChecked = computed(() =>
+  agentStore.isServiceSelectedForStart(props.projectId, props.service.name)
+)
 
 async function onCheckChange() {
   if (props.service.required) return
@@ -37,9 +34,7 @@ async function onCheckChange() {
   const next = isChecked.value
     ? current.filter(n => n !== props.service.name)
     : [...current, props.service.name]
-  await api.putSelected(props.projectId, next)
-  // 更新本地 project 状态，无需等待轮询
-  project.selected_service_ids = next
+  await agentStore.updateSelected(props.projectId, next)
 }
 
 async function onToggle() {

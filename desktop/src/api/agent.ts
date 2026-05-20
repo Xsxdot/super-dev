@@ -94,7 +94,7 @@ export const api = {
   startSelected: (projectId: string) =>
     request<void>(`/api/projects/${projectId}/start-selected`, { method: 'POST' }),
   putSelected: (projectId: string, names: string[]) =>
-    request<void>(`/api/projects/${projectId}/selected`, { method: 'PUT', body: JSON.stringify({ selected_service_ids: names }) }),
+    request<void>(`/api/projects/${projectId}/selected`, { method: 'PUT', body: JSON.stringify({ names }) }),
 
   // 日志
   fetchLogs: (params: FetchLogsParams) => {

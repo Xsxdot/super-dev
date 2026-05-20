@@ -48,6 +48,7 @@ async function addProject() {
           v-for="service in project.services"
           :key="service.id"
           :service="service"
+          :project-id="project.id"
           :selected="isServiceSelected(service.id)"
           @click="selectService(service.id, project.id)"
         />

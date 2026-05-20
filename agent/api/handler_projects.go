@@ -193,27 +193,34 @@ func (a *App) putProjectRules(w http.ResponseWriter, r *http.Request) {
 
 // putSelected 处理 PUT /api/projects/{id}/selected，更新项目的待启动服务选中列表。
 //
-// 请求体：{"names": ["api", "web"]}
+// 请求体：{"names": ["api", "web"]} 或 {"selected_service_ids": ["api", "web"]}
 // 注意：names 为服务名称列表（不是 ID），与 SelectedServiceIDs 字段对应。
 func (a *App) putSelected(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req struct {
-		Names []string `json:"names"`
+		Names               []string `json:"names"`
+		SelectedServiceIDs  []string `json:"selected_service_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Names == nil {
-		req.Names = []string{}
+	names := req.Names
+	if names == nil {
+		names = req.SelectedServiceIDs
+	}
+	if names == nil {
+		names = []string{}
 	}
 
 	a.mu.Lock()
+	var project model.Project
 	found := false
 	for i, p := range a.projects {
 		if p.ID == id {
-			a.projects[i].SelectedServiceIDs = req.Names
+			a.projects[i].SelectedServiceIDs = names
+			project = a.projects[i]
 			found = true
 			break
 		}
@@ -222,6 +229,12 @@ func (a *App) putSelected(w http.ResponseWriter, r *http.Request) {
 
 	if !found {
 		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	loader := config.NewLoader(project.RootPath)
+	if err := loader.Save(project); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to save selection: "+err.Error())
 		return
 	}
 

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/api"
@@ -123,6 +125,52 @@ func TestListServices(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&services))
 	require.Equal(t, 1, len(services))
 	assert.Equal(t, "web", services[0].Name)
+}
+
+// TestPutSelected 验证 PUT /api/projects/{id}/selected 持久化到 config.yaml。
+func TestPutSelected(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	projDir := t.TempDir()
+	writeTestConfig(t, projDir, "testapp")
+
+	addBody := `{"root_path": "` + projDir + `"}`
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	putBody := `{"names": ["web"]}`
+	req, err := http.NewRequest(
+		http.MethodPut,
+		srv.URL+"/api/projects/"+created.ID+"/selected",
+		strings.NewReader(putBody),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	assert.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	getResp, err := http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	defer getResp.Body.Close()
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&projects))
+	require.Len(t, projects, 1)
+	assert.Equal(t, []string{"web"}, projects[0].SelectedServiceIDs)
+
+	cfgData, err := os.ReadFile(filepath.Join(projDir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	var onDisk struct {
+		SelectedServiceIDs []string `yaml:"selected_service_ids"`
+	}
+	require.NoError(t, yaml.Unmarshal(cfgData, &onDisk))
+	assert.Equal(t, []string{"web"}, onDisk.SelectedServiceIDs)
 }
 
 // TestFetchLogs 验证 GET /api/logs?limit=10 返回 200 和空数组。

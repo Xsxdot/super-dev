@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import type { Service } from '@/api/agent'
 
 const props = defineProps<{
   service: Service
+  projectId: string
   selected: boolean
 }>()
 
@@ -15,6 +16,21 @@ const emit = defineEmits<{
 
 const agentStore = useAgentStore()
 const hovered = ref(false)
+
+const isChecked = computed(() =>
+  agentStore.isServiceSelectedForStart(props.projectId, props.service.name)
+)
+
+async function onCheckChange() {
+  if (props.service.required) return
+  const project = agentStore.projectById(props.projectId)
+  if (!project) return
+  const current = project.selected_service_ids ?? []
+  const next = isChecked.value
+    ? current.filter(n => n !== props.service.name)
+    : [...current, props.service.name]
+  await agentStore.updateSelected(props.projectId, next)
+}
 
 const statusColor = (status: string) => {
   if (status === 'running') return '#3fb950'
@@ -41,10 +57,9 @@ function onDragStart(e: DragEvent) {
   >
     <input
       type="checkbox"
-      :checked="service.required || undefined"
+      :checked="isChecked"
       :disabled="service.required"
-      @click.stop
-      @change.stop
+      @click.stop="onCheckChange"
       class="service-checkbox"
     />
     <span class="status-dot" :style="{ background: statusColor(service.status) }" />
