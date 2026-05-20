@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
 import { usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
@@ -14,7 +14,14 @@ const props = defineProps<{
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
-const { dropHighlight, getDropEdge, edgeToAxis } = useDragDrop()
+const {
+  dropHighlight,
+  draggedServiceId,
+  serviceDragPosition,
+  serviceDropRequest,
+  getDropEdge,
+  edgeToAxis,
+} = useDragDrop()
 
 const panelEl = ref<HTMLElement | null>(null)
 const isFocused = computed(() => panelStore.focusedPanelId === props.panelId)
@@ -34,26 +41,46 @@ const headerTitle = computed(() => {
 
 function onDragOver(e: DragEvent) {
   e.preventDefault()
-  if (!panelEl.value) return
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  dropHighlight.value = getDropEdgeFromEvent(e)
+}
+
+function isInsidePanel(e: DragEvent): boolean {
+  if (!panelEl.value) return false
   const rect = panelEl.value.getBoundingClientRect()
-  dropHighlight.value = getDropEdge(
-    { x: e.clientX - rect.left, y: e.clientY - rect.top },
+  return e.clientX >= rect.left
+    && e.clientX <= rect.right
+    && e.clientY >= rect.top
+    && e.clientY <= rect.bottom
+}
+
+function onDragLeave(e: DragEvent) {
+  if (isInsidePanel(e)) return
+  dropHighlight.value = null
+}
+
+function getDropEdgeFromEvent(e: DragEvent): DropEdge | null {
+  return getDropEdgeAt(e.clientX, e.clientY)
+}
+
+function getDropEdgeAt(clientX: number, clientY: number): DropEdge | null {
+  if (!panelEl.value) return null
+  const rect = panelEl.value.getBoundingClientRect()
+  if (
+    clientX < rect.left
+    || clientX > rect.right
+    || clientY < rect.top
+    || clientY > rect.bottom
+  ) {
+    return null
+  }
+  return getDropEdge(
+    { x: clientX - rect.left, y: clientY - rect.top },
     { w: rect.width, h: rect.height }
   )
 }
 
-function onDragLeave() {
-  dropHighlight.value = null
-}
-
-function onDrop(e: DragEvent) {
-  e.preventDefault()
-  const serviceId = e.dataTransfer?.getData('text/plain')
-  if (!serviceId || !dropHighlight.value) return
-
-  const edge: DropEdge = dropHighlight.value
-  dropHighlight.value = null
-
+function applyServiceDrop(serviceId: string, edge: DropEdge) {
   const svc = agentStore.serviceById(serviceId)
   const projectId = svc?.project_id ?? null
 
@@ -68,9 +95,26 @@ function onDrop(e: DragEvent) {
   }
 }
 
-function highlightStyle(edge: DropEdge | null) {
+function onDrop(e: DragEvent) {
+  e.preventDefault()
+  const serviceId = e.dataTransfer?.getData('text/plain')
+  if (!serviceId) return
+
+  const edge = getDropEdgeFromEvent(e) ?? dropHighlight.value
+  if (!edge) return
+  dropHighlight.value = null
+  applyServiceDrop(serviceId, edge)
+}
+
+function onDocumentPointerMove(e: PointerEvent) {
+  if (!draggedServiceId.value) return
+  const edge = getDropEdgeAt(e.clientX, e.clientY)
+  dropHighlight.value = edge
+}
+
+function highlightStyle(edge: DropEdge | null): StyleValue {
   if (!edge) return {}
-  const styles: Record<DropEdge, object> = {
+  const styles: Record<DropEdge, StyleValue> = {
     left:   { left: 0, top: 0, width: '20%', height: '100%' },
     right:  { right: 0, top: 0, width: '20%', height: '100%' },
     top:    { left: 0, top: 0, width: '100%', height: '20%' },
@@ -79,6 +123,28 @@ function highlightStyle(edge: DropEdge | null) {
   }
   return styles[edge]
 }
+
+onMounted(() => {
+  document.addEventListener('pointermove', onDocumentPointerMove)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('pointermove', onDocumentPointerMove)
+})
+
+watch(serviceDragPosition, (point) => {
+  if (!draggedServiceId.value || !point) return
+  dropHighlight.value = getDropEdgeAt(point.x, point.y)
+})
+
+watch(serviceDropRequest, (request) => {
+  if (!request) return
+  const edge = getDropEdgeAt(request.x, request.y)
+  dropHighlight.value = null
+  if (edge) {
+    applyServiceDrop(request.serviceId, edge)
+  }
+})
 </script>
 
 <template>
@@ -87,6 +153,7 @@ function highlightStyle(edge: DropEdge | null) {
     class="panel-leaf"
     :class="{ focused: isFocused }"
     @click="panelStore.setFocus(panelId)"
+    @dragenter="onDragOver"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"

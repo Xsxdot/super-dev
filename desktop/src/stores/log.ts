@@ -2,7 +2,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { type LogEntry } from '@/api/agent'
-import { ingest, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
+import {
+  closeActiveFold,
+  ingest,
+  toDisplayEntry,
+  type DisplayLogEntry,
+} from '@/lib/logEngine'
 
 const WS_BASE = 'ws://127.0.0.1:27017'
 const MAX_LOGS = 8000
@@ -64,6 +69,13 @@ export const useLogStore = defineStore('log', () => {
     return serviceLogs.value[serviceId]?.logs ?? []
   }
 
+  function closeActiveFoldForService(serviceId: string) {
+    const entry = serviceLogs.value[serviceId]
+    if (!entry) return
+    closeActiveFold(entry.logs)
+    bumpRevision()
+  }
+
   async function loadHistoryLogs(serviceId: string, runId: string) {
     const { api } = await import('@/api/agent')
     const logs = await api.fetchLogs({ service: serviceId, run: runId, limit: 2000 })
@@ -103,6 +115,7 @@ export const useLogStore = defineStore('log', () => {
     subscribe,
     unsubscribe,
     getLogs,
+    closeActiveFoldForService,
     loadHistoryLogs,
     clearHistoryLogs,
     getHistoryLogs,

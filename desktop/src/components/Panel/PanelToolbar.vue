@@ -2,7 +2,8 @@
 import { ref, computed } from 'vue'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
-
+import { useLogStore } from '@/stores/log'
+import { useAgentStore } from '@/stores/agent'
 const props = defineProps<{
   panelId: string
   serviceId: string | null
@@ -18,6 +19,8 @@ const emit = defineEmits<{
 
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
+const logStore = useLogStore()
+const agentStore = useAgentStore()
 
 const chipInput = ref('')
 const panel = computed(() => filterStore.getPanel(props.panelId))
@@ -32,7 +35,21 @@ function submitChip() {
   chipInput.value = ''
 }
 
+function scopeServiceIds(): string[] {
+  if (props.serviceId) return [props.serviceId]
+  if (!props.projectId) return []
+  const project = agentStore.projectById(props.projectId)
+  return project?.services.map(s => s.id) ?? []
+}
+
+function closeActiveFoldsForScope() {
+  for (const serviceId of scopeServiceIds()) {
+    logStore.closeActiveFoldForService(serviceId)
+  }
+}
+
 function startBookmark() {
+  closeActiveFoldsForScope()
   bookmarkStore.startBookmark(props.panelId, props.serviceId)
 }
 function endBookmark() {
@@ -49,15 +66,39 @@ function clearBookmark() {
 }
 async function copyBookmark() {
   const text = bookmarkStore.formatBookmark(props.panelId)
+  if (!text.trim()) return
   await navigator.clipboard.writeText(text)
 }
+
+function resolveExportPath(selected: string, defaultName: string): string {
+  if (/\.(log|txt)$/i.test(selected)) return selected
+  const sep = selected.includes('\\') ? '\\' : '/'
+  return selected.endsWith(sep) ? `${selected}${defaultName}` : `${selected}${sep}${defaultName}`
+}
+
 async function exportBookmark() {
+  const text = bookmarkStore.formatBookmark(props.panelId)
+  if (!text.trim()) {
+    window.alert('书签区间内没有可导出的日志')
+    return
+  }
+
+  const defaultName = `superdev-log-${Date.now()}.log`
   const { save } = await import('@tauri-apps/plugin-dialog')
-  const path = await save({ defaultPath: `superdev-log-${Date.now()}.log` })
-  if (path) {
+  const selected = await save({
+    defaultPath: defaultName,
+    title: '导出书签日志',
+    filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+  })
+  if (!selected) return
+
+  const filePath = resolveExportPath(selected, defaultName)
+  try {
     const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-    const text = bookmarkStore.formatBookmark(props.panelId)
-    await writeTextFile(path, text)
+    await writeTextFile(filePath, text)
+  } catch (err) {
+    console.error('[SuperDev] export bookmark failed:', err)
+    window.alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 </script>

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { normalize, ingest, toDisplayEntry, type DisplayLogEntry } from '../logEngine'
+import {
+  normalize,
+  ingest,
+  closeActiveFold,
+  toDisplayEntry,
+  type DisplayLogEntry,
+} from '../logEngine'
 import type { LogEntry } from '@/api/agent'
 
 function makeLog(message: string, serviceId = 'svc-a'): LogEntry {
@@ -53,10 +59,31 @@ describe('logEngine', () => {
     expect(entries[0].repeat_count).toBe(2)
   })
 
+  it('toDisplayEntry assigns unique ids to live logs without database ids', () => {
+    const first = toDisplayEntry({ ...makeLog('first live'), id: 0 })
+    const second = toDisplayEntry({ ...makeLog('second live'), id: 0 })
+
+    expect(first.id).not.toBe(0)
+    expect(second.id).not.toBe(0)
+    expect(first.id).not.toBe(second.id)
+  })
+
   it('ingest does not fold different services', () => {
     const entries: DisplayLogEntry[] = []
     ingest(toDisplayEntry(makeLog('same msg', 'a')), entries)
     ingest(toDisplayEntry(makeLog('same msg', 'b')), entries)
     expect(entries).toHaveLength(2)
+  })
+
+  it('closeActiveFold makes the next duplicate start a new folded row', () => {
+    const entries: DisplayLogEntry[] = []
+    ingest(toDisplayEntry(makeLog('heartbeat ok')), entries)
+    ingest(toDisplayEntry(makeLog('heartbeat ok')), entries)
+
+    closeActiveFold(entries)
+    ingest(toDisplayEntry(makeLog('heartbeat ok')), entries)
+    ingest(toDisplayEntry(makeLog('heartbeat ok')), entries)
+
+    expect(entries.map(e => e.repeat_count)).toEqual([2, 2])
   })
 })

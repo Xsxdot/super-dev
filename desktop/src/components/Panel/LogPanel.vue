@@ -8,7 +8,12 @@ import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
 import type { DisplayLogEntry } from '@/lib/logEngine'
-import type { Bookmark } from '@/stores/bookmark'
+import {
+  makeDisplayItems,
+  computeDisplayStats,
+  type LogDisplayItem,
+  type DisplayStats,
+} from '@/lib/logDisplay'
 
 const props = defineProps<{
   panelId: string
@@ -34,18 +39,6 @@ const activeSelectionRect = ref<DOMRect | null>(null)
 const markerStartId = ref('')
 const markerEndId = ref('')
 const bookmarkCapturedIds = new Set<number>()
-
-type LogDisplayItem =
-  | { kind: 'entry'; log: DisplayLogEntry }
-  | { kind: 'markerStart'; id: string; date: Date }
-  | { kind: 'markerEnd'; id: string; date: Date }
-
-interface DisplayStats {
-  total: number
-  folded: number
-  errors: number
-  warns: number
-}
 
 const cachedDisplay = ref<{ items: LogDisplayItem[]; stats: DisplayStats }>({
   items: [],
@@ -97,72 +90,23 @@ const filteredLogs = computed(() =>
   filterStore.applyFilters(props.panelId, props.projectId, rawLogs.value),
 )
 
-function makeDisplayItems(logs: DisplayLogEntry[], bm: Bookmark | null): LogDisplayItem[] {
-  const items: LogDisplayItem[] = []
-  if (bm?.startTime) {
-    const startTime = bm.startTime
-    if (bm.state === 'done') {
-      const endTime = bm.endTime ?? new Date()
-      let locked = bm.lockedLogs
-      if (locked.length === 0) {
-        locked = logs.filter(l => {
-          const t = new Date(l.timestamp)
-          return t >= startTime && t <= endTime
-        })
-      }
-      const lockedIds = new Set(locked.map(l => l.id))
-      const before = logs.filter(
-        l => new Date(l.timestamp) < startTime && !lockedIds.has(l.id),
-      )
-      const after = logs.filter(
-        l => new Date(l.timestamp) > endTime && !lockedIds.has(l.id),
-      )
-      for (const log of before) items.push({ kind: 'entry', log })
-      if (markerStartId.value) {
-        items.push({ kind: 'markerStart', id: markerStartId.value, date: startTime })
-      }
-      for (const log of locked) items.push({ kind: 'entry', log })
-      if (markerEndId.value) {
-        items.push({ kind: 'markerEnd', id: markerEndId.value, date: endTime })
-      }
-      for (const log of after) items.push({ kind: 'entry', log })
-    } else {
-      const before = logs.filter(l => new Date(l.timestamp) < startTime)
-      const after = logs.filter(l => new Date(l.timestamp) >= startTime)
-      for (const log of before) items.push({ kind: 'entry', log })
-      if ((after.length > 0 || bm.state === 'recording') && markerStartId.value) {
-        items.push({ kind: 'markerStart', id: markerStartId.value, date: startTime })
-      }
-      for (const log of after) items.push({ kind: 'entry', log })
-    }
-  } else {
-    for (const log of logs) items.push({ kind: 'entry', log })
-  }
-  return items
-}
-
-function computeStats(items: LogDisplayItem[]): DisplayStats {
-  let folded = 0
-  let errors = 0
-  let warns = 0
-  let total = 0
-  for (const item of items) {
-    if (item.kind !== 'entry') continue
-    total++
-    const e = item.log
-    const rc = e.repeat_count ?? 1
-    if (rc > 1) folded += rc - 1
-    if (e.level === 'ERROR') errors++
-    else if (e.level === 'WARN') warns++
-  }
-  return { total, folded, errors, warns }
-}
-
 function makeLogDisplay() {
   const logs = filteredLogs.value
   const bm = bookmarkStore.getBookmark(props.panelId)
-  const items = makeDisplayItems(logs, bm)
-  cachedDisplay.value = { items, stats: computeStats(items) }
+  const displayBm =
+    bm?.startTime != null
+      ? {
+          state: bm.state,
+          startTime: bm.startTime,
+          endTime: bm.endTime,
+          lockedLogs: bm.lockedLogs,
+        }
+      : null
+  const items = makeDisplayItems(logs, displayBm, {
+    start: markerStartId.value,
+    end: markerEndId.value,
+  })
+  cachedDisplay.value = { items, stats: computeDisplayStats(items) }
 }
 
 function scheduleDisplayRefresh() {
@@ -208,14 +152,26 @@ function serviceNameFor(log: DisplayLogEntry): string {
   return svc?.name ?? log.service_id.slice(0, 12)
 }
 
+function scopeServiceIds(): string[] {
+  if (props.serviceId) return [props.serviceId]
+  if (!props.projectId) return []
+  const project = agentStore.projectById(props.projectId)
+  return project?.services.map(s => s.id) ?? []
+}
+
+function closeActiveFoldsForScope() {
+  for (const serviceId of scopeServiceIds()) {
+    logStore.closeActiveFoldForService(serviceId)
+  }
+}
+
 watch(
-  [filteredLogs, () => bookmark.value?.state],
+  [filteredLogs, () => bookmark.value?.state, () => logStore.logSourceRevision],
   ([logs, state]) => {
     if (state !== 'recording' || !bookmark.value?.startTime) return
     const startTime = bookmark.value.startTime
     for (const log of logs) {
       if (new Date(log.timestamp) < startTime) continue
-      if (bookmarkCapturedIds.has(log.id)) continue
       bookmarkCapturedIds.add(log.id)
       bookmarkStore.appendToBookmark(props.panelId, log)
     }
@@ -223,11 +179,12 @@ watch(
 )
 
 function onEndBookmark() {
-  bookmarkStore.endBookmark(props.panelId, filteredLogs.value)
-}
-
-function backfillLockedLogsIfNeeded() {
-  bookmarkStore.finalizeLockedLogs(props.panelId, filteredLogs.value)
+  closeActiveFoldsForScope()
+  bookmarkStore.endBookmark(
+    props.panelId,
+    filteredLogs.value,
+    bookmarkCapturedIds,
+  )
 }
 
 watch(() => logStore.logSourceRevision, () => scheduleDisplayRefresh())
@@ -241,7 +198,6 @@ watch(
       markerEndId.value = crypto.randomUUID()
     }
     if (prev === 'recording' && state === 'done') {
-      backfillLockedLogsIfNeeded()
       bookmarkCapturedIds.clear()
     }
     if (!state || state === 'idle') {
@@ -434,7 +390,7 @@ const displayItems = computed(() => cachedDisplay.value.items)
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
       <template
         v-for="item in displayItems"
-        :key="item.kind === 'entry' ? `e-${item.log.id}` : item.id"
+        :key="item.id"
       >
         <BookmarkMarkerRow
           v-if="item.kind === 'markerStart'"

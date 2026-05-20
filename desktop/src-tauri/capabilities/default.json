@@ -7,6 +7,15 @@
     "core:default",
     "dialog:default",
     "fs:default",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DESKTOP/**" }
+      ]
+    },
     "shell:default",
     {
       "identifier": "shell:allow-execute",
