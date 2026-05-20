@@ -14,9 +14,23 @@ export interface Bookmark {
   lockedLogs: LogEntry[]
 }
 
+function snapshotLog(log: LogEntry): LogEntry {
+  return { ...log }
+}
+
+function dedupeById(logs: LogEntry[]): LogEntry[] {
+  const seen = new Set<number>()
+  const out: LogEntry[] = []
+  for (const log of logs) {
+    if (seen.has(log.id)) continue
+    seen.add(log.id)
+    out.push(snapshotLog(log))
+  }
+  return out
+}
+
 export const useBookmarkStore = defineStore('bookmark', () => {
   const bookmarks = ref<Record<string, Bookmark>>({})
-  // 同步组：panelId 集合
   const syncPanelIds = ref<Set<string>>(new Set())
   const syncRecording = ref(false)
 
@@ -35,10 +49,15 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     }
   }
 
-  function endBookmark(panelId: string) {
+  function endBookmark(panelId: string, captureLogs?: LogEntry[]) {
     const bm = bookmarks.value[panelId]
     if (!bm || bm.state !== 'recording') return
     bm.endTime = new Date()
+    if (captureLogs && bm.startTime) {
+      const start = bm.startTime
+      const inRange = captureLogs.filter(l => new Date(l.timestamp) >= start)
+      bm.lockedLogs = dedupeById(inRange)
+    }
     bm.state = 'done'
   }
 
@@ -46,15 +65,23 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     delete bookmarks.value[panelId]
   }
 
-  // 录制过程中追加过滤后的日志
+  function finalizeLockedLogs(panelId: string, captureLogs: LogEntry[]) {
+    const bm = bookmarks.value[panelId]
+    if (!bm?.startTime || !bm.endTime || bm.lockedLogs.length > 0) return
+    const start = bm.startTime
+    bm.lockedLogs = dedupeById(
+      captureLogs.filter(l => new Date(l.timestamp) >= start),
+    )
+  }
+
   function appendToBookmark(panelId: string, log: LogEntry) {
     const bm = bookmarks.value[panelId]
     if (!bm || bm.state !== 'recording') return
     if (!bm.startTime || new Date(log.timestamp) < bm.startTime) return
-    bm.lockedLogs.push(log)
+    if (bm.lockedLogs.some(l => l.id === log.id)) return
+    bm.lockedLogs.push(snapshotLog(log))
   }
 
-  // 格式化书签日志为可导出文本
   function formatBookmark(panelId: string): string {
     const bm = bookmarks.value[panelId]
     if (!bm) return ''
@@ -66,7 +93,6 @@ export const useBookmarkStore = defineStore('bookmark', () => {
       .join('\n')
   }
 
-  // 格式化同步组所有书签（按服务分块）
   function formatSyncBookmarks(): string {
     const parts: string[] = []
     for (const panelId of syncPanelIds.value) {
@@ -84,8 +110,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     return parts.join('\n\n')
   }
 
-  // 同步组操作
-  function toggleSyncPanel(panelId: string, serviceId: string | null) {
+  function toggleSyncPanel(panelId: string, _serviceId: string | null) {
     if (syncPanelIds.value.has(panelId)) {
       syncPanelIds.value.delete(panelId)
     } else {
@@ -98,9 +123,9 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     for (const panelId of syncPanelIds.value) {
       bookmarks.value[panelId] = {
         panelId,
-        serviceId: null,  // 由面板组件填入实际 serviceId
+        serviceId: null,
         state: 'recording',
-        startTime: now,  // 所有面板使用同一时间戳，保证对齐
+        startTime: now,
         endTime: null,
         lockedLogs: [],
       }
@@ -128,6 +153,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     startBookmark,
     endBookmark,
     clearBookmark,
+    finalizeLockedLogs,
     appendToBookmark,
     formatBookmark,
     formatSyncBookmarks,

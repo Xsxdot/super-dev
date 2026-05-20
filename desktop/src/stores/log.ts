@@ -2,20 +2,25 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { type LogEntry } from '@/api/agent'
+import { ingest, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 
 const WS_BASE = 'ws://127.0.0.1:27017'
-const MAX_LOGS = 8000  // 内存最多保留 8000 条
+const MAX_LOGS = 8000
 
 interface ServiceLog {
-  logs: LogEntry[]
+  logs: DisplayLogEntry[]
   ws: WebSocket | null
-  refCount: number  // 订阅该 serviceId 的面板数量
+  refCount: number
 }
 
 export const useLogStore = defineStore('log', () => {
   const serviceLogs = ref<Record<string, ServiceLog>>({})
-  // 按 serviceId 存历史查看的日志（与实时分开）
-  const historyLogs = ref<Record<string, LogEntry[]>>({})
+  const historyLogs = ref<Record<string, DisplayLogEntry[]>>({})
+  const logSourceRevision = ref(0)
+
+  function bumpRevision() {
+    logSourceRevision.value++
+  }
 
   function getOrCreate(serviceId: string): ServiceLog {
     if (!serviceLogs.value[serviceId]) {
@@ -28,16 +33,15 @@ export const useLogStore = defineStore('log', () => {
     const entry = getOrCreate(serviceId)
     entry.refCount++
     if (entry.ws && entry.ws.readyState === WebSocket.OPEN) return
-    // 建立 WebSocket 连接
     const ws = new WebSocket(`${WS_BASE}/ws/logs?service=${serviceId}`)
     ws.onmessage = (event) => {
       try {
         const log = JSON.parse(event.data) as LogEntry
-        entry.logs.push(log)
-        // 超出上限时从头部删除（环形缓冲效果）
+        ingest(toDisplayEntry(log), entry.logs)
         if (entry.logs.length > MAX_LOGS) {
           entry.logs.splice(0, entry.logs.length - MAX_LOGS)
         }
+        bumpRevision()
       } catch {}
     }
     ws.onclose = () => {
@@ -56,25 +60,29 @@ export const useLogStore = defineStore('log', () => {
     }
   }
 
-  function getLogs(serviceId: string): LogEntry[] {
+  function getLogs(serviceId: string): DisplayLogEntry[] {
     return serviceLogs.value[serviceId]?.logs ?? []
   }
 
   async function loadHistoryLogs(serviceId: string, runId: string) {
     const { api } = await import('@/api/agent')
     const logs = await api.fetchLogs({ service: serviceId, run: runId, limit: 2000 })
-    historyLogs.value[serviceId] = logs
+    const entries: DisplayLogEntry[] = []
+    for (const log of logs) {
+      ingest(toDisplayEntry(log), entries)
+    }
+    historyLogs.value[serviceId] = entries
+    bumpRevision()
   }
 
   function clearHistoryLogs(serviceId: string) {
     delete historyLogs.value[serviceId]
   }
 
-  function getHistoryLogs(serviceId: string): LogEntry[] {
+  function getHistoryLogs(serviceId: string): DisplayLogEntry[] {
     return historyLogs.value[serviceId] ?? []
   }
 
-  // 获取某服务的所有历史 runId（从已缓存日志推断）
   function getRunIds(serviceId: string): string[] {
     const logs = serviceLogs.value[serviceId]?.logs ?? []
     const seen = new Set<string>()
@@ -85,12 +93,13 @@ export const useLogStore = defineStore('log', () => {
         runs.push(log.run_id)
       }
     }
-    return runs.reverse()  // 最新的在前
+    return runs.reverse()
   }
 
   return {
     serviceLogs,
     historyLogs,
+    logSourceRevision,
     subscribe,
     unsubscribe,
     getLogs,

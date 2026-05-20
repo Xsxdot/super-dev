@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   selectRun: [runId: string | null]
+  endBookmark: []
 }>()
 
 const filterStore = useFilterStore()
@@ -35,8 +36,14 @@ function startBookmark() {
   bookmarkStore.startBookmark(props.panelId, props.serviceId)
 }
 function endBookmark() {
-  bookmarkStore.endBookmark(props.panelId)
+  emit('endBookmark')
 }
+
+function fillChipInput(text: string) {
+  chipInput.value = text.trim()
+}
+
+defineExpose({ fillChipInput })
 function clearBookmark() {
   bookmarkStore.clearBookmark(props.panelId)
 }
