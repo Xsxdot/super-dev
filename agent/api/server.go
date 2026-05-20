@@ -104,6 +104,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/services/{id}/stop", a.stopService)
 	mux.HandleFunc("POST /api/services/{id}/restart", a.restartService)
 	mux.HandleFunc("POST /api/projects/{id}/start-selected", a.startSelected)
+	mux.HandleFunc("PUT /api/projects/{id}/selected", a.putSelected)
 
 	// 日志
 	mux.HandleFunc("GET /api/logs", a.fetchLogs)

@@ -190,3 +190,40 @@ func (a *App) putProjectRules(w http.ResponseWriter, r *http.Request) {
 
 	jsonOK(w, rules)
 }
+
+// putSelected 处理 PUT /api/projects/{id}/selected，更新项目的待启动服务选中列表。
+//
+// 请求体：{"names": ["api", "web"]}
+// 注意：names 为服务名称列表（不是 ID），与 SelectedServiceIDs 字段对应。
+func (a *App) putSelected(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Names == nil {
+		req.Names = []string{}
+	}
+
+	a.mu.Lock()
+	found := false
+	for i, p := range a.projects {
+		if p.ID == id {
+			a.projects[i].SelectedServiceIDs = req.Names
+			found = true
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	if !found {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	jsonOK(w, map[string]string{"status": "ok"})
+}
