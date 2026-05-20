@@ -87,3 +87,101 @@ func TestDeleteOldEntries(t *testing.T) {
 	assert.Len(t, got, 1)
 	assert.Equal(t, "new", got[0].Message)
 }
+
+func TestSearchFindsKeywordAcrossServicesInTimeOrder(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-8f21 api done", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(1 * time.Second), Level: "WARN", Message: "TRACE-8F21 worker retry", Stream: "stderr"},
+		{ServiceID: "svc-c", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "unrelated", Stream: "stdout"},
+	}))
+
+	got, err := s.Search(store.SearchParams{
+		ServiceIDs: []string{"svc-a", "svc-b", "svc-c"},
+		Query:      "trace-8f21",
+		Limit:      10,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Entries, 2)
+	assert.Equal(t, "svc-b", got.Entries[0].ServiceID)
+	assert.Equal(t, "svc-a", got.Entries[1].ServiceID)
+	assert.Equal(t, 2, got.Total)
+	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, got.ServiceCounts)
+}
+
+func TestSearchRestrictsToServiceSet(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: now, Level: "INFO", Message: "trace-8f21 api", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: now, Level: "INFO", Message: "trace-8f21 worker", Stream: "stdout"},
+	}))
+
+	got, err := s.Search(store.SearchParams{
+		ServiceIDs: []string{"svc-b"},
+		Query:      "trace-8f21",
+		Limit:      10,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Entries, 1)
+	assert.Equal(t, "svc-b", got.Entries[0].ServiceID)
+	assert.Equal(t, map[string]int{"svc-b": 1}, got.ServiceCounts)
+}
+
+func TestFetchContextReturnsProjectServicesAroundTargetTime(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "api before", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(-500 * time.Millisecond), Level: "INFO", Message: "worker before", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "trace-8f21 target", Stream: "stderr"},
+		{ServiceID: "svc-c", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "billing after", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Minute), Level: "INFO", Message: "outside window", Stream: "stdout"},
+	}))
+	search, err := s.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+	targetID := search.Entries[0].ID
+
+	got, err := s.FetchContext(store.ContextParams{
+		TargetID:   targetID,
+		ServiceIDs: []string{"svc-a", "svc-b", "svc-c"},
+		Before:     3 * time.Second,
+		After:      3 * time.Second,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, targetID, got.TargetID)
+	assert.Equal(t, base, got.AnchorTime)
+	assert.Equal(t, []string{"api before", "trace-8f21 target"}, messagesOf(got.ItemsByService["svc-a"]))
+	assert.Equal(t, []string{"worker before"}, messagesOf(got.ItemsByService["svc-b"]))
+	assert.Equal(t, []string{"billing after"}, messagesOf(got.ItemsByService["svc-c"]))
+}
+
+func TestFetchContextRejectsTargetOutsideServiceSet(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: now, Level: "INFO", Message: "target", Stream: "stdout"},
+	}))
+	search, err := s.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+
+	_, err = s.FetchContext(store.ContextParams{
+		TargetID:   search.Entries[0].ID,
+		ServiceIDs: []string{"svc-b"},
+		Before:     time.Second,
+		After:      time.Second,
+	})
+	require.ErrorIs(t, err, store.ErrLogEntryNotFound)
+}
+
+func messagesOf(entries []model.LogEntry) []string {
+	out := make([]string, len(entries))
+	for i, entry := range entries {
+		out[i] = entry.Message
+	}
+	return out
+}
