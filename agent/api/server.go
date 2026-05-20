@@ -108,6 +108,8 @@ func (a *App) Handler() http.Handler {
 
 	// 日志
 	mux.HandleFunc("GET /api/logs", a.fetchLogs)
+	mux.HandleFunc("GET /api/log-search", a.searchLogs)
+	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
 
 	return cors(mux)
