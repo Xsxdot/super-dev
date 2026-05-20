@@ -28,7 +28,12 @@ func (a *App) listServices(w http.ResponseWriter, r *http.Request) {
 		mgr, hasMgr := a.managers[p.ID]
 		for _, svc := range p.Services {
 			if hasMgr {
-				svc.Status = mgr.Status(svc.ID)
+				st := mgr.Status(svc.ID)
+				// 后台化命令会使 sh 退出、status 为空，但 session 内仍视为已启动
+				if mgr.IsActive(svc.ID) && st != model.StatusStarting && st != model.StatusFailed {
+					st = model.StatusRunning
+				}
+				svc.Status = st
 				svc.PID = mgr.PID(svc.ID)
 			}
 			result = append(result, svc)
@@ -130,8 +135,19 @@ func (a *App) startSelected(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mgr := a.getOrCreateManager(projectID)
+	var toStartFiltered []model.Service
+	for _, svc := range toStart {
+		if !mgr.IsActive(svc.ID) {
+			toStartFiltered = append(toStartFiltered, svc)
+		}
+	}
+	if len(toStartFiltered) == 0 {
+		jsonOK(w, map[string]string{"status": "already_running"})
+		return
+	}
+
 	mgr.SetRunID(uuid.NewString())
-	if err := mgr.StartGroup(toStart); err != nil {
+	if err := mgr.StartGroup(toStartFiltered); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to start services: "+err.Error())
 		return
 	}

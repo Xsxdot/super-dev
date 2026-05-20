@@ -56,6 +56,7 @@ func (l *Loader) Load() (model.Project, error) {
 
 	// rawConfig 对应 YAML 文件顶层结构，使用 snake_case 字段名。
 	var raw struct {
+		ID                 string         `yaml:"id,omitempty"`
 		Name               string         `yaml:"name"`
 		Services           []serviceYAML  `yaml:"services"`
 		SelectedServiceIDs []string       `yaml:"selected_service_ids"`
@@ -67,6 +68,7 @@ func (l *Loader) Load() (model.Project, error) {
 	services := make([]model.Service, len(raw.Services))
 	for i, s := range raw.Services {
 		services[i] = model.Service{
+			ID:       s.ID,
 			Name:     s.Name,
 			Command:  s.Command,
 			WorkDir:  s.WorkingDir,
@@ -79,6 +81,7 @@ func (l *Loader) Load() (model.Project, error) {
 	}
 
 	return model.Project{
+		ID:                 raw.ID,
 		Name:               raw.Name,
 		RootPath:           l.rootPath,
 		Services:           services,
@@ -108,6 +111,9 @@ func (l *Loader) Save(p model.Project) error {
 		"name":                 p.Name,
 		"services":             servicesToYAML(p.Services),
 		"selected_service_ids": p.SelectedServiceIDs,
+	}
+	if p.ID != "" {
+		raw["id"] = p.ID
 	}
 	// 保留已有的 log_rules。
 	if lr, ok := existing["log_rules"]; ok {
@@ -168,6 +174,7 @@ func (l *Loader) SaveLogRules(rules []model.LogRule) error {
 // serviceYAML 对应 YAML 文件中服务条目的 snake_case 字段，
 // 与 model.Service 的 YAML tag 分离，避免写入运行时字段。
 type serviceYAML struct {
+	ID         string            `yaml:"id,omitempty"`
 	Name       string            `yaml:"name"`
 	Command    string            `yaml:"command"`
 	WorkingDir string            `yaml:"working_dir"`
@@ -182,6 +189,7 @@ func servicesToYAML(services []model.Service) []serviceYAML {
 	out := make([]serviceYAML, len(services))
 	for i, s := range services {
 		out[i] = serviceYAML{
+			ID:         s.ID,
 			Name:       s.Name,
 			Command:    s.Command,
 			WorkingDir: s.WorkDir,

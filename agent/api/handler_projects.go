@@ -69,6 +69,12 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	// 分配 UUID（Loader 不负责 ID 分配）
 	assignIDs(&p)
 
+	// 持久化 ID，避免 agent 重启后 service ID 变化导致重复启动
+	if err := loader.Save(p); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
+		return
+	}
+
 	// 写入注册表
 	if err := a.registry.Add(req.RootPath); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to register project: "+err.Error())

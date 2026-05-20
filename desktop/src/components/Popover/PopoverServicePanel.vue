@@ -26,6 +26,18 @@ const stoppedCount = computed(() =>
 
 const selectedNames = computed(() => props.project.selected_service_ids ?? [])
 
+const selectedServices = computed(() =>
+  props.project.services.filter(s =>
+    agentStore.isServiceSelectedForStart(props.project.id, s.name)
+  )
+)
+
+const canStartSelected = computed(() =>
+  selectedServices.value.some(
+    s => s.status !== 'running' && s.status !== 'starting'
+  )
+)
+
 const allOptionalSelected = computed(() =>
   optionalServices.value.length > 0 &&
   optionalServices.value.every(s => selectedNames.value.includes(s.name))
@@ -78,7 +90,7 @@ async function openMainWindow() {
         <span class="proj-name">{{ project.name }}</span>
         <div class="header-actions">
           <button class="btn btn-secondary" @click="stopAll">全停</button>
-          <button class="btn btn-primary" @click="startSelected">▶ 启动选中</button>
+          <button class="btn btn-primary" :disabled="!canStartSelected" @click="startSelected">▶ 启动选中</button>
         </div>
       </div>
       <div class="status-badges">
@@ -171,6 +183,10 @@ async function openMainWindow() {
   background: var(--accent);
   color: #fff;
   font-weight: 500;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .status-badges { display: flex; gap: 5px; flex-wrap: wrap; }
