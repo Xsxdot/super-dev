@@ -1,11 +1,19 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import type { Project } from '@/api/agent'
 
 const props = defineProps<{ project: Project }>()
 const agentStore = useAgentStore()
 
+const canStartSelected = computed(() =>
+  props.project.services
+    .filter(s => agentStore.isServiceSelectedForStart(props.project.id, s.name))
+    .some(s => s.status !== 'running' && s.status !== 'starting')
+)
+
 async function startSelected() {
+  if (!canStartSelected.value) return
   await agentStore.startSelected(props.project.id)
 }
 
@@ -21,7 +29,7 @@ async function stopAll() {
   <div class="project-header">
     <span class="project-name">{{ project.name }}</span>
     <div class="project-actions">
-      <button title="启动选中" class="action-btn start" @click.stop="startSelected">▶</button>
+      <button title="启动选中" class="action-btn start" :disabled="!canStartSelected" @click.stop="startSelected">▶</button>
       <button title="全部停止" class="action-btn stop" @click.stop="stopAll">⏹</button>
     </div>
   </div>
@@ -51,7 +59,8 @@ async function stopAll() {
   cursor: pointer;
   transition: background 0.12s;
 }
-.action-btn:hover { background: rgba(255,255,255,0.08); }
+.action-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+.action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .action-btn.start { color: #3fb950; }
 .action-btn.stop { color: var(--text-secondary); }
 </style>

@@ -139,6 +139,8 @@ func (a *App) loadRegisteredProjects() {
 			continue
 		}
 		assignIDs(&p)
+		// 将新生成的 ID 写回配置，避免重启后 ID 变化
+		_ = loader.Save(p)
 		a.mu.Lock()
 		a.projects = append(a.projects, p)
 		a.mu.Unlock()

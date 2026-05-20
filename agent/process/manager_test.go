@@ -1,6 +1,8 @@
 package process_test
 
 import (
+	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +57,54 @@ func TestManagerRestartKeepsRunningStatus(t *testing.T) {
 	assert.Equal(t, model.StatusRunning, mgr.Status("svc-restart"))
 
 	mgr.Stop("svc-restart")
+}
+
+func TestManagerStartSkipsWhenAlreadyRunning(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	svc := model.Service{
+		ID:      "svc-dup",
+		Name:    "long",
+		Command: "sleep 60",
+		WorkDir: t.TempDir(),
+	}
+	require.NoError(t, mgr.Start(svc))
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, model.StatusRunning, mgr.Status("svc-dup"))
+	firstPID := mgr.PID("svc-dup")
+	require.NotZero(t, firstPID)
+
+	require.NoError(t, mgr.Start(svc))
+	assert.Equal(t, firstPID, mgr.PID("svc-dup"))
+
+	mgr.Stop("svc-dup")
+}
+
+func TestManagerStartSkipsAfterBackgroundedCommand(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	svc := model.Service{
+		ID:      "svc-bg",
+		Name:    "bg",
+		Command: "sleep 60 &",
+		WorkDir: t.TempDir(),
+	}
+	require.NoError(t, mgr.Start(svc))
+	time.Sleep(300 * time.Millisecond)
+
+	require.NoError(t, mgr.Start(svc))
+	// 仅应有一个 sleep 子进程（第二次 Start 被跳过）
+	time.Sleep(100 * time.Millisecond)
+	out, err := exec.Command("pgrep", "-f", "sleep 60").Output()
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if lines[0] == "" {
+		assert.Empty(t, lines)
+	} else {
+		assert.Len(t, lines, 1)
+	}
+
+	mgr.Stop("svc-bg")
 }
 
 func TestManagerStartGroup(t *testing.T) {

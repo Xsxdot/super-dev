@@ -61,8 +61,21 @@ func (m *Manager) SetRunID(id string) {
 //
 // 注意：
 //   - 启动后在后台 goroutine 轮询进程状态，退出时自动置为 StatusStopped
-//   - 对同一 serviceID 重复调用 Start 会覆盖旧的 runner
+//   - 本 session 内已启动过的服务（runners 中仍有记录）重复调用 Start 为空操作，须先 Stop/Restart
+//   - 与 Swift ProcessManager 一致：guard runners[service.id] == nil，不依赖 IsRunning()
+//     （后台化命令如 `npm run dev &` 会使 sh 退出但子进程继续，IsRunning 不可靠）
 func (m *Manager) Start(svc model.Service) error {
+	m.mu.Lock()
+	if m.status[svc.ID] == model.StatusStarting {
+		m.mu.Unlock()
+		return nil
+	}
+	if _, ok := m.runners[svc.ID]; ok {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
 	m.setStatus(svc.ID, model.StatusStarting)
 
 	r := NewRunner(RunnerConfig{
@@ -156,6 +169,7 @@ func (m *Manager) StartGroup(services []model.Service) error {
 func (m *Manager) Stop(serviceID string) {
 	m.mu.Lock()
 	r := m.runners[serviceID]
+	delete(m.runners, serviceID)
 	m.mu.Unlock()
 	if r != nil {
 		r.Stop()
@@ -174,6 +188,19 @@ func (m *Manager) StopAll() {
 	for _, id := range ids {
 		m.Stop(id)
 	}
+}
+
+// IsActive 表示服务在本 session 内是否已启动且尚未 Stop。
+//
+// 对后台化命令（sh 已退出、子进程仍在）也返回 true，与 Swift runners 语义一致。
+func (m *Manager) IsActive(serviceID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if st := m.status[serviceID]; st == model.StatusStarting || st == model.StatusRunning {
+		return true
+	}
+	_, ok := m.runners[serviceID]
+	return ok
 }
 
 // Status 返回指定服务的当前状态。
