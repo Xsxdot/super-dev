@@ -2,6 +2,18 @@
 
 mod agent;
 use agent::AgentProcess;
+
+/// show_main_window 显示并聚焦主窗口。
+///
+/// 供 Popover 等非主窗口通过 Tauri invoke 调用，
+/// 点击"查看日志"等按钮时将主窗口带到前台。
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
@@ -13,6 +25,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![show_main_window])
         .setup(|app| {
             // 启动 agent（仅 release 模式）
             let agent = AgentProcess::new();
