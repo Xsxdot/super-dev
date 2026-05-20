@@ -150,7 +150,7 @@ type Service struct {
     Command   string `json:"command"`
     WorkDir   string `json:"work_dir"`
     Required  bool   `json:"required"`    // 必须启动，强制勾选不可取消
-    Order     int    `json:"order"`       // 启动顺序，相同 order 并行，值小的先启动
+    Order     int    `json:"order"`       // 启动顺序，相同 order 并行，值小的先启动；不填默认 0（全部并行）
     EnvFile   string `json:"env_file,omitempty"`
     Env       map[string]string `json:"env,omitempty"`
 }
