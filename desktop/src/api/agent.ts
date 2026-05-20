@@ -69,6 +69,34 @@ export interface FetchLogsParams {
   before?: number
 }
 
+export interface LogSearchResponse {
+  query: string
+  total: number
+  items: LogEntry[]
+  service_counts: Record<string, number>
+}
+
+export interface LogContextResponse {
+  target_id: number
+  anchor_time: string
+  items_by_service: Record<string, LogEntry[]>
+}
+
+export interface SearchLogsParams {
+  project: string
+  q: string
+  service?: string[]
+  limit?: number
+}
+
+export interface FetchLogContextParams {
+  project: string
+  id: number
+  service?: string[]
+  before_ms?: number
+  after_ms?: number
+}
+
 export const api = {
   // 项目
   listProjects: () => request<Project[]>('/api/projects'),
@@ -104,5 +132,22 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before) qs.set('before', String(params.before))
     return request<LogEntry[]>(`/api/logs${qs.toString() ? '?' + qs : ''}`)
+  },
+  searchLogs: (params: SearchLogsParams) => {
+    const qs = new URLSearchParams()
+    qs.set('project', params.project)
+    qs.set('q', params.q)
+    for (const serviceId of params.service ?? []) qs.append('service', serviceId)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<LogSearchResponse>(`/api/log-search?${qs}`)
+  },
+  fetchLogContext: (params: FetchLogContextParams) => {
+    const qs = new URLSearchParams()
+    qs.set('project', params.project)
+    qs.set('id', String(params.id))
+    for (const serviceId of params.service ?? []) qs.append('service', serviceId)
+    if (params.before_ms) qs.set('before_ms', String(params.before_ms))
+    if (params.after_ms) qs.set('after_ms', String(params.after_ms))
+    return request<LogContextResponse>(`/api/logs/context?${qs}`)
   },
 }

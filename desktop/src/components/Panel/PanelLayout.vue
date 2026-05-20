@@ -10,7 +10,6 @@ const props = defineProps<{
 
 const panelStore = usePanelStore()
 const node = computed(() => props.node ?? panelStore.root)
-const isRoot = computed(() => props.isRoot ?? true)
 
 const rootLeafCount = computed(() => panelStore.allLeaves.length)
 </script>
