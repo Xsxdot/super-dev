@@ -41,6 +41,7 @@ export interface LogEntry {
   level: string
   message: string
   stream: string
+  repeat_count?: number
 }
 
 export interface LogRule {
@@ -83,6 +84,8 @@ export const api = {
     request<void>(`/api/services/${id}/restart`, { method: 'POST' }),
   startSelected: (projectId: string) =>
     request<void>(`/api/projects/${projectId}/start-selected`, { method: 'POST' }),
+  putSelected: (projectId: string, names: string[]) =>
+    request<void>(`/api/projects/${projectId}/selected`, { method: 'PUT', body: JSON.stringify({ selected_service_ids: names }) }),
 
   // 日志
   fetchLogs: (params: FetchLogsParams) => {
