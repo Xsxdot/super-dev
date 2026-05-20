@@ -8,25 +8,21 @@ impl AgentProcess {
         AgentProcess(Mutex::new(None))
     }
 
-    pub fn start(&self, sidecar_path: &str) {
-        let mut guard = self.0.lock().unwrap();
+    pub fn start(&self, sidecar_path: &str) -> Result<(), std::io::Error> {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_some() {
-            return;
+            return Ok(());
         }
-        match Command::new(sidecar_path)
+        let child = Command::new(sidecar_path)
             .args(["--addr", ":27017"])
-            .spawn()
-        {
-            Ok(child) => {
-                *guard = Some(child);
-                println!("[SuperDev] agent started, pid={}", guard.as_ref().unwrap().id());
-            }
-            Err(e) => eprintln!("[SuperDev] failed to start agent: {e}"),
-        }
+            .spawn()?;
+        println!("[SuperDev] agent started, pid={}", child.id());
+        *guard = Some(child);
+        Ok(())
     }
 
     pub fn stop(&self) {
-        let mut guard = self.0.lock().unwrap();
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();

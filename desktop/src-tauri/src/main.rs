@@ -21,9 +21,12 @@ fn main() {
                 let resource_path = app
                     .path()
                     .resource_dir()
-                    .unwrap()
+                    .map_err(|e| format!("无法获取资源目录: {e}"))?
                     .join("binaries/superdev-agent");
-                agent.start(resource_path.to_str().unwrap());
+                let path_str = resource_path
+                    .to_str()
+                    .ok_or("资源路径包含非 UTF-8 字符")?;
+                agent.start(path_str)?;
             }
             app.manage(agent);
 
@@ -33,7 +36,11 @@ fn main() {
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(
+                    app.default_window_icon()
+                        .ok_or("未配置默认窗口图标")?
+                        .clone(),
+                )
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
@@ -65,10 +72,12 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 关闭主窗口时隐藏到托盘，而非退出
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            // 关闭主窗口时隐藏到托盘，而非退出；仅对 main 窗口生效
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())
