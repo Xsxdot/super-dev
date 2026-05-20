@@ -1,4 +1,12 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
+import { useAgentStore } from '@/stores/agent'
+
+const agentStore = useAgentStore()
+
+onMounted(() => {
+  agentStore.startPolling()
+})
 </script>
 
 <template>
