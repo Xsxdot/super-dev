@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import SearchServiceRail from './SearchServiceRail.vue'
+import SearchServiceColumns from './SearchServiceColumns.vue'
 import SearchTimeline from './SearchTimeline.vue'
 
 defineProps<{ tabId: string }>()
@@ -23,7 +24,7 @@ defineProps<{ tabId: string }>()
       <SearchTimeline :tab-id="tabId" />
     </aside>
     <section class="search-right">
-      <div class="context-empty">点击左侧命中日志查看跨服务上下文</div>
+      <SearchServiceColumns :tab-id="tabId" />
     </section>
   </div>
 </template>
@@ -48,13 +49,5 @@ defineProps<{ tabId: string }>()
   min-height: 0;
   overflow: hidden;
   background: var(--bg-primary);
-}
-.context-empty {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
-  font-size: 12px;
 }
 </style>
