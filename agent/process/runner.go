@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 )
 
 // RunnerConfig 是 Runner 的启动配置。
@@ -62,6 +63,8 @@ func (r *Runner) Start() error {
 	cmd := exec.Command("sh", "-c", r.cfg.Command)
 	cmd.Dir = r.cfg.WorkDir
 	cmd.Env = r.buildEnv()
+	// 独立进程组，Stop 时可 SIGKILL 整组（含 sh -c 拉起的子进程）
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -95,7 +98,8 @@ func (r *Runner) Stop() {
 	cmd := r.cmd
 	r.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		// 负 PID 终止整个进程组，避免仅杀掉 sh 而 node 等子进程继续跑
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
 
