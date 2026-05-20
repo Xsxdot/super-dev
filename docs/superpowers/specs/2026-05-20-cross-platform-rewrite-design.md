@@ -112,24 +112,13 @@ WS   /ws/logs?service={id}
      # 实时日志流，连接后持续推送新日志，不做任何过滤
 ```
 
-### 书签
+### 书签与同步组
 
-```
-POST   /api/bookmarks/{panelId}/start   # 开始录制（绑定 serviceId）
-POST   /api/bookmarks/{panelId}/end     # 结束录制
-GET    /api/bookmarks/{panelId}/export  # 导出为纯文本
-DELETE /api/bookmarks/{panelId}         # 清除书签
-```
+书签和同步组完全在客户端（Vue 前端）维护，agent 不感知这两个概念：
+- **书签**：客户端记录开始/结束时间点，从本地已过滤的日志中截取对应片段，导出时格式化当前展示内容
+- **同步组**：客户端协调多个面板同时触发书签开始/结束，时间对齐，合并导出时拼接各面板已过滤的书签片段
 
-### 同步组
-
-```
-GET    /api/sync-group                        # 获取当前同步组状态
-POST   /api/sync-group/toggle/{panelId}       # 加入/移出同步组（附带 serviceId）
-POST   /api/sync-group/start                  # 所有面板同时开始书签录制
-POST   /api/sync-group/end                    # 所有面板同时结束书签录制
-GET    /api/sync-group/export                 # 合并导出所有面板书签文本
-```
+无需任何 agent API。
 
 ---
 
@@ -187,30 +176,9 @@ type LogRule struct {
 }
 ```
 
-### LogBookmark（纯内存，不持久化）
+### LogBookmark / SyncGroupState（客户端状态，无对应 agent 数据模型）
 
-每个面板最多一个活跃书签。开始时实时追加属于绑定服务的日志，结束后可导出。
-
-```go
-type LogBookmark struct {
-    PanelID   string     `json:"panel_id"`
-    ServiceID string     `json:"service_id"`
-    StartTime *time.Time `json:"start_time,omitempty"`
-    EndTime   *time.Time `json:"end_time,omitempty"`
-    Logs      []LogEntry `json:"logs"`  // 内存中锁定的日志片段
-}
-```
-
-### SyncGroupState（协调器状态，不是持久化实体）
-
-同步组让多个面板同时开始/结束录制，时间对齐，方便对比同一时间段内不同服务的日志（如后端 A、后端 B 同时出问题时分栏对照）。
-
-```go
-type SyncGroupState struct {
-    PanelServiceBindings map[string]string `json:"panel_service_bindings"` // panelId → serviceId
-    IsRecording          bool              `json:"is_recording"`
-}
-```
+书签和同步组是纯客户端概念，由 Vue 前端的状态管理（Pinia）维护，不涉及任何 agent 数据结构。
 
 ---
 
@@ -257,8 +225,8 @@ type SyncGroupState struct {
 | `LogEngine` / `LogStore` (SQLite) | Go agent + SQLite (`database/sql`) |
 | `LogFilter` 内存过滤 | 客户端（Vue 前端）实现，两层：项目级规则 + 临时 Chip |
 | `LogRule` 项目级规则 | 随项目配置持久化，API 读写 |
-| `LogBookmark` 内存书签 | agent 内存书签，面板级管理 |
-| `SyncGroup` 同步组 | agent `SyncGroupState` 协调器 |
+| `LogBookmark` 内存书签 | 客户端 Pinia 状态，面板级管理，无 agent API |
+| `SyncGroup` 同步组 | 客户端 Pinia 状态，协调多面板书签触发，无 agent API |
 | `ControlSocketServer` (UDS) | agent HTTP REST 接口 |
 | `MenuBarManager` + SwiftUI | Tauri 系统托盘 + Vue 前端 |
 | `UserDefaults` 持久化 | agent 本地 JSON 配置文件 |
