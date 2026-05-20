@@ -23,9 +23,10 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let agent = window.app_handle().state::<AgentProcess>();
-                agent.stop();
+            if window.label() == "main" {
+                if let tauri::WindowEvent::Destroyed = event {
+                    window.app_handle().state::<AgentProcess>().stop();
+                }
             }
         })
         .run(tauri::generate_context!())
