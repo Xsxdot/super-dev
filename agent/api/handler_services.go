@@ -12,7 +12,6 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/superdev/agent/model"
@@ -76,10 +75,6 @@ func (a *App) stopService(w http.ResponseWriter, r *http.Request) {
 }
 
 // restartService 处理 POST /api/services/{id}/restart，重启指定服务。
-//
-// 注意：Stop 后等待 100ms，让旧进程的监控 goroutine 有机会观察到进程退出，
-// 避免其在新进程启动后将状态回写为 StatusStopped（覆盖 StatusRunning）。
-// 这是一个务实的折中方案；完整解法需要 runner 提供 done channel。
 func (a *App) restartService(w http.ResponseWriter, r *http.Request) {
 	svcID := r.PathValue("id")
 
@@ -90,10 +85,7 @@ func (a *App) restartService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mgr := a.getOrCreateManager(p.ID)
-	mgr.Stop(svc.ID)
-	// 等待旧监控 goroutine 完成状态写入，避免其覆盖新进程的 StatusRunning
-	time.Sleep(100 * time.Millisecond)
-	if err := mgr.Start(svc); err != nil {
+	if err := mgr.Restart(svc); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to restart service: "+err.Error())
 		return
 	}

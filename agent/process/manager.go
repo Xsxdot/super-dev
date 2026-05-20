@@ -21,11 +21,12 @@ import (
 //   - 不解析配置文件，仅消费 model.Service 数据结构
 //   - 不直接写日志存储，日志处理由 onLog 回调负责
 type Manager struct {
-	mu      sync.Mutex
-	runners map[string]*Runner
-	status  map[string]model.ServiceStatus
-	onLog   func(model.LogEntry)
-	runID   string
+	mu          sync.Mutex
+	runners     map[string]*Runner
+	status      map[string]model.ServiceStatus
+	generations map[string]uint64 // 每次 Start 递增，防止旧监控 goroutine 覆盖新进程状态
+	onLog       func(model.LogEntry)
+	runID       string
 }
 
 // NewManager 创建一个新的 Manager。
@@ -34,9 +35,10 @@ type Manager struct {
 //   - onLog: 每当有日志行产生时调用，调用方负责写入存储或广播
 func NewManager(onLog func(model.LogEntry)) *Manager {
 	return &Manager{
-		runners: map[string]*Runner{},
-		status:  map[string]model.ServiceStatus{},
-		onLog:   onLog,
+		runners:     map[string]*Runner{},
+		status:      map[string]model.ServiceStatus{},
+		generations: map[string]uint64{},
+		onLog:       onLog,
 	}
 }
 
@@ -93,15 +95,25 @@ func (m *Manager) Start(svc model.Service) error {
 	m.mu.Unlock()
 	m.setStatus(svc.ID, model.StatusRunning)
 
+	gen := m.bumpGeneration(svc.ID)
 	// 后台监控进程退出，自动更新状态为 StatusStopped。
+	// 仅当 generation 未变时写回，避免重启后旧 goroutine 把 running 覆盖为 stopped。
 	go func() {
 		for r.IsRunning() {
 			time.Sleep(200 * time.Millisecond)
 		}
-		m.setStatus(svc.ID, model.StatusStopped)
+		if m.generation(svc.ID) == gen {
+			m.setStatus(svc.ID, model.StatusStopped)
+		}
 	}()
 
 	return nil
+}
+
+// Restart 停止后重新启动服务。
+func (m *Manager) Restart(svc model.Service) error {
+	m.Stop(svc.ID)
+	return m.Start(svc)
 }
 
 // StartGroup 按 Order 字段分组，从小到大串行启动各组；同组内并行启动。
@@ -192,6 +204,19 @@ func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 	m.mu.Lock()
 	m.status[id] = st
 	m.mu.Unlock()
+}
+
+func (m *Manager) bumpGeneration(serviceID string) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.generations[serviceID]++
+	return m.generations[serviceID]
+}
+
+func (m *Manager) generation(serviceID string) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generations[serviceID]
 }
 
 // groupByOrder 将服务列表按 Order 字段分组，返回按 Order 升序排列的二维切片。

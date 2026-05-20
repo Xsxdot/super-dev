@@ -36,6 +36,27 @@ func TestManagerStartStopService(t *testing.T) {
 	assert.Equal(t, model.StatusStopped, mgr.Status("svc-2"))
 }
 
+func TestManagerRestartKeepsRunningStatus(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	svc := model.Service{
+		ID:      "svc-restart",
+		Name:    "long",
+		Command: "sleep 60",
+		WorkDir: t.TempDir(),
+	}
+	require.NoError(t, mgr.Start(svc))
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, model.StatusRunning, mgr.Status("svc-restart"))
+
+	require.NoError(t, mgr.Restart(svc))
+	// 旧监控 goroutine 轮询间隔 200ms，无 sleep 也不应被覆盖为 stopped
+	time.Sleep(400 * time.Millisecond)
+	assert.Equal(t, model.StatusRunning, mgr.Status("svc-restart"))
+
+	mgr.Stop("svc-restart")
+}
+
 func TestManagerStartGroup(t *testing.T) {
 	var mu sync.Mutex
 	_ = mu
