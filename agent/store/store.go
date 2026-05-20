@@ -14,11 +14,15 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/superdev/agent/model"
 	_ "modernc.org/sqlite"
 )
+
+// ErrLogEntryNotFound 表示目标日志不存在，或不属于允许查询的服务集合。
+var ErrLogEntryNotFound = sql.ErrNoRows
 
 // Store 封装 SQLite 数据库连接，提供日志的读写操作。
 type Store struct {
@@ -34,6 +38,41 @@ type FetchParams struct {
 	RunID     string
 	Limit     int
 	Before    int64
+}
+
+// SearchParams 定义跨服务历史日志搜索参数。
+//
+// ServiceIDs 为空时直接返回空结果，避免无边界全库搜索。
+// Query 会做大小写不敏感的 message 包含匹配。
+type SearchParams struct {
+	ServiceIDs []string
+	Query      string
+	Limit      int
+	Before     int64
+	From       *time.Time
+	To         *time.Time
+}
+
+// SearchResult 表示一次日志搜索的结果和按服务聚合的命中数。
+type SearchResult struct {
+	Entries       []model.LogEntry
+	Total         int
+	ServiceCounts map[string]int
+}
+
+// ContextParams 定义以某条日志为锚点的跨服务上下文查询参数。
+type ContextParams struct {
+	TargetID   int64
+	ServiceIDs []string
+	Before     time.Duration
+	After      time.Duration
+}
+
+// ContextResult 表示跨服务上下文查询结果。
+type ContextResult struct {
+	TargetID       int64
+	AnchorTime     time.Time
+	ItemsByService map[string][]model.LogEntry
 }
 
 // New 打开（或创建）指定路径的 SQLite 数据库，并执行 schema 迁移。
@@ -164,6 +203,166 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ",")
+}
+
+func appendServiceArgs(args []any, serviceIDs []string) []any {
+	for _, id := range serviceIDs {
+		args = append(args, id)
+	}
+	return args
+}
+
+// Search 在指定服务集合内按关键词搜索历史日志。
+//
+// 参数：
+//   - p: ServiceIDs 限定搜索范围，Query 为大小写不敏感关键词，Limit 控制返回条数
+//
+// 返回：
+//   - Entries: 按 timestamp ASC, id ASC 排序的匹配日志
+//   - Total: 未分页前的总命中数
+//   - ServiceCounts: 未分页前按 service_id 聚合的命中数
+func (s *Store) Search(p SearchParams) (SearchResult, error) {
+	result := SearchResult{
+		Entries:       []model.LogEntry{},
+		ServiceCounts: map[string]int{},
+	}
+	queryText := strings.TrimSpace(p.Query)
+	if len(p.ServiceIDs) == 0 || queryText == "" {
+		return result, nil
+	}
+	if p.Limit <= 0 {
+		p.Limit = 1000
+	}
+
+	where := fmt.Sprintf("service_id IN (%s) AND LOWER(message) LIKE LOWER(?)", placeholders(len(p.ServiceIDs)))
+	args := appendServiceArgs([]any{}, p.ServiceIDs)
+	args = append(args, "%"+queryText+"%")
+	if p.From != nil {
+		where += " AND timestamp >= ?"
+		args = append(args, p.From.UTC())
+	}
+	if p.To != nil {
+		where += " AND timestamp <= ?"
+		args = append(args, p.To.UTC())
+	}
+	if p.Before > 0 {
+		where += " AND id < ?"
+		args = append(args, p.Before)
+	}
+
+	countQuery := "SELECT service_id, COUNT(*) FROM log_entries WHERE " + where + " GROUP BY service_id"
+	countRows, err := s.db.Query(countQuery, args...)
+	if err != nil {
+		return result, err
+	}
+	defer countRows.Close()
+	for countRows.Next() {
+		var serviceID string
+		var count int
+		if err := countRows.Scan(&serviceID, &count); err != nil {
+			return result, err
+		}
+		result.ServiceCounts[serviceID] = count
+		result.Total += count
+	}
+	if err := countRows.Err(); err != nil {
+		return result, err
+	}
+
+	entryQuery := fmt.Sprintf(
+		"SELECT id, service_id, run_id, timestamp, level, message, stream FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
+		where,
+		p.Limit,
+	)
+	rows, err := s.db.Query(entryQuery, args...)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e model.LogEntry
+		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+			return result, err
+		}
+		result.Entries = append(result.Entries, e)
+	}
+	return result, rows.Err()
+}
+
+// FetchContext 以目标日志时间为锚点，拉取指定服务集合在时间窗口内的日志。
+//
+// 参数：
+//   - p: TargetID 为锚点日志 ID，ServiceIDs 限定项目服务集合，Before/After 控制时间窗口
+//
+// 返回：
+//   - 按 service_id 分组的日志上下文
+//   - 目标日志不存在或不属于 ServiceIDs 时返回 ErrLogEntryNotFound
+func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
+	result := ContextResult{
+		TargetID:       p.TargetID,
+		ItemsByService: map[string][]model.LogEntry{},
+	}
+	if p.TargetID <= 0 || len(p.ServiceIDs) == 0 {
+		return result, ErrLogEntryNotFound
+	}
+	if p.Before <= 0 {
+		p.Before = 30 * time.Second
+	}
+	if p.After <= 0 {
+		p.After = 30 * time.Second
+	}
+
+	targetQuery := fmt.Sprintf(
+		"SELECT timestamp FROM log_entries WHERE id = ? AND service_id IN (%s)",
+		placeholders(len(p.ServiceIDs)),
+	)
+	args := []any{p.TargetID}
+	args = appendServiceArgs(args, p.ServiceIDs)
+	if err := s.db.QueryRow(targetQuery, args...).Scan(&result.AnchorTime); err != nil {
+		if err == sql.ErrNoRows {
+			return result, ErrLogEntryNotFound
+		}
+		return result, err
+	}
+
+	for _, serviceID := range p.ServiceIDs {
+		result.ItemsByService[serviceID] = []model.LogEntry{}
+	}
+
+	from := result.AnchorTime.Add(-p.Before)
+	to := result.AnchorTime.Add(p.After)
+	contextQuery := fmt.Sprintf(`
+		SELECT id, service_id, run_id, timestamp, level, message, stream
+		FROM log_entries
+		WHERE service_id IN (%s) AND timestamp >= ? AND timestamp <= ?
+		ORDER BY timestamp ASC, id ASC
+	`, placeholders(len(p.ServiceIDs)))
+	contextArgs := appendServiceArgs([]any{}, p.ServiceIDs)
+	contextArgs = append(contextArgs, from, to)
+	rows, err := s.db.Query(contextQuery, contextArgs...)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e model.LogEntry
+		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+			return result, err
+		}
+		result.ItemsByService[e.ServiceID] = append(result.ItemsByService[e.ServiceID], e)
+	}
+	return result, rows.Err()
 }
 
 // DeleteOlderThan 删除超过指定天数的日志条目。
