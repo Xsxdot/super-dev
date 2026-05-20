@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
+import { useLogStore } from '@/stores/log'
+import { useFilterStore } from '@/stores/filter'
+import type { LogEntry, Service } from '@/api/agent'
+import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
+const logStore = useLogStore()
+const filterStore = useFilterStore()
 
 // 所有面板中的服务（去重）
 const panelServices = computed(() => {
   const seen = new Set<string>()
-  const result = []
+  const result: Service[] = []
   for (const leaf of panelStore.allLeaves) {
     if (leaf.serviceId && !seen.has(leaf.serviceId)) {
       seen.add(leaf.serviceId)
@@ -24,48 +30,155 @@ const panelServices = computed(() => {
 
 // 底部栏勾选状态（独立于侧边栏 selected_service_ids）
 const checkedIds = ref<Set<string>>(new Set())
+const manuallyTouchedIds = ref<Set<string>>(new Set())
+const checkedServiceIds = computed(() =>
+  panelServices.value.filter(svc => checkedIds.value.has(svc.id)).map(svc => svc.id),
+)
+
+watch(
+  panelServices,
+  (services) => {
+    const visibleIds = new Set(services.map(svc => svc.id))
+    const next = new Set([...checkedIds.value].filter(id => visibleIds.has(id)))
+    for (const svc of services) {
+      if (!manuallyTouchedIds.value.has(svc.id)) next.add(svc.id)
+    }
+    checkedIds.value = next
+  },
+  { immediate: true },
+)
 
 function toggleCheck(serviceId: string) {
-  if (checkedIds.value.has(serviceId)) {
-    checkedIds.value.delete(serviceId)
+  manuallyTouchedIds.value = new Set(manuallyTouchedIds.value).add(serviceId)
+  const next = new Set(checkedIds.value)
+  if (next.has(serviceId)) {
+    next.delete(serviceId)
   } else {
-    checkedIds.value.add(serviceId)
+    next.add(serviceId)
   }
-  // 强制 Vue 响应性：创建新 Set 以触发更新
-  checkedIds.value = new Set(checkedIds.value)
+  checkedIds.value = next
 }
 
 async function restartChecked() {
-  await Promise.all([...checkedIds.value].map(id => agentStore.restartService(id)))
+  await Promise.all(checkedServiceIds.value.map(id => agentStore.restartService(id)))
 }
 
 async function stopChecked() {
-  await Promise.all([...checkedIds.value].map(id => agentStore.stopService(id)))
+  await Promise.all(checkedServiceIds.value.map(id => agentStore.stopService(id)))
 }
 
 // 同步录制
 const syncEnabled = ref(false)
 const syncRecording = computed(() => bookmarkStore.syncRecording)
+const hasSyncOutput = computed(() => bookmarkStore.formatSyncBookmarks().trim().length > 0)
+
+function syncPanels(): SyncBookmarkPanel[] {
+  return panelStore.allLeaves
+    .filter(leaf => leaf.serviceId)
+    .map(leaf => ({ panelId: leaf.id, serviceId: leaf.serviceId }))
+}
+
+function refreshSyncPanelIds() {
+  bookmarkStore.syncPanelIds = new Set(syncPanels().map(panel => panel.panelId))
+}
 
 function toggleSync() {
   syncEnabled.value = !syncEnabled.value
   if (syncEnabled.value) {
-    // 把所有面板加入同步组
-    for (const leaf of panelStore.allLeaves) {
-      if (leaf.serviceId) {
-        bookmarkStore.syncPanelIds.value.add(leaf.id)
-      }
-    }
-  } else {
-    bookmarkStore.syncPanelIds.value.clear()
+    refreshSyncPanelIds()
+  } else if (!syncRecording.value) {
+    bookmarkStore.syncPanelIds = new Set()
   }
 }
 
+watch(
+  () => panelStore.allLeaves.map(leaf => `${leaf.id}:${leaf.serviceId ?? ''}`).join('|'),
+  () => {
+    if (syncEnabled.value && !syncRecording.value) refreshSyncPanelIds()
+  },
+)
+
+function visibleLogsForLeaf(leaf: { serviceId: string | null; projectId: string | null }): LogEntry[] {
+  if (leaf.serviceId) return logStore.getLogs(leaf.serviceId)
+  if (!leaf.projectId) return []
+  const project = agentStore.projectById(leaf.projectId)
+  if (!project) return []
+  return project.services
+    .flatMap(service => logStore.getLogs(service.id))
+    .sort((a, b) => a.id - b.id)
+}
+
+function syncCaptures(): SyncBookmarkCapture[] {
+  return [...bookmarkStore.syncPanelIds].map((panelId) => {
+    const leaf = panelStore.allLeaves.find(item => item.id === panelId)
+    const bm = bookmarkStore.getBookmark(panelId)
+    const captureLogs = leaf
+      ? filterStore.applyFilters(panelId, leaf.projectId, visibleLogsForLeaf(leaf))
+      : undefined
+    return {
+      panelId,
+      captureLogs,
+      capturedIds: bm ? new Set(bm.lockedLogs.map(log => log.id)) : undefined,
+    }
+  })
+}
+
 function toggleSyncRecord() {
+  for (const panelId of bookmarkStore.syncPanelIds) {
+    const leaf = panelStore.allLeaves.find(l => l.id === panelId)
+    if (leaf?.serviceId) logStore.closeActiveFoldForService(leaf.serviceId)
+  }
   if (syncRecording.value) {
-    bookmarkStore.endSyncBookmark()
+    bookmarkStore.endSyncBookmark(syncCaptures())
   } else {
-    bookmarkStore.startSyncBookmark()
+    const panels = syncPanels()
+    if (panels.length === 0) {
+      window.alert('没有可同步录制的面板服务')
+      return
+    }
+    bookmarkStore.startSyncBookmark(panels)
+    syncEnabled.value = true
+  }
+}
+
+async function copySyncBookmarks() {
+  const text = bookmarkStore.formatSyncBookmarks()
+  if (!text.trim()) {
+    window.alert('同步录制区间内没有可复制的日志')
+    return
+  }
+  await navigator.clipboard.writeText(text)
+}
+
+function resolveExportPath(selected: string, defaultName: string): string {
+  if (/\.(log|txt)$/i.test(selected)) return selected
+  const sep = selected.includes('\\') ? '\\' : '/'
+  return selected.endsWith(sep) ? `${selected}${defaultName}` : `${selected}${sep}${defaultName}`
+}
+
+async function exportSyncBookmarks() {
+  const text = bookmarkStore.formatSyncBookmarks()
+  if (!text.trim()) {
+    window.alert('同步录制区间内没有可导出的日志')
+    return
+  }
+
+  const defaultName = `superdev-sync-${Date.now()}.log`
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const selected = await save({
+    defaultPath: defaultName,
+    title: '导出同步录制日志',
+    filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+  })
+  if (!selected) return
+
+  const filePath = resolveExportPath(selected, defaultName)
+  try {
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+    await writeTextFile(filePath, text)
+  } catch (err) {
+    console.error('[SuperDev] export sync bookmark failed:', err)
+    window.alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -98,7 +211,7 @@ const statusColor = (status: string) => {
       </div>
     </div>
 
-    <template v-if="checkedIds.size > 0">
+    <template v-if="checkedServiceIds.length > 0">
       <div class="divider" />
       <button class="action-btn" @click="restartChecked">↺ 重启</button>
       <button class="action-btn danger" @click="stopChecked">⏹ 停止</button>
@@ -119,6 +232,10 @@ const statusColor = (status: string) => {
     >
       {{ syncRecording ? '⏹' : '⏺' }}
     </button>
+    <template v-if="hasSyncOutput && !syncRecording">
+      <button class="action-btn sync-copy-btn" @click="copySyncBookmarks">复制</button>
+      <button class="action-btn sync-export-btn" @click="exportSyncBookmarks">导出</button>
+    </template>
 
     <div class="flex-1" />
 

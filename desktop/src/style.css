@@ -32,4 +32,10 @@
     user-select: text;
     -webkit-user-select: text;
   }
+
+  body.service-dragging-no-select,
+  body.service-dragging-no-select * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
 }

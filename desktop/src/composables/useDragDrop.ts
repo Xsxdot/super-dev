@@ -3,6 +3,20 @@ import { ref } from 'vue'
 import type { PanelAxis } from '@/stores/panel'
 
 export type DropEdge = 'left' | 'right' | 'top' | 'bottom' | 'center'
+export interface DragPoint {
+  x: number
+  y: number
+}
+
+export interface ServiceDropRequest extends DragPoint {
+  id: number
+  serviceId: string
+}
+
+const draggedServiceId = ref<string | null>(null)
+const serviceDragPosition = ref<DragPoint | null>(null)
+const serviceDropRequest = ref<ServiceDropRequest | null>(null)
+let serviceDropRequestId = 0
 
 export function getDropEdge(location: { x: number; y: number }, size: { w: number; h: number }): DropEdge {
   const { x, y } = location
@@ -37,5 +51,43 @@ export function edgeToAxis(edge: DropEdge): { axis: PanelAxis; side: 'first' | '
 export function useDragDrop() {
   const dropHighlight = ref<DropEdge | null>(null)
 
-  return { dropHighlight, getDropEdge, edgeToAxis }
+  function startServiceDrag(serviceId: string, point: DragPoint) {
+    draggedServiceId.value = serviceId
+    serviceDragPosition.value = point
+  }
+
+  function moveServiceDrag(point: DragPoint) {
+    if (!draggedServiceId.value) return
+    serviceDragPosition.value = point
+  }
+
+  function endServiceDrag() {
+    draggedServiceId.value = null
+    serviceDragPosition.value = null
+  }
+
+  function finishServiceDrag(point: DragPoint) {
+    const serviceId = draggedServiceId.value
+    if (serviceId) {
+      serviceDropRequest.value = {
+        id: ++serviceDropRequestId,
+        serviceId,
+        ...point,
+      }
+    }
+    endServiceDrag()
+  }
+
+  return {
+    dropHighlight,
+    draggedServiceId,
+    serviceDragPosition,
+    serviceDropRequest,
+    getDropEdge,
+    edgeToAxis,
+    startServiceDrag,
+    moveServiceDrag,
+    endServiceDrag,
+    finishServiceDrag,
+  }
 }
