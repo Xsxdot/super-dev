@@ -27,6 +27,10 @@ function makeLeaf(serviceId: string | null = null, projectId: string | null = nu
   return { type: 'leaf', id: uuidv4(), serviceId, projectId }
 }
 
+export function createEmptyPanelRoot(): PanelLeafNode {
+  return makeLeaf()
+}
+
 function getAllLeaves(node: PanelNode): PanelLeafNode[] {
   if (node.type === 'leaf') return [node]
   return [...getAllLeaves(node.first), ...getAllLeaves(node.second)]
@@ -146,6 +150,13 @@ export const usePanelStore = defineStore('panel', () => {
     ensureFocused()
   }
 
+  function setRoot(nextRoot: PanelNode, nextFocusedPanelId: string | null = null) {
+    root.value = nextRoot
+    focusedPanelId.value = nextFocusedPanelId
+    ensureFocused()
+    save()
+  }
+
   // 当前焦点面板的目标 panelId（有焦点用焦点，否则用第一个）
   function targetPanelId(): string | null {
     const leaves = allLeaves.value
@@ -165,6 +176,7 @@ export const usePanelStore = defineStore('panel', () => {
     splitLeaf,
     replaceScope,
     removeLeaf,
+    setRoot,
     targetPanelId,
   }
 })
