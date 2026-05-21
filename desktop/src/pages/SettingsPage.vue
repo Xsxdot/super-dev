@@ -87,7 +87,11 @@ const retentionDays = computed({
         :class="{ active: selectedTab === 'general' }"
         @click="selectedTab = 'general'"
       >
-        ⚙ 通用
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.22 3.22l1.41 1.41M11.37 11.37l1.41 1.41M3.22 12.78l1.41-1.41M11.37 4.63l1.41-1.41" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        通用
       </button>
       <button
         data-test="settings-tab-projects"
@@ -95,7 +99,11 @@ const retentionDays = computed({
         :class="{ active: selectedTab === 'projects' }"
         @click="selectedTab = 'projects'"
       >
-        □ 项目
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M4 5h8M4 8h8M4 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        项目
       </button>
     </aside>
 
@@ -202,6 +210,8 @@ const retentionDays = computed({
 }
 .back-btn,
 .tab-btn {
+  display: flex;
+  align-items: center;
   text-align: left;
   border: none;
   border-radius: 6px;

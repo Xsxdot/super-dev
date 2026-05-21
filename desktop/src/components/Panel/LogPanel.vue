@@ -31,6 +31,7 @@ const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
 const newLogCount = ref(0)
 const logListEl = ref<HTMLElement | null>(null)
+const isLoadingHistory = ref(false)
 
 const activeSelectionEntryId = ref<number | null>(null)
 const activeSelectionText = ref<string | null>(null)
@@ -290,11 +291,15 @@ function onScroll() {
   if (dist >= 50) {
     isFollowing.value = false
     cancelScrollRetries()
-    return
+  } else {
+    isFollowing.value = true
+    newLogCount.value = 0
+    if (!wasFollowing) pinToBottomIfFollowing()
   }
-  isFollowing.value = true
-  newLogCount.value = 0
-  if (!wasFollowing) pinToBottomIfFollowing()
+  // 滚动到顶部附近时加载更早历史
+  if (el.scrollTop < 80) {
+    void tryLoadMoreHistory()
+  }
 }
 
 function onWheel(e: WheelEvent) {
@@ -302,6 +307,27 @@ function onWheel(e: WheelEvent) {
     isFollowing.value = false
     cancelScrollRetries()
   }
+}
+
+async function tryLoadMoreHistory() {
+  if (!props.serviceId) return
+  if (!logStore.hasMoreHistory(props.serviceId)) return
+  if (isLoadingHistory.value) return
+  isLoadingHistory.value = true
+  const el = logListEl.value
+  // 记住加载前的 scrollHeight，加载完后补偿滚动位置
+  const prevScrollHeight = el?.scrollHeight ?? 0
+  await logStore.loadMoreHistory(props.serviceId)
+  await nextTick()
+  if (el) {
+    const added = el.scrollHeight - prevScrollHeight
+    if (added > 0) {
+      programmaticScroll = true
+      el.scrollTop += added
+      requestAnimationFrame(() => { programmaticScroll = false })
+    }
+  }
+  isLoadingHistory.value = false
 }
 
 function jumpToBottom() {
@@ -360,6 +386,8 @@ const displayItems = computed(() => cachedDisplay.value.items)
     />
 
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
+      <div v-if="serviceId && isLoadingHistory" class="history-loading">加载历史记录中…</div>
+      <div v-else-if="serviceId && !logStore.hasMoreHistory(serviceId)" class="history-end">— 已到最早记录 —</div>
       <template
         v-for="item in displayItems"
         :key="item.id"
@@ -480,4 +508,11 @@ const displayItems = computed(() => cachedDisplay.value.items)
 .badge.warn { color: #d29922; background: rgba(210, 153, 34, 0.1); }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+.history-loading,
+.history-end {
+  text-align: center;
+  padding: 6px 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
 </style>

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,23 +39,35 @@ func TestAppendAndFetch(t *testing.T) {
 func TestFetchPagination(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()
+	// 插入5条，id 递增（1..5），消息为 "msg-0".."msg-4"
 	entries := make([]model.LogEntry, 5)
 	for i := range entries {
 		entries[i] = model.LogEntry{
 			ServiceID: "svc-1", RunID: "run-1",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Level:     "INFO", Message: "msg", Stream: "stdout",
+			Level:     "INFO", Message: fmt.Sprintf("msg-%d", i), Stream: "stdout",
 		}
 	}
 	require.NoError(t, s.AppendBatch(entries))
 
+	// 不带 Before：返回最新 3 条（id 3,4,5），结果按 ASC 排列
 	first, err := s.Fetch(store.FetchParams{ServiceID: "svc-1", Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, first, 3)
+	assert.Equal(t, "msg-2", first[0].Message) // id=3
+	assert.Equal(t, "msg-4", first[2].Message) // id=5
 
+	// Before=first[0].ID（即 id=3）：返回 id<3 的最新 2 条（id 1,2）
 	second, err := s.Fetch(store.FetchParams{ServiceID: "svc-1", Limit: 3, Before: first[0].ID})
 	require.NoError(t, err)
-	assert.Len(t, second, 0)
+	assert.Len(t, second, 2)
+	assert.Equal(t, "msg-0", second[0].Message) // id=1
+	assert.Equal(t, "msg-1", second[1].Message) // id=2
+
+	// Before=second[0].ID（即 id=1）：没有更早的记录
+	third, err := s.Fetch(store.FetchParams{ServiceID: "svc-1", Limit: 3, Before: second[0].ID})
+	require.NoError(t, err)
+	assert.Len(t, third, 0)
 }
 
 func TestFetchByRunID(t *testing.T) {

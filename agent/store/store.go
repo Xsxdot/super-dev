@@ -214,7 +214,8 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		query += " AND id < ?"
 		args = append(args, p.Before)
 	}
-	query += fmt.Sprintf(" ORDER BY id ASC LIMIT %d", p.Limit)
+	// 始终用 DESC 取最接近游标（或最新）的 N 条，返回前翻转为 ASC，保证调用方顺序一致
+	query += fmt.Sprintf(" ORDER BY id DESC LIMIT %d", p.Limit)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -231,7 +232,14 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		}
 		entries = append(entries, e)
 	}
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// DESC 查询结果翻转为 ASC 顺序返回
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+	return entries, nil
 }
 
 func placeholders(n int) string {
