@@ -24,6 +24,11 @@ interface ServiceLog {
   bootstrapPromise: Promise<void> | null
   historyBoundary: LogBoundary | null
   seenSignatures: Set<string>
+  // 最早已加载日志的 id，用于向上翻页
+  oldestLoadedId: number | null
+  // 是否还有更早的历史可加载
+  hasMoreHistory: boolean
+  loadingMoreHistory: boolean
 }
 
 export const useLogStore = defineStore('log', () => {
@@ -43,6 +48,9 @@ export const useLogStore = defineStore('log', () => {
         bootstrapPromise: null,
         historyBoundary: null,
         seenSignatures: new Set(),
+        oldestLoadedId: null,
+        hasMoreHistory: true,
+        loadingMoreHistory: false,
       }
     }
     return serviceLogs.value[serviceId]
@@ -67,6 +75,21 @@ export const useLogStore = defineStore('log', () => {
     if (entry.logs.length > MAX_LOGS) {
       entry.logs.splice(0, entry.logs.length - MAX_LOGS)
     }
+    if (entry.oldestLoadedId === null || log.id < entry.oldestLoadedId) {
+      entry.oldestLoadedId = log.id
+    }
+    return true
+  }
+
+  function prependEntry(entry: ServiceLog, log: LogEntry): boolean {
+    const sig = logSignature(log)
+    if (entry.seenSignatures.has(sig)) return false
+    entry.seenSignatures.add(sig)
+    const display = toDisplayEntry(log)
+    entry.logs.unshift(display)
+    if (entry.oldestLoadedId === null || log.id < entry.oldestLoadedId) {
+      entry.oldestLoadedId = log.id
+    }
     return true
   }
 
@@ -84,9 +107,36 @@ export const useLogStore = defineStore('log', () => {
       for (const log of logs) appendEntry(entry, log)
       const last = logs[logs.length - 1]
       entry.historyBoundary = last ? { timestamp: last.timestamp, id: last.id } : null
+      // 如果返回条数等于 limit，说明可能还有更早的历史
+      entry.hasMoreHistory = logs.length >= 200
       if (logs.length > 0) bumpRevision()
     })()
     return entry.bootstrapPromise
+  }
+
+  async function loadMoreHistory(serviceId: string) {
+    const entry = serviceLogs.value[serviceId]
+    if (!entry || entry.loadingMoreHistory || !entry.hasMoreHistory) return
+    if (entry.oldestLoadedId === null) return
+    entry.loadingMoreHistory = true
+    try {
+      const { api } = await import('@/api/agent')
+      const logs = await api.fetchLogs({ service: serviceId, limit: 200, before: entry.oldestLoadedId })
+      if (logs.length === 0) {
+        entry.hasMoreHistory = false
+        return
+      }
+      // 倒序插入到头部，保证时间顺序
+      for (let i = logs.length - 1; i >= 0; i--) {
+        prependEntry(entry, logs[i])
+      }
+      entry.hasMoreHistory = logs.length >= 200
+      bumpRevision()
+    } catch (err) {
+      console.warn('[SuperDev] load more history failed:', err)
+    } finally {
+      entry.loadingMoreHistory = false
+    }
   }
 
   async function subscribe(serviceId: string) {
@@ -127,6 +177,14 @@ export const useLogStore = defineStore('log', () => {
     return serviceLogs.value[serviceId]?.historyBoundary ?? null
   }
 
+  function hasMoreHistory(serviceId: string): boolean {
+    return serviceLogs.value[serviceId]?.hasMoreHistory ?? false
+  }
+
+  function isLoadingMoreHistory(serviceId: string): boolean {
+    return serviceLogs.value[serviceId]?.loadingMoreHistory ?? false
+  }
+
   function closeActiveFoldForService(serviceId: string) {
     const entry = serviceLogs.value[serviceId]
     if (!entry) return
@@ -141,6 +199,9 @@ export const useLogStore = defineStore('log', () => {
     unsubscribe,
     getLogs,
     getHistoryBoundary,
+    hasMoreHistory,
+    isLoadingMoreHistory,
+    loadMoreHistory,
     closeActiveFoldForService,
   }
 })
