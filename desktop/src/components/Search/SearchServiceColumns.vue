@@ -26,8 +26,11 @@ const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
 const suppressScrollSelectionId = ref<number | null>(null)
 const pinnedScrollTopByService = ref<Record<string, number>>({})
+const lastScrollTop = ref(0)
 let suppressScrollSelectionTimer: ReturnType<typeof window.setTimeout> | null = null
 const EDGE_LOAD_THRESHOLD = 80
+
+type ScrollDirection = 'up' | 'down' | 'none'
 
 const visibleServiceIds = computed(() => {
   if (!tab.value) return []
@@ -151,7 +154,7 @@ async function loadMore(direction: LogContextPageDirection) {
   }
 }
 
-function syncSelectedResultFromScroll(el: HTMLElement) {
+function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirection) {
   const currentTab = tab.value
   if (!currentTab) return
   const hidden = new Set(currentTab.hiddenServiceIds)
@@ -164,7 +167,7 @@ function syncSelectedResultFromScroll(el: HTMLElement) {
 
   const viewport = el.getBoundingClientRect()
   const viewportCenter = viewport.top + (viewport.bottom - viewport.top) / 2
-  let candidate: { id: number; distance: number } | null = null
+  const visibleCandidates: Array<{ id: number; center: number; distance: number }> = []
 
   const entryEls = Array.from(el.querySelectorAll<HTMLElement>('.context-entry'))
   for (const entryEl of entryEls) {
@@ -173,12 +176,37 @@ function syncSelectedResultFromScroll(el: HTMLElement) {
     const rect = entryEl.getBoundingClientRect()
     if (rect.bottom < viewport.top || rect.top > viewport.bottom) continue
     const entryCenter = rect.top + (rect.bottom - rect.top) / 2
-    const distance = Math.abs(entryCenter - viewportCenter)
-    if (!candidate || distance < candidate.distance) {
-      candidate = { id: entryId, distance }
-    }
+    visibleCandidates.push({
+      id: entryId,
+      center: entryCenter,
+      distance: Math.abs(entryCenter - viewportCenter),
+    })
   }
 
+  if (visibleCandidates.length === 0) return
+  const currentCandidate = visibleCandidates.find(item => item.id === currentTab.selectedLogId)
+  let candidate: { id: number; center: number; distance: number } | null = null
+  if (direction === 'down' && currentTab.selectedLogId !== null) {
+    const below = currentCandidate
+      ? visibleCandidates.filter(item => item.center > currentCandidate.center)
+      : visibleCandidates
+    if (below.length > 0) {
+      candidate = below.reduce((last, item) => (item.center > last.center ? item : last), below[0])
+    }
+    if (!candidate && currentCandidate) return
+  } else if (direction === 'up' && currentTab.selectedLogId !== null) {
+    const above = currentCandidate
+      ? visibleCandidates.filter(item => item.center < currentCandidate.center)
+      : visibleCandidates
+    if (above.length > 0) {
+      candidate = above.reduce((first, item) => (item.center < first.center ? item : first), above[0])
+    }
+    if (!candidate && currentCandidate) return
+  }
+  candidate ??= visibleCandidates.reduce(
+    (nearest, item) => (item.distance < nearest.distance ? item : nearest),
+    visibleCandidates[0],
+  )
   if (!candidate) return
   if (workspace.selectSearchResult(currentTab.id, candidate.id)) {
     selectedFromColumnsScrollId.value = candidate.id
@@ -187,8 +215,11 @@ function syncSelectedResultFromScroll(el: HTMLElement) {
 
 function handleScroll(event: Event) {
   const el = event.currentTarget as HTMLElement
+  const direction: ScrollDirection =
+    el.scrollTop > lastScrollTop.value ? 'down' : el.scrollTop < lastScrollTop.value ? 'up' : 'none'
+  lastScrollTop.value = el.scrollTop
   if (suppressScrollSelectionId.value === null) {
-    syncSelectedResultFromScroll(el)
+    syncSelectedResultFromScroll(el, direction)
   }
   if (el.scrollTop <= EDGE_LOAD_THRESHOLD) {
     void loadMore('before')

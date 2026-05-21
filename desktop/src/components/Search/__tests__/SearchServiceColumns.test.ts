@@ -238,6 +238,44 @@ describe('SearchServiceColumns', () => {
     expect(tab.selectedLogId).toBe(20)
   })
 
+  it('右侧向下滚动时优先同步下方新进入视野的命中日志', async () => {
+    const logger = service('svc-logger', 'logger')
+    const server = service('svc-server', 'server')
+    useAgentStore().projects = [project([logger, server])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-logger': 3568, 'svc-server': 2 }
+    tab.results = [
+      log(20, 'svc-logger', 'logger trace', '2026-05-20T14:41:43.401Z'),
+      log(40, 'svc-server', 'server trace', '2026-05-21T02:00:55.683Z'),
+    ]
+    tab.selectedLogId = 20
+    tab.contextAnchorTime = '2026-05-20T14:41:43.401Z'
+    tab.contextByService = {
+      'svc-logger': [
+        log(20, 'svc-logger', 'logger trace', '2026-05-20T14:41:43.401Z'),
+      ],
+      'svc-server': [
+        log(40, 'svc-server', 'server trace', '2026-05-21T02:00:55.683Z'),
+      ],
+    }
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+    const columns = wrapper.find('.columns').element as HTMLElement
+    Object.defineProperty(columns, 'scrollTop', { value: 700, writable: true, configurable: true })
+    Object.defineProperty(columns, 'clientHeight', { value: 400, configurable: true })
+    Object.defineProperty(columns, 'scrollHeight', { value: 1200, configurable: true })
+    setRect(columns, 0, 400)
+    setRect(wrapper.find('[data-entry-id="20"]').element, 180, 204)
+    setRect(wrapper.find('[data-entry-id="40"]').element, 330, 354)
+
+    await wrapper.find('.columns').trigger('scroll')
+
+    expect(tab.selectedLogId).toBe(40)
+  })
+
   it('外部选中命中项触发的程序滚动不会反向覆盖选中项', async () => {
     const logger = service('svc-logger', 'logger')
     const server = service('svc-server', 'server')
