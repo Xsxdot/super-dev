@@ -111,6 +111,9 @@ describe('BottomBar', () => {
       logs: [toDisplayEntry(makeLog(api.id, 'sync captured', ts))],
       ws: null,
       refCount: 1,
+      bootstrapPromise: null,
+      historyBoundary: null,
+      seenSignatures: new Set(),
     }
     vi.advanceTimersByTime(5000)
 

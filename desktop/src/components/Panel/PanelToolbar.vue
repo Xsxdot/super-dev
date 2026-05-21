@@ -8,12 +8,9 @@ const props = defineProps<{
   panelId: string
   serviceId: string | null
   projectId: string | null
-  historyRunIds: string[]
-  viewingRunId: string | null
 }>()
 
 const emit = defineEmits<{
-  selectRun: [runId: string | null]
   endBookmark: []
 }>()
 
@@ -171,9 +168,6 @@ async function exportBookmark() {
     <div class="flex-1" />
 
     <!-- 操作区 -->
-    <button class="icon-btn" title="历史记录" @click="emit('selectRun', null)">
-      🕐 历史
-    </button>
     <button class="icon-btn" title="过滤规则">⚙</button>
     <button v-if="panel.chips.length" class="icon-btn" title="保存为规则">↓</button>
 

@@ -7,6 +7,7 @@ import { useAgentStore } from '@/stores/agent'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
+import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import {
   makeDisplayItems,
@@ -27,7 +28,6 @@ const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
-const viewingRunId = ref<string | null>(null)
 const isFollowing = ref(true)
 const newLogCount = ref(0)
 const logListEl = ref<HTMLElement | null>(null)
@@ -50,7 +50,7 @@ let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
 
 onMounted(() => {
-  if (props.serviceId) logStore.subscribe(props.serviceId)
+  if (props.serviceId) void logStore.subscribe(props.serviceId)
   if (props.projectId) filterStore.loadProjectRules(props.projectId)
   refreshDisplayImmediately()
   scrollToBottom()
@@ -65,16 +65,12 @@ onUnmounted(() => {
 
 watch(() => props.serviceId, (newId, oldId) => {
   if (oldId) logStore.unsubscribe(oldId)
-  if (newId) logStore.subscribe(newId)
-  viewingRunId.value = null
+  if (newId) void logStore.subscribe(newId)
   isFollowing.value = true
   refreshDisplayImmediately()
 })
 
 const rawLogs = computed<DisplayLogEntry[]>(() => {
-  if (viewingRunId.value && props.serviceId) {
-    return logStore.getHistoryLogs(props.serviceId)
-  }
   if (props.serviceId) return logStore.getLogs(props.serviceId)
   if (props.projectId) {
     const proj = agentStore.projectById(props.projectId)
@@ -88,6 +84,10 @@ const rawLogs = computed<DisplayLogEntry[]>(() => {
 
 const filteredLogs = computed(() =>
   filterStore.applyFilters(props.panelId, props.projectId, rawLogs.value),
+)
+
+const historyBoundary = computed(() =>
+  props.serviceId ? logStore.getHistoryBoundary(props.serviceId) : null,
 )
 
 function makeLogDisplay() {
@@ -105,7 +105,7 @@ function makeLogDisplay() {
   const items = makeDisplayItems(logs, displayBm, {
     start: markerStartId.value,
     end: markerEndId.value,
-  })
+  }, historyBoundary.value)
   cachedDisplay.value = { items, stats: computeDisplayStats(items) }
 }
 
@@ -219,11 +219,6 @@ watch(
   () => scheduleDisplayRefresh(),
   { deep: true },
 )
-
-watch(viewingRunId, () => {
-  isFollowing.value = true
-  refreshDisplayImmediately()
-})
 
 function cancelScrollRetries() {
   if (scrollRetryTimer) {
@@ -350,21 +345,6 @@ const selectionButtonStyle = computed(() => {
   }
 })
 
-const historyRunIds = computed(() =>
-  props.serviceId ? logStore.getRunIds(props.serviceId) : [],
-)
-
-async function selectRun(runId: string | null) {
-  viewingRunId.value = runId
-  if (runId && props.serviceId) {
-    await logStore.loadHistoryLogs(props.serviceId, runId)
-  }
-  isFollowing.value = false
-  refreshDisplayImmediately()
-  await nextTick()
-  scrollToBottom()
-}
-
 const stats = computed(() => cachedDisplay.value.stats)
 const displayItems = computed(() => cachedDisplay.value.items)
 </script>
@@ -376,16 +356,8 @@ const displayItems = computed(() => cachedDisplay.value.items)
       :panel-id="panelId"
       :service-id="serviceId"
       :project-id="projectId"
-      :history-run-ids="historyRunIds"
-      :viewing-run-id="viewingRunId"
-      @select-run="selectRun"
       @end-bookmark="onEndBookmark"
     />
-
-    <div v-if="viewingRunId" class="history-banner">
-      <span>🕐 查看历史记录 · {{ stats.total }} 条</span>
-      <button @click="selectRun(null)">返回实时</button>
-    </div>
 
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
       <template
@@ -402,8 +374,11 @@ const displayItems = computed(() => cachedDisplay.value.items)
           :is-start="false"
           :date="item.date"
         />
+        <LogHistorySeparatorRow
+          v-else-if="item.kind === 'historySeparator'"
+        />
         <LogRow
-          v-else
+          v-else-if="item.kind === 'entry'"
           :log="item.log"
           :service-name="serviceNameFor(item.log)"
           :highlighted="isHighlighted(item.log)"
@@ -431,7 +406,7 @@ const displayItems = computed(() => cachedDisplay.value.items)
 
     <div class="status-bar">
       <span>
-        {{ viewingRunId ? '历史' : '实时' }} · 显示 {{ stats.total }} 条
+        实时 · 显示 {{ stats.total }} 条
         <template v-if="stats.folded > 0"> · 折叠 {{ stats.folded }} 条</template>
       </span>
       <div class="status-badges">
@@ -449,25 +424,6 @@ const displayItems = computed(() => cachedDisplay.value.items)
   flex: 1;
   overflow: hidden;
   position: relative;
-}
-.history-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  background: rgba(210, 153, 34, 0.15);
-  border-bottom: 1px solid var(--border-secondary);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.history-banner button {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  padding: 2px 8px;
-  cursor: pointer;
 }
 .log-list {
   flex: 1;
