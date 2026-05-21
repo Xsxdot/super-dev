@@ -36,6 +36,7 @@ type logSearchResponse struct {
 	Total         int              `json:"total"`
 	Items         []model.LogEntry `json:"items"`
 	ServiceCounts map[string]int   `json:"service_counts"`
+	HasMore       bool             `json:"has_more"`
 }
 
 type logContextResponse struct {
@@ -72,10 +73,30 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := parseBoundedInt(q.Get("limit"), defaultSearchLimit, maxSearchLimit)
+	var cursorTime *time.Time
+	var cursorID int64
+	if rawCursorTime := q.Get("cursor_time"); rawCursorTime != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, rawCursorTime)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "cursor_time is invalid")
+			return
+		}
+		cursorID, err = strconv.ParseInt(q.Get("cursor_id"), 10, 64)
+		if err != nil || cursorID <= 0 {
+			jsonError(w, http.StatusBadRequest, "cursor_id is required")
+			return
+		}
+		cursorTime = &parsed
+	} else if q.Get("cursor_id") != "" {
+		jsonError(w, http.StatusBadRequest, "cursor_time is required")
+		return
+	}
 	result, err := a.store.Search(store.SearchParams{
 		ServiceIDs: serviceIDs,
 		Query:      queryText,
 		Limit:      limit,
+		CursorTime: cursorTime,
+		CursorID:   cursorID,
 	})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to search logs: "+err.Error())
@@ -86,6 +107,7 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 		Total:         result.Total,
 		Items:         result.Entries,
 		ServiceCounts: result.ServiceCounts,
+		HasMore:       result.HasMore,
 	})
 }
 

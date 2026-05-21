@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
-import { api, type LogContextPageDirection, type LogEntry } from '@/api/agent'
+import { api, type LogContextPageDirection, type LogEntry, type SearchLogsParams } from '@/api/agent'
 import { useAgentStore } from './agent'
 import {
   createEmptyPanelRoot,
@@ -46,11 +46,13 @@ export interface SearchWorkspaceTab {
   pinnedServiceIds: string[]
   hasMoreBeforeByService: Record<string, boolean>
   hasMoreAfterByService: Record<string, boolean>
+  loadingMoreResults: boolean
   loadingMoreBefore: boolean
   loadingMoreAfter: boolean
   error: string | null
 }
 
+const SEARCH_PAGE_LIMIT = 1000
 const CONTEXT_PAGE_LIMIT = 200
 
 function makeProjectTab(projectId: string, title: string): ProjectWorkspaceTab {
@@ -81,6 +83,7 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
     pinnedServiceIds: [],
     hasMoreBeforeByService: {},
     hasMoreAfterByService: {},
+    loadingMoreResults: false,
     loadingMoreBefore: false,
     loadingMoreAfter: false,
     error: null,
@@ -182,16 +185,48 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return { cursor_time: tab.contextAnchorTime, cursor_id: 0 }
   }
 
-  function hideService(tabId: string, serviceId: string) {
+  function visibleSearchServiceIds(tab: SearchWorkspaceTab): string[] {
+    return Object.keys(tab.serviceCounts).filter(
+      serviceId => !tab.hiddenServiceIds.includes(serviceId),
+    )
+  }
+
+  function visibleSearchTotal(tab: SearchWorkspaceTab): number {
+    return visibleSearchServiceIds(tab).reduce(
+      (sum, serviceId) => sum + (tab.serviceCounts[serviceId] ?? 0),
+      0,
+    )
+  }
+
+  function visibleSearchResults(tab: SearchWorkspaceTab): LogEntry[] {
+    const visible = new Set(visibleSearchServiceIds(tab))
+    return tab.results.filter(entry => visible.has(entry.service_id)).sort(compareLogs)
+  }
+
+  function canLoadMoreSearchResults(tabId: string): boolean {
+    const tab = searchTab(tabId)
+    if (!tab || !tab.query || tab.loadingMoreResults) return false
+    return visibleSearchResults(tab).length < visibleSearchTotal(tab)
+  }
+
+  function searchResultCursor(tab: SearchWorkspaceTab): { cursor_time: string; cursor_id: number } | null {
+    const entries = visibleSearchResults(tab)
+    const cursor = entries[entries.length - 1]
+    return cursor ? { cursor_time: cursor.timestamp, cursor_id: cursor.id } : null
+  }
+
+  async function hideService(tabId: string, serviceId: string) {
     const tab = searchTab(tabId)
     if (!tab || tab.hiddenServiceIds.includes(serviceId)) return
     tab.hiddenServiceIds.push(serviceId)
+    await loadMoreSearchResults(tabId)
   }
 
-  function showService(tabId: string, serviceId: string) {
+  async function showService(tabId: string, serviceId: string) {
     const tab = searchTab(tabId)
     if (!tab) return
     tab.hiddenServiceIds = tab.hiddenServiceIds.filter(id => id !== serviceId)
+    await loadMoreSearchResults(tabId)
   }
 
   function pinService(tabId: string, serviceId: string) {
@@ -235,6 +270,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       tab.contextByService = {}
       tab.hasMoreBeforeByService = {}
       tab.hasMoreAfterByService = {}
+      tab.loadingMoreResults = false
       tab.status = result.items.length ? 'results' : 'emptyResults'
     } catch (err) {
       tab.error = err instanceof Error ? err.message : String(err)
@@ -258,6 +294,38 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       tab.contextByService[serviceId] = result.items_by_service[serviceId] ?? []
       tab.hasMoreBeforeByService[serviceId] = true
       tab.hasMoreAfterByService[serviceId] = true
+    }
+  }
+
+  async function loadMoreSearchResults(tabId: string): Promise<boolean> {
+    const tab = searchTab(tabId)
+    if (!tab || !tab.query || tab.loadingMoreResults) return false
+    if (!canLoadMoreSearchResults(tabId)) return false
+    const serviceIds = visibleSearchServiceIds(tab)
+    if (serviceIds.length === 0) return false
+
+    const cursor = searchResultCursor(tab)
+    const params: SearchLogsParams = {
+      project: tab.projectId,
+      q: tab.query,
+      service: serviceIds,
+      limit: SEARCH_PAGE_LIMIT,
+    }
+    if (cursor) {
+      params.cursor_time = cursor.cursor_time
+      params.cursor_id = cursor.cursor_id
+    }
+
+    tab.loadingMoreResults = true
+    try {
+      const result = await api.searchLogs(params)
+      tab.results = mergeLogs(tab.results, result.items)
+      return result.items.length > 0
+    } catch (err) {
+      tab.error = err instanceof Error ? err.message : String(err)
+      return false
+    } finally {
+      tab.loadingMoreResults = false
     }
   }
 
@@ -336,11 +404,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     searchTab,
     hideService,
     showService,
+    canLoadMoreSearchResults,
     pinService,
     unpinService,
     selectSearchResult,
     runSearch,
     loadContext,
+    loadMoreSearchResults,
     loadMoreContext,
     closeTab,
     saveActiveProjectLayout,

@@ -20,6 +20,7 @@ const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const timelineEl = ref<HTMLElement | null>(null)
+const EDGE_LOAD_THRESHOLD = 80
 
 const visibleResults = computed(() => {
   if (!tab.value) return []
@@ -40,6 +41,15 @@ function select(entryId: number) {
   void workspace.loadContext(tab.value.id, entryId)
 }
 
+function handleScroll(event: Event) {
+  if (!tab.value) return
+  const el = event.currentTarget as HTMLElement
+  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distanceToBottom <= EDGE_LOAD_THRESHOLD) {
+    void workspace.loadMoreSearchResults(tab.value.id)
+  }
+}
+
 watch(
   () => tab.value?.selectedLogId,
   async selectedLogId => {
@@ -53,7 +63,7 @@ watch(
 </script>
 
 <template>
-  <div ref="timelineEl" class="timeline">
+  <div ref="timelineEl" class="timeline" @scroll="handleScroll">
     <button
       v-for="entry in visibleResults"
       :key="entry.id"
@@ -65,6 +75,14 @@ watch(
       <span class="time">{{ timeLabel(entry.timestamp) }}</span>
       <span class="service">{{ serviceName(entry.service_id) }}</span>
       <span class="message">{{ entry.message }}</span>
+    </button>
+    <button
+      v-if="tab && workspace.canLoadMoreSearchResults(tab.id)"
+      class="load-more"
+      :disabled="tab.loadingMoreResults"
+      @click="workspace.loadMoreSearchResults(tab.id)"
+    >
+      {{ tab.loadingMoreResults ? '加载中...' : '加载更多命中' }}
     </button>
   </div>
 </template>
@@ -92,6 +110,23 @@ watch(
 }
 .timeline-row:hover { background: var(--bg-overlay); }
 .timeline-row.selected { background: rgba(88, 166, 255, 0.14); }
+.load-more {
+  width: 100%;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  cursor: pointer;
+}
+.load-more:hover:not(:disabled) {
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+}
+.load-more:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
 .time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .service { color: #58a6ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

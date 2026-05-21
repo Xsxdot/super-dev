@@ -44,20 +44,24 @@ type FetchParams struct {
 //
 // ServiceIDs 为空时直接返回空结果，避免无边界全库搜索。
 // Query 会做大小写不敏感的 message 包含匹配。
+// CursorTime 和 CursorID 同时指定时，返回游标之后的下一页。
 type SearchParams struct {
 	ServiceIDs []string
 	Query      string
 	Limit      int
 	Before     int64
+	CursorTime *time.Time
+	CursorID   int64
 	From       *time.Time
 	To         *time.Time
 }
 
-// SearchResult 表示一次日志搜索的结果和按服务聚合的命中数。
+// SearchResult 表示一次日志搜索的结果、分页状态和按服务聚合的命中数。
 type SearchResult struct {
 	Entries       []model.LogEntry
 	Total         int
 	ServiceCounts map[string]int
+	HasMore       bool
 }
 
 // ContextParams 定义以某条日志为锚点的跨服务上下文查询参数。
@@ -257,6 +261,7 @@ func appendServiceArgs(args []any, serviceIDs []string) []any {
 //   - Entries: 按 timestamp ASC, id ASC 排序的匹配日志
 //   - Total: 未分页前的总命中数
 //   - ServiceCounts: 未分页前按 service_id 聚合的命中数
+//   - HasMore: 当前游标之后是否还有更多匹配日志
 func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	result := SearchResult{
 		Entries:       []model.LogEntry{},
@@ -270,24 +275,20 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 		p.Limit = 1000
 	}
 
-	where := fmt.Sprintf("service_id IN (%s) AND LOWER(message) LIKE LOWER(?)", placeholders(len(p.ServiceIDs)))
-	args := appendServiceArgs([]any{}, p.ServiceIDs)
-	args = append(args, "%"+queryText+"%")
+	baseWhere := fmt.Sprintf("service_id IN (%s) AND LOWER(message) LIKE LOWER(?)", placeholders(len(p.ServiceIDs)))
+	baseArgs := appendServiceArgs([]any{}, p.ServiceIDs)
+	baseArgs = append(baseArgs, "%"+queryText+"%")
 	if p.From != nil {
-		where += " AND timestamp >= ?"
-		args = append(args, p.From.UTC())
+		baseWhere += " AND timestamp >= ?"
+		baseArgs = append(baseArgs, p.From.UTC())
 	}
 	if p.To != nil {
-		where += " AND timestamp <= ?"
-		args = append(args, p.To.UTC())
-	}
-	if p.Before > 0 {
-		where += " AND id < ?"
-		args = append(args, p.Before)
+		baseWhere += " AND timestamp <= ?"
+		baseArgs = append(baseArgs, p.To.UTC())
 	}
 
-	countQuery := "SELECT service_id, COUNT(*) FROM log_entries WHERE " + where + " GROUP BY service_id"
-	countRows, err := s.db.Query(countQuery, args...)
+	countQuery := "SELECT service_id, COUNT(*) FROM log_entries WHERE " + baseWhere + " GROUP BY service_id"
+	countRows, err := s.db.Query(countQuery, baseArgs...)
 	if err != nil {
 		return result, err
 	}
@@ -305,12 +306,24 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 		return result, err
 	}
 
+	entryWhere := baseWhere
+	entryArgs := append([]any{}, baseArgs...)
+	if p.Before > 0 {
+		entryWhere += " AND id < ?"
+		entryArgs = append(entryArgs, p.Before)
+	}
+	if p.CursorTime != nil && !p.CursorTime.IsZero() {
+		cursorTime := p.CursorTime.UTC()
+		entryWhere += " AND (timestamp > ? OR (timestamp = ? AND id > ?))"
+		entryArgs = append(entryArgs, cursorTime, cursorTime, p.CursorID)
+	}
+
 	entryQuery := fmt.Sprintf(
 		"SELECT id, service_id, run_id, timestamp, level, message, stream FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
-		where,
-		p.Limit,
+		entryWhere,
+		p.Limit+1,
 	)
-	rows, err := s.db.Query(entryQuery, args...)
+	rows, err := s.db.Query(entryQuery, entryArgs...)
 	if err != nil {
 		return result, err
 	}
@@ -322,7 +335,14 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 		}
 		result.Entries = append(result.Entries, e)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	if len(result.Entries) > p.Limit {
+		result.HasMore = true
+		result.Entries = result.Entries[:p.Limit]
+	}
+	return result, nil
 }
 
 // FetchContext 以目标日志时间为锚点，拉取指定服务集合在时间窗口内的日志。
