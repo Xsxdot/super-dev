@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
-import { api, type LogEntry } from '@/api/agent'
+import { api, type LogContextPageDirection, type LogEntry } from '@/api/agent'
 import { useAgentStore } from './agent'
 import {
   createEmptyPanelRoot,
@@ -44,8 +44,14 @@ export interface SearchWorkspaceTab {
   contextAnchorTime: string | null
   contextByService: Record<string, LogEntry[]>
   pinnedServiceIds: string[]
+  hasMoreBeforeByService: Record<string, boolean>
+  hasMoreAfterByService: Record<string, boolean>
+  loadingMoreBefore: boolean
+  loadingMoreAfter: boolean
   error: string | null
 }
+
+const CONTEXT_PAGE_LIMIT = 200
 
 function makeProjectTab(projectId: string, title: string): ProjectWorkspaceTab {
   return {
@@ -73,8 +79,24 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
     contextAnchorTime: null,
     contextByService: {},
     pinnedServiceIds: [],
+    hasMoreBeforeByService: {},
+    hasMoreAfterByService: {},
+    loadingMoreBefore: false,
+    loadingMoreAfter: false,
     error: null,
   }
+}
+
+function compareLogs(a: LogEntry, b: LogEntry): number {
+  const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  return timeDiff || a.id - b.id
+}
+
+function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
+  const byID = new Map<number, LogEntry>()
+  for (const entry of existing) byID.set(entry.id, entry)
+  for (const entry of incoming) byID.set(entry.id, entry)
+  return [...byID.values()].sort(compareLogs)
 }
 
 export const useWorkspaceStore = defineStore('workspace', () => {
@@ -139,6 +161,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tab?.type === 'search' ? tab : null
   }
 
+  function visibleContextServiceIds(tab: SearchWorkspaceTab): string[] {
+    return Object.keys(tab.serviceCounts).filter(
+      serviceId => !tab.hiddenServiceIds.includes(serviceId),
+    )
+  }
+
+  function contextCursor(
+    tab: SearchWorkspaceTab,
+    serviceId: string,
+    direction: LogContextPageDirection,
+  ): { cursor_time: string; cursor_id: number } | null {
+    const entries = [...(tab.contextByService[serviceId] ?? [])].sort(compareLogs)
+    if (entries.length > 0) {
+      const cursor = direction === 'before' ? entries[0] : entries[entries.length - 1]
+      return { cursor_time: cursor.timestamp, cursor_id: cursor.id }
+    }
+    if (!tab.contextAnchorTime) return null
+    // 当前服务在锚点附近没有日志时，以锚点时间继续向两端探测，避免空服务永远无法补数据。
+    return { cursor_time: tab.contextAnchorTime, cursor_id: 0 }
+  }
+
   function hideService(tabId: string, serviceId: string) {
     const tab = searchTab(tabId)
     if (!tab || tab.hiddenServiceIds.includes(serviceId)) return
@@ -175,6 +218,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const result = await api.searchLogs({ project: tab.projectId, q: trimmed })
       tab.results = result.items
       tab.serviceCounts = result.service_counts
+      tab.selectedLogId = null
+      tab.contextAnchorTime = null
+      tab.contextByService = {}
+      tab.hasMoreBeforeByService = {}
+      tab.hasMoreAfterByService = {}
       tab.status = result.items.length ? 'results' : 'emptyResults'
     } catch (err) {
       tab.error = err instanceof Error ? err.message : String(err)
@@ -185,9 +233,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function loadContext(tabId: string, logId: number) {
     const tab = searchTab(tabId)
     if (!tab) return
-    const visibleServices = Object.keys(tab.serviceCounts).filter(
-      serviceId => !tab.hiddenServiceIds.includes(serviceId),
-    )
+    const visibleServices = visibleContextServiceIds(tab)
     const result = await api.fetchLogContext({
       project: tab.projectId,
       id: logId,
@@ -198,6 +244,61 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     for (const serviceId of visibleServices) {
       if (tab.pinnedServiceIds.includes(serviceId)) continue
       tab.contextByService[serviceId] = result.items_by_service[serviceId] ?? []
+      tab.hasMoreBeforeByService[serviceId] = true
+      tab.hasMoreAfterByService[serviceId] = true
+    }
+  }
+
+  async function loadMoreContext(tabId: string, direction: LogContextPageDirection): Promise<boolean> {
+    const tab = searchTab(tabId)
+    if (!tab || !tab.contextAnchorTime) return false
+    const loadingKey = direction === 'before' ? 'loadingMoreBefore' : 'loadingMoreAfter'
+    const hasMoreMap =
+      direction === 'before' ? tab.hasMoreBeforeByService : tab.hasMoreAfterByService
+    if (tab[loadingKey]) return false
+
+    const requests = visibleContextServiceIds(tab)
+      .filter(serviceId => hasMoreMap[serviceId] !== false)
+      .map(serviceId => {
+        const cursor = contextCursor(tab, serviceId, direction)
+        if (!cursor) return null
+        return { serviceId, cursor }
+      })
+      .filter((item): item is { serviceId: string; cursor: { cursor_time: string; cursor_id: number } } =>
+        item !== null,
+      )
+    if (requests.length === 0) return false
+
+    tab[loadingKey] = true
+    try {
+      const pages = await Promise.all(
+        requests.map(({ serviceId, cursor }) =>
+          api.fetchLogContextPage({
+            project: tab.projectId,
+            service: serviceId,
+            direction,
+            cursor_time: cursor.cursor_time,
+            cursor_id: cursor.cursor_id,
+            limit: CONTEXT_PAGE_LIMIT,
+          }),
+        ),
+      )
+      let changed = false
+      for (const page of pages) {
+        hasMoreMap[page.service_id] = page.has_more
+        if (page.items.length === 0) continue
+        tab.contextByService[page.service_id] = mergeLogs(
+          tab.contextByService[page.service_id] ?? [],
+          page.items,
+        )
+        changed = true
+      }
+      return changed
+    } catch (err) {
+      tab.error = err instanceof Error ? err.message : String(err)
+      return false
+    } finally {
+      tab[loadingKey] = false
     }
   }
 
@@ -227,6 +328,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     unpinService,
     runSearch,
     loadContext,
+    loadMoreContext,
     closeTab,
     saveActiveProjectLayout,
   }

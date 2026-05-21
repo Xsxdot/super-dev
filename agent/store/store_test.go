@@ -178,6 +178,46 @@ func TestFetchContextRejectsTargetOutsideServiceSet(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrLogEntryNotFound)
 }
 
+func TestFetchContextPagePagesBeforeAndAfter(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-3 * time.Second), Level: "INFO", Message: "a-3", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "a-2", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-1 * time.Second), Level: "INFO", Message: "a-1", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "a+1", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "a+2", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "a+3", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(-500 * time.Millisecond), Level: "INFO", Message: "b-near", Stream: "stdout"},
+	}))
+	search, err := s.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+	target := search.Entries[0]
+
+	before, err := s.FetchContextPage(store.ContextPageParams{
+		ServiceID:  "svc-a",
+		CursorTime: target.Timestamp,
+		CursorID:   target.ID,
+		Direction:  store.ContextPageBefore,
+		Limit:      2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a-2", "a-1"}, messagesOf(before.Entries))
+	assert.True(t, before.HasMore)
+
+	after, err := s.FetchContextPage(store.ContextPageParams{
+		ServiceID:  "svc-a",
+		CursorTime: target.Timestamp,
+		CursorID:   target.ID,
+		Direction:  store.ContextPageAfter,
+		Limit:      2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a+1", "a+2"}, messagesOf(after.Entries))
+	assert.True(t, after.HasMore)
+}
+
 func messagesOf(entries []model.LogEntry) []string {
 	out := make([]string, len(entries))
 	for i, entry := range entries {

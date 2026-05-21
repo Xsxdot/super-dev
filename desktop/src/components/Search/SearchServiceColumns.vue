@@ -15,7 +15,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
-import type { LogEntry } from '@/api/agent'
+import type { LogContextPageDirection, LogEntry } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
@@ -23,6 +23,7 @@ const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const columnsEl = ref<HTMLElement | null>(null)
+const EDGE_LOAD_THRESHOLD = 80
 
 const visibleServiceIds = computed(() => {
   if (!tab.value) return []
@@ -43,6 +44,16 @@ const columnTemplate = computed(() => {
   const columnCount = visibleServiceIds.value.length
   // 每个可见命中服务占一列；服务少时平分可用宽度，服务多时保留最小宽度并横向滚动。
   return columnCount > 0 ? `repeat(${columnCount}, minmax(300px, 1fr))` : ''
+})
+
+const canLoadBefore = computed(() => {
+  if (!tab.value) return false
+  return visibleServiceIds.value.some(serviceId => tab.value!.hasMoreBeforeByService[serviceId] !== false)
+})
+
+const canLoadAfter = computed(() => {
+  if (!tab.value) return false
+  return visibleServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
 })
 
 function serviceName(serviceId: string): string {
@@ -70,6 +81,30 @@ function togglePin(serviceId: string) {
   }
 }
 
+async function loadMore(direction: LogContextPageDirection) {
+  if (!tab.value) return
+  const el = columnsEl.value
+  const previousHeight = el?.scrollHeight ?? 0
+  const previousTop = el?.scrollTop ?? 0
+  const changed = await workspace.loadMoreContext(tab.value.id, direction)
+  await nextTick()
+  if (direction === 'before' && changed && el) {
+    el.scrollTop = previousTop + el.scrollHeight - previousHeight
+  }
+}
+
+function handleScroll(event: Event) {
+  const el = event.currentTarget as HTMLElement
+  if (el.scrollTop <= EDGE_LOAD_THRESHOLD) {
+    void loadMore('before')
+    return
+  }
+  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distanceToBottom <= EDGE_LOAD_THRESHOLD) {
+    void loadMore('after')
+  }
+}
+
 watch(
   () => tab.value?.selectedLogId,
   async selectedLogId => {
@@ -83,7 +118,7 @@ watch(
 </script>
 
 <template>
-  <div v-if="tab?.contextAnchorTime" ref="columnsEl" class="columns">
+  <div v-if="tab?.contextAnchorTime" ref="columnsEl" class="columns" @scroll="handleScroll">
     <div class="columns-grid">
       <div class="columns-header" :style="{ gridTemplateColumns: columnTemplate }">
         <div
@@ -97,6 +132,15 @@ watch(
           </button>
         </div>
       </div>
+
+      <button
+        v-if="canLoadBefore"
+        class="load-edge before"
+        :disabled="tab.loadingMoreBefore"
+        @click="loadMore('before')"
+      >
+        {{ tab.loadingMoreBefore ? '加载中...' : '加载更早' }}
+      </button>
 
       <div
         v-for="bucket in buckets"
@@ -127,6 +171,15 @@ watch(
           </div>
         </div>
       </div>
+
+      <button
+        v-if="canLoadAfter"
+        class="load-edge after"
+        :disabled="tab.loadingMoreAfter"
+        @click="loadMore('after')"
+      >
+        {{ tab.loadingMoreAfter ? '加载中...' : '加载更新' }}
+      </button>
     </div>
   </div>
   <div v-else class="columns-empty">
@@ -150,6 +203,24 @@ watch(
   display: grid;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-secondary);
+}
+.load-edge {
+  width: 100%;
+  height: 28px;
+  border: none;
+  border-bottom: 1px solid var(--border-secondary);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  cursor: pointer;
+}
+.load-edge:hover:not(:disabled) {
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+}
+.load-edge:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 .column-header {
   display: flex;

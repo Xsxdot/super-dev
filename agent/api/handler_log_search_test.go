@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -107,4 +108,38 @@ func TestLogContextAPI(t *testing.T) {
 	assert.Len(t, body.ItemsByService["svc-a"], 1)
 	assert.Len(t, body.ItemsByService["svc-b"], 1)
 	assert.Len(t, body.ItemsByService["svc-c"], 0)
+}
+
+func TestLogContextPageAPI(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "api older", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "api near", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "worker near", Stream: "stdout"},
+	}))
+	search, err := app.store.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+	target := search.Entries[0]
+	query := url.Values{}
+	query.Set("project", "proj-1")
+	query.Set("service", "svc-a")
+	query.Set("direction", string(store.ContextPageBefore))
+	query.Set("cursor_time", target.Timestamp.Format(time.RFC3339Nano))
+	query.Set("cursor_id", strconv.FormatInt(target.ID, 10))
+	query.Set("limit", "1")
+
+	resp, err := http.Get(srv.URL + "/api/logs/context/page?" + query.Encode())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextPageResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "svc-a", body.ServiceID)
+	assert.Equal(t, store.ContextPageBefore, body.Direction)
+	assert.True(t, body.HasMore)
+	require.Len(t, body.Items, 1)
+	assert.Equal(t, "api near", body.Items[0].Message)
 }

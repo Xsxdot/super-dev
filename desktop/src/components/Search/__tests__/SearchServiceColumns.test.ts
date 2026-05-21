@@ -11,7 +11,7 @@
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import SearchServiceColumns from '../SearchServiceColumns.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -82,5 +82,77 @@ describe('SearchServiceColumns', () => {
     expect(wrapper.text()).not.toContain('logger hidden')
     expect(wrapper.find('.columns-header').attributes('style')).toContain('1fr')
     expect(wrapper.find('.columns-header').attributes('style')).not.toContain('360px')
+  })
+
+  it('滚动到顶部时请求向上加载更多上下文', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 3 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(1, 'svc-api', 'api visible')],
+    }
+    const loadMore = vi.spyOn(workspace, 'loadMoreContext').mockResolvedValue(false)
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+    const columns = wrapper.find('.columns').element as HTMLElement
+    Object.defineProperty(columns, 'scrollTop', { value: 0, writable: true, configurable: true })
+    Object.defineProperty(columns, 'clientHeight', { value: 400, configurable: true })
+    Object.defineProperty(columns, 'scrollHeight', { value: 1200, configurable: true })
+
+    await wrapper.find('.columns').trigger('scroll')
+
+    expect(loadMore).toHaveBeenCalledWith(tab.id, 'before')
+  })
+
+  it('滚动到底部时请求向下加载更多上下文', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 3 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(1, 'svc-api', 'api visible')],
+    }
+    const loadMore = vi.spyOn(workspace, 'loadMoreContext').mockResolvedValue(false)
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+    const columns = wrapper.find('.columns').element as HTMLElement
+    Object.defineProperty(columns, 'scrollTop', { value: 730, writable: true, configurable: true })
+    Object.defineProperty(columns, 'clientHeight', { value: 400, configurable: true })
+    Object.defineProperty(columns, 'scrollHeight', { value: 1200, configurable: true })
+
+    await wrapper.find('.columns').trigger('scroll')
+
+    expect(loadMore).toHaveBeenCalledWith(tab.id, 'after')
+  })
+
+  it('上下文不足以滚动时可点击加载更早', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 3 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(1, 'svc-api', 'api visible')],
+    }
+    tab.hasMoreBeforeByService = { 'svc-api': true }
+    const loadMore = vi.spyOn(workspace, 'loadMoreContext').mockResolvedValue(false)
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    await wrapper.find('.load-edge.before').trigger('click')
+
+    expect(loadMore).toHaveBeenCalledWith(tab.id, 'before')
   })
 })

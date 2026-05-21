@@ -41,12 +41,17 @@ function project(services: Service[], id = 'proj-1', name = 'Project'): Project 
   }
 }
 
-function log(id: number, serviceId: string, message: string): LogEntry {
+function log(
+  id: number,
+  serviceId: string,
+  message: string,
+  timestamp = '2026-05-20T22:41:32.000Z',
+): LogEntry {
   return {
     id,
     service_id: serviceId,
     run_id: 'run-1',
-    timestamp: '2026-05-20T22:41:32.000Z',
+    timestamp,
     level: 'INFO',
     message,
     stream: 'stdout',
@@ -181,5 +186,59 @@ describe('workspaceStore', () => {
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['old api'])
     expect(tab.contextByService['svc-worker'].map(entry => entry.message)).toEqual(['new worker'])
+  })
+
+  it('loadMoreContext 按可见服务独立游标向上补充上下文', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    const billing = service('svc-billing', 'billing')
+    useAgentStore().projects = [project([api, worker, billing])]
+    vi.spyOn(agentApi, 'fetchLogContextPage').mockImplementation(async params => ({
+      service_id: params.service,
+      direction: params.direction,
+      items:
+        params.service === 'svc-api'
+          ? [log(1, 'svc-api', 'older api', '2026-05-20T22:41:30.000Z')]
+          : [log(2, 'svc-worker', 'older worker', '2026-05-20T22:41:31.000Z')],
+      has_more: params.service === 'svc-api',
+    }))
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 1, 'svc-worker': 1, 'svc-billing': 1 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(9, 'svc-api', 'current api', '2026-05-20T22:41:32.000Z')],
+      'svc-worker': [],
+    }
+    workspace.hideService(tab.id, 'svc-billing')
+
+    await workspace.loadMoreContext(tab.id, 'before')
+
+    expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
+      project: 'proj-1',
+      service: 'svc-api',
+      direction: 'before',
+      cursor_time: '2026-05-20T22:41:32.000Z',
+      cursor_id: 9,
+      limit: 200,
+    })
+    expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
+      project: 'proj-1',
+      service: 'svc-worker',
+      direction: 'before',
+      cursor_time: '2026-05-20T22:41:32.000Z',
+      cursor_id: 0,
+      limit: 200,
+    })
+    expect(agentApi.fetchLogContextPage).toHaveBeenCalledTimes(2)
+    expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual([
+      'older api',
+      'current api',
+    ])
+    expect(tab.contextByService['svc-worker'].map(entry => entry.message)).toEqual([
+      'older worker',
+    ])
+    expect(tab.hasMoreBeforeByService['svc-api']).toBe(true)
+    expect(tab.hasMoreBeforeByService['svc-worker']).toBe(false)
   })
 })
