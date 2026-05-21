@@ -5,10 +5,12 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
 import { open, message } from '@tauri-apps/plugin-dialog'
+import { useRouter } from 'vue-router'
 
 const agentStore = useAgentStore()
 const panelStore = usePanelStore()
 const workspace = useWorkspaceStore()
+const router = useRouter()
 
 function isServiceSelected(serviceId: string) {
   const active = workspace.activeTab
@@ -54,6 +56,7 @@ async function addProject() {
         />
       </template>
     </div>
+    <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>
     <div class="add-project" @click="addProject">+ 添加项目</div>
   </div>
 </template>
@@ -84,4 +87,13 @@ async function addProject() {
   transition: color 0.12s;
 }
 .add-project:hover { color: var(--text-secondary); }
+.settings-entry {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-secondary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.settings-entry:hover { color: var(--text-secondary); }
 </style>
