@@ -1,6 +1,10 @@
 // API 封装对 Go agent HTTP 接口的请求，统一处理 baseURL 和错误。
 
-const BASE = 'http://127.0.0.1:27017'
+// dev 模式对应开发版 agent（57018），build 后对应正式版（57017）
+const AGENT_HOST = import.meta.env.DEV ? '127.0.0.1:57018' : '127.0.0.1:57017'
+const BASE = `http://${AGENT_HOST}`
+export const WS_BASE = `ws://${AGENT_HOST}`
+export { AGENT_HOST }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

@@ -5,7 +5,10 @@ import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useLogStore } from '@/stores/log'
 import { useFilterStore } from '@/stores/filter'
+import { AGENT_HOST } from '@/api/agent'
 import type { LogEntry, Service } from '@/api/agent'
+
+const agentHost = AGENT_HOST
 import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 
 const panelStore = usePanelStore()
@@ -242,7 +245,7 @@ const statusColor = (status: string) => {
     <!-- Agent 状态 -->
     <div class="agent-status">
       <span class="agent-dot" :class="{ connected: agentStore.connected }" />
-      <span>127.0.0.1:27017</span>
+      <span>{{ agentHost }}</span>
     </div>
   </div>
 </template>
