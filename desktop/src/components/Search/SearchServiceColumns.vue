@@ -39,9 +39,11 @@ const buckets = computed(() => {
   })
 })
 
-const columnTemplate = computed(() =>
-  visibleServiceIds.value.map(() => 'minmax(300px, 360px)').join(' '),
-)
+const columnTemplate = computed(() => {
+  const columnCount = visibleServiceIds.value.length
+  // 每个可见命中服务占一列；服务少时平分可用宽度，服务多时保留最小宽度并横向滚动。
+  return columnCount > 0 ? `repeat(${columnCount}, minmax(300px, 1fr))` : ''
+})
 
 function serviceName(serviceId: string): string {
   return agentStore.serviceById(serviceId)?.name ?? serviceId
@@ -139,7 +141,7 @@ watch(
   overflow: auto;
 }
 .columns-grid {
-  min-width: max-content;
+  min-width: 100%;
 }
 .columns-header {
   position: sticky;
