@@ -13,10 +13,38 @@ export interface FilterChip {
   type: ChipType
 }
 
+export interface RuleDraft {
+  name: string
+  type: ChipType
+  keywords: string[]
+  logic: ChipLogic
+  enabled: boolean
+}
+
+export interface PanelRuleDraft {
+  name: string
+  type: ChipType
+  logic: ChipLogic
+  enabled: boolean
+}
+
 interface PanelFilter {
   chips: FilterChip[]
   logic: ChipLogic
   nextChipType: ChipType
+}
+
+function cleanKeywords(keywords: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const keyword of keywords) {
+    const trimmed = keyword.trim()
+    const key = trimmed.toLowerCase()
+    if (!trimmed || seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
 }
 
 export const useFilterStore = defineStore('filter', () => {
@@ -80,13 +108,63 @@ export const useFilterStore = defineStore('filter', () => {
     projectRules.value[projectId] = saved
   }
 
-  function toggleRule(projectId: string, ruleId: string) {
+  async function createRule(projectId: string, draft: RuleDraft) {
+    const current = projectRules.value[projectId] ?? []
+    const keywords = cleanKeywords(draft.keywords)
+    if (keywords.length === 0) return
+    const rule: LogRule = {
+      id: uuidv4(),
+      name: draft.name.trim() || keywords[0] || '未命名规则',
+      type: draft.type,
+      keywords,
+      logic: draft.logic,
+      enabled: draft.enabled,
+    }
+    await saveProjectRules(projectId, [...current, rule])
+  }
+
+  async function updateRule(projectId: string, ruleId: string, draft: RuleDraft) {
+    const current = projectRules.value[projectId] ?? []
+    const next = current
+      .map(rule => {
+        if (rule.id !== ruleId) return rule
+        const keywords = cleanKeywords(draft.keywords)
+        return {
+          ...rule,
+          name: draft.name.trim() || keywords[0] || rule.name,
+          type: draft.type,
+          keywords,
+          logic: draft.logic,
+          enabled: draft.enabled,
+        }
+      })
+      .filter(rule => rule.keywords.length > 0)
+    await saveProjectRules(projectId, next)
+  }
+
+  async function deleteRule(projectId: string, ruleId: string) {
+    const current = projectRules.value[projectId] ?? []
+    await saveProjectRules(projectId, current.filter(rule => rule.id !== ruleId))
+  }
+
+  async function savePanelChipsAsRule(projectId: string, panelId: string, draft: PanelRuleDraft) {
+    const panel = getPanel(panelId)
+    const keywords = panel.chips
+      .filter(chip => chip.type === draft.type)
+      .map(chip => chip.keyword)
+    await createRule(projectId, {
+      ...draft,
+      keywords,
+    })
+  }
+
+  async function toggleRule(projectId: string, ruleId: string) {
     const rules = projectRules.value[projectId]
     if (!rules) return
-    const rule = rules.find(r => r.id === ruleId)
-    if (rule) rule.enabled = !rule.enabled
-    // 异步持久化，不阻塞 UI
-    saveProjectRules(projectId, rules)
+    const next = rules.map(rule =>
+      rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule,
+    )
+    await saveProjectRules(projectId, next)
   }
 
   // 核心过滤函数：先应用 LogRule，再应用 chip
@@ -152,6 +230,10 @@ export const useFilterStore = defineStore('filter', () => {
     removePanel,
     loadProjectRules,
     saveProjectRules,
+    createRule,
+    updateRule,
+    deleteRule,
+    savePanelChipsAsRule,
     toggleRule,
     applyFilters,
   }
