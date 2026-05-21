@@ -55,6 +55,7 @@ function log(id: number, serviceId: string, message: string): LogEntry {
 describe('SearchTimeline', () => {
   beforeEach(() => {
     localStorage.clear()
+    vi.restoreAllMocks()
     setActivePinia(createPinia())
   })
 
@@ -80,5 +81,27 @@ describe('SearchTimeline', () => {
 
     expect(wrapper.find('.timeline-row.selected').text()).toContain('trace target 30')
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
+  })
+
+  it('滚动到命中列表底部时加载更多搜索结果', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.results = [log(20, 'svc-api', 'trace target 20')]
+    tab.serviceCounts = { 'svc-api': 2 }
+    const loadMore = vi.spyOn(workspace, 'loadMoreSearchResults').mockResolvedValue(false)
+
+    const wrapper = mount(SearchTimeline, {
+      props: { tabId: tab.id },
+    })
+    const timeline = wrapper.find('.timeline').element as HTMLElement
+    Object.defineProperty(timeline, 'scrollTop', { value: 730, writable: true, configurable: true })
+    Object.defineProperty(timeline, 'clientHeight', { value: 400, configurable: true })
+    Object.defineProperty(timeline, 'scrollHeight', { value: 1200, configurable: true })
+
+    await wrapper.find('.timeline').trigger('scroll')
+
+    expect(loadMore).toHaveBeenCalledWith(tab.id)
   })
 })

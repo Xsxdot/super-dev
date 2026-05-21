@@ -146,6 +146,7 @@ describe('workspaceStore', () => {
       total: 1,
       items: [log(1, 'svc-api', 'trace-8f21 target')],
       service_counts: { 'svc-api': 1 },
+      has_more: false,
     })
     const workspace = useWorkspaceStore()
     const tab = workspace.openSearch('proj-1')
@@ -155,6 +156,75 @@ describe('workspaceStore', () => {
     expect(workspace.searchTab(tab.id)?.status).toBe('results')
     expect(workspace.searchTab(tab.id)?.query).toBe('trace-8f21')
     expect(workspace.searchTab(tab.id)?.serviceCounts).toEqual({ 'svc-api': 1 })
+  })
+
+  it('loadMoreSearchResults 使用最后一条可见命中继续加载', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    vi.spyOn(agentApi, 'searchLogs')
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 2,
+        items: [log(1, 'svc-api', 'first', '2026-05-20T22:41:32.000Z')],
+        service_counts: { 'svc-api': 2 },
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 2,
+        items: [log(2, 'svc-api', 'second', '2026-05-20T22:41:33.000Z')],
+        service_counts: { 'svc-api': 2 },
+        has_more: false,
+      })
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+
+    await workspace.runSearch(tab.id, 'trace-8f21')
+    await workspace.loadMoreSearchResults(tab.id)
+
+    expect(agentApi.searchLogs).toHaveBeenLastCalledWith({
+      project: 'proj-1',
+      q: 'trace-8f21',
+      service: ['svc-api'],
+      cursor_time: '2026-05-20T22:41:32.000Z',
+      cursor_id: 1,
+      limit: 1000,
+    })
+    expect(tab.results.map(entry => entry.message)).toEqual(['first', 'second'])
+  })
+
+  it('隐藏占满首屏的服务后自动补齐可见服务命中', async () => {
+    const logger = service('svc-logger', 'logger')
+    const server = service('svc-server', 'server')
+    useAgentStore().projects = [project([logger, server])]
+    vi.spyOn(agentApi, 'searchLogs')
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 1002,
+        items: [log(1, 'svc-logger', 'logger first', '2026-05-20T22:41:32.000Z')],
+        service_counts: { 'svc-logger': 1000, 'svc-server': 2 },
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 2,
+        items: [log(1001, 'svc-server', 'server first', '2026-05-20T22:41:30.000Z')],
+        service_counts: { 'svc-server': 2 },
+        has_more: true,
+      })
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+
+    await workspace.runSearch(tab.id, 'trace-8f21')
+    await workspace.hideService(tab.id, 'svc-logger')
+
+    expect(agentApi.searchLogs).toHaveBeenLastCalledWith({
+      project: 'proj-1',
+      q: 'trace-8f21',
+      service: ['svc-server'],
+      limit: 1000,
+    })
+    expect(tab.results.map(entry => entry.message)).toEqual(['server first', 'logger first'])
   })
 
   it('loadContext 只更新未固定的可见服务上下文', async () => {

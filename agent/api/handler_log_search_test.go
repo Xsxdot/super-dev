@@ -72,6 +72,44 @@ func TestLogSearchAPI(t *testing.T) {
 	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, body.ServiceCounts)
 }
 
+func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace page api", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace page worker", Stream: "stdout"},
+	}))
+
+	firstURL := srv.URL + "/api/log-search?project=proj-1&q=trace+page&limit=1"
+	firstResp, err := http.Get(firstURL)
+	require.NoError(t, err)
+	defer firstResp.Body.Close()
+	require.Equal(t, http.StatusOK, firstResp.StatusCode)
+	var first logSearchResponse
+	require.NoError(t, json.NewDecoder(firstResp.Body).Decode(&first))
+	require.Len(t, first.Items, 1)
+	assert.True(t, first.HasMore)
+
+	query := url.Values{}
+	query.Set("project", "proj-1")
+	query.Set("q", "trace page")
+	query.Set("limit", "1")
+	query.Set("cursor_time", first.Items[0].Timestamp.Format(time.RFC3339Nano))
+	query.Set("cursor_id", strconv.FormatInt(first.Items[0].ID, 10))
+	secondResp, err := http.Get(srv.URL + "/api/log-search?" + query.Encode())
+	require.NoError(t, err)
+	defer secondResp.Body.Close()
+	require.Equal(t, http.StatusOK, secondResp.StatusCode)
+
+	var second logSearchResponse
+	require.NoError(t, json.NewDecoder(secondResp.Body).Decode(&second))
+	require.Len(t, second.Items, 1)
+	assert.Equal(t, "svc-b", second.Items[0].ServiceID)
+	assert.False(t, second.HasMore)
+	assert.Equal(t, 2, second.Total)
+	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, second.ServiceCounts)
+}
+
 func TestLogSearchAPIRequiresProjectAndQuery(t *testing.T) {
 	_, srv := newSearchTestServer(t)
 

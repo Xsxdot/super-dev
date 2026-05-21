@@ -131,6 +131,44 @@ func TestSearchRestrictsToServiceSet(t *testing.T) {
 	assert.Equal(t, map[string]int{"svc-b": 1}, got.ServiceCounts)
 }
 
+func TestSearchPagesAfterCursorWithoutChangingCounts(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace page api 1", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace page api 2", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "trace page worker 1", Stream: "stdout"},
+		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(4 * time.Second), Level: "INFO", Message: "trace page worker 2", Stream: "stdout"},
+	}))
+
+	first, err := s.Search(store.SearchParams{
+		ServiceIDs: []string{"svc-a", "svc-b"},
+		Query:      "trace page",
+		Limit:      2,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Entries, 2)
+	assert.True(t, first.HasMore)
+	assert.Equal(t, 4, first.Total)
+	assert.Equal(t, map[string]int{"svc-a": 2, "svc-b": 2}, first.ServiceCounts)
+
+	cursor := first.Entries[len(first.Entries)-1]
+	second, err := s.Search(store.SearchParams{
+		ServiceIDs: []string{"svc-a", "svc-b"},
+		Query:      "trace page",
+		Limit:      2,
+		CursorTime: &cursor.Timestamp,
+		CursorID:   cursor.ID,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, second.Entries, 2)
+	assert.False(t, second.HasMore)
+	assert.Equal(t, []string{"trace page worker 1", "trace page worker 2"}, messagesOf(second.Entries))
+	assert.Equal(t, 4, second.Total)
+	assert.Equal(t, map[string]int{"svc-a": 2, "svc-b": 2}, second.ServiceCounts)
+}
+
 func TestFetchContextReturnsProjectServicesAroundTargetTime(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)

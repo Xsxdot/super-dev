@@ -74,6 +74,7 @@ export interface LogSearchResponse {
   total: number
   items: LogEntry[]
   service_counts: Record<string, number>
+  has_more: boolean
 }
 
 export interface LogContextResponse {
@@ -96,6 +97,8 @@ export interface SearchLogsParams {
   q: string
   service?: string[]
   limit?: number
+  cursor_time?: string
+  cursor_id?: number
 }
 
 export interface FetchLogContextParams {
@@ -157,6 +160,8 @@ export const api = {
     qs.set('q', params.q)
     for (const serviceId of params.service ?? []) qs.append('service', serviceId)
     if (params.limit) qs.set('limit', String(params.limit))
+    if (params.cursor_time) qs.set('cursor_time', params.cursor_time)
+    if (params.cursor_id) qs.set('cursor_id', String(params.cursor_id))
     return request<LogSearchResponse>(`/api/log-search?${qs}`)
   },
   fetchLogContext: (params: FetchLogContextParams) => {
