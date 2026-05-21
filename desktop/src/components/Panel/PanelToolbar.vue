@@ -4,6 +4,7 @@ import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useLogStore } from '@/stores/log'
 import { useAgentStore } from '@/stores/agent'
+import RuleManagerModal from './RuleManagerModal.vue'
 const props = defineProps<{
   panelId: string
   serviceId: string | null
@@ -20,6 +21,8 @@ const logStore = useLogStore()
 const agentStore = useAgentStore()
 
 const chipInput = ref('')
+const showRules = ref(false)
+const rulesInitialMode = ref<'list' | 'current'>('list')
 const panel = computed(() => filterStore.getPanel(props.panelId))
 const bookmark = computed(() => bookmarkStore.getBookmark(props.panelId))
 const rules = computed(() => props.projectId ? (filterStore.projectRules[props.projectId] ?? []) : [])
@@ -58,6 +61,13 @@ function fillChipInput(text: string) {
 }
 
 defineExpose({ fillChipInput })
+
+function openRuleManager(mode: 'list' | 'current') {
+  if (!props.projectId) return
+  rulesInitialMode.value = mode
+  showRules.value = true
+}
+
 function clearBookmark() {
   bookmarkStore.clearBookmark(props.panelId)
 }
@@ -168,8 +178,29 @@ async function exportBookmark() {
     <div class="flex-1" />
 
     <!-- 操作区 -->
-    <button class="icon-btn" title="过滤规则">⚙</button>
-    <button v-if="panel.chips.length" class="icon-btn" title="保存为规则">↓</button>
+    <button
+      class="rules-btn"
+      title="管理过滤规则"
+      :disabled="!projectId"
+      @click="openRuleManager('list')"
+    >
+      ⚙
+    </button>
+    <button
+      v-if="panel.chips.length && projectId"
+      class="save-rule-btn"
+      title="保存当前过滤为规则"
+      @click="openRuleManager('current')"
+    >
+      保存为规则
+    </button>
+    <RuleManagerModal
+      v-if="showRules && projectId"
+      :project-id="projectId"
+      :panel-id="panelId"
+      :initial-mode="rulesInitialMode"
+      @close="showRules = false"
+    />
 
     <div class="divider" />
 
@@ -318,6 +349,40 @@ async function exportBookmark() {
   white-space: nowrap;
 }
 .icon-btn:hover { color: var(--text-primary); background: var(--bg-overlay); }
+
+.rules-btn {
+  width: 28px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rules-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: rgba(88, 166, 255, 0.45);
+}
+.rules-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.save-rule-btn {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.save-rule-btn:hover {
+  color: var(--text-primary);
+  border-color: rgba(88, 166, 255, 0.45);
+}
 
 .bookmark-btn {
   background: transparent;
