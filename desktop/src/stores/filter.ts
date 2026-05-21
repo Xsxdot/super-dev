@@ -24,6 +24,7 @@ export interface RuleDraft {
 export interface PanelRuleDraft {
   name: string
   type: ChipType
+  keywords?: string[]
   logic: ChipLogic
   enabled: boolean
 }
@@ -149,9 +150,11 @@ export const useFilterStore = defineStore('filter', () => {
 
   async function savePanelChipsAsRule(projectId: string, panelId: string, draft: PanelRuleDraft) {
     const panel = getPanel(panelId)
-    const keywords = panel.chips
-      .filter(chip => chip.type === draft.type)
-      .map(chip => chip.keyword)
+    const keywords = draft.keywords?.length
+      ? draft.keywords
+      : panel.chips
+          .filter(chip => chip.type === draft.type)
+          .map(chip => chip.keyword)
     await createRule(projectId, {
       ...draft,
       keywords,
