@@ -113,6 +113,9 @@ describe('BottomBar', () => {
       refCount: 1,
       bootstrapPromise: null,
       historyBoundary: null,
+      oldestLoadedId: null,
+      hasMoreHistory: true,
+      loadingMoreHistory: false,
       seenSignatures: new Set(),
     }
     vi.advanceTimersByTime(5000)

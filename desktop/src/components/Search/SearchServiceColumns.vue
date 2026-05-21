@@ -24,6 +24,7 @@ const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
+const pinnedScrollTopByService = ref<Record<string, number>>({})
 const EDGE_LOAD_THRESHOLD = 80
 
 const visibleServiceIds = computed(() => {
@@ -33,28 +34,62 @@ const visibleServiceIds = computed(() => {
   )
 })
 
+const pinnedServiceIds = computed(() => {
+  if (!tab.value) return []
+  const pinned = new Set(tab.value.pinnedServiceIds)
+  return visibleServiceIds.value.filter(serviceId => pinned.has(serviceId))
+})
+
+const scrollingServiceIds = computed(() => {
+  if (!tab.value) return []
+  const pinned = new Set(tab.value.pinnedServiceIds)
+  return visibleServiceIds.value.filter(serviceId => !pinned.has(serviceId))
+})
+
 const buckets = computed(() => {
   if (!tab.value) return []
   return buildSearchBuckets({
-    serviceIds: visibleServiceIds.value,
+    serviceIds: scrollingServiceIds.value,
     itemsByService: tab.value.contextByService,
   })
 })
 
-const columnTemplate = computed(() => {
-  const columnCount = visibleServiceIds.value.length
+function columnTemplateFor(serviceIds: string[]): string {
+  const columnCount = serviceIds.length
   // 每个可见命中服务占一列；服务少时平分可用宽度，服务多时保留最小宽度并横向滚动。
   return columnCount > 0 ? `repeat(${columnCount}, minmax(300px, 1fr))` : ''
-})
+}
+
+const columnTemplate = computed(() => columnTemplateFor(scrollingServiceIds.value))
+
+const pinnedColumnTemplate = computed(() => columnTemplateFor(pinnedServiceIds.value))
+
+const pinnedPanelStyle = computed(() => ({
+  '--pinned-width': `${pinnedServiceIds.value.length * 300}px`,
+  gridTemplateColumns: pinnedColumnTemplate.value,
+}))
+
+function pinnedBuckets(serviceId: string): SearchBucketRow[] {
+  if (!tab.value) return []
+  return buildSearchBuckets({
+    serviceIds: [serviceId],
+    itemsByService: tab.value.contextByService,
+  })
+}
+
+function pinnedOffsetStyle(serviceId: string) {
+  const offset = pinnedScrollTopByService.value[serviceId] ?? 0
+  return { transform: `translateY(-${offset}px)` }
+}
 
 const canLoadBefore = computed(() => {
   if (!tab.value) return false
-  return visibleServiceIds.value.some(serviceId => tab.value!.hasMoreBeforeByService[serviceId] !== false)
+  return scrollingServiceIds.value.some(serviceId => tab.value!.hasMoreBeforeByService[serviceId] !== false)
 })
 
 const canLoadAfter = computed(() => {
   if (!tab.value) return false
-  return visibleServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
+  return scrollingServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
 })
 
 function serviceName(serviceId: string): string {
@@ -77,7 +112,13 @@ function togglePin(serviceId: string) {
   if (!tab.value) return
   if (tab.value.pinnedServiceIds.includes(serviceId)) {
     workspace.unpinService(tab.value.id, serviceId)
+    const { [serviceId]: _removed, ...next } = pinnedScrollTopByService.value
+    pinnedScrollTopByService.value = next
   } else {
+    pinnedScrollTopByService.value = {
+      ...pinnedScrollTopByService.value,
+      [serviceId]: columnsEl.value?.scrollTop ?? 0,
+    }
     workspace.pinService(tab.value.id, serviceId)
   }
 }
@@ -158,68 +199,132 @@ watch(
 </script>
 
 <template>
-  <div v-if="tab?.contextAnchorTime" ref="columnsEl" class="columns" @scroll="handleScroll">
-    <div class="columns-grid">
-      <div class="columns-header" :style="{ gridTemplateColumns: columnTemplate }">
-        <div
-          v-for="serviceId in visibleServiceIds"
-          :key="serviceId"
-          class="column-header"
-        >
-          <span class="service-name">{{ serviceName(serviceId) }}</span>
-          <button class="pin-btn" @click="togglePin(serviceId)">
-            {{ tab.pinnedServiceIds.includes(serviceId) ? '已固定' : '固定' }}
-          </button>
-        </div>
-      </div>
-
-      <button
-        v-if="canLoadBefore"
-        class="load-edge before"
-        :disabled="tab.loadingMoreBefore"
-        @click="loadMore('before')"
-      >
-        {{ tab.loadingMoreBefore ? '加载中...' : '加载更早' }}
-      </button>
-
+  <div v-if="tab?.contextAnchorTime" class="columns-shell">
+    <div
+      v-if="pinnedServiceIds.length"
+      class="pinned-columns"
+      :style="pinnedPanelStyle"
+    >
       <div
-        v-for="bucket in buckets"
-        :key="bucket.bucketStart"
-        class="bucket-row"
-        :style="{ gridTemplateColumns: columnTemplate }"
+        v-for="serviceId in pinnedServiceIds"
+        :key="serviceId"
+        class="pinned-column"
       >
-        <div
-          v-for="serviceId in visibleServiceIds"
-          :key="serviceId"
-          class="bucket-cell"
-          :class="{ blank: isBlank(bucket, serviceId) }"
-        >
-          <div class="bucket-time">{{ bucket.bucketLabel }}</div>
-          <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
-          <div v-else class="entry-stack">
+        <div class="column-header pinned">
+          <span class="service-name">{{ serviceName(serviceId) }}</span>
+          <button class="pin-btn" @click="togglePin(serviceId)">已固定</button>
+        </div>
+        <div class="pinned-body">
+          <div class="pinned-grid" :style="pinnedOffsetStyle(serviceId)">
             <div
-              v-for="entry in cellEntries(bucket, serviceId)"
-              :key="entry.id"
-              class="context-entry"
-              :class="{ target: entry.id === tab.selectedLogId }"
-              :data-entry-id="entry.id"
+              v-for="bucket in pinnedBuckets(serviceId)"
+              :key="bucket.bucketStart"
+              class="bucket-row pinned-row"
+              :style="{ gridTemplateColumns: 'minmax(300px, 1fr)' }"
             >
-              <span class="entry-time">{{ timeLabel(entry) }}</span>
-              <span class="entry-level">{{ entry.level }}</span>
-              <span class="entry-message">{{ entry.message }}</span>
+              <div
+                class="bucket-cell"
+                :class="{ blank: isBlank(bucket, serviceId) }"
+              >
+                <div class="bucket-time">{{ bucket.bucketLabel }}</div>
+                <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
+                <div v-else class="entry-stack">
+                  <div
+                    v-for="entry in cellEntries(bucket, serviceId)"
+                    :key="entry.id"
+                    class="context-entry"
+                    :class="{ target: entry.id === tab.selectedLogId }"
+                    :data-entry-id="entry.id"
+                  >
+                    <span class="entry-time">{{ timeLabel(entry) }}</span>
+                    <span class="entry-level">{{ entry.level }}</span>
+                    <span class="entry-message">{{ entry.message }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
+    </div>
 
-      <button
-        v-if="canLoadAfter"
-        class="load-edge after"
-        :disabled="tab.loadingMoreAfter"
-        @click="loadMore('after')"
-      >
-        {{ tab.loadingMoreAfter ? '加载中...' : '加载更新' }}
-      </button>
+    <div
+      v-if="scrollingServiceIds.length"
+      ref="columnsEl"
+      class="columns"
+      @scroll="handleScroll"
+    >
+      <div class="columns-grid">
+        <div class="columns-header" :style="{ gridTemplateColumns: columnTemplate }">
+          <div
+            v-for="serviceId in scrollingServiceIds"
+            :key="serviceId"
+            class="column-header"
+          >
+            <span class="service-name">{{ serviceName(serviceId) }}</span>
+            <button class="pin-btn" @click="togglePin(serviceId)">固定</button>
+          </div>
+        </div>
+
+        <button
+          v-if="canLoadBefore"
+          class="load-edge before"
+          :disabled="tab.loadingMoreBefore"
+          @click="loadMore('before')"
+        >
+          {{ tab.loadingMoreBefore ? '加载中...' : '加载更早' }}
+        </button>
+
+        <div
+          v-for="bucket in buckets"
+          :key="bucket.bucketStart"
+          class="bucket-row"
+          :style="{ gridTemplateColumns: columnTemplate }"
+        >
+          <div
+            v-for="serviceId in scrollingServiceIds"
+            :key="serviceId"
+            class="bucket-cell"
+            :class="{ blank: isBlank(bucket, serviceId) }"
+          >
+            <div class="bucket-time">{{ bucket.bucketLabel }}</div>
+            <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
+            <div v-else class="entry-stack">
+              <div
+                v-for="entry in cellEntries(bucket, serviceId)"
+                :key="entry.id"
+                class="context-entry"
+                :class="{ target: entry.id === tab.selectedLogId }"
+                :data-entry-id="entry.id"
+              >
+                <span class="entry-time">{{ timeLabel(entry) }}</span>
+                <span class="entry-level">{{ entry.level }}</span>
+                <span class="entry-message">{{ entry.message }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button
+          v-if="canLoadAfter"
+          class="load-edge after"
+          :disabled="tab.loadingMoreAfter"
+          @click="loadMore('after')"
+        >
+          {{ tab.loadingMoreAfter ? '加载中...' : '加载更新' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-else class="columns pinned-only">
+      <div class="columns-grid">
+        <div class="columns-header" :style="{ gridTemplateColumns: 'minmax(300px, 1fr)' }">
+          <div class="column-header placeholder">
+            <span class="service-name">已固定全部服务</span>
+          </div>
+        </div>
+        <div class="pinned-only-empty">取消固定后继续联动滚动</div>
+      </div>
     </div>
   </div>
   <div v-else class="columns-empty">
@@ -228,9 +333,61 @@ watch(
 </template>
 
 <style scoped>
+.columns-shell {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+.pinned-columns {
+  flex: 0 0 min(var(--pinned-width), 55%);
+  display: grid;
+  min-width: min(var(--pinned-width), 55%);
+  max-width: 55%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--bg);
+  border-right: 1px solid var(--border-secondary);
+}
+.pinned-column {
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pinned-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.pinned-grid {
+  min-width: 300px;
+  will-change: transform;
+}
+.pinned-row {
+  display: grid;
+}
+.pinned-only {
+  background: var(--bg);
+}
+.pinned-only-empty {
+  height: calc(100% - 32px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.column-header.pinned {
+  background: rgba(88, 166, 255, 0.08);
+}
+.column-header.placeholder {
+  justify-content: center;
+}
 .columns {
   height: 100%;
   min-width: 0;
+  flex: 1 1 auto;
   overflow: auto;
 }
 .columns-grid {
