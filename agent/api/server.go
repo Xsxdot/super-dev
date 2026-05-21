@@ -23,6 +23,7 @@ import (
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/process"
+	"github.com/superdev/agent/remote"
 	"github.com/superdev/agent/store"
 )
 
@@ -36,16 +37,17 @@ type AppConfig struct {
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg       AppConfig
-	mu        sync.RWMutex
-	projects  []model.Project
-	managers  map[string]*process.Manager // projectID → manager
-	buf       *logbuf.Buffer
-	store     *store.Store
-	registry  *config.Registry
-	settings  *config.SettingsStore
-	procMgr   *process.Manager // 远端 collector 复用的进程管理器
-	collector *collector.Manager
+	cfg         AppConfig
+	mu          sync.RWMutex
+	projects    []model.Project
+	managers    map[string]*process.Manager // projectID → manager
+	buf         *logbuf.Buffer
+	store       *store.Store
+	registry    *config.Registry
+	settings    *config.SettingsStore
+	procMgr     *process.Manager // 远端 collector 复用的进程管理器
+	collector   *collector.Manager
+	remoteStore *remote.Store
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -87,17 +89,22 @@ func NewApp(cfg AppConfig) (*App, error) {
 		probe = cfg.ProbeOverride
 	}
 	colMgr := collector.NewManager(procMgr, probe)
+	remoteStore := remote.NewStore(
+		filepath.Join(cfg.DataDir, "hosts.json"),
+		filepath.Join(cfg.DataDir, "log_sources.json"),
+	)
 
 	return &App{
-		cfg:       cfg,
-		projects:  []model.Project{},
-		managers:  map[string]*process.Manager{},
-		buf:       buf,
-		store:     s,
-		registry:  registry,
-		settings:  settingsStore,
-		procMgr:   procMgr,
-		collector: colMgr,
+		cfg:         cfg,
+		projects:    []model.Project{},
+		managers:    map[string]*process.Manager{},
+		buf:         buf,
+		store:       s,
+		registry:    registry,
+		settings:    settingsStore,
+		procMgr:     procMgr,
+		collector:   colMgr,
+		remoteStore: remoteStore,
 	}, nil
 }
 
@@ -148,6 +155,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/collectors", a.startCollector)
 	mux.HandleFunc("DELETE /api/collectors/{id}", a.stopCollector)
 	mux.HandleFunc("GET /api/collectors", a.listCollectors)
+
+	// 远程主机管理
+	mux.HandleFunc("GET /api/hosts", a.listHosts)
+	mux.HandleFunc("POST /api/hosts", a.createHost)
+	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
+	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
 	return cors(mux)
 }
