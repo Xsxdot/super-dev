@@ -10,7 +10,7 @@
   - 不负责右侧分栏渲染
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -19,6 +19,7 @@ const props = defineProps<{ tabId: string }>()
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
+const timelineEl = ref<HTMLElement | null>(null)
 
 const visibleResults = computed(() => {
   if (!tab.value) return []
@@ -38,15 +39,27 @@ function select(entryId: number) {
   if (!tab.value) return
   void workspace.loadContext(tab.value.id, entryId)
 }
+
+watch(
+  () => tab.value?.selectedLogId,
+  async selectedLogId => {
+    if (!selectedLogId) return
+    await nextTick()
+    timelineEl.value
+      ?.querySelector(`[data-entry-id="${selectedLogId}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  },
+)
 </script>
 
 <template>
-  <div class="timeline">
+  <div ref="timelineEl" class="timeline">
     <button
       v-for="entry in visibleResults"
       :key="entry.id"
       class="timeline-row"
       :class="{ selected: tab?.selectedLogId === entry.id }"
+      :data-entry-id="entry.id"
       @click="select(entry.id)"
     >
       <span class="time">{{ timeLabel(entry.timestamp) }}</span>

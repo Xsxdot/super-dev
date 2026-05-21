@@ -23,6 +23,7 @@ const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const columnsEl = ref<HTMLElement | null>(null)
+const selectedFromColumnsScrollId = ref<number | null>(null)
 const EDGE_LOAD_THRESHOLD = 80
 
 const visibleServiceIds = computed(() => {
@@ -93,8 +94,43 @@ async function loadMore(direction: LogContextPageDirection) {
   }
 }
 
+function syncSelectedResultFromScroll(el: HTMLElement) {
+  const currentTab = tab.value
+  if (!currentTab) return
+  const hidden = new Set(currentTab.hiddenServiceIds)
+  const resultIds = new Set(
+    currentTab.results
+      .filter(entry => !hidden.has(entry.service_id))
+      .map(entry => entry.id),
+  )
+  if (resultIds.size === 0) return
+
+  const viewport = el.getBoundingClientRect()
+  const viewportCenter = viewport.top + (viewport.bottom - viewport.top) / 2
+  let candidate: { id: number; distance: number } | null = null
+
+  const entryEls = Array.from(el.querySelectorAll<HTMLElement>('.context-entry'))
+  for (const entryEl of entryEls) {
+    const entryId = Number(entryEl.dataset.entryId)
+    if (!resultIds.has(entryId)) continue
+    const rect = entryEl.getBoundingClientRect()
+    if (rect.bottom < viewport.top || rect.top > viewport.bottom) continue
+    const entryCenter = rect.top + (rect.bottom - rect.top) / 2
+    const distance = Math.abs(entryCenter - viewportCenter)
+    if (!candidate || distance < candidate.distance) {
+      candidate = { id: entryId, distance }
+    }
+  }
+
+  if (!candidate) return
+  if (workspace.selectSearchResult(currentTab.id, candidate.id)) {
+    selectedFromColumnsScrollId.value = candidate.id
+  }
+}
+
 function handleScroll(event: Event) {
   const el = event.currentTarget as HTMLElement
+  syncSelectedResultFromScroll(el)
   if (el.scrollTop <= EDGE_LOAD_THRESHOLD) {
     void loadMore('before')
     return
@@ -109,6 +145,10 @@ watch(
   () => tab.value?.selectedLogId,
   async selectedLogId => {
     if (!selectedLogId) return
+    if (selectedFromColumnsScrollId.value === selectedLogId) {
+      selectedFromColumnsScrollId.value = null
+      return
+    }
     await nextTick()
     columnsEl.value
       ?.querySelector(`[data-entry-id="${selectedLogId}"]`)

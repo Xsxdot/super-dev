@@ -206,6 +206,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tab.pinnedServiceIds = tab.pinnedServiceIds.filter(id => id !== serviceId)
   }
 
+  function selectSearchResult(tabId: string, logId: number): boolean {
+    const tab = searchTab(tabId)
+    if (!tab || tab.selectedLogId === logId) return false
+    const hidden = new Set(tab.hiddenServiceIds)
+    const exists = tab.results.some(
+      entry => entry.id === logId && !hidden.has(entry.service_id),
+    )
+    if (!exists) return false
+    tab.selectedLogId = logId
+    return true
+  }
+
   async function runSearch(tabId: string, query: string) {
     const tab = searchTab(tabId)
     const trimmed = query.trim()
@@ -326,6 +338,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     showService,
     pinService,
     unpinService,
+    selectSearchResult,
     runSearch,
     loadContext,
     loadMoreContext,

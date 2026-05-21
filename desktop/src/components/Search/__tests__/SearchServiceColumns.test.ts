@@ -40,16 +40,35 @@ function project(services: Service[]): Project {
   }
 }
 
-function log(id: number, serviceId: string, message: string): LogEntry {
+function log(
+  id: number,
+  serviceId: string,
+  message: string,
+  timestamp = '2026-05-20T22:41:32.000Z',
+): LogEntry {
   return {
     id,
     service_id: serviceId,
     run_id: 'run-1',
-    timestamp: '2026-05-20T22:41:32.000Z',
+    timestamp,
     level: 'INFO',
     message,
     stream: 'stdout',
   }
+}
+
+function setRect(element: Element, top: number, bottom: number) {
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({
+    top,
+    bottom,
+    height: bottom - top,
+    left: 0,
+    right: 300,
+    width: 300,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect)
 }
 
 describe('SearchServiceColumns', () => {
@@ -154,5 +173,41 @@ describe('SearchServiceColumns', () => {
     await wrapper.find('.load-edge.before').trigger('click')
 
     expect(loadMore).toHaveBeenCalledWith(tab.id, 'before')
+  })
+
+  it('右侧滚动到命中日志时同步左侧选中项', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 3 }
+    tab.results = [
+      log(20, 'svc-api', 'trace target 20', '2026-05-20T22:41:32.000Z'),
+      log(30, 'svc-api', 'trace target 30', '2026-05-20T22:41:33.000Z'),
+    ]
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [
+        log(10, 'svc-api', 'ordinary context', '2026-05-20T22:41:31.000Z'),
+        log(20, 'svc-api', 'trace target 20', '2026-05-20T22:41:32.000Z'),
+        log(30, 'svc-api', 'trace target 30', '2026-05-20T22:41:33.000Z'),
+      ],
+    }
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+    const columns = wrapper.find('.columns').element as HTMLElement
+    Object.defineProperty(columns, 'scrollTop', { value: 300, writable: true, configurable: true })
+    Object.defineProperty(columns, 'clientHeight', { value: 400, configurable: true })
+    Object.defineProperty(columns, 'scrollHeight', { value: 1200, configurable: true })
+    setRect(columns, 0, 400)
+    setRect(wrapper.find('[data-entry-id="10"]').element, 20, 44)
+    setRect(wrapper.find('[data-entry-id="20"]').element, 180, 204)
+    setRect(wrapper.find('[data-entry-id="30"]').element, 330, 354)
+
+    await wrapper.find('.columns').trigger('scroll')
+
+    expect(tab.selectedLogId).toBe(20)
   })
 })
