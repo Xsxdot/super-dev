@@ -62,6 +62,10 @@ export interface LogRule {
   enabled: boolean
 }
 
+export interface AgentSettings {
+  log_retention_days: number
+}
+
 export interface FetchLogsParams {
   service?: string
   run?: string
@@ -128,6 +132,11 @@ export const api = {
   getProjectRules: (id: string) => request<LogRule[]>(`/api/projects/${id}/rules`),
   putProjectRules: (id: string, rules: LogRule[]) =>
     request<LogRule[]>(`/api/projects/${id}/rules`, { method: 'PUT', body: JSON.stringify(rules) }),
+
+  // 设置
+  getSettings: () => request<AgentSettings>('/api/settings'),
+  putSettings: (settings: AgentSettings) =>
+    request<AgentSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 
   // 服务
   listServices: (projectId?: string) => {
