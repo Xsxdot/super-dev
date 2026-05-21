@@ -102,3 +102,54 @@ type LogRule struct {
 	Logic    RuleLogic `json:"logic"    yaml:"logic"`
 	Enabled  bool      `json:"enabled"  yaml:"enabled"`
 }
+
+// LogSourceType 表示采集任务的类型。
+type LogSourceType string
+
+const (
+	// LogSourceTypeJournalctl 表示通过 journalctl 采集 systemd 服务日志。
+	LogSourceTypeJournalctl LogSourceType = "journalctl"
+	// LogSourceTypeDocker 表示通过 docker logs 采集容器日志。
+	LogSourceTypeDocker LogSourceType = "docker"
+)
+
+// IsValid 判断 LogSourceType 是否在允许的枚举范围内。
+func (t LogSourceType) IsValid() bool {
+	return t == LogSourceTypeJournalctl || t == LogSourceTypeDocker
+}
+
+// Host 表示一台被监听的远程主机。
+//
+// 持久化字段会写入 ~/.superdev/hosts.json（权限 0600）。
+// LocalTunnelPort 在首次连接时分配并写回，复用同端口便于前端 URL 稳定。
+type Host struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	SSHHost         string   `json:"ssh_host"`
+	SSHPort         int      `json:"ssh_port"`
+	SSHUser         string   `json:"ssh_user"`
+	SSHPassword     string   `json:"ssh_password"`
+	SSHKeyPath      string   `json:"ssh_key_path"`
+	RemoteAgentPort int      `json:"remote_agent_port"`
+	LocalTunnelPort int      `json:"local_tunnel_port"`
+	Tags            []string `json:"tags"`
+}
+
+// LogSource 表示一个监听任务：在哪些 Host 上以何种 type 采集哪个 name。
+type LogSource struct {
+	ID      string        `json:"id"`
+	Name    string        `json:"name"`
+	Type    LogSourceType `json:"type"`
+	HostIDs []string      `json:"host_ids"`
+}
+
+// Collector 是远端 agent 维护的采集任务运行时记录。
+//
+// 远端不持久化 Collector,仅在内存中保存，配合 process.Manager 跑虚拟 Service。
+type Collector struct {
+	ID        string        `json:"id"` // 由 hash(name+type) 生成，幂等
+	Name      string        `json:"name"`
+	Type      LogSourceType `json:"type"`
+	ServiceID string        `json:"service_id"` // 等于 Collector.ID，作为虚拟 Service 的 ID
+	Status    ServiceStatus `json:"status"`
+}
