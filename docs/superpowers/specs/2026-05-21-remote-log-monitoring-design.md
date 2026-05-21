@@ -220,6 +220,9 @@ POST   /api/hosts
 PUT    /api/hosts/{id}
 DELETE /api/hosts/{id}
 
+# SSH config 导入辅助
+GET    /api/ssh-config/hosts      # 解析 ~/.ssh/config，返回 [{name, host_name, port, user, identity_file}]
+
 # LogSource 管理
 GET    /api/log-sources
 POST   /api/log-sources
@@ -251,12 +254,7 @@ GET /api/remote-log-search        # 见 §7
    ├─ nova-api     [启动] [停止]   running
    └─ nova-worker  [启动] [停止]   stopped
 
-远程监听（新增）
-├─ 主机管理
-│  ├─ host-01  [test]              ● connected
-│  ├─ host-02  [prod]              ○ idle
-│  ├─ host-03  [prod, temp]        ○ idle
-│  └─ host-04  [prod, temp]        ○ idle
+远程监听（新增）          ⚙ ← 点击跳转设置页主机管理
 └─ 监听任务
    ├─ nova-api
    │  ├─ 全部       (4 节点)
@@ -266,6 +264,8 @@ GET /api/remote-log-search        # 见 §7
    └─ nova-worker
       └─ ...
 ```
+
+**说明**：主机管理不放 Sidebar（低频操作，配置一次用很久），放在设置页。Sidebar 顶部"远程监听"标题旁的齿轮图标可一键跳转设置页对应区段。所有 Host 的隧道状态在监听任务面板里通过节点 chip 颜色反映。
 
 **分组逻辑**：取该 LogSource 关联 Host 的 tag 并集，每个 tag 一个分组。同一 Host 出现在所有自己拥有的 tag 分组里（也出现在"全部"分组）。
 
@@ -293,8 +293,27 @@ GET /api/remote-log-search        # 见 §7
 
 ### 6.4 设置 / 配置入口
 
-- 主机管理：表单含 SSH host / port / user / password / key_path / remote_port / tags
-- 监听任务管理：表单含 name / type 下拉（journalctl / docker）/ host 多选
+**主机管理（设置页内，与日志保留天数等并列）**
+
+- 列表：显示所有 Host 的 name / ssh / tags / 当前隧道状态
+- 操作：增删改、批量删除
+- 单个 Host 表单字段：`name` / `ssh_host` / `ssh_port`（默认 22）/ `ssh_user` / `ssh_password` / `ssh_key_path`（密钥优先）/ `remote_agent_port`（默认 57017）/ `tags`
+- **快捷方法 1：从 ~/.ssh/config 导入**
+  - 表单上方按钮 `从 SSH config 导入`
+  - 点击 → 调 `GET /api/ssh-config/hosts` → 弹出列表 → 用户多选 → 自动填充 `name / ssh_host / ssh_port / ssh_user / ssh_key_path`（其余字段如 tags、remote_agent_port 由用户补全）
+  - 仅作为创建入口，不与本地 SSH config 保持同步（后续修改互不影响）
+- **快捷方法 2：密钥路径浏览**
+  - `ssh_key_path` 字段右侧加 `浏览...` 按钮，调起 Tauri 文件选择对话框
+  - 字段默认值按存在性优先填 `~/.ssh/id_ed25519` → `~/.ssh/id_rsa`
+- 安全提示：表单底部提示 "密码以明文存储在 ~/.superdev/hosts.json（权限 0600）"
+
+**监听任务管理（Sidebar 内联或弹窗）**
+
+- 表单字段：`name` / `type` 下拉（journalctl / docker）/ `host_ids` 多选
+
+**远端 agent 端口提示**
+
+- 主机管理表单顶部提示远端 agent 默认监听 `127.0.0.1:57017`，需要远端先部署 agent 二进制
 
 ---
 
@@ -391,11 +410,12 @@ Base64 编码后作为 `next_cursor` 返回。前端原样回传。
 
 1. **远端 collector 子系统**：新增 `agent/collector/` 包 + `/api/collectors` 接口；name 注入防护和 type 模板写死
 2. **本机 tunnel 包**：`golang.org/x/crypto/ssh` 隧道管理，含密码/密钥认证、空闲释放
-3. **本机 remote 子系统**：Host / LogSource CRUD + `/api/hosts` + `/api/log-sources` + `/api/remote/view`
+3. **本机 remote 子系统**：Host / LogSource CRUD + `/api/hosts` + `/api/log-sources` + `/api/remote/view` + `/api/ssh-config/hosts`（SSH config 解析）
 4. **本机 Controller**：通过隧道调远端 collector，断线重连对账
-5. **前端 Sidebar 改造**：本地项目 + 远程监听两块；主机管理 + 监听任务表单
-6. **前端日志面板支持远程**：多 Host WebSocket 并发，时间戳归并，host 前缀着色
-7. **跨节点搜索**：`/api/remote-log-search` + k-way merge + 复合游标；前端 SearchPage 兼容
+5. **前端设置页 - 主机管理**：列表 / CRUD 表单 / 从 ~/.ssh/config 导入 / 密钥浏览（Tauri 文件对话框）
+6. **前端 Sidebar 改造**：本地项目 + 远程监听两块；远程监听标题齿轮跳转设置页；监听任务表单
+7. **前端日志面板支持远程**：多 Host WebSocket 并发，时间戳归并，host 前缀着色
+8. **跨节点搜索**：`/api/remote-log-search` + k-way merge + 复合游标；前端 SearchPage 兼容
 
 每一步都可独立 PR 并自测。
 
