@@ -118,13 +118,48 @@ final class LogEngine: @unchecked Sendable {
 
     // MARK: - Private
 
-    // detectLevel 通过关键字匹配推断日志级别。
-    // 匹配顺序：error > warn > debug > info（默认）。
-    // 默认返回 .info 而非 .unknown，以减少典型开发日志中的噪音标注。
+    // detectLevel 推断日志级别。
+    // 优先级：level= 结构化字段 > [LEVEL] 括号标记 > 关键字扫描 > 默认 info。
     nonisolated private func detectLevel(in line: String) -> LogLevel {
+        if let level = levelFromStructuredField(in: line) {
+            return level
+        }
+        if let level = levelFromBracketMarker(in: line) {
+            return level
+        }
+        return levelFromKeywords(in: line)
+    }
+
+    // levelFromStructuredField 解析 logrus/zap 文本格式中的 level=error 等字段。
+    nonisolated private func levelFromStructuredField(in line: String) -> LogLevel? {
+        let pattern = #"(?i)\blevel\s*=\s*"?([a-z]+)"?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: line) else {
+            return nil
+        }
+        return mapLevelToken(String(line[range]))
+    }
+
+    // levelFromBracketMarker 解析 [ERROR]、[WARN] 等括号级别标记。
+    nonisolated private func levelFromBracketMarker(in line: String) -> LogLevel? {
+        let pattern = #"\[(ERROR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL|CRITICAL)\]"#
+        let upper = line.uppercased()
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: upper, range: NSRange(upper.startIndex..., in: upper)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: upper) else {
+            return nil
+        }
+        return mapLevelToken(String(upper[range]))
+    }
+
+    // levelFromKeywords 在全行做关键字扫描（error > warn > debug > info）。
+    nonisolated private func levelFromKeywords(in line: String) -> LogLevel {
         let upper = line.uppercased()
 
-        if upper.contains("ERROR") || upper.contains("FATAL") || upper.contains("CRITICAL") {
+        if upper.contains("ERROR") || upper.contains("FATAL") || upper.contains("CRITICAL") || upper.contains("PANIC") {
             return .error
         }
         if upper.contains("WARN") || upper.contains("WARNING") {
@@ -134,7 +169,21 @@ final class LogEngine: @unchecked Sendable {
             return .debug
         }
 
-        // 默认为 info：避免将普通输出标记为 unknown 造成过多视觉噪音
         return .info
+    }
+
+    nonisolated private func mapLevelToken(_ token: String) -> LogLevel? {
+        switch token.lowercased() {
+        case "error", "err", "fatal", "critical", "panic":
+            return .error
+        case "warn", "warning":
+            return .warn
+        case "debug", "trace":
+            return .debug
+        case "info":
+            return .info
+        default:
+            return nil
+        }
     }
 }

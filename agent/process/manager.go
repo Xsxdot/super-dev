@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/superdev/agent/logparse"
 	"github.com/superdev/agent/model"
 )
 
@@ -92,7 +93,7 @@ func (m *Manager) Start(svc model.Service) error {
 				ServiceID: svc.ID,
 				RunID:     runID,
 				Timestamp: time.Now().UTC(),
-				Level:     "INFO",
+				Level:     logparse.DetectLevel(line),
 				Message:   line,
 				Stream:    stream,
 			})

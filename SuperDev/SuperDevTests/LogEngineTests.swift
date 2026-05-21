@@ -26,6 +26,14 @@ final class LogEngineTests: XCTestCase {
         XCTAssertEqual(entry.level, .info)
     }
 
+    func test_parse_structuredLevelFieldOverridesInfoPrefix() {
+        let engine = LogEngine(runId: UUID())
+        let errorLine = #"16:37:25 [server] INFO time="2026-05-21 16:37:25" level=error msg="手动刷新绑定失败""#
+        let warnLine = #"time="2026-05-21 16:37:25" level=warning msg="API handler 返回错误""#
+        XCTAssertEqual(engine.parseLine(errorLine, serviceId: UUID(), serviceName: "server").level, .error)
+        XCTAssertEqual(engine.parseLine(warnLine, serviceId: UUID(), serviceName: "server").level, .warn)
+    }
+
     func test_dedup_foldsDuplicates() {
         let engine = LogEngine(runId: UUID())
         let sid = UUID()
