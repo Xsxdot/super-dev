@@ -50,7 +50,13 @@ describe('RuleManagerModal', () => {
 
     await wrapper.find('[data-test="new-rule"]').trigger('click')
     await wrapper.find('[data-test="rule-name"]').setValue('Errors')
-    await wrapper.find('[data-test="rule-keywords"]').setValue('error, timeout')
+
+    const keywordsInput = wrapper.find('[data-test="rule-keywords"]')
+    await keywordsInput.setValue('error')
+    await keywordsInput.trigger('keydown', { key: 'Enter' })
+    await keywordsInput.setValue('timeout')
+    await keywordsInput.trigger('keydown', { key: 'Enter' })
+
     await wrapper.find('[data-test="save-rule"]').trigger('click')
 
     expect(store.createRule).toHaveBeenCalledWith('proj-1', {
