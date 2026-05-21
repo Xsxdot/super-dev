@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/api"
 	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/store"
 )
 
 // writeTestConfig 在 dir/.superdev/config.yaml 中写入标准测试配置。
@@ -187,4 +189,86 @@ func TestFetchLogs(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&entries))
 	assert.NotNil(t, entries)
 	assert.Equal(t, 0, len(entries))
+}
+
+// TestSettingsDefaultsAndPersistence 验证 agent 设置接口返回默认值并能持久化修改。
+func TestSettingsDefaultsAndPersistence(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+
+	resp, err := http.Get(srv.URL + "/api/settings")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var defaults struct {
+		LogRetentionDays int `json:"log_retention_days"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&defaults))
+	assert.Equal(t, 7, defaults.LogRetentionDays)
+
+	req, err := http.NewRequest(
+		http.MethodPut,
+		srv.URL+"/api/settings",
+		strings.NewReader(`{"log_retention_days": 14}`),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	settingsPath := filepath.Join(dataDir, "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"log_retention_days": 14`)
+}
+
+// TestSettingsRejectsInvalidRetention 验证日志保留天数范围为 1 到 90。
+func TestSettingsRejectsInvalidRetention(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	req, err := http.NewRequest(
+		http.MethodPut,
+		srv.URL+"/api/settings",
+		strings.NewReader(`{"log_retention_days": 0}`),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestNewAppPrunesOldLogsUsingSavedSettings 验证 App 初始化时按持久化设置清理旧日志。
+func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
+	dataDir := t.TempDir()
+
+	settingsPath := filepath.Join(dataDir, "settings.json")
+	require.NoError(t, os.WriteFile(settingsPath, []byte(`{"log_retention_days": 3}`), 0o644))
+
+	dbPath := filepath.Join(dataDir, "logs.db")
+	s, err := store.New(dbPath)
+	require.NoError(t, err)
+	old := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	recent := time.Now().UTC()
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{ServiceID: "svc-1", RunID: "run-1", Timestamp: old, Level: "INFO", Message: "old", Stream: "stdout"},
+		{ServiceID: "svc-1", RunID: "run-1", Timestamp: recent, Level: "INFO", Message: "recent", Stream: "stdout"},
+	}))
+	require.NoError(t, s.Close())
+
+	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
+	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
+
+	check, err := store.New(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { check.Close() })
+	got, err := check.Fetch(store.FetchParams{ServiceID: "svc-1", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "recent", got[0].Message)
 }

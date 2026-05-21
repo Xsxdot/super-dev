@@ -40,6 +40,7 @@ type App struct {
 	buf      *logbuf.Buffer
 	store    *store.Store
 	registry *config.Registry
+	settings *config.SettingsStore
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -61,6 +62,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
+	settingsStore := config.NewSettingsStore(cfg.DataDir)
+	settings, err := settingsStore.Load()
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	if err := s.DeleteOlderThan(settings.LogRetentionDays); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+
 	buf := logbuf.New(s, 2000)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
@@ -72,6 +84,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		buf:      buf,
 		store:    s,
 		registry: registry,
+		settings: settingsStore,
 	}, nil
 }
 
@@ -97,6 +110,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{id}", a.deleteProject)
 	mux.HandleFunc("GET /api/projects/{id}/rules", a.getProjectRules)
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
+	mux.HandleFunc("GET /api/settings", a.getSettings)
+	mux.HandleFunc("PUT /api/settings", a.putSettings)
 
 	// 服务管理
 	mux.HandleFunc("GET /api/services", a.listServices)
