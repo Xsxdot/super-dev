@@ -11,7 +11,7 @@
   - 不执行上下文 API 请求
 -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
@@ -24,7 +24,9 @@ const workspace = useWorkspaceStore()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
+const suppressScrollSelectionId = ref<number | null>(null)
 const pinnedScrollTopByService = ref<Record<string, number>>({})
+let suppressScrollSelectionTimer: ReturnType<typeof window.setTimeout> | null = null
 const EDGE_LOAD_THRESHOLD = 80
 
 const visibleServiceIds = computed(() => {
@@ -108,6 +110,20 @@ function cellEntries(bucket: SearchBucketRow, serviceId: string): LogEntry[] {
   return bucket.cells[serviceId]?.entries ?? []
 }
 
+function suppressScrollSelection(logId: number) {
+  suppressScrollSelectionId.value = logId
+  if (suppressScrollSelectionTimer) {
+    window.clearTimeout(suppressScrollSelectionTimer)
+  }
+  // 外部选中会触发 scrollIntoView，浏览器随后的 scroll 事件不应该反向改写选中项。
+  suppressScrollSelectionTimer = window.setTimeout(() => {
+    if (suppressScrollSelectionId.value === logId) {
+      suppressScrollSelectionId.value = null
+    }
+    suppressScrollSelectionTimer = null
+  }, 160)
+}
+
 function togglePin(serviceId: string) {
   if (!tab.value) return
   if (tab.value.pinnedServiceIds.includes(serviceId)) {
@@ -171,7 +187,9 @@ function syncSelectedResultFromScroll(el: HTMLElement) {
 
 function handleScroll(event: Event) {
   const el = event.currentTarget as HTMLElement
-  syncSelectedResultFromScroll(el)
+  if (suppressScrollSelectionId.value === null) {
+    syncSelectedResultFromScroll(el)
+  }
   if (el.scrollTop <= EDGE_LOAD_THRESHOLD) {
     void loadMore('before')
     return
@@ -190,12 +208,19 @@ watch(
       selectedFromColumnsScrollId.value = null
       return
     }
+    suppressScrollSelection(selectedLogId)
     await nextTick()
     columnsEl.value
       ?.querySelector(`[data-entry-id="${selectedLogId}"]`)
       ?.scrollIntoView({ block: 'center', inline: 'nearest' })
   },
 )
+
+onBeforeUnmount(() => {
+  if (suppressScrollSelectionTimer) {
+    window.clearTimeout(suppressScrollSelectionTimer)
+  }
+})
 </script>
 
 <template>
