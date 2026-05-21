@@ -1,33 +1,39 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
+import { useSettingsStore } from '@/stores/settings'
 import type { Project } from '@/api/agent'
 import PopoverServiceRow from './PopoverServiceRow.vue'
 
 const props = defineProps<{ project: Project }>()
 const agentStore = useAgentStore()
+const settingsStore = useSettingsStore()
+
+const visibleServices = computed(() =>
+  props.project.services.filter(s => !settingsStore.isServiceHidden(s.id))
+)
 
 const requiredServices = computed(() =>
-  props.project.services.filter(s => s.required)
+  visibleServices.value.filter(s => s.required)
 )
 const optionalServices = computed(() =>
-  props.project.services.filter(s => !s.required)
+  visibleServices.value.filter(s => !s.required)
 )
 
 const runningCount = computed(() =>
-  props.project.services.filter(s => s.status === 'running').length
+  visibleServices.value.filter(s => s.status === 'running').length
 )
 const startingCount = computed(() =>
-  props.project.services.filter(s => s.status === 'starting').length
+  visibleServices.value.filter(s => s.status === 'starting').length
 )
 const stoppedCount = computed(() =>
-  props.project.services.filter(s => s.status !== 'running' && s.status !== 'starting').length
+  visibleServices.value.filter(s => s.status !== 'running' && s.status !== 'starting').length
 )
 
 const selectedNames = computed(() => props.project.selected_service_ids ?? [])
 
 const selectedServices = computed(() =>
-  props.project.services.filter(s =>
+  visibleServices.value.filter(s =>
     agentStore.isServiceSelectedForStart(props.project.id, s.name)
   )
 )
@@ -46,22 +52,30 @@ const someSelected = computed(() =>
   optionalServices.value.some(s => selectedNames.value.includes(s.name))
 )
 
+function hiddenSelectedNames(): string[] {
+  return props.project.services
+    .filter(s => settingsStore.isServiceHidden(s.id) && selectedNames.value.includes(s.name))
+    .map(s => s.name)
+}
+
 async function toggleSelectAll() {
   const requiredNames = requiredServices.value.map(s => s.name)
+  const hiddenNames = hiddenSelectedNames()
   if (allOptionalSelected.value) {
-    await agentStore.updateSelected(props.project.id, requiredNames)
+    await agentStore.updateSelected(props.project.id, [...hiddenNames, ...requiredNames])
   } else {
-    const all = props.project.services.map(s => s.name)
-    await agentStore.updateSelected(props.project.id, all)
+    const all = visibleServices.value.map(s => s.name)
+    await agentStore.updateSelected(props.project.id, [...hiddenNames, ...all])
   }
 }
 
 async function invertSelection() {
   const requiredNames = requiredServices.value.map(s => s.name)
   const optionalNames = optionalServices.value.map(s => s.name)
+  const hiddenNames = hiddenSelectedNames()
   const currentOptionalSelected = optionalNames.filter(n => selectedNames.value.includes(n))
   const inverted = optionalNames.filter(n => !currentOptionalSelected.includes(n))
-  const next = [...requiredNames, ...inverted]
+  const next = [...hiddenNames, ...requiredNames, ...inverted]
   await agentStore.updateSelected(props.project.id, next)
 }
 
@@ -70,7 +84,7 @@ async function startSelected() {
 }
 
 async function stopAll() {
-  const active = props.project.services.filter(
+  const active = visibleServices.value.filter(
     s => s.status === 'running' || s.status === 'starting'
   )
   await Promise.all(active.map(s => agentStore.stopService(s.id)))

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
+import { useSettingsStore } from '@/stores/settings'
 import type { Project } from '@/api/agent'
 
 const emit = defineEmits<{
@@ -8,12 +9,18 @@ const emit = defineEmits<{
 }>()
 
 const agentStore = useAgentStore()
+const settingsStore = useSettingsStore()
 const searchText = ref('')
 const hoveredProjectId = ref<string | null>(null)
 
+function visibleServices(project: Project) {
+  return project.services.filter(s => !settingsStore.isServiceHidden(s.id))
+}
+
 function filteredServices(project: Project) {
-  if (!searchText.value) return project.services
-  return project.services.filter(s =>
+  const services = visibleServices(project)
+  if (!searchText.value) return services
+  return services.filter(s =>
     s.name.toLowerCase().includes(searchText.value.toLowerCase())
   )
 }
