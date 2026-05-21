@@ -16,6 +16,7 @@ export type LogDisplayItem =
   | { kind: 'entry'; id: string; log: DisplayLogEntry }
   | { kind: 'markerStart'; id: string; date: Date }
   | { kind: 'markerEnd'; id: string; date: Date }
+  | { kind: 'historySeparator'; id: string }
 
 export interface BookmarkDisplayInput {
   state: BookmarkState
@@ -29,12 +30,39 @@ export interface MarkerIds {
   end: string
 }
 
+export interface HistoryBoundary {
+  timestamp: string
+  id: number
+}
+
 function ts(log: DisplayLogEntry): Date {
   return new Date(log.timestamp)
 }
 
 function entryItem(log: DisplayLogEntry, scope = 'live'): LogDisplayItem {
   return { kind: 'entry', id: `${scope}-${log.id}`, log }
+}
+
+function isAtOrBeforeBoundary(log: DisplayLogEntry, boundary: HistoryBoundary): boolean {
+  const diff = new Date(log.timestamp).getTime() - new Date(boundary.timestamp).getTime()
+  return diff < 0 || (diff === 0 && log.id <= boundary.id)
+}
+
+function withHistorySeparator(items: LogDisplayItem[], boundary: HistoryBoundary | null): LogDisplayItem[] {
+  if (!boundary) return items
+  let insertAfter = -1
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'entry' && isAtOrBeforeBoundary(item.log, boundary)) {
+      insertAfter = i
+    }
+  }
+  if (insertAfter < 0) return items
+  return [
+    ...items.slice(0, insertAfter + 1),
+    { kind: 'historySeparator', id: `history-separator-${boundary.timestamp}-${boundary.id}` },
+    ...items.slice(insertAfter + 1),
+  ]
 }
 
 /**
@@ -55,11 +83,12 @@ export function makeDisplayItems(
   logs: DisplayLogEntry[],
   bm: BookmarkDisplayInput | null,
   markerIds: MarkerIds,
+  historyBoundary: HistoryBoundary | null = null,
 ): LogDisplayItem[] {
   const items: LogDisplayItem[] = []
   if (!bm?.startTime) {
     for (const log of logs) items.push(entryItem(log))
-    return items
+    return withHistorySeparator(items, historyBoundary)
   }
 
   const startTime = bm.startTime
@@ -82,7 +111,7 @@ export function makeDisplayItems(
       items.push({ kind: 'markerEnd', id: markerIds.end, date: endTime })
     }
     for (const log of after) items.push(entryItem(log))
-    return items
+    return withHistorySeparator(items, historyBoundary)
   }
 
   const before = logs.filter(l => ts(l) < startTime)
@@ -92,7 +121,7 @@ export function makeDisplayItems(
     items.push({ kind: 'markerStart', id: markerIds.start, date: startTime })
   }
   for (const log of after) items.push(entryItem(log))
-  return items
+  return withHistorySeparator(items, historyBoundary)
 }
 
 export interface DisplayStats {

@@ -7,7 +7,7 @@
 // 边界：
 //   - 不挂载 Vue 组件，不测试 DOM 样式和滚动行为
 import { describe, it, expect } from 'vitest'
-import { makeDisplayItems } from '../logDisplay'
+import { makeDisplayItems, computeDisplayStats } from '../logDisplay'
 import type { DisplayLogEntry } from '../logEngine'
 
 function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
@@ -102,5 +102,34 @@ describe('makeDisplayItems', () => {
       'markerEnd',
       5,
     ])
+  })
+
+  it('在历史边界后插入历史消息分隔线', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:02.000Z'),
+      makeLog(3, '2026-05-21T10:00:03.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, {
+      timestamp: '2026-05-21T10:00:02.000Z',
+      id: 2,
+    })
+
+    expect(items.map(item => item.kind)).toEqual(['entry', 'entry', 'historySeparator', 'entry'])
+  })
+
+  it('历史分隔线不参与统计', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:02.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, {
+      timestamp: '2026-05-21T10:00:01.000Z',
+      id: 1,
+    })
+
+    expect(computeDisplayStats(items).total).toBe(2)
   })
 })
