@@ -82,6 +82,15 @@ export interface LogContextResponse {
   items_by_service: Record<string, LogEntry[]>
 }
 
+export type LogContextPageDirection = 'before' | 'after'
+
+export interface LogContextPageResponse {
+  service_id: string
+  direction: LogContextPageDirection
+  items: LogEntry[]
+  has_more: boolean
+}
+
 export interface SearchLogsParams {
   project: string
   q: string
@@ -95,6 +104,15 @@ export interface FetchLogContextParams {
   service?: string[]
   before_ms?: number
   after_ms?: number
+}
+
+export interface FetchLogContextPageParams {
+  project: string
+  service: string
+  direction: LogContextPageDirection
+  cursor_time: string
+  cursor_id: number
+  limit?: number
 }
 
 export const api = {
@@ -149,5 +167,15 @@ export const api = {
     if (params.before_ms) qs.set('before_ms', String(params.before_ms))
     if (params.after_ms) qs.set('after_ms', String(params.after_ms))
     return request<LogContextResponse>(`/api/logs/context?${qs}`)
+  },
+  fetchLogContextPage: (params: FetchLogContextPageParams) => {
+    const qs = new URLSearchParams()
+    qs.set('project', params.project)
+    qs.set('service', params.service)
+    qs.set('direction', params.direction)
+    qs.set('cursor_time', params.cursor_time)
+    qs.set('cursor_id', String(params.cursor_id))
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
   },
 }

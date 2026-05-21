@@ -27,6 +27,8 @@ const (
 	maxSearchLimit     = 5000
 	defaultContextMS   = 30000
 	maxContextMS       = 300000
+	defaultPageLimit   = 200
+	maxPageLimit       = 1000
 )
 
 type logSearchResponse struct {
@@ -40,6 +42,13 @@ type logContextResponse struct {
 	TargetID       int64                       `json:"target_id"`
 	AnchorTime     time.Time                   `json:"anchor_time"`
 	ItemsByService map[string][]model.LogEntry `json:"items_by_service"`
+}
+
+type logContextPageResponse struct {
+	ServiceID string                     `json:"service_id"`
+	Direction store.ContextPageDirection `json:"direction"`
+	Items     []model.LogEntry           `json:"items"`
+	HasMore   bool                       `json:"has_more"`
 }
 
 // searchLogs 处理 GET /api/log-search，按项目服务集合搜索历史日志。
@@ -119,6 +128,67 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		TargetID:       result.TargetID,
 		AnchorTime:     result.AnchorTime,
 		ItemsByService: result.ItemsByService,
+	})
+}
+
+// fetchLogContextPage 处理 GET /api/logs/context/page，按单服务时间游标继续读取上下文。
+func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	projectID := q.Get("project")
+	if projectID == "" {
+		jsonError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	serviceID := q.Get("service")
+	if serviceID == "" {
+		jsonError(w, http.StatusBadRequest, "service is required")
+		return
+	}
+	direction := store.ContextPageDirection(q.Get("direction"))
+	if direction != store.ContextPageBefore && direction != store.ContextPageAfter {
+		jsonError(w, http.StatusBadRequest, "direction must be before or after")
+		return
+	}
+	cursorTime, err := time.Parse(time.RFC3339Nano, q.Get("cursor_time"))
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "cursor_time is required")
+		return
+	}
+	cursorID, err := strconv.ParseInt(q.Get("cursor_id"), 10, 64)
+	if err != nil || cursorID < 0 {
+		jsonError(w, http.StatusBadRequest, "cursor_id is required")
+		return
+	}
+	serviceIDs, ok := a.projectServiceIDs(projectID, []string{serviceID})
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if len(serviceIDs) != 1 {
+		jsonError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	limit := parseBoundedInt(q.Get("limit"), defaultPageLimit, maxPageLimit)
+	result, err := a.store.FetchContextPage(store.ContextPageParams{
+		ServiceID:  serviceIDs[0],
+		CursorTime: cursorTime,
+		CursorID:   cursorID,
+		Direction:  direction,
+		Limit:      limit,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to fetch log context page: "+err.Error())
+		return
+	}
+	if result.Entries == nil {
+		result.Entries = []model.LogEntry{}
+	}
+	jsonOK(w, logContextPageResponse{
+		ServiceID: serviceIDs[0],
+		Direction: direction,
+		Items:     result.Entries,
+		HasMore:   result.HasMore,
 	})
 }
 

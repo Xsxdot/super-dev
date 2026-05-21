@@ -68,11 +68,36 @@ type ContextParams struct {
 	After      time.Duration
 }
 
+// ContextPageDirection 表示上下文游标分页的方向。
+type ContextPageDirection string
+
+const (
+	// ContextPageBefore 表示查询游标之前的更早日志。
+	ContextPageBefore ContextPageDirection = "before"
+	// ContextPageAfter 表示查询游标之后的更新日志。
+	ContextPageAfter ContextPageDirection = "after"
+)
+
+// ContextPageParams 定义单服务上下文游标分页参数。
+type ContextPageParams struct {
+	ServiceID  string
+	CursorTime time.Time
+	CursorID   int64
+	Direction  ContextPageDirection
+	Limit      int
+}
+
 // ContextResult 表示跨服务上下文查询结果。
 type ContextResult struct {
 	TargetID       int64
 	AnchorTime     time.Time
 	ItemsByService map[string][]model.LogEntry
+}
+
+// ContextPageResult 表示单服务上下文游标分页结果。
+type ContextPageResult struct {
+	Entries []model.LogEntry
+	HasMore bool
 }
 
 // New 打开（或创建）指定路径的 SQLite 数据库，并执行 schema 迁移。
@@ -363,6 +388,76 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 		result.ItemsByService[e.ServiceID] = append(result.ItemsByService[e.ServiceID], e)
 	}
 	return result, rows.Err()
+}
+
+// FetchContextPage 按服务和时间游标继续读取上下文日志。
+//
+// 参数：
+//   - p: ServiceID 限定单个服务，CursorTime/CursorID 定义当前位置，Direction 控制向前或向后翻页
+//
+// 返回：
+//   - Entries: 按 timestamp ASC, id ASC 排序的日志页
+//   - HasMore: 当前方向是否还有更多历史数据
+//   - 查询或扫描失败时返回错误
+func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error) {
+	result := ContextPageResult{Entries: []model.LogEntry{}}
+	if p.ServiceID == "" || p.CursorTime.IsZero() {
+		return result, nil
+	}
+	if p.Limit <= 0 {
+		p.Limit = 200
+	}
+
+	order := "ASC"
+	comparator := "(timestamp > ? OR (timestamp = ? AND id > ?))"
+	if p.Direction == ContextPageBefore {
+		order = "DESC"
+		comparator = "(timestamp < ? OR (timestamp = ? AND id < ?))"
+	} else if p.Direction != ContextPageAfter {
+		return result, fmt.Errorf("invalid context page direction: %s", p.Direction)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, service_id, run_id, timestamp, level, message, stream
+		FROM log_entries
+		WHERE service_id = ? AND %s
+		ORDER BY timestamp %s, id %s
+		LIMIT ?
+	`, comparator, order, order)
+	rows, err := s.db.Query(
+		query,
+		p.ServiceID,
+		p.CursorTime.UTC(),
+		p.CursorTime.UTC(),
+		p.CursorID,
+		p.Limit+1,
+	)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var e model.LogEntry
+		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+			return result, err
+		}
+		result.Entries = append(result.Entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+
+	if len(result.Entries) > p.Limit {
+		result.HasMore = true
+		result.Entries = result.Entries[:p.Limit]
+	}
+	if p.Direction == ContextPageBefore {
+		for i, j := 0, len(result.Entries)-1; i < j; i, j = i+1, j-1 {
+			result.Entries[i], result.Entries[j] = result.Entries[j], result.Entries[i]
+		}
+	}
+	return result, nil
 }
 
 // DeleteOlderThan 删除超过指定天数的日志条目。

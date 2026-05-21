@@ -110,6 +110,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs", a.fetchLogs)
 	mux.HandleFunc("GET /api/log-search", a.searchLogs)
 	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
+	mux.HandleFunc("GET /api/logs/context/page", a.fetchLogContextPage)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
 
 	return cors(mux)
