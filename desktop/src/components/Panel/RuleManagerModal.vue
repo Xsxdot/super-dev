@@ -10,7 +10,7 @@
   - 不管理跨服务搜索页的隐藏服务状态
 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useFilterStore, type ChipLogic, type ChipType } from '@/stores/filter'
 import type { LogRule } from '@/api/agent'
 
@@ -32,10 +32,14 @@ const savingFromPanel = ref(false)
 const form = reactive({
   name: '',
   type: 'include' as ChipType,
-  keywords: '',
+  keywords: [] as string[],
   logic: 'or' as ChipLogic,
   enabled: true,
 })
+
+// tag 输入器状态
+const tagInput = ref('')
+const tagInputEl = ref<HTMLInputElement | null>(null)
 
 const rules = computed(() => filterStore.projectRules[props.projectId] ?? [])
 const panel = computed(() => filterStore.getPanel(props.panelId))
@@ -46,9 +50,10 @@ function resetForm() {
   savingFromPanel.value = false
   form.name = ''
   form.type = 'include'
-  form.keywords = ''
+  form.keywords = []
   form.logic = 'or'
   form.enabled = true
+  tagInput.value = ''
 }
 
 function startNewRule() {
@@ -60,9 +65,10 @@ function startEdit(rule: LogRule) {
   savingFromPanel.value = false
   form.name = rule.name
   form.type = rule.type
-  form.keywords = rule.keywords.join(', ')
+  form.keywords = [...rule.keywords]
   form.logic = rule.logic
   form.enabled = rule.enabled
+  tagInput.value = ''
 }
 
 function startSaveCurrentFilter() {
@@ -74,19 +80,51 @@ function startSaveCurrentFilter() {
   form.keywords = panel.value.chips
     .filter(chip => chip.type === firstType)
     .map(chip => chip.keyword)
-    .join(', ')
 }
 
-function splitKeywords(): string[] {
-  return form.keywords.split(/[,;\t\n]+/).map(s => s.trim()).filter(Boolean)
+// 将输入框当前值提交为 tag
+function commitTag() {
+  const raw = tagInput.value.replace(/,|;/g, '').trim()
+  if (!raw) return
+  if (!form.keywords.some(k => k.toLowerCase() === raw.toLowerCase())) {
+    form.keywords.push(raw)
+  }
+  tagInput.value = ''
+}
+
+function onTagInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault()
+    commitTag()
+  } else if (e.key === 'Backspace' && tagInput.value === '' && form.keywords.length > 0) {
+    form.keywords.pop()
+  }
+}
+
+// 输入逗号/分号时触发提交
+function onTagInputInput() {
+  if (/[,;]/.test(tagInput.value)) {
+    commitTag()
+  }
+}
+
+function removeKeyword(index: number) {
+  form.keywords.splice(index, 1)
+}
+
+function focusTagInput() {
+  nextTick(() => tagInputEl.value?.focus())
 }
 
 async function saveRule() {
+  commitTag()
+  const keywords = form.keywords.filter(Boolean)
+
   if (savingFromPanel.value) {
     await filterStore.savePanelChipsAsRule(props.projectId, props.panelId, {
       name: form.name,
       type: form.type,
-      keywords: splitKeywords(),
+      keywords,
       logic: form.logic,
       enabled: form.enabled,
     })
@@ -97,7 +135,7 @@ async function saveRule() {
   const draft = {
     name: form.name,
     type: form.type,
-    keywords: splitKeywords(),
+    keywords,
     logic: form.logic,
     enabled: form.enabled,
   }
@@ -163,25 +201,64 @@ onMounted(() => {
             名称
             <input data-test="rule-name" v-model="form.name" />
           </label>
-          <label>
-            关键词
-            <textarea data-test="rule-keywords" v-model="form.keywords" />
-          </label>
+
+          <div class="field">
+            <span class="field-label">关键词</span>
+            <div class="tag-input" @click="focusTagInput">
+              <span
+                v-for="(kw, i) in form.keywords"
+                :key="i"
+                class="tag"
+              >
+                {{ kw }}
+                <button type="button" class="tag-remove" @click.stop="removeKeyword(i)">×</button>
+              </span>
+              <input
+                ref="tagInputEl"
+                data-test="rule-keywords"
+                class="tag-text-input"
+                v-model="tagInput"
+                placeholder="输入后回车添加…"
+                @keydown="onTagInputKeydown"
+                @input="onTagInputInput"
+                @blur="commitTag"
+              />
+            </div>
+          </div>
+
           <div class="form-row">
-            <label>
-              类型
-              <select v-model="form.type">
-                <option value="include">包含</option>
-                <option value="exclude">排除</option>
-              </select>
-            </label>
-            <label>
-              逻辑
-              <select v-model="form.logic">
-                <option value="or">OR</option>
-                <option value="and">AND</option>
-              </select>
-            </label>
+            <div class="field">
+              <span class="field-label">类型</span>
+              <div class="toggle-group">
+                <button
+                  type="button"
+                  :class="{ active: form.type === 'include' }"
+                  @click="form.type = 'include'"
+                >包含</button>
+                <button
+                  type="button"
+                  :class="{ active: form.type === 'exclude' }"
+                  @click="form.type = 'exclude'"
+                >排除</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="field-label">逻辑</span>
+              <div class="toggle-group">
+                <button
+                  type="button"
+                  :class="{ active: form.logic === 'or' }"
+                  @click="form.logic = 'or'"
+                >OR</button>
+                <button
+                  type="button"
+                  :class="{ active: form.logic === 'and' }"
+                  @click="form.logic = 'and'"
+                >AND</button>
+              </div>
+            </div>
+
             <label class="enabled-check">
               <input type="checkbox" v-model="form.enabled" />
               启用
@@ -297,6 +374,19 @@ h2 {
   align-items: center;
   gap: 8px;
 }
+.form-row {
+  align-items: flex-end;
+}
+/* 通用字段容器（替代 <label> 用于非 input 字段） */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.field-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
 label {
   display: flex;
   flex-direction: column;
@@ -304,9 +394,7 @@ label {
   color: var(--text-secondary);
   font-size: 11px;
 }
-input,
-textarea,
-select {
+input {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -314,9 +402,78 @@ select {
   padding: 6px 8px;
   font-size: 12px;
 }
-textarea {
-  min-height: 86px;
-  resize: vertical;
+/* tag 输入器容器 */
+.tag-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 34px;
+  cursor: text;
+}
+.tag-input:focus-within {
+  border-color: var(--accent);
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.tag-remove {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tag-remove:hover {
+  color: var(--text-primary);
+}
+.tag-text-input {
+  flex: 1;
+  min-width: 80px;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 2px 2px;
+}
+/* toggle 按钮组 */
+.toggle-group {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.toggle-group button {
+  padding: 4px 11px;
+  font-size: 11px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+.toggle-group button + button {
+  border-left: 1px solid var(--border);
+}
+.toggle-group button.active {
+  background: var(--accent);
+  color: #fff;
 }
 button {
   border: 1px solid var(--border);
@@ -334,6 +491,7 @@ button:disabled {
 .enabled-check {
   flex-direction: row;
   align-items: center;
+  padding-bottom: 1px;
 }
 .enabled-check input {
   width: 13px;
