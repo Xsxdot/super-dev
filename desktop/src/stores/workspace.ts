@@ -338,6 +338,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (tab[loadingKey]) return false
 
     const requests = visibleContextServiceIds(tab)
+      .filter(serviceId => !tab.pinnedServiceIds.includes(serviceId))
       .filter(serviceId => hasMoreMap[serviceId] !== false)
       .map(serviceId => {
         const cursor = contextCursor(tab, serviceId, direction)

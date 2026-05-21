@@ -73,6 +73,7 @@ function setRect(element: Element, top: number, bottom: number) {
 
 describe('SearchServiceColumns', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     localStorage.clear()
     setActivePinia(createPinia())
   })
@@ -101,6 +102,31 @@ describe('SearchServiceColumns', () => {
     expect(wrapper.text()).not.toContain('logger hidden')
     expect(wrapper.find('.columns-header').attributes('style')).toContain('1fr')
     expect(wrapper.find('.columns-header').attributes('style')).not.toContain('360px')
+  })
+
+  it('固定服务从共享滚动容器中剥离，避免跟随其他服务滚动', () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 3, 'svc-worker': 2 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(1, 'svc-api', 'api pinned')],
+      'svc-worker': [log(2, 'svc-worker', 'worker scrolling')],
+    }
+    workspace.pinService(tab.id, 'svc-api')
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    expect(wrapper.find('.pinned-columns').text()).toContain('api')
+    expect(wrapper.find('.pinned-columns').text()).toContain('api pinned')
+    expect(wrapper.find('.columns').text()).not.toContain('api pinned')
+    expect(wrapper.findAll('.columns .column-header')).toHaveLength(1)
+    expect(wrapper.find('.columns .column-header').text()).toContain('worker')
   })
 
   it('滚动到顶部时请求向上加载更多上下文', async () => {

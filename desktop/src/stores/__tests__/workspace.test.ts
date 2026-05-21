@@ -311,4 +311,38 @@ describe('workspaceStore', () => {
     expect(tab.hasMoreBeforeByService['svc-api']).toBe(true)
     expect(tab.hasMoreBeforeByService['svc-worker']).toBe(false)
   })
+
+  it('loadMoreContext 不请求已固定服务，避免固定列跟随分页刷新', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    vi.spyOn(agentApi, 'fetchLogContextPage').mockImplementation(async params => ({
+      service_id: params.service,
+      direction: params.direction,
+      items: [log(2, params.service, 'older worker', '2026-05-20T22:41:31.000Z')],
+      has_more: false,
+    }))
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 1, 'svc-worker': 1 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = {
+      'svc-api': [log(9, 'svc-api', 'pinned api', '2026-05-20T22:41:32.000Z')],
+      'svc-worker': [log(10, 'svc-worker', 'current worker', '2026-05-20T22:41:32.000Z')],
+    }
+    workspace.pinService(tab.id, 'svc-api')
+
+    await workspace.loadMoreContext(tab.id, 'before')
+
+    expect(agentApi.fetchLogContextPage).toHaveBeenCalledTimes(1)
+    expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
+      project: 'proj-1',
+      service: 'svc-worker',
+      direction: 'before',
+      cursor_time: '2026-05-20T22:41:32.000Z',
+      cursor_id: 10,
+      limit: 200,
+    })
+    expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['pinned api'])
+  })
 })
