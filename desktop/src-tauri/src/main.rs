@@ -11,6 +11,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_autostart::MacosLauncher;
 
 /// 最近一次显示 popover 的时间戳（ms），用于忽略打开瞬间的误触 Focused(false)。
 static POPOVER_SHOWN_AT_MS: AtomicU64 = AtomicU64::new(0);
@@ -36,6 +37,15 @@ fn now_ms() -> u64 {
 fn show_main_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// show_settings_window 显示主窗口并切换到设置页。
+fn show_settings_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.eval("window.location.hash = '#/settings'");
         let _ = w.set_focus();
     }
 }
@@ -165,10 +175,7 @@ fn position_and_show_popover(
     } else if let Some(monitor) = app.primary_monitor().ok().flatten() {
         let area = monitor.work_area();
         let right = area.position.x + area.size.width as i32;
-        (
-            right - POPOVER_WIDTH - 4,
-            area.position.y + 4,
-        )
+        (right - POPOVER_WIDTH - 4, area.position.y + 4)
     } else {
         (800, 30)
     };
@@ -184,6 +191,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![show_main_window])
         .setup(|app| {
             let agent = AgentProcess::new();
@@ -193,8 +204,7 @@ fn main() {
             app.manage(agent);
 
             // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
-            let settings =
-                MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&settings, &quit])?;
 
@@ -209,10 +219,7 @@ fn main() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "settings" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        show_settings_window(app);
                     }
                     "quit" => {
                         app.state::<AgentProcess>().stop();
