@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
@@ -29,18 +30,22 @@ import (
 type AppConfig struct {
 	// DataDir 是存放数据库文件和注册表文件的根目录。
 	DataDir string
+	// ProbeOverride 仅用于测试,生产环境为 nil 时使用 SystemProbe。
+	ProbeOverride collector.Probe
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg      AppConfig
-	mu       sync.RWMutex
-	projects []model.Project
-	managers map[string]*process.Manager // projectID → manager
-	buf      *logbuf.Buffer
-	store    *store.Store
-	registry *config.Registry
-	settings *config.SettingsStore
+	cfg       AppConfig
+	mu        sync.RWMutex
+	projects  []model.Project
+	managers  map[string]*process.Manager // projectID → manager
+	buf       *logbuf.Buffer
+	store     *store.Store
+	registry  *config.Registry
+	settings  *config.SettingsStore
+	procMgr   *process.Manager // 远端 collector 复用的进程管理器
+	collector *collector.Manager
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -76,15 +81,23 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(s, 2000)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
+	procMgr := process.NewManager(buf.Append)
+	probe := collector.Probe(collector.NewSystemProbe())
+	if cfg.ProbeOverride != nil {
+		probe = cfg.ProbeOverride
+	}
+	colMgr := collector.NewManager(procMgr, probe)
 
 	return &App{
-		cfg:      cfg,
-		projects: []model.Project{},
-		managers: map[string]*process.Manager{},
-		buf:      buf,
-		store:    s,
-		registry: registry,
-		settings: settingsStore,
+		cfg:       cfg,
+		projects:  []model.Project{},
+		managers:  map[string]*process.Manager{},
+		buf:       buf,
+		store:     s,
+		registry:  registry,
+		settings:  settingsStore,
+		procMgr:   procMgr,
+		collector: colMgr,
 	}, nil
 }
 
@@ -92,6 +105,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 //
 // 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
 func (a *App) Close() {
+	if a.procMgr != nil {
+		a.procMgr.StopAll()
+	}
 	a.buf.Close()
 	if a.store != nil {
 		a.store.Close()
@@ -127,6 +143,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
 	mux.HandleFunc("GET /api/logs/context/page", a.fetchLogContextPage)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
+
+	// Collector 控制(远端 agent 接收本机隧道请求)
+	mux.HandleFunc("POST /api/collectors", a.startCollector)
+	mux.HandleFunc("DELETE /api/collectors/{id}", a.stopCollector)
+	mux.HandleFunc("GET /api/collectors", a.listCollectors)
 
 	return cors(mux)
 }
