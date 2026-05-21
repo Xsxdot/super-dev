@@ -49,6 +49,8 @@ log_rules:
 	assert.Equal(t, "server", p.Services[0].Name)
 	assert.True(t, p.Services[0].Required)
 	assert.Equal(t, 1, p.Services[0].Order)
+	// 相对路径应被解析为相对于项目根目录的绝对路径
+	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].WorkDir)
 	assert.Equal(t, []string{"worker"}, p.SelectedServiceIDs)
 	assert.Equal(t, model.StatusStopped, p.Services[0].Status)
 }

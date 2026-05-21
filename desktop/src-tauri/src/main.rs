@@ -208,13 +208,15 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&settings, &quit])?;
 
+            // 菜单栏用专用彩色图标（按 superdev-logo-v5-launch.svg 设计），不用 app icon
+            let tray_icon = tauri::image::Image::from_bytes(
+                include_bytes!("../icons/tray-icon.png"),
+            )
+            .map_err(|e| format!("加载托盘图标失败: {e}"))?;
+
             TrayIconBuilder::with_id("main")
-                .icon(
-                    app.default_window_icon()
-                        .ok_or("未配置默认窗口图标")?
-                        .clone(),
-                )
-                .icon_as_template(true)
+                .icon(tray_icon)
+                .icon_as_template(false)
                 .show_menu_on_left_click(false)
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -275,6 +277,12 @@ fn main() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // cmd+Q 或任何方式退出时都要 kill agent，避免遗留孤儿进程
+            if let tauri::RunEvent::Exit = event {
+                app.state::<AgentProcess>().stop();
+            }
+        });
 }

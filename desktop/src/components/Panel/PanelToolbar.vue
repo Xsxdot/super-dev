@@ -139,7 +139,7 @@ async function exportBookmark() {
         @keydown.enter="submitChip"
       />
 
-      <!-- chips -->
+      <!-- 临时 chips -->
       <div
         v-for="chip in panel.chips"
         :key="chip.id"
@@ -157,10 +157,13 @@ async function exportBookmark() {
       <button v-if="panel.chips.length > 1" class="logic-btn" @click="filterStore.toggleLogic(panelId)">
         {{ panel.logic.toUpperCase() }}
       </button>
+    </div>
 
-      <!-- 项目规则快捷开关 -->
-      <template v-if="rules.length">
-        <div class="divider" />
+    <!-- 持久规则快捷开关区 -->
+    <template v-if="rules.length">
+      <div class="rules-divider" />
+      <div class="rules-area">
+        <span class="rules-label">规则</span>
         <button
           v-for="rule in rules"
           :key="rule.id"
@@ -172,8 +175,8 @@ async function exportBookmark() {
           <span class="rule-arrow">{{ rule.type === 'include' ? '↑' : '↓' }}</span>
           <span :class="{ strikethrough: !rule.enabled }">{{ rule.name || rule.keywords[0] }}</span>
         </button>
-      </template>
-    </div>
+      </div>
+    </template>
 
     <div class="flex-1" />
 
@@ -238,9 +241,9 @@ async function exportBookmark() {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex: 1;
   min-width: 0;
-  overflow: hidden;
+  flex-shrink: 1;
+  overflow: visible;
 }
 .search-icon { flex-shrink: 0; }
 .segmented {
@@ -314,6 +317,27 @@ async function exportBookmark() {
   cursor: pointer;
   flex-shrink: 0;
 }
+.rules-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+.rules-area {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.rules-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
 .rule-chip {
   display: flex;
   align-items: center;
@@ -328,8 +352,9 @@ async function exportBookmark() {
   flex-shrink: 0;
 }
 .rule-chip.enabled {
-  background: rgba(31,111,235,0.10);
-  border-color: rgba(31,111,235,0.25);
+  background: rgba(63,185,80,0.10);
+  border-color: rgba(63,185,80,0.30);
+  color: #3fb950;
 }
 .rule-arrow { font-size: 9px; }
 .strikethrough { text-decoration: line-through; opacity: 0.5; }

@@ -1,6 +1,7 @@
 package process
 
 import (
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -100,6 +101,7 @@ func (m *Manager) Start(svc model.Service) error {
 
 	if err := r.Start(); err != nil {
 		m.setStatus(svc.ID, model.StatusFailed)
+		m.emitLog(svc.ID, "ERROR", "stderr", "启动失败: "+err.Error())
 		return err
 	}
 
@@ -109,13 +111,21 @@ func (m *Manager) Start(svc model.Service) error {
 	m.setStatus(svc.ID, model.StatusRunning)
 
 	gen := m.bumpGeneration(svc.ID)
-	// 后台监控进程退出，自动更新状态为 StatusStopped。
+	// 后台监控进程退出，自动更新状态。
 	// 仅当 generation 未变时写回，避免重启后旧 goroutine 把 running 覆盖为 stopped。
 	go func() {
 		for r.IsRunning() {
 			time.Sleep(200 * time.Millisecond)
 		}
-		if m.generation(svc.ID) == gen {
+		if m.generation(svc.ID) != gen {
+			return
+		}
+		exitCode := r.ExitCode()
+		if exitCode != 0 {
+			m.setStatus(svc.ID, model.StatusFailed)
+			m.emitLog(svc.ID, "ERROR", "stderr",
+				fmt.Sprintf("进程异常退出，退出码 %d", exitCode))
+		} else {
 			m.setStatus(svc.ID, model.StatusStopped)
 		}
 	}()
@@ -166,7 +176,9 @@ func (m *Manager) StartGroup(services []model.Service) error {
 //
 // 注意：
 //   - 进程未启动或已退出时调用为空操作
+//   - bumpGeneration 保证后台监控 goroutine 不会在 Stop 后把状态覆盖为 failed
 func (m *Manager) Stop(serviceID string) {
+	m.bumpGeneration(serviceID)
 	m.mu.Lock()
 	r := m.runners[serviceID]
 	delete(m.runners, serviceID)
@@ -231,6 +243,21 @@ func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 	m.mu.Lock()
 	m.status[id] = st
 	m.mu.Unlock()
+}
+
+// emitLog 通过 onLog 回调发送一条系统日志，level 为 "ERROR"/"INFO" 等。
+func (m *Manager) emitLog(serviceID, level, stream, message string) {
+	m.mu.Lock()
+	runID := m.runID
+	m.mu.Unlock()
+	m.onLog(model.LogEntry{
+		ServiceID: serviceID,
+		RunID:     runID,
+		Timestamp: time.Now().UTC(),
+		Level:     level,
+		Message:   message,
+		Stream:    stream,
+	})
 }
 
 func (m *Manager) bumpGeneration(serviceID string) uint64 {

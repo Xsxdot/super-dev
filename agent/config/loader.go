@@ -67,11 +67,17 @@ func (l *Loader) Load() (model.Project, error) {
 
 	services := make([]model.Service, len(raw.Services))
 	for i, s := range raw.Services {
+		workDir := s.WorkingDir
+		// 相对路径解析为相对于项目根目录的绝对路径，避免 exec.Command 以
+		// agent 自身的工作目录为基准导致 "no such file or directory" 错误。
+		if workDir != "" && !filepath.IsAbs(workDir) {
+			workDir = filepath.Join(l.rootPath, workDir)
+		}
 		services[i] = model.Service{
 			ID:       s.ID,
 			Name:     s.Name,
 			Command:  s.Command,
-			WorkDir:  s.WorkingDir,
+			WorkDir:  workDir,
 			Required: s.Required,
 			Order:    s.Order,
 			EnvFile:  s.EnvFile,

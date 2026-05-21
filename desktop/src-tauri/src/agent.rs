@@ -17,11 +17,21 @@ impl AgentProcess {
             return Ok(());
         }
 
+        // debug_assertions 在 `tauri dev` 时为 true，`tauri build` 时为 false，
+        // 以此区分开发版（57018）和正式版（57017），避免同时运行时端口冲突。
+        let (addr, data_dir) = if cfg!(debug_assertions) {
+            let home = std::env::var("HOME").unwrap_or_default();
+            ("127.0.0.1:57018", format!("{home}/.superdev-dev"))
+        } else {
+            let home = std::env::var("HOME").unwrap_or_default();
+            ("127.0.0.1:57017", format!("{home}/.superdev"))
+        };
+
         let (_rx, child) = app
             .shell()
             .sidecar("superdev-agent")
             .map_err(|e| format!("找不到 agent sidecar: {e}"))?
-            .args(["--addr", "127.0.0.1:27017"])
+            .args(["--addr", addr, "--data", &data_dir])
             .spawn()
             .map_err(|e| format!("启动 agent 失败: {e}"))?;
 

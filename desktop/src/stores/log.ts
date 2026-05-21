@@ -1,15 +1,13 @@
 // logStore 按 serviceId 维护日志缓冲和 WebSocket 连接，多面板共享同一连接。
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { type LogEntry } from '@/api/agent'
+import { WS_BASE, type LogEntry } from '@/api/agent'
 import {
   closeActiveFold,
   ingest,
   toDisplayEntry,
   type DisplayLogEntry,
 } from '@/lib/logEngine'
-
-const WS_BASE = 'ws://127.0.0.1:27017'
 const MAX_LOGS = 8000
 
 interface LogBoundary {

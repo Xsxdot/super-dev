@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -112,6 +113,16 @@ func (r *Runner) IsRunning() bool {
 	return r.cmd != nil && r.cmd.ProcessState == nil
 }
 
+// ExitCode 返回子进程退出码；进程仍在运行或未启动时返回 0。
+func (r *Runner) ExitCode() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cmd != nil && r.cmd.ProcessState != nil {
+		return r.cmd.ProcessState.ExitCode()
+	}
+	return 0
+}
+
 // PID 返回子进程的 PID；进程未启动时返回 0。
 func (r *Runner) PID() int {
 	r.mu.Lock()
@@ -130,10 +141,47 @@ func (r *Runner) scanLines(scanner *bufio.Scanner, stream string) {
 }
 
 // buildEnv 将父进程环境变量与 cfg.Env 合并，cfg.Env 的值会覆盖同名变量。
+//
+// macOS GUI 应用（.app）继承的 PATH 不含 Homebrew 等路径，导致 go/node/python
+// 等命令找不到。这里把开发常用路径追加到 PATH 末尾作为兜底，不覆盖已有路径。
 func (r *Runner) buildEnv() []string {
 	base := os.Environ()
 	for k, v := range r.cfg.Env {
 		base = append(base, k+"="+v)
 	}
+
+	// 补全 macOS GUI 应用缺失的开发工具路径
+	extraPaths := []string{
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/go/bin",
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		extraPaths = append(extraPaths,
+			home+"/go/bin",
+			home+"/.nvm/versions/node/current/bin",
+		)
+	}
+
+	currentPath := os.Getenv("PATH")
+	var toAdd []string
+	for _, p := range extraPaths {
+		if !strings.Contains(currentPath, p) {
+			toAdd = append(toAdd, p)
+		}
+	}
+	if len(toAdd) > 0 {
+		newPath := currentPath + ":" + strings.Join(toAdd, ":")
+		// 替换 base 中已有的 PATH 条目
+		for i, entry := range base {
+			if strings.HasPrefix(entry, "PATH=") {
+				base[i] = "PATH=" + newPath
+				return base
+			}
+		}
+		base = append(base, "PATH="+newPath)
+	}
+
 	return base
 }

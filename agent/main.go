@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":27017", "HTTP listen address")
+	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
 	flag.Parse()
 
