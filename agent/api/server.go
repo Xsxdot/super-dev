@@ -15,6 +15,7 @@ package api
 import (
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"github.com/google/uuid"
@@ -34,6 +35,8 @@ type AppConfig struct {
 	DataDir string
 	// ProbeOverride 仅用于测试,生产环境为 nil 时使用 SystemProbe。
 	ProbeOverride collector.Probe
+	// TunnelOverride 注入自定义隧道解析器,仅用于测试。
+	TunnelOverride remote.TunnelResolver
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -50,6 +53,8 @@ type App struct {
 	collector   *collector.Manager
 	remoteStore *remote.Store
 	tunnels     *tunnel.Manager
+	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
+	tunnelResolver remote.TunnelResolver
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -96,19 +101,24 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
+	var resolver remote.TunnelResolver = newTunnelResolverAdapter(tunnels)
+	if cfg.TunnelOverride != nil {
+		resolver = cfg.TunnelOverride
+	}
 
 	return &App{
-		cfg:         cfg,
-		projects:    []model.Project{},
-		managers:    map[string]*process.Manager{},
-		buf:         buf,
-		store:       s,
-		registry:    registry,
-		settings:    settingsStore,
-		procMgr:     procMgr,
-		collector:   colMgr,
-		remoteStore: remoteStore,
-		tunnels:     tunnels,
+		cfg:            cfg,
+		projects:       []model.Project{},
+		managers:       map[string]*process.Manager{},
+		buf:            buf,
+		store:          s,
+		registry:       registry,
+		settings:       settingsStore,
+		procMgr:        procMgr,
+		collector:      colMgr,
+		remoteStore:    remoteStore,
+		tunnels:        tunnels,
+		tunnelResolver: resolver,
 	}, nil
 }
 
@@ -186,6 +196,7 @@ func (a *App) Handler() http.Handler {
 
 	// 远程监听聚合视图
 	mux.HandleFunc("GET /api/remote/view", a.remoteView)
+	mux.HandleFunc("GET /api/remote-log-search", a.remoteLogSearch)
 
 	return cors(mux)
 }
@@ -267,4 +278,21 @@ func assignIDs(p *model.Project) {
 		}
 		p.Services[i].ProjectID = p.ID
 	}
+}
+
+type tunnelResolverAdapter struct {
+	mgr *tunnel.Manager
+}
+
+func newTunnelResolverAdapter(m *tunnel.Manager) *tunnelResolverAdapter {
+	return &tunnelResolverAdapter{mgr: m}
+}
+
+// BaseURL 返回 host 当前隧道的本机 HTTP baseURL。
+func (a *tunnelResolverAdapter) BaseURL(hostID string) (string, error) {
+	port := a.mgr.LocalPort(hostID)
+	if port == 0 {
+		return "", remote.ErrHostUnreachable
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port), nil
 }
