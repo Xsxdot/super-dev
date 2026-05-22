@@ -26,6 +26,7 @@ const props = defineProps<{
   serviceId: string | null
   projectId: string | null
   logSourceId?: string | null
+  logSourceIds?: string[] | null
   groupKey?: string | null
 }>()
 
@@ -60,11 +61,19 @@ let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
 
-const isRemote = computed(() => !!props.logSourceId && !!props.groupKey)
+const effectiveLogSourceIds = computed<string[]>(() => {
+  if (props.logSourceIds && props.logSourceIds.length > 0) return props.logSourceIds
+  if (props.logSourceId) return [props.logSourceId]
+  return []
+})
+
+const isRemote = computed(() => effectiveLogSourceIds.value.length > 0 && !!props.groupKey)
 
 onMounted(() => {
-  if (isRemote.value && props.logSourceId && props.groupKey) {
-    void remoteLogStore.subscribe(props.logSourceId, props.groupKey)
+  if (isRemote.value && props.groupKey) {
+    for (const lsId of effectiveLogSourceIds.value) {
+      void remoteLogStore.subscribe(lsId, props.groupKey)
+    }
   } else if (props.serviceId) {
     void logStore.subscribe(props.serviceId)
   }
@@ -74,8 +83,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (isRemote.value && props.logSourceId && props.groupKey) {
-    remoteLogStore.unsubscribe(props.logSourceId, props.groupKey)
+  if (isRemote.value && props.groupKey) {
+    for (const lsId of effectiveLogSourceIds.value) {
+      remoteLogStore.unsubscribe(lsId, props.groupKey)
+    }
   } else if (props.serviceId) {
     logStore.unsubscribe(props.serviceId)
   }
@@ -93,14 +104,23 @@ watch(() => props.serviceId, (newId, oldId) => {
 })
 
 watch(
-  () => [props.logSourceId, props.groupKey] as const,
-  ([newLogSourceId, newGroupKey], [oldLogSourceId, oldGroupKey]) => {
-    if (oldLogSourceId && oldGroupKey) remoteLogStore.unsubscribe(oldLogSourceId, oldGroupKey)
+  () => [effectiveLogSourceIds.value, props.groupKey] as const,
+  ([newIds, newGroupKey], [oldIds, oldGroupKey]) => {
+    if (oldGroupKey) {
+      for (const lsId of (oldIds as string[])) {
+        remoteLogStore.unsubscribe(lsId, oldGroupKey)
+      }
+    }
     selectedHostIds.value = new Set()
-    if (newLogSourceId && newGroupKey) void remoteLogStore.subscribe(newLogSourceId, newGroupKey)
+    if (newGroupKey) {
+      for (const lsId of (newIds as string[])) {
+        void remoteLogStore.subscribe(lsId, newGroupKey)
+      }
+    }
     isFollowing.value = true
     refreshDisplayImmediately()
   },
+  { deep: true },
 )
 
 type RemoteDisplayLogEntry = DisplayLogEntry & { host_id?: string }
@@ -110,9 +130,23 @@ function toRemoteDisplayEntry(entry: RemoteLogEntry): RemoteDisplayLogEntry {
 }
 
 const rawLogs = computed<DisplayLogEntry[]>(() => {
-  if (isRemote.value && props.logSourceId && props.groupKey) {
+  if (isRemote.value && props.groupKey) {
     const selected = selectedHostIds.value
-    return remoteLogStore.logsOf(props.logSourceId, props.groupKey)
+    const allLogs = effectiveLogSourceIds.value.flatMap(lsId =>
+      remoteLogStore.logsOf(lsId, props.groupKey!)
+    )
+    const seen = new Set<string>()
+    const deduped = allLogs.filter(entry => {
+      const key = `${entry.host_id}:${entry.id}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    deduped.sort((a, b) => {
+      const t = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      return t !== 0 ? t : a.id - b.id
+    })
+    return deduped
       .filter(entry => selected.size === 0 || selected.has(entry.host_id))
       .map(toRemoteDisplayEntry)
   }
@@ -374,12 +408,16 @@ function onWheel(e: WheelEvent) {
 }
 
 async function tryLoadMoreHistory() {
-  if (isRemote.value && props.logSourceId && props.groupKey) {
+  if (isRemote.value && props.groupKey) {
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
     const el = logListEl.value
     const prevScrollHeight = el?.scrollHeight ?? 0
-    await remoteLogStore.loadHistory(props.logSourceId, props.groupKey)
+    await Promise.all(
+      effectiveLogSourceIds.value.map(lsId =>
+        remoteLogStore.loadHistory(lsId, props.groupKey!)
+      )
+    )
     await nextTick()
     if (el) {
       const added = el.scrollHeight - prevScrollHeight
