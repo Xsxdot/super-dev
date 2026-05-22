@@ -15,6 +15,7 @@ LogSourceFormModal：远程监听任务新建与编辑表单。
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
+import { useAgentStore } from '@/stores/agent'
 import TagInput from '@/components/Settings/TagInput.vue'
 import type { LogSource, LogSourceCreatePayload, LogSourceType } from '@/api/agent'
 
@@ -29,10 +30,18 @@ const emit = defineEmits<{
 }>()
 
 const store = useRemoteStore()
+const agentStore = useAgentStore()
 const name = ref('')
 const type = ref<LogSourceType>('journalctl')
 const hostIds = ref<Set<string>>(new Set())
 const tags = ref<string[]>([])
+const boundProjectId = ref('')
+const boundServiceId = ref('')
+
+const servicesOfBoundProject = computed(() => {
+  if (!boundProjectId.value) return []
+  return agentStore.projectById(boundProjectId.value)?.services ?? []
+})
 
 interface SafeParam {
   flag: string
@@ -87,15 +96,23 @@ watch(
       hostIds.value = new Set(initial.host_ids)
       tags.value = [...(initial.tags ?? [])]
       restoreFromExtraArgs(initial.extra_args ?? [])
+      boundProjectId.value = initial.project_id ?? ''
+      boundServiceId.value = initial.service_id ?? ''
       return
     }
     name.value = ''
     type.value = 'journalctl'
     hostIds.value = new Set()
     tags.value = []
+    boundProjectId.value = ''
+    boundServiceId.value = ''
   },
   { immediate: true },
 )
+
+watch(boundProjectId, () => {
+  boundServiceId.value = ''
+})
 
 function defaultValue(p: SafeParam): string {
   if (p.flag === '--since') return '1h'
@@ -160,6 +177,8 @@ function submit() {
     host_ids: Array.from(hostIds.value),
     tags: tags.value,
     extra_args: extraArgs.value,
+    project_id: boundProjectId.value || undefined,
+    service_id: boundServiceId.value || undefined,
   })
 }
 </script>
@@ -179,6 +198,26 @@ function submit() {
         <select v-model="type" data-test="logsource-form-type">
           <option value="journalctl">journalctl</option>
           <option value="docker">docker</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>绑定项目（可选）</label>
+        <select v-model="boundProjectId" data-test="logsource-form-project">
+          <option value="">不绑定</option>
+          <option v-for="proj in agentStore.projects" :key="proj.id" :value="proj.id">
+            {{ proj.name }}
+          </option>
+        </select>
+      </div>
+
+      <div v-if="boundProjectId" class="field">
+        <label>绑定服务（可选）</label>
+        <select v-model="boundServiceId" data-test="logsource-form-service">
+          <option value="">不绑定</option>
+          <option v-for="svc in servicesOfBoundProject" :key="svc.id" :value="svc.id">
+            {{ svc.name }}
+          </option>
         </select>
       </div>
 
