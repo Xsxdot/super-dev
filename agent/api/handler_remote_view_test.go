@@ -106,7 +106,8 @@ func TestLogSourceProjectBinding(t *testing.T) {
 	assert.Equal(t, "svc-xyz", created.ServiceID)
 
 	// 查询回来字段仍在
-	listResp, _ := http.Get(srv.URL + "/api/log-sources")
+	listResp, err := http.Get(srv.URL + "/api/log-sources")
+	require.NoError(t, err)
 	defer listResp.Body.Close()
 	var list []model.LogSource
 	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&list))
