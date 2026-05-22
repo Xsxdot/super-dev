@@ -3,7 +3,6 @@ package process_test
 import (
 	"os/exec"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -108,8 +107,6 @@ func TestManagerStartSkipsAfterBackgroundedCommand(t *testing.T) {
 }
 
 func TestManagerStartGroup(t *testing.T) {
-	var mu sync.Mutex
-	_ = mu
 	mgr := process.NewManager(func(e model.LogEntry) {})
 
 	services := []model.Service{
