@@ -18,6 +18,8 @@ import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import type { Project, Service } from '@/api/agent'
 
+const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
+
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
   message: vi.fn(),
@@ -25,6 +27,11 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
+  useRoute: () => ({ query: routeState.query }),
+}))
+
+vi.mock('@/components/Settings/HostManagerTab.vue', () => ({
+  default: { template: '<section>主机管理</section>' },
 }))
 
 function service(id: string, name: string, required = false): Service {
@@ -53,6 +60,7 @@ function project(services: Service[]): Project {
 describe('SettingsPage', () => {
   beforeEach(() => {
     localStorage.clear()
+    routeState.query = {}
     setActivePinia(createPinia())
     vi.restoreAllMocks()
   })
@@ -90,5 +98,18 @@ describe('SettingsPage', () => {
 
     expect(settings.isServiceHidden('svc-worker')).toBe(true)
     expect(agent.updateSelected).toHaveBeenCalledWith('proj-1', ['api'])
+  })
+
+  it('支持从 query 直达主机管理 tab', async () => {
+    routeState.query = { tab: 'hosts' }
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mount(SettingsPage)
+    await nextTick()
+
+    expect(wrapper.find('[data-test="settings-tab-hosts"]').classes()).toContain('active')
+    expect(wrapper.text()).toContain('主机管理')
   })
 })

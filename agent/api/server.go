@@ -15,32 +15,46 @@ package api
 import (
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/process"
+	"github.com/superdev/agent/remote"
 	"github.com/superdev/agent/store"
+	"github.com/superdev/agent/tunnel"
 )
 
 // AppConfig 包含创建 App 所需的配置参数。
 type AppConfig struct {
 	// DataDir 是存放数据库文件和注册表文件的根目录。
 	DataDir string
+	// ProbeOverride 仅用于测试,生产环境为 nil 时使用 SystemProbe。
+	ProbeOverride collector.Probe
+	// TunnelOverride 注入自定义隧道解析器,仅用于测试。
+	TunnelOverride remote.TunnelResolver
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg      AppConfig
-	mu       sync.RWMutex
-	projects []model.Project
-	managers map[string]*process.Manager // projectID → manager
-	buf      *logbuf.Buffer
-	store    *store.Store
-	registry *config.Registry
-	settings *config.SettingsStore
+	cfg         AppConfig
+	mu          sync.RWMutex
+	projects    []model.Project
+	managers    map[string]*process.Manager // projectID → manager
+	buf         *logbuf.Buffer
+	store       *store.Store
+	registry    *config.Registry
+	settings    *config.SettingsStore
+	procMgr     *process.Manager // 远端 collector 复用的进程管理器
+	collector   *collector.Manager
+	remoteStore *remote.Store
+	tunnels     *tunnel.Manager
+	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
+	tunnelResolver remote.TunnelResolver
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -76,15 +90,35 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(s, 2000)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
+	procMgr := process.NewManager(buf.Append)
+	probe := collector.Probe(collector.NewSystemProbe())
+	if cfg.ProbeOverride != nil {
+		probe = cfg.ProbeOverride
+	}
+	colMgr := collector.NewManager(procMgr, probe)
+	remoteStore := remote.NewStore(
+		filepath.Join(cfg.DataDir, "hosts.json"),
+		filepath.Join(cfg.DataDir, "log_sources.json"),
+	)
+	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
+	var resolver remote.TunnelResolver = newTunnelResolverAdapter(tunnels)
+	if cfg.TunnelOverride != nil {
+		resolver = cfg.TunnelOverride
+	}
 
 	return &App{
-		cfg:      cfg,
-		projects: []model.Project{},
-		managers: map[string]*process.Manager{},
-		buf:      buf,
-		store:    s,
-		registry: registry,
-		settings: settingsStore,
+		cfg:            cfg,
+		projects:       []model.Project{},
+		managers:       map[string]*process.Manager{},
+		buf:            buf,
+		store:          s,
+		registry:       registry,
+		settings:       settingsStore,
+		procMgr:        procMgr,
+		collector:      colMgr,
+		remoteStore:    remoteStore,
+		tunnels:        tunnels,
+		tunnelResolver: resolver,
 	}, nil
 }
 
@@ -92,7 +126,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 //
 // 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
 func (a *App) Close() {
+	if a.procMgr != nil {
+		a.procMgr.StopAll()
+	}
 	a.buf.Close()
+	if a.tunnels != nil {
+		a.tunnels.Close()
+	}
 	if a.store != nil {
 		a.store.Close()
 	}
@@ -127,6 +167,36 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
 	mux.HandleFunc("GET /api/logs/context/page", a.fetchLogContextPage)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
+
+	// Collector 控制(远端 agent 接收本机隧道请求)
+	mux.HandleFunc("POST /api/collectors", a.startCollector)
+	mux.HandleFunc("DELETE /api/collectors/{id}", a.stopCollector)
+	mux.HandleFunc("GET /api/collectors", a.listCollectors)
+
+	// 远程主机管理
+	mux.HandleFunc("GET /api/hosts", a.listHosts)
+	mux.HandleFunc("POST /api/hosts", a.createHost)
+	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
+	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
+
+	// 远程日志源管理
+	mux.HandleFunc("GET /api/log-sources", a.listLogSources)
+	mux.HandleFunc("POST /api/log-sources", a.createLogSource)
+	mux.HandleFunc("PUT /api/log-sources/{id}", a.updateLogSource)
+	mux.HandleFunc("DELETE /api/log-sources/{id}", a.deleteLogSource)
+
+	// SSH config 导入
+	mux.HandleFunc("GET /api/ssh-config/hosts", a.listSSHConfigHosts)
+
+	// 隧道管理
+	mux.HandleFunc("GET /api/tunnels", a.listTunnels)
+	mux.HandleFunc("POST /api/tunnels/{host_id}", a.connectTunnel)
+	mux.HandleFunc("DELETE /api/tunnels/{host_id}", a.disconnectTunnel)
+	mux.HandleFunc("GET /ws/tunnels", a.wsTunnels)
+
+	// 远程监听聚合视图
+	mux.HandleFunc("GET /api/remote/view", a.remoteView)
+	mux.HandleFunc("GET /api/remote-log-search", a.remoteLogSearch)
 
 	return cors(mux)
 }
@@ -208,4 +278,21 @@ func assignIDs(p *model.Project) {
 		}
 		p.Services[i].ProjectID = p.ID
 	}
+}
+
+type tunnelResolverAdapter struct {
+	mgr *tunnel.Manager
+}
+
+func newTunnelResolverAdapter(m *tunnel.Manager) *tunnelResolverAdapter {
+	return &tunnelResolverAdapter{mgr: m}
+}
+
+// BaseURL 返回 host 当前隧道的本机 HTTP baseURL。
+func (a *tunnelResolverAdapter) BaseURL(hostID string) (string, error) {
+	port := a.mgr.LocalPort(hostID)
+	if port == 0 {
+		return "", remote.ErrHostUnreachable
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port), nil
 }
