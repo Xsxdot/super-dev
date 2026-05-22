@@ -33,8 +33,9 @@ var ErrInvalidName = errors.New("invalid name: only [a-zA-Z0-9._-] allowed, leng
 var ErrUnsupportedType = errors.New("unsupported log source type")
 
 // argRegex 限制每个额外参数只允许安全字符。
-// 参数名必须以 -- 或 - 开头；参数值必须至少包含一个数字或非字母字符（防止纯命令名注入）。
-var argRegex = regexp.MustCompile(`^(-{1,2}[a-zA-Z][a-zA-Z0-9-]*)$|^([a-zA-Z0-9._/:@-]*[0-9._/:@-][a-zA-Z0-9._/:@-]*)$`)
+// 参数名必须以 -- 或 - 开头（长/短选项）；参数值只允许字母、数字和 ._/:@- 字符，长度 1-64。
+// 不允许空格、引号、$、;、|、&、\ 等 shell 特殊字符。
+var argRegex = regexp.MustCompile(`^(-{1,2}[a-zA-Z][a-zA-Z0-9-]*)$|^([a-zA-Z0-9._/:@-]{1,64})$`)
 
 // ErrInvalidArg 表示 extraArgs 中某个参数含非法字符或格式不符合要求。
 var ErrInvalidArg = errors.New("invalid extra arg: only safe flag/value characters allowed")

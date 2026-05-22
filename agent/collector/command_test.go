@@ -71,13 +71,22 @@ func TestBuildCommandExtraArgs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"docker", "logs", "-f", "nova-api", "--tail", "100"}, argv)
 
-	// 非法 arg（无 -- 前缀，纯字母单词）被拒绝
-	_, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"rm"})
-	assert.Error(t, err)
-
-	// 非法 arg（含注入字符）被拒绝
+	// 非法 arg（含空格注入字符）被拒绝
 	_, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--since", "1h; rm -rf /"})
 	assert.Error(t, err)
+
+	// 非法 arg（含 $ 字符）被拒绝
+	_, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--priority", "$(id)"})
+	assert.Error(t, err)
+
+	// 合法纯字母值（如 --output cat, --priority err）被允许
+	argv, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--output", "cat"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"journalctl", "-fu", "nova-api", "-o", "cat", "--no-pager", "--output", "cat"}, argv)
+
+	argv, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--priority", "err"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"journalctl", "-fu", "nova-api", "-o", "cat", "--no-pager", "--priority", "err"}, argv)
 
 	// 空 extra args 不影响结果
 	argv, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", nil)
