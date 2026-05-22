@@ -95,6 +95,42 @@ describe('panelStore', () => {
     expect(store.focusedPanelId).toBe(store.allLeaves[0].id)
   })
 
+  it('splitLeafWithSource：重复拖入相同远程来源时焦点落到新建 leaf', () => {
+    const store = usePanelStore()
+    const localLeafId = store.allLeaves[0].id
+    const remoteSource = {
+      type: 'remote-log-source' as const,
+      logSourceId: 'remote-prod',
+      groupKey: 'all',
+    }
+
+    ;((store as any).replaceSource ?? (() => undefined))(localLeafId, {
+      type: 'local-service',
+      projectId: 'project-A',
+      serviceId: 'svc-api',
+    })
+    ;((store as any).splitLeafWithSource ?? (() => undefined))(
+      localLeafId,
+      'h',
+      remoteSource,
+      'first',
+    )
+    const oldRemoteLeafId = store.allLeaves[0].id
+
+    ;((store as any).splitLeafWithSource ?? (() => undefined))(
+      localLeafId,
+      'v',
+      remoteSource,
+      'second',
+    )
+
+    const duplicateLeaf = store.allLeaves.find(
+      leaf => leaf.id !== localLeafId && leaf.id !== oldRemoteLeafId && (leaf as any).source?.type === 'remote-log-source',
+    )
+    expect(duplicateLeaf).toBeTruthy()
+    expect(store.focusedPanelId).toBe(duplicateLeaf?.id)
+  })
+
   it('removeLeaf：关闭焦点远程面板后保留兄弟来源且不允许最后一个面板消失', () => {
     const store = usePanelStore()
     const leafId = store.allLeaves[0].id

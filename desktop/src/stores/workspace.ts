@@ -161,6 +161,22 @@ function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
   return [...byID.values()].sort(compareLogs)
 }
 
+function replaceRemoteAggregateSource(
+  node: PanelNode,
+  source: Extract<PanelSource, { type: 'remote-aggregate' }>,
+): PanelNode {
+  if (node.type === 'leaf') {
+    if (node.source?.type !== 'remote-aggregate') return node
+    if (node.source.serviceId !== source.serviceId || node.source.groupKey !== source.groupKey) return node
+    return { ...node, serviceId: null, projectId: null, source }
+  }
+  return {
+    ...node,
+    first: replaceRemoteAggregateSource(node.first, source),
+    second: replaceRemoteAggregateSource(node.second, source),
+  }
+}
+
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkspaceTab[]>([])
   const activeTabId = ref<string | null>(null)
@@ -279,9 +295,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const existing = tabs.value.find(
       (tab): tab is RemoteAggregateTab => tab.type === 'remote-aggregate' && tab.id === id,
     )
+    const source: PanelSource = { type: 'remote-aggregate', logSourceIds, groupKey, projectId, serviceId, serviceName }
     if (existing) {
+      existing.projectId = projectId
+      existing.serviceName = serviceName
       existing.logSourceIds = logSourceIds
+      existing.title = `${serviceName} · ${groupKey}`
       activateTab(existing.id)
+      existing.layoutRoot = replaceRemoteAggregateSource(
+        existing.layoutRoot,
+        source as Extract<PanelSource, { type: 'remote-aggregate' }>,
+      )
+      const panel = usePanelStore()
+      panel.setRoot(existing.layoutRoot, existing.focusedPanelId)
+      existing.layoutRoot = panel.root
+      existing.focusedPanelId = panel.focusedPanelId
       return existing
     }
     const tab: RemoteAggregateTab = {
@@ -298,7 +326,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     tabs.value.push(tab)
     activeTabId.value = tab.id
-    const source: PanelSource = { type: 'remote-aggregate', logSourceIds, groupKey, projectId, serviceId, serviceName }
     const panel = usePanelStore()
     panel.setRoot(tab.layoutRoot, tab.focusedPanelId)
     const leafId = panel.targetPanelId()

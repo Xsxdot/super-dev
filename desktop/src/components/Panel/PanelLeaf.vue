@@ -213,6 +213,7 @@ watch(serviceDropRequest, (request) => {
       :log-source-id="source?.type === 'remote-log-source' ? source.logSourceId : undefined"
       :log-source-ids="source?.type === 'remote-aggregate' ? source.logSourceIds : undefined"
       :group-key="source?.type === 'remote-log-source' || source?.type === 'remote-aggregate' ? source.groupKey : undefined"
+      :source="source"
     />
 
     <!-- Drop highlight overlay -->
