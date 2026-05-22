@@ -110,38 +110,31 @@ func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
 
 	jsonOK(w, remoteViewResponse{
 		LogSource: logSourceDTO{ID: ls.ID, Name: ls.Name, Type: ls.Type, HostIDs: ls.HostIDs},
-		Groups:    buildGroups(ls.HostIDs, hostByID),
+		Groups:    buildGroups(ls.HostIDs, hostByID, ls.Tags),
 		Hosts:     relatedHosts,
 	})
 }
 
-// buildGroups 根据 LogSource 关联的 Host 集合生成 tag 分组列表。
+// buildGroups 根据 LogSource 自身的 tags 生成分组列表。
 //
 // "all" 组始终存在且包含所有关联 Host;
-// 其余分组按 Host.Tags 并集生成,每个 tag 对应一个分组。
-// 同一 Host 出现在它拥有的所有 tag 分组里。
-func buildGroups(hostIDs []string, hostByID map[string]model.Host) []remoteViewGroup {
+// 其余分组按 LogSource.Tags 生成,每个 tag 对应一个分组,包含全部关联 Host。
+// LogSource.Tags 与 Host.Tags 无关,仅作为监听任务的子视图分类。
+func buildGroups(hostIDs []string, hostByID map[string]model.Host, logSourceTags []string) []remoteViewGroup {
 	allHosts := make([]string, 0, len(hostIDs))
-	tagToHosts := map[string][]string{}
 	for _, hid := range hostIDs {
-		h, ok := hostByID[hid]
-		if !ok {
-			continue
-		}
-		allHosts = append(allHosts, hid)
-		for _, tag := range h.Tags {
-			tagToHosts[tag] = append(tagToHosts[tag], hid)
+		if _, ok := hostByID[hid]; ok {
+			allHosts = append(allHosts, hid)
 		}
 	}
-	tagNames := make([]string, 0, len(tagToHosts))
-	for tag := range tagToHosts {
-		tagNames = append(tagNames, tag)
-	}
+
+	tagNames := make([]string, len(logSourceTags))
+	copy(tagNames, logSourceTags)
 	sort.Strings(tagNames)
 
 	groups := []remoteViewGroup{{GroupKey: "all", HostIDs: allHosts}}
 	for _, tag := range tagNames {
-		groups = append(groups, remoteViewGroup{GroupKey: tag, HostIDs: tagToHosts[tag]})
+		groups = append(groups, remoteViewGroup{GroupKey: tag, HostIDs: allHosts})
 	}
 	return groups
 }
