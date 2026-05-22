@@ -126,6 +126,105 @@ export interface FetchLogContextPageParams {
   limit?: number
 }
 
+// ===== 远程监听相关类型 =====
+
+export interface Host {
+  id: string
+  name: string
+  ssh_host: string
+  ssh_port: number
+  ssh_user: string
+  ssh_password?: string
+  ssh_key_path?: string
+  remote_agent_port: number
+  tags: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type LogSourceType = 'journalctl' | 'docker'
+
+export interface LogSource {
+  id: string
+  name: string
+  type: LogSourceType
+  host_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SshConfigEntry {
+  host: string
+  hostname: string
+  port: number
+  user: string
+  identity_file?: string
+}
+
+export type TunnelState = 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
+
+export interface TunnelStatus {
+  host_id: string
+  state: TunnelState
+  local_port?: number
+  error?: string
+  last_active?: string
+}
+
+export interface RemoteLogEntry extends LogEntry {
+  host_id: string
+}
+
+export interface RemoteViewGroup {
+  group_key: string
+  host_ids: string[]
+}
+
+export interface RemoteViewResponse {
+  log_source: LogSource
+  groups: RemoteViewGroup[]
+  hosts: Host[]
+}
+
+export interface RemoteSearchParams {
+  log_source_id: string
+  group: string
+  query: string
+  limit?: number
+  cursor?: string
+  from?: string
+  to?: string
+}
+
+export interface RemoteSearchResponse {
+  entries: RemoteLogEntry[]
+  total_by_host: Record<string, number>
+  hosts_failed: string[]
+  next_cursor: string
+  has_more: boolean
+}
+
+export interface HostCreatePayload {
+  name: string
+  ssh_host: string
+  ssh_port?: number
+  ssh_user: string
+  ssh_password?: string
+  ssh_key_path?: string
+  remote_agent_port?: number
+  tags?: string[]
+}
+
+export type HostUpdatePayload = Partial<HostCreatePayload>
+
+export interface LogSourceCreatePayload {
+  name: string
+  type: LogSourceType
+  host_ids: string[]
+}
+
+export type LogSourceUpdatePayload = Partial<LogSourceCreatePayload>
+
 export const api = {
   // 项目
   listProjects: () => request<Project[]>('/api/projects'),
@@ -195,5 +294,51 @@ export const api = {
     qs.set('cursor_id', String(params.cursor_id))
     if (params.limit) qs.set('limit', String(params.limit))
     return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
+  },
+
+  // 远程监听：Host CRUD
+  listHosts: () => request<Host[]>('/api/hosts'),
+  createHost: (payload: HostCreatePayload) =>
+    request<Host>('/api/hosts', { method: 'POST', body: JSON.stringify(payload) }),
+  updateHost: (id: string, payload: HostUpdatePayload) =>
+    request<Host>(`/api/hosts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteHost: (id: string) =>
+    request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+
+  // 远程监听：SSH config 导入
+  listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),
+
+  // 远程监听：LogSource CRUD
+  listLogSources: () => request<LogSource[]>('/api/log-sources'),
+  createLogSource: (payload: LogSourceCreatePayload) =>
+    request<LogSource>('/api/log-sources', { method: 'POST', body: JSON.stringify(payload) }),
+  updateLogSource: (id: string, payload: LogSourceUpdatePayload) =>
+    request<LogSource>(`/api/log-sources/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteLogSource: (id: string) =>
+    request<void>(`/api/log-sources/${id}`, { method: 'DELETE' }),
+
+  // 远程监听：隧道
+  listTunnels: () => request<TunnelStatus[]>('/api/tunnels'),
+  openTunnel: (hostId: string) =>
+    request<TunnelStatus>(`/api/tunnels/${hostId}`, { method: 'POST' }),
+  closeTunnel: (hostId: string) =>
+    request<void>(`/api/tunnels/${hostId}`, { method: 'DELETE' }),
+
+  // 远程监听：LogSource 视图与跨节点搜索
+  getRemoteView: (logSourceId: string) => {
+    const qs = new URLSearchParams()
+    qs.set('log_source_id', logSourceId)
+    return request<RemoteViewResponse>(`/api/remote/view?${qs}`)
+  },
+  remoteSearch: (params: RemoteSearchParams) => {
+    const qs = new URLSearchParams()
+    qs.set('log_source_id', params.log_source_id)
+    qs.set('group', params.group)
+    qs.set('query', params.query)
+    if (params.limit) qs.set('limit', String(params.limit))
+    if (params.cursor) qs.set('cursor', params.cursor)
+    if (params.from) qs.set('from', params.from)
+    if (params.to) qs.set('to', params.to)
+    return request<RemoteSearchResponse>(`/api/remote-log-search?${qs}`)
   },
 }
