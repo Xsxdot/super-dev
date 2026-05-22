@@ -10,9 +10,10 @@ HostManagerTab：设置页主机管理标签页。
   - 不渲染日志面板
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
 import { tagColor } from '@/lib/tagColor'
+import { WS_BASE, type TunnelStatus } from '@/api/agent'
 import HostFormModal from './HostFormModal.vue'
 import type { Host, HostCreatePayload } from '@/api/agent'
 
@@ -21,10 +22,26 @@ const store = useRemoteStore()
 const formVisible = ref(false)
 const editing = ref<Host | null>(null)
 const error = ref<string | null>(null)
+const expandedErrors = ref<Set<string>>(new Set())
 
 const sortedHosts = computed(() =>
   [...store.hosts].sort((a, b) => a.name.localeCompare(b.name)),
 )
+
+let tunnelWs: WebSocket | null = null
+
+function connectTunnelWs() {
+  tunnelWs = new WebSocket(`${WS_BASE}/ws/tunnels`)
+  tunnelWs.onmessage = (event) => {
+    try {
+      const status = JSON.parse(event.data) as TunnelStatus
+      store.applyTunnelUpdate(status)
+    } catch {
+      // 忽略非法帧
+    }
+  }
+  tunnelWs.onclose = () => { tunnelWs = null }
+}
 
 onMounted(async () => {
   try {
@@ -32,6 +49,11 @@ onMounted(async () => {
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
   }
+  connectTunnelWs()
+})
+
+onUnmounted(() => {
+  tunnelWs?.close()
 })
 
 function openCreate() {
@@ -70,7 +92,26 @@ function tunnelLabel(hostId: string): string {
   const status = store.tunnelOf(hostId)
   if (!status) return '-'
   if (status.state === 'open' && status.local_port) return `open :${status.local_port}`
+  if (status.state === 'failed' && status.error) {
+    const brief = status.error.length > 40 ? status.error.slice(0, 40) + '…' : status.error
+    return `failed: ${brief}`
+  }
   return status.state
+}
+
+function toggleError(hostId: string) {
+  const next = new Set(expandedErrors.value)
+  if (next.has(hostId)) next.delete(hostId)
+  else next.add(hostId)
+  expandedErrors.value = next
+}
+
+function tunnelError(hostId: string): string {
+  return store.tunnelOf(hostId)?.error ?? ''
+}
+
+function isFailed(hostId: string): boolean {
+  return store.tunnelOf(hostId)?.state === 'failed'
 }
 </script>
 
@@ -95,25 +136,39 @@ function tunnelLabel(hostId: string): string {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="host in sortedHosts" :key="host.id" data-test="host-row">
-          <td>{{ host.name }}</td>
-          <td class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</td>
-          <td>
-            <span
-              v-for="tag in host.tags"
-              :key="tag"
-              class="tag-chip"
-              :style="{ background: tagColor(tag) }"
+        <template v-for="host in sortedHosts" :key="host.id">
+          <tr data-test="host-row">
+            <td>{{ host.name }}</td>
+            <td class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</td>
+            <td>
+              <span
+                v-for="tag in host.tags"
+                :key="tag"
+                class="tag-chip"
+                :style="{ background: tagColor(tag) }"
+              >
+                {{ tag }}
+              </span>
+            </td>
+            <td
+              class="mono tunnel-cell"
+              :class="{ 'tunnel-failed': isFailed(host.id) }"
+              @click="isFailed(host.id) && toggleError(host.id)"
             >
-              {{ tag }}
-            </span>
-          </td>
-          <td class="mono">{{ tunnelLabel(host.id) }}</td>
-          <td class="row-actions">
-            <button @click="openEdit(host)">编辑</button>
-            <button class="danger" @click="handleDelete(host)">删除</button>
-          </td>
-        </tr>
+              {{ tunnelLabel(host.id) }}
+              <span v-if="isFailed(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
+            </td>
+            <td class="row-actions">
+              <button @click="openEdit(host)">编辑</button>
+              <button class="danger" @click="handleDelete(host)">删除</button>
+            </td>
+          </tr>
+          <tr v-if="isFailed(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
+            <td colspan="5">
+              <div class="tunnel-error-detail">{{ tunnelError(host.id) }}</div>
+            </td>
+          </tr>
+        </template>
       </tbody>
     </table>
     <div v-else class="empty">还没有主机，点击新建主机开始。</div>
@@ -213,5 +268,30 @@ h1 {
   color: var(--text-tertiary);
   text-align: center;
   font-size: 12px;
+}
+.tunnel-cell {
+  white-space: nowrap;
+}
+.tunnel-failed {
+  color: var(--status-failed);
+  cursor: pointer;
+}
+.expand-icon {
+  margin-left: 4px;
+  font-size: 9px;
+  color: var(--text-tertiary);
+}
+.error-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border-secondary);
+}
+.tunnel-error-detail {
+  padding: 6px 12px;
+  color: var(--status-failed);
+  background: rgba(248, 81, 73, 0.06);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  word-break: break-all;
+  white-space: pre-wrap;
 }
 </style>

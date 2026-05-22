@@ -19,6 +19,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,11 +69,15 @@ func BuildClientConfig(c Credentials) (*ssh.ClientConfig, error) {
 	}, nil
 }
 
-// ReadPrivateKey 读取磁盘上的私钥文件。
-//
-// 参数：
-//   - path: 私钥路径(支持 ~/.ssh/id_rsa 这类绝对路径,调用方先 expand)
+// ReadPrivateKey 读取磁盘上的私钥文件，自动展开路径开头的 ~。
 func ReadPrivateKey(path string) ([]byte, error) {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("get home dir: %w", err)
+		}
+		path = filepath.Join(home, path[2:])
+	}
 	return os.ReadFile(path)
 }
 

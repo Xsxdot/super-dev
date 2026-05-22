@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/superdev/agent/logparse"
@@ -29,6 +30,7 @@ type Manager struct {
 	generations map[string]uint64 // 每次 Start 递增，防止旧监控 goroutine 覆盖新进程状态
 	onLog       func(model.LogEntry)
 	runID       string
+	logSeq      atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
 }
 
 // NewManager 创建一个新的 Manager。
@@ -90,6 +92,7 @@ func (m *Manager) Start(svc model.Service) error {
 			runID := m.runID
 			m.mu.Unlock()
 			m.onLog(model.LogEntry{
+				ID:        m.logSeq.Add(1),
 				ServiceID: svc.ID,
 				RunID:     runID,
 				Timestamp: time.Now().UTC(),
@@ -252,6 +255,7 @@ func (m *Manager) emitLog(serviceID, level, stream, message string) {
 	runID := m.runID
 	m.mu.Unlock()
 	m.onLog(model.LogEntry{
+		ID:        m.logSeq.Add(1),
 		ServiceID: serviceID,
 		RunID:     runID,
 		Timestamp: time.Now().UTC(),

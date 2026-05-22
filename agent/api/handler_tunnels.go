@@ -37,6 +37,7 @@ type tunnelStatusDTO struct {
 	HostID    string `json:"host_id"`
 	State     string `json:"state"`
 	LocalPort int    `json:"local_port"`
+	Error     string `json:"error,omitempty"`
 }
 
 // listTunnels 处理 GET /api/tunnels。
@@ -56,6 +57,7 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 			HostID:    h.ID,
 			State:     tunnelStateLabel(st),
 			LocalPort: a.tunnels.LocalPort(h.ID),
+			Error:     a.tunnels.ErrorOf(h.ID),
 		})
 	}
 	jsonOK(w, out)
@@ -113,7 +115,13 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if err := conn.WriteJSON(ev); err != nil {
+			dto := tunnelStatusDTO{
+				HostID:    ev.HostID,
+				State:     tunnelStateLabel(ev.Status),
+				LocalPort: a.tunnels.LocalPort(ev.HostID),
+				Error:     ev.Err,
+			}
+			if err := conn.WriteJSON(dto); err != nil {
 				return
 			}
 		case <-ctx.Done():

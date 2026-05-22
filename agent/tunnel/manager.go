@@ -54,9 +54,9 @@ func (c *Conn) Close() {
 
 // Event 表示一次隧道状态变化事件。
 type Event struct {
-	HostID string
-	Status Status
-	Err    string // 失败时携带 error.Error()
+	HostID string `json:"host_id"`
+	Status Status `json:"state"`
+	Err    string `json:"error,omitempty"`
 }
 
 // Dialer 抽象建立隧道的过程,生产实现见 SSHDialer,测试注入 fakeDialer。
@@ -70,6 +70,7 @@ type Manager struct {
 	dialer     Dialer
 	conns      map[string]*Conn
 	status     map[string]Status
+	errors     map[string]string // 最近一次连接失败的错误消息；连接成功或断开时清除
 	subs       map[string]chan Event
 	// connecting 用于防止并发 EnsureConnected 对同一 host 发起两次拨号:
 	// 先到者写入 channel,后到者等待该 channel 关闭后复用已建立的 conn。
@@ -83,6 +84,7 @@ func NewManager(dialer Dialer) *Manager {
 		dialer:     dialer,
 		conns:      map[string]*Conn{},
 		status:     map[string]Status{},
+		errors:     map[string]string{},
 		subs:       map[string]chan Event{},
 		connecting: map[string]chan struct{}{},
 	}
@@ -129,9 +131,11 @@ func (m *Manager) EnsureConnected(host model.Host) (int, error) {
 	delete(m.connecting, host.ID)
 	if err != nil {
 		m.status[host.ID] = StatusFailed
+		m.errors[host.ID] = err.Error()
 	} else {
 		m.conns[host.ID] = conn
 		m.status[host.ID] = StatusConnected
+		delete(m.errors, host.ID)
 	}
 	m.mu.Unlock()
 	close(ch) // 唤醒所有等待者。
@@ -149,6 +153,7 @@ func (m *Manager) Disconnect(hostID string) {
 	m.mu.Lock()
 	conn, ok := m.conns[hostID]
 	delete(m.conns, hostID)
+	delete(m.errors, hostID)
 	m.status[hostID] = StatusDisconnected
 	m.mu.Unlock()
 	if ok {
@@ -165,6 +170,13 @@ func (m *Manager) Status(hostID string) Status {
 		return s
 	}
 	return StatusDisconnected
+}
+
+// ErrorOf 返回指定 host 最近一次连接失败的错误消息；无错误时返回空字符串。
+func (m *Manager) ErrorOf(hostID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.errors[hostID]
 }
 
 // LocalPort 返回 host 当前隧道的本地端口;未连接返回 0。
