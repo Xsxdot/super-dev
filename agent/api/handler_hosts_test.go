@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,4 +65,43 @@ func TestHostCRUD(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&afterDel)
 	_ = resp.Body.Close()
 	assert.Empty(t, afterDel)
+}
+
+func TestDetectSshKeys(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	resp, err := http.Get(srv.URL + "/api/hosts/detect-ssh-keys")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	// 路由存在即 200（home dir 无 .ssh 时返回空列表，不是 404）
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var result []string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.NotNil(t, result)
+}
+
+func TestTestConnectionBadRequest(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	resp, err := http.Post(srv.URL+"/api/hosts/test-connection", "application/json", strings.NewReader(`{invalid}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestTestConnectionUnreachable(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	body := `{"ssh_host":"127.0.0.1","ssh_port":1,"ssh_user":"nobody","ssh_password":"x"}`
+	resp, err := http.Post(srv.URL+"/api/hosts/test-connection", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var result struct {
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.False(t, result.OK)
+	assert.NotEmpty(t, result.Message)
 }

@@ -174,6 +174,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/collectors", a.listCollectors)
 
 	// 远程主机管理
+	mux.HandleFunc("GET /api/hosts/detect-ssh-keys", a.detectSshKeys)
+	mux.HandleFunc("POST /api/hosts/test-connection", a.testConnection)
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
