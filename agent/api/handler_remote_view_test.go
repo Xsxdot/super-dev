@@ -25,10 +25,12 @@ func TestRemoteViewAggregation(t *testing.T) {
 	_ = json.NewDecoder(r2.Body).Decode(&h2)
 	_ = r2.Body.Close()
 
+	// LogSource 打了 test、prod 两个标签，分组由 LogSource.Tags 决定，与 Host.Tags 无关
 	lsBody, _ := json.Marshal(model.LogSource{
 		Name:    "nova-api",
 		Type:    model.LogSourceTypeJournalctl,
 		HostIDs: []string{h1.ID, h2.ID},
+		Tags:    []string{"test", "prod"},
 	})
 	rls, _ := http.Post(srv.URL+"/api/log-sources", "application/json", bytes.NewReader(lsBody))
 	var ls struct{ ID string `json:"id"` }
@@ -68,11 +70,47 @@ func TestRemoteViewAggregation(t *testing.T) {
 	assert.Equal(t, ls.ID, view.LogSource.ID)
 	require.Len(t, view.Hosts, 2)
 
+	// 分组由 LogSource.Tags 决定：all + prod + test（字母序）
 	tagsSeen := map[string]bool{}
 	for _, g := range view.Groups {
 		tagsSeen[g.GroupKey] = true
+		// 每个分组都包含全部关联 Host
+		assert.Len(t, g.HostIDs, 2)
 	}
 	assert.True(t, tagsSeen["all"])
 	assert.True(t, tagsSeen["prod"])
-	assert.True(t, tagsSeen["temp"])
+	assert.True(t, tagsSeen["test"])
+	// Host 自身有 temp tag，但 LogSource 没有，不应出现 temp 分组
+	assert.False(t, tagsSeen["temp"])
+}
+
+func TestLogSourceProjectBinding(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	// 创建 LogSource 并带 project_id/service_id
+	body, _ := json.Marshal(map[string]any{
+		"name":       "server",
+		"type":       "journalctl",
+		"host_ids":   []string{},
+		"project_id": "proj-abc",
+		"service_id": "svc-xyz",
+	})
+	resp, err := http.Post(srv.URL+"/api/log-sources", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.LogSource
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.Equal(t, "proj-abc", created.ProjectID)
+	assert.Equal(t, "svc-xyz", created.ServiceID)
+
+	// 查询回来字段仍在
+	listResp, _ := http.Get(srv.URL + "/api/log-sources")
+	defer listResp.Body.Close()
+	var list []model.LogSource
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&list))
+	require.Len(t, list, 1)
+	assert.Equal(t, "proj-abc", list[0].ProjectID)
+	assert.Equal(t, "svc-xyz", list[0].ServiceID)
 }
