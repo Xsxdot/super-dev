@@ -34,6 +34,14 @@ const workspace = useWorkspaceStore()
       :log-source-id="workspace.activeTab.logSourceId"
       :group-key="workspace.activeTab.groupKey"
     />
+    <LogPanel
+      v-else-if="workspace.activeTab.type === 'remote-aggregate'"
+      :panel-id="workspace.activeTab.id"
+      :service-id="null"
+      :project-id="null"
+      :log-source-ids="workspace.activeTab.logSourceIds"
+      :group-key="workspace.activeTab.groupKey"
+    />
     <SearchPage
       v-else-if="workspace.activeTab.type === 'remote-search'"
       :log-source-id="workspace.activeTab.logSourceId"
