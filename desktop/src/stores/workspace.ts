@@ -24,6 +24,7 @@ export type WorkspaceTab =
   | SearchWorkspaceTab
   | RemoteWorkspaceTab
   | RemoteSearchWorkspaceTab
+  | RemoteAggregateTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -68,6 +69,17 @@ export interface RemoteSearchWorkspaceTab {
   id: string
   type: 'remote-search'
   logSourceId: string
+  groupKey: string
+  title: string
+}
+
+export interface RemoteAggregateTab {
+  id: string
+  type: 'remote-aggregate'
+  projectId: string
+  serviceId: string
+  serviceName: string
+  logSourceIds: string[]
   groupKey: string
   title: string
 }
@@ -226,6 +238,38 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return existing
     }
     const tab = makeRemoteSearchTab(logSourceId, groupKey)
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
+    return tab
+  }
+
+  function openRemoteAggregate(
+    projectId: string,
+    serviceId: string,
+    serviceName: string,
+    logSourceIds: string[],
+    groupKey: string,
+  ): RemoteAggregateTab {
+    saveActiveProjectLayout()
+    const id = `remote-aggregate:${serviceId}:${groupKey}`
+    const existing = tabs.value.find(
+      (tab): tab is RemoteAggregateTab => tab.type === 'remote-aggregate' && tab.id === id,
+    )
+    if (existing) {
+      existing.logSourceIds = logSourceIds
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab: RemoteAggregateTab = {
+      id,
+      type: 'remote-aggregate',
+      projectId,
+      serviceId,
+      serviceName,
+      logSourceIds,
+      groupKey,
+      title: `${serviceName} · ${groupKey}`,
+    }
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
@@ -476,6 +520,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openSearch,
     openRemote,
     openRemoteSearch,
+    openRemoteAggregate,
     searchTab,
     hideService,
     showService,
