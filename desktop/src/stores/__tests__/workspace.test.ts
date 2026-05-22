@@ -116,6 +116,18 @@ describe('workspaceStore', () => {
     })
   })
 
+  it('openRemoteSearch 为远程分组创建搜索标签', () => {
+    const workspace = useWorkspaceStore()
+
+    workspace.openRemoteSearch('ls1', 'prod')
+
+    expect(workspace.activeTab).toMatchObject({
+      type: 'remote-search',
+      logSourceId: 'ls1',
+      groupKey: 'prod',
+    })
+  })
+
   it('项目标签切换时恢复各自的 panel root', () => {
     const api = service('svc-api', 'api', 'proj-1')
     const admin = service('svc-admin', 'admin', 'proj-2')
