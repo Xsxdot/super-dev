@@ -134,12 +134,9 @@ export interface Host {
   ssh_host: string
   ssh_port: number
   ssh_user: string
-  ssh_password?: string
-  ssh_key_path?: string
   remote_agent_port: number
+  local_tunnel_port: number
   tags: string[]
-  created_at: string
-  updated_at: string
 }
 
 export type LogSourceType = 'journalctl' | 'docker'
@@ -149,8 +146,6 @@ export interface LogSource {
   name: string
   type: LogSourceType
   host_ids: string[]
-  created_at: string
-  updated_at: string
 }
 
 export interface SshConfigEntry {
@@ -317,12 +312,26 @@ export const api = {
   deleteLogSource: (id: string) =>
     request<void>(`/api/log-sources/${id}`, { method: 'DELETE' }),
 
-  // 远程监听：隧道
+  // 远程监听：隧道（POST 建立，DELETE 断开）
   listTunnels: () => request<TunnelStatus[]>('/api/tunnels'),
   openTunnel: (hostId: string) =>
     request<TunnelStatus>(`/api/tunnels/${hostId}`, { method: 'POST' }),
   closeTunnel: (hostId: string) =>
     request<void>(`/api/tunnels/${hostId}`, { method: 'DELETE' }),
+  ensureCollector: (hostId: string, localPort: number, name: string, type: LogSourceType) => {
+    const url = `http://127.0.0.1:${localPort}/api/collectors`
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type }),
+    }).then(async res => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(body.error ?? `${res.status} ${res.statusText}`)
+      }
+      return res.json() as Promise<{ id: string; service_id: string }>
+    })
+  },
 
   // 远程监听：LogSource 视图与跨节点搜索
   getRemoteView: (logSourceId: string) => {

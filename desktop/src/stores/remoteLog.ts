@@ -26,6 +26,8 @@ interface GroupSession {
   errors: Map<string, string>
   loadingHistory: boolean
   ports: Map<string, number>
+  // collectorIds: hostId → collectorId(即 serviceId)，用于 WS 过滤和历史查询
+  collectorIds: Map<string, string>
   oldestIds: Map<string, number>
   hasMoreHistoryByHost: Map<string, boolean>
 }
@@ -85,6 +87,7 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
       errors: new Map(),
       loadingHistory: false,
       ports: new Map(),
+      collectorIds: new Map(),
       oldestIds: new Map(),
       hasMoreHistoryByHost: new Map(),
     }
@@ -128,10 +131,15 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
     try {
       const tunnel = await api.openTunnel(hostId)
       if (!tunnel.local_port) throw new Error(`隧道未就绪：${tunnel.state}`)
-      session.ports.set(hostId, tunnel.local_port)
+      const port = tunnel.local_port
+      session.ports.set(hostId, port)
 
-      const service = encodeURIComponent(view.log_source.name)
-      const ws = new WebSocket(`ws://127.0.0.1:${tunnel.local_port}/ws/logs?service=${service}`)
+      // 启动远端采集器（幂等），获取 collectorId（= serviceId，用于 WS/logs 过滤）
+      const col = await api.ensureCollector(hostId, port, view.log_source.name, view.log_source.type)
+      const collectorId = col.service_id
+      session.collectorIds.set(hostId, collectorId)
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/logs?service=${encodeURIComponent(collectorId)}`)
       session.sockets.set(hostId, ws)
       ws.onmessage = event => {
         try {
@@ -188,10 +196,11 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
   async function loadHostHistory(session: GroupSession, hostId: string, limit: number) {
     if (session.hasMoreHistoryByHost.get(hostId) === false) return
     const port = session.ports.get(hostId)
-    if (!port || !session.view) return
+    const collectorId = session.collectorIds.get(hostId)
+    if (!port || !collectorId) return
 
     const qs = new URLSearchParams()
-    qs.set('service', session.view.log_source.name)
+    qs.set('service', collectorId)
     qs.set('limit', String(limit))
     const oldest = session.oldestIds.get(hostId)
     if (oldest != null) qs.set('before', String(oldest))

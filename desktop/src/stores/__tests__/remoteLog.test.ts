@@ -28,14 +28,15 @@ vi.mock('@/api/agent', async () => {
         }),
       ),
       closeTunnel: vi.fn().mockResolvedValue(undefined),
+      ensureCollector: vi.fn((_hostId: string, _port: number, name: string) =>
+        Promise.resolve({ id: `col-${name}`, service_id: `svc-${name}` }),
+      ),
       getRemoteView: vi.fn().mockResolvedValue({
         log_source: {
           id: 'ls1',
           name: 'nova-api',
           type: 'journalctl',
           host_ids: ['h1', 'h2'],
-          created_at: '',
-          updated_at: '',
         },
         groups: [
           { group_key: 'all', host_ids: ['h1', 'h2'] },
@@ -49,9 +50,8 @@ vi.mock('@/api/agent', async () => {
             ssh_port: 22,
             ssh_user: '',
             remote_agent_port: 57017,
+            local_tunnel_port: 0,
             tags: ['prod'],
-            created_at: '',
-            updated_at: '',
           },
           {
             id: 'h2',
@@ -60,9 +60,8 @@ vi.mock('@/api/agent', async () => {
             ssh_port: 22,
             ssh_user: '',
             remote_agent_port: 57017,
+            local_tunnel_port: 0,
             tags: ['prod'],
-            created_at: '',
-            updated_at: '',
           },
         ],
       }),
@@ -128,6 +127,9 @@ beforeEach(() => {
       state: 'open',
       local_port: hostId === 'h1' ? 57100 : 57101,
     }),
+  )
+  ;(api.ensureCollector as Mock).mockImplementation((_hostId: string, _port: number, name: string) =>
+    Promise.resolve({ id: `col-${name}`, service_id: `svc-${name}` }),
   )
 })
 
