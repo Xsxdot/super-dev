@@ -73,7 +73,7 @@ func (m *Manager) Start(name string, t model.LogSourceType) (string, error) {
 	if err := ValidateName(name); err != nil {
 		return "", err
 	}
-	argv, err := BuildCommand(t, name)
+	argv, err := BuildCommand(t, name, nil)
 	if err != nil {
 		return "", err
 	}

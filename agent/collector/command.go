@@ -32,6 +32,13 @@ var ErrInvalidName = errors.New("invalid name: only [a-zA-Z0-9._-] allowed, leng
 // ErrUnsupportedType 表示 LogSourceType 不在允许的枚举范围内。
 var ErrUnsupportedType = errors.New("unsupported log source type")
 
+// argRegex 限制每个额外参数只允许安全字符。
+// 参数名必须以 -- 或 - 开头；参数值必须至少包含一个数字或非字母字符（防止纯命令名注入）。
+var argRegex = regexp.MustCompile(`^(-{1,2}[a-zA-Z][a-zA-Z0-9-]*)$|^([a-zA-Z0-9._/:@-]*[0-9._/:@-][a-zA-Z0-9._/:@-]*)$`)
+
+// ErrInvalidArg 表示 extraArgs 中某个参数含非法字符或格式不符合要求。
+var ErrInvalidArg = errors.New("invalid extra arg: only safe flag/value characters allowed")
+
 // ValidateName 校验 name 是否满足 nameRegex。
 //
 // 参数：
@@ -51,22 +58,30 @@ func ValidateName(name string) error {
 // 参数：
 //   - t: 采集类型，必须在 LogSourceType 枚举内
 //   - name: 校验通过的服务名/容器名
+//   - extraArgs: 额外追加参数，每个元素须通过 argRegex 校验；nil 表示无额外参数
 //
 // 返回：
 //   - argv 切片，调用方用 exec.Command(argv[0], argv[1:]...) 执行
-//   - type 不支持或 name 非法时返回错误
-func BuildCommand(t model.LogSourceType, name string) ([]string, error) {
+//   - type 不支持、name 非法或 extraArgs 含非法字符时返回错误
+func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]string, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+	for _, arg := range extraArgs {
+		if !argRegex.MatchString(arg) {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidArg, arg)
+		}
+	}
+	var base []string
 	switch t {
 	case model.LogSourceTypeJournalctl:
-		return []string{"journalctl", "-fu", name, "-o", "cat", "--no-pager"}, nil
+		base = []string{"journalctl", "-fu", name, "-o", "cat", "--no-pager"}
 	case model.LogSourceTypeDocker:
-		return []string{"docker", "logs", "-f", name}, nil
+		base = []string{"docker", "logs", "-f", name}
 	default:
 		return nil, ErrUnsupportedType
 	}
+	return append(base, extraArgs...), nil
 }
 
 // CollectorID 生成稳定的 collector ID,相同 (name, type) 总是返回同一 ID。
