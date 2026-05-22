@@ -35,7 +35,12 @@ const workspace = useWorkspaceStore()
       :group-key="workspace.activeTab.groupKey"
     />
     <SearchPage
-      v-else
+      v-else-if="workspace.activeTab.type === 'remote-search'"
+      :log-source-id="workspace.activeTab.logSourceId"
+      :group-key="workspace.activeTab.groupKey"
+    />
+    <SearchPage
+      v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
     />
   </div>

@@ -464,6 +464,8 @@ const displayItems = computed(() => cachedDisplay.value.items)
       :panel-id="panelId"
       :service-id="serviceId"
       :project-id="projectId"
+      :log-source-id="logSourceId"
+      :group-key="groupKey"
       @end-bookmark="onEndBookmark"
     />
     <RemoteHostChips
