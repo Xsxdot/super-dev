@@ -20,10 +20,18 @@ import {
   type LogSourceUpdatePayload,
   type TunnelStatus,
 } from '@/api/agent'
+import { useAgentStore } from '@/stores/agent'
 
 export interface Group {
   key: string
   hostIds: string[]
+}
+
+export interface RemoteServiceGroup {
+  serviceId: string
+  serviceName: string
+  logSourceIds: string[]
+  groups: Group[]
 }
 
 export const useRemoteStore = defineStore('remote', () => {
@@ -89,19 +97,68 @@ export const useRemoteStore = defineStore('remote', () => {
 
     const hostMap = new Map(hosts.value.map(host => [host.id, host]))
     const allHostIds = logSource.host_ids.filter(id => hostMap.has(id))
-    const byTag = new Map<string, string[]>([['all', allHostIds]])
 
-    for (const hostId of allHostIds) {
-      const host = hostMap.get(hostId)
-      if (!host) continue
-      for (const tag of host.tags) {
-        const taggedHostIds = byTag.get(tag) ?? []
-        taggedHostIds.push(hostId)
-        byTag.set(tag, taggedHostIds)
-      }
+    // 按 LogSource 自身的 tags 分组；每个 tag 分组包含全部 host_ids。
+    // all 分组始终存在，tag 分组按字母排序排在 all 之后。
+    const groups: Group[] = [{ key: 'all', hostIds: allHostIds }]
+    const sortedTags = [...(logSource.tags ?? [])].sort((a, b) => a.localeCompare(b))
+    for (const tag of sortedTags) {
+      groups.push({ key: tag, hostIds: allHostIds })
     }
 
-    return Array.from(byTag.entries()).map(([key, hostIds]) => ({ key, hostIds }))
+    return groups
+  }
+
+  // remoteServiceGroupsOf 返回指定项目下按服务聚合的远程监听分组。
+  // 分组规则：
+  //   - all: 所有参与聚合的 LogSource 的 HostIDs 合集
+  //   - tag 分组: 只含打了该 tag 的 LogSource 对应的 HostIDs
+  function remoteServiceGroupsOf(projectId: string): RemoteServiceGroup[] {
+    const bound = logSources.value.filter(ls => ls.project_id === projectId && ls.service_id)
+    if (bound.length === 0) return []
+
+    const byService = new Map<string, LogSource[]>()
+    for (const ls of bound) {
+      const key = ls.service_id!
+      if (!byService.has(key)) byService.set(key, [])
+      byService.get(key)!.push(ls)
+    }
+
+    const hostMap = new Map(hosts.value.map(h => [h.id, h]))
+
+    return Array.from(byService.entries()).map(([serviceId, sources]) => {
+      const allHostIds = [...new Set(sources.flatMap(ls => ls.host_ids.filter(id => hostMap.has(id))))]
+
+      const tagToHosts = new Map<string, string[]>()
+      for (const ls of sources) {
+        const validHosts = ls.host_ids.filter(id => hostMap.has(id))
+        for (const tag of ls.tags ?? []) {
+          if (!tagToHosts.has(tag)) tagToHosts.set(tag, [])
+          const existing = tagToHosts.get(tag)!
+          for (const h of validHosts) {
+            if (!existing.includes(h)) existing.push(h)
+          }
+        }
+      }
+      const sortedTags = [...tagToHosts.keys()].sort((a, b) => a.localeCompare(b))
+
+      const groups: Group[] = [{ key: 'all', hostIds: allHostIds }]
+      for (const tag of sortedTags) {
+        groups.push({ key: tag, hostIds: tagToHosts.get(tag)! })
+      }
+
+      const agentStore = useAgentStore()
+      const project = agentStore.projectById(projectId)
+      const svc = project?.services.find(s => s.id === serviceId)
+      const serviceName = svc?.name ?? serviceId.slice(0, 16)
+
+      return {
+        serviceId,
+        serviceName,
+        logSourceIds: sources.map(ls => ls.id),
+        groups,
+      }
+    })
   }
 
   async function loadTunnels() {
@@ -144,6 +201,7 @@ export const useRemoteStore = defineStore('remote', () => {
     deleteLogSource,
     logSourceById,
     groupsOf,
+    remoteServiceGroupsOf,
     loadTunnels,
     applyTunnelUpdate,
     tunnelOf,
