@@ -47,11 +47,15 @@ const rootLeafCount = computed(() => panelStore.allLeaves.length)
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 .panel-split {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 .split-h { flex-direction: row; }
 .split-v { flex-direction: column; }
