@@ -15,6 +15,13 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useRemoteStore } from '@/stores/remote'
 import { api, type Host, type LogSource, type TunnelStatus } from '@/api/agent'
 
+vi.mock('@/stores/agent', () => ({
+  useAgentStore: vi.fn(() => ({
+    projects: [],
+    projectById: vi.fn(() => undefined),
+  })),
+}))
+
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
   return {
@@ -56,6 +63,8 @@ function makeLogSource(overrides: Partial<LogSource> = {}): LogSource {
     name: 'nova-api',
     type: 'journalctl',
     host_ids: ['h1'],
+    tags: [],
+    extra_args: [],
     ...overrides,
   }
 }
@@ -135,15 +144,13 @@ describe('useRemoteStore', () => {
       expect(store.logSources).toHaveLength(1)
     })
 
-    it('groupsOf 按 host tag 并集分组', async () => {
+    it('groupsOf 按 LogSource.tags 生成分组', async () => {
       mockedApi.listHosts.mockResolvedValue([
-        makeHost({ id: 'h1', tags: ['test'] }),
-        makeHost({ id: 'h2', tags: ['prod'] }),
-        makeHost({ id: 'h3', tags: ['prod', 'temp'] }),
-        makeHost({ id: 'h4', tags: ['prod', 'temp'] }),
+        makeHost({ id: 'h1', tags: [] }),
+        makeHost({ id: 'h2', tags: [] }),
       ])
       mockedApi.listLogSources.mockResolvedValue([
-        makeLogSource({ id: 'ls1', host_ids: ['h1', 'h2', 'h3', 'h4'] }),
+        makeLogSource({ id: 'ls1', host_ids: ['h1', 'h2'], tags: ['prod', 'test'] }),
       ])
       const store = useRemoteStore()
 
@@ -152,16 +159,65 @@ describe('useRemoteStore', () => {
 
       const groups = store.groupsOf('ls1')
       const map = Object.fromEntries(groups.map(g => [g.key, g.hostIds.sort()]))
-      expect(map.all).toEqual(['h1', 'h2', 'h3', 'h4'])
-      expect(map.test).toEqual(['h1'])
-      expect(map.prod).toEqual(['h2', 'h3', 'h4'])
-      expect(map.temp).toEqual(['h3', 'h4'])
+      // all + prod + test, each containing all hosts (groups are views, not filters)
+      expect(map.all).toEqual(['h1', 'h2'])
+      expect(map.prod).toEqual(['h1', 'h2'])
+      expect(map.test).toEqual(['h1', 'h2'])
+      // Host has no tags; no host-derived groups
+      expect(map.temp).toBeUndefined()
     })
 
     it('groupsOf 不存在的 LogSource 返回空数组', () => {
       const store = useRemoteStore()
 
       expect(store.groupsOf('missing')).toEqual([])
+    })
+  })
+
+  describe('remoteServiceGroupsOf', () => {
+    it('returns empty when no bound logSources', () => {
+      const store = useRemoteStore()
+      store.hosts = []
+      store.logSources = []
+      expect(store.remoteServiceGroupsOf('proj-1')).toEqual([])
+    })
+
+    it('aggregates logSources by serviceId with correct tag grouping', () => {
+      const store = useRemoteStore()
+      store.hosts = [
+        makeHost({ id: 'h1' }),
+        makeHost({ id: 'h2' }),
+        makeHost({ id: 'h3' }),
+      ]
+      store.logSources = [
+        makeLogSource({ id: 'ls-a', host_ids: ['h1'], tags: ['prod'], project_id: 'proj-1', service_id: 'svc-server' }),
+        makeLogSource({ id: 'ls-b', host_ids: ['h2', 'h3'], tags: ['test'], project_id: 'proj-1', service_id: 'svc-server' }),
+      ]
+
+      const result = store.remoteServiceGroupsOf('proj-1')
+      expect(result).toHaveLength(1)
+
+      const svcGroup = result[0]
+      expect(svcGroup.serviceId).toBe('svc-server')
+      expect(svcGroup.logSourceIds).toEqual(['ls-a', 'ls-b'])
+
+      const groupMap = Object.fromEntries(svcGroup.groups.map(g => [g.key, g.hostIds]))
+      expect(groupMap['all']).toHaveLength(3)
+      expect(groupMap['all']).toEqual(expect.arrayContaining(['h1', 'h2', 'h3']))
+      // prod only from ls-a → only h1
+      expect(groupMap['prod']).toEqual(['h1'])
+      // test only from ls-b → h2, h3
+      expect(groupMap['test']).toHaveLength(2)
+      expect(groupMap['test']).toEqual(expect.arrayContaining(['h2', 'h3']))
+    })
+
+    it('ignores logSources bound to other projects', () => {
+      const store = useRemoteStore()
+      store.hosts = [makeHost({ id: 'h1' })]
+      store.logSources = [
+        makeLogSource({ id: 'ls-a', host_ids: ['h1'], project_id: 'proj-other', service_id: 'svc-server' }),
+      ]
+      expect(store.remoteServiceGroupsOf('proj-1')).toEqual([])
     })
   })
 

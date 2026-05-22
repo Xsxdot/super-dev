@@ -150,6 +150,8 @@ export interface LogSource {
   host_ids: string[]
   tags: string[]
   extra_args: string[]
+  project_id?: string
+  service_id?: string
 }
 
 export interface SshConfigEntry {
@@ -222,6 +224,8 @@ export interface LogSourceCreatePayload {
   host_ids: string[]
   tags?: string[]
   extra_args?: string[]
+  project_id?: string
+  service_id?: string
 }
 
 export interface TestConnectionPayload {
