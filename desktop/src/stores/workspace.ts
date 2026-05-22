@@ -157,6 +157,7 @@ function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkspaceTab[]>([])
   const activeTabId = ref<string | null>(null)
+  const remoteHiddenHostIdsByTab = ref<Record<string, string[]>>({})
 
   const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
 
@@ -225,6 +226,43 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
+  }
+
+  function setRemoteHiddenHostIds(tabId: string, hidden: string[]) {
+    remoteHiddenHostIdsByTab.value = {
+      ...remoteHiddenHostIdsByTab.value,
+      [tabId]: hidden,
+    }
+  }
+
+  function hideRemoteHost(tabId: string, hostId: string) {
+    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
+    if (hidden.includes(hostId)) return
+    setRemoteHiddenHostIds(tabId, [...hidden, hostId])
+  }
+
+  function showRemoteHost(tabId: string, hostId: string) {
+    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
+    if (!hidden.includes(hostId)) return
+    setRemoteHiddenHostIds(tabId, hidden.filter(id => id !== hostId))
+  }
+
+  function toggleRemoteHost(tabId: string, hostId: string) {
+    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
+    if (hidden.includes(hostId)) {
+      showRemoteHost(tabId, hostId)
+    } else {
+      hideRemoteHost(tabId, hostId)
+    }
+  }
+
+  function visibleRemoteHostIds(tabId: string, hostIds: string[]): string[] {
+    const hidden = new Set(remoteHiddenHostIdsByTab.value[tabId] ?? [])
+    return hostIds.filter(hostId => !hidden.has(hostId))
+  }
+
+  function isRemoteHostVisible(tabId: string, hostId: string): boolean {
+    return !(remoteHiddenHostIdsByTab.value[tabId] ?? []).includes(hostId)
   }
 
   function openRemoteSearch(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
@@ -503,6 +541,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const idx = tabs.value.findIndex(t => t.id === tabId)
     if (idx < 0) return
     tabs.value.splice(idx, 1)
+    if (remoteHiddenHostIdsByTab.value[tabId]) {
+      const { [tabId]: _removed, ...rest } = remoteHiddenHostIdsByTab.value
+      remoteHiddenHostIdsByTab.value = rest
+    }
     if (activeTabId.value !== tabId) return
     activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? null
     const tab = activeTab.value
@@ -515,12 +557,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabs,
     activeTabId,
     activeTab,
+    remoteHiddenHostIdsByTab,
     activateTab,
     openService,
     openSearch,
     openRemote,
     openRemoteSearch,
     openRemoteAggregate,
+    hideRemoteHost,
+    showRemoteHost,
+    toggleRemoteHost,
+    visibleRemoteHostIds,
+    isRemoteHostVisible,
     searchTab,
     hideService,
     showService,

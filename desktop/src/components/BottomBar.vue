@@ -5,8 +5,10 @@ import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useLogStore } from '@/stores/log'
 import { useFilterStore } from '@/stores/filter'
+import { useRemoteStore } from '@/stores/remote'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { AGENT_HOST } from '@/api/agent'
-import type { LogEntry, Service } from '@/api/agent'
+import type { Host, LogEntry, Service } from '@/api/agent'
 
 const agentHost = AGENT_HOST
 import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
@@ -16,6 +18,9 @@ const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const logStore = useLogStore()
 const filterStore = useFilterStore()
+const remoteStore = useRemoteStore()
+const workspace = useWorkspaceStore()
+const REMOTE_HOST_STATUS_COLOR = '#6e7681'
 
 // 所有面板中的服务（去重）
 const panelServices = computed(() => {
@@ -30,6 +35,44 @@ const panelServices = computed(() => {
   }
   return result
 })
+
+const activeRemoteHosts = computed<Host[]>(() => {
+  const tab = workspace.activeTab
+  if (!tab) return []
+
+  let hostIds: string[] = []
+  if (tab.type === 'remote') {
+    const group = remoteStore.groupsOf(tab.logSourceId).find(item => item.key === tab.groupKey)
+    hostIds = group?.hostIds ?? []
+  } else if (tab.type === 'remote-aggregate') {
+    const serviceGroup = remoteStore
+      .remoteServiceGroupsOf(tab.projectId)
+      .find(item => item.serviceId === tab.serviceId)
+    const group = serviceGroup?.groups.find(item => item.key === tab.groupKey)
+    hostIds = group?.hostIds ?? []
+  } else {
+    return []
+  }
+
+  return hostIds.map(id => remoteStore.hostById(id)).filter((host): host is Host => !!host)
+})
+
+const activeRemoteTabId = computed(() => {
+  const tab = workspace.activeTab
+  return tab?.type === 'remote' || tab?.type === 'remote-aggregate' ? tab.id : null
+})
+
+const isRemotePanel = computed(() => activeRemoteTabId.value !== null)
+
+function toggleRemoteHost(hostId: string) {
+  const tabId = activeRemoteTabId.value
+  if (!tabId) return
+  workspace.toggleRemoteHost(tabId, hostId)
+}
+
+function remoteHostLabel(host: Host): string {
+  return host.name || host.ssh_host || host.id
+}
 
 // 底部栏勾选状态（独立于侧边栏 selected_service_ids）
 const checkedIds = ref<Set<string>>(new Set())
@@ -198,23 +241,41 @@ const statusColor = (status: string) => {
     <span class="label">面板服务</span>
 
     <div class="service-chips">
-      <div
-        v-for="svc in panelServices"
-        :key="svc.id"
-        class="service-chip"
-      >
-        <input
-          type="checkbox"
-          :checked="checkedIds.has(svc.id)"
-          @change="toggleCheck(svc.id)"
-          style="accent-color: #1f6feb; width: 11px; height: 11px; cursor: pointer;"
-        />
-        <span class="dot" :style="{ background: statusColor(svc.status) }" />
-        <span class="svc-name">{{ svc.name }}</span>
-      </div>
+      <template v-if="isRemotePanel">
+        <div
+          v-for="host in activeRemoteHosts"
+          :key="host.id"
+          class="service-chip"
+        >
+          <input
+            type="checkbox"
+            :checked="activeRemoteTabId ? workspace.isRemoteHostVisible(activeRemoteTabId, host.id) : true"
+            @change="toggleRemoteHost(host.id)"
+            style="accent-color: #1f6feb; width: 11px; height: 11px; cursor: pointer;"
+          />
+          <span class="dot" :style="{ background: REMOTE_HOST_STATUS_COLOR }" />
+          <span class="svc-name">{{ remoteHostLabel(host) }}</span>
+        </div>
+      </template>
+      <template v-else>
+        <div
+          v-for="svc in panelServices"
+          :key="svc.id"
+          class="service-chip"
+        >
+          <input
+            type="checkbox"
+            :checked="checkedIds.has(svc.id)"
+            @change="toggleCheck(svc.id)"
+            style="accent-color: #1f6feb; width: 11px; height: 11px; cursor: pointer;"
+          />
+          <span class="dot" :style="{ background: statusColor(svc.status) }" />
+          <span class="svc-name">{{ svc.name }}</span>
+        </div>
+      </template>
     </div>
 
-    <template v-if="checkedServiceIds.length > 0">
+    <template v-if="!isRemotePanel && checkedServiceIds.length > 0">
       <div class="divider" />
       <button class="action-btn" @click="restartChecked">↺ 重启</button>
       <button class="action-btn danger" @click="stopChecked">⏹ 停止</button>

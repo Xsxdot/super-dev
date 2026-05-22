@@ -17,11 +17,15 @@ func TestRemoteViewAggregation(t *testing.T) {
 	h1Body, _ := json.Marshal(model.Host{Name: "c01", Tags: []string{"prod"}})
 	h2Body, _ := json.Marshal(model.Host{Name: "c02", Tags: []string{"prod", "temp"}})
 	r1, _ := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(h1Body))
-	var h1 struct{ ID string `json:"id"` }
+	var h1 struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r1.Body).Decode(&h1)
 	_ = r1.Body.Close()
 	r2, _ := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(h2Body))
-	var h2 struct{ ID string `json:"id"` }
+	var h2 struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r2.Body).Decode(&h2)
 	_ = r2.Body.Close()
 
@@ -33,7 +37,9 @@ func TestRemoteViewAggregation(t *testing.T) {
 		Tags:    []string{"test", "prod"},
 	})
 	rls, _ := http.Post(srv.URL+"/api/log-sources", "application/json", bytes.NewReader(lsBody))
-	var ls struct{ ID string `json:"id"` }
+	var ls struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(rls.Body).Decode(&ls)
 	_ = rls.Body.Close()
 
@@ -82,6 +88,42 @@ func TestRemoteViewAggregation(t *testing.T) {
 	assert.True(t, tagsSeen["test"])
 	// Host 自身有 temp tag，但 LogSource 没有，不应出现 temp 分组
 	assert.False(t, tagsSeen["temp"])
+}
+
+func TestRemoteViewReturnsLogSourceBindingFields(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	body, _ := json.Marshal(model.LogSource{
+		Name:      "bound-remote",
+		Type:      model.LogSourceTypeJournalctl,
+		HostIDs:   []string{},
+		ProjectID: "project-a",
+		ServiceID: "service-api",
+	})
+	createdResp, err := http.Post(srv.URL+"/api/log-sources", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer createdResp.Body.Close()
+	require.Equal(t, http.StatusOK, createdResp.StatusCode)
+
+	var created model.LogSource
+	require.NoError(t, json.NewDecoder(createdResp.Body).Decode(&created))
+
+	resp, err := http.Get(srv.URL + "/api/remote/view?log_source_id=" + created.ID)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var view struct {
+		LogSource struct {
+			ID        string `json:"id"`
+			ProjectID string `json:"project_id"`
+			ServiceID string `json:"service_id"`
+		} `json:"log_source"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&view))
+	assert.Equal(t, created.ID, view.LogSource.ID)
+	assert.Equal(t, "project-a", view.LogSource.ProjectID)
+	assert.Equal(t, "service-api", view.LogSource.ServiceID)
 }
 
 func TestLogSourceProjectBinding(t *testing.T) {
