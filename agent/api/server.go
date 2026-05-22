@@ -168,6 +168,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/log-sources/{id}", a.updateLogSource)
 	mux.HandleFunc("DELETE /api/log-sources/{id}", a.deleteLogSource)
 
+	// SSH config 导入
+	mux.HandleFunc("GET /api/ssh-config/hosts", a.listSSHConfigHosts)
+
 	return cors(mux)
 }
 
