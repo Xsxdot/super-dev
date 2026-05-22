@@ -4,11 +4,14 @@ import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useLogStore } from '@/stores/log'
 import { useAgentStore } from '@/stores/agent'
+import { useWorkspaceStore } from '@/stores/workspace'
 import RuleManagerModal from './RuleManagerModal.vue'
 const props = defineProps<{
   panelId: string
   serviceId: string | null
   projectId: string | null
+  logSourceId?: string | null
+  groupKey?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -19,6 +22,7 @@ const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const logStore = useLogStore()
 const agentStore = useAgentStore()
+const workspace = useWorkspaceStore()
 
 const chipInput = ref('')
 const showRules = ref(false)
@@ -66,6 +70,11 @@ function openRuleManager(mode: 'list' | 'current') {
   if (!props.projectId) return
   rulesInitialMode.value = mode
   showRules.value = true
+}
+
+function openRemoteSearch() {
+  if (!props.logSourceId || !props.groupKey) return
+  workspace.openRemoteSearch(props.logSourceId, props.groupKey)
 }
 
 function clearBookmark() {
@@ -181,6 +190,15 @@ async function exportBookmark() {
     <div class="flex-1" />
 
     <!-- 操作区 -->
+    <button
+      v-if="logSourceId && groupKey"
+      class="save-rule-btn"
+      data-test="remote-search-button"
+      title="搜索远程日志"
+      @click="openRemoteSearch"
+    >
+      搜索
+    </button>
     <button
       class="rules-btn"
       title="管理过滤规则"

@@ -15,7 +15,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/superdev/agent/model"
@@ -56,20 +55,27 @@ type logContextPageResponse struct {
 func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	projectID := q.Get("project")
-	queryText := strings.TrimSpace(q.Get("q"))
-	if projectID == "" {
-		jsonError(w, http.StatusBadRequest, "project is required")
-		return
-	}
+	queryText := searchQueryText(q)
 	if queryText == "" {
 		jsonError(w, http.StatusBadRequest, "q is required")
 		return
 	}
 
-	serviceIDs, ok := a.projectServiceIDs(projectID, q["service"])
-	if !ok {
-		jsonError(w, http.StatusNotFound, "project not found")
-		return
+	var serviceIDs []string
+	if projectID != "" {
+		var ok bool
+		serviceIDs, ok = a.projectServiceIDs(projectID, q["service"])
+		if !ok {
+			jsonError(w, http.StatusNotFound, "project not found")
+			return
+		}
+	} else {
+		// 无 project 时直接使用 service 列表,用于远端 collector 虚拟服务查询。
+		serviceIDs = q["service"]
+		if len(serviceIDs) == 0 {
+			jsonError(w, http.StatusBadRequest, "project or service is required")
+			return
+		}
 	}
 
 	limit := parseBoundedInt(q.Get("limit"), defaultSearchLimit, maxSearchLimit)

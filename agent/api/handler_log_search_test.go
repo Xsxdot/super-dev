@@ -110,6 +110,26 @@ func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, second.ServiceCounts)
 }
 
+func TestLogSearchAPIAllowsServiceWithoutProject(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	base := time.Date(2026, 5, 20, 12, 32, 0, 0, time.UTC)
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{ServiceID: "collector-1", RunID: "run-collector", Timestamp: base, Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
+		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
+	}))
+
+	resp, err := http.Get(srv.URL + "/api/log-search?service=collector-1&query=collector")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logSearchResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Len(t, body.Items, 1)
+	assert.Equal(t, "collector-1", body.Items[0].ServiceID)
+	assert.Equal(t, map[string]int{"collector-1": 1}, body.ServiceCounts)
+}
+
 func TestLogSearchAPIRequiresProjectAndQuery(t *testing.T) {
 	_, srv := newSearchTestServer(t)
 

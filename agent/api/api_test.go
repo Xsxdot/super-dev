@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/api"
+	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/store"
 )
@@ -49,7 +50,12 @@ func writeTestConfig(t *testing.T, dir, name string) {
 func newTestApp(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	dataDir := t.TempDir()
-	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
+	app, err := api.NewApp(api.AppConfig{
+		DataDir: dataDir,
+		ProbeOverride: collector.ProbeFunc(func(model.LogSourceType, string) error {
+			return nil
+		}),
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { app.Close() })
 	srv := httptest.NewServer(app.Handler())

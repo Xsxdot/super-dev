@@ -1,0 +1,50 @@
+/**
+ * WorkspaceShell.remote 测试远程 workspace tab 的渲染分支。
+ *
+ * 职责：
+ *   - 验证 remote tab 渲染远程 LogPanel
+ *
+ * 边界：
+ *   - 不测试 LogPanel 内部日志行为
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { setActivePinia, createPinia } from 'pinia'
+import WorkspaceShell from '@/components/Workspace/WorkspaceShell.vue'
+import { useWorkspaceStore } from '@/stores/workspace'
+
+vi.mock('@/components/Panel/LogPanel.vue', () => ({
+  default: {
+    props: ['logSourceId', 'groupKey'],
+    template: '<div data-test="remote-log-panel">{{ logSourceId }}:{{ groupKey }}</div>',
+  },
+}))
+
+vi.mock('@/components/Search/SearchPage.vue', () => ({
+  default: {
+    props: ['logSourceId', 'groupKey', 'tabId'],
+    template: '<div data-test="remote-search-page">{{ logSourceId }}:{{ groupKey }}:{{ tabId }}</div>',
+  },
+}))
+
+describe('WorkspaceShell remote tab', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('remote tab 渲染远程 LogPanel', () => {
+    const workspace = useWorkspaceStore()
+    workspace.openRemote('ls1', 'prod')
+
+    const wrapper = mount(WorkspaceShell)
+
+    expect(wrapper.find('[data-test="remote-log-panel"]').text()).toBe('ls1:prod')
+  })
+
+  it('remote-search tab 渲染远程 SearchPage', () => {
+    const workspace = useWorkspaceStore()
+    workspace.openRemoteSearch('ls1', 'prod')
+
+    const wrapper = mount(WorkspaceShell)
+
+    expect(wrapper.find('[data-test="remote-search-page"]').text()).toBe('ls1:prod:')
+  })
+})

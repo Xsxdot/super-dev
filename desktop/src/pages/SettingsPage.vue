@@ -11,18 +11,22 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { open, message } from '@tauri-apps/plugin-dialog'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
+import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import type { Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects'
+type SettingsTab = 'general' | 'projects' | 'hosts'
 
+const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
-const selectedTab = ref<SettingsTab>('general')
+const selectedTab = ref<SettingsTab>(
+  route.query.tab === 'hosts' ? 'hosts' : 'general',
+)
 
 onMounted(() => {
   void settingsStore.loadAgentSettings()
@@ -105,6 +109,20 @@ const retentionDays = computed({
         </svg>
         项目
       </button>
+      <button
+        data-test="settings-tab-hosts"
+        class="tab-btn"
+        :class="{ active: selectedTab === 'hosts' }"
+        @click="selectedTab = 'hosts'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <rect x="2" y="3" width="12" height="3" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <rect x="2" y="10" width="12" height="3" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <circle cx="4" cy="4.5" r="0.6" fill="currentColor"/>
+          <circle cx="4" cy="11.5" r="0.6" fill="currentColor"/>
+        </svg>
+        主机管理
+      </button>
     </aside>
 
     <main class="settings-main">
@@ -143,7 +161,7 @@ const retentionDays = computed({
         </div>
       </section>
 
-      <section v-else class="pane">
+      <section v-else-if="selectedTab === 'projects'" class="pane">
         <header class="pane-header">
           <h1>项目</h1>
           <button class="primary-btn" @click="addProject">+ 添加项目</button>
@@ -187,6 +205,10 @@ const retentionDays = computed({
             </div>
           </article>
         </div>
+      </section>
+
+      <section v-else class="pane">
+        <HostManagerTab />
       </section>
     </main>
   </div>

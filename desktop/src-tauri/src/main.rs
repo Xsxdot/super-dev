@@ -199,7 +199,7 @@ fn main() {
         .setup(|app| {
             let agent = AgentProcess::new();
             if let Err(e) = agent.start(app.handle()) {
-                eprintln!("[SuperDev] {e}");
+                return Err(e.into());
             }
             app.manage(agent);
 

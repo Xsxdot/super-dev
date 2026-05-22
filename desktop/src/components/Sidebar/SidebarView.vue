@@ -4,6 +4,7 @@ import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
+import RemoteListenSection from './RemoteListenSection.vue'
 import { open, message } from '@tauri-apps/plugin-dialog'
 import { useRouter } from 'vue-router'
 
@@ -24,6 +25,10 @@ function selectService(serviceId: string, projectId: string) {
 
 function openProjectSearch(projectId: string) {
   workspace.openSearch(projectId)
+}
+
+function openRemoteGroup(payload: { logSourceId: string; groupKey: string }) {
+  workspace.openRemote(payload.logSourceId, payload.groupKey)
 }
 
 async function addProject() {
@@ -55,6 +60,7 @@ async function addProject() {
           @click="selectService(service.id, project.id)"
         />
       </template>
+      <RemoteListenSection @open="openRemoteGroup" />
     </div>
     <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>
     <div class="add-project" @click="addProject">+ 添加项目</div>
