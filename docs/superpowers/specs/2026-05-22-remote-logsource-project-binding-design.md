@@ -72,7 +72,14 @@ TK
       all  (1 节点)
 ```
 
-**分组**：取所有绑定该服务的 LogSource 的 `Tags` 并集，每个 tag 一个分组，每个分组下的节点是对应 tag 在所有 LogSource 中出现的 `HostIDs` 合集。`all` 分组始终存在，包含全部节点。
+**分组规则**：
+- `all` 分组：包含所有参与聚合的 LogSource 的全部 HostIDs 合集
+- tag 分组：只包含**打了该 tag 的 LogSource** 对应的 HostIDs 合集
+
+例如 LogSource A（tags: [prod], hosts: [h1]）+ LogSource B（tags: [test], hosts: [h2, h3]）→ 分组：
+- `all`: [h1, h2, h3]
+- `prod`: [h1]（只有 LogSource A 打了 prod）
+- `test`: [h2, h3]（只有 LogSource B 打了 test）
 
 ### 3.2 未绑定的 LogSource
 
@@ -181,10 +188,15 @@ GET /api/projects/{project_id}/remote-services
 
 ### 5.4 分组逻辑统一说明
 
-无论是绑定项目的聚合视图还是独立区块的单任务视图，**分组均由 LogSource.Tags 决定，与 Host.Tags 无关**：
+分组均由 LogSource.Tags 决定，与 Host.Tags 无关。
 
-- `all` 分组：包含所有关联 Host
-- 每个 tag 分组：该 tag 在所有参与聚合的 LogSource 中对应的全部 Host（当前实现中每个 tag 分组包含全部 host，后续可细化到 per-LogSource 筛选）
+**单任务视图**（独立区块，单个 LogSource）：
+- `all`：该 LogSource 的全部 HostIDs
+- 每个 tag：该 LogSource 有该 tag → 包含其全部 HostIDs（单任务内 tag 不做 host 过滤）
+
+**聚合视图**（项目下，多个 LogSource 绑定同一服务）：
+- `all`：所有参与聚合的 LogSource 的 HostIDs 合集
+- 每个 tag：只取**打了该 tag 的 LogSource** 的 HostIDs 合集
 
 ---
 
@@ -201,7 +213,7 @@ GET /api/projects/{project_id}/remote-services
 - 选项 A：在 `remote.ts` 里新增 `remoteServiceGroupsOf(projectId)` computed，前端本地聚合
 - 选项 B：调 `/api/projects/{id}/remote-services` 由后端聚合
 
-**推荐选项 A**：前端已有全部数据（logSources + hosts），本地聚合避免额外请求，逻辑简单。
+**推荐选项 A（采用）**：前端已有全部数据（logSources + hosts），本地聚合避免额外请求，无需新增后端接口。
 
 ### `remoteLog.ts`
 
