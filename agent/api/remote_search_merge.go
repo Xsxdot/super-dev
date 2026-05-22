@@ -10,6 +10,7 @@
 package api
 
 import (
+	"container/heap"
 	"encoding/base64"
 	"encoding/json"
 	"time"
@@ -23,6 +24,31 @@ type MergeItem struct {
 	Entry  model.LogEntry `json:"entry"`
 }
 
+// mergeHeapItem 是 min-heap 中的单个元素，持有来源信息和切片游标。
+type mergeHeapItem struct {
+	hostID string
+	entry  model.LogEntry
+	slice  []model.LogEntry
+	cursor int // 下一个待读取的索引
+}
+
+// mergeHeap 实现 heap.Interface，按 timestamp ASC, id ASC 排序。
+type mergeHeap []*mergeHeapItem
+
+func (h mergeHeap) Len() int      { return len(h) }
+func (h mergeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h mergeHeap) Less(i, j int) bool {
+	return lessLogEntry(h[i].entry, h[j].entry)
+}
+func (h *mergeHeap) Push(x any) { *h = append(*h, x.(*mergeHeapItem)) }
+func (h *mergeHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
 // MergeStreams 将多个已排序流归并为一个已排序流。
 //
 // 参数：
@@ -31,40 +57,34 @@ type MergeItem struct {
 //
 // 返回：
 //   - 按 timestamp ASC, id ASC 排序的 MergeItem 列表,长度不超过 limit
-//
-// 注意：
-//   - 当前按每轮线性扫描取最小值实现,适合少量远端 Host 的交互式搜索场景
 func MergeStreams(streams map[string][]model.LogEntry, limit int) []MergeItem {
 	if limit <= 0 {
 		return nil
 	}
 
-	cursors := make(map[string]int, len(streams))
-	for hostID := range streams {
-		cursors[hostID] = 0
+	h := make(mergeHeap, 0, len(streams))
+	for hostID, slice := range streams {
+		if len(slice) == 0 {
+			continue
+		}
+		h = append(h, &mergeHeapItem{
+			hostID: hostID,
+			entry:  slice[0],
+			slice:  slice,
+			cursor: 1,
+		})
 	}
+	heap.Init(&h)
 
 	out := make([]MergeItem, 0, limit)
-	for len(out) < limit {
-		var minHost string
-		var minEntry model.LogEntry
-		hasAny := false
-		for hostID, idx := range cursors {
-			if idx >= len(streams[hostID]) {
-				continue
-			}
-			entry := streams[hostID][idx]
-			if !hasAny || lessLogEntry(entry, minEntry) {
-				hasAny = true
-				minHost = hostID
-				minEntry = entry
-			}
+	for h.Len() > 0 && len(out) < limit {
+		item := heap.Pop(&h).(*mergeHeapItem)
+		out = append(out, MergeItem{HostID: item.hostID, Entry: item.entry})
+		if item.cursor < len(item.slice) {
+			item.entry = item.slice[item.cursor]
+			item.cursor++
+			heap.Push(&h, item)
 		}
-		if !hasAny {
-			break
-		}
-		out = append(out, MergeItem{HostID: minHost, Entry: minEntry})
-		cursors[minHost]++
 	}
 	return out
 }

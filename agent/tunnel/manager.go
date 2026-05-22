@@ -13,6 +13,7 @@
 package tunnel
 
 import (
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -65,21 +66,25 @@ type Dialer interface {
 
 // Manager 管理多个 Host 的隧道。
 type Manager struct {
-	mu     sync.Mutex
-	dialer Dialer
-	conns  map[string]*Conn
-	status map[string]Status
-	subs   map[string]chan Event
-	closed bool
+	mu         sync.Mutex
+	dialer     Dialer
+	conns      map[string]*Conn
+	status     map[string]Status
+	subs       map[string]chan Event
+	// connecting 用于防止并发 EnsureConnected 对同一 host 发起两次拨号:
+	// 先到者写入 channel,后到者等待该 channel 关闭后复用已建立的 conn。
+	connecting map[string]chan struct{}
+	closed     bool
 }
 
 // NewManager 创建 Manager。dialer 不可为 nil。
 func NewManager(dialer Dialer) *Manager {
 	return &Manager{
-		dialer: dialer,
-		conns:  map[string]*Conn{},
-		status: map[string]Status{},
-		subs:   map[string]chan Event{},
+		dialer:     dialer,
+		conns:      map[string]*Conn{},
+		status:     map[string]Status{},
+		subs:       map[string]chan Event{},
+		connecting: map[string]chan struct{}{},
 	}
 }
 
@@ -93,27 +98,48 @@ func NewManager(dialer Dialer) *Manager {
 //   - 失败时返回错误,状态置为 StatusFailed
 func (m *Manager) EnsureConnected(host model.Host) (int, error) {
 	m.mu.Lock()
+	// 已连接：直接复用。
 	if c, ok := m.conns[host.ID]; ok {
 		m.mu.Unlock()
 		return c.LocalPort(), nil
 	}
+	// 正在连接：等待先到者完成后再读 conn，避免建立两条隧道。
+	if ch, ok := m.connecting[host.ID]; ok {
+		m.mu.Unlock()
+		<-ch
+		m.mu.Lock()
+		c, ok := m.conns[host.ID]
+		m.mu.Unlock()
+		if ok {
+			return c.LocalPort(), nil
+		}
+		// 先到者拨号失败，此处同样返回失败（状态已由先到者设置）。
+		return 0, fmt.Errorf("tunnel dial failed for host %s", host.ID)
+	}
+	// 首个调用者：占位 channel，其他并发调用者等待。
+	ch := make(chan struct{})
+	m.connecting[host.ID] = ch
 	m.status[host.ID] = StatusConnecting
 	m.mu.Unlock()
 	m.emit(host.ID, StatusConnecting, "")
 
 	conn, err := m.dialer.Dial(host)
+
+	m.mu.Lock()
+	delete(m.connecting, host.ID)
 	if err != nil {
-		m.mu.Lock()
 		m.status[host.ID] = StatusFailed
-		m.mu.Unlock()
+	} else {
+		m.conns[host.ID] = conn
+		m.status[host.ID] = StatusConnected
+	}
+	m.mu.Unlock()
+	close(ch) // 唤醒所有等待者。
+
+	if err != nil {
 		m.emit(host.ID, StatusFailed, err.Error())
 		return 0, err
 	}
-
-	m.mu.Lock()
-	m.conns[host.ID] = conn
-	m.status[host.ID] = StatusConnected
-	m.mu.Unlock()
 	m.emit(host.ID, StatusConnected, "")
 	return conn.LocalPort(), nil
 }
