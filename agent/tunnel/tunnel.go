@@ -56,10 +56,13 @@ func BuildClientConfig(c Credentials) (*ssh.ClientConfig, error) {
 	if len(auth) == 0 {
 		return nil, errors.New("at least one of PrivateKey or Password is required")
 	}
+	// InsecureIgnoreHostKey 不校验服务端指纹，存在中间人攻击风险。
+	// 未来可通过 Credentials.KnownHostsPath 扩展为严格校验；
+	// UI 层在首次连接时应向用户展示指纹并要求确认（TODO）。
 	return &ssh.ClientConfig{
 		User:            c.User,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
 		Timeout:         15 * time.Second,
 	}, nil
 }
@@ -138,9 +141,11 @@ func (t *Tunnel) handleConn(local net.Conn, remoteAddr string) {
 	}
 	defer remote.Close()
 
+	// 等待两个方向都完成：任一方向关闭后，关闭对端连接迫使另一方向退出。
 	errCh := make(chan error, 2)
-	go func() { _, e := io.Copy(remote, local); errCh <- e }()
-	go func() { _, e := io.Copy(local, remote); errCh <- e }()
+	go func() { _, e := io.Copy(remote, local); remote.Close(); errCh <- e }()
+	go func() { _, e := io.Copy(local, remote); local.Close(); errCh <- e }()
+	<-errCh
 	<-errCh
 }
 

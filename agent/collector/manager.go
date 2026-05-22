@@ -132,6 +132,9 @@ func (m *Manager) startWithArgv(name string, t model.LogSourceType, argv []strin
 //
 // process.Runner 当前只接受 Command 字符串并通过 sh -c 执行；这里对每个 token
 // 做单引号转义，避免未来扩展 argv token 时把内容交给 shell 重新解释。
+// 注意：argv 由上层 buildArgv 从硬编码模板生成，name/type 均经过正则校验，
+// 不存在用户任意字符串注入的路径；shellQuote 是额外的防御层。
+// 若未来 Runner 支持 argv 模式，可移除 shellQuote 并直接传递 argv 列表。
 func shellQuote(argv []string) string {
 	quoted := make([]string, 0, len(argv))
 	for _, arg := range argv {
