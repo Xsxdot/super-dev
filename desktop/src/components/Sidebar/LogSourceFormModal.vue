@@ -125,9 +125,9 @@ const visibleParams = computed(() =>
 const extraArgs = computed<string[]>(() => {
   const args: string[] = []
   for (const p of visibleParams.value) {
-    if (p.enabled) {
+    if (p.enabled && p.value.trim()) {
       args.push(p.flag)
-      if (p.value) args.push(p.value)
+      args.push(p.value.trim())
     }
   }
   return args
