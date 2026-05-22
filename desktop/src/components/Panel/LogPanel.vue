@@ -14,6 +14,7 @@ import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 import { tagColor } from '@/lib/tagColor'
 import type { RemoteLogEntry } from '@/api/agent'
+import type { PanelSource } from '@/stores/panel'
 import {
   makeDisplayItems,
   computeDisplayStats,
@@ -28,6 +29,7 @@ const props = defineProps<{
   logSourceId?: string | null
   logSourceIds?: string[] | null
   groupKey?: string | null
+  source?: PanelSource | null
 }>()
 
 const logStore = useLogStore()
@@ -217,6 +219,27 @@ function entryCount(items: LogDisplayItem[]): number {
 
 const bookmark = computed(() => bookmarkStore.getBookmark(props.panelId))
 
+function currentPanelSource(): PanelSource | null {
+  if (props.source !== undefined) return props.source
+  if (props.serviceId && props.projectId) {
+    return { type: 'local-service', serviceId: props.serviceId, projectId: props.projectId }
+  }
+  if (props.projectId) return { type: 'local-project', projectId: props.projectId }
+  if (props.groupKey && props.logSourceIds?.length) {
+    return { type: 'remote-aggregate', logSourceIds: props.logSourceIds, groupKey: props.groupKey }
+  }
+  if (props.groupKey && props.logSourceId) {
+    return { type: 'remote-log-source', logSourceId: props.logSourceId, groupKey: props.groupKey }
+  }
+  return null
+}
+
+function bookmarkMatchesCurrentSource(): boolean {
+  const bm = bookmark.value
+  if (!bm?.source) return true
+  return JSON.stringify(bm.source) === JSON.stringify(currentPanelSource())
+}
+
 function isHighlighted(log: DisplayLogEntry): boolean {
   const bm = bookmark.value
   if (!bm?.startTime) return false
@@ -261,7 +284,7 @@ function closeActiveFoldsForScope() {
 watch(
   [filteredLogs, () => bookmark.value?.state, () => logStore.logSourceRevision],
   ([logs, state]) => {
-    if (state !== 'recording' || !bookmark.value?.startTime) return
+    if (state !== 'recording' || !bookmark.value?.startTime || !bookmarkMatchesCurrentSource()) return
     const startTime = bookmark.value.startTime
     for (const log of logs) {
       if (new Date(log.timestamp) < startTime) continue
@@ -275,7 +298,7 @@ function onEndBookmark() {
   closeActiveFoldsForScope()
   bookmarkStore.endBookmark(
     props.panelId,
-    filteredLogs.value,
+    bookmarkMatchesCurrentSource() ? filteredLogs.value : [],
     bookmarkCapturedIds,
   )
 }

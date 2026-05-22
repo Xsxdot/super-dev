@@ -66,12 +66,11 @@ function splitLeafById(
   node: PanelNode,
   leafId: string,
   axis: PanelAxis,
-  source: PanelSource | null,
+  newLeaf: PanelLeafNode,
   newSide: 'first' | 'second'
 ): PanelNode {
   if (node.type === 'leaf') {
     if (node.id !== leafId) return node
-    const newLeaf = makeLeafFromSource(source)
     const split: PanelSplitNode = {
       type: 'split',
       id: uuidv4(),
@@ -84,8 +83,8 @@ function splitLeafById(
   }
   return {
     ...node,
-    first: splitLeafById(node.first, leafId, axis, source, newSide),
-    second: splitLeafById(node.second, leafId, axis, source, newSide),
+    first: splitLeafById(node.first, leafId, axis, newLeaf, newSide),
+    second: splitLeafById(node.second, leafId, axis, newLeaf, newSide),
   }
 }
 
@@ -178,12 +177,11 @@ export const usePanelStore = defineStore('panel', () => {
     source: PanelSource | null,
     newSide: 'first' | 'second'
   ) {
-    root.value = splitLeafById(root.value, leafId, axis, source, newSide)
+    const newLeaf = makeLeafFromSource(source)
+    root.value = splitLeafById(root.value, leafId, axis, newLeaf, newSide)
     save()
     ensureFocused()
-    const sourceKey = JSON.stringify(source)
-    const created = allLeaves.value.find(leaf => leaf.id !== leafId && JSON.stringify(leaf.source) === sourceKey)
-    if (created) focusedPanelId.value = created.id
+    if (allLeaves.value.some(leaf => leaf.id === newLeaf.id)) focusedPanelId.value = newLeaf.id
   }
 
   function replaceScope(leafId: string, serviceId: string | null, projectId: string | null) {

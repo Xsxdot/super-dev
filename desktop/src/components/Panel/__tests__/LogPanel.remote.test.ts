@@ -14,6 +14,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import LogPanel from '@/components/Panel/LogPanel.vue'
 import { useRemoteStore } from '@/stores/remote'
 import { useRemoteLogStore } from '@/stores/remoteLog'
+import { useBookmarkStore } from '@/stores/bookmark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 vi.mock('@/api/agent', async () => {
@@ -22,7 +23,10 @@ vi.mock('@/api/agent', async () => {
 })
 
 describe('LogPanel 远程模式', () => {
-  beforeEach(() => setActivePinia(createPinia()))
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
 
   it('挂载时调 remoteLog.subscribe；卸载时 unsubscribe', () => {
     const remoteLog = useRemoteLogStore()
@@ -86,6 +90,53 @@ describe('LogPanel 远程模式', () => {
 
     expect(wrapper.text()).toContain('[host-01]')
     expect(wrapper.text()).toContain('hello')
+  })
+
+  it('同步录制中切换远程来源后不会把新来源日志追加到旧 source 书签', async () => {
+    const remoteLog = useRemoteLogStore()
+    vi.spyOn(remoteLog, 'subscribe').mockResolvedValue(undefined)
+    vi.spyOn(remoteLog, 'unsubscribe').mockReturnValue()
+    vi.spyOn(remoteLog, 'logsOf').mockImplementation((logSourceId: string) => {
+      if (logSourceId === 'ls2') {
+        return [{
+          id: 2,
+          service_id: 'remote-service',
+          run_id: 'run-2',
+          timestamp: new Date(Date.now() + 1000).toISOString(),
+          level: 'INFO',
+          message: 'new source should not be captured',
+          stream: 'stdout',
+          host_id: 'h2',
+        }]
+      }
+      return []
+    })
+    const bookmarkStore = useBookmarkStore()
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'p1',
+        serviceId: null,
+        projectId: null,
+        logSourceId: 'ls1',
+        groupKey: 'all',
+        source: { type: 'remote-log-source', logSourceId: 'ls1', groupKey: 'all' },
+      },
+    })
+    bookmarkStore.startBookmark('p1', null, {
+      type: 'remote-log-source',
+      logSourceId: 'ls1',
+      groupKey: 'all',
+    })
+
+    await wrapper.setProps({
+      logSourceId: 'ls2',
+      source: { type: 'remote-log-source', logSourceId: 'ls2', groupKey: 'all' },
+    })
+    remoteLog.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve))
+
+    expect(bookmarkStore.getBookmark('p1')?.lockedLogs).toEqual([])
   })
 
   it('远程模式工具栏搜索按钮打开 remote-search tab', async () => {

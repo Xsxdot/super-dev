@@ -200,6 +200,40 @@ describe('workspaceStore', () => {
     expect(panel.allLeaves.map(leaf => (leaf as any).source?.groupKey)).toEqual(['all', 'api'])
   })
 
+  it('openRemoteAggregate 复用标签时同步更新 layoutRoot 内的远程聚合来源', () => {
+    const workspace = useWorkspaceStore()
+    const panel = usePanelStore()
+
+    const tab = workspace.openRemoteAggregate(
+      'project-A',
+      'svc-api',
+      'api',
+      ['remote-1'],
+      'all',
+    ) as any
+    const firstLeafId = panel.allLeaves[0].id
+
+    workspace.openRemoteAggregate(
+      'project-A',
+      'svc-api',
+      'api',
+      ['remote-2', 'remote-3'],
+      'all',
+    )
+
+    expect(workspace.activeTab?.id).toBe(tab.id)
+    expect((workspace.activeTab as any).logSourceIds).toEqual(['remote-2', 'remote-3'])
+    expect(panel.allLeaves[0].id).toBe(firstLeafId)
+    expect((panel.allLeaves[0] as any).source).toMatchObject({
+      type: 'remote-aggregate',
+      logSourceIds: ['remote-2', 'remote-3'],
+      groupKey: 'all',
+      projectId: 'project-A',
+      serviceId: 'svc-api',
+      serviceName: 'api',
+    })
+  })
+
   it('搜索标签的隐藏和固定服务互不影响', () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]
