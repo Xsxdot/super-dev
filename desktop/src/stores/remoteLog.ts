@@ -66,9 +66,14 @@ function insertSorted(logs: RemoteLogEntry[], entry: RemoteLogEntry) {
 
 export const useRemoteLogStore = defineStore('remoteLog', () => {
   const sessions = ref<Map<string, GroupSession>>(new Map())
+  const logSourceRevision = ref(0)
 
   function touchSessions() {
     sessions.value = new Map(sessions.value)
+  }
+
+  function bumpRevision() {
+    logSourceRevision.value++
   }
 
   function makeSession(): GroupSession {
@@ -158,6 +163,7 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
       session.oldestIds.set(hostId, raw.id)
     }
     session.logs = [...session.logs]
+    bumpRevision()
     touchSessions()
   }
 
@@ -174,6 +180,7 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
     } finally {
       session.loadingHistory = false
       session.logs = [...session.logs].sort(compareLogs)
+      bumpRevision()
       touchSessions()
     }
   }
@@ -240,6 +247,7 @@ export const useRemoteLogStore = defineStore('remoteLog', () => {
 
   return {
     sessions,
+    logSourceRevision,
     subscribe,
     unsubscribe,
     loadHistory,
