@@ -19,7 +19,11 @@ import {
   type PanelNode,
 } from './panel'
 
-export type WorkspaceTab = ProjectWorkspaceTab | SearchWorkspaceTab | RemoteWorkspaceTab
+export type WorkspaceTab =
+  | ProjectWorkspaceTab
+  | SearchWorkspaceTab
+  | RemoteWorkspaceTab
+  | RemoteSearchWorkspaceTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -55,6 +59,14 @@ export interface SearchWorkspaceTab {
 export interface RemoteWorkspaceTab {
   id: string
   type: 'remote'
+  logSourceId: string
+  groupKey: string
+  title: string
+}
+
+export interface RemoteSearchWorkspaceTab {
+  id: string
+  type: 'remote-search'
   logSourceId: string
   groupKey: string
   title: string
@@ -105,6 +117,16 @@ function makeRemoteTab(logSourceId: string, groupKey: string): RemoteWorkspaceTa
     logSourceId,
     groupKey,
     title: `Remote · ${groupKey}`,
+  }
+}
+
+function makeRemoteSearchTab(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
+  return {
+    id: `remote-search:${logSourceId}:${groupKey}`,
+    type: 'remote-search',
+    logSourceId,
+    groupKey,
+    title: `Remote Search · ${groupKey}`,
   }
 }
 
@@ -188,6 +210,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return existing
     }
     const tab = makeRemoteTab(logSourceId, groupKey)
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
+    return tab
+  }
+
+  function openRemoteSearch(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
+    saveActiveProjectLayout()
+    const id = `remote-search:${logSourceId}:${groupKey}`
+    const existing = tabs.value.find(
+      (tab): tab is RemoteSearchWorkspaceTab => tab.type === 'remote-search' && tab.id === id,
+    )
+    if (existing) {
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab = makeRemoteSearchTab(logSourceId, groupKey)
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
@@ -437,6 +475,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openService,
     openSearch,
     openRemote,
+    openRemoteSearch,
     searchTab,
     hideService,
     showService,
