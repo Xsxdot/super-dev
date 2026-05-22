@@ -5,6 +5,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
 import RemoteListenSection from './RemoteListenSection.vue'
+import ProjectRemoteSection from './ProjectRemoteSection.vue'
 import { open, message } from '@tauri-apps/plugin-dialog'
 import { useRouter } from 'vue-router'
 
@@ -29,6 +30,22 @@ function openProjectSearch(projectId: string) {
 
 function openRemoteGroup(payload: { logSourceId: string; groupKey: string }) {
   workspace.openRemote(payload.logSourceId, payload.groupKey)
+}
+
+function openRemoteAggregate(payload: {
+  projectId: string
+  serviceId: string
+  serviceName: string
+  logSourceIds: string[]
+  groupKey: string
+}) {
+  workspace.openRemoteAggregate(
+    payload.projectId,
+    payload.serviceId,
+    payload.serviceName,
+    payload.logSourceIds,
+    payload.groupKey,
+  )
 }
 
 async function addProject() {
@@ -58,6 +75,10 @@ async function addProject() {
           :project-id="project.id"
           :selected="isServiceSelected(service.id)"
           @click="selectService(service.id, project.id)"
+        />
+        <ProjectRemoteSection
+          :project-id="project.id"
+          @open="openRemoteAggregate"
         />
       </template>
       <RemoteListenSection @open="openRemoteGroup" />
