@@ -88,6 +88,78 @@ describe('LogPanel 远程模式', () => {
     expect(wrapper.text()).toContain('hello')
   })
 
+
+
+  it('远程模式按 workspace tab 的节点可见性过滤已加载日志', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [
+      {
+        id: 'h1',
+        name: 'host-01',
+        ssh_host: '',
+        ssh_port: 22,
+        ssh_user: '',
+        remote_agent_port: 57017,
+        local_tunnel_port: 0,
+        tags: ['prod'],
+      },
+      {
+        id: 'h2',
+        name: 'host-02',
+        ssh_host: '',
+        ssh_port: 22,
+        ssh_user: '',
+        remote_agent_port: 57017,
+        local_tunnel_port: 0,
+        tags: ['prod'],
+      },
+    ]
+    const workspace = useWorkspaceStore() as ReturnType<typeof useWorkspaceStore> & {
+      hideRemoteHost: (tabId: string, hostId: string) => void
+    }
+    const tab = workspace.openRemote('ls1', 'all')
+    workspace.hideRemoteHost(tab.id, 'h1')
+
+    const remoteLog = useRemoteLogStore()
+    vi.spyOn(remoteLog, 'subscribe').mockResolvedValue(undefined)
+    vi.spyOn(remoteLog, 'logsOf').mockReturnValue([
+      {
+        id: 1,
+        service_id: 's',
+        run_id: 'r',
+        timestamp: '2026-05-21T12:00:00Z',
+        level: 'INFO',
+        message: 'hidden host line',
+        stream: 'stdout',
+        host_id: 'h1',
+      },
+      {
+        id: 2,
+        service_id: 's',
+        run_id: 'r',
+        timestamp: '2026-05-21T12:00:01Z',
+        level: 'INFO',
+        message: 'visible host line',
+        stream: 'stdout',
+        host_id: 'h2',
+      },
+    ])
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: tab.id,
+        serviceId: null,
+        projectId: null,
+        logSourceId: 'ls1',
+        groupKey: 'all',
+      },
+    })
+    await new Promise(resolve => setTimeout(resolve))
+
+    expect(wrapper.text()).not.toContain('hidden host line')
+    expect(wrapper.text()).toContain('visible host line')
+  })
+
   it('远程模式工具栏搜索按钮打开 remote-search tab', async () => {
     const remoteLog = useRemoteLogStore()
     vi.spyOn(remoteLog, 'subscribe').mockResolvedValue(undefined)

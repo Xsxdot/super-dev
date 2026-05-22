@@ -6,6 +6,7 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { useRemoteLogStore } from '@/stores/remoteLog'
+import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import RemoteHostChips from './RemoteHostChips.vue'
@@ -36,6 +37,7 @@ const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const remote = useRemoteStore()
 const remoteLogStore = useRemoteLogStore()
+const workspace = useWorkspaceStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
@@ -146,7 +148,10 @@ const rawLogs = computed<DisplayLogEntry[]>(() => {
       const t = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       return t !== 0 ? t : a.id - b.id
     })
+    const allHostIds = [...new Set(deduped.map(entry => entry.host_id))]
+    const visibleHostIds = new Set(workspace.visibleRemoteHostIds(props.panelId, allHostIds))
     return deduped
+      .filter(entry => visibleHostIds.has(entry.host_id))
       .filter(entry => selected.size === 0 || selected.has(entry.host_id))
       .map(toRemoteDisplayEntry)
   }
@@ -281,7 +286,7 @@ function onEndBookmark() {
 }
 
 watch(
-  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision, selectedHostIds],
+  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision, selectedHostIds, () => workspace.remoteHiddenHostIdsByTab[props.panelId]?.join('|')],
   () => scheduleDisplayRefresh(),
   { deep: true },
 )

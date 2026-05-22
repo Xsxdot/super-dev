@@ -49,10 +49,12 @@ type remoteViewGroup struct {
 }
 
 type logSourceDTO struct {
-	ID      string              `json:"id"`
-	Name    string              `json:"name"`
-	Type    model.LogSourceType `json:"type"`
-	HostIDs []string            `json:"host_ids"`
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	Type      model.LogSourceType `json:"type"`
+	HostIDs   []string            `json:"host_ids"`
+	ProjectID string              `json:"project_id,omitempty"`
+	ServiceID string              `json:"service_id,omitempty"`
 }
 
 type remoteViewResponse struct {
@@ -109,9 +111,16 @@ func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, remoteViewResponse{
-		LogSource: logSourceDTO{ID: ls.ID, Name: ls.Name, Type: ls.Type, HostIDs: ls.HostIDs},
-		Groups:    buildGroups(ls.HostIDs, hostByID, ls.Tags),
-		Hosts:     relatedHosts,
+		LogSource: logSourceDTO{
+			ID:        ls.ID,
+			Name:      ls.Name,
+			Type:      ls.Type,
+			HostIDs:   ls.HostIDs,
+			ProjectID: ls.ProjectID,
+			ServiceID: ls.ServiceID,
+		},
+		Groups: buildGroups(ls.HostIDs, hostByID, ls.Tags),
+		Hosts:  relatedHosts,
 	})
 }
 

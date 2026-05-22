@@ -15,8 +15,20 @@ import LogPanel from '@/components/Panel/LogPanel.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useRemoteStore } from '@/stores/remote'
+import { useAgentStore } from '@/stores/agent'
 
 const workspace = useWorkspaceStore()
+const remote = useRemoteStore()
+const agentStore = useAgentStore()
+
+function projectIdForLogSource(logSourceId: string): string | null {
+  const logSource = remote.logSourceById(logSourceId)
+  if (!logSource) return null
+  if (logSource.project_id) return logSource.project_id
+  if (!logSource.service_id) return null
+  return agentStore.serviceById(logSource.service_id)?.project_id ?? null
+}
 </script>
 
 <template>
@@ -30,7 +42,7 @@ const workspace = useWorkspaceStore()
       v-else-if="workspace.activeTab.type === 'remote'"
       :panel-id="workspace.activeTab.id"
       :service-id="null"
-      :project-id="null"
+      :project-id="projectIdForLogSource(workspace.activeTab.logSourceId)"
       :log-source-id="workspace.activeTab.logSourceId"
       :group-key="workspace.activeTab.groupKey"
     />
@@ -38,7 +50,7 @@ const workspace = useWorkspaceStore()
       v-else-if="workspace.activeTab.type === 'remote-aggregate'"
       :panel-id="workspace.activeTab.id"
       :service-id="null"
-      :project-id="null"
+      :project-id="workspace.activeTab.projectId"
       :log-source-ids="workspace.activeTab.logSourceIds"
       :group-key="workspace.activeTab.groupKey"
     />
