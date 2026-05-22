@@ -102,6 +102,20 @@ describe('workspaceStore', () => {
     expect(workspace.activeTab?.type).toBe('search')
   })
 
+  it('openRemote 为同一远程分组复用标签', () => {
+    const workspace = useWorkspaceStore()
+
+    workspace.openRemote('ls1', 'all')
+    workspace.openRemote('ls1', 'all')
+
+    expect(workspace.tabs.filter(t => t.type === 'remote')).toHaveLength(1)
+    expect(workspace.activeTab).toMatchObject({
+      type: 'remote',
+      logSourceId: 'ls1',
+      groupKey: 'all',
+    })
+  })
+
   it('项目标签切换时恢复各自的 panel root', () => {
     const api = service('svc-api', 'api', 'proj-1')
     const admin = service('svc-admin', 'admin', 'proj-2')
