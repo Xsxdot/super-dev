@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { usePanelStore } from '@/stores/panel'
+import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useLogStore } from '@/stores/log'
@@ -22,9 +22,10 @@ const panelServices = computed(() => {
   const seen = new Set<string>()
   const result: Service[] = []
   for (const leaf of panelStore.allLeaves) {
-    if (leaf.serviceId && !seen.has(leaf.serviceId)) {
-      seen.add(leaf.serviceId)
-      const svc = agentStore.serviceById(leaf.serviceId)
+    const serviceId = leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId
+    if (serviceId && !seen.has(serviceId)) {
+      seen.add(serviceId)
+      const svc = agentStore.serviceById(serviceId)
       if (svc) result.push(svc)
     }
   }
@@ -77,8 +78,12 @@ const hasSyncOutput = computed(() => bookmarkStore.formatSyncBookmarks().trim().
 
 function syncPanels(): SyncBookmarkPanel[] {
   return panelStore.allLeaves
-    .filter(leaf => leaf.serviceId)
-    .map(leaf => ({ panelId: leaf.id, serviceId: leaf.serviceId }))
+    .filter(leaf => leaf.source || leaf.serviceId || leaf.projectId)
+    .map(leaf => ({
+      panelId: leaf.id,
+      serviceId: leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId,
+      source: leaf.source,
+    }))
 }
 
 function refreshSyncPanelIds() {
@@ -95,16 +100,18 @@ function toggleSync() {
 }
 
 watch(
-  () => panelStore.allLeaves.map(leaf => `${leaf.id}:${leaf.serviceId ?? ''}`).join('|'),
+  () => panelStore.allLeaves.map(leaf => `${leaf.id}:${JSON.stringify(leaf.source)}`).join('|'),
   () => {
     if (syncEnabled.value && !syncRecording.value) refreshSyncPanelIds()
   },
 )
 
-function visibleLogsForLeaf(leaf: { serviceId: string | null; projectId: string | null }): LogEntry[] {
-  if (leaf.serviceId) return logStore.getLogs(leaf.serviceId)
-  if (!leaf.projectId) return []
-  const project = agentStore.projectById(leaf.projectId)
+function visibleLogsForLeaf(leaf: PanelLeafNode): LogEntry[] {
+  const serviceId = leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId
+  const projectId = leaf.source?.type === 'local-project' ? leaf.source.projectId : leaf.projectId
+  if (serviceId) return logStore.getLogs(serviceId)
+  if (!projectId) return []
+  const project = agentStore.projectById(projectId)
   if (!project) return []
   return project.services
     .flatMap(service => logStore.getLogs(service.id))
@@ -129,14 +136,15 @@ function syncCaptures(): SyncBookmarkCapture[] {
 function toggleSyncRecord() {
   for (const panelId of bookmarkStore.syncPanelIds) {
     const leaf = panelStore.allLeaves.find(l => l.id === panelId)
-    if (leaf?.serviceId) logStore.closeActiveFoldForService(leaf.serviceId)
+    const serviceId = leaf?.source?.type === 'local-service' ? leaf.source.serviceId : leaf?.serviceId
+    if (serviceId) logStore.closeActiveFoldForService(serviceId)
   }
   if (syncRecording.value) {
     bookmarkStore.endSyncBookmark(syncCaptures())
   } else {
     const panels = syncPanels()
     if (panels.length === 0) {
-      window.alert('没有可同步录制的面板服务')
+      window.alert('没有可同步录制的面板')
       return
     }
     bookmarkStore.startSyncBookmark(panels)

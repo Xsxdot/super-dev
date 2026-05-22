@@ -148,6 +148,58 @@ describe('workspaceStore', () => {
     expect(panel.allLeaves[0].serviceId).toBe('svc-api')
   })
 
+  it('openRemote 将远程监听作为日志工作区 panel source 打开', () => {
+    const workspace = useWorkspaceStore()
+    const panel = usePanelStore()
+
+    const tab = workspace.openRemote('remote-prod', 'all') as any
+
+    expect(tab.layoutRoot).toBeTruthy()
+    expect(tab.focusedPanelId).toBeTruthy()
+    expect((panel.allLeaves[0] as any).source).toEqual({
+      type: 'remote-log-source',
+      logSourceId: 'remote-prod',
+      groupKey: 'all',
+    })
+  })
+
+  it('remote 与 project 标签切换时分别保存和恢复 layoutRoot 与焦点', () => {
+    const api = service('svc-api', 'api', 'project-A')
+    useAgentStore().projects = [project([api], 'project-A', 'Project A')]
+    const workspace = useWorkspaceStore()
+    const panel = usePanelStore()
+
+    workspace.openService('project-A', 'svc-api')
+    const projectTabId = workspace.activeTabId!
+    const projectPanelId = panel.allLeaves[0].id
+
+    const remoteTab = workspace.openRemote('remote-prod', 'all') as any
+    const remotePanelId = panel.allLeaves[0].id
+    ;((panel as any).splitLeafWithSource ?? (() => undefined))(
+      remotePanelId,
+      'h',
+      {
+        type: 'remote-log-source',
+        logSourceId: 'remote-prod',
+        groupKey: 'api',
+      },
+      'second',
+    )
+    const focusedRemoteId = panel.allLeaves[1]?.id
+    panel.setFocus(focusedRemoteId)
+    ;((workspace as any).saveActiveLogWorkspaceLayout ?? workspace.saveActiveProjectLayout)()
+
+    workspace.activateTab(projectTabId)
+    expect(panel.allLeaves).toHaveLength(1)
+    expect(panel.allLeaves[0].id).toBe(projectPanelId)
+
+    workspace.activateTab(remoteTab.id)
+
+    expect(panel.allLeaves).toHaveLength(2)
+    expect(panel.focusedPanelId).toBe(focusedRemoteId)
+    expect(panel.allLeaves.map(leaf => (leaf as any).source?.groupKey)).toEqual(['all', 'api'])
+  })
+
   it('搜索标签的隐藏和固定服务互不影响', () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]

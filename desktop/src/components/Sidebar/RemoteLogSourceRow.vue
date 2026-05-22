@@ -13,6 +13,7 @@ RemoteLogSourceRow：单个远程监听任务及其分组列表。
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
+import type { PanelSource } from '@/stores/panel'
 import { tagColor } from '@/lib/tagColor'
 import type { LogSource } from '@/api/agent'
 
@@ -31,6 +32,17 @@ const groups = computed(() => store.groupsOf(props.logSource.id))
 function chipStyle(groupKey: string) {
   if (groupKey === 'all') return undefined
   return { background: tagColor(groupKey) }
+}
+
+function sourceForGroup(groupKey: string): PanelSource {
+  return { type: 'remote-log-source', logSourceId: props.logSource.id, groupKey }
+}
+
+function onGroupDragStart(e: DragEvent, groupKey: string) {
+  const source = sourceForGroup(groupKey)
+  e.dataTransfer?.setData('application/superdev-panel-source', JSON.stringify(source))
+  e.dataTransfer?.setData('text/plain', JSON.stringify(source))
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'
 }
 </script>
 
@@ -51,6 +63,8 @@ function chipStyle(groupKey: string) {
         :key="group.key"
         class="group-row"
         data-test="logsource-group"
+        draggable="true"
+        @dragstart="onGroupDragStart($event, group.key)"
         @click="emit('open', { logSourceId: logSource.id, groupKey: group.key })"
       >
         <span class="chip" :style="chipStyle(group.key)">{{ group.key }}</span>

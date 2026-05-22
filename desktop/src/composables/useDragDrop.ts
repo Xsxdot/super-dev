@@ -1,6 +1,6 @@
 // useDragDrop 封装面板拖放逻辑：根据落点位置决定分栏方向。
 import { ref } from 'vue'
-import type { PanelAxis } from '@/stores/panel'
+import type { PanelAxis, PanelSource } from '@/stores/panel'
 
 export type DropEdge = 'left' | 'right' | 'top' | 'bottom' | 'center'
 export interface DragPoint {
@@ -13,10 +13,19 @@ export interface ServiceDropRequest extends DragPoint {
   serviceId: string
 }
 
+export interface SourceDropRequest extends DragPoint {
+  id: number
+  source: PanelSource
+}
+
+const draggedSource = ref<PanelSource | null>(null)
+const sourceDragPosition = ref<DragPoint | null>(null)
+const sourceDropRequest = ref<SourceDropRequest | null>(null)
 const draggedServiceId = ref<string | null>(null)
 const serviceDragPosition = ref<DragPoint | null>(null)
 const serviceDropRequest = ref<ServiceDropRequest | null>(null)
 let serviceDropRequestId = 0
+let sourceDropRequestId = 0
 
 export function getDropEdge(location: { x: number; y: number }, size: { w: number; h: number }): DropEdge {
   const { x, y } = location
@@ -51,9 +60,19 @@ export function edgeToAxis(edge: DropEdge): { axis: PanelAxis; side: 'first' | '
 export function useDragDrop() {
   const dropHighlight = ref<DropEdge | null>(null)
 
+  function startSourceDrag(source: PanelSource, point: DragPoint) {
+    draggedSource.value = source
+    sourceDragPosition.value = point
+  }
+
   function startServiceDrag(serviceId: string, point: DragPoint) {
     draggedServiceId.value = serviceId
     serviceDragPosition.value = point
+  }
+
+  function moveSourceDrag(point: DragPoint) {
+    if (!draggedSource.value) return
+    sourceDragPosition.value = point
   }
 
   function moveServiceDrag(point: DragPoint) {
@@ -61,9 +80,26 @@ export function useDragDrop() {
     serviceDragPosition.value = point
   }
 
+  function endSourceDrag() {
+    draggedSource.value = null
+    sourceDragPosition.value = null
+  }
+
   function endServiceDrag() {
     draggedServiceId.value = null
     serviceDragPosition.value = null
+  }
+
+  function finishSourceDrag(point: DragPoint) {
+    const source = draggedSource.value
+    if (source) {
+      sourceDropRequest.value = {
+        id: ++sourceDropRequestId,
+        source,
+        ...point,
+      }
+    }
+    endSourceDrag()
   }
 
   function finishServiceDrag(point: DragPoint) {
@@ -75,16 +111,24 @@ export function useDragDrop() {
         ...point,
       }
     }
-    endServiceDrag()
+    draggedServiceId.value = null
+    serviceDragPosition.value = null
   }
 
   return {
     dropHighlight,
+    draggedSource,
+    sourceDragPosition,
+    sourceDropRequest,
     draggedServiceId,
     serviceDragPosition,
     serviceDropRequest,
     getDropEdge,
     edgeToAxis,
+    startSourceDrag,
+    moveSourceDrag,
+    endSourceDrag,
+    finishSourceDrag,
     startServiceDrag,
     moveServiceDrag,
     endServiceDrag,
