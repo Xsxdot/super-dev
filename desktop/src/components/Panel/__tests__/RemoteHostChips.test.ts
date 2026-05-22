@@ -26,9 +26,8 @@ function seedSession() {
       ssh_port: 22,
       ssh_user: '',
       remote_agent_port: 57017,
+      local_tunnel_port: 0,
       tags: ['prod'],
-      created_at: '',
-      updated_at: '',
     },
     {
       id: 'h2',
@@ -37,9 +36,8 @@ function seedSession() {
       ssh_port: 22,
       ssh_user: '',
       remote_agent_port: 57017,
+      local_tunnel_port: 0,
       tags: ['prod'],
-      created_at: '',
-      updated_at: '',
     },
   ]
   remoteLog.sessions.set('ls1::all', {
@@ -50,8 +48,6 @@ function seedSession() {
         name: 'x',
         type: 'journalctl',
         host_ids: ['h1', 'h2'],
-        created_at: '',
-        updated_at: '',
       },
       groups: [{ group_key: 'all', host_ids: ['h1', 'h2'] }],
       hosts: [],

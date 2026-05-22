@@ -44,9 +44,8 @@ function makeHost(overrides: Partial<Host> = {}): Host {
     ssh_port: 22,
     ssh_user: 'root',
     remote_agent_port: 57017,
+    local_tunnel_port: 0,
     tags: ['prod'],
-    created_at: '',
-    updated_at: '',
     ...overrides,
   }
 }
@@ -57,8 +56,6 @@ function makeLogSource(overrides: Partial<LogSource> = {}): LogSource {
     name: 'nova-api',
     type: 'journalctl',
     host_ids: ['h1'],
-    created_at: '',
-    updated_at: '',
     ...overrides,
   }
 }
