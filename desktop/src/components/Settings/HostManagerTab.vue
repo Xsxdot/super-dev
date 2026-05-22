@@ -4,7 +4,6 @@ HostManagerTab：设置页主机管理标签页。
 职责：
   - 列出所有远程 Host 及其 SSH、tag 和隧道状态
   - 提供 Host 新建、编辑、删除入口
-  - 提供从 SSH config 批量导入 Host 的入口
 
 边界：
   - 不管理 LogSource，监听任务由 Sidebar 负责
@@ -15,13 +14,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
 import { tagColor } from '@/lib/tagColor'
 import HostFormModal from './HostFormModal.vue'
-import SshConfigImportModal from './SshConfigImportModal.vue'
-import type { Host, HostCreatePayload, SshConfigEntry } from '@/api/agent'
+import type { Host, HostCreatePayload } from '@/api/agent'
 
 const store = useRemoteStore()
 
 const formVisible = ref(false)
-const importVisible = ref(false)
 const editing = ref<Host | null>(null)
 const error = ref<string | null>(null)
 
@@ -69,26 +66,6 @@ async function handleDelete(host: Host) {
   }
 }
 
-async function handleImport(entries: SshConfigEntry[]) {
-  importVisible.value = false
-  for (const entry of entries) {
-    try {
-      await store.createHost({
-        name: entry.host,
-        ssh_host: entry.hostname,
-        ssh_port: entry.port,
-        ssh_user: entry.user,
-        ssh_key_path: entry.identity_file,
-        remote_agent_port: 57017,
-        tags: [],
-      })
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : `导入 ${entry.host} 失败`
-      break
-    }
-  }
-}
-
 function tunnelLabel(hostId: string): string {
   const status = store.tunnelOf(hostId)
   if (!status) return '-'
@@ -103,7 +80,6 @@ function tunnelLabel(hostId: string): string {
       <h1>主机管理</h1>
       <div class="toolbar">
         <button class="primary" data-test="host-add" @click="openCreate">+ 新建主机</button>
-        <button data-test="host-import" @click="importVisible = true">从 SSH config 导入</button>
       </div>
     </header>
 
@@ -111,9 +87,9 @@ function tunnelLabel(hostId: string): string {
     <table v-if="sortedHosts.length > 0" class="host-table">
       <thead>
         <tr>
-          <th>name</th>
-          <th>ssh</th>
-          <th>tags</th>
+          <th>名称</th>
+          <th>连接地址</th>
+          <th>标签</th>
           <th>隧道</th>
           <th></th>
         </tr>
@@ -140,18 +116,13 @@ function tunnelLabel(hostId: string): string {
         </tr>
       </tbody>
     </table>
-    <div v-else class="empty">还没有主机，点击新建主机或从 SSH config 导入开始。</div>
+    <div v-else class="empty">还没有主机，点击新建主机开始。</div>
 
     <HostFormModal
       :visible="formVisible"
       :initial="editing"
       @submit="handleSubmit"
       @cancel="formVisible = false"
-    />
-    <SshConfigImportModal
-      :visible="importVisible"
-      @import="handleImport"
-      @cancel="importVisible = false"
     />
   </section>
 </template>

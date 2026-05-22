@@ -2,7 +2,7 @@
  * HostManagerTab 测试设置页主机管理能力。
  *
  * 职责：
- *   - 验证空态、新建入口与 SSH config 导入口
+ *   - 验证空态、新建入口
  *   - 验证 Host 表单提交会走 remote store action
  *
  * 边界：
@@ -30,7 +30,8 @@ vi.mock('@/api/agent', async () => {
       createHost: vi.fn(),
       updateHost: vi.fn(),
       deleteHost: vi.fn(),
-      listSshConfigHosts: vi.fn().mockResolvedValue([]),
+      detectSshKeys: vi.fn().mockResolvedValue([]),
+      testConnection: vi.fn().mockResolvedValue({ ok: true, message: '连接成功', latency_ms: 10 }),
     },
   }
 })
@@ -54,14 +55,6 @@ describe('HostManagerTab', () => {
     await wrapper.find('[data-test="host-add"]').trigger('click')
 
     expect(wrapper.find('[data-test="host-form-name"]').exists()).toBe(true)
-  })
-
-  it('点击从 SSH config 导入打开导入对话框', async () => {
-    const wrapper = mount(HostManagerTab)
-
-    await wrapper.find('[data-test="host-import"]').trigger('click')
-
-    expect(wrapper.text()).toContain('从 SSH config 导入')
   })
 
   it('提交表单调用 store.createHost', async () => {
