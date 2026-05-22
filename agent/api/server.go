@@ -162,6 +162,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
+	// 远程日志源管理
+	mux.HandleFunc("GET /api/log-sources", a.listLogSources)
+	mux.HandleFunc("POST /api/log-sources", a.createLogSource)
+	mux.HandleFunc("PUT /api/log-sources/{id}", a.updateLogSource)
+	mux.HandleFunc("DELETE /api/log-sources/{id}", a.deleteLogSource)
+
 	return cors(mux)
 }
 
