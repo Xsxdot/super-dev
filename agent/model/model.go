@@ -139,6 +139,8 @@ type Host struct {
 //
 // Tags 是监听任务自身的标签，与关联 Host 的 Tags 无关。
 // ExtraArgs 是追加给采集命令的额外参数（白名单校验后追加），如 ["--since", "1h"]。
+// ProjectID 和 ServiceID 是可选的：当设置时，表示该监听任务绑定到某个本地项目/服务；
+// 否则（空字符串）表示该任务是独立的远程监听任务。
 type LogSource struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
@@ -146,6 +148,8 @@ type LogSource struct {
 	HostIDs   []string      `json:"host_ids"`
 	Tags      []string      `json:"tags"`
 	ExtraArgs []string      `json:"extra_args"`
+	ProjectID string        `json:"project_id,omitempty"`
+	ServiceID string        `json:"service_id,omitempty"`
 }
 
 // Collector 是远端 agent 维护的采集任务运行时记录。
