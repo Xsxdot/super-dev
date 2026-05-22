@@ -25,6 +25,7 @@ import (
 	"github.com/superdev/agent/process"
 	"github.com/superdev/agent/remote"
 	"github.com/superdev/agent/store"
+	"github.com/superdev/agent/tunnel"
 )
 
 // AppConfig 包含创建 App 所需的配置参数。
@@ -48,6 +49,7 @@ type App struct {
 	procMgr     *process.Manager // 远端 collector 复用的进程管理器
 	collector   *collector.Manager
 	remoteStore *remote.Store
+	tunnels     *tunnel.Manager
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -93,6 +95,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 
 	return &App{
 		cfg:         cfg,
@@ -105,6 +108,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		procMgr:     procMgr,
 		collector:   colMgr,
 		remoteStore: remoteStore,
+		tunnels:     tunnels,
 	}, nil
 }
 
@@ -116,6 +120,9 @@ func (a *App) Close() {
 		a.procMgr.StopAll()
 	}
 	a.buf.Close()
+	if a.tunnels != nil {
+		a.tunnels.Close()
+	}
 	if a.store != nil {
 		a.store.Close()
 	}
@@ -170,6 +177,12 @@ func (a *App) Handler() http.Handler {
 
 	// SSH config 导入
 	mux.HandleFunc("GET /api/ssh-config/hosts", a.listSSHConfigHosts)
+
+	// 隧道管理
+	mux.HandleFunc("GET /api/tunnels", a.listTunnels)
+	mux.HandleFunc("POST /api/tunnels/{host_id}/connect", a.connectTunnel)
+	mux.HandleFunc("POST /api/tunnels/{host_id}/disconnect", a.disconnectTunnel)
+	mux.HandleFunc("GET /ws/tunnels", a.wsTunnels)
 
 	return cors(mux)
 }
