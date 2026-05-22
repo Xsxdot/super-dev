@@ -74,9 +74,8 @@ describe('HostManagerTab', () => {
       ssh_port: 22,
       ssh_user: 'root',
       remote_agent_port: 57017,
+      local_tunnel_port: 0,
       tags: [],
-      created_at: '',
-      updated_at: '',
     })
 
     await wrapper.find('[data-test="host-add"]').trigger('click')

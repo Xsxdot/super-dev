@@ -54,9 +54,8 @@ describe('LogPanel 远程模式', () => {
         ssh_port: 22,
         ssh_user: '',
         remote_agent_port: 57017,
+        local_tunnel_port: 0,
         tags: ['prod'],
-        created_at: '',
-        updated_at: '',
       },
     ]
     const remoteLog = useRemoteLogStore()

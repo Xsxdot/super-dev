@@ -134,6 +134,8 @@ export interface Host {
   ssh_host: string
   ssh_port: number
   ssh_user: string
+  ssh_password?: string
+  ssh_key_path?: string
   remote_agent_port: number
   local_tunnel_port: number
   tags: string[]
@@ -318,7 +320,7 @@ export const api = {
     request<TunnelStatus>(`/api/tunnels/${hostId}`, { method: 'POST' }),
   closeTunnel: (hostId: string) =>
     request<void>(`/api/tunnels/${hostId}`, { method: 'DELETE' }),
-  ensureCollector: (hostId: string, localPort: number, name: string, type: LogSourceType) => {
+  ensureCollector: (_hostId: string, localPort: number, name: string, type: LogSourceType) => {
     const url = `http://127.0.0.1:${localPort}/api/collectors`
     return fetch(url, {
       method: 'POST',
