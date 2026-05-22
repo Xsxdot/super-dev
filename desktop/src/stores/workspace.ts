@@ -1,7 +1,7 @@
-// workspaceStore 管理右侧项目/搜索标签页，是侧边栏和内容区之间的导航状态。
+// workspaceStore 管理右侧项目、搜索和远程监听标签页，是侧边栏和内容区之间的导航状态。
 //
 // 职责：
-//   - 管理项目日志标签和项目搜索标签
+//   - 管理项目日志、项目搜索和远程监听标签
 //   - 在项目标签切换时保存/恢复 Panel 布局树
 //   - 承载搜索页局部状态：结果、上下文、隐藏服务、固定服务
 //
@@ -19,7 +19,7 @@ import {
   type PanelNode,
 } from './panel'
 
-export type WorkspaceTab = ProjectWorkspaceTab | SearchWorkspaceTab
+export type WorkspaceTab = ProjectWorkspaceTab | SearchWorkspaceTab | RemoteWorkspaceTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -50,6 +50,14 @@ export interface SearchWorkspaceTab {
   loadingMoreBefore: boolean
   loadingMoreAfter: boolean
   error: string | null
+}
+
+export interface RemoteWorkspaceTab {
+  id: string
+  type: 'remote'
+  logSourceId: string
+  groupKey: string
+  title: string
 }
 
 const SEARCH_PAGE_LIMIT = 1000
@@ -87,6 +95,16 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
     loadingMoreBefore: false,
     loadingMoreAfter: false,
     error: null,
+  }
+}
+
+function makeRemoteTab(logSourceId: string, groupKey: string): RemoteWorkspaceTab {
+  return {
+    id: `remote:${logSourceId}:${groupKey}`,
+    type: 'remote',
+    logSourceId,
+    groupKey,
+    title: `Remote · ${groupKey}`,
   }
 }
 
@@ -154,6 +172,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function openSearch(projectId: string): SearchWorkspaceTab {
     saveActiveProjectLayout()
     const tab = makeSearchTab(projectId, `Search · ${projectName(projectId)}`)
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
+    return tab
+  }
+
+  function openRemote(logSourceId: string, groupKey: string): RemoteWorkspaceTab {
+    saveActiveProjectLayout()
+    const id = `remote:${logSourceId}:${groupKey}`
+    const existing = tabs.value.find(
+      (tab): tab is RemoteWorkspaceTab => tab.type === 'remote' && tab.id === id,
+    )
+    if (existing) {
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab = makeRemoteTab(logSourceId, groupKey)
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
@@ -402,6 +436,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activateTab,
     openService,
     openSearch,
+    openRemote,
     searchTab,
     hideService,
     showService,
