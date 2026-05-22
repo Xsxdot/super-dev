@@ -11,7 +11,7 @@ RemoteListenSection：Sidebar 中的远程监听块。
   - 不打开日志面板，只 emit open 事件
 -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRemoteStore } from '@/stores/remote'
 import RemoteLogSourceRow from './RemoteLogSourceRow.vue'
@@ -27,6 +27,10 @@ const store = useRemoteStore()
 const formVisible = ref(false)
 const editing = ref<LogSource | null>(null)
 const error = ref<string | null>(null)
+
+const unboundLogSources = computed(() =>
+  store.logSources.filter(ls => !ls.project_id)
+)
 
 onMounted(async () => {
   try {
@@ -81,14 +85,14 @@ async function handleSubmit(payload: LogSourceCreatePayload) {
     </div>
     <div v-if="error" class="error">{{ error }}</div>
     <RemoteLogSourceRow
-      v-for="logSource in store.logSources"
+      v-for="logSource in unboundLogSources"
       :key="logSource.id"
       :log-source="logSource"
       @open="payload => emit('open', payload)"
       @edit="handleEdit"
       @delete="handleDelete"
     />
-    <div v-if="store.logSources.length === 0 && !error" class="empty">还没有监听任务</div>
+    <div v-if="unboundLogSources.length === 0 && !error" class="empty">还没有监听任务</div>
     <div class="add-row" data-test="remote-add-logsource" @click="openCreate">+ 新建监听任务</div>
 
     <LogSourceFormModal
