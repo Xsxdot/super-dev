@@ -184,6 +184,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tunnels/{host_id}/disconnect", a.disconnectTunnel)
 	mux.HandleFunc("GET /ws/tunnels", a.wsTunnels)
 
+	// 远程监听聚合视图
+	mux.HandleFunc("GET /api/remote/view", a.remoteView)
+
 	return cors(mux)
 }
 
