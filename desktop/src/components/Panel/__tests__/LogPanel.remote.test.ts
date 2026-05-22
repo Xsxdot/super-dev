@@ -14,6 +14,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import LogPanel from '@/components/Panel/LogPanel.vue'
 import { useRemoteStore } from '@/stores/remote'
 import { useRemoteLogStore } from '@/stores/remoteLog'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -86,5 +87,25 @@ describe('LogPanel 远程模式', () => {
 
     expect(wrapper.text()).toContain('[host-01]')
     expect(wrapper.text()).toContain('hello')
+  })
+
+  it('远程模式工具栏搜索按钮打开 remote-search tab', async () => {
+    const remoteLog = useRemoteLogStore()
+    vi.spyOn(remoteLog, 'subscribe').mockResolvedValue(undefined)
+    const workspace = useWorkspaceStore()
+    const spy = vi.spyOn(workspace, 'openRemoteSearch')
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'p1',
+        serviceId: null,
+        projectId: null,
+        logSourceId: 'ls1',
+        groupKey: 'all',
+      },
+    })
+
+    await wrapper.find('[data-test="remote-search-button"]').trigger('click')
+
+    expect(spy).toHaveBeenCalledWith('ls1', 'all')
   })
 })

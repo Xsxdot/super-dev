@@ -20,6 +20,13 @@ vi.mock('@/components/Panel/LogPanel.vue', () => ({
   },
 }))
 
+vi.mock('@/components/Search/SearchPage.vue', () => ({
+  default: {
+    props: ['logSourceId', 'groupKey', 'tabId'],
+    template: '<div data-test="remote-search-page">{{ logSourceId }}:{{ groupKey }}:{{ tabId }}</div>',
+  },
+}))
+
 describe('WorkspaceShell remote tab', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
@@ -30,5 +37,14 @@ describe('WorkspaceShell remote tab', () => {
     const wrapper = mount(WorkspaceShell)
 
     expect(wrapper.find('[data-test="remote-log-panel"]').text()).toBe('ls1:prod')
+  })
+
+  it('remote-search tab 渲染远程 SearchPage', () => {
+    const workspace = useWorkspaceStore()
+    workspace.openRemoteSearch('ls1', 'prod')
+
+    const wrapper = mount(WorkspaceShell)
+
+    expect(wrapper.find('[data-test="remote-search-page"]').text()).toBe('ls1:prod:')
   })
 })
