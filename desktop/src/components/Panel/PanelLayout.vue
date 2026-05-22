@@ -23,6 +23,7 @@ const rootLeafCount = computed(() => panelStore.allLeaves.length)
       :panel-id="node.id"
       :service-id="node.serviceId"
       :project-id="node.projectId"
+      :source="node.source"
       :can-close="rootLeafCount > 1"
     />
   </div>

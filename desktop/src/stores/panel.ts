@@ -5,11 +5,18 @@ import { v4 as uuidv4 } from 'uuid'
 
 export type PanelAxis = 'h' | 'v'
 
+export type PanelSource =
+  | { type: 'local-service'; projectId: string; serviceId: string }
+  | { type: 'local-project'; projectId: string }
+  | { type: 'remote-log-source'; logSourceId: string; groupKey: string }
+  | { type: 'remote-aggregate'; logSourceIds: string[]; groupKey: string; projectId?: string; serviceId?: string; serviceName?: string }
+
 export interface PanelLeafNode {
   type: 'leaf'
   id: string
   serviceId: string | null
   projectId: string | null
+  source: PanelSource | null
 }
 
 export interface PanelSplitNode {
@@ -23,8 +30,26 @@ export interface PanelSplitNode {
 
 export type PanelNode = PanelLeafNode | PanelSplitNode
 
+function sourceFromScope(serviceId: string | null, projectId: string | null): PanelSource | null {
+  if (serviceId && projectId) return { type: 'local-service', projectId, serviceId }
+  if (projectId) return { type: 'local-project', projectId }
+  return null
+}
+
+function scopeFromSource(source: PanelSource | null): { serviceId: string | null; projectId: string | null } {
+  if (!source) return { serviceId: null, projectId: null }
+  if (source.type === 'local-service') return { serviceId: source.serviceId, projectId: source.projectId }
+  if (source.type === 'local-project') return { serviceId: null, projectId: source.projectId }
+  return { serviceId: null, projectId: null }
+}
+
+function makeLeafFromSource(source: PanelSource | null = null): PanelLeafNode {
+  const scope = scopeFromSource(source)
+  return { type: 'leaf', id: uuidv4(), ...scope, source }
+}
+
 function makeLeaf(serviceId: string | null = null, projectId: string | null = null): PanelLeafNode {
-  return { type: 'leaf', id: uuidv4(), serviceId, projectId }
+  return makeLeafFromSource(sourceFromScope(serviceId, projectId))
 }
 
 export function createEmptyPanelRoot(): PanelLeafNode {
@@ -41,13 +66,12 @@ function splitLeafById(
   node: PanelNode,
   leafId: string,
   axis: PanelAxis,
-  newServiceId: string | null,
-  newProjectId: string | null,
+  source: PanelSource | null,
   newSide: 'first' | 'second'
 ): PanelNode {
   if (node.type === 'leaf') {
     if (node.id !== leafId) return node
-    const newLeaf = makeLeaf(newServiceId, newProjectId)
+    const newLeaf = makeLeafFromSource(source)
     const split: PanelSplitNode = {
       type: 'split',
       id: uuidv4(),
@@ -60,26 +84,25 @@ function splitLeafById(
   }
   return {
     ...node,
-    first: splitLeafById(node.first, leafId, axis, newServiceId, newProjectId, newSide),
-    second: splitLeafById(node.second, leafId, axis, newServiceId, newProjectId, newSide),
+    first: splitLeafById(node.first, leafId, axis, source, newSide),
+    second: splitLeafById(node.second, leafId, axis, source, newSide),
   }
 }
 
-// 替换指定叶子的 scope（serviceId/projectId）
-function replaceScopeById(
+function replaceSourceById(
   node: PanelNode,
   leafId: string,
-  serviceId: string | null,
-  projectId: string | null
+  source: PanelSource | null
 ): PanelNode {
   if (node.type === 'leaf') {
     if (node.id !== leafId) return node
-    return { ...node, serviceId, projectId }
+    const scope = scopeFromSource(source)
+    return { ...node, ...scope, source }
   }
   return {
     ...node,
-    first: replaceScopeById(node.first, leafId, serviceId, projectId),
-    second: replaceScopeById(node.second, leafId, serviceId, projectId),
+    first: replaceSourceById(node.first, leafId, source),
+    second: replaceSourceById(node.second, leafId, source),
   }
 }
 
@@ -100,9 +123,22 @@ const STORAGE_KEY = 'superdev:panel-layout'
 function loadLayout(): PanelNode {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as PanelNode
+    if (raw) return normalizePanelNode(JSON.parse(raw) as PanelNode)
   } catch {}
   return makeLeaf()
+}
+
+function normalizePanelNode(node: PanelNode): PanelNode {
+  if (node.type === 'leaf') {
+    const source = node.source ?? sourceFromScope(node.serviceId, node.projectId)
+    const scope = scopeFromSource(source)
+    return { ...node, ...scope, source }
+  }
+  return {
+    ...node,
+    first: normalizePanelNode(node.first),
+    second: normalizePanelNode(node.second),
+  }
 }
 
 export const usePanelStore = defineStore('panel', () => {
@@ -133,17 +169,34 @@ export const usePanelStore = defineStore('panel', () => {
     newProjectId: string | null,
     newSide: 'first' | 'second'
   ) {
-    root.value = splitLeafById(root.value, leafId, axis, newServiceId, newProjectId, newSide)
+    splitLeafWithSource(leafId, axis, sourceFromScope(newServiceId, newProjectId), newSide)
+  }
+
+  function splitLeafWithSource(
+    leafId: string,
+    axis: PanelAxis,
+    source: PanelSource | null,
+    newSide: 'first' | 'second'
+  ) {
+    root.value = splitLeafById(root.value, leafId, axis, source, newSide)
     save()
     ensureFocused()
+    const sourceKey = JSON.stringify(source)
+    const created = allLeaves.value.find(leaf => leaf.id !== leafId && JSON.stringify(leaf.source) === sourceKey)
+    if (created) focusedPanelId.value = created.id
   }
 
   function replaceScope(leafId: string, serviceId: string | null, projectId: string | null) {
-    root.value = replaceScopeById(root.value, leafId, serviceId, projectId)
+    replaceSource(leafId, sourceFromScope(serviceId, projectId))
+  }
+
+  function replaceSource(leafId: string, source: PanelSource | null) {
+    root.value = replaceSourceById(root.value, leafId, source)
     save()
   }
 
   function removeLeaf(leafId: string) {
+    if (allLeaves.value.length <= 1) return
     const newRoot = removeLeafById(root.value, leafId)
     root.value = newRoot ?? makeLeaf()
     save()
@@ -151,7 +204,7 @@ export const usePanelStore = defineStore('panel', () => {
   }
 
   function setRoot(nextRoot: PanelNode, nextFocusedPanelId: string | null = null) {
-    root.value = nextRoot
+    root.value = normalizePanelNode(nextRoot)
     focusedPanelId.value = nextFocusedPanelId
     ensureFocused()
     save()
@@ -174,7 +227,9 @@ export const usePanelStore = defineStore('panel', () => {
     allLeaves,
     setFocus,
     splitLeaf,
+    splitLeafWithSource,
     replaceScope,
+    replaceSource,
     removeLeaf,
     setRoot,
     targetPanelId,

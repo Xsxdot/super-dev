@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
-import { usePanelStore } from '@/stores/panel'
+import { usePanelStore, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
 import LogPanel from './LogPanel.vue'
@@ -9,6 +9,7 @@ const props = defineProps<{
   panelId: string
   serviceId: string | null
   projectId: string | null
+  source?: PanelSource | null
   canClose: boolean
 }>()
 
@@ -16,6 +17,9 @@ const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const {
   dropHighlight,
+  draggedSource,
+  sourceDragPosition,
+  sourceDropRequest,
   draggedServiceId,
   serviceDragPosition,
   serviceDropRequest,
@@ -26,16 +30,26 @@ const {
 const panelEl = ref<HTMLElement | null>(null)
 const isFocused = computed(() => panelStore.focusedPanelId === props.panelId)
 
+const source = computed<PanelSource | null>(() =>
+  props.source ?? (props.serviceId && props.projectId
+    ? { type: 'local-service', serviceId: props.serviceId, projectId: props.projectId }
+    : props.projectId
+      ? { type: 'local-project', projectId: props.projectId }
+      : null)
+)
+
 const service = computed(() =>
-  props.serviceId ? agentStore.serviceById(props.serviceId) : null
+  source.value?.type === 'local-service' ? agentStore.serviceById(source.value.serviceId) : null
 )
 
 const headerTitle = computed(() => {
   if (service.value) return service.value.name
-  if (props.projectId) {
-    const proj = agentStore.projectById(props.projectId)
+  if (source.value?.type === 'local-project') {
+    const proj = agentStore.projectById(source.value.projectId)
     return proj ? `${proj.name} · 全部` : '未选择'
   }
+  if (source.value?.type === 'remote-log-source') return `Remote · ${source.value.groupKey}`
+  if (source.value?.type === 'remote-aggregate') return `${source.value.serviceName ?? 'Remote'} · ${source.value.groupKey}`
   return '未选择'
 })
 
@@ -80,34 +94,47 @@ function getDropEdgeAt(clientX: number, clientY: number): DropEdge | null {
   )
 }
 
-function applyServiceDrop(serviceId: string, edge: DropEdge) {
-  const svc = agentStore.serviceById(serviceId)
-  const projectId = svc?.project_id ?? null
+function normalizeDropSource(dropSource: PanelSource): PanelSource {
+  if (dropSource.type !== 'local-service' || dropSource.projectId) return dropSource
+  const svc = agentStore.serviceById(dropSource.serviceId)
+  return { ...dropSource, projectId: svc?.project_id ?? '' }
+}
+
+function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
+  const nextSource = normalizeDropSource(dropSource)
 
   if (edge === 'center') {
-    panelStore.replaceScope(props.panelId, serviceId, projectId)
+    panelStore.replaceSource(props.panelId, nextSource)
     panelStore.setFocus(props.panelId)
   } else {
     const split = edgeToAxis(edge)
     if (split) {
-      panelStore.splitLeaf(props.panelId, split.axis, serviceId, projectId, split.side)
+      panelStore.splitLeafWithSource(props.panelId, split.axis, nextSource, split.side)
     }
   }
 }
 
+function applyServiceDrop(serviceId: string, edge: DropEdge) {
+  const svc = agentStore.serviceById(serviceId)
+  applySourceDrop({ type: 'local-service', serviceId, projectId: svc?.project_id ?? '' }, edge)
+}
+
 function onDrop(e: DragEvent) {
   e.preventDefault()
+  const rawSource = e.dataTransfer?.getData('application/superdev-panel-source')
   const serviceId = e.dataTransfer?.getData('text/plain')
-  if (!serviceId) return
-
   const edge = getDropEdgeFromEvent(e) ?? dropHighlight.value
   if (!edge) return
   dropHighlight.value = null
-  applyServiceDrop(serviceId, edge)
+  if (rawSource) {
+    applySourceDrop(JSON.parse(rawSource) as PanelSource, edge)
+  } else if (serviceId) {
+    applyServiceDrop(serviceId, edge)
+  }
 }
 
 function onDocumentPointerMove(e: PointerEvent) {
-  if (!draggedServiceId.value) return
+  if (!draggedSource.value && !draggedServiceId.value) return
   const edge = getDropEdgeAt(e.clientX, e.clientY)
   dropHighlight.value = edge
 }
@@ -132,9 +159,23 @@ onUnmounted(() => {
   document.removeEventListener('pointermove', onDocumentPointerMove)
 })
 
+watch(sourceDragPosition, (point) => {
+  if (!draggedSource.value || !point) return
+  dropHighlight.value = getDropEdgeAt(point.x, point.y)
+})
+
 watch(serviceDragPosition, (point) => {
   if (!draggedServiceId.value || !point) return
   dropHighlight.value = getDropEdgeAt(point.x, point.y)
+})
+
+watch(sourceDropRequest, (request) => {
+  if (!request) return
+  const edge = getDropEdgeAt(request.x, request.y)
+  dropHighlight.value = null
+  if (edge) {
+    applySourceDrop(request.source, edge)
+  }
 })
 
 watch(serviceDropRequest, (request) => {
@@ -165,7 +206,14 @@ watch(serviceDropRequest, (request) => {
     </div>
 
     <!-- Log panel -->
-    <LogPanel :panel-id="panelId" :service-id="serviceId" :project-id="projectId" />
+    <LogPanel
+      :panel-id="panelId"
+      :service-id="source?.type === 'local-service' ? source.serviceId : null"
+      :project-id="source?.type === 'local-service' || source?.type === 'local-project' ? source.projectId : null"
+      :log-source-id="source?.type === 'remote-log-source' ? source.logSourceId : undefined"
+      :log-source-ids="source?.type === 'remote-aggregate' ? source.logSourceIds : undefined"
+      :group-key="source?.type === 'remote-log-source' || source?.type === 'remote-aggregate' ? source.groupKey : undefined"
+    />
 
     <!-- Drop highlight overlay -->
     <div

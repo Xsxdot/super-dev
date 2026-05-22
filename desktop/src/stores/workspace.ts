@@ -17,6 +17,7 @@ import {
   createEmptyPanelRoot,
   usePanelStore,
   type PanelNode,
+  type PanelSource,
 } from './panel'
 
 export type WorkspaceTab =
@@ -63,6 +64,8 @@ export interface RemoteWorkspaceTab {
   logSourceId: string
   groupKey: string
   title: string
+  layoutRoot: PanelNode
+  focusedPanelId: string | null
 }
 
 export interface RemoteSearchWorkspaceTab {
@@ -82,6 +85,8 @@ export interface RemoteAggregateTab {
   logSourceIds: string[]
   groupKey: string
   title: string
+  layoutRoot: PanelNode
+  focusedPanelId: string | null
 }
 
 const SEARCH_PAGE_LIMIT = 1000
@@ -129,6 +134,8 @@ function makeRemoteTab(logSourceId: string, groupKey: string): RemoteWorkspaceTa
     logSourceId,
     groupKey,
     title: `Remote · ${groupKey}`,
+    layoutRoot: createEmptyPanelRoot(),
+    focusedPanelId: null,
   }
 }
 
@@ -164,19 +171,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return useAgentStore().projectById(projectId)?.name ?? projectId
   }
 
-  function saveActiveProjectLayout() {
+  function isLogWorkspaceTab(tab: WorkspaceTab | null): tab is ProjectWorkspaceTab | RemoteWorkspaceTab | RemoteAggregateTab {
+    return tab?.type === 'project' || tab?.type === 'remote' || tab?.type === 'remote-aggregate'
+  }
+
+  function saveActiveLogWorkspaceLayout() {
     const active = activeTab.value
-    if (!active || active.type !== 'project') return
+    if (!isLogWorkspaceTab(active)) return
     const panel = usePanelStore()
     active.layoutRoot = panel.root
     active.focusedPanelId = panel.focusedPanelId
   }
 
+  function saveActiveProjectLayout() {
+    saveActiveLogWorkspaceLayout()
+  }
+
   function activateTab(tabId: string) {
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
     activeTabId.value = tabId
     const tab = activeTab.value
-    if (tab?.type === 'project') {
+    if (isLogWorkspaceTab(tab)) {
       usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
     }
   }
@@ -200,11 +215,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!targetPanelId) return
     panel.replaceScope(targetPanelId, serviceId, projectId)
     panel.setFocus(targetPanelId)
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
   }
 
   function openSearch(projectId: string): SearchWorkspaceTab {
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
     const tab = makeSearchTab(projectId, `Search · ${projectName(projectId)}`)
     tabs.value.push(tab)
     activeTabId.value = tab.id
@@ -212,23 +227,32 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function openRemote(logSourceId: string, groupKey: string): RemoteWorkspaceTab {
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
     const id = `remote:${logSourceId}:${groupKey}`
     const existing = tabs.value.find(
       (tab): tab is RemoteWorkspaceTab => tab.type === 'remote' && tab.id === id,
     )
     if (existing) {
-      activeTabId.value = existing.id
+      activateTab(existing.id)
       return existing
     }
     const tab = makeRemoteTab(logSourceId, groupKey)
     tabs.value.push(tab)
     activeTabId.value = tab.id
+    const panel = usePanelStore()
+    panel.setRoot(tab.layoutRoot, tab.focusedPanelId)
+    const leafId = panel.targetPanelId()
+    if (leafId) {
+      panel.replaceSource(leafId, { type: 'remote-log-source', logSourceId, groupKey })
+      panel.setFocus(leafId)
+    }
+    tab.layoutRoot = panel.root
+    tab.focusedPanelId = panel.focusedPanelId
     return tab
   }
 
   function openRemoteSearch(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
     const id = `remote-search:${logSourceId}:${groupKey}`
     const existing = tabs.value.find(
       (tab): tab is RemoteSearchWorkspaceTab => tab.type === 'remote-search' && tab.id === id,
@@ -250,14 +274,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     logSourceIds: string[],
     groupKey: string,
   ): RemoteAggregateTab {
-    saveActiveProjectLayout()
+    saveActiveLogWorkspaceLayout()
     const id = `remote-aggregate:${serviceId}:${groupKey}`
     const existing = tabs.value.find(
       (tab): tab is RemoteAggregateTab => tab.type === 'remote-aggregate' && tab.id === id,
     )
     if (existing) {
       existing.logSourceIds = logSourceIds
-      activeTabId.value = existing.id
+      activateTab(existing.id)
       return existing
     }
     const tab: RemoteAggregateTab = {
@@ -269,9 +293,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       logSourceIds,
       groupKey,
       title: `${serviceName} · ${groupKey}`,
+      layoutRoot: createEmptyPanelRoot(),
+      focusedPanelId: null,
     }
     tabs.value.push(tab)
     activeTabId.value = tab.id
+    const source: PanelSource = { type: 'remote-aggregate', logSourceIds, groupKey, projectId, serviceId, serviceName }
+    const panel = usePanelStore()
+    panel.setRoot(tab.layoutRoot, tab.focusedPanelId)
+    const leafId = panel.targetPanelId()
+    if (leafId) {
+      panel.replaceSource(leafId, source)
+      panel.setFocus(leafId)
+    }
+    tab.layoutRoot = panel.root
+    tab.focusedPanelId = panel.focusedPanelId
     return tab
   }
 
@@ -506,7 +542,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (activeTabId.value !== tabId) return
     activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? null
     const tab = activeTab.value
-    if (tab?.type === 'project') {
+    if (isLogWorkspaceTab(tab)) {
       usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
     }
   }
@@ -534,5 +570,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadMoreContext,
     closeTab,
     saveActiveProjectLayout,
+    saveActiveLogWorkspaceLayout,
   }
 })

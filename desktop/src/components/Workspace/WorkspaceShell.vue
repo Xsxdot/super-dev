@@ -11,7 +11,6 @@
 -->
 <script setup lang="ts">
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
-import LogPanel from '@/components/Panel/LogPanel.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -25,23 +24,7 @@ const workspace = useWorkspaceStore()
     <div v-if="!workspace.activeTab" class="workspace-empty">
       <div>选择左侧服务或点击项目搜索</div>
     </div>
-    <PanelLayout v-else-if="workspace.activeTab.type === 'project'" />
-    <LogPanel
-      v-else-if="workspace.activeTab.type === 'remote'"
-      :panel-id="workspace.activeTab.id"
-      :service-id="null"
-      :project-id="null"
-      :log-source-id="workspace.activeTab.logSourceId"
-      :group-key="workspace.activeTab.groupKey"
-    />
-    <LogPanel
-      v-else-if="workspace.activeTab.type === 'remote-aggregate'"
-      :panel-id="workspace.activeTab.id"
-      :service-id="null"
-      :project-id="null"
-      :log-source-ids="workspace.activeTab.logSourceIds"
-      :group-key="workspace.activeTab.groupKey"
-    />
+    <PanelLayout v-else-if="workspace.activeTab.type === 'project' || workspace.activeTab.type === 'remote' || workspace.activeTab.type === 'remote-aggregate'" />
     <SearchPage
       v-else-if="workspace.activeTab.type === 'remote-search'"
       :log-source-id="workspace.activeTab.logSourceId"

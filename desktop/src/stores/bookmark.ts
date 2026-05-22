@@ -2,12 +2,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { LogEntry } from '@/api/agent'
+import type { PanelSource } from './panel'
 
 export type BookmarkState = 'idle' | 'recording' | 'done'
 
 export interface Bookmark {
   panelId: string
   serviceId: string | null
+  source?: PanelSource | null
   state: BookmarkState
   startTime: Date | null
   endTime: Date | null
@@ -17,6 +19,7 @@ export interface Bookmark {
 export interface SyncBookmarkPanel {
   panelId: string
   serviceId: string | null
+  source?: PanelSource | null
 }
 
 export interface SyncBookmarkCapture {
@@ -89,6 +92,14 @@ export function captureLockedLogs(
   )
 }
 
+function sourceLabel(bm: Bookmark): string {
+  if (bm.source?.type === 'local-service') return bm.source.serviceId
+  if (bm.source?.type === 'local-project') return `${bm.source.projectId} · all`
+  if (bm.source?.type === 'remote-log-source') return `remote:${bm.source.logSourceId}/${bm.source.groupKey}`
+  if (bm.source?.type === 'remote-aggregate') return `remote:${bm.source.logSourceIds.join(',')}/${bm.source.groupKey}`
+  return bm.serviceId ?? 'unknown'
+}
+
 function formatLogLines(l: LogEntry): string[] {
   const t = new Date(l.timestamp).toLocaleTimeString('en-US', { hour12: false })
   const base = `${t} [${l.service_id}] ${l.level.padEnd(5)} ${l.message}`
@@ -105,10 +116,11 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     return bookmarks.value[panelId] ?? null
   }
 
-  function startBookmark(panelId: string, serviceId: string | null) {
+  function startBookmark(panelId: string, serviceId: string | null, source: PanelSource | null = null) {
     bookmarks.value[panelId] = {
       panelId,
       serviceId,
+      source,
       state: 'recording',
       startTime: new Date(),
       endTime: null,
@@ -177,7 +189,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     for (const panelId of syncPanelIds.value) {
       const bm = bookmarks.value[panelId]
       if (!bm) continue
-      const header = `=== ${bm.serviceId ?? 'unknown'} ===`
+      const header = `=== ${sourceLabel(bm)} ===`
       const body = bm.lockedLogs.flatMap(formatLogLines).join('\n')
       parts.push(`${header}\n${body}`)
     }
@@ -194,12 +206,13 @@ export const useBookmarkStore = defineStore('bookmark', () => {
 
   function startSyncBookmark(panels?: SyncBookmarkPanel[]) {
     const now = new Date()
-    const targets = panels ?? [...syncPanelIds.value].map(panelId => ({ panelId, serviceId: null }))
+    const targets: SyncBookmarkPanel[] = panels ?? [...syncPanelIds.value].map(panelId => ({ panelId, serviceId: null, source: null }))
     for (const target of targets) {
       syncPanelIds.value.add(target.panelId)
       bookmarks.value[target.panelId] = {
         panelId: target.panelId,
         serviceId: target.serviceId,
+        source: target.source ?? null,
         state: 'recording',
         startTime: now,
         endTime: null,
