@@ -190,8 +190,8 @@ func (a *App) Handler() http.Handler {
 
 	// 隧道管理
 	mux.HandleFunc("GET /api/tunnels", a.listTunnels)
-	mux.HandleFunc("POST /api/tunnels/{host_id}/connect", a.connectTunnel)
-	mux.HandleFunc("POST /api/tunnels/{host_id}/disconnect", a.disconnectTunnel)
+	mux.HandleFunc("POST /api/tunnels/{host_id}", a.connectTunnel)
+	mux.HandleFunc("DELETE /api/tunnels/{host_id}", a.disconnectTunnel)
 	mux.HandleFunc("GET /ws/tunnels", a.wsTunnels)
 
 	// 远程监听聚合视图

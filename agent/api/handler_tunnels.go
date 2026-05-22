@@ -2,8 +2,8 @@
 //
 // 职责：
 //   - GET /api/tunnels:返回所有 Host 的隧道状态快照(含本地端口)
-//   - POST /api/tunnels/{host_id}/connect:按 host 凭据建立隧道
-//   - POST /api/tunnels/{host_id}/disconnect:主动断开
+//   - POST /api/tunnels/{host_id}:按 host 凭据建立隧道
+//   - DELETE /api/tunnels/{host_id}:主动断开
 //   - GET /ws/tunnels:订阅状态变化事件流
 //
 // 边界：
@@ -18,10 +18,25 @@ import (
 	"github.com/superdev/agent/tunnel"
 )
 
+// tunnelStateLabel 将内部 tunnel.Status 映射到前端 TunnelState 枚举。
+// 前端枚举：idle | connecting | open | failed | closed
+func tunnelStateLabel(s tunnel.Status) string {
+	switch s {
+	case tunnel.StatusConnected:
+		return "open"
+	case tunnel.StatusConnecting:
+		return "connecting"
+	case tunnel.StatusFailed:
+		return "failed"
+	default:
+		return "idle"
+	}
+}
+
 type tunnelStatusDTO struct {
-	HostID    string        `json:"host_id"`
-	Status    tunnel.Status `json:"status"`
-	LocalPort int           `json:"local_port"`
+	HostID    string `json:"host_id"`
+	State     string `json:"state"`
+	LocalPort int    `json:"local_port"`
 }
 
 // listTunnels 处理 GET /api/tunnels。
@@ -39,14 +54,14 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, tunnelStatusDTO{
 			HostID:    h.ID,
-			Status:    st,
+			State:     tunnelStateLabel(st),
 			LocalPort: a.tunnels.LocalPort(h.ID),
 		})
 	}
 	jsonOK(w, out)
 }
 
-// connectTunnel 处理 POST /api/tunnels/{host_id}/connect。
+// connectTunnel 处理 POST /api/tunnels/{host_id}。
 func (a *App) connectTunnel(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
 	hosts, err := a.remoteStore.ListHosts()
@@ -67,13 +82,13 @@ func (a *App) connectTunnel(w http.ResponseWriter, r *http.Request) {
 			h.LocalTunnelPort = port
 			_ = a.remoteStore.UpdateHost(h)
 		}
-		jsonOK(w, tunnelStatusDTO{HostID: hostID, Status: tunnel.StatusConnected, LocalPort: port})
+		jsonOK(w, tunnelStatusDTO{HostID: hostID, State: "open", LocalPort: port})
 		return
 	}
 	jsonError(w, http.StatusNotFound, "host not found")
 }
 
-// disconnectTunnel 处理 POST /api/tunnels/{host_id}/disconnect。
+// disconnectTunnel 处理 DELETE /api/tunnels/{host_id}。
 func (a *App) disconnectTunnel(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
 	a.tunnels.Disconnect(hostID)

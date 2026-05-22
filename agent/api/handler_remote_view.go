@@ -1,13 +1,14 @@
 // handler_remote_view.go 实现 GET /api/remote/view:
-// 聚合 Host 和 LogSource 数据为前端 Sidebar 友好的形态。
+// 按 log_source_id 聚合单个 LogSource 的分组信息和关联 Host 列表。
 //
 // 职责：
-//   - 列出所有 Host(含 tags)
-//   - 列出所有 LogSource,对每个 LogSource 计算 tag 分组("all" + 关联 Host 的 tags 并集)
+//   - 接受 ?log_source_id 参数,返回指定 LogSource
+//   - 计算 tag 分组("all" + 关联 Host 的 tags 并集)
+//   - 返回关联 Host 列表(不含 SSH 密码等敏感字段)
 //
 // 边界：
 //   - 不返回日志数据
-//   - 不返回隧道端口(由 /api/tunnels 提供);前端组合两个接口数据使用
+//   - 不返回隧道端口(由 /api/tunnels 提供)
 package api
 
 import (
@@ -17,31 +18,75 @@ import (
 	"github.com/superdev/agent/model"
 )
 
-type remoteViewGroup struct {
-	Tag     string   `json:"tag"`
-	HostIDs []string `json:"host_ids"`
+// hostDTO 是 Host 的对外安全视图,不含 SSH 密码和密钥路径。
+type hostDTO struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	SSHHost         string   `json:"ssh_host"`
+	SSHPort         int      `json:"ssh_port"`
+	SSHUser         string   `json:"ssh_user"`
+	RemoteAgentPort int      `json:"remote_agent_port"`
+	LocalTunnelPort int      `json:"local_tunnel_port"`
+	Tags            []string `json:"tags"`
 }
 
-type remoteViewLogSource struct {
-	ID     string              `json:"id"`
-	Name   string              `json:"name"`
-	Type   model.LogSourceType `json:"type"`
-	Groups []remoteViewGroup   `json:"groups"`
+func toHostDTO(h model.Host) hostDTO {
+	return hostDTO{
+		ID:              h.ID,
+		Name:            h.Name,
+		SSHHost:         h.SSHHost,
+		SSHPort:         h.SSHPort,
+		SSHUser:         h.SSHUser,
+		RemoteAgentPort: h.RemoteAgentPort,
+		LocalTunnelPort: h.LocalTunnelPort,
+		Tags:            h.Tags,
+	}
+}
+
+type remoteViewGroup struct {
+	GroupKey string   `json:"group_key"`
+	HostIDs  []string `json:"host_ids"`
+}
+
+type logSourceDTO struct {
+	ID      string              `json:"id"`
+	Name    string              `json:"name"`
+	Type    model.LogSourceType `json:"type"`
+	HostIDs []string            `json:"host_ids"`
 }
 
 type remoteViewResponse struct {
-	LogSources []remoteViewLogSource `json:"log_sources"`
-	Hosts      []model.Host          `json:"hosts"`
+	LogSource logSourceDTO      `json:"log_source"`
+	Groups    []remoteViewGroup `json:"groups"`
+	Hosts     []hostDTO         `json:"hosts"`
 }
 
-// remoteView 处理 GET /api/remote/view。
+// remoteView 处理 GET /api/remote/view?log_source_id=xxx。
 func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
-	hosts, err := a.remoteStore.ListHosts()
+	logSourceID := r.URL.Query().Get("log_source_id")
+	if logSourceID == "" {
+		jsonError(w, http.StatusBadRequest, "log_source_id is required")
+		return
+	}
+
+	logSources, err := a.remoteStore.ListLogSources()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	logSources, err := a.remoteStore.ListLogSources()
+	var ls *model.LogSource
+	for i := range logSources {
+		if logSources[i].ID == logSourceID {
+			ls = &logSources[i]
+			break
+		}
+	}
+	if ls == nil {
+		jsonError(w, http.StatusNotFound, "log source not found")
+		return
+	}
+
+	hosts, err := a.remoteStore.ListHosts()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -49,26 +94,25 @@ func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
 	if hosts == nil {
 		hosts = []model.Host{}
 	}
-	if logSources == nil {
-		logSources = []model.LogSource{}
-	}
 
 	hostByID := make(map[string]model.Host, len(hosts))
 	for _, h := range hosts {
 		hostByID[h.ID] = h
 	}
 
-	out := make([]remoteViewLogSource, 0, len(logSources))
-	for _, ls := range logSources {
-		out = append(out, remoteViewLogSource{
-			ID:     ls.ID,
-			Name:   ls.Name,
-			Type:   ls.Type,
-			Groups: buildGroups(ls.HostIDs, hostByID),
-		})
+	// 只返回 LogSource 关联的 Host
+	relatedHosts := make([]hostDTO, 0, len(ls.HostIDs))
+	for _, hid := range ls.HostIDs {
+		if h, ok := hostByID[hid]; ok {
+			relatedHosts = append(relatedHosts, toHostDTO(h))
+		}
 	}
 
-	jsonOK(w, remoteViewResponse{LogSources: out, Hosts: hosts})
+	jsonOK(w, remoteViewResponse{
+		LogSource: logSourceDTO{ID: ls.ID, Name: ls.Name, Type: ls.Type, HostIDs: ls.HostIDs},
+		Groups:    buildGroups(ls.HostIDs, hostByID),
+		Hosts:     relatedHosts,
+	})
 }
 
 // buildGroups 根据 LogSource 关联的 Host 集合生成 tag 分组列表。
@@ -95,9 +139,9 @@ func buildGroups(hostIDs []string, hostByID map[string]model.Host) []remoteViewG
 	}
 	sort.Strings(tagNames)
 
-	groups := []remoteViewGroup{{Tag: "all", HostIDs: allHosts}}
+	groups := []remoteViewGroup{{GroupKey: "all", HostIDs: allHosts}}
 	for _, tag := range tagNames {
-		groups = append(groups, remoteViewGroup{Tag: tag, HostIDs: tagToHosts[tag]})
+		groups = append(groups, remoteViewGroup{GroupKey: tag, HostIDs: tagToHosts[tag]})
 	}
 	return groups
 }

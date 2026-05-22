@@ -70,15 +70,17 @@ func TestEndToEndRemoteSearch(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&ls))
 	_ = resp.Body.Close()
 
-	resp, err = http.Get(srv.URL + "/api/remote/view")
+	resp, err = http.Get(srv.URL + "/api/remote/view?log_source_id=" + ls.ID)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var view struct {
-		LogSources []any `json:"log_sources"`
+		LogSource struct {
+			ID string `json:"id"`
+		} `json:"log_source"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&view))
 	_ = resp.Body.Close()
-	require.NotEmpty(t, view.LogSources)
+	require.Equal(t, ls.ID, view.LogSource.ID)
 
 	q := url.Values{}
 	q.Set("log_source_id", ls.ID)

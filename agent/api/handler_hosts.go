@@ -17,17 +17,18 @@ import (
 	"github.com/superdev/agent/remote"
 )
 
-// listHosts 处理 GET /api/hosts。
+// listHosts 处理 GET /api/hosts,返回不含 SSH 凭据的安全视图。
 func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := a.remoteStore.ListHosts()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if hosts == nil {
-		hosts = []model.Host{}
+	out := make([]hostDTO, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, toHostDTO(h))
 	}
-	jsonOK(w, hosts)
+	jsonOK(w, out)
 }
 
 // createHost 处理 POST /api/hosts,body 为 model.Host。
