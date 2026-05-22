@@ -136,11 +136,16 @@ type Host struct {
 }
 
 // LogSource 表示一个监听任务：在哪些 Host 上以何种 type 采集哪个 name。
+//
+// Tags 是监听任务自身的标签，与关联 Host 的 Tags 无关。
+// ExtraArgs 是追加给采集命令的额外参数（白名单校验后追加），如 ["--since", "1h"]。
 type LogSource struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Type    LogSourceType `json:"type"`
-	HostIDs []string      `json:"host_ids"`
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Type      LogSourceType `json:"type"`
+	HostIDs   []string      `json:"host_ids"`
+	Tags      []string      `json:"tags"`
+	ExtraArgs []string      `json:"extra_args"`
 }
 
 // Collector 是远端 agent 维护的采集任务运行时记录。
