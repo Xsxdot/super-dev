@@ -154,6 +154,16 @@ function remoteEntryNodeLabel(entry: LogEntry): string | null {
   return remoteEntry.host_name || remoteEntry.host_id || null
 }
 
+function entryKey(entry: LogEntry): string | number {
+  if (!remoteTab.value) return entry.id
+  const remoteEntry = entry as RemoteLogEntry
+  return remoteEntry.key ?? `${remoteEntry.service_id}:${remoteEntry.log_source_id ?? ''}:${remoteEntry.host_id}:${remoteEntry.id}`
+}
+
+function isRemoteEntry(): boolean {
+  return Boolean(remoteTab.value)
+}
+
 function nodeCoverageLabel(serviceId: string): string | null {
   const column = remoteColumn(serviceId)
   if (!column || column.node_count === 0) return null
@@ -366,10 +376,11 @@ onBeforeUnmount(() => {
                 <div v-else class="entry-stack">
                   <div
                     v-for="entry in cellEntries(bucket, serviceId)"
-                    :key="entry.id"
+                    :key="entryKey(entry)"
                     class="context-entry"
-                    :class="{ target: entry.id === tab.selectedLogId }"
+                    :class="{ target: entry.id === tab.selectedLogId, 'remote-entry': isRemoteEntry() }"
                     :data-entry-id="entry.id"
+                    :data-entry-key="entryKey(entry)"
                   >
                     <span class="entry-time">{{ timeLabel(entry) }}</span>
                     <span class="entry-level">{{ entry.level }}</span>
@@ -440,10 +451,11 @@ onBeforeUnmount(() => {
             <div v-else class="entry-stack">
               <div
                 v-for="entry in cellEntries(bucket, serviceId)"
-                :key="entry.id"
+                :key="entryKey(entry)"
                 class="context-entry"
-                :class="{ target: entry.id === tab.selectedLogId }"
+                :class="{ target: entry.id === tab.selectedLogId, 'remote-entry': isRemoteEntry() }"
                 :data-entry-id="entry.id"
+                :data-entry-key="entryKey(entry)"
               >
                 <span class="entry-time">{{ timeLabel(entry) }}</span>
                 <span class="entry-level">{{ entry.level }}</span>
@@ -649,13 +661,16 @@ onBeforeUnmount(() => {
 }
 .context-entry {
   display: grid;
-  grid-template-columns: 74px 48px minmax(58px, auto) minmax(0, 1fr);
+  grid-template-columns: 74px 48px minmax(0, 1fr);
   gap: 5px;
   border-radius: 3px;
   padding: 2px 4px;
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 1.45;
+}
+.context-entry.remote-entry {
+  grid-template-columns: 74px 48px minmax(58px, auto) minmax(0, 1fr);
 }
 .context-entry.target {
   background: rgba(88, 166, 255, 0.18);
