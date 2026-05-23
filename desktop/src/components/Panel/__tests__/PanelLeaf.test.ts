@@ -11,7 +11,7 @@
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PanelLeaf from '../PanelLeaf.vue'
 import ServiceRow from '../../Sidebar/ServiceRow.vue'
 import RemoteLogSourceRow from '../../Sidebar/RemoteLogSourceRow.vue'
@@ -95,6 +95,10 @@ describe('PanelLeaf', () => {
   beforeEach(() => {
     localStorage.clear()
     setActivePinia(createPinia())
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('drop 时即使高亮被 dragleave 清空，也按当前右边缘位置创建分栏', async () => {
@@ -443,6 +447,96 @@ describe('PanelLeaf', () => {
         groupKey: 'all',
       })
     }
+  })
+
+  it('远程监听分组所有节点连接失败时 drop 不新增分栏并提示失败', async () => {
+    const panelStore = usePanelStore()
+    const remoteStore = useRemoteStore()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    remoteStore.hosts = [makeHost()]
+    remoteStore.logSources = [makeLogSource('remote-failed')]
+    remoteStore.applyTunnelUpdate({ host_id: 'host-1', state: 'failed', error: 'Permission denied' })
+    const initialRoot = JSON.stringify(panelStore.root)
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: panelStore.root.id,
+        serviceId: null,
+        projectId: null,
+        canClose: false,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+    stubPanelRect(wrapper)
+
+    await wrapper.find('.panel-leaf').trigger('drop', {
+      clientX: 380,
+      clientY: 150,
+      dataTransfer: {
+        getData: (type: string) => (
+          type === 'application/superdev-panel-source'
+            ? JSON.stringify({ type: 'remote-log-source', logSourceId: 'remote-failed', groupKey: 'all' })
+            : ''
+        ),
+      },
+    })
+
+    expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('无法打开远程监听日志'))
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('Permission denied'))
+  })
+
+  it('达到最大分栏数时 drop 新远程监听不新增分栏并提示上限', async () => {
+    const panelStore = usePanelStore()
+    const remoteStore = useRemoteStore()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    remoteStore.hosts = [makeHost()]
+    remoteStore.logSources = [makeLogSource('remote-new')]
+
+    const firstLeafId = panelStore.root.id
+    panelStore.replaceSource(firstLeafId, { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-1' })
+    panelStore.splitLeafWithSource(firstLeafId, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-2' }, 'second')
+    panelStore.splitLeafWithSource(panelStore.allLeaves[1].id, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-3' }, 'second')
+    panelStore.splitLeafWithSource(panelStore.allLeaves[2].id, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-4' }, 'second')
+    expect(panelStore.allLeaves).toHaveLength(4)
+    const initialRoot = JSON.stringify(panelStore.root)
+    const targetLeaf = panelStore.allLeaves[0]
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: targetLeaf.id,
+        serviceId: targetLeaf.serviceId,
+        projectId: targetLeaf.projectId,
+        source: targetLeaf.source,
+        canClose: true,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+    stubPanelRect(wrapper)
+
+    await wrapper.find('.panel-leaf').trigger('drop', {
+      clientX: 380,
+      clientY: 150,
+      dataTransfer: {
+        getData: (type: string) => (
+          type === 'application/superdev-panel-source'
+            ? JSON.stringify({ type: 'remote-log-source', logSourceId: 'remote-new', groupKey: 'all' })
+            : ''
+        ),
+      },
+    })
+
+    expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
+    expect(panelStore.allLeaves).toHaveLength(4)
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('已达到最大分栏数'))
   })
 
   it('从项目远程聚合分组 pointer 拖到面板右边缘时显示高亮并创建分栏', async () => {
