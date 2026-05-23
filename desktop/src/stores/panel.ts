@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from 'uuid'
 
 export type PanelAxis = 'h' | 'v'
 
+export const MAX_PANEL_LEAVES = 4
+
 export type PanelSource =
   | { type: 'local-service'; projectId: string; serviceId: string }
   | { type: 'local-project'; projectId: string }
@@ -238,6 +240,10 @@ export const usePanelStore = defineStore('panel', () => {
     splitLeafWithSource(leafId, axis, sourceFromScope(newServiceId, newProjectId), newSide)
   }
 
+  function canAddPanelLeaf(): boolean {
+    return allLeaves.value.length < MAX_PANEL_LEAVES
+  }
+
   function splitLeafWithSource(
     leafId: string,
     axis: PanelAxis,
@@ -245,6 +251,7 @@ export const usePanelStore = defineStore('panel', () => {
     newSide: 'first' | 'second'
   ) {
     if (focusEquivalentRemoteSource(source)) return
+    if (!canAddPanelLeaf()) return
     const newLeaf = makeLeafFromSource(source)
     root.value = splitLeafById(root.value, leafId, axis, newLeaf, newSide)
     save()
@@ -294,6 +301,7 @@ export const usePanelStore = defineStore('panel', () => {
     setFocus,
     findLeafByEquivalentRemoteSource,
     focusEquivalentRemoteSource,
+    canAddPanelLeaf,
     splitLeaf,
     splitLeafWithSource,
     replaceScope,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
-import { usePanelStore, projectIdFromPanelSource, type PanelSource } from '@/stores/panel'
+import { MAX_PANEL_LEAVES, usePanelStore, projectIdFromPanelSource, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
@@ -148,9 +148,54 @@ function normalizeDropSource(dropSource: PanelSource): PanelSource {
   return { ...dropSource, projectId: svc?.project_id ?? '' }
 }
 
+function showDropFailure(message: string) {
+  window.alert(message)
+}
+
+function hostIdsForRemoteSource(dropSource: PanelSource): string[] {
+  const knownHosts = new Set(remoteStore.hosts.map(host => host.id))
+  if (dropSource.type === 'remote-log-source') {
+    const group = remoteStore.groupsOf(dropSource.logSourceId).find(item => item.key === dropSource.groupKey)
+    return group?.hostIds.filter(id => knownHosts.has(id)) ?? []
+  }
+  if (dropSource.type === 'remote-aggregate') {
+    const logSources = dropSource.logSourceIds
+      .map(id => remoteStore.logSourceById(id))
+      .filter(source => source != null)
+    const hostIds = logSources.flatMap(source => {
+      const validHostIds = source.host_ids.filter(id => knownHosts.has(id))
+      return dropSource.groupKey === 'all' || source.tags.includes(dropSource.groupKey) ? validHostIds : []
+    })
+    return [...new Set(hostIds)]
+  }
+  return []
+}
+
+function remoteSourceOpenFailure(dropSource: PanelSource): string | null {
+  if (dropSource.type !== 'remote-log-source' && dropSource.type !== 'remote-aggregate') return null
+  const hostIds = hostIdsForRemoteSource(dropSource)
+  if (hostIds.length === 0) {
+    return '无法打开远程监听日志：当前分组没有可用节点，请检查监听配置或节点状态。'
+  }
+  const failedTunnels = hostIds
+    .map(id => remoteStore.tunnelOf(id))
+    .filter(status => status?.state === 'failed')
+  if (failedTunnels.length === hostIds.length) {
+    const reason = failedTunnels.map(status => status?.error).find(Boolean)
+    return `无法打开远程监听日志：${reason ?? '所有节点连接失败，请检查远程监听配置。'}`
+  }
+  return null
+}
+
 function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
   const nextSource = normalizeDropSource(dropSource)
   if (panelStore.focusEquivalentRemoteSource(nextSource)) return
+
+  const openFailure = remoteSourceOpenFailure(nextSource)
+  if (openFailure) {
+    showDropFailure(openFailure)
+    return
+  }
 
   if (edge === 'center') {
     panelStore.replaceSource(props.panelId, nextSource)
@@ -158,6 +203,10 @@ function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
   } else {
     const split = edgeToAxis(edge)
     if (split) {
+      if (!panelStore.canAddPanelLeaf()) {
+        showDropFailure(`已达到最大分栏数（${MAX_PANEL_LEAVES} 个），请先关闭已有分栏后再添加。`)
+        return
+      }
       panelStore.splitLeafWithSource(props.panelId, split.axis, nextSource, split.side)
     }
   }
