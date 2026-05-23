@@ -16,7 +16,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
 import { splitSearchHighlight } from '@/lib/searchHighlight'
-import type { LogContextPageDirection, LogEntry } from '@/api/agent'
+import type { LogContextPageDirection, LogEntry, RemoteLogEntry, RemoteSearchServiceColumn } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
@@ -127,8 +127,46 @@ const canLoadAfter = computed(() => {
   return scrollingServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
 })
 
+function remoteColumn(serviceId: string): RemoteSearchServiceColumn | null {
+  return remoteTab.value?.serviceColumns.find(column => column.service_id === serviceId) ?? null
+}
+
 function serviceName(serviceId: string): string {
-  return agentStore.serviceById(serviceId)?.name ?? serviceId
+  return agentStore.serviceById(serviceId)?.name ?? remoteColumn(serviceId)?.service_name ?? serviceId
+}
+
+function statusLabel(status: RemoteSearchServiceColumn['status']): string {
+  return {
+    success: '成功',
+    partial_failed: '部分失败',
+    failed: '失败',
+    timeout: '超时',
+  }[status]
+}
+
+function remoteNodeLabel(node: RemoteSearchServiceColumn['nodes'][number]): string {
+  return node.host_name || node.host_id
+}
+
+function remoteEntryNodeLabel(entry: LogEntry): string | null {
+  if (!remoteTab.value) return null
+  const remoteEntry = entry as RemoteLogEntry
+  return remoteEntry.host_name || remoteEntry.host_id || null
+}
+
+function nodeCoverageLabel(serviceId: string): string | null {
+  const column = remoteColumn(serviceId)
+  if (!column || column.node_count === 0) return null
+  const success = column.nodes.filter(node => node.status === 'success').length
+  return `${success}/${column.node_count} 节点`
+}
+
+function problemNodeLabels(serviceId: string): string[] {
+  const column = remoteColumn(serviceId)
+  if (!column) return []
+  return column.nodes
+    .filter(node => node.status === 'failed' || node.status === 'timeout')
+    .map(node => `${remoteNodeLabel(node)} ${node.status === 'timeout' ? '超时' : '失败'}`)
 }
 
 function timeLabel(entry: LogEntry): string {
@@ -301,7 +339,14 @@ onBeforeUnmount(() => {
         class="pinned-column"
       >
         <div class="column-header pinned">
-          <span class="service-name">{{ serviceName(serviceId) }}</span>
+          <div class="header-main">
+            <span class="service-name">{{ serviceName(serviceId) }}</span>
+            <span v-if="remoteColumn(serviceId)" class="remote-status">{{ statusLabel(remoteColumn(serviceId)!.status) }}</span>
+            <span v-if="nodeCoverageLabel(serviceId)" class="node-coverage">{{ nodeCoverageLabel(serviceId) }}</span>
+          </div>
+          <div v-if="problemNodeLabels(serviceId).length" class="node-problems">
+            {{ problemNodeLabels(serviceId).join(' · ') }}
+          </div>
           <button class="pin-btn" @click="togglePin(serviceId)">已固定</button>
         </div>
         <div class="pinned-body">
@@ -328,6 +373,7 @@ onBeforeUnmount(() => {
                   >
                     <span class="entry-time">{{ timeLabel(entry) }}</span>
                     <span class="entry-level">{{ entry.level }}</span>
+                    <span v-if="remoteEntryNodeLabel(entry)" class="entry-node">{{ remoteEntryNodeLabel(entry) }}</span>
                     <span class="entry-message">
                       <template v-for="(part, index) in messageParts(entry.message)" :key="index">
                         <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
@@ -356,7 +402,14 @@ onBeforeUnmount(() => {
             :key="serviceId"
             class="column-header"
           >
-            <span class="service-name">{{ serviceName(serviceId) }}</span>
+            <div class="header-main">
+              <span class="service-name">{{ serviceName(serviceId) }}</span>
+              <span v-if="remoteColumn(serviceId)" class="remote-status">{{ statusLabel(remoteColumn(serviceId)!.status) }}</span>
+              <span v-if="nodeCoverageLabel(serviceId)" class="node-coverage">{{ nodeCoverageLabel(serviceId) }}</span>
+            </div>
+            <div v-if="problemNodeLabels(serviceId).length" class="node-problems">
+              {{ problemNodeLabels(serviceId).join(' · ') }}
+            </div>
             <button class="pin-btn" @click="togglePin(serviceId)">固定</button>
           </div>
         </div>
@@ -394,6 +447,7 @@ onBeforeUnmount(() => {
               >
                 <span class="entry-time">{{ timeLabel(entry) }}</span>
                 <span class="entry-level">{{ entry.level }}</span>
+                <span v-if="remoteEntryNodeLabel(entry)" class="entry-node">{{ remoteEntryNodeLabel(entry) }}</span>
                 <span class="entry-message">
                   <template v-for="(part, index) in messageParts(entry.message)" :key="index">
                     <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
@@ -520,12 +574,34 @@ onBeforeUnmount(() => {
   opacity: 0.65;
 }
 .column-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-right: 1px solid var(--border-secondary);
+}
+.header-main {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 32px;
-  padding: 0 8px;
-  border-right: 1px solid var(--border-secondary);
+  gap: 6px;
+  min-width: 0;
+}
+.remote-status,
+.node-coverage,
+.node-problems {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.remote-status {
+  color: var(--text-secondary);
+}
+.node-problems {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .service-name {
   color: var(--text-primary);
@@ -573,7 +649,7 @@ onBeforeUnmount(() => {
 }
 .context-entry {
   display: grid;
-  grid-template-columns: 74px 48px minmax(0, 1fr);
+  grid-template-columns: 74px 48px minmax(58px, auto) minmax(0, 1fr);
   gap: 5px;
   border-radius: 3px;
   padding: 2px 4px;
@@ -586,9 +662,15 @@ onBeforeUnmount(() => {
   outline: 1px solid rgba(88, 166, 255, 0.35);
 }
 .entry-time,
-.entry-level {
+.entry-level,
+.entry-node {
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
+}
+.entry-node {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .entry-message {
   white-space: pre-wrap;

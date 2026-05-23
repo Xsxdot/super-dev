@@ -14,9 +14,10 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import SearchServiceColumns from '../SearchServiceColumns.vue'
+import SearchServiceRail from '../SearchServiceRail.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { LogEntry, Project, Service } from '@/api/agent'
+import type { LogEntry, Project, RemoteLogEntry, Service } from '@/api/agent'
 
 function service(id: string, name: string): Service {
   return {
@@ -55,6 +56,24 @@ function log(
     level: 'INFO',
     message,
     stream: 'stdout',
+  }
+}
+
+
+function remoteLog(
+  id: number,
+  serviceId: string,
+  hostId: string,
+  hostName: string | undefined,
+  message: string,
+  timestamp = '2026-05-20T22:41:32.000Z',
+): RemoteLogEntry {
+  return {
+    ...log(id, serviceId, message, timestamp),
+    host_id: hostId,
+    host_name: hostName,
+    log_source_id: `ls-${serviceId}`,
+    key: `${serviceId}:${hostId}:${id}`,
   }
 }
 
@@ -317,4 +336,97 @@ describe('SearchServiceColumns', () => {
 
     expect(tab.selectedLogId).toBe(40)
   })
+
+  it('远程搜索结果行展示节点来源并保留关键词高亮', () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+    tab.query = 'panic'
+    tab.status = 'results'
+    tab.serviceColumns = [{
+      service_id: 'svc-api',
+      service_name: 'api',
+      status: 'success',
+      result_count: 1,
+      node_count: 1,
+      nodes: [{ host_id: 'host-a', host_name: 'node-a', status: 'success', count: 1 }],
+      entries: [remoteLog(1, 'svc-api', 'host-a', 'node-a', 'panic in worker')],
+    }]
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    const entry = wrapper.find('.context-entry')
+    expect(entry.text()).toContain('node-a')
+    expect(entry.text()).toContain('panic')
+    expect(entry.find('[data-test="search-keyword-highlight"]').text()).toBe('panic')
+  })
+
+  it('远程搜索分栏 header 展示服务级状态和节点覆盖', () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+    tab.query = 'panic'
+    tab.status = 'partialFailed'
+    tab.serviceColumns = [{
+      service_id: 'svc-api',
+      service_name: 'api',
+      status: 'partial_failed',
+      result_count: 1,
+      node_count: 3,
+      nodes: [
+        { host_id: 'host-a', host_name: 'node-a', status: 'success', count: 1 },
+        { host_id: 'host-b', host_name: 'node-b', status: 'failed', count: 0, error: 'connection refused' },
+        { host_id: 'host-c', status: 'timeout', count: 0, error: 'deadline exceeded' },
+      ],
+      entries: [remoteLog(1, 'svc-api', 'host-a', 'node-a', 'panic in worker')],
+    }]
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    const header = wrapper.find('.column-header')
+    expect(header.text()).toContain('部分失败')
+    expect(header.text()).toContain('1/3 节点')
+    expect(header.text()).toContain('node-b')
+    expect(header.text()).toContain('host-c')
+    expect(header.text()).toContain('超时')
+  })
+
+  it('远程搜索 rail 展示服务级状态和节点成功失败超时摘要', () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+    tab.query = 'panic'
+    tab.status = 'partialFailed'
+    tab.serviceColumns = [{
+      service_id: 'svc-api',
+      service_name: 'api',
+      status: 'partial_failed',
+      result_count: 1,
+      node_count: 3,
+      nodes: [
+        { host_id: 'host-a', host_name: 'node-a', status: 'success', count: 1 },
+        { host_id: 'host-b', host_name: 'node-b', status: 'failed', count: 0, error: 'connection refused' },
+        { host_id: 'host-c', status: 'timeout', count: 0, error: 'deadline exceeded' },
+      ],
+      entries: [remoteLog(1, 'svc-api', 'host-a', 'node-a', 'panic in worker')],
+    }]
+
+    const wrapper = mount(SearchServiceRail, {
+      props: { tabId: tab.id },
+    })
+
+    const row = wrapper.find('.service-hit')
+    expect(row.text()).toContain('部分失败')
+    expect(row.text()).toContain('成功 1')
+    expect(row.text()).toContain('失败 1')
+    expect(row.text()).toContain('超时 1')
+  })
+
 })

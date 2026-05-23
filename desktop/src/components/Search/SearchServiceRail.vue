@@ -13,6 +13,7 @@
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
+import type { RemoteSearchServiceColumn } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
@@ -24,20 +25,42 @@ const tab = computed(() => localTab.value ?? remoteTab.value)
 
 const rows = computed(() => {
   if (!tab.value) return []
+  const remoteColumns = new Map(remoteTab.value?.serviceColumns.map(column => [column.service_id, column]) ?? [])
   const serviceCounts = localTab.value
     ? localTab.value.serviceCounts
     : Object.fromEntries(remoteTab.value?.serviceColumns.map(column => [column.service_id, column.result_count]) ?? [])
   return Object.entries(serviceCounts)
     .sort((a, b) => b[1] - a[1])
-    .map(([serviceId, count], index) => ({
-      serviceId,
-      count,
-      service: agentStore.serviceById(serviceId),
-      serviceName: remoteTab.value?.serviceColumns.find(column => column.service_id === serviceId)?.service_name,
-      color: serviceColor(index),
-      hidden: tab.value!.hiddenServiceIds.includes(serviceId),
-    }))
+    .map(([serviceId, count], index) => {
+      const column = remoteColumns.get(serviceId)
+      return {
+        serviceId,
+        count,
+        service: agentStore.serviceById(serviceId),
+        serviceName: column?.service_name,
+        color: serviceColor(index),
+        hidden: tab.value!.hiddenServiceIds.includes(serviceId),
+        statusLabel: column ? statusLabel(column.status) : null,
+        nodeSummary: column ? nodeSummary(column) : null,
+      }
+    })
 })
+
+function statusLabel(status: RemoteSearchServiceColumn['status']): string {
+  return {
+    success: '成功',
+    partial_failed: '部分失败',
+    failed: '失败',
+    timeout: '超时',
+  }[status]
+}
+
+function nodeSummary(column: RemoteSearchServiceColumn): string {
+  const success = column.nodes.filter(node => node.status === 'success').length
+  const failed = column.nodes.filter(node => node.status === 'failed').length
+  const timeout = column.nodes.filter(node => node.status === 'timeout').length
+  return `成功 ${success} / 失败 ${failed} / 超时 ${timeout}`
+}
 
 function serviceColor(index: number): string {
   const colors = ['#58a6ff', '#f2cc60', '#56d364', '#ff7b72', '#d2a8ff', '#79c0ff']
@@ -62,7 +85,10 @@ function toggle(serviceId: string, hidden: boolean) {
       @click="toggle(row.serviceId, row.hidden)"
     >
       <span class="dot" :style="{ backgroundColor: row.color }" />
-      <span class="name">{{ row.service?.name ?? row.serviceName ?? row.serviceId }}</span>
+      <span class="name">
+        <span>{{ row.service?.name ?? row.serviceName ?? row.serviceId }}</span>
+        <span v-if="row.statusLabel" class="remote-meta">{{ row.statusLabel }} · {{ row.nodeSummary }}</span>
+      </span>
       <span class="count">{{ row.count }}</span>
     </button>
   </div>
@@ -99,6 +125,21 @@ function toggle(serviceId: string, hidden: boolean) {
 .service-hit:hover { background: var(--bg-overlay); }
 .service-hit.hidden { opacity: 0.45; text-decoration: line-through; }
 .dot { width: 7px; height: 7px; border-radius: 999px; }
-.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.name {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: left;
+}
+.name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-meta {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
+}
 .count { color: var(--text-tertiary); }
 </style>
