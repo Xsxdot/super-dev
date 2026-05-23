@@ -10,9 +10,10 @@ ProjectRemoteSection：项目下的远程监听子区块。
   - 分组数据由 remote store 聚合计算
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
 import type { PanelSource } from '@/stores/panel'
+import { usePanelSourcePointerDrag } from '@/composables/usePanelSourcePointerDrag'
 
 const props = defineProps<{ projectId: string }>()
 
@@ -22,6 +23,12 @@ const emit = defineEmits<{
 
 const remote = useRemoteStore()
 const serviceGroups = computed(() => remote.remoteServiceGroupsOf(props.projectId))
+const pointerServiceGroup = ref<(typeof serviceGroups.value)[number] | null>(null)
+const pointerGroupKey = ref<string>('all')
+const sourcePointerDrag = usePanelSourcePointerDrag(() => {
+  if (!pointerServiceGroup.value) throw new Error('missing project remote drag source')
+  return sourceForGroup(pointerServiceGroup.value, pointerGroupKey.value)
+})
 
 function sourceForGroup(serviceGroup: (typeof serviceGroups.value)[number], groupKey: string): PanelSource {
   return {
@@ -32,6 +39,23 @@ function sourceForGroup(serviceGroup: (typeof serviceGroups.value)[number], grou
     logSourceIds: serviceGroup.logSourceIds,
     groupKey,
   }
+}
+
+function onGroupPointerDown(e: PointerEvent, serviceGroup: (typeof serviceGroups.value)[number], groupKey: string) {
+  pointerServiceGroup.value = serviceGroup
+  pointerGroupKey.value = groupKey
+  sourcePointerDrag.onPointerDown(e)
+}
+
+function onGroupClick(serviceGroup: (typeof serviceGroups.value)[number], groupKey: string) {
+  if (sourcePointerDrag.consumeClickSuppression()) return
+  emit('open', {
+    projectId: props.projectId,
+    serviceId: serviceGroup.serviceId,
+    serviceName: serviceGroup.serviceName,
+    logSourceIds: serviceGroup.logSourceIds,
+    groupKey,
+  })
 }
 
 function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.value)[number], groupKey: string) {
@@ -51,16 +75,12 @@ function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.valu
         v-for="group in sg.groups"
         :key="group.key"
         class="group-row"
+        :class="{ dragging: sourcePointerDrag.dragging.value && pointerServiceGroup?.serviceId === sg.serviceId && pointerGroupKey === group.key }"
         data-test="project-remote-group"
         draggable="true"
+        @pointerdown="onGroupPointerDown($event, sg, group.key)"
         @dragstart="onGroupDragStart($event, sg, group.key)"
-        @click="emit('open', {
-          projectId,
-          serviceId: sg.serviceId,
-          serviceName: sg.serviceName,
-          logSourceIds: sg.logSourceIds,
-          groupKey: group.key,
-        })"
+        @click="onGroupClick(sg, group.key)"
       >
         <span class="chip">{{ group.key }}</span>
         <span class="count">({{ group.hostIds.length }} 节点)</span>
@@ -100,6 +120,10 @@ function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.valu
 }
 .group-row:hover {
   background: var(--bg-secondary);
+}
+.group-row.dragging {
+  opacity: 0.7;
+  cursor: grabbing;
 }
 .chip {
   padding: 1px 6px;
