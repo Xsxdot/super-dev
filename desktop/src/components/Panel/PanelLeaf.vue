@@ -111,6 +111,7 @@ function normalizeDropSource(dropSource: PanelSource): PanelSource {
 
 function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
   const nextSource = normalizeDropSource(dropSource)
+  if (panelStore.focusEquivalentRemoteSource(nextSource)) return
 
   if (edge === 'center') {
     panelStore.replaceSource(props.panelId, nextSource)
