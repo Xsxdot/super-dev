@@ -71,6 +71,33 @@ export function projectIdFromPanelSource(
   return null
 }
 
+function sortedIds(ids: string[]): string[] {
+  return [...ids].sort()
+}
+
+function isRemotePanelSource(source: PanelSource | null): source is Extract<PanelSource, { type: 'remote-log-source' | 'remote-aggregate' }> {
+  return source?.type === 'remote-log-source' || source?.type === 'remote-aggregate'
+}
+
+export function isSamePanelSource(a: PanelSource | null, b: PanelSource | null): boolean {
+  if (!a || !b || a.type !== b.type) return false
+  if (a.type === 'local-service' && b.type === 'local-service') {
+    return a.projectId === b.projectId && a.serviceId === b.serviceId
+  }
+  if (a.type === 'local-project' && b.type === 'local-project') {
+    return a.projectId === b.projectId
+  }
+  if (a.type === 'remote-log-source' && b.type === 'remote-log-source') {
+    return a.logSourceId === b.logSourceId && a.groupKey === b.groupKey
+  }
+  if (a.type === 'remote-aggregate' && b.type === 'remote-aggregate') {
+    if (a.groupKey !== b.groupKey) return false
+    if (a.serviceId && b.serviceId) return a.serviceId === b.serviceId
+    return sortedIds(a.logSourceIds).join('\0') === sortedIds(b.logSourceIds).join('\0')
+  }
+  return false
+}
+
 function makeLeafFromSource(source: PanelSource | null = null): PanelLeafNode {
   const scope = scopeFromSource(source)
   return { type: 'leaf', id: uuidv4(), ...scope, source }
@@ -189,6 +216,18 @@ export const usePanelStore = defineStore('panel', () => {
     focusedPanelId.value = panelId
   }
 
+  function findLeafByEquivalentRemoteSource(source: PanelSource | null): PanelLeafNode | null {
+    if (!isRemotePanelSource(source)) return null
+    return allLeaves.value.find(leaf => isSamePanelSource(leaf.source, source)) ?? null
+  }
+
+  function focusEquivalentRemoteSource(source: PanelSource | null): boolean {
+    const leaf = findLeafByEquivalentRemoteSource(source)
+    if (!leaf) return false
+    setFocus(leaf.id)
+    return true
+  }
+
   function splitLeaf(
     leafId: string,
     axis: PanelAxis,
@@ -205,6 +244,7 @@ export const usePanelStore = defineStore('panel', () => {
     source: PanelSource | null,
     newSide: 'first' | 'second'
   ) {
+    if (focusEquivalentRemoteSource(source)) return
     const newLeaf = makeLeafFromSource(source)
     root.value = splitLeafById(root.value, leafId, axis, newLeaf, newSide)
     save()
@@ -252,6 +292,8 @@ export const usePanelStore = defineStore('panel', () => {
     focusedPanelId,
     allLeaves,
     setFocus,
+    findLeafByEquivalentRemoteSource,
+    focusEquivalentRemoteSource,
     splitLeaf,
     splitLeafWithSource,
     replaceScope,

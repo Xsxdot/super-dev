@@ -206,6 +206,71 @@ describe('PanelLeaf', () => {
     }
   })
 
+  it('重复拖入已打开的远程监听时聚焦已有分栏且不重复创建', async () => {
+    const panelStore = usePanelStore()
+    const localLeafId = panelStore.root.id
+    const remoteSource = {
+      type: 'remote-log-source' as const,
+      logSourceId: 'remote-prod',
+      groupKey: 'all',
+    }
+
+    panelStore.replaceSource(localLeafId, {
+      type: 'local-service',
+      projectId: 'project-A',
+      serviceId: 'svc-api',
+    })
+    panelStore.splitLeafWithSource(localLeafId, 'h', remoteSource, 'first')
+
+    const remoteLeaf = panelStore.allLeaves.find(leaf => leaf.source?.type === 'remote-log-source')
+    const localLeaf = panelStore.allLeaves.find(leaf => leaf.source?.type === 'local-service')
+    expect(remoteLeaf).toBeTruthy()
+    expect(localLeaf).toBeTruthy()
+    panelStore.setFocus(localLeaf!.id)
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: localLeaf!.id,
+        serviceId: localLeaf!.serviceId,
+        projectId: localLeaf!.projectId,
+        source: localLeaf!.source,
+        canClose: true,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+
+    const panelEl = wrapper.find('.panel-leaf').element as HTMLElement
+    vi.spyOn(panelEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 300,
+      right: 400,
+      bottom: 300,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    await wrapper.find('.panel-leaf').trigger('drop', {
+      clientX: 380,
+      clientY: 150,
+      dataTransfer: {
+        getData: (type: string) => (
+          type === 'application/superdev-panel-source' ? JSON.stringify(remoteSource) : ''
+        ),
+      },
+    })
+
+    expect(panelStore.allLeaves).toHaveLength(2)
+    expect(panelStore.allLeaves.filter(leaf => leaf.source?.type === 'remote-log-source')).toHaveLength(1)
+    expect(panelStore.focusedPanelId).toBe(remoteLeaf!.id)
+  })
+
   it('服务行拖拽期间临时禁用文字选择，松开后恢复', async () => {
     const panelStore = usePanelStore()
     const agentStore = useAgentStore()

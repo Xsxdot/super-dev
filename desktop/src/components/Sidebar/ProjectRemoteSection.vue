@@ -12,6 +12,7 @@ ProjectRemoteSection：项目下的远程监听子区块。
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
+import type { PanelSource } from '@/stores/panel'
 
 const props = defineProps<{ projectId: string }>()
 
@@ -21,6 +22,24 @@ const emit = defineEmits<{
 
 const remote = useRemoteStore()
 const serviceGroups = computed(() => remote.remoteServiceGroupsOf(props.projectId))
+
+function sourceForGroup(serviceGroup: (typeof serviceGroups.value)[number], groupKey: string): PanelSource {
+  return {
+    type: 'remote-aggregate',
+    projectId: props.projectId,
+    serviceId: serviceGroup.serviceId,
+    serviceName: serviceGroup.serviceName,
+    logSourceIds: serviceGroup.logSourceIds,
+    groupKey,
+  }
+}
+
+function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.value)[number], groupKey: string) {
+  const source = sourceForGroup(serviceGroup, groupKey)
+  e.dataTransfer?.setData('application/superdev-panel-source', JSON.stringify(source))
+  e.dataTransfer?.setData('text/plain', JSON.stringify(source))
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'
+}
 </script>
 
 <template>
@@ -32,6 +51,9 @@ const serviceGroups = computed(() => remote.remoteServiceGroupsOf(props.projectI
         v-for="group in sg.groups"
         :key="group.key"
         class="group-row"
+        data-test="project-remote-group"
+        draggable="true"
+        @dragstart="onGroupDragStart($event, sg, group.key)"
         @click="emit('open', {
           projectId,
           serviceId: sg.serviceId,
