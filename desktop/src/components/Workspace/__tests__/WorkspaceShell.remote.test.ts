@@ -111,6 +111,6 @@ describe('WorkspaceShell remote tab', () => {
 
     const wrapper = mount(WorkspaceShell)
 
-    expect(wrapper.find('[data-test="remote-search-page"]').text()).toBe('ls1:prod:')
+    expect(wrapper.find('[data-test="remote-search-page"]').text()).toBe('ls1:prod:remote-search:ls1:prod')
   })
 })
