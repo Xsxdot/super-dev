@@ -250,6 +250,36 @@ describe('workspaceStore', () => {
     expect(workspace.searchTab(second.id)?.pinnedServiceIds).toEqual([])
   })
 
+
+
+  it('远程节点隐藏状态按远程 tab 隔离', () => {
+    const workspace = useWorkspaceStore() as ReturnType<typeof useWorkspaceStore> & {
+      hideRemoteHost: (tabId: string, hostId: string) => void
+      visibleRemoteHostIds: (tabId: string, hostIds: string[]) => string[]
+    }
+
+    const all = workspace.openRemote('ls1', 'all')
+    const prod = workspace.openRemote('ls1', 'prod')
+    workspace.hideRemoteHost(all.id, 'h1')
+
+    expect(workspace.visibleRemoteHostIds(all.id, ['h1', 'h2'])).toEqual(['h2'])
+    expect(workspace.visibleRemoteHostIds(prod.id, ['h1', 'h2'])).toEqual(['h1', 'h2'])
+  })
+
+  it('关闭远程 tab 时清理该 tab 的节点隐藏状态', () => {
+    const workspace = useWorkspaceStore() as ReturnType<typeof useWorkspaceStore> & {
+      hideRemoteHost: (tabId: string, hostId: string) => void
+      visibleRemoteHostIds: (tabId: string, hostIds: string[]) => string[]
+    }
+
+    const tab = workspace.openRemote('ls1', 'all')
+    workspace.hideRemoteHost(tab.id, 'h1')
+    workspace.closeTab(tab.id)
+    const reopened = workspace.openRemote('ls1', 'all')
+
+    expect(workspace.visibleRemoteHostIds(reopened.id, ['h1', 'h2'])).toEqual(['h1', 'h2'])
+  })
+
   it('runSearch 将搜索结果写入当前搜索标签', async () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]
