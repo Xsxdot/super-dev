@@ -487,4 +487,250 @@ describe('workspaceStore', () => {
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['pinned api'])
   })
+
+  it('openRemoteProjectSearch creates a project-level remote search tab with presentation state', () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    const workspace = useWorkspaceStore() as any
+
+    expect(typeof workspace.openRemoteProjectSearch).toBe('function')
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+
+    expect(tab).toMatchObject({
+      type: 'remote-search',
+      projectId: 'proj-1',
+      groupKey: 'all',
+      status: 'empty',
+      serviceColumns: [],
+      hiddenServiceIds: [],
+      pinnedServiceIds: [],
+      failures: [],
+      nextCursor: null,
+      hasMore: false,
+    })
+    expect(tab.logSourceId).toBeUndefined()
+    expect(workspace.activeTab).toBe(tab)
+  })
+
+  it('runRemoteSearch stores service columns and hide/pin only changes presentation state', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    vi.spyOn(agentApi, 'remoteSearch').mockResolvedValue({
+      query: 'error',
+      status: 'partial_failed',
+      service_columns: [
+        {
+          service_id: 'svc-api',
+          service_name: 'api',
+          status: 'success',
+          result_count: 1,
+          node_count: 1,
+          nodes: [{ host_id: 'host-a', host_name: 'node-a', status: 'success', count: 1 }],
+          entries: [{
+            key: 'svc-api/ls-api/host-a:101',
+            id: 101,
+            service_id: 'svc-api',
+            log_source_id: 'ls-api',
+            host_id: 'host-a',
+            host_name: 'node-a',
+            run_id: 'run-1',
+            timestamp: '2026-05-20T22:41:32.000Z',
+            level: 'ERROR',
+            message: 'api error',
+            stream: 'stderr',
+          }],
+        },
+        {
+          service_id: 'svc-worker',
+          service_name: 'worker',
+          status: 'partial_failed',
+          result_count: 0,
+          node_count: 1,
+          nodes: [{ host_id: 'host-b', host_name: 'node-b', status: 'failed', count: 0, error: 'boom' }],
+          entries: [],
+        },
+      ],
+      failures: [{ service_id: 'svc-worker', host_id: 'host-b', kind: 'failed', message: 'boom' }],
+      next_cursor: 'cursor-1',
+      has_more: true,
+    } as any)
+    const workspace = useWorkspaceStore() as any
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+
+    await workspace.runRemoteSearch(tab.id, ' error ')
+    await workspace.hideService(tab.id, 'svc-worker')
+    workspace.pinService(tab.id, 'svc-api')
+
+    expect(agentApi.remoteSearch).toHaveBeenCalledWith({
+      project_id: 'proj-1',
+      group: 'all',
+      query: 'error',
+      limit: 200,
+    })
+    expect(tab.status).toBe('partialFailed')
+    expect(tab.serviceColumns.map((column: any) => column.service_id)).toEqual(['svc-api', 'svc-worker'])
+    expect(tab.failures).toHaveLength(1)
+    expect(tab.nextCursor).toBe('cursor-1')
+    expect(tab.hiddenServiceIds).toEqual(['svc-worker'])
+    expect(tab.pinnedServiceIds).toEqual(['svc-api'])
+    expect(tab.serviceColumns).toHaveLength(2)
+  })
+
+  it('runRemoteSearch ignores stale responses from rapid consecutive searches', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    let resolveFirst: (value: any) => void = () => {}
+    vi.spyOn(agentApi, 'remoteSearch')
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
+      .mockResolvedValueOnce({
+        query: 'panic',
+        status: 'success',
+        service_columns: [{
+          service_id: 'svc-api',
+          service_name: 'api',
+          status: 'success',
+          result_count: 1,
+          node_count: 1,
+          nodes: [],
+          entries: [{ key: 'svc-api/ls-api/host-a:2', id: 2, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:33.000Z', level: 'ERROR', message: 'panic target', stream: 'stderr' }],
+        }],
+        failures: [],
+        next_cursor: '',
+        has_more: false,
+      } as any)
+    const workspace = useWorkspaceStore() as any
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+
+    const first = workspace.runRemoteSearch(tab.id, 'error')
+    await workspace.runRemoteSearch(tab.id, 'panic')
+    resolveFirst({
+      query: 'error',
+      status: 'success',
+      service_columns: [{ service_id: 'svc-api', service_name: 'api', status: 'success', result_count: 1, node_count: 1, nodes: [], entries: [{ key: 'old', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'INFO', message: 'stale error', stream: 'stdout' }] }],
+      failures: [],
+      next_cursor: '',
+      has_more: false,
+    })
+    await first
+
+    expect(tab.query).toBe('panic')
+    expect(tab.serviceColumns[0].entries[0].message).toBe('panic target')
+  })
+
+  it('local search hide and pin behavior remains scoped to local search tabs', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.serviceCounts = { 'svc-api': 1, 'svc-worker': 1 }
+
+    await workspace.hideService(tab.id, 'svc-worker')
+    workspace.pinService(tab.id, 'svc-api')
+
+    expect(workspace.searchTab(tab.id)?.hiddenServiceIds).toEqual(['svc-worker'])
+    expect(workspace.searchTab(tab.id)?.pinnedServiceIds).toEqual(['svc-api'])
+  })
+
+
+
+  it('loadMoreRemoteSearch de-duplicates project remote entries by stable key', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    vi.spyOn(agentApi, 'remoteSearch')
+      .mockResolvedValueOnce({
+        query: 'error',
+        status: 'success',
+        service_columns: [{
+          service_id: 'svc-api',
+          service_name: 'api',
+          status: 'success',
+          result_count: 1,
+          node_count: 1,
+          nodes: [],
+          entries: [
+            { key: 'svc-api/ls-api/host-a:1', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'ERROR', message: 'first error', stream: 'stderr' },
+          ],
+        }],
+        failures: [],
+        next_cursor: 'cursor-1',
+        has_more: true,
+      } as any)
+      .mockResolvedValueOnce({
+        query: 'error',
+        status: 'success',
+        service_columns: [{
+          service_id: 'svc-api',
+          service_name: 'api',
+          status: 'success',
+          result_count: 2,
+          node_count: 1,
+          nodes: [],
+          entries: [
+            { key: 'svc-api/ls-api/host-a:1', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'ERROR', message: 'first error duplicate', stream: 'stderr' },
+            { key: 'svc-api/ls-api/host-a:2', id: 2, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:33.000Z', level: 'ERROR', message: 'second error', stream: 'stderr' },
+          ],
+        }],
+        failures: [],
+        next_cursor: '',
+        has_more: false,
+      } as any)
+    const workspace = useWorkspaceStore() as any
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+
+    await workspace.runRemoteSearch(tab.id, 'error')
+    await workspace.loadMoreRemoteSearch(tab.id)
+
+    expect(tab.serviceColumns[0].entries.map((entry: any) => entry.key)).toEqual([
+      'svc-api/ls-api/host-a:1',
+      'svc-api/ls-api/host-a:2',
+    ])
+    expect(tab.serviceColumns[0].result_count).toBe(2)
+  })
+
+
+  it('runRemoteSearch sends selected services, selected hosts, and cursor for project remote search', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    vi.spyOn(agentApi, 'remoteSearch').mockResolvedValue({
+      query: 'error',
+      status: 'success',
+      service_columns: [],
+      failures: [],
+      next_cursor: '',
+      has_more: false,
+    } as any)
+    const workspace = useWorkspaceStore() as any
+    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
+
+    await workspace.runRemoteSearch(tab.id, ' error ', {
+      serviceIds: ['svc-api'],
+      hostIds: ['host-a'],
+    })
+    tab.nextCursor = 'cursor-next'
+    tab.hasMore = true
+    await workspace.loadMoreRemoteSearch(tab.id)
+
+    expect(agentApi.remoteSearch).toHaveBeenNthCalledWith(1, {
+      project_id: 'proj-1',
+      group: 'all',
+      query: 'error',
+      service_id: ['svc-api'],
+      host_id: ['host-a'],
+      limit: 200,
+    })
+    expect(agentApi.remoteSearch).toHaveBeenNthCalledWith(2, {
+      project_id: 'proj-1',
+      group: 'all',
+      query: 'error',
+      service_id: ['svc-api'],
+      host_id: ['host-a'],
+      cursor: 'cursor-next',
+      limit: 200,
+    })
+  })
+
 })

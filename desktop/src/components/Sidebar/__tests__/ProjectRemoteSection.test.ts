@@ -92,4 +92,21 @@ describe('ProjectRemoteSection', () => {
       groupKey: 'all',
     })
   })
+
+  it('项目远程区块提供项目级远程搜索入口', async () => {
+    const agent = useAgentStore()
+    const remote = useRemoteStore()
+    const service = makeService()
+    agent.projects = [makeProject(service)]
+    remote.hosts = [makeHost()]
+    remote.logSources = [makeLogSource('ls-a')]
+
+    const wrapper = mount(ProjectRemoteSection, {
+      props: { projectId: 'project-a' },
+    })
+
+    await wrapper.find('[data-test="project-remote-search"]').trigger('click')
+
+    expect(wrapper.emitted('search')).toEqual([[{ projectId: 'project-a', groupKey: 'all' }]])
+  })
 })
