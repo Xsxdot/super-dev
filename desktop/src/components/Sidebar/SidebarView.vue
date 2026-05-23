@@ -32,6 +32,10 @@ function openRemoteGroup(payload: { logSourceId: string; groupKey: string }) {
   workspace.openRemote(payload.logSourceId, payload.groupKey)
 }
 
+function openRemoteProjectSearch(payload: { projectId: string; groupKey: string }) {
+  workspace.openRemoteProjectSearch(payload.projectId, payload.groupKey)
+}
+
 function openRemoteAggregate(payload: {
   projectId: string
   serviceId: string
@@ -79,6 +83,7 @@ async function addProject() {
         <ProjectRemoteSection
           :project-id="project.id"
           @open="openRemoteAggregate"
+          @search="openRemoteProjectSearch"
         />
       </template>
       <RemoteListenSection @open="openRemoteGroup" />

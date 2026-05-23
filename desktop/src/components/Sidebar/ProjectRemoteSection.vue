@@ -19,6 +19,7 @@ const props = defineProps<{ projectId: string }>()
 
 const emit = defineEmits<{
   open: [payload: { projectId: string; serviceId: string; serviceName: string; logSourceIds: string[]; groupKey: string }]
+  search: [payload: { projectId: string; groupKey: string }]
 }>()
 
 const remote = useRemoteStore()
@@ -64,11 +65,26 @@ function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.valu
   e.dataTransfer?.setData('text/plain', JSON.stringify(source))
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'
 }
+
+function openProjectRemoteSearch() {
+  emit('search', { projectId: props.projectId, groupKey: 'all' })
+}
 </script>
 
 <template>
   <div v-if="serviceGroups.length > 0" class="project-remote-section">
-    <div class="section-label">远程监听</div>
+    <div class="section-header">
+      <div class="section-label">远程监听</div>
+      <button
+        class="section-search"
+        data-test="project-remote-search"
+        type="button"
+        title="搜索远程日志"
+        @click="openProjectRemoteSearch"
+      >
+        搜索
+      </button>
+    </div>
     <div v-for="sg in serviceGroups" :key="sg.serviceId" class="service-block">
       <div class="service-name">{{ sg.serviceName }}</div>
       <div
@@ -94,12 +110,31 @@ function onGroupDragStart(e: DragEvent, serviceGroup: (typeof serviceGroups.valu
   border-top: 1px solid var(--border-secondary);
   padding: 4px 0 2px;
 }
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 8px 3px 12px;
+}
 .section-label {
-  padding: 3px 12px;
   color: var(--text-tertiary);
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+.section-search {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.section-search:hover {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
 }
 .service-block {
   margin-bottom: 2px;

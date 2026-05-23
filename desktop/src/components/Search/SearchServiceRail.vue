@@ -18,16 +18,22 @@ const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
-const tab = computed(() => workspace.searchTab(props.tabId))
+const localTab = computed(() => workspace.searchTab(props.tabId))
+const remoteTab = computed(() => workspace.remoteSearchTab(props.tabId))
+const tab = computed(() => localTab.value ?? remoteTab.value)
 
 const rows = computed(() => {
   if (!tab.value) return []
-  return Object.entries(tab.value.serviceCounts)
+  const serviceCounts = localTab.value
+    ? localTab.value.serviceCounts
+    : Object.fromEntries(remoteTab.value?.serviceColumns.map(column => [column.service_id, column.result_count]) ?? [])
+  return Object.entries(serviceCounts)
     .sort((a, b) => b[1] - a[1])
     .map(([serviceId, count], index) => ({
       serviceId,
       count,
       service: agentStore.serviceById(serviceId),
+      serviceName: remoteTab.value?.serviceColumns.find(column => column.service_id === serviceId)?.service_name,
       color: serviceColor(index),
       hidden: tab.value!.hiddenServiceIds.includes(serviceId),
     }))
@@ -56,7 +62,7 @@ function toggle(serviceId: string, hidden: boolean) {
       @click="toggle(row.serviceId, row.hidden)"
     >
       <span class="dot" :style="{ backgroundColor: row.color }" />
-      <span class="name">{{ row.service?.name ?? row.serviceId }}</span>
+      <span class="name">{{ row.service?.name ?? row.serviceName ?? row.serviceId }}</span>
       <span class="count">{{ row.count }}</span>
     </button>
   </div>
