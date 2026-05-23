@@ -6,9 +6,9 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { useRemoteLogStore } from '@/stores/remoteLog'
+import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
-import RemoteHostChips from './RemoteHostChips.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
@@ -38,13 +38,13 @@ const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const remote = useRemoteStore()
 const remoteLogStore = useRemoteLogStore()
+const workspace = useWorkspaceStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
 const newLogCount = ref(0)
 const logListEl = ref<HTMLElement | null>(null)
 const isLoadingHistory = ref(false)
-const selectedHostIds = ref<Set<string>>(new Set())
 
 const activeSelectionEntryId = ref<number | null>(null)
 const activeSelectionText = ref<string | null>(null)
@@ -113,7 +113,6 @@ watch(
         remoteLogStore.unsubscribe(lsId, oldGroupKey)
       }
     }
-    selectedHostIds.value = new Set()
     if (newGroupKey) {
       for (const lsId of (newIds as string[])) {
         void remoteLogStore.subscribe(lsId, newGroupKey)
@@ -133,23 +132,24 @@ function toRemoteDisplayEntry(entry: RemoteLogEntry): RemoteDisplayLogEntry {
 
 const rawLogs = computed<DisplayLogEntry[]>(() => {
   if (isRemote.value && props.groupKey) {
-    const selected = selectedHostIds.value
     const allLogs = effectiveLogSourceIds.value.flatMap(lsId =>
-      remoteLogStore.logsOf(lsId, props.groupKey!)
+      remoteLogStore.logsOf(lsId, props.groupKey!).map(entry => ({ logSourceId: lsId, entry }))
     )
     const seen = new Set<string>()
-    const deduped = allLogs.filter(entry => {
-      const key = `${entry.host_id}:${entry.id}`
+    const deduped = allLogs.filter(({ logSourceId, entry }) => {
+      const key = `${logSourceId}:${entry.host_id}:${entry.id}`
       if (seen.has(key)) return false
       seen.add(key)
       return true
-    })
+    }).map(({ entry }) => entry)
     deduped.sort((a, b) => {
       const t = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       return t !== 0 ? t : a.id - b.id
     })
+    const allHostIds = [...new Set(deduped.map(entry => entry.host_id))]
+    const visibleHostIds = new Set(workspace.visibleRemoteHostIds(props.panelId, allHostIds))
     return deduped
-      .filter(entry => selected.size === 0 || selected.has(entry.host_id))
+      .filter(entry => visibleHostIds.has(entry.host_id))
       .map(toRemoteDisplayEntry)
   }
   if (props.serviceId) return logStore.getLogs(props.serviceId)
@@ -304,9 +304,14 @@ function onEndBookmark() {
 }
 
 watch(
-  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision, selectedHostIds],
+  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision],
   () => scheduleDisplayRefresh(),
   { deep: true },
+)
+
+watch(
+  () => workspace.remoteHiddenHostIdsByTab[props.panelId]?.join('|'),
+  () => refreshDisplayImmediately(),
 )
 
 watch(
@@ -529,13 +534,6 @@ const displayItems = computed(() => cachedDisplay.value.items)
       :group-key="groupKey"
       @end-bookmark="onEndBookmark"
     />
-    <RemoteHostChips
-      v-if="isRemote && logSourceId && groupKey"
-      v-model:selected-host-ids="selectedHostIds"
-      :log-source-id="logSourceId"
-      :group-key="groupKey"
-    />
-
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
       <div v-if="(serviceId || isRemote) && isLoadingHistory" class="history-loading">加载历史记录中…</div>
       <div v-else-if="serviceId && !logStore.hasMoreHistory(serviceId)" class="history-end">— 已到最早记录 —</div>
