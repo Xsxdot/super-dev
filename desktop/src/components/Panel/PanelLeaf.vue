@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
-import { usePanelStore, type PanelSource } from '@/stores/panel'
+import { usePanelStore, projectIdFromPanelSource, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
+import { useRemoteStore } from '@/stores/remote'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
 import LogPanel from './LogPanel.vue'
 
@@ -15,6 +16,7 @@ const props = defineProps<{
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
+const remoteStore = useRemoteStore()
 const {
   dropHighlight,
   draggedSource,
@@ -36,6 +38,13 @@ const source = computed<PanelSource | null>(() =>
     : props.projectId
       ? { type: 'local-project', projectId: props.projectId }
       : null)
+)
+
+const effectiveProjectId = computed(() =>
+  projectIdFromPanelSource(source.value, {
+    logSourceById: id => remoteStore.logSourceById(id),
+    serviceById: id => agentStore.serviceById(id),
+  }) ?? props.projectId,
 )
 
 const service = computed(() =>
@@ -209,7 +218,7 @@ watch(serviceDropRequest, (request) => {
     <LogPanel
       :panel-id="panelId"
       :service-id="source?.type === 'local-service' ? source.serviceId : null"
-      :project-id="source?.type === 'local-service' || source?.type === 'local-project' ? source.projectId : null"
+      :project-id="effectiveProjectId"
       :log-source-id="source?.type === 'remote-log-source' ? source.logSourceId : undefined"
       :log-source-ids="source?.type === 'remote-aggregate' ? source.logSourceIds : undefined"
       :group-key="source?.type === 'remote-log-source' || source?.type === 'remote-aggregate' ? source.groupKey : undefined"

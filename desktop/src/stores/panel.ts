@@ -43,6 +43,34 @@ function scopeFromSource(source: PanelSource | null): { serviceId: string | null
   return { serviceId: null, projectId: null }
 }
 
+export interface PanelSourceProjectContext {
+  logSourceById: (id: string) => { project_id?: string; service_id?: string } | undefined
+  serviceById: (id: string) => { project_id?: string } | undefined
+}
+
+/** 从面板来源解析项目 ID，供远程监听复用绑定项目的 LogRule。 */
+export function projectIdFromPanelSource(
+  source: PanelSource | null,
+  ctx: PanelSourceProjectContext,
+): string | null {
+  if (!source) return null
+  if (source.type === 'local-service' || source.type === 'local-project') {
+    return source.projectId
+  }
+  if (source.type === 'remote-aggregate') {
+    return source.projectId ?? null
+  }
+  if (source.type === 'remote-log-source') {
+    const logSource = ctx.logSourceById(source.logSourceId)
+    if (!logSource) return null
+    if (logSource.project_id) return logSource.project_id
+    if (logSource.service_id) {
+      return ctx.serviceById(logSource.service_id)?.project_id ?? null
+    }
+  }
+  return null
+}
+
 function makeLeafFromSource(source: PanelSource | null = null): PanelLeafNode {
   const scope = scopeFromSource(source)
   return { type: 'leaf', id: uuidv4(), ...scope, source }
