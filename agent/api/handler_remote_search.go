@@ -43,9 +43,76 @@ type remoteSearchResponse struct {
 	HasMore     bool           `json:"has_more"`
 }
 
+type remoteProjectSearchResponse struct {
+	Query          string                       `json:"query"`
+	Status         string                       `json:"status"`
+	ServiceColumns []remoteProjectServiceColumn `json:"service_columns"`
+	Failures       []remoteProjectFailure       `json:"failures"`
+	NextCursor     string                       `json:"next_cursor"`
+	HasMore        bool                         `json:"has_more"`
+}
+
+type remoteProjectServiceColumn struct {
+	ServiceID   string                   `json:"service_id"`
+	ServiceName string                   `json:"service_name"`
+	Status      string                   `json:"status"`
+	ResultCount int                      `json:"result_count"`
+	NodeCount   int                      `json:"node_count"`
+	Nodes       []remoteProjectNode      `json:"nodes"`
+	Entries     []remoteProjectEntryItem `json:"entries"`
+}
+
+type remoteProjectNode struct {
+	HostID   string `json:"host_id"`
+	HostName string `json:"host_name"`
+	Status   string `json:"status"`
+	Count    int    `json:"count"`
+	Error    string `json:"error,omitempty"`
+}
+
+type remoteProjectEntryItem struct {
+	Key         string    `json:"key"`
+	ID          int64     `json:"id"`
+	ServiceID   string    `json:"service_id"`
+	LogSourceID string    `json:"log_source_id"`
+	HostID      string    `json:"host_id"`
+	HostName    string    `json:"host_name"`
+	RunID       string    `json:"run_id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Level       string    `json:"level"`
+	Message     string    `json:"message"`
+	Stream      string    `json:"stream"`
+}
+
+type remoteProjectFailure struct {
+	ServiceID string `json:"service_id"`
+	HostID    string `json:"host_id"`
+	Kind      string `json:"kind"`
+	Message   string `json:"message,omitempty"`
+}
+
+type remoteProjectTarget struct {
+	serviceID   string
+	serviceName string
+	logSource   model.LogSource
+	host        model.Host
+}
+
+type remoteProjectTargetResult struct {
+	target  remoteProjectTarget
+	cursor  HostCursor
+	entries []model.LogEntry
+	err     error
+}
+
 // remoteLogSearch 处理 GET /api/remote-log-search。
 func (a *App) remoteLogSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if projectID := q.Get("project_id"); projectID != "" {
+		a.remoteProjectLogSearch(w, r, projectID)
+		return
+	}
+
 	logSourceID := q.Get("log_source_id")
 	group := q.Get("group")
 	query := searchQueryText(q)
@@ -54,15 +121,7 @@ func (a *App) remoteLogSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := remoteSearchDefaultLim
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-			if limit > remoteSearchMaxLim {
-				limit = remoteSearchMaxLim
-			}
-		}
-	}
+	limit := remoteSearchLimit(q)
 
 	cursor, err := DecodeMergeCursor(q.Get("cursor"))
 	if err != nil {
@@ -187,6 +246,19 @@ func searchQueryText(values url.Values) string {
 	return strings.TrimSpace(values.Get("query"))
 }
 
+func remoteSearchLimit(values url.Values) int {
+	limit := remoteSearchDefaultLim
+	if v := values.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > remoteSearchMaxLim {
+		return remoteSearchMaxLim
+	}
+	return limit
+}
+
 // buildNextMergeCursor 根据本次已实际返回的 merged entries 推进每个 Host 的游标。
 //
 // 游标只能推进到已经返回给前端的最后一条日志;如果直接推进到远端本批最后一条,
@@ -288,4 +360,286 @@ func (a *App) fetchOneHost(ctx context.Context, hostID, serviceID, query string,
 		payload.Items = []model.LogEntry{}
 	}
 	return payload.Items, payload.Total, nil
+}
+
+func (a *App) remoteProjectLogSearch(w http.ResponseWriter, r *http.Request, projectID string) {
+	q := r.URL.Query()
+	group := q.Get("group")
+	query := searchQueryText(q)
+	if group == "" {
+		jsonError(w, http.StatusBadRequest, "group is required")
+		return
+	}
+	if query == "" {
+		jsonError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	limit := remoteSearchLimit(q)
+	cursor, err := DecodeMergeCursor(q.Get("cursor"))
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid cursor")
+		return
+	}
+
+	targets, serviceOrder, err := a.remoteProjectSearchTargets(projectID, group, q["service_id"], q["host_id"])
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(serviceOrder) == 0 {
+		jsonOK(w, remoteProjectSearchResponse{Query: query, Status: "failed", ServiceColumns: []remoteProjectServiceColumn{}, Failures: []remoteProjectFailure{}, NextCursor: MergeCursor{}.Encode()})
+		return
+	}
+
+	results := make([]remoteProjectTargetResult, 0, len(targets))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, target := range targets {
+		wg.Add(1)
+		go func(t remoteProjectTarget) {
+			defer wg.Done()
+			hostCursor := cursor[remoteProjectCursorKey(t)]
+			ctx, cancel := context.WithTimeout(r.Context(), remoteSearchTimeout)
+			defer cancel()
+			collectorID := collector.CollectorID(t.logSource.Name, t.logSource.Type)
+			entries, _, err := a.fetchOneHost(ctx, t.host.ID, collectorID, query, limit, hostCursor, q.Get("from"), q.Get("to"))
+			mu.Lock()
+			results = append(results, remoteProjectTargetResult{target: t, cursor: hostCursor, entries: entries, err: err})
+			mu.Unlock()
+		}(target)
+	}
+	wg.Wait()
+
+	jsonOK(w, buildRemoteProjectSearchResponse(query, serviceOrder, results, limit))
+}
+
+func buildRemoteProjectSearchResponse(query string, serviceOrder []string, results []remoteProjectTargetResult, limit int) remoteProjectSearchResponse {
+	columnsByService := map[string]*remoteProjectServiceColumn{}
+	cursorHosts := make([]model.Host, 0, len(results))
+	oldCursorByTarget := map[string]HostCursor{}
+	streamsByTarget := map[string][]model.LogEntry{}
+	failedCursorKeys := []string{}
+	successfulTargets := 0
+	failures := []remoteProjectFailure{}
+	for _, serviceID := range serviceOrder {
+		columnsByService[serviceID] = &remoteProjectServiceColumn{ServiceID: serviceID, Status: "failed", Nodes: []remoteProjectNode{}, Entries: []remoteProjectEntryItem{}}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].target.serviceID == results[j].target.serviceID {
+			return results[i].target.host.ID < results[j].target.host.ID
+		}
+		return serviceIndex(serviceOrder, results[i].target.serviceID) < serviceIndex(serviceOrder, results[j].target.serviceID)
+	})
+	for _, result := range results {
+		cursorKey := remoteProjectCursorKey(result.target)
+		cursorHosts = append(cursorHosts, model.Host{ID: cursorKey})
+		oldCursorByTarget[cursorKey] = result.cursor
+		column := columnsByService[result.target.serviceID]
+		column.ServiceName = result.target.serviceName
+		node := remoteProjectNode{HostID: result.target.host.ID, HostName: result.target.host.Name}
+		if result.err != nil {
+			kind := remoteProjectErrorKind(result.err)
+			node.Status = kind
+			node.Error = result.err.Error()
+			failures = append(failures, remoteProjectFailure{ServiceID: result.target.serviceID, HostID: result.target.host.ID, Kind: kind, Message: result.err.Error()})
+			failedCursorKeys = append(failedCursorKeys, cursorKey)
+			column.Nodes = append(column.Nodes, node)
+			continue
+		}
+		streamsByTarget[cursorKey] = result.entries
+		successfulTargets++
+		node.Status = "success"
+		node.Count = len(result.entries)
+		column.Nodes = append(column.Nodes, node)
+		for _, entry := range result.entries {
+			column.Entries = append(column.Entries, remoteProjectEntry(result.target, entry))
+		}
+	}
+
+	columns := make([]remoteProjectServiceColumn, 0, len(serviceOrder))
+	for _, serviceID := range serviceOrder {
+		column := columnsByService[serviceID]
+		sort.Slice(column.Entries, func(i, j int) bool {
+			if column.Entries[i].Timestamp.Equal(column.Entries[j].Timestamp) {
+				return column.Entries[i].ID < column.Entries[j].ID
+			}
+			return column.Entries[i].Timestamp.Before(column.Entries[j].Timestamp)
+		})
+		if len(column.Entries) > limit {
+			column.Entries = column.Entries[:limit]
+		}
+		column.ResultCount = len(column.Entries)
+		column.NodeCount = len(column.Nodes)
+		column.Status = remoteProjectColumnStatus(column.Nodes)
+		columns = append(columns, *column)
+	}
+
+	returnedItems := make([]MergeItem, 0)
+	for _, column := range columns {
+		for _, entry := range column.Entries {
+			cursorKey := remoteProjectEntryCursorKey(entry)
+			returnedItems = append(returnedItems, MergeItem{
+				HostID: cursorKey,
+				Entry: model.LogEntry{
+					ID:        entry.ID,
+					ServiceID: entry.ServiceID,
+					RunID:     entry.RunID,
+					Timestamp: entry.Timestamp,
+					Level:     entry.Level,
+					Message:   entry.Message,
+					Stream:    entry.Stream,
+				},
+			})
+		}
+	}
+	nextCursor, hasMore := buildNextMergeCursor(cursorHosts, oldCursorByTarget, streamsByTarget, failedCursorKeys, returnedItems, limit)
+
+	return remoteProjectSearchResponse{
+		Query:          query,
+		Status:         remoteProjectSearchStatus(successfulTargets, failures),
+		ServiceColumns: columns,
+		Failures:       failures,
+		NextCursor:     nextCursor.Encode(),
+		HasMore:        hasMore,
+	}
+}
+
+func remoteProjectCursorKey(target remoteProjectTarget) string {
+	return target.serviceID + "/" + target.logSource.ID + "/" + target.host.ID
+}
+
+func remoteProjectEntryCursorKey(entry remoteProjectEntryItem) string {
+	return entry.ServiceID + "/" + entry.LogSourceID + "/" + entry.HostID
+}
+
+func remoteProjectErrorKind(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		return "timeout"
+	}
+	return "failed"
+}
+
+func remoteProjectEntry(target remoteProjectTarget, entry model.LogEntry) remoteProjectEntryItem {
+	return remoteProjectEntryItem{
+		Key:         target.serviceID + "/" + target.logSource.ID + "/" + target.host.ID + ":" + strconv.FormatInt(entry.ID, 10),
+		ID:          entry.ID,
+		ServiceID:   target.serviceID,
+		LogSourceID: target.logSource.ID,
+		HostID:      target.host.ID,
+		HostName:    target.host.Name,
+		RunID:       entry.RunID,
+		Timestamp:   entry.Timestamp,
+		Level:       entry.Level,
+		Message:     entry.Message,
+		Stream:      entry.Stream,
+	}
+}
+
+func remoteProjectColumnStatus(nodes []remoteProjectNode) string {
+	successNodes := 0
+	timeoutNodes := 0
+	for _, node := range nodes {
+		switch node.Status {
+		case "success":
+			successNodes++
+		case "timeout":
+			timeoutNodes++
+		}
+	}
+	switch {
+	case successNodes == 0 && timeoutNodes == len(nodes):
+		return "timeout"
+	case successNodes == 0:
+		return "failed"
+	case successNodes < len(nodes):
+		return "partial_failed"
+	default:
+		return "success"
+	}
+}
+
+func remoteProjectSearchStatus(successfulTargets int, failures []remoteProjectFailure) string {
+	if successfulTargets == 0 {
+		return "failed"
+	}
+	if len(failures) > 0 {
+		return "partial_failed"
+	}
+	return "success"
+}
+
+func (a *App) remoteProjectSearchTargets(projectID, group string, serviceFilter, hostFilter []string) ([]remoteProjectTarget, []string, error) {
+	a.mu.RLock()
+	project, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		return nil, nil, nil
+	}
+	serviceNames := map[string]string{}
+	for _, svc := range project.Services {
+		serviceNames[svc.ID] = svc.Name
+	}
+	serviceAllowed := stringSet(serviceFilter)
+	hostAllowed := stringSet(hostFilter)
+
+	logSources, err := a.remoteStore.ListLogSources()
+	if err != nil {
+		return nil, nil, err
+	}
+	hosts, err := a.remoteStore.ListHosts()
+	if err != nil {
+		return nil, nil, err
+	}
+	hostByID := make(map[string]model.Host, len(hosts))
+	for _, h := range hosts {
+		hostByID[h.ID] = h
+	}
+
+	targets := []remoteProjectTarget{}
+	serviceOrder := []string{}
+	seenService := map[string]bool{}
+	for _, ls := range logSources {
+		if ls.ProjectID != projectID || ls.ServiceID == "" {
+			continue
+		}
+		if len(serviceAllowed) > 0 && !serviceAllowed[ls.ServiceID] {
+			continue
+		}
+		if _, ok := serviceNames[ls.ServiceID]; !ok {
+			continue
+		}
+		if !seenService[ls.ServiceID] {
+			seenService[ls.ServiceID] = true
+			serviceOrder = append(serviceOrder, ls.ServiceID)
+		}
+		for _, host := range selectHostsForGroup(ls.HostIDs, group, hostByID) {
+			if len(hostAllowed) > 0 && !hostAllowed[host.ID] {
+				continue
+			}
+			targets = append(targets, remoteProjectTarget{serviceID: ls.ServiceID, serviceName: serviceNames[ls.ServiceID], logSource: ls, host: host})
+		}
+	}
+	return targets, serviceOrder, nil
+}
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
+}
+
+func serviceIndex(order []string, serviceID string) int {
+	for i, item := range order {
+		if item == serviceID {
+			return i
+		}
+	}
+	return len(order)
 }

@@ -174,6 +174,9 @@ export interface TunnelStatus {
 
 export interface RemoteLogEntry extends LogEntry {
   host_id: string
+  host_name?: string
+  key?: string
+  log_source_id?: string
 }
 
 export interface RemoteViewGroup {
@@ -188,19 +191,51 @@ export interface RemoteViewResponse {
 }
 
 export interface RemoteSearchParams {
-  log_source_id: string
+  log_source_id?: string
+  project_id?: string
   group: string
   query: string
+  service_id?: string[]
+  host_id?: string[]
   limit?: number
   cursor?: string
   from?: string
   to?: string
 }
 
+export interface RemoteSearchNode {
+  host_id: string
+  host_name?: string
+  status: 'success' | 'failed' | 'timeout'
+  count: number
+  error?: string
+}
+
+export interface RemoteSearchServiceColumn {
+  service_id: string
+  service_name?: string
+  status: 'success' | 'partial_failed' | 'failed' | 'timeout'
+  result_count: number
+  node_count: number
+  nodes: RemoteSearchNode[]
+  entries: RemoteLogEntry[]
+}
+
+export interface RemoteSearchFailure {
+  service_id?: string
+  host_id: string
+  kind: 'failed' | 'timeout'
+  message?: string
+}
+
 export interface RemoteSearchResponse {
+  query?: string
+  status?: 'success' | 'partial_failed' | 'failed'
   entries: RemoteLogEntry[]
   total_by_host: Record<string, number>
   hosts_failed: string[]
+  service_columns?: RemoteSearchServiceColumn[]
+  failures?: RemoteSearchFailure[]
   next_cursor: string
   has_more: boolean
 }
@@ -373,9 +408,12 @@ export const api = {
   },
   remoteSearch: (params: RemoteSearchParams) => {
     const qs = new URLSearchParams()
-    qs.set('log_source_id', params.log_source_id)
+    if (params.log_source_id) qs.set('log_source_id', params.log_source_id)
+    if (params.project_id) qs.set('project_id', params.project_id)
     qs.set('group', params.group)
     qs.set('query', params.query)
+    for (const serviceId of params.service_id ?? []) qs.append('service_id', serviceId)
+    for (const hostId of params.host_id ?? []) qs.append('host_id', hostId)
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.cursor) qs.set('cursor', params.cursor)
     if (params.from) qs.set('from', params.from)

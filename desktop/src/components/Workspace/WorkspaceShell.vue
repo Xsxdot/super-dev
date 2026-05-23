@@ -27,6 +27,7 @@ const workspace = useWorkspaceStore()
     <PanelLayout v-else-if="workspace.activeTab.type === 'project' || workspace.activeTab.type === 'remote' || workspace.activeTab.type === 'remote-aggregate'" />
     <SearchPage
       v-else-if="workspace.activeTab.type === 'remote-search'"
+      :tab-id="workspace.activeTab.id"
       :log-source-id="workspace.activeTab.logSourceId"
       :group-key="workspace.activeTab.groupKey"
     />

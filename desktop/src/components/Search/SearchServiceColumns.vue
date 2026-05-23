@@ -15,13 +15,43 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
+import { splitSearchHighlight } from '@/lib/searchHighlight'
 import type { LogContextPageDirection, LogEntry } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
-const tab = computed(() => workspace.searchTab(props.tabId))
+const localTab = computed(() => workspace.searchTab(props.tabId))
+const remoteTab = computed(() => workspace.remoteSearchTab(props.tabId))
+const tab = computed(() => {
+  if (localTab.value) return localTab.value
+  const remote = remoteTab.value
+  if (!remote) return null
+  const contextByService: Record<string, LogEntry[]> = {}
+  const serviceCounts: Record<string, number> = {}
+  const results: LogEntry[] = []
+  for (const column of remote.serviceColumns) {
+    const entries = column.entries as LogEntry[]
+    contextByService[column.service_id] = entries
+    serviceCounts[column.service_id] = column.result_count
+    results.push(...entries)
+  }
+  return {
+    id: remote.id,
+    serviceCounts,
+    hiddenServiceIds: remote.hiddenServiceIds,
+    pinnedServiceIds: remote.pinnedServiceIds,
+    contextAnchorTime: results[0]?.timestamp ?? null,
+    contextByService,
+    results,
+    selectedLogId: null,
+    hasMoreBeforeByService: {} as Record<string, boolean>,
+    hasMoreAfterByService: {} as Record<string, boolean>,
+    loadingMoreBefore: false,
+    loadingMoreAfter: false,
+  }
+})
 const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
 const suppressScrollSelectionId = ref<number | null>(null)
@@ -105,6 +135,10 @@ function timeLabel(entry: LogEntry): string {
   return new Date(entry.timestamp).toISOString().slice(11, 23)
 }
 
+const searchQuery = computed(() => localTab.value?.query ?? remoteTab.value?.query ?? '')
+
+const messageParts = (message: string) => splitSearchHighlight(message, searchQuery.value)
+
 function isBlank(bucket: SearchBucketRow, serviceId: string): boolean {
   return bucket.cells[serviceId]?.blank ?? true
 }
@@ -143,11 +177,11 @@ function togglePin(serviceId: string) {
 }
 
 async function loadMore(direction: LogContextPageDirection) {
-  if (!tab.value) return
+  if (!tab.value || !localTab.value) return
   const el = columnsEl.value
   const previousHeight = el?.scrollHeight ?? 0
   const previousTop = el?.scrollTop ?? 0
-  const changed = await workspace.loadMoreContext(tab.value.id, direction)
+  const changed = await workspace.loadMoreContext(localTab.value.id, direction)
   await nextTick()
   if (direction === 'before' && changed && el) {
     el.scrollTop = previousTop + el.scrollHeight - previousHeight
@@ -156,7 +190,7 @@ async function loadMore(direction: LogContextPageDirection) {
 
 function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirection) {
   const currentTab = tab.value
-  if (!currentTab) return
+  if (!currentTab || !localTab.value) return
   const hidden = new Set(currentTab.hiddenServiceIds)
   const resultIds = new Set(
     currentTab.results
@@ -294,7 +328,12 @@ onBeforeUnmount(() => {
                   >
                     <span class="entry-time">{{ timeLabel(entry) }}</span>
                     <span class="entry-level">{{ entry.level }}</span>
-                    <span class="entry-message">{{ entry.message }}</span>
+                    <span class="entry-message">
+                      <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+                        <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+                        <span v-else>{{ part.text }}</span>
+                      </template>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -355,7 +394,12 @@ onBeforeUnmount(() => {
               >
                 <span class="entry-time">{{ timeLabel(entry) }}</span>
                 <span class="entry-level">{{ entry.level }}</span>
-                <span class="entry-message">{{ entry.message }}</span>
+                <span class="entry-message">
+                  <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+                    <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+                    <span v-else>{{ part.text }}</span>
+                  </template>
+                </span>
               </div>
             </div>
           </div>
@@ -549,6 +593,12 @@ onBeforeUnmount(() => {
 .entry-message {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.entry-message mark {
+  border-radius: 2px;
+  background: rgba(255, 212, 0, 0.32);
+  color: var(--text-primary);
+  padding: 0 1px;
 }
 .columns-empty {
   height: 100%;

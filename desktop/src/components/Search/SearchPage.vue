@@ -21,6 +21,17 @@ import { api, type RemoteLogEntry } from '@/api/agent'
 import { tagColor } from '@/lib/tagColor'
 
 type SearchStatus = 'empty' | 'loading' | 'results' | 'emptyResults' | 'error'
+interface RemoteSearchTarget {
+  serviceId: string
+  serviceName: string
+  hostId: string
+  hostName: string
+}
+
+interface ScopeOption {
+  id: string
+  name: string
+}
 
 const props = defineProps<{
   tabId?: string
@@ -32,6 +43,9 @@ const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const remote = useRemoteStore()
 const input = ref('')
+const queryError = ref('')
+const selectedServiceIds = ref<string[]>([])
+const selectedHostIds = ref<string[]>([])
 const remoteStatus = ref<SearchStatus>('empty')
 const remoteResults = ref<RemoteLogEntry[]>([])
 const remoteHostsFailed = ref<string[]>([])
@@ -40,20 +54,103 @@ const remoteCursor = ref<string | null>(null)
 const remoteHasMore = ref(false)
 const remoteError = ref<string | null>(null)
 
-const isRemote = computed(() => !!props.logSourceId && !!props.groupKey)
+const legacyRemote = computed(() => !!props.logSourceId && !!props.groupKey)
 const tab = computed(() => props.tabId ? workspace.searchTab(props.tabId) : null)
+const remoteTab = computed(() => props.tabId ? workspace.remoteSearchTab(props.tabId) : null)
+const projectRemote = computed(() => !!remoteTab.value?.projectId)
+const isRemote = computed(() => legacyRemote.value || projectRemote.value)
 const project = computed(() => tab.value ? agentStore.projectById(tab.value.projectId) : null)
+const remoteProject = computed(() => remoteTab.value?.projectId ? agentStore.projectById(remoteTab.value.projectId) : null)
 const remoteTotal = computed(() =>
   Object.values(remoteTotalByHost.value).reduce((sum, count) => sum + count, 0),
 )
+const remoteProjectTotal = computed(() =>
+  remoteTab.value?.serviceColumns.reduce((sum, column) => sum + column.result_count, 0) ?? 0,
+)
 
-watch(tab, value => {
-  if (isRemote.value) return
-  input.value = value?.query ?? ''
+const remoteProjectServiceNames = computed(() => new Map(
+  remoteProject.value?.services.map(service => [service.id, service.name]) ?? [],
+))
+
+const projectRemoteTargets = computed<RemoteSearchTarget[]>(() => {
+  const tabValue = remoteTab.value
+  if (!tabValue?.projectId) return []
+  const projectServices = remoteProjectServiceNames.value
+  return remote.logSources.flatMap(source => {
+    const serviceId = source.service_id
+    if (source.project_id !== tabValue.projectId || !serviceId || !projectServices.has(serviceId)) return []
+    const serviceName = projectServices.get(serviceId) ?? serviceId
+    return source.host_ids.flatMap(hostId => {
+      const host = remote.hostById(hostId)
+      if (!host || (tabValue.groupKey !== 'all' && !host.tags.includes(tabValue.groupKey))) return []
+      return [{
+        serviceId,
+        serviceName,
+        hostId: host.id,
+        hostName: host.name,
+      }]
+    })
+  })
+})
+
+const hasSearchableRemoteTargets = computed(() => !projectRemote.value || projectRemoteTargets.value.length > 0)
+
+function uniqueScopeOptions(targets: RemoteSearchTarget[], key: 'service' | 'host'): ScopeOption[] {
+  const byId = new Map<string, string>()
+  for (const target of targets) {
+    byId.set(
+      key === 'service' ? target.serviceId : target.hostId,
+      key === 'service' ? target.serviceName : target.hostName,
+    )
+  }
+  return [...byId.entries()].map(([id, name]) => ({ id, name }))
+}
+
+const serviceOptions = computed(() => uniqueScopeOptions(projectRemoteTargets.value, 'service'))
+
+const scopedRemoteTargets = computed(() => {
+  const selected = new Set(selectedServiceIds.value)
+  if (selected.size === 0) return projectRemoteTargets.value
+  return projectRemoteTargets.value.filter(target => selected.has(target.serviceId))
+})
+
+const hostOptions = computed(() => uniqueScopeOptions(scopedRemoteTargets.value, 'host'))
+
+const selectedRemoteScope = computed(() => ({
+  serviceIds: [...selectedServiceIds.value],
+  hostIds: [...selectedHostIds.value],
+}))
+
+const searchInFlight = computed(() =>
+  legacyRemote.value ? remoteStatus.value === 'loading' : remoteTab.value?.status === 'loading' || tab.value?.status === 'loading',
+)
+
+const submitDisabled = computed(() =>
+  (projectRemote.value && !hasSearchableRemoteTargets.value) || searchInFlight.value,
+)
+
+const remoteProjectFailureLabels = computed(() =>
+  remoteTab.value?.failures.map(item => item.host_id).join(', ') ?? '',
+)
+
+const localSearchTotal = computed(() =>
+  tab.value ? Object.values(tab.value.serviceCounts).reduce((a, b) => a + b, 0) : 0,
+)
+
+watch([tab, remoteTab], ([localValue, remoteValue]) => {
+  if (legacyRemote.value) return
+  input.value = remoteValue?.query ?? localValue?.query ?? ''
+  selectedServiceIds.value = remoteValue?.selectedServiceIds ?? []
+  selectedHostIds.value = remoteValue?.selectedHostIds ?? []
 }, { immediate: true })
 
+watch(hostOptions, options => {
+  const allowed = new Set(options.map(option => option.id))
+  selectedHostIds.value = selectedHostIds.value.filter(hostId => allowed.has(hostId))
+})
+
 async function runSearch(append = false) {
-  if (isRemote.value && props.logSourceId && props.groupKey) {
+  if (legacyRemote.value && props.logSourceId && props.groupKey) {
     const query = input.value.trim()
     if (!query) return
     remoteStatus.value = 'loading'
@@ -81,12 +178,29 @@ async function runSearch(append = false) {
     return
   }
 
+  if (remoteTab.value?.projectId) {
+    await workspace.runRemoteSearch(remoteTab.value.id, input.value, selectedRemoteScope.value)
+    return
+  }
+
   if (!tab.value) return
   await workspace.runSearch(tab.value.id, input.value)
 }
 
+
 function submit() {
+  queryError.value = ''
+  if (projectRemote.value && !hasSearchableRemoteTargets.value) return
+  if (isRemote.value && !input.value.trim()) {
+    queryError.value = '请输入搜索内容'
+    return
+  }
   void runSearch(false)
+}
+
+function loadMoreProjectRemote() {
+  if (!remoteTab.value) return
+  void workspace.loadMoreRemoteSearch(remoteTab.value.id)
 }
 
 function hostNameFor(entry: RemoteLogEntry): string {
@@ -105,7 +219,8 @@ defineExpose({ runSearch })
   <div v-if="isRemote || tab" class="search-page">
     <div class="search-top">
       <div class="project-name">
-        <template v-if="isRemote">Remote · {{ groupKey }}</template>
+        <template v-if="legacyRemote">Remote · {{ groupKey }}</template>
+        <template v-else-if="remoteTab">Remote Search · {{ remoteProject?.name ?? remoteTab.projectId }}</template>
         <template v-else-if="tab">{{ project?.name ?? tab.projectId }}</template>
       </div>
       <form class="search-form" @submit.prevent="submit">
@@ -118,20 +233,25 @@ defineExpose({ runSearch })
         >
         <button
           class="search-button"
-          :disabled="isRemote ? remoteStatus === 'loading' : tab?.status === 'loading'"
+          data-test="remote-search-submit"
+          :disabled="submitDisabled"
         >
           搜索
         </button>
       </form>
-      <div v-if="isRemote && remoteStatus === 'results'" class="result-summary">
+      <div v-if="queryError" class="query-error" data-test="remote-search-query-error">{{ queryError }}</div>
+      <div v-if="legacyRemote && remoteStatus === 'results'" class="result-summary">
         {{ remoteResults.length }} / {{ remoteTotal }} 条命中
       </div>
+      <div v-else-if="remoteTab?.status === 'results' || remoteTab?.status === 'partialFailed'" class="result-summary">
+        {{ remoteProjectTotal }} 条命中
+      </div>
       <div v-else-if="tab?.status === 'results'" class="result-summary">
-        {{ tab.results.length }} / {{ Object.values(tab.serviceCounts).reduce((a, b) => a + b, 0) }} 条命中
+        {{ tab.results.length }} / {{ localSearchTotal }} 条命中
       </div>
     </div>
 
-    <template v-if="isRemote">
+    <template v-if="legacyRemote">
       <div v-if="remoteStatus === 'empty'" class="search-empty">
         <div class="search-brand">Remote Search</div>
       </div>
@@ -157,6 +277,57 @@ defineExpose({ runSearch })
           class="load-more"
           type="button"
           @click="runSearch(true)"
+        >
+          加载更多
+        </button>
+      </div>
+    </template>
+    <template v-else-if="remoteTab">
+      <div v-if="projectRemote" class="scope-bar">
+        <div class="scope-group" data-test="remote-search-service-scope">
+          <span>{{ selectedServiceIds.length ? '已选服务' : '全部服务' }}</span>
+          <label v-for="option in serviceOptions" :key="option.id" class="scope-option">
+            <input
+              v-model="selectedServiceIds"
+              type="checkbox"
+              :value="option.id"
+              :data-test="`remote-search-service-${option.id}`"
+            >
+            {{ option.name }}
+          </label>
+        </div>
+        <div class="scope-group" data-test="remote-search-node-scope">
+          <span>{{ selectedHostIds.length ? '已选节点' : '全部节点' }}</span>
+          <label v-for="option in hostOptions" :key="option.id" class="scope-option">
+            <input
+              v-model="selectedHostIds"
+              type="checkbox"
+              :value="option.id"
+              :data-test="`remote-search-node-${option.id}`"
+            >
+            {{ option.name }}
+          </label>
+        </div>
+      </div>
+      <div v-if="projectRemote && !hasSearchableRemoteTargets" class="search-state" data-test="remote-search-no-targets">没有可搜索的远程日志对象</div>
+      <div v-else-if="remoteTab.status === 'empty'" class="search-empty">
+        <div class="search-brand">Remote Search</div>
+      </div>
+      <div v-else-if="remoteTab.status === 'loading'" class="search-state">搜索中...</div>
+      <div v-else-if="remoteTab.status === 'emptyResults'" class="search-state">当前远程项目没有匹配日志</div>
+      <div v-else-if="remoteTab.status === 'error' || remoteTab.status === 'failed'" class="search-state error">{{ remoteTab.error ?? '远程搜索失败' }}</div>
+      <div v-else class="remote-project-results">
+        <div v-if="remoteTab.failures.length > 0" class="hosts-failed">
+          部分节点超时或失败：{{ remoteProjectFailureLabels }}
+        </div>
+        <div v-if="remoteTab.hasMore" class="has-more" data-test="remote-search-has-more">还有更多结果</div>
+        <SearchBoard :tab-id="remoteTab.id" />
+        <button
+          v-if="remoteTab.hasMore"
+          class="load-more"
+          type="button"
+          data-test="remote-search-load-more"
+          @click="loadMoreProjectRemote"
         >
           加载更多
         </button>
@@ -231,6 +402,35 @@ defineExpose({ runSearch })
   color: var(--text-tertiary);
   font-size: 11px;
 }
+.query-error {
+  color: #f85149;
+  font-size: 11px;
+}
+.scope-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.scope-group,
+.scope-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scope-group > span {
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+.has-more {
+  padding: 6px 12px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border-secondary);
+}
 .search-empty,
 .search-state {
   flex: 1;
@@ -246,6 +446,12 @@ defineExpose({ runSearch })
 }
 .search-state.error {
   color: #f85149;
+}
+.remote-project-results {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 .remote-results {
   flex: 1;
