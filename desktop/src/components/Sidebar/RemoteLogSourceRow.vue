@@ -14,6 +14,7 @@ RemoteLogSourceRow：单个远程监听任务及其分组列表。
 import { computed, ref } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
 import type { PanelSource } from '@/stores/panel'
+import { usePanelSourcePointerDrag } from '@/composables/usePanelSourcePointerDrag'
 import { tagColor } from '@/lib/tagColor'
 import type { LogSource } from '@/api/agent'
 
@@ -28,6 +29,8 @@ const emit = defineEmits<{
 const store = useRemoteStore()
 const expanded = ref(true)
 const groups = computed(() => store.groupsOf(props.logSource.id))
+const pointerGroupKey = ref<string>('all')
+const sourcePointerDrag = usePanelSourcePointerDrag(() => sourceForGroup(pointerGroupKey.value))
 
 function chipStyle(groupKey: string) {
   if (groupKey === 'all') return undefined
@@ -36,6 +39,16 @@ function chipStyle(groupKey: string) {
 
 function sourceForGroup(groupKey: string): PanelSource {
   return { type: 'remote-log-source', logSourceId: props.logSource.id, groupKey }
+}
+
+function onGroupPointerDown(e: PointerEvent, groupKey: string) {
+  pointerGroupKey.value = groupKey
+  sourcePointerDrag.onPointerDown(e)
+}
+
+function onGroupClick(groupKey: string) {
+  if (sourcePointerDrag.consumeClickSuppression()) return
+  emit('open', { logSourceId: props.logSource.id, groupKey })
 }
 
 function onGroupDragStart(e: DragEvent, groupKey: string) {
@@ -62,10 +75,12 @@ function onGroupDragStart(e: DragEvent, groupKey: string) {
         v-for="group in groups"
         :key="group.key"
         class="group-row"
+        :class="{ dragging: sourcePointerDrag.dragging.value && pointerGroupKey === group.key }"
         data-test="logsource-group"
         draggable="true"
+        @pointerdown="onGroupPointerDown($event, group.key)"
         @dragstart="onGroupDragStart($event, group.key)"
-        @click="emit('open', { logSourceId: logSource.id, groupKey: group.key })"
+        @click="onGroupClick(group.key)"
       >
         <span class="chip" :style="chipStyle(group.key)">{{ group.key }}</span>
         <span class="count">({{ group.hostIds.length }} 节点)</span>
@@ -133,6 +148,10 @@ button.icon {
 }
 .group-row:hover {
   background: var(--bg-secondary);
+}
+.group-row.dragging {
+  opacity: 0.7;
+  cursor: grabbing;
 }
 .chip {
   padding: 1px 6px;

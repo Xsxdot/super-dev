@@ -103,6 +103,45 @@ function getDropEdgeAt(clientX: number, clientY: number): DropEdge | null {
   )
 }
 
+function parsePanelSourcePayload(rawSource: string): PanelSource | null {
+  try {
+    const parsed = JSON.parse(rawSource) as unknown
+    return isSupportedPanelSource(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+}
+
+function isSupportedPanelSource(value: unknown): value is PanelSource {
+  if (!isRecord(value) || typeof value.type !== 'string') return false
+  if (value.type === 'local-project') {
+    return typeof value.projectId === 'string'
+  }
+  if (value.type === 'local-service') {
+    return typeof value.serviceId === 'string'
+      && (value.projectId === undefined || typeof value.projectId === 'string')
+  }
+  if (value.type === 'remote-log-source') {
+    return typeof value.logSourceId === 'string' && typeof value.groupKey === 'string'
+  }
+  if (value.type === 'remote-aggregate') {
+    return typeof value.projectId === 'string'
+      && typeof value.groupKey === 'string'
+      && isStringArray(value.logSourceIds)
+      && (value.serviceId === undefined || typeof value.serviceId === 'string')
+      && (value.serviceName === undefined || typeof value.serviceName === 'string')
+  }
+  return false
+}
+
 function normalizeDropSource(dropSource: PanelSource): PanelSource {
   if (dropSource.type !== 'local-service' || dropSource.projectId) return dropSource
   const svc = agentStore.serviceById(dropSource.serviceId)
@@ -137,7 +176,8 @@ function onDrop(e: DragEvent) {
   if (!edge) return
   dropHighlight.value = null
   if (rawSource) {
-    applySourceDrop(JSON.parse(rawSource) as PanelSource, edge)
+    const parsedSource = parsePanelSourcePayload(rawSource)
+    if (parsedSource) applySourceDrop(parsedSource, edge)
   } else if (serviceId) {
     applyServiceDrop(serviceId, edge)
   }
