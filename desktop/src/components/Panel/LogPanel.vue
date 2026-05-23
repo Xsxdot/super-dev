@@ -79,10 +79,17 @@ onMounted(() => {
   } else if (props.serviceId) {
     void logStore.subscribe(props.serviceId)
   }
-  if (props.projectId) filterStore.loadProjectRules(props.projectId)
+  if (props.projectId) void filterStore.loadProjectRules(props.projectId)
   refreshDisplayImmediately()
   scrollToBottom()
 })
+
+watch(
+  () => props.projectId,
+  (projectId, prev) => {
+    if (projectId && projectId !== prev) void filterStore.loadProjectRules(projectId)
+  },
+)
 
 onUnmounted(() => {
   if (isRemote.value && props.groupKey) {

@@ -1,6 +1,53 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, it, expect } from 'vitest'
-import { usePanelStore } from '../panel'
+import { usePanelStore, projectIdFromPanelSource } from '../panel'
+
+describe('projectIdFromPanelSource', () => {
+  const ctx = {
+    logSourceById: (id: string) => ({
+      'ls-bound': { project_id: 'project-a' },
+      'ls-service': { service_id: 'service-api' },
+    }[id]),
+    serviceById: (id: string) => ({
+      'service-api': { project_id: 'project-a' },
+    }[id]),
+  }
+
+  it('本地服务来源返回 projectId', () => {
+    expect(projectIdFromPanelSource(
+      { type: 'local-service', projectId: 'project-a', serviceId: 'svc-1' },
+      ctx,
+    )).toBe('project-a')
+  })
+
+  it('远程聚合来源返回 source.projectId', () => {
+    expect(projectIdFromPanelSource(
+      { type: 'remote-aggregate', logSourceIds: ['ls-a'], groupKey: 'all', projectId: 'project-a' },
+      ctx,
+    )).toBe('project-a')
+  })
+
+  it('远程单任务从 log source.project_id 解析', () => {
+    expect(projectIdFromPanelSource(
+      { type: 'remote-log-source', logSourceId: 'ls-bound', groupKey: 'all' },
+      ctx,
+    )).toBe('project-a')
+  })
+
+  it('远程单任务从绑定 service_id 反查项目', () => {
+    expect(projectIdFromPanelSource(
+      { type: 'remote-log-source', logSourceId: 'ls-service', groupKey: 'all' },
+      ctx,
+    )).toBe('project-a')
+  })
+
+  it('未绑定项目时返回 null', () => {
+    expect(projectIdFromPanelSource(
+      { type: 'remote-log-source', logSourceId: 'ls-free', groupKey: 'all' },
+      ctx,
+    )).toBeNull()
+  })
+})
 
 describe('panelStore', () => {
   beforeEach(() => {
