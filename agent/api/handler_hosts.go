@@ -27,14 +27,25 @@ import (
 	"github.com/superdev/agent/tunnel"
 )
 
-// listHosts 处理 GET /api/hosts,返回不含 SSH 凭据的安全视图。
+// listHosts 处理 GET /api/hosts，在列表头部插入本机节点（is_self=true），
+// 后跟不含 SSH 凭据的远端 host 安全视图。
 func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := a.remoteStore.ListHosts()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]hostDTO, 0, len(hosts))
+
+	// 本机节点始终排在第一位
+	selfNode := hostDTO{
+		ID:     a.identity.NodeID,
+		Name:   a.identity.DisplayName,
+		IsSelf: true,
+		NodeID: a.identity.NodeID,
+		Tags:   []string{},
+	}
+	out := make([]hostDTO, 0, len(hosts)+1)
+	out = append(out, selfNode)
 	for _, h := range hosts {
 		out = append(out, toHostDTO(h))
 	}
