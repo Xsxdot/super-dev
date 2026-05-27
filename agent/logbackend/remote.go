@@ -187,14 +187,21 @@ func (b *RemoteAgentBackend) Subscribe(ctx context.Context, serviceID string) Lo
 		return LogStream{Ch: ch, Cancel: func() {}}
 	}
 
+	done := make(chan struct{})
 	var once sync.Once
 	closeConn := func() {
-		once.Do(func() { _ = conn.Close() })
+		once.Do(func() {
+			close(done)
+			_ = conn.Close()
+		})
 	}
 
-	// ctx watcher：ctx 取消时触发 conn.Close()，解除 ReadJSON 阻塞
+	// ctx watcher：ctx 取消或 closeConn 调用时均可退出，避免 goroutine 泄漏
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 		closeConn()
 	}()
 
