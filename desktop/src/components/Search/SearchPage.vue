@@ -59,13 +59,13 @@ function submit() {
         >
         <button
           class="search-button"
-          data-test="remote-search-submit"
+          data-test="search-submit"
           :disabled="tab.status === 'loading'"
         >
           搜索
         </button>
       </form>
-      <div v-if="tab?.status === 'results'" class="result-summary">
+      <div v-if="tab.status === 'results'" class="result-summary">
         {{ tab.results.length }} / {{ localSearchTotal }} 条命中
       </div>
     </div>

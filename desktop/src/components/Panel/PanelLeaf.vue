@@ -39,10 +39,7 @@ const source = computed<PanelSource | null>(() =>
 )
 
 const effectiveProjectId = computed(() =>
-  projectIdFromPanelSource(source.value, {
-    logSourceById: () => undefined,
-    serviceById: id => agentStore.serviceById(id),
-  }) ?? props.projectId,
+  projectIdFromPanelSource(source.value) ?? props.projectId,
 )
 
 const service = computed(() =>

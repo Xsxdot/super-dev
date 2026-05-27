@@ -19,29 +19,21 @@ describe('isSamePanelSource', () => {
 })
 
 describe('projectIdFromPanelSource', () => {
-  const ctx = {
-    logSourceById: (_id: string) => undefined,
-    serviceById: (_id: string) => undefined,
-  }
-
   it('本地服务来源返回 projectId', () => {
     expect(projectIdFromPanelSource(
       { type: 'local-service', projectId: 'project-a', serviceId: 'svc-1' },
-      ctx,
     )).toBe('project-a')
   })
 
   it('本地项目来源返回 projectId', () => {
     expect(projectIdFromPanelSource(
       { type: 'local-project', projectId: 'project-a' },
-      ctx,
     )).toBe('project-a')
   })
 
   it('deployment 来源返回 null', () => {
     expect(projectIdFromPanelSource(
       { type: 'deployment', deploymentId: 'dep-1' },
-      ctx,
     )).toBeNull()
   })
 })

@@ -11,24 +11,24 @@ describe('useDragDrop', () => {
     expect(edgeToAxis('bottom')).toEqual({ axis: 'v', side: 'second' })
   })
 
-  it('支持远程监听和本地日志统一 source drag payload', () => {
+  it('支持本地服务 source drag payload', () => {
     const dragDrop = useDragDrop() as any
 
     expect(typeof dragDrop.startSourceDrag).toBe('function')
     expect(typeof dragDrop.finishSourceDrag).toBe('function')
 
     dragDrop.startSourceDrag({
-      type: 'remote-log-source',
-      logSourceId: 'remote-prod',
-      groupKey: 'all',
+      type: 'local-service',
+      projectId: 'proj-1',
+      serviceId: 'svc-1',
     }, { x: 4, y: 8 })
     dragDrop.finishSourceDrag({ x: 10, y: 12 })
 
     expect(dragDrop.sourceDropRequest.value).toMatchObject({
       source: {
-        type: 'remote-log-source',
-        logSourceId: 'remote-prod',
-        groupKey: 'all',
+        type: 'local-service',
+        projectId: 'proj-1',
+        serviceId: 'svc-1',
       },
       x: 10,
       y: 12,

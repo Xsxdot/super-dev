@@ -44,16 +44,8 @@ function scopeFromSource(source: PanelSource | null): { serviceId: string | null
   return { serviceId: null, projectId: null }
 }
 
-export interface PanelSourceProjectContext {
-  logSourceById: (id: string) => { project_id?: string; service_id?: string } | undefined
-  serviceById: (id: string) => { project_id?: string } | undefined
-}
-
 /** 从面板来源解析项目 ID。只有 local-service 和 local-project 关联项目。 */
-export function projectIdFromPanelSource(
-  source: PanelSource | null,
-  _ctx: PanelSourceProjectContext,
-): string | null {
+export function projectIdFromPanelSource(source: PanelSource | null): string | null {
   if (!source) return null
   if (source.type === 'local-service' || source.type === 'local-project') {
     return source.projectId
