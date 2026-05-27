@@ -12,12 +12,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   click: []
+  'open-deployment': [payload: { deploymentId: string; title: string }]
 }>()
 
 const agentStore = useAgentStore()
 const { startServiceDrag, moveServiceDrag, endServiceDrag, finishServiceDrag } = useDragDrop()
 const hovered = ref(false)
 const dragging = ref(false)
+// 有 deployments 时默认展开子行列表
+const expanded = ref(true)
+
+const hasDeployments = computed(() => Boolean(props.service.deployments?.length))
 
 let pointerStart: { x: number; y: number } | null = null
 let suppressClick = false
@@ -120,7 +125,21 @@ function onClick() {
     suppressClick = false
     return
   }
+  // 有 deployments 时切换折叠/展开，不 emit click
+  if (hasDeployments.value) {
+    expanded.value = !expanded.value
+    return
+  }
   emit('click')
+}
+
+function onDeploymentClick(e: MouseEvent, dep: NonNullable<Service['deployments']>[number]) {
+  // 阻止事件冒泡，避免触发服务行的 onClick
+  e.stopPropagation()
+  emit('open-deployment', {
+    deploymentId: dep.id,
+    title: `${props.service.name} · ${dep.env_name}`,
+  })
 }
 
 onUnmounted(() => {
@@ -131,35 +150,62 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="service-row"
-    :class="{ selected, dragging }"
-    @mouseenter="hovered = true"
-    @mouseleave="hovered = false"
-    @click="onClick"
-    @pointerdown="onPointerDown"
-  >
-    <input
-      type="checkbox"
-      :checked="isChecked"
-      :disabled="service.required"
-      @click.stop="onCheckChange"
-      class="service-checkbox"
-    />
-    <span class="status-dot" :style="{ background: statusColor(service.status) }" />
-    <span class="service-name">{{ service.name }}</span>
+  <div class="service-row-wrapper">
+    <div
+      class="service-row"
+      :class="{ selected, dragging }"
+      @mouseenter="hovered = true"
+      @mouseleave="hovered = false"
+      @click="onClick"
+      @pointerdown="onPointerDown"
+    >
+      <input
+        type="checkbox"
+        :checked="isChecked"
+        :disabled="service.required"
+        @click.stop="onCheckChange"
+        class="service-checkbox"
+      />
+      <span class="status-dot" :style="{ background: statusColor(service.status) }" />
+      <span class="service-name">{{ service.name }}</span>
 
-    <Transition name="fade">
-      <div v-if="hovered" class="hover-actions" @click.stop>
-        <template v-if="service.status === 'running' || service.status === 'starting'">
-          <button title="重启" @click="agentStore.restartService(service.id)">↺</button>
-          <button title="停止" class="stop-btn" @click="agentStore.stopService(service.id)">⏹</button>
-        </template>
-        <template v-else>
-          <button title="启动" class="start-btn" @click="agentStore.startService(service.id)">▶</button>
-        </template>
+      <!-- 有 deployments 时显示折叠/展开箭头，替代 hover 启停按钮 -->
+      <span v-if="hasDeployments" class="expand-arrow" :class="{ expanded }">
+        {{ expanded ? '▾' : '▸' }}
+      </span>
+
+      <!-- 无 deployments 时保留 hover 启停按钮 -->
+      <Transition v-else name="fade">
+        <div v-if="hovered" class="hover-actions" @click.stop>
+          <template v-if="service.status === 'running' || service.status === 'starting'">
+            <button title="重启" @click="agentStore.restartService(service.id)">↺</button>
+            <button title="停止" class="stop-btn" @click="agentStore.stopService(service.id)">⏹</button>
+          </template>
+          <template v-else>
+            <button title="启动" class="start-btn" @click="agentStore.startService(service.id)">▶</button>
+          </template>
+        </div>
+      </Transition>
+    </div>
+
+    <!-- Deployment 子行列表 -->
+    <div
+      v-if="hasDeployments && expanded"
+      class="deployment-list"
+      data-test="deployment-list"
+    >
+      <div
+        v-for="dep in service.deployments"
+        :key="dep.id"
+        class="deployment-row"
+        data-test="deployment-row"
+        @click="(e) => onDeploymentClick(e, dep)"
+      >
+        <span class="deployment-location-icon">{{ dep.location === 'remote' ? '☁' : '⬡' }}</span>
+        <span class="deployment-env-name">{{ dep.env_name }}</span>
+        <span class="deployment-status-dot" :style="{ background: statusColor(dep.status) }" />
       </div>
-    </Transition>
+    </div>
   </div>
 </template>
 
@@ -232,4 +278,47 @@ onUnmounted(() => {
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.expand-arrow {
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: transform 0.12s;
+}
+
+.deployment-list {
+  margin: 0 4px 2px 4px;
+}
+
+.deployment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: background 0.12s;
+}
+.deployment-row:hover { background: rgba(255,255,255,0.04); }
+
+.deployment-location-icon {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.deployment-env-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deployment-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 </style>
