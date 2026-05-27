@@ -102,32 +102,6 @@ describe('workspaceStore', () => {
     expect(workspace.activeTab?.type).toBe('search')
   })
 
-  it('openRemote 为同一远程分组复用标签', () => {
-    const workspace = useWorkspaceStore()
-
-    workspace.openRemote('ls1', 'all')
-    workspace.openRemote('ls1', 'all')
-
-    expect(workspace.tabs.filter(t => t.type === 'remote')).toHaveLength(1)
-    expect(workspace.activeTab).toMatchObject({
-      type: 'remote',
-      logSourceId: 'ls1',
-      groupKey: 'all',
-    })
-  })
-
-  it('openRemoteSearch 为远程分组创建搜索标签', () => {
-    const workspace = useWorkspaceStore()
-
-    workspace.openRemoteSearch('ls1', 'prod')
-
-    expect(workspace.activeTab).toMatchObject({
-      type: 'remote-search',
-      logSourceId: 'ls1',
-      groupKey: 'prod',
-    })
-  })
-
   it('项目标签切换时恢复各自的 panel root', () => {
     const api = service('svc-api', 'api', 'proj-1')
     const admin = service('svc-admin', 'admin', 'proj-2')
@@ -148,92 +122,6 @@ describe('workspaceStore', () => {
     expect(panel.allLeaves[0].serviceId).toBe('svc-api')
   })
 
-  it('openRemote 将远程监听作为日志工作区 panel source 打开', () => {
-    const workspace = useWorkspaceStore()
-    const panel = usePanelStore()
-
-    const tab = workspace.openRemote('remote-prod', 'all') as any
-
-    expect(tab.layoutRoot).toBeTruthy()
-    expect(tab.focusedPanelId).toBeTruthy()
-    expect((panel.allLeaves[0] as any).source).toEqual({
-      type: 'remote-log-source',
-      logSourceId: 'remote-prod',
-      groupKey: 'all',
-    })
-  })
-
-  it('remote 与 project 标签切换时分别保存和恢复 layoutRoot 与焦点', () => {
-    const api = service('svc-api', 'api', 'project-A')
-    useAgentStore().projects = [project([api], 'project-A', 'Project A')]
-    const workspace = useWorkspaceStore()
-    const panel = usePanelStore()
-
-    workspace.openService('project-A', 'svc-api')
-    const projectTabId = workspace.activeTabId!
-    const projectPanelId = panel.allLeaves[0].id
-
-    const remoteTab = workspace.openRemote('remote-prod', 'all') as any
-    const remotePanelId = panel.allLeaves[0].id
-    ;((panel as any).splitLeafWithSource ?? (() => undefined))(
-      remotePanelId,
-      'h',
-      {
-        type: 'remote-log-source',
-        logSourceId: 'remote-prod',
-        groupKey: 'api',
-      },
-      'second',
-    )
-    const focusedRemoteId = panel.allLeaves[1]?.id
-    panel.setFocus(focusedRemoteId)
-    ;((workspace as any).saveActiveLogWorkspaceLayout ?? workspace.saveActiveProjectLayout)()
-
-    workspace.activateTab(projectTabId)
-    expect(panel.allLeaves).toHaveLength(1)
-    expect(panel.allLeaves[0].id).toBe(projectPanelId)
-
-    workspace.activateTab(remoteTab.id)
-
-    expect(panel.allLeaves).toHaveLength(2)
-    expect(panel.focusedPanelId).toBe(focusedRemoteId)
-    expect(panel.allLeaves.map(leaf => (leaf as any).source?.groupKey)).toEqual(['all', 'api'])
-  })
-
-  it('openRemoteAggregate 复用标签时同步更新 layoutRoot 内的远程聚合来源', () => {
-    const workspace = useWorkspaceStore()
-    const panel = usePanelStore()
-
-    const tab = workspace.openRemoteAggregate(
-      'project-A',
-      'svc-api',
-      'api',
-      ['remote-1'],
-      'all',
-    ) as any
-    const firstLeafId = panel.allLeaves[0].id
-
-    workspace.openRemoteAggregate(
-      'project-A',
-      'svc-api',
-      'api',
-      ['remote-2', 'remote-3'],
-      'all',
-    )
-
-    expect(workspace.activeTab?.id).toBe(tab.id)
-    expect((workspace.activeTab as any).logSourceIds).toEqual(['remote-2', 'remote-3'])
-    expect(panel.allLeaves[0].id).toBe(firstLeafId)
-    expect((panel.allLeaves[0] as any).source).toMatchObject({
-      type: 'remote-aggregate',
-      logSourceIds: ['remote-2', 'remote-3'],
-      groupKey: 'all',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-      serviceName: 'api',
-    })
-  })
-
   it('搜索标签的隐藏和固定服务互不影响', () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]
@@ -248,36 +136,6 @@ describe('workspaceStore', () => {
     expect(workspace.searchTab(first.id)?.pinnedServiceIds).toEqual(['svc-api'])
     expect(workspace.searchTab(second.id)?.hiddenServiceIds).toEqual([])
     expect(workspace.searchTab(second.id)?.pinnedServiceIds).toEqual([])
-  })
-
-
-
-  it('远程节点隐藏状态按远程 tab 隔离', () => {
-    const workspace = useWorkspaceStore() as ReturnType<typeof useWorkspaceStore> & {
-      hideRemoteHost: (tabId: string, hostId: string) => void
-      visibleRemoteHostIds: (tabId: string, hostIds: string[]) => string[]
-    }
-
-    const all = workspace.openRemote('ls1', 'all')
-    const prod = workspace.openRemote('ls1', 'prod')
-    workspace.hideRemoteHost(all.id, 'h1')
-
-    expect(workspace.visibleRemoteHostIds(all.id, ['h1', 'h2'])).toEqual(['h2'])
-    expect(workspace.visibleRemoteHostIds(prod.id, ['h1', 'h2'])).toEqual(['h1', 'h2'])
-  })
-
-  it('关闭远程 tab 时清理该 tab 的节点隐藏状态', () => {
-    const workspace = useWorkspaceStore() as ReturnType<typeof useWorkspaceStore> & {
-      hideRemoteHost: (tabId: string, hostId: string) => void
-      visibleRemoteHostIds: (tabId: string, hostIds: string[]) => string[]
-    }
-
-    const tab = workspace.openRemote('ls1', 'all')
-    workspace.hideRemoteHost(tab.id, 'h1')
-    workspace.closeTab(tab.id)
-    const reopened = workspace.openRemote('ls1', 'all')
-
-    expect(workspace.visibleRemoteHostIds(reopened.id, ['h1', 'h2'])).toEqual(['h1', 'h2'])
   })
 
   it('runSearch 将搜索结果写入当前搜索标签', async () => {
@@ -488,137 +346,6 @@ describe('workspaceStore', () => {
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['pinned api'])
   })
 
-  it('openRemoteProjectSearch creates a project-level remote search tab with presentation state', () => {
-    const api = service('svc-api', 'api')
-    const worker = service('svc-worker', 'worker')
-    useAgentStore().projects = [project([api, worker])]
-    const workspace = useWorkspaceStore() as any
-
-    expect(typeof workspace.openRemoteProjectSearch).toBe('function')
-    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
-
-    expect(tab).toMatchObject({
-      type: 'remote-search',
-      projectId: 'proj-1',
-      groupKey: 'all',
-      status: 'empty',
-      serviceColumns: [],
-      hiddenServiceIds: [],
-      pinnedServiceIds: [],
-      failures: [],
-      nextCursor: null,
-      hasMore: false,
-    })
-    expect(tab.logSourceId).toBeUndefined()
-    expect(workspace.activeTab).toBe(tab)
-  })
-
-  it('runRemoteSearch stores service columns and hide/pin only changes presentation state', async () => {
-    const api = service('svc-api', 'api')
-    const worker = service('svc-worker', 'worker')
-    useAgentStore().projects = [project([api, worker])]
-    vi.spyOn(agentApi, 'remoteSearch').mockResolvedValue({
-      query: 'error',
-      status: 'partial_failed',
-      service_columns: [
-        {
-          service_id: 'svc-api',
-          service_name: 'api',
-          status: 'success',
-          result_count: 1,
-          node_count: 1,
-          nodes: [{ host_id: 'host-a', host_name: 'node-a', status: 'success', count: 1 }],
-          entries: [{
-            key: 'svc-api/ls-api/host-a:101',
-            id: 101,
-            service_id: 'svc-api',
-            log_source_id: 'ls-api',
-            host_id: 'host-a',
-            host_name: 'node-a',
-            run_id: 'run-1',
-            timestamp: '2026-05-20T22:41:32.000Z',
-            level: 'ERROR',
-            message: 'api error',
-            stream: 'stderr',
-          }],
-        },
-        {
-          service_id: 'svc-worker',
-          service_name: 'worker',
-          status: 'partial_failed',
-          result_count: 0,
-          node_count: 1,
-          nodes: [{ host_id: 'host-b', host_name: 'node-b', status: 'failed', count: 0, error: 'boom' }],
-          entries: [],
-        },
-      ],
-      failures: [{ service_id: 'svc-worker', host_id: 'host-b', kind: 'failed', message: 'boom' }],
-      next_cursor: 'cursor-1',
-      has_more: true,
-    } as any)
-    const workspace = useWorkspaceStore() as any
-    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
-
-    await workspace.runRemoteSearch(tab.id, ' error ')
-    await workspace.hideService(tab.id, 'svc-worker')
-    workspace.pinService(tab.id, 'svc-api')
-
-    expect(agentApi.remoteSearch).toHaveBeenCalledWith({
-      project_id: 'proj-1',
-      group: 'all',
-      query: 'error',
-      limit: 200,
-    })
-    expect(tab.status).toBe('partialFailed')
-    expect(tab.serviceColumns.map((column: any) => column.service_id)).toEqual(['svc-api', 'svc-worker'])
-    expect(tab.failures).toHaveLength(1)
-    expect(tab.nextCursor).toBe('cursor-1')
-    expect(tab.hiddenServiceIds).toEqual(['svc-worker'])
-    expect(tab.pinnedServiceIds).toEqual(['svc-api'])
-    expect(tab.serviceColumns).toHaveLength(2)
-  })
-
-  it('runRemoteSearch ignores stale responses from rapid consecutive searches', async () => {
-    const api = service('svc-api', 'api')
-    useAgentStore().projects = [project([api])]
-    let resolveFirst: (value: any) => void = () => {}
-    vi.spyOn(agentApi, 'remoteSearch')
-      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
-      .mockResolvedValueOnce({
-        query: 'panic',
-        status: 'success',
-        service_columns: [{
-          service_id: 'svc-api',
-          service_name: 'api',
-          status: 'success',
-          result_count: 1,
-          node_count: 1,
-          nodes: [],
-          entries: [{ key: 'svc-api/ls-api/host-a:2', id: 2, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:33.000Z', level: 'ERROR', message: 'panic target', stream: 'stderr' }],
-        }],
-        failures: [],
-        next_cursor: '',
-        has_more: false,
-      } as any)
-    const workspace = useWorkspaceStore() as any
-    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
-
-    const first = workspace.runRemoteSearch(tab.id, 'error')
-    await workspace.runRemoteSearch(tab.id, 'panic')
-    resolveFirst({
-      query: 'error',
-      status: 'success',
-      service_columns: [{ service_id: 'svc-api', service_name: 'api', status: 'success', result_count: 1, node_count: 1, nodes: [], entries: [{ key: 'old', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'INFO', message: 'stale error', stream: 'stdout' }] }],
-      failures: [],
-      next_cursor: '',
-      has_more: false,
-    })
-    await first
-
-    expect(tab.query).toBe('panic')
-    expect(tab.serviceColumns[0].entries[0].message).toBe('panic target')
-  })
-
   it('local search hide and pin behavior remains scoped to local search tabs', async () => {
     const api = service('svc-api', 'api')
     const worker = service('svc-worker', 'worker')
@@ -633,63 +360,6 @@ describe('workspaceStore', () => {
     expect(workspace.searchTab(tab.id)?.hiddenServiceIds).toEqual(['svc-worker'])
     expect(workspace.searchTab(tab.id)?.pinnedServiceIds).toEqual(['svc-api'])
   })
-
-
-
-  it('loadMoreRemoteSearch de-duplicates project remote entries by stable key', async () => {
-    const api = service('svc-api', 'api')
-    useAgentStore().projects = [project([api])]
-    vi.spyOn(agentApi, 'remoteSearch')
-      .mockResolvedValueOnce({
-        query: 'error',
-        status: 'success',
-        service_columns: [{
-          service_id: 'svc-api',
-          service_name: 'api',
-          status: 'success',
-          result_count: 1,
-          node_count: 1,
-          nodes: [],
-          entries: [
-            { key: 'svc-api/ls-api/host-a:1', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'ERROR', message: 'first error', stream: 'stderr' },
-          ],
-        }],
-        failures: [],
-        next_cursor: 'cursor-1',
-        has_more: true,
-      } as any)
-      .mockResolvedValueOnce({
-        query: 'error',
-        status: 'success',
-        service_columns: [{
-          service_id: 'svc-api',
-          service_name: 'api',
-          status: 'success',
-          result_count: 2,
-          node_count: 1,
-          nodes: [],
-          entries: [
-            { key: 'svc-api/ls-api/host-a:1', id: 1, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:32.000Z', level: 'ERROR', message: 'first error duplicate', stream: 'stderr' },
-            { key: 'svc-api/ls-api/host-a:2', id: 2, service_id: 'svc-api', log_source_id: 'ls-api', host_id: 'host-a', host_name: 'node-a', run_id: 'r', timestamp: '2026-05-20T22:41:33.000Z', level: 'ERROR', message: 'second error', stream: 'stderr' },
-          ],
-        }],
-        failures: [],
-        next_cursor: '',
-        has_more: false,
-      } as any)
-    const workspace = useWorkspaceStore() as any
-    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
-
-    await workspace.runRemoteSearch(tab.id, 'error')
-    await workspace.loadMoreRemoteSearch(tab.id)
-
-    expect(tab.serviceColumns[0].entries.map((entry: any) => entry.key)).toEqual([
-      'svc-api/ls-api/host-a:1',
-      'svc-api/ls-api/host-a:2',
-    ])
-    expect(tab.serviceColumns[0].result_count).toBe(2)
-  })
-
 
   describe('openDeployment', () => {
     it('creates a deployment tab', () => {
@@ -728,48 +398,6 @@ describe('workspaceStore', () => {
       store.openDeployment('dep1', 'Deploy #1')
       expect(store.activeTabId).toBe(firstTabId)
       expect(store.tabs.filter(t => t.type === 'deployment')).toHaveLength(1)
-    })
-  })
-
-  it('runRemoteSearch sends selected services, selected hosts, and cursor for project remote search', async () => {
-    const api = service('svc-api', 'api')
-    const worker = service('svc-worker', 'worker')
-    useAgentStore().projects = [project([api, worker])]
-    vi.spyOn(agentApi, 'remoteSearch').mockResolvedValue({
-      query: 'error',
-      status: 'success',
-      service_columns: [],
-      failures: [],
-      next_cursor: '',
-      has_more: false,
-    } as any)
-    const workspace = useWorkspaceStore() as any
-    const tab = workspace.openRemoteProjectSearch('proj-1', 'all')
-
-    await workspace.runRemoteSearch(tab.id, ' error ', {
-      serviceIds: ['svc-api'],
-      hostIds: ['host-a'],
-    })
-    tab.nextCursor = 'cursor-next'
-    tab.hasMore = true
-    await workspace.loadMoreRemoteSearch(tab.id)
-
-    expect(agentApi.remoteSearch).toHaveBeenNthCalledWith(1, {
-      project_id: 'proj-1',
-      group: 'all',
-      query: 'error',
-      service_id: ['svc-api'],
-      host_id: ['host-a'],
-      limit: 200,
-    })
-    expect(agentApi.remoteSearch).toHaveBeenNthCalledWith(2, {
-      project_id: 'proj-1',
-      group: 'all',
-      query: 'error',
-      service_id: ['svc-api'],
-      host_id: ['host-a'],
-      cursor: 'cursor-next',
-      limit: 200,
     })
   })
 

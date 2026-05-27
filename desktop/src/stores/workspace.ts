@@ -1,7 +1,7 @@
-// workspaceStore 管理右侧项目、搜索和远程监听标签页，是侧边栏和内容区之间的导航状态。
+// workspaceStore 管理右侧项目、搜索和部署标签页，是侧边栏和内容区之间的导航状态。
 //
 // 职责：
-//   - 管理项目日志、项目搜索和远程监听标签
+//   - 管理项目日志、项目搜索和部署标签
 //   - 在项目标签切换时保存/恢复 Panel 布局树
 //   - 承载搜索页局部状态：结果、上下文、隐藏服务、固定服务
 //
@@ -11,21 +11,17 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
-import { api, type LogContextPageDirection, type LogEntry, type RemoteSearchFailure, type RemoteSearchParams, type RemoteSearchResponse, type RemoteSearchServiceColumn, type SearchLogsParams } from '@/api/agent'
+import { api, type LogContextPageDirection, type LogEntry, type SearchLogsParams } from '@/api/agent'
 import { useAgentStore } from './agent'
 import {
   createEmptyPanelRoot,
   usePanelStore,
   type PanelNode,
-  type PanelSource,
 } from './panel'
 
 export type WorkspaceTab =
   | ProjectWorkspaceTab
   | SearchWorkspaceTab
-  | RemoteWorkspaceTab
-  | RemoteSearchWorkspaceTab
-  | RemoteAggregateTab
   | DeploymentTab
 
 export interface ProjectWorkspaceTab {
@@ -57,55 +53,6 @@ export interface SearchWorkspaceTab {
   loadingMoreBefore: boolean
   loadingMoreAfter: boolean
   error: string | null
-}
-
-export interface RemoteWorkspaceTab {
-  id: string
-  type: 'remote'
-  logSourceId: string
-  groupKey: string
-  title: string
-  layoutRoot: PanelNode
-  focusedPanelId: string | null
-}
-
-export interface RemoteSearchWorkspaceTab {
-  id: string
-  type: 'remote-search'
-  logSourceId?: string
-  projectId?: string
-  groupKey: string
-  title: string
-  query: string
-  selectedServiceIds: string[]
-  selectedHostIds: string[]
-  status: 'empty' | 'loading' | 'results' | 'emptyResults' | 'error' | 'partialFailed' | 'failed'
-  serviceColumns: RemoteSearchServiceColumn[]
-  hiddenServiceIds: string[]
-  pinnedServiceIds: string[]
-  failures: RemoteSearchFailure[]
-  nextCursor: string | null
-  hasMore: boolean
-  error: string | null
-  requestSeq: number
-}
-
-interface RemoteSearchScope {
-  serviceIds?: string[]
-  hostIds?: string[]
-}
-
-export interface RemoteAggregateTab {
-  id: string
-  type: 'remote-aggregate'
-  projectId: string
-  serviceId: string
-  serviceName: string
-  logSourceIds: string[]
-  groupKey: string
-  title: string
-  layoutRoot: PanelNode
-  focusedPanelId: string | null
 }
 
 export interface DeploymentTab {
@@ -153,138 +100,6 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
   }
 }
 
-function makeRemoteTab(logSourceId: string, groupKey: string): RemoteWorkspaceTab {
-  return {
-    id: `remote:${logSourceId}:${groupKey}`,
-    type: 'remote',
-    logSourceId,
-    groupKey,
-    title: `Remote · ${groupKey}`,
-    layoutRoot: createEmptyPanelRoot(),
-    focusedPanelId: null,
-  }
-}
-
-function makeRemoteSearchTab(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
-  return makeRemoteSearchState({
-    id: `remote-search:${logSourceId}:${groupKey}`,
-    logSourceId,
-    groupKey,
-    title: `Remote Search · ${groupKey}`,
-  })
-}
-
-function makeRemoteProjectSearchTab(projectId: string, groupKey: string, title: string): RemoteSearchWorkspaceTab {
-  return makeRemoteSearchState({
-    id: `remote-project-search:${projectId}:${groupKey}`,
-    projectId,
-    groupKey,
-    title,
-  })
-}
-
-function makeRemoteSearchState(
-  base: Pick<RemoteSearchWorkspaceTab, 'id' | 'groupKey' | 'title'> & { logSourceId?: string; projectId?: string },
-): RemoteSearchWorkspaceTab {
-  return {
-    ...base,
-    type: 'remote-search',
-    query: '',
-    selectedServiceIds: [],
-    selectedHostIds: [],
-    status: 'empty',
-    serviceColumns: [],
-    hiddenServiceIds: [],
-    pinnedServiceIds: [],
-    failures: [],
-    nextCursor: null,
-    hasMore: false,
-    error: null,
-    requestSeq: 0,
-  }
-}
-
-function remoteSearchStatus(result: RemoteSearchResponse, columns: RemoteSearchServiceColumn[]): RemoteSearchWorkspaceTab['status'] {
-  if (result.status === 'failed') return 'failed'
-  if (result.status === 'partial_failed') return 'partialFailed'
-  return columns.some(column => column.entries.length > 0) ? 'results' : 'emptyResults'
-}
-
-function retainKnownServiceIds(serviceIds: string[], columns: RemoteSearchServiceColumn[]): string[] {
-  const known = new Set(columns.map(column => column.service_id))
-  return serviceIds.filter(serviceId => known.has(serviceId))
-}
-
-function resetRemoteSearchResults(tab: RemoteSearchWorkspaceTab) {
-  tab.status = 'loading'
-  tab.error = null
-  tab.serviceColumns = []
-  tab.failures = []
-  tab.nextCursor = null
-  tab.hasMore = false
-}
-
-function applyRemoteSearchResult(tab: RemoteSearchWorkspaceTab, result: RemoteSearchResponse) {
-  const columns = result.service_columns ?? []
-  tab.serviceColumns = columns
-  tab.failures = result.failures ?? []
-  tab.nextCursor = result.next_cursor || null
-  tab.hasMore = result.has_more
-  tab.hiddenServiceIds = retainKnownServiceIds(tab.hiddenServiceIds, columns)
-  tab.pinnedServiceIds = retainKnownServiceIds(tab.pinnedServiceIds, columns)
-  tab.status = remoteSearchStatus(result, columns)
-}
-
-function remoteSearchRequest(tab: RemoteSearchWorkspaceTab, cursor?: string): RemoteSearchParams {
-  return {
-    project_id: tab.projectId,
-    group: tab.groupKey,
-    query: tab.query,
-    service_id: tab.selectedServiceIds.length ? tab.selectedServiceIds : undefined,
-    host_id: tab.selectedHostIds.length ? tab.selectedHostIds : undefined,
-    cursor,
-    limit: 200,
-  }
-}
-
-function remoteEntryStableKey(entry: RemoteSearchServiceColumn['entries'][number]): string {
-  return entry.key ?? `${entry.service_id}:${entry.log_source_id ?? ''}:${entry.host_id}:${entry.id}`
-}
-
-function mergeRemoteColumnEntries(
-  existing: RemoteSearchServiceColumn['entries'],
-  incoming: RemoteSearchServiceColumn['entries'],
-): RemoteSearchServiceColumn['entries'] {
-  const byKey = new Map<string, RemoteSearchServiceColumn['entries'][number]>()
-  for (const entry of existing) byKey.set(remoteEntryStableKey(entry), entry)
-  for (const entry of incoming) {
-    const key = remoteEntryStableKey(entry)
-    if (!byKey.has(key)) byKey.set(key, entry)
-  }
-  return [...byKey.values()]
-}
-
-function mergeRemoteSearchResult(tab: RemoteSearchWorkspaceTab, result: RemoteSearchResponse) {
-  const existingByService = new Map(tab.serviceColumns.map(column => [column.service_id, column]))
-  const columns = result.service_columns?.map(column => {
-    const existing = existingByService.get(column.service_id)
-    if (!existing) return column
-    const entries = mergeRemoteColumnEntries(existing.entries, column.entries)
-    return {
-      ...column,
-      entries,
-      result_count: entries.length,
-    }
-  }) ?? []
-  tab.serviceColumns = columns
-  tab.failures = result.failures ?? []
-  tab.nextCursor = result.next_cursor || null
-  tab.hasMore = result.has_more
-  tab.hiddenServiceIds = retainKnownServiceIds(tab.hiddenServiceIds, columns)
-  tab.pinnedServiceIds = retainKnownServiceIds(tab.pinnedServiceIds, columns)
-  tab.status = remoteSearchStatus(result, columns)
-}
-
 function compareLogs(a: LogEntry, b: LogEntry): number {
   const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
   return timeDiff || a.id - b.id
@@ -297,26 +112,9 @@ function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
   return [...byID.values()].sort(compareLogs)
 }
 
-function replaceRemoteAggregateSource(
-  node: PanelNode,
-  source: Extract<PanelSource, { type: 'remote-aggregate' }>,
-): PanelNode {
-  if (node.type === 'leaf') {
-    if (node.source?.type !== 'remote-aggregate') return node
-    if (node.source.serviceId !== source.serviceId || node.source.groupKey !== source.groupKey) return node
-    return { ...node, serviceId: null, projectId: null, source }
-  }
-  return {
-    ...node,
-    first: replaceRemoteAggregateSource(node.first, source),
-    second: replaceRemoteAggregateSource(node.second, source),
-  }
-}
-
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkspaceTab[]>([])
   const activeTabId = ref<string | null>(null)
-  const remoteHiddenHostIdsByTab = ref<Record<string, string[]>>({})
 
   const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
 
@@ -324,8 +122,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return useAgentStore().projectById(projectId)?.name ?? projectId
   }
 
-  function isLogWorkspaceTab(tab: WorkspaceTab | null): tab is ProjectWorkspaceTab | RemoteWorkspaceTab | RemoteAggregateTab {
-    return tab?.type === 'project' || tab?.type === 'remote' || tab?.type === 'remote-aggregate'
+  function isLogWorkspaceTab(tab: WorkspaceTab | null): tab is ProjectWorkspaceTab {
+    return tab?.type === 'project'
   }
 
   function saveActiveLogWorkspaceLayout() {
@@ -379,155 +177,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tab
   }
 
-  function openRemote(logSourceId: string, groupKey: string): RemoteWorkspaceTab {
-    saveActiveLogWorkspaceLayout()
-    const id = `remote:${logSourceId}:${groupKey}`
-    const existing = tabs.value.find(
-      (tab): tab is RemoteWorkspaceTab => tab.type === 'remote' && tab.id === id,
-    )
-    if (existing) {
-      activateTab(existing.id)
-      return existing
-    }
-    const tab = makeRemoteTab(logSourceId, groupKey)
-    tabs.value.push(tab)
-    activeTabId.value = tab.id
-    const panel = usePanelStore()
-    panel.setRoot(tab.layoutRoot, tab.focusedPanelId)
-    const leafId = panel.targetPanelId()
-    if (leafId) {
-      panel.replaceSource(leafId, { type: 'remote-log-source', logSourceId, groupKey })
-      panel.setFocus(leafId)
-    }
-    tab.layoutRoot = panel.root
-    tab.focusedPanelId = panel.focusedPanelId
-    return tab
-  }
-
-  function setRemoteHiddenHostIds(tabId: string, hidden: string[]) {
-    remoteHiddenHostIdsByTab.value = {
-      ...remoteHiddenHostIdsByTab.value,
-      [tabId]: hidden,
-    }
-  }
-
-  function hideRemoteHost(tabId: string, hostId: string) {
-    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
-    if (hidden.includes(hostId)) return
-    setRemoteHiddenHostIds(tabId, [...hidden, hostId])
-  }
-
-  function showRemoteHost(tabId: string, hostId: string) {
-    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
-    if (!hidden.includes(hostId)) return
-    setRemoteHiddenHostIds(tabId, hidden.filter(id => id !== hostId))
-  }
-
-  function toggleRemoteHost(tabId: string, hostId: string) {
-    const hidden = remoteHiddenHostIdsByTab.value[tabId] ?? []
-    if (hidden.includes(hostId)) {
-      showRemoteHost(tabId, hostId)
-    } else {
-      hideRemoteHost(tabId, hostId)
-    }
-  }
-
-  function visibleRemoteHostIds(tabId: string, hostIds: string[]): string[] {
-    const hidden = new Set(remoteHiddenHostIdsByTab.value[tabId] ?? [])
-    return hostIds.filter(hostId => !hidden.has(hostId))
-  }
-
-  function isRemoteHostVisible(tabId: string, hostId: string): boolean {
-    return !(remoteHiddenHostIdsByTab.value[tabId] ?? []).includes(hostId)
-  }
-
-  function openRemoteSearch(logSourceId: string, groupKey: string): RemoteSearchWorkspaceTab {
-    saveActiveLogWorkspaceLayout()
-    const id = `remote-search:${logSourceId}:${groupKey}`
-    const existing = tabs.value.find(
-      (tab): tab is RemoteSearchWorkspaceTab => tab.type === 'remote-search' && tab.id === id,
-    )
-    if (existing) {
-      activeTabId.value = existing.id
-      return existing
-    }
-    const tab = makeRemoteSearchTab(logSourceId, groupKey)
-    tabs.value.push(tab)
-    activeTabId.value = tab.id
-    return tab
-  }
-
-  function openRemoteProjectSearch(projectId: string, groupKey: string): RemoteSearchWorkspaceTab {
-    saveActiveLogWorkspaceLayout()
-    const id = `remote-project-search:${projectId}:${groupKey}`
-    const existing = tabs.value.find(
-      (tab): tab is RemoteSearchWorkspaceTab => tab.type === 'remote-search' && tab.id === id,
-    )
-    if (existing) {
-      activeTabId.value = existing.id
-      return existing
-    }
-    const tab = makeRemoteProjectSearchTab(projectId, groupKey, `Remote Search · ${projectName(projectId)}`)
-    tabs.value.push(tab)
-    activeTabId.value = tab.id
-    return tabs.value[tabs.value.length - 1] as RemoteSearchWorkspaceTab
-  }
-
-  function openRemoteAggregate(
-    projectId: string,
-    serviceId: string,
-    serviceName: string,
-    logSourceIds: string[],
-    groupKey: string,
-  ): RemoteAggregateTab {
-    saveActiveLogWorkspaceLayout()
-    const id = `remote-aggregate:${serviceId}:${groupKey}`
-    const existing = tabs.value.find(
-      (tab): tab is RemoteAggregateTab => tab.type === 'remote-aggregate' && tab.id === id,
-    )
-    const source: PanelSource = { type: 'remote-aggregate', logSourceIds, groupKey, projectId, serviceId, serviceName }
-    if (existing) {
-      existing.projectId = projectId
-      existing.serviceName = serviceName
-      existing.logSourceIds = logSourceIds
-      existing.title = `${serviceName} · ${groupKey}`
-      activateTab(existing.id)
-      existing.layoutRoot = replaceRemoteAggregateSource(
-        existing.layoutRoot,
-        source as Extract<PanelSource, { type: 'remote-aggregate' }>,
-      )
-      const panel = usePanelStore()
-      panel.setRoot(existing.layoutRoot, existing.focusedPanelId)
-      existing.layoutRoot = panel.root
-      existing.focusedPanelId = panel.focusedPanelId
-      return existing
-    }
-    const tab: RemoteAggregateTab = {
-      id,
-      type: 'remote-aggregate',
-      projectId,
-      serviceId,
-      serviceName,
-      logSourceIds,
-      groupKey,
-      title: `${serviceName} · ${groupKey}`,
-      layoutRoot: createEmptyPanelRoot(),
-      focusedPanelId: null,
-    }
-    tabs.value.push(tab)
-    activeTabId.value = tab.id
-    const panel = usePanelStore()
-    panel.setRoot(tab.layoutRoot, tab.focusedPanelId)
-    const leafId = panel.targetPanelId()
-    if (leafId) {
-      panel.replaceSource(leafId, source)
-      panel.setFocus(leafId)
-    }
-    tab.layoutRoot = panel.root
-    tab.focusedPanelId = panel.focusedPanelId
-    return tab
-  }
-
   function openDeployment(deploymentId: string, title: string): DeploymentTab {
     saveActiveLogWorkspaceLayout()
     const id = `deployment:${deploymentId}`
@@ -552,11 +201,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function searchTab(tabId: string): SearchWorkspaceTab | null {
     const tab = tabs.value.find(t => t.id === tabId)
     return tab?.type === 'search' ? tab : null
-  }
-
-  function remoteSearchTab(tabId: string): RemoteSearchWorkspaceTab | null {
-    const tab = tabs.value.find(t => t.id === tabId)
-    return tab?.type === 'remote-search' ? tab : null
   }
 
   function visibleContextServiceIds(tab: SearchWorkspaceTab): string[] {
@@ -611,27 +255,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function hideService(tabId: string, serviceId: string) {
-    const tab = searchTab(tabId) ?? remoteSearchTab(tabId)
+    const tab = searchTab(tabId)
     if (!tab || tab.hiddenServiceIds.includes(serviceId)) return
     tab.hiddenServiceIds.push(serviceId)
-    if (tab.type === 'search') await loadMoreSearchResults(tabId)
+    await loadMoreSearchResults(tabId)
   }
 
   async function showService(tabId: string, serviceId: string) {
-    const tab = searchTab(tabId) ?? remoteSearchTab(tabId)
+    const tab = searchTab(tabId)
     if (!tab) return
     tab.hiddenServiceIds = tab.hiddenServiceIds.filter(id => id !== serviceId)
-    if (tab.type === 'search') await loadMoreSearchResults(tabId)
+    await loadMoreSearchResults(tabId)
   }
 
   function pinService(tabId: string, serviceId: string) {
-    const tab = searchTab(tabId) ?? remoteSearchTab(tabId)
+    const tab = searchTab(tabId)
     if (!tab || tab.pinnedServiceIds.includes(serviceId)) return
     tab.pinnedServiceIds.push(serviceId)
   }
 
   function unpinService(tabId: string, serviceId: string) {
-    const tab = searchTab(tabId) ?? remoteSearchTab(tabId)
+    const tab = searchTab(tabId)
     if (!tab) return
     tab.pinnedServiceIds = tab.pinnedServiceIds.filter(id => id !== serviceId)
   }
@@ -670,48 +314,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } catch (err) {
       tab.error = err instanceof Error ? err.message : String(err)
       tab.status = 'error'
-    }
-  }
-
-  async function runRemoteSearch(
-    tabId: string,
-    query: string,
-    scope: RemoteSearchScope = {},
-  ) {
-    const tab = remoteSearchTab(tabId)
-    const trimmed = query.trim()
-    if (!tab || !tab.projectId || !trimmed) return
-    const requestSeq = ++tab.requestSeq
-    tab.query = trimmed
-    tab.selectedServiceIds = scope.serviceIds ?? []
-    tab.selectedHostIds = scope.hostIds ?? []
-    tab.title = `Remote Search: ${trimmed}`
-    resetRemoteSearchResults(tab)
-    try {
-      const result = await api.remoteSearch(remoteSearchRequest(tab))
-      if (tab.requestSeq !== requestSeq) return
-      applyRemoteSearchResult(tab, result)
-    } catch (err) {
-      if (tab.requestSeq !== requestSeq) return
-      tab.error = err instanceof Error ? err.message : String(err)
-      tab.status = 'error'
-    }
-  }
-
-  async function loadMoreRemoteSearch(tabId: string): Promise<boolean> {
-    const tab = remoteSearchTab(tabId)
-    if (!tab || !tab.projectId || !tab.query || !tab.hasMore || !tab.nextCursor || tab.status === 'loading') return false
-    const requestSeq = ++tab.requestSeq
-    try {
-      const result = await api.remoteSearch(remoteSearchRequest(tab, tab.nextCursor))
-      if (tab.requestSeq !== requestSeq) return false
-      mergeRemoteSearchResult(tab, result)
-      return true
-    } catch (err) {
-      if (tab.requestSeq !== requestSeq) return false
-      tab.error = err instanceof Error ? err.message : String(err)
-      tab.status = 'error'
-      return false
     }
   }
 
@@ -824,10 +426,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const idx = tabs.value.findIndex(t => t.id === tabId)
     if (idx < 0) return
     tabs.value.splice(idx, 1)
-    if (remoteHiddenHostIdsByTab.value[tabId]) {
-      const { [tabId]: _removed, ...rest } = remoteHiddenHostIdsByTab.value
-      remoteHiddenHostIdsByTab.value = rest
-    }
     if (activeTabId.value !== tabId) return
     activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? null
     const tab = activeTab.value
@@ -840,22 +438,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabs,
     activeTabId,
     activeTab,
-    remoteHiddenHostIdsByTab,
     activateTab,
     openService,
     openSearch,
-    openRemote,
-    openRemoteSearch,
-    openRemoteProjectSearch,
-    openRemoteAggregate,
     openDeployment,
-    hideRemoteHost,
-    showRemoteHost,
-    toggleRemoteHost,
-    visibleRemoteHostIds,
-    isRemoteHostVisible,
     searchTab,
-    remoteSearchTab,
     hideService,
     showService,
     canLoadMoreSearchResults,
@@ -863,8 +450,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     unpinService,
     selectSearchResult,
     runSearch,
-    runRemoteSearch,
-    loadMoreRemoteSearch,
     loadContext,
     loadMoreSearchResults,
     loadMoreContext,
