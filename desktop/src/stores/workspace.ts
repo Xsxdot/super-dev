@@ -26,6 +26,7 @@ export type WorkspaceTab =
   | RemoteWorkspaceTab
   | RemoteSearchWorkspaceTab
   | RemoteAggregateTab
+  | DeploymentTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -105,6 +106,13 @@ export interface RemoteAggregateTab {
   title: string
   layoutRoot: PanelNode
   focusedPanelId: string | null
+}
+
+export interface DeploymentTab {
+  id: string
+  type: 'deployment'
+  deploymentId: string
+  title: string
 }
 
 const SEARCH_PAGE_LIMIT = 1000
@@ -520,6 +528,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tab
   }
 
+  function openDeployment(deploymentId: string, title: string): DeploymentTab {
+    saveActiveLogWorkspaceLayout()
+    const id = `deployment:${deploymentId}`
+    const existing = tabs.value.find(
+      (tab): tab is DeploymentTab => tab.type === 'deployment' && tab.id === id,
+    )
+    if (existing) {
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab: DeploymentTab = {
+      id,
+      type: 'deployment',
+      deploymentId,
+      title,
+    }
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
+    return tab
+  }
+
   function searchTab(tabId: string): SearchWorkspaceTab | null {
     const tab = tabs.value.find(t => t.id === tabId)
     return tab?.type === 'search' ? tab : null
@@ -819,6 +848,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openRemoteSearch,
     openRemoteProjectSearch,
     openRemoteAggregate,
+    openDeployment,
     hideRemoteHost,
     showRemoteHost,
     toggleRemoteHost,
