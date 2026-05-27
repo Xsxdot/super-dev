@@ -25,6 +25,7 @@ type QueryFilter struct {
 	// Limit 返回条数上限；0 时实现方使用自身默认值。
 	Limit int
 	// Before 游标分页：只返回 timestamp < Before 的记录；零值表示从最新开始。
+	// 注意：当前 SQLiteBackend 实现不支持此字段（store 只有 ID 游标），传入零值即可。
 	Before time.Time
 }
 
@@ -44,6 +45,7 @@ type SearchQuery struct {
 }
 
 // Cursor 表示分页游标，由 (Time, ID) 确定唯一位置。
+// 零值（Time.IsZero() && ID == 0）表示无游标，从最新记录开始。
 type Cursor struct {
 	Time time.Time
 	ID   int64
@@ -71,5 +73,6 @@ type LogBackend interface {
 
 	// Subscribe 订阅实时日志流。调用方通过 LogStream.Cancel 取消订阅。
 	// 实现方在 Cancel 调用后应关闭 LogStream.Ch。
+	// ctx 取消和 Cancel 调用均可停止流；实现方应同时响应两者。
 	Subscribe(ctx context.Context, serviceID string) LogStream
 }
