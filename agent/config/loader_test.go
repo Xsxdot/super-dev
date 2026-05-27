@@ -124,3 +124,96 @@ func TestSaveLogRules(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "no ping", loaded[0].Name)
 }
+
+func TestLoadNewFormatProject(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yamlContent := `
+name: myapp
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
+  - name: prod
+    order: 1
+services:
+  - name: api-server
+    order: 0
+    deployments:
+      - env: dev
+        location: local
+        command: "go run ./cmd/server"
+        working_dir: "./server"
+      - env: prod
+        location: remote
+        hosts: [prod-01]
+        log_type: journalctl
+        log_target: api-server.service
+        start_command: "sudo systemctl start api-server"
+        stop_command: "sudo systemctl stop api-server"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "myapp", p.Name)
+	assert.Len(t, p.Environments, 2)
+	assert.Equal(t, "dev", p.Environments[0].Name)
+	assert.True(t, p.Environments[0].IsDev)
+	assert.Equal(t, "prod", p.Environments[1].Name)
+	assert.False(t, p.Environments[1].IsDev)
+
+	assert.Len(t, p.Services, 1)
+	svc := p.Services[0]
+	assert.Equal(t, "api-server", svc.Name)
+	assert.Len(t, svc.Deployments, 2)
+
+	dev := svc.Deployments[0]
+	assert.Equal(t, "dev", dev.EnvName)
+	assert.Equal(t, model.LocationLocal, dev.Location)
+	assert.Equal(t, "go run ./cmd/server", dev.Command)
+	assert.Equal(t, filepath.Join(dir, "server"), dev.WorkDir)
+	assert.False(t, dev.IsReadOnly())
+
+	prod := svc.Deployments[1]
+	assert.Equal(t, "prod", prod.EnvName)
+	assert.Equal(t, model.LocationRemote, prod.Location)
+	assert.Equal(t, []string{"prod-01"}, prod.HostIDs)
+	assert.Equal(t, model.LogSourceTypeJournalctl, prod.LogType)
+	assert.Equal(t, "api-server.service", prod.LogTarget)
+	assert.Equal(t, "sudo systemctl start api-server", prod.StartCommand)
+	assert.False(t, prod.IsReadOnly())
+}
+
+func TestLoadNewFormatReadOnlyDeployment(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yamlContent := `
+name: myapp
+environments:
+  - name: prod
+    order: 0
+services:
+  - name: api-server
+    deployments:
+      - env: prod
+        location: remote
+        hosts: [prod-01]
+        log_type: docker
+        log_target: api-server
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+
+	prod := p.Services[0].Deployments[0]
+	assert.True(t, prod.IsReadOnly())
+}
