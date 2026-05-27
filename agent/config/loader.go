@@ -106,7 +106,7 @@ func (l *Loader) Save(p model.Project) error {
 		raw["id"] = p.ID
 	}
 	if len(p.Environments) > 0 {
-		raw["environments"] = p.Environments
+		raw["environments"] = envsToYAML(p.Environments)
 	}
 	// 保留已有的 log_rules。
 	if lr, ok := existing["log_rules"]; ok {
@@ -190,6 +190,8 @@ type deploymentYAML struct {
 	Command      string            `yaml:"command,omitempty"`
 	WorkingDir   string            `yaml:"working_dir,omitempty"`
 	EnvFile      string            `yaml:"env_file,omitempty"`
+	// EnvVars 使用 yaml key "env_vars" 而非 "env"，因为 "env" 已被 Env 字段（env_name）
+	// 占用。serviceYAML 沿用老格式的 "env" key，两者最终都映射到 model.Deployment.Env。
 	EnvVars      map[string]string `yaml:"env_vars,omitempty"`
 	Hosts        []string          `yaml:"hosts,omitempty"`
 	LogType      string            `yaml:"log_type,omitempty"`
@@ -208,6 +210,7 @@ type serviceYAML struct {
 	Required    bool              `yaml:"required"`
 	Order       int               `yaml:"order"`
 	EnvFile     string            `yaml:"env_file,omitempty"`
+	// Env 使用 yaml key "env"，是老格式沿用的字段名；新格式 deployment 改用 "env_vars"。
 	Env         map[string]string `yaml:"env,omitempty"`
 	Deployments []deploymentYAML  `yaml:"deployments,omitempty"`
 }
@@ -341,6 +344,22 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			ExtraArgs:    d.ExtraArgs,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
+		}
+	}
+	return out
+}
+
+// envsToYAML 将 model.Environment 切片转为可序列化的 envYAML 切片。
+// 必须经过此转换再序列化，直接序列化 model.Environment 会因缺少 yaml tag
+// 导致 is_dev 字段被写成 "isdev"，读回时丢失。
+func envsToYAML(envs []model.Environment) []envYAML {
+	out := make([]envYAML, len(envs))
+	for i, e := range envs {
+		out[i] = envYAML{
+			ID:    e.ID,
+			Name:  e.Name,
+			IsDev: e.IsDev,
+			Order: e.Order,
 		}
 	}
 	return out
