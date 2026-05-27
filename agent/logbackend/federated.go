@@ -172,18 +172,23 @@ func (f *FederatedBackend) Subscribe(ctx context.Context, serviceID string) LogS
 	}
 
 	ch := make(chan model.LogEntry, 64)
+	done := make(chan struct{})
 	var once sync.Once
 	cancel := func() {
 		once.Do(func() {
+			close(done)
 			for _, s := range streams {
 				s.Cancel()
 			}
 		})
 	}
 
-	// ctx watcher：ctx 取消时触发 cancel，确保本层也能响应 ctx 取消
+	// ctx watcher：ctx 取消或 cancel 调用时均可退出，避免 goroutine 泄漏
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 		cancel()
 	}()
 

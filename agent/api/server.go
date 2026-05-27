@@ -238,7 +238,7 @@ func (a *App) Start(addr string) error {
 //
 // 注意：
 //   - 若某个路径的配置加载失败，跳过该项目（不中断整体加载）
-//   - 为每个项目和服务分配 UUID（若 ID 为空）
+//   - 为每个项目、服务和 deployment 分配 UUID（若 ID 为空）
 func (a *App) loadRegisteredProjects() {
 	paths := a.registry.List()
 	for _, path := range paths {
@@ -295,7 +295,7 @@ func (a *App) getOrCreateManager(projectID string) *process.Manager {
 	return mgr
 }
 
-// assignIDs 为 Project 及其 Services 分配 UUID（若 ID 为空字符串）。
+// assignIDs 为 Project、Services 及 Deployments 分配 UUID（若 ID 为空字符串）。
 func assignIDs(p *model.Project) {
 	if p.ID == "" {
 		p.ID = uuid.NewString()
@@ -305,6 +305,11 @@ func assignIDs(p *model.Project) {
 			p.Services[i].ID = uuid.NewString()
 		}
 		p.Services[i].ProjectID = p.ID
+		for j := range p.Services[i].Deployments {
+			if p.Services[i].Deployments[j].ID == "" {
+				p.Services[i].Deployments[j].ID = uuid.NewString()
+			}
+		}
 	}
 }
 
