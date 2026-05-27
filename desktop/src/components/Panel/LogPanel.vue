@@ -191,10 +191,6 @@ function serviceNameFor(log: DisplayLogEntry): string {
   return svc?.name ?? log.service_id.slice(0, 12)
 }
 
-function hostMetaFor(_log: DisplayLogEntry): { name: string; color: string } | null {
-  return null
-}
-
 function scopeServiceIds(): string[] {
   if (props.serviceId) return [props.serviceId]
   if (!props.projectId) return []
@@ -475,8 +471,6 @@ const displayItems = computed(() => cachedDisplay.value.items)
           v-else-if="item.kind === 'entry'"
           :log="item.log"
           :service-name="serviceNameFor(item.log)"
-          :host-name="hostMetaFor(item.log)?.name"
-          :host-color="hostMetaFor(item.log)?.color"
           :highlighted="isHighlighted(item.log)"
           @selection-change="(t, r) => onLogSelection(item.log.id, t, r)"
         />

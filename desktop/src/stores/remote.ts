@@ -6,7 +6,7 @@
 //   - 缓存隧道状态，供设置页和远程日志面板展示
 //
 // 边界：
-//   - 不直接发起 WebSocket 连接，实时日志由 remoteLog store 负责
+//   - 不直接发起 WebSocket 连接，实时日志由 log store 负责
 //   - 不渲染任何 UI，组件只通过 actions 和 getters 访问
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'

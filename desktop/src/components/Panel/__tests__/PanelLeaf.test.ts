@@ -284,7 +284,7 @@ describe('PanelLeaf', () => {
       dataTransfer: {
         getData: (type: string) => (
           type === 'application/superdev-panel-source'
-            ? JSON.stringify({ type: 'remote-log-source', groupKey: 'all' })
+            ? JSON.stringify({ type: 'unknown-source-type', groupKey: 'all' })
             : ''
         ),
       },

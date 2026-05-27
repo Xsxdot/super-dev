@@ -134,10 +134,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     active.focusedPanelId = panel.focusedPanelId
   }
 
-  function saveActiveProjectLayout() {
-    saveActiveLogWorkspaceLayout()
-  }
-
   function activateTab(tabId: string) {
     saveActiveLogWorkspaceLayout()
     activeTabId.value = tabId
@@ -454,7 +450,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadMoreSearchResults,
     loadMoreContext,
     closeTab,
-    saveActiveProjectLayout,
     saveActiveLogWorkspaceLayout,
   }
 })
