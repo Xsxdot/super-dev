@@ -165,3 +165,12 @@ func TestLocalDeploymentAlwaysNotReadOnly(t *testing.T) {
 	d := model.Deployment{Location: model.LocationLocal, Command: "go run ."}
 	assert.False(t, d.IsReadOnly())
 }
+func TestDeploymentReadOnlyPartialCommands(t *testing.T) {
+	// 只配 StartCommand，缺 StopCommand → 仍只读
+	onlyStart := model.Deployment{Location: model.LocationRemote, StartCommand: "start.sh"}
+	assert.True(t, onlyStart.IsReadOnly())
+
+	// 只配 StopCommand，缺 StartCommand → 仍只读
+	onlyStop := model.Deployment{Location: model.LocationRemote, StopCommand: "stop.sh"}
+	assert.True(t, onlyStop.IsReadOnly())
+}

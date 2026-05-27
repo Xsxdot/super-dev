@@ -225,7 +225,7 @@ type Deployment struct {
 //
 // local deployment 始终可启停；remote deployment 需要同时配置
 // StartCommand 和 StopCommand 才能启停，否则为只读。
-func (d *Deployment) IsReadOnly() bool {
+func (d Deployment) IsReadOnly() bool {
 	if d.Location == LocationLocal {
 		return false
 	}
