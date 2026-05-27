@@ -18,10 +18,8 @@ import { useAgentStore } from '../../stores/agent'
 import { useBookmarkStore } from '../../stores/bookmark'
 import { useLogStore } from '../../stores/log'
 import { usePanelStore } from '../../stores/panel'
-import { useRemoteStore } from '../../stores/remote'
-import { useWorkspaceStore } from '../../stores/workspace'
 import { toDisplayEntry } from '../../lib/logEngine'
-import type { Host, LogEntry, LogSource, Project, Service } from '../../api/agent'
+import type { LogEntry, Project, Service } from '../../api/agent'
 
 const tauriMocks = vi.hoisted(() => ({
   save: vi.fn(),
@@ -59,31 +57,6 @@ function makeProject(services: Service[]): Project {
   }
 }
 
-
-function makeHost(id: string, name: string): Host {
-  return {
-    id,
-    name,
-    ssh_host: `10.0.0.${id.slice(-1)}`,
-    ssh_port: 22,
-    ssh_user: 'root',
-    remote_agent_port: 57017,
-    local_tunnel_port: 0,
-    tags: [],
-  }
-}
-
-function makeLogSource(overrides: Partial<LogSource> = {}): LogSource {
-  return {
-    id: 'ls1',
-    name: 'remote api',
-    type: 'journalctl',
-    host_ids: ['h1', 'h2'],
-    tags: [],
-    extra_args: [],
-    ...overrides,
-  }
-}
 
 function makeLog(serviceId: string, message: string, timestamp: string): LogEntry {
   return {
@@ -136,23 +109,6 @@ describe('BottomBar', () => {
   })
 
 
-
-  it('远程标签页展示节点而不是本地面板服务', async () => {
-    await mountBottomBarWithServices()
-    const remote = useRemoteStore()
-    remote.hosts = [makeHost('h1', 'node-1'), makeHost('h2', 'node-2')]
-    remote.logSources = [makeLogSource()]
-    const workspace = useWorkspaceStore()
-    workspace.openRemote('ls1', 'all')
-
-    const wrapper = mount(BottomBar)
-    await nextTick()
-
-    const chipNames = wrapper.findAll('.service-chip .svc-name').map(item => item.text())
-    expect(chipNames).toEqual(['node-1', 'node-2'])
-    expect(chipNames).not.toContain('api')
-    expect(chipNames).not.toContain('worker')
-  })
 
   it('同步录制开始时登记面板和服务，停止后显示复制导出入口', async () => {
     const { wrapper, panelStore, api } = await mountBottomBarWithServices()

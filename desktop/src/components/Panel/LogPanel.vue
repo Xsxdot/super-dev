@@ -4,17 +4,12 @@ import { useLogStore } from '@/stores/log'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
-import { useRemoteStore } from '@/stores/remote'
-import { useRemoteLogStore } from '@/stores/remoteLog'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
-import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
-import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
-import { tagColor } from '@/lib/tagColor'
-import type { RemoteLogEntry } from '@/api/agent'
+import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { PanelSource } from '@/stores/panel'
 import {
   makeDisplayItems,
@@ -27,9 +22,6 @@ const props = defineProps<{
   panelId: string
   serviceId: string | null
   projectId: string | null
-  logSourceId?: string | null
-  logSourceIds?: string[] | null
-  groupKey?: string | null
   source?: PanelSource | null
 }>()
 
@@ -37,10 +29,7 @@ const logStore = useLogStore()
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
-const remote = useRemoteStore()
-const remoteLogStore = useRemoteLogStore()
 const deploymentLogStore = useDeploymentLogStore()
-const workspace = useWorkspaceStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
@@ -65,22 +54,10 @@ let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
 
-const effectiveLogSourceIds = computed<string[]>(() => {
-  if (props.logSourceIds && props.logSourceIds.length > 0) return props.logSourceIds
-  if (props.logSourceId) return [props.logSourceId]
-  return []
-})
-
-const isRemote = computed(() => effectiveLogSourceIds.value.length > 0 && !!props.groupKey)
-
 onMounted(() => {
   if (props.source?.type === 'deployment') {
     deploymentLogStore.subscribe(props.source.deploymentId)
     void deploymentLogStore.loadMoreHistory(props.source.deploymentId)
-  } else if (isRemote.value && props.groupKey) {
-    for (const lsId of effectiveLogSourceIds.value) {
-      void remoteLogStore.subscribe(lsId, props.groupKey)
-    }
   } else if (props.serviceId) {
     void logStore.subscribe(props.serviceId)
   }
@@ -99,10 +76,6 @@ watch(
 onUnmounted(() => {
   if (props.source?.type === 'deployment') {
     deploymentLogStore.unsubscribe(props.source.deploymentId)
-  } else if (isRemote.value && props.groupKey) {
-    for (const lsId of effectiveLogSourceIds.value) {
-      remoteLogStore.unsubscribe(lsId, props.groupKey)
-    }
   } else if (props.serviceId) {
     logStore.unsubscribe(props.serviceId)
   }
@@ -112,62 +85,15 @@ onUnmounted(() => {
 })
 
 watch(() => props.serviceId, (newId, oldId) => {
-  if (isRemote.value) return
   if (oldId) logStore.unsubscribe(oldId)
   if (newId) void logStore.subscribe(newId)
   isFollowing.value = true
   refreshDisplayImmediately()
 })
 
-watch(
-  () => [effectiveLogSourceIds.value, props.groupKey] as const,
-  ([newIds, newGroupKey], [oldIds, oldGroupKey]) => {
-    if (oldGroupKey) {
-      for (const lsId of (oldIds as string[])) {
-        remoteLogStore.unsubscribe(lsId, oldGroupKey)
-      }
-    }
-    if (newGroupKey) {
-      for (const lsId of (newIds as string[])) {
-        void remoteLogStore.subscribe(lsId, newGroupKey)
-      }
-    }
-    isFollowing.value = true
-    refreshDisplayImmediately()
-  },
-  { deep: true },
-)
-
-type RemoteDisplayLogEntry = DisplayLogEntry & { host_id?: string }
-
-function toRemoteDisplayEntry(entry: RemoteLogEntry): RemoteDisplayLogEntry {
-  return toDisplayEntry(entry) as RemoteDisplayLogEntry
-}
-
 const rawLogs = computed<DisplayLogEntry[]>(() => {
   if (props.source?.type === 'deployment') {
     return deploymentLogStore.getLogs(props.source.deploymentId)
-  }
-  if (isRemote.value && props.groupKey) {
-    const allLogs = effectiveLogSourceIds.value.flatMap(lsId =>
-      remoteLogStore.logsOf(lsId, props.groupKey!).map(entry => ({ logSourceId: lsId, entry }))
-    )
-    const seen = new Set<string>()
-    const deduped = allLogs.filter(({ logSourceId, entry }) => {
-      const key = `${logSourceId}:${entry.host_id}:${entry.id}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    }).map(({ entry }) => entry)
-    deduped.sort((a, b) => {
-      const t = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      return t !== 0 ? t : a.id - b.id
-    })
-    const allHostIds = [...new Set(deduped.map(entry => entry.host_id))]
-    const visibleHostIds = new Set(workspace.visibleRemoteHostIds(props.panelId, allHostIds))
-    return deduped
-      .filter(entry => visibleHostIds.has(entry.host_id))
-      .map(toRemoteDisplayEntry)
   }
   if (props.serviceId) return logStore.getLogs(props.serviceId)
   if (props.projectId) {
@@ -185,7 +111,7 @@ const filteredLogs = computed(() =>
 )
 
 const historyBoundary = computed(() =>
-  props.serviceId && !isRemote.value ? logStore.getHistoryBoundary(props.serviceId) : null,
+  props.serviceId ? logStore.getHistoryBoundary(props.serviceId) : null,
 )
 
 function makeLogDisplay() {
@@ -242,12 +168,6 @@ function currentPanelSource(): PanelSource | null {
     return { type: 'local-service', serviceId: props.serviceId, projectId: props.projectId }
   }
   if (props.projectId) return { type: 'local-project', projectId: props.projectId }
-  if (props.groupKey && props.logSourceIds?.length) {
-    return { type: 'remote-aggregate', logSourceIds: props.logSourceIds, groupKey: props.groupKey }
-  }
-  if (props.groupKey && props.logSourceId) {
-    return { type: 'remote-log-source', logSourceId: props.logSourceId, groupKey: props.groupKey }
-  }
   return null
 }
 
@@ -271,21 +191,11 @@ function serviceNameFor(log: DisplayLogEntry): string {
   return svc?.name ?? log.service_id.slice(0, 12)
 }
 
-function hostMetaFor(log: DisplayLogEntry): { name: string; color: string } | null {
-  if (!isRemote.value) return null
-  const hostId = (log as RemoteDisplayLogEntry).host_id
-  if (!hostId) return null
-  const host = remote.hostById(hostId)
-  if (!host) return { name: hostId, color: 'var(--text-tertiary)' }
-  const tag = host.tags[0]
-  return {
-    name: host.name,
-    color: tag ? tagColor(tag) : 'var(--text-tertiary)',
-  }
+function hostMetaFor(_log: DisplayLogEntry): { name: string; color: string } | null {
+  return null
 }
 
 function scopeServiceIds(): string[] {
-  if (isRemote.value) return []
   if (props.serviceId) return [props.serviceId]
   if (!props.projectId) return []
   const project = agentStore.projectById(props.projectId)
@@ -321,14 +231,9 @@ function onEndBookmark() {
 }
 
 watch(
-  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision, () => deploymentLogStore.logSourceRevision],
+  [() => logStore.logSourceRevision, () => deploymentLogStore.logSourceRevision],
   () => scheduleDisplayRefresh(),
   { deep: true },
-)
-
-watch(
-  () => workspace.remoteHiddenHostIdsByTab[props.panelId]?.join('|'),
-  () => refreshDisplayImmediately(),
 )
 
 watch(
@@ -472,28 +377,6 @@ async function tryLoadMoreHistory() {
     isLoadingHistory.value = false
     return
   }
-  if (isRemote.value && props.groupKey) {
-    if (isLoadingHistory.value) return
-    isLoadingHistory.value = true
-    const el = logListEl.value
-    const prevScrollHeight = el?.scrollHeight ?? 0
-    await Promise.all(
-      effectiveLogSourceIds.value.map(lsId =>
-        remoteLogStore.loadHistory(lsId, props.groupKey!)
-      )
-    )
-    await nextTick()
-    if (el) {
-      const added = el.scrollHeight - prevScrollHeight
-      if (added > 0) {
-        programmaticScroll = true
-        el.scrollTop += added
-        requestAnimationFrame(() => { programmaticScroll = false })
-      }
-    }
-    isLoadingHistory.value = false
-    return
-  }
   if (!props.serviceId) return
   if (!logStore.hasMoreHistory(props.serviceId)) return
   if (isLoadingHistory.value) return
@@ -566,12 +449,10 @@ const displayItems = computed(() => cachedDisplay.value.items)
       :panel-id="panelId"
       :service-id="serviceId"
       :project-id="projectId"
-      :log-source-id="logSourceId"
-      :group-key="groupKey"
       @end-bookmark="onEndBookmark"
     />
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
-      <div v-if="(serviceId || isRemote || source?.type === 'deployment') && isLoadingHistory" class="history-loading">加载历史记录中…</div>
+      <div v-if="(serviceId || source?.type === 'deployment') && isLoadingHistory" class="history-loading">加载历史记录中…</div>
       <div v-else-if="(serviceId && !logStore.hasMoreHistory(serviceId)) || (source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId))" class="history-end">— 已到最早记录 —</div>
       <template
         v-for="item in displayItems"
