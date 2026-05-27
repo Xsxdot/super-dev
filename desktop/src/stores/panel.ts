@@ -10,8 +10,6 @@ export const MAX_PANEL_LEAVES = 4
 export type PanelSource =
   | { type: 'local-service'; projectId: string; serviceId: string }
   | { type: 'local-project'; projectId: string }
-  | { type: 'remote-log-source'; logSourceId: string; groupKey: string }
-  | { type: 'remote-aggregate'; logSourceIds: string[]; groupKey: string; projectId?: string; serviceId?: string; serviceName?: string }
   | { type: 'deployment'; deploymentId: string }
 
 export interface PanelLeafNode {
@@ -51,39 +49,16 @@ export interface PanelSourceProjectContext {
   serviceById: (id: string) => { project_id?: string } | undefined
 }
 
-/** 从面板来源解析项目 ID，供远程监听复用绑定项目的 LogRule。 */
+/** 从面板来源解析项目 ID。只有 local-service 和 local-project 关联项目。 */
 export function projectIdFromPanelSource(
   source: PanelSource | null,
-  ctx: PanelSourceProjectContext,
+  _ctx: PanelSourceProjectContext,
 ): string | null {
   if (!source) return null
   if (source.type === 'local-service' || source.type === 'local-project') {
     return source.projectId
   }
-  if (source.type === 'remote-aggregate') {
-    return source.projectId ?? null
-  }
-  if (source.type === 'remote-log-source') {
-    const logSource = ctx.logSourceById(source.logSourceId)
-    if (!logSource) return null
-    if (logSource.project_id) return logSource.project_id
-    if (logSource.service_id) {
-      return ctx.serviceById(logSource.service_id)?.project_id ?? null
-    }
-  }
-  // deployment 类型不关联项目，直接返回 null
-  if (source.type === 'deployment') {
-    return null
-  }
   return null
-}
-
-function sortedIds(ids: string[]): string[] {
-  return [...ids].sort()
-}
-
-function isRemotePanelSource(source: PanelSource | null): source is Extract<PanelSource, { type: 'remote-log-source' | 'remote-aggregate' }> {
-  return source?.type === 'remote-log-source' || source?.type === 'remote-aggregate'
 }
 
 export function isSamePanelSource(a: PanelSource | null, b: PanelSource | null): boolean {
@@ -93,14 +68,6 @@ export function isSamePanelSource(a: PanelSource | null, b: PanelSource | null):
   }
   if (a.type === 'local-project' && b.type === 'local-project') {
     return a.projectId === b.projectId
-  }
-  if (a.type === 'remote-log-source' && b.type === 'remote-log-source') {
-    return a.logSourceId === b.logSourceId && a.groupKey === b.groupKey
-  }
-  if (a.type === 'remote-aggregate' && b.type === 'remote-aggregate') {
-    if (a.groupKey !== b.groupKey) return false
-    if (a.serviceId && b.serviceId) return a.serviceId === b.serviceId
-    return sortedIds(a.logSourceIds).join('\0') === sortedIds(b.logSourceIds).join('\0')
   }
   if (a.type === 'deployment' && b.type === 'deployment') {
     return a.deploymentId === b.deploymentId
@@ -226,18 +193,6 @@ export const usePanelStore = defineStore('panel', () => {
     focusedPanelId.value = panelId
   }
 
-  function findLeafByEquivalentRemoteSource(source: PanelSource | null): PanelLeafNode | null {
-    if (!isRemotePanelSource(source)) return null
-    return allLeaves.value.find(leaf => isSamePanelSource(leaf.source, source)) ?? null
-  }
-
-  function focusEquivalentRemoteSource(source: PanelSource | null): boolean {
-    const leaf = findLeafByEquivalentRemoteSource(source)
-    if (!leaf) return false
-    setFocus(leaf.id)
-    return true
-  }
-
   function splitLeaf(
     leafId: string,
     axis: PanelAxis,
@@ -258,7 +213,6 @@ export const usePanelStore = defineStore('panel', () => {
     source: PanelSource | null,
     newSide: 'first' | 'second'
   ) {
-    if (focusEquivalentRemoteSource(source)) return
     if (!canAddPanelLeaf()) return
     const newLeaf = makeLeafFromSource(source)
     root.value = splitLeafById(root.value, leafId, axis, newLeaf, newSide)
@@ -307,8 +261,6 @@ export const usePanelStore = defineStore('panel', () => {
     focusedPanelId,
     allLeaves,
     setFocus,
-    findLeafByEquivalentRemoteSource,
-    focusEquivalentRemoteSource,
     canAddPanelLeaf,
     splitLeaf,
     splitLeafWithSource,
