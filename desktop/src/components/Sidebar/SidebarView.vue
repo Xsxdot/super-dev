@@ -4,8 +4,6 @@ import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
-import RemoteListenSection from './RemoteListenSection.vue'
-import ProjectRemoteSection from './ProjectRemoteSection.vue'
 import { open, message } from '@tauri-apps/plugin-dialog'
 import { useRouter } from 'vue-router'
 
@@ -30,30 +28,6 @@ function openDeployment(payload: { deploymentId: string; title: string }) {
 
 function openProjectSearch(projectId: string) {
   workspace.openSearch(projectId)
-}
-
-function openRemoteGroup(payload: { logSourceId: string; groupKey: string }) {
-  workspace.openRemote(payload.logSourceId, payload.groupKey)
-}
-
-function openRemoteProjectSearch(payload: { projectId: string; groupKey: string }) {
-  workspace.openRemoteProjectSearch(payload.projectId, payload.groupKey)
-}
-
-function openRemoteAggregate(payload: {
-  projectId: string
-  serviceId: string
-  serviceName: string
-  logSourceIds: string[]
-  groupKey: string
-}) {
-  workspace.openRemoteAggregate(
-    payload.projectId,
-    payload.serviceId,
-    payload.serviceName,
-    payload.logSourceIds,
-    payload.groupKey,
-  )
 }
 
 async function addProject() {
@@ -85,13 +59,7 @@ async function addProject() {
           @click="selectService(service.id, project.id)"
           @open-deployment="openDeployment"
         />
-        <ProjectRemoteSection
-          :project-id="project.id"
-          @open="openRemoteAggregate"
-          @search="openRemoteProjectSearch"
-        />
       </template>
-      <RemoteListenSection @open="openRemoteGroup" />
     </div>
     <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>
     <div class="add-project" @click="addProject">+ 添加项目</div>
