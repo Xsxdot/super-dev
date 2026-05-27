@@ -95,8 +95,6 @@ export function captureLockedLogs(
 function sourceLabel(bm: Bookmark): string {
   if (bm.source?.type === 'local-service') return bm.source.serviceId
   if (bm.source?.type === 'local-project') return `${bm.source.projectId} · all`
-  if (bm.source?.type === 'remote-log-source') return `remote:${bm.source.logSourceId}/${bm.source.groupKey}`
-  if (bm.source?.type === 'remote-aggregate') return `remote:${bm.source.logSourceIds.join(',')}/${bm.source.groupKey}`
   return bm.serviceId ?? 'unknown'
 }
 
