@@ -24,6 +24,10 @@ function selectService(serviceId: string, projectId: string) {
   workspace.openService(projectId, serviceId)
 }
 
+function openDeployment(payload: { deploymentId: string; title: string }) {
+  workspace.openDeployment(payload.deploymentId, payload.title)
+}
+
 function openProjectSearch(projectId: string) {
   workspace.openSearch(projectId)
 }
@@ -79,6 +83,7 @@ async function addProject() {
           :project-id="project.id"
           :selected="isServiceSelected(service.id)"
           @click="selectService(service.id, project.id)"
+          @open-deployment="openDeployment"
         />
         <ProjectRemoteSection
           :project-id="project.id"
