@@ -55,6 +55,7 @@ export interface LogEntry {
   message: string
   stream: string
   repeat_count?: number
+  source_id?: string
 }
 
 export interface LogRule {
@@ -240,6 +241,27 @@ export interface RemoteSearchResponse {
   has_more: boolean
 }
 
+// ===== Deployment 统一日志接口类型 =====
+
+export interface DeploymentFetchLogsParams {
+  deploymentId: string
+  limit?: number
+}
+
+export interface DeploymentSearchParams {
+  deploymentId: string
+  q: string
+  limit?: number
+  cursor_time?: string
+  cursor_id?: number
+}
+
+export interface DeploymentSearchResponse {
+  items: LogEntry[]
+  cursor: { time: string; id: number } | null
+  has_more: boolean
+}
+
 export interface HostCreatePayload {
   name: string
   ssh_host: string
@@ -420,4 +442,25 @@ export const api = {
     if (params.to) qs.set('to', params.to)
     return request<RemoteSearchResponse>(`/api/remote-log-search?${qs}`)
   },
+
+  // Deployment 统一日志接口
+  fetchDeploymentLogs: (params: DeploymentFetchLogsParams) => {
+    const qs = new URLSearchParams()
+    if (params.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return request<LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
+  },
+  searchDeploymentLogs: (params: DeploymentSearchParams) => {
+    const qs = new URLSearchParams()
+    qs.set('q', params.q)
+    if (params.limit) qs.set('limit', String(params.limit))
+    if (params.cursor_time) qs.set('cursor_time', params.cursor_time)
+    if (params.cursor_id != null) qs.set('cursor_id', String(params.cursor_id))
+    return request<DeploymentSearchResponse>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/search?${qs}`)
+  },
+}
+
+/** deploymentWsUrl 返回指定 deployment 的 WebSocket 日志流 URL。 */
+export function deploymentWsUrl(deploymentId: string): string {
+  return `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
 }
