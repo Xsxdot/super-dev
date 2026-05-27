@@ -308,3 +308,102 @@ services:
 	dep := p.Services[0].Deployments[0]
 	assert.Equal(t, "local", dep.EnvName)
 }
+
+func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
+	dir := t.TempDir()
+	loader := config.NewLoader(dir)
+
+	p := model.Project{
+		ID:       "proj-1",
+		Name:     "myapp",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{ID: "env-dev", Name: "dev", IsDev: true, Order: 0},
+			{ID: "env-prod", Name: "prod", IsDev: false, Order: 1},
+		},
+		Services: []model.Service{
+			{
+				ID:    "svc-1",
+				Name:  "api-server",
+				Order: 0,
+				Deployments: []model.Deployment{
+					{
+						ID:       "d-1",
+						EnvName:  "dev",
+						Location: model.LocationLocal,
+						Command:  "go run .",
+						WorkDir:  dir,
+					},
+					{
+						ID:           "d-2",
+						EnvName:      "prod",
+						Location:     model.LocationRemote,
+						HostIDs:      []string{"h-1"},
+						LogType:      model.LogSourceTypeJournalctl,
+						LogTarget:    "api-server.service",
+						StartCommand: "systemctl start api-server",
+						StopCommand:  "systemctl stop api-server",
+					},
+				},
+			},
+		},
+		SelectedServiceIDs: []string{"api-server"},
+	}
+
+	require.NoError(t, loader.Save(p))
+
+	loaded, err := loader.Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "myapp", loaded.Name)
+	assert.Len(t, loaded.Environments, 2)
+	assert.Equal(t, "dev", loaded.Environments[0].Name)
+	assert.True(t, loaded.Environments[0].IsDev)
+	assert.Len(t, loaded.Services, 1)
+	assert.Len(t, loaded.Services[0].Deployments, 2)
+
+	dev := loaded.Services[0].Deployments[0]
+	assert.Equal(t, "dev", dev.EnvName)
+	assert.Equal(t, model.LocationLocal, dev.Location)
+	assert.Equal(t, "go run .", dev.Command)
+
+	prod := loaded.Services[0].Deployments[1]
+	assert.Equal(t, "prod", prod.EnvName)
+	assert.Equal(t, model.LocationRemote, prod.Location)
+	assert.Equal(t, []string{"h-1"}, prod.HostIDs)
+	assert.Equal(t, "systemctl start api-server", prod.StartCommand)
+}
+
+func TestSavePreservesLogRulesWithNewFormat(t *testing.T) {
+	dir := t.TempDir()
+	loader := config.NewLoader(dir)
+
+	initialYaml := `
+name: myapp
+services: []
+log_rules:
+  - id: "r1"
+    name: no ping
+    type: exclude
+    keywords: ["ping"]
+    logic: or
+    enabled: true
+`
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(initialYaml), 0o644))
+
+	p := model.Project{
+		Name:     "myapp",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{Name: "dev", IsDev: true},
+		},
+	}
+	require.NoError(t, loader.Save(p))
+
+	rules, err := loader.LoadLogRules()
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "no ping", rules[0].Name)
+}
