@@ -19,17 +19,39 @@ import (
 	"github.com/superdev/agent/model"
 )
 
+// defaultLimit 是 Query/Search 未指定 Limit 时的默认最大返回条数。
+const defaultLimit = 1000
+
 // FederatedBackend 聚合多个子 LogBackend，实现跨节点日志统一访问。
 type FederatedBackend struct {
 	children []LogBackend
 }
 
 // NewFederatedBackend 创建 FederatedBackend。
+//
+// 参数：
+//   - children: 子 LogBackend 列表，可混合 SQLite、Remote 等不同类型
+//
+// 返回：
+//   - 聚合了所有子 backend 的 FederatedBackend 实例
 func NewFederatedBackend(children []LogBackend) *FederatedBackend {
 	return &FederatedBackend{children: children}
 }
 
 // Query 并发拉取所有子 backend 的历史日志，k-way 归并后截取 limit。
+//
+// 参数：
+//   - ctx: 上下文，用于控制超时和取消
+//   - filter: 查询过滤条件，包含 ServiceID、时间范围、Cursor、Limit 等
+//
+// 返回：
+//   - 按 timestamp ASC, id ASC 排序的日志条目列表
+//   - 指向最后一条记录的游标，供下一页查询使用
+//   - 错误信息（子 backend 错误时降级跳过，不向上传播）
+//
+// 注意：
+//   - Limit <= 0 时使用 defaultLimit（1000）
+//   - 子 backend 返回错误时静默降级，不影响其他节点结果
 func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]model.LogEntry, Cursor, error) {
 	type result struct {
 		entries []model.LogEntry
@@ -55,7 +77,7 @@ func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]mod
 
 	limit := filter.Limit
 	if limit <= 0 {
-		limit = 1000
+		limit = defaultLimit
 	}
 	merged := mergeLogStreams(streams, limit)
 
@@ -68,6 +90,20 @@ func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]mod
 }
 
 // Search 并发搜索所有子 backend，归并排序后截取 limit。
+//
+// 参数：
+//   - ctx: 上下文，用于控制超时和取消
+//   - q: 搜索查询条件，包含关键词、ServiceID、时间范围、Limit 等
+//
+// 返回：
+//   - 按 timestamp ASC, id ASC 排序的匹配日志条目列表
+//   - 指向最后一条记录的游标，供下一页查询使用
+//   - 是否还有更多结果（任一子 backend 返回 hasMore=true 或截取时丢弃了数据）
+//   - 错误信息（子 backend 错误时降级跳过，不向上传播）
+//
+// 注意：
+//   - Limit <= 0 时使用 defaultLimit（1000）
+//   - 子 backend 返回错误时静默降级，不影响其他节点结果
 func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogEntry, Cursor, bool, error) {
 	type result struct {
 		entries []model.LogEntry
@@ -100,7 +136,7 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 
 	limit := q.Limit
 	if limit <= 0 {
-		limit = 1000
+		limit = defaultLimit
 	}
 	if len(all) > limit {
 		all = all[:limit]
@@ -116,7 +152,19 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 }
 
 // Subscribe fan-in 所有子 backend 的实时流。
-// Cancel 时统一停止所有子流并关闭 Ch。
+//
+// 参数：
+//   - ctx: 上下文，用于控制取消；ctx 取消时会触发所有子流的 Cancel
+//   - serviceID: 订阅的服务 ID
+//
+// 返回：
+//   - LogStream，包含日志条目 channel 和 Cancel 函数
+//
+// 注意：
+//   - fan-in goroutine 使用阻塞写，背压自然传导给消费方
+//   - ctx 取消时本层也会立即响应，不依赖子流自己退出
+//   - Cancel 与 ctx 取消均可触发子流停止，两者互为补充
+//   - ctx 为 context.Background() 时，ctx watcher goroutine 会永久阻塞，这是已知可接受行为
 func (f *FederatedBackend) Subscribe(ctx context.Context, serviceID string) LogStream {
 	streams := make([]LogStream, len(f.children))
 	for i, child := range f.children {
@@ -133,7 +181,14 @@ func (f *FederatedBackend) Subscribe(ctx context.Context, serviceID string) LogS
 		})
 	}
 
-	// fan-in：每个子流一个 goroutine，写入统一的 ch
+	// ctx watcher：ctx 取消时触发 cancel，确保本层也能响应 ctx 取消
+	go func() {
+		<-ctx.Done()
+		cancel()
+	}()
+
+	// fan-in：每个子流一个 goroutine，阻塞写入统一的 ch
+	// 使用阻塞写而非 select default，让背压自然传导给消费方，避免静默丢数据
 	var wg sync.WaitGroup
 	for _, s := range streams {
 		wg.Add(1)
@@ -142,7 +197,8 @@ func (f *FederatedBackend) Subscribe(ctx context.Context, serviceID string) LogS
 			for entry := range sub.Ch {
 				select {
 				case ch <- entry:
-				default:
+				case <-ctx.Done():
+					return
 				}
 			}
 		}(s)
