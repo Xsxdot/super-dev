@@ -12,6 +12,7 @@ export type PanelSource =
   | { type: 'local-project'; projectId: string }
   | { type: 'remote-log-source'; logSourceId: string; groupKey: string }
   | { type: 'remote-aggregate'; logSourceIds: string[]; groupKey: string; projectId?: string; serviceId?: string; serviceName?: string }
+  | { type: 'deployment'; deploymentId: string }
 
 export interface PanelLeafNode {
   type: 'leaf'
@@ -70,6 +71,10 @@ export function projectIdFromPanelSource(
       return ctx.serviceById(logSource.service_id)?.project_id ?? null
     }
   }
+  // deployment 类型不关联项目，直接返回 null
+  if (source.type === 'deployment') {
+    return null
+  }
   return null
 }
 
@@ -96,6 +101,9 @@ export function isSamePanelSource(a: PanelSource | null, b: PanelSource | null):
     if (a.groupKey !== b.groupKey) return false
     if (a.serviceId && b.serviceId) return a.serviceId === b.serviceId
     return sortedIds(a.logSourceIds).join('\0') === sortedIds(b.logSourceIds).join('\0')
+  }
+  if (a.type === 'deployment' && b.type === 'deployment') {
+    return a.deploymentId === b.deploymentId
   }
   return false
 }

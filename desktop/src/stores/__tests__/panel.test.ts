@@ -1,6 +1,22 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, it, expect } from 'vitest'
-import { usePanelStore, projectIdFromPanelSource } from '../panel'
+import { usePanelStore, projectIdFromPanelSource, isSamePanelSource } from '../panel'
+
+describe('isSamePanelSource', () => {
+  it('deployment 来源按 deploymentId 匹配：相同时返回 true', () => {
+    expect(isSamePanelSource(
+      { type: 'deployment', deploymentId: 'd1' },
+      { type: 'deployment', deploymentId: 'd1' },
+    )).toBe(true)
+  })
+
+  it('deployment 来源按 deploymentId 匹配：不同时返回 false', () => {
+    expect(isSamePanelSource(
+      { type: 'deployment', deploymentId: 'd1' },
+      { type: 'deployment', deploymentId: 'd2' },
+    )).toBe(false)
+  })
+})
 
 describe('projectIdFromPanelSource', () => {
   const ctx = {
