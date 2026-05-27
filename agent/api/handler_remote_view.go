@@ -28,8 +28,8 @@ type hostDTO struct {
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
 	Tags            []string `json:"tags"`
-	// IsSelf 为 true 表示该条目代表本机，不可删除。
-	IsSelf bool `json:"is_self,omitempty"`
+	// IsSelf 为 true 表示该条目代表本机，不可删除。远端 host 为 false。
+	IsSelf bool `json:"is_self"`
 	// NodeID 仅本机节点携带，是 identity 的 node_id。
 	NodeID string `json:"node_id,omitempty"`
 }

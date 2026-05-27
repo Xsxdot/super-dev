@@ -55,6 +55,7 @@ func TestHostCRUD(t *testing.T) {
 	_ = resp.Body.Close()
 	// self node(index=0) + c01-renamed(index=1)
 	require.Len(t, list, 2)
+	assert.True(t, list[0].IsSelf, "self node stays first even with remote hosts present")
 	assert.Equal(t, "c01-renamed", list[1].Name)
 
 	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/hosts/"+created.ID, nil)
