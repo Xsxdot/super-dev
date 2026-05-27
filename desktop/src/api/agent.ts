@@ -24,6 +24,31 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type DeployLocation = 'local' | 'remote'
+
+export interface Deployment {
+  id: string
+  env_name: string
+  location: DeployLocation
+  command?: string
+  work_dir?: string
+  host_ids?: string[]
+  log_type?: LogSourceType
+  log_target?: string
+  extra_args?: string[]
+  start_command?: string
+  stop_command?: string
+  status: '' | 'starting' | 'running' | 'failed'
+  pid?: number
+}
+
+export interface Environment {
+  id: string
+  name: string
+  is_dev: boolean
+  order: number
+}
+
 export interface Service {
   id: string
   project_id: string
@@ -34,6 +59,7 @@ export interface Service {
   work_dir: string
   required: boolean
   order: number
+  deployments?: Deployment[]
   env_file?: string
   env?: Record<string, string>
 }
@@ -44,6 +70,7 @@ export interface Project {
   root_path: string
   services: Service[]
   selected_service_ids: string[]
+  environments?: Environment[]
 }
 
 export interface LogEntry {
