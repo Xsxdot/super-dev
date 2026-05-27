@@ -217,3 +217,27 @@ services:
 	prod := p.Services[0].Deployments[0]
 	assert.True(t, prod.IsReadOnly())
 }
+
+func TestSaveAndReloadPreservesIsDev(t *testing.T) {
+	// 验证 IsDev 在 Save/Load 往返后不丢失（model.Environment 无 yaml tag，
+	// 必须经过 envsToYAML 转换才能正确序列化 is_dev key）
+	dir := t.TempDir()
+	loader := config.NewLoader(dir)
+
+	p := model.Project{
+		Name:     "myapp",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{Name: "dev", IsDev: true, Order: 0},
+			{Name: "prod", IsDev: false, Order: 1},
+		},
+		Services: []model.Service{},
+	}
+	require.NoError(t, loader.Save(p))
+
+	loaded, err := loader.Load()
+	require.NoError(t, err)
+	require.Len(t, loaded.Environments, 2)
+	assert.True(t, loaded.Environments[0].IsDev, "IsDev should survive Save/Load roundtrip")
+	assert.False(t, loaded.Environments[1].IsDev)
+}
