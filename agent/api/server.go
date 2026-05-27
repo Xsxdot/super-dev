@@ -22,6 +22,7 @@ import (
 	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/identity"
+	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/process"
@@ -56,7 +57,10 @@ type App struct {
 	tunnels     *tunnel.Manager
 	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
 	tunnelResolver remote.TunnelResolver
-	identity       identity.Identity
+	// backends 按 deployment ID 索引对应的 LogBackend。
+	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
+	backends map[string]logbackend.LogBackend
+	identity identity.Identity
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -127,6 +131,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		remoteStore:    remoteStore,
 		tunnels:        tunnels,
 		tunnelResolver: resolver,
+		backends:       map[string]logbackend.LogBackend{},
 		identity:       id,
 	}, nil
 }
@@ -209,6 +214,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/remote/view", a.remoteView)
 	mux.HandleFunc("GET /api/remote-log-search", a.remoteLogSearch)
 
+	// Deployment 统一日志接口（location 无关）
+	mux.HandleFunc("GET /api/deployments/{id}/logs", a.fetchDeploymentLogs)
+	mux.HandleFunc("GET /api/deployments/{id}/search", a.searchDeploymentLogs)
+	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
+
 	return cors(mux)
 }
 
@@ -242,6 +252,13 @@ func (a *App) loadRegisteredProjects() {
 		_ = loader.Save(p)
 		a.mu.Lock()
 		a.projects = append(a.projects, p)
+		// 为该项目所有 deployment 构造 LogBackend
+		for _, svc := range p.Services {
+			for _, dep := range svc.Deployments {
+				b := buildBackend(dep, svc.ID, a.store, a.buf, a.tunnelResolver)
+				a.backends[dep.ID] = b
+			}
+		}
 		a.mu.Unlock()
 	}
 }
@@ -306,4 +323,19 @@ func (a *tunnelResolverAdapter) BaseURL(hostID string) (string, error) {
 		return "", remote.ErrHostUnreachable
 	}
 	return "http://127.0.0.1:" + strconv.Itoa(port), nil
+}
+
+// WriteTestLog 供测试注入日志条目。生产代码不调用此方法。
+func (a *App) WriteTestLog(e model.LogEntry) {
+	a.buf.Append(e)
+}
+
+// SetBackendForTest 供测试直接注入 backend。生产代码不调用此方法。
+func (a *App) SetBackendForTest(depID string, b logbackend.LogBackend) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.backends == nil {
+		a.backends = map[string]logbackend.LogBackend{}
+	}
+	a.backends[depID] = b
 }
