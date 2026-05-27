@@ -13,6 +13,8 @@ import { ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
 import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 
+const MAX_LOGS = 8000
+
 interface DeploymentSession {
   refCount: number
   ws: WebSocket | null
@@ -20,6 +22,35 @@ interface DeploymentSession {
   hasMoreHistory: boolean
   oldestLoadedId: number | null
   loadingMoreHistory: boolean
+}
+
+// compareLogs 按 timestamp 升序排列，时间相同时按 id 升序。
+function compareLogs(a: DisplayLogEntry, b: DisplayLogEntry): number {
+  const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  if (timeDiff !== 0) return timeDiff
+  return a.id - b.id
+}
+
+// insertSorted 将单条日志以 O(n) 二分插入有序数组，重复 id 原地覆盖。
+function insertSorted(logs: DisplayLogEntry[], entry: DisplayLogEntry) {
+  const existing = logs.findIndex(item => item.id === entry.id)
+  if (existing >= 0) {
+    logs[existing] = entry
+    logs.sort(compareLogs)
+    return
+  }
+  if (logs.length === 0 || compareLogs(logs[logs.length - 1], entry) <= 0) {
+    logs.push(entry)
+    return
+  }
+  let lo = 0
+  let hi = logs.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (compareLogs(logs[mid], entry) <= 0) lo = mid + 1
+    else hi = mid
+  }
+  logs.splice(lo, 0, entry)
 }
 
 export const useDeploymentLogStore = defineStore('deploymentLog', () => {
@@ -49,17 +80,17 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
    * ingestEntry 将原始日志条目转换并按时间顺序插入 session 的日志缓冲。
    *
    * 注意：
+   *   - 使用 insertSorted 二分插入，避免每次全量重建 Map + 全排序（O(n log n)）
    *   - 使用 id 做去重，避免 WebSocket 重连导致重复消息
    *   - 同 id 的日志以新内容覆盖旧内容
+   *   - 超出 MAX_LOGS 时裁剪最早的条目，防止内存无限增长
    */
   function ingestEntry(session: DeploymentSession, raw: LogEntry) {
     const entry = toDisplayEntry(raw)
-    const byId = new Map(session.logs.map(e => [e.id, e]))
-    byId.set(entry.id, entry)
-    session.logs = [...byId.values()].sort((a, b) => {
-      const t = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      return t !== 0 ? t : a.id - b.id
-    })
+    insertSorted(session.logs, entry)
+    if (session.logs.length > MAX_LOGS) {
+      session.logs.splice(0, session.logs.length - MAX_LOGS)
+    }
     if (session.oldestLoadedId == null || raw.id < session.oldestLoadedId) {
       session.oldestLoadedId = raw.id
     }
@@ -151,14 +182,18 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     session.loadingMoreHistory = true
     touchSessions()
     try {
-      const entries = await api.fetchDeploymentLogs({ deploymentId, limit })
-      // 倒序插入保证 ingestEntry 内部排序时有最优性能
+      const entries = await api.fetchDeploymentLogs({
+        deploymentId,
+        limit,
+        before: session.oldestLoadedId ?? undefined,
+      })
+      // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
       for (let i = entries.length - 1; i >= 0; i--) {
         ingestEntry(session, entries[i])
       }
       session.hasMoreHistory = entries.length >= limit
-    } catch {
-      // 忽略，上层可重试
+    } catch (err) {
+      console.error('Failed to load deployment log history', err)
     } finally {
       session.loadingMoreHistory = false
       touchSessions()

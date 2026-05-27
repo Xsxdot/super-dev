@@ -246,6 +246,7 @@ export interface RemoteSearchResponse {
 export interface DeploymentFetchLogsParams {
   deploymentId: string
   limit?: number
+  before?: number
 }
 
 export interface DeploymentSearchParams {
@@ -447,6 +448,7 @@ export const api = {
   fetchDeploymentLogs: (params: DeploymentFetchLogsParams) => {
     const qs = new URLSearchParams()
     if (params.limit) qs.set('limit', String(params.limit))
+    if (params.before != null) qs.set('before', String(params.before))
     const q = qs.toString()
     return request<LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
   },
