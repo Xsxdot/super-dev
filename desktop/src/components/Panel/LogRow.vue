@@ -7,8 +7,6 @@ const props = defineProps<{
   log: DisplayLogEntry
   serviceName: string
   highlighted: boolean
-  hostName?: string | null
-  hostColor?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -56,7 +54,6 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
 
 <template>
   <div class="log-row" :style="{ background: rowBg }" :data-log-id="log.id">
-    <span v-if="hostName" class="host-prefix" :style="{ color: hostColor ?? undefined }">[{{ hostName }}]</span>
     <span class="ts">{{ time }}</span>
     <span class="svc" :style="{ color: serviceColor(serviceName) }">[{{ serviceName }}]</span>
     <span class="level" :style="{ color: levelColor }">{{ log.level.padEnd(5) }}</span>
@@ -79,7 +76,6 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
   word-break: break-all;
 }
 .ts { color: var(--text-tertiary); flex-shrink: 0; }
-.host-prefix { flex-shrink: 0; }
 .svc { flex-shrink: 0; }
 .level { flex-shrink: 0; width: 48px; }
 .repeat-badge {
