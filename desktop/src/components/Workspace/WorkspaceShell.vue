@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
+import LogPanel from '@/components/Panel/LogPanel.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -34,6 +35,10 @@ const workspace = useWorkspaceStore()
     <SearchPage
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
+    />
+    <LogPanel
+      v-else-if="workspace.activeTab.type === 'deployment'"
+      :source="{ type: 'deployment', deploymentId: workspace.activeTab.deploymentId }"
     />
   </div>
 </template>

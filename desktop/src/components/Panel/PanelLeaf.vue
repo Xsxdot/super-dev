@@ -59,6 +59,7 @@ const headerTitle = computed(() => {
   }
   if (source.value?.type === 'remote-log-source') return `Remote · ${source.value.groupKey}`
   if (source.value?.type === 'remote-aggregate') return `${source.value.serviceName ?? 'Remote'} · ${source.value.groupKey}`
+  if (source.value?.type === 'deployment') return `Deploy: ${source.value.deploymentId}`
   return '未选择'
 })
 
@@ -138,6 +139,9 @@ function isSupportedPanelSource(value: unknown): value is PanelSource {
       && isStringArray(value.logSourceIds)
       && (value.serviceId === undefined || typeof value.serviceId === 'string')
       && (value.serviceName === undefined || typeof value.serviceName === 'string')
+  }
+  if (value.type === 'deployment') {
+    return typeof value.deploymentId === 'string'
   }
   return false
 }
