@@ -241,3 +241,70 @@ func TestSaveAndReloadPreservesIsDev(t *testing.T) {
 	assert.True(t, loaded.Environments[0].IsDev, "IsDev should survive Save/Load roundtrip")
 	assert.False(t, loaded.Environments[1].IsDev)
 }
+
+func TestOldFormatMigratedToLocalDevDeployment(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yamlContent := `
+name: myapp
+services:
+  - name: server
+    command: go run .
+    working_dir: ./server
+    required: true
+    order: 1
+  - name: worker
+    command: go run ./worker
+    order: 2
+selected_service_ids:
+  - worker
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "myapp", p.Name)
+	assert.Len(t, p.Services, 2)
+	assert.Equal(t, []string{"worker"}, p.SelectedServiceIDs)
+
+	for _, svc := range p.Services {
+		require.Len(t, svc.Deployments, 1, "service %q should have exactly 1 migrated deployment", svc.Name)
+		dep := svc.Deployments[0]
+		assert.Equal(t, model.LocationLocal, dep.Location)
+		assert.Equal(t, "dev", dep.EnvName)
+		assert.Equal(t, svc.Command, dep.Command)
+		assert.False(t, dep.IsReadOnly())
+	}
+
+	serverDep := p.Services[0].Deployments[0]
+	assert.Equal(t, filepath.Join(dir, "server"), serverDep.WorkDir)
+}
+
+func TestOldFormatWithExplicitDevEnv(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yamlContent := `
+name: myapp
+environments:
+  - name: local
+    is_dev: true
+    order: 0
+services:
+  - name: api
+    command: go run .
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+
+	dep := p.Services[0].Deployments[0]
+	assert.Equal(t, "local", dep.EnvName)
+}
