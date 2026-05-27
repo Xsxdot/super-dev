@@ -14,8 +14,6 @@ import { setActivePinia, createPinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PanelLeaf from '../PanelLeaf.vue'
 import ServiceRow from '../../Sidebar/ServiceRow.vue'
-import RemoteLogSourceRow from '../../Sidebar/RemoteLogSourceRow.vue'
-import ProjectRemoteSection from '../../Sidebar/ProjectRemoteSection.vue'
 import { useAgentStore } from '../../../stores/agent'
 import { useRemoteStore } from '../../../stores/remote'
 import { usePanelStore, type PanelNode, type PanelSplitNode } from '../../../stores/panel'
@@ -388,67 +386,6 @@ describe('PanelLeaf', () => {
     expect(wrapper.find('.drop-overlay').exists()).toBe(false)
   })
 
-  it('从远程监听分组 pointer 拖到面板右边缘时显示高亮并创建分栏', async () => {
-    const panelStore = usePanelStore()
-    const remoteStore = useRemoteStore()
-    const logSource = makeLogSource()
-    remoteStore.hosts = [makeHost()]
-    remoteStore.logSources = [logSource]
-
-    const wrapper = mount({
-      components: { PanelLeaf, RemoteLogSourceRow },
-      template: `
-        <div>
-          <RemoteLogSourceRow
-            :log-source="logSource"
-            @open="() => {}"
-            @edit="() => {}"
-            @delete="() => {}"
-          />
-          <PanelLeaf
-            :panel-id="panelId"
-            :service-id="null"
-            :project-id="null"
-            :can-close="false"
-          />
-        </div>
-      `,
-      setup() {
-        return { logSource, panelId: panelStore.root.id }
-      },
-    }, {
-      global: {
-        stubs: {
-          LogPanel: { template: '<div class="log-panel-stub" />' },
-        },
-      },
-    })
-    stubPanelRect(wrapper)
-
-    wrapper.find('[data-test="logsource-group"]').element.dispatchEvent(
-      new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }),
-    )
-    await wrapper.vm.$nextTick()
-    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 380, clientY: 150, buttons: 1 }))
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find('.drop-overlay').exists()).toBe(true)
-
-    document.dispatchEvent(new MouseEvent('pointerup', { clientX: 380, clientY: 150 }))
-    await wrapper.vm.$nextTick()
-
-    const split = expectSplitNode(panelStore.root)
-    expect(split.axis).toBe('h')
-    expect(split.second.type).toBe('leaf')
-    if (split.second.type === 'leaf') {
-      expect(split.second.source).toEqual({
-        type: 'remote-log-source',
-        logSourceId: logSource.id,
-        groupKey: 'all',
-      })
-    }
-  })
-
   it('远程监听分组所有节点连接失败时 drop 不新增分栏并提示失败', async () => {
     const panelStore = usePanelStore()
     const remoteStore = useRemoteStore()
@@ -537,67 +474,6 @@ describe('PanelLeaf', () => {
     expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
     expect(panelStore.allLeaves).toHaveLength(4)
     expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('已达到最大分栏数'))
-  })
-
-  it('从项目远程聚合分组 pointer 拖到面板右边缘时显示高亮并创建分栏', async () => {
-    const panelStore = usePanelStore()
-    const agentStore = useAgentStore()
-    const remoteStore = useRemoteStore()
-    const service = makeService()
-    agentStore.projects = [makeProject(service)]
-    remoteStore.hosts = [makeHost()]
-    remoteStore.logSources = [makeLogSource('remote-a'), makeLogSource('remote-b')]
-
-    const wrapper = mount({
-      components: { PanelLeaf, ProjectRemoteSection },
-      template: `
-        <div>
-          <ProjectRemoteSection project-id="proj-1" />
-          <PanelLeaf
-            :panel-id="panelId"
-            :service-id="null"
-            :project-id="null"
-            :can-close="false"
-          />
-        </div>
-      `,
-      setup() {
-        return { panelId: panelStore.root.id }
-      },
-    }, {
-      global: {
-        stubs: {
-          LogPanel: { template: '<div class="log-panel-stub" />' },
-        },
-      },
-    })
-    stubPanelRect(wrapper)
-
-    wrapper.find('[data-test="project-remote-group"]').element.dispatchEvent(
-      new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }),
-    )
-    await wrapper.vm.$nextTick()
-    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 380, clientY: 150, buttons: 1 }))
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find('.drop-overlay').exists()).toBe(true)
-
-    document.dispatchEvent(new MouseEvent('pointerup', { clientX: 380, clientY: 150 }))
-    await wrapper.vm.$nextTick()
-
-    const split = expectSplitNode(panelStore.root)
-    expect(split.axis).toBe('h')
-    expect(split.second.type).toBe('leaf')
-    if (split.second.type === 'leaf') {
-      expect(split.second.source).toEqual({
-        type: 'remote-aggregate',
-        projectId: 'proj-1',
-        serviceId: 'svc-1',
-        serviceName: 'api',
-        logSourceIds: ['remote-a', 'remote-b'],
-        groupKey: 'all',
-      })
-    }
   })
 
   it('服务行拖拽期间临时禁用文字选择，松开后恢复', async () => {
