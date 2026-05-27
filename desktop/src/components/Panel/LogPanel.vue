@@ -6,6 +6,7 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { useRemoteLogStore } from '@/stores/remoteLog'
+import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
@@ -38,6 +39,7 @@ const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const remote = useRemoteStore()
 const remoteLogStore = useRemoteLogStore()
+const deploymentLogStore = useDeploymentLogStore()
 const workspace = useWorkspaceStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
@@ -72,7 +74,10 @@ const effectiveLogSourceIds = computed<string[]>(() => {
 const isRemote = computed(() => effectiveLogSourceIds.value.length > 0 && !!props.groupKey)
 
 onMounted(() => {
-  if (isRemote.value && props.groupKey) {
+  if (props.source?.type === 'deployment') {
+    deploymentLogStore.subscribe(props.source.deploymentId)
+    void deploymentLogStore.loadMoreHistory(props.source.deploymentId)
+  } else if (isRemote.value && props.groupKey) {
     for (const lsId of effectiveLogSourceIds.value) {
       void remoteLogStore.subscribe(lsId, props.groupKey)
     }
@@ -92,7 +97,9 @@ watch(
 )
 
 onUnmounted(() => {
-  if (isRemote.value && props.groupKey) {
+  if (props.source?.type === 'deployment') {
+    deploymentLogStore.unsubscribe(props.source.deploymentId)
+  } else if (isRemote.value && props.groupKey) {
     for (const lsId of effectiveLogSourceIds.value) {
       remoteLogStore.unsubscribe(lsId, props.groupKey)
     }
@@ -138,6 +145,9 @@ function toRemoteDisplayEntry(entry: RemoteLogEntry): RemoteDisplayLogEntry {
 }
 
 const rawLogs = computed<DisplayLogEntry[]>(() => {
+  if (props.source?.type === 'deployment') {
+    return deploymentLogStore.getLogs(props.source.deploymentId)
+  }
   if (isRemote.value && props.groupKey) {
     const allLogs = effectiveLogSourceIds.value.flatMap(lsId =>
       remoteLogStore.logsOf(lsId, props.groupKey!).map(entry => ({ logSourceId: lsId, entry }))
@@ -311,7 +321,7 @@ function onEndBookmark() {
 }
 
 watch(
-  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision],
+  [() => logStore.logSourceRevision, () => remoteLogStore.logSourceRevision, () => deploymentLogStore.logSourceRevision],
   () => scheduleDisplayRefresh(),
   { deep: true },
 )
@@ -443,6 +453,25 @@ function onWheel(e: WheelEvent) {
 }
 
 async function tryLoadMoreHistory() {
+  if (props.source?.type === 'deployment') {
+    if (!deploymentLogStore.hasMoreHistory(props.source.deploymentId)) return
+    if (isLoadingHistory.value) return
+    isLoadingHistory.value = true
+    const el = logListEl.value
+    const prevScrollHeight = el?.scrollHeight ?? 0
+    await deploymentLogStore.loadMoreHistory(props.source.deploymentId)
+    await nextTick()
+    if (el) {
+      const added = el.scrollHeight - prevScrollHeight
+      if (added > 0) {
+        programmaticScroll = true
+        el.scrollTop += added
+        requestAnimationFrame(() => { programmaticScroll = false })
+      }
+    }
+    isLoadingHistory.value = false
+    return
+  }
   if (isRemote.value && props.groupKey) {
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
