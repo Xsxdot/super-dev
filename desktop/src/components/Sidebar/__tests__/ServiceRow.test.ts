@@ -125,4 +125,19 @@ describe('ServiceRow - with deployments', () => {
 
     expect(wrapper.emitted('click')).toBeFalsy()
   })
+
+  it('点击有 deployments 的服务行切换子行显示', async () => {
+    const deps = [makeDeployment('dep-1', 'dev', 'local')]
+    const wrapper = mount(ServiceRow, {
+      props: { service: makeService(deps), projectId: 'proj-1', selected: false },
+    })
+    // 默认展开，子行可见
+    expect(wrapper.find('[data-test="deployment-list"]').exists()).toBe(true)
+    // 点击服务行折叠
+    await wrapper.find('.service-row').trigger('click')
+    expect(wrapper.find('[data-test="deployment-list"]').exists()).toBe(false)
+    // 再次点击展开
+    await wrapper.find('.service-row').trigger('click')
+    expect(wrapper.find('[data-test="deployment-list"]').exists()).toBe(true)
+  })
 })

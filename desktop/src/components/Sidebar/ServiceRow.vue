@@ -133,9 +133,7 @@ function onClick() {
   emit('click')
 }
 
-function onDeploymentClick(e: MouseEvent, dep: NonNullable<Service['deployments']>[number]) {
-  // 阻止事件冒泡，避免触发服务行的 onClick
-  e.stopPropagation()
+function onDeploymentClick(dep: NonNullable<Service['deployments']>[number]) {
   emit('open-deployment', {
     deploymentId: dep.id,
     title: `${props.service.name} · ${dep.env_name}`,
@@ -170,7 +168,7 @@ onUnmounted(() => {
       <span class="service-name">{{ service.name }}</span>
 
       <!-- 有 deployments 时显示折叠/展开箭头，替代 hover 启停按钮 -->
-      <span v-if="hasDeployments" class="expand-arrow" :class="{ expanded }">
+      <span v-if="hasDeployments" class="expand-arrow">
         {{ expanded ? '▾' : '▸' }}
       </span>
 
@@ -199,7 +197,7 @@ onUnmounted(() => {
         :key="dep.id"
         class="deployment-row"
         data-test="deployment-row"
-        @click="(e) => onDeploymentClick(e, dep)"
+        @click="onDeploymentClick(dep)"
       >
         <span class="deployment-location-icon">{{ dep.location === 'remote' ? '☁' : '⬡' }}</span>
         <span class="deployment-env-name">{{ dep.env_name }}</span>
@@ -283,7 +281,6 @@ onUnmounted(() => {
   font-size: 10px;
   color: var(--text-secondary);
   flex-shrink: 0;
-  transition: transform 0.12s;
 }
 
 .deployment-list {
