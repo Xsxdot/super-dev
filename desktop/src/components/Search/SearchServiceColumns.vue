@@ -16,42 +16,14 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
 import { splitSearchHighlight } from '@/lib/searchHighlight'
-import type { LogContextPageDirection, LogEntry, RemoteLogEntry, RemoteSearchServiceColumn } from '@/api/agent'
+import type { LogContextPageDirection, LogEntry } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const localTab = computed(() => workspace.searchTab(props.tabId))
-const remoteTab = computed(() => workspace.remoteSearchTab(props.tabId))
-const tab = computed(() => {
-  if (localTab.value) return localTab.value
-  const remote = remoteTab.value
-  if (!remote) return null
-  const contextByService: Record<string, LogEntry[]> = {}
-  const serviceCounts: Record<string, number> = {}
-  const results: LogEntry[] = []
-  for (const column of remote.serviceColumns) {
-    const entries = column.entries as LogEntry[]
-    contextByService[column.service_id] = entries
-    serviceCounts[column.service_id] = column.result_count
-    results.push(...entries)
-  }
-  return {
-    id: remote.id,
-    serviceCounts,
-    hiddenServiceIds: remote.hiddenServiceIds,
-    pinnedServiceIds: remote.pinnedServiceIds,
-    contextAnchorTime: results[0]?.timestamp ?? null,
-    contextByService,
-    results,
-    selectedLogId: null,
-    hasMoreBeforeByService: {} as Record<string, boolean>,
-    hasMoreAfterByService: {} as Record<string, boolean>,
-    loadingMoreBefore: false,
-    loadingMoreAfter: false,
-  }
-})
+const tab = computed(() => localTab.value ?? null)
 const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
 const suppressScrollSelectionId = ref<number | null>(null)
@@ -127,63 +99,19 @@ const canLoadAfter = computed(() => {
   return scrollingServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
 })
 
-function remoteColumn(serviceId: string): RemoteSearchServiceColumn | null {
-  return remoteTab.value?.serviceColumns.find(column => column.service_id === serviceId) ?? null
-}
-
 function serviceName(serviceId: string): string {
-  return agentStore.serviceById(serviceId)?.name ?? remoteColumn(serviceId)?.service_name ?? serviceId
-}
-
-function statusLabel(status: RemoteSearchServiceColumn['status']): string {
-  return {
-    success: '成功',
-    partial_failed: '部分失败',
-    failed: '失败',
-    timeout: '超时',
-  }[status]
-}
-
-function remoteNodeLabel(node: RemoteSearchServiceColumn['nodes'][number]): string {
-  return node.host_name || node.host_id
-}
-
-function remoteEntryNodeLabel(entry: LogEntry): string | null {
-  if (!remoteTab.value) return null
-  const remoteEntry = entry as RemoteLogEntry
-  return remoteEntry.host_name || remoteEntry.host_id || null
+  return agentStore.serviceById(serviceId)?.name ?? serviceId
 }
 
 function entryKey(entry: LogEntry): string | number {
-  if (!remoteTab.value) return entry.id
-  const remoteEntry = entry as RemoteLogEntry
-  return remoteEntry.key ?? `${remoteEntry.service_id}:${remoteEntry.log_source_id ?? ''}:${remoteEntry.host_id}:${remoteEntry.id}`
-}
-
-function isRemoteEntry(): boolean {
-  return Boolean(remoteTab.value)
-}
-
-function nodeCoverageLabel(serviceId: string): string | null {
-  const column = remoteColumn(serviceId)
-  if (!column || column.node_count === 0) return null
-  const success = column.nodes.filter(node => node.status === 'success').length
-  return `${success}/${column.node_count} 节点`
-}
-
-function problemNodeLabels(serviceId: string): string[] {
-  const column = remoteColumn(serviceId)
-  if (!column) return []
-  return column.nodes
-    .filter(node => node.status === 'failed' || node.status === 'timeout')
-    .map(node => `${remoteNodeLabel(node)} ${node.status === 'timeout' ? '超时' : '失败'}`)
+  return entry.id
 }
 
 function timeLabel(entry: LogEntry): string {
   return new Date(entry.timestamp).toISOString().slice(11, 23)
 }
 
-const searchQuery = computed(() => localTab.value?.query ?? remoteTab.value?.query ?? '')
+const searchQuery = computed(() => localTab.value?.query ?? '')
 
 const messageParts = (message: string) => splitSearchHighlight(message, searchQuery.value)
 
@@ -351,11 +279,6 @@ onBeforeUnmount(() => {
         <div class="column-header pinned">
           <div class="header-main">
             <span class="service-name">{{ serviceName(serviceId) }}</span>
-            <span v-if="remoteColumn(serviceId)" class="remote-status">{{ statusLabel(remoteColumn(serviceId)!.status) }}</span>
-            <span v-if="nodeCoverageLabel(serviceId)" class="node-coverage">{{ nodeCoverageLabel(serviceId) }}</span>
-          </div>
-          <div v-if="problemNodeLabels(serviceId).length" class="node-problems">
-            {{ problemNodeLabels(serviceId).join(' · ') }}
           </div>
           <button class="pin-btn" @click="togglePin(serviceId)">已固定</button>
         </div>
@@ -378,13 +301,12 @@ onBeforeUnmount(() => {
                     v-for="entry in cellEntries(bucket, serviceId)"
                     :key="entryKey(entry)"
                     class="context-entry"
-                    :class="{ target: entry.id === tab.selectedLogId, 'remote-entry': isRemoteEntry() }"
+                    :class="{ target: entry.id === tab.selectedLogId }"
                     :data-entry-id="entry.id"
                     :data-entry-key="entryKey(entry)"
                   >
                     <span class="entry-time">{{ timeLabel(entry) }}</span>
                     <span class="entry-level">{{ entry.level }}</span>
-                    <span v-if="remoteEntryNodeLabel(entry)" class="entry-node">{{ remoteEntryNodeLabel(entry) }}</span>
                     <span class="entry-message">
                       <template v-for="(part, index) in messageParts(entry.message)" :key="index">
                         <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
@@ -415,11 +337,6 @@ onBeforeUnmount(() => {
           >
             <div class="header-main">
               <span class="service-name">{{ serviceName(serviceId) }}</span>
-              <span v-if="remoteColumn(serviceId)" class="remote-status">{{ statusLabel(remoteColumn(serviceId)!.status) }}</span>
-              <span v-if="nodeCoverageLabel(serviceId)" class="node-coverage">{{ nodeCoverageLabel(serviceId) }}</span>
-            </div>
-            <div v-if="problemNodeLabels(serviceId).length" class="node-problems">
-              {{ problemNodeLabels(serviceId).join(' · ') }}
             </div>
             <button class="pin-btn" @click="togglePin(serviceId)">固定</button>
           </div>
@@ -453,13 +370,12 @@ onBeforeUnmount(() => {
                 v-for="entry in cellEntries(bucket, serviceId)"
                 :key="entryKey(entry)"
                 class="context-entry"
-                :class="{ target: entry.id === tab.selectedLogId, 'remote-entry': isRemoteEntry() }"
+                :class="{ target: entry.id === tab.selectedLogId }"
                 :data-entry-id="entry.id"
                 :data-entry-key="entryKey(entry)"
               >
                 <span class="entry-time">{{ timeLabel(entry) }}</span>
                 <span class="entry-level">{{ entry.level }}</span>
-                <span v-if="remoteEntryNodeLabel(entry)" class="entry-node">{{ remoteEntryNodeLabel(entry) }}</span>
                 <span class="entry-message">
                   <template v-for="(part, index) in messageParts(entry.message)" :key="index">
                     <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
@@ -600,21 +516,6 @@ onBeforeUnmount(() => {
   gap: 6px;
   min-width: 0;
 }
-.remote-status,
-.node-coverage,
-.node-problems {
-  color: var(--text-tertiary);
-  font-size: 10px;
-  white-space: nowrap;
-}
-.remote-status {
-  color: var(--text-secondary);
-}
-.node-problems {
-  grid-column: 1 / -1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .service-name {
   color: var(--text-primary);
   font-size: 12px;
@@ -669,23 +570,14 @@ onBeforeUnmount(() => {
   font-size: 10px;
   line-height: 1.45;
 }
-.context-entry.remote-entry {
-  grid-template-columns: 74px 48px minmax(58px, auto) minmax(0, 1fr);
-}
 .context-entry.target {
   background: rgba(88, 166, 255, 0.18);
   outline: 1px solid rgba(88, 166, 255, 0.35);
 }
 .entry-time,
-.entry-level,
-.entry-node {
+.entry-level {
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
-}
-.entry-node {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .entry-message {
   white-space: pre-wrap;

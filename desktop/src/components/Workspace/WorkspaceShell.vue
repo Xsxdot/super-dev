@@ -25,13 +25,7 @@ const workspace = useWorkspaceStore()
     <div v-if="!workspace.activeTab" class="workspace-empty">
       <div>选择左侧服务或点击项目搜索</div>
     </div>
-    <PanelLayout v-else-if="workspace.activeTab.type === 'project' || workspace.activeTab.type === 'remote' || workspace.activeTab.type === 'remote-aggregate'" />
-    <SearchPage
-      v-else-if="workspace.activeTab.type === 'remote-search'"
-      :tab-id="workspace.activeTab.id"
-      :log-source-id="workspace.activeTab.logSourceId"
-      :group-key="workspace.activeTab.groupKey"
-    />
+    <PanelLayout v-else-if="workspace.activeTab.type === 'project'" />
     <SearchPage
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
