@@ -41,6 +41,7 @@ type Buffer struct {
 	subs    map[string]chan model.LogEntry
 	store   Flusher
 	done    chan struct{}
+	nodeID  string // 本机 node_id，Append 时填入 LogEntry.SourceID（空字符串时不填充）
 }
 
 // New 创建并启动一个新的日志缓冲实例。
@@ -48,16 +49,18 @@ type Buffer struct {
 // 参数：
 //   - store: 持久化接口，传 nil 时跳过持久化（测试场景）
 //   - maxSize: 环形缓冲容量，保留最近 maxSize 条日志
+//   - nodeID: 本机 node_id，Append 时用于填充 LogEntry.SourceID；传空字符串时不填充
 //
 // 返回：
 //   - 已启动 flush goroutine 的 *Buffer
-func New(store Flusher, maxSize int) *Buffer {
+func New(store Flusher, maxSize int, nodeID string) *Buffer {
 	b := &Buffer{
 		ring:    make([]model.LogEntry, maxSize),
 		maxSize: maxSize,
 		subs:    map[string]chan model.LogEntry{},
 		store:   store,
 		done:    make(chan struct{}),
+		nodeID:  nodeID,
 	}
 	go b.flushLoop()
 	return b
@@ -65,10 +68,17 @@ func New(store Flusher, maxSize int) *Buffer {
 
 // Append 追加一条日志条目到环形缓冲，并推送给所有订阅者。
 //
+// SourceID 填充：若 e.SourceID 为空且 b.nodeID 非空，则自动填充 e.SourceID = b.nodeID；
+// 若 e.SourceID 已有值（远端日志转发场景），不覆盖。
+//
 // 注意：
 //   - 订阅者 channel 满时跳过写入，不阻塞调用方
 //   - 当 pending 积累达到 flushBatch 时触发立即 flush
 func (b *Buffer) Append(e model.LogEntry) {
+	if e.SourceID == "" && b.nodeID != "" {
+		e.SourceID = b.nodeID
+	}
+
 	b.mu.Lock()
 	b.ring[b.head] = e
 	b.head = (b.head + 1) % b.maxSize

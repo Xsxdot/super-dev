@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
+	"github.com/superdev/agent/identity"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/process"
@@ -55,6 +56,7 @@ type App struct {
 	tunnels     *tunnel.Manager
 	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
 	tunnelResolver remote.TunnelResolver
+	identity       identity.Identity
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -87,7 +89,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	buf := logbuf.New(s, 2000)
+	id, err := identity.LoadOrCreate(cfg.DataDir)
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+
+	buf := logbuf.New(s, 2000, id.NodeID)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
 	procMgr := process.NewManager(buf.Append)
@@ -119,6 +127,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		remoteStore:    remoteStore,
 		tunnels:        tunnels,
 		tunnelResolver: resolver,
+		identity:       id,
 	}, nil
 }
 
