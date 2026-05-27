@@ -15,9 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PanelLeaf from '../PanelLeaf.vue'
 import ServiceRow from '../../Sidebar/ServiceRow.vue'
 import { useAgentStore } from '../../../stores/agent'
-import { useRemoteStore } from '../../../stores/remote'
 import { usePanelStore, type PanelNode, type PanelSplitNode } from '../../../stores/panel'
-import type { Host, LogSource, Project, Service } from '../../../api/agent'
+import type { Project, Service } from '../../../api/agent'
 
 function expectSplitNode(node: PanelNode): PanelSplitNode {
   expect(node.type).toBe('split')
@@ -45,32 +44,6 @@ function makeProject(service: Service): Project {
     root_path: '/tmp/project',
     services: [service],
     selected_service_ids: [],
-  }
-}
-
-function makeHost(): Host {
-  return {
-    id: 'host-1',
-    name: 'Host 1',
-    ssh_host: '10.0.0.1',
-    ssh_port: 22,
-    ssh_user: 'root',
-    remote_agent_port: 57017,
-    local_tunnel_port: 57018,
-    tags: ['prod'],
-  }
-}
-
-function makeLogSource(id = 'remote-prod'): LogSource {
-  return {
-    id,
-    name: 'Remote Prod',
-    type: 'docker',
-    host_ids: ['host-1'],
-    tags: ['prod'],
-    extra_args: [],
-    project_id: 'proj-1',
-    service_id: 'svc-1',
   }
 }
 
@@ -252,71 +225,6 @@ describe('PanelLeaf', () => {
     }
   })
 
-  it('重复拖入已打开的远程监听时聚焦已有分栏且不重复创建', async () => {
-    const panelStore = usePanelStore()
-    const localLeafId = panelStore.root.id
-    const remoteSource = {
-      type: 'remote-log-source' as const,
-      logSourceId: 'remote-prod',
-      groupKey: 'all',
-    }
-
-    panelStore.replaceSource(localLeafId, {
-      type: 'local-service',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-    })
-    panelStore.splitLeafWithSource(localLeafId, 'h', remoteSource, 'first')
-
-    const remoteLeaf = panelStore.allLeaves.find(leaf => leaf.source?.type === 'remote-log-source')
-    const localLeaf = panelStore.allLeaves.find(leaf => leaf.source?.type === 'local-service')
-    expect(remoteLeaf).toBeTruthy()
-    expect(localLeaf).toBeTruthy()
-    panelStore.setFocus(localLeaf!.id)
-
-    const wrapper = mount(PanelLeaf, {
-      props: {
-        panelId: localLeaf!.id,
-        serviceId: localLeaf!.serviceId,
-        projectId: localLeaf!.projectId,
-        source: localLeaf!.source,
-        canClose: true,
-      },
-      global: {
-        stubs: {
-          LogPanel: { template: '<div class="log-panel-stub" />' },
-        },
-      },
-    })
-
-    const panelEl = wrapper.find('.panel-leaf').element as HTMLElement
-    vi.spyOn(panelEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0,
-      top: 0,
-      width: 400,
-      height: 300,
-      right: 400,
-      bottom: 300,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect)
-
-    await wrapper.find('.panel-leaf').trigger('drop', {
-      clientX: 380,
-      clientY: 150,
-      dataTransfer: {
-        getData: (type: string) => (
-          type === 'application/superdev-panel-source' ? JSON.stringify(remoteSource) : ''
-        ),
-      },
-    })
-
-    expect(panelStore.allLeaves).toHaveLength(2)
-    expect(panelStore.allLeaves.filter(leaf => leaf.source?.type === 'remote-log-source')).toHaveLength(1)
-    expect(panelStore.focusedPanelId).toBe(remoteLeaf!.id)
-  })
-
   it('忽略 malformed panel source payload 且不改变布局', async () => {
     const panelStore = usePanelStore()
     const initialRoot = JSON.stringify(panelStore.root)
@@ -384,96 +292,6 @@ describe('PanelLeaf', () => {
 
     expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
     expect(wrapper.find('.drop-overlay').exists()).toBe(false)
-  })
-
-  it('远程监听分组所有节点连接失败时 drop 不新增分栏并提示失败', async () => {
-    const panelStore = usePanelStore()
-    const remoteStore = useRemoteStore()
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
-    remoteStore.hosts = [makeHost()]
-    remoteStore.logSources = [makeLogSource('remote-failed')]
-    remoteStore.applyTunnelUpdate({ host_id: 'host-1', state: 'failed', error: 'Permission denied' })
-    const initialRoot = JSON.stringify(panelStore.root)
-
-    const wrapper = mount(PanelLeaf, {
-      props: {
-        panelId: panelStore.root.id,
-        serviceId: null,
-        projectId: null,
-        canClose: false,
-      },
-      global: {
-        stubs: {
-          LogPanel: { template: '<div class="log-panel-stub" />' },
-        },
-      },
-    })
-    stubPanelRect(wrapper)
-
-    await wrapper.find('.panel-leaf').trigger('drop', {
-      clientX: 380,
-      clientY: 150,
-      dataTransfer: {
-        getData: (type: string) => (
-          type === 'application/superdev-panel-source'
-            ? JSON.stringify({ type: 'remote-log-source', logSourceId: 'remote-failed', groupKey: 'all' })
-            : ''
-        ),
-      },
-    })
-
-    expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('无法打开远程监听日志'))
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('Permission denied'))
-  })
-
-  it('达到最大分栏数时 drop 新远程监听不新增分栏并提示上限', async () => {
-    const panelStore = usePanelStore()
-    const remoteStore = useRemoteStore()
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
-    remoteStore.hosts = [makeHost()]
-    remoteStore.logSources = [makeLogSource('remote-new')]
-
-    const firstLeafId = panelStore.root.id
-    panelStore.replaceSource(firstLeafId, { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-1' })
-    panelStore.splitLeafWithSource(firstLeafId, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-2' }, 'second')
-    panelStore.splitLeafWithSource(panelStore.allLeaves[1].id, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-3' }, 'second')
-    panelStore.splitLeafWithSource(panelStore.allLeaves[2].id, 'h', { type: 'local-service', projectId: 'proj-1', serviceId: 'svc-4' }, 'second')
-    expect(panelStore.allLeaves).toHaveLength(4)
-    const initialRoot = JSON.stringify(panelStore.root)
-    const targetLeaf = panelStore.allLeaves[0]
-
-    const wrapper = mount(PanelLeaf, {
-      props: {
-        panelId: targetLeaf.id,
-        serviceId: targetLeaf.serviceId,
-        projectId: targetLeaf.projectId,
-        source: targetLeaf.source,
-        canClose: true,
-      },
-      global: {
-        stubs: {
-          LogPanel: { template: '<div class="log-panel-stub" />' },
-        },
-      },
-    })
-    stubPanelRect(wrapper)
-
-    await wrapper.find('.panel-leaf').trigger('drop', {
-      clientX: 380,
-      clientY: 150,
-      dataTransfer: {
-        getData: (type: string) => (
-          type === 'application/superdev-panel-source'
-            ? JSON.stringify({ type: 'remote-log-source', logSourceId: 'remote-new', groupKey: 'all' })
-            : ''
-        ),
-      },
-    })
-
-    expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
-    expect(panelStore.allLeaves).toHaveLength(4)
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('已达到最大分栏数'))
   })
 
   it('服务行拖拽期间临时禁用文字选择，松开后恢复', async () => {

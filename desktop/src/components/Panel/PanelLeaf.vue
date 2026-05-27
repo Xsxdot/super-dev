@@ -2,7 +2,6 @@
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
 import { MAX_PANEL_LEAVES, usePanelStore, projectIdFromPanelSource, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
-import { useRemoteStore } from '@/stores/remote'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
 import LogPanel from './LogPanel.vue'
 
@@ -16,7 +15,6 @@ const props = defineProps<{
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
-const remoteStore = useRemoteStore()
 const {
   dropHighlight,
   draggedSource,
@@ -42,7 +40,7 @@ const source = computed<PanelSource | null>(() =>
 
 const effectiveProjectId = computed(() =>
   projectIdFromPanelSource(source.value, {
-    logSourceById: id => remoteStore.logSourceById(id),
+    logSourceById: () => undefined,
     serviceById: id => agentStore.serviceById(id),
   }) ?? props.projectId,
 )
@@ -57,8 +55,6 @@ const headerTitle = computed(() => {
     const proj = agentStore.projectById(source.value.projectId)
     return proj ? `${proj.name} · 全部` : '未选择'
   }
-  if (source.value?.type === 'remote-log-source') return `Remote · ${source.value.groupKey}`
-  if (source.value?.type === 'remote-aggregate') return `${source.value.serviceName ?? 'Remote'} · ${source.value.groupKey}`
   if (source.value?.type === 'deployment') return `Deploy: ${source.value.deploymentId}`
   return '未选择'
 })
@@ -117,10 +113,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string')
-}
-
 function isSupportedPanelSource(value: unknown): value is PanelSource {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (value.type === 'local-project') {
@@ -129,16 +121,6 @@ function isSupportedPanelSource(value: unknown): value is PanelSource {
   if (value.type === 'local-service') {
     return typeof value.serviceId === 'string'
       && (value.projectId === undefined || typeof value.projectId === 'string')
-  }
-  if (value.type === 'remote-log-source') {
-    return typeof value.logSourceId === 'string' && typeof value.groupKey === 'string'
-  }
-  if (value.type === 'remote-aggregate') {
-    return typeof value.projectId === 'string'
-      && typeof value.groupKey === 'string'
-      && isStringArray(value.logSourceIds)
-      && (value.serviceId === undefined || typeof value.serviceId === 'string')
-      && (value.serviceName === undefined || typeof value.serviceName === 'string')
   }
   if (value.type === 'deployment') {
     return typeof value.deploymentId === 'string'
@@ -156,50 +138,8 @@ function showDropFailure(message: string) {
   window.alert(message)
 }
 
-function hostIdsForRemoteSource(dropSource: PanelSource): string[] {
-  const knownHosts = new Set(remoteStore.hosts.map(host => host.id))
-  if (dropSource.type === 'remote-log-source') {
-    const group = remoteStore.groupsOf(dropSource.logSourceId).find(item => item.key === dropSource.groupKey)
-    return group?.hostIds.filter(id => knownHosts.has(id)) ?? []
-  }
-  if (dropSource.type === 'remote-aggregate') {
-    const logSources = dropSource.logSourceIds
-      .map(id => remoteStore.logSourceById(id))
-      .filter(source => source != null)
-    const hostIds = logSources.flatMap(source => {
-      const validHostIds = source.host_ids.filter(id => knownHosts.has(id))
-      return dropSource.groupKey === 'all' || source.tags.includes(dropSource.groupKey) ? validHostIds : []
-    })
-    return [...new Set(hostIds)]
-  }
-  return []
-}
-
-function remoteSourceOpenFailure(dropSource: PanelSource): string | null {
-  if (dropSource.type !== 'remote-log-source' && dropSource.type !== 'remote-aggregate') return null
-  const hostIds = hostIdsForRemoteSource(dropSource)
-  if (hostIds.length === 0) {
-    return '无法打开远程监听日志：当前分组没有可用节点，请检查监听配置或节点状态。'
-  }
-  const failedTunnels = hostIds
-    .map(id => remoteStore.tunnelOf(id))
-    .filter(status => status?.state === 'failed')
-  if (failedTunnels.length === hostIds.length) {
-    const reason = failedTunnels.map(status => status?.error).find(Boolean)
-    return `无法打开远程监听日志：${reason ?? '所有节点连接失败，请检查远程监听配置。'}`
-  }
-  return null
-}
-
 function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
   const nextSource = normalizeDropSource(dropSource)
-  if (panelStore.focusEquivalentRemoteSource(nextSource)) return
-
-  const openFailure = remoteSourceOpenFailure(nextSource)
-  if (openFailure) {
-    showDropFailure(openFailure)
-    return
-  }
 
   if (edge === 'center') {
     panelStore.replaceSource(props.panelId, nextSource)
@@ -313,9 +253,6 @@ watch(serviceDropRequest, (request) => {
       :panel-id="panelId"
       :service-id="source?.type === 'local-service' ? source.serviceId : null"
       :project-id="effectiveProjectId"
-      :log-source-id="source?.type === 'remote-log-source' ? source.logSourceId : undefined"
-      :log-source-ids="source?.type === 'remote-aggregate' ? source.logSourceIds : undefined"
-      :group-key="source?.type === 'remote-log-source' || source?.type === 'remote-aggregate' ? source.groupKey : undefined"
       :source="source"
     />
 
