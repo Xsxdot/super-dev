@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# npm artifacts (this is a pnpm project)
+package-lock.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
