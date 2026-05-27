@@ -15,12 +15,14 @@ import (
 func TestHostCRUD(t *testing.T) {
 	srv, _ := newTestApp(t)
 
+	// 初始列表只含本机节点
 	resp, err := http.Get(srv.URL + "/api/hosts")
 	require.NoError(t, err)
-	var initial []model.Host
+	var initial []hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&initial))
 	_ = resp.Body.Close()
-	assert.Empty(t, initial)
+	require.Len(t, initial, 1, "初始列表只有本机节点")
+	assert.True(t, initial[0].IsSelf, "首条是本机节点")
 
 	body, _ := json.Marshal(model.Host{
 		Name:        "c01",
@@ -48,11 +50,12 @@ func TestHostCRUD(t *testing.T) {
 
 	resp, err = http.Get(srv.URL + "/api/hosts")
 	require.NoError(t, err)
-	var list []model.Host
+	var list []hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
 	_ = resp.Body.Close()
-	require.Len(t, list, 1)
-	assert.Equal(t, "c01-renamed", list[0].Name)
+	// self node(index=0) + c01-renamed(index=1)
+	require.Len(t, list, 2)
+	assert.Equal(t, "c01-renamed", list[1].Name)
 
 	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/hosts/"+created.ID, nil)
 	resp, err = http.DefaultClient.Do(req)
@@ -61,10 +64,12 @@ func TestHostCRUD(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	resp, _ = http.Get(srv.URL + "/api/hosts")
-	var afterDel []model.Host
+	var afterDel []hostDTOWithSelf
 	_ = json.NewDecoder(resp.Body).Decode(&afterDel)
 	_ = resp.Body.Close()
-	assert.Empty(t, afterDel)
+	// 删除后只剩本机节点
+	require.Len(t, afterDel, 1)
+	assert.True(t, afterDel[0].IsSelf)
 }
 
 func TestDetectSshKeys(t *testing.T) {
@@ -104,4 +109,36 @@ func TestTestConnectionUnreachable(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.False(t, result.OK)
 	assert.NotEmpty(t, result.Message)
+}
+
+func TestListHosts_IncludesSelfNode(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	resp, err := http.Get(srv.URL + "/api/hosts")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var hosts []hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&hosts))
+
+	// 必须至少有一个本机节点
+	require.NotEmpty(t, hosts)
+	selfNode := hosts[0]
+	assert.True(t, selfNode.IsSelf, "first host should be the self node")
+	assert.NotEmpty(t, selfNode.NodeID, "self node must have a node_id")
+	assert.NotEmpty(t, selfNode.Name, "self node must have a display name")
+}
+
+// hostDTOWithSelf 是含 is_self 字段的扩展视图，供本测试解析。
+type hostDTOWithSelf struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	SSHHost         string   `json:"ssh_host"`
+	SSHPort         int      `json:"ssh_port"`
+	SSHUser         string   `json:"ssh_user"`
+	RemoteAgentPort int      `json:"remote_agent_port"`
+	LocalTunnelPort int      `json:"local_tunnel_port"`
+	Tags            []string `json:"tags"`
+	IsSelf          bool     `json:"is_self"`
+	NodeID          string   `json:"node_id"`
 }
