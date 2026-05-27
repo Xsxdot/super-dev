@@ -691,6 +691,46 @@ describe('workspaceStore', () => {
   })
 
 
+  describe('openDeployment', () => {
+    it('creates a deployment tab', () => {
+      const store = useWorkspaceStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      expect(store.tabs.some(t => t.type === 'deployment' && t.deploymentId === 'dep1')).toBe(true)
+    })
+
+    it('does not create duplicate tabs for same deploymentId', () => {
+      const store = useWorkspaceStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      store.openDeployment('dep1', 'Deploy #1')
+      expect(store.tabs.filter(t => t.type === 'deployment' && t.deploymentId === 'dep1')).toHaveLength(1)
+    })
+
+    it('sets the deployment tab as active', () => {
+      const store = useWorkspaceStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      expect(store.activeTab).toMatchObject({
+        type: 'deployment',
+        deploymentId: 'dep1',
+        title: 'Deploy #1',
+      })
+    })
+
+    it('re-activates an existing deployment tab without duplicating', () => {
+      const store = useWorkspaceStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      const firstTabId = store.activeTabId
+
+      // Open a different tab to change active
+      store.openSearch('proj-1')
+      expect(store.activeTab?.type).toBe('search')
+
+      // Re-open same deployment tab
+      store.openDeployment('dep1', 'Deploy #1')
+      expect(store.activeTabId).toBe(firstTabId)
+      expect(store.tabs.filter(t => t.type === 'deployment')).toHaveLength(1)
+    })
+  })
+
   it('runRemoteSearch sends selected services, selected hosts, and cursor for project remote search', async () => {
     const api = service('svc-api', 'api')
     const worker = service('svc-worker', 'worker')
