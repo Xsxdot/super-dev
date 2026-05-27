@@ -571,8 +571,8 @@ const displayItems = computed(() => cachedDisplay.value.items)
       @end-bookmark="onEndBookmark"
     />
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
-      <div v-if="(serviceId || isRemote) && isLoadingHistory" class="history-loading">加载历史记录中…</div>
-      <div v-else-if="serviceId && !logStore.hasMoreHistory(serviceId)" class="history-end">— 已到最早记录 —</div>
+      <div v-if="(serviceId || isRemote || source?.type === 'deployment') && isLoadingHistory" class="history-loading">加载历史记录中…</div>
+      <div v-else-if="(serviceId && !logStore.hasMoreHistory(serviceId)) || (source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId))" class="history-end">— 已到最早记录 —</div>
       <template
         v-for="item in displayItems"
         :key="item.id"
