@@ -13,11 +13,12 @@ package logbackend
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -60,7 +61,7 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 		return nil, Cursor{}, err
 	}
 	if base == "" {
-		return nil, Cursor{}, errors.New("tunnel not connected")
+		return nil, Cursor{}, fmt.Errorf("tunnel not connected for host %s", b.hostID)
 	}
 
 	u, err := url.Parse(base + "/api/logs")
@@ -110,7 +111,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 		return nil, Cursor{}, false, err
 	}
 	if base == "" {
-		return nil, Cursor{}, false, errors.New("tunnel not connected")
+		return nil, Cursor{}, false, fmt.Errorf("tunnel not connected for host %s", b.hostID)
 	}
 
 	u, err := url.Parse(base + "/api/log-search")
@@ -169,6 +170,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 }
 
 // Subscribe 连接远端 /ws/logs WebSocket，转发实时日志。
+// ctx 取消和 Cancel 调用均可停止流并关闭 Ch；两者均幂等。
 // 连接断开时自动关闭 Ch（不重连，由上层 FederatedBackend 决策）。
 func (b *RemoteAgentBackend) Subscribe(ctx context.Context, serviceID string) LogStream {
 	ch := make(chan model.LogEntry, 64)
@@ -185,13 +187,20 @@ func (b *RemoteAgentBackend) Subscribe(ctx context.Context, serviceID string) Lo
 		return LogStream{Ch: ch, Cancel: func() {}}
 	}
 
-	cancel := func() {
-		_ = conn.Close()
+	var once sync.Once
+	closeConn := func() {
+		once.Do(func() { _ = conn.Close() })
 	}
+
+	// ctx watcher：ctx 取消时触发 conn.Close()，解除 ReadJSON 阻塞
+	go func() {
+		<-ctx.Done()
+		closeConn()
+	}()
 
 	go func() {
 		defer close(ch)
-		defer conn.Close()
+		defer closeConn()
 		for {
 			var entry model.LogEntry
 			if err := conn.ReadJSON(&entry); err != nil {
@@ -204,7 +213,7 @@ func (b *RemoteAgentBackend) Subscribe(ctx context.Context, serviceID string) Lo
 		}
 	}()
 
-	return LogStream{Ch: ch, Cancel: cancel}
+	return LogStream{Ch: ch, Cancel: closeConn}
 }
 
 // resolveWSURL 获取 WebSocket 连接地址。
@@ -218,9 +227,17 @@ func (b *RemoteAgentBackend) resolveWSURL() (string, error) {
 		return "", err
 	}
 	if base == "" {
-		return "", errors.New("tunnel not connected")
+		return "", fmt.Errorf("tunnel not connected for host %s", b.hostID)
 	}
-	// http://127.0.0.1:PORT → ws://127.0.0.1:PORT
-	wsBase := "ws" + base[4:]
+	// 将 http(s):// 替换为 ws(s)://，避免裸字符串切片的 panic 风险
+	var wsBase string
+	switch {
+	case strings.HasPrefix(base, "https://"):
+		wsBase = "wss://" + base[len("https://"):]
+	case strings.HasPrefix(base, "http://"):
+		wsBase = "ws://" + base[len("http://"):]
+	default:
+		return "", fmt.Errorf("unsupported scheme in tunnel base URL: %s", base)
+	}
 	return wsBase + "/ws/logs?service=" + url.QueryEscape(b.serviceID), nil
 }
