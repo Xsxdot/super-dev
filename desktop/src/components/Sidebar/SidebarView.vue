@@ -4,6 +4,8 @@ import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
 import ServiceRow from './ServiceRow.vue'
+import EnvGroup from './EnvGroup.vue'
+import type { Service } from '@/api/agent'
 import { open, message } from '@tauri-apps/plugin-dialog'
 import { useRouter } from 'vue-router'
 
@@ -30,6 +32,16 @@ function openProjectSearch(projectId: string) {
   workspace.openSearch(projectId)
 }
 
+function servicesForEnv(services: Service[], envName: string): Service[] {
+  return services.filter(svc => svc.deployments?.some(d => d.env_name === envName))
+}
+
+function selectedServiceIdSet(): Set<string> {
+  const active = workspace.activeTab
+  if (!active || active.type !== 'project') return new Set()
+  return new Set(panelStore.allLeaves.map(l => l.serviceId).filter(Boolean) as string[])
+}
+
 async function addProject() {
   const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
   if (!selected || Array.isArray(selected)) return
@@ -50,15 +62,31 @@ async function addProject() {
     <div class="sidebar-scroll">
       <template v-for="project in agentStore.projects" :key="project.id">
         <ProjectHeader :project="project" @search="openProjectSearch(project.id)" />
-        <ServiceRow
-          v-for="service in project.services"
-          :key="service.id"
-          :service="service"
-          :project-id="project.id"
-          :selected="isServiceSelected(service.id)"
-          @click="selectService(service.id, project.id)"
-          @open-deployment="openDeployment"
-        />
+        <!-- 已配置 environments：按环境分组 -->
+        <template v-if="project.environments?.length">
+          <EnvGroup
+            v-for="env in project.environments"
+            :key="env.id || env.name"
+            :env-name="env.name"
+            :is-dev="env.is_dev"
+            :project-id="project.id"
+            :services="servicesForEnv(project.services, env.name)"
+            :selected-service-ids="selectedServiceIdSet()"
+            @open-deployment="openDeployment"
+          />
+        </template>
+        <!-- 未配置 environments：退化为平铺 ServiceRow -->
+        <template v-else>
+          <ServiceRow
+            v-for="service in project.services"
+            :key="service.id"
+            :service="service"
+            :project-id="project.id"
+            :selected="isServiceSelected(service.id)"
+            @click="selectService(service.id, project.id)"
+            @open-deployment="openDeployment"
+          />
+        </template>
       </template>
     </div>
     <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>
