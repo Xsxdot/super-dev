@@ -61,6 +61,7 @@ type App struct {
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
 	backends map[string]logbackend.LogBackend
 	identity identity.Identity
+	pidStore *process.PIDStore
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -133,6 +134,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		tunnelResolver: resolver,
 		backends:       map[string]logbackend.LogBackend{},
 		identity:       id,
+		pidStore:       process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
 	}, nil
 }
 
@@ -221,6 +223,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}/search", a.searchDeploymentLogs)
 	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
 
+	// Deployment 进程控制
+	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
+	mux.HandleFunc("POST /api/deployments/{id}/stop", a.stopDeployment)
+	mux.HandleFunc("POST /api/deployments/{id}/restart", a.restartDeployment)
+
 	return cors(mux)
 }
 
@@ -242,6 +249,7 @@ func (a *App) Start(addr string) error {
 //   - 若某个路径的配置加载失败，跳过该项目（不中断整体加载）
 //   - 为每个项目、服务和 deployment 分配 UUID（若 ID 为空）
 func (a *App) loadRegisteredProjects() {
+	a.pidStore.KillAll()
 	paths := a.registry.List()
 	for _, path := range paths {
 		loader := config.NewLoader(path)

@@ -11,6 +11,7 @@
 package api_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -277,4 +278,66 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "recent", got[0].Message)
+}
+
+func TestDeploymentStartStop(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+	_ = dataDir
+
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	cfg := `
+name: myproject
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
+services:
+  - name: api
+    required: false
+    order: 0
+    deployments:
+      - env: dev
+        location: local
+        command: "sleep 60"
+        working_dir: "."
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644))
+
+	body, _ := json.Marshal(map[string]string{"root_path": dir})
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var project model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&project))
+	_ = resp.Body.Close()
+
+	require.Len(t, project.Services, 1)
+	require.Len(t, project.Services[0].Deployments, 1)
+	depID := project.Services[0].Deployments[0].ID
+
+	// 启动 deployment
+	resp, err = http.Post(srv.URL+"/api/deployments/"+depID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	time.Sleep(150 * time.Millisecond)
+
+	// 查询状态：deployment.Status 应为 running
+	resp, err = http.Get(srv.URL + "/api/services")
+	require.NoError(t, err)
+	var services []model.Service
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&services))
+	_ = resp.Body.Close()
+	require.Len(t, services, 1)
+	require.Len(t, services[0].Deployments, 1)
+	assert.Equal(t, model.StatusRunning, services[0].Deployments[0].Status)
+
+	// 停止 deployment
+	resp, err = http.Post(srv.URL+"/api/deployments/"+depID+"/stop", "application/json", nil)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = resp.Body.Close()
 }
