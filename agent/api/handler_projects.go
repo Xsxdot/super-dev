@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/model"
 )
@@ -245,4 +246,129 @@ func (a *App) putSelected(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// putEnvSelected 处理 PUT /api/projects/{id}/env-selected。
+//
+// 请求体：{"env_name": "dev", "names": ["api", "worker"]}
+// 更新指定环境下用户选中的服务名列表，持久化到配置文件。
+func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		EnvName string   `json:"env_name"`
+		Names   []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.EnvName == "" {
+		jsonError(w, http.StatusBadRequest, "env_name is required")
+		return
+	}
+	if req.Names == nil {
+		req.Names = []string{}
+	}
+
+	a.mu.Lock()
+	var project model.Project
+	found := false
+	for i, p := range a.projects {
+		if p.ID == id {
+			if a.projects[i].EnvSelectedServiceIDs == nil {
+				a.projects[i].EnvSelectedServiceIDs = map[string][]string{}
+			}
+			a.projects[i].EnvSelectedServiceIDs[req.EnvName] = req.Names
+			project = a.projects[i]
+			found = true
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	if !found {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	loader := config.NewLoader(project.RootPath)
+	if err := loader.Save(project); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to save env selection: "+err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// startEnvSelected 处理 POST /api/projects/{id}/envs/{envName}/start-selected。
+//
+// 启动策略：
+//   - 该 env 下 Required=true 的服务的 deployment 必须启动
+//   - 该 env 的 EnvSelectedServiceIDs 中列出的服务名对应的 deployment 也启动
+//   - 已运行的 deployment 跳过
+func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	envName := r.PathValue("envName")
+
+	a.mu.RLock()
+	p, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	selectedNames := map[string]struct{}{}
+	if p.EnvSelectedServiceIDs != nil {
+		for _, name := range p.EnvSelectedServiceIDs[envName] {
+			selectedNames[name] = struct{}{}
+		}
+	}
+
+	mgr := a.getOrCreateManager(projectID)
+	mgr.SetRunID(uuid.NewString())
+
+	var toStart []model.Deployment
+	for _, svc := range p.Services {
+		if !svc.Required {
+			if _, ok := selectedNames[svc.Name]; !ok {
+				continue
+			}
+		}
+		dep := findDepByEnvName(svc.Deployments, envName)
+		if dep == nil || dep.IsReadOnly() {
+			continue
+		}
+		if mgr.IsDeploymentActive(dep.ID) {
+			continue
+		}
+		toStart = append(toStart, *dep)
+	}
+
+	if len(toStart) == 0 {
+		jsonOK(w, map[string]string{"status": "already_running"})
+		return
+	}
+
+	for _, dep := range toStart {
+		dep := dep
+		if err := mgr.StartDeployment(dep); err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to start deployment "+dep.ID+": "+err.Error())
+			return
+		}
+		a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
+	}
+	_ = a.pidStore.Flush()
+
+	jsonOK(w, map[string]string{"status": "starting"})
+}
+
+// findDepByEnvName 在 deployments 中按 EnvName 查找，未找到返回 nil。
+func findDepByEnvName(deps []model.Deployment, envName string) *model.Deployment {
+	for i := range deps {
+		if deps[i].EnvName == envName {
+			return &deps[i]
+		}
+	}
+	return nil
 }
