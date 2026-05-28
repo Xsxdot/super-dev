@@ -16,6 +16,7 @@ import { open, message } from '@tauri-apps/plugin-dialog'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
+import ProjectSetupModal from '@/components/Settings/ProjectSetupModal.vue'
 import type { Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts'
@@ -70,6 +71,16 @@ async function toggleStartSelection(project: Project, service: Service, checked:
 function isSelectedForStart(project: Project, service: Service): boolean {
   if (service.required) return true
   return selectedStartNames(project).includes(service.name)
+}
+
+const setupProject = ref<Project | null>(null)
+
+function openSetup(project: Project) {
+  setupProject.value = project
+}
+
+function onSetupDone() {
+  setupProject.value = null
 }
 
 const retentionDays = computed({
@@ -175,6 +186,14 @@ const retentionDays = computed({
               </div>
               <div class="project-actions">
                 <span>{{ project.services.length }} 个服务</span>
+                <button
+                  v-if="!project.environments?.length"
+                  class="ghost-btn"
+                  :data-test="`setup-project-${project.id}`"
+                  @click="openSetup(project)"
+                >
+                  配置环境
+                </button>
                 <button class="danger-btn" @click="deleteProject(project)">删除</button>
               </div>
             </header>
@@ -211,6 +230,14 @@ const retentionDays = computed({
         <HostManagerTab />
       </section>
     </main>
+
+    <ProjectSetupModal
+      v-if="setupProject"
+      :visible="true"
+      :project="setupProject"
+      @done="onSetupDone"
+      @cancel="setupProject = null"
+    />
   </div>
 </template>
 
