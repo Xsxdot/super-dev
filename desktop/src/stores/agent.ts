@@ -110,6 +110,18 @@ export const useAgentStore = defineStore('agent', () => {
     return projects.value.find(p => p.id === id)
   }
 
+  async function reloadProject(id: string) {
+    const list = await api.listProjects()
+    const updated = list.find(p => p.id === id)
+    if (!updated) return
+    const idx = projects.value.findIndex(p => p.id === id)
+    if (idx !== -1) {
+      projects.value[idx] = updated
+    } else {
+      projects.value.push(updated)
+    }
+  }
+
   return {
     projects,
     connected,
@@ -127,5 +139,6 @@ export const useAgentStore = defineStore('agent', () => {
     isServiceSelectedForStart,
     serviceById,
     projectById,
+    reloadProject,
   }
 })
