@@ -78,6 +78,39 @@ export const useAgentStore = defineStore('agent', () => {
     await api.restartService(id)
   }
 
+  async function startDeployment(id: string) {
+    await api.startDeployment(id)
+  }
+
+  async function stopDeployment(id: string) {
+    await api.stopDeployment(id)
+  }
+
+  async function restartDeployment(id: string) {
+    await api.restartDeployment(id)
+  }
+
+  async function putEnvSelected(projectId: string, envName: string, names: string[]) {
+    await api.putEnvSelected(projectId, envName, names)
+    const project = projects.value.find(p => p.id === projectId)
+    if (project) {
+      if (!project.env_selected_service_ids) project.env_selected_service_ids = {}
+      project.env_selected_service_ids[envName] = names
+    }
+  }
+
+  async function startEnvSelected(projectId: string, envName: string) {
+    await api.startEnvSelected(projectId, envName)
+  }
+
+  function isServiceEnvSelected(projectId: string, envName: string, serviceName: string): boolean {
+    const project = projects.value.find(p => p.id === projectId)
+    if (!project) return false
+    const svc = project.services.find(s => s.name === serviceName)
+    if (svc?.required) return true
+    return project.env_selected_service_ids?.[envName]?.includes(serviceName) ?? false
+  }
+
   async function startSelected(projectId: string) {
     await api.startSelected(projectId)
   }
@@ -134,6 +167,12 @@ export const useAgentStore = defineStore('agent', () => {
     startService,
     stopService,
     restartService,
+    startDeployment,
+    stopDeployment,
+    restartDeployment,
+    putEnvSelected,
+    startEnvSelected,
+    isServiceEnvSelected,
     startSelected,
     updateSelected,
     isServiceSelectedForStart,
