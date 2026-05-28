@@ -70,6 +70,7 @@ export interface Project {
   root_path: string
   services: Service[]
   selected_service_ids: string[]
+  env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
 }
 
@@ -393,6 +394,25 @@ export const api = {
     request<void>(`/api/projects/${projectId}/start-selected`, { method: 'POST' }),
   putSelected: (projectId: string, names: string[]) =>
     request<void>(`/api/projects/${projectId}/selected`, { method: 'PUT', body: JSON.stringify({ names }) }),
+
+  // Deployment 进程控制
+  startDeployment: (id: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+  stopDeployment: (id: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+  restartDeployment: (id: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
+
+  // Env 级 selected
+  putEnvSelected: (projectId: string, envName: string, names: string[]) =>
+    request<void>(`/api/projects/${encodeURIComponent(projectId)}/env-selected`, {
+      method: 'PUT',
+      body: JSON.stringify({ env_name: envName, names }),
+    }),
+  startEnvSelected: (projectId: string, envName: string) =>
+    request<void>(`/api/projects/${encodeURIComponent(projectId)}/envs/${encodeURIComponent(envName)}/start-selected`, {
+      method: 'POST',
+    }),
 
   // 日志
   fetchLogs: (params: FetchLogsParams) => {
