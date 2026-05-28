@@ -57,7 +57,8 @@ func (l *Loader) Load() (model.Project, error) {
 		Name               string        `yaml:"name"`
 		Environments       []envYAML     `yaml:"environments"`
 		Services           []serviceYAML `yaml:"services"`
-		SelectedServiceIDs []string      `yaml:"selected_service_ids"`
+		SelectedServiceIDs    []string            `yaml:"selected_service_ids"`
+		EnvSelectedServiceIDs map[string][]string `yaml:"env_selected_service_ids"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return model.Project{}, fmt.Errorf("parse config: %w", err)
@@ -75,7 +76,8 @@ func (l *Loader) Load() (model.Project, error) {
 		RootPath:           l.rootPath,
 		Environments:       envs,
 		Services:           services,
-		SelectedServiceIDs: raw.SelectedServiceIDs,
+		SelectedServiceIDs:    raw.SelectedServiceIDs,
+		EnvSelectedServiceIDs: raw.EnvSelectedServiceIDs,
 	}, nil
 }
 
@@ -101,6 +103,9 @@ func (l *Loader) Save(p model.Project) error {
 		"name":                 p.Name,
 		"services":             servicesToYAML(p.Services),
 		"selected_service_ids": p.SelectedServiceIDs,
+	}
+	if len(p.EnvSelectedServiceIDs) > 0 {
+		raw["env_selected_service_ids"] = p.EnvSelectedServiceIDs
 	}
 	if p.ID != "" {
 		raw["id"] = p.ID

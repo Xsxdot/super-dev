@@ -81,7 +81,11 @@ type Project struct {
 	RootPath           string        `json:"root_path"            yaml:"-"`
 	Environments       []Environment `json:"environments,omitempty"`
 	Services           []Service     `json:"services"             yaml:"services"`
-	SelectedServiceIDs []string      `json:"selected_service_ids" yaml:"selected_service_ids"`
+	SelectedServiceIDs []string `json:"selected_service_ids" yaml:"selected_service_ids"`
+	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
+	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表。
+	// 替代全局的 SelectedServiceIDs，实现 env 级隔离选择。
+	EnvSelectedServiceIDs map[string][]string `json:"env_selected_service_ids,omitempty" yaml:"env_selected_service_ids,omitempty"`
 }
 
 // LogEntry 表示一条从服务进程捕获的日志记录。
