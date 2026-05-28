@@ -182,6 +182,32 @@ export interface LogSource {
   service_id?: string
 }
 
+export interface LaunchConfig {
+  name: string
+  command: string
+  work_dir: string
+  env?: Record<string, string>
+}
+
+export interface SetupDeployment {
+  id?: string
+  env_name: string
+  location: 'local' | 'remote'
+  command?: string
+  work_dir?: string
+  env?: Record<string, string>
+}
+
+export interface SetupServiceEntry {
+  id: string
+  deployments: SetupDeployment[]
+}
+
+export interface SetupPayload {
+  environments: Array<{ id?: string; name: string; is_dev: boolean; order: number }>
+  services: SetupServiceEntry[]
+}
+
 export interface SshConfigEntry {
   host: string
   hostname: string
@@ -339,6 +365,13 @@ export const api = {
   getProjectRules: (id: string) => request<LogRule[]>(`/api/projects/${id}/rules`),
   putProjectRules: (id: string, rules: LogRule[]) =>
     request<LogRule[]>(`/api/projects/${id}/rules`, { method: 'PUT', body: JSON.stringify(rules) }),
+  getVscodeLaunch: (projectId: string) =>
+    request<LaunchConfig[]>(`/api/projects/${encodeURIComponent(projectId)}/vscode-launch`),
+  putProjectSetup: (projectId: string, payload: SetupPayload) =>
+    request<Project>(`/api/projects/${encodeURIComponent(projectId)}/setup`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
 
   // 设置
   getSettings: () => request<AgentSettings>('/api/settings'),
