@@ -35,6 +35,16 @@ func (a *App) listServices(w http.ResponseWriter, r *http.Request) {
 				}
 				svc.Status = st
 				svc.PID = mgr.PID(svc.ID)
+				// 补全每个 deployment 的运行时状态
+				for j := range svc.Deployments {
+					depID := svc.Deployments[j].ID
+					dst := mgr.DeploymentStatus(depID)
+					if mgr.IsDeploymentActive(depID) && dst != model.StatusStarting && dst != model.StatusFailed {
+						dst = model.StatusRunning
+					}
+					svc.Deployments[j].Status = dst
+					svc.Deployments[j].PID = mgr.DeploymentPID(depID)
+				}
 			}
 			result = append(result, svc)
 		}
