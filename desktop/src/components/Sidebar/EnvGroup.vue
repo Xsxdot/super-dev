@@ -13,7 +13,7 @@ EnvGroup：侧边栏 Environment 分组。
 -->
 
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop } from '@/composables/useDragDrop'
 import type { Service } from '@/api/agent'
@@ -96,11 +96,11 @@ async function stopAll() {
   await Promise.all(deps.map(d => agentStore.stopDeployment(d!.id)))
 }
 
-const canStart = () => props.services.some(svc => {
+const canStart = computed(() => props.services.some(svc => {
   if (!agentStore.isServiceEnvSelected(props.projectId, props.envName, svc.name)) return false
   const dep = svc.deployments?.find(d => d.env_name === props.envName)
   return dep && dep.status !== 'running' && dep.status !== 'starting'
-})
+}))
 
 // ===== 拖拽逻辑 =====
 
@@ -193,7 +193,7 @@ onUnmounted(() => {
       <span class="env-name">{{ envName }}</span>
       <Transition name="fade">
         <div v-if="hovered" class="env-actions" @click.stop>
-          <button title="启动全部" class="action-btn start" :disabled="!canStart()" @click="startAll">▶</button>
+          <button title="启动全部" class="action-btn start" :disabled="!canStart" @click="startAll">▶</button>
           <button title="搜索日志" class="action-btn search" :disabled="services.length === 0" @click="emit('search')">⌕</button>
           <button title="全部停止" class="action-btn stop" @click="stopAll">⏹</button>
         </div>

@@ -252,6 +252,9 @@ func (a *App) putSelected(w http.ResponseWriter, r *http.Request) {
 //
 // 请求体：{"env_name": "dev", "names": ["api", "worker"]}
 // 更新指定环境下用户选中的服务名列表，持久化到配置文件。
+//
+// 操作顺序：先读取项目快照，构建新值，先 Save 成功后再更新内存，
+// 避免 Save 失败时内存与磁盘状态不一致。
 func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -271,32 +274,40 @@ func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
 		req.Names = []string{}
 	}
 
-	a.mu.Lock()
-	var project model.Project
-	found := false
-	for i, p := range a.projects {
-		if p.ID == id {
-			if a.projects[i].EnvSelectedServiceIDs == nil {
-				a.projects[i].EnvSelectedServiceIDs = map[string][]string{}
-			}
-			a.projects[i].EnvSelectedServiceIDs[req.EnvName] = req.Names
-			project = a.projects[i]
-			found = true
-			break
-		}
-	}
-	a.mu.Unlock()
-
+	// 先读取项目快照，用于持久化
+	a.mu.RLock()
+	p, found := a.findProject(id)
+	a.mu.RUnlock()
 	if !found {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
-	loader := config.NewLoader(project.RootPath)
-	if err := loader.Save(project); err != nil {
+	// 构建新的 EnvSelectedServiceIDs（浅拷贝，避免修改原 map）
+	newEnvSelected := map[string][]string{}
+	for k, v := range p.EnvSelectedServiceIDs {
+		newEnvSelected[k] = v
+	}
+	newEnvSelected[req.EnvName] = req.Names
+
+	// 先持久化，成功后再更新内存
+	p.EnvSelectedServiceIDs = newEnvSelected
+	loader := config.NewLoader(p.RootPath)
+	if err := loader.Save(p); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to save env selection: "+err.Error())
 		return
 	}
+
+	// 持久化成功，更新内存
+	a.mu.Lock()
+	for i, proj := range a.projects {
+		if proj.ID == id {
+			a.projects[i].EnvSelectedServiceIDs = newEnvSelected
+			break
+		}
+	}
+	a.mu.Unlock()
+
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -350,12 +361,21 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var started []model.Deployment
 	for _, dep := range toStart {
 		dep := dep
 		if err := mgr.StartDeployment(dep); err != nil {
+			// 部分失败：先把已启动的 PID 持久化，避免遗漏孤儿进程
+			for _, d := range started {
+				a.pidStore.Set(d.ID, mgr.DeploymentPID(d.ID))
+			}
+			_ = a.pidStore.Flush()
 			jsonError(w, http.StatusInternalServerError, "failed to start deployment "+dep.ID+": "+err.Error())
 			return
 		}
+		started = append(started, dep)
+	}
+	for _, dep := range started {
 		a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
 	}
 	_ = a.pidStore.Flush()
