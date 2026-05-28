@@ -120,3 +120,61 @@ func TestManagerStartGroup(t *testing.T) {
 	assert.Equal(t, model.StatusStopped, mgr.Status("b"))
 	assert.Equal(t, model.StatusStopped, mgr.Status("c"))
 }
+
+func TestManagerStartDeployment(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	dep := model.Deployment{
+		ID:       "dep-1",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(dep))
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-1"))
+	assert.Greater(t, mgr.DeploymentPID("dep-1"), 0)
+
+	mgr.StopDeployment("dep-1")
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-1"))
+}
+
+func TestManagerRestartDeployment(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	dep := model.Deployment{
+		ID:       "dep-restart",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(dep))
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-restart"))
+
+	require.NoError(t, mgr.RestartDeployment(dep))
+	time.Sleep(400 * time.Millisecond)
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-restart"))
+
+	mgr.StopDeployment("dep-restart")
+}
+
+func TestManagerDeploymentIsolation(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+
+	dep1 := model.Deployment{ID: "dep-dev", EnvName: "dev", Location: model.LocationLocal, Command: "sleep 60", WorkDir: t.TempDir()}
+	dep2 := model.Deployment{ID: "dep-test", EnvName: "test", Location: model.LocationLocal, Command: "sleep 60", WorkDir: t.TempDir()}
+
+	require.NoError(t, mgr.StartDeployment(dep1))
+	require.NoError(t, mgr.StartDeployment(dep2))
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-dev"))
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-test"))
+
+	mgr.StopDeployment("dep-dev")
+	mgr.StopDeployment("dep-test")
+}

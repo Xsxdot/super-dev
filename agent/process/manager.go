@@ -69,72 +69,7 @@ func (m *Manager) SetRunID(id string) {
 //   - 与 Swift ProcessManager 一致：guard runners[service.id] == nil，不依赖 IsRunning()
 //     （后台化命令如 `npm run dev &` 会使 sh 退出但子进程继续，IsRunning 不可靠）
 func (m *Manager) Start(svc model.Service) error {
-	m.mu.Lock()
-	if m.status[svc.ID] == model.StatusStarting {
-		m.mu.Unlock()
-		return nil
-	}
-	if _, ok := m.runners[svc.ID]; ok {
-		m.mu.Unlock()
-		return nil
-	}
-	m.mu.Unlock()
-
-	m.setStatus(svc.ID, model.StatusStarting)
-
-	r := NewRunner(RunnerConfig{
-		Command: svc.Command,
-		WorkDir: svc.WorkDir,
-		Env:     svc.Env,
-		EnvFile: svc.EnvFile,
-		OnLine: func(line, stream string) {
-			m.mu.Lock()
-			runID := m.runID
-			m.mu.Unlock()
-			m.onLog(model.LogEntry{
-				ID:        m.logSeq.Add(1),
-				ServiceID: svc.ID,
-				RunID:     runID,
-				Timestamp: time.Now().UTC(),
-				Level:     logparse.DetectLevel(line),
-				Message:   line,
-				Stream:    stream,
-			})
-		},
-	})
-
-	if err := r.Start(); err != nil {
-		m.setStatus(svc.ID, model.StatusFailed)
-		m.emitLog(svc.ID, "ERROR", "stderr", "启动失败: "+err.Error())
-		return err
-	}
-
-	m.mu.Lock()
-	m.runners[svc.ID] = r
-	m.mu.Unlock()
-	m.setStatus(svc.ID, model.StatusRunning)
-
-	gen := m.bumpGeneration(svc.ID)
-	// 后台监控进程退出，自动更新状态。
-	// 仅当 generation 未变时写回，避免重启后旧 goroutine 把 running 覆盖为 stopped。
-	go func() {
-		for r.IsRunning() {
-			time.Sleep(200 * time.Millisecond)
-		}
-		if m.generation(svc.ID) != gen {
-			return
-		}
-		exitCode := r.ExitCode()
-		if exitCode != 0 {
-			m.setStatus(svc.ID, model.StatusFailed)
-			m.emitLog(svc.ID, "ERROR", "stderr",
-				fmt.Sprintf("进程异常退出，退出码 %d", exitCode))
-		} else {
-			m.setStatus(svc.ID, model.StatusStopped)
-		}
-	}()
-
-	return nil
+	return m.startByID(svc.ID, svc)
 }
 
 // Restart 停止后重新启动服务。
@@ -276,6 +211,138 @@ func (m *Manager) generation(serviceID string) uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.generations[serviceID]
+}
+
+// StartDeployment 以 Deployment 的配置启动一个进程，以 dep.ID 为键管理。
+//
+// 只读 deployment（location=remote 且 StartCommand/StopCommand 任一为空）直接返回 nil。
+// location 为空时按 local 处理。
+func (m *Manager) StartDeployment(dep model.Deployment) error {
+	if dep.IsReadOnly() {
+		return nil
+	}
+	svc := deploymentToService(dep)
+	return m.startByID(dep.ID, svc)
+}
+
+// StopDeployment 停止指定 deployment 的进程。
+// 与 Stop/Status 等方法共用同一 runners map，以 deploymentID 为键，语义上区分 service 和 deployment 两个命名空间。
+func (m *Manager) StopDeployment(deploymentID string) {
+	m.Stop(deploymentID)
+}
+
+// RestartDeployment 重启指定 deployment 的进程。
+func (m *Manager) RestartDeployment(dep model.Deployment) error {
+	m.StopDeployment(dep.ID)
+	return m.StartDeployment(dep)
+}
+
+// DeploymentStatus 返回 deployment 进程的当前状态。
+func (m *Manager) DeploymentStatus(deploymentID string) model.ServiceStatus {
+	return m.Status(deploymentID)
+}
+
+// DeploymentPID 返回 deployment 进程的 PID；未启动或已退出时返回 0。
+func (m *Manager) DeploymentPID(deploymentID string) int {
+	return m.PID(deploymentID)
+}
+
+// IsDeploymentActive 报告 deployment 是否已启动且未停止。
+func (m *Manager) IsDeploymentActive(deploymentID string) bool {
+	return m.IsActive(deploymentID)
+}
+
+// startByID 以指定的 id 为键启动进程，是 Start(svc) 的泛化版本。
+func (m *Manager) startByID(id string, svc model.Service) error {
+	m.mu.Lock()
+	if m.status[id] == model.StatusStarting {
+		m.mu.Unlock()
+		return nil
+	}
+	if _, ok := m.runners[id]; ok {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	m.setStatus(id, model.StatusStarting)
+
+	r := NewRunner(RunnerConfig{
+		Command: svc.Command,
+		WorkDir: svc.WorkDir,
+		Env:     svc.Env,
+		EnvFile: svc.EnvFile,
+		OnLine: func(line, stream string) {
+			m.mu.Lock()
+			runID := m.runID
+			m.mu.Unlock()
+			m.onLog(model.LogEntry{
+				ID:        m.logSeq.Add(1),
+				ServiceID: id,
+				RunID:     runID,
+				Timestamp: time.Now().UTC(),
+				Level:     logparse.DetectLevel(line),
+				Message:   line,
+				Stream:    stream,
+			})
+		},
+	})
+
+	if err := r.Start(); err != nil {
+		m.setStatus(id, model.StatusFailed)
+		m.emitLog(id, "ERROR", "stderr", "启动失败: "+err.Error())
+		return err
+	}
+
+	m.mu.Lock()
+	m.runners[id] = r
+	m.mu.Unlock()
+	m.setStatus(id, model.StatusRunning)
+
+	gen := m.bumpGeneration(id)
+	go func() {
+		for r.IsRunning() {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if m.generation(id) != gen {
+			return
+		}
+		exitCode := r.ExitCode()
+		if exitCode != 0 {
+			m.setStatus(id, model.StatusFailed)
+			m.emitLog(id, "ERROR", "stderr",
+				fmt.Sprintf("进程异常退出，退出码 %d", exitCode))
+		} else {
+			m.setStatus(id, model.StatusStopped)
+		}
+	}()
+
+	return nil
+}
+
+// deploymentToService 将 Deployment 字段映射到 Service，供 startByID 复用 Runner。
+// local deployment 用自身的 Command/WorkDir/Env；
+// remote deployment 用 StartCommand 作为命令。
+// remote deployment 通过远程命令（SSH 等）执行，本机 env 无需透传；
+// StartCommand 作为启动命令直接在远端执行。
+func deploymentToService(dep model.Deployment) model.Service {
+	cmd := dep.Command
+	workDir := dep.WorkDir
+	env := dep.Env
+	envFile := dep.EnvFile
+	if dep.Location == model.LocationRemote {
+		cmd = dep.StartCommand
+		workDir = ""
+		env = nil
+		envFile = ""
+	}
+	return model.Service{
+		ID:      dep.ID,
+		Command: cmd,
+		WorkDir: workDir,
+		Env:     env,
+		EnvFile: envFile,
+	}
 }
 
 // groupByOrder 将服务列表按 Order 字段分组，返回按 Order 升序排列的二维切片。
