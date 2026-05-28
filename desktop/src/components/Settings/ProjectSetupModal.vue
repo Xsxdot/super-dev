@@ -12,7 +12,7 @@ ProjectSetupModal：项目 Environment 配置引导弹窗。
   - 不自动关闭，由父组件监听 done 事件后处理
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { api, type Project, type Service, type LaunchConfig, type SetupPayload } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 
@@ -51,6 +51,18 @@ const launchSelected = ref<Set<string>>(new Set())
 // 加载/错误状态
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// 每次弹窗打开时重置所有状态，避免上次操作的残留数据
+watch(() => props.visible, (val) => {
+  if (!val) return
+  step.value = 'choose'
+  error.value = null
+  envName.value = 'dev'
+  envIsDev.value = true
+  scratchRows.value = []
+  launchConfigs.value = []
+  launchSelected.value = new Set()
+})
 
 /**
  * matchLaunchToService 根据 launch 配置名匹配对应 service。
