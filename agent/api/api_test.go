@@ -341,3 +341,116 @@ services:
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	_ = resp.Body.Close()
 }
+
+func TestEnvSelectedPutAndStart(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	cfg := `
+name: myproject
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
+  - name: test
+    is_dev: false
+    order: 1
+services:
+  - name: api
+    required: true
+    order: 0
+    deployments:
+      - env: dev
+        location: local
+        command: "sleep 60"
+        working_dir: "."
+      - env: test
+        location: local
+        command: "sleep 60"
+        working_dir: "."
+  - name: worker
+    required: false
+    order: 1
+    deployments:
+      - env: dev
+        location: local
+        command: "sleep 60"
+        working_dir: "."
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644))
+
+	body, _ := json.Marshal(map[string]string{"root_path": dir})
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	var project model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&project))
+	_ = resp.Body.Close()
+
+	// PUT env-selected：dev 环境选中 worker
+	putBody, _ := json.Marshal(map[string]interface{}{
+		"env_name": "dev",
+		"names":    []string{"worker"},
+	})
+	req, _ := http.NewRequest(http.MethodPut,
+		srv.URL+"/api/projects/"+project.ID+"/env-selected",
+		bytes.NewReader(putBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	// 重新 GET projects 验证持久化
+	resp, err = http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&projects))
+	_ = resp.Body.Close()
+	require.Len(t, projects, 1)
+	assert.Equal(t, []string{"worker"}, projects[0].EnvSelectedServiceIDs["dev"])
+
+	// POST start-env-selected：只启动 dev env 下的 required(api) + selected(worker)
+	resp, err = http.Post(
+		srv.URL+"/api/projects/"+project.ID+"/envs/dev/start-selected",
+		"application/json", nil)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	time.Sleep(200 * time.Millisecond)
+
+	// 验证 dev 的 api 和 worker deployment 都在运行，test 的 api 不在运行
+	resp, err = http.Get(srv.URL + "/api/services")
+	require.NoError(t, err)
+	var services []model.Service
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&services))
+	_ = resp.Body.Close()
+
+	svcMap := map[string]model.Service{}
+	for _, s := range services {
+		svcMap[s.Name] = s
+	}
+
+	apiDevDep := findDepByEnv(svcMap["api"].Deployments, "dev")
+	apiTestDep := findDepByEnv(svcMap["api"].Deployments, "test")
+	workerDevDep := findDepByEnv(svcMap["worker"].Deployments, "dev")
+
+	require.NotNil(t, apiDevDep)
+	assert.Equal(t, model.StatusRunning, apiDevDep.Status, "api/dev should be running")
+	require.NotNil(t, apiTestDep)
+	assert.Equal(t, model.StatusStopped, apiTestDep.Status, "api/test should NOT be running")
+	require.NotNil(t, workerDevDep)
+	assert.Equal(t, model.StatusRunning, workerDevDep.Status, "worker/dev should be running")
+}
+
+// findDepByEnv 在 deployments 中按 env_name 查找。
+func findDepByEnv(deps []model.Deployment, envName string) *model.Deployment {
+	for i := range deps {
+		if deps[i].EnvName == envName {
+			return &deps[i]
+		}
+	}
+	return nil
+}
