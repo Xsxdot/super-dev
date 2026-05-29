@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { setActivePinia, createPinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
 import EnvGroup from '@/components/Sidebar/EnvGroup.vue'
 import type { Service } from '@/api/agent'
 
@@ -16,6 +17,9 @@ const makeService = (id: string, name: string, envName: string): Service => ({
 })
 
 describe('EnvGroup', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
   it('is_dev=true 时初始展开，显示 service 行', () => {
     const wrapper = mount(EnvGroup, {
       props: {
@@ -61,7 +65,7 @@ describe('EnvGroup', () => {
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(true)
   })
 
-  it('点击 service 行 emit open-deployment', async () => {
+  it('点击 service 行 emit select-service', async () => {
     const wrapper = mount(EnvGroup, {
       props: {
         envName: 'dev',
@@ -74,8 +78,9 @@ describe('EnvGroup', () => {
 
     await wrapper.find('[data-test="env-service-row"]').trigger('click')
 
-    const emitted = wrapper.emitted('open-deployment')
+    const emitted = wrapper.emitted('select-service')
     expect(emitted).toBeTruthy()
-    expect((emitted![0][0] as { deploymentId: string }).deploymentId).toBe('dep-svc-1')
+    expect((emitted![0][0] as { serviceId: string; projectId: string }).serviceId).toBe('svc-1')
+    expect((emitted![0][0] as { serviceId: string; projectId: string }).projectId).toBe('proj-1')
   })
 })
