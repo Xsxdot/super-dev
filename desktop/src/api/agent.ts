@@ -50,6 +50,7 @@ export interface Deployment {
   location: DeployLocation
   command?: string
   work_dir?: string
+  env?: Record<string, string>
   host_ids?: string[]
   log_type?: LogSourceType
   log_target?: string
