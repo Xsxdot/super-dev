@@ -34,4 +34,18 @@ describe('DeploymentForm', () => {
     const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
     expect(wrapper.find('[data-test="env-row"]').exists()).toBe(true)
   })
+
+  it('remote 勾选主机 emit 含该 host 的 host_ids', async () => {
+    const dep = { id: 'd1', env_name: 'dev', location: 'remote' as const, host_ids: [] as string[], status: '' as const }
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: dep, hosts: [{ id: 'h1', name: 'box1' }, { id: 'h2', name: 'box2' }] },
+    })
+    const checkboxes = wrapper.findAll('.dep-host input')
+    expect(checkboxes.length).toBeGreaterThanOrEqual(2)
+    await checkboxes[0].setValue(true)
+    const emitted = wrapper.emitted('update:modelValue')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { host_ids?: string[] }
+    expect(last.host_ids).toContain('h1')
+  })
 })
