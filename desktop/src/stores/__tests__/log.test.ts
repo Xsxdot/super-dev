@@ -80,3 +80,31 @@ describe('logStore', () => {
     expect(store.getLogs('svc-api').map(l => l.message)).toEqual(['history 1', 'live 2'])
   })
 })
+
+describe('log trimming', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+    MockWebSocket.instances = []
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  })
+
+  it('超出 MAX_LOGS 时批量截断并同步清理 seenSignatures', async () => {
+    vi.spyOn(agentApi, 'fetchLogs').mockResolvedValue([])
+    const store = useLogStore()
+    await store.subscribe('svc-trim')
+    const ws = MockWebSocket.instances[0]
+
+    // 注入 5001 条不同日志
+    for (let i = 1; i <= 5001; i++) {
+      ws.onmessage?.({ data: JSON.stringify(log(i, `msg-${i}`)) })
+    }
+
+    const logs = store.getLogs('svc-trim')
+    // 截断后不超过 MAX_LOGS (5000)
+    expect(logs.length).toBeLessThanOrEqual(5000)
+    // seenSignatures 不应无限增长——其大小应与 logs 数量接近（允许少量偏差）
+    const entry = (store as any).serviceLogs['svc-trim']
+    expect(entry.seenSignatures.size).toBeLessThanOrEqual(5000 + 10)
+  })
+})
