@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useLogStore } from '@/stores/log'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -273,15 +274,9 @@ function cancelScrollRetries() {
 async function scrollToBottom() {
   programmaticScroll = true
   await nextTick()
-  const el = logListEl.value
-  if (!el) {
-    programmaticScroll = false
-    return
-  }
-  el.scrollTop = el.scrollHeight
-  const lastEntry = el.querySelector('[data-log-id]:last-of-type')
-  if (lastEntry && 'scrollIntoView' in lastEntry) {
-    lastEntry.scrollIntoView({ block: 'end' })
+  const count = displayItems.value.length
+  if (count > 0) {
+    virtualizer.value.scrollToIndex(count - 1, { align: 'end' })
   }
   requestAnimationFrame(() => {
     programmaticScroll = false
@@ -340,8 +335,8 @@ function onScroll() {
     newLogCount.value = 0
     if (!wasFollowing) pinToBottomIfFollowing()
   }
-  // 滚动到顶部附近时加载更早历史
-  if (el.scrollTop < 80) {
+  const range = virtualizer.value.range
+  if (range && range.startIndex < 5) {
     void tryLoadMoreHistory()
   }
 }
@@ -358,17 +353,15 @@ async function tryLoadMoreHistory() {
     if (!deploymentLogStore.hasMoreHistory(props.source.deploymentId)) return
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
-    const el = logListEl.value
-    const prevScrollHeight = el?.scrollHeight ?? 0
+    const prevStart = virtualizer.value.range?.startIndex ?? 0
+    const prevCount = displayItems.value.length
     await deploymentLogStore.loadMoreHistory(props.source.deploymentId)
     await nextTick()
-    if (el) {
-      const added = el.scrollHeight - prevScrollHeight
-      if (added > 0) {
-        programmaticScroll = true
-        el.scrollTop += added
-        requestAnimationFrame(() => { programmaticScroll = false })
-      }
+    const added = displayItems.value.length - prevCount
+    if (added > 0) {
+      programmaticScroll = true
+      virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+      requestAnimationFrame(() => { programmaticScroll = false })
     }
     isLoadingHistory.value = false
     return
@@ -377,18 +370,15 @@ async function tryLoadMoreHistory() {
   if (!logStore.hasMoreHistory(props.serviceId)) return
   if (isLoadingHistory.value) return
   isLoadingHistory.value = true
-  const el = logListEl.value
-  // 记住加载前的 scrollHeight，加载完后补偿滚动位置
-  const prevScrollHeight = el?.scrollHeight ?? 0
+  const prevStart = virtualizer.value.range?.startIndex ?? 0
+  const prevCount = displayItems.value.length
   await logStore.loadMoreHistory(props.serviceId)
   await nextTick()
-  if (el) {
-    const added = el.scrollHeight - prevScrollHeight
-    if (added > 0) {
-      programmaticScroll = true
-      el.scrollTop += added
-      requestAnimationFrame(() => { programmaticScroll = false })
-    }
+  const added = displayItems.value.length - prevCount
+  if (added > 0) {
+    programmaticScroll = true
+    virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+    requestAnimationFrame(() => { programmaticScroll = false })
   }
   isLoadingHistory.value = false
 }
@@ -436,6 +426,15 @@ const selectionButtonStyle = computed(() => {
 
 const stats = computed(() => cachedDisplay.value.stats)
 const displayItems = computed(() => cachedDisplay.value.items)
+
+const virtualizer = useVirtualizer(
+  computed(() => ({
+    count: displayItems.value.length,
+    getScrollElement: () => logListEl.value,
+    estimateSize: () => 22,
+    overscan: 10,
+  }))
+)
 </script>
 
 <template>
@@ -450,31 +449,39 @@ const displayItems = computed(() => cachedDisplay.value.items)
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
       <div v-if="(serviceId || source?.type === 'deployment') && isLoadingHistory" class="history-loading">加载历史记录中…</div>
       <div v-else-if="(serviceId && !logStore.hasMoreHistory(serviceId)) || (source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId))" class="history-end">— 已到最早记录 —</div>
-      <template
-        v-for="item in displayItems"
-        :key="item.id"
-      >
-        <BookmarkMarkerRow
-          v-if="item.kind === 'markerStart'"
-          :is-start="true"
-          :date="item.date"
-        />
-        <BookmarkMarkerRow
-          v-else-if="item.kind === 'markerEnd'"
-          :is-start="false"
-          :date="item.date"
-        />
-        <LogHistorySeparatorRow
-          v-else-if="item.kind === 'historySeparator'"
-        />
-        <LogRow
-          v-else-if="item.kind === 'entry'"
-          :log="item.log"
-          :service-name="serviceNameFor(item.log)"
-          :highlighted="isHighlighted(item.log)"
-          @selection-change="(t, r) => onLogSelection(item.log.id, t, r)"
-        />
-      </template>
+
+      <div :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }">
+        <div
+          v-for="vRow in virtualizer.getVirtualItems()"
+          :key="vRow.key"
+          :data-index="vRow.index"
+          :ref="(el) => { if (el) virtualizer.measureElement(el as Element) }"
+          :style="{ position: 'absolute', top: vRow.start + 'px', width: '100%' }"
+        >
+          <template v-if="displayItems[vRow.index]">
+            <BookmarkMarkerRow
+              v-if="displayItems[vRow.index].kind === 'markerStart'"
+              :is-start="true"
+              :date="(displayItems[vRow.index] as any).date"
+            />
+            <BookmarkMarkerRow
+              v-else-if="displayItems[vRow.index].kind === 'markerEnd'"
+              :is-start="false"
+              :date="(displayItems[vRow.index] as any).date"
+            />
+            <LogHistorySeparatorRow
+              v-else-if="displayItems[vRow.index].kind === 'historySeparator'"
+            />
+            <LogRow
+              v-else-if="displayItems[vRow.index].kind === 'entry'"
+              :log="(displayItems[vRow.index] as any).log"
+              :service-name="serviceNameFor((displayItems[vRow.index] as any).log)"
+              :highlighted="isHighlighted((displayItems[vRow.index] as any).log)"
+              @selection-change="(t, r) => onLogSelection((displayItems[vRow.index] as any).log.id, t, r)"
+            />
+          </template>
+        </div>
+      </div>
 
       <button
         v-if="activeSelectionText && activeSelectionRect"
