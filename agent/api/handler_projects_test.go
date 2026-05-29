@@ -3,8 +3,10 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,4 +57,29 @@ func TestProbeProject_ExistingConfig(t *testing.T) {
 	assert.Equal(t, "myapp", probed.Name)
 	require.Len(t, probed.Services, 1)
 	assert.Equal(t, "web", probed.Services[0].Name)
+}
+
+// TestAddProject_EmptyDirCreatesSkeleton 验证 addProject 对无 config 的目录
+// 不报错，落地一个空骨架项目（含 ID，写入注册表）。
+func TestAddProject_EmptyDirCreatesSkeleton(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.NotEmpty(t, created.ID)
+	assert.Empty(t, created.Services)
+
+	listResp, err := http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
+	assert.Len(t, projects, 1, "addProject 应落地项目")
 }

@@ -64,7 +64,15 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 
 	loader := config.NewLoader(req.RootPath)
 	p, err := loader.Load()
-	if err != nil {
+	if errors.Is(err, config.ErrNotFound) {
+		// 空目录：落地空骨架项目，首次 Save 生成 config.yaml
+		p = model.Project{
+			Name:         filepath.Base(req.RootPath),
+			RootPath:     req.RootPath,
+			Environments: []model.Environment{},
+			Services:     []model.Service{},
+		}
+	} else if err != nil {
 		jsonError(w, http.StatusBadRequest, "failed to load project config: "+err.Error())
 		return
 	}
