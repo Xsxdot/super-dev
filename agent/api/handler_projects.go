@@ -13,7 +13,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	"github.com/superdev/agent/config"
@@ -86,6 +88,39 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	a.projects = append(a.projects, p)
 	a.mu.Unlock()
 
+	jsonOK(w, p)
+}
+
+// probeProject 处理 GET /api/projects/probe?root_path=...。
+//
+// 探测目录是否已有 .superdev/config.yaml：
+//   - 有：返回解析后的 project（含 service 列表）供编辑器预填
+//   - 无：返回空骨架（Name 取目录名，environments/services 为空）
+//
+// 注意：探测不写注册表、不写 YAML、不进内存；真正落地在 addProject。
+func (a *App) probeProject(w http.ResponseWriter, r *http.Request) {
+	rootPath := r.URL.Query().Get("root_path")
+	if rootPath == "" {
+		jsonError(w, http.StatusBadRequest, "root_path is required")
+		return
+	}
+
+	loader := config.NewLoader(rootPath)
+	p, err := loader.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		jsonOK(w, model.Project{
+			Name:         filepath.Base(rootPath),
+			RootPath:     rootPath,
+			Environments: []model.Environment{},
+			Services:     []model.Service{},
+		})
+		return
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to load project config: "+err.Error())
+		return
+	}
+	assignIDs(&p)
 	jsonOK(w, p)
 }
 
