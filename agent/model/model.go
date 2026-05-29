@@ -220,6 +220,10 @@ type Deployment struct {
 	StartCommand string `json:"start_command,omitempty"`
 	StopCommand  string `json:"stop_command,omitempty"`
 
+	// Pipeline 可选的部署流水线。非空时启停走流水线引擎而非单命令；
+	// 为空时退回 Command(local) / StartCommand+StopCommand(remote) 的单命令模式（向后兼容）。
+	Pipeline *Pipeline `json:"pipeline,omitempty" yaml:"pipeline,omitempty"`
+
 	// 运行时字段，不持久化
 	Status ServiceStatus `json:"status" yaml:"-"`
 	PID    int           `json:"pid,omitempty" yaml:"-"`

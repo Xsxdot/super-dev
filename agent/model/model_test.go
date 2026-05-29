@@ -174,3 +174,21 @@ func TestDeploymentReadOnlyPartialCommands(t *testing.T) {
 	onlyStop := model.Deployment{Location: model.LocationRemote, StopCommand: "stop.sh"}
 	assert.True(t, onlyStop.IsReadOnly())
 }
+
+func TestDeploymentPipelineOptional(t *testing.T) {
+	// 无 pipeline 的 deployment：字段为 nil，行为不变（向后兼容）
+	d := model.Deployment{ID: "d1", Location: model.LocationLocal, Command: "go run ."}
+	assert.Nil(t, d.Pipeline)
+
+	// 带 pipeline 的 deployment：可序列化往返
+	d.Pipeline = &model.Pipeline{Steps: []model.Step{
+		{ID: "s1", Name: "构建", Scope: model.ScopeLocal, Action: model.ActionRun, Command: "make"},
+	}}
+	data, err := json.Marshal(d)
+	require.NoError(t, err)
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.NotNil(t, got.Pipeline)
+	require.Len(t, got.Pipeline.Steps, 1)
+	assert.Equal(t, "构建", got.Pipeline.Steps[0].Name)
+}
