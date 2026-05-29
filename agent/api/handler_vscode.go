@@ -5,7 +5,7 @@
 //   - PUT /api/projects/{id}/setup：写入 environments 和 service deployments，刷新内存
 //
 // 边界：
-//   - setup 只更新已存在 service 的 deployments，不新增/删除 service
+//   - setup 全量替换 environments 与 services（按 service ID diff：空 ID 新增、命中更新、缺席删除）
 //   - vscode-launch 文件不存在时返回空数组，不报错
 package api
 
