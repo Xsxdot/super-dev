@@ -242,3 +242,34 @@ func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
 	require.Len(t, projects, 1)
 	assert.Len(t, projects[0].Environments, 1)
 }
+
+// TestPutProjectSetup_DeletesAbsentService 验证请求中不出现的 service 被删除（未运行时）。
+func TestPutProjectSetup_DeletesAbsentService(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "myapp")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	require.Len(t, created.Services, 1)
+
+	// 提交一份不含任何 service 的配置 —— web 应被删除
+	setupBody, _ := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services":     []any{},
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	var updated model.Project
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
+	assert.Len(t, updated.Services, 0, "未出现在请求中的 service 应被删除")
+}
