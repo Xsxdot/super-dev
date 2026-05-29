@@ -67,4 +67,23 @@ describe('configDraft', () => {
   it('validateDraft：合法草稿返回空数组', () => {
     expect(validateDraft(projectToDraft(makeProject()))).toEqual([])
   })
+
+  it('projectToDraft 深拷贝嵌套对象：改草稿的 env / pipeline 不影响原 Project', () => {
+    const p = makeProject()
+    p.services[0].deployments[0].pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
+    const draft = projectToDraft(p)
+    // 改草稿里的 env map 和 pipeline 步骤
+    draft.services[0].deployments[0].env!.A = 'mutated'
+    draft.services[0].deployments[0].pipeline!.steps[0].command = 'mutated'
+    // 原 Project 不应被影响
+    expect(p.services[0].deployments[0].env!.A).toBe('1')
+    expect(p.services[0].deployments[0].pipeline!.steps[0].command).toBe('make')
+  })
+
+  it('validateDraft：local deployment 有 pipeline 时允许命令为空', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments[0].command = ''
+    draft.services[0].deployments[0].pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
+    expect(validateDraft(draft)).toEqual([])
+  })
 })
