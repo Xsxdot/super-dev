@@ -1,12 +1,10 @@
-// Package model 中的 pipeline.go 定义部署流水线的声明与执行模型。
+// Package model 中的 pipeline.go 定义部署流水线的声明模型。
 //
 // 职责：
 //   - 声明模型：Pipeline / Step / StepScope / StepAction，描述「同步→构建→启停」流程
-//   - 执行模型：Run / StepRun / Task / RunStatus，描述一次执行的展开与状态
-//   - Pipeline.Expand：把声明的 Step 按作用域展开成可执行的 Run 骨架（纯函数）
 //
 // 边界：
-//   - 仅数据结构与纯展开逻辑，不含任何 I/O 或命令执行（执行在 pipeline 包）
+//   - 仅数据结构定义，不含任何 I/O 或命令执行（执行在 pipeline 包）
 //   - StepScope/StepAction 为开放枚举，未来新增 rolling 作用域不破坏结构
 package model
 
@@ -37,7 +35,12 @@ type Pipeline struct {
 }
 
 // Step 流程中的一步。每步声明在哪执行（Scope）和执行什么（Action）。
+//
+// 字段互斥约束：
+//   - Command / WorkDir 仅 ActionRun 有意义，其他 Action 下应保持零值
+//   - SyncFrom / SyncTo 仅 ActionSync 有意义，其他 Action 下应保持零值
 type Step struct {
+	// ID 步骤唯一标识符，必须非空且在 Pipeline 内唯一。
 	ID     string     `json:"id"     yaml:"id"`
 	Name   string     `json:"name"   yaml:"name"`
 	Scope  StepScope  `json:"scope"  yaml:"scope"`
