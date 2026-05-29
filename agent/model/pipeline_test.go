@@ -66,3 +66,28 @@ func TestStepOmitemptyZeroValues(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, step, got)
 }
+
+func TestRunStatusConstants(t *testing.T) {
+	assert.Equal(t, "pending", string(model.StatusPending))
+	assert.Equal(t, "running", string(model.RunStatusRunning))
+	assert.Equal(t, "success", string(model.StatusSuccess))
+	assert.Equal(t, "failed", string(model.RunStatusFailed))
+	assert.Equal(t, "canceled", string(model.StatusCanceled))
+}
+
+func TestRunJSONRoundTrip(t *testing.T) {
+	r := model.Run{
+		ID: "run-1", DeploymentID: "dep-1", Status: model.RunStatusRunning,
+		StartedAt: 1716000000,
+		StepRuns: []model.StepRun{{
+			StepID: "s1", Name: "构建", Scope: model.ScopeLocal,
+			Status: model.RunStatusRunning,
+			Tasks:  []model.Task{{Status: model.RunStatusRunning, StartedAt: 1716000000}},
+		}},
+	}
+	data, err := json.Marshal(r)
+	require.NoError(t, err)
+	var got model.Run
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, r, got)
+}

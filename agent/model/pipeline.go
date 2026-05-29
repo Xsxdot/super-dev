@@ -54,3 +54,50 @@ type Step struct {
 	SyncFrom string `json:"sync_from,omitempty" yaml:"sync_from,omitempty"`
 	SyncTo   string `json:"sync_to,omitempty"   yaml:"sync_to,omitempty"`
 }
+
+// RunStatus 通用执行状态，Run / StepRun / Task 共用。
+type RunStatus string
+
+const (
+	// StatusPending 待执行。
+	StatusPending RunStatus = "pending"
+	// RunStatusRunning 执行中（区别于 ServiceStatus.StatusRunning，避免同包常量冲突）。
+	RunStatusRunning RunStatus = "running"
+	// StatusSuccess 执行成功。
+	StatusSuccess RunStatus = "success"
+	// RunStatusFailed 执行失败（区别于 ServiceStatus.StatusFailed，避免同包常量冲突）。
+	RunStatusFailed RunStatus = "failed"
+	// StatusCanceled 被取消。
+	StatusCanceled RunStatus = "canceled"
+)
+
+// Run 一次流水线执行。一个 deployment 同时只允许一个活跃 Run（约束由引擎/store 保证）。
+type Run struct {
+	ID           string    `json:"id"`
+	DeploymentID string    `json:"deployment_id"`
+	Status       RunStatus `json:"status"`
+	StepRuns     []StepRun `json:"step_runs"`
+	StartedAt    int64     `json:"started_at"`
+	FinishedAt   int64     `json:"finished_at,omitempty"`
+}
+
+// StepRun 一个 Step 在本次 Run 中的执行状态。
+// local 步骤只有 1 个 Task；fan-out 步骤每台 host 一个 Task。
+type StepRun struct {
+	StepID string    `json:"step_id"`
+	Name   string    `json:"name"`
+	Scope  StepScope `json:"scope"`
+	Status RunStatus `json:"status"`
+	Tasks  []Task    `json:"tasks"`
+}
+
+// Task 最小执行单元 = 某步骤在某个位置的一次执行。GUI 的「格子」。
+// HostID 为空表示本机（local 步骤）；非空表示远程 host（fan-out 步骤）。
+type Task struct {
+	HostID     string    `json:"host_id,omitempty"`
+	HostName   string    `json:"host_name,omitempty"`
+	Status     RunStatus `json:"status"`
+	ExitCode   int       `json:"exit_code,omitempty"`
+	StartedAt  int64     `json:"started_at,omitempty"`
+	FinishedAt int64     `json:"finished_at,omitempty"`
+}
