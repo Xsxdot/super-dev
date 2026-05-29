@@ -13,7 +13,8 @@ import { ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
 import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 
-const MAX_LOGS = 8000
+const MAX_LOGS = 5000
+const TRIM_BATCH = 500
 
 interface DeploymentSession {
   refCount: number
@@ -89,7 +90,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     const entry = toDisplayEntry(raw)
     insertSorted(session.logs, entry)
     if (session.logs.length > MAX_LOGS) {
-      session.logs.splice(0, session.logs.length - MAX_LOGS)
+      session.logs.splice(0, TRIM_BATCH)
     }
     if (session.oldestLoadedId == null || raw.id < session.oldestLoadedId) {
       session.oldestLoadedId = raw.id

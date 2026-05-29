@@ -133,6 +133,27 @@ describe('log ingestion', () => {
 
     expect(store.getLogs('dep1')).toHaveLength(1)
   })
+
+  it('超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-trim')
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+
+    // 注入 5001 条日志
+    for (let i = 1; i <= 5001; i++) {
+      ws.onmessage?.({ data: JSON.stringify({
+        id: i,
+        timestamp: `2024-01-01T00:00:${String(i).padStart(5, '0')}Z`,
+        message: `msg-${i}`,
+        level: 'INFO',
+        service_id: '',
+        run_id: '',
+        stream: 'stdout',
+      }) })
+    }
+
+    expect(store.getLogs('dep-trim').length).toBeLessThanOrEqual(5000)
+  }, 30000)
 })
 
 describe('loadMoreHistory', () => {
