@@ -106,6 +106,55 @@ func TestGetVscodeLaunch_NoFile(t *testing.T) {
 	assert.Len(t, configs, 0)
 }
 
+// TestPutProjectSetup_AddsNewService 验证 setup 可新增一个 ID 为空的 service，
+// 后端分配 ID 并持久化 name/required/order。
+func TestPutProjectSetup_AddsNewService(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "myapp")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	webSvcID := created.Services[0].ID
+
+	setupBody, err := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services": []map[string]any{
+			{"id": webSvcID, "name": "web", "required": false, "order": 0, "deployments": []any{}},
+			{"id": "", "name": "worker", "required": true, "order": 1, "deployments": []map[string]any{
+				{"env_name": "dev", "location": "local", "command": "go run ./worker"},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	var updated model.Project
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
+	require.Len(t, updated.Services, 2)
+	var worker *model.Service
+	for i := range updated.Services {
+		if updated.Services[i].Name == "worker" {
+			worker = &updated.Services[i]
+		}
+	}
+	require.NotNil(t, worker, "worker service 应已新增")
+	assert.NotEmpty(t, worker.ID, "新 service 应分配 ID")
+	assert.True(t, worker.Required)
+	assert.Equal(t, 1, worker.Order)
+	require.Len(t, worker.Deployments, 1)
+	assert.Equal(t, "go run ./worker", worker.Deployments[0].Command)
+}
+
 // TestPutProjectSetup_AppliesEnvironmentsAndDeployments 验证 PUT /api/projects/{id}/setup
 // 正确写入 environments 和 service deployments，并分配 ID。
 func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {

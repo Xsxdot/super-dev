@@ -48,15 +48,21 @@ func (a *App) getVscodeLaunch(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, configs)
 }
 
-// setupRequest 是 PUT /api/projects/{id}/setup 的请求体结构。
+// setupRequest 是 PUT /api/projects/{id}/setup 的请求体结构（全量项目配置）。
 type setupRequest struct {
 	Environments []model.Environment `json:"environments"`
 	Services     []setupServiceEntry `json:"services"`
 }
 
-// setupServiceEntry 描述单个 service 的 deployments 替换请求。
+// setupServiceEntry 描述单个 service 的全量配置。
+//
+// ID 为空表示新增 service（后端分配 ID）；ID 存在表示更新；
+// 现有 service 不在请求列表中则被删除（删除逻辑在 putProjectSetup）。
 type setupServiceEntry struct {
 	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Required    bool               `json:"required"`
+	Order       int                `json:"order"`
 	Deployments []model.Deployment `json:"deployments"`
 }
 
@@ -102,19 +108,28 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	// 替换 environments
 	a.projects[idx].Environments = req.Environments
 
-	// 按 service ID 替换 deployments
-	for _, entry := range req.Services {
-		for si := range a.projects[idx].Services {
-			if a.projects[idx].Services[si].ID == entry.ID {
-				deps := entry.Deployments
-				if deps == nil {
-					deps = []model.Deployment{}
-				}
-				a.projects[idx].Services[si].Deployments = deps
-				break
-			}
-		}
+	// 按请求重建 services：ID 命中现有则保留运行时无关字段并更新；ID 为空则新增。
+	// 请求中不出现的现有 service 将被丢弃（删除）——删除运行中守卫在 Task 2 添加。
+	existing := map[string]model.Service{}
+	for _, s := range a.projects[idx].Services {
+		existing[s.ID] = s
 	}
+
+	newServices := make([]model.Service, 0, len(req.Services))
+	for _, entry := range req.Services {
+		deps := entry.Deployments
+		if deps == nil {
+			deps = []model.Deployment{}
+		}
+		svc := existing[entry.ID] // ID 为空时为零值 Service（新增）
+		svc.ID = entry.ID
+		svc.Name = entry.Name
+		svc.Required = entry.Required
+		svc.Order = entry.Order
+		svc.Deployments = deps
+		newServices = append(newServices, svc)
+	}
+	a.projects[idx].Services = newServices
 
 	// 填充空 ID（environment ID、deployment ID 等）
 	assignIDs(&a.projects[idx])
