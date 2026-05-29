@@ -187,8 +187,10 @@ struct LogPanelView: View {
         }
         .onChange(of: cachedDisplay.items.last?.id) { _, newId in
             guard isFollowing, let newId else { return }
-            suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
-            scrollAnchorId = newId
+            MainRunLoop.deferred {
+                suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
+                scrollAnchorId = newId
+            }
         }
         .onChange(of: core.logSourceRevision) { _, _ in scheduleDisplayRefresh() }
         .onChange(of: core.bookmarks[panelId]?.lockedLogs.count) { _, _ in scheduleDisplayRefresh() }
@@ -239,8 +241,10 @@ struct LogPanelView: View {
 
     private func refreshDisplayImmediately() {
         displayRefreshTask?.cancel()
-        cachedDisplay = makeLogDisplay()
-        pinToBottomIfFollowing()
+        MainRunLoop.deferred {
+            cachedDisplay = makeLogDisplay()
+            pinToBottomIfFollowing()
+        }
     }
 
     private func pinToBottomIfFollowing() {
@@ -249,6 +253,33 @@ struct LogPanelView: View {
         newLogCount = 0
         scrollAnchorId = lastId
         scheduleScrollRetries(lastId: lastId)
+    }
+
+    private func applyScrollFollowState(distanceFromBottom: CGFloat, items: [LogDisplayItem]) {
+        guard Date() >= suppressFollowGeometryUntil else { return }
+        let wasFollowing = isFollowing
+        isFollowing = distanceFromBottom < 50
+        if isFollowing {
+            newLogCount = 0
+            if !wasFollowing, let last = items.last {
+                scrollAnchorId = last.id
+            }
+        }
+    }
+
+    private func applyItemsCountChange(oldCount: Int, newCount: Int, items: [LogDisplayItem]) {
+        if isFollowing {
+            newLogCount = 0
+            if let last = items.last {
+                suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
+                scrollAnchorId = last.id
+                if oldCount == 0, newCount > 0 {
+                    scheduleScrollRetries(lastId: last.id)
+                }
+            }
+        } else {
+            newLogCount += max(0, newCount - oldCount)
+        }
     }
 
     private func scheduleScrollRetries(lastId: UUID) {
@@ -710,28 +741,13 @@ struct LogPanelView: View {
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentSize.height - geo.containerSize.height - geo.contentOffset.y
         } action: { _, distanceFromBottom in
-            guard Date() >= suppressFollowGeometryUntil else { return }
-            let wasFollowing = isFollowing
-            isFollowing = distanceFromBottom < 50
-            if isFollowing {
-                newLogCount = 0
-                if !wasFollowing, let last = items.last {
-                    scrollAnchorId = last.id
-                }
+            MainRunLoop.deferred {
+                applyScrollFollowState(distanceFromBottom: distanceFromBottom, items: items)
             }
         }
         .onChange(of: items.count) { oldCount, newCount in
-            if isFollowing {
-                newLogCount = 0
-                if let last = items.last {
-                    suppressFollowGeometryUntil = Date().addingTimeInterval(0.25)
-                    scrollAnchorId = last.id
-                    if oldCount == 0, newCount > 0 {
-                        scheduleScrollRetries(lastId: last.id)
-                    }
-                }
-            } else {
-                newLogCount += max(0, newCount - oldCount)
+            MainRunLoop.deferred {
+                applyItemsCountChange(oldCount: oldCount, newCount: newCount, items: items)
             }
         }
         .overlay(alignment: .bottomTrailing) {

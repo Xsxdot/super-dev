@@ -101,6 +101,16 @@ describe('bookmarkStore', () => {
     expect(store.getBookmark('p1')?.lockedLogs).toHaveLength(1)
   })
 
+  it('endBookmark 从 captureLogs 填充 lockedLogs', () => {
+    const store = useBookmarkStore()
+    store.startBookmark('p1', 'svc-1')
+    const midTs = new Date().toISOString()
+    const logs = [makeLog('in range', midTs)]
+    store.endBookmark('p1', logs)
+    expect(store.getBookmark('p1')?.lockedLogs).toHaveLength(1)
+    expect(store.getBookmark('p1')?.lockedLogs[0].message).toBe('in range')
+  })
+
   it('clearBookmark 清除书签', () => {
     const store = useBookmarkStore()
     store.startBookmark('p1', 'svc-1')

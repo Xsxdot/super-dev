@@ -20,8 +20,10 @@ struct MainWindowView: View {
         } detail: {
             PanelLayoutView(layout: $layout, focusedPanelId: $focusedPanelId)
                 .onChange(of: layout) { _, newLayout in
-                    pruneOrphanBookmarks(layout: newLayout)
-                    ensureFocusedPanel(in: newLayout)
+                    MainRunLoop.deferred {
+                        pruneOrphanBookmarks(layout: newLayout)
+                        ensureFocusedPanel(in: newLayout)
+                    }
                 }
                 .onAppear {
                     ensureFocusedPanel(in: layout)
