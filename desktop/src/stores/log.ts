@@ -8,7 +8,8 @@ import {
   toDisplayEntry,
   type DisplayLogEntry,
 } from '@/lib/logEngine'
-const MAX_LOGS = 8000
+const MAX_LOGS = 5000
+const TRIM_BATCH = 500
 
 interface LogBoundary {
   timestamp: string
@@ -71,7 +72,8 @@ export const useLogStore = defineStore('log', () => {
     entry.seenSignatures.add(sig)
     ingest(toDisplayEntry(log), entry.logs)
     if (entry.logs.length > MAX_LOGS) {
-      entry.logs.splice(0, entry.logs.length - MAX_LOGS)
+      const removed = entry.logs.splice(0, TRIM_BATCH)
+      for (const r of removed) entry.seenSignatures.delete(logSignature(r))
     }
     if (entry.oldestLoadedId === null || log.id < entry.oldestLoadedId) {
       entry.oldestLoadedId = log.id
