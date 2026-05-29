@@ -8,6 +8,8 @@ export interface DisplayLogEntry extends LogEntry {
   normalized_message: string
   repeat_count: number
   fold_closed?: boolean
+  _sig?: string     // original signature for seenSignatures cleanup, stored before ingest mutates timestamp
+  _allSigs?: string[] // all fold-merged signatures (including duplicates) for complete seenSignatures cleanup
 }
 
 export function normalize(line: string): string {

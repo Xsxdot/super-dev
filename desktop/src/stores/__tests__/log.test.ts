@@ -107,4 +107,25 @@ describe('log trimming', () => {
     const entry = (store as any).serviceLogs['svc-trim']
     expect(entry.seenSignatures.size).toBeLessThanOrEqual(5000 + 10)
   })
+
+  it('折叠行被截断时也能正确清理 seenSignatures', async () => {
+    vi.spyOn(agentApi, 'fetchLogs').mockResolvedValue([])
+    const store = useLogStore()
+    await store.subscribe('svc-fold')
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+
+    // 注入 11000 条日志，其中每隔一条是重复（触发 fold）。
+    // 每 2 条折叠成 1 个 log 条目，约 5500 条，超过 MAX_LOGS=5000 触发 trim。
+    for (let i = 1; i <= 11000; i++) {
+      // 奇数 id 用唯一消息，偶数 id 重复上一条消息（触发 fold）
+      const message = i % 2 === 0 ? `msg-${i - 1}` : `msg-${i}`
+      ws.onmessage?.({ data: JSON.stringify(log(i, message)) })
+    }
+
+    const logs = store.getLogs('svc-fold')
+    expect(logs.length).toBeLessThanOrEqual(5000)
+    const entry = (store as any).serviceLogs['svc-fold']
+    // seenSignatures 不应无限增长——最多与 MAX_LOGS 同数量级（含折叠签名约 2x）
+    expect(entry.seenSignatures.size).toBeLessThanOrEqual(5000 * 2 + 100)
+  })
 })
