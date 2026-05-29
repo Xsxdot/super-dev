@@ -153,6 +153,15 @@ func TestPutProjectSetup_AddsNewService(t *testing.T) {
 	assert.Equal(t, 1, worker.Order)
 	require.Len(t, worker.Deployments, 1)
 	assert.Equal(t, "go run ./worker", worker.Deployments[0].Command)
+
+	var web *model.Service
+	for i := range updated.Services {
+		if updated.Services[i].Name == "web" {
+			web = &updated.Services[i]
+		}
+	}
+	require.NotNil(t, web, "已有 web service 应保留")
+	assert.Equal(t, webSvcID, web.ID, "保留的 service 应沿用原 ID")
 }
 
 // TestPutProjectSetup_AppliesEnvironmentsAndDeployments 验证 PUT /api/projects/{id}/setup
@@ -184,7 +193,8 @@ func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
 		},
 		"services": []map[string]any{
 			{
-				"id": webSvcID,
+				"id":   webSvcID,
+				"name": "web",
 				"deployments": []map[string]any{
 					{
 						"env_name": "dev",
@@ -218,6 +228,7 @@ func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
 	assert.True(t, updated.Environments[0].IsDev)
 
 	require.Len(t, updated.Services, 1)
+	assert.Equal(t, "web", updated.Services[0].Name)
 	require.Len(t, updated.Services[0].Deployments, 1)
 	assert.Equal(t, "dev", updated.Services[0].Deployments[0].EnvName)
 	assert.NotEmpty(t, updated.Services[0].Deployments[0].ID, "deployment ID 应由 assignIDs 分配")
