@@ -108,8 +108,25 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	// 替换 environments
 	a.projects[idx].Environments = req.Environments
 
+	// 删除运行中 service 守卫：被删除（不在请求中）且正在运行的 service 拒绝删除。
+	keepIDs := map[string]bool{}
+	for _, entry := range req.Services {
+		if entry.ID != "" {
+			keepIDs[entry.ID] = true
+		}
+	}
+	if mgr, ok := a.managers[id]; ok {
+		for _, s := range a.projects[idx].Services {
+			if !keepIDs[s.ID] && mgr.IsActive(s.ID) {
+				a.mu.Unlock()
+				jsonError(w, http.StatusConflict, "请先停止服务「"+s.Name+"」再删除")
+				return
+			}
+		}
+	}
+
 	// 按请求重建 services：ID 命中现有则保留运行时无关字段并更新；ID 为空则新增。
-	// 请求中不出现的现有 service 将被丢弃（删除）——删除运行中守卫在 Task 2 添加。
+	// 请求中不出现的现有 service 将被丢弃（删除）。
 	existing := map[string]model.Service{}
 	for _, s := range a.projects[idx].Services {
 		existing[s.ID] = s
