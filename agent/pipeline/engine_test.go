@@ -107,3 +107,19 @@ func TestEngineEmitsStatusCallbacks(t *testing.T) {
 	assert.Contains(t, events, "task_finished")
 	assert.Contains(t, events, "run_finished")
 }
+
+func TestEngineEmptyFanOutStepSucceeds(t *testing.T) {
+	// fan-out 步骤但没有 host（0 个 task）：视为该步骤直接成功
+	p := model.Pipeline{Steps: []model.Step{
+		{ID: "sync", Name: "同步", Scope: model.ScopeFanOut, Action: model.ActionSync},
+	}}
+	run := p.Expand("dep-1", nil) // 无 host → 0 个 task
+	fe := &fakeExecutor{failAt: map[string]bool{}}
+	eng := pipeline.NewEngine(fe)
+
+	final, err := eng.Run(context.Background(), p, run, nil)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusSuccess, final.Status)
+	assert.Equal(t, model.StatusSuccess, final.StepRuns[0].Status)
+	assert.Empty(t, fe.calls)
+}
