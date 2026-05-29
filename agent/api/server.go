@@ -164,6 +164,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects", a.listProjects)
 	mux.HandleFunc("POST /api/projects", a.addProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", a.deleteProject)
+	mux.HandleFunc("GET /api/projects/probe", a.probeProject)
 	mux.HandleFunc("GET /api/projects/{id}/rules", a.getProjectRules)
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
