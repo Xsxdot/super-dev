@@ -61,7 +61,7 @@ async function addProject() {
   <div class="sidebar">
     <div class="sidebar-scroll">
       <template v-for="project in agentStore.projects" :key="project.id">
-        <ProjectHeader :project="project" @search="openProjectSearch(project.id)" />
+        <ProjectHeader :project="project" />
         <!-- 已配置 environments：按环境分组 -->
         <template v-if="project.environments?.length">
           <EnvGroup
@@ -73,6 +73,8 @@ async function addProject() {
             :services="servicesForEnv(project.services, env.name)"
             :selected-service-ids="selectedServiceIdSet()"
             @open-deployment="openDeployment"
+            @select-service="selectService($event.serviceId, $event.projectId)"
+            @search="openProjectSearch(project.id)"
           />
         </template>
         <!-- 未配置 environments：退化为平铺 ServiceRow -->

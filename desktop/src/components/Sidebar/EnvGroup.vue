@@ -28,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'open-deployment': [payload: { deploymentId: string; title: string }]
+  'select-service': [payload: { serviceId: string; projectId: string }]
   'search': []
 }>()
 
@@ -66,15 +67,10 @@ function statusColor(status: string): string {
 
 /**
  * onServiceRowClick 处理 service 行点击事件。
- * 找到该 service 在当前环境下的 deployment，emit open-deployment。
+ * emit select-service，由父组件调用 openService 打开 project tab（支持分栏拖拽）。
  */
 function onServiceRowClick(svc: Service) {
-  const dep = svc.deployments?.find(d => d.env_name === props.envName)
-  if (!dep) return
-  emit('open-deployment', {
-    deploymentId: dep.id,
-    title: `${svc.name} · ${props.envName}`,
-  })
+  emit('select-service', { serviceId: svc.id, projectId: props.projectId })
 }
 
 // ===== env 级批量操作 =====
