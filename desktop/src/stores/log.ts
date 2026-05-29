@@ -70,10 +70,28 @@ export const useLogStore = defineStore('log', () => {
     const sig = logSignature(log)
     if (entry.seenSignatures.has(sig)) return false
     entry.seenSignatures.add(sig)
-    ingest(toDisplayEntry(log), entry.logs)
+    const display = toDisplayEntry(log)
+    // 在 ingest 可能修改 display.timestamp（fold 合并）之前先保存原始签名，
+    // 确保后续截断清理 seenSignatures 时能用正确的 key 删除
+    display._sig = sig
+    const prevLength = entry.logs.length
+    ingest(display, entry.logs)
+    if (entry.logs.length === prevLength) {
+      // ingest 将此条折叠进了最后一行，把签名追加到该行的 _allSigs 中，
+      // 以便该行被截断时能清理所有折叠进来的 seenSignatures 条目
+      const last = entry.logs[entry.logs.length - 1]
+      if (last) {
+        if (!last._allSigs) last._allSigs = last._sig ? [last._sig] : []
+        last._allSigs.push(sig)
+      }
+    }
     if (entry.logs.length > MAX_LOGS) {
       const removed = entry.logs.splice(0, TRIM_BATCH)
-      for (const r of removed) entry.seenSignatures.delete(logSignature(r))
+      for (const r of removed) {
+        // 优先清理所有折叠签名，否则回退到原始签名
+        const sigs = r._allSigs ?? (r._sig ? [r._sig] : [])
+        for (const s of sigs) entry.seenSignatures.delete(s)
+      }
     }
     if (entry.oldestLoadedId === null || log.id < entry.oldestLoadedId) {
       entry.oldestLoadedId = log.id
