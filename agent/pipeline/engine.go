@@ -49,6 +49,9 @@ func NewEngine(exec Executor) *Engine {
 //   - 同一 StepRun 内的 fan-out task 并行
 //   - emit 为可选回调（nil 则不上报），引擎按 task 粒度回调进度事件
 //
+// 注意：
+//   - emit 回调可能被并发 goroutine 调用，调用方需自行保证线程安全
+//
 // 返回：执行后的 Run 终态 + 整体错误（任一 task 失败时非 nil）。
 func (e *Engine) Run(ctx context.Context, p model.Pipeline, run model.Run, emit func(Event)) (model.Run, error) {
 	run.Status = model.RunStatusRunning
