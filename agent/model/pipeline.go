@@ -101,3 +101,40 @@ type Task struct {
 	StartedAt  int64     `json:"started_at,omitempty"`
 	FinishedAt int64     `json:"finished_at,omitempty"`
 }
+
+// HostRef 是展开 fan-out 步骤所需的目标主机最小信息。
+// 由上层（持有 deployment.HostIDs + Host 列表）解析后传入，
+// 使 Expand 保持纯函数、不依赖 store。
+type HostRef struct {
+	ID   string
+	Name string
+}
+
+// Expand 把声明的 Pipeline 按作用域展开成一个待执行的 Run 骨架。
+//
+// 参数：
+//   - deploymentID: 关联的 deployment ID
+//   - hosts: fan-out 步骤要扇出的目标主机；local 步骤忽略此参数
+//
+// 返回：
+//   - 一个所有 Status 均为 pending 的 Run。ID、StartedAt 由引擎在执行时填充。
+//
+// 注意：
+//   - local 步骤恒展开为 1 个无 HostID 的 Task
+//   - fan-out 步骤为每台 host 展开 1 个 Task；hosts 为空则该步骤 0 个 Task
+func (p Pipeline) Expand(deploymentID string, hosts []HostRef) Run {
+	run := Run{DeploymentID: deploymentID, Status: StatusPending}
+	for _, step := range p.Steps {
+		sr := StepRun{StepID: step.ID, Name: step.Name, Scope: step.Scope, Status: StatusPending}
+		switch step.Scope {
+		case ScopeLocal:
+			sr.Tasks = []Task{{Status: StatusPending}}
+		case ScopeFanOut:
+			for _, h := range hosts {
+				sr.Tasks = append(sr.Tasks, Task{HostID: h.ID, HostName: h.Name, Status: StatusPending})
+			}
+		}
+		run.StepRuns = append(run.StepRuns, sr)
+	}
+	return run
+}
