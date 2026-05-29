@@ -74,7 +74,7 @@ type setupServiceEntry struct {
 //
 // 注意：
 //   - 写锁仅在修改内存期间持有，不在 loader.Save 期间持锁
-//   - 不存在的 service ID 会被静默跳过（不新增/删除 service）
+//   - 按 service ID diff：空 ID 新增、命中更新、缺席删除；删除运行中 service 返回 409
 func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -105,10 +105,8 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 替换 environments
-	a.projects[idx].Environments = req.Environments
-
 	// 删除运行中 service 守卫：被删除（不在请求中）且正在运行的 service 拒绝删除。
+	// 守卫必须在任何状态修改之前执行，确保 409 返回时内存状态保持不变。
 	keepIDs := map[string]bool{}
 	for _, entry := range req.Services {
 		if entry.ID != "" {
@@ -124,6 +122,9 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// 替换 environments
+	a.projects[idx].Environments = req.Environments
 
 	// 按请求重建 services：ID 命中现有则保留运行时无关字段并更新；ID 为空则新增。
 	// 请求中不出现的现有 service 将被丢弃（删除）。
