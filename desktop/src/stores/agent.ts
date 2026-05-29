@@ -61,6 +61,10 @@ export const useAgentStore = defineStore('agent', () => {
     return project
   }
 
+  async function probeProject(rootPath: string) {
+    return api.probeProject(rootPath)
+  }
+
   async function deleteProject(id: string) {
     await api.deleteProject(id)
     projects.value = projects.value.filter(p => p.id !== id)
@@ -163,6 +167,7 @@ export const useAgentStore = defineStore('agent', () => {
     stopPolling,
     fetchProjects,
     addProject,
+    probeProject,
     deleteProject,
     startService,
     stopService,
