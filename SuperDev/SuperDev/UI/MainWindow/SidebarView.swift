@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SidebarView: View {
@@ -8,19 +9,22 @@ struct SidebarView: View {
     @State private var hoveredServiceId: UUID?
 
     var body: some View {
-        List {
-            ForEach(core.projects) { project in
-                Section {
+        // ScrollView 替代 List：macOS 上 List 会吞掉 onDrag，导致侧边栏拖不动。
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(core.projects) { project in
+                    projectHeader(project: project)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 10)
                     ForEach(project.services) { service in
                         serviceRow(service: service, project: project)
-                            .draggable(service.id.uuidString)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
                     }
-                } header: {
-                    projectHeader(project: project)
                 }
             }
+            .padding(.bottom, 8)
         }
-        .listStyle(.sidebar)
         .frame(minWidth: 160, maxWidth: 200)
     }
 
@@ -67,15 +71,21 @@ struct SidebarView: View {
             }
         }
         .contentShape(Rectangle())
-        .listRowBackground(selected ? Theme.accent.opacity(0.12) : Color.clear)
-        .onTapGesture {
+        .background(selected ? Theme.accent.opacity(0.12) : Color.clear)
+        .cornerRadius(4)
+        .simultaneousGesture(TapGesture().onEnded {
             selectService(service, in: project)
+        })
+        .onDrag {
+            NSItemProvider(object: service.id.uuidString as NSString)
         }
         .onHover { hovering in
-            if hovering {
-                hoveredServiceId = service.id
-            } else if hoveredServiceId == service.id {
-                hoveredServiceId = nil
+            MainRunLoop.deferred {
+                if hovering {
+                    hoveredServiceId = service.id
+                } else if hoveredServiceId == service.id {
+                    hoveredServiceId = nil
+                }
             }
         }
         .animation(.easeOut(duration: 0.18), value: hoveredServiceId)
@@ -90,16 +100,20 @@ struct SidebarView: View {
 
     private func selectService(_ service: Service, in project: Project) {
         guard let panelId = targetPanelId() else { return }
-        layout.replaceScope(panelId: panelId, serviceId: service.id, projectId: project.id)
-        focusedPanelId = panelId
-        core.returnToLiveLogs()
+        MainRunLoop.deferred {
+            layout.replaceScope(panelId: panelId, serviceId: service.id, projectId: project.id)
+            focusedPanelId = panelId
+            core.returnToLiveLogs()
+        }
     }
 
     private func selectProject(_ project: Project) {
         guard let panelId = targetPanelId() else { return }
-        layout.replaceScope(panelId: panelId, serviceId: nil, projectId: project.id)
-        focusedPanelId = panelId
-        core.returnToLiveLogs()
+        MainRunLoop.deferred {
+            layout.replaceScope(panelId: panelId, serviceId: nil, projectId: project.id)
+            focusedPanelId = panelId
+            core.returnToLiveLogs()
+        }
     }
 
     private func isServiceSelected(_ service: Service) -> Bool {

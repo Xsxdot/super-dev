@@ -8,7 +8,9 @@
 // 边界：
 //   - 不直接修改 AppCore，所有布局变更通过 binding 回调完成
 //   - drop zone 逻辑纯 SwiftUI，不依赖 AppKit
+import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PanelLayoutView: View {
     @EnvironmentObject var core: AppCore
@@ -93,12 +95,72 @@ private enum DropEdge: Equatable {
     case left, right, top, bottom, center
 }
 
+/// 根据落点划分拖放区域：中央替换当前面板，四边分栏。
+private func panelDropEdge(at location: CGPoint, size: CGSize) -> DropEdge {
+    let w = size.width
+    let h = size.height
+    guard w > 0, h > 0 else { return .center }
+
+    let innerW = w * 0.6
+    let innerH = h * 0.6
+    let innerRect = CGRect(x: (w - innerW) / 2, y: (h - innerH) / 2, width: innerW, height: innerH)
+    if innerRect.contains(location) {
+        return .center
+    }
+
+    let edgeFraction: CGFloat = 0.20
+    if location.x < w * edgeFraction { return .left }
+    if location.x > w * (1 - edgeFraction) { return .right }
+    if location.y < h * edgeFraction { return .top }
+    if location.y > h * (1 - edgeFraction) { return .bottom }
+    return .center
+}
+
+private struct ServicePanelDropDelegate: DropDelegate {
+    let panelSize: CGSize
+    @Binding var dropHighlight: DropEdge?
+    let onDrop: (UUID, DropEdge) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.plainText])
+    }
+
+    func dropEntered(info: DropInfo) {
+        dropHighlight = panelDropEdge(at: info.location, size: panelSize)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        dropHighlight = panelDropEdge(at: info.location, size: panelSize)
+        return DropProposal(operation: .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        dropHighlight = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let edge = panelDropEdge(at: info.location, size: panelSize)
+        dropHighlight = nil
+        let providers = info.itemProviders(for: [.plainText])
+        guard let provider = providers.first else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let uuidString = object as? String,
+                  let serviceId = UUID(uuidString: uuidString) else { return }
+            DispatchQueue.main.async {
+                onDrop(serviceId, edge)
+            }
+        }
+        return true
+    }
+}
+
 private struct LeafPanelView: View {
     @EnvironmentObject var core: AppCore
     @Binding var layout: PanelLayout
     @Binding var focusedPanelId: UUID?
     let onClose: (() -> Void)?
-    @State private var dropHighlight: DropEdge? = nil
+    @State private var panelSize: CGSize = .zero
+    @State private var dropHighlight: DropEdge?
 
     private var panelId: UUID {
         if case .leaf(let id, _, _) = layout { return id }
@@ -121,43 +183,39 @@ private struct LeafPanelView: View {
     }
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                panelHeader
-                LogPanelView(
-                    panelId: panelId,
-                    serviceId: serviceId,
-                    projectId: projectId,
-                    project: project
-                )
-                .environmentObject(core)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                focusedPanelId = panelId
-            }
-
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                let edgeFraction: CGFloat = 0.20
-
-                ZStack {
-                    dropZone(edge: .left)
-                        .frame(width: w * edgeFraction, height: h)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    dropZone(edge: .right)
-                        .frame(width: w * edgeFraction, height: h)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    dropZone(edge: .top)
-                        .frame(width: w, height: h * edgeFraction)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                    dropZone(edge: .bottom)
-                        .frame(width: w, height: h * edgeFraction)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                    dropZone(edge: .center)
-                        .frame(width: w * 0.6, height: h * 0.6)
+        VStack(spacing: 0) {
+            panelHeader
+            LogPanelView(
+                panelId: panelId,
+                serviceId: serviceId,
+                projectId: projectId,
+                project: project
+            )
+            .environmentObject(core)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            MainRunLoop.deferred { focusedPanelId = panelId }
+        }
+        .onGeometryChange(for: CGSize.self) { proxy in proxy.size } action: { _, size in
+            guard size != panelSize else { return }
+            MainRunLoop.deferred { panelSize = size }
+        }
+        .onDrop(
+            of: [.plainText],
+            delegate: ServicePanelDropDelegate(
+                panelSize: panelSize,
+                dropHighlight: $dropHighlight,
+                onDrop: { serviceId, edge in
+                    scheduleDrop(serviceId: serviceId, edge: edge)
                 }
+            )
+        )
+        .overlay {
+            if let dropHighlight, panelSize.width > 0, panelSize.height > 0 {
+                dropHighlightOverlay(edge: dropHighlight, size: panelSize)
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -197,33 +255,40 @@ private struct LeafPanelView: View {
         return "未选择"
     }
 
+    private func scheduleDrop(serviceId: UUID, edge: DropEdge) {
+        MainRunLoop.deferred {
+            handleDrop(serviceId: serviceId, edge: edge)
+        }
+    }
+
     @ViewBuilder
-    private func dropZone(edge: DropEdge) -> some View {
-        let isHighlighted = dropHighlight == edge
-        Color.clear
-            .contentShape(Rectangle())
-            .allowsHitTesting(isHighlighted)
-            .overlay(
-                isHighlighted
-                    ? RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.accentColor.opacity(0.25))
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 2))
-                        .allowsHitTesting(false)
-                    : nil
-            )
-            .dropDestination(for: String.self) { items, _ in
-                guard let uuidString = items.first,
-                      let droppedServiceId = UUID(uuidString: uuidString) else { return false }
-                handleDrop(serviceId: droppedServiceId, edge: edge)
-                dropHighlight = nil
-                return true
-            } isTargeted: { targeted in
-                if targeted {
-                    dropHighlight = edge
-                } else if dropHighlight == edge {
-                    dropHighlight = nil
-                }
-            }
+    private func dropHighlightOverlay(edge: DropEdge, size: CGSize) -> some View {
+        let rect = dropHighlightRect(edge: edge, size: size)
+        RoundedRectangle(cornerRadius: 4)
+            .fill(Color.accentColor.opacity(0.25))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 2))
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+    }
+
+    private func dropHighlightRect(edge: DropEdge, size: CGSize) -> CGRect {
+        let w = size.width
+        let h = size.height
+        let edgeFraction: CGFloat = 0.20
+        switch edge {
+        case .left:
+            return CGRect(x: 0, y: 0, width: w * edgeFraction, height: h)
+        case .right:
+            return CGRect(x: w * (1 - edgeFraction), y: 0, width: w * edgeFraction, height: h)
+        case .top:
+            return CGRect(x: 0, y: 0, width: w, height: h * edgeFraction)
+        case .bottom:
+            return CGRect(x: 0, y: h * (1 - edgeFraction), width: w, height: h * edgeFraction)
+        case .center:
+            let innerW = w * 0.6
+            let innerH = h * 0.6
+            return CGRect(x: (w - innerW) / 2, y: (h - innerH) / 2, width: innerW, height: innerH)
+        }
     }
 
     private func handleDrop(serviceId droppedId: UUID, edge: DropEdge) {
