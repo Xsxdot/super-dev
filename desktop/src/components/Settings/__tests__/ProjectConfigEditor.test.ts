@@ -55,4 +55,18 @@ describe('ProjectConfigEditor', () => {
     await wrapper.find('[data-test="config-cancel"]').trigger('click')
     expect(wrapper.emitted('cancel')).toBeTruthy()
   })
+
+  it('校验通过时保存：调用 putProjectSetup 并 emit saved', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    await new Promise(r => setTimeout(r))
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+    expect(api.putProjectSetup).toHaveBeenCalledTimes(1)
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      environments: expect.any(Array),
+      services: expect.any(Array),
+    }))
+    expect(wrapper.emitted('saved')).toBeTruthy()
+  })
 })
