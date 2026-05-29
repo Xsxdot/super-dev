@@ -16,7 +16,7 @@ import { open, message } from '@tauri-apps/plugin-dialog'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
-import ProjectSetupModal from '@/components/Settings/ProjectSetupModal.vue'
+import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import type { Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts'
@@ -34,17 +34,30 @@ onMounted(() => {
   void settingsStore.loadAutostart()
 })
 
+const editorProject = ref<Project | null>(null)
+const editorIsNew = ref(false)
+
+function openEditor(project: Project) {
+  editorProject.value = project
+  editorIsNew.value = false
+}
+
+function onEditorSaved() {
+  editorProject.value = null
+  editorIsNew.value = false
+}
+
 async function addProject() {
   const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
   if (!selected || Array.isArray(selected)) return
   try {
-    await agentStore.addProject(selected)
+    // 落地项目（空目录返回空骨架，已有 config 则解析），再进编辑器
+    const created = await agentStore.addProject(selected)
+    editorProject.value = created
+    editorIsNew.value = true
   } catch (e) {
     const msg = e instanceof Error ? e.message : '添加项目失败'
-    await message(
-      msg.includes('config') ? `${msg}\n请确认目录中有 .superdev/config.yaml` : msg,
-      { title: '无法添加项目', kind: 'error' },
-    )
+    await message(msg, { title: '无法添加项目', kind: 'error' })
   }
 }
 
@@ -71,16 +84,6 @@ async function toggleStartSelection(project: Project, service: Service, checked:
 function isSelectedForStart(project: Project, service: Service): boolean {
   if (service.required) return true
   return selectedStartNames(project).includes(service.name)
-}
-
-const setupProject = ref<Project | null>(null)
-
-function openSetup(project: Project) {
-  setupProject.value = project
-}
-
-function onSetupDone() {
-  setupProject.value = null
 }
 
 const retentionDays = computed({
@@ -187,12 +190,11 @@ const retentionDays = computed({
               <div class="project-actions">
                 <span>{{ project.services.length }} 个服务</span>
                 <button
-                  v-if="!project.environments?.length"
                   class="ghost-btn"
                   :data-test="`setup-project-${project.id}`"
-                  @click="openSetup(project)"
+                  @click="openEditor(project)"
                 >
-                  配置环境
+                  编辑配置
                 </button>
                 <button class="danger-btn" @click="deleteProject(project)">删除</button>
               </div>
@@ -231,12 +233,12 @@ const retentionDays = computed({
       </section>
     </main>
 
-    <ProjectSetupModal
-      v-if="setupProject"
-      :visible="true"
-      :project="setupProject"
-      @done="onSetupDone"
-      @cancel="setupProject = null"
+    <ProjectConfigEditor
+      v-if="editorProject"
+      :project="editorProject"
+      :is-new="editorIsNew"
+      @saved="onEditorSaved"
+      @cancel="editorProject = null; editorIsNew = false"
     />
   </div>
 </template>
