@@ -374,6 +374,53 @@ func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 	assert.Equal(t, "systemctl start api-server", prod.StartCommand)
 }
 
+// TestSaveLoadPreservesPipeline 验证 deployment 的 pipeline 经 Save→Load 往返不丢失。
+func TestSaveLoadPreservesPipeline(t *testing.T) {
+	dir := t.TempDir()
+	loader := config.NewLoader(dir)
+
+	proj := model.Project{
+		Name:         "demo",
+		RootPath:     dir,
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
+		Services: []model.Service{
+			{
+				ID:   "s1",
+				Name: "web",
+				Deployments: []model.Deployment{
+					{
+						ID:       "d1",
+						EnvName:  "dev",
+						Location: model.LocationLocal,
+						Command:  "go run .",
+						Pipeline: &model.Pipeline{
+							Steps: []model.Step{
+								{ID: "st1", Name: "build", Scope: model.ScopeLocal, Action: model.ActionRun, Command: "make"},
+								{ID: "st2", Name: "sync", Scope: model.ScopeFanOut, Action: model.ActionSync, SyncFrom: "./bin", SyncTo: "/opt/app"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, loader.Save(proj))
+
+	loaded, err := loader.Load()
+	require.NoError(t, err)
+	require.Len(t, loaded.Services, 1)
+	require.Len(t, loaded.Services[0].Deployments, 1)
+	dep := loaded.Services[0].Deployments[0]
+	require.NotNil(t, dep.Pipeline, "pipeline 应在往返后保留")
+	require.Len(t, dep.Pipeline.Steps, 2)
+	assert.Equal(t, "build", dep.Pipeline.Steps[0].Name)
+	assert.Equal(t, model.ActionRun, dep.Pipeline.Steps[0].Action)
+	assert.Equal(t, "make", dep.Pipeline.Steps[0].Command)
+	assert.Equal(t, model.ActionSync, dep.Pipeline.Steps[1].Action)
+	assert.Equal(t, "/opt/app", dep.Pipeline.Steps[1].SyncTo)
+}
+
 func TestSavePreservesLogRulesWithNewFormat(t *testing.T) {
 	dir := t.TempDir()
 	loader := config.NewLoader(dir)

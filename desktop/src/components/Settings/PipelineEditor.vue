@@ -25,7 +25,7 @@ function update(steps: PipelineStep[]) {
 
 function addStep() {
   const steps = [...(props.modelValue?.steps ?? [])]
-  steps.push({ id: `step-${steps.length + 1}`, name: '', scope: 'local', action: 'run', command: '' })
+  steps.push({ id: crypto.randomUUID(), name: '', scope: 'local', action: 'run', command: '' })
   update(steps)
 }
 

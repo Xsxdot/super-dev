@@ -204,6 +204,7 @@ type deploymentYAML struct {
 	ExtraArgs    []string          `yaml:"extra_args,omitempty"`
 	StartCommand string            `yaml:"start_command,omitempty"`
 	StopCommand  string            `yaml:"stop_command,omitempty"`
+	Pipeline     *model.Pipeline   `yaml:"pipeline,omitempty"`
 }
 
 // serviceYAML 对应 yaml 文件中服务条目，兼容新旧两种格式。
@@ -278,6 +279,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			ExtraArgs:    d.ExtraArgs,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
+			Pipeline:     d.Pipeline,
 		}
 	}
 	return out
@@ -349,6 +351,7 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			ExtraArgs:    d.ExtraArgs,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
+			Pipeline:     d.Pipeline,
 		}
 	}
 	return out

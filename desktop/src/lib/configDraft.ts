@@ -99,6 +99,8 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
         host_ids: d.host_ids,
         log_type: d.log_type,
         log_target: d.log_target,
+        extra_args: d.extra_args,
+        env_file: d.env_file,
         start_command: d.start_command,
         stop_command: d.stop_command,
         pipeline: d.pipeline,
