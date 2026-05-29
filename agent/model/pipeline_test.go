@@ -91,3 +91,42 @@ func TestRunJSONRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, r, got)
 }
+
+func TestPipelineExpand(t *testing.T) {
+	p := model.Pipeline{Steps: []model.Step{
+		{ID: "build", Name: "构建", Scope: model.ScopeLocal, Action: model.ActionRun},
+		{ID: "sync", Name: "同步", Scope: model.ScopeFanOut, Action: model.ActionSync},
+	}}
+	hosts := []model.HostRef{{ID: "stg-01", Name: "staging-01"}, {ID: "stg-02", Name: "staging-02"}}
+
+	run := p.Expand("dep-1", hosts)
+
+	assert.Equal(t, "dep-1", run.DeploymentID)
+	assert.Equal(t, model.StatusPending, run.Status)
+	require.Len(t, run.StepRuns, 2)
+
+	// local 步骤：1 个无 host 的 task
+	local := run.StepRuns[0]
+	assert.Equal(t, "build", local.StepID)
+	assert.Equal(t, model.ScopeLocal, local.Scope)
+	require.Len(t, local.Tasks, 1)
+	assert.Empty(t, local.Tasks[0].HostID)
+	assert.Equal(t, model.StatusPending, local.Tasks[0].Status)
+
+	// fan-out 步骤：每台 host 一个 task
+	fan := run.StepRuns[1]
+	require.Len(t, fan.Tasks, 2)
+	assert.Equal(t, "stg-01", fan.Tasks[0].HostID)
+	assert.Equal(t, "staging-01", fan.Tasks[0].HostName)
+	assert.Equal(t, "stg-02", fan.Tasks[1].HostID)
+}
+
+func TestPipelineExpandFanOutNoHosts(t *testing.T) {
+	// fan-out 但没有 host：该步骤展开为 0 个 task
+	p := model.Pipeline{Steps: []model.Step{
+		{ID: "sync", Name: "同步", Scope: model.ScopeFanOut, Action: model.ActionSync},
+	}}
+	run := p.Expand("dep-1", nil)
+	require.Len(t, run.StepRuns, 1)
+	assert.Empty(t, run.StepRuns[0].Tasks)
+}
