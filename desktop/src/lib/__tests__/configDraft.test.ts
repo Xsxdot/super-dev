@@ -70,14 +70,16 @@ describe('configDraft', () => {
 
   it('projectToDraft 深拷贝嵌套对象：改草稿的 env / pipeline 不影响原 Project', () => {
     const p = makeProject()
-    p.services[0].deployments[0].pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
+    const origDep = p.services[0]!.deployments![0]!
+    origDep.pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
     const draft = projectToDraft(p)
     // 改草稿里的 env map 和 pipeline 步骤
-    draft.services[0].deployments[0].env!.A = 'mutated'
-    draft.services[0].deployments[0].pipeline!.steps[0].command = 'mutated'
+    const draftDep = draft.services[0]!.deployments[0]!
+    draftDep.env!.A = 'mutated'
+    draftDep.pipeline!.steps[0]!.command = 'mutated'
     // 原 Project 不应被影响
-    expect(p.services[0].deployments[0].env!.A).toBe('1')
-    expect(p.services[0].deployments[0].pipeline!.steps[0].command).toBe('make')
+    expect(origDep.env!.A).toBe('1')
+    expect(origDep.pipeline!.steps[0]!.command).toBe('make')
   })
 
   it('validateDraft：local deployment 有 pipeline 时允许命令为空', () => {
