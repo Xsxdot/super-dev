@@ -26,6 +26,24 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export type DeployLocation = 'local' | 'remote'
 
+export type StepScope = 'local' | 'fan-out'
+export type StepAction = 'run' | 'sync'
+
+export interface PipelineStep {
+  id: string
+  name: string
+  scope: StepScope
+  action: StepAction
+  command?: string
+  work_dir?: string
+  sync_from?: string
+  sync_to?: string
+}
+
+export interface Pipeline {
+  steps: PipelineStep[]
+}
+
 export interface Deployment {
   id: string
   env_name: string
@@ -38,6 +56,7 @@ export interface Deployment {
   extra_args?: string[]
   start_command?: string
   stop_command?: string
+  pipeline?: Pipeline
   status: '' | 'starting' | 'running' | 'failed'
   pid?: number
 }
@@ -197,10 +216,19 @@ export interface SetupDeployment {
   command?: string
   work_dir?: string
   env?: Record<string, string>
+  host_ids?: string[]
+  log_type?: LogSourceType
+  log_target?: string
+  start_command?: string
+  stop_command?: string
+  pipeline?: Pipeline
 }
 
 export interface SetupServiceEntry {
   id: string
+  name: string
+  required: boolean
+  order: number
   deployments: SetupDeployment[]
 }
 
@@ -361,6 +389,8 @@ export const api = {
   listProjects: () => request<Project[]>('/api/projects'),
   addProject: (root_path: string) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ root_path }) }),
+  probeProject: (root_path: string) =>
+    request<Project>(`/api/projects/probe?root_path=${encodeURIComponent(root_path)}`),
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
   getProjectRules: (id: string) => request<LogRule[]>(`/api/projects/${id}/rules`),
