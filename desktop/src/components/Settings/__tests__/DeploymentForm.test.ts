@@ -28,4 +28,10 @@ describe('DeploymentForm', () => {
     const last = emitted![emitted!.length - 1][0] as Deployment
     expect(last.command).toBe('npm run dev')
   })
+
+  it('local 时渲染环境变量编辑器', () => {
+    const dep = { id: 'd1', env_name: 'dev', location: 'local' as const, command: 'x', work_dir: '/tmp', env: { A: '1' }, status: '' as const }
+    const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
+    expect(wrapper.find('[data-test="env-row"]').exists()).toBe(true)
+  })
 })

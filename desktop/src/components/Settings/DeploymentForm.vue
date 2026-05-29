@@ -3,16 +3,16 @@ DeploymentForm：单份 deployment 的编辑表单（最大组件，职责单一
 
 职责：
   - location 切换 local/remote
-  - local：命令 / 工作目录
+  - local：命令 / 工作目录 / 环境变量（EnvKeyValueEditor）
   - remote：主机多选 / 日志类型 / 日志目标 / 启停命令
   - pipeline：折叠的 PipelineEditor
 边界：
   - 不做校验、不发请求；变更整份 emit 给父层草稿
-  - EnvKeyValueEditor 暂未集成（Deployment 类型暂无 env 字段）
 -->
 <script setup lang="ts">
 import type { Deployment, LogSourceType, Pipeline } from '@/api/agent'
 import PipelineEditor from './PipelineEditor.vue'
+import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 
 const props = defineProps<{
   modelValue: Deployment
@@ -34,6 +34,10 @@ function toggleHost(id: string, checked: boolean) {
 
 function setPipeline(pipeline: Pipeline | undefined) {
   patch({ pipeline })
+}
+
+function setEnv(env: Record<string, string>) {
+  patch({ env })
 }
 </script>
 
@@ -75,6 +79,8 @@ function setPipeline(pipeline: Pipeline | undefined) {
         :value="modelValue.work_dir"
         @input="patch({ work_dir: ($event.target as HTMLInputElement).value })"
       />
+      <div class="dep-label">环境变量</div>
+      <EnvKeyValueEditor :model-value="modelValue.env ?? {}" @update:model-value="setEnv" />
     </template>
 
     <!-- remote 模式：主机多选 / 日志配置 / 启停命令 -->
