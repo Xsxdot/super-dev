@@ -55,6 +55,7 @@ export interface Deployment {
   log_type?: LogSourceType
   log_target?: string
   extra_args?: string[]
+  env_file?: string
   start_command?: string
   stop_command?: string
   pipeline?: Pipeline
@@ -220,6 +221,8 @@ export interface SetupDeployment {
   host_ids?: string[]
   log_type?: LogSourceType
   log_target?: string
+  extra_args?: string[]
+  env_file?: string
   start_command?: string
   stop_command?: string
   pipeline?: Pipeline

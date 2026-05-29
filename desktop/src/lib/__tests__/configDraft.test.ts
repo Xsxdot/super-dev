@@ -82,6 +82,15 @@ describe('configDraft', () => {
     expect(origDep.pipeline!.steps[0]!.command).toBe('make')
   })
 
+  it('draftToPayload 透传 extra_args 与 env_file（编辑器未暴露但不应丢失）', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0]!.deployments[0]!.extra_args = ['--since', '1h']
+    draft.services[0]!.deployments[0]!.env_file = '.env.local'
+    const payload = draftToPayload(draft)
+    expect(payload.services[0]!.deployments[0]!.extra_args).toEqual(['--since', '1h'])
+    expect(payload.services[0]!.deployments[0]!.env_file).toBe('.env.local')
+  })
+
   it('validateDraft：local deployment 有 pipeline 时允许命令为空', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0].command = ''
