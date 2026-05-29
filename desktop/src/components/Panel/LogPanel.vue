@@ -278,9 +278,9 @@ async function scrollToBottom() {
   if (count > 0) {
     virtualizer.value.scrollToIndex(count - 1, { align: 'end' })
   }
-  requestAnimationFrame(() => {
+  setTimeout(() => {
     programmaticScroll = false
-  })
+  }, 80)
 }
 
 function scheduleScrollRetries() {
@@ -353,6 +353,7 @@ async function tryLoadMoreHistory() {
     if (!deploymentLogStore.hasMoreHistory(props.source.deploymentId)) return
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
+    // range is null only when the list is empty/unmounted; scroll-up can't fire in that state, so ?? 0 is safe
     const prevStart = virtualizer.value.range?.startIndex ?? 0
     const prevCount = displayItems.value.length
     await deploymentLogStore.loadMoreHistory(props.source.deploymentId)
@@ -361,7 +362,7 @@ async function tryLoadMoreHistory() {
     if (added > 0) {
       programmaticScroll = true
       virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
-      requestAnimationFrame(() => { programmaticScroll = false })
+      setTimeout(() => { programmaticScroll = false }, 80)
     }
     isLoadingHistory.value = false
     return
@@ -370,6 +371,7 @@ async function tryLoadMoreHistory() {
   if (!logStore.hasMoreHistory(props.serviceId)) return
   if (isLoadingHistory.value) return
   isLoadingHistory.value = true
+  // range is null only when the list is empty/unmounted; scroll-up can't fire in that state, so ?? 0 is safe
   const prevStart = virtualizer.value.range?.startIndex ?? 0
   const prevCount = displayItems.value.length
   await logStore.loadMoreHistory(props.serviceId)
@@ -378,7 +380,7 @@ async function tryLoadMoreHistory() {
   if (added > 0) {
     programmaticScroll = true
     virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
-    requestAnimationFrame(() => { programmaticScroll = false })
+    setTimeout(() => { programmaticScroll = false }, 80)
   }
   isLoadingHistory.value = false
 }
@@ -432,7 +434,7 @@ const virtualizer = useVirtualizer(
     count: displayItems.value.length,
     getScrollElement: () => logListEl.value,
     estimateSize: () => 22,
-    overscan: 10,
+    overscan: 5,
   }))
 )
 </script>
