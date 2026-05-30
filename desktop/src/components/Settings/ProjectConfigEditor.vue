@@ -185,6 +185,7 @@ async function save() {
               :service="activeService"
               :env-name="activeEnv"
               :hosts="hosts"
+              :project-path="project.root_path"
               @update:service="updateService(activeServiceIndex, $event)"
               @remove="removeService(activeServiceIndex)"
             />

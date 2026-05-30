@@ -13,8 +13,13 @@ PipelineEditor：deployment 流水线（有序 Step 列表）编辑器。
 -->
 <script setup lang="ts">
 import type { Pipeline, PipelineStep, StepAction } from '@/api/agent'
+import WorkDirInput from './WorkDirInput.vue'
 
-const props = defineProps<{ modelValue?: Pipeline }>()
+const props = defineProps<{
+  modelValue?: Pipeline
+  /** 新步骤的工作目录默认值，通常为项目根目录/服务名 */
+  defaultWorkDir?: string
+}>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
 function enable() {
@@ -27,7 +32,7 @@ function update(steps: PipelineStep[]) {
 
 function addStep() {
   const steps = [...(props.modelValue?.steps ?? [])]
-  steps.push({ id: crypto.randomUUID(), name: '', scope: 'local', action: 'run', command: '' })
+  steps.push({ id: crypto.randomUUID(), name: '', scope: 'local', action: 'run', command: '', work_dir: props.defaultWorkDir ?? '' })
   update(steps)
 }
 
@@ -117,7 +122,11 @@ function disable() {
           <label class="step-field-label">执行命令</label>
           <input class="step-input" placeholder="命令" :value="step.command" @input="patch(i, 'command', ($event.target as HTMLInputElement).value)" />
           <label class="step-field-label">工作目录</label>
-          <input class="step-input" placeholder="工作目录" :value="step.work_dir" @input="patch(i, 'work_dir', ($event.target as HTMLInputElement).value)" />
+          <WorkDirInput
+            :model-value="step.work_dir"
+            placeholder="如：/home/user/project"
+            @update:model-value="patch(i, 'work_dir', $event)"
+          />
         </template>
         <template v-else>
           <label class="step-field-label">源路径</label>
