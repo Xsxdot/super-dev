@@ -44,26 +44,22 @@ const (
 	RuleLogicOR RuleLogic = "or"
 )
 
-// Service 表示一个受 agent 管理的本地服务进程。
+// Service 表示一组同名服务的逻辑分组，本身不携带运行配置。
+//
+// Service 仅作为 Deployment 的容器：一个 Service 在不同环境下对应若干
+// Deployment，真正的运行配置（命令、工作目录、环境变量、启停方式等）
+// 全部落在 Deployment 上，由 EnvName 区分环境。
 //
 // YAML 字段来自配置文件（如 superdev.yaml），运行时字段（Status、PID）
 // 不参与序列化，仅在内存中维护。
-//
-// Deployments 描述该服务在各个环境下的运行配置。
-// 新格式（environments + deployments）使用 Deployments；
-// 老格式加载后自动迁移，Command/WorkDir 等字段仍保留供兼容。
 type Service struct {
-	ID        string            `json:"id"         yaml:"id"`
-	ProjectID string            `json:"project_id" yaml:"-"`
-	Name      string            `json:"name"       yaml:"name"`
-	Command   string            `json:"command"    yaml:"command"`
-	WorkDir   string            `json:"work_dir"   yaml:"working_dir"`
-	Required  bool              `json:"required"   yaml:"required"`
-	Order     int               `json:"order"      yaml:"order"`
-	EnvFile   string            `json:"env_file,omitempty" yaml:"env_file,omitempty"`
-	Env       map[string]string `json:"env,omitempty"      yaml:"env,omitempty"`
+	ID        string `json:"id"         yaml:"id"`
+	ProjectID string `json:"project_id" yaml:"-"`
+	Name      string `json:"name"       yaml:"name"`
+	Required  bool   `json:"required"   yaml:"required"`
+	Order     int    `json:"order"      yaml:"order"`
 
-	// Deployments 描述该服务在各环境的运行配置（新格式）。
+	// Deployments 描述该服务在各环境的运行配置。
 	Deployments []Deployment `json:"deployments,omitempty" yaml:"deployments,omitempty"`
 
 	// 运行时字段，不持久化到配置文件。
@@ -76,15 +72,14 @@ type Service struct {
 // Environments 定义该项目的运行环境列表，每个 Service 的 Deployment
 // 通过 EnvName 引用其中一个环境。
 type Project struct {
-	ID                 string        `json:"id"`
-	Name               string        `json:"name"                 yaml:"name"`
-	RootPath           string        `json:"root_path"            yaml:"-"`
-	Environments       []Environment `json:"environments,omitempty"`
-	Services           []Service     `json:"services"             yaml:"services"`
-	SelectedServiceIDs []string      `json:"selected_service_ids" yaml:"selected_service_ids"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"                 yaml:"name"`
+	RootPath     string        `json:"root_path"            yaml:"-"`
+	Environments []Environment `json:"environments,omitempty"`
+	Services     []Service     `json:"services"             yaml:"services"`
 	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
-	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表。
-	// 替代全局的 SelectedServiceIDs，实现 env 级隔离选择。
+	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表，
+	// 从而实现 env 级隔离的选中状态。
 	EnvSelectedServiceIDs map[string][]string `json:"env_selected_service_ids,omitempty" yaml:"env_selected_service_ids,omitempty"`
 }
 
