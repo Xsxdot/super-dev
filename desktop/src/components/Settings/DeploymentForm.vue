@@ -3,7 +3,7 @@ DeploymentForm：单份 deployment 的编辑表单（最大组件，职责单一
 
 职责：
   - location 切换 local/remote（本地 / 远程）
-  - local：命令 / 工作目录 / 环境变量（EnvKeyValueEditor）
+  - local：命令 / 工作目录（WorkDirInput）/ 环境变量（EnvKeyValueEditor）
   - remote：主机多选 / 日志类型 / 日志目标 / 启停命令
   - pipeline：折叠的 PipelineEditor
 边界：
@@ -13,10 +13,13 @@ DeploymentForm：单份 deployment 的编辑表单（最大组件，职责单一
 import type { Deployment, LogSourceType, Pipeline } from '@/api/agent'
 import PipelineEditor from './PipelineEditor.vue'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
+import WorkDirInput from './WorkDirInput.vue'
 
 const props = defineProps<{
   modelValue: Deployment
   hosts: Array<{ id: string; name: string }>
+  /** 工作目录默认值，新建流水线步骤时自动填入 */
+  defaultWorkDir?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
 
@@ -80,12 +83,10 @@ function setEnv(env: Record<string, string>) {
       </div>
       <div class="dep-field">
         <label class="dep-label">工作目录</label>
-        <input
-          class="dep-input"
+        <WorkDirInput
           data-test="dep-work-dir"
-          placeholder="如：/home/user/project"
-          :value="modelValue.work_dir"
-          @input="patch({ work_dir: ($event.target as HTMLInputElement).value })"
+          :model-value="modelValue.work_dir"
+          @update:model-value="patch({ work_dir: $event })"
         />
       </div>
       <div class="dep-label">环境变量</div>
@@ -149,7 +150,7 @@ function setEnv(env: Record<string, string>) {
 
     <!-- 部署流水线（可选） -->
     <div class="dep-label">部署流水线（可选）</div>
-    <PipelineEditor :model-value="modelValue.pipeline" @update:model-value="setPipeline" />
+    <PipelineEditor :model-value="modelValue.pipeline" :default-work-dir="defaultWorkDir" @update:model-value="setPipeline" />
   </div>
 </template>
 

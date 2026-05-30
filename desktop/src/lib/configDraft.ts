@@ -41,7 +41,7 @@ export function projectToDraft(p: Project): ConfigDraft {
       name: s.name,
       required: s.required,
       order: s.order,
-      deployments: (s.deployments ?? []).map(d => structuredClone(d)),
+      deployments: (s.deployments ?? []).map(d => JSON.parse(JSON.stringify(d))),
     })),
   }
 }

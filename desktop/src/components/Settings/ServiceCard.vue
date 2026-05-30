@@ -19,6 +19,8 @@ const props = defineProps<{
   service: ConfigDraftService
   envName: string
   hosts: Array<{ id: string; name: string }>
+  /** 项目根目录，用于新建 deployment 时自动填入工作目录默认值 */
+  projectPath?: string
 }>()
 const emit = defineEmits<{
   'update:service': [ConfigDraftService]
@@ -26,13 +28,16 @@ const emit = defineEmits<{
 }>()
 
 const dep = computed(() => props.service.deployments.find(d => d.env_name === props.envName))
+const defaultWorkDir = computed(() =>
+  props.projectPath && props.service.name ? `${props.projectPath}/${props.service.name}` : ''
+)
 
 function patchService(partial: Partial<ConfigDraftService>) {
   emit('update:service', { ...props.service, ...partial })
 }
 
 function enableDep() {
-  const newDep: Deployment = { id: '', env_name: props.envName, location: 'local', command: '', work_dir: '', status: '' }
+  const newDep: Deployment = { id: '', env_name: props.envName, location: 'local', command: '', work_dir: defaultWorkDir.value, status: '' }
   patchService({ deployments: [...props.service.deployments, newDep] })
 }
 
@@ -68,7 +73,7 @@ function removeDep() {
       <button type="button" class="enable-btn" data-test="enable-dep" @click="enableDep">启用</button>
     </div>
     <div v-else class="svc-dep">
-      <DeploymentForm :model-value="dep" :hosts="hosts" @update:model-value="updateDep" />
+      <DeploymentForm :model-value="dep" :hosts="hosts" :default-work-dir="defaultWorkDir" @update:model-value="updateDep" />
       <button type="button" class="dep-remove" @click="removeDep">移除该环境配置</button>
     </div>
   </article>
