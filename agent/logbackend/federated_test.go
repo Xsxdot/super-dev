@@ -71,7 +71,7 @@ func containsStr(s, sub string) bool {
 }
 
 func makeEntry(id int64, msg string, t time.Time) model.LogEntry {
-	return model.LogEntry{ID: id, ServiceID: "svc-1", Timestamp: t, Message: msg, Stream: "stdout"}
+	return model.LogEntry{ID: id, DeploymentID: "svc-1", Timestamp: t, Message: msg, Stream: "stdout"}
 }
 
 func TestFederatedBackend_QueryMergesAndSorts(t *testing.T) {

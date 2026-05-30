@@ -34,23 +34,23 @@ type TunnelResolver interface {
 
 // RemoteAgentBackend 通过隧道读取远端 agent 的日志。
 type RemoteAgentBackend struct {
-	hostID    string
-	serviceID string // 远端 collector 的虚拟 serviceID（collector.CollectorID）
-	resolver  TunnelResolver
-	wsURLFn   func() (string, error) // 仅用于测试注入；正常情况下从 resolver 派生
+	hostID       string
+	deploymentID string // 远端 collector 的虚拟 deploymentID（collector.CollectorID）
+	resolver     TunnelResolver
+	wsURLFn      func() (string, error) // 仅用于测试注入；正常情况下从 resolver 派生
 }
 
 // NewRemoteAgentBackend 创建 RemoteAgentBackend。
 //
-// serviceID 是远端 collector 对应的虚拟 serviceID（由 collector.CollectorID 生成）。
-func NewRemoteAgentBackend(hostID, serviceID string, resolver TunnelResolver) *RemoteAgentBackend {
-	return &RemoteAgentBackend{hostID: hostID, serviceID: serviceID, resolver: resolver}
+// deploymentID 是远端 collector 对应的虚拟 deploymentID（由 collector.CollectorID 生成）。
+func NewRemoteAgentBackend(hostID, deploymentID string, resolver TunnelResolver) *RemoteAgentBackend {
+	return &RemoteAgentBackend{hostID: hostID, deploymentID: deploymentID, resolver: resolver}
 }
 
 // NewRemoteAgentBackendWithWSURL 创建 RemoteAgentBackend，允许测试时注入 ws URL（绕过 http→ws 转换）。
-func NewRemoteAgentBackendWithWSURL(hostID, serviceID string, resolver TunnelResolver, wsURL string) *RemoteAgentBackend {
-	b := NewRemoteAgentBackend(hostID, serviceID, resolver)
-	b.wsURLFn = func() (string, error) { return wsURL + "/ws/logs?service=" + url.QueryEscape(serviceID), nil }
+func NewRemoteAgentBackendWithWSURL(hostID, deploymentID string, resolver TunnelResolver, wsURL string) *RemoteAgentBackend {
+	b := NewRemoteAgentBackend(hostID, deploymentID, resolver)
+	b.wsURLFn = func() (string, error) { return wsURL + "/ws/logs?deployment=" + url.QueryEscape(deploymentID), nil }
 	return b
 }
 
@@ -69,7 +69,7 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 		return nil, Cursor{}, err
 	}
 	q := u.Query()
-	q.Set("service", b.serviceID)
+	q.Set("deployment", b.deploymentID)
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
@@ -119,7 +119,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 		return nil, Cursor{}, false, err
 	}
 	params := u.Query()
-	params.Set("service", b.serviceID)
+	params.Set("deployment", b.deploymentID)
 	params.Set("q", q.Text)
 	if q.Limit > 0 {
 		params.Set("limit", strconv.Itoa(q.Limit))
@@ -172,7 +172,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 // Subscribe 连接远端 /ws/logs WebSocket，转发实时日志。
 // ctx 取消和 Cancel 调用均可停止流并关闭 Ch；两者均幂等。
 // 连接断开时自动关闭 Ch（不重连，由上层 FederatedBackend 决策）。
-func (b *RemoteAgentBackend) Subscribe(ctx context.Context, serviceID string) LogStream {
+func (b *RemoteAgentBackend) Subscribe(ctx context.Context, deploymentID string) LogStream {
 	ch := make(chan model.LogEntry, 64)
 
 	wsURL, err := b.resolveWSURL()
@@ -246,5 +246,5 @@ func (b *RemoteAgentBackend) resolveWSURL() (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported scheme in tunnel base URL: %s", base)
 	}
-	return wsBase + "/ws/logs?service=" + url.QueryEscape(b.serviceID), nil
+	return wsBase + "/ws/logs?deployment=" + url.QueryEscape(b.deploymentID), nil
 }

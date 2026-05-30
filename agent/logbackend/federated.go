@@ -42,7 +42,7 @@ func NewFederatedBackend(children []LogBackend) *FederatedBackend {
 //
 // 参数：
 //   - ctx: 上下文，用于控制超时和取消
-//   - filter: 查询过滤条件，包含 ServiceID、时间范围、Cursor、Limit 等
+//   - filter: 查询过滤条件，包含 DeploymentID、时间范围、Cursor、Limit 等
 //
 // 返回：
 //   - 按 timestamp ASC, id ASC 排序的日志条目列表
@@ -93,7 +93,7 @@ func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]mod
 //
 // 参数：
 //   - ctx: 上下文，用于控制超时和取消
-//   - q: 搜索查询条件，包含关键词、ServiceID、时间范围、Limit 等
+//   - q: 搜索查询条件，包含关键词、DeploymentID、时间范围、Limit 等
 //
 // 返回：
 //   - 按 timestamp ASC, id ASC 排序的匹配日志条目列表
@@ -155,7 +155,7 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 //
 // 参数：
 //   - ctx: 上下文，用于控制取消；ctx 取消时会触发所有子流的 Cancel
-//   - serviceID: 订阅的服务 ID
+//   - deploymentID: 订阅的部署 ID
 //
 // 返回：
 //   - LogStream，包含日志条目 channel 和 Cancel 函数
@@ -165,10 +165,10 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 //   - ctx 取消时本层也会立即响应，不依赖子流自己退出
 //   - Cancel 与 ctx 取消均可触发子流停止，两者互为补充
 //   - ctx 为 context.Background() 时，ctx watcher goroutine 会永久阻塞，这是已知可接受行为
-func (f *FederatedBackend) Subscribe(ctx context.Context, serviceID string) LogStream {
+func (f *FederatedBackend) Subscribe(ctx context.Context, deploymentID string) LogStream {
 	streams := make([]LogStream, len(f.children))
 	for i, child := range f.children {
-		streams[i] = child.Subscribe(ctx, serviceID)
+		streams[i] = child.Subscribe(ctx, deploymentID)
 	}
 
 	ch := make(chan model.LogEntry, 64)

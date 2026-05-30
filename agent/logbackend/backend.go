@@ -18,8 +18,8 @@ import (
 
 // QueryFilter 定义历史日志拉取的过滤和分页参数。
 type QueryFilter struct {
-	// ServiceID 按服务过滤；空字符串表示不过滤。
-	ServiceID string
+	// DeploymentID 按部署过滤；空字符串表示不过滤。
+	DeploymentID string
 	// RunID 按运行会话过滤；空字符串表示不过滤。
 	RunID string
 	// Limit 返回条数上限；0 时实现方使用自身默认值。
@@ -33,8 +33,8 @@ type QueryFilter struct {
 type SearchQuery struct {
 	// Text 搜索关键字，大小写不敏感包含匹配。
 	Text string
-	// ServiceIDs 限定搜索范围；nil 或空时实现方可拒绝（避免无边界全库扫描）。
-	ServiceIDs []string
+	// DeploymentIDs 限定搜索范围；nil 或空时实现方可拒绝（避免无边界全库扫描）。
+	DeploymentIDs []string
 	// Limit 返回条数上限；0 时实现方使用自身默认值。
 	Limit int
 	// Cursor 分页游标；零值表示从最新开始。
@@ -74,5 +74,5 @@ type LogBackend interface {
 	// Subscribe 订阅实时日志流。调用方通过 LogStream.Cancel 取消订阅。
 	// 实现方在 Cancel 调用后应关闭 LogStream.Ch。
 	// ctx 取消和 Cancel 调用均可停止流；实现方应同时响应两者。
-	Subscribe(ctx context.Context, serviceID string) LogStream
+	Subscribe(ctx context.Context, deploymentID string) LogStream
 }
