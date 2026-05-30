@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 批量写入日志条目（AppendBatch）
-//   - 按服务ID、RunID 或 ID 游标分页查询日志（Fetch）
+//   - 按 DeploymentID、RunID 或 ID 游标分页查询日志（Fetch）
 //   - 清理过期日志（DeleteOlderThan）
 //
 // 边界：
@@ -21,7 +21,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// ErrLogEntryNotFound 表示目标日志不存在，或不属于允许查询的服务集合。
+// ErrLogEntryNotFound 表示目标日志不存在，或不属于允许查询的部署集合。
 var ErrLogEntryNotFound = sql.ErrNoRows
 
 // Store 封装 SQLite 数据库连接，提供日志的读写操作。
@@ -31,45 +31,45 @@ type Store struct {
 
 // FetchParams 定义日志查询的过滤与分页参数。
 //
-// ServiceID 和 RunID 可同时指定（AND 关系），也可单独使用。
+// DeploymentID 和 RunID 可同时指定（AND 关系），也可单独使用。
 // Before 为上一页最小 ID，用于实现向前翻页（游标分页）。
 type FetchParams struct {
-	ServiceID string
-	RunID     string
-	Limit     int
-	Before    int64
+	DeploymentID string
+	RunID        string
+	Limit        int
+	Before       int64
 }
 
-// SearchParams 定义跨服务历史日志搜索参数。
+// SearchParams 定义跨部署历史日志搜索参数。
 //
-// ServiceIDs 为空时直接返回空结果，避免无边界全库搜索。
+// DeploymentIDs 为空时直接返回空结果，避免无边界全库搜索。
 // Query 会做大小写不敏感的 message 包含匹配。
 // CursorTime 和 CursorID 同时指定时，返回游标之后的下一页。
 type SearchParams struct {
-	ServiceIDs []string
-	Query      string
-	Limit      int
-	Before     int64
-	CursorTime *time.Time
-	CursorID   int64
-	From       *time.Time
-	To         *time.Time
+	DeploymentIDs []string
+	Query         string
+	Limit         int
+	Before        int64
+	CursorTime    *time.Time
+	CursorID      int64
+	From          *time.Time
+	To            *time.Time
 }
 
-// SearchResult 表示一次日志搜索的结果、分页状态和按服务聚合的命中数。
+// SearchResult 表示一次日志搜索的结果、分页状态和按部署聚合的命中数。
 type SearchResult struct {
-	Entries       []model.LogEntry
-	Total         int
-	ServiceCounts map[string]int
-	HasMore       bool
+	Entries          []model.LogEntry
+	Total            int
+	DeploymentCounts map[string]int
+	HasMore          bool
 }
 
-// ContextParams 定义以某条日志为锚点的跨服务上下文查询参数。
+// ContextParams 定义以某条日志为锚点的跨部署上下文查询参数。
 type ContextParams struct {
-	TargetID   int64
-	ServiceIDs []string
-	Before     time.Duration
-	After      time.Duration
+	TargetID      int64
+	DeploymentIDs []string
+	Before        time.Duration
+	After         time.Duration
 }
 
 // ContextPageDirection 表示上下文游标分页的方向。
@@ -82,23 +82,23 @@ const (
 	ContextPageAfter ContextPageDirection = "after"
 )
 
-// ContextPageParams 定义单服务上下文游标分页参数。
+// ContextPageParams 定义单部署上下文游标分页参数。
 type ContextPageParams struct {
-	ServiceID  string
-	CursorTime time.Time
-	CursorID   int64
-	Direction  ContextPageDirection
-	Limit      int
+	DeploymentID string
+	CursorTime   time.Time
+	CursorID     int64
+	Direction    ContextPageDirection
+	Limit        int
 }
 
-// ContextResult 表示跨服务上下文查询结果。
+// ContextResult 表示跨部署上下文查询结果。
 type ContextResult struct {
-	TargetID       int64
-	AnchorTime     time.Time
-	ItemsByService map[string][]model.LogEntry
+	TargetID          int64
+	AnchorTime        time.Time
+	ItemsByDeployment map[string][]model.LogEntry
 }
 
-// ContextPageResult 表示单服务上下文游标分页结果。
+// ContextPageResult 表示单部署上下文游标分页结果。
 type ContextPageResult struct {
 	Entries []model.LogEntry
 	HasMore bool
@@ -135,17 +135,17 @@ func (s *Store) Close() error { return s.db.Close() }
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS log_entries (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			service_id TEXT     NOT NULL,
-			run_id     TEXT     NOT NULL,
-			timestamp  DATETIME NOT NULL,
-			level      TEXT     NOT NULL,
-			message    TEXT     NOT NULL,
-			stream     TEXT     NOT NULL
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			deployment_id TEXT     NOT NULL,
+			run_id        TEXT     NOT NULL,
+			timestamp     DATETIME NOT NULL,
+			level         TEXT     NOT NULL,
+			message       TEXT     NOT NULL,
+			stream        TEXT     NOT NULL
 		);
-		CREATE INDEX IF NOT EXISTS idx_service_id ON log_entries(service_id);
-		CREATE INDEX IF NOT EXISTS idx_run_id     ON log_entries(run_id);
-		CREATE INDEX IF NOT EXISTS idx_timestamp  ON log_entries(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_deployment_id ON log_entries(deployment_id);
+		CREATE INDEX IF NOT EXISTS idx_run_id        ON log_entries(run_id);
+		CREATE INDEX IF NOT EXISTS idx_timestamp     ON log_entries(timestamp);
 	`)
 	return err
 }
@@ -166,7 +166,7 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 		return err
 	}
 	stmt, err := tx.Prepare(`
-		INSERT INTO log_entries (service_id, run_id, timestamp, level, message, stream)
+		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
@@ -176,7 +176,7 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 	defer stmt.Close()
 
 	for _, e := range entries {
-		if _, err := stmt.Exec(e.ServiceID, e.RunID, e.Timestamp.UTC(), e.Level, e.Message, e.Stream); err != nil {
+		if _, err := stmt.Exec(e.DeploymentID, e.RunID, e.Timestamp.UTC(), e.Level, e.Message, e.Stream); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -187,7 +187,7 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 // Fetch 按指定参数查询日志条目，结果按 id ASC 排序。
 //
 // 参数：
-//   - p: 查询参数，ServiceID/RunID 为空则不过滤该字段；
+//   - p: 查询参数，DeploymentID/RunID 为空则不过滤该字段；
 //     Before > 0 时仅返回 id < Before 的记录（用于向前翻页）；
 //     Limit <= 0 时默认取 1000 条。
 //
@@ -199,12 +199,12 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		p.Limit = 1000
 	}
 
-	query := `SELECT id, service_id, run_id, timestamp, level, message, stream FROM log_entries WHERE 1=1`
+	query := `SELECT id, deployment_id, run_id, timestamp, level, message, stream FROM log_entries WHERE 1=1`
 	args := []any{}
 
-	if p.ServiceID != "" {
-		query += " AND service_id = ?"
-		args = append(args, p.ServiceID)
+	if p.DeploymentID != "" {
+		query += " AND deployment_id = ?"
+		args = append(args, p.DeploymentID)
 	}
 	if p.RunID != "" {
 		query += " AND run_id = ?"
@@ -227,7 +227,7 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 	for rows.Next() {
 		var e model.LogEntry
 		// modernc.org/sqlite 将 DATETIME 列以 time.Time 形式返回，直接 Scan 避免格式解析歧义。
-		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -253,38 +253,38 @@ func placeholders(n int) string {
 	return strings.Join(parts, ",")
 }
 
-func appendServiceArgs(args []any, serviceIDs []string) []any {
-	for _, id := range serviceIDs {
+func appendDeploymentArgs(args []any, deploymentIDs []string) []any {
+	for _, id := range deploymentIDs {
 		args = append(args, id)
 	}
 	return args
 }
 
-// Search 在指定服务集合内按关键词搜索历史日志。
+// Search 在指定部署集合内按关键词搜索历史日志。
 //
 // 参数：
-//   - p: ServiceIDs 限定搜索范围，Query 为大小写不敏感关键词，Limit 控制返回条数
+//   - p: DeploymentIDs 限定搜索范围，Query 为大小写不敏感关键词，Limit 控制返回条数
 //
 // 返回：
 //   - Entries: 按 timestamp ASC, id ASC 排序的匹配日志
 //   - Total: 未分页前的总命中数
-//   - ServiceCounts: 未分页前按 service_id 聚合的命中数
+//   - DeploymentCounts: 未分页前按 deployment_id 聚合的命中数
 //   - HasMore: 当前游标之后是否还有更多匹配日志
 func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	result := SearchResult{
-		Entries:       []model.LogEntry{},
-		ServiceCounts: map[string]int{},
+		Entries:          []model.LogEntry{},
+		DeploymentCounts: map[string]int{},
 	}
 	queryText := strings.TrimSpace(p.Query)
-	if len(p.ServiceIDs) == 0 || queryText == "" {
+	if len(p.DeploymentIDs) == 0 || queryText == "" {
 		return result, nil
 	}
 	if p.Limit <= 0 {
 		p.Limit = 1000
 	}
 
-	baseWhere := fmt.Sprintf("service_id IN (%s) AND LOWER(message) LIKE LOWER(?)", placeholders(len(p.ServiceIDs)))
-	baseArgs := appendServiceArgs([]any{}, p.ServiceIDs)
+	baseWhere := fmt.Sprintf("deployment_id IN (%s) AND LOWER(message) LIKE LOWER(?)", placeholders(len(p.DeploymentIDs)))
+	baseArgs := appendDeploymentArgs([]any{}, p.DeploymentIDs)
 	baseArgs = append(baseArgs, "%"+queryText+"%")
 	if p.From != nil {
 		baseWhere += " AND timestamp >= ?"
@@ -295,19 +295,19 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 		baseArgs = append(baseArgs, p.To.UTC())
 	}
 
-	countQuery := "SELECT service_id, COUNT(*) FROM log_entries WHERE " + baseWhere + " GROUP BY service_id"
+	countQuery := "SELECT deployment_id, COUNT(*) FROM log_entries WHERE " + baseWhere + " GROUP BY deployment_id"
 	countRows, err := s.db.Query(countQuery, baseArgs...)
 	if err != nil {
 		return result, err
 	}
 	defer countRows.Close()
 	for countRows.Next() {
-		var serviceID string
+		var deploymentID string
 		var count int
-		if err := countRows.Scan(&serviceID, &count); err != nil {
+		if err := countRows.Scan(&deploymentID, &count); err != nil {
 			return result, err
 		}
-		result.ServiceCounts[serviceID] = count
+		result.DeploymentCounts[deploymentID] = count
 		result.Total += count
 	}
 	if err := countRows.Err(); err != nil {
@@ -327,7 +327,7 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	}
 
 	entryQuery := fmt.Sprintf(
-		"SELECT id, service_id, run_id, timestamp, level, message, stream FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
+		"SELECT id, deployment_id, run_id, timestamp, level, message, stream FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
 		entryWhere,
 		p.Limit+1,
 	)
@@ -338,7 +338,7 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)
@@ -353,20 +353,20 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	return result, nil
 }
 
-// FetchContext 以目标日志时间为锚点，拉取指定服务集合在时间窗口内的日志。
+// FetchContext 以目标日志时间为锚点，拉取指定部署集合在时间窗口内的日志。
 //
 // 参数：
-//   - p: TargetID 为锚点日志 ID，ServiceIDs 限定项目服务集合，Before/After 控制时间窗口
+//   - p: TargetID 为锚点日志 ID，DeploymentIDs 限定项目部署集合，Before/After 控制时间窗口
 //
 // 返回：
-//   - 按 service_id 分组的日志上下文
-//   - 目标日志不存在或不属于 ServiceIDs 时返回 ErrLogEntryNotFound
+//   - 按 deployment_id 分组的日志上下文
+//   - 目标日志不存在或不属于 DeploymentIDs 时返回 ErrLogEntryNotFound
 func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 	result := ContextResult{
-		TargetID:       p.TargetID,
-		ItemsByService: map[string][]model.LogEntry{},
+		TargetID:          p.TargetID,
+		ItemsByDeployment: map[string][]model.LogEntry{},
 	}
-	if p.TargetID <= 0 || len(p.ServiceIDs) == 0 {
+	if p.TargetID <= 0 || len(p.DeploymentIDs) == 0 {
 		return result, ErrLogEntryNotFound
 	}
 	if p.Before <= 0 {
@@ -377,11 +377,11 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 	}
 
 	targetQuery := fmt.Sprintf(
-		"SELECT timestamp FROM log_entries WHERE id = ? AND service_id IN (%s)",
-		placeholders(len(p.ServiceIDs)),
+		"SELECT timestamp FROM log_entries WHERE id = ? AND deployment_id IN (%s)",
+		placeholders(len(p.DeploymentIDs)),
 	)
 	args := []any{p.TargetID}
-	args = appendServiceArgs(args, p.ServiceIDs)
+	args = appendDeploymentArgs(args, p.DeploymentIDs)
 	if err := s.db.QueryRow(targetQuery, args...).Scan(&result.AnchorTime); err != nil {
 		if err == sql.ErrNoRows {
 			return result, ErrLogEntryNotFound
@@ -389,19 +389,19 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 		return result, err
 	}
 
-	for _, serviceID := range p.ServiceIDs {
-		result.ItemsByService[serviceID] = []model.LogEntry{}
+	for _, deploymentID := range p.DeploymentIDs {
+		result.ItemsByDeployment[deploymentID] = []model.LogEntry{}
 	}
 
 	from := result.AnchorTime.Add(-p.Before)
 	to := result.AnchorTime.Add(p.After)
 	contextQuery := fmt.Sprintf(`
-		SELECT id, service_id, run_id, timestamp, level, message, stream
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream
 		FROM log_entries
-		WHERE service_id IN (%s) AND timestamp >= ? AND timestamp <= ?
+		WHERE deployment_id IN (%s) AND timestamp >= ? AND timestamp <= ?
 		ORDER BY timestamp ASC, id ASC
-	`, placeholders(len(p.ServiceIDs)))
-	contextArgs := appendServiceArgs([]any{}, p.ServiceIDs)
+	`, placeholders(len(p.DeploymentIDs)))
+	contextArgs := appendDeploymentArgs([]any{}, p.DeploymentIDs)
 	contextArgs = append(contextArgs, from, to)
 	rows, err := s.db.Query(contextQuery, contextArgs...)
 	if err != nil {
@@ -410,18 +410,18 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
 			return result, err
 		}
-		result.ItemsByService[e.ServiceID] = append(result.ItemsByService[e.ServiceID], e)
+		result.ItemsByDeployment[e.DeploymentID] = append(result.ItemsByDeployment[e.DeploymentID], e)
 	}
 	return result, rows.Err()
 }
 
-// FetchContextPage 按服务和时间游标继续读取上下文日志。
+// FetchContextPage 按部署和时间游标继续读取上下文日志。
 //
 // 参数：
-//   - p: ServiceID 限定单个服务，CursorTime/CursorID 定义当前位置，Direction 控制向前或向后翻页
+//   - p: DeploymentID 限定单个部署，CursorTime/CursorID 定义当前位置，Direction 控制向前或向后翻页
 //
 // 返回：
 //   - Entries: 按 timestamp ASC, id ASC 排序的日志页
@@ -429,7 +429,7 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 //   - 查询或扫描失败时返回错误
 func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error) {
 	result := ContextPageResult{Entries: []model.LogEntry{}}
-	if p.ServiceID == "" || p.CursorTime.IsZero() {
+	if p.DeploymentID == "" || p.CursorTime.IsZero() {
 		return result, nil
 	}
 	if p.Limit <= 0 {
@@ -446,15 +446,15 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, service_id, run_id, timestamp, level, message, stream
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream
 		FROM log_entries
-		WHERE service_id = ? AND %s
+		WHERE deployment_id = ? AND %s
 		ORDER BY timestamp %s, id %s
 		LIMIT ?
 	`, comparator, order, order)
 	rows, err := s.db.Query(
 		query,
-		p.ServiceID,
+		p.DeploymentID,
 		p.CursorTime.UTC(),
 		p.CursorTime.UTC(),
 		p.CursorID,
@@ -467,7 +467,7 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.ServiceID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)
