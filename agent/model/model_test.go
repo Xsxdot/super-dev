@@ -10,15 +10,15 @@ import (
 )
 
 func TestServiceDefaults(t *testing.T) {
-	s := model.Service{Name: "web", Command: "go run ."}
+	s := model.Service{Name: "web"}
 	assert.Equal(t, 0, s.Order)
 	assert.False(t, s.Required)
 	assert.Equal(t, model.StatusStopped, s.Status)
 }
 
-func TestProjectSelectedIDs(t *testing.T) {
+func TestProjectEnvSelectedIDs(t *testing.T) {
 	p := model.Project{Name: "myapp"}
-	assert.Empty(t, p.SelectedServiceIDs)
+	assert.Empty(t, p.EnvSelectedServiceIDs)
 }
 
 func TestLogRuleTypes(t *testing.T) {

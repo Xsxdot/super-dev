@@ -18,17 +18,28 @@ func TestLoadProject(t *testing.T) {
 
 	yaml := `
 name: myapp
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
 services:
   - name: server
-    command: go run .
-    working_dir: ./server
     required: true
     order: 1
+    deployments:
+      - env: dev
+        location: local
+        command: go run .
+        working_dir: ./server
   - name: worker
-    command: go run ./worker
     order: 2
-selected_service_ids:
-  - worker
+    deployments:
+      - env: dev
+        location: local
+        command: go run ./worker
+env_selected_service_ids:
+  dev:
+    - worker
 log_rules:
   - id: "rule-1"
     name: exclude health
@@ -50,8 +61,8 @@ log_rules:
 	assert.True(t, p.Services[0].Required)
 	assert.Equal(t, 1, p.Services[0].Order)
 	// 相对路径应被解析为相对于项目根目录的绝对路径
-	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].WorkDir)
-	assert.Equal(t, []string{"worker"}, p.SelectedServiceIDs)
+	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].Deployments[0].WorkDir)
+	assert.Equal(t, []string{"worker"}, p.EnvSelectedServiceIDs["dev"])
 	assert.Equal(t, model.StatusStopped, p.Services[0].Status)
 }
 
@@ -96,16 +107,22 @@ func TestSaveAndReload(t *testing.T) {
 		Name:     "test",
 		RootPath: dir,
 		Services: []model.Service{
-			{Name: "api", Command: "go run .", WorkDir: ".", Order: 0},
+			{
+				Name:  "api",
+				Order: 0,
+				Deployments: []model.Deployment{
+					{EnvName: "dev", Location: model.LocationLocal, Command: "go run .", WorkDir: "."},
+				},
+			},
 		},
-		SelectedServiceIDs: []string{"api"},
+		EnvSelectedServiceIDs: map[string][]string{"dev": {"api"}},
 	}
 	require.NoError(t, loader.Save(p))
 
 	loaded, err := loader.Load()
 	require.NoError(t, err)
 	assert.Equal(t, "test", loaded.Name)
-	assert.Equal(t, []string{"api"}, loaded.SelectedServiceIDs)
+	assert.Equal(t, []string{"api"}, loaded.EnvSelectedServiceIDs["dev"])
 }
 
 func TestSaveLogRules(t *testing.T) {
@@ -242,73 +259,6 @@ func TestSaveAndReloadPreservesIsDev(t *testing.T) {
 	assert.False(t, loaded.Environments[1].IsDev)
 }
 
-func TestOldFormatMigratedToLocalDevDeployment(t *testing.T) {
-	dir := t.TempDir()
-	superdevDir := filepath.Join(dir, ".superdev")
-	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
-
-	yamlContent := `
-name: myapp
-services:
-  - name: server
-    command: go run .
-    working_dir: ./server
-    required: true
-    order: 1
-  - name: worker
-    command: go run ./worker
-    order: 2
-selected_service_ids:
-  - worker
-`
-	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
-
-	loader := config.NewLoader(dir)
-	p, err := loader.Load()
-	require.NoError(t, err)
-
-	assert.Equal(t, "myapp", p.Name)
-	assert.Len(t, p.Services, 2)
-	assert.Equal(t, []string{"worker"}, p.SelectedServiceIDs)
-
-	for _, svc := range p.Services {
-		require.Len(t, svc.Deployments, 1, "service %q should have exactly 1 migrated deployment", svc.Name)
-		dep := svc.Deployments[0]
-		assert.Equal(t, model.LocationLocal, dep.Location)
-		assert.Equal(t, "dev", dep.EnvName)
-		assert.Equal(t, svc.Command, dep.Command)
-		assert.False(t, dep.IsReadOnly())
-	}
-
-	serverDep := p.Services[0].Deployments[0]
-	assert.Equal(t, filepath.Join(dir, "server"), serverDep.WorkDir)
-}
-
-func TestOldFormatWithExplicitDevEnv(t *testing.T) {
-	dir := t.TempDir()
-	superdevDir := filepath.Join(dir, ".superdev")
-	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
-
-	yamlContent := `
-name: myapp
-environments:
-  - name: local
-    is_dev: true
-    order: 0
-services:
-  - name: api
-    command: go run .
-`
-	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
-
-	loader := config.NewLoader(dir)
-	p, err := loader.Load()
-	require.NoError(t, err)
-
-	dep := p.Services[0].Deployments[0]
-	assert.Equal(t, "local", dep.EnvName)
-}
-
 func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 	dir := t.TempDir()
 	loader := config.NewLoader(dir)
@@ -347,7 +297,7 @@ func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 				},
 			},
 		},
-		SelectedServiceIDs: []string{"api-server"},
+		EnvSelectedServiceIDs: map[string][]string{"dev": {"api-server"}},
 	}
 
 	require.NoError(t, loader.Save(p))
