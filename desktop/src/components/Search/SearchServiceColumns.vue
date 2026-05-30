@@ -99,8 +99,9 @@ const canLoadAfter = computed(() => {
   return scrollingServiceIds.value.some(serviceId => tab.value!.hasMoreAfterByService[serviceId] !== false)
 })
 
-function serviceName(serviceId: string): string {
-  return agentStore.serviceById(serviceId)?.name ?? serviceId
+// 列键语义为 deploymentId，反查所属 service 名，反查不到时显示 id。
+function serviceName(deploymentId: string): string {
+  return agentStore.serviceForDeployment(deploymentId)?.service.name ?? deploymentId
 }
 
 function entryKey(entry: LogEntry): string | number {
@@ -170,7 +171,7 @@ function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirectio
   const hidden = new Set(currentTab.hiddenServiceIds)
   const resultIds = new Set(
     currentTab.results
-      .filter(entry => !hidden.has(entry.service_id))
+      .filter(entry => !hidden.has(entry.deployment_id))
       .map(entry => entry.id),
   )
   if (resultIds.size === 0) return

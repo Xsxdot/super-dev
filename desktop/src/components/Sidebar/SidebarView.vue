@@ -3,7 +3,6 @@ import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectHeader from './ProjectHeader.vue'
-import ServiceRow from './ServiceRow.vue'
 import EnvGroup from './EnvGroup.vue'
 import type { Service } from '@/api/agent'
 import { open, message } from '@tauri-apps/plugin-dialog'
@@ -13,16 +12,6 @@ const agentStore = useAgentStore()
 const panelStore = usePanelStore()
 const workspace = useWorkspaceStore()
 const router = useRouter()
-
-function isServiceSelected(serviceId: string) {
-  const active = workspace.activeTab
-  if (!active || active.type !== 'project') return false
-  return panelStore.allLeaves.some(leaf => leaf.serviceId === serviceId)
-}
-
-function selectService(serviceId: string, projectId: string) {
-  workspace.openService(projectId, serviceId)
-}
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
   workspace.openDeployment(payload.deploymentId, payload.title)
@@ -36,7 +25,11 @@ function servicesForEnv(services: Service[], envName: string): Service[] {
   return services.filter(svc => svc.deployments?.some(d => d.env_name === envName))
 }
 
-function selectedServiceIdSet(): Set<string> {
+/**
+ * openDeploymentIdSet 返回所有面板（项目 tab 的分栏）中已打开的 deploymentId 集合，
+ * 用于侧边栏行高亮。leaf.serviceId 语义即 deploymentId。
+ */
+function openDeploymentIdSet(): Set<string> {
   const active = workspace.activeTab
   if (!active || active.type !== 'project') return new Set()
   return new Set(panelStore.allLeaves.map(l => l.serviceId).filter(Boolean) as string[])
@@ -62,33 +55,18 @@ async function addProject() {
     <div class="sidebar-scroll">
       <template v-for="project in agentStore.projects" :key="project.id">
         <ProjectHeader :project="project" />
-        <!-- 已配置 environments：按环境分组 -->
-        <template v-if="project.environments?.length">
-          <EnvGroup
-            v-for="env in project.environments"
-            :key="env.id || env.name"
-            :env-name="env.name"
-            :is-dev="env.is_dev"
-            :project-id="project.id"
-            :services="servicesForEnv(project.services, env.name)"
-            :selected-service-ids="selectedServiceIdSet()"
-            @open-deployment="openDeployment"
-            @select-service="selectService($event.serviceId, $event.projectId)"
-            @search="openProjectSearch(project.id)"
-          />
-        </template>
-        <!-- 未配置 environments：退化为平铺 ServiceRow -->
-        <template v-else>
-          <ServiceRow
-            v-for="service in project.services"
-            :key="service.id"
-            :service="service"
-            :project-id="project.id"
-            :selected="isServiceSelected(service.id)"
-            @click="selectService(service.id, project.id)"
-            @open-deployment="openDeployment"
-          />
-        </template>
+        <!-- 按环境分组展示有 deployment 的 service 行 -->
+        <EnvGroup
+          v-for="env in project.environments ?? []"
+          :key="env.id || env.name"
+          :env-name="env.name"
+          :is-dev="env.is_dev"
+          :project-id="project.id"
+          :services="servicesForEnv(project.services, env.name)"
+          :selected-service-ids="openDeploymentIdSet()"
+          @open-deployment="openDeployment"
+          @search="openProjectSearch(project.id)"
+        />
       </template>
     </div>
     <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>

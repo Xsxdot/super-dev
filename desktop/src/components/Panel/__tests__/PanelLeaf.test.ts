@@ -7,16 +7,19 @@
  *
  * 边界：
  *   - 不渲染真实日志内容，LogPanel 使用轻量 stub
- *   - 不测试拖拽源组件，dataTransfer 由测试替身提供
+ *   - 拖拽源使用 EnvGroup（侧边栏真实拖拽来源），拖出的标识为 deploymentId
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PanelLeaf from '../PanelLeaf.vue'
-import ServiceRow from '../../Sidebar/ServiceRow.vue'
+import EnvGroup from '../../Sidebar/EnvGroup.vue'
 import { useAgentStore } from '../../../stores/agent'
 import { usePanelStore, type PanelNode, type PanelSplitNode } from '../../../stores/panel'
 import type { Project, Service } from '../../../api/agent'
+
+// 拖拽承载的标识为 dev 环境的 deploymentId。
+const DEV_DEPLOYMENT_ID = 'dep-1'
 
 function expectSplitNode(node: PanelNode): PanelSplitNode {
   expect(node.type).toBe('split')
@@ -30,10 +33,9 @@ function makeService(): Service {
     project_id: 'proj-1',
     name: 'api',
     status: 'running',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required: false,
     order: 1,
+    deployments: [{ id: DEV_DEPLOYMENT_ID, env_name: 'dev', location: 'local', status: 'running' }],
   }
 }
 
@@ -43,7 +45,8 @@ function makeProject(service: Service): Project {
     name: 'Project',
     root_path: '/tmp/project',
     services: [service],
-    selected_service_ids: [],
+    env_selected_service_ids: {},
+    environments: [{ id: 'e-dev', name: 'dev', is_dev: true, order: 0 }],
   }
 }
 
@@ -111,7 +114,7 @@ describe('PanelLeaf', () => {
       clientX: 380,
       clientY: 150,
       dataTransfer: {
-        getData: (type: string) => (type === 'text/plain' ? service.id : ''),
+        getData: (type: string) => (type === 'text/plain' ? DEV_DEPLOYMENT_ID : ''),
       },
     })
 
@@ -119,8 +122,10 @@ describe('PanelLeaf', () => {
     expect(split.axis).toBe('h')
     expect(split.second.type).toBe('leaf')
     if (split.second.type === 'leaf') {
-      expect(split.second.serviceId).toBe(service.id)
-      expect(split.second.projectId).toBe(service.project_id)
+      // 拖拽 deploymentId 后，叶子来源为 deployment 单源（serviceId 语义即 deploymentId，projectId 恒 null）
+      expect(split.second.serviceId).toBe(DEV_DEPLOYMENT_ID)
+      expect(split.second.source).toEqual({ type: 'deployment', deploymentId: DEV_DEPLOYMENT_ID })
+      expect(split.second.projectId).toBeNull()
     }
   })
 
@@ -169,10 +174,10 @@ describe('PanelLeaf', () => {
     agentStore.projects = [makeProject(service)]
 
     const wrapper = mount({
-      components: { PanelLeaf, ServiceRow },
+      components: { PanelLeaf, EnvGroup },
       template: `
         <div>
-          <ServiceRow :service="service" project-id="proj-1" :selected="false" />
+          <EnvGroup env-name="dev" :is-dev="true" project-id="proj-1" :services="[service]" :selected-service-ids="emptySet" />
           <PanelLeaf
             :panel-id="panelId"
             :service-id="null"
@@ -182,7 +187,7 @@ describe('PanelLeaf', () => {
         </div>
       `,
       setup() {
-        return { service, panelId: panelStore.root.id }
+        return { service, panelId: panelStore.root.id, emptySet: new Set<string>() }
       },
     }, {
       global: {
@@ -205,7 +210,7 @@ describe('PanelLeaf', () => {
       toJSON: () => ({}),
     } as DOMRect)
 
-    wrapper.find('.service-row').element.dispatchEvent(
+    wrapper.find('.env-service-row').element.dispatchEvent(
       new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }),
     )
     await wrapper.vm.$nextTick()
@@ -221,7 +226,7 @@ describe('PanelLeaf', () => {
     expect(split.axis).toBe('h')
     expect(split.second.type).toBe('leaf')
     if (split.second.type === 'leaf') {
-      expect(split.second.serviceId).toBe(service.id)
+      expect(split.second.serviceId).toBe(DEV_DEPLOYMENT_ID)
     }
   })
 
@@ -305,10 +310,10 @@ describe('PanelLeaf', () => {
     } as unknown as Selection)
 
     const wrapper = mount({
-      components: { PanelLeaf, ServiceRow },
+      components: { PanelLeaf, EnvGroup },
       template: `
         <div>
-          <ServiceRow :service="service" project-id="proj-1" :selected="false" />
+          <EnvGroup env-name="dev" :is-dev="true" project-id="proj-1" :services="[service]" :selected-service-ids="emptySet" />
           <PanelLeaf
             :panel-id="panelId"
             :service-id="null"
@@ -318,7 +323,7 @@ describe('PanelLeaf', () => {
         </div>
       `,
       setup() {
-        return { service, panelId: panelStore.root.id }
+        return { service, panelId: panelStore.root.id, emptySet: new Set<string>() }
       },
     }, {
       global: {
@@ -328,7 +333,7 @@ describe('PanelLeaf', () => {
       },
     })
 
-    wrapper.find('.service-row').element.dispatchEvent(
+    wrapper.find('.env-service-row').element.dispatchEvent(
       new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }),
     )
     await wrapper.vm.$nextTick()

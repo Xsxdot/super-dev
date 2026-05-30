@@ -63,13 +63,13 @@ export function toDisplayEntry(log: LogEntry): DisplayLogEntry {
   }
 }
 
-/** Fold adjacent duplicates (same service_id + normalized_message) into last row. */
+/** Fold adjacent duplicates (same deployment_id + normalized_message) into last row. */
 export function ingest(entry: DisplayLogEntry, entries: DisplayLogEntry[]): void {
   const last = entries[entries.length - 1]
   if (
     last &&
     !last.fold_closed &&
-    last.service_id === entry.service_id &&
+    last.deployment_id === entry.deployment_id &&
     last.normalized_message === entry.normalized_message
   ) {
     last.repeat_count += 1

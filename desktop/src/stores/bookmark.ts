@@ -93,14 +93,13 @@ export function captureLockedLogs(
 }
 
 function sourceLabel(bm: Bookmark): string {
-  if (bm.source?.type === 'local-service') return bm.source.serviceId
-  if (bm.source?.type === 'local-project') return `${bm.source.projectId} · all`
+  if (bm.source?.type === 'deployment') return bm.source.deploymentId
   return bm.serviceId ?? 'unknown'
 }
 
 function formatLogLines(l: LogEntry): string[] {
   const t = new Date(l.timestamp).toLocaleTimeString('en-US', { hour12: false })
-  const base = `${t} [${l.service_id}] ${l.level.padEnd(5)} ${l.message}`
+  const base = `${t} [${l.deployment_id}] ${l.level.padEnd(5)} ${l.message}`
   const n = l.repeat_count ?? 1
   return Array.from({ length: Math.max(1, n) }, () => base)
 }

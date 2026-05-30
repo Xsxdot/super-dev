@@ -19,9 +19,9 @@ vi.mock('@/api/agent', async () => {
 
 function project(): Project {
   return {
-    id: 'p1', name: 'demo', root_path: '/tmp/demo', selected_service_ids: [],
+    id: 'p1', name: 'demo', root_path: '/tmp/demo', env_selected_service_ids: {},
     environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
-    services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', command: '', work_dir: '', required: false, order: 0, deployments: [] }],
+    services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', required: false, order: 0, deployments: [] }],
   }
 }
 

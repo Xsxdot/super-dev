@@ -7,15 +7,17 @@ export type PanelAxis = 'h' | 'v'
 
 export const MAX_PANEL_LEAVES = 4
 
+// PanelSource 现在只有 deployment 单一来源：deployment_id 是全系统唯一的运行/日志单元标识。
+// 历史上的 local-service / local-project 来源已废弃。
 export type PanelSource =
-  | { type: 'local-service'; projectId: string; serviceId: string }
-  | { type: 'local-project'; projectId: string }
   | { type: 'deployment'; deploymentId: string }
 
 export interface PanelLeafNode {
   type: 'leaf'
   id: string
+  // serviceId 保留字段名，但语义为「日志订阅键」即 deploymentId。命名沿用历史，避免大面积改字段名。
   serviceId: string | null
+  // projectId 已废弃，恒为 null：项目归属由 agentStore 通过 deploymentId 反查。保留字段仅为兼容旧布局快照。
   projectId: string | null
   source: PanelSource | null
 }
@@ -31,36 +33,31 @@ export interface PanelSplitNode {
 
 export type PanelNode = PanelLeafNode | PanelSplitNode
 
-function sourceFromScope(serviceId: string | null, projectId: string | null): PanelSource | null {
-  if (serviceId && projectId) return { type: 'local-service', projectId, serviceId }
-  if (projectId) return { type: 'local-project', projectId }
+// sourceFromScope 由旧的 (serviceId, projectId) 二元组构造来源。
+// projectId 已不再产生任何来源；serviceId（语义为 deploymentId）有值时构造 deployment 来源。
+function sourceFromScope(serviceId: string | null, _projectId: string | null): PanelSource | null {
+  if (serviceId) return { type: 'deployment', deploymentId: serviceId }
   return null
 }
 
 function scopeFromSource(source: PanelSource | null): { serviceId: string | null; projectId: string | null } {
   if (!source) return { serviceId: null, projectId: null }
-  if (source.type === 'local-service') return { serviceId: source.serviceId, projectId: source.projectId }
-  if (source.type === 'local-project') return { serviceId: null, projectId: source.projectId }
+  if (source.type === 'deployment') return { serviceId: source.deploymentId, projectId: null }
   return { serviceId: null, projectId: null }
 }
 
-/** 从面板来源解析项目 ID。只有 local-service 和 local-project 关联项目。 */
-export function projectIdFromPanelSource(source: PanelSource | null): string | null {
-  if (!source) return null
-  if (source.type === 'local-service' || source.type === 'local-project') {
-    return source.projectId
-  }
+/**
+ * projectIdFromPanelSource 从面板来源解析项目 ID。
+ *
+ * deployment 单源下来源不再直接携带项目；项目归属由 agentStore 通过 deploymentId 反查。
+ * 故此函数恒返回 null，仅为兼容旧调用点保留签名。
+ */
+export function projectIdFromPanelSource(_source: PanelSource | null): string | null {
   return null
 }
 
 export function isSamePanelSource(a: PanelSource | null, b: PanelSource | null): boolean {
   if (!a || !b || a.type !== b.type) return false
-  if (a.type === 'local-service' && b.type === 'local-service') {
-    return a.projectId === b.projectId && a.serviceId === b.serviceId
-  }
-  if (a.type === 'local-project' && b.type === 'local-project') {
-    return a.projectId === b.projectId
-  }
   if (a.type === 'deployment' && b.type === 'deployment') {
     return a.deploymentId === b.deploymentId
   }
@@ -78,6 +75,11 @@ function makeLeaf(serviceId: string | null = null, projectId: string | null = nu
 
 export function createEmptyPanelRoot(): PanelLeafNode {
   return makeLeaf()
+}
+
+/** createDeploymentPanelRoot 返回一个以指定 deployment 为来源的单叶子布局根，用作 deployment tab 的初始分栏树。 */
+export function createDeploymentPanelRoot(deploymentId: string): PanelLeafNode {
+  return makeLeafFromSource({ type: 'deployment', deploymentId })
 }
 
 function getAllLeaves(node: PanelNode): PanelLeafNode[] {
@@ -153,7 +155,13 @@ function loadLayout(): PanelNode {
 
 function normalizePanelNode(node: PanelNode): PanelNode {
   if (node.type === 'leaf') {
-    const source = node.source ?? sourceFromScope(node.serviceId, node.projectId)
+    // 容错旧布局快照：localStorage 里可能存有 local-service / local-project 来源。
+    // 只接受 deployment 来源，其余一律按 serviceId（语义=deploymentId）重新推导，推导不出则退化为 null。
+    const rawSource = node.source as PanelSource | { type?: string; serviceId?: string } | null
+    const source =
+      rawSource && rawSource.type === 'deployment'
+        ? (rawSource as PanelSource)
+        : sourceFromScope(node.serviceId ?? (rawSource as { serviceId?: string })?.serviceId ?? null, null)
     const scope = scopeFromSource(source)
     return { ...node, ...scope, source }
   }

@@ -96,8 +96,6 @@ async function tryImportVscodeLaunch(created: Project): Promise<void> {
     name: c.name,
     required: false,
     order: i,
-    command: '',
-    work_dir: c.work_dir,
     status: '' as const,
     deployments: [{
       id: '',
@@ -133,8 +131,10 @@ async function deleteProject(project: Project) {
   await agentStore.deleteProject(project.id)
 }
 
+// 设置页项目面板无 env 选择，启动选中统一作用于项目的开发环境。
 function selectedStartNames(project: Project): string[] {
-  const selected = new Set(project.selected_service_ids ?? [])
+  const envName = agentStore.devEnvName(project.id)
+  const selected = new Set(project.env_selected_service_ids?.[envName] ?? [])
   for (const service of project.services) {
     if (service.required) selected.add(service.name)
   }
@@ -143,10 +143,12 @@ function selectedStartNames(project: Project): string[] {
 
 async function toggleStartSelection(project: Project, service: Service, checked: boolean) {
   if (service.required) return
-  const selected = new Set(selectedStartNames(project))
-  if (checked) selected.add(service.name)
-  else selected.delete(service.name)
-  await agentStore.updateSelected(project.id, [...selected])
+  const envName = agentStore.devEnvName(project.id)
+  // 仅在已选集合基础上增删，required 由后端/读取侧补齐，不写入持久化列表。
+  const current = new Set(project.env_selected_service_ids?.[envName] ?? [])
+  if (checked) current.add(service.name)
+  else current.delete(service.name)
+  await agentStore.putEnvSelected(project.id, envName, [...current])
 }
 
 function isSelectedForStart(project: Project, service: Service): boolean {

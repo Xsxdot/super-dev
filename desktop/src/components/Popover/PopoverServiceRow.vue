@@ -11,6 +11,12 @@ const props = defineProps<{
 const agentStore = useAgentStore()
 const hovered = ref(false)
 
+// 托盘 Popover 无 env 选择，统一作用于项目的开发环境。
+const envName = computed(() => agentStore.devEnvName(props.projectId))
+const devDeployment = computed(() =>
+  agentStore.deploymentForServiceInEnv(props.service.id, envName.value),
+)
+
 const isActive = computed(() =>
   props.service.status === 'running' || props.service.status === 'starting'
 )
@@ -23,30 +29,34 @@ const statusColor = computed(() => {
 })
 
 const isChecked = computed(() =>
-  agentStore.isServiceSelectedForStart(props.projectId, props.service.name)
+  agentStore.isServiceEnvSelected(props.projectId, envName.value, props.service.name)
 )
 
 async function onCheckChange() {
   if (props.service.required) return
   const project = agentStore.projectById(props.projectId)
   if (!project) return
-  const current = project.selected_service_ids ?? []
+  const current = project.env_selected_service_ids?.[envName.value] ?? []
   const next = isChecked.value
-    ? current.filter(n => n !== props.service.name)
+    ? current.filter((n: string) => n !== props.service.name)
     : [...current, props.service.name]
-  await agentStore.updateSelected(props.projectId, next)
+  await agentStore.putEnvSelected(props.projectId, envName.value, next)
 }
 
 async function onToggle() {
+  const dep = devDeployment.value
+  if (!dep) return
   if (isActive.value) {
-    await agentStore.stopService(props.service.id)
+    await agentStore.stopDeployment(dep.id)
   } else {
-    await agentStore.startService(props.service.id)
+    await agentStore.startDeployment(dep.id)
   }
 }
 
 async function onRestart() {
-  await agentStore.restartService(props.service.id)
+  const dep = devDeployment.value
+  if (!dep) return
+  await agentStore.restartDeployment(dep.id)
 }
 </script>
 

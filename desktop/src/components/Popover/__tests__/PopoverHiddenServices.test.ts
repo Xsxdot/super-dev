@@ -23,8 +23,6 @@ function service(id: string, name: string): Service {
     project_id: 'proj-1',
     name,
     status: '',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required: false,
     order: 1,
   }
@@ -36,7 +34,7 @@ function project(services: Service[]): Project {
     name: 'Project',
     root_path: '/tmp/project',
     services,
-    selected_service_ids: [],
+    env_selected_service_ids: {},
   }
 }
 

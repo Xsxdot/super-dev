@@ -8,8 +8,6 @@ const makeService = (id: string, name: string, envName: string): Service => ({
   id,
   project_id: 'proj-1',
   name,
-  command: 'go run .',
-  work_dir: '/',
   required: false,
   order: 0,
   status: '',
@@ -65,7 +63,7 @@ describe('EnvGroup', () => {
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(true)
   })
 
-  it('点击 service 行 emit select-service', async () => {
+  it('点击 service 行 emit open-deployment（携带本 env 的 deploymentId）', async () => {
     const wrapper = mount(EnvGroup, {
       props: {
         envName: 'dev',
@@ -78,9 +76,9 @@ describe('EnvGroup', () => {
 
     await wrapper.find('[data-test="env-service-row"]').trigger('click')
 
-    const emitted = wrapper.emitted('select-service')
+    const emitted = wrapper.emitted('open-deployment')
     expect(emitted).toBeTruthy()
-    expect((emitted![0][0] as { serviceId: string; projectId: string }).serviceId).toBe('svc-1')
-    expect((emitted![0][0] as { serviceId: string; projectId: string }).projectId).toBe('proj-1')
+    expect((emitted![0][0] as { deploymentId: string; title: string }).deploymentId).toBe('dep-svc-1')
+    expect((emitted![0][0] as { deploymentId: string; title: string }).title).toBe('web · dev')
   })
 })

@@ -9,6 +9,9 @@ const props = defineProps<{ project: Project }>()
 const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
 
+// 托盘 Popover 无 env 选择，统一作用于项目的开发环境。
+const envName = computed(() => agentStore.devEnvName(props.project.id))
+
 const visibleServices = computed(() =>
   props.project.services.filter(s => !settingsStore.isServiceHidden(s.id))
 )
@@ -30,11 +33,11 @@ const stoppedCount = computed(() =>
   visibleServices.value.filter(s => s.status !== 'running' && s.status !== 'starting').length
 )
 
-const selectedNames = computed(() => props.project.selected_service_ids ?? [])
+const selectedNames = computed(() => props.project.env_selected_service_ids?.[envName.value] ?? [])
 
 const selectedServices = computed(() =>
   visibleServices.value.filter(s =>
-    agentStore.isServiceSelectedForStart(props.project.id, s.name)
+    agentStore.isServiceEnvSelected(props.project.id, envName.value, s.name)
   )
 )
 
@@ -62,10 +65,10 @@ async function toggleSelectAll() {
   const requiredNames = requiredServices.value.map(s => s.name)
   const hiddenNames = hiddenSelectedNames()
   if (allOptionalSelected.value) {
-    await agentStore.updateSelected(props.project.id, [...hiddenNames, ...requiredNames])
+    await agentStore.putEnvSelected(props.project.id, envName.value, [...hiddenNames, ...requiredNames])
   } else {
     const all = visibleServices.value.map(s => s.name)
-    await agentStore.updateSelected(props.project.id, [...hiddenNames, ...all])
+    await agentStore.putEnvSelected(props.project.id, envName.value, [...hiddenNames, ...all])
   }
 }
 
@@ -76,18 +79,19 @@ async function invertSelection() {
   const currentOptionalSelected = optionalNames.filter(n => selectedNames.value.includes(n))
   const inverted = optionalNames.filter(n => !currentOptionalSelected.includes(n))
   const next = [...hiddenNames, ...requiredNames, ...inverted]
-  await agentStore.updateSelected(props.project.id, next)
+  await agentStore.putEnvSelected(props.project.id, envName.value, next)
 }
 
 async function startSelected() {
-  await agentStore.startSelected(props.project.id)
+  await agentStore.startEnvSelected(props.project.id, envName.value)
 }
 
 async function stopAll() {
-  const active = visibleServices.value.filter(
-    s => s.status === 'running' || s.status === 'starting'
-  )
-  await Promise.all(active.map(s => agentStore.stopService(s.id)))
+  // 停止开发环境下所有运行中的 deployment。
+  const active = visibleServices.value
+    .map(s => agentStore.deploymentForServiceInEnv(s.id, envName.value))
+    .filter(d => d && (d.status === 'running' || d.status === 'starting'))
+  await Promise.all(active.map(d => agentStore.stopDeployment(d!.id)))
 }
 
 async function openMainWindow() {

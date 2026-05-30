@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
-import { MAX_PANEL_LEAVES, usePanelStore, projectIdFromPanelSource, type PanelSource } from '@/stores/panel'
+import { MAX_PANEL_LEAVES, usePanelStore, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
 import LogPanel from './LogPanel.vue'
 
 const props = defineProps<{
   panelId: string
-  serviceId: string | null
-  projectId: string | null
+  serviceId?: string | null
+  projectId?: string | null
   source?: PanelSource | null
   canClose: boolean
 }>()
@@ -30,29 +30,28 @@ const {
 const panelEl = ref<HTMLElement | null>(null)
 const isFocused = computed(() => panelStore.focusedPanelId === props.panelId)
 
-const source = computed<PanelSource | null>(() =>
-  props.source ?? (props.serviceId && props.projectId
-    ? { type: 'local-service', serviceId: props.serviceId, projectId: props.projectId }
-    : props.projectId
-      ? { type: 'local-project', projectId: props.projectId }
-      : null)
+// deployment 单源：来源即 props.source，不再从 serviceId/projectId 兜底构造。
+const source = computed<PanelSource | null>(() => props.source ?? null)
+
+// deployment 反查所属 service + env，供面板标题与项目规则加载使用。
+const deploymentInfo = computed(() =>
+  source.value?.type === 'deployment'
+    ? agentStore.serviceForDeployment(source.value.deploymentId)
+    : undefined,
 )
 
+// 项目规则需要 projectId：通过 deployment 反查 service 所属项目。
 const effectiveProjectId = computed(() =>
-  projectIdFromPanelSource(source.value) ?? props.projectId,
-)
-
-const service = computed(() =>
-  source.value?.type === 'local-service' ? agentStore.serviceById(source.value.serviceId) : null
+  deploymentInfo.value?.service.project_id ?? null,
 )
 
 const headerTitle = computed(() => {
-  if (service.value) return service.value.name
-  if (source.value?.type === 'local-project') {
-    const proj = agentStore.projectById(source.value.projectId)
-    return proj ? `${proj.name} · 全部` : '未选择'
+  if (source.value?.type === 'deployment') {
+    const info = deploymentInfo.value
+    if (info) return `${info.service.name} · ${info.envName}`
+    // 反查不到（数据尚未加载或已删除）时退回截断的 deployment id
+    return `Deploy: ${source.value.deploymentId.slice(0, 12)}`
   }
-  if (source.value?.type === 'deployment') return `Deploy: ${source.value.deploymentId}`
   return '未选择'
 })
 
@@ -112,32 +111,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isSupportedPanelSource(value: unknown): value is PanelSource {
   if (!isRecord(value) || typeof value.type !== 'string') return false
-  if (value.type === 'local-project') {
-    return typeof value.projectId === 'string'
-  }
-  if (value.type === 'local-service') {
-    return typeof value.serviceId === 'string'
-      && (value.projectId === undefined || typeof value.projectId === 'string')
-  }
   if (value.type === 'deployment') {
     return typeof value.deploymentId === 'string'
   }
   return false
 }
 
-function normalizeDropSource(dropSource: PanelSource): PanelSource {
-  if (dropSource.type !== 'local-service' || dropSource.projectId) return dropSource
-  const svc = agentStore.serviceById(dropSource.serviceId)
-  return { ...dropSource, projectId: svc?.project_id ?? '' }
-}
-
 function showDropFailure(message: string) {
   window.alert(message)
 }
 
-function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
-  const nextSource = normalizeDropSource(dropSource)
-
+function applySourceDrop(nextSource: PanelSource, edge: DropEdge) {
   if (edge === 'center') {
     panelStore.replaceSource(props.panelId, nextSource)
     panelStore.setFocus(props.panelId)
@@ -153,23 +137,23 @@ function applySourceDrop(dropSource: PanelSource, edge: DropEdge) {
   }
 }
 
-function applyServiceDrop(serviceId: string, edge: DropEdge) {
-  const svc = agentStore.serviceById(serviceId)
-  applySourceDrop({ type: 'local-service', serviceId, projectId: svc?.project_id ?? '' }, edge)
+// 侧边栏拖拽 text/plain 现在承载的是 deploymentId（见 EnvGroup），据此构造 deployment 来源。
+function applyServiceDrop(deploymentId: string, edge: DropEdge) {
+  applySourceDrop({ type: 'deployment', deploymentId }, edge)
 }
 
 function onDrop(e: DragEvent) {
   e.preventDefault()
   const rawSource = e.dataTransfer?.getData('application/superdev-panel-source')
-  const serviceId = e.dataTransfer?.getData('text/plain')
+  const deploymentId = e.dataTransfer?.getData('text/plain')
   const edge = getDropEdgeFromEvent(e) ?? dropHighlight.value
   if (!edge) return
   dropHighlight.value = null
   if (rawSource) {
     const parsedSource = parsePanelSourcePayload(rawSource)
     if (parsedSource) applySourceDrop(parsedSource, edge)
-  } else if (serviceId) {
-    applyServiceDrop(serviceId, edge)
+  } else if (deploymentId) {
+    applyServiceDrop(deploymentId, edge)
   }
 }
 
@@ -248,7 +232,6 @@ watch(serviceDropRequest, (request) => {
     <!-- Log panel -->
     <LogPanel
       :panel-id="panelId"
-      :service-id="source?.type === 'local-service' ? source.serviceId : null"
       :project-id="effectiveProjectId"
       :source="source"
     />
