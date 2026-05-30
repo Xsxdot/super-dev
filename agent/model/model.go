@@ -243,11 +243,11 @@ func (d Deployment) IsReadOnly() bool {
 
 // Collector 是远端 agent 维护的采集任务运行时记录。
 //
-// 远端不持久化 Collector,仅在内存中保存，配合 process.Manager 跑虚拟 Service。
+// 远端不持久化 Collector,仅在内存中保存，配合 process.Manager 跑日志采集进程。
 type Collector struct {
-	ID        string        `json:"id"` // 由 hash(name+type) 生成，幂等
-	Name      string        `json:"name"`
-	Type      LogSourceType `json:"type"`
-	ServiceID string        `json:"service_id"` // 等于 Collector.ID，作为虚拟 Service 的 ID
-	Status    ServiceStatus `json:"status"`
+	ID           string        `json:"id"` // 由 hash(name+type) 生成，幂等
+	Name         string        `json:"name"`
+	Type         LogSourceType `json:"type"`
+	DeploymentID string        `json:"deployment_id"` // 等于 Collector.ID，作为采集日志的 DeploymentID 归属
+	Status       ServiceStatus `json:"status"`
 }

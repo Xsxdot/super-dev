@@ -23,7 +23,7 @@ func fakeRemote(t *testing.T) (*httptest.Server, *fakeRemoteState) {
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		id := req.Name + "@" + string(req.Type)
-		state.collectors[id] = model.Collector{ID: id, Name: req.Name, Type: req.Type, ServiceID: id}
+		state.collectors[id] = model.Collector{ID: id, Name: req.Name, Type: req.Type, DeploymentID: id}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(state.collectors[id])
 	})
