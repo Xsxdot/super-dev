@@ -12,87 +12,102 @@ import (
 	"github.com/superdev/agent/process"
 )
 
-func TestManagerStartStopService(t *testing.T) {
-	var lines []string
-	mgr := process.NewManager(func(e model.LogEntry) { lines = append(lines, e.Message) })
+func TestManagerStartStopDeployment(t *testing.T) {
+	var entries []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
 
-	svc := model.Service{
-		ID:      "svc-1",
-		Name:    "test",
-		Command: `echo "started"`,
-		WorkDir: t.TempDir(),
-		Order:   0,
+	dep1 := model.Deployment{
+		ID:       "dep-1",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  `echo "started"`,
+		WorkDir:  t.TempDir(),
 	}
-	require.NoError(t, mgr.Start(svc))
+	require.NoError(t, mgr.StartDeployment(dep1))
 	time.Sleep(300 * time.Millisecond)
-	assert.Equal(t, model.StatusStopped, mgr.Status("svc-1"))
+	assert.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-1"))
 
-	svc2 := model.Service{ID: "svc-2", Name: "long", Command: "sleep 60", WorkDir: t.TempDir()}
-	require.NoError(t, mgr.Start(svc2))
+	dep2 := model.Deployment{
+		ID:       "dep-2",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(dep2))
 	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, model.StatusRunning, mgr.Status("svc-2"))
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-2"))
 
-	mgr.Stop("svc-2")
+	mgr.StopDeployment("dep-2")
 	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, model.StatusStopped, mgr.Status("svc-2"))
+	assert.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-2"))
+
+	// 所有日志条目的 DeploymentID 应正确归属
+	for _, e := range entries {
+		assert.NotEmpty(t, e.DeploymentID)
+	}
 }
 
-func TestManagerRestartKeepsRunningStatus(t *testing.T) {
+func TestManagerRestartDeploymentKeepsRunningStatus(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
 
-	svc := model.Service{
-		ID:      "svc-restart",
-		Name:    "long",
-		Command: "sleep 60",
-		WorkDir: t.TempDir(),
+	dep := model.Deployment{
+		ID:       "dep-restart",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
 	}
-	require.NoError(t, mgr.Start(svc))
+	require.NoError(t, mgr.StartDeployment(dep))
 	time.Sleep(50 * time.Millisecond)
-	require.Equal(t, model.StatusRunning, mgr.Status("svc-restart"))
+	require.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-restart"))
 
-	require.NoError(t, mgr.Restart(svc))
+	require.NoError(t, mgr.RestartDeployment(dep))
 	// 旧监控 goroutine 轮询间隔 200ms，无 sleep 也不应被覆盖为 stopped
 	time.Sleep(400 * time.Millisecond)
-	assert.Equal(t, model.StatusRunning, mgr.Status("svc-restart"))
+	assert.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-restart"))
 
-	mgr.Stop("svc-restart")
+	mgr.StopDeployment("dep-restart")
 }
 
-func TestManagerStartSkipsWhenAlreadyRunning(t *testing.T) {
+func TestManagerStartDeploymentSkipsWhenAlreadyRunning(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
 
-	svc := model.Service{
-		ID:      "svc-dup",
-		Name:    "long",
-		Command: "sleep 60",
-		WorkDir: t.TempDir(),
+	dep := model.Deployment{
+		ID:       "dep-dup",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
 	}
-	require.NoError(t, mgr.Start(svc))
+	require.NoError(t, mgr.StartDeployment(dep))
 	time.Sleep(50 * time.Millisecond)
-	require.Equal(t, model.StatusRunning, mgr.Status("svc-dup"))
-	firstPID := mgr.PID("svc-dup")
+	require.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-dup"))
+	firstPID := mgr.DeploymentPID("dep-dup")
 	require.NotZero(t, firstPID)
 
-	require.NoError(t, mgr.Start(svc))
-	assert.Equal(t, firstPID, mgr.PID("svc-dup"))
+	// 重复启动应为空操作，PID 不变
+	require.NoError(t, mgr.StartDeployment(dep))
+	assert.Equal(t, firstPID, mgr.DeploymentPID("dep-dup"))
 
-	mgr.Stop("svc-dup")
+	mgr.StopDeployment("dep-dup")
 }
 
-func TestManagerStartSkipsAfterBackgroundedCommand(t *testing.T) {
+func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
 
-	svc := model.Service{
-		ID:      "svc-bg",
-		Name:    "bg",
-		Command: "sleep 60 &",
-		WorkDir: t.TempDir(),
+	dep := model.Deployment{
+		ID:       "dep-bg",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60 &",
+		WorkDir:  t.TempDir(),
 	}
-	require.NoError(t, mgr.Start(svc))
+	require.NoError(t, mgr.StartDeployment(dep))
 	time.Sleep(300 * time.Millisecond)
 
-	require.NoError(t, mgr.Start(svc))
-	// 仅应有一个 sleep 子进程（第二次 Start 被跳过）
+	require.NoError(t, mgr.StartDeployment(dep))
+	// 仅应有一个 sleep 子进程（第二次 StartDeployment 被跳过）
 	time.Sleep(100 * time.Millisecond)
 	out, err := exec.Command("pgrep", "-f", "sleep 60").Output()
 	require.NoError(t, err)
@@ -103,7 +118,7 @@ func TestManagerStartSkipsAfterBackgroundedCommand(t *testing.T) {
 		assert.Len(t, lines, 1)
 	}
 
-	mgr.Stop("svc-bg")
+	mgr.StopDeployment("dep-bg")
 }
 
 func TestManagerStartGroup(t *testing.T) {
@@ -177,4 +192,24 @@ func TestManagerDeploymentIsolation(t *testing.T) {
 
 	mgr.StopDeployment("dep-dev")
 	mgr.StopDeployment("dep-test")
+}
+
+func TestManagerLogEntryDeploymentID(t *testing.T) {
+	var entries []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
+
+	dep := model.Deployment{
+		ID:       "dep-log",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  `echo "hello"`,
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(dep))
+	time.Sleep(300 * time.Millisecond)
+
+	require.NotEmpty(t, entries)
+	for _, e := range entries {
+		assert.Equal(t, "dep-log", e.DeploymentID, "所有日志条目应归属于 dep.ID")
+	}
 }

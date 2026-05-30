@@ -14,14 +14,14 @@ import (
 // Manager 管理多个服务进程的生命周期。
 //
 // 职责：
-//   - 按 model.Service 启动/停止子进程
+//   - 按 model.Deployment 启动/停止子进程（唯一入口：StartDeployment/StopDeployment/RestartDeployment）
 //   - 监控进程退出并更新状态
-//   - 支持按 Order 字段分组串行启动，同组并行
-//   - 将进程输出通过 onLog 回调传递给上层
+//   - 支持按 Order 字段分组串行启动，同组并行（StartGroup，供 api 层批量启动）
+//   - 将进程输出通过 onLog 回调传递给上层，日志以 DeploymentID 归属
 //
 // 边界：
 //   - 不持久化状态，仅在内存维护 runners/status 映射
-//   - 不解析配置文件，仅消费 model.Service 数据结构
+//   - 不解析配置文件，仅消费 model.Deployment/model.Service 数据结构
 //   - 不直接写日志存储，日志处理由 onLog 回调负责
 type Manager struct {
 	mu          sync.Mutex
@@ -55,29 +55,6 @@ func (m *Manager) SetRunID(id string) {
 	m.mu.Unlock()
 }
 
-// Start 启动单个服务进程。
-//
-// 参数：
-//   - svc: 服务定义，包含 ID、Command、WorkDir、Env 等信息
-//
-// 返回：
-//   - 启动成功返回 nil；启动失败返回错误并将状态置为 StatusFailed
-//
-// 注意：
-//   - 启动后在后台 goroutine 轮询进程状态，退出时自动置为 StatusStopped
-//   - 本 session 内已启动过的服务（runners 中仍有记录）重复调用 Start 为空操作，须先 Stop/Restart
-//   - 与 Swift ProcessManager 一致：guard runners[service.id] == nil，不依赖 IsRunning()
-//     （后台化命令如 `npm run dev &` 会使 sh 退出但子进程继续，IsRunning 不可靠）
-func (m *Manager) Start(svc model.Service) error {
-	return m.startByID(svc.ID, svc)
-}
-
-// Restart 停止后重新启动服务。
-func (m *Manager) Restart(svc model.Service) error {
-	m.Stop(svc.ID)
-	return m.Start(svc)
-}
-
 // StartGroup 按 Order 字段分组，从小到大串行启动各组；同组内并行启动。
 //
 // 参数：
@@ -88,6 +65,7 @@ func (m *Manager) Restart(svc model.Service) error {
 //
 // 注意：
 //   - 每组内的启动并发执行，组间严格按 Order 升序串行
+//   - 以 svc.ID 为键调用 startByID，日志归属字段为 DeploymentID
 func (m *Manager) StartGroup(services []model.Service) error {
 	groups := groupByOrder(services)
 	for _, group := range groups {
@@ -97,7 +75,7 @@ func (m *Manager) StartGroup(services []model.Service) error {
 			wg.Add(1)
 			go func(s model.Service) {
 				defer wg.Done()
-				if err := m.Start(s); err != nil {
+				if err := m.startByID(s.ID, s); err != nil {
 					errCh <- err
 				}
 			}(svc)
@@ -185,18 +163,19 @@ func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 }
 
 // emitLog 通过 onLog 回调发送一条系统日志，level 为 "ERROR"/"INFO" 等。
+// serviceID 形参名保留不动，实参在 deployment 路径下传入的是 dep.ID。
 func (m *Manager) emitLog(serviceID, level, stream, message string) {
 	m.mu.Lock()
 	runID := m.runID
 	m.mu.Unlock()
 	m.onLog(model.LogEntry{
-		ID:        m.logSeq.Add(1),
-		ServiceID: serviceID,
-		RunID:     runID,
-		Timestamp: time.Now().UTC(),
-		Level:     level,
-		Message:   message,
-		Stream:    stream,
+		ID:           m.logSeq.Add(1),
+		DeploymentID: serviceID,
+		RunID:        runID,
+		Timestamp:    time.Now().UTC(),
+		Level:        level,
+		Message:      message,
+		Stream:       stream,
 	})
 }
 
@@ -252,7 +231,7 @@ func (m *Manager) IsDeploymentActive(deploymentID string) bool {
 	return m.IsActive(deploymentID)
 }
 
-// startByID 以指定的 id 为键启动进程，是 Start(svc) 的泛化版本。
+// startByID 以指定的 id 为键启动进程，是所有启动路径的核心实现。
 func (m *Manager) startByID(id string, svc model.Service) error {
 	m.mu.Lock()
 	if m.status[id] == model.StatusStarting {
@@ -277,13 +256,13 @@ func (m *Manager) startByID(id string, svc model.Service) error {
 			runID := m.runID
 			m.mu.Unlock()
 			m.onLog(model.LogEntry{
-				ID:        m.logSeq.Add(1),
-				ServiceID: id,
-				RunID:     runID,
-				Timestamp: time.Now().UTC(),
-				Level:     logparse.DetectLevel(line),
-				Message:   line,
-				Stream:    stream,
+				ID:           m.logSeq.Add(1),
+				DeploymentID: id,
+				RunID:        runID,
+				Timestamp:    time.Now().UTC(),
+				Level:        logparse.DetectLevel(line),
+				Message:      line,
+				Stream:       stream,
 			})
 		},
 	})
