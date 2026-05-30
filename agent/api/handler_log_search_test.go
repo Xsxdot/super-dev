@@ -52,9 +52,9 @@ func TestLogSearchAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace-8f21 api", Stream: "stdout"},
-		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-8f21 worker", Stream: "stdout"},
-		{ServiceID: "other", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "trace-8f21 outside", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace-8f21 api", Stream: "stdout"},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-8f21 worker", Stream: "stdout"},
+		{DeploymentID: "other", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "trace-8f21 outside", Stream: "stdout"},
 	}))
 
 	resp, err := http.Get(srv.URL + "/api/log-search?project=proj-1&q=trace-8f21")
@@ -67,17 +67,17 @@ func TestLogSearchAPI(t *testing.T) {
 	assert.Equal(t, "trace-8f21", body.Query)
 	assert.Equal(t, 2, body.Total)
 	require.Len(t, body.Items, 2)
-	assert.Equal(t, "svc-a", body.Items[0].ServiceID)
-	assert.Equal(t, "svc-b", body.Items[1].ServiceID)
-	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, body.ServiceCounts)
+	assert.Equal(t, "svc-a", body.Items[0].DeploymentID)
+	assert.Equal(t, "svc-b", body.Items[1].DeploymentID)
+	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, body.DeploymentCounts)
 }
 
 func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace page api", Stream: "stdout"},
-		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace page worker", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace page api", Stream: "stdout"},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace page worker", Stream: "stdout"},
 	}))
 
 	firstURL := srv.URL + "/api/log-search?project=proj-1&q=trace+page&limit=1"
@@ -104,21 +104,21 @@ func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 	var second logSearchResponse
 	require.NoError(t, json.NewDecoder(secondResp.Body).Decode(&second))
 	require.Len(t, second.Items, 1)
-	assert.Equal(t, "svc-b", second.Items[0].ServiceID)
+	assert.Equal(t, "svc-b", second.Items[0].DeploymentID)
 	assert.False(t, second.HasMore)
 	assert.Equal(t, 2, second.Total)
-	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, second.ServiceCounts)
+	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, second.DeploymentCounts)
 }
 
 func TestLogSearchAPIAllowsServiceWithoutProject(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 12, 32, 0, 0, time.UTC)
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
-		{ServiceID: "collector-1", RunID: "run-collector", Timestamp: base, Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
+		{DeploymentID: "collector-1", RunID: "run-collector", Timestamp: base, Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
 	}))
 
-	resp, err := http.Get(srv.URL + "/api/log-search?service=collector-1&query=collector")
+	resp, err := http.Get(srv.URL + "/api/log-search?deployment=collector-1&query=collector")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -126,8 +126,8 @@ func TestLogSearchAPIAllowsServiceWithoutProject(t *testing.T) {
 	var body logSearchResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	require.Len(t, body.Items, 1)
-	assert.Equal(t, "collector-1", body.Items[0].ServiceID)
-	assert.Equal(t, map[string]int{"collector-1": 1}, body.ServiceCounts)
+	assert.Equal(t, "collector-1", body.Items[0].DeploymentID)
+	assert.Equal(t, map[string]int{"collector-1": 1}, body.DeploymentCounts)
 }
 
 func TestLogSearchAPIRequiresProjectAndQuery(t *testing.T) {
@@ -148,10 +148,10 @@ func TestLogContextAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "trace-8f21 target", Stream: "stderr"},
-		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "worker context", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "trace-8f21 target", Stream: "stderr"},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "worker context", Stream: "stdout"},
 	}))
-	search, err := app.store.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	search, err := app.store.Search(store.SearchParams{DeploymentIDs: []string{"svc-a"}, Query: "target", Limit: 1})
 	require.NoError(t, err)
 
 	resp, err := http.Get(srv.URL + "/api/logs/context?project=proj-1&id=" + strconv.FormatInt(search.Entries[0].ID, 10))
@@ -163,26 +163,26 @@ func TestLogContextAPI(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, search.Entries[0].ID, body.TargetID)
 	assert.Equal(t, base, body.AnchorTime)
-	assert.Len(t, body.ItemsByService["svc-a"], 1)
-	assert.Len(t, body.ItemsByService["svc-b"], 1)
-	assert.Len(t, body.ItemsByService["svc-c"], 0)
+	assert.Len(t, body.ItemsByDeployment["svc-a"], 1)
+	assert.Len(t, body.ItemsByDeployment["svc-b"], 1)
+	assert.Len(t, body.ItemsByDeployment["svc-c"], 0)
 }
 
 func TestLogContextPageAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "api older", Stream: "stdout"},
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "api near", Stream: "stdout"},
-		{ServiceID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
-		{ServiceID: "svc-b", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "worker near", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "api older", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "api near", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "worker near", Stream: "stdout"},
 	}))
-	search, err := app.store.Search(store.SearchParams{ServiceIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	search, err := app.store.Search(store.SearchParams{DeploymentIDs: []string{"svc-a"}, Query: "target", Limit: 1})
 	require.NoError(t, err)
 	target := search.Entries[0]
 	query := url.Values{}
 	query.Set("project", "proj-1")
-	query.Set("service", "svc-a")
+	query.Set("deployment", "svc-a")
 	query.Set("direction", string(store.ContextPageBefore))
 	query.Set("cursor_time", target.Timestamp.Format(time.RFC3339Nano))
 	query.Set("cursor_id", strconv.FormatInt(target.ID, 10))
@@ -195,7 +195,7 @@ func TestLogContextPageAPI(t *testing.T) {
 
 	var body logContextPageResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	assert.Equal(t, "svc-a", body.ServiceID)
+	assert.Equal(t, "svc-a", body.DeploymentID)
 	assert.Equal(t, store.ContextPageBefore, body.Direction)
 	assert.True(t, body.HasMore)
 	require.Len(t, body.Items, 1)

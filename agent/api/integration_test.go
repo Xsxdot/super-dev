@@ -30,13 +30,13 @@ func TestEndToEndRemoteSearch(t *testing.T) {
 	colID := collector.CollectorID("nova-api", model.LogSourceTypeJournalctl)
 	srvA := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
 		colID: {
-			{ID: 10, ServiceID: colID, Timestamp: now, Message: "A older"},
-			{ID: 20, ServiceID: colID, Timestamp: now.Add(2 * time.Second), Message: "A newer"},
+			{ID: 10, DeploymentID: colID, Timestamp: now, Message: "A older"},
+			{ID: 20, DeploymentID: colID, Timestamp: now.Add(2 * time.Second), Message: "A newer"},
 		},
 	})
 	srvB := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
 		colID: {
-			{ID: 15, ServiceID: colID, Timestamp: now.Add(time.Second), Message: "B middle"},
+			{ID: 15, DeploymentID: colID, Timestamp: now.Add(time.Second), Message: "B middle"},
 		},
 	})
 
