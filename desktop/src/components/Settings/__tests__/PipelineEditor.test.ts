@@ -25,4 +25,29 @@ describe('PipelineEditor', () => {
     const last = emitted![emitted!.length - 1][0] as Pipeline
     expect(last.steps).toHaveLength(2)
   })
+
+  it('选择同步文件时 scope 自动锁定为每台目标机', async () => {
+    const pipeline: Pipeline = { steps: [{ id: 's1', name: 'step1', scope: 'local', action: 'run', command: 'make' }] }
+    const wrapper = mount(PipelineEditor, { props: { modelValue: pipeline } })
+    // 找到「同步文件」radio 并点击
+    const syncRadio = wrapper.findAll('input[type="radio"]').find(r => {
+      const label = r.element.closest('label')
+      return label?.textContent?.includes('同步文件')
+    })
+    await syncRadio!.trigger('change')
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Pipeline
+    expect(last.steps[0].action).toBe('sync')
+    expect(last.steps[0].scope).toBe('fan-out')
+  })
+
+  it('scope=local 选项在 action=sync 时被禁用', () => {
+    const pipeline: Pipeline = { steps: [{ id: 's1', name: 'step1', scope: 'fan-out', action: 'sync', command: '' }] }
+    const wrapper = mount(PipelineEditor, { props: { modelValue: pipeline } })
+    const localRadio = wrapper.findAll('input[type="radio"]').find(r => {
+      const label = r.element.closest('label')
+      return label?.textContent?.includes('本机一次')
+    })
+    expect((localRadio!.element as HTMLInputElement).disabled).toBe(true)
+  })
 })

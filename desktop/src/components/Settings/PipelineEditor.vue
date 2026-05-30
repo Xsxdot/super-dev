@@ -5,12 +5,14 @@ PipelineEditor：deployment 流水线（有序 Step 列表）编辑器。
   - 无 pipeline 时提供「配置流水线」入口（emit { steps: [] }）
   - 有 pipeline 时渲染可增删、可上下移的步骤卡片
   - 按 action 切换显示 run（command/work_dir）或 sync（from/to）字段
+  - 选择 sync action 时自动强制 scope 为 fan-out，防止 local+sync 非法组合
+
 边界：
   - 不做校验（校验在 configDraft.validateDraft）
   - Step ID 为空时本地补 step-{n}
 -->
 <script setup lang="ts">
-import type { Pipeline, PipelineStep } from '@/api/agent'
+import type { Pipeline, PipelineStep, StepAction } from '@/api/agent'
 
 const props = defineProps<{ modelValue?: Pipeline }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
@@ -48,6 +50,19 @@ function patch(i: number, field: keyof PipelineStep, value: string) {
   update(steps)
 }
 
+// patchAction 切换 action 时处理联动逻辑：
+// 切到 sync 时后端 local_executor 会直接报错，故同时强制把 scope 改为 fan-out。
+// 切回 run 时不干预 scope，让用户自行决定在哪执行。
+function patchAction(i: number, action: StepAction) {
+  const steps = props.modelValue!.steps.map((s, k) => {
+    if (k !== i) return s
+    // sync 只允许在 fan-out 下运行，强制修正 scope
+    const scope = action === 'sync' ? 'fan-out' : s.scope
+    return { ...s, action, scope }
+  })
+  update(steps)
+}
+
 function disable() {
   emit('update:modelValue', undefined)
 }
@@ -69,22 +84,45 @@ function disable() {
           <button type="button" @click="move(i, 1)">▼</button>
           <button type="button" data-test="step-del" @click="delStep(i)">✕</button>
         </div>
+        <label class="step-field-label">步骤名</label>
         <input
           class="step-input" placeholder="步骤名"
           :value="step.name" @input="patch(i, 'name', ($event.target as HTMLInputElement).value)"
         />
-        <div class="step-radios">
-          <label><input type="radio" :checked="step.scope === 'local'" @change="patch(i, 'scope', 'local')" /> local</label>
-          <label><input type="radio" :checked="step.scope === 'fan-out'" @change="patch(i, 'scope', 'fan-out')" /> fan-out</label>
-          <label><input type="radio" :checked="step.action === 'run'" @change="patch(i, 'action', 'run')" /> run</label>
-          <label><input type="radio" :checked="step.action === 'sync'" @change="patch(i, 'action', 'sync')" /> sync</label>
+        <div class="step-dims">
+          <div class="step-dim-row">
+            <span class="step-dim-label">在哪执行</span>
+            <label title="在本机执行一次（如打包、构建产物）">
+              <input type="radio" :checked="step.scope === 'local'" :disabled="step.action === 'sync'" @change="patch(i, 'scope', 'local')" />
+              本机一次
+            </label>
+            <label title="对每台目标主机并行执行（如分发、重启）">
+              <input type="radio" :checked="step.scope === 'fan-out'" @change="patch(i, 'scope', 'fan-out')" />
+              每台目标机
+            </label>
+          </div>
+          <div class="step-dim-row">
+            <span class="step-dim-label">做什么</span>
+            <label title="运行一条 shell 命令">
+              <input type="radio" :checked="step.action === 'run'" @change="patchAction(i, 'run')" />
+              执行命令
+            </label>
+            <label title="把本地文件传到各目标主机">
+              <input type="radio" :checked="step.action === 'sync'" @change="patchAction(i, 'sync')" />
+              同步文件
+            </label>
+          </div>
         </div>
         <template v-if="step.action === 'run'">
+          <label class="step-field-label">执行命令</label>
           <input class="step-input" placeholder="命令" :value="step.command" @input="patch(i, 'command', ($event.target as HTMLInputElement).value)" />
+          <label class="step-field-label">工作目录</label>
           <input class="step-input" placeholder="工作目录" :value="step.work_dir" @input="patch(i, 'work_dir', ($event.target as HTMLInputElement).value)" />
         </template>
         <template v-else>
+          <label class="step-field-label">源路径</label>
           <input class="step-input" placeholder="同步源路径" :value="step.sync_from" @input="patch(i, 'sync_from', ($event.target as HTMLInputElement).value)" />
+          <label class="step-field-label">目标路径</label>
           <input class="step-input" placeholder="同步目标路径" :value="step.sync_to" @input="patch(i, 'sync_to', ($event.target as HTMLInputElement).value)" />
         </template>
       </div>
@@ -146,11 +184,30 @@ function disable() {
   outline: none;
   box-sizing: border-box;
 }
-.step-radios {
-  display: flex;
-  gap: 10px;
+.step-field-label {
+  display: block;
   font-size: 11px;
   color: var(--text-secondary);
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.step-dims {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 6px;
+}
+.step-dim-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.step-dim-label {
+  font-weight: 600;
+  min-width: 56px;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 </style>
