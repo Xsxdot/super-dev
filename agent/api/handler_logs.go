@@ -21,7 +21,7 @@ import (
 const maxLimit = 5000
 
 // fetchLogs 处理 GET /api/logs，支持以下查询参数：
-//   - service: 按 ServiceID 过滤
+//   - deployment: 按 DeploymentID 过滤
 //   - run: 按 RunID 过滤
 //   - limit: 返回条数上限（默认 1000，最大 5000）
 //   - before: 返回 id < before 的记录（游标分页）
@@ -29,8 +29,8 @@ func (a *App) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	params := store.FetchParams{
-		ServiceID: q.Get("service"),
-		RunID:     q.Get("run"),
+		DeploymentID: q.Get("deployment"),
+		RunID:        q.Get("run"),
 	}
 
 	if limitStr := q.Get("limit"); limitStr != "" {

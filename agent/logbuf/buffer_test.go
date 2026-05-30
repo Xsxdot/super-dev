@@ -18,7 +18,7 @@ func TestBufferSubscribeReceivesEntries(t *testing.T) {
 	ch := buf.Subscribe("sub-1")
 	defer buf.Unsubscribe("sub-1")
 
-	entry := model.LogEntry{ServiceID: "svc-1", RunID: "run-1", Level: "INFO", Message: "hello", Stream: "stdout", Timestamp: time.Now()}
+	entry := model.LogEntry{DeploymentID: "svc-1", RunID: "run-1", Level: "INFO", Message: "hello", Stream: "stdout", Timestamp: time.Now()}
 	buf.Append(entry)
 
 	select {
@@ -34,7 +34,7 @@ func TestBufferRecentReturnsLastN(t *testing.T) {
 	defer buf.Close()
 
 	for i := 0; i < 10; i++ {
-		buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "run-1", Level: "INFO",
+		buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "run-1", Level: "INFO",
 			Message: fmt.Sprintf("msg-%d", i), Stream: "stdout", Timestamp: time.Now()})
 	}
 
@@ -48,7 +48,7 @@ func TestBufferMaxSize(t *testing.T) {
 	defer buf.Close()
 
 	for i := 0; i < 5; i++ {
-		buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "run-1", Level: "INFO",
+		buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "run-1", Level: "INFO",
 			Message: fmt.Sprintf("msg-%d", i), Stream: "stdout", Timestamp: time.Now()})
 	}
 
@@ -59,7 +59,7 @@ func TestBufferMaxSize(t *testing.T) {
 
 func TestBuffer_AppendFillsSourceID(t *testing.T) {
 	buf := logbuf.New(nil, 10, "superdev-ab12")
-	buf.Append(model.LogEntry{ServiceID: "svc-1", Message: "hello"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "hello"})
 	recent := buf.Recent(1)
 	require.Len(t, recent, 1)
 	assert.Equal(t, "superdev-ab12", recent[0].SourceID)
@@ -68,7 +68,7 @@ func TestBuffer_AppendFillsSourceID(t *testing.T) {
 func TestBuffer_AppendPreservesExistingSourceID(t *testing.T) {
 	// 如果 LogEntry 已有 SourceID（远端日志转发场景），不覆盖
 	buf := logbuf.New(nil, 10, "superdev-ab12")
-	buf.Append(model.LogEntry{ServiceID: "svc-1", Message: "remote", SourceID: "superdev-ff00"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "remote", SourceID: "superdev-ff00"})
 	recent := buf.Recent(1)
 	require.Len(t, recent, 1)
 	assert.Equal(t, "superdev-ff00", recent[0].SourceID, "existing SourceID must not be overwritten")
@@ -76,7 +76,7 @@ func TestBuffer_AppendPreservesExistingSourceID(t *testing.T) {
 
 func TestBuffer_EmptyNodeID_SourceIDLeftEmpty(t *testing.T) {
 	buf := logbuf.New(nil, 10, "")
-	buf.Append(model.LogEntry{ServiceID: "svc-1", Message: "no node"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "no node"})
 	recent := buf.Recent(1)
 	require.Len(t, recent, 1)
 	assert.Equal(t, "", recent[0].SourceID)

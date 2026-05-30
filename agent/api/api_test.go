@@ -21,8 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/api"
@@ -136,52 +134,6 @@ func TestListServices(t *testing.T) {
 	assert.Equal(t, "web", services[0].Name)
 }
 
-// TestPutSelected 验证 PUT /api/projects/{id}/selected 持久化到 config.yaml。
-func TestPutSelected(t *testing.T) {
-	srv, _ := newTestApp(t)
-
-	projDir := t.TempDir()
-	writeTestConfig(t, projDir, "testapp")
-
-	addBody := `{"root_path": "` + projDir + `"}`
-	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var created model.Project
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
-
-	putBody := `{"names": ["web"]}`
-	req, err := http.NewRequest(
-		http.MethodPut,
-		srv.URL+"/api/projects/"+created.ID+"/selected",
-		strings.NewReader(putBody),
-	)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	putResp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer putResp.Body.Close()
-	assert.Equal(t, http.StatusOK, putResp.StatusCode)
-
-	getResp, err := http.Get(srv.URL + "/api/projects")
-	require.NoError(t, err)
-	defer getResp.Body.Close()
-	var projects []model.Project
-	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&projects))
-	require.Len(t, projects, 1)
-	assert.Equal(t, []string{"web"}, projects[0].SelectedServiceIDs)
-
-	cfgData, err := os.ReadFile(filepath.Join(projDir, ".superdev", "config.yaml"))
-	require.NoError(t, err)
-	var onDisk struct {
-		SelectedServiceIDs []string `yaml:"selected_service_ids"`
-	}
-	require.NoError(t, yaml.Unmarshal(cfgData, &onDisk))
-	assert.Equal(t, []string{"web"}, onDisk.SelectedServiceIDs)
-}
-
 // TestFetchLogs 验证 GET /api/logs?limit=10 返回 200 和空数组。
 func TestFetchLogs(t *testing.T) {
 	srv, _ := newTestApp(t)
@@ -262,8 +214,8 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 	old := time.Now().UTC().Add(-5 * 24 * time.Hour)
 	recent := time.Now().UTC()
 	require.NoError(t, s.AppendBatch([]model.LogEntry{
-		{ServiceID: "svc-1", RunID: "run-1", Timestamp: old, Level: "INFO", Message: "old", Stream: "stdout"},
-		{ServiceID: "svc-1", RunID: "run-1", Timestamp: recent, Level: "INFO", Message: "recent", Stream: "stdout"},
+		{DeploymentID: "svc-1", RunID: "run-1", Timestamp: old, Level: "INFO", Message: "old", Stream: "stdout"},
+		{DeploymentID: "svc-1", RunID: "run-1", Timestamp: recent, Level: "INFO", Message: "recent", Stream: "stdout"},
 	}))
 	require.NoError(t, s.Close())
 
@@ -274,7 +226,7 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 	check, err := store.New(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { check.Close() })
-	got, err := check.Fetch(store.FetchParams{ServiceID: "svc-1", Limit: 10})
+	got, err := check.Fetch(store.FetchParams{DeploymentID: "svc-1", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "recent", got[0].Message)

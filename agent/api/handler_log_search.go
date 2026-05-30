@@ -31,24 +31,24 @@ const (
 )
 
 type logSearchResponse struct {
-	Query         string           `json:"query"`
-	Total         int              `json:"total"`
-	Items         []model.LogEntry `json:"items"`
-	ServiceCounts map[string]int   `json:"service_counts"`
-	HasMore       bool             `json:"has_more"`
+	Query            string           `json:"query"`
+	Total            int              `json:"total"`
+	Items            []model.LogEntry `json:"items"`
+	DeploymentCounts map[string]int   `json:"deployment_counts"`
+	HasMore          bool             `json:"has_more"`
 }
 
 type logContextResponse struct {
-	TargetID       int64                       `json:"target_id"`
-	AnchorTime     time.Time                   `json:"anchor_time"`
-	ItemsByService map[string][]model.LogEntry `json:"items_by_service"`
+	TargetID          int64                       `json:"target_id"`
+	AnchorTime        time.Time                   `json:"anchor_time"`
+	ItemsByDeployment map[string][]model.LogEntry `json:"items_by_deployment"`
 }
 
 type logContextPageResponse struct {
-	ServiceID string                     `json:"service_id"`
-	Direction store.ContextPageDirection `json:"direction"`
-	Items     []model.LogEntry           `json:"items"`
-	HasMore   bool                       `json:"has_more"`
+	DeploymentID string                     `json:"deployment_id"`
+	Direction    store.ContextPageDirection `json:"direction"`
+	Items        []model.LogEntry           `json:"items"`
+	HasMore      bool                       `json:"has_more"`
 }
 
 // searchLogs 处理 GET /api/log-search，按项目服务集合搜索历史日志。
@@ -61,19 +61,19 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var serviceIDs []string
+	var deploymentIDs []string
 	if projectID != "" {
 		var ok bool
-		serviceIDs, ok = a.projectServiceIDs(projectID, q["service"])
+		deploymentIDs, ok = a.projectDeploymentIDs(projectID, q["deployment"])
 		if !ok {
 			jsonError(w, http.StatusNotFound, "project not found")
 			return
 		}
 	} else {
-		// 无 project 时直接使用 service 列表,用于远端 collector 虚拟服务查询。
-		serviceIDs = q["service"]
-		if len(serviceIDs) == 0 {
-			jsonError(w, http.StatusBadRequest, "project or service is required")
+		// 无 project 时直接使用 deployment 列表,用于远端 collector 虚拟部署查询。
+		deploymentIDs = q["deployment"]
+		if len(deploymentIDs) == 0 {
+			jsonError(w, http.StatusBadRequest, "project or deployment is required")
 			return
 		}
 	}
@@ -98,22 +98,22 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := a.store.Search(store.SearchParams{
-		ServiceIDs: serviceIDs,
-		Query:      queryText,
-		Limit:      limit,
-		CursorTime: cursorTime,
-		CursorID:   cursorID,
+		DeploymentIDs: deploymentIDs,
+		Query:         queryText,
+		Limit:         limit,
+		CursorTime:    cursorTime,
+		CursorID:      cursorID,
 	})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to search logs: "+err.Error())
 		return
 	}
 	jsonOK(w, logSearchResponse{
-		Query:         queryText,
-		Total:         result.Total,
-		Items:         result.Entries,
-		ServiceCounts: result.ServiceCounts,
-		HasMore:       result.HasMore,
+		Query:            queryText,
+		Total:            result.Total,
+		Items:            result.Entries,
+		DeploymentCounts: result.DeploymentCounts,
+		HasMore:          result.HasMore,
 	})
 }
 
@@ -130,7 +130,7 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	serviceIDs, ok := a.projectServiceIDs(projectID, q["service"])
+	deploymentIDs, ok := a.projectDeploymentIDs(projectID, q["deployment"])
 	if !ok {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
@@ -139,10 +139,10 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 	afterMS := parseBoundedInt(q.Get("after_ms"), defaultContextMS, maxContextMS)
 
 	result, err := a.store.FetchContext(store.ContextParams{
-		TargetID:   targetID,
-		ServiceIDs: serviceIDs,
-		Before:     time.Duration(beforeMS) * time.Millisecond,
-		After:      time.Duration(afterMS) * time.Millisecond,
+		TargetID:      targetID,
+		DeploymentIDs: deploymentIDs,
+		Before:        time.Duration(beforeMS) * time.Millisecond,
+		After:         time.Duration(afterMS) * time.Millisecond,
 	})
 	if errors.Is(err, store.ErrLogEntryNotFound) {
 		jsonError(w, http.StatusNotFound, "log entry not found")
@@ -153,9 +153,9 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, logContextResponse{
-		TargetID:       result.TargetID,
-		AnchorTime:     result.AnchorTime,
-		ItemsByService: result.ItemsByService,
+		TargetID:          result.TargetID,
+		AnchorTime:        result.AnchorTime,
+		ItemsByDeployment: result.ItemsByDeployment,
 	})
 }
 
@@ -167,9 +167,9 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	serviceID := q.Get("service")
-	if serviceID == "" {
-		jsonError(w, http.StatusBadRequest, "service is required")
+	deploymentID := q.Get("deployment")
+	if deploymentID == "" {
+		jsonError(w, http.StatusBadRequest, "deployment is required")
 		return
 	}
 	direction := store.ContextPageDirection(q.Get("direction"))
@@ -187,23 +187,23 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "cursor_id is required")
 		return
 	}
-	serviceIDs, ok := a.projectServiceIDs(projectID, []string{serviceID})
+	deploymentIDs, ok := a.projectDeploymentIDs(projectID, []string{deploymentID})
 	if !ok {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	if len(serviceIDs) != 1 {
-		jsonError(w, http.StatusNotFound, "service not found")
+	if len(deploymentIDs) != 1 {
+		jsonError(w, http.StatusNotFound, "deployment not found")
 		return
 	}
 
 	limit := parseBoundedInt(q.Get("limit"), defaultPageLimit, maxPageLimit)
 	result, err := a.store.FetchContextPage(store.ContextPageParams{
-		ServiceID:  serviceIDs[0],
-		CursorTime: cursorTime,
-		CursorID:   cursorID,
-		Direction:  direction,
-		Limit:      limit,
+		DeploymentID: deploymentIDs[0],
+		CursorTime:   cursorTime,
+		CursorID:     cursorID,
+		Direction:    direction,
+		Limit:        limit,
 	})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch log context page: "+err.Error())
@@ -213,14 +213,23 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 		result.Entries = []model.LogEntry{}
 	}
 	jsonOK(w, logContextPageResponse{
-		ServiceID: serviceIDs[0],
-		Direction: direction,
-		Items:     result.Entries,
-		HasMore:   result.HasMore,
+		DeploymentID: deploymentIDs[0],
+		Direction:    direction,
+		Items:        result.Entries,
+		HasMore:      result.HasMore,
 	})
 }
 
-func (a *App) projectServiceIDs(projectID string, requested []string) ([]string, bool) {
+// projectDeploymentIDs 把请求的 deployment 范围收敛到指定项目内，防止跨项目窥探日志。
+//
+// 参数：
+//   - projectID: 目标项目 ID
+//   - requested: 请求方指定的 deployment ID 列表，为空表示该项目全部
+//
+// 返回：
+//   - 收敛后的 deployment ID 列表
+//   - 项目是否存在
+func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]string, bool) {
 	a.mu.RLock()
 	project, ok := a.findProject(projectID)
 	a.mu.RUnlock()
@@ -243,7 +252,7 @@ func (a *App) projectServiceIDs(projectID string, requested []string) ([]string,
 	ids := make([]string, 0, len(requested))
 	seen := map[string]bool{}
 	for _, id := range requested {
-		// 忽略非本项目服务，保证搜索接口不能跨项目窥探日志。
+		// 忽略不属于本项目的 deployment，保证搜索接口不能跨项目窥探日志。
 		if !allowed[id] || seen[id] {
 			continue
 		}

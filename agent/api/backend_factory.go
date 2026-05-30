@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不持有 backend 生命周期，调用方（App）负责存储和关闭
-//   - serviceID 仅用于 remote backend 的 collector 虚拟服务查询
+//   - deploymentID 仅用于 remote backend 的 collector 虚拟部署查询
 package api
 
 import (
@@ -22,25 +22,25 @@ import (
 //
 // 参数：
 //   - dep: 目标 deployment
-//   - localServiceID: 本地 service ID（仅 local deployment 使用，用于 SQLiteBackend 过滤）
+//   - localDeploymentID: 本地 deployment ID（仅 local deployment 使用，用于 SQLiteBackend 过滤）
 //   - s: 本地 SQLite store（local deployment 使用）
 //   - buf: 本地 logbuf（local deployment 使用）
 //   - resolver: 隧道地址解析器（remote deployment 使用）
-func buildBackend(dep model.Deployment, localServiceID string, s *store.Store, buf *logbuf.Buffer, resolver logbackend.TunnelResolver) logbackend.LogBackend {
+func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store, buf *logbuf.Buffer, resolver logbackend.TunnelResolver) logbackend.LogBackend {
 	if dep.Location == model.LocationLocal {
 		return logbackend.NewSQLiteBackend(s, buf)
 	}
 
 	// remote deployment：按 host 数量决定单节点还是联邦
 	if len(dep.HostIDs) == 1 {
-		remoteServiceID := collector.CollectorID(dep.LogTarget, dep.LogType)
-		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteServiceID, resolver)
+		remoteDeploymentID := collector.CollectorID(dep.LogTarget, dep.LogType)
+		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteDeploymentID, resolver)
 	}
 
 	children := make([]logbackend.LogBackend, 0, len(dep.HostIDs))
 	for _, hostID := range dep.HostIDs {
-		remoteServiceID := collector.CollectorID(dep.LogTarget, dep.LogType)
-		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteServiceID, resolver))
+		remoteDeploymentID := collector.CollectorID(dep.LogTarget, dep.LogType)
+		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteDeploymentID, resolver))
 	}
 	return logbackend.NewFederatedBackend(children)
 }

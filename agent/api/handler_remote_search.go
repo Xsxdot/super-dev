@@ -321,7 +321,7 @@ func (a *App) fetchOneHost(ctx context.Context, hostID, serviceID, query string,
 		return nil, 0, err
 	}
 	q := u.Query()
-	q.Set("service", serviceID)
+	q.Set("deployment", serviceID)
 	q.Set("q", query)
 	q.Set("query", query)
 	q.Set("limit", strconv.Itoa(limit))
@@ -483,13 +483,13 @@ func buildRemoteProjectSearchResponse(query string, serviceOrder []string, resul
 			returnedItems = append(returnedItems, MergeItem{
 				HostID: cursorKey,
 				Entry: model.LogEntry{
-					ID:        entry.ID,
-					ServiceID: entry.ServiceID,
-					RunID:     entry.RunID,
-					Timestamp: entry.Timestamp,
-					Level:     entry.Level,
-					Message:   entry.Message,
-					Stream:    entry.Stream,
+					ID:           entry.ID,
+					DeploymentID: entry.ServiceID,
+					RunID:        entry.RunID,
+					Timestamp:    entry.Timestamp,
+					Level:        entry.Level,
+					Message:      entry.Message,
+					Stream:       entry.Stream,
 				},
 			})
 		}

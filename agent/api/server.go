@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 暴露项目管理接口（列表、添加、删除、规则读写）
-//   - 暴露服务管理接口（列表、启动、停止、重启）
+//   - 暴露服务列表与 deployment 级启停接口
 //   - 暴露日志查询接口（REST 分页 + WebSocket 实时推送）
 //   - 生命周期管理：启动时从注册表加载已注册项目
 //
@@ -172,13 +172,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
 
-	// 服务管理
+	// 服务管理（service 级启停/选择已下线，统一走 deployment 级接口）
 	mux.HandleFunc("GET /api/services", a.listServices)
-	mux.HandleFunc("POST /api/services/{id}/start", a.startService)
-	mux.HandleFunc("POST /api/services/{id}/stop", a.stopService)
-	mux.HandleFunc("POST /api/services/{id}/restart", a.restartService)
-	mux.HandleFunc("POST /api/projects/{id}/start-selected", a.startSelected)
-	mux.HandleFunc("PUT /api/projects/{id}/selected", a.putSelected)
 	mux.HandleFunc("PUT /api/projects/{id}/env-selected", a.putEnvSelected)
 	mux.HandleFunc("POST /api/projects/{id}/envs/{envName}/start-selected", a.startEnvSelected)
 

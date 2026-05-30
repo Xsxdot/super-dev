@@ -39,18 +39,18 @@ func fakeRemoteWithSearch(t *testing.T, items map[string][]model.LogEntry) *http
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/log-search", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		svc := q.Get("service")
-		entries := items[svc]
+		dep := q.Get("deployment")
+		entries := items[dep]
 		if strings.TrimSpace(q.Get("q")) == "" {
 			entries = []model.LogEntry{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"query":          q.Get("q"),
-			"total":          len(entries),
-			"items":          entries,
-			"service_counts": map[string]int{svc: len(entries)},
-			"has_more":       false,
+			"query":             q.Get("q"),
+			"total":             len(entries),
+			"items":             entries,
+			"deployment_counts": map[string]int{dep: len(entries)},
+			"has_more":          false,
 		})
 	})
 	mux.HandleFunc("POST /api/collectors", func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +62,7 @@ func fakeRemoteWithSearch(t *testing.T, items map[string][]model.LogEntry) *http
 		id := collector.CollectorID(req.Name, req.Type)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(model.Collector{
-			ID: id, Name: req.Name, Type: req.Type, ServiceID: id,
+			ID: id, Name: req.Name, Type: req.Type, DeploymentID: id,
 		})
 	})
 	srv := httptest.NewServer(mux)
@@ -76,13 +76,13 @@ func TestRemoteLogSearchMergesAcrossHosts(t *testing.T) {
 
 	srvH1 := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
 		colID: {
-			{ID: 1, ServiceID: colID, Timestamp: now, Message: "from h1 #1"},
-			{ID: 3, ServiceID: colID, Timestamp: now.Add(2 * time.Second), Message: "from h1 #2"},
+			{ID: 1, DeploymentID: colID, Timestamp: now, Message: "from h1 #1"},
+			{ID: 3, DeploymentID: colID, Timestamp: now.Add(2 * time.Second), Message: "from h1 #2"},
 		},
 	})
 	srvH2 := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
 		colID: {
-			{ID: 2, ServiceID: colID, Timestamp: now.Add(time.Second), Message: "from h2 #1"},
+			{ID: 2, DeploymentID: colID, Timestamp: now.Add(time.Second), Message: "from h2 #1"},
 		},
 	})
 
@@ -147,7 +147,7 @@ func TestRemoteLogSearchAcceptsSpecQueryParam(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	colID := collector.CollectorID("nova-api", model.LogSourceTypeJournalctl)
 	remoteSrv := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
-		colID: {{ID: 1, ServiceID: colID, Timestamp: now, Message: "from query param"}},
+		colID: {{ID: 1, DeploymentID: colID, Timestamp: now, Message: "from query param"}},
 	})
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:        t.TempDir(),
@@ -303,10 +303,10 @@ func TestRemoteLogSearch_ProjectModeResolvesAllVisibleTargets(t *testing.T) {
 	workerCollector := collector.CollectorID("worker", model.LogSourceTypeJournalctl)
 	remoteSrv := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
 		apiCollector: {
-			{ID: 101, ServiceID: apiCollector, Timestamp: now, Message: "api error from host"},
+			{ID: 101, DeploymentID: apiCollector, Timestamp: now, Message: "api error from host"},
 		},
 		workerCollector: {
-			{ID: 101, ServiceID: workerCollector, Timestamp: now.Add(time.Second), Message: "worker error from host"},
+			{ID: 101, DeploymentID: workerCollector, Timestamp: now.Add(time.Second), Message: "worker error from host"},
 		},
 	})
 	app, err := api.NewApp(api.AppConfig{
@@ -400,11 +400,11 @@ func TestRemoteLogSearch_ProjectModeAppliesServiceAndHostFilters(t *testing.T) {
 	workerCollector := collector.CollectorID("worker", model.LogSourceTypeJournalctl)
 	var requestedCollectors []string
 	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestedCollectors = append(requestedCollectors, r.URL.Query().Get("service"))
+		requestedCollectors = append(requestedCollectors, r.URL.Query().Get("deployment"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"total": 1,
-			"items": []model.LogEntry{{ID: 7, ServiceID: apiCollector, Timestamp: now, Message: "api scoped trace"}},
+			"items": []model.LogEntry{{ID: 7, DeploymentID: apiCollector, Timestamp: now, Message: "api scoped trace"}},
 		})
 	}))
 	defer remoteSrv.Close()
@@ -462,7 +462,7 @@ func TestRemoteLogSearch_ProjectModePartialFailureAndAllFailureStatuses(t *testi
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	apiCollector := collector.CollectorID("api", model.LogSourceTypeJournalctl)
 	remoteSrv := fakeRemoteWithSearch(t, map[string][]model.LogEntry{
-		apiCollector: {{ID: 1, ServiceID: apiCollector, Timestamp: now, Message: "api survives failure"}},
+		apiCollector: {{ID: 1, DeploymentID: apiCollector, Timestamp: now, Message: "api survives failure"}},
 	})
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:        t.TempDir(),
@@ -550,8 +550,8 @@ func TestRemoteLogSearch_ProjectModeUsesCursorForNextPage(t *testing.T) {
 		q := r.URL.Query()
 		seenCursorIDs = append(seenCursorIDs, q.Get("cursor_id"))
 		entries := []model.LogEntry{
-			{ID: 1, ServiceID: apiCollector, Timestamp: now, Message: "first trace"},
-			{ID: 2, ServiceID: apiCollector, Timestamp: now.Add(time.Second), Message: "second trace"},
+			{ID: 1, DeploymentID: apiCollector, Timestamp: now, Message: "first trace"},
+			{ID: 2, DeploymentID: apiCollector, Timestamp: now.Add(time.Second), Message: "second trace"},
 		}
 		if q.Get("cursor_id") == "1" {
 			entries = entries[1:]
@@ -654,13 +654,13 @@ func TestRemoteLogSearch_ProjectModeCursorDoesNotRepeatReturnedMultiTargetEntrie
 		}))
 	}
 	apiSrv := remoteFor([]model.LogEntry{
-		{ID: 1, ServiceID: apiCollector, Timestamp: now, Message: "api trace one"},
-		{ID: 3, ServiceID: apiCollector, Timestamp: now.Add(2 * time.Second), Message: "api trace two"},
+		{ID: 1, DeploymentID: apiCollector, Timestamp: now, Message: "api trace one"},
+		{ID: 3, DeploymentID: apiCollector, Timestamp: now.Add(2 * time.Second), Message: "api trace two"},
 	})
 	defer apiSrv.Close()
 	workerSrv := remoteFor([]model.LogEntry{
-		{ID: 2, ServiceID: workerCollector, Timestamp: now.Add(time.Second), Message: "worker trace one"},
-		{ID: 4, ServiceID: workerCollector, Timestamp: now.Add(3 * time.Second), Message: "worker trace two"},
+		{ID: 2, DeploymentID: workerCollector, Timestamp: now.Add(time.Second), Message: "worker trace one"},
+		{ID: 4, DeploymentID: workerCollector, Timestamp: now.Add(3 * time.Second), Message: "worker trace two"},
 	})
 	defer workerSrv.Close()
 

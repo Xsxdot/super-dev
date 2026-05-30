@@ -2,8 +2,8 @@
 //
 // 职责：
 //   - 将 HTTP 连接升级为 WebSocket
-//   - 先发送最近 200 条历史日志（按 serviceID 过滤）
-//   - 实时推送 logbuf.Buffer 发布的新日志（按 serviceID 过滤）
+//   - 先发送最近 200 条历史日志（按 deploymentID 过滤）
+//   - 实时推送 logbuf.Buffer 发布的新日志（按 deploymentID 过滤）
 //   - 客户端断开后及时清理订阅
 //
 // 边界：
@@ -26,9 +26,9 @@ var wsUpgrader = websocket.Upgrader{
 // wsLogs 处理 GET /ws/logs，建立 WebSocket 连接并推送日志流。
 //
 // 查询参数：
-//   - service: 按 ServiceID 过滤日志（可选，为空则推送所有服务的日志）
+//   - deployment: 按 DeploymentID 过滤日志（可选，为空则推送所有部署的日志）
 func (a *App) wsLogs(w http.ResponseWriter, r *http.Request) {
-	serviceID := r.URL.Query().Get("service")
+	deploymentID := r.URL.Query().Get("deployment")
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -42,10 +42,10 @@ func (a *App) wsLogs(w http.ResponseWriter, r *http.Request) {
 	ch := a.buf.Subscribe(subID)
 	defer a.buf.Unsubscribe(subID)
 
-	// 先发送最近 200 条历史日志（按 serviceID 过滤）
+	// 先发送最近 200 条历史日志（按 deploymentID 过滤）
 	recent := a.buf.Recent(200)
 	for _, entry := range recent {
-		if serviceID != "" && entry.ServiceID != serviceID {
+		if deploymentID != "" && entry.DeploymentID != deploymentID {
 			continue
 		}
 		if err := conn.WriteJSON(entry); err != nil {
@@ -62,8 +62,8 @@ func (a *App) wsLogs(w http.ResponseWriter, r *http.Request) {
 				// buffer 已关闭
 				return
 			}
-			// 按 serviceID 过滤
-			if serviceID != "" && entry.ServiceID != serviceID {
+			// 按 deploymentID 过滤
+			if deploymentID != "" && entry.DeploymentID != deploymentID {
 				continue
 			}
 			if err := conn.WriteJSON(entry); err != nil {
@@ -74,4 +74,3 @@ func (a *App) wsLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-

@@ -67,11 +67,11 @@ func TestDeploymentSearchEndpoint_ReturnsResults(t *testing.T) {
 	depID := addTestDeploymentBackend(t, app)
 
 	app.WriteTestLog(model.LogEntry{
-		ServiceID: "svc-test",
-		RunID:     "r1",
-		Timestamp: time.Now(),
-		Message:   "error happened",
-		Stream:    "stderr",
+		DeploymentID: "svc-test",
+		RunID:        "r1",
+		Timestamp:    time.Now(),
+		Message:      "error happened",
+		Stream:       "stderr",
 	})
 	time.Sleep(200 * time.Millisecond)
 

@@ -40,7 +40,7 @@ type deploymentSearchResponse struct {
 // fetchDeploymentLogs 处理 GET /api/deployments/{id}/logs。
 //
 // 参数（query string）：
-//   - service: 按 ServiceID 过滤（可选）
+//   - deployment: 按 DeploymentID 过滤（可选）
 //   - run: 按 RunID 过滤（可选）
 //   - limit: 最大返回条数（默认 1000，上限由 maxLimit 控制）
 func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
@@ -53,9 +53,9 @@ func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	filter := logbackend.QueryFilter{
-		ServiceID: q.Get("service"),
-		RunID:     q.Get("run"),
-		Limit:     parseBoundedInt(q.Get("limit"), 1000, maxLimit),
+		DeploymentID: q.Get("deployment"),
+		RunID:        q.Get("run"),
+		Limit:        parseBoundedInt(q.Get("limit"), 1000, maxLimit),
 	}
 
 	entries, next, err := backend.Query(r.Context(), filter)

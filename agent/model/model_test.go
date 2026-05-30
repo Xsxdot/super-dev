@@ -124,7 +124,7 @@ func TestProjectWithEnvironments(t *testing.T) {
 }
 
 func TestLogEntrySourceID(t *testing.T) {
-	e := model.LogEntry{ID: 1, ServiceID: "svc-1", SourceID: "superdev-a3f9", Message: "hi"}
+	e := model.LogEntry{ID: 1, DeploymentID: "svc-1", SourceID: "superdev-a3f9", Message: "hi"}
 	data, err := json.Marshal(e)
 	require.NoError(t, err)
 	var got model.LogEntry
