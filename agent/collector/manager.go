@@ -1,12 +1,13 @@
-// manager.go 实现 collector.Manager:按 (name, type) 启停虚拟 Service。
+// manager.go 实现 collector.Manager:按 (name, type) 启停采集进程。
 //
 // 职责：
 //   - 维护 (name, type) → collector_id 的映射
-//   - 启动时调用 Probe 校验目标存在性,然后通过 process.Manager 启动虚拟 Service
-//   - 关闭时停止虚拟 Service 并清理映射
+//   - 启动时调用 Probe 校验目标存在性,然后通过 process.Manager.StartProcess 启动采集进程
+//   - 关闭时停止采集进程并清理映射
 //
 // 边界：
 //   - 不直接执行命令,使用现有的 process.Manager + process.Runner
+//   - 不依赖 model.Service 运行模型,仅以 collector_id 作为日志归属的 DeploymentID
 //   - 不写存储,collector 是运行时状态;断电/重启后丢失,本机重连后重新 EnsureCollector
 package collector
 
@@ -47,7 +48,7 @@ type Manager struct {
 // NewManager 创建新的 collector.Manager。
 //
 // 参数：
-//   - procMgr: 已初始化的 process.Manager,用于跑虚拟 Service
+//   - procMgr: 已初始化的 process.Manager,用于跑日志采集进程
 //   - probe: 目标存在性探测器
 func NewManager(procMgr *process.Manager, probe Probe) *Manager {
 	return &Manager{
@@ -100,20 +101,15 @@ func (m *Manager) startWithArgv(name string, t model.LogSourceType, argv []strin
 		return existing.ID, nil
 	}
 	m.items[id] = model.Collector{
-		ID:        id,
-		Name:      name,
-		Type:      t,
-		ServiceID: id,
-		Status:    model.StatusStarting,
+		ID:           id,
+		Name:         name,
+		Type:         t,
+		DeploymentID: id,
+		Status:       model.StatusStarting,
 	}
 	m.mu.Unlock()
 
-	svc := model.Service{
-		ID:      id,
-		Name:    name,
-		Command: shellQuote(argv),
-	}
-	if err := m.procMgr.Start(svc); err != nil {
+	if err := m.procMgr.StartProcess(id, process.ProcessSpec{Command: shellQuote(argv)}); err != nil {
 		m.mu.Lock()
 		delete(m.items, id)
 		m.mu.Unlock()
@@ -170,7 +166,7 @@ func (m *Manager) Get(id string) (model.Collector, bool) {
 	if !ok {
 		return model.Collector{}, false
 	}
-	c.Status = m.procMgr.Status(c.ServiceID)
+	c.Status = m.procMgr.Status(c.DeploymentID)
 	return c, true
 }
 
@@ -183,7 +179,7 @@ func (m *Manager) List() []model.Collector {
 	}
 	m.mu.Unlock()
 	for i := range out {
-		out[i].Status = m.procMgr.Status(out[i].ServiceID)
+		out[i].Status = m.procMgr.Status(out[i].DeploymentID)
 	}
 	return out
 }

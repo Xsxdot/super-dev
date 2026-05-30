@@ -2,7 +2,6 @@ package process
 
 import (
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,14 +13,14 @@ import (
 // Manager 管理多个服务进程的生命周期。
 //
 // 职责：
-//   - 按 model.Deployment 启动/停止子进程（唯一入口：StartDeployment/StopDeployment/RestartDeployment）
+//   - 按 model.Deployment 启动/停止子进程（StartDeployment/StopDeployment/RestartDeployment）
+//   - 提供不绑定 deployment 概念的低阶启动原语 StartProcess（供 collector 等子系统使用）
 //   - 监控进程退出并更新状态
-//   - 支持按 Order 字段分组串行启动，同组并行（StartGroup，供 api 层批量启动）
 //   - 将进程输出通过 onLog 回调传递给上层，日志以 DeploymentID 归属
 //
 // 边界：
 //   - 不持久化状态，仅在内存维护 runners/status 映射
-//   - 不解析配置文件，仅消费 model.Deployment/model.Service 数据结构
+//   - 不解析配置文件，仅消费 model.Deployment / ProcessSpec 数据结构
 //   - 不直接写日志存储，日志处理由 onLog 回调负责
 type Manager struct {
 	mu          sync.Mutex
@@ -55,38 +54,15 @@ func (m *Manager) SetRunID(id string) {
 	m.mu.Unlock()
 }
 
-// StartGroup 按 Order 字段分组，从小到大串行启动各组；同组内并行启动。
+// ProcessSpec 描述启动一个进程所需的最小配置，不依赖 model.Service/Deployment。
 //
-// 参数：
-//   - services: 待启动的服务列表，可混合不同 Order 值
-//
-// 返回：
-//   - 任意服务启动失败时立即返回错误，后续组不再启动
-//
-// 注意：
-//   - 每组内的启动并发执行，组间严格按 Order 升序串行
-//   - 以 svc.ID 为键调用 startByID，日志归属字段为 DeploymentID
-func (m *Manager) StartGroup(services []model.Service) error {
-	groups := groupByOrder(services)
-	for _, group := range groups {
-		var wg sync.WaitGroup
-		errCh := make(chan error, len(group))
-		for _, svc := range group {
-			wg.Add(1)
-			go func(s model.Service) {
-				defer wg.Done()
-				if err := m.startByID(s.ID, s); err != nil {
-					errCh <- err
-				}
-			}(svc)
-		}
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			return err
-		}
-	}
-	return nil
+// 它是 process.Manager 对外的低阶启动契约：调用方（deployment 启停、collector
+// 日志采集）只需提供命令与运行环境，由 Manager 负责进程生命周期与日志归属。
+type ProcessSpec struct {
+	Command string
+	WorkDir string
+	Env     map[string]string
+	EnvFile string
 }
 
 // Stop 强制终止指定服务进程，并立即将状态置为 StatusStopped。
@@ -163,14 +139,13 @@ func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 }
 
 // emitLog 通过 onLog 回调发送一条系统日志，level 为 "ERROR"/"INFO" 等。
-// serviceID 形参名保留不动，实参在 deployment 路径下传入的是 dep.ID。
-func (m *Manager) emitLog(serviceID, level, stream, message string) {
+func (m *Manager) emitLog(id, level, stream, message string) {
 	m.mu.Lock()
 	runID := m.runID
 	m.mu.Unlock()
 	m.onLog(model.LogEntry{
 		ID:           m.logSeq.Add(1),
-		DeploymentID: serviceID,
+		DeploymentID: id,
 		RunID:        runID,
 		Timestamp:    time.Now().UTC(),
 		Level:        level,
@@ -200,8 +175,7 @@ func (m *Manager) StartDeployment(dep model.Deployment) error {
 	if dep.IsReadOnly() {
 		return nil
 	}
-	svc := deploymentToService(dep)
-	return m.startByID(dep.ID, svc)
+	return m.startByID(dep.ID, deploymentToSpec(dep))
 }
 
 // StopDeployment 停止指定 deployment 的进程。
@@ -231,8 +205,16 @@ func (m *Manager) IsDeploymentActive(deploymentID string) bool {
 	return m.IsActive(deploymentID)
 }
 
+// StartProcess 以指定 id 为键启动一个进程，是不绑定 deployment 概念的低阶启动入口。
+//
+// 供 collector 等内部子系统直接启动采集进程使用；日志以 id 作为 DeploymentID 归属。
+// 与 StartDeployment 共用 startByID 底座与同一 runners 命名空间。
+func (m *Manager) StartProcess(id string, spec ProcessSpec) error {
+	return m.startByID(id, spec)
+}
+
 // startByID 以指定的 id 为键启动进程，是所有启动路径的核心实现。
-func (m *Manager) startByID(id string, svc model.Service) error {
+func (m *Manager) startByID(id string, spec ProcessSpec) error {
 	m.mu.Lock()
 	if m.status[id] == model.StatusStarting {
 		m.mu.Unlock()
@@ -247,10 +229,10 @@ func (m *Manager) startByID(id string, svc model.Service) error {
 	m.setStatus(id, model.StatusStarting)
 
 	r := NewRunner(RunnerConfig{
-		Command: svc.Command,
-		WorkDir: svc.WorkDir,
-		Env:     svc.Env,
-		EnvFile: svc.EnvFile,
+		Command: spec.Command,
+		WorkDir: spec.WorkDir,
+		Env:     spec.Env,
+		EnvFile: spec.EnvFile,
 		OnLine: func(line, stream string) {
 			m.mu.Lock()
 			runID := m.runID
@@ -299,12 +281,10 @@ func (m *Manager) startByID(id string, svc model.Service) error {
 	return nil
 }
 
-// deploymentToService 将 Deployment 字段映射到 Service，供 startByID 复用 Runner。
-// local deployment 用自身的 Command/WorkDir/Env；
-// remote deployment 用 StartCommand 作为命令。
-// remote deployment 通过远程命令（SSH 等）执行，本机 env 无需透传；
-// StartCommand 作为启动命令直接在远端执行。
-func deploymentToService(dep model.Deployment) model.Service {
+// deploymentToSpec 将 Deployment 字段映射为 ProcessSpec。
+// local deployment 用自身 Command/WorkDir/Env；
+// remote deployment 用 StartCommand 作为命令，本机 env/workDir 不透传。
+func deploymentToSpec(dep model.Deployment) ProcessSpec {
 	cmd := dep.Command
 	workDir := dep.WorkDir
 	env := dep.Env
@@ -315,31 +295,5 @@ func deploymentToService(dep model.Deployment) model.Service {
 		env = nil
 		envFile = ""
 	}
-	return model.Service{
-		ID:      dep.ID,
-		Command: cmd,
-		WorkDir: workDir,
-		Env:     env,
-		EnvFile: envFile,
-	}
-}
-
-// groupByOrder 将服务列表按 Order 字段分组，返回按 Order 升序排列的二维切片。
-//
-// 同一 Order 值的服务归入同一组，组内顺序不保证。
-func groupByOrder(services []model.Service) [][]model.Service {
-	orders := []int{}
-	byOrder := map[int][]model.Service{}
-	for _, s := range services {
-		if _, ok := byOrder[s.Order]; !ok {
-			orders = append(orders, s.Order)
-		}
-		byOrder[s.Order] = append(byOrder[s.Order], s)
-	}
-	slices.Sort(orders)
-	groups := make([][]model.Service, len(orders))
-	for i, o := range orders {
-		groups[i] = byOrder[o]
-	}
-	return groups
+	return ProcessSpec{Command: cmd, WorkDir: workDir, Env: env, EnvFile: envFile}
 }

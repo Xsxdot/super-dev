@@ -121,19 +121,19 @@ func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 	mgr.StopDeployment("dep-bg")
 }
 
-func TestManagerStartGroup(t *testing.T) {
-	mgr := process.NewManager(func(e model.LogEntry) {})
+func TestManagerStartProcess(t *testing.T) {
+	var entries []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
 
-	services := []model.Service{
-		{ID: "a", Name: "a", Command: `sleep 0.1 && echo a`, WorkDir: t.TempDir(), Order: 1},
-		{ID: "b", Name: "b", Command: `sleep 0.1 && echo b`, WorkDir: t.TempDir(), Order: 1},
-		{ID: "c", Name: "c", Command: `echo c`, WorkDir: t.TempDir(), Order: 2},
+	require.NoError(t, mgr.StartProcess("proc-1", process.ProcessSpec{Command: `echo "hello"`, WorkDir: t.TempDir()}))
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, model.StatusStopped, mgr.Status("proc-1"))
+
+	// 通过 StartProcess 启动的进程，其日志应以传入的 id 作为 DeploymentID 归属
+	require.NotEmpty(t, entries)
+	for _, e := range entries {
+		assert.Equal(t, "proc-1", e.DeploymentID, "StartProcess 的日志应归属于传入 id")
 	}
-	require.NoError(t, mgr.StartGroup(services))
-	time.Sleep(500 * time.Millisecond)
-	assert.Equal(t, model.StatusStopped, mgr.Status("a"))
-	assert.Equal(t, model.StatusStopped, mgr.Status("b"))
-	assert.Equal(t, model.StatusStopped, mgr.Status("c"))
 }
 
 func TestManagerStartDeployment(t *testing.T) {
