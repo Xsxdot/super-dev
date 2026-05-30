@@ -81,7 +81,7 @@ type Project struct {
 	RootPath           string        `json:"root_path"            yaml:"-"`
 	Environments       []Environment `json:"environments,omitempty"`
 	Services           []Service     `json:"services"             yaml:"services"`
-	SelectedServiceIDs []string `json:"selected_service_ids" yaml:"selected_service_ids"`
+	SelectedServiceIDs []string      `json:"selected_service_ids" yaml:"selected_service_ids"`
 	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
 	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表。
 	// 替代全局的 SelectedServiceIDs，实现 env 级隔离选择。
@@ -92,18 +92,19 @@ type Project struct {
 //
 // Stream 区分 stdout 和 stderr，RunID 标识本次启动的唯一会话，
 // 便于区分同一服务多次运行的日志。
+// DeploymentID 标识日志所属的部署单元，是日志的归属标识。
 // SourceID 标识日志来源节点的稳定 ID：本机日志为本机 node_id，
 // 远程日志为对应 Host 的 ID。取代「没有 host_id 就是本地」的隐式约定。
 // Step1 仅添加字段，填充逻辑在 Step2。
 type LogEntry struct {
-	ID        int64     `json:"id"`
-	ServiceID string    `json:"service_id"`
-	SourceID  string    `json:"source_id,omitempty"`
-	RunID     string    `json:"run_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Level     string    `json:"level"`
-	Message   string    `json:"message"`
-	Stream    string    `json:"stream"` // stdout / stderr
+	ID           int64     `json:"id"`
+	DeploymentID string    `json:"deployment_id"`
+	SourceID     string    `json:"source_id,omitempty"`
+	RunID        string    `json:"run_id"`
+	Timestamp    time.Time `json:"timestamp"`
+	Level        string    `json:"level"`
+	Message      string    `json:"message"`
+	Stream       string    `json:"stream"` // stdout / stderr
 }
 
 // LogRule 表示一条日志过滤规则。
