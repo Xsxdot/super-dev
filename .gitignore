@@ -1,2 +1,17 @@
 .superpowers/
 .worktrees/
+
+# Dependencies
+node_modules/
+
+# Local tooling
+.claude/
+.playwright-mcp/
+
+# Manual UI test captures
+screenshot-*.png
+
+# Local design drafts (not product source)
+docs/model-redesign.md
+docs/superpowers/plans/*model-redesign*
+docs/superpowers/plans/2026-05-28-deployment-lifecycle.md
