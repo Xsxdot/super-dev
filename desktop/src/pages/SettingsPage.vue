@@ -12,7 +12,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { open, message } from '@tauri-apps/plugin-dialog'
+import { open, message, ask } from '@tauri-apps/plugin-dialog'
+import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
@@ -47,16 +48,83 @@ function onEditorSaved() {
   editorIsNew.value = false
 }
 
+/**
+ * tryImportVscodeLaunch 尝试从项目的 .vscode/launch.json 导入启动配置。
+ *
+ * 后端 GET /api/projects/{id}/vscode-launch 已完成 launch.json 解析与命令构造
+ * （按 type 生成 go run / npm 等命令、替换 ${workspaceFolder}、提取 env）。
+ * 本函数仅负责：询问用户 → 把后端返回的配置填入草稿 service（绑定 dev 环境）。
+ *
+ * 参数：
+ *   - created: 刚落地的项目（services 可能为空骨架）
+ *
+ * 注意：
+ *   - 仅当后端返回非空配置、且项目当前无 service 时才导入，避免覆盖已有 config
+ *   - 草稿仅在内存中修改，进入编辑器后由用户确认再保存
+ */
+async function tryImportVscodeLaunch(created: Project): Promise<void> {
+  let configs
+  try {
+    configs = await api.getVscodeLaunch(created.id)
+  } catch {
+    // 无 launch.json 或解析失败时静默跳过，不阻塞添加项目
+    return
+  }
+  if (!configs || configs.length === 0) return
+
+  const confirmed = await ask(
+    `检测到 .vscode/launch.json，包含 ${configs.length} 个启动配置，是否导入？\n导入后可在编辑器中调整。`,
+    { title: '导入 VS Code 启动配置', kind: 'info' },
+  )
+  if (!confirmed) return
+
+  // 已有 service（来自已有 config 文件）时不覆盖
+  if (created.services && created.services.length > 0) return
+
+  // 确保 dev 环境存在：无则自动创建并绑定导入的服务
+  if (!created.environments) created.environments = []
+  let devEnv = created.environments.find(e => e.is_dev) ?? created.environments[0]
+  if (!devEnv) {
+    devEnv = { id: '', name: 'dev', is_dev: true, order: 0 }
+    created.environments.push(devEnv)
+  }
+  const devEnvName = devEnv.name
+
+  created.services = configs.map((c, i) => ({
+    id: '',
+    project_id: created.id,
+    name: c.name,
+    required: false,
+    order: i,
+    command: '',
+    work_dir: c.work_dir,
+    status: '' as const,
+    deployments: [{
+      id: '',
+      env_name: devEnvName,
+      location: 'local' as const,
+      command: c.command,
+      work_dir: c.work_dir,
+      env: c.env,
+      status: '',
+    }],
+  }))
+}
+
 async function addProject() {
   const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
   if (!selected || Array.isArray(selected)) return
   try {
     // 落地项目（空目录返回空骨架，已有 config 则解析），再进编辑器
     const created = await agentStore.addProject(selected)
+
+    // 尝试导入 .vscode/launch.json（后端解析，本函数仅填充草稿）
+    await tryImportVscodeLaunch(created)
+
     editorProject.value = created
     editorIsNew.value = true
   } catch (e) {
-    const msg = e instanceof Error ? e.message : '添加项目失败'
+    const msg = e instanceof Error ? e.message : String(e)
     await message(msg, { title: '无法添加项目', kind: 'error' })
   }
 }
