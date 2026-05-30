@@ -7,16 +7,16 @@
  *
  * 边界：
  *   - 不测试 Tauri 文件对话框真实行为
- *   - 不建立 WebSocket 连接，日志通过 logStore 直接注入
+ *   - 不建立 WebSocket 连接，日志通过 deploymentLogStore 直接注入
  */
-import { flushPromises, mount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import BottomBar from '../BottomBar.vue'
 import { useAgentStore } from '../../stores/agent'
 import { useBookmarkStore } from '../../stores/bookmark'
-import { useLogStore } from '../../stores/log'
+import { useDeploymentLogStore } from '../../stores/deploymentLog'
 import { usePanelStore } from '../../stores/panel'
 import { toDisplayEntry } from '../../lib/logEngine'
 import type { LogEntry, Project, Service } from '../../api/agent'
@@ -34,16 +34,18 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeTextFile: tauriMocks.writeTextFile,
 }))
 
+// service id 'svc-x' 对应 dev 环境的 deployment id 'dep-x'，面板按 deploymentId 订阅。
 function makeService(id: string, name: string): Service {
   return {
     id,
     project_id: 'proj-1',
     name,
     status: 'running',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required: false,
     order: 1,
+    deployments: [
+      { id: id.replace('svc-', 'dep-'), env_name: 'dev', location: 'local', status: 'running' },
+    ],
   }
 }
 
@@ -53,15 +55,16 @@ function makeProject(services: Service[]): Project {
     name: 'Project',
     root_path: '/tmp/project',
     services,
-    selected_service_ids: [],
+    env_selected_service_ids: {},
+    environments: [{ id: 'e-dev', name: 'dev', is_dev: true, order: 0 }],
   }
 }
 
 
-function makeLog(serviceId: string, message: string, timestamp: string): LogEntry {
+function makeLog(deploymentId: string, message: string, timestamp: string): LogEntry {
   return {
     id: 101,
-    service_id: serviceId,
+    deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
     level: 'INFO',
@@ -77,13 +80,16 @@ async function mountBottomBarWithServices() {
   const worker = makeService('svc-worker', 'worker')
   agentStore.projects = [makeProject([api, worker])]
 
+  // 面板订阅键为 deploymentId（dep-api / dep-worker）。
+  const apiDep = api.deployments![0].id
+  const workerDep = worker.deployments![0].id
   const firstPanelId = panelStore.root.id
-  panelStore.replaceScope(firstPanelId, api.id, api.project_id)
-  panelStore.splitLeaf(firstPanelId, 'h', worker.id, worker.project_id, 'second')
+  panelStore.replaceScope(firstPanelId, apiDep, null)
+  panelStore.splitLeaf(firstPanelId, 'h', workerDep, null, 'second')
 
   const wrapper = mount(BottomBar)
   await nextTick()
-  return { wrapper, panelStore, api, worker }
+  return { wrapper, panelStore, api, worker, apiDep, workerDep }
 }
 
 describe('BottomBar', () => {
@@ -111,31 +117,28 @@ describe('BottomBar', () => {
 
 
   it('同步录制开始时登记面板和服务，停止后显示复制导出入口', async () => {
-    const { wrapper, panelStore, api } = await mountBottomBarWithServices()
+    const { wrapper, panelStore, apiDep } = await mountBottomBarWithServices()
     const bookmarkStore = useBookmarkStore()
-    const logStore = useLogStore()
-    const apiPanel = panelStore.allLeaves.find(leaf => leaf.serviceId === api.id)!
+    const deploymentLogStore = useDeploymentLogStore()
+    const apiPanel = panelStore.allLeaves.find(leaf => leaf.serviceId === apiDep)!
 
     await wrapper.find('.sync-label input[type="checkbox"]').setValue(true)
     await wrapper.find('.sync-record-btn').trigger('click')
 
     expect(bookmarkStore.syncPanelIds.has(apiPanel.id)).toBe(true)
-    expect(bookmarkStore.getBookmark(apiPanel.id)?.serviceId).toBe(api.id)
+    expect(bookmarkStore.getBookmark(apiPanel.id)?.serviceId).toBe(apiDep)
     expect(bookmarkStore.syncRecording).toBe(true)
 
     const start = bookmarkStore.getBookmark(apiPanel.id)!.startTime!
     const ts = new Date(start.getTime() + 1000).toISOString()
-    logStore.serviceLogs[api.id] = {
-      logs: [toDisplayEntry(makeLog(api.id, 'sync captured', ts))],
-      ws: null,
+    deploymentLogStore.sessions.set(apiDep, {
       refCount: 1,
-      bootstrapPromise: null,
-      historyBoundary: null,
-      oldestLoadedId: null,
+      ws: null,
+      logs: [toDisplayEntry(makeLog(apiDep, 'sync captured', ts))],
       hasMoreHistory: true,
+      oldestLoadedId: null,
       loadingMoreHistory: false,
-      seenSignatures: new Set(),
-    }
+    })
     vi.advanceTimersByTime(5000)
 
     await wrapper.find('.sync-record-btn').trigger('click')

@@ -24,8 +24,6 @@ function service(id: string, name: string): Service {
     project_id: 'proj-1',
     name,
     status: 'running',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required: false,
     order: 1,
   }
@@ -37,19 +35,19 @@ function project(services: Service[]): Project {
     name: 'Project',
     root_path: '/tmp/project',
     services,
-    selected_service_ids: [],
+    env_selected_service_ids: {},
   }
 }
 
 function log(
   id: number,
-  serviceId: string,
+  deploymentId: string,
   message: string,
   timestamp = '2026-05-20T22:41:32.000Z',
 ): LogEntry {
   return {
     id,
-    service_id: serviceId,
+    deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
     level: 'INFO',

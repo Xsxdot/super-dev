@@ -4,7 +4,7 @@ import { useFilterStore } from '../filter'
 import { api as agentApi, type LogEntry, type LogRule } from '@/api/agent'
 
 function makeLog(message: string, id = 1): LogEntry {
-  return { id, service_id: 'svc', run_id: 'run', timestamp: '', level: 'INFO', message, stream: 'stdout' }
+  return { id, deployment_id: 'svc', run_id: 'run', timestamp: '', level: 'INFO', message, stream: 'stdout' }
 }
 
 describe('filterStore', () => {

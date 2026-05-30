@@ -7,7 +7,7 @@ let nextLogId = 1
 function makeLog(message: string, ts: string): LogEntry {
   return {
     id: nextLogId++,
-    service_id: 'svc',
+    deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
     level: 'INFO',

@@ -2,7 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, type Project, type Service } from '@/api/agent'
+import { api, type Deployment, type Project, type Service } from '@/api/agent'
 
 export const useAgentStore = defineStore('agent', () => {
   const projects = ref<Project[]>([])
@@ -70,18 +70,6 @@ export const useAgentStore = defineStore('agent', () => {
     projects.value = projects.value.filter(p => p.id !== id)
   }
 
-  async function startService(id: string) {
-    await api.startService(id)
-  }
-
-  async function stopService(id: string) {
-    await api.stopService(id)
-  }
-
-  async function restartService(id: string) {
-    await api.restartService(id)
-  }
-
   async function startDeployment(id: string) {
     await api.startDeployment(id)
   }
@@ -115,26 +103,6 @@ export const useAgentStore = defineStore('agent', () => {
     return project.env_selected_service_ids?.[envName]?.includes(serviceName) ?? false
   }
 
-  async function startSelected(projectId: string) {
-    await api.startSelected(projectId)
-  }
-
-  async function updateSelected(projectId: string, names: string[]) {
-    await api.putSelected(projectId, names)
-    const project = projects.value.find(p => p.id === projectId)
-    if (project) {
-      project.selected_service_ids = names
-    }
-  }
-
-  function isServiceSelectedForStart(projectId: string, serviceName: string): boolean {
-    const project = projects.value.find(p => p.id === projectId)
-    if (!project) return false
-    const service = project.services.find(s => s.name === serviceName)
-    if (service?.required) return true
-    return project.selected_service_ids?.includes(serviceName) ?? false
-  }
-
   const allServices = computed<Service[]>(() =>
     projects.value.flatMap(p => p.services)
   )
@@ -143,8 +111,75 @@ export const useAgentStore = defineStore('agent', () => {
     return allServices.value.find(s => s.id === id)
   }
 
+  /**
+   * deploymentById 在所有项目的所有 service 的 deployments 中查找指定 deployment。
+   *
+   * 参数：
+   *   - id: deployment 唯一标识
+   *
+   * 返回：
+   *   - 命中的 Deployment，未找到时返回 undefined
+   */
+  function deploymentById(id: string): Deployment | undefined {
+    for (const service of allServices.value) {
+      const dep = service.deployments?.find(d => d.id === id)
+      if (dep) return dep
+    }
+    return undefined
+  }
+
+  /**
+   * serviceForDeployment 反查 deployment 所属的 service 及其 env 名。
+   *
+   * 参数：
+   *   - depId: deployment 唯一标识
+   *
+   * 返回：
+   *   - { service, deployment, envName } 三元组；未找到时返回 undefined
+   *
+   * 注意：
+   *   - 供面板标题显示「service 名 · env 名」使用
+   */
+  function serviceForDeployment(
+    depId: string,
+  ): { service: Service; deployment: Deployment; envName: string } | undefined {
+    for (const service of allServices.value) {
+      const dep = service.deployments?.find(d => d.id === depId)
+      if (dep) return { service, deployment: dep, envName: dep.env_name }
+    }
+    return undefined
+  }
+
   function projectById(id: string): Project | undefined {
     return projects.value.find(p => p.id === id)
+  }
+
+  /**
+   * devEnvName 返回项目的开发环境名称。
+   *
+   * 优先取 is_dev 的环境；无标记时退回第一个环境；项目无环境时返回 'dev'。
+   * 供无 env 选择 UI（托盘 Popover、设置页）默认作用于开发环境。
+   */
+  function devEnvName(projectId: string): string {
+    const project = projectById(projectId)
+    const envs = project?.environments ?? []
+    const dev = envs.find(e => e.is_dev) ?? envs[0]
+    return dev?.name ?? 'dev'
+  }
+
+  /**
+   * deploymentForServiceInEnv 取出 service 在指定 env 下的 deployment。
+   *
+   * 参数：
+   *   - serviceId: service 唯一标识
+   *   - envName: 环境名
+   *
+   * 返回：
+   *   - 命中的 Deployment，未找到时返回 undefined
+   */
+  function deploymentForServiceInEnv(serviceId: string, envName: string): Deployment | undefined {
+    const svc = serviceById(serviceId)
+    return svc?.deployments?.find(d => d.env_name === envName)
   }
 
   async function reloadProject(id: string) {
@@ -169,20 +204,18 @@ export const useAgentStore = defineStore('agent', () => {
     addProject,
     probeProject,
     deleteProject,
-    startService,
-    stopService,
-    restartService,
     startDeployment,
     stopDeployment,
     restartDeployment,
     putEnvSelected,
     startEnvSelected,
     isServiceEnvSelected,
-    startSelected,
-    updateSelected,
-    isServiceSelectedForStart,
     serviceById,
+    deploymentById,
+    serviceForDeployment,
     projectById,
+    devEnvName,
+    deploymentForServiceInEnv,
     reloadProject,
   }
 })

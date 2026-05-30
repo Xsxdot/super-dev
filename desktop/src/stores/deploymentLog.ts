@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
-import { toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
+import { closeActiveFold, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 
 const MAX_LOGS = 5000
 const TRIM_BATCH = 500
@@ -238,6 +238,24 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return sessions.value.get(deploymentId)?.refCount ?? 0
   }
 
+  /**
+   * closeActiveFoldForDeployment 收尾指定 deployment 当前正在累积的折叠行。
+   *
+   * 参数：
+   *   - deploymentId: deployment 唯一标识
+   *
+   * 注意：
+   *   - 用于书签录制开始/结束时，避免折叠状态跨区间污染
+   *   - 未订阅时静默返回
+   */
+  function closeActiveFoldForDeployment(deploymentId: string) {
+    const session = sessions.value.get(deploymentId)
+    if (!session) return
+    closeActiveFold(session.logs)
+    bumpRevision()
+    touchSessions()
+  }
+
   return {
     sessions,
     logSourceRevision,
@@ -248,5 +266,6 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     hasMoreHistory,
     isLoadingMore,
     refCountOf,
+    closeActiveFoldForDeployment,
   }
 })

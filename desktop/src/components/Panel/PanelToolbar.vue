@@ -2,13 +2,13 @@
 import { ref, computed } from 'vue'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
-import { useLogStore } from '@/stores/log'
-import { useAgentStore } from '@/stores/agent'
+import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import type { PanelSource } from '@/stores/panel'
 import RuleManagerModal from './RuleManagerModal.vue'
 const props = defineProps<{
   panelId: string
-  serviceId: string | null
-  projectId: string | null
+  source?: PanelSource | null
+  projectId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -17,8 +17,12 @@ const emit = defineEmits<{
 
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
-const logStore = useLogStore()
-const agentStore = useAgentStore()
+const deploymentLogStore = useDeploymentLogStore()
+
+// 当前面板订阅的 deployment 日志键（deployment 单源）。
+const deploymentId = computed(() =>
+  props.source?.type === 'deployment' ? props.source.deploymentId : null,
+)
 
 const chipInput = ref('')
 const showRules = ref(false)
@@ -35,22 +39,15 @@ function submitChip() {
   chipInput.value = ''
 }
 
-function scopeServiceIds(): string[] {
-  if (props.serviceId) return [props.serviceId]
-  if (!props.projectId) return []
-  const project = agentStore.projectById(props.projectId)
-  return project?.services.map(s => s.id) ?? []
-}
-
 function closeActiveFoldsForScope() {
-  for (const serviceId of scopeServiceIds()) {
-    logStore.closeActiveFoldForService(serviceId)
+  if (deploymentId.value) {
+    deploymentLogStore.closeActiveFoldForDeployment(deploymentId.value)
   }
 }
 
 function startBookmark() {
   closeActiveFoldsForScope()
-  bookmarkStore.startBookmark(props.panelId, props.serviceId)
+  bookmarkStore.startBookmark(props.panelId, deploymentId.value)
 }
 function endBookmark() {
   emit('endBookmark')

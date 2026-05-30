@@ -17,7 +17,7 @@ import type { LogEntry } from '../../api/agent'
 function log(id: number, serviceId: string, timestamp: string, message: string): LogEntry {
   return {
     id,
-    service_id: serviceId,
+    deployment_id: serviceId,
     run_id: 'run-1',
     timestamp,
     level: 'INFO',

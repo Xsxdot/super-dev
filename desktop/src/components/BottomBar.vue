@@ -3,10 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
-import { useLogStore } from '@/stores/log'
+import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useFilterStore } from '@/stores/filter'
 import { AGENT_HOST } from '@/api/agent'
-import type { LogEntry, Service } from '@/api/agent'
+import type { LogEntry } from '@/api/agent'
 
 const agentHost = AGENT_HOST
 import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
@@ -14,25 +14,37 @@ import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
-const logStore = useLogStore()
+const deploymentLogStore = useDeploymentLogStore()
 const filterStore = useFilterStore()
 
-// 所有面板中的服务（去重）
+// leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
+function leafDeploymentId(leaf: PanelLeafNode): string | null {
+  return leaf.source?.type === 'deployment' ? leaf.source.deploymentId : leaf.serviceId
+}
+
+// 所有面板中的服务（按 deployment 反查所属 service，去重）。
+// checkedIds 内部仍以 deploymentId 为键（命名沿用历史的 service 概念）。
 const panelServices = computed(() => {
   const seen = new Set<string>()
-  const result: Service[] = []
+  const result: Array<{ id: string; name: string; status: string }> = []
   for (const leaf of panelStore.allLeaves) {
-    const serviceId = leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId
-    if (serviceId && !seen.has(serviceId)) {
-      seen.add(serviceId)
-      const svc = agentStore.serviceById(serviceId)
-      if (svc) result.push(svc)
+    const deploymentId = leafDeploymentId(leaf)
+    if (deploymentId && !seen.has(deploymentId)) {
+      seen.add(deploymentId)
+      const info = agentStore.serviceForDeployment(deploymentId)
+      if (info) {
+        result.push({
+          id: deploymentId,
+          name: `${info.service.name} · ${info.envName}`,
+          status: info.deployment.status,
+        })
+      }
     }
   }
   return result
 })
 
-// 底部栏勾选状态（独立于侧边栏 selected_service_ids）
+// 底部栏勾选状态（独立于侧边栏 env_selected_service_ids 的启动选中）
 const checkedIds = ref<Set<string>>(new Set())
 const manuallyTouchedIds = ref<Set<string>>(new Set())
 const checkedServiceIds = computed(() =>
@@ -64,11 +76,11 @@ function toggleCheck(serviceId: string) {
 }
 
 async function restartChecked() {
-  await Promise.all(checkedServiceIds.value.map(id => agentStore.restartService(id)))
+  await Promise.all(checkedServiceIds.value.map(id => agentStore.restartDeployment(id)))
 }
 
 async function stopChecked() {
-  await Promise.all(checkedServiceIds.value.map(id => agentStore.stopService(id)))
+  await Promise.all(checkedServiceIds.value.map(id => agentStore.stopDeployment(id)))
 }
 
 // 同步录制
@@ -78,10 +90,10 @@ const hasSyncOutput = computed(() => bookmarkStore.formatSyncBookmarks().trim().
 
 function syncPanels(): SyncBookmarkPanel[] {
   return panelStore.allLeaves
-    .filter(leaf => leaf.source || leaf.serviceId || leaf.projectId)
+    .filter(leaf => leaf.source || leaf.serviceId)
     .map(leaf => ({
       panelId: leaf.id,
-      serviceId: leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId,
+      serviceId: leafDeploymentId(leaf),
       source: leaf.source,
     }))
 }
@@ -107,23 +119,21 @@ watch(
 )
 
 function visibleLogsForLeaf(leaf: PanelLeafNode): LogEntry[] {
-  const serviceId = leaf.source?.type === 'local-service' ? leaf.source.serviceId : leaf.serviceId
-  const projectId = leaf.source?.type === 'local-project' ? leaf.source.projectId : leaf.projectId
-  if (serviceId) return logStore.getLogs(serviceId)
-  if (!projectId) return []
-  const project = agentStore.projectById(projectId)
-  if (!project) return []
-  return project.services
-    .flatMap(service => logStore.getLogs(service.id))
-    .sort((a, b) => a.id - b.id)
+  const deploymentId = leafDeploymentId(leaf)
+  if (deploymentId) return deploymentLogStore.getLogs(deploymentId)
+  return []
 }
 
 function syncCaptures(): SyncBookmarkCapture[] {
   return [...bookmarkStore.syncPanelIds].map((panelId) => {
     const leaf = panelStore.allLeaves.find(item => item.id === panelId)
     const bm = bookmarkStore.getBookmark(panelId)
+    // filter 的项目规则键需要 projectId：通过 deployment 反查所属项目。
+    const projectId = leaf
+      ? agentStore.serviceForDeployment(leafDeploymentId(leaf) ?? '')?.service.project_id ?? null
+      : null
     const captureLogs = leaf
-      ? filterStore.applyFilters(panelId, leaf.projectId, visibleLogsForLeaf(leaf))
+      ? filterStore.applyFilters(panelId, projectId, visibleLogsForLeaf(leaf))
       : undefined
     return {
       panelId,
@@ -136,8 +146,8 @@ function syncCaptures(): SyncBookmarkCapture[] {
 function toggleSyncRecord() {
   for (const panelId of bookmarkStore.syncPanelIds) {
     const leaf = panelStore.allLeaves.find(l => l.id === panelId)
-    const serviceId = leaf?.source?.type === 'local-service' ? leaf.source.serviceId : leaf?.serviceId
-    if (serviceId) logStore.closeActiveFoldForService(serviceId)
+    const deploymentId = leaf ? leafDeploymentId(leaf) : null
+    if (deploymentId) deploymentLogStore.closeActiveFoldForDeployment(deploymentId)
   }
   if (syncRecording.value) {
     bookmarkStore.endSyncBookmark(syncCaptures())

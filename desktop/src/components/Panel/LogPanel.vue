@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { useLogStore } from '@/stores/log'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
@@ -21,12 +20,10 @@ import {
 
 const props = defineProps<{
   panelId: string
-  serviceId: string | null
-  projectId: string | null
+  projectId?: string | null
   source?: PanelSource | null
 }>()
 
-const logStore = useLogStore()
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
@@ -59,8 +56,6 @@ onMounted(() => {
   if (props.source?.type === 'deployment') {
     deploymentLogStore.subscribe(props.source.deploymentId)
     void deploymentLogStore.loadMoreHistory(props.source.deploymentId)
-  } else if (props.serviceId) {
-    void logStore.subscribe(props.serviceId)
   }
   if (props.projectId) void filterStore.loadProjectRules(props.projectId)
   refreshDisplayImmediately()
@@ -77,43 +72,25 @@ watch(
 onUnmounted(() => {
   if (props.source?.type === 'deployment') {
     deploymentLogStore.unsubscribe(props.source.deploymentId)
-  } else if (props.serviceId) {
-    logStore.unsubscribe(props.serviceId)
   }
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
   cancelScrollRetries()
 })
 
-watch(() => props.serviceId, (newId, oldId) => {
-  if (oldId) logStore.unsubscribe(oldId)
-  if (newId) void logStore.subscribe(newId)
-  isFollowing.value = true
-  refreshDisplayImmediately()
-})
-
 const rawLogs = computed<DisplayLogEntry[]>(() => {
   if (props.source?.type === 'deployment') {
     return deploymentLogStore.getLogs(props.source.deploymentId)
-  }
-  if (props.serviceId) return logStore.getLogs(props.serviceId)
-  if (props.projectId) {
-    const proj = agentStore.projectById(props.projectId)
-    if (!proj) return []
-    return proj.services
-      .flatMap((s: { id: string }) => logStore.getLogs(s.id))
-      .sort((a: DisplayLogEntry, b: DisplayLogEntry) => a.id - b.id)
   }
   return []
 })
 
 const filteredLogs = computed(() =>
-  filterStore.applyFilters(props.panelId, props.projectId, rawLogs.value),
+  filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value),
 )
 
-const historyBoundary = computed(() =>
-  props.serviceId ? logStore.getHistoryBoundary(props.serviceId) : null,
-)
+// deployment 来源不维护独立的 historyBoundary 分隔线（历史与实时统一为时间序）。
+const historyBoundary = computed(() => null)
 
 function makeLogDisplay() {
   const logs = filteredLogs.value
@@ -164,12 +141,7 @@ function entryCount(items: LogDisplayItem[]): number {
 const bookmark = computed(() => bookmarkStore.getBookmark(props.panelId))
 
 function currentPanelSource(): PanelSource | null {
-  if (props.source !== undefined) return props.source
-  if (props.serviceId && props.projectId) {
-    return { type: 'local-service', serviceId: props.serviceId, projectId: props.projectId }
-  }
-  if (props.projectId) return { type: 'local-project', projectId: props.projectId }
-  return null
+  return props.source ?? null
 }
 
 function bookmarkMatchesCurrentSource(): boolean {
@@ -187,26 +159,20 @@ function isHighlighted(log: DisplayLogEntry): boolean {
   return false
 }
 
+// serviceNameFor 通过日志的 deployment_id 反查所属 service 名，反查不到时显示截断的 id。
 function serviceNameFor(log: DisplayLogEntry): string {
-  const svc = agentStore.serviceById(log.service_id)
-  return svc?.name ?? log.service_id.slice(0, 12)
-}
-
-function scopeServiceIds(): string[] {
-  if (props.serviceId) return [props.serviceId]
-  if (!props.projectId) return []
-  const project = agentStore.projectById(props.projectId)
-  return project?.services.map(s => s.id) ?? []
+  const info = agentStore.serviceForDeployment(log.deployment_id)
+  return info?.service.name ?? log.deployment_id.slice(0, 12)
 }
 
 function closeActiveFoldsForScope() {
-  for (const serviceId of scopeServiceIds()) {
-    logStore.closeActiveFoldForService(serviceId)
+  if (props.source?.type === 'deployment') {
+    deploymentLogStore.closeActiveFoldForDeployment(props.source.deploymentId)
   }
 }
 
 watch(
-  [filteredLogs, () => bookmark.value?.state, () => logStore.logSourceRevision],
+  [filteredLogs, () => bookmark.value?.state, () => deploymentLogStore.logSourceRevision],
   ([logs, state]) => {
     if (state !== 'recording' || !bookmark.value?.startTime || !bookmarkMatchesCurrentSource()) return
     const startTime = bookmark.value.startTime
@@ -228,7 +194,7 @@ function onEndBookmark() {
 }
 
 watch(
-  [() => logStore.logSourceRevision, () => deploymentLogStore.logSourceRevision],
+  () => deploymentLogStore.logSourceRevision,
   () => scheduleDisplayRefresh(),
   { deep: true },
 )
@@ -365,24 +331,7 @@ async function tryLoadMoreHistory() {
       setTimeout(() => { programmaticScroll = false }, 80)
     }
     isLoadingHistory.value = false
-    return
   }
-  if (!props.serviceId) return
-  if (!logStore.hasMoreHistory(props.serviceId)) return
-  if (isLoadingHistory.value) return
-  isLoadingHistory.value = true
-  // range is null only when the list is empty/unmounted; scroll-up can't fire in that state, so ?? 0 is safe
-  const prevStart = virtualizer.value.range?.startIndex ?? 0
-  const prevCount = displayItems.value.length
-  await logStore.loadMoreHistory(props.serviceId)
-  await nextTick()
-  const added = displayItems.value.length - prevCount
-  if (added > 0) {
-    programmaticScroll = true
-    virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
-    setTimeout(() => { programmaticScroll = false }, 80)
-  }
-  isLoadingHistory.value = false
 }
 
 function jumpToBottom() {
@@ -444,18 +393,18 @@ const virtualizer = useVirtualizer(
     <PanelToolbar
       ref="toolbarRef"
       :panel-id="panelId"
-      :service-id="serviceId"
+      :source="source"
       :project-id="projectId"
       @end-bookmark="onEndBookmark"
     />
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
-      <div v-if="(serviceId || source?.type === 'deployment') && isLoadingHistory" class="history-loading">加载历史记录中…</div>
-      <div v-else-if="(serviceId && !logStore.hasMoreHistory(serviceId)) || (source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId))" class="history-end">— 已到最早记录 —</div>
+      <div v-if="source?.type === 'deployment' && isLoadingHistory" class="history-loading">加载历史记录中…</div>
+      <div v-else-if="source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId)" class="history-end">— 已到最早记录 —</div>
 
       <div :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }">
         <div
           v-for="vRow in virtualizer.getVirtualItems()"
-          :key="vRow.key"
+          :key="String(vRow.key)"
           :data-index="vRow.index"
           :ref="(el) => { if (el) virtualizer.measureElement(el as Element) }"
           :style="{ position: 'absolute', top: vRow.start + 'px', width: '100%' }"

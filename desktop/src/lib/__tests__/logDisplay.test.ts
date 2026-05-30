@@ -13,7 +13,7 @@ import type { DisplayLogEntry } from '../logEngine'
 function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
   return {
     id,
-    service_id: 'svc',
+    deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
     level: 'INFO',

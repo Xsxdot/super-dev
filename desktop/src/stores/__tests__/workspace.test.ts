@@ -24,8 +24,6 @@ function service(id: string, name: string, projectId = 'proj-1'): Service {
     project_id: projectId,
     name,
     status: 'running',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required: false,
     order: 1,
   }
@@ -37,19 +35,19 @@ function project(services: Service[], id = 'proj-1', name = 'Project'): Project 
     name,
     root_path: '/tmp/project',
     services,
-    selected_service_ids: [],
+    env_selected_service_ids: {},
   }
 }
 
 function log(
   id: number,
-  serviceId: string,
+  deploymentId: string,
   message: string,
   timestamp = '2026-05-20T22:41:32.000Z',
 ): LogEntry {
   return {
     id,
-    service_id: serviceId,
+    deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
     level: 'INFO',
@@ -65,29 +63,16 @@ describe('workspaceStore', () => {
     setActivePinia(createPinia())
   })
 
-  it('openService 创建项目标签并打开服务', () => {
+  it('ensureProjectTab 创建并复用项目标签（deployment 多面板容器）', () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]
     const workspace = useWorkspaceStore()
-    const panel = usePanelStore()
 
-    workspace.openService('proj-1', 'svc-api')
-
-    expect(workspace.tabs).toHaveLength(1)
-    expect(workspace.activeTab?.type).toBe('project')
-    expect(panel.allLeaves[0].serviceId).toBe('svc-api')
-  })
-
-  it('openService 复用已有项目标签', () => {
-    const api = service('svc-api', 'api')
-    const worker = service('svc-worker', 'worker')
-    useAgentStore().projects = [project([api, worker])]
-    const workspace = useWorkspaceStore()
-
-    workspace.openService('proj-1', 'svc-api')
-    workspace.openService('proj-1', 'svc-worker')
+    const tab1 = workspace.ensureProjectTab('proj-1')
+    const tab2 = workspace.ensureProjectTab('proj-1')
 
     expect(workspace.tabs.filter(t => t.type === 'project')).toHaveLength(1)
+    expect(tab1.id).toBe(tab2.id)
   })
 
   it('openSearch 每次创建新的搜索标签', () => {
@@ -112,14 +97,22 @@ describe('workspaceStore', () => {
     const workspace = useWorkspaceStore()
     const panel = usePanelStore()
 
-    workspace.openService('proj-1', 'svc-api')
+    // 在 proj-1 的容器 tab 内拖入 dep-api，在 proj-2 的容器 tab 内拖入 dep-admin。
+    const tabA = workspace.ensureProjectTab('proj-1')
+    workspace.activateTab(tabA.id)
+    panel.replaceScope(panel.targetPanelId()!, 'dep-api', null)
+    workspace.saveActiveLogWorkspaceLayout()
     const firstTabId = workspace.activeTabId
-    workspace.openService('proj-2', 'svc-admin')
-    expect(panel.allLeaves[0].serviceId).toBe('svc-admin')
+
+    const tabB = workspace.ensureProjectTab('proj-2')
+    workspace.activateTab(tabB.id)
+    panel.replaceScope(panel.targetPanelId()!, 'dep-admin', null)
+    workspace.saveActiveLogWorkspaceLayout()
+    expect(panel.allLeaves[0].serviceId).toBe('dep-admin')
 
     workspace.activateTab(firstTabId!)
 
-    expect(panel.allLeaves[0].serviceId).toBe('svc-api')
+    expect(panel.allLeaves[0].serviceId).toBe('dep-api')
   })
 
   it('搜索标签的隐藏和固定服务互不影响', () => {
@@ -145,7 +138,7 @@ describe('workspaceStore', () => {
       query: 'trace-8f21',
       total: 1,
       items: [log(1, 'svc-api', 'trace-8f21 target')],
-      service_counts: { 'svc-api': 1 },
+      deployment_counts: { 'svc-api': 1 },
       has_more: false,
     })
     const workspace = useWorkspaceStore()
@@ -166,14 +159,14 @@ describe('workspaceStore', () => {
         query: 'trace-8f21',
         total: 2,
         items: [log(1, 'svc-api', 'first', '2026-05-20T22:41:32.000Z')],
-        service_counts: { 'svc-api': 2 },
+        deployment_counts: { 'svc-api': 2 },
         has_more: true,
       })
       .mockResolvedValueOnce({
         query: 'trace-8f21',
         total: 2,
         items: [log(2, 'svc-api', 'second', '2026-05-20T22:41:33.000Z')],
-        service_counts: { 'svc-api': 2 },
+        deployment_counts: { 'svc-api': 2 },
         has_more: false,
       })
     const workspace = useWorkspaceStore()
@@ -185,7 +178,7 @@ describe('workspaceStore', () => {
     expect(agentApi.searchLogs).toHaveBeenLastCalledWith({
       project: 'proj-1',
       q: 'trace-8f21',
-      service: ['svc-api'],
+      deployment: ['svc-api'],
       cursor_time: '2026-05-20T22:41:32.000Z',
       cursor_id: 1,
       limit: 1000,
@@ -202,14 +195,14 @@ describe('workspaceStore', () => {
         query: 'trace-8f21',
         total: 1002,
         items: [log(1, 'svc-logger', 'logger first', '2026-05-20T22:41:32.000Z')],
-        service_counts: { 'svc-logger': 1000, 'svc-server': 2 },
+        deployment_counts: { 'svc-logger': 1000, 'svc-server': 2 },
         has_more: true,
       })
       .mockResolvedValueOnce({
         query: 'trace-8f21',
         total: 2,
         items: [log(1001, 'svc-server', 'server first', '2026-05-20T22:41:30.000Z')],
-        service_counts: { 'svc-server': 2 },
+        deployment_counts: { 'svc-server': 2 },
         has_more: true,
       })
     const workspace = useWorkspaceStore()
@@ -221,7 +214,7 @@ describe('workspaceStore', () => {
     expect(agentApi.searchLogs).toHaveBeenLastCalledWith({
       project: 'proj-1',
       q: 'trace-8f21',
-      service: ['svc-server'],
+      deployment: ['svc-server'],
       limit: 1000,
     })
     expect(tab.results.map(entry => entry.message)).toEqual(['server first', 'logger first'])
@@ -235,7 +228,7 @@ describe('workspaceStore', () => {
     vi.spyOn(agentApi, 'fetchLogContext').mockResolvedValue({
       target_id: 9,
       anchor_time: '2026-05-20T22:41:32.000Z',
-      items_by_service: {
+      items_by_deployment: {
         'svc-api': [log(9, 'svc-api', 'new api')],
         'svc-worker': [log(10, 'svc-worker', 'new worker')],
       },
@@ -252,7 +245,7 @@ describe('workspaceStore', () => {
     expect(agentApi.fetchLogContext).toHaveBeenCalledWith({
       project: 'proj-1',
       id: 9,
-      service: ['svc-api', 'svc-worker'],
+      deployment: ['svc-api', 'svc-worker'],
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['old api'])
     expect(tab.contextByService['svc-worker'].map(entry => entry.message)).toEqual(['new worker'])
@@ -264,13 +257,13 @@ describe('workspaceStore', () => {
     const billing = service('svc-billing', 'billing')
     useAgentStore().projects = [project([api, worker, billing])]
     vi.spyOn(agentApi, 'fetchLogContextPage').mockImplementation(async params => ({
-      service_id: params.service,
+      deployment_id: params.deployment,
       direction: params.direction,
       items:
-        params.service === 'svc-api'
+        params.deployment === 'svc-api'
           ? [log(1, 'svc-api', 'older api', '2026-05-20T22:41:30.000Z')]
           : [log(2, 'svc-worker', 'older worker', '2026-05-20T22:41:31.000Z')],
-      has_more: params.service === 'svc-api',
+      has_more: params.deployment === 'svc-api',
     }))
     const workspace = useWorkspaceStore()
     const tab = workspace.openSearch('proj-1')
@@ -286,7 +279,7 @@ describe('workspaceStore', () => {
 
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
       project: 'proj-1',
-      service: 'svc-api',
+      deployment: 'svc-api',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
       cursor_id: 9,
@@ -294,7 +287,7 @@ describe('workspaceStore', () => {
     })
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
       project: 'proj-1',
-      service: 'svc-worker',
+      deployment: 'svc-worker',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
       cursor_id: 0,
@@ -317,9 +310,9 @@ describe('workspaceStore', () => {
     const worker = service('svc-worker', 'worker')
     useAgentStore().projects = [project([api, worker])]
     vi.spyOn(agentApi, 'fetchLogContextPage').mockImplementation(async params => ({
-      service_id: params.service,
+      deployment_id: params.deployment,
       direction: params.direction,
-      items: [log(2, params.service, 'older worker', '2026-05-20T22:41:31.000Z')],
+      items: [log(2, params.deployment, 'older worker', '2026-05-20T22:41:31.000Z')],
       has_more: false,
     }))
     const workspace = useWorkspaceStore()
@@ -337,7 +330,7 @@ describe('workspaceStore', () => {
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledTimes(1)
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
       project: 'proj-1',
-      service: 'svc-worker',
+      deployment: 'svc-worker',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
       cursor_id: 10,
@@ -398,6 +391,45 @@ describe('workspaceStore', () => {
       store.openDeployment('dep1', 'Deploy #1')
       expect(store.activeTabId).toBe(firstTabId)
       expect(store.tabs.filter(t => t.type === 'deployment')).toHaveLength(1)
+    })
+
+    it('初始化以该 deployment 为来源的单叶子分栏树，并同步到 panel store', () => {
+      const store = useWorkspaceStore()
+      const panel = usePanelStore()
+      store.openDeployment('dep1', 'Deploy #1')
+
+      const tab = store.activeTab
+      expect(tab?.type).toBe('deployment')
+      // deployment tab 携带 layoutRoot，初始为单个 deployment 叶子（可拖入其他 deployment 分栏）
+      if (tab?.type === 'deployment') {
+        expect(tab.layoutRoot.type).toBe('leaf')
+        if (tab.layoutRoot.type === 'leaf') {
+          expect(tab.layoutRoot.source).toEqual({ type: 'deployment', deploymentId: 'dep1' })
+        }
+      }
+      // panel store 已切到该 tab 的布局，叶子来源即 dep1
+      expect(panel.allLeaves).toHaveLength(1)
+      expect(panel.allLeaves[0]?.source).toEqual({ type: 'deployment', deploymentId: 'dep1' })
+    })
+
+    it('切走再切回 deployment tab 时恢复其各自分栏布局', () => {
+      const store = useWorkspaceStore()
+      const panel = usePanelStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      const firstTabId = store.activeTabId!
+
+      // 在 dep1 的面板里分栏拖入 dep2
+      const leafId = panel.allLeaves[0]!.id
+      panel.splitLeafWithSource(leafId, 'h', { type: 'deployment', deploymentId: 'dep2' }, 'second')
+      expect(panel.allLeaves).toHaveLength(2)
+
+      // 打开另一个 deployment tab（dep3），panel 切到单叶子
+      store.openDeployment('dep3', 'Deploy #3')
+      expect(panel.allLeaves).toHaveLength(1)
+
+      // 切回 dep1，恢复其 2 叶子分栏
+      store.activateTab(firstTabId)
+      expect(panel.allLeaves).toHaveLength(2)
     })
   })
 

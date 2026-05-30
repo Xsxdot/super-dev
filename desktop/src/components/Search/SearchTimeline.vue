@@ -25,15 +25,16 @@ const EDGE_LOAD_THRESHOLD = 80
 const visibleResults = computed(() => {
   if (!tab.value) return []
   const hidden = new Set(tab.value.hiddenServiceIds)
-  return tab.value.results.filter(entry => !hidden.has(entry.service_id))
+  return tab.value.results.filter(entry => !hidden.has(entry.deployment_id))
 })
 
 function timeLabel(timestamp: string): string {
   return new Date(timestamp).toISOString().slice(11, 23)
 }
 
-function serviceName(serviceId: string): string {
-  return agentStore.serviceById(serviceId)?.name ?? serviceId
+// deploymentId 反查所属 service 名，反查不到时直接显示 id。
+function serviceName(deploymentId: string): string {
+  return agentStore.serviceForDeployment(deploymentId)?.service.name ?? deploymentId
 }
 
 function select(entryId: number) {
@@ -73,7 +74,7 @@ watch(
       @click="select(entry.id)"
     >
       <span class="time">{{ timeLabel(entry.timestamp) }}</span>
-      <span class="service">{{ serviceName(entry.service_id) }}</span>
+      <span class="service">{{ serviceName(entry.deployment_id) }}</span>
       <span class="message">{{ entry.message }}</span>
     </button>
     <button

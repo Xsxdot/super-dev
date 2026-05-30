@@ -13,7 +13,7 @@ import type { LogEntry } from '@/api/agent'
 function makeLog(id: number, ts: string, repeat = 1): LogEntry {
   return {
     id,
-    service_id: 'svc',
+    deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
     level: 'INFO',

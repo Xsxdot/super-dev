@@ -12,7 +12,6 @@
 <script setup lang="ts">
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
-import LogPanel from '@/components/Panel/LogPanel.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -25,14 +24,13 @@ const workspace = useWorkspaceStore()
     <div v-if="!workspace.activeTab" class="workspace-empty">
       <div>选择左侧服务或点击项目搜索</div>
     </div>
-    <PanelLayout v-else-if="workspace.activeTab.type === 'project'" />
+    <!-- 项目聚合 tab 与 deployment tab 都走 PanelLayout 分栏树（deployment tab 初始为单叶子，可拖入其他 deployment 分栏） -->
+    <PanelLayout
+      v-else-if="workspace.activeTab.type === 'project' || workspace.activeTab.type === 'deployment'"
+    />
     <SearchPage
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
-    />
-    <LogPanel
-      v-else-if="workspace.activeTab.type === 'deployment'"
-      :source="{ type: 'deployment', deploymentId: workspace.activeTab.deploymentId }"
     />
   </div>
 </template>

@@ -76,13 +76,9 @@ export interface Service {
   name: string
   status: '' | 'starting' | 'running' | 'failed'
   pid?: number
-  command: string
-  work_dir: string
   required: boolean
   order: number
   deployments?: Deployment[]
-  env_file?: string
-  env?: Record<string, string>
 }
 
 export interface Project {
@@ -90,14 +86,13 @@ export interface Project {
   name: string
   root_path: string
   services: Service[]
-  selected_service_ids: string[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
 }
 
 export interface LogEntry {
   id: number
-  service_id: string
+  deployment_id: string
   run_id: string
   timestamp: string
   level: string
@@ -121,7 +116,7 @@ export interface AgentSettings {
 }
 
 export interface FetchLogsParams {
-  service?: string
+  deployment?: string
   run?: string
   limit?: number
   before?: number
@@ -131,20 +126,20 @@ export interface LogSearchResponse {
   query: string
   total: number
   items: LogEntry[]
-  service_counts: Record<string, number>
+  deployment_counts: Record<string, number>
   has_more: boolean
 }
 
 export interface LogContextResponse {
   target_id: number
   anchor_time: string
-  items_by_service: Record<string, LogEntry[]>
+  items_by_deployment: Record<string, LogEntry[]>
 }
 
 export type LogContextPageDirection = 'before' | 'after'
 
 export interface LogContextPageResponse {
-  service_id: string
+  deployment_id: string
   direction: LogContextPageDirection
   items: LogEntry[]
   has_more: boolean
@@ -153,7 +148,7 @@ export interface LogContextPageResponse {
 export interface SearchLogsParams {
   project: string
   q: string
-  service?: string[]
+  deployment?: string[]
   limit?: number
   cursor_time?: string
   cursor_id?: number
@@ -162,14 +157,14 @@ export interface SearchLogsParams {
 export interface FetchLogContextParams {
   project: string
   id: number
-  service?: string[]
+  deployment?: string[]
   before_ms?: number
   after_ms?: number
 }
 
 export interface FetchLogContextPageParams {
   project: string
-  service: string
+  deployment: string
   direction: LogContextPageDirection
   cursor_time: string
   cursor_id: number
@@ -418,16 +413,6 @@ export const api = {
     const qs = projectId ? `?project_id=${projectId}` : ''
     return request<Service[]>(`/api/services${qs}`)
   },
-  startService: (id: string) =>
-    request<void>(`/api/services/${id}/start`, { method: 'POST' }),
-  stopService: (id: string) =>
-    request<void>(`/api/services/${id}/stop`, { method: 'POST' }),
-  restartService: (id: string) =>
-    request<void>(`/api/services/${id}/restart`, { method: 'POST' }),
-  startSelected: (projectId: string) =>
-    request<void>(`/api/projects/${projectId}/start-selected`, { method: 'POST' }),
-  putSelected: (projectId: string, names: string[]) =>
-    request<void>(`/api/projects/${projectId}/selected`, { method: 'PUT', body: JSON.stringify({ names }) }),
 
   // Deployment 进程控制
   startDeployment: (id: string) =>
@@ -451,7 +436,7 @@ export const api = {
   // 日志
   fetchLogs: (params: FetchLogsParams) => {
     const qs = new URLSearchParams()
-    if (params.service) qs.set('service', params.service)
+    if (params.deployment) qs.set('deployment', params.deployment)
     if (params.run) qs.set('run', params.run)
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before) qs.set('before', String(params.before))
@@ -461,7 +446,7 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('project', params.project)
     qs.set('q', params.q)
-    for (const serviceId of params.service ?? []) qs.append('service', serviceId)
+    for (const deploymentId of params.deployment ?? []) qs.append('deployment', deploymentId)
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.cursor_time) qs.set('cursor_time', params.cursor_time)
     if (params.cursor_id) qs.set('cursor_id', String(params.cursor_id))
@@ -471,7 +456,7 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('project', params.project)
     qs.set('id', String(params.id))
-    for (const serviceId of params.service ?? []) qs.append('service', serviceId)
+    for (const deploymentId of params.deployment ?? []) qs.append('deployment', deploymentId)
     if (params.before_ms) qs.set('before_ms', String(params.before_ms))
     if (params.after_ms) qs.set('after_ms', String(params.after_ms))
     return request<LogContextResponse>(`/api/logs/context?${qs}`)
@@ -479,7 +464,7 @@ export const api = {
   fetchLogContextPage: (params: FetchLogContextPageParams) => {
     const qs = new URLSearchParams()
     qs.set('project', params.project)
-    qs.set('service', params.service)
+    qs.set('deployment', params.deployment)
     qs.set('direction', params.direction)
     qs.set('cursor_time', params.cursor_time)
     qs.set('cursor_id', String(params.cursor_id))

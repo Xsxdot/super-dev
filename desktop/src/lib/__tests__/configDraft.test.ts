@@ -9,14 +9,14 @@ function makeProject(): Project {
     root_path: '/tmp/demo',
     services: [
       {
-        id: 's1', project_id: 'p1', name: 'web', status: '', command: '', work_dir: '',
+        id: 's1', project_id: 'p1', name: 'web', status: '',
         required: false, order: 0,
         deployments: [
           { id: 'd1', env_name: 'dev', location: 'local', command: 'go run .', work_dir: '/tmp/demo', env: { A: '1' }, status: '' },
         ],
       },
     ],
-    selected_service_ids: [],
+    env_selected_service_ids: {},
     environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
   }
 }

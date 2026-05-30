@@ -23,12 +23,12 @@ const props = defineProps<{
   isDev: boolean
   projectId: string
   services: Service[]
+  // selectedServiceIds 语义为「已在面板打开的 deploymentId 集合」，用于行高亮。
   selectedServiceIds: Set<string>
 }>()
 
 const emit = defineEmits<{
   'open-deployment': [payload: { deploymentId: string; title: string }]
-  'select-service': [payload: { serviceId: string; projectId: string }]
   'search': []
 }>()
 
@@ -66,11 +66,30 @@ function statusColor(status: string): string {
 }
 
 /**
+ * deploymentForService 取出本 env 下 service 对应的 deployment。
+ * deployment_id 是系统唯一日志单元，一个 service 在一个 env 下对应一个 deployment。
+ */
+function deploymentForService(svc: Service) {
+  return svc.deployments?.find(d => d.env_name === props.envName)
+}
+
+// isServiceOpen 判断本 env 下 service 的 deployment 是否已在某面板打开（用于行高亮）。
+function isServiceOpen(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  return dep ? props.selectedServiceIds.has(dep.id) : false
+}
+
+/**
  * onServiceRowClick 处理 service 行点击事件。
- * emit select-service，由父组件调用 openService 打开 project tab（支持分栏拖拽）。
+ * 取本 env 下的 deployment，emit open-deployment 打开 deployment 日志面板。
  */
 function onServiceRowClick(svc: Service) {
-  emit('select-service', { serviceId: svc.id, projectId: props.projectId })
+  const dep = deploymentForService(svc)
+  if (!dep) {
+    console.warn('[SuperDev] service 在该 env 下无 deployment，无法打开日志', svc.name, props.envName)
+    return
+  }
+  emit('open-deployment', { deploymentId: dep.id, title: `${svc.name} · ${props.envName}` })
 }
 
 // ===== env 级批量操作 =====
@@ -103,8 +122,9 @@ const canStart = computed(() => props.services.some(svc => {
 const DRAG_THRESHOLD = 4
 const DRAG_NO_SELECT_CLASS = 'service-dragging-no-select'
 
-let draggingServiceId: string | null = null
-let pendingServiceId: string | null = null
+// 拖拽承载的标识语义为 deploymentId（拖出的面板源是 deployment 单源）。
+let draggingDeploymentId: string | null = null
+let pendingDeploymentId: string | null = null
 let pointerStart: { x: number; y: number } | null = null
 let previousUserSelect = ''
 let selectionGuardActive = false
@@ -113,8 +133,8 @@ function clearTextSelection() {
   window.getSelection()?.removeAllRanges()
 }
 
-function beginPointerDrag(serviceId: string, e: PointerEvent) {
-  draggingServiceId = serviceId
+function beginPointerDrag(deploymentId: string, e: PointerEvent) {
+  draggingDeploymentId = deploymentId
   if (!selectionGuardActive) {
     previousUserSelect = document.body.style.userSelect
     document.body.style.userSelect = 'none'
@@ -122,12 +142,12 @@ function beginPointerDrag(serviceId: string, e: PointerEvent) {
     selectionGuardActive = true
   }
   clearTextSelection()
-  startServiceDrag(serviceId, { x: e.clientX, y: e.clientY })
+  startServiceDrag(deploymentId, { x: e.clientX, y: e.clientY })
 }
 
 function finishPointerDrag() {
-  draggingServiceId = null
-  pendingServiceId = null
+  draggingDeploymentId = null
+  pendingDeploymentId = null
   pointerStart = null
   if (selectionGuardActive) {
     document.body.style.userSelect = previousUserSelect
@@ -140,19 +160,19 @@ function onDocumentPointerMove(e: PointerEvent) {
   if (!pointerStart) return
   const dx = Math.abs(e.clientX - pointerStart.x)
   const dy = Math.abs(e.clientY - pointerStart.y)
-  if (!draggingServiceId && dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) return
+  if (!draggingDeploymentId && dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) return
   e.preventDefault()
-  if (!draggingServiceId && pendingServiceId) {
-    beginPointerDrag(pendingServiceId, e)
+  if (!draggingDeploymentId && pendingDeploymentId) {
+    beginPointerDrag(pendingDeploymentId, e)
   }
-  if (draggingServiceId) {
+  if (draggingDeploymentId) {
     clearTextSelection()
     moveServiceDrag({ x: e.clientX, y: e.clientY })
   }
 }
 
 function onDocumentPointerUp(e: PointerEvent) {
-  if (draggingServiceId) {
+  if (draggingDeploymentId) {
     finishServiceDrag({ x: e.clientX, y: e.clientY })
   }
   finishPointerDrag()
@@ -160,9 +180,12 @@ function onDocumentPointerUp(e: PointerEvent) {
   document.removeEventListener('pointerup', onDocumentPointerUp)
 }
 
-function onServiceRowPointerDown(serviceId: string, e: PointerEvent) {
+// 入参为本 env 下 service 对应的 deploymentId，拖出的面板源即该 deployment。
+function onServiceRowPointerDown(svc: Service, e: PointerEvent) {
   if (e.button !== 0) return
-  pendingServiceId = serviceId
+  const dep = deploymentForService(svc)
+  if (!dep) return
+  pendingDeploymentId = dep.id
   pointerStart = { x: e.clientX, y: e.clientY }
   document.addEventListener('pointermove', onDocumentPointerMove)
   document.addEventListener('pointerup', onDocumentPointerUp)
@@ -203,9 +226,9 @@ onUnmounted(() => {
         :key="svc.id"
         class="env-service-row"
         data-test="env-service-row"
-        :class="{ selected: selectedServiceIds.has(svc.id) }"
+        :class="{ selected: isServiceOpen(svc) }"
         @click="onServiceRowClick(svc)"
-        @pointerdown="onServiceRowPointerDown(svc.id, $event)"
+        @pointerdown="onServiceRowPointerDown(svc, $event)"
       >
         <input
           type="checkbox"

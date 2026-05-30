@@ -19,22 +19,14 @@ describe('isSamePanelSource', () => {
 })
 
 describe('projectIdFromPanelSource', () => {
-  it('本地服务来源返回 projectId', () => {
-    expect(projectIdFromPanelSource(
-      { type: 'local-service', projectId: 'project-a', serviceId: 'svc-1' },
-    )).toBe('project-a')
-  })
-
-  it('本地项目来源返回 projectId', () => {
-    expect(projectIdFromPanelSource(
-      { type: 'local-project', projectId: 'project-a' },
-    )).toBe('project-a')
-  })
-
-  it('deployment 来源返回 null', () => {
+  it('deployment 单源下恒返回 null（项目由 agentStore 反查）', () => {
     expect(projectIdFromPanelSource(
       { type: 'deployment', deploymentId: 'dep-1' },
     )).toBeNull()
+  })
+
+  it('空来源返回 null', () => {
+    expect(projectIdFromPanelSource(null)).toBeNull()
   })
 })
 
@@ -75,26 +67,22 @@ describe('panelStore', () => {
     expect(store.allLeaves[0].serviceId).toBe('svc-abc')
   })
 
-  it('splitLeafWithSource：将本地面板拆分为两栏并获得焦点', () => {
+  it('splitLeafWithSource：将 deployment 面板拆分为两栏并获得焦点', () => {
     const store = usePanelStore()
     const leafId = store.allLeaves[0].id
-    store.replaceSource(leafId, {
-      type: 'local-service',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-    })
+    store.replaceSource(leafId, { type: 'deployment', deploymentId: 'dep-A' })
 
     store.splitLeafWithSource(
       leafId,
       'h',
-      { type: 'local-project', projectId: 'project-B' },
+      { type: 'deployment', deploymentId: 'dep-B' },
       'first',
     )
 
     expect(store.root.type).toBe('split')
     expect(store.allLeaves.map(leaf => leaf.source)).toEqual([
-      { type: 'local-project', projectId: 'project-B' },
-      { type: 'local-service', projectId: 'project-A', serviceId: 'svc-api' },
+      { type: 'deployment', deploymentId: 'dep-B' },
+      { type: 'deployment', deploymentId: 'dep-A' },
     ])
     expect(store.focusedPanelId).toBe(store.allLeaves[0].id)
   })
@@ -102,15 +90,11 @@ describe('panelStore', () => {
   it('removeLeaf：关闭焦点面板后保留兄弟来源且不允许最后一个面板消失', () => {
     const store = usePanelStore()
     const leafId = store.allLeaves[0].id
-    store.replaceSource(leafId, {
-      type: 'local-service',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-    })
+    store.replaceSource(leafId, { type: 'deployment', deploymentId: 'dep-A' })
     store.splitLeafWithSource(
       leafId,
       'h',
-      { type: 'local-project', projectId: 'project-B' },
+      { type: 'deployment', deploymentId: 'dep-B' },
       'second',
     )
     const secondLeaf = store.allLeaves[1] ?? { id: 'missing-panel' }
@@ -119,20 +103,12 @@ describe('panelStore', () => {
     store.removeLeaf(secondLeaf.id)
 
     expect(store.allLeaves).toHaveLength(1)
-    expect(store.allLeaves[0].source).toEqual({
-      type: 'local-service',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-    })
+    expect(store.allLeaves[0].source).toEqual({ type: 'deployment', deploymentId: 'dep-A' })
     expect(store.focusedPanelId).toBe(store.allLeaves[0].id)
 
     store.removeLeaf(store.allLeaves[0].id)
 
     expect(store.allLeaves).toHaveLength(1)
-    expect(store.allLeaves[0].source).toEqual({
-      type: 'local-service',
-      projectId: 'project-A',
-      serviceId: 'svc-api',
-    })
+    expect(store.allLeaves[0].source).toEqual({ type: 'deployment', deploymentId: 'dep-A' })
   })
 })

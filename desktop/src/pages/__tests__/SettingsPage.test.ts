@@ -40,8 +40,6 @@ function service(id: string, name: string, required = false): Service {
     project_id: 'proj-1',
     name,
     status: '',
-    command: 'pnpm dev',
-    work_dir: '/tmp/project',
     required,
     order: 1,
   }
@@ -53,7 +51,8 @@ function project(services: Service[]): Project {
     name: 'Project',
     root_path: '/tmp/project',
     services,
-    selected_service_ids: ['worker'],
+    env_selected_service_ids: { dev: ['worker'] },
+    environments: [{ id: 'e-dev', name: 'dev', is_dev: true, order: 0 }],
   }
 }
 
@@ -86,7 +85,7 @@ describe('SettingsPage', () => {
     const worker = service('svc-worker', 'worker')
     const agent = useAgentStore()
     agent.projects = [project([api, worker])]
-    vi.spyOn(agent, 'updateSelected').mockResolvedValue(undefined)
+    vi.spyOn(agent, 'putEnvSelected').mockResolvedValue(undefined)
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
@@ -97,7 +96,8 @@ describe('SettingsPage', () => {
     await wrapper.find('[data-test="select-start-svc-worker"]').setValue(false)
 
     expect(settings.isServiceHidden('svc-worker')).toBe(true)
-    expect(agent.updateSelected).toHaveBeenCalledWith('proj-1', ['api'])
+    // 取消勾选 worker → dev 环境的已选列表从 ['worker'] 变为 []
+    expect(agent.putEnvSelected).toHaveBeenCalledWith('proj-1', 'dev', [])
   })
 
   it('支持从 query 直达主机管理 tab', async () => {

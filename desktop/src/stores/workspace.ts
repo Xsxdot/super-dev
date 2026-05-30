@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { api, type LogContextPageDirection, type LogEntry, type SearchLogsParams } from '@/api/agent'
 import { useAgentStore } from './agent'
 import {
+  createDeploymentPanelRoot,
   createEmptyPanelRoot,
   usePanelStore,
   type PanelNode,
@@ -60,6 +61,10 @@ export interface DeploymentTab {
   type: 'deployment'
   deploymentId: string
   title: string
+  // layoutRoot/focusedPanelId 让 deployment tab 也走 PanelLayout 分栏树：
+  // 初始为单个 deployment 叶子，从侧边栏拖入其他 deployment 即可分栏并排看日志。
+  layoutRoot: PanelNode
+  focusedPanelId: string | null
 }
 
 const SEARCH_PAGE_LIMIT = 1000
@@ -122,8 +127,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return useAgentStore().projectById(projectId)?.name ?? projectId
   }
 
-  function isLogWorkspaceTab(tab: WorkspaceTab | null): tab is ProjectWorkspaceTab {
-    return tab?.type === 'project'
+  // 携带 PanelLayout 分栏树的 tab：项目聚合 tab 与 deployment tab 都按 layoutRoot 走分栏。
+  function isLogWorkspaceTab(tab: WorkspaceTab | null): tab is ProjectWorkspaceTab | DeploymentTab {
+    return tab?.type === 'project' || tab?.type === 'deployment'
   }
 
   function saveActiveLogWorkspaceLayout() {
@@ -153,18 +159,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tab
   }
 
-  function openService(projectId: string, serviceId: string) {
-    const tab = ensureProjectTab(projectId)
-    activateTab(tab.id)
-    const panel = usePanelStore()
-    const existing = panel.allLeaves.find(leaf => leaf.serviceId === serviceId)
-    const targetPanelId = existing?.id ?? panel.targetPanelId()
-    if (!targetPanelId) return
-    panel.replaceScope(targetPanelId, serviceId, projectId)
-    panel.setFocus(targetPanelId)
-    saveActiveLogWorkspaceLayout()
-  }
-
   function openSearch(projectId: string): SearchWorkspaceTab {
     saveActiveLogWorkspaceLayout()
     const tab = makeSearchTab(projectId, `Search · ${projectName(projectId)}`)
@@ -181,6 +175,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     )
     if (existing) {
       activeTabId.value = existing.id
+      usePanelStore().setRoot(existing.layoutRoot, existing.focusedPanelId)
       return existing
     }
     const tab: DeploymentTab = {
@@ -188,9 +183,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       type: 'deployment',
       deploymentId,
       title,
+      layoutRoot: createDeploymentPanelRoot(deploymentId),
+      focusedPanelId: null,
     }
     tabs.value.push(tab)
     activeTabId.value = tab.id
+    usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
     return tab
   }
 
@@ -235,7 +233,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function visibleSearchResults(tab: SearchWorkspaceTab): LogEntry[] {
     const visible = new Set(visibleSearchServiceIds(tab))
-    return tab.results.filter(entry => visible.has(entry.service_id)).sort(compareLogs)
+    return tab.results.filter(entry => visible.has(entry.deployment_id)).sort(compareLogs)
   }
 
   function canLoadMoreSearchResults(tabId: string): boolean {
@@ -281,7 +279,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!tab || tab.selectedLogId === logId) return false
     const hidden = new Set(tab.hiddenServiceIds)
     const exists = tab.results.some(
-      entry => entry.id === logId && !hidden.has(entry.service_id),
+      entry => entry.id === logId && !hidden.has(entry.deployment_id),
     )
     if (!exists) return false
     tab.selectedLogId = logId
@@ -299,7 +297,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const result = await api.searchLogs({ project: tab.projectId, q: trimmed })
       tab.results = result.items
-      tab.serviceCounts = result.service_counts
+      tab.serviceCounts = result.deployment_counts
       tab.selectedLogId = null
       tab.contextAnchorTime = null
       tab.contextByService = {}
@@ -320,13 +318,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const result = await api.fetchLogContext({
       project: tab.projectId,
       id: logId,
-      service: visibleServices,
+      deployment: visibleServices,
     })
     tab.selectedLogId = result.target_id
     tab.contextAnchorTime = result.anchor_time
     for (const serviceId of visibleServices) {
       if (tab.pinnedServiceIds.includes(serviceId)) continue
-      tab.contextByService[serviceId] = result.items_by_service[serviceId] ?? []
+      tab.contextByService[serviceId] = result.items_by_deployment[serviceId] ?? []
       tab.hasMoreBeforeByService[serviceId] = true
       tab.hasMoreAfterByService[serviceId] = true
     }
@@ -343,7 +341,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const params: SearchLogsParams = {
       project: tab.projectId,
       q: tab.query,
-      service: serviceIds,
+      deployment: serviceIds,
       limit: SEARCH_PAGE_LIMIT,
     }
     if (cursor) {
@@ -391,7 +389,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         requests.map(({ serviceId, cursor }) =>
           api.fetchLogContextPage({
             project: tab.projectId,
-            service: serviceId,
+            deployment: serviceId,
             direction,
             cursor_time: cursor.cursor_time,
             cursor_id: cursor.cursor_id,
@@ -401,10 +399,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       )
       let changed = false
       for (const page of pages) {
-        hasMoreMap[page.service_id] = page.has_more
+        hasMoreMap[page.deployment_id] = page.has_more
         if (page.items.length === 0) continue
-        tab.contextByService[page.service_id] = mergeLogs(
-          tab.contextByService[page.service_id] ?? [],
+        tab.contextByService[page.deployment_id] = mergeLogs(
+          tab.contextByService[page.deployment_id] ?? [],
           page.items,
         )
         changed = true
@@ -435,7 +433,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeTabId,
     activeTab,
     activateTab,
-    openService,
+    // ensureProjectTab 作为 deployment 多面板容器 tab 的入口保留，供后续在项目 tab 中拖入多个 deployment 分栏使用。
+    ensureProjectTab,
     openSearch,
     openDeployment,
     searchTab,

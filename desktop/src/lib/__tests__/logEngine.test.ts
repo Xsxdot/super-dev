@@ -11,7 +11,7 @@ import type { LogEntry } from '@/api/agent'
 function makeLog(message: string, serviceId = 'svc-a'): LogEntry {
   return {
     id: Math.floor(Math.random() * 1e6),
-    service_id: serviceId,
+    deployment_id: serviceId,
     run_id: 'run',
     timestamp: new Date().toISOString(),
     level: 'INFO',
