@@ -28,19 +28,19 @@ func (m *mockTunnelResolver) BaseURL(hostID string) (string, error) {
 func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
 	now := time.Now().Truncate(time.Millisecond)
 	entries := []model.LogEntry{
-		{ID: 1, ServiceID: "svc-1", Timestamp: now, Message: "hello", Stream: "stdout"},
+		{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "hello", Stream: "stdout"},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/logs", r.URL.Path)
-		assert.Equal(t, "svc-1", r.URL.Query().Get("service"))
+		assert.Equal(t, "svc-1", r.URL.Query().Get("deployment"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(entries)
 	}))
 	defer srv.Close()
 
 	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockTunnelResolver{baseURL: srv.URL})
-	got, next, err := b.Query(context.Background(), logbackend.QueryFilter{ServiceID: "svc-1", Limit: 10})
+	got, next, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "hello", got[0].Message)
@@ -57,7 +57,7 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 			Total   int              `json:"total"`
 			HasMore bool             `json:"has_more"`
 		}{
-			Items:   []model.LogEntry{{ID: 1, ServiceID: "svc-1", Timestamp: now, Message: "error occurred", Stream: "stderr"}},
+			Items:   []model.LogEntry{{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "error occurred", Stream: "stderr"}},
 			Total:   1,
 			HasMore: false,
 		}
@@ -68,9 +68,9 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 
 	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockTunnelResolver{baseURL: srv.URL})
 	got, _, hasMore, err := b.Search(context.Background(), logbackend.SearchQuery{
-		ServiceIDs: []string{"svc-1"},
-		Text:       "error",
-		Limit:      10,
+		DeploymentIDs: []string{"svc-1"},
+		Text:          "error",
+		Limit:         10,
 	})
 	require.NoError(t, err)
 	assert.False(t, hasMore)
@@ -80,7 +80,7 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 
 func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	now := time.Now().Truncate(time.Millisecond)
-	entry := model.LogEntry{ID: 1, ServiceID: "svc-1", Timestamp: now, Message: "live", Stream: "stdout"}
+	entry := model.LogEntry{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "live", Stream: "stdout"}
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

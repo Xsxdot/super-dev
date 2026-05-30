@@ -26,7 +26,7 @@ func newTestSQLiteBackend(t *testing.T) (logbackend.LogBackend, *logbuf.Buffer) 
 
 func TestSQLiteBackend_QueryEmpty(t *testing.T) {
 	b, _ := newTestSQLiteBackend(t)
-	entries, next, err := b.Query(context.Background(), logbackend.QueryFilter{ServiceID: "svc-1"})
+	entries, next, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1"})
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.True(t, next.Time.IsZero())
@@ -36,14 +36,14 @@ func TestSQLiteBackend_QueryReturnsEntries(t *testing.T) {
 	b, buf := newTestSQLiteBackend(t)
 
 	now := time.Now().Truncate(time.Millisecond)
-	buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: now, Message: "hello", Stream: "stdout"})
-	buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: now.Add(time.Millisecond), Message: "world", Stream: "stdout"})
-	buf.Append(model.LogEntry{ServiceID: "svc-2", RunID: "r2", Timestamp: now, Message: "other", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: now, Message: "hello", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: now.Add(time.Millisecond), Message: "world", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-2", RunID: "r2", Timestamp: now, Message: "other", Stream: "stdout"})
 
 	// flush 写入 SQLite（等待 buffer 刷盘）
 	time.Sleep(200 * time.Millisecond)
 
-	entries, _, err := b.Query(context.Background(), logbackend.QueryFilter{ServiceID: "svc-1", Limit: 10})
+	entries, _, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "hello", entries[0].Message)
@@ -54,15 +54,15 @@ func TestSQLiteBackend_SearchReturnsMatches(t *testing.T) {
 	b, buf := newTestSQLiteBackend(t)
 
 	now := time.Now().Truncate(time.Millisecond)
-	buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: now, Message: "error occurred", Stream: "stderr"})
-	buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: now.Add(time.Millisecond), Message: "all good", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: now, Message: "error occurred", Stream: "stderr"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: now.Add(time.Millisecond), Message: "all good", Stream: "stdout"})
 
 	time.Sleep(200 * time.Millisecond)
 
 	entries, _, hasMore, err := b.Search(context.Background(), logbackend.SearchQuery{
-		ServiceIDs: []string{"svc-1"},
-		Text:       "error",
-		Limit:      10,
+		DeploymentIDs: []string{"svc-1"},
+		Text:          "error",
+		Limit:         10,
 	})
 	require.NoError(t, err)
 	assert.False(t, hasMore)
@@ -76,7 +76,7 @@ func TestSQLiteBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	stream := b.Subscribe(context.Background(), "svc-1")
 	defer stream.Cancel()
 
-	entry := model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: time.Now(), Message: "live", Stream: "stdout"}
+	entry := model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: time.Now(), Message: "live", Stream: "stdout"}
 	buf.Append(entry)
 
 	select {
@@ -94,9 +94,9 @@ func TestSQLiteBackend_SubscribeFiltersOtherServices(t *testing.T) {
 	defer stream.Cancel()
 
 	// 写入 svc-2 的日志，svc-1 的订阅者不应收到
-	buf.Append(model.LogEntry{ServiceID: "svc-2", RunID: "r2", Timestamp: time.Now(), Message: "not mine", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-2", RunID: "r2", Timestamp: time.Now(), Message: "not mine", Stream: "stdout"})
 	// 写入 svc-1 的日志，确认能收到
-	buf.Append(model.LogEntry{ServiceID: "svc-1", RunID: "r1", Timestamp: time.Now(), Message: "mine", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: time.Now(), Message: "mine", Stream: "stdout"})
 
 	select {
 	case got := <-stream.Ch:

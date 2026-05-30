@@ -14,7 +14,7 @@ import (
 // TestQueryFilterZeroValue 确认 QueryFilter 零值不引发 panic。
 func TestQueryFilterZeroValue(t *testing.T) {
 	f := logbackend.QueryFilter{}
-	assert.Equal(t, "", f.ServiceID)
+	assert.Equal(t, "", f.DeploymentID)
 	assert.Equal(t, 0, f.Limit)
 	assert.True(t, f.Before.IsZero())
 }
@@ -23,7 +23,7 @@ func TestQueryFilterZeroValue(t *testing.T) {
 func TestSearchQueryZeroValue(t *testing.T) {
 	q := logbackend.SearchQuery{}
 	assert.Equal(t, "", q.Text)
-	assert.Nil(t, q.ServiceIDs)
+	assert.Nil(t, q.DeploymentIDs)
 }
 
 // TestCursorZeroValue 确认 Cursor 零值表示"无游标"。
