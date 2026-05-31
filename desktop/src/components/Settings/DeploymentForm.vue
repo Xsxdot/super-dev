@@ -5,13 +5,13 @@ DeploymentForm：单份 deployment 的编辑表单（最大组件，职责单一
   - location 切换 local/remote（本地 / 远程）
   - local：命令 / 工作目录（WorkDirInput）/ 环境变量（EnvKeyValueEditor）
   - remote：主机多选 / 日志类型 / 日志目标 / 启停命令
-  - pipeline：折叠的 PipelineEditor
+  - pipeline：模板化 PipelineTemplateWizard
 边界：
   - 不做校验、不发请求；变更整份 emit 给父层草稿
 -->
 <script setup lang="ts">
-import type { Deployment, LogSourceType, Pipeline } from '@/api/agent'
-import PipelineEditor from './PipelineEditor.vue'
+import type { Deployment, LogSourceType, Pipeline, PipelineTemplateSummary } from '@/api/agent'
+import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 import WorkDirInput from './WorkDirInput.vue'
 
@@ -20,6 +20,7 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   /** 工作目录默认值，新建流水线步骤时自动填入 */
   defaultWorkDir?: string
+  pipelineTemplates?: PipelineTemplateSummary[]
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
 
@@ -160,7 +161,11 @@ function setEnv(env: Record<string, string>) {
 
     <!-- 部署流水线（可选） -->
     <div class="dep-label">部署流水线（可选）</div>
-    <PipelineEditor :model-value="modelValue.pipeline" :default-work-dir="defaultWorkDir" @update:model-value="setPipeline" />
+    <PipelineTemplateWizard
+      :model-value="modelValue.pipeline"
+      :templates="pipelineTemplates ?? []"
+      @update:model-value="setPipeline"
+    />
   </div>
 </template>
 
