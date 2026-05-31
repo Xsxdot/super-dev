@@ -224,6 +224,7 @@ services:
         hosts: [prod-01]
         log_type: docker
         log_target: api-server
+        read_only: true
 `
 	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yamlContent), 0o644))
 
@@ -232,7 +233,7 @@ services:
 	require.NoError(t, err)
 
 	prod := p.Services[0].Deployments[0]
-	assert.True(t, prod.IsReadOnly())
+	assert.True(t, prod.ReadOnly)
 }
 
 func TestSaveAndReloadPreservesIsDev(t *testing.T) {
@@ -293,6 +294,7 @@ func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 						LogTarget:    "api-server.service",
 						StartCommand: "systemctl start api-server",
 						StopCommand:  "systemctl stop api-server",
+						ReadOnly:     true,
 					},
 				},
 			},
@@ -322,6 +324,7 @@ func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 	assert.Equal(t, model.LocationRemote, prod.Location)
 	assert.Equal(t, []string{"h-1"}, prod.HostIDs)
 	assert.Equal(t, "systemctl start api-server", prod.StartCommand)
+	assert.True(t, prod.ReadOnly)
 }
 
 // TestSaveLoadPreservesPipeline 验证 deployment 的 pipeline 经 Save→Load 往返不丢失。

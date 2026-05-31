@@ -65,6 +65,10 @@ function statusColor(status: string): string {
   return '#6e7681'
 }
 
+function isRunningStatus(status: string): boolean {
+  return status === 'running' || status === 'starting'
+}
+
 /**
  * deploymentForService 取出本 env 下 service 对应的 deployment。
  * deployment_id 是系统唯一日志单元，一个 service 在一个 env 下对应一个 deployment。
@@ -77,6 +81,29 @@ function deploymentForService(svc: Service) {
 function isServiceOpen(svc: Service): boolean {
   const dep = deploymentForService(svc)
   return dep ? props.selectedServiceIds.has(dep.id) : false
+}
+
+function canControlDeployment(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  return !!dep && dep.read_only !== true
+}
+
+async function startOne(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.startDeployment(dep.id)
+}
+
+async function stopOne(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.stopDeployment(dep.id)
+}
+
+async function restartOne(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.restartDeployment(dep.id)
 }
 
 /**
@@ -107,14 +134,14 @@ async function startAll() {
 async function stopAll() {
   const deps = props.services
     .map(svc => svc.deployments?.find(d => d.env_name === props.envName))
-    .filter(d => d && (d.status === 'running' || d.status === 'starting'))
+    .filter(d => d && d.read_only !== true && isRunningStatus(d.status))
   await Promise.all(deps.map(d => agentStore.stopDeployment(d!.id)))
 }
 
 const canStart = computed(() => props.services.some(svc => {
   if (!agentStore.isServiceEnvSelected(props.projectId, props.envName, svc.name)) return false
   const dep = svc.deployments?.find(d => d.env_name === props.envName)
-  return dep && dep.status !== 'running' && dep.status !== 'starting'
+  return dep && dep.read_only !== true && !isRunningStatus(dep.status)
 }))
 
 // ===== 拖拽逻辑 =====
@@ -246,6 +273,38 @@ onUnmounted(() => {
           }"
         />
         <span class="service-name">{{ svc.name }}</span>
+        <div
+          v-if="canControlDeployment(svc)"
+          class="row-actions"
+          data-test="row-actions"
+          @click.stop
+          @pointerdown.stop
+        >
+          <button
+            v-if="!isRunningStatus(deploymentForService(svc)?.status ?? '')"
+            type="button"
+            class="row-action start"
+            data-test="row-start"
+            title="启动"
+            @click="startOne(svc)"
+          >▶</button>
+          <button
+            v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+            type="button"
+            class="row-action restart"
+            data-test="row-restart"
+            title="重启"
+            @click="restartOne(svc)"
+          >↻</button>
+          <button
+            v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+            type="button"
+            class="row-action stop"
+            data-test="row-stop"
+            title="停止"
+            @click="stopOne(svc)"
+          >⏹</button>
+        </div>
       </div>
     </div>
   </div>
@@ -359,5 +418,51 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transform: translateX(8px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.env-service-row:hover .row-actions {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.row-action {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary, #8b949e);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 20px;
+  padding: 0;
+}
+
+.row-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.row-action.start {
+  color: #3fb950;
+}
+
+.row-action.restart {
+  color: #d29922;
+}
+
+.row-action.stop {
+  color: #f85149;
 }
 </style>

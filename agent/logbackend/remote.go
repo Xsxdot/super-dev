@@ -73,6 +73,9 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
+	if f.BeforeID > 0 {
+		q.Set("before", strconv.FormatInt(f.BeforeID, 10))
+	}
 	u.RawQuery = q.Encode()
 
 	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)

@@ -69,6 +69,16 @@ function setEnv(env: Record<string, string>) {
       </div>
     </div>
 
+    <label class="dep-read-only">
+      <input
+        type="checkbox"
+        data-test="dep-read-only"
+        :checked="modelValue.read_only === true"
+        @change="patch({ read_only: ($event.target as HTMLInputElement).checked })"
+      />
+      只读（仅查看日志）
+    </label>
+
     <!-- local 模式：命令 + 工作目录 + 环境变量 -->
     <template v-if="modelValue.location === 'local'">
       <div class="dep-field">
@@ -169,6 +179,14 @@ function setEnv(env: Record<string, string>) {
   gap: 14px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.dep-read-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
 }
 .dep-input {
   display: block;

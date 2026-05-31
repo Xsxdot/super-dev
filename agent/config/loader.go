@@ -197,6 +197,7 @@ type deploymentYAML struct {
 	LogType      string            `yaml:"log_type,omitempty"`
 	LogTarget    string            `yaml:"log_target,omitempty"`
 	ExtraArgs    []string          `yaml:"extra_args,omitempty"`
+	ReadOnly     bool              `yaml:"read_only,omitempty"`
 	StartCommand string            `yaml:"start_command,omitempty"`
 	StopCommand  string            `yaml:"stop_command,omitempty"`
 	Pipeline     *model.Pipeline   `yaml:"pipeline,omitempty"`
@@ -257,6 +258,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			LogType:      model.LogSourceType(d.LogType),
 			LogTarget:    d.LogTarget,
 			ExtraArgs:    d.ExtraArgs,
+			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
 			Pipeline:     d.Pipeline,
@@ -303,6 +305,7 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			LogType:      string(d.LogType),
 			LogTarget:    d.LogTarget,
 			ExtraArgs:    d.ExtraArgs,
+			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
 			Pipeline:     d.Pipeline,

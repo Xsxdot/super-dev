@@ -3,6 +3,7 @@ package logbackend_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -48,6 +49,36 @@ func TestSQLiteBackend_QueryReturnsEntries(t *testing.T) {
 	require.Len(t, entries, 2)
 	assert.Equal(t, "hello", entries[0].Message)
 	assert.Equal(t, "world", entries[1].Message)
+}
+
+func TestSQLiteBackend_QueryBeforeID(t *testing.T) {
+	b, buf := newTestSQLiteBackend(t)
+
+	now := time.Now().Truncate(time.Millisecond)
+	for i := 0; i < 5; i++ {
+		buf.Append(model.LogEntry{
+			DeploymentID: "svc-1",
+			RunID:        "r1",
+			Timestamp:    now.Add(time.Duration(i) * time.Millisecond),
+			Level:        "INFO",
+			Message:      fmt.Sprintf("msg-%d", i),
+			Stream:       "stdout",
+		})
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	first, _, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 3})
+	require.NoError(t, err)
+	require.Len(t, first, 3)
+
+	second, _, err := b.Query(context.Background(), logbackend.QueryFilter{
+		DeploymentID: "svc-1",
+		Limit:        3,
+		BeforeID:     first[0].ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"msg-0", "msg-1"}, []string{second[0].Message, second[1].Message})
 }
 
 func TestSQLiteBackend_SearchReturnsMatches(t *testing.T) {

@@ -91,6 +91,13 @@ describe('configDraft', () => {
     expect(payload.services[0]!.deployments[0]!.env_file).toBe('.env.local')
   })
 
+  it('draftToPayload 透传 read_only', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0]!.deployments[0]!.read_only = true
+    const payload = draftToPayload(draft)
+    expect(payload.services[0]!.deployments[0]!.read_only).toBe(true)
+  })
+
   it('validateDraft：local deployment 有 pipeline 时允许命令为空', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0].command = ''

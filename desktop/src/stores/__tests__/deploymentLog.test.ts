@@ -162,24 +162,60 @@ describe('loadMoreHistory', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     MockWebSocket.instances = []
+    vi.clearAllMocks()
   })
 
-  it('passes oldestLoadedId as before cursor', async () => {
+  it('uses the oldest history id as before cursor for subsequent pages', async () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep1')
+
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch
+      .mockResolvedValueOnce([
+        { id: 5, timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        { id: 6, timestamp: '2024-01-01T00:00:06Z', message: 'f', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 3, timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+      ])
+
+    await store.loadMoreHistory('dep1', 2)
+    await store.loadMoreHistory('dep1', 2)
+
+    expect(mockFetch).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      deploymentId: 'dep1',
+      limit: 2,
+      before: undefined,
+    }))
+    expect(mockFetch).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      deploymentId: 'dep1',
+      limit: 2,
+      before: 5,
+    }))
+  })
+
+  it('does not let websocket ids advance the history pagination cursor', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep1')
     const ws = MockWebSocket.instances[0]
 
-    // 先通过 WS 注入一条日志，建立 oldestLoadedId = 5
-    ws.onmessage?.({ data: JSON.stringify({ id: 5, timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({
+      id: 1,
+      timestamp: '2024-01-01T00:00:10Z',
+      message: 'live',
+      level: 'INFO',
+      deployment_id: 'dep1',
+      run_id: '',
+      stream: 'stdout',
+    }) })
 
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
     mockFetch.mockResolvedValueOnce([
-      { id: 3, timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: '', run_id: '', stream: '' },
-      { id: 2, timestamp: '2024-01-01T00:00:02Z', message: 'b', level: 'info', deployment_id: '', run_id: '', stream: '' },
+      { id: 20, timestamp: '2024-01-01T00:00:05Z', message: 'history', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout' },
     ])
 
     await store.loadMoreHistory('dep1', 200)
 
-    expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({ before: 5 }))
+    expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({ before: undefined }))
   })
 })

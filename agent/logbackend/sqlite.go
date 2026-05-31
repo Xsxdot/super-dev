@@ -39,11 +39,11 @@ func NewSQLiteBackend(s *store.Store, buf *logbuf.Buffer) *SQLiteBackend {
 	return &SQLiteBackend{store: s, buf: buf}
 }
 
-// Query 按 DeploymentID/RunID/游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。
+// Query 按 DeploymentID/RunID/ID 游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。
 //
 // 参数：
 //   - ctx: 上下文（当前实现未使用，保留以满足接口契约）
-//   - f: 查询过滤参数，Before 字段当前版本不支持（store 只有 ID 游标）
+//   - f: 查询过滤参数，BeforeID 为 id < BeforeID 的前翻页游标
 //
 // 返回：
 //   - 匹配的日志条目列表
@@ -54,10 +54,8 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 		DeploymentID: f.DeploymentID,
 		RunID:        f.RunID,
 		Limit:        f.Limit,
+		Before:       f.BeforeID,
 	}
-	// Before 字段语义为时间游标，当前 store.FetchParams.Before 为 ID 游标，两者语义不同。
-	// 暂不转换，待后续 store 支持时间游标后跟进。
-	_ = f.Before
 
 	entries, err := b.store.Fetch(params)
 	if err != nil {

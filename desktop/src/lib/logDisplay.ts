@@ -11,12 +11,14 @@
 import type { LogEntry } from '@/api/agent'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { BookmarkState } from '@/stores/bookmark'
+import type { LogLifecycleMarker } from '@/stores/logLifecycle'
 
 export type LogDisplayItem =
   | { kind: 'entry'; id: string; log: DisplayLogEntry }
   | { kind: 'markerStart'; id: string; date: Date }
   | { kind: 'markerEnd'; id: string; date: Date }
   | { kind: 'historySeparator'; id: string }
+  | { kind: 'lifecycleSeparator'; id: string; marker: LogLifecycleMarker }
 
 export interface BookmarkDisplayInput {
   state: BookmarkState
@@ -65,6 +67,31 @@ function withHistorySeparator(items: LogDisplayItem[], boundary: HistoryBoundary
   ]
 }
 
+function withLifecycleSeparators(
+  items: LogDisplayItem[],
+  markers: LogLifecycleMarker[] = [],
+): LogDisplayItem[] {
+  if (!markers.length) return items
+  const out = [...items]
+  const sorted = [...markers].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  )
+  for (const marker of sorted) {
+    const markerTime = new Date(marker.createdAt).getTime()
+    const insertAt = out.findIndex(item =>
+      item.kind === 'entry' && new Date(item.log.timestamp).getTime() > markerTime
+    )
+    const displayItem: LogDisplayItem = {
+      kind: 'lifecycleSeparator',
+      id: `lifecycle-${marker.id}`,
+      marker,
+    }
+    if (insertAt < 0) out.push(displayItem)
+    else out.splice(insertAt, 0, displayItem)
+  }
+  return out
+}
+
 /**
  * makeDisplayItems 构造带书签标记的日志显示列表。
  *
@@ -84,11 +111,12 @@ export function makeDisplayItems(
   bm: BookmarkDisplayInput | null,
   markerIds: MarkerIds,
   historyBoundary: HistoryBoundary | null = null,
+  lifecycleMarkers: LogLifecycleMarker[] = [],
 ): LogDisplayItem[] {
   const items: LogDisplayItem[] = []
   if (!bm?.startTime) {
     for (const log of logs) items.push(entryItem(log))
-    return withHistorySeparator(items, historyBoundary)
+    return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
   }
 
   const startTime = bm.startTime
@@ -111,7 +139,7 @@ export function makeDisplayItems(
       items.push({ kind: 'markerEnd', id: markerIds.end, date: endTime })
     }
     for (const log of after) items.push(entryItem(log))
-    return withHistorySeparator(items, historyBoundary)
+    return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
   }
 
   const before = logs.filter(l => ts(l) < startTime)
@@ -121,7 +149,7 @@ export function makeDisplayItems(
     items.push({ kind: 'markerStart', id: markerIds.start, date: startTime })
   }
   for (const log of after) items.push(entryItem(log))
-  return withHistorySeparator(items, historyBoundary)
+  return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
 }
 
 export interface DisplayStats {

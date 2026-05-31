@@ -190,7 +190,7 @@ type Environment struct {
 // 职责：
 //   - 描述服务「跑在哪」（local / remote）
 //   - 描述「怎么看日志」（本地 buffer / journalctl / docker）
-//   - 描述「能不能控制」（StartCommand/StopCommand 均为空则只读）
+//   - 描述「能不能控制」（ReadOnly 为 true 时只能查看日志）
 //
 // 边界：
 //   - 不负责把代码/构建包传到远程主机（那是部署系统的职责）
@@ -212,7 +212,10 @@ type Deployment struct {
 	LogTarget string        `json:"log_target,omitempty"`
 	ExtraArgs []string      `json:"extra_args,omitempty"`
 
-	// 远程可选启停命令；均为空时该 deployment 只读
+	// ReadOnly 为 true 时该 deployment 只能查看日志，不能被启动、停止或重启。
+	ReadOnly bool `json:"read_only,omitempty" yaml:"read_only,omitempty"`
+
+	// 远程可选启停命令；是否允许启停由 ReadOnly 显式控制。
 	StartCommand string `json:"start_command,omitempty"`
 	StopCommand  string `json:"stop_command,omitempty"`
 
@@ -227,13 +230,10 @@ type Deployment struct {
 
 // IsReadOnly 报告该 deployment 是否只能查看日志、不能启停。
 //
-// local deployment 始终可启停；remote deployment 需要同时配置
-// StartCommand 和 StopCommand 才能启停，否则为只读。
+// read_only 是显式能力开关。命令是否存在不参与只读判断，
+// 便于未来通过 sudo、远程控制代理等方式补齐启停能力。
 func (d Deployment) IsReadOnly() bool {
-	if d.Location == LocationLocal {
-		return false
-	}
-	return d.StartCommand == "" || d.StopCommand == ""
+	return d.ReadOnly
 }
 
 // Collector 是远端 agent 维护的采集任务运行时记录。

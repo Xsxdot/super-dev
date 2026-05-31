@@ -1,7 +1,8 @@
 package process_test
 
 import (
-	"os/exec"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,23 +96,25 @@ func TestManagerStartDeploymentSkipsWhenAlreadyRunning(t *testing.T) {
 
 func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "started.log")
 
 	dep := model.Deployment{
 		ID:       "dep-bg",
 		EnvName:  "dev",
 		Location: model.LocationLocal,
-		Command:  "sleep 60 &",
-		WorkDir:  t.TempDir(),
+		Command:  "printf 'started\\n' >> started.log; sleep 60 &",
+		WorkDir:  dir,
 	}
 	require.NoError(t, mgr.StartDeployment(dep))
 	time.Sleep(300 * time.Millisecond)
 
 	require.NoError(t, mgr.StartDeployment(dep))
-	// 仅应有一个 sleep 子进程（第二次 StartDeployment 被跳过）
+	// 仅应执行一次启动命令（第二次 StartDeployment 被跳过）。
 	time.Sleep(100 * time.Millisecond)
-	out, err := exec.Command("pgrep", "-f", "sleep 60").Output()
+	data, err := os.ReadFile(marker)
 	require.NoError(t, err)
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if lines[0] == "" {
 		assert.Empty(t, lines)
 	} else {

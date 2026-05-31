@@ -101,6 +101,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
         log_target: d.log_target,
         extra_args: d.extra_args,
         env_file: d.env_file,
+        read_only: d.read_only,
         start_command: d.start_command,
         stop_command: d.stop_command,
         pipeline: d.pipeline,

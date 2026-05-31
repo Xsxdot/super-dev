@@ -48,4 +48,16 @@ describe('DeploymentForm', () => {
     const last = emitted![emitted!.length - 1][0] as { host_ids?: string[] }
     expect(last.host_ids).toContain('h1')
   })
+
+  it('切换只读开关时 emit read_only 更新', async () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [] },
+    })
+
+    await wrapper.find('[data-test="dep-read-only"]').setValue(true)
+
+    const emitted = wrapper.emitted('update:modelValue')
+    expect(emitted).toBeTruthy()
+    expect((emitted![0]![0] as Deployment).read_only).toBe(true)
+  })
 })
