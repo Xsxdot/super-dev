@@ -11,6 +11,8 @@ package plugins_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,4 +39,21 @@ func TestLocalCommandExecutesAndLogs(t *testing.T) {
 	err := p.Execute(ctx, step, nil)
 	require.NoError(t, err)
 	assert.Contains(t, logs, "stdout:ok")
+}
+
+func TestLocalCommandInjectsRunTempDirEnv(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.txt")
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{RunTempDir: dir})
+	step := model.Step{
+		Name: "Env",
+		Type: "local_command",
+		With: map[string]interface{}{
+			"cmd": "printf %s \"$RUN_TEMP_DIR\" > " + out,
+		},
+	}
+	require.NoError(t, plugins.NewLocalCommand().Execute(ctx, step, nil))
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Equal(t, dir, string(data))
 }

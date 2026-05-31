@@ -71,3 +71,46 @@ services:
 	assert.Equal(t, "Build", body.Run.StepRuns[0].StepName)
 	assert.Equal(t, "build", body.Run.StepRuns[0].Phase)
 }
+
+func TestPreviewDeploymentPipelineRendersRunTempDir(t *testing.T) {
+	app := newTestAppInstance(t)
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".superdev")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(`
+name: preview-temp-dir-demo
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - id: svc-1
+    name: api
+    deployments:
+      - id: dep-1
+        env: dev
+        location: local
+        pipeline:
+          build:
+            - name: Build Go
+              type: include
+              with:
+                template: builtin://go-binary-build
+                version: 1.0.0
+                vars:
+                  work_dir: .
+                  package: ./...
+                  output: ${run_temp_dir}/build/app
+                  artifact_dir: ${run_temp_dir}/artifacts
+                  app_name: api
+`), 0o644))
+	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
+	addRR := httptest.NewRecorder()
+	app.Handler().ServeHTTP(addRR, addReq)
+	require.Equal(t, http.StatusOK, addRR.Code)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/deployments/dep-1/pipeline/preview", nil)
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "/tmp/super-debug-pipeline-preview")
+}

@@ -70,6 +70,9 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	cmd := exec.CommandContext(ctx.Context, "sh", "-c", cmdText)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
+	if ctx.RunTempDir != "" {
+		cmd.Env = append(cmd.Env, "RUN_TEMP_DIR="+ctx.RunTempDir)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

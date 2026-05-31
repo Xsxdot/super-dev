@@ -27,6 +27,8 @@ type StepPlugin interface {
 // RunContextOptions configures a RunContext.
 type RunContextOptions struct {
 	ProjectRoot string
+	RunTempDir  string
+	Vars        map[string]string
 	LogLine     func(line, stream string)
 }
 
@@ -34,6 +36,8 @@ type RunContextOptions struct {
 type RunContext struct {
 	Context     context.Context
 	ProjectRoot string
+	RunTempDir  string
+	Vars        map[string]string
 	logLine     func(line, stream string)
 }
 
@@ -46,7 +50,7 @@ type RunContext struct {
 // 返回：
 //   - 可传给 StepPlugin.Execute 的 RunContext
 func NewRunContext(ctx context.Context, opts RunContextOptions) *RunContext {
-	return &RunContext{Context: ctx, ProjectRoot: opts.ProjectRoot, logLine: opts.LogLine}
+	return &RunContext{Context: ctx, ProjectRoot: opts.ProjectRoot, RunTempDir: opts.RunTempDir, Vars: opts.Vars, logLine: opts.LogLine}
 }
 
 // LogLine records one plugin output line.

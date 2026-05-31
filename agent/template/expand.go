@@ -118,6 +118,9 @@ func expandSteps(steps []model.Step, resolver Resolver, pipelineVars map[string]
 
 func includeVars(step model.Step, pipelineVars map[string]string) map[string]string {
 	out := map[string]string{}
+	for k, v := range pipelineVars {
+		out[k] = v
+	}
 	if step.With == nil {
 		return out
 	}

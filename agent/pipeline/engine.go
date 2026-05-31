@@ -4,6 +4,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/superdev/agent/model"
@@ -77,16 +80,24 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 	run.Status = model.RunStatusRunning
 	run.StartedAt = time.Now().UnixMilli()
 	stepRuns := indexStepRuns(run.StepRuns)
+	runTempDir, cleanup, err := createRunTempDir(run.DeploymentID)
+	if err != nil {
+		run.Status = model.RunStatusFailed
+		run.FinishedAt = time.Now().UnixMilli()
+		return run, err
+	}
+	defer cleanup()
+	runVars := map[string]string{"run_temp_dir": runTempDir}
 
 	var runErr error
-	buildFailed, err := e.runPhase(ctx, model.PhaseBuild, plan.Phases[model.PhaseBuild], stepRuns, emit)
+	buildFailed, err := e.runPhase(ctx, model.PhaseBuild, plan.Phases[model.PhaseBuild], stepRuns, emit, runTempDir, runVars)
 	if err != nil {
 		runErr = err
 	}
 	if buildFailed {
 		skipPhase(model.PhaseDeploy, plan.Phases[model.PhaseDeploy], stepRuns)
 	} else {
-		deployFailed, err := e.runPhase(ctx, model.PhaseDeploy, plan.Phases[model.PhaseDeploy], stepRuns, emit)
+		deployFailed, err := e.runPhase(ctx, model.PhaseDeploy, plan.Phases[model.PhaseDeploy], stepRuns, emit, runTempDir, runVars)
 		if err != nil && runErr == nil {
 			runErr = err
 		}
@@ -94,7 +105,7 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 			run.Status = model.RunStatusFailed
 		}
 	}
-	_, finallyErr := e.runPhase(ctx, model.PhaseFinally, plan.Phases[model.PhaseFinally], stepRuns, emit)
+	_, finallyErr := e.runPhase(ctx, model.PhaseFinally, plan.Phases[model.PhaseFinally], stepRuns, emit, runTempDir, runVars)
 	if finallyErr != nil && runErr == nil {
 		runErr = finallyErr
 	}
@@ -112,7 +123,7 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 	return run, runErr
 }
 
-func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps []model.Step, runs stepRunIndex, emit func(Event)) (bool, error) {
+func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps []model.Step, runs stepRunIndex, emit func(Event), runTempDir string, runVars map[string]string) (bool, error) {
 	statuses := map[string]model.RunStatus{}
 	var phaseErr error
 	for _, step := range steps {
@@ -131,7 +142,7 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 			statuses[step.Name] = model.StatusSuccess
 			continue
 		}
-		err := e.executeStep(ctx, step, sr, emit)
+		err := e.executeStep(ctx, step, sr, emit, runTempDir, runVars)
 		if err != nil {
 			statuses[step.Name] = model.RunStatusFailed
 			if phaseErr == nil {
@@ -144,7 +155,7 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 	return phaseErr != nil, phaseErr
 }
 
-func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.StepRun, emit func(Event)) error {
+func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.StepRun, emit func(Event), runTempDir string, runVars map[string]string) error {
 	plugin, ok := e.plugins[step.Type]
 	if !ok {
 		markStepFailed(sr)
@@ -157,6 +168,8 @@ func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.Ste
 	markTasksRunning(sr, emit)
 	targets := targetsForStepRun(sr)
 	runCtx := NewRunContext(ctx, RunContextOptions{
+		RunTempDir: runTempDir,
+		Vars:       runVars,
 		LogLine: func(line, stream string) {
 			if emit != nil {
 				emit(Event{Type: EventTaskLog, StepName: step.Name, Line: line, Stream: stream, At: time.Now().UnixMilli()})
@@ -174,6 +187,31 @@ func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.Ste
 	sr.Status = model.StatusSuccess
 	finishTasks(sr, model.StatusSuccess, emit)
 	return nil
+}
+
+var unsafeTempPrefix = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+func createRunTempDir(deploymentID string) (string, func(), error) {
+	prefix := "super-debug-pipeline-"
+	if deploymentID != "" {
+		prefix += sanitizeTempPrefix(deploymentID) + "-"
+	}
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return "", func() {}, err
+	}
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+func sanitizeTempPrefix(value string) string {
+	value = strings.Trim(unsafeTempPrefix.ReplaceAllString(value, "-"), "-")
+	if value == "" {
+		return "run"
+	}
+	if len(value) > 48 {
+		return value[:48]
+	}
+	return value
 }
 
 func executeWithRetries(ctx context.Context, step model.Step, fn func() error) error {

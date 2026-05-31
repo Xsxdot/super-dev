@@ -12,6 +12,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 
@@ -39,6 +40,19 @@ func (p *fakePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets 
 	if p.failOn[step.Name] {
 		return errors.New("boom")
 	}
+	return nil
+}
+
+type contextCapturePlugin struct {
+	tempDir string
+	vars    map[string]string
+}
+
+func (p *contextCapturePlugin) Name() string              { return "capture_context" }
+func (p *contextCapturePlugin) Validate(model.Step) error { return nil }
+func (p *contextCapturePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	p.tempDir = ctx.RunTempDir
+	p.vars = ctx.Vars
 	return nil
 }
 
@@ -75,4 +89,21 @@ func TestEngineSkipsDeployAfterBuildFailureButRunsFinally(t *testing.T) {
 	assert.Equal(t, model.RunStatusFailed, final.Status)
 	assert.Equal(t, []string{"Build", "Cleanup"}, plugin.calls)
 	assert.Equal(t, model.StatusSkipped, final.StepRuns[1].Status)
+}
+
+func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
+	plugin := &contextCapturePlugin{}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
+	plan, run, err := pipeline.BuildPlan("dep-1", model.Pipeline{
+		Build: []model.Step{{Name: "Capture", Type: "capture_context"}},
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = eng.Run(context.Background(), plan, run, nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, plugin.tempDir)
+	assert.Equal(t, plugin.tempDir, plugin.vars["run_temp_dir"])
+	_, statErr := os.Stat(plugin.tempDir)
+	assert.True(t, os.IsNotExist(statErr), "run temp dir removed after run")
 }

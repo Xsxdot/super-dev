@@ -37,7 +37,12 @@ func (a *App) previewDeploymentPipeline(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	resolver := pipelinetemplate.NewStore(a.cfg.DataDir, builtins, project.RootPath)
-	expanded, err := expandDeploymentPipeline(*dep.Pipeline, resolver)
+	pipelineConfig := *dep.Pipeline
+	if pipelineConfig.Variables == nil {
+		pipelineConfig.Variables = map[string]string{}
+	}
+	pipelineConfig.Variables["run_temp_dir"] = "/tmp/super-debug-pipeline-preview"
+	expanded, err := expandDeploymentPipeline(pipelineConfig, resolver)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "failed to expand pipeline: "+err.Error())
 		return
