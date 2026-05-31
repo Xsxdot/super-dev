@@ -232,6 +232,24 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 	assert.Equal(t, "recent", got[0].Message)
 }
 
+func addProjectFromConfig(t *testing.T, srvURL string, cfg string) model.Project {
+	t.Helper()
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644))
+
+	body, _ := json.Marshal(map[string]string{"root_path": dir})
+	resp, err := http.Post(srvURL+"/api/projects", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	defer resp.Body.Close()
+
+	var project model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&project))
+	return project
+}
+
 func TestDeploymentStartStop(t *testing.T) {
 	srv, dataDir := newTestApp(t)
 	_ = dataDir
@@ -292,6 +310,62 @@ services:
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	_ = resp.Body.Close()
+}
+
+func TestReadOnlyDeploymentRejectsLifecycleControls(t *testing.T) {
+	srv, _ := newTestApp(t)
+	project := addProjectFromConfig(t, srv.URL, `
+name: myproject
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
+services:
+  - name: api
+    required: false
+    order: 0
+    deployments:
+      - env: dev
+        location: local
+        command: "sleep 60"
+        working_dir: "."
+        read_only: true
+`)
+	depID := project.Services[0].Deployments[0].ID
+
+	for _, action := range []string{"start", "stop", "restart"} {
+		resp, err := http.Post(srv.URL+"/api/deployments/"+depID+"/"+action, "application/json", nil)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, action)
+		_ = resp.Body.Close()
+	}
+}
+
+func TestRemoteDeploymentWithoutCommandsIsNotRejectedAsReadOnly(t *testing.T) {
+	srv, _ := newTestApp(t)
+	project := addProjectFromConfig(t, srv.URL, `
+name: myproject
+environments:
+  - name: prod
+    is_dev: false
+    order: 0
+services:
+  - name: api
+    required: false
+    order: 0
+    deployments:
+      - env: prod
+        location: remote
+        hosts: [prod-01]
+        log_type: journalctl
+        log_target: api.service
+`)
+	depID := project.Services[0].Deployments[0].ID
+
+	resp, err := http.Post(srv.URL+"/api/deployments/"+depID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.NotEqual(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestEnvSelectedPutAndStart(t *testing.T) {

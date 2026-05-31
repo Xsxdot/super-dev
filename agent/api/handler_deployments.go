@@ -3,7 +3,7 @@
 // 职责：
 //   - 按 deployment ID 启动、停止、重启进程
 //   - local deployment：用 deployment 自身的 command/workDir/env 启动
-//   - remote deployment：IsReadOnly() 为 true 时返回 400
+//   - remote/local deployment：IsReadOnly() 为 true 时返回 400
 //
 // 边界：
 //   - 不直接操作子进程，通过 process.Manager.StartDeployment 系列方法
@@ -25,7 +25,7 @@ func (a *App) startDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dep.IsReadOnly() {
-		jsonError(w, http.StatusBadRequest, "deployment is read-only (no start command)")
+		jsonError(w, http.StatusBadRequest, "deployment is read-only")
 		return
 	}
 	mgr := a.getOrCreateManager(p.ID)
@@ -46,6 +46,10 @@ func (a *App) stopDeployment(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "deployment not found")
 		return
 	}
+	if dep.IsReadOnly() {
+		jsonError(w, http.StatusBadRequest, "deployment is read-only")
+		return
+	}
 	mgr := a.getOrCreateManager(p.ID)
 	mgr.StopDeployment(dep.ID)
 	a.pidStore.Remove(dep.ID)
@@ -62,7 +66,7 @@ func (a *App) restartDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dep.IsReadOnly() {
-		jsonError(w, http.StatusBadRequest, "deployment is read-only (no start command)")
+		jsonError(w, http.StatusBadRequest, "deployment is read-only")
 		return
 	}
 	mgr := a.getOrCreateManager(p.ID)

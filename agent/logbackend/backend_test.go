@@ -16,7 +16,7 @@ func TestQueryFilterZeroValue(t *testing.T) {
 	f := logbackend.QueryFilter{}
 	assert.Equal(t, "", f.DeploymentID)
 	assert.Equal(t, 0, f.Limit)
-	assert.True(t, f.Before.IsZero())
+	assert.Equal(t, int64(0), f.BeforeID)
 }
 
 // TestSearchQueryZeroValue 确认 SearchQuery 零值不引发 panic。

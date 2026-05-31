@@ -147,32 +147,29 @@ func TestDeploymentLocalDefaults(t *testing.T) {
 	assert.Equal(t, model.StatusStopped, d.Status)
 }
 
-func TestDeploymentReadOnly(t *testing.T) {
-	d := model.Deployment{Location: model.LocationRemote}
+func TestDeploymentReadOnlyUsesExplicitField(t *testing.T) {
+	d := model.Deployment{Location: model.LocationLocal, ReadOnly: true}
+	assert.True(t, d.IsReadOnly())
+
+	d = model.Deployment{Location: model.LocationRemote, ReadOnly: true}
 	assert.True(t, d.IsReadOnly())
 }
 
-func TestDeploymentNotReadOnly(t *testing.T) {
-	d := model.Deployment{
+func TestDeploymentNotReadOnlyByDefault(t *testing.T) {
+	d := model.Deployment{Location: model.LocationRemote}
+	assert.False(t, d.IsReadOnly())
+}
+
+func TestDeploymentCommandPresenceDoesNotControlReadOnly(t *testing.T) {
+	withoutCommands := model.Deployment{Location: model.LocationRemote}
+	assert.False(t, withoutCommands.IsReadOnly())
+
+	withCommands := model.Deployment{
 		Location:     model.LocationRemote,
 		StartCommand: "sudo systemctl start api",
 		StopCommand:  "sudo systemctl stop api",
 	}
-	assert.False(t, d.IsReadOnly())
-}
-
-func TestLocalDeploymentAlwaysNotReadOnly(t *testing.T) {
-	d := model.Deployment{Location: model.LocationLocal, Command: "go run ."}
-	assert.False(t, d.IsReadOnly())
-}
-func TestDeploymentReadOnlyPartialCommands(t *testing.T) {
-	// 只配 StartCommand，缺 StopCommand → 仍只读
-	onlyStart := model.Deployment{Location: model.LocationRemote, StartCommand: "start.sh"}
-	assert.True(t, onlyStart.IsReadOnly())
-
-	// 只配 StopCommand，缺 StartCommand → 仍只读
-	onlyStop := model.Deployment{Location: model.LocationRemote, StopCommand: "stop.sh"}
-	assert.True(t, onlyStop.IsReadOnly())
+	assert.False(t, withCommands.IsReadOnly())
 }
 
 func TestDeploymentPipelineOptional(t *testing.T) {

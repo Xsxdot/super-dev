@@ -5,10 +5,12 @@ import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import { useLogLifecycleStore } from '@/stores/logLifecycle'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
+import LogLifecycleSeparatorRow from './LogLifecycleSeparatorRow.vue'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { PanelSource } from '@/stores/panel'
 import {
@@ -16,7 +18,13 @@ import {
   computeDisplayStats,
   type LogDisplayItem,
   type DisplayStats,
+  type HistoryBoundary,
 } from '@/lib/logDisplay'
+
+const INITIAL_HISTORY_LIMIT = 200
+const INCREMENTAL_HISTORY_LIMIT = 80
+const HISTORY_PREFETCH_START_INDEX = 30
+const LOG_VIRTUAL_OVERSCAN = 12
 
 const props = defineProps<{
   panelId: string
@@ -28,12 +36,14 @@ const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const deploymentLogStore = useDeploymentLogStore()
+const logLifecycleStore = useLogLifecycleStore()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
 const newLogCount = ref(0)
 const logListEl = ref<HTMLElement | null>(null)
 const isLoadingHistory = ref(false)
+const initialHistoryBoundary = ref<HistoryBoundary | null>(null)
 
 const activeSelectionEntryId = ref<number | null>(null)
 const activeSelectionText = ref<string | null>(null)
@@ -51,16 +61,46 @@ const cachedDisplay = ref<{ items: LogDisplayItem[]; stats: DisplayStats }>({
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
+let historyLoadToken = 0
+
+function deploymentIdFromSource(source: PanelSource | null | undefined): string | null {
+  return source?.type === 'deployment' ? source.deploymentId : null
+}
+
+async function subscribeDeployment(deploymentId: string) {
+  deploymentLogStore.subscribe(deploymentId)
+  initialHistoryBoundary.value = null
+  const token = ++historyLoadToken
+  await deploymentLogStore.loadMoreHistory(deploymentId, INITIAL_HISTORY_LIMIT)
+  if (token !== historyLoadToken || deploymentId !== deploymentIdFromSource(props.source)) return
+  const logs = deploymentLogStore.getLogs(deploymentId)
+  const newest = logs[logs.length - 1]
+  initialHistoryBoundary.value = newest ? { timestamp: newest.timestamp, id: newest.id } : null
+  refreshDisplayImmediately()
+  if (isFollowing.value) pinToBottomIfFollowing()
+}
 
 onMounted(() => {
-  if (props.source?.type === 'deployment') {
-    deploymentLogStore.subscribe(props.source.deploymentId)
-    void deploymentLogStore.loadMoreHistory(props.source.deploymentId)
-  }
+  const deploymentId = deploymentIdFromSource(props.source)
+  if (deploymentId) void subscribeDeployment(deploymentId)
   if (props.projectId) void filterStore.loadProjectRules(props.projectId)
   refreshDisplayImmediately()
   scrollToBottom()
 })
+
+watch(
+  () => deploymentIdFromSource(props.source),
+  (deploymentId, prevDeploymentId) => {
+    if (deploymentId === prevDeploymentId) return
+    if (prevDeploymentId) deploymentLogStore.unsubscribe(prevDeploymentId)
+    historyLoadToken++
+    initialHistoryBoundary.value = null
+    if (deploymentId) void subscribeDeployment(deploymentId)
+    isFollowing.value = true
+    newLogCount.value = 0
+    refreshDisplayImmediately()
+  },
+)
 
 watch(
   () => props.projectId,
@@ -70,9 +110,9 @@ watch(
 )
 
 onUnmounted(() => {
-  if (props.source?.type === 'deployment') {
-    deploymentLogStore.unsubscribe(props.source.deploymentId)
-  }
+  const deploymentId = deploymentIdFromSource(props.source)
+  if (deploymentId) deploymentLogStore.unsubscribe(deploymentId)
+  historyLoadToken++
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
   cancelScrollRetries()
@@ -89,8 +129,12 @@ const filteredLogs = computed(() =>
   filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value),
 )
 
-// deployment 来源不维护独立的 historyBoundary 分隔线（历史与实时统一为时间序）。
-const historyBoundary = computed(() => null)
+const historyBoundary = computed(() => initialHistoryBoundary.value)
+
+const lifecycleMarkers = computed(() => {
+  const deploymentId = deploymentIdFromSource(props.source)
+  return deploymentId ? logLifecycleStore.getMarkers(deploymentId) : []
+})
 
 function makeLogDisplay() {
   const logs = filteredLogs.value
@@ -107,7 +151,7 @@ function makeLogDisplay() {
   const items = makeDisplayItems(logs, displayBm, {
     start: markerStartId.value,
     end: markerEndId.value,
-  }, historyBoundary.value)
+  }, historyBoundary.value, lifecycleMarkers.value)
   cachedDisplay.value = { items, stats: computeDisplayStats(items) }
 }
 
@@ -200,6 +244,12 @@ watch(
 )
 
 watch(
+  lifecycleMarkers,
+  () => scheduleDisplayRefresh(),
+  { deep: true },
+)
+
+watch(
   () => bookmark.value?.state,
   (state, prev) => {
     if (state === 'recording') {
@@ -235,6 +285,10 @@ function cancelScrollRetries() {
     clearTimeout(scrollRetryTimer)
     scrollRetryTimer = null
   }
+}
+
+function measureVirtualizer() {
+  virtualizer.value.measure()
 }
 
 async function scrollToBottom() {
@@ -302,7 +356,7 @@ function onScroll() {
     if (!wasFollowing) pinToBottomIfFollowing()
   }
   const range = virtualizer.value.range
-  if (range && range.startIndex < 5) {
+  if (range && range.startIndex < HISTORY_PREFETCH_START_INDEX) {
     void tryLoadMoreHistory()
   }
 }
@@ -319,18 +373,31 @@ async function tryLoadMoreHistory() {
     if (!deploymentLogStore.hasMoreHistory(props.source.deploymentId)) return
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
-    // range is null only when the list is empty/unmounted; scroll-up can't fire in that state, so ?? 0 is safe
+    // 快速滚动时 range 可能短暂为空；按 0 补偿可以让重新测量后的窗口回到顶部附近。
     const prevStart = virtualizer.value.range?.startIndex ?? 0
     const prevCount = displayItems.value.length
-    await deploymentLogStore.loadMoreHistory(props.source.deploymentId)
-    await nextTick()
-    const added = displayItems.value.length - prevCount
-    if (added > 0) {
-      programmaticScroll = true
-      virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
-      setTimeout(() => { programmaticScroll = false }, 80)
+    try {
+      await deploymentLogStore.loadMoreHistory(props.source.deploymentId, INCREMENTAL_HISTORY_LIMIT)
+      if (displayRefreshTimer) {
+        clearTimeout(displayRefreshTimer)
+        displayRefreshTimer = null
+      }
+      makeLogDisplay()
+      await nextTick()
+      const added = displayItems.value.length - prevCount
+      if (added > 0) {
+        programmaticScroll = true
+        measureVirtualizer()
+        virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+        setTimeout(() => {
+          measureVirtualizer()
+          virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+        }, 0)
+        setTimeout(() => { programmaticScroll = false }, 80)
+      }
+    } finally {
+      isLoadingHistory.value = false
     }
-    isLoadingHistory.value = false
   }
 }
 
@@ -383,7 +450,8 @@ const virtualizer = useVirtualizer(
     count: displayItems.value.length,
     getScrollElement: () => logListEl.value,
     estimateSize: () => 22,
-    overscan: 5,
+    getItemKey: (index: number) => displayItems.value[index]?.id ?? index,
+    overscan: LOG_VIRTUAL_OVERSCAN,
   }))
 )
 </script>
@@ -422,6 +490,10 @@ const virtualizer = useVirtualizer(
             />
             <LogHistorySeparatorRow
               v-else-if="displayItems[vRow.index].kind === 'historySeparator'"
+            />
+            <LogLifecycleSeparatorRow
+              v-else-if="displayItems[vRow.index].kind === 'lifecycleSeparator'"
+              :marker="(displayItems[vRow.index] as any).marker"
             />
             <LogRow
               v-else-if="displayItems[vRow.index].kind === 'entry'"

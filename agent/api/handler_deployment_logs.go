@@ -40,9 +40,9 @@ type deploymentSearchResponse struct {
 // fetchDeploymentLogs 处理 GET /api/deployments/{id}/logs。
 //
 // 参数（query string）：
-//   - deployment: 按 DeploymentID 过滤（可选）
 //   - run: 按 RunID 过滤（可选）
 //   - limit: 最大返回条数（默认 1000，上限由 maxLimit 控制）
+//   - before: 返回 id < before 的记录（游标分页）
 func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	depID := r.PathValue("id")
 	backend, ok := a.lookupBackend(depID)
@@ -53,9 +53,17 @@ func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	filter := logbackend.QueryFilter{
-		DeploymentID: q.Get("deployment"),
+		DeploymentID: depID,
 		RunID:        q.Get("run"),
 		Limit:        parseBoundedInt(q.Get("limit"), 1000, maxLimit),
+	}
+	if beforeStr := q.Get("before"); beforeStr != "" {
+		before, err := strconv.ParseInt(beforeStr, 10, 64)
+		if err != nil || before <= 0 {
+			jsonError(w, http.StatusBadRequest, "before is invalid")
+			return
+		}
+		filter.BeforeID = before
 	}
 
 	entries, next, err := backend.Query(r.Context(), filter)
@@ -148,7 +156,7 @@ func (a *App) wsDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	stream := backend.Subscribe(r.Context(), "")
+	stream := backend.Subscribe(r.Context(), depID)
 	defer stream.Cancel()
 
 	ctx := r.Context()

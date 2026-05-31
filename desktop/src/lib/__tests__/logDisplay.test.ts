@@ -132,4 +132,25 @@ describe('makeDisplayItems', () => {
 
     expect(computeDisplayStats(items).total).toBe(2)
   })
+
+  it('按时间插入生命周期分隔线', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:03.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, null, [
+      { id: 'life-1', deploymentId: 'dep-1', kind: 'restart', createdAt: '2026-05-21T10:00:02.000Z' },
+    ])
+
+    expect(items.map(item => item.kind)).toEqual(['entry', 'lifecycleSeparator', 'entry'])
+  })
+
+  it('生命周期分隔线不参与统计', () => {
+    const items = makeDisplayItems([makeLog(1, '2026-05-21T10:00:01.000Z')], null, markers, null, [
+      { id: 'life-1', deploymentId: 'dep-1', kind: 'start', createdAt: '2026-05-21T10:00:02.000Z' },
+    ])
+
+    expect(computeDisplayStats(items).total).toBe(1)
+  })
 })

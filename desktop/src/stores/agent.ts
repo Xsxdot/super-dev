@@ -3,10 +3,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api, type Deployment, type Project, type Service } from '@/api/agent'
+import { useLogLifecycleStore } from '@/stores/logLifecycle'
 
 export const useAgentStore = defineStore('agent', () => {
   const projects = ref<Project[]>([])
   const connected = ref(false)
+  const logLifecycleStore = useLogLifecycleStore()
   let pollTimer: ReturnType<typeof setInterval> | null = null
 
   async function fetchProjects() {
@@ -72,14 +74,17 @@ export const useAgentStore = defineStore('agent', () => {
 
   async function startDeployment(id: string) {
     await api.startDeployment(id)
+    logLifecycleStore.recordMarker(id, 'start')
   }
 
   async function stopDeployment(id: string) {
     await api.stopDeployment(id)
+    logLifecycleStore.recordMarker(id, 'stop')
   }
 
   async function restartDeployment(id: string) {
     await api.restartDeployment(id)
+    logLifecycleStore.recordMarker(id, 'restart')
   }
 
   async function putEnvSelected(projectId: string, envName: string, names: string[]) {

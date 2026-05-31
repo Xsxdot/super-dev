@@ -24,9 +24,8 @@ type QueryFilter struct {
 	RunID string
 	// Limit 返回条数上限；0 时实现方使用自身默认值。
 	Limit int
-	// Before 游标分页：只返回 timestamp < Before 的记录；零值表示从最新开始。
-	// 注意：当前 SQLiteBackend 实现不支持此字段（store 只有 ID 游标），传入零值即可。
-	Before time.Time
+	// BeforeID 游标分页：只返回 id < BeforeID 的记录；0 表示从最新记录开始。
+	BeforeID int64
 }
 
 // SearchQuery 定义关键字搜索参数。
@@ -65,7 +64,7 @@ type LogStream struct {
 // handler 只调此接口，不关心日志实际存在本地 SQLite、
 // 远程 agent，还是分布在多个节点。
 type LogBackend interface {
-	// Query 按时间游标拉取历史日志，结果按 timestamp ASC, id ASC 排序。
+	// Query 按 ID 游标拉取历史日志，结果按 timestamp ASC, id ASC 排序。
 	Query(ctx context.Context, f QueryFilter) (entries []model.LogEntry, next Cursor, err error)
 
 	// Search 按关键字搜索历史日志，结果按 timestamp ASC, id ASC 排序。

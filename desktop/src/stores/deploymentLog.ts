@@ -25,6 +25,11 @@ interface DeploymentSession {
   loadingMoreHistory: boolean
 }
 
+export interface LoadHistoryResult {
+  added: number
+  entries: DisplayLogEntry[]
+}
+
 // compareLogs 按 timestamp 升序排列，时间相同时按 id 升序。
 function compareLogs(a: DisplayLogEntry, b: DisplayLogEntry): number {
   const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -91,9 +96,6 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     insertSorted(session.logs, entry)
     if (session.logs.length > MAX_LOGS) {
       session.logs.splice(0, TRIM_BATCH)
-    }
-    if (session.oldestLoadedId == null || raw.id < session.oldestLoadedId) {
-      session.oldestLoadedId = raw.id
     }
     bumpRevision()
     touchSessions()
@@ -177,9 +179,11 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
    *   - 若 hasMoreHistory 为 false 或正在加载则直接返回
    *   - 加载失败时静默忽略，上层可重试
    */
-  async function loadMoreHistory(deploymentId: string, limit = 200) {
+  async function loadMoreHistory(deploymentId: string, limit = 200): Promise<LoadHistoryResult> {
     const session = sessions.value.get(deploymentId)
-    if (!session || !session.hasMoreHistory || session.loadingMoreHistory) return
+    if (!session || !session.hasMoreHistory || session.loadingMoreHistory) {
+      return { added: 0, entries: [] }
+    }
     session.loadingMoreHistory = true
     touchSessions()
     try {
@@ -188,13 +192,21 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         limit,
         before: session.oldestLoadedId ?? undefined,
       })
+      const displayEntries = entries.map(toDisplayEntry)
       // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
       for (let i = entries.length - 1; i >= 0; i--) {
         ingestEntry(session, entries[i])
       }
+      for (const entry of entries) {
+        if (session.oldestLoadedId == null || entry.id < session.oldestLoadedId) {
+          session.oldestLoadedId = entry.id
+        }
+      }
       session.hasMoreHistory = entries.length >= limit
+      return { added: entries.length, entries: displayEntries }
     } catch (err) {
       console.error('Failed to load deployment log history', err)
+      return { added: 0, entries: [] }
     } finally {
       session.loadingMoreHistory = false
       touchSessions()
