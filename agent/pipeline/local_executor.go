@@ -1,4 +1,4 @@
-// local_executor.go 在本机执行命令（ScopeLocal 的 run 步骤）。
+// local_executor.go 在本机执行 local_command 步骤。
 package pipeline
 
 import (
@@ -11,7 +11,7 @@ import (
 	"github.com/superdev/agent/model"
 )
 
-// LocalExecutor 在 agent 所在本机执行命令。sync 在本机无意义。
+// LocalExecutor 在 agent 所在本机执行命令。文件传输在本机执行器无意义。
 type LocalExecutor struct{}
 
 // NewLocalExecutor 创建本机执行器。
@@ -22,15 +22,19 @@ func NewLocalExecutor() *LocalExecutor { return &LocalExecutor{} }
 // 参数：
 //   - ctx: 上下文，取消时强制终止进程
 //   - target: 忽略（本机执行不需要 host 信息）
-//   - step: 使用 step.Command 和 step.WorkDir
+//   - step: 使用 step.With["cmd"] 和 step.With["workDir"]
 //   - onLine: 逐行输出回调，stream 为 "stdout"/"stderr"
 //
 // 返回：
 //   - 进程退出码（非零不代表 error，调用方据此判断失败）
 //   - 仅进程无法启动时返回 non-nil error
 func (l *LocalExecutor) Run(ctx context.Context, _ Target, step model.Step, onLine func(line, stream string)) (int, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", step.Command)
-	cmd.Dir = step.WorkDir
+	command := stepWithString(step, "cmd", "command")
+	if command == "" {
+		return -1, errors.New("local_command cmd is required")
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = stepWithString(step, "workDir", "work_dir", "workdir")
 	cmd.Env = os.Environ()
 
 	stdout, err := cmd.StdoutPipe()
@@ -72,7 +76,7 @@ func (l *LocalExecutor) Run(ctx context.Context, _ Target, step model.Step, onLi
 
 // Sync 在本机无意义，返回错误。
 //
-// 注意：sync 动作只在 fan-out（目标为远程 host）时有意义，本机执行器不支持。
+// 注意：transfer 动作只在远程 target 上有意义，本机执行器不支持。
 func (l *LocalExecutor) Sync(_ context.Context, _ Target, _ model.Step, _ func(line, stream string)) error {
-	return errors.New("sync action is not supported on local scope")
+	return errors.New("transfer is not supported by local executor")
 }

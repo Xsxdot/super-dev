@@ -15,7 +15,7 @@ func TestLocalExecutorRunCapturesOutput(t *testing.T) {
 	ex := pipeline.NewLocalExecutor()
 	var lines []string
 	code, err := ex.Run(context.Background(), pipeline.Target{},
-		model.Step{Command: "echo hello", Action: model.ActionRun},
+		model.Step{Name: "echo", Type: "local_command", With: map[string]interface{}{"cmd": "echo hello"}},
 		func(line, stream string) { lines = append(lines, line) })
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
@@ -25,7 +25,7 @@ func TestLocalExecutorRunCapturesOutput(t *testing.T) {
 func TestLocalExecutorRunNonZeroExit(t *testing.T) {
 	ex := pipeline.NewLocalExecutor()
 	code, err := ex.Run(context.Background(), pipeline.Target{},
-		model.Step{Command: "exit 3", Action: model.ActionRun},
+		model.Step{Name: "fail", Type: "local_command", With: map[string]interface{}{"cmd": "exit 3"}},
 		func(line, stream string) {})
 	require.NoError(t, err) // 进程正常跑完，非零退出码不算 Run 自身错误
 	assert.Equal(t, 3, code)
@@ -34,6 +34,6 @@ func TestLocalExecutorRunNonZeroExit(t *testing.T) {
 func TestLocalExecutorSyncIsUnsupported(t *testing.T) {
 	ex := pipeline.NewLocalExecutor()
 	err := ex.Sync(context.Background(), pipeline.Target{},
-		model.Step{Action: model.ActionSync}, func(line, stream string) {})
+		model.Step{Name: "upload", Type: "transfer"}, func(line, stream string) {})
 	require.Error(t, err)
 }

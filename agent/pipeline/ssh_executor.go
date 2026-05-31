@@ -1,4 +1,4 @@
-// ssh_executor.go 在远程 host 上执行命令（fan-out run）并同步文件（fan-out sync）。
+// ssh_executor.go 在远程 host 上执行 remote_command 步骤并传输文件。
 //
 // 职责：
 //   - 通过 SSH 在远程 host 上执行 shell 命令，逐行回调输出
@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不持久化执行状态，全部通过 onLine 回调上报
-//   - 不处理目录传输，SyncTo 目标目录必须已存在
+//   - 不处理目录传输，target 目标目录必须已存在
 //   - 上层通过注入 HostLookup 提供 host 连接信息，本包不依赖 store
 package pipeline
 
@@ -68,7 +68,7 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 // 参数：
 //   - ctx: 上下文（当前 SSH session.Run 会阻塞至命令结束，ctx 取消不中断已启动命令）
 //   - target: 目标主机，HostID 用于 HostLookup
-//   - step: 使用 step.Command 和 step.WorkDir；若 WorkDir 非空则在前置 cd
+//   - step: 使用 step.With["cmd"] 和 step.With["workDir"]；若 workDir 非空则在前置 cd
 //   - onLine: 逐行输出回调，stream 为 "stdout"/"stderr"
 //
 // 返回：
@@ -98,10 +98,13 @@ func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, o
 	go streamLines(stdout, "stdout", onLine)
 	go streamLines(stderr, "stderr", onLine)
 
-	cmd := step.Command
-	if step.WorkDir != "" {
+	cmd := stepWithString(step, "cmd", "command")
+	if cmd == "" {
+		return -1, fmt.Errorf("remote_command cmd is required")
+	}
+	if workDir := stepWithString(step, "workDir", "work_dir", "workdir"); workDir != "" {
 		// 通过 cd 前置保证命令在指定目录下运行，与 LocalExecutor 行为对齐
-		cmd = fmt.Sprintf("cd %s && %s", step.WorkDir, step.Command)
+		cmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
 	}
 	err = session.Run(cmd)
 	if err == nil {
@@ -114,12 +117,12 @@ func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, o
 	return -1, err
 }
 
-// Sync 把本地 step.SyncFrom 单文件传到远程 step.SyncTo（scp sink 协议）。
+// Sync 把本地 source 单文件传到远程 target（scp sink 协议）。
 //
 // 参数：
-//   - step.SyncFrom: 本地文件路径
-//   - step.SyncTo:   远程文件完整路径（含文件名），目标目录必须已存在
-//   - onLine:        本函数暂无行输出，参数保留以满足 Executor 接口语义
+//   - step.With["source"]: 本地文件路径
+//   - step.With["target"]: 远程文件完整路径（含文件名），目标目录必须已存在
+//   - onLine:              本函数暂无行输出，参数保留以满足 Executor 接口语义
 //
 // 注意：
 //   - 仅支持单文件传输，不支持目录递归
@@ -131,7 +134,15 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	}
 	defer client.Close()
 
-	f, err := os.Open(step.SyncFrom)
+	source := stepWithString(step, "source", "from", "src", "sync_from")
+	if source == "" {
+		return fmt.Errorf("transfer source is required")
+	}
+	destination := stepWithString(step, "target", "to", "dest", "sync_to")
+	if destination == "" {
+		return fmt.Errorf("transfer target is required")
+	}
+	f, err := os.Open(source)
 	if err != nil {
 		return err
 	}
@@ -157,7 +168,7 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	go func() {
 		defer w.Close()
 		// SCP C 指令：权限 大小 文件名
-		fmt.Fprintf(w, "C0644 %d %s\n", stat.Size(), path.Base(step.SyncTo))
+		fmt.Fprintf(w, "C0644 %d %s\n", stat.Size(), path.Base(destination))
 		if _, err := io.Copy(w, f); err != nil {
 			errCh <- err
 			return
@@ -168,7 +179,7 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	}()
 
 	// scp -t 启动 sink 模式，接收文件到目标目录
-	if err := session.Run("scp -t " + path.Dir(step.SyncTo)); err != nil {
+	if err := session.Run("scp -t " + path.Dir(destination)); err != nil {
 		return err
 	}
 	return <-errCh

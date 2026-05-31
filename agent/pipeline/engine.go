@@ -1,4 +1,4 @@
-// engine.go 实现流水线执行引擎：串行 step、并行 fan-out、fail-fast。
+// engine.go 实现流水线执行引擎：按 Run 骨架串行 step、并行 task、fail-fast。
 package pipeline
 
 import (
@@ -23,7 +23,7 @@ const (
 // Event 引擎执行过程中上报的增量进度事件。
 type Event struct {
 	Type     EventType
-	StepID   string
+	StepName string
 	HostID   string
 	Line     string          // EventTaskLog 时有效
 	Stream   string          // EventTaskLog 时有效："stdout"/"stderr"
@@ -45,8 +45,8 @@ func NewEngine(exec Executor) *Engine {
 // Run 执行整条流水线。
 //
 // 语义：
-//   - StepRun 之间串行；前一步任一 task 失败则中断（fail-fast），后续 StepRun 保持 pending
-//   - 同一 StepRun 内的 fan-out task 并行
+//   - StepRun 按 Run skeleton 顺序执行；前一步任一 task 失败则中断
+//   - 同一 StepRun 内的 task 并行
 //   - emit 为可选回调（nil 则不上报），引擎按 task 粒度回调进度事件
 //
 // 注意：
@@ -54,19 +54,30 @@ func NewEngine(exec Executor) *Engine {
 //
 // 返回：执行后的 Run 终态 + 整体错误（任一 task 失败时非 nil）。
 func (e *Engine) Run(ctx context.Context, p model.Pipeline, run model.Run, emit func(Event)) (model.Run, error) {
+	if e.exec == nil {
+		return run, fmt.Errorf("pipeline executor is required")
+	}
 	run.Status = model.RunStatusRunning
 	run.StartedAt = time.Now().UnixMilli()
 
-	// stepByID 便于按 StepRun.StepID 找回声明 Step（取 Action/Command 等）
-	stepByID := make(map[string]model.Step, len(p.Steps))
-	for _, s := range p.Steps {
-		stepByID[s.ID] = s
+	// stepByName 便于按 StepRun.StepName 找回声明 Step（取 Type/With 等）。
+	stepByName := map[string]model.Step{}
+	for _, phase := range pipelinePhases() {
+		for _, s := range stepsForPhase(p, phase) {
+			stepByName[s.Name] = s
+		}
 	}
 
 	var runErr error
 	for si := range run.StepRuns {
 		sr := &run.StepRuns[si]
-		step := stepByID[sr.StepID]
+		step, ok := stepByName[sr.StepName]
+		if !ok {
+			sr.Status = model.RunStatusFailed
+			run.Status = model.RunStatusFailed
+			runErr = fmt.Errorf("step %s not found", sr.StepName)
+			break
+		}
 		sr.Status = model.RunStatusRunning
 
 		var wg sync.WaitGroup
@@ -78,7 +89,7 @@ func (e *Engine) Run(ctx context.Context, p model.Pipeline, run model.Run, emit 
 			go func(task *model.Task) {
 				defer wg.Done()
 				target := Target{HostID: task.HostID, HostName: task.HostName}
-				e.runTask(ctx, sr.StepID, step, target, task, emit)
+				e.runTask(ctx, sr.StepName, step, target, task, emit)
 				if task.Status == model.RunStatusFailed {
 					mu.Lock()
 					stepFailed = true
@@ -91,7 +102,7 @@ func (e *Engine) Run(ctx context.Context, p model.Pipeline, run model.Run, emit 
 		if stepFailed {
 			sr.Status = model.RunStatusFailed
 			run.Status = model.RunStatusFailed
-			runErr = fmt.Errorf("step %s failed", sr.StepID)
+			runErr = fmt.Errorf("step %s failed", sr.StepName)
 			break // fail-fast：后续 StepRun 保持 pending
 		}
 		sr.Status = model.StatusSuccess
@@ -108,27 +119,27 @@ func (e *Engine) Run(ctx context.Context, p model.Pipeline, run model.Run, emit 
 }
 
 // runTask 执行单个 task（一个 step 在一个 target 上），更新 task 状态并上报事件。
-func (e *Engine) runTask(ctx context.Context, stepID string, step model.Step, target Target, task *model.Task, emit func(Event)) {
+func (e *Engine) runTask(ctx context.Context, stepName string, step model.Step, target Target, task *model.Task, emit func(Event)) {
 	task.Status = model.RunStatusRunning
 	task.StartedAt = time.Now().UnixMilli()
 	if emit != nil {
-		emit(Event{Type: EventTaskStarted, StepID: stepID, HostID: target.HostID, At: task.StartedAt})
+		emit(Event{Type: EventTaskStarted, StepName: stepName, HostID: target.HostID, At: task.StartedAt})
 	}
 
 	onLine := func(line, stream string) {
 		if emit != nil {
-			emit(Event{Type: EventTaskLog, StepID: stepID, HostID: target.HostID, Line: line, Stream: stream})
+			emit(Event{Type: EventTaskLog, StepName: stepName, HostID: target.HostID, Line: line, Stream: stream})
 		}
 	}
 
 	var err error
-	switch step.Action {
-	case model.ActionRun:
+	switch step.Type {
+	case "local_command", "remote_command":
 		task.ExitCode, err = e.exec.Run(ctx, target, step, onLine)
-	case model.ActionSync:
+	case "transfer":
 		err = e.exec.Sync(ctx, target, step, onLine)
 	default:
-		err = fmt.Errorf("unknown action %q", step.Action)
+		err = fmt.Errorf("unknown step type %q", step.Type)
 	}
 
 	task.FinishedAt = time.Now().UnixMilli()
@@ -138,7 +149,7 @@ func (e *Engine) runTask(ctx context.Context, stepID string, step model.Step, ta
 		task.Status = model.StatusSuccess
 	}
 	if emit != nil {
-		emit(Event{Type: EventTaskFinished, StepID: stepID, HostID: target.HostID,
+		emit(Event{Type: EventTaskFinished, StepName: stepName, HostID: target.HostID,
 			Status: task.Status, ExitCode: task.ExitCode, At: task.FinishedAt})
 	}
 }

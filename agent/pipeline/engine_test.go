@@ -12,22 +12,22 @@ import (
 	"github.com/superdev/agent/pipeline"
 )
 
-// fakeExecutor 记录调用顺序，可按 (stepID, hostID) 注入失败。
+// fakeExecutor 记录调用顺序，可按 (stepName, hostID) 注入失败。
 type fakeExecutor struct {
 	mu     sync.Mutex
-	calls  []string // "stepID@hostID"
+	calls  []string // "stepName@hostID"
 	failAt map[string]bool
 }
 
 func (f *fakeExecutor) record(step model.Step, t pipeline.Target) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, step.ID+"@"+t.HostID)
+	f.calls = append(f.calls, step.Name+"@"+t.HostID)
 }
 
 func (f *fakeExecutor) Run(ctx context.Context, t pipeline.Target, step model.Step, onLine func(string, string)) (int, error) {
 	f.record(step, t)
-	if f.failAt[step.ID+"@"+t.HostID] {
+	if f.failAt[step.Name+"@"+t.HostID] {
 		return 1, errors.New("boom")
 	}
 	return 0, nil
@@ -35,19 +35,27 @@ func (f *fakeExecutor) Run(ctx context.Context, t pipeline.Target, step model.St
 
 func (f *fakeExecutor) Sync(ctx context.Context, t pipeline.Target, step model.Step, onLine func(string, string)) error {
 	f.record(step, t)
-	if f.failAt[step.ID+"@"+t.HostID] {
+	if f.failAt[step.Name+"@"+t.HostID] {
 		return errors.New("sync boom")
 	}
 	return nil
 }
 
 func buildPipelineAndRun() (model.Pipeline, model.Run) {
-	p := model.Pipeline{Steps: []model.Step{
-		{ID: "build", Name: "构建", Scope: model.ScopeLocal, Action: model.ActionRun},
-		{ID: "sync", Name: "同步", Scope: model.ScopeFanOut, Action: model.ActionSync},
-		{ID: "restart", Name: "重启", Scope: model.ScopeFanOut, Action: model.ActionRun},
-	}}
-	run := p.Expand("dep-1", []model.HostRef{{ID: "h1", Name: "host-1"}, {ID: "h2", Name: "host-2"}})
+	p := model.Pipeline{
+		Roles: map[string][]string{"compute": {"h1", "h2"}},
+		Build: []model.Step{
+			{Name: "build", Type: "local_command"},
+		},
+		Deploy: []model.Step{
+			{Name: "sync", Type: "transfer", Roles: []string{"compute"}},
+			{Name: "restart", Type: "remote_command", Roles: []string{"compute"}, Needs: []string{"sync"}},
+		},
+	}
+	_, run, err := pipeline.BuildPlan("dep-1", p, []model.HostRef{{ID: "h1", Name: "host-1"}, {ID: "h2", Name: "host-2"}})
+	if err != nil {
+		panic(err)
+	}
 	return p, run
 }
 
@@ -65,7 +73,7 @@ func TestEngineHappyPath(t *testing.T) {
 			assert.Equal(t, model.StatusSuccess, tk.Status)
 		}
 	}
-	// build 在所有 fan-out 之前
+	// build 在所有 remote tasks 之前。
 	assert.Equal(t, "build@", fe.calls[0])
 }
 
@@ -78,7 +86,7 @@ func TestEngineFailFastStopsLaterSteps(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, model.RunStatusFailed, final.Status)
 
-	// build 成功，sync 失败，restart 完全不执行
+	// build 成功，sync 失败，restart 完全不执行。
 	assert.Equal(t, model.StatusSuccess, final.StepRuns[0].Status)
 	assert.Equal(t, model.RunStatusFailed, final.StepRuns[1].Status)
 	assert.Equal(t, model.StatusPending, final.StepRuns[2].Status)
@@ -109,11 +117,13 @@ func TestEngineEmitsStatusCallbacks(t *testing.T) {
 }
 
 func TestEngineEmptyFanOutStepSucceeds(t *testing.T) {
-	// fan-out 步骤但没有 host（0 个 task）：视为该步骤直接成功
-	p := model.Pipeline{Steps: []model.Step{
-		{ID: "sync", Name: "同步", Scope: model.ScopeFanOut, Action: model.ActionSync},
-	}}
-	run := p.Expand("dep-1", nil) // 无 host → 0 个 task
+	// role 存在但没有 host（0 个 task）：视为该步骤直接成功。
+	p := model.Pipeline{
+		Roles:  map[string][]string{"compute": nil},
+		Deploy: []model.Step{{Name: "sync", Type: "transfer", Roles: []string{"compute"}}},
+	}
+	_, run, err := pipeline.BuildPlan("dep-1", p, nil)
+	require.NoError(t, err)
 	fe := &fakeExecutor{failAt: map[string]bool{}}
 	eng := pipeline.NewEngine(fe)
 

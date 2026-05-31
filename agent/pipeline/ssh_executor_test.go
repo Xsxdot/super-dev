@@ -23,7 +23,7 @@ func TestSSHExecutorConstruct(t *testing.T) {
 func TestSSHExecutorUnknownHost(t *testing.T) {
 	ex := pipeline.NewSSHExecutor(func(string) (model.Host, bool) { return model.Host{}, false })
 	_, err := ex.Run(context.Background(), pipeline.Target{HostID: "missing"},
-		model.Step{Command: "echo hi", Action: model.ActionRun}, func(string, string) {})
+		model.Step{Name: "remote", Type: "remote_command", With: map[string]interface{}{"cmd": "echo hi"}}, func(string, string) {})
 	require.Error(t, err)
 }
 
