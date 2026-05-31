@@ -33,4 +33,14 @@ describe('TemplateManagerTab', () => {
 
     expect(onImport).toHaveBeenCalled()
   })
+
+  it('点击查看触发 onView', async () => {
+    const onView = vi.fn()
+    const template = { source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' } as const
+    const wrapper = mount(TemplateManagerTab, { props: { templates: [template], onView } })
+
+    await wrapper.find('[data-test="template-view-go-binary-build"]').trigger('click')
+
+    expect(onView).toHaveBeenCalledWith(template)
+  })
 })

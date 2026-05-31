@@ -19,8 +19,9 @@ import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
+import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
-import type { Project, Service } from '@/api/agent'
+import type { PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates'
 
@@ -41,6 +42,11 @@ onMounted(() => {
 
 const editorProject = ref<Project | null>(null)
 const editorIsNew = ref(false)
+const templateModalOpen = ref(false)
+const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
+const templateDetailLoading = ref(false)
+const templateDetailError = ref('')
+const templateDetailYAML = ref('')
 
 function openEditor(project: Project) {
   editorProject.value = project
@@ -143,6 +149,22 @@ async function importPipelineTemplate() {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await message(msg, { title: '无法导入模板', kind: 'error' })
+  }
+}
+
+async function viewTemplate(template: PipelineTemplateSummary) {
+  selectedTemplate.value = template
+  templateModalOpen.value = true
+  templateDetailError.value = ''
+  templateDetailYAML.value = ''
+  templateDetailLoading.value = true
+  try {
+    const detail = await pipelineTemplateStore.loadTemplateDetail(template.source, template.id, template.version)
+    templateDetailYAML.value = detail.yaml
+  } catch (error) {
+    templateDetailError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    templateDetailLoading.value = false
   }
 }
 
@@ -334,7 +356,11 @@ const retentionDays = computed({
       </section>
 
       <section v-else class="pane">
-        <TemplateManagerTab :templates="pipelineTemplateStore.templates" :on-import="importPipelineTemplate" />
+        <TemplateManagerTab
+          :templates="pipelineTemplateStore.templates"
+          :on-import="importPipelineTemplate"
+          :on-view="viewTemplate"
+        />
       </section>
     </main>
 
@@ -345,6 +371,14 @@ const retentionDays = computed({
       :pipeline-templates="pipelineTemplateStore.templates"
       @saved="onEditorSaved"
       @cancel="editorProject = null; editorIsNew = false"
+    />
+    <TemplateContentModal
+      :open="templateModalOpen"
+      :title="selectedTemplate?.name ?? '模板内容'"
+      :yaml="templateDetailYAML"
+      :loading="templateDetailLoading"
+      :error="templateDetailError"
+      @close="templateModalOpen = false"
     />
   </div>
 </template>
