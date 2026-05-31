@@ -1,0 +1,43 @@
+id: go-binary-build
+name: Go Binary Build
+description: Build a Go binary and package it as a tar.gz artifact.
+version: 1.0.0
+inputs:
+  work_dir:
+    label: Project directory
+    type: path
+    required: true
+    default: .
+  package:
+    label: Go package
+    type: string
+    required: true
+    default: ./...
+  output:
+    label: Binary output
+    type: path
+    required: true
+    default: ./dist/app
+  artifact_dir:
+    label: Artifact directory
+    type: path
+    required: true
+    default: ./artifacts
+  app_name:
+    label: App name
+    type: string
+    required: true
+steps:
+  - name: Build
+    type: local_command
+    with:
+      workDir: ${vars.work_dir}
+      cmd: go build -o ${vars.output} ${vars.package}
+  - name: Archive
+    type: archive
+    needs: [Build]
+    with:
+      source: ${vars.output}
+      dest: ${vars.artifact_dir}
+      basename: ${vars.app_name}
+      format: tar.gz

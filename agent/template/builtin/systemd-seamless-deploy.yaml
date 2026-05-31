@@ -1,0 +1,77 @@
+id: systemd-seamless-deploy
+name: Systemd Seamless Deploy
+description: Upload an artifact, switch the current release, restart a systemd service, and verify HTTP health.
+version: 1.0.0
+inputs:
+  role:
+    label: Target role
+    type: string
+    required: true
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+  release_dir:
+    label: Release directory
+    type: path
+    required: true
+  current_dir:
+    label: Current symlink
+    type: path
+    required: true
+  app_name:
+    label: App name
+    type: string
+    required: true
+  service_name:
+    label: Systemd service
+    type: string
+    required: true
+  port:
+    label: Health port
+    type: number
+    required: true
+    default: "8080"
+  health_path:
+    label: Health path
+    type: string
+    required: true
+    default: /health
+steps:
+  - name: Prepare
+    type: remote_command
+    roles: ["${vars.role}"]
+    with:
+      cmd: mkdir -p ${vars.release_dir}/${vars.app_name} ${vars.release_dir}/uploads
+  - name: Upload
+    type: transfer
+    roles: ["${vars.role}"]
+    needs: [Prepare]
+    with:
+      source: ${vars.artifact}
+      target: ${vars.release_dir}/uploads/${vars.app_name}.tar.gz
+  - name: Extract
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Upload]
+    with:
+      cmd: rm -rf ${vars.release_dir}/${vars.app_name}/* && tar -xzf ${vars.release_dir}/uploads/${vars.app_name}.tar.gz -C ${vars.release_dir}/${vars.app_name}
+  - name: Switch
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Extract]
+    with:
+      cmd: ln -sfn ${vars.release_dir}/${vars.app_name} ${vars.current_dir}
+  - name: Restart
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Switch]
+    with:
+      cmd: systemctl restart ${vars.service_name}
+  - name: Health Check
+    type: http_check
+    roles: ["${vars.role}"]
+    needs: [Restart]
+    with:
+      url: http://${host}:${vars.port}${vars.health_path}
+      expected_status: 200

@@ -1,0 +1,43 @@
+id: vue-standard-build
+name: Vue Standard Build
+description: Install dependencies, build a Vue project, and package the dist directory.
+version: 1.0.0
+inputs:
+  work_dir:
+    label: Project directory
+    type: path
+    required: true
+    default: .
+  build_cmd:
+    label: Build command
+    type: string
+    required: true
+    default: pnpm install && pnpm build
+  dist_dir:
+    label: Dist directory
+    type: path
+    required: true
+    default: ./dist
+  artifact_dir:
+    label: Artifact directory
+    type: path
+    required: true
+    default: ./artifacts
+  app_name:
+    label: App name
+    type: string
+    required: true
+steps:
+  - name: Build
+    type: local_command
+    with:
+      workDir: ${vars.work_dir}
+      cmd: ${vars.build_cmd}
+  - name: Archive
+    type: archive
+    needs: [Build]
+    with:
+      source: ${vars.dist_dir}
+      dest: ${vars.artifact_dir}
+      basename: ${vars.app_name}
+      format: tar.gz
