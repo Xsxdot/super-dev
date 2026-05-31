@@ -26,22 +26,66 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export type DeployLocation = 'local' | 'remote'
 
-export type StepScope = 'local' | 'fan-out'
-export type StepAction = 'run' | 'sync'
+export type PipelinePhase = 'build' | 'deploy' | 'finally'
+export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'canceled'
 
 export interface PipelineStep {
-  id: string
   name: string
-  scope: StepScope
-  action: StepAction
-  command?: string
-  work_dir?: string
-  sync_from?: string
-  sync_to?: string
+  type: string
+  needs?: string[]
+  roles?: string[]
+  run_if?: string
+  batch_size?: number
+  retries?: number
+  retry_delay?: string
+  tolerate_failures?: string
+  with?: Record<string, unknown>
 }
 
 export interface Pipeline {
-  steps: PipelineStep[]
+  variables?: Record<string, string>
+  roles?: Record<string, string[]>
+  build?: PipelineStep[]
+  deploy?: PipelineStep[]
+  finally?: PipelineStep[]
+}
+
+export interface TemplateInput {
+  label: string
+  type: 'string' | 'number' | 'bool' | 'select' | 'path'
+  required?: boolean
+  default?: string
+  description?: string
+  options?: string[]
+}
+
+export interface PipelineTemplateSummary {
+  source: 'builtin' | 'user' | 'project'
+  id: string
+  name: string
+  version: string
+  digest: string
+  description?: string
+  inputs?: Record<string, TemplateInput>
+}
+
+export interface PipelineTemplatesResponse {
+  items: PipelineTemplateSummary[]
+}
+
+export interface PipelinePreviewResponse {
+  run: {
+    deployment_id: string
+    status: RunStatus
+    step_runs: Array<{
+      step_name: string
+      type: string
+      phase: PipelinePhase
+      needs?: string[]
+      status: RunStatus
+      tasks: Array<{ host_id?: string; host_name?: string; status: RunStatus }>
+    }>
+  }
 }
 
 export interface Deployment {
@@ -431,6 +475,18 @@ export const api = {
     request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   restartDeployment: (id: string) =>
     request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
+
+  // Pipeline 模板与预览
+  listPipelineTemplates: () => request<PipelineTemplatesResponse>('/api/pipeline/templates'),
+  importPipelineTemplate: (path: string) =>
+    request<PipelineTemplateSummary>('/api/pipeline/templates/import', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  previewDeploymentPipeline: (deploymentId: string) =>
+    request<PipelinePreviewResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/pipeline/preview`, {
+      method: 'POST',
+    }),
 
   // Env 级 selected
   putEnvSelected: (projectId: string, envName: string, names: string[]) =>

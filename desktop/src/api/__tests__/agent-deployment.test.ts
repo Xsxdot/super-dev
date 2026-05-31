@@ -43,3 +43,17 @@ describe('fetchDeploymentLogs', () => {
     expect(logs[0].message).toBe('vite ready')
   })
 })
+
+describe('pipeline template api', () => {
+  it('listPipelineTemplates returns items', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ items: [{ source: 'builtin', id: 'go-binary-build', version: '1.0.0', digest: 'sha256:x' }] }),
+    } as Response)
+
+    const res = await api.listPipelineTemplates()
+
+    expect(res.items[0].id).toBe('go-binary-build')
+    expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/pipeline/templates'), expect.any(Object))
+  })
+})
