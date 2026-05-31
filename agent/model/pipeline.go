@@ -1,58 +1,48 @@
-// Package model 中的 pipeline.go 定义部署流水线的声明模型。
+// Package model 中的 pipeline.go 定义部署流水线的插件化声明模型。
 //
 // 职责：
-//   - 声明模型：Pipeline / Step / StepScope / StepAction，描述「同步→构建→启停」流程
+//   - 声明 Pipeline / Step / Template 等配置模型
+//   - 声明 Run / StepRun / Task 等执行状态模型
+//   - 保持模型纯净，不包含 YAML 解析、模板展开、DAG 调度或命令执行
 //
 // 边界：
-//   - 仅数据结构定义，不含任何 I/O 或命令执行（执行在 pipeline 包）
-//   - StepScope/StepAction 为开放枚举，未来新增 rolling 作用域不破坏结构
+//   - 不做 I/O，不访问配置文件或远程主机
+//   - 插件私有参数统一放入 Step.With，由插件自行校验
 package model
 
-// StepScope 步骤的执行作用域。开放枚举，未来加 rolling 不动引擎。
-type StepScope string
+// PipelinePhase 标识流水线阶段。阶段间由引擎串行控制。
+type PipelinePhase string
 
 const (
-	// ScopeLocal 在本机执行一次（如 build、本地打包）。
-	ScopeLocal StepScope = "local"
-	// ScopeFanOut 对 deployment 的每台 host 并行执行（如 sync 产物、restart）。
-	ScopeFanOut StepScope = "fan-out"
+	// PhaseBuild 是构建阶段。
+	PhaseBuild PipelinePhase = "build"
+	// PhaseDeploy 是部署阶段。
+	PhaseDeploy PipelinePhase = "deploy"
+	// PhaseFinally 是清理阶段，无论 build/deploy 成功失败都会执行。
+	PhaseFinally PipelinePhase = "finally"
 )
 
-// StepAction 步骤动作类型。开放枚举。
-type StepAction string
-
-const (
-	// ActionRun 执行命令（local 在本机，fan-out 在各 host）。
-	ActionRun StepAction = "run"
-	// ActionSync 把本地文件同步到各 host（仅 fan-out 有意义）。
-	ActionSync StepAction = "sync"
-)
-
-// Pipeline 描述一个 deployment 的同步/构建/启停流程：一串有序 Step。
-// 为空（nil）时 deployment 退回单命令模式，向后兼容。
+// Pipeline 描述 deployment 的插件化 DAG 流水线。
 type Pipeline struct {
-	Steps []Step `json:"steps" yaml:"steps"`
+	Variables map[string]string   `json:"variables,omitempty" yaml:"variables,omitempty"`
+	Roles     map[string][]string `json:"roles,omitempty" yaml:"roles,omitempty"`
+	Build     []Step              `json:"build,omitempty" yaml:"build,omitempty"`
+	Deploy    []Step              `json:"deploy,omitempty" yaml:"deploy,omitempty"`
+	Finally   []Step              `json:"finally,omitempty" yaml:"finally,omitempty"`
 }
 
-// Step 流程中的一步。每步声明在哪执行（Scope）和执行什么（Action）。
-//
-// 字段互斥约束：
-//   - Command / WorkDir 仅 ActionRun 有意义，其他 Action 下应保持零值
-//   - SyncFrom / SyncTo 仅 ActionSync 有意义，其他 Action 下应保持零值
+// Step 是流水线中的插件化执行单元。
 type Step struct {
-	// ID 步骤唯一标识符，必须非空且在 Pipeline 内唯一。
-	ID     string     `json:"id"     yaml:"id"`
-	Name   string     `json:"name"   yaml:"name"`
-	Scope  StepScope  `json:"scope"  yaml:"scope"`
-	Action StepAction `json:"action" yaml:"action"`
-
-	// Action=run 时使用
-	Command string `json:"command,omitempty" yaml:"command,omitempty"`
-	WorkDir string `json:"work_dir,omitempty" yaml:"work_dir,omitempty"`
-
-	// Action=sync 时使用
-	SyncFrom string `json:"sync_from,omitempty" yaml:"sync_from,omitempty"`
-	SyncTo   string `json:"sync_to,omitempty"   yaml:"sync_to,omitempty"`
+	Name             string                 `json:"name" yaml:"name"`
+	Type             string                 `json:"type" yaml:"type"`
+	Needs            []string               `json:"needs,omitempty" yaml:"needs,omitempty"`
+	Roles            []string               `json:"roles,omitempty" yaml:"roles,omitempty"`
+	RunIf            string                 `json:"run_if,omitempty" yaml:"run_if,omitempty"`
+	BatchSize        int                    `json:"batch_size,omitempty" yaml:"batch_size,omitempty"`
+	Retries          int                    `json:"retries,omitempty" yaml:"retries,omitempty"`
+	RetryDelay       string                 `json:"retry_delay,omitempty" yaml:"retry_delay,omitempty"`
+	TolerateFailures string                 `json:"tolerate_failures,omitempty" yaml:"tolerate_failures,omitempty"`
+	With             map[string]interface{} `json:"with,omitempty" yaml:"with,omitempty"`
 }
 
 // RunStatus 通用执行状态，Run / StepRun / Task 共用。
@@ -61,17 +51,19 @@ type RunStatus string
 const (
 	// StatusPending 待执行。
 	StatusPending RunStatus = "pending"
-	// RunStatusRunning 执行中（区别于 ServiceStatus.StatusRunning，避免同包常量冲突）。
+	// RunStatusRunning 执行中。
 	RunStatusRunning RunStatus = "running"
 	// StatusSuccess 执行成功。
 	StatusSuccess RunStatus = "success"
-	// RunStatusFailed 执行失败（区别于 ServiceStatus.StatusFailed，避免同包常量冲突）。
+	// RunStatusFailed 执行失败。
 	RunStatusFailed RunStatus = "failed"
+	// StatusSkipped 因条件或上游失败被跳过。
+	StatusSkipped RunStatus = "skipped"
 	// StatusCanceled 被取消。
 	StatusCanceled RunStatus = "canceled"
 )
 
-// Run 一次流水线执行。一个 deployment 同时只允许一个活跃 Run（约束由引擎/store 保证）。
+// Run 一次流水线执行。
 type Run struct {
 	ID           string    `json:"id"`
 	DeploymentID string    `json:"deployment_id"`
@@ -81,18 +73,17 @@ type Run struct {
 	FinishedAt   int64     `json:"finished_at,omitempty"`
 }
 
-// StepRun 一个 Step 在本次 Run 中的执行状态。
-// local 步骤只有 1 个 Task；fan-out 步骤每台 host 一个 Task。
+// StepRun 是一个插件步骤在本次 Run 中的执行状态。
 type StepRun struct {
-	StepID string    `json:"step_id"`
-	Name   string    `json:"name"`
-	Scope  StepScope `json:"scope"`
-	Status RunStatus `json:"status"`
-	Tasks  []Task    `json:"tasks"`
+	StepName string        `json:"step_name"`
+	Type     string        `json:"type"`
+	Phase    PipelinePhase `json:"phase"`
+	Needs    []string      `json:"needs,omitempty"`
+	Status   RunStatus     `json:"status"`
+	Tasks    []Task        `json:"tasks"`
 }
 
-// Task 最小执行单元 = 某步骤在某个位置的一次执行。GUI 的「格子」。
-// HostID 为空表示本机（local 步骤）；非空表示远程 host（fan-out 步骤）。
+// Task 是某个 StepRun 在某个目标上的执行单元。
 type Task struct {
 	HostID     string    `json:"host_id,omitempty"`
 	HostName   string    `json:"host_name,omitempty"`
@@ -102,39 +93,8 @@ type Task struct {
 	FinishedAt int64     `json:"finished_at,omitempty"`
 }
 
-// HostRef 是展开 fan-out 步骤所需的目标主机最小信息。
-// 由上层（持有 deployment.HostIDs + Host 列表）解析后传入，
-// 使 Expand 保持纯函数、不依赖 store。
+// HostRef 是展开 roles 时所需的目标主机最小信息。
 type HostRef struct {
 	ID   string
 	Name string
-}
-
-// Expand 把声明的 Pipeline 按作用域展开成一个待执行的 Run 骨架。
-//
-// 参数：
-//   - deploymentID: 关联的 deployment ID
-//   - hosts: fan-out 步骤要扇出的目标主机；local 步骤忽略此参数
-//
-// 返回：
-//   - 一个所有 Status 均为 pending 的 Run。ID、StartedAt 由引擎在执行时填充。
-//
-// 注意：
-//   - local 步骤恒展开为 1 个无 HostID 的 Task
-//   - fan-out 步骤为每台 host 展开 1 个 Task；hosts 为空则该步骤 0 个 Task
-func (p Pipeline) Expand(deploymentID string, hosts []HostRef) Run {
-	run := Run{DeploymentID: deploymentID, Status: StatusPending}
-	for _, step := range p.Steps {
-		sr := StepRun{StepID: step.ID, Name: step.Name, Scope: step.Scope, Status: StatusPending}
-		switch step.Scope {
-		case ScopeLocal:
-			sr.Tasks = []Task{{Status: StatusPending}}
-		case ScopeFanOut:
-			for _, h := range hosts {
-				sr.Tasks = append(sr.Tasks, Task{HostID: h.ID, HostName: h.Name, Status: StatusPending})
-			}
-		}
-		run.StepRuns = append(run.StepRuns, sr)
-	}
-	return run
 }
