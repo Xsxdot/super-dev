@@ -237,27 +237,40 @@ func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]stri
 		return nil, false
 	}
 
-	allowed := map[string]bool{}
+	aliases := map[string][]string{}
+	allIDs := make([]string, 0, len(project.Services))
 	for _, service := range project.Services {
-		allowed[service.ID] = true
+		if len(service.Deployments) == 0 {
+			// 兼容旧配置：deployment 模型落地前，日志直接以 service.ID 归属。
+			aliases[service.ID] = []string{service.ID}
+			allIDs = append(allIDs, service.ID)
+			continue
+		}
+
+		serviceDeploymentIDs := make([]string, 0, len(service.Deployments))
+		for _, deployment := range service.Deployments {
+			aliases[deployment.ID] = []string{deployment.ID}
+			serviceDeploymentIDs = append(serviceDeploymentIDs, deployment.ID)
+			allIDs = append(allIDs, deployment.ID)
+		}
+		// 允许旧调用方用 service.ID 请求，内部展开为该服务下全部 deployment。
+		aliases[service.ID] = serviceDeploymentIDs
 	}
 	if len(requested) == 0 {
-		ids := make([]string, 0, len(project.Services))
-		for _, service := range project.Services {
-			ids = append(ids, service.ID)
-		}
-		return ids, true
+		return allIDs, true
 	}
 
 	ids := make([]string, 0, len(requested))
 	seen := map[string]bool{}
 	for _, id := range requested {
 		// 忽略不属于本项目的 deployment，保证搜索接口不能跨项目窥探日志。
-		if !allowed[id] || seen[id] {
-			continue
+		for _, deploymentID := range aliases[id] {
+			if seen[deploymentID] {
+				continue
+			}
+			seen[deploymentID] = true
+			ids = append(ids, deploymentID)
 		}
-		seen[id] = true
-		ids = append(ids, id)
 	}
 	return ids, true
 }

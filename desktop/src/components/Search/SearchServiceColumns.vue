@@ -11,7 +11,7 @@
   - 不执行上下文 API 请求
 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
@@ -28,9 +28,14 @@ const columnsEl = ref<HTMLElement | null>(null)
 const selectedFromColumnsScrollId = ref<number | null>(null)
 const suppressScrollSelectionId = ref<number | null>(null)
 const pinnedScrollTopByService = ref<Record<string, number>>({})
+const pinnedBucketsByService = ref<Record<string, SearchBucketRow[]>>({})
+const pinnedBucketServiceIdsByService = ref<Record<string, string[]>>({})
+const frozenColumnWidthByService = ref<Record<string, number>>({})
 const lastScrollTop = ref(0)
+const pinnedBodyEls = new Map<string, HTMLElement>()
 let suppressScrollSelectionTimer: ReturnType<typeof window.setTimeout> | null = null
 const EDGE_LOAD_THRESHOLD = 80
+const DEFAULT_COLUMN_WIDTH = 300
 
 type ScrollDirection = 'up' | 'down' | 'none'
 
@@ -53,40 +58,89 @@ const scrollingServiceIds = computed(() => {
   return visibleServiceIds.value.filter(serviceId => !pinned.has(serviceId))
 })
 
-const buckets = computed(() => {
+const visibleBuckets = computed(() => {
   if (!tab.value) return []
   return buildSearchBuckets({
-    serviceIds: scrollingServiceIds.value,
+    serviceIds: visibleServiceIds.value,
     itemsByService: tab.value.contextByService,
   })
 })
 
+const buckets = computed(() => {
+  if (!tab.value) return []
+  return visibleBuckets.value
+})
+
 function columnTemplateFor(serviceIds: string[]): string {
   const columnCount = serviceIds.length
+  const frozenWidths = serviceIds.map(serviceId => frozenColumnWidthByService.value[serviceId])
+  if (frozenWidths.some(width => width > 0)) {
+    return serviceIds
+      .map((_, index) => `${Math.max(DEFAULT_COLUMN_WIDTH, Math.round(frozenWidths[index] || DEFAULT_COLUMN_WIDTH))}px`)
+      .join(' ')
+  }
   // 每个可见命中服务占一列；服务少时平分可用宽度，服务多时保留最小宽度并横向滚动。
-  return columnCount > 0 ? `repeat(${columnCount}, minmax(300px, 1fr))` : ''
+  return columnCount > 0 ? `repeat(${columnCount}, minmax(${DEFAULT_COLUMN_WIDTH}px, 1fr))` : ''
+}
+
+function totalColumnWidth(serviceIds: string[]): number {
+  return serviceIds.reduce((sum, serviceId) => {
+    const width = frozenColumnWidthByService.value[serviceId]
+    return sum + Math.max(DEFAULT_COLUMN_WIDTH, Math.round(width || DEFAULT_COLUMN_WIDTH))
+  }, 0)
 }
 
 const columnTemplate = computed(() => columnTemplateFor(scrollingServiceIds.value))
 
 const pinnedColumnTemplate = computed(() => columnTemplateFor(pinnedServiceIds.value))
 
+const allServicesPinned = computed(() => pinnedServiceIds.value.length > 0 && scrollingServiceIds.value.length === 0)
+
 const pinnedPanelStyle = computed(() => ({
-  '--pinned-width': `${pinnedServiceIds.value.length * 300}px`,
+  '--pinned-width': `${totalColumnWidth(pinnedServiceIds.value)}px`,
   gridTemplateColumns: pinnedColumnTemplate.value,
 }))
 
 function pinnedBuckets(serviceId: string): SearchBucketRow[] {
-  if (!tab.value) return []
-  return buildSearchBuckets({
-    serviceIds: [serviceId],
-    itemsByService: tab.value.contextByService,
-  })
+  return pinnedBucketsByService.value[serviceId] ?? visibleBuckets.value
 }
 
-function pinnedOffsetStyle(serviceId: string) {
-  const offset = pinnedScrollTopByService.value[serviceId] ?? 0
-  return { transform: `translateY(-${offset}px)` }
+function pinnedBucketServiceIds(serviceId: string): string[] {
+  return pinnedBucketServiceIdsByService.value[serviceId] ?? [
+    serviceId,
+    ...visibleServiceIds.value.filter(id => id !== serviceId),
+  ]
+}
+
+function setPinnedBodyRef(serviceId: string, el: Element | ComponentPublicInstance | null) {
+  if (el instanceof HTMLElement) {
+    pinnedBodyEls.set(serviceId, el)
+  } else {
+    pinnedBodyEls.delete(serviceId)
+  }
+}
+
+function restorePinnedScroll(serviceId: string) {
+  const el = pinnedBodyEls.get(serviceId)
+  if (!el) return
+  el.scrollTop = pinnedScrollTopByService.value[serviceId] ?? 0
+}
+
+function snapshotColumnWidths() {
+  const next = { ...frozenColumnWidthByService.value }
+  const preserveExistingWidths = pinnedServiceIds.value.length > 0
+  const headers = columnsEl.value?.querySelectorAll<HTMLElement>('.columns-header .column-header[data-service-id]')
+  headers?.forEach(header => {
+    const serviceId = header.dataset.serviceId
+    const width = header.getBoundingClientRect().width
+    if (!serviceId || width <= 0) return
+    if (preserveExistingWidths && next[serviceId] > 0) return
+    next[serviceId] = Math.max(DEFAULT_COLUMN_WIDTH, Math.round(width))
+  })
+  for (const serviceId of visibleServiceIds.value) {
+    next[serviceId] ??= DEFAULT_COLUMN_WIDTH
+  }
+  frozenColumnWidthByService.value = next
 }
 
 const canLoadBefore = computed(() => {
@@ -138,18 +192,45 @@ function suppressScrollSelection(logId: number) {
   }, 160)
 }
 
-function togglePin(serviceId: string) {
+async function togglePin(serviceId: string) {
   if (!tab.value) return
+  if (tab.value.selectedLogId !== null) {
+    suppressScrollSelection(tab.value.selectedLogId)
+  }
   if (tab.value.pinnedServiceIds.includes(serviceId)) {
     workspace.unpinService(tab.value.id, serviceId)
     const { [serviceId]: _removed, ...next } = pinnedScrollTopByService.value
     pinnedScrollTopByService.value = next
+    const { [serviceId]: _rows, ...nextBuckets } = pinnedBucketsByService.value
+    pinnedBucketsByService.value = nextBuckets
+    const { [serviceId]: _serviceIds, ...nextServiceIds } = pinnedBucketServiceIdsByService.value
+    pinnedBucketServiceIdsByService.value = nextServiceIds
+    pinnedBodyEls.delete(serviceId)
+    if (tab.value.pinnedServiceIds.length === 0) {
+      frozenColumnWidthByService.value = {}
+    }
   } else {
+    const scrollTop = columnsEl.value?.scrollTop ?? 0
+    snapshotColumnWidths()
+    // 固定栏要保留固定瞬间的完整跨服务时间栅格，否则单服务重建会压缩空白行并让内容漂移。
+    pinnedBucketsByService.value = {
+      ...pinnedBucketsByService.value,
+      [serviceId]: visibleBuckets.value,
+    }
+    pinnedBucketServiceIdsByService.value = {
+      ...pinnedBucketServiceIdsByService.value,
+      [serviceId]: [
+        serviceId,
+        ...visibleServiceIds.value.filter(id => id !== serviceId),
+      ],
+    }
     pinnedScrollTopByService.value = {
       ...pinnedScrollTopByService.value,
-      [serviceId]: columnsEl.value?.scrollTop ?? 0,
+      [serviceId]: scrollTop,
     }
     workspace.pinService(tab.value.id, serviceId)
+    await nextTick()
+    restorePinnedScroll(serviceId)
   }
 }
 
@@ -266,7 +347,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="tab?.contextAnchorTime" class="columns-shell">
+  <div
+    v-if="tab?.contextAnchorTime"
+    class="columns-shell"
+    :class="{ 'all-pinned': allServicesPinned }"
+  >
     <div
       v-if="pinnedServiceIds.length"
       class="pinned-columns"
@@ -277,14 +362,14 @@ onBeforeUnmount(() => {
         :key="serviceId"
         class="pinned-column"
       >
-        <div class="column-header pinned">
+        <div class="column-header pinned" :data-service-id="serviceId">
           <div class="header-main">
             <span class="service-name">{{ serviceName(serviceId) }}</span>
           </div>
           <button class="pin-btn" @click="togglePin(serviceId)">已固定</button>
         </div>
-        <div class="pinned-body">
-          <div class="pinned-grid" :style="pinnedOffsetStyle(serviceId)">
+        <div class="pinned-body" :ref="el => setPinnedBodyRef(serviceId, el)">
+          <div class="pinned-grid">
             <div
               v-for="bucket in pinnedBuckets(serviceId)"
               :key="bucket.bucketStart"
@@ -294,26 +379,38 @@ onBeforeUnmount(() => {
               <div
                 class="bucket-cell"
                 :class="{ blank: isBlank(bucket, serviceId) }"
+                :data-service-id="serviceId"
               >
-                <div class="bucket-time">{{ bucket.bucketLabel }}</div>
-                <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
-                <div v-else class="entry-stack">
+                <div class="pinned-cell-layers">
                   <div
-                    v-for="entry in cellEntries(bucket, serviceId)"
-                    :key="entryKey(entry)"
-                    class="context-entry"
-                    :class="{ target: entry.id === tab.selectedLogId }"
-                    :data-entry-id="entry.id"
-                    :data-entry-key="entryKey(entry)"
+                    v-for="cellServiceId in pinnedBucketServiceIds(serviceId)"
+                    :key="cellServiceId"
+                    class="pinned-cell-layer"
+                    :class="{ 'height-mirror': cellServiceId !== serviceId }"
+                    :data-service-id="cellServiceId"
+                    :aria-hidden="cellServiceId !== serviceId ? 'true' : undefined"
                   >
-                    <span class="entry-time">{{ timeLabel(entry) }}</span>
-                    <span class="entry-level">{{ entry.level }}</span>
-                    <span class="entry-message">
-                      <template v-for="(part, index) in messageParts(entry.message)" :key="index">
-                        <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
-                        <span v-else>{{ part.text }}</span>
-                      </template>
-                    </span>
+                    <div class="bucket-time">{{ bucket.bucketLabel }}</div>
+                    <div v-if="isBlank(bucket, cellServiceId)" class="blank-cell" />
+                    <div v-else class="entry-stack">
+                      <div
+                        v-for="entry in cellEntries(bucket, cellServiceId)"
+                        :key="entryKey(entry)"
+                        class="context-entry"
+                        :class="{ target: entry.id === tab.selectedLogId }"
+                        :data-entry-id="entry.id"
+                        :data-entry-key="entryKey(entry)"
+                      >
+                        <span class="entry-time">{{ timeLabel(entry) }}</span>
+                        <span class="entry-level">{{ entry.level }}</span>
+                        <span class="entry-message">
+                          <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+                            <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+                            <span v-else>{{ part.text }}</span>
+                          </template>
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -335,6 +432,7 @@ onBeforeUnmount(() => {
             v-for="serviceId in scrollingServiceIds"
             :key="serviceId"
             class="column-header"
+            :data-service-id="serviceId"
           >
             <div class="header-main">
               <span class="service-name">{{ serviceName(serviceId) }}</span>
@@ -363,26 +461,63 @@ onBeforeUnmount(() => {
             :key="serviceId"
             class="bucket-cell"
             :class="{ blank: isBlank(bucket, serviceId) }"
+            :data-service-id="serviceId"
           >
-            <div class="bucket-time">{{ bucket.bucketLabel }}</div>
-            <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
-            <div v-else class="entry-stack">
+            <div class="scroll-cell-layers">
               <div
-                v-for="entry in cellEntries(bucket, serviceId)"
-                :key="entryKey(entry)"
-                class="context-entry"
-                :class="{ target: entry.id === tab.selectedLogId }"
-                :data-entry-id="entry.id"
-                :data-entry-key="entryKey(entry)"
+                class="scroll-cell-layer"
+                :data-service-id="serviceId"
               >
-                <span class="entry-time">{{ timeLabel(entry) }}</span>
-                <span class="entry-level">{{ entry.level }}</span>
-                <span class="entry-message">
-                  <template v-for="(part, index) in messageParts(entry.message)" :key="index">
-                    <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
-                    <span v-else>{{ part.text }}</span>
-                  </template>
-                </span>
+                <div class="bucket-time">{{ bucket.bucketLabel }}</div>
+                <div v-if="isBlank(bucket, serviceId)" class="blank-cell" />
+                <div v-else class="entry-stack">
+                  <div
+                    v-for="entry in cellEntries(bucket, serviceId)"
+                    :key="entryKey(entry)"
+                    class="context-entry"
+                    :class="{ target: entry.id === tab.selectedLogId }"
+                    :data-entry-id="entry.id"
+                    :data-entry-key="entryKey(entry)"
+                  >
+                    <span class="entry-time">{{ timeLabel(entry) }}</span>
+                    <span class="entry-level">{{ entry.level }}</span>
+                    <span class="entry-message">
+                      <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+                        <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+                        <span v-else>{{ part.text }}</span>
+                      </template>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-for="mirrorServiceId in pinnedServiceIds"
+                :key="mirrorServiceId"
+                class="scroll-cell-layer height-mirror"
+                :data-service-id="mirrorServiceId"
+                aria-hidden="true"
+              >
+                <div class="bucket-time">{{ bucket.bucketLabel }}</div>
+                <div v-if="isBlank(bucket, mirrorServiceId)" class="blank-cell" />
+                <div v-else class="entry-stack">
+                  <div
+                    v-for="entry in cellEntries(bucket, mirrorServiceId)"
+                    :key="entryKey(entry)"
+                    class="context-entry"
+                    :class="{ target: entry.id === tab.selectedLogId }"
+                    :data-entry-id="entry.id"
+                    :data-entry-key="entryKey(entry)"
+                  >
+                    <span class="entry-time">{{ timeLabel(entry) }}</span>
+                    <span class="entry-level">{{ entry.level }}</span>
+                    <span class="entry-message">
+                      <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+                        <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+                        <span v-else>{{ part.text }}</span>
+                      </template>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -399,16 +534,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-else class="columns pinned-only">
-      <div class="columns-grid">
-        <div class="columns-header" :style="{ gridTemplateColumns: 'minmax(300px, 1fr)' }">
-          <div class="column-header placeholder">
-            <span class="service-name">已固定全部服务</span>
-          </div>
-        </div>
-        <div class="pinned-only-empty">取消固定后继续联动滚动</div>
-      </div>
-    </div>
   </div>
   <div v-else class="columns-empty">
     点击左侧命中日志查看跨服务上下文
@@ -432,6 +557,12 @@ onBeforeUnmount(() => {
   background: var(--bg);
   border-right: 1px solid var(--border-secondary);
 }
+.columns-shell.all-pinned .pinned-columns {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
 .pinned-column {
   min-width: 300px;
   display: flex;
@@ -441,31 +572,21 @@ onBeforeUnmount(() => {
 .pinned-body {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.pinned-body::-webkit-scrollbar {
+  display: none;
 }
 .pinned-grid {
   min-width: 300px;
-  will-change: transform;
 }
 .pinned-row {
   display: grid;
 }
-.pinned-only {
-  background: var(--bg);
-}
-.pinned-only-empty {
-  height: calc(100% - 32px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
 .column-header.pinned {
   background: rgba(88, 166, 255, 0.08);
-}
-.column-header.placeholder {
-  justify-content: center;
 }
 .columns {
   height: 100%;
@@ -546,6 +667,20 @@ onBeforeUnmount(() => {
 }
 .bucket-cell.blank {
   background: rgba(255, 255, 255, 0.012);
+}
+.pinned-cell-layers,
+.scroll-cell-layers {
+  display: grid;
+}
+.pinned-cell-layer,
+.scroll-cell-layer {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+.pinned-cell-layer.height-mirror,
+.scroll-cell-layer.height-mirror {
+  visibility: hidden;
+  pointer-events: none;
 }
 .bucket-time {
   color: var(--text-tertiary);
