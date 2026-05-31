@@ -18,6 +18,52 @@ import (
 	"github.com/superdev/agent/model"
 )
 
+// StepPlugin is the extension point for concrete step actions.
+type StepPlugin interface {
+	Name() string
+	Validate(step model.Step) error
+	Execute(ctx *RunContext, step model.Step, targets []Target) error
+}
+
+// RunContextOptions configures a RunContext.
+type RunContextOptions struct {
+	ProjectRoot string
+	LogLine     func(line, stream string)
+}
+
+// RunContext is passed to plugins during execution.
+type RunContext struct {
+	Context     context.Context
+	ProjectRoot string
+	logLine     func(line, stream string)
+}
+
+// NewRunContext creates plugin execution context.
+//
+// 参数：
+//   - ctx: 上下文，用于取消插件执行
+//   - opts: 运行上下文配置
+//
+// 返回：
+//   - 可传给 StepPlugin.Execute 的 RunContext
+func NewRunContext(ctx context.Context, opts RunContextOptions) *RunContext {
+	return &RunContext{Context: ctx, ProjectRoot: opts.ProjectRoot, logLine: opts.LogLine}
+}
+
+// LogLine records one plugin output line.
+//
+// 参数：
+//   - line: 单行日志内容
+//   - stream: 日志流名，如 stdout/stderr
+//
+// 注意：
+//   - 未配置 LogLine 回调时该方法为空操作
+func (c *RunContext) LogLine(line, stream string) {
+	if c.logLine != nil {
+		c.logLine(line, stream)
+	}
+}
+
 // Executor 抽象「在某个 Target 上执行一个插件步骤」。
 //
 // 实现需把命令/文件传输输出逐行通过 onLine 回调上报。
