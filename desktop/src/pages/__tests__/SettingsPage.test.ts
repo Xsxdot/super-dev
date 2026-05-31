@@ -13,8 +13,10 @@ import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
+import { open } from '@tauri-apps/plugin-dialog'
 import SettingsPage from '../SettingsPage.vue'
 import { useAgentStore } from '@/stores/agent'
+import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import type { Project, Service } from '@/api/agent'
 
@@ -23,6 +25,7 @@ const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
   message: vi.fn(),
+  ask: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -111,5 +114,35 @@ describe('SettingsPage', () => {
 
     expect(wrapper.find('[data-test="settings-tab-hosts"]').classes()).toContain('active')
     expect(wrapper.text()).toContain('主机管理')
+  })
+
+  it('支持打开模板管理 tab', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mount(SettingsPage)
+    await wrapper.find('[data-test="settings-tab-templates"]').trigger('click')
+
+    expect(wrapper.text()).toContain('模板')
+  })
+
+  it('导入模板时打开 YAML 文件选择器并刷新模板 store', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    const templateStore = usePipelineTemplateStore()
+    vi.spyOn(templateStore, 'loadTemplates').mockResolvedValue(undefined)
+    const importTemplate = vi.spyOn(templateStore, 'importTemplate').mockResolvedValue(undefined)
+    vi.mocked(open).mockResolvedValue('/tmp/custom.yaml')
+
+    const wrapper = mount(SettingsPage)
+    await wrapper.find('[data-test="settings-tab-templates"]').trigger('click')
+    await wrapper.find('[data-test="template-import"]').trigger('click')
+
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    }))
+    expect(importTemplate).toHaveBeenCalledWith('/tmp/custom.yaml')
   })
 })

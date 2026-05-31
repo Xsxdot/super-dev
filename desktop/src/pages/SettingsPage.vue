@@ -15,24 +15,28 @@ import { useRoute, useRouter } from 'vue-router'
 import { open, message, ask } from '@tauri-apps/plugin-dialog'
 import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
+import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import type { Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates'
 
 const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
+const pipelineTemplateStore = usePipelineTemplateStore()
 const settingsStore = useSettingsStore()
 const selectedTab = ref<SettingsTab>(
-  route.query.tab === 'hosts' ? 'hosts' : 'general',
+  route.query.tab === 'hosts' ? 'hosts' : route.query.tab === 'templates' ? 'templates' : 'general',
 )
 
 onMounted(() => {
   void settingsStore.loadAgentSettings()
   void settingsStore.loadAutostart()
+  void pipelineTemplateStore.loadTemplates().catch(() => undefined)
 })
 
 const editorProject = ref<Project | null>(null)
@@ -127,6 +131,21 @@ async function addProject() {
   }
 }
 
+async function importPipelineTemplate() {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    title: '导入流水线模板',
+  })
+  if (!selected || Array.isArray(selected)) return
+  try {
+    await pipelineTemplateStore.importTemplate(selected)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await message(msg, { title: '无法导入模板', kind: 'error' })
+  }
+}
+
 async function deleteProject(project: Project) {
   await agentStore.deleteProject(project.id)
 }
@@ -206,6 +225,18 @@ const retentionDays = computed({
           <circle cx="4" cy="11.5" r="0.6" fill="currentColor"/>
         </svg>
         主机管理
+      </button>
+      <button
+        data-test="settings-tab-templates"
+        class="tab-btn"
+        :class="{ active: selectedTab === 'templates' }"
+        @click="selectedTab = 'templates'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <path d="M3 2.5h7l3 3v8H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M10 2.5v3h3M5 8h6M5 10.5h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        模板
       </button>
     </aside>
 
@@ -298,8 +329,12 @@ const retentionDays = computed({
         </div>
       </section>
 
-      <section v-else class="pane">
+      <section v-else-if="selectedTab === 'hosts'" class="pane">
         <HostManagerTab />
+      </section>
+
+      <section v-else class="pane">
+        <TemplateManagerTab :templates="pipelineTemplateStore.templates" :on-import="importPipelineTemplate" />
       </section>
     </main>
 
