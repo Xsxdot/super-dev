@@ -67,3 +67,37 @@ func TestExpandIncludeRelinksEntrypointsAndLeaves(t *testing.T) {
 	assert.Equal(t, []string{"Deploy.Restart"}, needs["After"])
 	assert.Equal(t, []string{"compute"}, got[1].Roles)
 }
+
+func TestExpandIncludeInheritsIncludeRolesForTemplateStepsWithoutRoles(t *testing.T) {
+	tpl := pipelinetemplate.Template{
+		ID: "runner-aware", Name: "Runner Aware", Version: "1.0.0",
+		Steps: []model.Step{
+			{Name: "Prepare", Type: "remote_command"},
+			{Name: "Deploy", Type: "remote_command", Roles: []string{"${vars.role}"}, Needs: []string{"Prepare"}},
+		},
+	}
+	digest, err := pipelinetemplate.Digest(tpl)
+	require.NoError(t, err)
+	resolver := memoryResolver{
+		"builtin://runner-aware@1.0.0": {Source: "builtin", Template: tpl, Digest: digest},
+	}
+	steps := []model.Step{{
+		Name:  "Run Template",
+		Type:  "include",
+		Roles: []string{"build_runner"},
+		With: map[string]interface{}{
+			"template": "builtin://runner-aware",
+			"version":  "1.0.0",
+			"digest":   digest,
+			"vars": map[string]interface{}{
+				"role": "deploy_targets",
+			},
+		},
+	}}
+
+	got, err := pipelinetemplate.ExpandSteps(steps, resolver, map[string]string{}, 5)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"build_runner"}, got[0].Roles)
+	assert.Equal(t, []string{"deploy_targets"}, got[1].Roles)
+}

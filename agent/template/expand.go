@@ -85,6 +85,9 @@ func expandSteps(steps []model.Step, resolver Resolver, pipelineVars map[string]
 				delete(stack, key)
 				return nil, err
 			}
+			if len(rs.Roles) == 0 && len(step.Roles) > 0 {
+				rs.Roles = append([]string(nil), step.Roles...)
+			}
 			rendered = append(rendered, rs)
 		}
 		nested, err := expandSteps(rendered, resolver, pipelineVars, maxDepth, depth+1, stack)

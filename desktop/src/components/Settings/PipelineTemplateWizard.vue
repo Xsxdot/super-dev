@@ -23,6 +23,7 @@ type TemplateBlock = {
   selectedKey: string
   vars: Record<string, string>
   targets: Record<string, string[]>
+  runnerTargets: string[]
 }
 
 const props = defineProps<{
@@ -77,7 +78,7 @@ function blocksForPhase(phase: PipelinePhase) {
 }
 
 function addBlock(phase: PipelinePhase) {
-  blocks.value.push({ id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {} })
+  blocks.value.push({ id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {}, runnerTargets: [] })
 }
 
 function removeBlock(block: TemplateBlock) {
@@ -95,6 +96,10 @@ function resetBlockInputs(block: TemplateBlock) {
     }
     block.vars[name] = input.default ?? ''
   }
+}
+
+function runnerRoleKey(block: TemplateBlock) {
+  return `${block.phase}_${block.id}_runner`
 }
 
 function roleKey(block: TemplateBlock, inputName: string) {
@@ -121,7 +126,12 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
         selectedKey: version ? `${templateURI}@${version}` : '',
         vars,
         targets: {},
+        runnerTargets: [],
       }
+      for (const role of step.roles ?? []) {
+        block.runnerTargets.push(...(pipeline.roles?.[role] ?? []))
+      }
+      block.runnerTargets = Array.from(new Set(block.runnerTargets))
       for (const [name, value] of Object.entries(vars)) {
         const ids = pipeline.roles?.[String(value)]
         if (ids) block.targets[name] = [...ids]
@@ -143,6 +153,17 @@ function disable() {
 
 function isTargetChecked(block: TemplateBlock, name: string, hostID: string) {
   return (block.targets[name] ?? []).includes(hostID)
+}
+
+function isRunnerChecked(block: TemplateBlock, hostID: string) {
+  return block.runnerTargets.includes(hostID)
+}
+
+function toggleRunner(block: TemplateBlock, hostID: string, checked: boolean) {
+  const set = new Set(block.runnerTargets)
+  if (checked) set.add(hostID)
+  else set.delete(hostID)
+  block.runnerTargets = [...set]
 }
 
 function toggleTarget(block: TemplateBlock, name: string, hostID: string, checked: boolean) {
@@ -172,9 +193,15 @@ function saveTemplate() {
     if (vars.app_name && !pipeline.variables!.app_name) {
       pipeline.variables!.app_name = vars.app_name
     }
+    const runnerTargets = block.runnerTargets.filter(Boolean)
+    const runnerKey = runnerRoleKey(block)
+    if (runnerTargets.length > 0) {
+      pipeline.roles![runnerKey] = runnerTargets
+    }
     pipeline[block.phase]!.push({
       name: template.name,
       type: 'include',
+      roles: runnerTargets.length > 0 ? [runnerKey] : undefined,
       with: {
         template: `${template.source}://${template.id}`,
         version: template.version,
@@ -235,6 +262,23 @@ function saveTemplate() {
 
             <div v-if="selectedFor(block)?.description" class="template-description">
               {{ selectedFor(block)?.description }}
+            </div>
+
+            <div class="template-runner-row">
+              <div class="field-label">运行机器</div>
+              <div class="field-help">留空时在本机执行；选择后会作为模板内部未指定角色步骤的运行机器。</div>
+              <div v-if="(hosts ?? []).length === 0" class="field-help">还没有可选主机，请先在主机管理中添加。</div>
+              <div v-else class="target-list">
+                <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
+                  <input
+                    type="checkbox"
+                    :data-test="`block-${block.id}-runner-${host.id}`"
+                    :checked="isRunnerChecked(block, host.id)"
+                    @change="toggleRunner(block, host.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  {{ host.name }}
+                </label>
+              </div>
             </div>
 
             <div v-for="[name, input] in inputEntries(block)" :key="name" class="template-input-row">
@@ -387,6 +431,9 @@ function saveTemplate() {
 }
 .template-input-row {
   margin-bottom: 6px;
+}
+.template-runner-row {
+  margin: 6px 0;
 }
 .required {
   margin-left: 2px;
