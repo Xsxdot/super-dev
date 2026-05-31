@@ -72,6 +72,48 @@ func TestLogSearchAPI(t *testing.T) {
 	assert.Equal(t, map[string]int{"svc-a": 1, "svc-b": 1}, body.DeploymentCounts)
 }
 
+// TestLogSearchAPIUsesDeploymentIDs 验证项目级搜索以 deployment ID 作为日志归属范围。
+func TestLogSearchAPIUsesDeploymentIDs(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-api",
+			ProjectID: "proj-1",
+			Name:      "api",
+			Deployments: []model.Deployment{
+				{ID: "dep-api", EnvName: "dev", Location: model.LocationLocal},
+			},
+		},
+		{
+			ID:        "svc-worker",
+			ProjectID: "proj-1",
+			Name:      "worker",
+			Deployments: []model.Deployment{
+				{ID: "dep-worker", EnvName: "dev", Location: model.LocationLocal},
+			},
+		},
+	}
+	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{DeploymentID: "dep-api", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace-dep api", Stream: "stdout"},
+		{DeploymentID: "dep-worker", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-dep worker", Stream: "stdout"},
+		{DeploymentID: "outside", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "trace-dep outside", Stream: "stdout"},
+	}))
+
+	resp, err := http.Get(srv.URL + "/api/log-search?project=proj-1&q=trace-dep")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logSearchResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, 2, body.Total)
+	require.Len(t, body.Items, 2)
+	assert.Equal(t, "dep-api", body.Items[0].DeploymentID)
+	assert.Equal(t, "dep-worker", body.Items[1].DeploymentID)
+	assert.Equal(t, map[string]int{"dep-api": 1, "dep-worker": 1}, body.DeploymentCounts)
+}
+
 func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
