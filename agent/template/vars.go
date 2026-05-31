@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	pipelineVarRef = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)\}`)
-	templateVarRef = regexp.MustCompile(`\$\{vars\.([a-zA-Z0-9_]+)\}`)
+	pipelineVarRef        = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)\}`)
+	templateVarRef        = regexp.MustCompile(`\$\{vars\.([a-zA-Z0-9_]+)\}`)
+	templateVarDefaultRef = regexp.MustCompile(`\$\{vars\.([a-zA-Z0-9_]+):-([^}]*)\}`)
 )
 
 // RenderPipelineVars replaces ${name} with pipeline variables.
@@ -104,6 +105,24 @@ func ScanTemplateVars(s string) []string {
 }
 
 func renderTemplateString(s string, vars map[string]string) string {
+	// 先渲染默认值内部的普通变量，再处理 `${vars.name:-default}`。
+	// 这样 `${vars.output:-${vars.run_temp_dir}/app}` 会先变成
+	// `${vars.output:-/tmp/run/app}`，避免默认值中的嵌套括号截断匹配。
+	rendered := replacePlainTemplateVars(s, vars)
+	rendered = templateVarDefaultRef.ReplaceAllStringFunc(rendered, func(match string) string {
+		sub := templateVarDefaultRef.FindStringSubmatch(match)
+		if len(sub) != 3 {
+			return match
+		}
+		if v, ok := vars[sub[1]]; ok && v != "" {
+			return v
+		}
+		return sub[2]
+	})
+	return replacePlainTemplateVars(rendered, vars)
+}
+
+func replacePlainTemplateVars(s string, vars map[string]string) string {
 	return templateVarRef.ReplaceAllStringFunc(s, func(match string) string {
 		sub := templateVarRef.FindStringSubmatch(match)
 		if len(sub) != 2 {

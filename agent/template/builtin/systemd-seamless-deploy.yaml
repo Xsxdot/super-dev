@@ -4,39 +4,47 @@ description: Upload an artifact, switch the current release, restart a systemd s
 version: 1.0.0
 inputs:
   role:
-    label: Target role
-    type: string
+    label: Target machines
+    type: target_role
     required: true
+    description: Machines that receive the artifact and run systemd deployment commands.
   artifact:
     label: Artifact path
     type: path
-    required: true
+    default: ${run_temp_dir}/artifacts/${app_name}.tar.gz
+    description: Local tar.gz artifact path produced by the build template and uploaded to each target machine.
   release_dir:
     label: Release directory
     type: path
     required: true
+    description: Remote directory that stores release contents and upload staging files.
   current_dir:
     label: Current symlink
     type: path
     required: true
+    description: Remote symlink path that points to the active release directory.
   app_name:
     label: App name
     type: string
     required: true
+    description: Application name used for remote release folder and uploaded archive name.
   service_name:
     label: Systemd service
     type: string
     required: true
+    description: systemd service name to restart after switching the current release.
   port:
     label: Health port
     type: number
     required: true
     default: "8080"
+    description: HTTP port used for the post-restart health check.
   health_path:
     label: Health path
     type: string
     required: true
     default: /health
+    description: HTTP path used for the post-restart health check.
 steps:
   - name: Prepare
     type: remote_command
@@ -48,7 +56,7 @@ steps:
     roles: ["${vars.role}"]
     needs: [Prepare]
     with:
-      source: ${vars.artifact}
+      source: ${vars.artifact:-${vars.run_temp_dir}/artifacts/${vars.app_name}.tar.gz}
       target: ${vars.release_dir}/uploads/${vars.app_name}.tar.gz
   - name: Extract
     type: remote_command

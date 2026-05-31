@@ -27,3 +27,16 @@ func TestLoadBuiltinTemplates(t *testing.T) {
 		assert.NotEmpty(t, tpl.Steps)
 	}
 }
+
+func TestBuiltinTemplatesHaveInputDescriptionsAndTargetRoles(t *testing.T) {
+	builtins, err := pipelinetemplate.LoadBuiltins()
+	require.NoError(t, err)
+	for _, tpl := range builtins {
+		for name, input := range tpl.Inputs {
+			assert.NotEmpty(t, input.Description, "%s input %s needs description", tpl.ID, name)
+		}
+	}
+	assert.Equal(t, "target_role", builtins["systemd-seamless-deploy"].Inputs["role"].Type)
+	assert.Equal(t, "target_role", builtins["nginx-static-deploy"].Inputs["role"].Type)
+	assert.Contains(t, builtins["go-binary-build"].Inputs["artifact_dir"].Default, "${run_temp_dir}")
+}

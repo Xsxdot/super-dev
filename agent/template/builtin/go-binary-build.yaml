@@ -8,25 +8,30 @@ inputs:
     type: path
     required: true
     default: .
+    description: Local directory where the Go build command runs, usually the project root or backend module directory.
   package:
     label: Go package
     type: string
     required: true
     default: ./...
+    description: Go package pattern passed to go build, for example ./cmd/server or ./...
   output:
     label: Binary output
     type: path
     required: true
-    default: ./dist/app
+    default: ${run_temp_dir}/build/app
+    description: Local binary output path. The default writes into the per-run temp workspace.
   artifact_dir:
     label: Artifact directory
     type: path
     required: true
-    default: ./artifacts
+    default: ${run_temp_dir}/artifacts
+    description: Local directory where the tar.gz artifact is written before deploy templates upload it.
   app_name:
     label: App name
     type: string
     required: true
+    description: Application name used as the archive basename.
 steps:
   - name: Build
     type: local_command

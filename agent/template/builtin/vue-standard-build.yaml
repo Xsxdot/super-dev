@@ -8,25 +8,30 @@ inputs:
     type: path
     required: true
     default: .
+    description: Local Vue project directory where dependency install and build commands run.
   build_cmd:
     label: Build command
     type: string
     required: true
-    default: pnpm install && pnpm build
+    default: pnpm install && pnpm build -- --outDir ${run_temp_dir}/dist
+    description: Shell command that builds the Vue app. The default writes dist output into the per-run temp workspace.
   dist_dir:
     label: Dist directory
     type: path
     required: true
-    default: ./dist
+    default: ${run_temp_dir}/dist
+    description: Built static files directory to package.
   artifact_dir:
     label: Artifact directory
     type: path
     required: true
-    default: ./artifacts
+    default: ${run_temp_dir}/artifacts
+    description: Local directory where the tar.gz artifact is written before deploy templates upload it.
   app_name:
     label: App name
     type: string
     required: true
+    description: Application name used as the archive basename.
 steps:
   - name: Build
     type: local_command

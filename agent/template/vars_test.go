@@ -43,6 +43,21 @@ func TestRenderTemplateVarsInStep(t *testing.T) {
 	assert.Equal(t, "/opt/api/releases/1.0.0/", got.With["target"])
 }
 
+func TestRenderTemplateVarsSupportsDefaults(t *testing.T) {
+	step := pipelinetemplate.Step{
+		Name: "Build",
+		Type: "local_command",
+		With: map[string]interface{}{
+			"cmd": "CGO_ENABLED=${vars.cgo_enabled:-0} go build -o ${vars.output:-${vars.run_temp_dir}/app}",
+		},
+	}
+	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]string{
+		"run_temp_dir": "/tmp/run",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "CGO_ENABLED=0 go build -o /tmp/run/app", got.With["cmd"])
+}
+
 func TestScanTemplateVars(t *testing.T) {
 	vars := pipelinetemplate.ScanTemplateVars("${vars.app_name} ${vars.role} ${vars.app_name}")
 	assert.Equal(t, []string{"app_name", "role"}, vars)
