@@ -13,11 +13,14 @@ PipelineTemplateWizard：模板化流水线配置向导。
 -->
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import type { Pipeline, PipelineTemplateSummary, TemplateInput } from '@/api/agent'
+import type { Pipeline, PipelinePreviewResponse, PipelineTemplateSummary, TemplateInput } from '@/api/agent'
+import PipelinePreview from './PipelinePreview.vue'
 
 const props = defineProps<{
   modelValue?: Pipeline
   templates: PipelineTemplateSummary[]
+  preview?: PipelinePreviewResponse
+  previewError?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
@@ -156,6 +159,9 @@ function saveTemplate() {
         <button type="button" class="pipeline-save" data-test="pipeline-save-template" :disabled="!selected" @click="saveTemplate">
           使用模板
         </button>
+
+        <div v-if="previewError" class="preview-error">{{ previewError }}</div>
+        <PipelinePreview v-if="preview" :preview="preview" />
       </template>
     </template>
   </div>
@@ -194,6 +200,11 @@ function saveTemplate() {
 .field-help {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+.preview-error {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--status-failed);
 }
 .field-label {
   display: block;

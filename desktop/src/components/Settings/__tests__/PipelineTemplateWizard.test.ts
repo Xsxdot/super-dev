@@ -12,7 +12,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PipelineTemplateWizard from '@/components/Settings/PipelineTemplateWizard.vue'
-import type { Pipeline, PipelineTemplateSummary } from '@/api/agent'
+import type { Pipeline, PipelinePreviewResponse, PipelineTemplateSummary } from '@/api/agent'
 
 const template: PipelineTemplateSummary = {
   source: 'builtin',
@@ -66,5 +66,21 @@ describe('PipelineTemplateWizard', () => {
 
     expect((wrapper.find('[data-test="template-select"]').element as HTMLSelectElement).value).toBe('builtin://go-binary-build@1.0.0')
     expect((wrapper.find('[data-test="template-input-app_name"]').element as HTMLInputElement).value).toBe('api')
+  })
+
+  it('展示预览结果和预览错误', () => {
+    const preview: PipelinePreviewResponse = {
+      run: {
+        deployment_id: 'd1',
+        status: 'pending',
+        step_runs: [{ step_name: 'Compile', type: 'local_command', phase: 'build', status: 'pending', tasks: [] }],
+      },
+    }
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: { deploy: [] }, templates: [template], preview, previewError: '预览失败' },
+    })
+
+    expect(wrapper.text()).toContain('Compile')
+    expect(wrapper.text()).toContain('预览失败')
   })
 })
