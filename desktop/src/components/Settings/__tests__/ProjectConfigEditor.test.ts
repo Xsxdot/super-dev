@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
-import type { Project } from '@/api/agent'
+import type { PipelineTemplateSummary, Project } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -23,6 +23,12 @@ function project(): Project {
     environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
     services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', required: false, order: 0, deployments: [] }],
   }
+}
+
+function projectWithDeployment(): Project {
+  const p = project()
+  p.services[0].deployments = [{ id: 'd1', env_name: 'dev', location: 'local', command: 'npm run dev', work_dir: '/tmp/demo/web', status: '' }]
+  return p
 }
 
 describe('ProjectConfigEditor', () => {
@@ -68,5 +74,23 @@ describe('ProjectConfigEditor', () => {
       services: expect.any(Array),
     }))
     expect(wrapper.emitted('saved')).toBeTruthy()
+  })
+
+  it('向 deployment 表单传入 pipeline templates', async () => {
+    const pipelineTemplates: PipelineTemplateSummary[] = [{
+      source: 'builtin',
+      id: 'go-binary-build',
+      name: 'Go Build',
+      version: '1.0.0',
+      digest: 'sha256:x',
+    }]
+    const wrapper = mount(ProjectConfigEditor, {
+      props: { project: projectWithDeployment(), pipelineTemplates },
+    })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+
+    expect(wrapper.find('[data-test="template-select"]').exists()).toBe(true)
   })
 })

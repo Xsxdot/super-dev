@@ -11,7 +11,7 @@ ServiceCard：单个 service 在某个 env 下的配置卡片。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Deployment } from '@/api/agent'
+import type { Deployment, PipelineTemplateSummary } from '@/api/agent'
 import type { ConfigDraftService } from '@/lib/configDraft'
 import DeploymentForm from './DeploymentForm.vue'
 
@@ -21,6 +21,7 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   /** 项目根目录，用于新建 deployment 时自动填入工作目录默认值 */
   projectPath?: string
+  pipelineTemplates?: PipelineTemplateSummary[]
 }>()
 const emit = defineEmits<{
   'update:service': [ConfigDraftService]
@@ -73,7 +74,13 @@ function removeDep() {
       <button type="button" class="enable-btn" data-test="enable-dep" @click="enableDep">启用</button>
     </div>
     <div v-else class="svc-dep">
-      <DeploymentForm :model-value="dep" :hosts="hosts" :default-work-dir="defaultWorkDir" @update:model-value="updateDep" />
+      <DeploymentForm
+        :model-value="dep"
+        :hosts="hosts"
+        :default-work-dir="defaultWorkDir"
+        :pipeline-templates="pipelineTemplates ?? []"
+        @update:model-value="updateDep"
+      />
       <button type="button" class="dep-remove" @click="removeDep">移除该环境配置</button>
     </div>
   </article>

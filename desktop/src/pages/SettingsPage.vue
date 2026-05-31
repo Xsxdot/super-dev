@@ -342,6 +342,7 @@ const retentionDays = computed({
       v-if="editorProject"
       :project="editorProject"
       :is-new="editorIsNew"
+      :pipeline-templates="pipelineTemplateStore.templates"
       @saved="onEditorSaved"
       @cancel="editorProject = null; editorIsNew = false"
     />

@@ -13,14 +13,14 @@ ProjectConfigEditor：项目配置编辑器外壳（配置唯一编辑入口）�
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { api, type Project } from '@/api/agent'
+import { api, type PipelineTemplateSummary, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraft, type ConfigDraftService } from '@/lib/configDraft'
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
 
-const props = defineProps<{ project: Project; isNew?: boolean }>()
+const props = defineProps<{ project: Project; isNew?: boolean; pipelineTemplates?: PipelineTemplateSummary[] }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
 const agentStore = useAgentStore()
@@ -186,6 +186,7 @@ async function save() {
               :env-name="activeEnv"
               :hosts="hosts"
               :project-path="project.root_path"
+              :pipeline-templates="pipelineTemplates ?? []"
               @update:service="updateService(activeServiceIndex, $event)"
               @remove="removeService(activeServiceIndex)"
             />
