@@ -37,3 +37,29 @@ func TestListPipelineTemplatesIncludesBuiltins(t *testing.T) {
 	require.NotEmpty(t, body.Items)
 	assert.NotEmpty(t, body.Items[0].Digest)
 }
+
+func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
+	app := newTestAppInstance(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0", nil)
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body struct {
+		Source   string `json:"source"`
+		ID       string `json:"id"`
+		Version  string `json:"version"`
+		Digest   string `json:"digest"`
+		YAML     string `json:"yaml"`
+		Template struct {
+			Name string `json:"name"`
+		} `json:"template"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	assert.Equal(t, "builtin", body.Source)
+	assert.Equal(t, "go-binary-build", body.ID)
+	assert.Equal(t, "1.0.0", body.Version)
+	assert.NotEmpty(t, body.Digest)
+	assert.Equal(t, "Go Binary Build", body.Template.Name)
+	assert.Contains(t, body.YAML, "id: go-binary-build")
+}

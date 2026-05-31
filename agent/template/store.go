@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -136,6 +137,69 @@ func (s *Store) PublishDraft(source, id, version string) (VersionedTemplate, err
 	return s.writePublished(source, tpl)
 }
 
+// ListPublished returns published user and project templates.
+//
+// 返回：
+//   - user/project 模板库中已发布的不可变版本
+//   - 读取、解析或 digest 计算失败时返回错误
+//
+// 注意：
+//   - builtin 模板由 LoadBuiltins 直接加载，不通过该方法返回
+func (s *Store) ListPublished() ([]VersionedTemplate, error) {
+	var out []VersionedTemplate
+	for _, source := range []string{"user", "project"} {
+		root := filepath.Join(s.rootForSource(source), "versions")
+		entries, err := os.ReadDir(root)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			versionFiles, err := os.ReadDir(filepath.Join(root, entry.Name()))
+			if err != nil {
+				return nil, err
+			}
+			for _, versionFile := range versionFiles {
+				if versionFile.IsDir() || filepath.Ext(versionFile.Name()) != ".yaml" {
+					continue
+				}
+				path := filepath.Join(root, entry.Name(), versionFile.Name())
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return nil, err
+				}
+				var tpl Template
+				if err := yaml.Unmarshal(data, &tpl); err != nil {
+					return nil, err
+				}
+				if err := Validate(tpl); err != nil {
+					return nil, err
+				}
+				digest, err := Digest(tpl)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, VersionedTemplate{Source: source, Template: tpl, Digest: digest})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		if out[i].Template.ID != out[j].Template.ID {
+			return out[i].Template.ID < out[j].Template.ID
+		}
+		return out[i].Template.Version < out[j].Template.Version
+	})
+	return out, nil
+}
+
 // Resolve resolves a template URI to an immutable versioned template.
 //
 // 参数：
@@ -182,6 +246,29 @@ func (s *Store) Resolve(uri, version, digest string) (VersionedTemplate, error) 
 		return VersionedTemplate{}, fmt.Errorf("template %s@%s digest mismatch", uri, version)
 	}
 	return VersionedTemplate{Source: source, Template: tpl, Digest: gotDigest}, nil
+}
+
+// ResolveWithYAML resolves a template and returns canonical YAML text.
+//
+// 参数：
+//   - uri: 模板 URI
+//   - version: 固定版本号
+//   - digest: 可选 digest 锁
+//
+// 返回：
+//   - 解析后的模板版本
+//   - 可用于只读查看的规范 YAML 文本
+//   - 解析或 YAML 序列化失败时返回错误
+func (s *Store) ResolveWithYAML(uri, version, digest string) (VersionedTemplate, string, error) {
+	resolved, err := s.Resolve(uri, version, digest)
+	if err != nil {
+		return VersionedTemplate{}, "", err
+	}
+	data, err := yaml.Marshal(resolved.Template)
+	if err != nil {
+		return VersionedTemplate{}, "", err
+	}
+	return resolved, string(data), nil
 }
 
 func (s *Store) writePublished(source string, tpl Template) (VersionedTemplate, error) {

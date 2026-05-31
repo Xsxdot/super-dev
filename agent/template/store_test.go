@@ -27,6 +27,55 @@ func writeTemplateFile(t *testing.T, path string, tpl pipelinetemplate.Template)
 	require.NoError(t, os.WriteFile(path, data, 0o644))
 }
 
+func TestStoreListPublishedIncludesUserTemplates(t *testing.T) {
+	dir := t.TempDir()
+	store := pipelinetemplate.NewStore(dir, nil, "")
+	tpl := pipelinetemplate.Template{
+		ID:      "custom",
+		Name:    "Custom",
+		Version: "1.0.0",
+		Steps: []pipelinetemplate.Step{{
+			Name: "Echo",
+			Type: "local_command",
+			With: map[string]interface{}{"cmd": "echo ok"},
+		}},
+	}
+	path := filepath.Join(dir, "custom.yaml")
+	writeTemplateFile(t, path, tpl)
+	_, err := store.ImportFile(path)
+	require.NoError(t, err)
+
+	items, err := store.ListPublished()
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "user", items[0].Source)
+	assert.Equal(t, "custom", items[0].Template.ID)
+	assert.NotEmpty(t, items[0].Digest)
+}
+
+func TestStoreResolveYAMLReturnsCanonicalContent(t *testing.T) {
+	dir := t.TempDir()
+	builtins := map[string]pipelinetemplate.Template{
+		"go": {
+			ID:      "go",
+			Name:    "Go",
+			Version: "1.0.0",
+			Steps: []pipelinetemplate.Step{{
+				Name: "Build",
+				Type: "local_command",
+				With: map[string]interface{}{"cmd": "go build"},
+			}},
+		},
+	}
+	store := pipelinetemplate.NewStore(dir, builtins, "")
+
+	got, yamlText, err := store.ResolveWithYAML("builtin://go", "1.0.0", "")
+	require.NoError(t, err)
+	assert.Equal(t, "builtin", got.Source)
+	assert.Contains(t, yamlText, "id: go")
+	assert.Contains(t, yamlText, "steps:")
+}
+
 func TestStoreImportRejectsSameVersionDifferentDigest(t *testing.T) {
 	dir := t.TempDir()
 	store := pipelinetemplate.NewStore(dir, nil, "")
