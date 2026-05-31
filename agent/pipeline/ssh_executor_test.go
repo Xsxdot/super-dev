@@ -11,19 +11,27 @@ import (
 	"github.com/superdev/agent/pipeline"
 )
 
+type sshRemoteRunner interface {
+	RunRemote(ctx context.Context, target pipeline.Target, cmd string, workDir string, onLine func(string, string)) error
+}
+
+type sshFileTransfer interface {
+	Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error
+}
+
 func TestSSHExecutorConstruct(t *testing.T) {
-	// 仅验证构造与接口实现，不连真机
+	// 仅验证构造与能力接口实现，不连真机
 	ex := pipeline.NewSSHExecutor(func(hostID string) (model.Host, bool) {
 		return model.Host{ID: hostID, SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops"}, true
 	})
-	var _ pipeline.Executor = ex
+	var _ sshRemoteRunner = ex
+	var _ sshFileTransfer = ex
 	assert.NotNil(t, ex)
 }
 
 func TestSSHExecutorUnknownHost(t *testing.T) {
 	ex := pipeline.NewSSHExecutor(func(string) (model.Host, bool) { return model.Host{}, false })
-	_, err := ex.Run(context.Background(), pipeline.Target{HostID: "missing"},
-		model.Step{Name: "remote", Type: "remote_command", With: map[string]interface{}{"cmd": "echo hi"}}, func(string, string) {})
+	err := ex.RunRemote(context.Background(), pipeline.Target{HostID: "missing"}, "echo hi", "", func(string, string) {})
 	require.Error(t, err)
 }
 

@@ -1,3 +1,12 @@
+// Package pipeline_test 验证插件化阶段 DAG 执行引擎。
+//
+// 职责：
+//   - 验证 build/deploy/finally 阶段顺序
+//   - 验证 build 失败时跳过 deploy 但仍执行 finally
+//
+// 边界：
+//   - 不执行真实 shell/SSH/HTTP 插件
+//   - 不测试模板 include 展开
 package pipeline_test
 
 import (
@@ -12,124 +21,58 @@ import (
 	"github.com/superdev/agent/pipeline"
 )
 
-// fakeExecutor 记录调用顺序，可按 (stepName, hostID) 注入失败。
-type fakeExecutor struct {
+type fakePlugin struct {
+	name   string
+	failOn map[string]bool
 	mu     sync.Mutex
-	calls  []string // "stepName@hostID"
-	failAt map[string]bool
+	calls  []string
 }
 
-func (f *fakeExecutor) record(step model.Step, t pipeline.Target) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, step.Name+"@"+t.HostID)
+func (p *fakePlugin) Name() string { return p.name }
+func (p *fakePlugin) Validate(step model.Step) error {
+	return nil
 }
-
-func (f *fakeExecutor) Run(ctx context.Context, t pipeline.Target, step model.Step, onLine func(string, string)) (int, error) {
-	f.record(step, t)
-	if f.failAt[step.Name+"@"+t.HostID] {
-		return 1, errors.New("boom")
-	}
-	return 0, nil
-}
-
-func (f *fakeExecutor) Sync(ctx context.Context, t pipeline.Target, step model.Step, onLine func(string, string)) error {
-	f.record(step, t)
-	if f.failAt[step.Name+"@"+t.HostID] {
-		return errors.New("sync boom")
+func (p *fakePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	p.mu.Lock()
+	p.calls = append(p.calls, step.Name)
+	p.mu.Unlock()
+	if p.failOn[step.Name] {
+		return errors.New("boom")
 	}
 	return nil
 }
 
-func buildPipelineAndRun() (model.Pipeline, model.Run) {
+func TestEngineRunsBuildDeployFinally(t *testing.T) {
+	plugin := &fakePlugin{name: "local_command", failOn: map[string]bool{}}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
 	p := model.Pipeline{
-		Roles: map[string][]string{"compute": {"h1", "h2"}},
-		Build: []model.Step{
-			{Name: "build", Type: "local_command"},
-		},
-		Deploy: []model.Step{
-			{Name: "sync", Type: "transfer", Roles: []string{"compute"}},
-			{Name: "restart", Type: "remote_command", Roles: []string{"compute"}, Needs: []string{"sync"}},
-		},
+		Build:   []model.Step{{Name: "Build", Type: "local_command"}},
+		Deploy:  []model.Step{{Name: "Deploy", Type: "local_command"}},
+		Finally: []model.Step{{Name: "Cleanup", Type: "local_command"}},
 	}
-	_, run, err := pipeline.BuildPlan("dep-1", p, []model.HostRef{{ID: "h1", Name: "host-1"}, {ID: "h2", Name: "host-2"}})
-	if err != nil {
-		panic(err)
-	}
-	return p, run
-}
-
-func TestEngineHappyPath(t *testing.T) {
-	p, run := buildPipelineAndRun()
-	fe := &fakeExecutor{failAt: map[string]bool{}}
-	eng := pipeline.NewEngine(fe)
-
-	final, err := eng.Run(context.Background(), p, run, nil)
+	plan, run, err := pipeline.BuildPlan("dep-1", p, nil)
+	require.NoError(t, err)
+	final, err := eng.Run(context.Background(), plan, run, nil)
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusSuccess, final.Status)
-	for _, sr := range final.StepRuns {
-		assert.Equal(t, model.StatusSuccess, sr.Status)
-		for _, tk := range sr.Tasks {
-			assert.Equal(t, model.StatusSuccess, tk.Status)
-		}
-	}
-	// build 在所有 remote tasks 之前。
-	assert.Equal(t, "build@", fe.calls[0])
+	assert.Equal(t, []string{"Build", "Deploy", "Cleanup"}, plugin.calls)
 }
 
-func TestEngineFailFastStopsLaterSteps(t *testing.T) {
-	p, run := buildPipelineAndRun()
-	fe := &fakeExecutor{failAt: map[string]bool{"sync@h1": true}}
-	eng := pipeline.NewEngine(fe)
-
-	final, err := eng.Run(context.Background(), p, run, nil)
+func TestEngineSkipsDeployAfterBuildFailureButRunsFinally(t *testing.T) {
+	plugin := &fakePlugin{name: "local_command", failOn: map[string]bool{"Build": true}}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
+	p := model.Pipeline{
+		Build:   []model.Step{{Name: "Build", Type: "local_command"}},
+		Deploy:  []model.Step{{Name: "Deploy", Type: "local_command"}},
+		Finally: []model.Step{{Name: "Cleanup", Type: "local_command"}},
+	}
+	plan, run, err := pipeline.BuildPlan("dep-1", p, nil)
+	require.NoError(t, err)
+	final, err := eng.Run(context.Background(), plan, run, nil)
 	require.Error(t, err)
 	assert.Equal(t, model.RunStatusFailed, final.Status)
-
-	// build 成功，sync 失败，restart 完全不执行。
-	assert.Equal(t, model.StatusSuccess, final.StepRuns[0].Status)
-	assert.Equal(t, model.RunStatusFailed, final.StepRuns[1].Status)
-	assert.Equal(t, model.StatusPending, final.StepRuns[2].Status)
-	for _, c := range fe.calls {
-		assert.NotContains(t, c, "restart@")
-	}
-}
-
-func TestEngineEmitsStatusCallbacks(t *testing.T) {
-	p, run := buildPipelineAndRun()
-	fe := &fakeExecutor{failAt: map[string]bool{}}
-	eng := pipeline.NewEngine(fe)
-
-	var mu sync.Mutex
-	var events []string
-	cb := func(ev pipeline.Event) {
-		mu.Lock()
-		defer mu.Unlock()
-		events = append(events, string(ev.Type))
-	}
-	_, err := eng.Run(context.Background(), p, run, cb)
-	require.NoError(t, err)
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, events, "task_started")
-	assert.Contains(t, events, "task_finished")
-	assert.Contains(t, events, "run_finished")
-}
-
-func TestEngineEmptyFanOutStepSucceeds(t *testing.T) {
-	// role 存在但没有 host（0 个 task）：视为该步骤直接成功。
-	p := model.Pipeline{
-		Roles:  map[string][]string{"compute": nil},
-		Deploy: []model.Step{{Name: "sync", Type: "transfer", Roles: []string{"compute"}}},
-	}
-	_, run, err := pipeline.BuildPlan("dep-1", p, nil)
-	require.NoError(t, err)
-	fe := &fakeExecutor{failAt: map[string]bool{}}
-	eng := pipeline.NewEngine(fe)
-
-	final, err := eng.Run(context.Background(), p, run, nil)
-	require.NoError(t, err)
-	assert.Equal(t, model.StatusSuccess, final.Status)
-	assert.Equal(t, model.StatusSuccess, final.StepRuns[0].Status)
-	assert.Empty(t, fe.calls)
+	assert.Equal(t, []string{"Build", "Cleanup"}, plugin.calls)
+	assert.Equal(t, model.StatusSkipped, final.StepRuns[1].Status)
 }

@@ -29,7 +29,7 @@ import (
 // HostLookup 按 hostID 解析远程主机连接信息。由上层（持有 remote.Store）注入。
 type HostLookup func(hostID string) (model.Host, bool)
 
-// SSHExecutor 通过 SSH 在远程 host 执行命令与传输文件，实现 Executor 接口。
+// SSHExecutor 通过 SSH 提供远程命令与文件传输能力。
 type SSHExecutor struct {
 	lookup HostLookup
 }
@@ -61,23 +61,6 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 	}
 	addr := net.JoinHostPort(host.SSHHost, strconv.Itoa(host.SSHPort))
 	return ssh.Dial("tcp", addr, cfg)
-}
-
-// Run 在远程 host 执行命令，逐行回调输出，返回退出码。
-//
-// 参数：
-//   - ctx: 上下文（当前 SSH session.Run 会阻塞至命令结束，ctx 取消不中断已启动命令）
-//   - target: 目标主机，HostID 用于 HostLookup
-//   - step: 使用 step.With["cmd"] 和 step.With["workDir"]；若 workDir 非空则在前置 cd
-//   - onLine: 逐行输出回调，stream 为 "stdout"/"stderr"
-//
-// 返回：
-//   - 退出码（命令非零退出不视为 error）
-//   - 仅连接失败或 session 异常时返回 non-nil error
-func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, onLine func(line, stream string)) (int, error) {
-	cmd := stepWithString(step, "cmd", "command")
-	workDir := stepWithString(step, "workDir", "work_dir", "workdir")
-	return s.runRemoteExit(ctx, target, cmd, workDir, onLine)
 }
 
 // RunRemote 在远程 host 执行命令，命令非零退出会作为错误返回。
@@ -130,7 +113,7 @@ func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd stri
 	go streamLines(stderr, "stderr", onLine)
 
 	if workDir != "" {
-		// 通过 cd 前置保证命令在指定目录下运行，与 LocalExecutor 行为对齐
+		// 通过 cd 前置保证命令在指定目录下运行，与本地 shell 插件行为对齐。
 		cmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
 	}
 	err = session.Run(cmd)
@@ -142,22 +125,6 @@ func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd stri
 		return ee.ExitStatus(), nil
 	}
 	return -1, err
-}
-
-// Sync 把本地 source 单文件传到远程 target（scp sink 协议）。
-//
-// 参数：
-//   - step.With["source"]: 本地文件路径
-//   - step.With["target"]: 远程文件完整路径（含文件名），目标目录必须已存在
-//   - onLine:              本函数暂无行输出，参数保留以满足 Executor 接口语义
-//
-// 注意：
-//   - 仅支持单文件传输，不支持目录递归
-//   - 使用标准 SCP sink 协议，远程必须有 scp 命令
-func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, onLine func(line, stream string)) error {
-	source := stepWithString(step, "source", "from", "src", "sync_from")
-	destination := stepWithString(step, "target", "to", "dest", "sync_to")
-	return s.Transfer(ctx, target, source, destination, onLine)
 }
 
 // Transfer 把本地单文件传到远程 targetPath（scp sink 协议）。
