@@ -75,6 +75,37 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 //   - 退出码（命令非零退出不视为 error）
 //   - 仅连接失败或 session 异常时返回 non-nil error
 func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, onLine func(line, stream string)) (int, error) {
+	cmd := stepWithString(step, "cmd", "command")
+	workDir := stepWithString(step, "workDir", "work_dir", "workdir")
+	return s.runRemoteExit(ctx, target, cmd, workDir, onLine)
+}
+
+// RunRemote 在远程 host 执行命令，命令非零退出会作为错误返回。
+//
+// 参数：
+//   - ctx: 上下文（当前 SSH session.Run 会阻塞至命令结束，ctx 取消不中断已启动命令）
+//   - target: 目标主机，HostID 用于 HostLookup
+//   - cmd: 要执行的 shell 命令
+//   - workDir: 可选工作目录
+//   - onLine: 逐行输出回调，stream 为 "stdout"/"stderr"
+//
+// 返回：
+//   - 连接失败、session 异常或命令非零退出时返回错误
+func (s *SSHExecutor) RunRemote(ctx context.Context, target Target, cmd string, workDir string, onLine func(string, string)) error {
+	code, err := s.runRemoteExit(ctx, target, cmd, workDir, onLine)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("remote command exited with code %d", code)
+	}
+	return nil
+}
+
+func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd string, workDir string, onLine func(line, stream string)) (int, error) {
+	if cmd == "" {
+		return -1, fmt.Errorf("remote_command cmd is required")
+	}
 	client, err := s.dial(target)
 	if err != nil {
 		return -1, err
@@ -98,11 +129,7 @@ func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, o
 	go streamLines(stdout, "stdout", onLine)
 	go streamLines(stderr, "stderr", onLine)
 
-	cmd := stepWithString(step, "cmd", "command")
-	if cmd == "" {
-		return -1, fmt.Errorf("remote_command cmd is required")
-	}
-	if workDir := stepWithString(step, "workDir", "work_dir", "workdir"); workDir != "" {
+	if workDir != "" {
 		// 通过 cd 前置保证命令在指定目录下运行，与 LocalExecutor 行为对齐
 		cmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
 	}
@@ -128,20 +155,35 @@ func (s *SSHExecutor) Run(ctx context.Context, target Target, step model.Step, o
 //   - 仅支持单文件传输，不支持目录递归
 //   - 使用标准 SCP sink 协议，远程必须有 scp 命令
 func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, onLine func(line, stream string)) error {
+	source := stepWithString(step, "source", "from", "src", "sync_from")
+	destination := stepWithString(step, "target", "to", "dest", "sync_to")
+	return s.Transfer(ctx, target, source, destination, onLine)
+}
+
+// Transfer 把本地单文件传到远程 targetPath（scp sink 协议）。
+//
+// 参数：
+//   - ctx: 上下文（当前 SSH session.Run 会阻塞至传输结束）
+//   - target: 目标主机，HostID 用于 HostLookup
+//   - source: 本地文件路径
+//   - targetPath: 远程文件完整路径（含文件名）
+//   - onLine: 本函数暂无行输出，参数保留以满足插件能力语义
+//
+// 返回：
+//   - 连接、读取源文件、传输失败或 source 为目录时返回错误
+func (s *SSHExecutor) Transfer(ctx context.Context, target Target, source string, targetPath string, onLine func(line, stream string)) error {
+	if source == "" {
+		return fmt.Errorf("transfer source is required")
+	}
+	if targetPath == "" {
+		return fmt.Errorf("transfer target is required")
+	}
 	client, err := s.dial(target)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	source := stepWithString(step, "source", "from", "src", "sync_from")
-	if source == "" {
-		return fmt.Errorf("transfer source is required")
-	}
-	destination := stepWithString(step, "target", "to", "dest", "sync_to")
-	if destination == "" {
-		return fmt.Errorf("transfer target is required")
-	}
 	f, err := os.Open(source)
 	if err != nil {
 		return err
@@ -150,6 +192,9 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	stat, err := f.Stat()
 	if err != nil {
 		return err
+	}
+	if stat.IsDir() {
+		return fmt.Errorf("transfer source must be a file")
 	}
 
 	session, err := client.NewSession()
@@ -168,7 +213,7 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	go func() {
 		defer w.Close()
 		// SCP C 指令：权限 大小 文件名
-		fmt.Fprintf(w, "C0644 %d %s\n", stat.Size(), path.Base(destination))
+		fmt.Fprintf(w, "C0644 %d %s\n", stat.Size(), path.Base(targetPath))
 		if _, err := io.Copy(w, f); err != nil {
 			errCh <- err
 			return
@@ -179,7 +224,7 @@ func (s *SSHExecutor) Sync(ctx context.Context, target Target, step model.Step, 
 	}()
 
 	// scp -t 启动 sink 模式，接收文件到目标目录
-	if err := session.Run("scp -t " + path.Dir(destination)); err != nil {
+	if err := session.Run("scp -t " + path.Dir(targetPath)); err != nil {
 		return err
 	}
 	return <-errCh
