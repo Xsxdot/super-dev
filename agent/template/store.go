@@ -136,6 +136,54 @@ func (s *Store) PublishDraft(source, id, version string) (VersionedTemplate, err
 	return s.writePublished(source, tpl)
 }
 
+// Resolve resolves a template URI to an immutable versioned template.
+//
+// 参数：
+//   - uri: 模板 URI，如 builtin://go-binary-build 或 user://custom
+//   - version: 固定版本号
+//   - digest: 可选 digest 锁，非空时必须匹配
+//
+// 返回：
+//   - 匹配的模板、来源和 digest
+//   - 模板不存在、校验失败或 digest 不匹配时返回错误
+func (s *Store) Resolve(uri, version, digest string) (VersionedTemplate, error) {
+	source, id := parseTemplateURI(uri)
+	if id == "" {
+		return VersionedTemplate{}, fmt.Errorf("template uri %q is invalid", uri)
+	}
+	var tpl Template
+	if source == "builtin" {
+		got, ok := s.builtin[id]
+		if !ok {
+			return VersionedTemplate{}, fmt.Errorf("builtin template %q not found", id)
+		}
+		tpl = got
+	} else {
+		path := filepath.Join(s.rootForSource(source), "versions", id, version+".yaml")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return VersionedTemplate{}, err
+		}
+		if err := yaml.Unmarshal(data, &tpl); err != nil {
+			return VersionedTemplate{}, err
+		}
+	}
+	if err := Validate(tpl); err != nil {
+		return VersionedTemplate{}, err
+	}
+	if version != "" && tpl.Version != version {
+		return VersionedTemplate{}, fmt.Errorf("template %s version mismatch: want %s got %s", uri, version, tpl.Version)
+	}
+	gotDigest, err := Digest(tpl)
+	if err != nil {
+		return VersionedTemplate{}, err
+	}
+	if digest != "" && gotDigest != digest {
+		return VersionedTemplate{}, fmt.Errorf("template %s@%s digest mismatch", uri, version)
+	}
+	return VersionedTemplate{Source: source, Template: tpl, Digest: gotDigest}, nil
+}
+
 func (s *Store) writePublished(source string, tpl Template) (VersionedTemplate, error) {
 	digest, err := Digest(tpl)
 	if err != nil {
@@ -189,4 +237,12 @@ func normalizeSource(source string) string {
 		return "user"
 	}
 	return source
+}
+
+func parseTemplateURI(uri string) (string, string) {
+	parts := strings.SplitN(uri, "://", 2)
+	if len(parts) != 2 {
+		return "user", strings.TrimSpace(uri)
+	}
+	return normalizeSource(parts[0]), strings.TrimSpace(parts[1])
 }

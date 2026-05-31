@@ -221,6 +221,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}/search", a.searchDeploymentLogs)
 	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
 
+	// Pipeline 模板与预览
+	mux.HandleFunc("GET /api/pipeline/templates", a.listPipelineTemplates)
+	mux.HandleFunc("POST /api/pipeline/templates/import", a.importPipelineTemplate)
+	mux.HandleFunc("POST /api/deployments/{id}/pipeline/preview", a.previewDeploymentPipeline)
+
 	// Deployment 进程控制
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
 	mux.HandleFunc("POST /api/deployments/{id}/stop", a.stopDeployment)
