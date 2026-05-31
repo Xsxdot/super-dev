@@ -9,7 +9,7 @@
  * 边界：
  *   - 纯数据转换，不发请求、不依赖 Vue
  */
-import type { Project, Deployment, Environment, SetupPayload, SetupDeployment } from '@/api/agent'
+import type { Project, Deployment, Environment, SetupPayload, SetupDeployment, Pipeline, PipelineStep } from '@/api/agent'
 
 export interface ConfigDraftService {
   id: string
@@ -110,6 +110,19 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
   }
 }
 
+function pipelineSteps(pipeline?: Pipeline): PipelineStep[] {
+  if (!pipeline) return []
+  return [
+    ...(pipeline.build ?? []),
+    ...(pipeline.deploy ?? []),
+    ...(pipeline.finally ?? []),
+  ]
+}
+
+function pipelineHasTargets(pipeline?: Pipeline): boolean {
+  return Object.values(pipeline?.roles ?? {}).some(ids => ids.length > 0)
+}
+
 /**
  * validateDraft 保存前校验，返回错误信息数组（空数组 = 通过）。
  *
@@ -120,9 +133,9 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
  *   - 错误信息数组，若为空数组表示校验通过
  *
  * 注意：
- *   - local deployment：command 为空且无 pipeline 时报错
- *   - remote deployment：host_ids 为空时报错
- *   - pipeline 步骤：run 类型命令为空、sync 类型路径为空时报错
+ *   - local deployment：command 为空且无 pipeline step 时报错
+ *   - remote deployment：host_ids 与 pipeline.roles 均为空时报错
+ *   - pipeline 步骤：名称和插件类型为空时报错
  */
 export function validateDraft(draft: ConfigDraft): string[] {
   const errors: string[] = []
@@ -152,25 +165,21 @@ export function validateDraft(draft: ConfigDraft): string[] {
 
     // 校验每个部署配置
     for (const d of s.deployments) {
-      if (d.location === 'local' && (d.command ?? '').trim() === '' && !d.pipeline) {
+      const steps = pipelineSteps(d.pipeline)
+      if (d.location === 'local' && (d.command ?? '').trim() === '' && steps.length === 0) {
         // local 部署：必须有命令或 pipeline，两者都没有则报错
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的本地命令不能为空`)
       }
-      if (d.location === 'remote' && (d.host_ids ?? []).length === 0) {
-        // remote 部署：必须选择至少一台主机
+      if (d.location === 'remote' && (d.host_ids ?? []).length === 0 && !pipelineHasTargets(d.pipeline)) {
+        // remote 部署：必须选择至少一台主机，或在 pipeline.roles 中声明目标。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境未选择主机`)
       }
-      if (d.pipeline) {
-        for (const step of d.pipeline.steps) {
-          if (step.action === 'run' && (step.command ?? '').trim() === '') {
-            errors.push(`服务「${s.name}」流水线步骤「${step.name || step.id}」命令不能为空`)
-          }
-          if (
-            step.action === 'sync' &&
-            ((step.sync_from ?? '').trim() === '' || (step.sync_to ?? '').trim() === '')
-          ) {
-            errors.push(`服务「${s.name}」流水线同步步骤「${step.name || step.id}」路径不能为空`)
-          }
+      for (const step of steps) {
+        if ((step.name ?? '').trim() === '') {
+          errors.push(`服务「${s.name}」流水线步骤名称不能为空`)
+        }
+        if ((step.type ?? '').trim() === '') {
+          errors.push(`服务「${s.name}」流水线步骤「${step.name || '未命名'}」插件类型不能为空`)
         }
       }
     }

@@ -71,15 +71,15 @@ describe('configDraft', () => {
   it('projectToDraft 深拷贝嵌套对象：改草稿的 env / pipeline 不影响原 Project', () => {
     const p = makeProject()
     const origDep = p.services[0]!.deployments![0]!
-    origDep.pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
+    origDep.pipeline = { build: [{ name: 'Build', type: 'local_command', with: { cmd: 'make' } }] }
     const draft = projectToDraft(p)
     // 改草稿里的 env map 和 pipeline 步骤
     const draftDep = draft.services[0]!.deployments[0]!
     draftDep.env!.A = 'mutated'
-    draftDep.pipeline!.steps[0]!.command = 'mutated'
+    ;(draftDep.pipeline!.build![0]!.with as Record<string, unknown>).cmd = 'mutated'
     // 原 Project 不应被影响
     expect(origDep.env!.A).toBe('1')
-    expect(origDep.pipeline!.steps[0]!.command).toBe('make')
+    expect(origDep.pipeline!.build![0]!.with!.cmd).toBe('make')
   })
 
   it('draftToPayload 透传 extra_args 与 env_file（编辑器未暴露但不应丢失）', () => {
@@ -98,10 +98,23 @@ describe('configDraft', () => {
     expect(payload.services[0]!.deployments[0]!.read_only).toBe(true)
   })
 
-  it('validateDraft：local deployment 有 pipeline 时允许命令为空', () => {
+  it('允许 local deployment 使用 pipeline 替代 command', () => {
     const draft = projectToDraft(makeProject())
-    draft.services[0].deployments[0].command = ''
-    draft.services[0].deployments[0].pipeline = { steps: [{ id: 'st1', name: 'build', scope: 'local', action: 'run', command: 'make' }] }
+    draft.services[0].deployments[0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      status: '',
+      pipeline: { build: [{ name: 'Build', type: 'local_command', with: { cmd: 'go build' } }] },
+    }
     expect(validateDraft(draft)).toEqual([])
+  })
+
+  it('校验 pipeline step name 和 type', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments[0].pipeline = { deploy: [{ name: '', type: '' }] }
+    const errors = validateDraft(draft)
+    expect(errors.some(e => e.includes('步骤名称不能为空'))).toBe(true)
+    expect(errors.some(e => e.includes('插件类型不能为空'))).toBe(true)
   })
 })
