@@ -117,4 +117,22 @@ describe('configDraft', () => {
     expect(errors.some(e => e.includes('步骤名称不能为空'))).toBe(true)
     expect(errors.some(e => e.includes('插件类型不能为空'))).toBe(true)
   })
+
+  it('拒绝未选择主机的流水线目标角色', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].name = 'api'
+    draft.services[0].deployments[0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'remote',
+      host_ids: [],
+      status: '',
+      pipeline: {
+        roles: { deploy_1_targets: [] },
+        deploy: [{ name: 'Deploy', type: 'include', with: { vars: { role: 'deploy_1_targets' } } }],
+      },
+    }
+
+    expect(validateDraft(draft)).toContain('服务「api」流水线目标「deploy_1_targets」未选择主机')
+  })
 })

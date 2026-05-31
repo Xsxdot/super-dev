@@ -174,6 +174,11 @@ export function validateDraft(draft: ConfigDraft): string[] {
         // remote 部署：必须选择至少一台主机，或在 pipeline.roles 中声明目标。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境未选择主机`)
       }
+      for (const [role, ids] of Object.entries(d.pipeline?.roles ?? {})) {
+        if (ids.length === 0) {
+          errors.push(`服务「${s.name}」流水线目标「${role}」未选择主机`)
+        }
+      }
       for (const step of steps) {
         if ((step.name ?? '').trim() === '') {
           errors.push(`服务「${s.name}」流水线步骤名称不能为空`)
