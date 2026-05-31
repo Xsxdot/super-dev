@@ -1,9 +1,10 @@
 /**
- * PipelineTemplateWizard 测试模板化流水线配置入口。
+ * PipelineTemplateWizard 测试模板化流水线组合编辑器。
  *
  * 职责：
- *   - 验证无 pipeline 时展示启用入口
- *   - 验证选择模板并填写输入后生成 include step
+ *   - 验证按阶段添加多个模板
+ *   - 验证 target_role 输入保存为 pipeline.roles
+ *   - 验证已有 include pipeline 可回填
  *
  * 边界：
  *   - 不调用真实模板预览接口
@@ -14,58 +15,105 @@ import { describe, expect, it } from 'vitest'
 import PipelineTemplateWizard from '@/components/Settings/PipelineTemplateWizard.vue'
 import type { Pipeline, PipelinePreviewResponse, PipelineTemplateSummary } from '@/api/agent'
 
-const template: PipelineTemplateSummary = {
+const buildTemplate: PipelineTemplateSummary = {
   source: 'builtin',
   id: 'go-binary-build',
   name: 'Go Build',
   version: '1.0.0',
-  digest: 'sha256:x',
+  digest: 'sha256:build',
   inputs: {
-    app_name: { label: '应用名', type: 'string', required: true },
+    app_name: { label: '应用名', type: 'string', required: true, description: '应用名' },
+  },
+}
+
+const deployTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'systemd-seamless-deploy',
+  name: 'Systemd Deploy',
+  version: '1.0.0',
+  digest: 'sha256:deploy',
+  inputs: {
+    role: { label: '目标机器', type: 'target_role', required: true, description: '部署目标机器' },
+    app_name: { label: '应用名', type: 'string', required: true, description: '应用名' },
   },
 }
 
 describe('PipelineTemplateWizard', () => {
   it('无 pipeline 时展示配置入口', () => {
-    const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [template] } })
+    const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [buildTemplate] } })
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(true)
   })
 
-  it('选择模板并填写 inputs 后 emit include step', async () => {
-    const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [template] } })
+  it('按阶段保存多个模板和目标机器角色', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
-    await wrapper.find('[data-test="template-select"]').setValue('builtin://go-binary-build@1.0.0')
-    await wrapper.find('[data-test="template-input-app_name"]').setValue('api')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
+    expect(wrapper.find('[data-test="block-0-help-app_name"]').attributes('title')).toBe('应用名')
+
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+    await wrapper.find('[data-test="block-1-input-app_name"]').setValue('api')
+    await wrapper.find('[data-test="block-1-target-h1"]').setValue(true)
     await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
 
-    const emitted = wrapper.emitted('update:modelValue')
-    const pipeline = emitted![0][0] as any
-
-    expect(pipeline.deploy[0].type).toBe('include')
-    expect(pipeline.deploy[0].with.template).toBe('builtin://go-binary-build')
-    expect(pipeline.deploy[0].with.version).toBe('1.0.0')
-    expect(pipeline.deploy[0].with.digest).toBe('sha256:x')
-    expect(pipeline.deploy[0].with.vars.app_name).toBe('api')
+    const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
+    expect(pipeline.build?.[0].with?.template).toBe('builtin://go-binary-build')
+    expect(pipeline.deploy?.[0].with?.template).toBe('builtin://systemd-seamless-deploy')
+    expect(pipeline.deploy?.[0].with?.vars).toMatchObject({ role: 'deploy_1_targets', app_name: 'api' })
+    expect(pipeline.roles?.deploy_1_targets).toEqual(['h1'])
+    expect(pipeline.variables?.app_name).toBe('api')
   })
 
-  it('已有 include pipeline 时回填模板和 inputs', () => {
+  it('target_role 未选择机器时禁用保存', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+    await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
+
+    expect(wrapper.find('[data-test="pipeline-save-template"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('已有 include pipeline 时回填模板、输入和目标机器', () => {
     const pipeline: Pipeline = {
+      roles: { deploy_0_targets: ['h1'] },
       deploy: [{
-        name: 'Go Build',
+        name: 'Systemd Deploy',
         type: 'include',
         with: {
-          template: 'builtin://go-binary-build',
+          template: 'builtin://systemd-seamless-deploy',
           version: '1.0.0',
-          digest: 'sha256:x',
-          vars: { app_name: 'api' },
+          digest: 'sha256:deploy',
+          vars: { app_name: 'api', role: 'deploy_0_targets' },
         },
       }],
     }
 
-    const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: pipeline, templates: [template] } })
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: pipeline,
+        templates: [deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
 
-    expect((wrapper.find('[data-test="template-select"]').element as HTMLSelectElement).value).toBe('builtin://go-binary-build@1.0.0')
-    expect((wrapper.find('[data-test="template-input-app_name"]').element as HTMLInputElement).value).toBe('api')
+    expect((wrapper.find('[data-test="block-0-template-select"]').element as HTMLSelectElement).value).toBe('builtin://systemd-seamless-deploy@1.0.0')
+    expect((wrapper.find('[data-test="block-0-input-app_name"]').element as HTMLInputElement).value).toBe('api')
+    expect((wrapper.find('[data-test="block-0-target-h1"]').element as HTMLInputElement).checked).toBe(true)
   })
 
   it('展示预览结果和预览错误', () => {
@@ -77,7 +125,7 @@ describe('PipelineTemplateWizard', () => {
       },
     }
     const wrapper = mount(PipelineTemplateWizard, {
-      props: { modelValue: { deploy: [] }, templates: [template], preview, previewError: '预览失败' },
+      props: { modelValue: { deploy: [] }, templates: [buildTemplate], preview, previewError: '预览失败' },
     })
 
     expect(wrapper.text()).toContain('Compile')

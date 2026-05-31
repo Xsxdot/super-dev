@@ -75,12 +75,13 @@ describe('DeploymentForm', () => {
     })
 
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
-    await wrapper.find('[data-test="template-select"]').setValue('builtin://go-binary-build@1.0.0')
-    await wrapper.find('[data-test="template-input-app_name"]').setValue('api')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
     await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
 
     const emitted = wrapper.emitted('update:modelValue')
     const last = emitted![emitted!.length - 1][0] as Deployment
-    expect(last.pipeline?.deploy?.[0].type).toBe('include')
+    expect(last.pipeline?.build?.[0].type).toBe('include')
   })
 })

@@ -164,6 +164,7 @@ function setEnv(env: Record<string, string>) {
     <PipelineTemplateWizard
       :model-value="modelValue.pipeline"
       :templates="pipelineTemplates ?? []"
+      :hosts="hosts"
       @update:model-value="setPipeline"
     />
   </div>

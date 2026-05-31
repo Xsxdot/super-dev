@@ -90,7 +90,8 @@ describe('ProjectConfigEditor', () => {
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
 
-    expect(wrapper.find('[data-test="template-select"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-template-select"]').exists()).toBe(true)
   })
 })
