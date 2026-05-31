@@ -52,7 +52,7 @@ export interface Pipeline {
 
 export interface TemplateInput {
   label: string
-  type: 'string' | 'number' | 'bool' | 'select' | 'path'
+  type: 'string' | 'number' | 'bool' | 'select' | 'path' | 'target_role'
   required?: boolean
   default?: string
   description?: string
@@ -67,6 +67,24 @@ export interface PipelineTemplateSummary {
   digest: string
   description?: string
   inputs?: Record<string, TemplateInput>
+}
+
+export interface PipelineTemplateModel {
+  id: string
+  name: string
+  description?: string
+  version: string
+  inputs?: Record<string, TemplateInput>
+  steps: PipelineStep[]
+}
+
+export interface PipelineTemplateDetail {
+  source: 'builtin' | 'user' | 'project'
+  id: string
+  version: string
+  digest: string
+  yaml: string
+  template: PipelineTemplateModel
 }
 
 export interface PipelineTemplatesResponse {
@@ -478,6 +496,10 @@ export const api = {
 
   // Pipeline 模板与预览
   listPipelineTemplates: () => request<PipelineTemplatesResponse>('/api/pipeline/templates'),
+  getPipelineTemplate: (source: PipelineTemplateSummary['source'], id: string, version: string) =>
+    request<PipelineTemplateDetail>(
+      `/api/pipeline/templates/${encodeURIComponent(source)}/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`,
+    ),
   importPipelineTemplate: (path: string) =>
     request<PipelineTemplateSummary>('/api/pipeline/templates/import', {
       method: 'POST',

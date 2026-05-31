@@ -50,4 +50,26 @@ describe('pipelineTemplate store', () => {
     expect(importTemplate).toHaveBeenCalledWith('/tmp/custom-deploy.yaml')
     expect(store.templates[0].source).toBe('user')
   })
+
+  it('loads template detail', async () => {
+    vi.spyOn(api, 'getPipelineTemplate').mockResolvedValue({
+      source: 'builtin',
+      id: 'go-binary-build',
+      version: '1.0.0',
+      digest: 'sha256:x',
+      yaml: 'id: go-binary-build\n',
+      template: {
+        id: 'go-binary-build',
+        name: 'Go Build',
+        version: '1.0.0',
+        steps: [{ name: 'Build', type: 'local_command' }],
+      },
+    })
+
+    const store = usePipelineTemplateStore()
+    const detail = await store.loadTemplateDetail('builtin', 'go-binary-build', '1.0.0')
+
+    expect(api.getPipelineTemplate).toHaveBeenCalledWith('builtin', 'go-binary-build', '1.0.0')
+    expect(detail.yaml).toContain('go-binary-build')
+  })
 })
