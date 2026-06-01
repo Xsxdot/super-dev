@@ -8,7 +8,11 @@ use tauri::AppHandle;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
-const REQUIRED_AGENT_ENDPOINTS: [&str; 2] = ["/api/hosts", "/api/tunnels"];
+const REQUIRED_AGENT_ENDPOINTS: [&str; 3] = [
+    "/api/hosts",
+    "/api/tunnels",
+    "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
+];
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
@@ -229,7 +233,14 @@ mod tests {
 
     #[test]
     fn probe_reports_compatible_when_required_remote_endpoints_exist() {
-        let addr = serve_statuses(vec![("/api/hosts", 200), ("/api/tunnels", 200)]);
+        let addr = serve_statuses(vec![
+            ("/api/hosts", 200),
+            ("/api/tunnels", 200),
+            (
+                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
+                200,
+            ),
+        ]);
 
         let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
 
@@ -246,6 +257,28 @@ mod tests {
             outcome,
             ProbeOutcome::Incompatible {
                 endpoint: "/api/hosts",
+                status: 404,
+            }
+        );
+    }
+
+    #[test]
+    fn probe_reports_incompatible_when_existing_agent_lacks_template_detail_endpoint() {
+        let addr = serve_statuses(vec![
+            ("/api/hosts", 200),
+            ("/api/tunnels", 200),
+            (
+                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
+                404,
+            ),
+        ]);
+
+        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
+
+        assert_eq!(
+            outcome,
+            ProbeOutcome::Incompatible {
+                endpoint: "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
                 status: 404,
             }
         );
