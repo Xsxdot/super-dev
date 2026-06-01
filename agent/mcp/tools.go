@@ -35,8 +35,54 @@ func emptyInputSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false}
 }
 
+func targetInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":    map[string]any{"type": "string"},
+			"project_name":  map[string]any{"type": "string"},
+			"env_name":      map[string]any{"type": "string"},
+			"service_id":    map[string]any{"type": "string"},
+			"service_name":  map[string]any{"type": "string"},
+			"deployment_id": map[string]any{"type": "string"},
+		},
+	}
+}
+
+func projectInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+		},
+	}
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
+		{
+			Tool: Tool{
+				Name:        "list_projects",
+				Title:       "List projects",
+				Description: "Return SuperDev projects registered in the local agent.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listProjectsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_project",
+				Title:       "Get project",
+				Description: "Return one SuperDev project by ID or name.",
+				InputSchema: projectInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getProjectTool,
+		},
 		{
 			Tool: Tool{
 				Name:        "get_runtime_snapshot",
@@ -45,7 +91,46 @@ func defaultTools(s *Server) []registeredTool {
 				InputSchema: emptyInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
-			Handler: s.toolNotImplemented,
+			Handler: s.runtimeSnapshotTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_services",
+				Title:       "List services",
+				Description: "Return services and deployment runtime state from the local SuperDev agent.",
+				InputSchema: projectInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listServicesTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "start_service",
+				Title:       "Start service",
+				Description: "Start one resolved deployment through the local SuperDev agent.",
+				InputSchema: targetInputSchema(),
+			},
+			Handler: s.startServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "stop_service",
+				Title:       "Stop service",
+				Description: "Stop one resolved deployment through the local SuperDev agent.",
+				InputSchema: targetInputSchema(),
+				Annotations: map[string]any{"destructiveHint": true},
+			},
+			Handler: s.stopServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "restart_service",
+				Title:       "Restart service",
+				Description: "Restart one resolved deployment through the local SuperDev agent.",
+				InputSchema: targetInputSchema(),
+				Annotations: map[string]any{"destructiveHint": true},
+			},
+			Handler: s.restartServiceTool,
 		},
 	}
 }
