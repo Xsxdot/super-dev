@@ -186,15 +186,3 @@ func mustObject(v any) map[string]any {
 	_ = json.Unmarshal(data, &out)
 	return out
 }
-
-func toolError(code, message string, data any) CallToolResult {
-	body := map[string]any{"ok": false, "code": code, "message": message}
-	if data != nil {
-		body["data"] = data
-	}
-	return CallToolResult{
-		Content:           []map[string]string{{"type": "text", "text": message}},
-		StructuredContent: body,
-		IsError:           true,
-	}
-}
