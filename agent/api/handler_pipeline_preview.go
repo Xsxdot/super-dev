@@ -12,6 +12,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/superdev/agent/model"
@@ -53,6 +54,71 @@ func (a *App) previewDeploymentPipeline(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	plan, run, err := pipeline.BuildPlan(dep.ID, expanded, hosts)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to build pipeline plan: "+err.Error())
+		return
+	}
+	jsonOK(w, map[string]interface{}{"plan": plan, "run": run})
+}
+
+type projectPipelinePreviewRequest struct {
+	EnvName      string            `json:"env_name"`
+	ServiceNames []string          `json:"service_names"`
+	Variables    map[string]string `json:"variables"`
+}
+
+// previewProjectPipeline 处理 POST /api/projects/{id}/pipelines/{pipelineId}/preview。
+func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	pipelineID := r.PathValue("pipelineId")
+	var req projectPipelinePreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.EnvName == "" {
+		jsonError(w, http.StatusBadRequest, "env_name is required")
+		return
+	}
+
+	a.mu.RLock()
+	project, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:        project,
+		PipelineID:     pipelineID,
+		EnvName:        req.EnvName,
+		ServiceNames:   req.ServiceNames,
+		RunVariables:   req.Variables,
+		PreviewTempDir: "/tmp/super-debug-pipeline-preview",
+	})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	builtins, err := pipelinetemplate.LoadBuiltins()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to load builtin templates: "+err.Error())
+		return
+	}
+	resolver := pipelinetemplate.NewStore(a.cfg.DataDir, builtins, project.RootPath)
+	expanded, err := expandDeploymentPipeline(resolved.Pipeline, resolver)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to expand pipeline: "+err.Error())
+		return
+	}
+	hosts, err := a.hostRefs(pipelineHostIDs(nil, expanded.Roles))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to load hosts: "+err.Error())
+		return
+	}
+	plan, run, err := pipeline.BuildPlan(resolved.RunID, expanded, hosts)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "failed to build pipeline plan: "+err.Error())
 		return

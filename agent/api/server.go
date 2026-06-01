@@ -226,6 +226,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/pipeline/templates/{source}/{id}", a.getPipelineTemplate)
 	mux.HandleFunc("POST /api/pipeline/templates/import", a.importPipelineTemplate)
 	mux.HandleFunc("POST /api/deployments/{id}/pipeline/preview", a.previewDeploymentPipeline)
+	mux.HandleFunc("POST /api/projects/{id}/pipelines/{pipelineId}/preview", a.previewProjectPipeline)
 
 	// Deployment 进程控制
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
