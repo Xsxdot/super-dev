@@ -92,6 +92,45 @@ func TestEngineSkipsDeployAfterBuildFailureButRunsFinally(t *testing.T) {
 	assert.Equal(t, model.StatusSkipped, final.StepRuns[1].Status)
 }
 
+func TestEngineSkipsStepWhenRunIfFalse(t *testing.T) {
+	plugin := &fakePlugin{name: "local_command", failOn: map[string]bool{}}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
+	p := model.Pipeline{
+		Build: []model.Step{{Name: "Optional", Type: "local_command", RunIf: "false"}},
+	}
+	plan, run, err := pipeline.BuildPlan("dep-1", p, nil)
+	require.NoError(t, err)
+
+	final, err := eng.Run(context.Background(), plan, run, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusSuccess, final.Status)
+	assert.Empty(t, plugin.calls)
+	require.Len(t, final.StepRuns, 1)
+	assert.Equal(t, model.StatusSkipped, final.StepRuns[0].Status)
+}
+
+func TestEngineFailsStepWhenRunIfInvalid(t *testing.T) {
+	plugin := &fakePlugin{name: "local_command", failOn: map[string]bool{}}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
+	p := model.Pipeline{
+		Build: []model.Step{{Name: "Invalid", Type: "local_command", RunIf: "prod"}},
+	}
+	plan, run, err := pipeline.BuildPlan("dep-1", p, nil)
+	require.NoError(t, err)
+
+	final, err := eng.Run(context.Background(), plan, run, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run_if")
+	assert.Equal(t, model.RunStatusFailed, final.Status)
+	assert.Empty(t, plugin.calls)
+	require.Len(t, final.StepRuns, 1)
+	assert.Equal(t, model.RunStatusFailed, final.StepRuns[0].Status)
+}
+
 func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
 	plugin := &contextCapturePlugin{}
 	eng := pipeline.NewEngine()

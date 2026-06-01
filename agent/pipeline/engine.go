@@ -146,12 +146,26 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 			statuses[step.Name] = model.StatusSkipped
 			continue
 		}
+		shouldRun, err := EvaluateRunIf(step.RunIf)
+		if err != nil {
+			markStepFailed(sr)
+			statuses[step.Name] = model.RunStatusFailed
+			if phaseErr == nil {
+				phaseErr = err
+			}
+			continue
+		}
+		if !shouldRun {
+			markStepSkipped(sr)
+			statuses[step.Name] = model.StatusSkipped
+			continue
+		}
 		if len(sr.Tasks) == 0 {
 			sr.Status = model.StatusSuccess
 			statuses[step.Name] = model.StatusSuccess
 			continue
 		}
-		err := e.executeStep(ctx, step, sr, emit, runTempDir, runVars)
+		err = e.executeStep(ctx, step, sr, emit, runTempDir, runVars)
 		if err != nil {
 			statuses[step.Name] = model.RunStatusFailed
 			if phaseErr == nil {
