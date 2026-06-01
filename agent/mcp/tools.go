@@ -61,6 +61,54 @@ func projectInputSchema() map[string]any {
 	}
 }
 
+func tailLogsInputSchema() map[string]any {
+	schema := targetInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["limit"] = map[string]any{"type": "integer", "minimum": 1}
+	properties["run_id"] = map[string]any{"type": "string"}
+	properties["before"] = map[string]any{"type": "integer", "minimum": 1}
+	properties["level"] = map[string]any{"type": "string"}
+	properties["since"] = map[string]any{"type": "string"}
+	properties["apply_project_rules"] = map[string]any{"type": "boolean"}
+	return schema
+}
+
+func searchLogsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"q":             map[string]any{"type": "string"},
+			"project_id":    map[string]any{"type": "string"},
+			"project_name":  map[string]any{"type": "string"},
+			"deployment_id": map[string]any{"type": "string"},
+			"limit":         map[string]any{"type": "integer", "minimum": 1},
+			"cursor_time":   map[string]any{"type": "string"},
+			"cursor_id":     map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"q"},
+	}
+}
+
+func logContextInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"id":           map[string]any{"type": "integer", "minimum": 1},
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"deployment_id": map[string]any{
+				"type": "string",
+			},
+			"before_ms": map[string]any{"type": "integer", "minimum": 1},
+			"after_ms":  map[string]any{"type": "integer", "minimum": 1},
+			"limit":     map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"id"},
+	}
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
 		{
@@ -131,6 +179,36 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"destructiveHint": true},
 			},
 			Handler: s.restartServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "tail_logs",
+				Title:       "Tail logs",
+				Description: "Fetch recent deployment logs and optionally apply project log rules.",
+				InputSchema: tailLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.tailLogsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "search_logs",
+				Title:       "Search logs",
+				Description: "Search SuperDev logs by project or deployment.",
+				InputSchema: searchLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.searchLogsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_log_context",
+				Title:       "Get log context",
+				Description: "Fetch cross-service log context around one log entry.",
+				InputSchema: logContextInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getLogContextTool,
 		},
 	}
 }
