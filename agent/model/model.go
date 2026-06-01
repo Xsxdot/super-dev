@@ -72,11 +72,13 @@ type Service struct {
 // Environments 定义该项目的运行环境列表，每个 Service 的 Deployment
 // 通过 EnvName 引用其中一个环境。
 type Project struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"                 yaml:"name"`
-	RootPath     string        `json:"root_path"            yaml:"-"`
-	Environments []Environment `json:"environments,omitempty"`
-	Services     []Service     `json:"services"             yaml:"services"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"                 yaml:"name"`
+	RootPath     string            `json:"root_path"            yaml:"-"`
+	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
+	Environments []Environment     `json:"environments,omitempty"`
+	Services     []Service         `json:"services"             yaml:"services"`
+	Pipelines    []ProjectPipeline `json:"pipelines,omitempty" yaml:"pipelines,omitempty"`
 	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
 	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表，
 	// 从而实现 env 级隔离的选中状态。
@@ -174,6 +176,103 @@ const (
 	LocationRemote DeployLocation = "remote"
 )
 
+// RuntimeType 表示服务在某环境下由哪种运行基座接管生命周期。
+type RuntimeType string
+
+const (
+	// RuntimeTypeCommand 表示本机或远程 shell 命令运行。
+	RuntimeTypeCommand RuntimeType = "command"
+	// RuntimeTypeSystemd 表示由 systemd service 接管运行。
+	RuntimeTypeSystemd RuntimeType = "systemd"
+	// RuntimeTypeDocker 表示由 Docker 容器接管运行。
+	RuntimeTypeDocker RuntimeType = "docker"
+	// RuntimeTypeNginxStatic 表示由 Nginx 托管静态资源。
+	RuntimeTypeNginxStatic RuntimeType = "nginx_static"
+	// RuntimeTypeExternal 表示 SuperDev 只观测外部系统托管的服务。
+	RuntimeTypeExternal RuntimeType = "external"
+)
+
+// LogKind 表示 Deployment 的日志采集方式。
+type LogKind string
+
+const (
+	// LogKindProcess 表示捕获本机子进程 stdout/stderr。
+	LogKindProcess LogKind = "process"
+	// LogKindJournalctl 表示通过 journalctl 采集 systemd 日志。
+	LogKindJournalctl LogKind = "journalctl"
+	// LogKindDocker 表示通过 docker logs 采集容器日志。
+	LogKindDocker LogKind = "docker"
+	// LogKindNginx 表示采集 Nginx 访问或错误日志。
+	LogKindNginx LogKind = "nginx"
+)
+
+// RuntimeConfig 描述服务在某环境下的运行基座和生命周期参数。
+//
+// 职责：
+//   - 描述服务最终如何被启动、停止、重启
+//   - 描述制品被部署后应该放在哪些运行目录
+//
+// 边界：
+//   - 不描述构建、传输、健康检查等部署过程
+//   - 不执行命令，仅作为配置模型
+type RuntimeConfig struct {
+	Type        RuntimeType       `json:"type" yaml:"type"`
+	Command     string            `json:"command,omitempty" yaml:"command,omitempty"`
+	WorkingDir  string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	EnvFile     string            `json:"env_file,omitempty" yaml:"env_file,omitempty"`
+	EnvVars     map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
+	ServiceName string            `json:"service_name,omitempty" yaml:"service_name,omitempty"`
+	ReleaseDir  string            `json:"release_dir,omitempty" yaml:"release_dir,omitempty"`
+	CurrentDir  string            `json:"current_dir,omitempty" yaml:"current_dir,omitempty"`
+	ExecStart   string            `json:"exec_start,omitempty" yaml:"exec_start,omitempty"`
+	Container   string            `json:"container,omitempty" yaml:"container,omitempty"`
+	Domain      string            `json:"domain,omitempty" yaml:"domain,omitempty"`
+}
+
+// LogConfig 描述服务在某环境下的日志采集配置。
+//
+// 职责：
+//   - 统一表达本机进程、journalctl、docker、nginx 等日志来源
+//
+// 边界：
+//   - 不负责日志过滤规则
+//   - 不持有运行时游标或订阅状态
+type LogConfig struct {
+	Type      LogKind  `json:"type" yaml:"type"`
+	Target    string   `json:"target,omitempty" yaml:"target,omitempty"`
+	ExtraArgs []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
+}
+
+// PipelineEnvironment 描述项目级流水线在某个环境下覆盖的变量。
+type PipelineEnvironment struct {
+	Variables map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
+}
+
+// ProjectPipelineRole 描述项目级流水线角色如何解析到主机列表。
+type ProjectPipelineRole struct {
+	FromService string   `json:"from_service,omitempty" yaml:"from_service,omitempty"`
+	Hosts       []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+}
+
+// ProjectPipeline 描述项目级部署流水线，可一次部署多个服务。
+//
+// 职责：
+//   - 保存构建、传输、部署编排
+//   - 保存环境变量覆盖和服务目标角色解析规则
+//
+// 边界：
+//   - 不描述单个服务如何长期运行，该职责属于 Deployment.Runtime
+//   - 不保存 Run 状态
+type ProjectPipeline struct {
+	ID           string                         `json:"id" yaml:"id"`
+	Name         string                         `json:"name" yaml:"name"`
+	Services     []string                       `json:"services,omitempty" yaml:"services,omitempty"`
+	Variables    map[string]string              `json:"variables,omitempty" yaml:"variables,omitempty"`
+	Environments map[string]PipelineEnvironment `json:"environments,omitempty" yaml:"environments,omitempty"`
+	Roles        map[string]ProjectPipelineRole `json:"roles,omitempty" yaml:"roles,omitempty"`
+	Pipeline     Pipeline                       `json:"pipeline" yaml:"pipeline"`
+}
+
 // Environment 表示一个运行环境定义，集中管理名称、排序和开发标记。
 //
 // 环境名由用户自由定义（dev / staging / prod ...），不做枚举约束。
@@ -199,6 +298,11 @@ type Deployment struct {
 	ID       string         `json:"id"`
 	EnvName  string         `json:"env_name"`
 	Location DeployLocation `json:"location"`
+
+	// Runtime 描述该服务在当前环境下的运行基座。迁移期保留下面的扁平字段。
+	Runtime *RuntimeConfig `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+	// Logs 描述该服务在当前环境下的日志采集方式。迁移期保留 LogType 等扁平字段。
+	Logs *LogConfig `json:"logs,omitempty" yaml:"logs,omitempty"`
 
 	// location=local 时使用
 	Command string            `json:"command,omitempty"`

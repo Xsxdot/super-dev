@@ -77,6 +77,32 @@ func TestDeploymentJSON(t *testing.T) {
 	require.Equal(t, d, got)
 }
 
+func TestDeploymentRuntimeAndLogsJSON(t *testing.T) {
+	d := model.Deployment{
+		ID:       "dep-1",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Runtime: &model.RuntimeConfig{
+			Type:       model.RuntimeTypeCommand,
+			Command:    "go run .",
+			WorkingDir: "server",
+			EnvFile:    ".env.dev",
+			EnvVars:    map[string]string{"LOG_LEVEL": "debug"},
+		},
+		Logs: &model.LogConfig{Type: model.LogKindProcess},
+	}
+
+	data, err := json.Marshal(d)
+	require.NoError(t, err)
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.NotNil(t, got.Runtime)
+	assert.Equal(t, model.RuntimeTypeCommand, got.Runtime.Type)
+	assert.Equal(t, "go run .", got.Runtime.Command)
+	require.NotNil(t, got.Logs)
+	assert.Equal(t, model.LogKindProcess, got.Logs.Type)
+}
+
 func TestEnvironmentJSON(t *testing.T) {
 	e := model.Environment{
 		ID:    "env-1",
@@ -121,6 +147,39 @@ func TestProjectWithEnvironments(t *testing.T) {
 	var got model.Project
 	require.NoError(t, json.Unmarshal(data, &got))
 	require.Equal(t, p, got)
+}
+
+func TestProjectPipelinesJSON(t *testing.T) {
+	p := model.Project{
+		Name:      "demo",
+		Variables: map[string]string{"app_name": "demo"},
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "deploy-dev",
+			Name:     "Deploy Dev",
+			Services: []string{"api", "admin"},
+			Variables: map[string]string{
+				"artifact_dir": "${run_temp_dir}/artifacts",
+			},
+			Environments: map[string]model.PipelineEnvironment{
+				"dev": {Variables: map[string]string{"config_file": "resources/dev.yaml"}},
+			},
+			Roles: map[string]model.ProjectPipelineRole{
+				"api_targets": {FromService: "api"},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{Name: "Build", Type: "local_command"}},
+			},
+		}},
+	}
+
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	var got model.Project
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "demo", got.Variables["app_name"])
+	require.Len(t, got.Pipelines, 1)
+	assert.Equal(t, "deploy-dev", got.Pipelines[0].ID)
+	assert.Equal(t, "api", got.Pipelines[0].Roles["api_targets"].FromService)
 }
 
 func TestLogEntrySourceID(t *testing.T) {
