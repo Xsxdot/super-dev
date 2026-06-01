@@ -13,12 +13,13 @@ ProjectConfigEditor：项目配置编辑器外壳（配置唯一编辑入口）�
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { api, type PipelineTemplateSummary, type Project } from '@/api/agent'
+import { api, type PipelineTemplateSummary, type Project, type ProjectPipeline } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraft, type ConfigDraftService } from '@/lib/configDraft'
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
+import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
 
 const props = defineProps<{ project: Project; isNew?: boolean; pipelineTemplates?: PipelineTemplateSummary[] }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
@@ -127,6 +128,10 @@ function removeService(i: number) {
   }
 }
 
+function updatePipelines(pipelines: ProjectPipeline[]) {
+  draft.value.pipelines = pipelines
+}
+
 async function save() {
   errors.value = validateDraft(draft.value)
   if (errors.value.length) return
@@ -186,7 +191,6 @@ async function save() {
               :env-name="activeEnv"
               :hosts="hosts"
               :project-path="project.root_path"
-              :pipeline-templates="pipelineTemplates ?? []"
               @update:service="updateService(activeServiceIndex, $event)"
               @remove="removeService(activeServiceIndex)"
             />
@@ -194,6 +198,14 @@ async function save() {
           <div v-else class="editor-empty">请在左侧新增服务</div>
         </div>
       </div>
+
+      <ProjectPipelinePanel
+        :model-value="draft.pipelines"
+        :services="draft.services"
+        :hosts="hosts"
+        :templates="pipelineTemplates ?? []"
+        @update:model-value="updatePipelines"
+      />
 
       <div class="editor-actions">
         <button type="button" data-test="config-cancel" @click="emit('cancel')">取消</button>

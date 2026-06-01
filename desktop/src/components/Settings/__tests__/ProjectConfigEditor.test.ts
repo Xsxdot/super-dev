@@ -76,22 +76,32 @@ describe('ProjectConfigEditor', () => {
     expect(wrapper.emitted('saved')).toBeTruthy()
   })
 
-  it('向 deployment 表单传入 pipeline templates', async () => {
+  it('保存项目级 pipeline', async () => {
+    const { api } = await import('@/api/agent')
     const pipelineTemplates: PipelineTemplateSummary[] = [{
       source: 'builtin',
       id: 'go-binary-build',
       name: 'Go Build',
       version: '1.0.0',
       digest: 'sha256:x',
+      inputs: { app_name: { label: '应用名', type: 'string', required: true } },
     }]
+    const p = projectWithDeployment()
     const wrapper = mount(ProjectConfigEditor, {
-      props: { project: projectWithDeployment(), pipelineTemplates },
+      props: { project: p, pipelineTemplates },
     })
     await new Promise(r => setTimeout(r))
 
-    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
-    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="add-project-pipeline"]').trigger('click')
+    await wrapper.find('[data-test="project-pipeline-name"]').setValue('Deploy Dev')
+    await wrapper.find('[data-test="project-pipeline-save-template"]').trigger('click')
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
 
-    expect(wrapper.find('[data-test="block-0-template-select"]').exists()).toBe(true)
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      pipelines: expect.arrayContaining([
+        expect.objectContaining({ name: 'Deploy Dev' }),
+      ]),
+    }))
   })
 })

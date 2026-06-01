@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DeploymentForm from '@/components/Settings/DeploymentForm.vue'
-import type { Deployment, PipelineTemplateSummary } from '@/api/agent'
+import type { Deployment } from '@/api/agent'
 
 function localDep(): Deployment {
   return { id: 'd1', env_name: 'dev', location: 'local', command: 'go run .', work_dir: '/tmp', status: '' }
@@ -61,27 +61,11 @@ describe('DeploymentForm', () => {
     expect((emitted![0]![0] as Deployment).read_only).toBe(true)
   })
 
-  it('使用模板向导生成 include pipeline', async () => {
-    const templates: PipelineTemplateSummary[] = [{
-      source: 'builtin',
-      id: 'go-binary-build',
-      name: 'Go Build',
-      version: '1.0.0',
-      digest: 'sha256:x',
-      inputs: { app_name: { label: '应用名', type: 'string', required: true } },
-    }]
+  it('does not render deployment-level pipeline wizard', () => {
     const wrapper = mount(DeploymentForm, {
-      props: { modelValue: localDep(), hosts: [], pipelineTemplates: templates },
+      props: { modelValue: localDep(), hosts: [] },
     })
 
-    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
-    await wrapper.find('[data-test="add-template-build"]').trigger('click')
-    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
-    await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
-    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
-
-    const emitted = wrapper.emitted('update:modelValue')
-    const last = emitted![emitted!.length - 1][0] as Deployment
-    expect(last.pipeline?.build?.[0].type).toBe('include')
+    expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
   })
 })
