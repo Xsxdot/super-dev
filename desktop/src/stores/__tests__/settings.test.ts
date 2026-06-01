@@ -12,7 +12,7 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api as agentApi } from '@/api/agent'
-import { LOCALE_STORAGE_KEY } from '@/i18n'
+import { LOCALE_STORAGE_KEY, setLocale } from '@/i18n'
 import { useSettingsStore } from '../settings'
 
 vi.mock('@tauri-apps/plugin-autostart', () => ({
@@ -57,12 +57,12 @@ describe('settingsStore', () => {
   })
 
   it('初始化时暴露当前语言和可选语言', () => {
-    localStorage.setItem(LOCALE_STORAGE_KEY, 'en-US')
+    setLocale('en-US')
     const store = useSettingsStore()
 
     expect(store.locale).toBe('en-US')
     expect(store.supportedLocaleOptions).toEqual([
-      { value: 'zh-CN', label: '简体中文' },
+      { value: 'zh-CN', label: 'Chinese (Simplified)' },
       { value: 'en-US', label: 'English' },
     ])
   })

@@ -10,6 +10,7 @@ ServiceRail：左栏服务导航列表。
   - 删除只 emit index，不做确认（确认由父层决定）
 -->
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { ConfigDraftService } from '@/lib/configDraft'
 
 const props = defineProps<{
@@ -22,13 +23,14 @@ const emit = defineEmits<{
   'add': []
   'remove': [index: number]
 }>()
+const { t } = useAppI18n()
 
 function badge(svc: ConfigDraftService): string {
   const dep = svc.deployments.find(d => d.env_name === props.envName)
-  if (!dep) return '未配置'
-  if (dep.location === 'local') return '本地'
+  if (!dep) return t('settings.service.unconfigured')
+  if (dep.location === 'local') return t('common.local')
   const count = dep.host_ids?.length ?? 0
-  return count > 0 ? `远程 ${count} 台` : '远程'
+  return count > 0 ? t('common.remoteCount', { count }) : t('common.remote')
 }
 
 function isActive(svc: ConfigDraftService, i: number): boolean {
@@ -45,11 +47,11 @@ function isActive(svc: ConfigDraftService, i: number): boolean {
       :class="{ active: isActive(svc, i) }"
       @click="emit('select', svc.id || String(i))"
     >
-      <span class="rail-name">{{ svc.name || '（未命名）' }}</span>
-      <span class="rail-badge" :class="badge(svc) === '未配置' ? 'badge-empty' : 'badge-ok'">{{ badge(svc) }}</span>
+      <span class="rail-name">{{ svc.name || t('settings.service.unnamed') }}</span>
+      <span class="rail-badge" :class="badge(svc) === t('settings.service.unconfigured') ? 'badge-empty' : 'badge-ok'">{{ badge(svc) }}</span>
       <button type="button" class="rail-del" data-test="rail-del" @click.stop="emit('remove', i)">✕</button>
     </div>
-    <button type="button" class="rail-add" data-test="rail-add" @click="emit('add')">+ 新增服务</button>
+    <button type="button" class="rail-add" data-test="rail-add" @click="emit('add')">+ {{ t('settings.service.addService') }}</button>
   </div>
 </template>
 

@@ -9,9 +9,11 @@ EnvKeyValueEditor：环境变量 key-value 行编辑器。
 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ modelValue: Record<string, string> }>()
 const emit = defineEmits<{ 'update:modelValue': [Record<string, string>] }>()
+const { t } = useAppI18n()
 
 interface Row { key: string; value: string }
 const rows = ref<Row[]>([])
@@ -51,7 +53,7 @@ function delRow(i: number) {
       <input v-model="row.value" class="env-input" placeholder="VALUE" @input="emitRows" />
       <button type="button" class="env-del" data-test="env-del" @click="delRow(i)">✕</button>
     </div>
-    <button type="button" class="env-add" data-test="env-add" @click="addRow">+ 添加变量</button>
+    <button type="button" class="env-add" data-test="env-add" @click="addRow">{{ t('settings.deployment.addEnvVar') }}</button>
   </div>
 </template>
 

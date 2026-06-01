@@ -20,7 +20,7 @@ export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number]
 
 export const SUPPORTED_LOCALE_OPTIONS: Array<{ value: SupportedLocale; label: string }> = [
-  { value: 'zh-CN', label: '简体中文' },
+  { value: 'zh-CN', label: 'Chinese (Simplified)' },
   { value: 'en-US', label: 'English' },
 ]
 

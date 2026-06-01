@@ -7,7 +7,8 @@
  *   - validateDraft：保存前校验，返回错误信息数组（空数组 = 通过）
  *
  * 边界：
- *   - 纯数据转换，不发请求、不依赖 Vue
+ *   - 纯数据转换，不发请求
+ *   - 校验提示只通过 i18n key 格式化，不耦合具体 UI 组件
  */
 import type {
   Project,
@@ -25,6 +26,7 @@ import type {
   LogSourceType,
   ControlMode,
 } from '@/api/agent'
+import { i18n } from '@/i18n'
 
 export interface ConfigDraftService {
   id: string
@@ -39,6 +41,14 @@ export interface ConfigDraft {
   environments: Environment[]
   services: ConfigDraftService[]
   pipelines: ProjectPipeline[]
+}
+
+export type ValidationScope = 'config' | 'pipeline'
+
+export interface ValidationIssue {
+  scope: ValidationScope
+  key: string
+  params?: Record<string, string>
 }
 
 function clone<T>(value: T): T {
@@ -267,29 +277,52 @@ function pipelineSteps(pipeline?: Pipeline): PipelineStep[] {
 }
 
 /**
- * validateDraft 保存前校验，返回错误信息数组（空数组 = 通过）。
+ * formatValidationIssue 把校验 issue 格式化为当前语言下的可展示错误信息。
+ *
+ * 参数：
+ *   - issue: validateDraftDetailed 返回的结构化校验错误
+ *
+ * 返回：
+ *   - 当前 i18n locale 对应的错误文案
+ */
+export function formatValidationIssue(issue: ValidationIssue): string {
+  const unnamed = i18n.global.t('common.unnamed')
+  return i18n.global.t(issue.key, {
+    unnamed,
+    ...issue.params,
+    pipeline: issue.params?.pipeline || unnamed,
+    step: issue.params?.step || unnamed,
+  })
+}
+
+function issue(scope: ValidationScope, key: string, params?: Record<string, string>): ValidationIssue {
+  return { scope, key, params }
+}
+
+/**
+ * validateDraftDetailed 保存前校验，返回结构化错误（空数组 = 通过）。
  *
  * 参数：
  *   - draft: 待校验的 ConfigDraft 草稿
  *
  * 返回：
- *   - 错误信息数组，若为空数组表示校验通过
+ *   - 结构化错误数组，若为空数组表示校验通过
  *
  * 注意：
  *   - local deployment：runtime.command / command 为空时报错
  *   - remote deployment：host_ids 为空时报错
  *   - 项目级 pipeline 步骤：名称和插件类型为空时报错
  */
-export function validateDraft(draft: ConfigDraft): string[] {
-  const errors: string[] = []
+export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
+  const errors: ValidationIssue[] = []
 
   // 校验环境配置
   const envNames = new Set<string>()
   for (const e of draft.environments) {
     if (e.name.trim() === '') {
-      errors.push('环境名称不能为空')
+      errors.push(issue('config', 'validation.envNameRequired'))
     } else if (envNames.has(e.name)) {
-      errors.push(`环境名称重复：${e.name}`)
+      errors.push(issue('config', 'validation.envNameDuplicate', { name: e.name }))
     } else {
       envNames.add(e.name)
     }
@@ -299,9 +332,9 @@ export function validateDraft(draft: ConfigDraft): string[] {
   const svcNames = new Set<string>()
   for (const s of draft.services) {
     if (s.name.trim() === '') {
-      errors.push('服务名称不能为空')
+      errors.push(issue('config', 'validation.serviceNameRequired'))
     } else if (svcNames.has(s.name)) {
-      errors.push(`服务名重复：${s.name}`)
+      errors.push(issue('config', 'validation.serviceNameDuplicate', { name: s.name }))
     } else {
       svcNames.add(s.name)
     }
@@ -312,29 +345,29 @@ export function validateDraft(draft: ConfigDraft): string[] {
       const command = (dep.runtime?.command ?? '').trim()
       if (dep.control_mode === 'managed' && dep.runtime?.type === 'command' && command === '') {
         // command 接管需要明确启动命令；流水线已提升到项目级，不再作为命令替代品。
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境的本地命令不能为空`)
+        errors.push(issue('config', 'validation.localCommandRequired', { service: s.name, env: d.env_name }))
       }
       if (dep.control_mode === 'managed' && dep.runtime?.type === 'launchd' && (dep.runtime.label ?? '').trim() === '') {
         // launchd 接管依赖稳定 label，不能退化为自定义命令或隐式猜测。
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境的 Launchd Label 不能为空`)
+        errors.push(issue('config', 'validation.launchdLabelRequired', { service: s.name, env: d.env_name }))
       }
       if (d.location === 'remote' && (d.host_ids ?? []).length === 0) {
         // remote 运行配置必须明确主机；项目级流水线通过服务环境配置再解析目标。
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境未选择主机`)
+        errors.push(issue('config', 'validation.remoteHostRequired', { service: s.name, env: d.env_name }))
       }
       const logs = dep.logs
       if (logs?.type === 'file_tail' && (logs.path ?? '').trim() === '') {
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志文件路径不能为空`)
+        errors.push(issue('config', 'validation.logFilePathRequired', { service: s.name, env: d.env_name }))
       }
       if (logs?.type === 'command' && (logs.command ?? '').trim() === '') {
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志命令不能为空`)
+        errors.push(issue('config', 'validation.logCommandRequired', { service: s.name, env: d.env_name }))
       }
       if ((logs?.type === 'journalctl' || logs?.type === 'macos_log' || logs?.type === 'docker' || logs?.type === 'nginx') && (logs.target ?? '').trim() === '') {
         if (logs?.type === 'macos_log') {
-          errors.push(`服务「${s.name}」在「${d.env_name}」环境的 macOS 日志目标不能为空`)
+          errors.push(issue('config', 'validation.macosLogTargetRequired', { service: s.name, env: d.env_name }))
           continue
         }
-        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志目标不能为空`)
+        errors.push(issue('config', 'validation.logTargetRequired', { service: s.name, env: d.env_name }))
       }
     }
   }
@@ -342,13 +375,29 @@ export function validateDraft(draft: ConfigDraft): string[] {
   for (const projectPipeline of draft.pipelines) {
     for (const step of pipelineSteps(projectPipeline.pipeline)) {
       if ((step.name ?? '').trim() === '') {
-        errors.push(`项目流水线「${projectPipeline.name || projectPipeline.id || '未命名'}」步骤名称不能为空`)
+        errors.push(issue('pipeline', 'validation.pipelineStepNameRequired', { pipeline: projectPipeline.name || projectPipeline.id || '' }))
       }
       if ((step.type ?? '').trim() === '') {
-        errors.push(`项目流水线「${projectPipeline.name || projectPipeline.id || '未命名'}」步骤「${step.name || '未命名'}」插件类型不能为空`)
+        errors.push(issue('pipeline', 'validation.pipelineStepTypeRequired', {
+          pipeline: projectPipeline.name || projectPipeline.id || '',
+          step: step.name || '',
+        }))
       }
     }
   }
 
   return errors
+}
+
+/**
+ * validateDraft 保存前校验，返回错误信息数组（空数组 = 通过）。
+ *
+ * 参数：
+ *   - draft: 待校验的 ConfigDraft 草稿
+ *
+ * 返回：
+ *   - 错误信息数组，若为空数组表示校验通过
+ */
+export function validateDraft(draft: ConfigDraft): string[] {
+  return validateDraftDetailed(draft).map(formatValidationIssue)
 }

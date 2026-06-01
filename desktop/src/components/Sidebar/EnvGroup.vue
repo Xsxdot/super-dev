@@ -115,7 +115,7 @@ async function restartOne(svc: Service) {
 function onServiceRowClick(svc: Service) {
   const dep = deploymentForService(svc)
   if (!dep) {
-    console.warn('[SuperDev] service 在该 env 下无 deployment，无法打开日志', svc.name, props.envName)
+    console.warn('[SuperDev] service has no deployment in this env; cannot open logs', svc.name, props.envName)
     return
   }
   emit('open-deployment', { deploymentId: dep.id, title: `${svc.name} · ${props.envName}` })

@@ -9,6 +9,7 @@ ServiceList：当前 env 下的服务列表 + 新增服务入口。
 -->
 <script setup lang="ts">
 import type { ConfigDraftService } from '@/lib/configDraft'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import ServiceCard from './ServiceCard.vue'
 
 defineProps<{
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   'remove-service': [number]
   'add-service': []
 }>()
+const { t } = useAppI18n()
 </script>
 
 <template>
@@ -32,7 +34,7 @@ const emit = defineEmits<{
       @remove="emit('remove-service', i)"
     />
     <button type="button" class="add-service" data-test="add-service" @click="emit('add-service')">
-      + 新增服务
+      {{ t('settings.service.addService') }}
     </button>
   </div>
 </template>

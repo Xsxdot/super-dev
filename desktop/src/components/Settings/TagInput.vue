@@ -12,12 +12,14 @@ TagInput：标签式多值输入组件。
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import { tagColor } from '@/lib/tagColor'
 
 const props = defineProps<{ modelValue: string[] }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string[]] }>()
 
 const input = ref('')
+const { t } = useAppI18n()
 
 function addTag(raw: string) {
   const trimmed = raw.trim()
@@ -59,7 +61,7 @@ function removeTag(tag: string) {
     <input
       v-model="input"
       class="tag-text"
-      placeholder="输入后按 Enter 添加"
+      :placeholder="t('common.tagPlaceholder')"
       @keydown="onKeydown"
       @blur="onBlur"
     />

@@ -10,16 +10,18 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { LogLifecycleMarker } from '@/stores/logLifecycle'
 
 const props = defineProps<{
   marker: LogLifecycleMarker
 }>()
+const { t } = useAppI18n()
 
 const label = computed(() => {
-  if (props.marker.kind === 'start') return '启动'
-  if (props.marker.kind === 'stop') return '停止'
-  return '重启'
+  if (props.marker.kind === 'start') return t('panel.lifecycle.start')
+  if (props.marker.kind === 'stop') return t('panel.lifecycle.stop')
+  return t('panel.lifecycle.restart')
 })
 
 const time = computed(() => {

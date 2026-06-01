@@ -11,18 +11,21 @@ WorkDirInput：工作目录输入框（含文件夹选择按钮）。
   - 不依赖具体业务，通用于任何路径选择场景
 -->
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
+
 const props = defineProps<{
   modelValue?: string
   placeholder?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
+const { t } = useAppI18n()
 
 async function pickDir() {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const selected = await open({
     directory: true,
     multiple: false,
-    title: '选择工作目录',
+    title: t('settings.workDir.selectTitle'),
     defaultPath: props.modelValue || undefined,
   })
   if (selected && typeof selected === 'string') {
@@ -35,11 +38,11 @@ async function pickDir() {
   <div class="wdi-wrap">
     <input
       class="wdi-input"
-      :placeholder="placeholder ?? '如：/home/user/project'"
+      :placeholder="placeholder ?? t('settings.workDir.placeholder')"
       :value="modelValue"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
-    <button type="button" class="wdi-pick" title="选择文件夹" @click="pickDir">
+    <button type="button" class="wdi-pick" :title="t('settings.workDir.pickFolder')" @click="pickDir">
       <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.086a1.5 1.5 0 0 1 1.06.44l.915.914A1.5 1.5 0 0 0 8.62 3.8H13.5A1.5 1.5 0 0 1 15 5.3v7.2A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-9Z" stroke="currentColor" stroke-width="1.2" fill="none"/>
       </svg>

@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'v
 import { MAX_PANEL_LEAVES, usePanelStore, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import LogPanel from './LogPanel.vue'
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ const props = defineProps<{
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
+const { t } = useAppI18n()
 const {
   dropHighlight,
   draggedSource,
@@ -52,7 +54,7 @@ const headerTitle = computed(() => {
     // 反查不到（数据尚未加载或已删除）时退回截断的 deployment id
     return `Deploy: ${source.value.deploymentId.slice(0, 12)}`
   }
-  return '未选择'
+  return t('panel.emptyTitle')
 })
 
 function onDragOver(e: DragEvent) {
@@ -129,7 +131,7 @@ function applySourceDrop(nextSource: PanelSource, edge: DropEdge) {
     const split = edgeToAxis(edge)
     if (split) {
       if (!panelStore.canAddPanelLeaf()) {
-        showDropFailure(`已达到最大分栏数（${MAX_PANEL_LEAVES} 个），请先关闭已有分栏后再添加。`)
+        showDropFailure(t('panel.maxLeavesAlert', { count: MAX_PANEL_LEAVES }))
         return
       }
       panelStore.splitLeafWithSource(props.panelId, split.axis, nextSource, split.side)

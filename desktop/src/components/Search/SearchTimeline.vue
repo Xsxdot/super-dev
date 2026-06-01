@@ -13,11 +13,13 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const { t } = useAppI18n()
 const tab = computed(() => workspace.searchTab(props.tabId))
 const timelineEl = ref<HTMLElement | null>(null)
 const EDGE_LOAD_THRESHOLD = 80
@@ -83,7 +85,7 @@ watch(
       :disabled="tab.loadingMoreResults"
       @click="workspace.loadMoreSearchResults(tab.id)"
     >
-      {{ tab.loadingMoreResults ? '加载中...' : '加载更多命中' }}
+      {{ tab.loadingMoreResults ? t('common.loading') : t('search.loadMore') }}
     </button>
   </div>
 </template>

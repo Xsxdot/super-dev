@@ -16,6 +16,7 @@ HostFormModal：单 Host 新建与编辑表单。
 import { ref, watch } from 'vue'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { api } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Host, HostCreatePayload } from '@/api/agent'
 import TagInput from './TagInput.vue'
 
@@ -34,6 +35,7 @@ const keyOptions = ref<string[]>([])
 const showKeyDropdown = ref(false)
 const testResult = ref<{ ok: boolean; message: string; latency_ms?: number } | null>(null)
 const testing = ref(false)
+const { t } = useAppI18n()
 
 function emptyForm(): HostCreatePayload {
   return {
@@ -74,7 +76,7 @@ watch(
 )
 
 async function browseKey() {
-  const selected = await openDialog({ multiple: false, title: '选择 SSH 私钥文件' })
+  const selected = await openDialog({ multiple: false, title: t('settings.hostForm.keyFileTitle') })
   if (selected && !Array.isArray(selected)) {
     form.value.ssh_key_path = selected
   }
@@ -85,10 +87,10 @@ async function detectKeys() {
     keyOptions.value = await api.detectSshKeys()
     showKeyDropdown.value = keyOptions.value.length > 0
     if (keyOptions.value.length === 0) {
-      testResult.value = { ok: false, message: '未在 ~/.ssh/ 找到私钥文件' }
+      testResult.value = { ok: false, message: t('settings.hostForm.noPrivateKey') }
     }
   } catch (err) {
-    testResult.value = { ok: false, message: err instanceof Error ? err.message : '检测失败' }
+    testResult.value = { ok: false, message: err instanceof Error ? err.message : t('common.detectFailed') }
   }
 }
 
@@ -110,7 +112,7 @@ async function testConn() {
     })
     testResult.value = result
   } catch (err) {
-    testResult.value = { ok: false, message: err instanceof Error ? err.message : '请求失败' }
+    testResult.value = { ok: false, message: err instanceof Error ? err.message : t('common.requestFailed') }
   } finally {
     testing.value = false
   }
@@ -124,40 +126,40 @@ function submit() {
 <template>
   <div v-if="visible" class="modal-backdrop" @click.self="emit('cancel')">
     <div class="modal-body">
-      <div class="modal-title">{{ initial ? '编辑主机' : '新建主机' }}</div>
+      <div class="modal-title">{{ initial ? t('settings.hosts.edit') : t('settings.hosts.add') }}</div>
 
       <div class="field">
-        <label>名称 <span class="req">*</span></label>
+        <label>{{ t('settings.hosts.name') }} <span class="req">*</span></label>
         <input v-model="form.name" placeholder="nova-api-prod-01" data-test="host-form-name" />
       </div>
 
       <div class="row">
         <div class="field flex">
-          <label>SSH 地址 <span class="req">*</span></label>
+          <label>{{ t('settings.hostForm.sshAddress') }} <span class="req">*</span></label>
           <input v-model="form.ssh_host" placeholder="10.0.0.1" data-test="host-form-host" />
         </div>
         <div class="field port">
-          <label>端口</label>
+          <label>{{ t('settings.hostForm.port') }}</label>
           <input v-model.number="form.ssh_port" type="number" min="1" data-test="host-form-port" />
         </div>
       </div>
 
       <div class="field">
-        <label>SSH 用户 <span class="req">*</span></label>
+        <label>{{ t('settings.hostForm.sshUser') }} <span class="req">*</span></label>
         <input v-model="form.ssh_user" placeholder="root" data-test="host-form-user" />
       </div>
 
       <div class="field">
-        <label>SSH 密码</label>
-        <input v-model="form.ssh_password" type="password" placeholder="留空则用密钥" data-test="host-form-password" />
+        <label>{{ t('settings.hostForm.sshPassword') }}</label>
+        <input v-model="form.ssh_password" type="password" :placeholder="t('settings.hostForm.passwordHint')" data-test="host-form-password" />
       </div>
 
       <div class="field">
-        <label>SSH 私钥路径</label>
+        <label>{{ t('settings.hostForm.sshKeyPath') }}</label>
         <div class="row tight">
           <input v-model="form.ssh_key_path" placeholder="~/.ssh/id_ed25519" data-test="host-form-key" />
-          <button type="button" @click="browseKey" data-test="host-form-browse">浏览</button>
-          <button type="button" @click="detectKeys" data-test="host-form-detect">检测</button>
+          <button type="button" @click="browseKey" data-test="host-form-browse">{{ t('common.browse') }}</button>
+          <button type="button" @click="detectKeys" data-test="host-form-detect">{{ t('common.detect') }}</button>
         </div>
         <div v-if="showKeyDropdown" class="key-dropdown">
           <div
@@ -170,31 +172,31 @@ function submit() {
       </div>
 
       <div class="field">
-        <label>远端 Agent 端口</label>
+        <label>{{ t('settings.hostForm.remoteAgentPort') }}</label>
         <input v-model.number="form.remote_agent_port" type="number" min="1" data-test="host-form-agent-port" />
       </div>
 
       <div class="field">
-        <label>标签</label>
+        <label>{{ t('settings.hosts.tags') }}</label>
         <TagInput v-model="form.tags!" data-test="host-form-tags" />
       </div>
 
-      <div class="warn">密码会以明文存储在本机 hosts 配置文件中，请优先使用密钥。</div>
+      <div class="warn">{{ t('settings.hostForm.warning') }}</div>
 
       <div class="test-conn">
         <button type="button" :disabled="testing" data-test="host-form-test" @click="testConn">
-          {{ testing ? '测试中…' : '测试连接' }}
+          {{ testing ? t('common.testing') : t('common.testConnection') }}
         </button>
         <span v-if="testResult" :class="testResult.ok ? 'ok' : 'fail'" class="test-msg">
           {{ testResult.ok
-            ? `连接成功（${testResult.latency_ms}ms）`
+            ? t('settings.hostForm.connectSuccess', { latency: testResult.latency_ms })
             : testResult.message }}
         </span>
       </div>
 
       <div class="actions">
-        <button type="button" @click="emit('cancel')">取消</button>
-        <button type="button" class="primary" @click="submit" data-test="host-form-submit">保存</button>
+        <button type="button" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+        <button type="button" class="primary" @click="submit" data-test="host-form-submit">{{ t('common.save') }}</button>
       </div>
     </div>
   </div>

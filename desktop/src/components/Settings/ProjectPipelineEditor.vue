@@ -15,7 +15,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api, type PipelineTemplateSummary, type Project, type ProjectPipeline } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
-import { projectToDraft, draftToPayload, validateDraft } from '@/lib/configDraft'
+import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
 import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
 
 const props = defineProps<{ project: Project; pipelineTemplates?: PipelineTemplateSummary[] }>()
@@ -44,7 +44,9 @@ function updatePipelines(pipelines: ProjectPipeline[]) {
 
 function pipelineValidationErrors(): string[] {
   // 流水线编辑器只处理 project.pipelines；服务配置错误留给「编辑配置」入口处理。
-  return validateDraft(draft.value).filter(error => error.startsWith('项目流水线'))
+  return validateDraftDetailed(draft.value)
+    .filter(error => error.scope === 'pipeline')
+    .map(formatValidationIssue)
 }
 
 async function save() {
