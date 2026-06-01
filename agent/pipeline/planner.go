@@ -19,7 +19,8 @@ import (
 
 // Plan is the executable pipeline grouped by phase.
 type Plan struct {
-	Phases map[model.PipelinePhase][]model.Step
+	Phases    map[model.PipelinePhase][]model.Step
+	Variables map[string]string
 }
 
 // Target is where a plugin task executes. Empty HostID means local/global.
@@ -58,7 +59,7 @@ func BuildPlan(deploymentID string, p model.Pipeline, hosts []model.HostRef) (Pl
 		}
 		phases[phase] = order.Steps
 	}
-	plan := Plan{Phases: phases}
+	plan := Plan{Phases: phases, Variables: copyStringMap(p.Variables)}
 	run := model.Run{DeploymentID: deploymentID, Status: model.StatusPending}
 	for _, phase := range pipelinePhases() {
 		for _, step := range phases[phase] {
@@ -84,6 +85,14 @@ func BuildPlan(deploymentID string, p model.Pipeline, hosts []model.HostRef) (Pl
 		}
 	}
 	return plan, run, nil
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // ResolveStepTargets resolves step roles to concrete host targets.

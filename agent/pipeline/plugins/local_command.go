@@ -73,6 +73,7 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	if ctx.RunTempDir != "" {
 		cmd.Env = append(cmd.Env, "RUN_TEMP_DIR="+ctx.RunTempDir)
 	}
+	cmd.Env = appendReservedEnv(cmd.Env, ctx.Vars)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -99,6 +100,27 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 		return fmt.Errorf("local command failed: %w", err)
 	}
 	return nil
+}
+
+func appendReservedEnv(env []string, vars map[string]string) []string {
+	for _, item := range []struct {
+		key  string
+		name string
+	}{
+		{key: "workspace", name: "WORKSPACE"},
+		{key: "output", name: "OUTPUT"},
+		{key: "artifacts", name: "ARTIFACTS"},
+		{key: "version", name: "VERSION"},
+		{key: "env", name: "ENV"},
+		{key: "date", name: "DATE"},
+		{key: "time", name: "TIME"},
+		{key: "run_temp_dir", name: "RUN_TEMP_DIR"},
+	} {
+		if value := vars[item.key]; value != "" {
+			env = append(env, item.name+"="+value)
+		}
+	}
+	return env
 }
 
 func withString(values map[string]interface{}, keys ...string) string {

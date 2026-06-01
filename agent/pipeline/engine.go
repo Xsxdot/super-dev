@@ -87,7 +87,16 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 		return run, err
 	}
 	defer cleanup()
-	runVars := map[string]string{"run_temp_dir": runTempDir}
+	runVars := MergeVariables(plan.Variables, RuntimeReservedVars(runTempDir, ReservedVarOptions{
+		Workspace: plan.Variables["workspace"],
+		Version:   plan.Variables["version"],
+		Env:       plan.Variables["env"],
+	}))
+	if err := ensureRunReservedDirs(runVars); err != nil {
+		run.Status = model.RunStatusFailed
+		run.FinishedAt = time.Now().UnixMilli()
+		return run, err
+	}
 
 	var runErr error
 	buildFailed, err := e.runPhase(ctx, model.PhaseBuild, plan.Phases[model.PhaseBuild], stepRuns, emit, runTempDir, runVars)
@@ -212,6 +221,20 @@ func sanitizeTempPrefix(value string) string {
 		return value[:48]
 	}
 	return value
+}
+
+func ensureRunReservedDirs(vars map[string]string) error {
+	for _, name := range []string{"output", "artifacts"} {
+		dir := vars[name]
+		if dir == "" {
+			continue
+		}
+		// output/artifacts 是模板的公共写入根，运行前创建可以避免每个构建模板重复 mkdir。
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func executeWithRetries(ctx context.Context, step model.Step, fn func() error) error {

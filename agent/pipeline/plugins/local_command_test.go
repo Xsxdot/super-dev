@@ -57,3 +57,27 @@ func TestLocalCommandInjectsRunTempDirEnv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dir, string(data))
 }
+
+func TestLocalCommandInjectsReservedEnv(t *testing.T) {
+	dir := t.TempDir()
+	outputFile := filepath.Join(dir, "env.txt")
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		Vars: map[string]string{
+			"workspace": "/repo",
+			"output":    "/tmp/run/output",
+			"artifacts": "/tmp/run/artifacts",
+			"version":   "1.2.3",
+			"env":       "prod",
+			"date":      "20260101",
+			"time":      "000000",
+		},
+	})
+	step := model.Step{Name: "Env", Type: "local_command", With: map[string]interface{}{
+		"cmd": "printf '%s|%s|%s|%s|%s|%s|%s' \"$WORKSPACE\" \"$OUTPUT\" \"$ARTIFACTS\" \"$VERSION\" \"$ENV\" \"$DATE\" \"$TIME\" > " + outputFile,
+	}}
+
+	require.NoError(t, plugins.NewLocalCommand().Execute(ctx, step, nil))
+	data, err := os.ReadFile(outputFile)
+	require.NoError(t, err)
+	assert.Equal(t, "/repo|/tmp/run/output|/tmp/run/artifacts|1.2.3|prod|20260101|000000", string(data))
+}

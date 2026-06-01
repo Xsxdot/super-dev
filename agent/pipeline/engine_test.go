@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -96,7 +97,8 @@ func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
 	eng := pipeline.NewEngine()
 	eng.Register(plugin)
 	plan, run, err := pipeline.BuildPlan("dep-1", model.Pipeline{
-		Build: []model.Step{{Name: "Capture", Type: "capture_context"}},
+		Variables: map[string]string{"env": "prod", "version": "1.2.3"},
+		Build:     []model.Step{{Name: "Capture", Type: "capture_context"}},
 	}, nil)
 	require.NoError(t, err)
 
@@ -104,6 +106,10 @@ func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, plugin.tempDir)
 	assert.Equal(t, plugin.tempDir, plugin.vars["run_temp_dir"])
+	assert.Equal(t, filepath.Join(plugin.tempDir, "output"), plugin.vars["output"])
+	assert.Equal(t, filepath.Join(plugin.tempDir, "artifacts"), plugin.vars["artifacts"])
+	assert.Equal(t, "prod", plugin.vars["env"])
+	assert.Equal(t, "1.2.3", plugin.vars["version"])
 	_, statErr := os.Stat(plugin.tempDir)
 	assert.True(t, os.IsNotExist(statErr), "run temp dir removed after run")
 }
