@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/vscode"
 )
@@ -241,6 +242,61 @@ func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
 	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
 	require.Len(t, projects, 1)
 	assert.Len(t, projects[0].Environments, 1)
+}
+
+func TestPutProjectSetupPreservesProjectVariablesAndPipelines(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "demo")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	setupBody := `{
+	  "variables": {"app_name":"demo"},
+	  "environments": [{"name":"dev","is_dev":true,"order":0}],
+	  "services": [{
+	    "id": "",
+	    "name": "api",
+	    "required": true,
+	    "order": 0,
+	    "deployments": [{
+	      "env_name": "dev",
+	      "location": "local",
+	      "runtime": {"type":"command","command":"go run ."},
+	      "logs": {"type":"process"}
+	    }]
+	  }],
+	  "pipelines": [{
+	    "id": "deploy-dev",
+	    "name": "Deploy Dev",
+	    "services": ["api"],
+	    "roles": {"api_targets": {"from_service":"api"}},
+	    "pipeline": {"build":[{"name":"Build","type":"local_command"}]}
+	  }]
+	}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", strings.NewReader(setupBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	assert.Equal(t, "demo", loaded.Variables["app_name"])
+	require.Len(t, loaded.Pipelines, 1)
+	assert.Equal(t, "deploy-dev", loaded.Pipelines[0].ID)
+	require.NotNil(t, loaded.Services[0].Deployments[0].Runtime)
+	assert.Equal(t, model.RuntimeTypeCommand, loaded.Services[0].Deployments[0].Runtime.Type)
+	require.NotNil(t, loaded.Services[0].Deployments[0].Logs)
+	assert.Equal(t, model.LogKindProcess, loaded.Services[0].Deployments[0].Logs.Type)
 }
 
 // TestPutProjectSetup_DeletesAbsentService 验证请求中不出现的 service 被删除（未运行时）。

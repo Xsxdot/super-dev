@@ -50,8 +50,10 @@ func (a *App) getVscodeLaunch(w http.ResponseWriter, r *http.Request) {
 
 // setupRequest 是 PUT /api/projects/{id}/setup 的请求体结构（全量项目配置）。
 type setupRequest struct {
-	Environments []model.Environment `json:"environments"`
-	Services     []setupServiceEntry `json:"services"`
+	Variables    map[string]string       `json:"variables"`
+	Environments []model.Environment     `json:"environments"`
+	Services     []setupServiceEntry     `json:"services"`
+	Pipelines    []model.ProjectPipeline `json:"pipelines"`
 }
 
 // setupServiceEntry 描述单个 service 的全量配置。
@@ -124,7 +126,15 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 替换 environments
+	a.projects[idx].Variables = req.Variables
+	if a.projects[idx].Variables == nil {
+		a.projects[idx].Variables = map[string]string{}
+	}
 	a.projects[idx].Environments = req.Environments
+	a.projects[idx].Pipelines = req.Pipelines
+	if a.projects[idx].Pipelines == nil {
+		a.projects[idx].Pipelines = []model.ProjectPipeline{}
+	}
 
 	// 按请求重建 services：ID 命中现有则保留运行时无关字段并更新；ID 为空则新增。
 	// 请求中不出现的现有 service 将被丢弃（删除）。
