@@ -61,8 +61,35 @@ func TestExamplePipelinesExpandAndPlan(t *testing.T) {
 			assert.NotEmpty(t, plan.Phases[model.PhaseBuild])
 			assert.NotEmpty(t, plan.Phases[model.PhaseDeploy])
 			assert.NotEmpty(t, run.StepRuns)
+			assertLocal02BinaryBuildTargets(t, name, plan.Phases[model.PhaseBuild])
 		})
 	}
+}
+
+func assertLocal02BinaryBuildTargets(t *testing.T, name string, steps []model.Step) {
+	t.Helper()
+	commands := ""
+	for _, step := range steps {
+		if step.Type == "local_command" {
+			commands += " " + stringValue(step.With, "cmd")
+		}
+	}
+	switch name {
+	case "go-http", "vue-go-combined":
+		assert.Contains(t, commands, "GOOS=linux")
+		assert.Contains(t, commands, "GOARCH=amd64")
+	case "rust-http":
+		assert.Contains(t, commands, "x86_64-unknown-linux-musl")
+	}
+}
+
+func stringValue(values map[string]interface{}, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	value, _ := raw.(string)
+	return value
 }
 
 func repoRoot(t *testing.T) string {

@@ -14,6 +14,7 @@ build:
         work_dir: ${example_dir}
         package: .
         output: ${output}/go-http
+        build_env: GOOS=linux GOARCH=amd64 CGO_ENABLED=0
         artifact: ${artifact}
         files:
           - from: ${output}/go-http

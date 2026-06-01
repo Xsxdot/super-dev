@@ -102,4 +102,19 @@ func TestSystemdSeamlessDeployIsSelfContained(t *testing.T) {
 	assert.Contains(t, stepNames, "Write Service")
 	assert.Contains(t, stepNames, "Daemon Reload")
 	assert.Contains(t, stepNames, "Health Check")
+	assert.Contains(t, stepCommand(t, tpl.Steps, "Restart"), "systemctl reset-failed")
+}
+
+func stepCommand(t *testing.T, steps []pipelinetemplate.Step, name string) string {
+	t.Helper()
+	for _, step := range steps {
+		if step.Name != name {
+			continue
+		}
+		cmd, ok := step.With["cmd"].(string)
+		require.True(t, ok, name)
+		return cmd
+	}
+	require.FailNow(t, "step not found", name)
+	return ""
 }

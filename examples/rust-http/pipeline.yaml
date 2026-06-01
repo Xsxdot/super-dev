@@ -12,10 +12,10 @@ build:
       version: 1.0.0
       vars:
         work_dir: ${example_dir}
-        build_cmd: cargo build --release
+        build_cmd: RUSTUP_DIST_SERVER=https://static.rust-lang.org rustup target add x86_64-unknown-linux-musl && RUSTFLAGS='-C linker=rust-lld' cargo build --release --target x86_64-unknown-linux-musl
         artifact: ${artifact}
         files:
-          - from: ${example_dir}/target/release/rust-http
+          - from: ${example_dir}/target/x86_64-unknown-linux-musl/release/rust-http
             to: rust-http
 deploy:
   - name: Deploy Rust

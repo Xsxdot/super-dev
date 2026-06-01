@@ -21,6 +21,10 @@ inputs:
     required: true
     default: ${output}/app
     description: Final local binary output path under the standard output root.
+  build_env:
+    label: Build environment
+    type: string
+    description: Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
   artifact:
     label: Artifact path
     type: path
@@ -34,7 +38,7 @@ steps:
     type: local_command
     with:
       workDir: ${vars.work_dir}
-      cmd: mkdir -p "$(dirname "${vars.output}")" && go build -o "${vars.output}" ${vars.package}
+      cmd: mkdir -p "$(dirname "${vars.output}")" && ${vars.build_env:-} go build -o "${vars.output}" ${vars.package}
   - name: Package
     type: archive_package
     needs: [Build]

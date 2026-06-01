@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,13 +63,14 @@ func TestLocal02Examples(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
+	require.NoError(t, prepareLocalBuildToolchains(ctx, t))
 	sshExec := pipeline.NewSSHExecutor(func(hostID string) (model.Host, bool) {
 		if hostID != "local-02" {
 			return model.Host{}, false
 		}
 		return cfg, true
 	})
-	require.NoError(t, prepareLocal02(ctx, sshExec))
+	require.NoError(t, prepareLocal02(ctx, t, sshExec))
 
 	localRunRoot := t.TempDir()
 	for _, tc := range cases {
@@ -100,6 +102,25 @@ func local02Config(t *testing.T) model.Host {
 	return model.Host{ID: "local-02", Name: host, SSHHost: host, SSHPort: port, SSHUser: user, SSHPassword: password, SSHKeyPath: keyPath}
 }
 
+func prepareLocalBuildToolchains(ctx context.Context, t *testing.T) error {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "sh", "-c", `if command -v rustup >/dev/null 2>&1; then
+  if ! rustup target list --installed | grep -q '^x86_64-unknown-linux-musl$'; then
+    RUSTUP_DIST_SERVER=https://static.rust-lang.org RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-musl --no-self-update
+  fi
+fi`)
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				t.Logf("prepare local build toolchains: %s", line)
+			}
+		}
+	}
+	return err
+}
+
 func firstExistingSSHKey() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -114,14 +135,20 @@ func firstExistingSSHKey() string {
 	return ""
 }
 
-func prepareLocal02(ctx context.Context, ex *pipeline.SSHExecutor) error {
+func prepareLocal02(ctx context.Context, t *testing.T, ex *pipeline.SSHExecutor) error {
+	t.Helper()
 	cmd := `mkdir -p /opt/superdev-examples
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y curl tar gzip nodejs npm python3 openjdk-17-jre-headless php maven cargo
+  apt-get install -y curl tar gzip nodejs python3 openjdk-17-jre-headless php
 fi`
-	return ex.RunRemote(ctx, pipeline.Target{HostID: "local-02", HostName: "local-02"}, cmd, "", func(string, string) {})
+	return ex.RunRemote(ctx, pipeline.Target{HostID: "local-02", HostName: "local-02"}, cmd, "", func(line, stream string) {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			t.Logf("prepare local-02 %s: %s", stream, line)
+		}
+	})
 }
 
 func runExamplePipeline(ctx context.Context, t *testing.T, root string, runTempDir string, host model.Host, ex *pipeline.SSHExecutor, tc exampleCase) error {

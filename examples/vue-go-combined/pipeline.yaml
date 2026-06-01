@@ -16,6 +16,7 @@ build:
         frontend_build_cmd: npm install && npm run build
         go_package: .
         binary_output: ${output}/vue-go-combined
+        go_build_env: GOOS=linux GOARCH=amd64 CGO_ENABLED=0
         artifact: ${artifact}
         files:
           - from: ${output}/vue-go-combined

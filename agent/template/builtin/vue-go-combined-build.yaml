@@ -31,6 +31,10 @@ inputs:
     required: true
     default: ${output}/app
     description: Local path for the built Go binary.
+  go_build_env:
+    label: Go build environment
+    type: string
+    description: Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
   artifact:
     label: Artifact path
     type: path
@@ -53,7 +57,7 @@ steps:
     needs: [Build Frontend]
     with:
       workDir: ${vars.backend_dir}
-      cmd: mkdir -p "$(dirname "${vars.binary_output}")" && go build -o "${vars.binary_output}" ${vars.go_package}
+      cmd: mkdir -p "$(dirname "${vars.binary_output}")" && ${vars.go_build_env:-} go build -o "${vars.binary_output}" ${vars.go_package}
   - name: Package
     type: archive_package
     needs: [Build Backend]

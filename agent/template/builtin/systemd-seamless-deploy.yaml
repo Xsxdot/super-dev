@@ -133,7 +133,7 @@ steps:
     roles: ["${vars.role}"]
     needs: [Daemon Reload]
     with:
-      cmd: systemctl restart ${vars.service_name}.service
+      cmd: systemctl reset-failed ${vars.service_name}.service || true; systemctl restart ${vars.service_name}.service
   - name: Health Check
     type: http_check
     roles: ["${vars.role}"]
