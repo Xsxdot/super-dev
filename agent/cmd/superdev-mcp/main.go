@@ -20,7 +20,12 @@ import (
 
 func main() {
 	log.SetOutput(os.Stderr)
-	server := mcp.NewServer(nil)
+	agentURL := os.Getenv("SUPERDEV_AGENT_URL")
+	if agentURL == "" {
+		agentURL = "http://127.0.0.1:57017"
+	}
+	client := mcp.NewHTTPAgentClient(agentURL, nil)
+	server := mcp.NewServer(client)
 	if err := server.RunStdio(context.Background(), os.Stdin, os.Stdout); err != nil {
 		log.Fatal(err)
 	}

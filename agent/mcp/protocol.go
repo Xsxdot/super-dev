@@ -187,9 +187,6 @@ func mustObject(v any) map[string]any {
 	return out
 }
 
-// AgentClient 是 MCP 工具访问本机 agent 的抽象。
-type AgentClient interface{}
-
 func toolError(code, message string, data any) CallToolResult {
 	body := map[string]any{"ok": false, "code": code, "message": message}
 	if data != nil {
