@@ -98,7 +98,47 @@ describe('configDraft', () => {
     expect(payload.services[0]!.deployments[0]!.read_only).toBe(true)
   })
 
-  it('允许 local deployment 使用 pipeline 替代 command', () => {
+  it('projectToDraft 和 draftToPayload 保留项目变量、项目流水线、runtime/logs', () => {
+    const p: Project = {
+      id: 'p1',
+      name: 'demo',
+      root_path: '/tmp/demo',
+      variables: { app_name: 'demo' },
+      environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
+      services: [{
+        id: 'svc-api',
+        project_id: 'p1',
+        name: 'api',
+        status: '',
+        required: true,
+        order: 0,
+        deployments: [{
+          id: 'dep-api-dev',
+          env_name: 'dev',
+          location: 'local',
+          runtime: { type: 'command', command: 'go run .' },
+          logs: { type: 'process' },
+          status: '',
+        }],
+      }],
+      pipelines: [{
+        id: 'deploy-dev',
+        name: 'Deploy Dev',
+        services: ['api'],
+        roles: { api_targets: { from_service: 'api' } },
+        pipeline: { build: [{ name: 'Build', type: 'local_command' }] },
+      }],
+    }
+
+    const draft = projectToDraft(p)
+    const payload = draftToPayload(draft)
+    expect(payload.variables).toEqual({ app_name: 'demo' })
+    expect(payload.pipelines?.[0].id).toBe('deploy-dev')
+    expect(payload.services[0].deployments[0].runtime?.type).toBe('command')
+    expect(payload.services[0].deployments[0].logs?.type).toBe('process')
+  })
+
+  it('不允许 local deployment 使用 deployment-level pipeline 替代 command', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0] = {
       id: 'd1',
@@ -107,18 +147,22 @@ describe('configDraft', () => {
       status: '',
       pipeline: { build: [{ name: 'Build', type: 'local_command', with: { cmd: 'go build' } }] },
     }
-    expect(validateDraft(draft)).toEqual([])
+    expect(validateDraft(draft).some(e => e.includes('命令'))).toBe(true)
   })
 
-  it('校验 pipeline step name 和 type', () => {
+  it('校验项目级 pipeline step name 和 type', () => {
     const draft = projectToDraft(makeProject())
-    draft.services[0].deployments[0].pipeline = { deploy: [{ name: '', type: '' }] }
+    draft.pipelines = [{
+      id: 'deploy-dev',
+      name: 'Deploy Dev',
+      pipeline: { deploy: [{ name: '', type: '' }] },
+    }]
     const errors = validateDraft(draft)
     expect(errors.some(e => e.includes('步骤名称不能为空'))).toBe(true)
     expect(errors.some(e => e.includes('插件类型不能为空'))).toBe(true)
   })
 
-  it('拒绝未选择主机的流水线目标角色', () => {
+  it('remote deployment 必须选择主机，不能依赖 deployment-level pipeline 目标', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].name = 'api'
     draft.services[0].deployments[0] = {
@@ -133,6 +177,6 @@ describe('configDraft', () => {
       },
     }
 
-    expect(validateDraft(draft)).toContain('服务「api」流水线目标「deploy_1_targets」未选择主机')
+    expect(validateDraft(draft)).toContain('服务「api」在「dev」环境未选择主机')
   })
 })

@@ -25,6 +25,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export type DeployLocation = 'local' | 'remote'
+export type RuntimeType = 'command' | 'systemd' | 'docker' | 'nginx_static' | 'external'
+export type LogKind = 'process' | 'journalctl' | 'docker' | 'nginx'
 
 export type PipelinePhase = 'build' | 'deploy' | 'finally'
 export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'canceled'
@@ -48,6 +50,45 @@ export interface Pipeline {
   build?: PipelineStep[]
   deploy?: PipelineStep[]
   finally?: PipelineStep[]
+}
+
+export interface RuntimeConfig {
+  type: RuntimeType
+  command?: string
+  working_dir?: string
+  env_file?: string
+  env_vars?: Record<string, string>
+  service_name?: string
+  release_dir?: string
+  current_dir?: string
+  exec_start?: string
+  container?: string
+  domain?: string
+}
+
+export interface LogConfig {
+  type: LogKind
+  target?: string
+  extra_args?: string[]
+}
+
+export interface PipelineEnvironment {
+  variables?: Record<string, string>
+}
+
+export interface ProjectPipelineRole {
+  from_service?: string
+  hosts?: string[]
+}
+
+export interface ProjectPipeline {
+  id: string
+  name: string
+  services?: string[]
+  variables?: Record<string, string>
+  environments?: Record<string, PipelineEnvironment>
+  roles?: Record<string, ProjectPipelineRole>
+  pipeline: Pipeline
 }
 
 export interface TemplateInput {
@@ -110,6 +151,8 @@ export interface Deployment {
   id: string
   env_name: string
   location: DeployLocation
+  runtime?: RuntimeConfig
+  logs?: LogConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -148,7 +191,9 @@ export interface Project {
   id: string
   name: string
   root_path: string
+  variables?: Record<string, string>
   services: Service[]
+  pipelines?: ProjectPipeline[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
 }
@@ -273,6 +318,8 @@ export interface SetupDeployment {
   id?: string
   env_name: string
   location: 'local' | 'remote'
+  runtime?: RuntimeConfig
+  logs?: LogConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -296,8 +343,16 @@ export interface SetupServiceEntry {
 }
 
 export interface SetupPayload {
+  variables?: Record<string, string>
   environments: Array<{ id?: string; name: string; is_dev: boolean; order: number }>
   services: SetupServiceEntry[]
+  pipelines?: ProjectPipeline[]
+}
+
+export interface ProjectPipelinePreviewRequest {
+  env_name: string
+  service_names?: string[]
+  variables?: Record<string, string>
 }
 
 export interface SshConfigEntry {
@@ -509,6 +564,11 @@ export const api = {
     request<PipelinePreviewResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/pipeline/preview`, {
       method: 'POST',
     }),
+  previewProjectPipeline: (projectId: string, pipelineId: string, payload: ProjectPipelinePreviewRequest) =>
+    request<PipelinePreviewResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/preview`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
 
   // Env 级 selected
   putEnvSelected: (projectId: string, envName: string, names: string[]) =>
