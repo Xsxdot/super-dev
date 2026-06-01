@@ -13,11 +13,13 @@
 import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const { t } = useAppI18n()
 const tab = computed(() => workspace.searchTab(props.tabId))
 
 const rows = computed(() => {
@@ -47,7 +49,7 @@ function toggle(serviceId: string, hidden: boolean) {
 
 <template>
   <div class="service-rail">
-    <div class="rail-title">命中服务</div>
+    <div class="rail-title">{{ t('search.servicesTitle') }}</div>
     <button
       v-for="row in rows"
       :key="row.serviceId"

@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useFilterStore, type ChipLogic, type ChipType } from '@/stores/filter'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { LogRule } from '@/api/agent'
 
 const props = withDefaults(defineProps<{
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 }>()
 
 const filterStore = useFilterStore()
+const { t } = useAppI18n()
 const editingRuleId = ref<string | null>(null)
 const savingFromPanel = ref(false)
 const form = reactive({
@@ -162,10 +164,10 @@ onMounted(() => {
 
 <template>
   <div class="modal-backdrop" @click.self="emit('close')">
-    <section class="modal" role="dialog" aria-modal="true" aria-label="过滤规则">
+    <section class="modal" role="dialog" aria-modal="true" :aria-label="t('panel.rules.title')">
       <header class="modal-header">
-        <h2>过滤规则</h2>
-        <button class="close-btn" title="关闭" @click="emit('close')">×</button>
+        <h2>{{ t('panel.rules.title') }}</h2>
+        <button class="close-btn" :title="t('common.close')" @click="emit('close')">×</button>
       </header>
 
       <div class="modal-body">
@@ -178,32 +180,32 @@ onMounted(() => {
             @click="startEdit(rule)"
           >
             <span class="rule-name">{{ rule.name }}</span>
-            <span class="rule-meta">{{ rule.type === 'include' ? '包含' : '排除' }} · {{ rule.logic.toUpperCase() }}</span>
+            <span class="rule-meta">{{ rule.type === 'include' ? t('panel.filter.include') : t('panel.filter.exclude') }} · {{ rule.logic.toUpperCase() }}</span>
             <span class="rule-keywords">{{ rule.keywords.join(', ') }}</span>
           </button>
-          <div v-if="rules.length === 0" class="empty-rules">暂无项目规则</div>
+          <div v-if="rules.length === 0" class="empty-rules">{{ t('panel.rules.empty') }}</div>
         </div>
 
         <form class="rule-form" @submit.prevent="saveRule">
           <div class="form-actions">
-            <button type="button" data-test="new-rule" @click="startNewRule">新建规则</button>
+            <button type="button" data-test="new-rule" @click="startNewRule">{{ t('panel.rules.new') }}</button>
             <button
               type="button"
               data-test="save-current-filter"
               :disabled="!hasCurrentChips"
               @click="startSaveCurrentFilter"
             >
-              从当前过滤保存
+              {{ t('panel.rules.saveCurrent') }}
             </button>
           </div>
 
           <label>
-            名称
+            {{ t('panel.rules.name') }}
             <input data-test="rule-name" v-model="form.name" />
           </label>
 
           <div class="field">
-            <span class="field-label">关键词</span>
+            <span class="field-label">{{ t('panel.rules.keywords') }}</span>
             <div class="tag-input" @click="focusTagInput">
               <span
                 v-for="(kw, i) in form.keywords"
@@ -218,7 +220,7 @@ onMounted(() => {
                 data-test="rule-keywords"
                 class="tag-text-input"
                 v-model="tagInput"
-                placeholder="输入后回车添加…"
+                :placeholder="t('panel.rules.keywordPlaceholder')"
                 @keydown="onTagInputKeydown"
                 @input="onTagInputInput"
                 @blur="commitTag"
@@ -228,23 +230,23 @@ onMounted(() => {
 
           <div class="form-row">
             <div class="field">
-              <span class="field-label">类型</span>
+              <span class="field-label">{{ t('panel.rules.type') }}</span>
               <div class="toggle-group">
                 <button
                   type="button"
                   :class="{ active: form.type === 'include' }"
                   @click="form.type = 'include'"
-                >包含</button>
+                >{{ t('panel.filter.include') }}</button>
                 <button
                   type="button"
                   :class="{ active: form.type === 'exclude' }"
                   @click="form.type = 'exclude'"
-                >排除</button>
+                >{{ t('panel.filter.exclude') }}</button>
               </div>
             </div>
 
             <div class="field">
-              <span class="field-label">逻辑</span>
+              <span class="field-label">{{ t('panel.rules.logic') }}</span>
               <div class="toggle-group">
                 <button
                   type="button"
@@ -261,7 +263,7 @@ onMounted(() => {
 
             <label class="enabled-check">
               <input type="checkbox" v-model="form.enabled" />
-              启用
+              {{ t('panel.rules.enabled') }}
             </label>
           </div>
 
@@ -272,10 +274,10 @@ onMounted(() => {
               class="danger"
               @click="deleteEditingRule"
             >
-              删除
+              {{ t('common.delete') }}
             </button>
             <span class="spacer" />
-            <button type="button" data-test="save-rule" class="primary" @click="saveRule">保存</button>
+            <button type="button" data-test="save-rule" class="primary" @click="saveRule">{{ t('common.save') }}</button>
           </div>
         </form>
       </div>

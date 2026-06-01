@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick, ref } from 'vue'
 import LogPanel from '../LogPanel.vue'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 
 const virtualizerMock = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ function makeLog(id: number): DisplayLogEntry {
 describe('LogPanel', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     vi.clearAllMocks()
     virtualizerMock.range.startIndex = 0
     virtualizerMock.optionsRef = null
@@ -78,6 +80,7 @@ describe('LogPanel', () => {
         source: { type: 'deployment', deploymentId: 'dep-1' },
       },
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           PanelToolbar: { template: '<div />' },
           LogRow: { template: '<div />' },
@@ -131,6 +134,7 @@ describe('LogPanel', () => {
         source: { type: 'deployment', deploymentId: 'dep-1' },
       },
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           PanelToolbar: { template: '<div />' },
           LogRow: { template: '<div />' },
@@ -173,6 +177,7 @@ describe('LogPanel', () => {
         source: { type: 'deployment', deploymentId: 'dep-1' },
       },
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           PanelToolbar: { template: '<div />' },
           LogRow: { template: '<div />' },
@@ -228,6 +233,7 @@ describe('LogPanel', () => {
         source: { type: 'deployment', deploymentId: 'dep-1' },
       },
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           PanelToolbar: { template: '<div />' },
           LogRow: { template: '<div />' },
@@ -261,5 +267,29 @@ describe('LogPanel', () => {
 
     expect(virtualizerMock.measure).toHaveBeenCalled()
     expect(virtualizerMock.optionsRef.value.getItemKey(0)).toBe('live-7')
+  })
+
+  it('英文 locale 下渲染状态栏文案', async () => {
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-1',
+        projectId: null,
+        source: null,
+      },
+      global: {
+        plugins: [installTestI18n('en-US')],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Live · showing 0')
   })
 })

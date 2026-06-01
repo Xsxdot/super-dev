@@ -1,8 +1,12 @@
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
+
 defineProps<{
   isStart: boolean
   date: Date
 }>()
+
+const { t } = useAppI18n()
 
 function formatTime(d: Date) {
   return d.toLocaleTimeString('en-US', {
@@ -16,7 +20,7 @@ function formatTime(d: Date) {
 
 <template>
   <div class="bookmark-marker">
-    <span class="label">{{ isStart ? '▶ 开始标记' : '■ 结束标记' }}</span>
+    <span class="label">{{ isStart ? t('panel.bookmark.startMarker') : t('panel.bookmark.endMarker') }}</span>
     <span class="time">{{ formatTime(date) }}</span>
   </div>
 </template>

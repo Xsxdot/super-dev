@@ -14,15 +14,17 @@ import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 const workspace = useWorkspaceStore()
+const { t } = useAppI18n()
 </script>
 
 <template>
   <div class="workspace-shell">
     <WorkspaceTabs v-if="workspace.tabs.length" />
     <div v-if="!workspace.activeTab" class="workspace-empty">
-      <div>选择左侧服务或点击项目搜索</div>
+      <div>{{ t('shell.emptyWorkspace') }}</div>
     </div>
     <!-- 项目聚合 tab 与 deployment tab 都走 PanelLayout 分栏树（deployment tab 初始为单叶子，可拖入其他 deployment 分栏） -->
     <PanelLayout

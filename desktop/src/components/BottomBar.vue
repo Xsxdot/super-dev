@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -16,6 +17,7 @@ const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const deploymentLogStore = useDeploymentLogStore()
 const filterStore = useFilterStore()
+const { t } = useI18n()
 
 // leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
 function leafDeploymentId(leaf: PanelLeafNode): string | null {
@@ -154,7 +156,7 @@ function toggleSyncRecord() {
   } else {
     const panels = syncPanels()
     if (panels.length === 0) {
-      window.alert('没有可同步录制的面板')
+      window.alert(t('bottomBar.noSyncPanels'))
       return
     }
     bookmarkStore.startSyncBookmark(panels)
@@ -165,7 +167,7 @@ function toggleSyncRecord() {
 async function copySyncBookmarks() {
   const text = bookmarkStore.formatSyncBookmarks()
   if (!text.trim()) {
-    window.alert('同步录制区间内没有可复制的日志')
+    window.alert(t('bottomBar.noSyncCopy'))
     return
   }
   await navigator.clipboard.writeText(text)
@@ -180,7 +182,7 @@ function resolveExportPath(selected: string, defaultName: string): string {
 async function exportSyncBookmarks() {
   const text = bookmarkStore.formatSyncBookmarks()
   if (!text.trim()) {
-    window.alert('同步录制区间内没有可导出的日志')
+    window.alert(t('bottomBar.noSyncExport'))
     return
   }
 
@@ -188,7 +190,7 @@ async function exportSyncBookmarks() {
   const { save } = await import('@tauri-apps/plugin-dialog')
   const selected = await save({
     defaultPath: defaultName,
-    title: '导出同步录制日志',
+    title: t('bottomBar.exportTitle'),
     filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
   })
   if (!selected) return
@@ -199,7 +201,7 @@ async function exportSyncBookmarks() {
     await writeTextFile(filePath, text)
   } catch (err) {
     console.error('[SuperDev] export sync bookmark failed:', err)
-    window.alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
+    window.alert(t('common.exportFailed', { message: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -213,7 +215,7 @@ const statusColor = (status: string) => {
 
 <template>
   <div class="bottom-bar">
-    <span class="label">面板服务</span>
+    <span class="label">{{ t('bottomBar.panelServices') }}</span>
 
     <div class="service-chips">
       <div
@@ -234,8 +236,8 @@ const statusColor = (status: string) => {
 
     <template v-if="checkedServiceIds.length > 0">
       <div class="divider" />
-      <button class="action-btn" @click="restartChecked">↺ 重启</button>
-      <button class="action-btn danger" @click="stopChecked">⏹ 停止</button>
+      <button class="action-btn" @click="restartChecked">↺ {{ t('bottomBar.restart') }}</button>
+      <button class="action-btn danger" @click="stopChecked">⏹ {{ t('bottomBar.stop') }}</button>
     </template>
 
     <div class="divider" />
@@ -243,7 +245,7 @@ const statusColor = (status: string) => {
     <!-- 同步录制 -->
     <label class="sync-label">
       <input type="checkbox" :checked="syncEnabled" @change="toggleSync" style="accent-color:#1f6feb;" />
-      <span>同步录制</span>
+      <span>{{ t('bottomBar.syncRecording') }}</span>
     </label>
     <button
       v-if="syncEnabled"
@@ -254,8 +256,8 @@ const statusColor = (status: string) => {
       {{ syncRecording ? '⏹' : '⏺' }}
     </button>
     <template v-if="hasSyncOutput && !syncRecording">
-      <button class="action-btn sync-copy-btn" @click="copySyncBookmarks">复制</button>
-      <button class="action-btn sync-export-btn" @click="exportSyncBookmarks">导出</button>
+      <button class="action-btn sync-copy-btn" @click="copySyncBookmarks">{{ t('bottomBar.copy') }}</button>
+      <button class="action-btn sync-export-btn" @click="exportSyncBookmarks">{{ t('bottomBar.export') }}</button>
     </template>
 
     <div class="flex-1" />

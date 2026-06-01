@@ -14,6 +14,7 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ControlMode, Deployment, LogConfig, LogKind, RuntimeConfig, RuntimeType } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 import WorkDirInput from './WorkDirInput.vue'
 
@@ -24,6 +25,7 @@ const props = defineProps<{
   defaultWorkDir?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
+const { t } = useAppI18n()
 
 function patch(partial: Partial<Deployment>) {
   emit('update:modelValue', { ...props.modelValue, ...partial })
@@ -238,7 +240,7 @@ function setEnv(env: Record<string, string>) {
 <template>
   <div class="dep-form">
     <section class="dep-block">
-      <div class="dep-heading">节点</div>
+      <div class="dep-heading">{{ t('settings.deployment.node') }}</div>
       <div class="dep-location">
         <label class="dep-choice">
           <input
@@ -246,7 +248,7 @@ function setEnv(env: Record<string, string>) {
             data-test="dep-location-local"
             :checked="modelValue.location === 'local'"
             @change="setLocation('local')"
-          /> 本机
+          /> {{ t('settings.deployment.local') }}
         </label>
         <label class="dep-choice">
           <input
@@ -254,11 +256,11 @@ function setEnv(env: Record<string, string>) {
             data-test="dep-location-remote"
             :checked="modelValue.location === 'remote'"
             @change="setLocation('remote')"
-          /> 远程主机
+          /> {{ t('settings.deployment.remoteHost') }}
         </label>
       </div>
       <div v-if="modelValue.location === 'remote'" class="dep-hosts">
-        <div v-if="hosts.length === 0" class="dep-hint">还没有主机，请先在「主机管理」添加</div>
+        <div v-if="hosts.length === 0" class="dep-hint">{{ t('settings.deployment.noHosts') }}</div>
         <label v-for="h in hosts" v-else :key="h.id" class="dep-host">
           <input
             type="checkbox"
@@ -270,7 +272,7 @@ function setEnv(env: Record<string, string>) {
     </section>
 
     <section class="dep-block">
-      <div class="dep-heading">服务控制</div>
+      <div class="dep-heading">{{ t('settings.deployment.serviceControl') }}</div>
       <div class="dep-location">
         <label class="dep-choice">
           <input
@@ -278,7 +280,7 @@ function setEnv(env: Record<string, string>) {
             data-test="dep-control-monitor"
             :checked="controlMode === 'monitor'"
             @change="setControlMode('monitor')"
-          /> 监控
+          /> {{ t('settings.deployment.monitor') }}
         </label>
         <label class="dep-choice">
           <input
@@ -286,42 +288,42 @@ function setEnv(env: Record<string, string>) {
             data-test="dep-control-managed"
             :checked="controlMode === 'managed'"
             @change="setControlMode('managed')"
-          /> 接管启停
+          /> {{ t('settings.deployment.managed') }}
         </label>
       </div>
       <div class="dep-help">
-        {{ controlMode === 'monitor' ? '观测日志和运行状态，不启动或停止服务。' : 'Agent 负责启动、停止、重启，并持续观测。' }}
+        {{ controlMode === 'monitor' ? t('settings.deployment.monitorDesc') : t('settings.deployment.managedDesc') }}
       </div>
 
       <div class="dep-field">
-        <label class="dep-label">{{ controlMode === 'monitor' ? '监控对象' : '接管方式' }}</label>
+        <label class="dep-label">{{ controlMode === 'monitor' ? t('settings.deployment.monitorTarget') : t('settings.deployment.managedMode') }}</label>
         <select
           class="dep-input"
           data-test="dep-target-type"
           :value="runtime.type"
           @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
         >
-          <option v-if="controlMode === 'managed'" value="command">Agent 执行命令</option>
-          <option value="systemd">Systemd 服务</option>
-          <option v-if="controlMode === 'managed'" value="launchd">Launchd 服务</option>
-          <option value="docker">Docker 容器</option>
-          <option v-if="controlMode === 'monitor'" value="nginx_static">Nginx / 静态站点</option>
+          <option v-if="controlMode === 'managed'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
+          <option value="systemd">{{ t('settings.deployment.systemdService') }}</option>
+          <option v-if="controlMode === 'managed'" value="launchd">{{ t('settings.deployment.launchdService') }}</option>
+          <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
+          <option v-if="controlMode === 'monitor'" value="nginx_static">{{ t('settings.deployment.nginxStatic') }}</option>
         </select>
       </div>
 
       <template v-if="runtime.type === 'command'">
         <div class="dep-field">
-          <label class="dep-label">启动命令</label>
+          <label class="dep-label">{{ t('settings.deployment.startCommand') }}</label>
           <input
             class="dep-input"
             data-test="dep-command"
-            placeholder="如：go run ./cmd/server"
+            :placeholder="t('settings.deployment.commandPlaceholder')"
             :value="runtime.command"
             @input="patchRuntime({ type: 'command', command: ($event.target as HTMLInputElement).value })"
           />
         </div>
         <div class="dep-field">
-          <label class="dep-label">工作目录</label>
+          <label class="dep-label">{{ t('settings.deployment.workDir') }}</label>
           <WorkDirInput
             v-if="modelValue.location === 'local'"
             data-test="dep-work-dir"
@@ -332,31 +334,31 @@ function setEnv(env: Record<string, string>) {
             v-else
             class="dep-input"
             data-test="dep-work-dir"
-            placeholder="如：/opt/app/current"
+            :placeholder="t('settings.deployment.workDirPlaceholder')"
             :value="runtime.working_dir"
             @input="patchRuntime({ type: 'command', working_dir: ($event.target as HTMLInputElement).value })"
           />
         </div>
         <div class="dep-field">
-          <label class="dep-label">环境变量文件</label>
+          <label class="dep-label">{{ t('settings.deployment.envFile') }}</label>
           <input
             class="dep-input"
             data-test="dep-env-file"
-            placeholder="如：.env.dev"
+            :placeholder="t('settings.deployment.envFilePlaceholder')"
             :value="runtime.env_file"
             @input="patchRuntime({ type: 'command', env_file: ($event.target as HTMLInputElement).value })"
           />
         </div>
-        <div class="dep-label">环境变量</div>
+        <div class="dep-label">{{ t('settings.deployment.envVars') }}</div>
         <EnvKeyValueEditor :model-value="runtime.env_vars ?? {}" @update:model-value="setEnv" />
       </template>
 
       <div v-else-if="runtime.type === 'systemd'" class="dep-field">
-        <label class="dep-label">服务名</label>
+        <label class="dep-label">{{ t('settings.deployment.serviceName') }}</label>
         <input
           class="dep-input"
           data-test="dep-service-name"
-          placeholder="如：api.service"
+          :placeholder="t('settings.deployment.serviceNamePlaceholder')"
           :value="runtime.service_name"
           @input="setSystemdServiceName(($event.target as HTMLInputElement).value)"
         />
@@ -368,17 +370,17 @@ function setEnv(env: Record<string, string>) {
           <input
             class="dep-input"
             data-test="dep-launchd-label"
-            placeholder="如：com.example.api"
+            :placeholder="t('settings.deployment.launchdLabelPlaceholder')"
             :value="runtime.label"
             @input="setLaunchdLabel(($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="dep-field">
-          <label class="dep-label">Plist 路径</label>
+          <label class="dep-label">{{ t('settings.deployment.plistPath') }}</label>
           <input
             class="dep-input"
             data-test="dep-launchd-plist"
-            placeholder="如：~/Library/LaunchAgents/com.example.api.plist"
+            :placeholder="t('settings.deployment.plistPathPlaceholder')"
             :value="runtime.plist_path"
             @input="setLaunchdPlistPath(($event.target as HTMLInputElement).value)"
           />
@@ -386,22 +388,22 @@ function setEnv(env: Record<string, string>) {
       </template>
 
       <div v-else-if="runtime.type === 'docker'" class="dep-field">
-        <label class="dep-label">容器名</label>
+        <label class="dep-label">{{ t('settings.deployment.containerName') }}</label>
         <input
           class="dep-input"
           data-test="dep-container"
-          placeholder="如：api-container"
+          :placeholder="t('settings.deployment.containerPlaceholder')"
           :value="runtime.container"
           @input="setDockerContainer(($event.target as HTMLInputElement).value)"
         />
       </div>
 
       <div v-else-if="runtime.type === 'nginx_static'" class="dep-field">
-        <label class="dep-label">站点 / 域名</label>
+        <label class="dep-label">{{ t('settings.deployment.siteDomain') }}</label>
         <input
           class="dep-input"
           data-test="dep-domain"
-          placeholder="如：www.example.com"
+          :placeholder="t('settings.deployment.domainPlaceholder')"
           :value="runtime.domain"
           @input="setNginxDomain(($event.target as HTMLInputElement).value)"
         />
@@ -409,53 +411,53 @@ function setEnv(env: Record<string, string>) {
     </section>
 
     <section class="dep-block">
-      <div class="dep-heading">日志来源</div>
+      <div class="dep-heading">{{ t('settings.deployment.logSource') }}</div>
       <div class="dep-field">
-        <label class="dep-label">来源类型</label>
+        <label class="dep-label">{{ t('settings.deployment.sourceType') }}</label>
         <select
           class="dep-input"
           data-test="dep-log-type"
           :value="logs.type"
           @change="setLogKind(($event.target as HTMLSelectElement).value as LogKind)"
         >
-          <option value="process">跟随进程输出</option>
+          <option value="process">{{ t('settings.deployment.processOutput') }}</option>
           <option value="journalctl">journalctl</option>
           <option value="macos_log">macOS log stream</option>
           <option value="docker">docker logs</option>
-          <option value="nginx">Nginx 日志</option>
-          <option value="file_tail">文件 tail</option>
-          <option value="command">自定义日志命令</option>
+          <option value="nginx">{{ t('settings.deployment.nginxLogs') }}</option>
+          <option value="file_tail">{{ t('settings.deployment.fileTail') }}</option>
+          <option value="command">{{ t('settings.deployment.customLogCommand') }}</option>
         </select>
       </div>
 
       <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="dep-field">
-        <label class="dep-label">日志目标</label>
+        <label class="dep-label">{{ t('settings.deployment.logTarget') }}</label>
         <input
           class="dep-input"
           data-test="dep-log-target"
-          placeholder="如：api.service / com.example.api / api-container / access.log"
+          :placeholder="t('settings.deployment.logTargetPlaceholder')"
           :value="logs.target"
           @input="patchLogs({ target: ($event.target as HTMLInputElement).value })"
         />
       </div>
 
       <div v-else-if="logs.type === 'file_tail'" class="dep-field">
-        <label class="dep-label">日志文件路径</label>
+        <label class="dep-label">{{ t('settings.deployment.logFilePath') }}</label>
         <input
           class="dep-input"
           data-test="dep-log-path"
-          placeholder="如：/var/log/api/app.log"
+          :placeholder="t('settings.deployment.logFilePlaceholder')"
           :value="logs.path"
           @input="patchLogs({ path: ($event.target as HTMLInputElement).value })"
         />
       </div>
 
       <div v-else-if="logs.type === 'command'" class="dep-field">
-        <label class="dep-label">日志命令</label>
+        <label class="dep-label">{{ t('settings.deployment.logCommand') }}</label>
         <input
           class="dep-input"
           data-test="dep-log-command"
-          placeholder="如：tail -F /var/log/api/app.log"
+          :placeholder="t('settings.deployment.logCommandPlaceholder')"
           :value="logs.command"
           @input="patchLogs({ command: ($event.target as HTMLInputElement).value })"
         />

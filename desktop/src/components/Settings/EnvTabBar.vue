@@ -11,6 +11,7 @@ EnvTabBar：环境横向 tab，切换 / 新增 / 删除 / 改名 / is_dev 标记
   - 改名校验（重名检测）由父层负责
 -->
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Environment } from '@/api/agent'
 
 defineProps<{ environments: Environment[]; active: string; renamingEnv?: string }>()
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   'toggle-dev': [string]
   'start-rename': [string]
 }>()
+const { t } = useAppI18n()
 
 // submitRename 从 input 事件中读取新名称并 emit rename-env；
 // 无论是否改名，都 emit start-rename('') 退出编辑态。
@@ -57,12 +59,12 @@ function submitRename(oldName: string, event: Event) {
       </template>
       <template v-else>
         {{ env.name }}
-        <span v-if="env.is_dev" class="dev-dot" title="开发环境">·dev</span>
-        <span class="env-edit" data-test="env-edit" title="重命名" @click.stop="emit('start-rename', env.name)">✎</span>
+        <span v-if="env.is_dev" class="dev-dot" :title="t('settings.env.dev')">·dev</span>
+        <span class="env-edit" data-test="env-edit" :title="t('settings.env.rename')" @click.stop="emit('start-rename', env.name)">✎</span>
         <span class="env-x" @click.stop="emit('remove-env', env.name)">✕</span>
       </template>
     </button>
-    <button type="button" class="add-env" data-test="add-env" @click="emit('add-env')">+ 新增环境</button>
+    <button type="button" class="add-env" data-test="add-env" @click="emit('add-env')">+ {{ t('settings.env.add') }}</button>
   </div>
 </template>
 

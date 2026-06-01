@@ -15,6 +15,7 @@ PipelineTemplateWizard：模板化流水线组合编辑器。
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { Pipeline, PipelinePhase, PipelinePreviewResponse, PipelineTemplateSummary, TemplateFileItem, TemplateInput } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import PipelinePreview from './PipelinePreview.vue'
 
 type TemplateVarValue = string | TemplateFileItem[]
@@ -39,14 +40,10 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
 const phases: PipelinePhase[] = ['build', 'deploy', 'finally']
-const phaseLabels: Record<PipelinePhase, string> = {
-  build: '构建阶段',
-  deploy: '部署阶段',
-  finally: '清理阶段',
-}
 const enabled = ref(Boolean(props.modelValue))
 const blocks = ref<TemplateBlock[]>([])
 const nextBlockId = ref(0)
+const { t } = useAppI18n()
 
 const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(block => {
   const template = selectedFor(block)
@@ -73,6 +70,10 @@ function inputEntries(block: TemplateBlock): [string, TemplateInput][] {
 
 function blocksForPhase(phase: PipelinePhase) {
   return blocks.value.filter(block => block.phase === phase)
+}
+
+function phaseLabel(phase: PipelinePhase) {
+  return t(`settings.pipeline.phases.${phase}`)
 }
 
 function addBlock(phase: PipelinePhase) {
@@ -287,29 +288,29 @@ function saveTemplate() {
 <template>
   <div class="pipeline-wizard">
     <button v-if="!enabled" type="button" class="pipeline-enable" data-test="pipeline-enable" @click="enable">
-      + 配置流水线
+      {{ t('settings.pipeline.configure') }}
     </button>
 
     <template v-else>
       <div class="wizard-head">
-        <span>流水线模板</span>
-        <button type="button" class="pipeline-disable" @click="disable">移除流水线</button>
+        <span>{{ t('settings.pipeline.template') }}</span>
+        <button type="button" class="pipeline-disable" @click="disable">{{ t('settings.pipeline.removeTemplate') }}</button>
       </div>
 
       <div v-if="templates.length === 0" class="pipeline-empty">
-        暂无可用模板，请先导入或创建模板。
+        {{ t('settings.pipeline.emptyTemplates') }}
       </div>
 
       <template v-else>
         <section v-for="phase in phases" :key="phase" class="phase-section">
           <header class="phase-head">
-            <span>{{ phaseLabels[phase] }}</span>
+            <span>{{ phaseLabel(phase) }}</span>
             <button type="button" class="text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
-              + 添加模板
+              {{ t('settings.pipeline.addTemplate') }}
             </button>
           </header>
 
-          <div v-if="blocksForPhase(phase).length === 0" class="phase-empty">未添加模板</div>
+          <div v-if="blocksForPhase(phase).length === 0" class="phase-empty">{{ t('settings.pipeline.noTemplate') }}</div>
 
           <div v-for="block in blocksForPhase(phase)" :key="block.id" class="template-block">
             <div class="block-row">
@@ -319,13 +320,13 @@ function saveTemplate() {
                 :data-test="`block-${block.id}-template-select`"
                 @change="resetBlockInputs(block)"
               >
-                <option value="" disabled>请选择模板</option>
+                <option value="" disabled>{{ t('settings.pipeline.selectTemplate') }}</option>
                 <option v-for="template in templates" :key="templateKey(template)" :value="templateKey(template)">
                   {{ template.name }} · {{ template.source }} · {{ template.version }}
                 </option>
               </select>
-              <button type="button" class="text-btn" :disabled="!selectedFor(block)" @click="viewSelected(block)">查看模板</button>
-              <button type="button" class="danger-btn" @click="removeBlock(block)">移除</button>
+              <button type="button" class="text-btn" :disabled="!selectedFor(block)" @click="viewSelected(block)">{{ t('settings.pipeline.viewTemplate') }}</button>
+              <button type="button" class="danger-btn" @click="removeBlock(block)">{{ t('common.remove') }}</button>
             </div>
 
             <div v-if="selectedFor(block)?.description" class="template-description">
@@ -333,9 +334,9 @@ function saveTemplate() {
             </div>
 
             <div class="template-runner-row">
-              <div class="field-label">运行机器</div>
-              <div class="field-help">留空时在本机执行；选择后会作为模板内部未指定角色步骤的运行机器。</div>
-              <div v-if="(hosts ?? []).length === 0" class="field-help">还没有可选主机，请先在主机管理中添加。</div>
+              <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
+              <div class="field-help">{{ t('settings.pipeline.machineHelp') }}</div>
+              <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
               <div v-else class="target-list">
                 <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
                   <input
@@ -365,7 +366,7 @@ function saveTemplate() {
                   />
                   {{ host.name }}
                 </label>
-                <div v-if="(hosts ?? []).length === 0" class="field-help">还没有可选主机，请先在主机管理中添加。</div>
+                <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
               </div>
 
               <select
@@ -403,11 +404,11 @@ function saveTemplate() {
                     :data-test="`block-${block.id}-remove-file-${index}`"
                     @click="removeFileItem(block, name, index)"
                   >
-                    移除
+                    {{ t('common.remove') }}
                   </button>
                 </div>
                 <button type="button" class="text-btn" :data-test="`block-${block.id}-add-file`" @click="addFileItem(block, name)">
-                  + 添加文件
+                  {{ t('settings.pipeline.addFile') }}
                 </button>
               </div>
 
@@ -425,7 +426,7 @@ function saveTemplate() {
         </section>
 
         <button type="button" class="pipeline-save" data-test="pipeline-save-template" :disabled="!canSave" @click="saveTemplate">
-          保存流水线
+          {{ t('settings.pipeline.saveTemplate') }}
         </button>
 
         <div v-if="previewError" class="preview-error">{{ previewError }}</div>

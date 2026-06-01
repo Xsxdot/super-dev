@@ -13,6 +13,7 @@ SshConfigImportModal：列出 ~/.ssh/config 中的 Host 条目供多选导入。
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { api, type SshConfigEntry } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ visible: boolean }>()
 
@@ -25,6 +26,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const entries = ref<SshConfigEntry[]>([])
 const selected = ref<Set<string>>(new Set())
+const { t } = useAppI18n()
 
 watch(
   () => props.visible,
@@ -36,7 +38,7 @@ watch(
     try {
       entries.value = await api.listSshConfigHosts()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '读取 SSH config 失败'
+      error.value = err instanceof Error ? err.message : t('settings.hostForm.readSshFailed')
       entries.value = []
     } finally {
       loading.value = false
@@ -60,10 +62,10 @@ function confirmImport() {
 <template>
   <div v-if="visible" class="modal-backdrop" @click.self="emit('cancel')">
     <div class="modal-body">
-      <div class="modal-title">从 SSH config 导入</div>
-      <div v-if="loading" class="state">读取中...</div>
+      <div class="modal-title">{{ t('settings.hostForm.importSshTitle') }}</div>
+      <div v-if="loading" class="state">{{ t('settings.hostForm.reading') }}</div>
       <div v-else-if="error" class="state err">{{ error }}</div>
-      <div v-else-if="entries.length === 0" class="state">没有可导入的 Host</div>
+      <div v-else-if="entries.length === 0" class="state">{{ t('settings.hostForm.noHosts') }}</div>
       <ul v-else class="entry-list">
         <li
           v-for="entry in entries"
@@ -79,7 +81,7 @@ function confirmImport() {
         </li>
       </ul>
       <div class="actions">
-        <button type="button" @click="emit('cancel')">取消</button>
+        <button type="button" @click="emit('cancel')">{{ t('common.cancel') }}</button>
         <button
           type="button"
           class="primary"
@@ -87,7 +89,7 @@ function confirmImport() {
           data-test="ssh-import-confirm"
           @click="confirmImport"
         >
-          导入 {{ selected.size }} 项
+          {{ t('settings.hostForm.importCount', { count: selected.size }) }}
         </button>
       </div>
     </div>

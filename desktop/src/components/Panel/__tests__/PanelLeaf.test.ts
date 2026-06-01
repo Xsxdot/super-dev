@@ -16,6 +16,7 @@ import PanelLeaf from '../PanelLeaf.vue'
 import EnvGroup from '../../Sidebar/EnvGroup.vue'
 import { useAgentStore } from '../../../stores/agent'
 import { usePanelStore, type PanelNode, type PanelSplitNode } from '../../../stores/panel'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '../../../api/agent'
 
 // 拖拽承载的标识为 dev 环境的 deploymentId。
@@ -191,6 +192,7 @@ describe('PanelLeaf', () => {
       },
     }, {
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           LogPanel: { template: '<div class="log-panel-stub" />' },
         },
@@ -327,6 +329,7 @@ describe('PanelLeaf', () => {
       },
     }, {
       global: {
+        plugins: [installTestI18n()],
         stubs: {
           LogPanel: { template: '<div class="log-panel-stub" />' },
         },

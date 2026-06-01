@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Project } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
@@ -37,14 +38,22 @@ function project(): Project {
   }
 }
 
+function mountProjectPipelineEditor(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
+  return mount(ProjectPipelineEditor, {
+    props: { project: project(), pipelineTemplates: [] },
+    global: { plugins: [installTestI18n(locale)] },
+  })
+}
+
 describe('ProjectPipelineEditor', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     vi.clearAllMocks()
   })
 
   it('渲染项目流水线编辑弹窗', async () => {
-    const wrapper = mount(ProjectPipelineEditor, { props: { project: project(), pipelineTemplates: [] } })
+    const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))
 
     expect(wrapper.text()).toContain('编辑流水线 · demo')
@@ -53,7 +62,7 @@ describe('ProjectPipelineEditor', () => {
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {
     const { api } = await import('@/api/agent')
-    const wrapper = mount(ProjectPipelineEditor, { props: { project: project(), pipelineTemplates: [] } })
+    const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="add-project-pipeline"]').trigger('click')
@@ -71,9 +80,16 @@ describe('ProjectPipelineEditor', () => {
   })
 
   it('点击取消 emit cancel', async () => {
-    const wrapper = mount(ProjectPipelineEditor, { props: { project: project(), pipelineTemplates: [] } })
+    const wrapper = mountProjectPipelineEditor()
     await wrapper.find('[data-test="pipeline-config-cancel"]').trigger('click')
 
     expect(wrapper.emitted('cancel')).toBeTruthy()
+  })
+
+  it('英文 locale 下渲染保存和取消按钮', async () => {
+    const wrapper = mountProjectPipelineEditor('en-US')
+
+    expect(wrapper.text()).toContain('Save')
+    expect(wrapper.text()).toContain('Cancel')
   })
 })

@@ -16,12 +16,14 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { buildSearchBuckets, type SearchBucketRow } from '@/lib/searchBuckets'
 import { splitSearchHighlight } from '@/lib/searchHighlight'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { LogContextPageDirection, LogEntry } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const { t } = useAppI18n()
 const localTab = computed(() => workspace.searchTab(props.tabId))
 const tab = computed(() => localTab.value ?? null)
 const columnsEl = ref<HTMLElement | null>(null)
@@ -366,7 +368,7 @@ onBeforeUnmount(() => {
           <div class="header-main">
             <span class="service-name">{{ serviceName(serviceId) }}</span>
           </div>
-          <button class="pin-btn" @click="togglePin(serviceId)">已固定</button>
+          <button class="pin-btn" @click="togglePin(serviceId)">{{ t('search.pinned') }}</button>
         </div>
         <div class="pinned-body" :ref="el => setPinnedBodyRef(serviceId, el)">
           <div class="pinned-grid">
@@ -437,7 +439,7 @@ onBeforeUnmount(() => {
             <div class="header-main">
               <span class="service-name">{{ serviceName(serviceId) }}</span>
             </div>
-            <button class="pin-btn" @click="togglePin(serviceId)">固定</button>
+            <button class="pin-btn" @click="togglePin(serviceId)">{{ t('search.pin') }}</button>
           </div>
         </div>
 
@@ -447,7 +449,7 @@ onBeforeUnmount(() => {
           :disabled="tab.loadingMoreBefore"
           @click="loadMore('before')"
         >
-          {{ tab.loadingMoreBefore ? '加载中...' : '加载更早' }}
+          {{ tab.loadingMoreBefore ? t('common.loading') : t('search.loadMoreBefore') }}
         </button>
 
         <div
@@ -529,14 +531,14 @@ onBeforeUnmount(() => {
           :disabled="tab.loadingMoreAfter"
           @click="loadMore('after')"
         >
-          {{ tab.loadingMoreAfter ? '加载中...' : '加载更新' }}
+          {{ tab.loadingMoreAfter ? t('common.loading') : t('search.loadMoreAfter') }}
         </button>
       </div>
     </div>
 
   </div>
   <div v-else class="columns-empty">
-    点击左侧命中日志查看跨服务上下文
+    {{ t('search.selectHitForContext') }}
   </div>
 </template>
 

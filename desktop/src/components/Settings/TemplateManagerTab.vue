@@ -12,6 +12,7 @@ TemplateManagerTab：流水线模板管理页签。
   - 不直接访问文件系统或 agent API
 -->
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { PipelineTemplateSummary } from '@/api/agent'
 
 const props = defineProps<{
@@ -19,31 +20,33 @@ const props = defineProps<{
   onImport?: () => void
   onView?: (template: PipelineTemplateSummary) => void
 }>()
+
+const { t } = useI18n()
 </script>
 
 <template>
   <section class="template-manager">
     <header class="template-toolbar">
       <div>
-        <h1>模板</h1>
-        <p>管理可复用的部署流水线模板</p>
+        <h1>{{ t('settings.templates.title') }}</h1>
+        <p>{{ t('settings.templates.description') }}</p>
       </div>
       <button type="button" class="primary-btn" data-test="template-import" @click="props.onImport?.()">
-        导入模板
+        {{ t('settings.templates.import') }}
       </button>
     </header>
 
     <div v-if="templates.length === 0" class="empty">
-      暂无模板
+      {{ t('settings.templates.empty') }}
     </div>
 
     <div v-else class="template-table">
       <div class="template-row table-head">
-        <span>来源</span>
-        <span>名称</span>
-        <span>版本</span>
-        <span>摘要</span>
-        <span>操作</span>
+        <span>{{ t('settings.templates.source') }}</span>
+        <span>{{ t('settings.templates.name') }}</span>
+        <span>{{ t('settings.templates.version') }}</span>
+        <span>{{ t('settings.templates.digest') }}</span>
+        <span>{{ t('settings.templates.actions') }}</span>
       </div>
       <div v-for="template in templates" :key="`${template.source}:${template.id}:${template.version}`" class="template-row">
         <span class="source">{{ template.source }}</span>
@@ -51,7 +54,7 @@ const props = defineProps<{
         <span>{{ template.version }}</span>
         <span class="digest">{{ template.digest }}</span>
         <button type="button" class="text-btn" :data-test="`template-view-${template.id}`" @click="props.onView?.(template)">
-          查看
+          {{ t('common.view') }}
         </button>
       </div>
     </div>

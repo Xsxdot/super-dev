@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Project } from '@/api/agent'
 
 const emit = defineEmits<{
@@ -10,6 +11,7 @@ const emit = defineEmits<{
 
 const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
+const { t } = useAppI18n()
 const searchText = ref('')
 const hoveredProjectId = ref<string | null>(null)
 
@@ -58,7 +60,7 @@ function onProjectLeave() {
       <span class="search-icon">⌕</span>
       <input
         v-model="searchText"
-        placeholder="搜索服务…"
+        :placeholder="t('popover.serviceSearchPlaceholder')"
         class="search-input"
       />
     </div>
@@ -102,7 +104,7 @@ function onProjectLeave() {
     <div class="divider" />
 
     <!-- 未连接提示 -->
-    <div v-if="!agentStore.connected" class="disconnected">未连接</div>
+    <div v-if="!agentStore.connected" class="disconnected">{{ t('popover.disconnected') }}</div>
   </div>
 </template>
 

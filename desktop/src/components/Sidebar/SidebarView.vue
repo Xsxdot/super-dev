@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -12,6 +13,7 @@ const agentStore = useAgentStore()
 const panelStore = usePanelStore()
 const workspace = useWorkspaceStore()
 const router = useRouter()
+const { t } = useI18n()
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
   workspace.openDeployment(payload.deploymentId, payload.title)
@@ -36,15 +38,15 @@ function openDeploymentIdSet(): Set<string> {
 }
 
 async function addProject() {
-  const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
+  const selected = await open({ directory: true, multiple: false, title: t('shell.sidebar.selectProjectRootTitle') })
   if (!selected || Array.isArray(selected)) return
   try {
     await agentStore.addProject(selected)
   } catch (e) {
-    const msg = e instanceof Error ? e.message : '添加项目失败'
+    const msg = e instanceof Error ? e.message : t('shell.sidebar.addProjectFailed')
     await message(
-      msg.includes('config') ? `${msg}\n请确认目录中有 .superdev/config.yaml` : msg,
-      { title: '无法添加项目', kind: 'error' },
+      msg.includes('config') ? `${msg}\n${t('shell.sidebar.configMissingHint')}` : msg,
+      { title: t('shell.sidebar.unableAddProject'), kind: 'error' },
     )
   }
 }
@@ -69,8 +71,8 @@ async function addProject() {
         />
       </template>
     </div>
-    <div class="settings-entry" @click="router.push('/settings')">⚙ 设置</div>
-    <div class="add-project" @click="addProject">+ 添加项目</div>
+    <div class="settings-entry" @click="router.push('/settings')">⚙ {{ t('shell.sidebar.settings') }}</div>
+    <div class="add-project" @click="addProject">+ {{ t('shell.sidebar.addProject') }}</div>
   </div>
 </template>
 

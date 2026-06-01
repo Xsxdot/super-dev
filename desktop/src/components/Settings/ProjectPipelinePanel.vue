@@ -11,6 +11,7 @@ ProjectPipelinePanel：项目级流水线编辑面板。
   - 不直接保存项目配置
 -->
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { ProjectPipeline, Pipeline, PipelineTemplateSummary } from '@/api/agent'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
 
@@ -22,6 +23,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ 'update:modelValue': [ProjectPipeline[]] }>()
+const { t } = useAppI18n()
 
 function patch(index: number, partial: Partial<ProjectPipeline>) {
   const next = props.modelValue.map((item, i) => (i === index ? { ...item, ...partial } : item))
@@ -48,11 +50,11 @@ function setPipeline(index: number, pipeline: Pipeline | undefined) {
 <template>
   <section class="project-pipelines">
     <div class="section-head">
-      <div class="section-title">项目流水线</div>
-      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline">新增流水线</button>
+      <div class="section-title">{{ t('settings.pipeline.title') }}</div>
+      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline">{{ t('settings.pipeline.add') }}</button>
     </div>
 
-    <div v-if="modelValue.length === 0" class="pipeline-empty">还没有项目级流水线</div>
+    <div v-if="modelValue.length === 0" class="pipeline-empty">{{ t('settings.pipeline.empty') }}</div>
 
     <div v-for="(item, index) in modelValue" :key="item.id || index" class="pipeline-item">
       <input
@@ -91,9 +93,9 @@ function setPipeline(index: number, pipeline: Pipeline | undefined) {
           data-test="project-pipeline-save-template"
           @click="patch(index, { pipeline: item.pipeline })"
         >
-          保存流水线草稿
+          {{ t('settings.pipeline.saveDraft') }}
         </button>
-        <button type="button" class="danger-btn" @click="removePipeline(index)">删除流水线</button>
+        <button type="button" class="danger-btn" @click="removePipeline(index)">{{ t('settings.pipeline.delete') }}</button>
       </div>
     </div>
   </section>

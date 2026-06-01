@@ -12,6 +12,7 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api as agentApi } from '@/api/agent'
+import { LOCALE_STORAGE_KEY, setLocale } from '@/i18n'
 import { useSettingsStore } from '../settings'
 
 vi.mock('@tauri-apps/plugin-autostart', () => ({
@@ -53,5 +54,26 @@ describe('settingsStore', () => {
 
     expect(store.isServiceHidden('svc-api')).toBe(true)
     expect(JSON.parse(localStorage.getItem('superdev.hidden_service_ids.v1') ?? '[]')).toEqual(['svc-api'])
+  })
+
+  it('初始化时暴露当前语言和可选语言', () => {
+    setLocale('en-US')
+    const store = useSettingsStore()
+
+    expect(store.locale).toBe('en-US')
+    expect(store.supportedLocaleOptions).toEqual([
+      { value: 'zh-CN', label: 'Chinese (Simplified)' },
+      { value: 'en-US', label: 'English' },
+    ])
+  })
+
+  it('setLocale 更新 store 状态和 localStorage', () => {
+    const store = useSettingsStore()
+
+    store.setLocale('en-US')
+
+    expect(store.locale).toBe('en-US')
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en-US')
+    expect(document.documentElement.lang).toBe('en-US')
   })
 })

@@ -12,6 +12,7 @@ PipelinePreview：展示后端编译后的流水线 DAG 预览。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import type { PipelinePhase, PipelinePreviewResponse } from '@/api/agent'
 
 const props = defineProps<{
@@ -21,6 +22,7 @@ const props = defineProps<{
 type StepRun = PipelinePreviewResponse['run']['step_runs'][number]
 
 const phaseOrder: PipelinePhase[] = ['build', 'deploy', 'finally']
+const { t } = useAppI18n()
 
 const grouped = computed(() => phaseOrder
   .map(phase => ({
@@ -31,14 +33,14 @@ const grouped = computed(() => phaseOrder
 
 function taskTarget(step: StepRun) {
   const names = step.tasks.map(task => task.host_name || task.host_id).filter(Boolean)
-  return names.length > 0 ? names.join(', ') : '本地'
+  return names.length > 0 ? names.join(', ') : t('common.local')
 }
 </script>
 
 <template>
   <section class="pipeline-preview">
     <header class="preview-head">
-      <span>预览</span>
+      <span>{{ t('settings.pipeline.preview') }}</span>
       <span class="preview-status">{{ preview.run.status }}</span>
     </header>
 
@@ -51,8 +53,8 @@ function taskTarget(step: StepRun) {
           <span class="step-status">{{ step.status }}</span>
         </div>
         <div class="step-meta">
-          <span v-if="step.needs?.length">依赖：{{ step.needs.join(', ') }}</span>
-          <span>目标：{{ taskTarget(step) }}</span>
+          <span v-if="step.needs?.length">{{ t('settings.pipeline.dependency', { items: step.needs.join(', ') }) }}</span>
+          <span>{{ t('settings.pipeline.target', { target: taskTarget(step) }) }}</span>
         </div>
       </article>
     </div>

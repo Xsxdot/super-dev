@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { api, type LogRule, type LogEntry } from '@/api/agent'
+import { i18n } from '@/i18n'
 
 export type ChipType = 'include' | 'exclude'
 export type ChipLogic = 'and' | 'or'
@@ -115,7 +116,7 @@ export const useFilterStore = defineStore('filter', () => {
     if (keywords.length === 0) return
     const rule: LogRule = {
       id: uuidv4(),
-      name: draft.name.trim() || keywords[0] || '未命名规则',
+      name: draft.name.trim() || keywords[0] || i18n.global.t('panel.rules.untitled'),
       type: draft.type,
       keywords,
       logic: draft.logic,

@@ -14,6 +14,7 @@ import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import { useRemoteStore } from '@/stores/remote'
+import { installTestI18n } from '@/test-utils/i18n'
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
@@ -40,17 +41,18 @@ describe('HostManagerTab', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   it('空态展示提示文案', async () => {
-    const wrapper = mount(HostManagerTab)
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
     await new Promise(resolve => setTimeout(resolve))
 
     expect(wrapper.text()).toContain('还没有主机')
   })
 
   it('点击新建主机打开表单', async () => {
-    const wrapper = mount(HostManagerTab)
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="host-add"]').trigger('click')
 
@@ -58,7 +60,7 @@ describe('HostManagerTab', () => {
   })
 
   it('提交表单调用 store.createHost', async () => {
-    const wrapper = mount(HostManagerTab)
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
     const store = useRemoteStore()
     const spy = vi.spyOn(store, 'createHost').mockResolvedValue({
       id: 'h1',
@@ -83,5 +85,16 @@ describe('HostManagerTab', () => {
       ssh_host: '1.1.1.1',
       ssh_user: 'root',
     })
+  })
+
+  it('英文 locale 下渲染主机管理标题', async () => {
+    const wrapper = mount(HostManagerTab, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await new Promise(resolve => setTimeout(resolve))
+
+    expect(wrapper.text()).toContain('Hosts')
+    expect(wrapper.text()).toContain('New Host')
   })
 })

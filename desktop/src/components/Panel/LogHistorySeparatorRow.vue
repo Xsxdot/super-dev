@@ -8,10 +8,16 @@
   - 不代表真实 LogEntry
   - 不参与复制、导出或过滤
 -->
+<script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
+
+const { t } = useAppI18n()
+</script>
+
 <template>
   <div class="history-separator-row">
     <span class="line" />
-    <span class="label">历史消息 · 之后为实时输出</span>
+    <span class="label">{{ t('panel.log.historySeparator') }}</span>
     <span class="line" />
   </div>
 </template>

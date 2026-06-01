@@ -14,9 +14,10 @@ ProjectConfigEditor：项目运行配置编辑器外壳。
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
-import { projectToDraft, draftToPayload, validateDraft, type ConfigDraftService } from '@/lib/configDraft'
+import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue, type ConfigDraftService } from '@/lib/configDraft'
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
@@ -25,6 +26,7 @@ const props = defineProps<{ project: Project; isNew?: boolean }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
 const agentStore = useAgentStore()
+const { t } = useI18n()
 const draft = ref(projectToDraft(props.project))
 const activeEnv = ref('')
 const activeServiceId = ref('')
@@ -130,7 +132,9 @@ function removeService(i: number) {
 
 function configValidationErrors(): string[] {
   // 项目级流水线已拆到独立编辑器，配置保存只拦截环境/服务/运行日志相关错误。
-  return validateDraft(draft.value).filter(error => !error.startsWith('项目流水线'))
+  return validateDraftDetailed(draft.value)
+    .filter(error => error.scope === 'config')
+    .map(formatValidationIssue)
 }
 
 async function save() {
@@ -143,7 +147,7 @@ async function save() {
     await agentStore.reloadProject(props.project.id)
     emit('saved', updated)
   } catch (e) {
-    saveError.value = e instanceof Error ? e.message : '保存失败'
+    saveError.value = e instanceof Error ? e.message : t('common.saveFailed')
   } finally {
     saving.value = false
   }
@@ -153,7 +157,7 @@ async function save() {
 <template>
   <div class="editor-backdrop" @click.self="emit('cancel')">
     <div class="editor-body">
-      <div class="editor-title">配置项目 · {{ project.name }}</div>
+      <div class="editor-title">{{ t('settings.projects.editConfig') }} · {{ project.name }}</div>
 
       <ul v-if="errors.length" class="err-list">
         <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
@@ -196,14 +200,14 @@ async function save() {
               @remove="removeService(activeServiceIndex)"
             />
           </template>
-          <div v-else class="editor-empty">请在左侧新增服务</div>
+          <div v-else class="editor-empty">{{ t('settings.service.addPrompt') }}</div>
         </div>
       </div>
 
       <div class="editor-actions">
-        <button type="button" data-test="config-cancel" @click="emit('cancel')">取消</button>
+        <button type="button" data-test="config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
         <button type="button" class="primary" data-test="config-save" :disabled="saving" @click="save">
-          {{ saving ? '保存中...' : '保存' }}
+          {{ saving ? t('common.loading') : t('common.save') }}
         </button>
       </div>
     </div>

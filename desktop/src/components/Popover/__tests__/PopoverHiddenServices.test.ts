@@ -15,6 +15,7 @@ import PopoverProjectList from '../PopoverProjectList.vue'
 import PopoverServicePanel from '../PopoverServicePanel.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '@/api/agent'
 
 function service(id: string, name: string): Service {
@@ -52,8 +53,11 @@ describe('popover hidden services', () => {
     const settings = useSettingsStore()
     settings.toggleServiceHidden('svc-worker')
 
-    const list = mount(PopoverProjectList)
-    const panel = mount(PopoverServicePanel, { props: { project: agent.projects[0] } })
+    const list = mount(PopoverProjectList, { global: { plugins: [installTestI18n()] } })
+    const panel = mount(PopoverServicePanel, {
+      props: { project: agent.projects[0] },
+      global: { plugins: [installTestI18n()] },
+    })
 
     expect(list.text()).toContain('api')
     expect(list.text()).not.toContain('worker')
