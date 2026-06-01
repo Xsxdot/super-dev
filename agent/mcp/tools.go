@@ -109,6 +109,28 @@ func logContextInputSchema() map[string]any {
 	}
 }
 
+func templateSourceInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"path": map[string]any{"type": "string"},
+			"yaml": map[string]any{"type": "string"},
+		},
+	}
+}
+
+func templateImportInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"path": map[string]any{"type": "string"},
+		},
+		"required": []string{"path"},
+	}
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
 		{
@@ -219,6 +241,25 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.diagnoseServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "preview_pipeline_template",
+				Title:       "Preview pipeline template",
+				Description: "Dry-run parse and validate a pipeline template YAML string or file.",
+				InputSchema: templateSourceInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.previewPipelineTemplateTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "import_pipeline_template",
+				Title:       "Import pipeline template",
+				Description: "Import a pipeline template file into the local agent template library only.",
+				InputSchema: templateImportInputSchema(),
+			},
+			Handler: s.importPipelineTemplateTool,
 		},
 	}
 }
