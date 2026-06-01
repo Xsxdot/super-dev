@@ -14,14 +14,16 @@ PipelineTemplateWizard：模板化流水线组合编辑器。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { Pipeline, PipelinePhase, PipelinePreviewResponse, PipelineTemplateSummary, TemplateInput } from '@/api/agent'
+import type { Pipeline, PipelinePhase, PipelinePreviewResponse, PipelineTemplateSummary, TemplateFileItem, TemplateInput } from '@/api/agent'
 import PipelinePreview from './PipelinePreview.vue'
+
+type TemplateVarValue = string | TemplateFileItem[]
 
 type TemplateBlock = {
   id: string
   phase: PipelinePhase
   selectedKey: string
-  vars: Record<string, string>
+  vars: Record<string, TemplateVarValue>
   targets: Record<string, string[]>
   runnerTargets: string[]
 }
@@ -49,11 +51,7 @@ const nextBlockId = ref(0)
 const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(block => {
   const template = selectedFor(block)
   if (!template) return false
-  return Object.entries(template.inputs ?? {}).every(([name, input]) => {
-    if (!input.required) return true
-    if (input.type === 'target_role') return (block.targets[name] ?? []).length > 0
-    return (block.vars[name] ?? '').trim() !== ''
-  })
+  return Object.entries(template.inputs ?? {}).every(([name, input]) => inputSatisfied(block, name, input))
 }))
 
 watch(() => props.modelValue, (value) => {
@@ -94,6 +92,10 @@ function resetBlockInputs(block: TemplateBlock) {
       block.targets[name] = []
       continue
     }
+    if (input.type === 'file_list') {
+      block.vars[name] = []
+      continue
+    }
     block.vars[name] = input.default ?? ''
   }
 }
@@ -119,11 +121,13 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
       const rawVars = step.with.vars && typeof step.with.vars === 'object'
         ? step.with.vars as Record<string, unknown>
         : {}
-      const vars = Object.fromEntries(Object.entries(rawVars).map(([key, value]) => [key, String(value)]))
+      const selectedKey = version ? `${templateURI}@${version}` : ''
+      const template = props.templates.find(t => templateKey(t) === selectedKey)
+      const vars = hydrateVars(rawVars, template)
       const block: TemplateBlock = {
         id: String(nextBlockId.value++),
         phase,
-        selectedKey: version ? `${templateURI}@${version}` : '',
+        selectedKey,
         vars,
         targets: {},
         runnerTargets: [],
@@ -133,6 +137,7 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
       }
       block.runnerTargets = Array.from(new Set(block.runnerTargets))
       for (const [name, value] of Object.entries(vars)) {
+        if (typeof value !== 'string') continue
         const ids = pipeline.roles?.[String(value)]
         if (ids) block.targets[name] = [...ids]
       }
@@ -173,6 +178,65 @@ function toggleTarget(block: TemplateBlock, name: string, hostID: string, checke
   block.targets[name] = [...set]
 }
 
+function inputSatisfied(block: TemplateBlock, name: string, input: TemplateInput) {
+  if (input.type === 'target_role') return !input.required || (block.targets[name] ?? []).length > 0
+  if (input.type === 'file_list') {
+    const files = fileItems(block, name)
+    if (files.length > 0 && !files.every(file => file.from.trim() !== '' && file.to.trim() !== '')) return false
+    return !input.required || files.length > 0
+  }
+  return !input.required || stringVar(block, name).trim() !== ''
+}
+
+function stringVar(block: TemplateBlock, name: string) {
+  const value = block.vars[name]
+  return typeof value === 'string' ? value : ''
+}
+
+function setStringVar(block: TemplateBlock, name: string, value: string) {
+  block.vars[name] = value
+}
+
+function fileItems(block: TemplateBlock, name: string) {
+  const value = block.vars[name]
+  return Array.isArray(value) ? value : []
+}
+
+function addFileItem(block: TemplateBlock, name: string) {
+  const items = [...fileItems(block, name), { from: '', to: '' }]
+  block.vars[name] = items
+}
+
+function updateFileItem(block: TemplateBlock, name: string, index: number, field: keyof TemplateFileItem, value: string) {
+  const items = fileItems(block, name).map(item => ({ ...item }))
+  if (!items[index]) return
+  items[index][field] = value
+  block.vars[name] = items
+}
+
+function removeFileItem(block: TemplateBlock, name: string, index: number) {
+  block.vars[name] = fileItems(block, name).filter((_, i) => i !== index)
+}
+
+function hydrateVars(rawVars: Record<string, unknown>, template?: PipelineTemplateSummary): Record<string, TemplateVarValue> {
+  const vars: Record<string, TemplateVarValue> = {}
+  for (const [key, value] of Object.entries(rawVars)) {
+    if (template?.inputs?.[key]?.type === 'file_list' || Array.isArray(value)) {
+      vars[key] = normalizeFileList(value)
+      continue
+    }
+    vars[key] = String(value)
+  }
+  return vars
+}
+
+function normalizeFileList(value: unknown): TemplateFileItem[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map(item => ({ from: String(item.from ?? ''), to: String(item.to ?? '') }))
+}
+
 function viewSelected(block: TemplateBlock) {
   const template = selectedFor(block)
   if (template) props.onViewTemplate?.(template)
@@ -183,14 +247,18 @@ function saveTemplate() {
   for (const block of blocks.value) {
     const template = selectedFor(block)
     if (!template) continue
-    const vars: Record<string, string> = { ...block.vars }
+    const vars: Record<string, TemplateVarValue> = { ...block.vars }
     for (const [name, input] of Object.entries(template.inputs ?? {})) {
-      if (input.type !== 'target_role') continue
-      const key = roleKey(block, name)
-      vars[name] = key
-      pipeline.roles![key] = block.targets[name] ?? []
+      if (input.type === 'target_role') {
+        const key = roleKey(block, name)
+        vars[name] = key
+        pipeline.roles![key] = block.targets[name] ?? []
+      }
+      if (input.type === 'file_list' && fileItems(block, name).length === 0 && !input.required) {
+        delete vars[name]
+      }
     }
-    if (vars.app_name && !pipeline.variables!.app_name) {
+    if (typeof vars.app_name === 'string' && vars.app_name && !pipeline.variables!.app_name) {
       pipeline.variables!.app_name = vars.app_name
     }
     const runnerTargets = block.runnerTargets.filter(Boolean)
@@ -303,20 +371,54 @@ function saveTemplate() {
               <select
                 v-else-if="input.type === 'select'"
                 :id="`template-input-${block.id}-${name}`"
-                v-model="block.vars[name]"
+                :value="stringVar(block, name)"
                 class="field-input"
                 :data-test="`block-${block.id}-input-${name}`"
+                @change="setStringVar(block, name, ($event.target as HTMLSelectElement).value)"
               >
                 <option v-for="option in input.options ?? []" :key="option" :value="option">{{ option }}</option>
               </select>
 
+              <div v-else-if="input.type === 'file_list'" class="file-list">
+                <div v-for="(file, index) in fileItems(block, name)" :key="index" class="file-row">
+                  <input
+                    class="field-input file-input"
+                    type="text"
+                    placeholder="from"
+                    :data-test="`block-${block.id}-file-from-${index}`"
+                    :value="file.from"
+                    @input="updateFileItem(block, name, index, 'from', ($event.target as HTMLInputElement).value)"
+                  />
+                  <input
+                    class="field-input file-input"
+                    type="text"
+                    placeholder="to"
+                    :data-test="`block-${block.id}-file-to-${index}`"
+                    :value="file.to"
+                    @input="updateFileItem(block, name, index, 'to', ($event.target as HTMLInputElement).value)"
+                  />
+                  <button
+                    type="button"
+                    class="danger-btn file-remove"
+                    :data-test="`block-${block.id}-remove-file-${index}`"
+                    @click="removeFileItem(block, name, index)"
+                  >
+                    移除
+                  </button>
+                </div>
+                <button type="button" class="text-btn" :data-test="`block-${block.id}-add-file`" @click="addFileItem(block, name)">
+                  + 添加文件
+                </button>
+              </div>
+
               <input
                 v-else
                 :id="`template-input-${block.id}-${name}`"
-                v-model="block.vars[name]"
+                :value="stringVar(block, name)"
                 class="field-input"
                 :type="input.type === 'number' ? 'number' : 'text'"
                 :data-test="`block-${block.id}-input-${name}`"
+                @input="setStringVar(block, name, ($event.target as HTMLInputElement).value)"
               />
             </div>
           </div>
@@ -459,5 +561,22 @@ function saveTemplate() {
 .target-item {
   font-size: 12px;
   color: var(--text-secondary);
+}
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.file-input {
+  min-width: 0;
+}
+.file-remove {
+  white-space: nowrap;
 }
 </style>

@@ -39,6 +39,18 @@ const deployTemplate: PipelineTemplateSummary = {
   },
 }
 
+const packageTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'archive-package',
+  name: 'Archive Package',
+  version: '1.0.0',
+  digest: 'sha256:package',
+  inputs: {
+    artifact: { label: '产物', type: 'path', required: true, description: '最终产物' },
+    files: { label: '文件', type: 'file_list', required: true, description: '文件清单' },
+  },
+}
+
 describe('PipelineTemplateWizard', () => {
   it('无 pipeline 时展示配置入口', () => {
     const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [buildTemplate] } })
@@ -178,5 +190,53 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.text()).toContain('Compile')
     expect(wrapper.text()).toContain('预览失败')
+  })
+
+  it('保存 file_list 输入为结构化 files 数组', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: undefined, templates: [packageTemplate] },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://archive-package@1.0.0')
+    await wrapper.find('[data-test="block-0-input-artifact"]').setValue('${artifacts}/api.tar.gz')
+    expect(wrapper.find('[data-test="pipeline-save-template"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.find('[data-test="block-0-add-file"]').trigger('click')
+    await wrapper.find('[data-test="block-0-file-from-0"]').setValue('${output}/api')
+    await wrapper.find('[data-test="block-0-file-to-0"]').setValue('bin/api')
+    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
+
+    const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
+    expect(pipeline.build?.[0].with?.vars).toMatchObject({
+      artifact: '${artifacts}/api.tar.gz',
+      files: [{ from: '${output}/api', to: 'bin/api' }],
+    })
+  })
+
+  it('已有 include pipeline 时回填 file_list 输入', () => {
+    const pipeline: Pipeline = {
+      build: [{
+        name: 'Archive Package',
+        type: 'include',
+        with: {
+          template: 'builtin://archive-package',
+          version: '1.0.0',
+          digest: 'sha256:package',
+          vars: {
+            artifact: '${artifacts}/api.tar.gz',
+            files: [{ from: '${output}/api', to: 'bin/api' }],
+          },
+        },
+      }],
+    }
+
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: pipeline, templates: [packageTemplate] },
+    })
+
+    expect((wrapper.find('[data-test="block-0-input-artifact"]').element as HTMLInputElement).value).toBe('${artifacts}/api.tar.gz')
+    expect((wrapper.find('[data-test="block-0-file-from-0"]').element as HTMLInputElement).value).toBe('${output}/api')
+    expect((wrapper.find('[data-test="block-0-file-to-0"]').element as HTMLInputElement).value).toBe('bin/api')
   })
 })

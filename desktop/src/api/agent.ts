@@ -96,9 +96,14 @@ export interface ProjectPipeline {
   pipeline: Pipeline
 }
 
+export interface TemplateFileItem {
+  from: string
+  to: string
+}
+
 export interface TemplateInput {
   label: string
-  type: 'string' | 'number' | 'bool' | 'select' | 'path' | 'target_role'
+  type: 'string' | 'number' | 'bool' | 'select' | 'path' | 'target_role' | 'file_list'
   required?: boolean
   default?: string
   description?: string
