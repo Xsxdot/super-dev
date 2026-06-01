@@ -11,6 +11,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, type AgentSettings } from '@/api/agent'
+import {
+  SUPPORTED_LOCALE_OPTIONS,
+  currentLocale,
+  setLocale as applyLocale,
+  type SupportedLocale,
+} from '@/i18n'
 
 const HIDDEN_SERVICE_IDS_KEY = 'superdev.hidden_service_ids.v1'
 
@@ -32,6 +38,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const agentSettings = ref<AgentSettings>({ log_retention_days: 7 })
   const hiddenServiceIds = ref<string[]>(loadHiddenServiceIds())
   const autostartEnabled = ref(false)
+  const locale = ref<SupportedLocale>(currentLocale())
+  const supportedLocaleOptions = SUPPORTED_LOCALE_OPTIONS
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -76,10 +84,17 @@ export const useSettingsStore = defineStore('settings', () => {
     saveHiddenServiceIds(next)
   }
 
+  function setLocale(nextLocale: SupportedLocale) {
+    applyLocale(nextLocale)
+    locale.value = currentLocale()
+  }
+
   return {
     agentSettings,
     hiddenServiceIds,
     autostartEnabled,
+    locale,
+    supportedLocaleOptions,
     loading,
     error,
     loadAgentSettings,
@@ -88,5 +103,6 @@ export const useSettingsStore = defineStore('settings', () => {
     setAutostart,
     isServiceHidden,
     toggleServiceHidden,
+    setLocale,
   }
 })
