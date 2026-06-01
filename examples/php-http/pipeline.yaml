@@ -1,0 +1,37 @@
+variables:
+  app_name: php-http
+  example_dir: ${workspace}/examples/php-http
+  artifact: ${artifacts}/php-http.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build PHP
+    type: include
+    with:
+      template: builtin://php-standard-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        install_cmd: if [ -f composer.json ]; then composer install --no-dev --prefer-dist --no-interaction; else true; fi
+        artifact: ${artifact}
+        files:
+          - from: ${example_dir}/index.php
+            to: index.php
+deploy:
+  - name: Deploy PHP
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/php-http/releases
+        current_dir: /opt/superdev-examples/php-http/current
+        app_name: php-http
+        service_name: superdev-example-php-http
+        exec_start: /usr/bin/php -S 0.0.0.0:18085 -t /opt/superdev-examples/php-http/current /opt/superdev-examples/php-http/current/index.php
+        working_dir: /opt/superdev-examples/php-http/current
+        port: "18085"
+        health_path: /health
+        environment: Environment=APP_VERSION=${version}

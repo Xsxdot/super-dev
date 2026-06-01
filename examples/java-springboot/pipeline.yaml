@@ -1,0 +1,37 @@
+variables:
+  app_name: java-springboot
+  example_dir: ${workspace}/examples/java-springboot
+  artifact: ${artifacts}/java-springboot.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Java
+    type: include
+    with:
+      template: builtin://java-maven-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        build_cmd: mvn -q -DskipTests package
+        artifact: ${artifact}
+        files:
+          - from: ${example_dir}/target/java-springboot-1.0.0.jar
+            to: app.jar
+deploy:
+  - name: Deploy Java
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/java-springboot/releases
+        current_dir: /opt/superdev-examples/java-springboot/current
+        app_name: java-springboot
+        service_name: superdev-example-java-springboot
+        exec_start: /usr/bin/java -jar /opt/superdev-examples/java-springboot/current/app.jar --server.port=18083
+        working_dir: /opt/superdev-examples/java-springboot/current
+        port: "18083"
+        health_path: /health
+        environment: Environment=APP_VERSION=${version}

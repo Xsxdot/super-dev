@@ -1,0 +1,40 @@
+variables:
+  app_name: node-http
+  example_dir: ${workspace}/examples/node-http
+  artifact: ${artifacts}/node-http.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Node
+    type: include
+    with:
+      template: builtin://node-standard-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        install_cmd: npm install
+        build_cmd: npm run build
+        artifact: ${artifact}
+        files:
+          - from: ${example_dir}/server.js
+            to: server.js
+          - from: ${example_dir}/package.json
+            to: package.json
+deploy:
+  - name: Deploy Node
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/node-http/releases
+        current_dir: /opt/superdev-examples/node-http/current
+        app_name: node-http
+        service_name: superdev-example-node-http
+        exec_start: /usr/bin/node /opt/superdev-examples/node-http/current/server.js
+        working_dir: /opt/superdev-examples/node-http/current
+        port: "18081"
+        health_path: /health
+        environment: Environment=PORT=18081 APP_VERSION=${version}

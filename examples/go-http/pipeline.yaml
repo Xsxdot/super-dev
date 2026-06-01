@@ -1,0 +1,38 @@
+variables:
+  app_name: go-http
+  example_dir: ${workspace}/examples/go-http
+  artifact: ${artifacts}/go-http.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Go
+    type: include
+    with:
+      template: builtin://go-binary-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        package: .
+        output: ${output}/go-http
+        artifact: ${artifact}
+        files:
+          - from: ${output}/go-http
+            to: go-http
+deploy:
+  - name: Deploy Go
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/go-http/releases
+        current_dir: /opt/superdev-examples/go-http/current
+        app_name: go-http
+        service_name: superdev-example-go-http
+        exec_start: /opt/superdev-examples/go-http/current/go-http
+        working_dir: /opt/superdev-examples/go-http/current
+        port: "18080"
+        health_path: /health
+        environment: Environment=PORT=18080 APP_VERSION=${version}

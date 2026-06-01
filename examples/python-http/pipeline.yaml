@@ -1,0 +1,37 @@
+variables:
+  app_name: python-http
+  example_dir: ${workspace}/examples/python-http
+  artifact: ${artifacts}/python-http.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Python
+    type: include
+    with:
+      template: builtin://python-standard-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        check_cmd: python3 -m py_compile app.py
+        artifact: ${artifact}
+        files:
+          - from: ${example_dir}/app.py
+            to: app.py
+deploy:
+  - name: Deploy Python
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/python-http/releases
+        current_dir: /opt/superdev-examples/python-http/current
+        app_name: python-http
+        service_name: superdev-example-python-http
+        exec_start: /usr/bin/python3 /opt/superdev-examples/python-http/current/app.py
+        working_dir: /opt/superdev-examples/python-http/current
+        port: "18082"
+        health_path: /health
+        environment: Environment=PORT=18082 APP_VERSION=${version}

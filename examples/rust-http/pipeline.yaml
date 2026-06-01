@@ -1,0 +1,37 @@
+variables:
+  app_name: rust-http
+  example_dir: ${workspace}/examples/rust-http
+  artifact: ${artifacts}/rust-http.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Rust
+    type: include
+    with:
+      template: builtin://rust-cargo-build
+      version: 1.0.0
+      vars:
+        work_dir: ${example_dir}
+        build_cmd: cargo build --release
+        artifact: ${artifact}
+        files:
+          - from: ${example_dir}/target/release/rust-http
+            to: rust-http
+deploy:
+  - name: Deploy Rust
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/rust-http/releases
+        current_dir: /opt/superdev-examples/rust-http/current
+        app_name: rust-http
+        service_name: superdev-example-rust-http
+        exec_start: /opt/superdev-examples/rust-http/current/rust-http
+        working_dir: /opt/superdev-examples/rust-http/current
+        port: "18084"
+        health_path: /health
+        environment: Environment=PORT=18084 APP_VERSION=${version}

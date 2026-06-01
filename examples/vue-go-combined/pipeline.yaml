@@ -1,0 +1,42 @@
+variables:
+  app_name: vue-go-combined
+  example_dir: ${workspace}/examples/vue-go-combined
+  artifact: ${artifacts}/vue-go-combined.tar.gz
+roles:
+  local02_targets: ["local-02"]
+build:
+  - name: Build Vue Go
+    type: include
+    with:
+      template: builtin://vue-go-combined-build
+      version: 1.0.0
+      vars:
+        frontend_dir: ${example_dir}/frontend
+        backend_dir: ${example_dir}/backend
+        frontend_build_cmd: npm install && npm run build
+        go_package: .
+        binary_output: ${output}/vue-go-combined
+        artifact: ${artifact}
+        files:
+          - from: ${output}/vue-go-combined
+            to: vue-go-combined
+          - from: ${example_dir}/frontend/dist
+            to: dist
+deploy:
+  - name: Deploy Vue Go
+    type: include
+    with:
+      template: builtin://systemd-seamless-deploy
+      version: 1.0.0
+      vars:
+        role: local02_targets
+        artifact: ${artifact}
+        release_dir: /opt/superdev-examples/vue-go-combined/releases
+        current_dir: /opt/superdev-examples/vue-go-combined/current
+        app_name: vue-go-combined
+        service_name: superdev-example-vue-go-combined
+        exec_start: /opt/superdev-examples/vue-go-combined/current/vue-go-combined
+        working_dir: /opt/superdev-examples/vue-go-combined/current
+        port: "18086"
+        health_path: /health
+        environment: Environment=PORT=18086 DIST_DIR=/opt/superdev-examples/vue-go-combined/current/dist APP_VERSION=${version}
