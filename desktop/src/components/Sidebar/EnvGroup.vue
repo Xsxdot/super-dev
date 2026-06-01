@@ -14,6 +14,7 @@ EnvGroup：侧边栏 Environment 分组。
 
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop } from '@/composables/useDragDrop'
 import type { Service } from '@/api/agent'
@@ -33,6 +34,7 @@ const emit = defineEmits<{
 }>()
 
 const agentStore = useAgentStore()
+const { t } = useI18n()
 const { startServiceDrag, moveServiceDrag, endServiceDrag, finishServiceDrag } = useDragDrop()
 
 async function onCheckChange(svc: Service) {
@@ -239,9 +241,9 @@ onUnmounted(() => {
       <span class="env-name">{{ envName }}</span>
       <Transition name="fade">
         <div v-if="hovered" class="env-actions" @click.stop>
-          <button title="启动全部" class="action-btn start" :disabled="!canStart" @click="startAll">▶</button>
-          <button title="搜索日志" class="action-btn search" :disabled="services.length === 0" @click="emit('search')">⌕</button>
-          <button title="全部停止" class="action-btn stop" @click="stopAll">⏹</button>
+          <button title="" class="action-btn start" :aria-label="t('shell.env.startAll')" :disabled="!canStart" @click="startAll">▶</button>
+          <button title="" class="action-btn search" :aria-label="t('shell.env.searchLogs')" :disabled="services.length === 0" @click="emit('search')">⌕</button>
+          <button title="" class="action-btn stop" :aria-label="t('shell.env.stopAll')" @click="stopAll">⏹</button>
         </div>
       </Transition>
     </div>
@@ -285,7 +287,7 @@ onUnmounted(() => {
             type="button"
             class="row-action start"
             data-test="row-start"
-            title="启动"
+            :title="t('shell.env.start')"
             @click="startOne(svc)"
           >▶</button>
           <button
@@ -293,7 +295,7 @@ onUnmounted(() => {
             type="button"
             class="row-action restart"
             data-test="row-restart"
-            title="重启"
+            :title="t('shell.env.restart')"
             @click="restartOne(svc)"
           >↻</button>
           <button
@@ -301,7 +303,7 @@ onUnmounted(() => {
             type="button"
             class="row-action stop"
             data-test="row-stop"
-            title="停止"
+            :title="t('shell.env.stop')"
             @click="stopOne(svc)"
           >⏹</button>
         </div>

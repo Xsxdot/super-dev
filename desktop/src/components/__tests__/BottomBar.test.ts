@@ -19,6 +19,7 @@ import { useBookmarkStore } from '../../stores/bookmark'
 import { useDeploymentLogStore } from '../../stores/deploymentLog'
 import { usePanelStore } from '../../stores/panel'
 import { toDisplayEntry } from '../../lib/logEngine'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { LogEntry, Project, Service } from '../../api/agent'
 
 const tauriMocks = vi.hoisted(() => ({
@@ -73,7 +74,7 @@ function makeLog(deploymentId: string, message: string, timestamp: string): LogE
   }
 }
 
-async function mountBottomBarWithServices() {
+async function mountBottomBarWithServices(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   const panelStore = usePanelStore()
   const agentStore = useAgentStore()
   const api = makeService('svc-api', 'api')
@@ -87,7 +88,9 @@ async function mountBottomBarWithServices() {
   panelStore.replaceScope(firstPanelId, apiDep, null)
   panelStore.splitLeaf(firstPanelId, 'h', workerDep, null, 'second')
 
-  const wrapper = mount(BottomBar)
+  const wrapper = mount(BottomBar, {
+    global: { plugins: [installTestI18n(locale)] },
+  })
   await nextTick()
   return { wrapper, panelStore, api, worker, apiDep, workerDep }
 }
@@ -151,4 +154,12 @@ describe('BottomBar', () => {
     expect(wrapper.find('.sync-export-btn').exists()).toBe(true)
   })
 
+  it('英文 locale 下渲染底部栏控制文案', async () => {
+    const { wrapper } = await mountBottomBarWithServices('en-US')
+
+    expect(wrapper.text()).toContain('Panel Services')
+    expect(wrapper.text()).toContain('Sync Recording')
+    expect(wrapper.text()).toContain('Restart')
+    expect(wrapper.text()).toContain('Stop')
+  })
 })

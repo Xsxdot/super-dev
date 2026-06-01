@@ -3,6 +3,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EnvGroup from '@/components/Sidebar/EnvGroup.vue'
 import { useAgentStore } from '@/stores/agent'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Deployment, Service } from '@/api/agent'
 
 const makeService = (id: string, name: string, envName: string, depExtra: Partial<Deployment> = {}): Service => ({
@@ -17,6 +18,7 @@ const makeService = (id: string, name: string, envName: string, depExtra: Partia
 
 describe('EnvGroup', () => {
   beforeEach(() => {
+    localStorage.clear()
     setActivePinia(createPinia())
   })
   it('is_dev=true 时初始展开，显示 service 行', () => {
@@ -28,6 +30,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'dev')],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(true)
@@ -43,6 +46,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'prod')],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(false)
@@ -57,6 +61,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'prod')],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(false)
@@ -73,6 +78,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'dev')],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     await wrapper.find('[data-test="env-service-row"]').trigger('click')
@@ -92,6 +98,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'dev', { read_only: true })],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     await wrapper.find('[data-test="env-service-row"]').trigger('mouseenter')
@@ -111,6 +118,7 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'dev', { status: '' })],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     await wrapper.find('[data-test="env-service-row"]').trigger('mouseenter')
@@ -129,11 +137,30 @@ describe('EnvGroup', () => {
         services: [makeService('svc-1', 'web', 'dev', { status: 'running' })],
         selectedServiceIds: new Set<string>(),
       },
+      global: { plugins: [installTestI18n()] },
     })
 
     await wrapper.find('[data-test="env-service-row"]').trigger('mouseenter')
     expect(wrapper.find('[data-test="row-restart"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="row-stop"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="row-start"]').exists()).toBe(false)
+  })
+
+  it('英文 locale 下渲染环境操作 tooltip', async () => {
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'dev',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'web', 'dev', { status: 'running' })],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('[data-test="env-service-row"]').trigger('mouseenter')
+
+    expect(wrapper.find('[data-test="row-restart"]').attributes('title')).toBe('Restart')
+    expect(wrapper.find('[data-test="row-stop"]').attributes('title')).toBe('Stop')
   })
 })
