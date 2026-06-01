@@ -15,3 +15,6 @@ screenshot-*.png
 docs/model-redesign.md
 docs/superpowers/plans/*model-redesign*
 docs/superpowers/plans/2026-05-28-deployment-lifecycle.md
+
+# Generated remote agent install artifacts
+desktop/src-tauri/resources/agent-install/superdev-agent-*
