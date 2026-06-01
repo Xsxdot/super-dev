@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
-import type { PipelineTemplateSummary, Project } from '@/api/agent'
+import type { Project } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -101,32 +101,52 @@ describe('ProjectConfigEditor', () => {
     }))
   })
 
-  it('保存项目级 pipeline', async () => {
-    const { api } = await import('@/api/agent')
-    const pipelineTemplates: PipelineTemplateSummary[] = [{
-      source: 'builtin',
-      id: 'go-binary-build',
-      name: 'Go Build',
-      version: '1.0.0',
-      digest: 'sha256:x',
-      inputs: { app_name: { label: '应用名', type: 'string', required: true } },
-    }]
-    const p = projectWithDeployment()
-    const wrapper = mount(ProjectConfigEditor, {
-      props: { project: p, pipelineTemplates },
-    })
+  it('不再渲染项目级 pipeline 编辑区', async () => {
+    const wrapper = mount(ProjectConfigEditor, { props: { project: projectWithDeployment() } })
     await new Promise(r => setTimeout(r))
 
-    await wrapper.find('[data-test="add-project-pipeline"]').trigger('click')
-    await wrapper.find('[data-test="project-pipeline-name"]').setValue('Deploy Dev')
-    await wrapper.find('[data-test="project-pipeline-save-template"]').trigger('click')
+    expect(wrapper.find('[data-test="add-project-pipeline"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('项目流水线')
+  })
+
+  it('保存服务配置时保留已有项目级 pipeline', async () => {
+    const { api } = await import('@/api/agent')
+    const p = projectWithDeployment()
+    p.pipelines = [{
+      id: 'deploy-dev',
+      name: 'Deploy Dev',
+      services: ['web'],
+      pipeline: { deploy: [{ name: 'Deploy', type: 'remote_command' }] },
+    }]
+    const wrapper = mount(ProjectConfigEditor, { props: { project: p } })
+    await new Promise(r => setTimeout(r))
+
     await wrapper.find('[data-test="config-save"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
     expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
-      pipelines: expect.arrayContaining([
-        expect.objectContaining({ name: 'Deploy Dev' }),
-      ]),
+      pipelines: [expect.objectContaining({ id: 'deploy-dev', name: 'Deploy Dev' })],
+    }))
+  })
+
+  it('保存服务配置时不被已有项目级 pipeline 校验错误阻塞', async () => {
+    const { api } = await import('@/api/agent')
+    const p = projectWithDeployment()
+    p.pipelines = [{
+      id: 'broken',
+      name: 'Broken',
+      services: ['web'],
+      pipeline: { deploy: [{ name: '', type: '' }] },
+    }]
+    const wrapper = mount(ProjectConfigEditor, { props: { project: p } })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.text()).not.toContain('项目流水线')
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      pipelines: [expect.objectContaining({ id: 'broken', name: 'Broken' })],
     }))
   })
 })
