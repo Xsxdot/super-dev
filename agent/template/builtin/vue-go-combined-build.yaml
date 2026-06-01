@@ -1,0 +1,63 @@
+id: vue-go-combined-build
+name: Vue Go Combined Build
+description: Build a Vue frontend, build a Go backend, and package both into one artifact.
+version: 1.0.0
+inputs:
+  frontend_dir:
+    label: Frontend directory
+    type: path
+    required: true
+    description: Local Vue project directory.
+  backend_dir:
+    label: Backend directory
+    type: path
+    required: true
+    description: Local Go backend directory.
+  frontend_build_cmd:
+    label: Frontend build command
+    type: string
+    required: true
+    default: npm install && npm run build
+    description: Command that creates the Vue dist directory.
+  go_package:
+    label: Go package
+    type: string
+    required: true
+    default: .
+    description: Go package passed to go build.
+  binary_output:
+    label: Binary output
+    type: path
+    required: true
+    default: ${output}/app
+    description: Local path for the built Go binary.
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+    default: ${artifacts}/${app_name}.tar.gz
+    description: Final tar.gz artifact path.
+  files:
+    label: Package files
+    type: file_list
+    required: true
+    description: Go binary and Vue dist files to include in the artifact.
+steps:
+  - name: Build Frontend
+    type: local_command
+    with:
+      workDir: ${vars.frontend_dir}
+      cmd: ${vars.frontend_build_cmd}
+  - name: Build Backend
+    type: local_command
+    needs: [Build Frontend]
+    with:
+      workDir: ${vars.backend_dir}
+      cmd: mkdir -p "$(dirname "${vars.binary_output}")" && go build -o "${vars.binary_output}" ${vars.go_package}
+  - name: Package
+    type: archive_package
+    needs: [Build Backend]
+    with:
+      artifact: ${vars.artifact}
+      files: ${vars.files}
+      format: tar.gz

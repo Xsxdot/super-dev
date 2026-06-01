@@ -1,0 +1,41 @@
+id: java-maven-build
+name: Java Maven Build
+description: Build a Maven service jar and package it for deployment.
+version: 1.0.0
+inputs:
+  work_dir:
+    label: Project directory
+    type: path
+    required: true
+    default: ${workspace}
+    description: Local Maven project directory.
+  build_cmd:
+    label: Build command
+    type: string
+    required: true
+    default: mvn -q -DskipTests package
+    description: Maven command that creates the deployable jar.
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+    default: ${artifacts}/${app_name}.tar.gz
+    description: Final tar.gz artifact path.
+  files:
+    label: Package files
+    type: file_list
+    required: true
+    description: Built jar and supporting files to include in the artifact.
+steps:
+  - name: Build
+    type: local_command
+    with:
+      workDir: ${vars.work_dir}
+      cmd: ${vars.build_cmd}
+  - name: Package
+    type: archive_package
+    needs: [Build]
+    with:
+      artifact: ${vars.artifact}
+      files: ${vars.files}
+      format: tar.gz

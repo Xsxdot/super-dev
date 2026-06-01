@@ -1,0 +1,41 @@
+id: python-standard-build
+name: Python Standard Build
+description: Validate a Python service and package explicit source files.
+version: 1.0.0
+inputs:
+  work_dir:
+    label: Project directory
+    type: path
+    required: true
+    default: ${workspace}
+    description: Local Python project directory where validation runs.
+  check_cmd:
+    label: Check command
+    type: string
+    required: true
+    default: python3 -m py_compile app.py
+    description: Command that validates the Python service before packaging.
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+    default: ${artifacts}/${app_name}.tar.gz
+    description: Final tar.gz artifact path.
+  files:
+    label: Package files
+    type: file_list
+    required: true
+    description: Python files and dependency manifests to include in the artifact.
+steps:
+  - name: Check
+    type: local_command
+    with:
+      workDir: ${vars.work_dir}
+      cmd: ${vars.check_cmd}
+  - name: Package
+    type: archive_package
+    needs: [Check]
+    with:
+      artifact: ${vars.artifact}
+      files: ${vars.files}
+      format: tar.gz

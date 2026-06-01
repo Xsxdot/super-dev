@@ -1,0 +1,41 @@
+id: php-standard-build
+name: PHP Standard Build
+description: Install Composer dependencies when configured and package a PHP service.
+version: 1.0.0
+inputs:
+  work_dir:
+    label: Project directory
+    type: path
+    required: true
+    default: ${workspace}
+    description: Local PHP project directory.
+  install_cmd:
+    label: Install command
+    type: string
+    required: true
+    default: if [ -f composer.json ]; then composer install --no-dev --prefer-dist --no-interaction; else true; fi
+    description: Command that prepares PHP dependencies before packaging.
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+    default: ${artifacts}/${app_name}.tar.gz
+    description: Final tar.gz artifact path.
+  files:
+    label: Package files
+    type: file_list
+    required: true
+    description: PHP files and dependency directories to include in the artifact.
+steps:
+  - name: Install
+    type: local_command
+    with:
+      workDir: ${vars.work_dir}
+      cmd: ${vars.install_cmd}
+  - name: Package
+    type: archive_package
+    needs: [Install]
+    with:
+      artifact: ${vars.artifact}
+      files: ${vars.files}
+      format: tar.gz
