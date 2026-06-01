@@ -11,6 +11,7 @@ HostManagerTab：设置页主机管理标签页。
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRemoteStore } from '@/stores/remote'
 import { tagColor } from '@/lib/tagColor'
 import { WS_BASE, type TunnelStatus } from '@/api/agent'
@@ -18,6 +19,7 @@ import HostFormModal from './HostFormModal.vue'
 import type { Host, HostCreatePayload } from '@/api/agent'
 
 const store = useRemoteStore()
+const { t } = useI18n()
 
 const formVisible = ref(false)
 const editing = ref<Host | null>(null)
@@ -47,7 +49,7 @@ onMounted(async () => {
   try {
     await Promise.all([store.loadHosts(), store.loadTunnels()])
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '加载失败'
+    error.value = err instanceof Error ? err.message : t('settings.hosts.loadFailed')
   }
   connectTunnelWs()
 })
@@ -75,16 +77,16 @@ async function handleSubmit(payload: HostCreatePayload) {
     }
     formVisible.value = false
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '保存失败'
+    error.value = err instanceof Error ? err.message : t('settings.hosts.saveFailed')
   }
 }
 
 async function handleDelete(host: Host) {
-  if (!confirm(`确认删除主机 "${host.name}"？`)) return
+  if (!confirm(t('settings.hosts.deleteConfirm', { name: host.name }))) return
   try {
     await store.deleteHost(host.id)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '删除失败'
+    error.value = err instanceof Error ? err.message : t('settings.hosts.deleteFailed')
   }
 }
 
@@ -118,9 +120,9 @@ function isFailed(hostId: string): boolean {
 <template>
   <section class="host-manager">
     <header class="pane-header">
-      <h1>主机管理</h1>
+      <h1>{{ t('settings.hosts.title') }}</h1>
       <div class="toolbar">
-        <button class="primary" data-test="host-add" @click="openCreate">+ 新建主机</button>
+        <button class="primary" data-test="host-add" @click="openCreate">+ {{ t('settings.hosts.add') }}</button>
       </div>
     </header>
 
@@ -128,10 +130,10 @@ function isFailed(hostId: string): boolean {
     <table v-if="sortedHosts.length > 0" class="host-table">
       <thead>
         <tr>
-          <th>名称</th>
-          <th>连接地址</th>
-          <th>标签</th>
-          <th>隧道</th>
+          <th>{{ t('settings.hosts.name') }}</th>
+          <th>{{ t('settings.hosts.address') }}</th>
+          <th>{{ t('settings.hosts.tags') }}</th>
+          <th>{{ t('settings.hosts.tunnel') }}</th>
           <th></th>
         </tr>
       </thead>
@@ -159,8 +161,8 @@ function isFailed(hostId: string): boolean {
               <span v-if="isFailed(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
             </td>
             <td class="row-actions">
-              <button @click="openEdit(host)">编辑</button>
-              <button class="danger" @click="handleDelete(host)">删除</button>
+              <button @click="openEdit(host)">{{ t('common.edit') }}</button>
+              <button class="danger" @click="handleDelete(host)">{{ t('common.delete') }}</button>
             </td>
           </tr>
           <tr v-if="isFailed(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
@@ -171,7 +173,7 @@ function isFailed(hostId: string): boolean {
         </template>
       </tbody>
     </table>
-    <div v-else class="empty">还没有主机，点击新建主机开始。</div>
+    <div v-else class="empty">{{ t('settings.hosts.empty') }}</div>
 
     <HostFormModal
       :visible="formVisible"

@@ -11,8 +11,12 @@ TemplateContentModal：模板内容只读查看弹窗。
   - 不编辑或保存模板内容
 -->
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+
 defineProps<{ open: boolean; title: string; yaml: string; loading?: boolean; error?: string }>()
 defineEmits<{ close: [] }>()
+
+const { t } = useI18n()
 </script>
 
 <template>
@@ -20,9 +24,9 @@ defineEmits<{ close: [] }>()
     <section class="modal-panel" role="dialog" aria-modal="true">
       <header class="modal-head">
         <h2>{{ title }}</h2>
-        <button type="button" data-test="template-modal-close" @click="$emit('close')">关闭</button>
+        <button type="button" data-test="template-modal-close" @click="$emit('close')">{{ t('common.cancel') }}</button>
       </header>
-      <div v-if="loading" class="modal-state">加载中...</div>
+      <div v-if="loading" class="modal-state">{{ t('common.loading') }}</div>
       <div v-else-if="error" class="modal-error">{{ error }}</div>
       <pre v-else class="yaml-view"><code>{{ yaml }}</code></pre>
     </section>

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Project } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
@@ -31,14 +32,22 @@ function projectWithDeployment(): Project {
   return p
 }
 
+function mountProjectConfigEditor(projectValue: Project, locale: 'zh-CN' | 'en-US' = 'zh-CN') {
+  return mount(ProjectConfigEditor, {
+    props: { project: projectValue },
+    global: { plugins: [installTestI18n(locale)] },
+  })
+}
+
 describe('ProjectConfigEditor', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     vi.clearAllMocks()
   })
 
   it('渲染 env tab 与服务列表', async () => {
-    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))
     expect(wrapper.find('[data-test="env-tab"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="service-card"]').exists()).toBe(true)
@@ -48,7 +57,7 @@ describe('ProjectConfigEditor', () => {
     const { api } = await import('@/api/agent')
     const p = project()
     p.environments![0].name = ''
-    const wrapper = mount(ProjectConfigEditor, { props: { project: p } })
+    const wrapper = mountProjectConfigEditor(p)
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="config-save"]').trigger('click')
     expect(api.putProjectSetup).not.toHaveBeenCalled()
@@ -56,7 +65,7 @@ describe('ProjectConfigEditor', () => {
   })
 
   it('点击取消 emit cancel', async () => {
-    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="config-cancel"]').trigger('click')
     expect(wrapper.emitted('cancel')).toBeTruthy()
@@ -64,7 +73,7 @@ describe('ProjectConfigEditor', () => {
 
   it('校验通过时保存：调用 putProjectSetup 并 emit saved', async () => {
     const { api } = await import('@/api/agent')
-    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="config-save"]').trigger('click')
     await new Promise(r => setTimeout(r))
@@ -78,7 +87,7 @@ describe('ProjectConfigEditor', () => {
 
   it('新启用服务环境时保存 runtime/logs 配置', async () => {
     const { api } = await import('@/api/agent')
-    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="enable-dep"]').trigger('click')
@@ -102,7 +111,7 @@ describe('ProjectConfigEditor', () => {
   })
 
   it('不再渲染项目级 pipeline 编辑区', async () => {
-    const wrapper = mount(ProjectConfigEditor, { props: { project: projectWithDeployment() } })
+    const wrapper = mountProjectConfigEditor(projectWithDeployment())
     await new Promise(r => setTimeout(r))
 
     expect(wrapper.find('[data-test="add-project-pipeline"]').exists()).toBe(false)
@@ -118,7 +127,7 @@ describe('ProjectConfigEditor', () => {
       services: ['web'],
       pipeline: { deploy: [{ name: 'Deploy', type: 'remote_command' }] },
     }]
-    const wrapper = mount(ProjectConfigEditor, { props: { project: p } })
+    const wrapper = mountProjectConfigEditor(p)
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="config-save"]').trigger('click')
@@ -138,7 +147,7 @@ describe('ProjectConfigEditor', () => {
       services: ['web'],
       pipeline: { deploy: [{ name: '', type: '' }] },
     }]
-    const wrapper = mount(ProjectConfigEditor, { props: { project: p } })
+    const wrapper = mountProjectConfigEditor(p)
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="config-save"]').trigger('click')
@@ -148,5 +157,13 @@ describe('ProjectConfigEditor', () => {
     expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
       pipelines: [expect.objectContaining({ id: 'broken', name: 'Broken' })],
     }))
+  })
+
+  it('英文 locale 下渲染保存和取消按钮', async () => {
+    const wrapper = mountProjectConfigEditor(project(), 'en-US')
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.text()).toContain('Save')
+    expect(wrapper.text()).toContain('Cancel')
   })
 })

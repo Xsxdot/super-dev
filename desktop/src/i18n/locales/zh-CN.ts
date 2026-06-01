@@ -35,6 +35,7 @@ export default {
     },
     errorWithMessage: '{prefix}：{message}',
     exportFailed: '导出失败：{message}',
+    saveFailed: '保存失败',
   },
   settings: {
     tabs: {
