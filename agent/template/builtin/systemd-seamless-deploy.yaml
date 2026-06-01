@@ -1,6 +1,6 @@
 id: systemd-seamless-deploy
 name: Systemd Seamless Deploy
-description: Upload an artifact, switch the current release, restart a systemd service, and verify HTTP health.
+description: Upload an artifact, write a systemd unit, switch the current release, restart the service, and verify HTTP health.
 version: 1.0.0
 inputs:
   role:
@@ -32,7 +32,17 @@ inputs:
     label: Systemd service
     type: string
     required: true
-    description: systemd service name to restart after switching the current release.
+    description: systemd service name to write, enable, and restart after switching the current release.
+  exec_start:
+    label: ExecStart command
+    type: string
+    required: true
+    description: Full systemd ExecStart command for the deployed service.
+  working_dir:
+    label: Working directory
+    type: path
+    required: true
+    description: Remote directory used as systemd WorkingDirectory for the service.
   port:
     label: Health port
     type: number
@@ -45,6 +55,25 @@ inputs:
     required: true
     default: /health
     description: HTTP path used for the post-restart health check.
+  user:
+    label: Service user
+    type: string
+    default: root
+    description: Linux user that systemd should run the service as.
+  environment:
+    label: Environment lines
+    type: string
+    description: Optional systemd Environment= lines written into the service unit.
+  restart:
+    label: Restart policy
+    type: string
+    default: always
+    description: systemd Restart policy for the deployed service.
+  skip_http_check:
+    label: Skip HTTP check
+    type: boolean
+    default: "false"
+    description: Set to true when the service should restart without HTTP health verification.
 steps:
   - name: Prepare
     type: remote_command
@@ -63,23 +92,55 @@ steps:
     roles: ["${vars.role}"]
     needs: [Upload]
     with:
-      cmd: rm -rf ${vars.release_dir}/${vars.app_name}/* && tar -xzf ${vars.release_dir}/uploads/${vars.app_name}.tar.gz -C ${vars.release_dir}/${vars.app_name}
+      cmd: rm -rf ${vars.release_dir}/${vars.app_name} && mkdir -p ${vars.release_dir}/${vars.app_name} && tar -xzf ${vars.release_dir}/uploads/${vars.app_name}.tar.gz -C ${vars.release_dir}/${vars.app_name}
   - name: Switch
     type: remote_command
     roles: ["${vars.role}"]
     needs: [Extract]
     with:
       cmd: ln -sfn ${vars.release_dir}/${vars.app_name} ${vars.current_dir}
-  - name: Restart
+  - name: Write Service
     type: remote_command
     roles: ["${vars.role}"]
     needs: [Switch]
     with:
-      cmd: systemctl restart ${vars.service_name}
+      cmd: |
+        cat >/etc/systemd/system/${vars.service_name}.service <<'SUPERDEV_SERVICE'
+        [Unit]
+        Description=${vars.service_name}
+        After=network.target
+
+        [Service]
+        Type=simple
+        WorkingDirectory=${vars.working_dir}
+        ExecStart=${vars.exec_start}
+        Restart=${vars.restart:-always}
+        RestartSec=2
+        User=${vars.user:-root}
+        ${vars.environment:-}
+
+        [Install]
+        WantedBy=multi-user.target
+        SUPERDEV_SERVICE
+  - name: Daemon Reload
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Write Service]
+    with:
+      cmd: systemctl daemon-reload && systemctl enable ${vars.service_name}.service
+  - name: Restart
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Daemon Reload]
+    with:
+      cmd: systemctl restart ${vars.service_name}.service
   - name: Health Check
     type: http_check
     roles: ["${vars.role}"]
     needs: [Restart]
+    retries: 20
+    retry_delay: 1s
+    run_if: '"${vars.skip_http_check:-false}" != "true"'
     with:
       url: http://${host}:${vars.port}${vars.health_path}
       expected_status: 200
