@@ -210,5 +210,15 @@ func defaultTools(s *Server) []registeredTool {
 			},
 			Handler: s.getLogContextTool,
 		},
+		{
+			Tool: Tool{
+				Name:        "diagnose_service",
+				Title:       "Diagnose service",
+				Description: "Collect runtime status and recent log evidence for one deployment without claiming root cause.",
+				InputSchema: targetInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.diagnoseServiceTool,
+		},
 	}
 }
