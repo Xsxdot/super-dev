@@ -119,8 +119,8 @@ func expandSteps(steps []model.Step, resolver Resolver, pipelineVars map[string]
 	return expanded, nil
 }
 
-func includeVars(step model.Step, pipelineVars map[string]string) map[string]string {
-	out := map[string]string{}
+func includeVars(step model.Step, pipelineVars map[string]string) map[string]interface{} {
+	out := map[string]interface{}{}
 	for k, v := range pipelineVars {
 		out[k] = v
 	}
@@ -130,7 +130,7 @@ func includeVars(step model.Step, pipelineVars map[string]string) map[string]str
 	switch raw := step.With["vars"].(type) {
 	case map[string]interface{}:
 		for k, v := range raw {
-			out[k] = RenderPipelineVars(fmt.Sprint(v), pipelineVars)
+			out[k] = renderPipelineValue(v, pipelineVars)
 		}
 	case map[string]string:
 		for k, v := range raw {
@@ -138,10 +138,43 @@ func includeVars(step model.Step, pipelineVars map[string]string) map[string]str
 		}
 	case map[interface{}]interface{}:
 		for k, v := range raw {
-			out[fmt.Sprint(k)] = RenderPipelineVars(fmt.Sprint(v), pipelineVars)
+			out[fmt.Sprint(k)] = renderPipelineValue(v, pipelineVars)
 		}
 	}
 	return out
+}
+
+func renderPipelineValue(value interface{}, pipelineVars map[string]string) interface{} {
+	switch v := value.(type) {
+	case string:
+		return RenderPipelineVars(v, pipelineVars)
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = renderPipelineValue(item, pipelineVars)
+		}
+		return out
+	case []string:
+		out := make([]string, len(v))
+		for i, item := range v {
+			out[i] = RenderPipelineVars(item, pipelineVars)
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			out[key] = renderPipelineValue(item, pipelineVars)
+		}
+		return out
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			out[fmt.Sprint(key)] = renderPipelineValue(item, pipelineVars)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func relinkNeeds(needs []string, includeLeaves map[string][]string) []string {

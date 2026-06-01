@@ -33,7 +33,7 @@ func TestRenderTemplateVarsInStep(t *testing.T) {
 		Roles: []string{"${vars.role}"},
 		With:  map[string]interface{}{"target": "${vars.release_dir}/${vars.version}/"},
 	}
-	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]string{
+	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]interface{}{
 		"role":        "compute",
 		"release_dir": "/opt/api/releases",
 		"version":     "1.0.0",
@@ -51,11 +51,33 @@ func TestRenderTemplateVarsSupportsDefaults(t *testing.T) {
 			"cmd": "CGO_ENABLED=${vars.cgo_enabled:-0} go build -o ${vars.output:-${vars.run_temp_dir}/app}",
 		},
 	}
-	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]string{
+	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]interface{}{
 		"run_temp_dir": "/tmp/run",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "CGO_ENABLED=0 go build -o /tmp/run/app", got.With["cmd"])
+}
+
+func TestRenderTemplateVarsPreservesStructuredExactValue(t *testing.T) {
+	files := []interface{}{
+		map[string]interface{}{"from": "/repo/bin/api", "to": "bin/api"},
+		map[string]interface{}{"from": "/repo/config.yaml", "to": "config/config.yaml"},
+	}
+	step := pipelinetemplate.Step{
+		Name: "Package",
+		Type: "archive_package",
+		With: map[string]interface{}{
+			"artifact": "/tmp/api.tar.gz",
+			"files":    "${vars.files}",
+		},
+	}
+
+	got, err := pipelinetemplate.RenderStepTemplateVars(step, map[string]interface{}{
+		"files": files,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, files, got.With["files"])
 }
 
 func TestScanTemplateVars(t *testing.T) {

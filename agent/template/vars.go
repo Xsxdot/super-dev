@@ -12,6 +12,7 @@ package template
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"sort"
 )
@@ -19,6 +20,7 @@ import (
 var (
 	pipelineVarRef        = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)\}`)
 	templateVarRef        = regexp.MustCompile(`\$\{vars\.([a-zA-Z0-9_]+)\}`)
+	templateVarExactRef   = regexp.MustCompile(`^\$\{vars\.([a-zA-Z0-9_]+)\}$`)
 	templateVarDefaultRef = regexp.MustCompile(`\$\{vars\.([a-zA-Z0-9_]+):-([^}]*)\}`)
 )
 
@@ -91,7 +93,7 @@ func RenderPipelineVariableMap(vars map[string]string) map[string]string {
 //
 // 注意：
 //   - 未知变量保持原样，便于后续校验报告更准确的位置
-func RenderStepTemplateVars(step Step, vars map[string]string) (Step, error) {
+func RenderStepTemplateVars(step Step, vars map[string]interface{}) (Step, error) {
 	b, err := json.Marshal(step)
 	if err != nil {
 		return Step{}, err
@@ -137,7 +139,7 @@ func ScanTemplateVars(s string) []string {
 	return out
 }
 
-func renderTemplateString(s string, vars map[string]string) string {
+func renderTemplateString(s string, vars map[string]interface{}) string {
 	// 先渲染默认值内部的普通变量，再处理 `${vars.name:-default}`。
 	// 这样 `${vars.output:-${vars.run_temp_dir}/app}` 会先变成
 	// `${vars.output:-/tmp/run/app}`，避免默认值中的嵌套括号截断匹配。
@@ -147,28 +149,28 @@ func renderTemplateString(s string, vars map[string]string) string {
 		if len(sub) != 3 {
 			return match
 		}
-		if v, ok := vars[sub[1]]; ok && v != "" {
-			return v
+		if v, ok := vars[sub[1]]; ok && templateVarValueNonEmpty(v) {
+			return stringifyTemplateVarValue(v)
 		}
 		return sub[2]
 	})
 	return replacePlainTemplateVars(rendered, vars)
 }
 
-func replacePlainTemplateVars(s string, vars map[string]string) string {
+func replacePlainTemplateVars(s string, vars map[string]interface{}) string {
 	return templateVarRef.ReplaceAllStringFunc(s, func(match string) string {
 		sub := templateVarRef.FindStringSubmatch(match)
 		if len(sub) != 2 {
 			return match
 		}
 		if v, ok := vars[sub[1]]; ok {
-			return v
+			return stringifyTemplateVarValue(v)
 		}
 		return match
 	})
 }
 
-func renderTemplateStringSlice(values []string, vars map[string]string) []string {
+func renderTemplateStringSlice(values []string, vars map[string]interface{}) []string {
 	if len(values) == 0 {
 		return values
 	}
@@ -179,7 +181,7 @@ func renderTemplateStringSlice(values []string, vars map[string]string) []string
 	return out
 }
 
-func renderTemplateMap(values map[string]interface{}, vars map[string]string) map[string]interface{} {
+func renderTemplateMap(values map[string]interface{}, vars map[string]interface{}) map[string]interface{} {
 	if len(values) == 0 {
 		return values
 	}
@@ -190,10 +192,10 @@ func renderTemplateMap(values map[string]interface{}, vars map[string]string) ma
 	return out
 }
 
-func renderTemplateValue(value interface{}, vars map[string]string) interface{} {
+func renderTemplateValue(value interface{}, vars map[string]interface{}) interface{} {
 	switch v := value.(type) {
 	case string:
-		return renderTemplateString(v, vars)
+		return renderTemplateStringValue(v, vars)
 	case []interface{}:
 		out := make([]interface{}, len(v))
 		for i, item := range v {
@@ -212,5 +214,34 @@ func renderTemplateValue(value interface{}, vars map[string]string) interface{} 
 		return out
 	default:
 		return value
+	}
+}
+
+func renderTemplateStringValue(s string, vars map[string]interface{}) interface{} {
+	if sub := templateVarExactRef.FindStringSubmatch(s); len(sub) == 2 {
+		if v, ok := vars[sub[1]]; ok {
+			if text, ok := v.(string); ok {
+				return renderTemplateString(text, vars)
+			}
+			return v
+		}
+	}
+	return renderTemplateString(s, vars)
+}
+
+func templateVarValueNonEmpty(value interface{}) bool {
+	return stringifyTemplateVarValue(value) != ""
+}
+
+func stringifyTemplateVarValue(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
 	}
 }

@@ -101,3 +101,51 @@ func TestExpandIncludeInheritsIncludeRolesForTemplateStepsWithoutRoles(t *testin
 	assert.Equal(t, []string{"build_runner"}, got[0].Roles)
 	assert.Equal(t, []string{"deploy_targets"}, got[1].Roles)
 }
+
+func TestExpandIncludePreservesStructuredVars(t *testing.T) {
+	tpl := pipelinetemplate.Template{
+		ID: "package", Name: "Package", Version: "1.0.0",
+		Steps: []model.Step{{
+			Name: "Archive",
+			Type: "archive_package",
+			With: map[string]interface{}{
+				"artifact": "${vars.artifact}",
+				"files":    "${vars.files}",
+			},
+		}},
+	}
+	digest, err := pipelinetemplate.Digest(tpl)
+	require.NoError(t, err)
+	resolver := memoryResolver{
+		"builtin://package@1.0.0": {Source: "builtin", Template: tpl, Digest: digest},
+	}
+	steps := []model.Step{{
+		Name: "Package",
+		Type: "include",
+		With: map[string]interface{}{
+			"template": "builtin://package",
+			"version":  "1.0.0",
+			"digest":   digest,
+			"vars": map[string]interface{}{
+				"artifact": "${artifacts}/api.tar.gz",
+				"files": []interface{}{
+					map[string]interface{}{"from": "${workspace}/bin/api", "to": "bin/api"},
+					map[string]interface{}{"from": "${workspace}/config.yaml", "to": "config/config.yaml"},
+				},
+			},
+		},
+	}}
+
+	got, err := pipelinetemplate.ExpandSteps(steps, resolver, map[string]string{
+		"workspace": "/repo",
+		"artifacts": "/tmp/artifacts",
+	}, 5)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "/tmp/artifacts/api.tar.gz", got[0].With["artifact"])
+	assert.Equal(t, []interface{}{
+		map[string]interface{}{"from": "/repo/bin/api", "to": "bin/api"},
+		map[string]interface{}{"from": "/repo/config.yaml", "to": "config/config.yaml"},
+	}, got[0].With["files"])
+}
