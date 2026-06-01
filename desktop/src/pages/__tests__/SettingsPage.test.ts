@@ -18,6 +18,7 @@ import SettingsPage from '../SettingsPage.vue'
 import { useAgentStore } from '@/stores/agent'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
+import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '@/api/agent'
 
 const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
@@ -59,6 +60,12 @@ function project(services: Service[]): Project {
   }
 }
 
+function mountSettingsPage(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
+  return mount(SettingsPage, {
+    global: { plugins: [installTestI18n(locale)] },
+  })
+}
+
 describe('SettingsPage', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -74,7 +81,7 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
     vi.spyOn(settings, 'saveLogRetentionDays').mockResolvedValue(undefined)
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await nextTick()
     const input = wrapper.find('[data-test="retention-days"]')
     await input.setValue(14)
@@ -93,7 +100,7 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await wrapper.find('[data-test="settings-tab-projects"]').trigger('click')
     await wrapper.find('[data-test="toggle-hidden-svc-worker"]').trigger('click')
     await wrapper.find('[data-test="select-start-svc-worker"]').setValue(false)
@@ -110,7 +117,7 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await wrapper.find('[data-test="settings-tab-projects"]').trigger('click')
 
     expect(wrapper.find('[data-test="setup-project-proj-1"]').exists()).toBe(true)
@@ -127,7 +134,7 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await nextTick()
 
     expect(wrapper.find('[data-test="settings-tab-hosts"]').classes()).toContain('active')
@@ -139,7 +146,7 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await wrapper.find('[data-test="settings-tab-templates"]').trigger('click')
 
     expect(wrapper.text()).toContain('模板')
@@ -154,7 +161,7 @@ describe('SettingsPage', () => {
     const importTemplate = vi.spyOn(templateStore, 'importTemplate').mockResolvedValue(undefined)
     vi.mocked(open).mockResolvedValue('/tmp/custom.yaml')
 
-    const wrapper = mount(SettingsPage)
+    const wrapper = mountSettingsPage()
     await wrapper.find('[data-test="settings-tab-templates"]').trigger('click')
     await wrapper.find('[data-test="template-import"]').trigger('click')
 
@@ -162,5 +169,23 @@ describe('SettingsPage', () => {
       filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
     }))
     expect(importTemplate).toHaveBeenCalledWith('/tmp/custom.yaml')
+  })
+
+  it('通用页可切换到英文并立即更新界面文案', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = { log_retention_days: 7 }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage('zh-CN')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('通用')
+    await wrapper.find('[data-test="locale-select"]').setValue('en-US')
+
+    expect(settings.locale).toBe('en-US')
+    expect(wrapper.text()).toContain('General')
+    expect(wrapper.text()).toContain('Language')
+    expect(wrapper.text()).toContain('Log retention days')
   })
 })

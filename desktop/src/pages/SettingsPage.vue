@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { open, message, ask } from '@tauri-apps/plugin-dialog'
 import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
@@ -22,6 +23,7 @@ import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
+import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates'
@@ -31,6 +33,7 @@ const router = useRouter()
 const agentStore = useAgentStore()
 const pipelineTemplateStore = usePipelineTemplateStore()
 const settingsStore = useSettingsStore()
+const { t } = useI18n()
 const selectedTab = ref<SettingsTab>(
   route.query.tab === 'hosts' ? 'hosts' : route.query.tab === 'templates' ? 'templates' : 'general',
 )
@@ -93,8 +96,8 @@ async function tryImportVscodeLaunch(created: Project): Promise<void> {
   if (!configs || configs.length === 0) return
 
   const confirmed = await ask(
-    `检测到 .vscode/launch.json，包含 ${configs.length} 个启动配置，是否导入？\n导入后可在编辑器中调整。`,
-    { title: '导入 VS Code 启动配置', kind: 'info' },
+    t('settings.projects.importVscodeMessage', { count: configs.length }),
+    { title: t('settings.projects.importVscodeTitle'), kind: 'info' },
   )
   if (!confirmed) return
 
@@ -130,7 +133,7 @@ async function tryImportVscodeLaunch(created: Project): Promise<void> {
 }
 
 async function addProject() {
-  const selected = await open({ directory: true, multiple: false, title: '选择项目根目录' })
+  const selected = await open({ directory: true, multiple: false, title: t('settings.projects.selectProjectRootTitle') })
   if (!selected || Array.isArray(selected)) return
   try {
     // 落地项目（空目录返回空骨架，已有 config 则解析），再进编辑器
@@ -143,7 +146,7 @@ async function addProject() {
     editorIsNew.value = true
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    await message(msg, { title: '无法添加项目', kind: 'error' })
+    await message(msg, { title: t('settings.projects.unableAddProject'), kind: 'error' })
   }
 }
 
@@ -151,14 +154,14 @@ async function importPipelineTemplate() {
   const selected = await open({
     multiple: false,
     filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
-    title: '导入流水线模板',
+    title: t('settings.templates.importTitle'),
   })
   if (!selected || Array.isArray(selected)) return
   try {
     await pipelineTemplateStore.importTemplate(selected)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    await message(msg, { title: '无法导入模板', kind: 'error' })
+    await message(msg, { title: t('settings.templates.unableImport'), kind: 'error' })
   }
 }
 
@@ -219,7 +222,7 @@ const retentionDays = computed({
 <template>
   <div class="settings-page">
     <aside class="settings-sidebar">
-      <button class="back-btn" @click="router.push('/')">← 返回</button>
+      <button class="back-btn" @click="router.push('/')">← {{ t('common.back') }}</button>
       <button
         data-test="settings-tab-general"
         class="tab-btn"
@@ -230,7 +233,7 @@ const retentionDays = computed({
           <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.4"/>
           <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.22 3.22l1.41 1.41M11.37 11.37l1.41 1.41M3.22 12.78l1.41-1.41M11.37 4.63l1.41-1.41" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
-        通用
+        {{ t('settings.tabs.general') }}
       </button>
       <button
         data-test="settings-tab-projects"
@@ -242,7 +245,7 @@ const retentionDays = computed({
           <rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.4"/>
           <path d="M4 5h8M4 8h8M4 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
-        项目
+        {{ t('settings.tabs.projects') }}
       </button>
       <button
         data-test="settings-tab-hosts"
@@ -256,7 +259,7 @@ const retentionDays = computed({
           <circle cx="4" cy="4.5" r="0.6" fill="currentColor"/>
           <circle cx="4" cy="11.5" r="0.6" fill="currentColor"/>
         </svg>
-        主机管理
+        {{ t('settings.tabs.hosts') }}
       </button>
       <button
         data-test="settings-tab-templates"
@@ -268,19 +271,19 @@ const retentionDays = computed({
           <path d="M3 2.5h7l3 3v8H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
           <path d="M10 2.5v3h3M5 8h6M5 10.5h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
-        模板
+        {{ t('settings.tabs.templates') }}
       </button>
     </aside>
 
     <main class="settings-main">
       <section v-if="selectedTab === 'general'" class="pane">
         <header class="pane-header">
-          <h1>通用</h1>
+          <h1>{{ t('settings.general.title') }}</h1>
         </header>
         <div class="setting-row">
           <div>
-            <div class="setting-title">日志保留天数</div>
-            <div class="setting-desc">超过此天数的日志会在 agent 启动时自动删除</div>
+            <div class="setting-title">{{ t('settings.general.logRetentionTitle') }}</div>
+            <div class="setting-desc">{{ t('settings.general.logRetentionDesc') }}</div>
           </div>
           <input
             data-test="retention-days"
@@ -294,8 +297,28 @@ const retentionDays = computed({
         </div>
         <div class="setting-row">
           <div>
-            <div class="setting-title">开机自启</div>
-            <div class="setting-desc">登录系统后自动启动 SuperDev 桌面应用</div>
+            <div class="setting-title">{{ t('settings.general.languageTitle') }}</div>
+            <div class="setting-desc">{{ t('settings.general.languageDesc') }}</div>
+          </div>
+          <select
+            data-test="locale-select"
+            class="select-input"
+            :value="settingsStore.locale"
+            @change="settingsStore.setLocale(($event.target as HTMLSelectElement).value as SupportedLocale)"
+          >
+            <option
+              v-for="option in settingsStore.supportedLocaleOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">{{ t('settings.general.autostartTitle') }}</div>
+            <div class="setting-desc">{{ t('settings.general.autostartDesc') }}</div>
           </div>
           <label class="switch">
             <input
@@ -310,8 +333,8 @@ const retentionDays = computed({
 
       <section v-else-if="selectedTab === 'projects'" class="pane">
         <header class="pane-header">
-          <h1>项目</h1>
-          <button class="primary-btn" @click="addProject">+ 添加项目</button>
+          <h1>{{ t('settings.projects.title') }}</h1>
+          <button class="primary-btn" @click="addProject">+ {{ t('settings.projects.addProject') }}</button>
         </header>
         <div class="project-list">
           <article v-for="project in agentStore.projects" :key="project.id" class="project-card">
@@ -321,29 +344,29 @@ const retentionDays = computed({
                 <p>{{ project.root_path }}</p>
               </div>
               <div class="project-actions">
-                <span>{{ project.services.length }} 个服务</span>
+                <span>{{ t('common.serviceCount', { count: project.services.length }) }}</span>
                 <button
                   class="ghost-btn"
                   :data-test="`setup-project-${project.id}`"
                   @click="openEditor(project)"
                 >
-                  编辑配置
+                  {{ t('settings.projects.editConfig') }}
                 </button>
                 <button
                   class="ghost-btn"
                   :data-test="`pipeline-project-${project.id}`"
                   @click="openPipelineEditor(project)"
                 >
-                  编辑流水线
+                  {{ t('settings.projects.editPipeline') }}
                 </button>
-                <button class="danger-btn" @click="deleteProject(project)">删除</button>
+                <button class="danger-btn" @click="deleteProject(project)">{{ t('common.delete') }}</button>
               </div>
             </header>
             <div class="service-table">
               <div v-for="service in project.services" :key="service.id" class="service-row">
                 <div>
                   <span class="service-name">{{ service.name }}</span>
-                  <span v-if="service.required" class="required-badge">必选</span>
+                  <span v-if="service.required" class="required-badge">{{ t('common.required') }}</span>
                 </div>
                 <label class="inline-check">
                   <input
@@ -353,14 +376,14 @@ const retentionDays = computed({
                     :checked="isSelectedForStart(project, service)"
                     @change="toggleStartSelection(project, service, ($event.target as HTMLInputElement).checked)"
                   />
-                  启动选中
+                  {{ t('settings.projects.startSelected') }}
                 </label>
                 <button
                   :data-test="`toggle-hidden-${service.id}`"
                   class="ghost-btn"
                   @click="settingsStore.toggleServiceHidden(service.id)"
                 >
-                  {{ settingsStore.isServiceHidden(service.id) ? '已隐藏' : '显示' }}
+                  {{ settingsStore.isServiceHidden(service.id) ? t('common.hidden') : t('common.display') }}
                 </button>
               </div>
             </div>
@@ -397,7 +420,7 @@ const retentionDays = computed({
     />
     <TemplateContentModal
       :open="templateModalOpen"
-      :title="selectedTemplate?.name ?? '模板内容'"
+      :title="selectedTemplate?.name ?? t('settings.templates.contentTitle')"
       :yaml="templateDetailYAML"
       :loading="templateDetailLoading"
       :error="templateDetailError"
@@ -498,6 +521,15 @@ p {
   border-radius: 5px;
   color: var(--text-primary);
   padding: 5px 7px;
+}
+.select-input {
+  min-width: 132px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+  padding: 5px 7px;
+  font-size: 12px;
 }
 .switch input {
   display: none;
