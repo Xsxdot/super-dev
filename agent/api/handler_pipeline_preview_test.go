@@ -90,6 +90,9 @@ services:
         env: dev
         location: local
         pipeline:
+          variables:
+            backend_output: ${output}/backend
+            backend_artifact_dir: ${artifacts}/backend-${version}
           build:
             - name: Build Go
               type: include
@@ -97,10 +100,10 @@ services:
                 template: builtin://go-binary-build
                 version: 1.0.0
                 vars:
-                  work_dir: .
+                  work_dir: ${workspace}
                   package: ./...
-                  output: ${run_temp_dir}/build/app
-                  artifact_dir: ${run_temp_dir}/artifacts
+                  output: ${backend_output}
+                  artifact_dir: ${backend_artifact_dir}
                   app_name: api
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
@@ -112,7 +115,8 @@ services:
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Contains(t, rr.Body.String(), "/tmp/super-debug-pipeline-preview")
+	assert.Contains(t, rr.Body.String(), "/tmp/super-debug-pipeline-preview/output/backend")
+	assert.Contains(t, rr.Body.String(), "/tmp/super-debug-pipeline-preview/artifacts/backend-")
 }
 
 func TestPreviewProjectPipelineBuildsRunSkeleton(t *testing.T) {

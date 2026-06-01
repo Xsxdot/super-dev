@@ -42,7 +42,15 @@ func (a *App) previewDeploymentPipeline(w http.ResponseWriter, r *http.Request) 
 	if pipelineConfig.Variables == nil {
 		pipelineConfig.Variables = map[string]string{}
 	}
-	pipelineConfig.Variables["run_temp_dir"] = "/tmp/super-debug-pipeline-preview"
+	if err := pipeline.RejectReservedVariableOverrides(pipelineConfig.Variables); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	pipelineConfig.Variables = pipeline.MergeVariables(pipelineConfig.Variables, pipeline.PreviewReservedVars(pipeline.ReservedVarOptions{
+		Workspace: project.RootPath,
+		Env:       dep.EnvName,
+	}))
+	pipelineConfig.Variables = pipelinetemplate.RenderPipelineVariableMap(pipelineConfig.Variables)
 	expanded, err := expandDeploymentPipeline(pipelineConfig, resolver)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "failed to expand pipeline: "+err.Error())
@@ -90,12 +98,12 @@ func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
-		Project:        project,
-		PipelineID:     pipelineID,
-		EnvName:        req.EnvName,
-		ServiceNames:   req.ServiceNames,
-		RunVariables:   req.Variables,
-		PreviewTempDir: "/tmp/super-debug-pipeline-preview",
+		Project:      project,
+		PipelineID:   pipelineID,
+		EnvName:      req.EnvName,
+		ServiceNames: req.ServiceNames,
+		RunVariables: req.Variables,
+		Preview:      true,
 	})
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())

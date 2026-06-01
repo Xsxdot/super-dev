@@ -46,6 +46,39 @@ func RenderPipelineVars(s string, vars map[string]string) string {
 	})
 }
 
+// RenderPipelineVariableMap 渲染变量表中互相引用的 pipeline 变量。
+//
+// 参数：
+//   - vars: pipeline 变量表
+//
+// 返回：
+//   - 已尽量解析变量引用的新 map
+//
+// 注意：
+//   - 未知变量保持原样
+//   - 循环引用不会报错，会在有限轮次后保留未解析形式
+func RenderPipelineVariableMap(vars map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range vars {
+		out[k] = v
+	}
+	for i := 0; i < len(out); i++ {
+		changed := false
+		for k, v := range out {
+			rendered := RenderPipelineVars(v, out)
+			if rendered == v {
+				continue
+			}
+			out[k] = rendered
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	return out
+}
+
 // RenderStepTemplateVars replaces ${vars.name} in a Step copy.
 //
 // 参数：

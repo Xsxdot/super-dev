@@ -23,6 +23,7 @@ func projectForResolve() model.Project {
 	return model.Project{
 		ID:        "p1",
 		Name:      "demo",
+		RootPath:  "/repo/demo",
 		Variables: map[string]string{"app_name": "demo", "config_file": "resources/base.yaml"},
 		Services: []model.Service{{
 			ID:   "svc-api",
@@ -62,23 +63,45 @@ func projectForResolve() model.Project {
 }
 
 func TestResolveProjectPipelineAppliesEnvVariablesAndServiceRoles(t *testing.T) {
+	project := projectForResolve()
 	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
-		Project:        projectForResolve(),
-		PipelineID:     "deploy-dev",
-		EnvName:        "dev",
-		ServiceNames:   []string{"api"},
-		RunVariables:   map[string]string{"version": "manual"},
-		PreviewTempDir: "/tmp/super-debug-pipeline-preview",
+		Project:      project,
+		PipelineID:   "deploy-dev",
+		EnvName:      "dev",
+		ServiceNames: []string{"api"},
+		RunVariables: map[string]string{"version": "manual"},
+		Preview:      true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "resources/dev.yaml", resolved.Pipeline.Variables["config_file"])
-	assert.Equal(t, "manual", resolved.Pipeline.Variables["version"])
+	assert.Equal(t, project.RootPath, resolved.Pipeline.Variables["workspace"])
+	assert.Equal(t, "/tmp/super-debug-pipeline-preview/output", resolved.Pipeline.Variables["output"])
+	assert.Equal(t, "/tmp/super-debug-pipeline-preview/artifacts", resolved.Pipeline.Variables["artifacts"])
 	assert.Equal(t, "/tmp/super-debug-pipeline-preview", resolved.Pipeline.Variables["run_temp_dir"])
+	assert.Equal(t, "dev", resolved.Pipeline.Variables["env"])
+	assert.Equal(t, "manual", resolved.Pipeline.Variables["version"])
+	assert.Equal(t, "20260101", resolved.Pipeline.Variables["date"])
+	assert.Equal(t, "000000", resolved.Pipeline.Variables["time"])
 	assert.Equal(t, []string{"h1", "h2"}, resolved.Pipeline.Roles["api_targets"])
 	require.Len(t, resolved.Pipeline.Deploy, 1)
 	assert.Equal(t, []string{"api_targets"}, resolved.Pipeline.Deploy[0].Roles)
 	assert.Equal(t, "echo resources/dev.yaml", resolved.Pipeline.Deploy[0].With["cmd"])
 	assert.Equal(t, "project:p1:pipeline:deploy-dev:env:dev", resolved.RunID)
+}
+
+func TestResolveProjectPipelineRejectsReservedVariables(t *testing.T) {
+	project := projectForResolve()
+	project.Variables = map[string]string{"workspace": "/bad"}
+
+	_, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "deploy-dev",
+		EnvName:    "dev",
+		Preview:    true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace")
 }
 
 func TestResolveProjectPipelineRejectsMissingServiceDeployment(t *testing.T) {

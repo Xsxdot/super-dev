@@ -20,12 +20,12 @@ import (
 
 // ProjectPipelineRequest 描述一次项目级流水线解析请求。
 type ProjectPipelineRequest struct {
-	Project        model.Project
-	PipelineID     string
-	EnvName        string
-	ServiceNames   []string
-	RunVariables   map[string]string
-	PreviewTempDir string
+	Project      model.Project
+	PipelineID   string
+	EnvName      string
+	ServiceNames []string
+	RunVariables map[string]string
+	Preview      bool
 }
 
 // ResolvedProjectPipeline 是项目级流水线解析后的结果。
@@ -57,14 +57,41 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	if len(serviceNames) == 0 {
 		serviceNames = pp.Services
 	}
+	if err := RejectReservedVariableOverrides(req.Project.Variables); err != nil {
+		return ResolvedProjectPipeline{}, err
+	}
+	if err := RejectReservedVariableOverrides(pp.Variables); err != nil {
+		return ResolvedProjectPipeline{}, err
+	}
+	if err := RejectReservedVariableOverrides(pp.Pipeline.Variables); err != nil {
+		return ResolvedProjectPipeline{}, err
+	}
+	if env, ok := pp.Environments[req.EnvName]; ok {
+		if err := RejectReservedVariableOverrides(env.Variables); err != nil {
+			return ResolvedProjectPipeline{}, err
+		}
+	}
+	if err := rejectRunVariableReservedOverrides(req.RunVariables); err != nil {
+		return ResolvedProjectPipeline{}, err
+	}
 	vars := mergeStringMaps(req.Project.Variables, pp.Variables, pp.Pipeline.Variables)
 	if env, ok := pp.Environments[req.EnvName]; ok {
 		vars = mergeStringMaps(vars, env.Variables)
 	}
-	if req.PreviewTempDir != "" {
-		vars["run_temp_dir"] = req.PreviewTempDir
-	}
+	runtimeVersion := req.RunVariables["version"]
 	vars = mergeStringMaps(vars, req.RunVariables)
+	vars = MergeVariables(vars, map[string]string{
+		"env":     req.EnvName,
+		"version": runtimeVersion,
+	})
+	if req.Preview {
+		vars = MergeVariables(vars, PreviewReservedVars(ReservedVarOptions{
+			Workspace: req.Project.RootPath,
+			Version:   vars["version"],
+			Env:       req.EnvName,
+		}))
+	}
+	vars = pipelinetemplate.RenderPipelineVariableMap(vars)
 
 	resolvedRoles, err := resolveProjectRoles(req.Project, req.EnvName, pp.Roles)
 	if err != nil {
@@ -103,6 +130,19 @@ func mergeStringMaps(items ...map[string]string) map[string]string {
 		}
 	}
 	return out
+}
+
+func rejectRunVariableReservedOverrides(vars map[string]string) error {
+	for _, name := range ReservedVariableNames() {
+		// version 是本次发布的运行元数据，允许由运行入口传入，再由系统注入为保留变量。
+		if name == "version" {
+			continue
+		}
+		if _, ok := vars[name]; ok {
+			return fmt.Errorf("pipeline run variable %q is reserved", name)
+		}
+	}
+	return nil
 }
 
 func resolveProjectRoles(project model.Project, envName string, roles map[string]model.ProjectPipelineRole) (map[string][]string, error) {
