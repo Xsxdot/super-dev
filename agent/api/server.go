@@ -212,6 +212,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
+	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
 	// 远程日志源管理

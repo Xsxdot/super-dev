@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/api"
 	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
@@ -19,6 +21,25 @@ func newTestAppInstance(t *testing.T) *api.App {
 	}
 	t.Cleanup(func() { app.Close() })
 	return app
+}
+
+// newTestAppWithConfig 创建使用指定配置的测试 App 和 HTTP server。
+//
+// 参数：
+//   - t: 测试上下文
+//   - cfg: App 配置，调用方负责传入 DataDir
+//
+// 返回：
+//   - httptest server
+//   - 底层 App 实例
+func newTestAppWithConfig(t *testing.T, cfg api.AppConfig) (*httptest.Server, *api.App) {
+	t.Helper()
+	app, err := api.NewApp(cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	return srv, app
 }
 
 // addTestDeploymentBackend 直接向 app 注入一个 SQLiteBackend，返回 deployment ID。

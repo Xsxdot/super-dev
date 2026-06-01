@@ -2,13 +2,17 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/api"
+	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/model"
 )
 
@@ -128,6 +132,85 @@ func TestListHosts_IncludesSelfNode(t *testing.T) {
 	assert.True(t, selfNode.IsSelf, "first host should be the self node")
 	assert.NotEmpty(t, selfNode.NodeID, "self node must have a node_id")
 	assert.NotEmpty(t, selfNode.Name, "self node must have a display name")
+}
+
+type fakeHostAgentInstaller struct {
+	result installer.Result
+	err    error
+	hostID string
+}
+
+func (f *fakeHostAgentInstaller) Install(ctx context.Context, host model.Host) (installer.Result, error) {
+	f.hostID = host.ID
+	if f.err != nil {
+		return installer.Result{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestInstallHostAgent(t *testing.T) {
+	fake := &fakeHostAgentInstaller{
+		result: installer.Result{OK: true, HostID: "h1", Platform: "linux/amd64", Message: "Agent installed and started"},
+	}
+	srv, _ := newTestAppWithConfig(t, api.AppConfig{
+		DataDir:           t.TempDir(),
+		InstallerOverride: fake,
+	})
+
+	body, _ := json.Marshal(model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHUser: "ops", SSHPassword: "pw"})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	var created model.Host
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	_ = resp.Body.Close()
+	fake.result.HostID = created.ID
+
+	resp, err = http.Post(srv.URL+"/api/hosts/"+created.ID+"/agent/install", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var result installer.Result
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.True(t, result.OK)
+	assert.Equal(t, created.ID, fake.hostID)
+	assert.Equal(t, "linux/amd64", result.Platform)
+}
+
+func TestInstallHostAgentMissingHost(t *testing.T) {
+	srv, _ := newTestApp(t)
+	resp, err := http.Post(srv.URL+"/api/hosts/missing/agent/install", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestInstallHostAgentFailureIncludesStage(t *testing.T) {
+	fake := &fakeHostAgentInstaller{
+		err: &installer.InstallError{Stage: "verify", Err: errors.New("connection refused")},
+	}
+	srv, _ := newTestAppWithConfig(t, api.AppConfig{
+		DataDir:           t.TempDir(),
+		InstallerOverride: fake,
+	})
+
+	body, _ := json.Marshal(model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHUser: "ops", SSHPassword: "pw"})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	var created model.Host
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	_ = resp.Body.Close()
+
+	resp, err = http.Post(srv.URL+"/api/hosts/"+created.ID+"/agent/install", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	var bodyErr struct {
+		Error string `json:"error"`
+		Stage string `json:"stage"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&bodyErr))
+	assert.Equal(t, "verify", bodyErr.Stage)
+	assert.Contains(t, bodyErr.Error, "connection refused")
 }
 
 // hostDTOWithSelf 是含 is_self 字段的扩展视图，供本测试解析。
