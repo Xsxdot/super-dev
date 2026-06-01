@@ -37,7 +37,14 @@ function patchService(partial: Partial<ConfigDraftService>) {
 }
 
 function enableDep() {
-  const newDep: Deployment = { id: '', env_name: props.envName, location: 'local', command: '', work_dir: defaultWorkDir.value, status: '' }
+  const newDep: Deployment = {
+    id: '',
+    env_name: props.envName,
+    location: 'local',
+    runtime: { type: 'command', command: '', working_dir: defaultWorkDir.value },
+    logs: { type: 'process' },
+    status: '',
+  }
   patchService({ deployments: [...props.service.deployments, newDep] })
 }
 

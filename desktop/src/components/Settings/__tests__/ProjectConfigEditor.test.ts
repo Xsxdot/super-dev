@@ -76,6 +76,30 @@ describe('ProjectConfigEditor', () => {
     expect(wrapper.emitted('saved')).toBeTruthy()
   })
 
+  it('新启用服务环境时保存 runtime/logs 配置', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mount(ProjectConfigEditor, { props: { project: project() } })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="enable-dep"]').trigger('click')
+    await wrapper.find('[data-test="dep-command"]').setValue('npm run dev')
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      services: expect.arrayContaining([
+        expect.objectContaining({
+          deployments: expect.arrayContaining([
+            expect.objectContaining({
+              runtime: expect.objectContaining({ type: 'command', command: 'npm run dev' }),
+              logs: expect.objectContaining({ type: 'process' }),
+            }),
+          ]),
+        }),
+      ]),
+    }))
+  })
+
   it('保存项目级 pipeline', async () => {
     const { api } = await import('@/api/agent')
     const pipelineTemplates: PipelineTemplateSummary[] = [{

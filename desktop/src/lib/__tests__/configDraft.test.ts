@@ -38,6 +38,46 @@ describe('configDraft', () => {
     expect(payload.services[0].deployments[0].env).toEqual({ A: '1' })
   })
 
+  it('projectToDraft 将旧 deployment 字段归一到 runtime/logs', () => {
+    const draft = projectToDraft(makeProject())
+    const dep = draft.services[0].deployments[0]
+
+    expect(dep.runtime).toEqual({
+      type: 'command',
+      command: 'go run .',
+      working_dir: '/tmp/demo',
+      env_vars: { A: '1' },
+    })
+    expect(dep.logs).toEqual({ type: 'process' })
+  })
+
+  it('draftToPayload 保存 runtime/logs 作为服务运行配置', () => {
+    const draft = projectToDraft(makeProject())
+    const dep = draft.services[0].deployments[0]
+    dep.runtime = {
+      type: 'command',
+      command: 'npm run dev',
+      working_dir: '/tmp/demo/web',
+      env_file: '.env.dev',
+      env_vars: { B: '2', '': 'ignored' },
+    }
+    dep.logs = { type: 'process' }
+
+    const payload = draftToPayload(draft)
+    const out = payload.services[0].deployments[0]
+    expect(out.runtime).toEqual({
+      type: 'command',
+      command: 'npm run dev',
+      working_dir: '/tmp/demo/web',
+      env_file: '.env.dev',
+      env_vars: { B: '2' },
+    })
+    expect(out.logs).toEqual({ type: 'process' })
+    expect(out.command).toBe('npm run dev')
+    expect(out.work_dir).toBe('/tmp/demo/web')
+    expect(out.env).toEqual({ B: '2' })
+  })
+
   it('validateDraft：env 名称为空报错', () => {
     const draft = projectToDraft(makeProject())
     draft.environments[0].name = ''
@@ -52,7 +92,7 @@ describe('configDraft', () => {
 
   it('validateDraft：local deployment 命令为空报错', () => {
     const draft = projectToDraft(makeProject())
-    draft.services[0].deployments[0].command = ''
+    draft.services[0].deployments[0].runtime!.command = ''
     expect(validateDraft(draft).some(e => e.includes('命令'))).toBe(true)
   })
 

@@ -9,7 +9,21 @@
  * 边界：
  *   - 纯数据转换，不发请求、不依赖 Vue
  */
-import type { Project, Deployment, Environment, SetupPayload, SetupDeployment, ProjectPipeline, Pipeline, PipelineStep } from '@/api/agent'
+import type {
+  Project,
+  Deployment,
+  Environment,
+  SetupPayload,
+  SetupDeployment,
+  ProjectPipeline,
+  Pipeline,
+  PipelineStep,
+  RuntimeConfig,
+  RuntimeType,
+  LogConfig,
+  LogKind,
+  LogSourceType,
+} from '@/api/agent'
 
 export interface ConfigDraftService {
   id: string
@@ -24,6 +38,87 @@ export interface ConfigDraft {
   environments: Environment[]
   services: ConfigDraftService[]
   pipelines: ProjectPipeline[]
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function serviceNameFromLogTarget(target?: string): string | undefined {
+  if (!target) return undefined
+  return target.endsWith('.service') ? target.slice(0, -'.service'.length) : target
+}
+
+function inferRuntimeType(d: Deployment): RuntimeType {
+  if (d.runtime?.type) return d.runtime.type
+  if (d.command !== undefined || d.work_dir !== undefined || d.env_file !== undefined || d.env !== undefined) return 'command'
+  if (d.log_type === 'docker') return 'docker'
+  if (d.log_type === 'journalctl' || d.log_target || d.start_command || d.stop_command) return 'systemd'
+  return d.location === 'local' ? 'command' : 'external'
+}
+
+function normalizeRuntime(d: Deployment): RuntimeConfig {
+  const source = d.runtime ?? ({} as RuntimeConfig)
+  const runtime: RuntimeConfig = { type: inferRuntimeType(d) }
+
+  if (runtime.type === 'command') {
+    runtime.command = source.command ?? d.command ?? ''
+    const workingDir = source.working_dir ?? d.work_dir
+    const envFile = source.env_file ?? d.env_file
+    const envVars = stripEmptyEnvKeys(source.env_vars ?? d.env)
+    if (workingDir !== undefined) runtime.working_dir = workingDir
+    if (envFile !== undefined) runtime.env_file = envFile
+    if (envVars !== undefined) runtime.env_vars = envVars
+  } else if (runtime.type === 'systemd') {
+    const serviceName = source.service_name ?? serviceNameFromLogTarget(d.log_target)
+    if (serviceName !== undefined) runtime.service_name = serviceName
+    if (source.release_dir !== undefined) runtime.release_dir = source.release_dir
+    if (source.current_dir !== undefined) runtime.current_dir = source.current_dir
+    if (source.exec_start !== undefined) runtime.exec_start = source.exec_start
+  } else if (runtime.type === 'docker') {
+    const container = source.container ?? d.log_target
+    if (container !== undefined) runtime.container = container
+  } else if (runtime.type === 'nginx_static') {
+    if (source.domain !== undefined) runtime.domain = source.domain
+    if (source.release_dir !== undefined) runtime.release_dir = source.release_dir
+    if (source.current_dir !== undefined) runtime.current_dir = source.current_dir
+  }
+
+  return runtime
+}
+
+function defaultLogKind(runtime: RuntimeConfig, location: Deployment['location']): LogKind {
+  if (location === 'local' && runtime.type === 'command') return 'process'
+  if (runtime.type === 'docker') return 'docker'
+  if (runtime.type === 'nginx_static') return 'nginx'
+  if (runtime.type === 'systemd') return 'journalctl'
+  return 'process'
+}
+
+function normalizeLogs(d: Deployment, runtime: RuntimeConfig): LogConfig {
+  const source = d.logs ?? ({} as LogConfig)
+  const kind = source.type ?? (d.log_type as LogKind | undefined) ?? defaultLogKind(runtime, d.location)
+  const logs: LogConfig = { type: kind }
+  const target = source.target ?? d.log_target
+  const extraArgs = source.extra_args ?? d.extra_args
+  if (target !== undefined) logs.target = target
+  if (extraArgs !== undefined) logs.extra_args = extraArgs
+  return logs
+}
+
+function normalizeDeployment(d: Deployment): Deployment {
+  const dep = clone(d)
+  const runtime = normalizeRuntime(dep)
+  return {
+    ...dep,
+    runtime,
+    logs: normalizeLogs(dep, runtime),
+  }
+}
+
+function logKindToLegacy(kind?: LogKind): LogSourceType | undefined {
+  if (kind === 'journalctl' || kind === 'docker') return kind
+  return undefined
 }
 
 /**
@@ -44,9 +139,9 @@ export function projectToDraft(p: Project): ConfigDraft {
       name: s.name,
       required: s.required,
       order: s.order,
-      deployments: (s.deployments ?? []).map(d => JSON.parse(JSON.stringify(d))),
+      deployments: (s.deployments ?? []).map(d => normalizeDeployment(d)),
     })),
-    pipelines: (p.pipelines ?? []).map(pipeline => JSON.parse(JSON.stringify(pipeline))),
+    pipelines: (p.pipelines ?? []).map(pipeline => clone(pipeline)),
   }
 }
 
@@ -94,25 +189,30 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       name: s.name,
       required: s.required,
       order: s.order,
-      deployments: s.deployments.map<SetupDeployment>(d => ({
-        id: d.id || undefined,
-        env_name: d.env_name,
-        location: d.location,
-        command: d.command,
-        work_dir: d.work_dir,
-        env: stripEmptyEnvKeys(d.env),
-        host_ids: d.host_ids,
-        log_type: d.log_type,
-        log_target: d.log_target,
-        extra_args: d.extra_args,
-        env_file: d.env_file,
-        runtime: d.runtime,
-        logs: d.logs,
-        read_only: d.read_only,
-        start_command: d.start_command,
-        stop_command: d.stop_command,
-        pipeline: d.pipeline,
-      })),
+      deployments: s.deployments.map<SetupDeployment>((d) => {
+        const dep = normalizeDeployment(d)
+        const runtime = dep.runtime!
+        const logs = dep.logs
+        return {
+          id: dep.id || undefined,
+          env_name: dep.env_name,
+          location: dep.location,
+          command: runtime.type === 'command' ? runtime.command : dep.command,
+          work_dir: runtime.type === 'command' ? runtime.working_dir : dep.work_dir,
+          env: runtime.type === 'command' ? stripEmptyEnvKeys(runtime.env_vars) : stripEmptyEnvKeys(dep.env),
+          host_ids: dep.host_ids,
+          log_type: logKindToLegacy(logs?.type),
+          log_target: logs?.target,
+          extra_args: logs?.extra_args,
+          env_file: runtime.type === 'command' ? runtime.env_file : dep.env_file,
+          runtime,
+          logs,
+          read_only: dep.read_only,
+          start_command: dep.start_command,
+          stop_command: dep.stop_command,
+          pipeline: dep.pipeline,
+        }
+      }),
     })),
     pipelines: draft.pipelines,
   }
@@ -169,7 +269,8 @@ export function validateDraft(draft: ConfigDraft): string[] {
 
     // 校验每个部署配置
     for (const d of s.deployments) {
-      const command = (d.runtime?.command ?? d.command ?? '').trim()
+      const dep = normalizeDeployment(d)
+      const command = (dep.runtime?.command ?? '').trim()
       if (d.location === 'local' && command === '') {
         // local 部署：必须有运行命令；流水线已提升到项目级，不再作为本地命令替代品。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的本地命令不能为空`)
