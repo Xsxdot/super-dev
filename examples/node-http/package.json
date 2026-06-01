@@ -1,0 +1,9 @@
+{
+  "name": "superdev-node-http",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"console.log('node-http build ok')\"",
+    "start": "node server.js"
+  }
+}
