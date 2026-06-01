@@ -1,5 +1,5 @@
 <!--
-ProjectConfigEditor：项目配置编辑器外壳（配置唯一编辑入口）。
+ProjectConfigEditor：项目运行配置编辑器外壳。
 
 职责：
   - 持有项目配置草稿（深拷贝自 project），全程本地编辑
@@ -8,20 +8,20 @@ ProjectConfigEditor：项目配置编辑器外壳（配置唯一编辑入口）�
   - 保存：校验 → 拍平为 SetupPayload → PUT /setup → reloadProject → emit saved
   - 取消：丢弃草稿 → emit cancel
 边界：
+  - 不编辑项目级流水线（由 ProjectPipelineEditor 负责）
   - 不负责新建项目的落地（由父层在 saved 后处理 registry）
   - 删除运行中 service 的最终守卫在后端
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { api, type PipelineTemplateSummary, type Project, type ProjectPipeline } from '@/api/agent'
+import { api, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraft, type ConfigDraftService } from '@/lib/configDraft'
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
-import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
 
-const props = defineProps<{ project: Project; isNew?: boolean; pipelineTemplates?: PipelineTemplateSummary[] }>()
+const props = defineProps<{ project: Project; isNew?: boolean }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
 const agentStore = useAgentStore()
@@ -128,12 +128,13 @@ function removeService(i: number) {
   }
 }
 
-function updatePipelines(pipelines: ProjectPipeline[]) {
-  draft.value.pipelines = pipelines
+function configValidationErrors(): string[] {
+  // 项目级流水线已拆到独立编辑器，配置保存只拦截环境/服务/运行日志相关错误。
+  return validateDraft(draft.value).filter(error => !error.startsWith('项目流水线'))
 }
 
 async function save() {
-  errors.value = validateDraft(draft.value)
+  errors.value = configValidationErrors()
   if (errors.value.length) return
   saving.value = true
   saveError.value = null
@@ -198,14 +199,6 @@ async function save() {
           <div v-else class="editor-empty">请在左侧新增服务</div>
         </div>
       </div>
-
-      <ProjectPipelinePanel
-        :model-value="draft.pipelines"
-        :services="draft.services"
-        :hosts="hosts"
-        :templates="pipelineTemplates ?? []"
-        @update:model-value="updatePipelines"
-      />
 
       <div class="editor-actions">
         <button type="button" data-test="config-cancel" @click="emit('cancel')">取消</button>

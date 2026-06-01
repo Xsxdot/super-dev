@@ -21,6 +21,7 @@ import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
+import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import type { PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates'
@@ -42,6 +43,7 @@ onMounted(() => {
 
 const editorProject = ref<Project | null>(null)
 const editorIsNew = ref(false)
+const pipelineEditorProject = ref<Project | null>(null)
 const templateModalOpen = ref(false)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetailLoading = ref(false)
@@ -56,6 +58,14 @@ function openEditor(project: Project) {
 function onEditorSaved() {
   editorProject.value = null
   editorIsNew.value = false
+}
+
+function openPipelineEditor(project: Project) {
+  pipelineEditorProject.value = project
+}
+
+function onPipelineEditorSaved() {
+  pipelineEditorProject.value = null
 }
 
 /**
@@ -319,6 +329,13 @@ const retentionDays = computed({
                 >
                   编辑配置
                 </button>
+                <button
+                  class="ghost-btn"
+                  :data-test="`pipeline-project-${project.id}`"
+                  @click="openPipelineEditor(project)"
+                >
+                  编辑流水线
+                </button>
                 <button class="danger-btn" @click="deleteProject(project)">删除</button>
               </div>
             </header>
@@ -368,9 +385,15 @@ const retentionDays = computed({
       v-if="editorProject"
       :project="editorProject"
       :is-new="editorIsNew"
-      :pipeline-templates="pipelineTemplateStore.templates"
       @saved="onEditorSaved"
       @cancel="editorProject = null; editorIsNew = false"
+    />
+    <ProjectPipelineEditor
+      v-if="pipelineEditorProject"
+      :project="pipelineEditorProject"
+      :pipeline-templates="pipelineTemplateStore.templates"
+      @saved="onPipelineEditorSaved"
+      @cancel="pipelineEditorProject = null"
     />
     <TemplateContentModal
       :open="templateModalOpen"

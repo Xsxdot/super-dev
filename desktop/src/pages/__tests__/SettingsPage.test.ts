@@ -103,6 +103,24 @@ describe('SettingsPage', () => {
     expect(agent.putEnvSelected).toHaveBeenCalledWith('proj-1', 'dev', [])
   })
 
+  it('项目页可从编辑配置旁打开流水线编辑器', async () => {
+    const agent = useAgentStore()
+    agent.projects = [project([service('svc-web', 'web')])]
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mount(SettingsPage)
+    await wrapper.find('[data-test="settings-tab-projects"]').trigger('click')
+
+    expect(wrapper.find('[data-test="setup-project-proj-1"]').exists()).toBe(true)
+    const button = wrapper.find('[data-test="pipeline-project-proj-1"]')
+    expect(button.exists()).toBe(true)
+
+    await button.trigger('click')
+    expect(wrapper.text()).toContain('编辑流水线 · Project')
+  })
+
   it('支持从 query 直达主机管理 tab', async () => {
     routeState.query = { tab: 'hosts' }
     const settings = useSettingsStore()
