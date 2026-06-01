@@ -206,6 +206,68 @@ services:
 	assert.False(t, prod.IsReadOnly())
 }
 
+func TestLoadProjectRuntimeAndTopLevelPipelines(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".superdev"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".superdev", "config.yaml"), []byte(`
+name: tk
+variables:
+  app_name: tk
+  base_work_dir: /Users/xushixin/workspace/tk
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - name: server
+    deployments:
+      - env: dev
+        location: local
+        runtime:
+          type: command
+          command: "go run ./cmd/server"
+          working_dir: server
+          env_file: .env.dev
+          env_vars:
+            LOG_LEVEL: debug
+        logs:
+          type: process
+pipelines:
+  - id: deploy-dev
+    name: Deploy Dev
+    services: [server]
+    variables:
+      target_server: server_targets
+    environments:
+      dev:
+        variables:
+          config_file: resources/dev.yaml
+    roles:
+      server_targets:
+        from_service: server
+    pipeline:
+      build:
+        - name: Build
+          type: local_command
+          with:
+            cmd: echo build
+`), 0o644))
+
+	p, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	assert.Equal(t, "tk", p.Variables["app_name"])
+	require.Len(t, p.Services, 1)
+	dep := p.Services[0].Deployments[0]
+	require.NotNil(t, dep.Runtime)
+	assert.Equal(t, model.RuntimeTypeCommand, dep.Runtime.Type)
+	assert.Equal(t, filepath.Join(dir, "server"), dep.WorkDir)
+	assert.Equal(t, "go run ./cmd/server", dep.Command)
+	require.NotNil(t, dep.Logs)
+	assert.Equal(t, model.LogKindProcess, dep.Logs.Type)
+	require.Len(t, p.Pipelines, 1)
+	assert.Equal(t, "deploy-dev", p.Pipelines[0].ID)
+	assert.Equal(t, "server", p.Pipelines[0].Roles["server_targets"].FromService)
+}
+
 func TestLoadNewFormatReadOnlyDeployment(t *testing.T) {
 	dir := t.TempDir()
 	superdevDir := filepath.Join(dir, ".superdev")
@@ -382,6 +444,54 @@ func TestSaveLoadPreservesPipeline(t *testing.T) {
 	require.Len(t, dep.Pipeline.Deploy, 1)
 	assert.Equal(t, "include", dep.Pipeline.Deploy[0].Type)
 	assert.Equal(t, "builtin://systemd-seamless-deploy", dep.Pipeline.Deploy[0].With["template"])
+}
+
+func TestSaveAndReloadPreservesRuntimeAndProjectPipelines(t *testing.T) {
+	dir := t.TempDir()
+	p := model.Project{
+		Name:      "tk",
+		RootPath:  dir,
+		Variables: map[string]string{"app_name": "tk"},
+		Environments: []model.Environment{
+			{Name: "dev", IsDev: true},
+		},
+		Services: []model.Service{{
+			Name: "server",
+			Deployments: []model.Deployment{{
+				EnvName:  "dev",
+				Location: model.LocationRemote,
+				HostIDs:  []string{"dev-01"},
+				Runtime: &model.RuntimeConfig{
+					Type:        model.RuntimeTypeSystemd,
+					ServiceName: "tk-dev",
+					ReleaseDir:  "/opt/tk/releases",
+					CurrentDir:  "/opt/tk/current",
+					ExecStart:   "/opt/tk/current/tk",
+				},
+				Logs: &model.LogConfig{Type: model.LogKindJournalctl, Target: "tk-dev.service"},
+			}},
+		}},
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "deploy-dev",
+			Name:     "Deploy Dev",
+			Services: []string{"server"},
+			Roles: map[string]model.ProjectPipelineRole{
+				"server_targets": {FromService: "server"},
+			},
+			Pipeline: model.Pipeline{Build: []model.Step{{Name: "Build", Type: "local_command"}}},
+		}},
+	}
+
+	require.NoError(t, config.NewLoader(dir).Save(p))
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	require.Len(t, loaded.Pipelines, 1)
+	assert.Equal(t, "deploy-dev", loaded.Pipelines[0].ID)
+	dep := loaded.Services[0].Deployments[0]
+	require.NotNil(t, dep.Runtime)
+	assert.Equal(t, model.RuntimeTypeSystemd, dep.Runtime.Type)
+	require.NotNil(t, dep.Logs)
+	assert.Equal(t, "tk-dev.service", dep.Logs.Target)
 }
 
 func TestSavePreservesLogRulesWithNewFormat(t *testing.T) {

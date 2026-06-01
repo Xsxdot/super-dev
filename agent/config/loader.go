@@ -51,11 +51,13 @@ func (l *Loader) Load() (model.Project, error) {
 	}
 
 	var raw struct {
-		ID                    string              `yaml:"id,omitempty"`
-		Name                  string              `yaml:"name"`
-		Environments          []envYAML           `yaml:"environments"`
-		Services              []serviceYAML       `yaml:"services"`
-		EnvSelectedServiceIDs map[string][]string `yaml:"env_selected_service_ids"`
+		ID                    string                  `yaml:"id,omitempty"`
+		Name                  string                  `yaml:"name"`
+		Variables             map[string]string       `yaml:"variables,omitempty"`
+		Environments          []envYAML               `yaml:"environments"`
+		Services              []serviceYAML           `yaml:"services"`
+		Pipelines             []model.ProjectPipeline `yaml:"pipelines,omitempty"`
+		EnvSelectedServiceIDs map[string][]string     `yaml:"env_selected_service_ids"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return model.Project{}, fmt.Errorf("parse config: %w", err)
@@ -71,8 +73,10 @@ func (l *Loader) Load() (model.Project, error) {
 		ID:                    raw.ID,
 		Name:                  raw.Name,
 		RootPath:              l.rootPath,
+		Variables:             raw.Variables,
 		Environments:          envs,
 		Services:              services,
+		Pipelines:             raw.Pipelines,
 		EnvSelectedServiceIDs: raw.EnvSelectedServiceIDs,
 	}, nil
 }
@@ -99,6 +103,9 @@ func (l *Loader) Save(p model.Project) error {
 		"name":     p.Name,
 		"services": servicesToYAML(p.Services),
 	}
+	if len(p.Variables) > 0 {
+		raw["variables"] = p.Variables
+	}
 	if len(p.EnvSelectedServiceIDs) > 0 {
 		raw["env_selected_service_ids"] = p.EnvSelectedServiceIDs
 	}
@@ -107,6 +114,9 @@ func (l *Loader) Save(p model.Project) error {
 	}
 	if len(p.Environments) > 0 {
 		raw["environments"] = envsToYAML(p.Environments)
+	}
+	if len(p.Pipelines) > 0 {
+		raw["pipelines"] = p.Pipelines
 	}
 	// 保留已有的 log_rules。
 	if lr, ok := existing["log_rules"]; ok {
@@ -192,15 +202,17 @@ type deploymentYAML struct {
 	EnvFile    string `yaml:"env_file,omitempty"`
 	// EnvVars 使用 yaml key "env_vars" 而非 "env"，因为 "env" 已被 Env 字段（env_name）
 	// 占用。serviceYAML 沿用老格式的 "env" key，两者最终都映射到 model.Deployment.Env。
-	EnvVars      map[string]string `yaml:"env_vars,omitempty"`
-	Hosts        []string          `yaml:"hosts,omitempty"`
-	LogType      string            `yaml:"log_type,omitempty"`
-	LogTarget    string            `yaml:"log_target,omitempty"`
-	ExtraArgs    []string          `yaml:"extra_args,omitempty"`
-	ReadOnly     bool              `yaml:"read_only,omitempty"`
-	StartCommand string            `yaml:"start_command,omitempty"`
-	StopCommand  string            `yaml:"stop_command,omitempty"`
-	Pipeline     *model.Pipeline   `yaml:"pipeline,omitempty"`
+	EnvVars      map[string]string    `yaml:"env_vars,omitempty"`
+	Hosts        []string             `yaml:"hosts,omitempty"`
+	LogType      string               `yaml:"log_type,omitempty"`
+	LogTarget    string               `yaml:"log_target,omitempty"`
+	ExtraArgs    []string             `yaml:"extra_args,omitempty"`
+	Runtime      *model.RuntimeConfig `yaml:"runtime,omitempty"`
+	Logs         *model.LogConfig     `yaml:"logs,omitempty"`
+	ReadOnly     bool                 `yaml:"read_only,omitempty"`
+	StartCommand string               `yaml:"start_command,omitempty"`
+	StopCommand  string               `yaml:"stop_command,omitempty"`
+	Pipeline     *model.Pipeline      `yaml:"pipeline,omitempty"`
 }
 
 // serviceYAML 对应 yaml 文件中服务条目，仅作为 deployment 的逻辑分组。
@@ -246,7 +258,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 		if d.Location == "remote" {
 			loc = model.LocationRemote
 		}
-		out[i] = model.Deployment{
+		dep := model.Deployment{
 			ID:           d.ID,
 			EnvName:      d.Env,
 			Location:     loc,
@@ -258,11 +270,39 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			LogType:      model.LogSourceType(d.LogType),
 			LogTarget:    d.LogTarget,
 			ExtraArgs:    d.ExtraArgs,
+			Runtime:      d.Runtime,
+			Logs:         d.Logs,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
 			Pipeline:     d.Pipeline,
 		}
+		if dep.Runtime != nil {
+			if dep.Command == "" {
+				dep.Command = dep.Runtime.Command
+			}
+			if dep.WorkDir == "" {
+				dep.WorkDir = resolveWorkDir(dep.Runtime.WorkingDir, rootPath)
+			}
+			if dep.EnvFile == "" {
+				dep.EnvFile = dep.Runtime.EnvFile
+			}
+			if dep.Env == nil {
+				dep.Env = dep.Runtime.EnvVars
+			}
+		}
+		if dep.Logs != nil {
+			if dep.LogType == "" {
+				dep.LogType = model.LogSourceType(dep.Logs.Type)
+			}
+			if dep.LogTarget == "" {
+				dep.LogTarget = dep.Logs.Target
+			}
+			if dep.ExtraArgs == nil {
+				dep.ExtraArgs = dep.Logs.ExtraArgs
+			}
+		}
+		out[i] = dep
 	}
 	return out
 }
@@ -305,6 +345,8 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			LogType:      string(d.LogType),
 			LogTarget:    d.LogTarget,
 			ExtraArgs:    d.ExtraArgs,
+			Runtime:      d.Runtime,
+			Logs:         d.Logs,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
