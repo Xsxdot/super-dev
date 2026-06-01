@@ -92,7 +92,7 @@ services:
         pipeline:
           variables:
             backend_output: ${output}/backend
-            backend_artifact_dir: ${artifacts}/backend-${version}
+            backend_artifact: ${artifacts}/backend-${version}.tar.gz
           build:
             - name: Build Go
               type: include
@@ -103,7 +103,10 @@ services:
                   work_dir: ${workspace}
                   package: ./...
                   output: ${backend_output}
-                  artifact_dir: ${backend_artifact_dir}
+                  artifact: ${backend_artifact}
+                  files:
+                    - from: ${backend_output}
+                      to: bin/api
                   app_name: api
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))

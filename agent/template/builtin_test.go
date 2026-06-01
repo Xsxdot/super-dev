@@ -20,7 +20,7 @@ import (
 func TestLoadBuiltinTemplates(t *testing.T) {
 	builtins, err := pipelinetemplate.LoadBuiltins()
 	require.NoError(t, err)
-	for _, id := range []string{"go-binary-build", "vue-standard-build", "systemd-seamless-deploy", "nginx-static-deploy"} {
+	for _, id := range []string{"go-binary-build", "vue-standard-build", "archive-package", "systemd-seamless-deploy", "nginx-static-deploy"} {
 		tpl, ok := builtins[id]
 		require.True(t, ok, id)
 		assert.NotEmpty(t, tpl.Inputs)
@@ -38,5 +38,23 @@ func TestBuiltinTemplatesHaveInputDescriptionsAndTargetRoles(t *testing.T) {
 	}
 	assert.Equal(t, "target_role", builtins["systemd-seamless-deploy"].Inputs["role"].Type)
 	assert.Equal(t, "target_role", builtins["nginx-static-deploy"].Inputs["role"].Type)
-	assert.Contains(t, builtins["go-binary-build"].Inputs["artifact_dir"].Default, "${run_temp_dir}")
+	assert.Equal(t, "file_list", builtins["archive-package"].Inputs["files"].Type)
+	assert.Equal(t, "${output}/app", builtins["go-binary-build"].Inputs["output"].Default)
+	assert.True(t, builtins["systemd-seamless-deploy"].Inputs["artifact"].Required)
+	assert.Empty(t, builtins["systemd-seamless-deploy"].Inputs["artifact"].Default)
+	assert.True(t, builtins["nginx-static-deploy"].Inputs["artifact"].Required)
+	assert.Empty(t, builtins["nginx-static-deploy"].Inputs["artifact"].Default)
+}
+
+func TestGoBinaryBuildPackagingIsOptional(t *testing.T) {
+	builtins, err := pipelinetemplate.LoadBuiltins()
+	require.NoError(t, err)
+	require.Len(t, builtins["go-binary-build"].Steps, 2)
+
+	step, err := pipelinetemplate.RenderStepTemplateVars(builtins["go-binary-build"].Steps[1], map[string]interface{}{
+		"output": "/tmp/app",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, `"" != ""`, step.RunIf)
 }

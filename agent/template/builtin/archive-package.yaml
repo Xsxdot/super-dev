@@ -1,0 +1,29 @@
+id: archive-package
+name: Archive Package
+description: Package an explicit files list into one tar.gz artifact.
+version: 1.0.0
+inputs:
+  artifact:
+    label: Artifact path
+    type: path
+    required: true
+    description: Final local tar.gz artifact path, for example ${artifacts}/api-${version}.tar.gz.
+  files:
+    label: Files
+    type: file_list
+    required: true
+    description: Files or directories to include in the artifact. Each item must provide from and to.
+  format:
+    label: Format
+    type: select
+    required: true
+    default: tar.gz
+    options: [tar.gz]
+    description: Archive format. Only tar.gz is currently supported.
+steps:
+  - name: Package
+    type: archive_package
+    with:
+      artifact: ${vars.artifact}
+      files: ${vars.files}
+      format: ${vars.format:-tar.gz}

@@ -1,48 +1,45 @@
 id: vue-standard-build
 name: Vue Standard Build
-description: Install dependencies, build a Vue project, and package the dist directory.
+description: Install dependencies, build a Vue project, and optionally package explicit files into a tar.gz artifact.
 version: 1.0.0
 inputs:
   work_dir:
     label: Project directory
     type: path
     required: true
-    default: .
+    default: ${workspace}
     description: Local Vue project directory where dependency install and build commands run.
   build_cmd:
     label: Build command
     type: string
     required: true
-    default: pnpm install && pnpm build -- --outDir ${run_temp_dir}/dist
-    description: Shell command that builds the Vue app. The default writes dist output into the per-run temp workspace.
+    default: pnpm install && pnpm build -- --outDir ${output}/dist
+    description: Shell command that builds the Vue app. The default writes dist output under the standard output root.
   dist_dir:
     label: Dist directory
     type: path
     required: true
-    default: ${run_temp_dir}/dist
-    description: Built static files directory to package.
-  artifact_dir:
-    label: Artifact directory
+    default: ${output}/dist
+    description: Built static files directory under the standard output root.
+  artifact:
+    label: Artifact path
     type: path
-    required: true
-    default: ${run_temp_dir}/artifacts
-    description: Local directory where the tar.gz artifact is written before deploy templates upload it.
-  app_name:
-    label: App name
-    type: string
-    required: true
-    description: Application name used as the archive basename.
+    description: Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
+  files:
+    label: Package files
+    type: file_list
+    description: Files or directories to package when artifact is set, usually the dist directory plus any deployment config.
 steps:
   - name: Build
     type: local_command
     with:
       workDir: ${vars.work_dir}
       cmd: ${vars.build_cmd}
-  - name: Archive
-    type: archive
+  - name: Package
+    type: archive_package
     needs: [Build]
+    run_if: '"${vars.artifact:-}" != ""'
     with:
-      source: ${vars.dist_dir}
-      dest: ${vars.artifact_dir}
-      basename: ${vars.app_name}
+      artifact: ${vars.artifact:-}
+      files: ${vars.files}
       format: tar.gz

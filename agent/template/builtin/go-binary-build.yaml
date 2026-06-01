@@ -1,13 +1,13 @@
 id: go-binary-build
 name: Go Binary Build
-description: Build a Go binary and package it as a tar.gz artifact.
+description: Build a Go binary and optionally package explicit files into a tar.gz artifact.
 version: 1.0.0
 inputs:
   work_dir:
     label: Project directory
     type: path
     required: true
-    default: .
+    default: ${workspace}
     description: Local directory where the Go build command runs, usually the project root or backend module directory.
   package:
     label: Go package
@@ -19,30 +19,27 @@ inputs:
     label: Binary output
     type: path
     required: true
-    default: ${run_temp_dir}/build/app
-    description: Local binary output path. The default writes into the per-run temp workspace.
-  artifact_dir:
-    label: Artifact directory
+    default: ${output}/app
+    description: Final local binary output path under the standard output root.
+  artifact:
+    label: Artifact path
     type: path
-    required: true
-    default: ${run_temp_dir}/artifacts
-    description: Local directory where the tar.gz artifact is written before deploy templates upload it.
-  app_name:
-    label: App name
-    type: string
-    required: true
-    description: Application name used as the archive basename.
+    description: Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
+  files:
+    label: Package files
+    type: file_list
+    description: Files to package when artifact is set. Include the built binary and any config or env files that should ship with it.
 steps:
   - name: Build
     type: local_command
     with:
       workDir: ${vars.work_dir}
-      cmd: go build -o ${vars.output} ${vars.package}
-  - name: Archive
-    type: archive
+      cmd: mkdir -p "$(dirname "${vars.output}")" && go build -o "${vars.output}" ${vars.package}
+  - name: Package
+    type: archive_package
     needs: [Build]
+    run_if: '"${vars.artifact:-}" != ""'
     with:
-      source: ${vars.output}
-      dest: ${vars.artifact_dir}
-      basename: ${vars.app_name}
+      artifact: ${vars.artifact:-}
+      files: ${vars.files}
       format: tar.gz
