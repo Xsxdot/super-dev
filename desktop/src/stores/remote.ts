@@ -15,6 +15,7 @@ import {
   type Host,
   type HostCreatePayload,
   type HostUpdatePayload,
+  type InstallHostAgentResult,
   type LogSource,
   type LogSourceCreatePayload,
   type LogSourceUpdatePayload,
@@ -59,6 +60,10 @@ export const useRemoteStore = defineStore('remote', () => {
   async function deleteHost(id: string) {
     await api.deleteHost(id)
     hosts.value = hosts.value.filter(host => host.id !== id)
+  }
+
+  async function installHostAgent(id: string): Promise<InstallHostAgentResult> {
+    return api.installHostAgent(id)
   }
 
   function hostById(id: string): Host | undefined {
@@ -194,6 +199,7 @@ export const useRemoteStore = defineStore('remote', () => {
     createHost,
     updateHost,
     deleteHost,
+    installHostAgent,
     hostById,
     loadLogSources,
     createLogSource,

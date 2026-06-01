@@ -32,6 +32,7 @@ vi.mock('@/api/agent', async () => {
       createHost: vi.fn(),
       updateHost: vi.fn(),
       deleteHost: vi.fn(),
+      installHostAgent: vi.fn(),
       listLogSources: vi.fn(),
       createLogSource: vi.fn(),
       updateLogSource: vi.fn(),
@@ -131,6 +132,21 @@ describe('useRemoteStore', () => {
 
       expect(store.hostById('h1')?.name).toBe('host-01')
       expect(store.hostById('missing')).toBeUndefined()
+    })
+
+    it('installHostAgent 调用 agent API 并返回结果', async () => {
+      const result = {
+        ok: true,
+        host_id: 'h1',
+        platform: 'linux/amd64',
+        message: 'Agent installed and started',
+      }
+      mockedApi.installHostAgent.mockResolvedValue(result)
+
+      const store = useRemoteStore()
+      await expect(store.installHostAgent('h1')).resolves.toEqual(result)
+
+      expect(mockedApi.installHostAgent).toHaveBeenCalledWith('h1')
     })
   })
 

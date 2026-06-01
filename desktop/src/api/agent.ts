@@ -303,6 +303,15 @@ export interface Host {
   remote_agent_port: number
   local_tunnel_port: number
   tags: string[]
+  is_self?: boolean
+  node_id?: string
+}
+
+export interface InstallHostAgentResult {
+  ok: boolean
+  host_id: string
+  platform: string
+  message: string
 }
 
 export type LogSourceType = 'journalctl' | 'docker' | 'file_tail' | 'command'
@@ -648,6 +657,8 @@ export const api = {
     request<Host>(`/api/hosts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteHost: (id: string) =>
     request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+  installHostAgent: (id: string) =>
+    request<InstallHostAgentResult>(`/api/hosts/${id}/agent/install`, { method: 'POST' }),
 
   // 远程监听：SSH config 导入
   listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),
