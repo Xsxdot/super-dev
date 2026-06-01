@@ -78,6 +78,49 @@ describe('configDraft', () => {
     expect(out.env).toEqual({ B: '2' })
   })
 
+  it('projectToDraft 将旧只读和 external 归一成 monitor 控制模式', () => {
+    const p = makeProject()
+    p.services[0].deployments![0] = {
+      id: 'd1',
+      env_name: 'prod',
+      location: 'remote',
+      host_ids: ['h1'],
+      read_only: true,
+      runtime: { type: 'external' },
+      logs: { type: 'journalctl', target: 'api.service' },
+      status: '',
+    }
+
+    const dep = projectToDraft(p).services[0].deployments[0]
+
+    expect(dep.control_mode).toBe('monitor')
+    expect(dep.runtime?.type).toBe('systemd')
+    expect(dep.runtime?.service_name).toBe('api')
+  })
+
+  it('draftToPayload 保存 control_mode 和自定义日志命令', () => {
+    const draft = projectToDraft(makeProject())
+    const dep = draft.services[0].deployments[0]
+    dep.control_mode = 'monitor'
+    dep.runtime = { type: 'systemd', service_name: 'api' }
+    dep.logs = { type: 'command', command: 'tail -F /var/log/api/app.log' }
+
+    const out = draftToPayload(draft).services[0].deployments[0]
+
+    expect(out.control_mode).toBe('monitor')
+    expect(out.read_only).toBe(true)
+    expect(out.logs).toEqual({ type: 'command', command: 'tail -F /var/log/api/app.log' })
+  })
+
+  it('validateDraft：文件 tail 必须填写路径，自定义日志命令必须填写命令', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments[0].logs = { type: 'file_tail', path: '' }
+    expect(validateDraft(draft).some(e => e.includes('日志文件路径'))).toBe(true)
+
+    draft.services[0].deployments[0].logs = { type: 'command', command: '' }
+    expect(validateDraft(draft).some(e => e.includes('日志命令'))).toBe(true)
+  })
+
   it('validateDraft：env 名称为空报错', () => {
     const draft = projectToDraft(makeProject())
     draft.environments[0].name = ''
@@ -131,11 +174,12 @@ describe('configDraft', () => {
     expect(payload.services[0]!.deployments[0]!.env_file).toBe('.env.local')
   })
 
-  it('draftToPayload 透传 read_only', () => {
+  it('draftToPayload 用 monitor 控制模式写出兼容 read_only', () => {
     const draft = projectToDraft(makeProject())
-    draft.services[0]!.deployments[0]!.read_only = true
+    draft.services[0]!.deployments[0]!.control_mode = 'monitor'
     const payload = draftToPayload(draft)
     expect(payload.services[0]!.deployments[0]!.read_only).toBe(true)
+    expect(payload.services[0]!.deployments[0]!.control_mode).toBe('monitor')
   })
 
   it('projectToDraft 和 draftToPayload 保留项目变量、项目流水线、runtime/logs', () => {

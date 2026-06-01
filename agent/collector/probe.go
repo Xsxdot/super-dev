@@ -4,6 +4,7 @@
 //   - journalctl 类型:运行 `systemctl status <unit> --no-pager`
 //     退出码 0 或 3 表示 unit 存在，其他情况视为不存在
 //   - docker 类型:运行 `docker inspect <name>`,退出码非零视为不存在
+//   - file_tail / command 类型:只做配置字符串校验,允许 tail -F 等待文件出现
 //
 // 边界：
 //   - 仅在远端运行;本机调用 Probe 时会通过 collector.Manager 的注入决定
@@ -26,8 +27,8 @@ func NewSystemProbe() *SystemProbe { return &SystemProbe{} }
 // Exists 检查 (t, name) 表示的目标是否存在于本机。
 //
 // 参数：
-//   - t: 必须是 journalctl 或 docker
-//   - name: 已通过 ValidateName 校验
+//   - t: journalctl / docker / file_tail / command
+//   - name: 服务名、容器名、日志路径或自定义日志命令
 //
 // 返回：
 //   - 存在返回 nil
@@ -35,11 +36,11 @@ func NewSystemProbe() *SystemProbe { return &SystemProbe{} }
 //   - type 不支持 → ErrUnsupportedType
 //   - 目标不存在或命令失败 → ErrTargetNotFound
 func (p *SystemProbe) Exists(t model.LogSourceType, name string) error {
-	if err := ValidateName(name); err != nil {
-		return err
-	}
 	switch t {
 	case model.LogSourceTypeJournalctl:
+		if err := ValidateName(name); err != nil {
+			return err
+		}
 		cmd := exec.Command("systemctl", "status", systemdUnitName(name), "--no-pager")
 		if err := cmd.Run(); err != nil {
 			// systemctl status 退出码 3 表示 unit 存在但 inactive,仍可通过 journalctl 采集历史/后续日志。
@@ -50,11 +51,18 @@ func (p *SystemProbe) Exists(t model.LogSourceType, name string) error {
 		}
 		return nil
 	case model.LogSourceTypeDocker:
+		if err := ValidateName(name); err != nil {
+			return err
+		}
 		cmd := exec.Command("docker", "inspect", name)
 		if err := cmd.Run(); err != nil {
 			return ErrTargetNotFound
 		}
 		return nil
+	case model.LogSourceTypeFileTail:
+		return ValidatePath(name)
+	case model.LogSourceTypeCommand:
+		return ValidateCommand(name)
 	default:
 		return ErrUnsupportedType
 	}

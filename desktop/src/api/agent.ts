@@ -26,7 +26,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export type DeployLocation = 'local' | 'remote'
 export type RuntimeType = 'command' | 'systemd' | 'docker' | 'nginx_static' | 'external'
-export type LogKind = 'process' | 'journalctl' | 'docker' | 'nginx'
+export type ControlMode = 'monitor' | 'managed'
+export type LogKind = 'process' | 'journalctl' | 'docker' | 'nginx' | 'file_tail' | 'command'
 
 export type PipelinePhase = 'build' | 'deploy' | 'finally'
 export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'canceled'
@@ -69,6 +70,8 @@ export interface RuntimeConfig {
 export interface LogConfig {
   type: LogKind
   target?: string
+  path?: string
+  command?: string
   extra_args?: string[]
 }
 
@@ -151,6 +154,7 @@ export interface Deployment {
   id: string
   env_name: string
   location: DeployLocation
+  control_mode?: ControlMode
   runtime?: RuntimeConfig
   logs?: LogConfig
   command?: string
@@ -294,7 +298,7 @@ export interface Host {
   tags: string[]
 }
 
-export type LogSourceType = 'journalctl' | 'docker'
+export type LogSourceType = 'journalctl' | 'docker' | 'file_tail' | 'command'
 
 export interface LogSource {
   id: string
@@ -318,6 +322,7 @@ export interface SetupDeployment {
   id?: string
   env_name: string
   location: 'local' | 'remote'
+  control_mode?: ControlMode
   runtime?: RuntimeConfig
   logs?: LogConfig
   command?: string

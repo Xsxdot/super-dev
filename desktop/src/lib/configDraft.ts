@@ -23,6 +23,7 @@ import type {
   LogConfig,
   LogKind,
   LogSourceType,
+  ControlMode,
 } from '@/api/agent'
 
 export interface ConfigDraftService {
@@ -57,6 +58,12 @@ function inferRuntimeType(d: Deployment): RuntimeType {
   return d.location === 'local' ? 'command' : 'external'
 }
 
+function inferControlMode(d: Deployment): ControlMode {
+  if (d.control_mode) return d.control_mode
+  if (d.read_only || d.runtime?.type === 'external') return 'monitor'
+  return 'managed'
+}
+
 function normalizeRuntime(d: Deployment): RuntimeConfig {
   const source = d.runtime ?? ({} as RuntimeConfig)
   const runtime: RuntimeConfig = { type: inferRuntimeType(d) }
@@ -82,6 +89,12 @@ function normalizeRuntime(d: Deployment): RuntimeConfig {
     if (source.domain !== undefined) runtime.domain = source.domain
     if (source.release_dir !== undefined) runtime.release_dir = source.release_dir
     if (source.current_dir !== undefined) runtime.current_dir = source.current_dir
+  } else if (runtime.type === 'external') {
+    if (d.logs?.type === 'journalctl' || d.log_type === 'journalctl' || d.log_target) {
+      runtime.type = 'systemd'
+      const serviceName = source.service_name ?? serviceNameFromLogTarget(d.logs?.target ?? d.log_target)
+      if (serviceName !== undefined) runtime.service_name = serviceName
+    }
   }
 
   return runtime
@@ -100,8 +113,12 @@ function normalizeLogs(d: Deployment, runtime: RuntimeConfig): LogConfig {
   const kind = source.type ?? (d.log_type as LogKind | undefined) ?? defaultLogKind(runtime, d.location)
   const logs: LogConfig = { type: kind }
   const target = source.target ?? d.log_target
+  const path = source.path
+  const command = source.command
   const extraArgs = source.extra_args ?? d.extra_args
   if (target !== undefined) logs.target = target
+  if (path !== undefined) logs.path = path
+  if (command !== undefined) logs.command = command
   if (extraArgs !== undefined) logs.extra_args = extraArgs
   return logs
 }
@@ -111,13 +128,14 @@ function normalizeDeployment(d: Deployment): Deployment {
   const runtime = normalizeRuntime(dep)
   return {
     ...dep,
+    control_mode: inferControlMode(dep),
     runtime,
     logs: normalizeLogs(dep, runtime),
   }
 }
 
 function logKindToLegacy(kind?: LogKind): LogSourceType | undefined {
-  if (kind === 'journalctl' || kind === 'docker') return kind
+  if (kind === 'journalctl' || kind === 'docker' || kind === 'file_tail' || kind === 'command') return kind
   return undefined
 }
 
@@ -193,10 +211,12 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
         const dep = normalizeDeployment(d)
         const runtime = dep.runtime!
         const logs = dep.logs
+        const controlMode = dep.control_mode ?? 'managed'
         return {
           id: dep.id || undefined,
           env_name: dep.env_name,
           location: dep.location,
+          control_mode: controlMode,
           command: runtime.type === 'command' ? runtime.command : dep.command,
           work_dir: runtime.type === 'command' ? runtime.working_dir : dep.work_dir,
           env: runtime.type === 'command' ? stripEmptyEnvKeys(runtime.env_vars) : stripEmptyEnvKeys(dep.env),
@@ -207,7 +227,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           env_file: runtime.type === 'command' ? runtime.env_file : dep.env_file,
           runtime,
           logs,
-          read_only: dep.read_only,
+          read_only: controlMode === 'monitor' ? true : undefined,
           start_command: dep.start_command,
           stop_command: dep.stop_command,
           pipeline: dep.pipeline,
@@ -271,13 +291,23 @@ export function validateDraft(draft: ConfigDraft): string[] {
     for (const d of s.deployments) {
       const dep = normalizeDeployment(d)
       const command = (dep.runtime?.command ?? '').trim()
-      if (d.location === 'local' && command === '') {
-        // local 部署：必须有运行命令；流水线已提升到项目级，不再作为本地命令替代品。
+      if (dep.control_mode === 'managed' && dep.runtime?.type === 'command' && command === '') {
+        // command 接管需要明确启动命令；流水线已提升到项目级，不再作为命令替代品。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的本地命令不能为空`)
       }
       if (d.location === 'remote' && (d.host_ids ?? []).length === 0) {
         // remote 运行配置必须明确主机；项目级流水线通过服务环境配置再解析目标。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境未选择主机`)
+      }
+      const logs = dep.logs
+      if (logs?.type === 'file_tail' && (logs.path ?? '').trim() === '') {
+        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志文件路径不能为空`)
+      }
+      if (logs?.type === 'command' && (logs.command ?? '').trim() === '') {
+        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志命令不能为空`)
+      }
+      if ((logs?.type === 'journalctl' || logs?.type === 'docker' || logs?.type === 'nginx') && (logs.target ?? '').trim() === '') {
+        errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志目标不能为空`)
       }
     }
   }

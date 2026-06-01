@@ -125,11 +125,18 @@ const (
 	LogSourceTypeJournalctl LogSourceType = "journalctl"
 	// LogSourceTypeDocker 表示通过 docker logs 采集容器日志。
 	LogSourceTypeDocker LogSourceType = "docker"
+	// LogSourceTypeFileTail 表示通过 tail -F 采集文件日志。
+	LogSourceTypeFileTail LogSourceType = "file_tail"
+	// LogSourceTypeCommand 表示通过自定义命令采集日志输出。
+	LogSourceTypeCommand LogSourceType = "command"
 )
 
 // IsValid 判断 LogSourceType 是否在允许的枚举范围内。
 func (t LogSourceType) IsValid() bool {
-	return t == LogSourceTypeJournalctl || t == LogSourceTypeDocker
+	return t == LogSourceTypeJournalctl ||
+		t == LogSourceTypeDocker ||
+		t == LogSourceTypeFileTail ||
+		t == LogSourceTypeCommand
 }
 
 // Host 表示一台被监听的远程主机。
@@ -192,6 +199,16 @@ const (
 	RuntimeTypeExternal RuntimeType = "external"
 )
 
+// ControlMode 表示 agent 对服务运行态的能力边界。
+type ControlMode string
+
+const (
+	// ControlModeMonitor 表示只监控日志和运行状态，不接管启停。
+	ControlModeMonitor ControlMode = "monitor"
+	// ControlModeManaged 表示 agent 接管启动、停止、重启，并监控日志和运行状态。
+	ControlModeManaged ControlMode = "managed"
+)
+
 // LogKind 表示 Deployment 的日志采集方式。
 type LogKind string
 
@@ -204,6 +221,10 @@ const (
 	LogKindDocker LogKind = "docker"
 	// LogKindNginx 表示采集 Nginx 访问或错误日志。
 	LogKindNginx LogKind = "nginx"
+	// LogKindFileTail 表示通过 tail -F 采集文件日志。
+	LogKindFileTail LogKind = "file_tail"
+	// LogKindCommand 表示通过自定义日志命令采集输出。
+	LogKindCommand LogKind = "command"
 )
 
 // RuntimeConfig 描述服务在某环境下的运行基座和生命周期参数。
@@ -240,6 +261,8 @@ type RuntimeConfig struct {
 type LogConfig struct {
 	Type      LogKind  `json:"type" yaml:"type"`
 	Target    string   `json:"target,omitempty" yaml:"target,omitempty"`
+	Path      string   `json:"path,omitempty" yaml:"path,omitempty"`
+	Command   string   `json:"command,omitempty" yaml:"command,omitempty"`
 	ExtraArgs []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
 }
 
@@ -288,8 +311,8 @@ type Environment struct {
 //
 // 职责：
 //   - 描述服务「跑在哪」（local / remote）
-//   - 描述「怎么看日志」（本地 buffer / journalctl / docker）
-//   - 描述「能不能控制」（ReadOnly 为 true 时只能查看日志）
+//   - 描述「怎么看日志」（本地 buffer / journalctl / docker / tail / command）
+//   - 描述「怎么控制运行态」（ControlMode 为 managed 时允许启停）
 //
 // 边界：
 //   - 不负责把代码/构建包传到远程主机（那是部署系统的职责）
@@ -298,6 +321,9 @@ type Deployment struct {
 	ID       string         `json:"id"`
 	EnvName  string         `json:"env_name"`
 	Location DeployLocation `json:"location"`
+
+	// ControlMode 描述 agent 是只监控，还是接管启停。为空时兼容旧配置。
+	ControlMode ControlMode `json:"control_mode,omitempty" yaml:"control_mode,omitempty"`
 
 	// Runtime 描述该服务在当前环境下的运行基座。迁移期保留下面的扁平字段。
 	Runtime *RuntimeConfig `json:"runtime,omitempty" yaml:"runtime,omitempty"`
@@ -316,7 +342,7 @@ type Deployment struct {
 	LogTarget string        `json:"log_target,omitempty"`
 	ExtraArgs []string      `json:"extra_args,omitempty"`
 
-	// ReadOnly 为 true 时该 deployment 只能查看日志，不能被启动、停止或重启。
+	// ReadOnly 是 control_mode 出现前的旧字段，迁移期仅用于读旧配置。
 	ReadOnly bool `json:"read_only,omitempty" yaml:"read_only,omitempty"`
 
 	// 远程可选启停命令；是否允许启停由 ReadOnly 显式控制。
@@ -332,12 +358,23 @@ type Deployment struct {
 	PID    int           `json:"pid,omitempty" yaml:"-"`
 }
 
-// IsReadOnly 报告该 deployment 是否只能查看日志、不能启停。
+// EffectiveControlMode 返回 deployment 的有效运行态控制模式。
 //
-// read_only 是显式能力开关。命令是否存在不参与只读判断，
-// 便于未来通过 sudo、远程控制代理等方式补齐启停能力。
+// control_mode 是新配置的唯一语义来源。为空时兼容旧配置：
+// read_only=true 映射为 monitor，否则默认为 managed。
+func (d Deployment) EffectiveControlMode() ControlMode {
+	if d.ControlMode != "" {
+		return d.ControlMode
+	}
+	if d.ReadOnly {
+		return ControlModeMonitor
+	}
+	return ControlModeManaged
+}
+
+// IsReadOnly 报告该 deployment 是否不能被启动、停止或重启。
 func (d Deployment) IsReadOnly() bool {
-	return d.ReadOnly
+	return d.EffectiveControlMode() == ControlModeMonitor
 }
 
 // Collector 是远端 agent 维护的采集任务运行时记录。

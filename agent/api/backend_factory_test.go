@@ -64,3 +64,25 @@ func TestBuildBackend_RemoteMultiHostReturnsFederated(t *testing.T) {
 	_, isFed := b.(*logbackend.FederatedBackend)
 	assert.True(t, isFed, "multi-host remote deployment should return FederatedBackend")
 }
+
+func TestDeploymentCollectorTargetUsesStructuredLogs(t *testing.T) {
+	fileTail := model.Deployment{
+		LogType:   model.LogSourceTypeJournalctl,
+		LogTarget: "legacy.service",
+		Logs: &model.LogConfig{
+			Type: model.LogKindFileTail,
+			Path: "/var/log/api/app.log",
+		},
+	}
+	assert.Equal(t, model.LogSourceTypeFileTail, deploymentCollectorType(fileTail))
+	assert.Equal(t, "/var/log/api/app.log", deploymentCollectorName(fileTail))
+
+	command := model.Deployment{
+		Logs: &model.LogConfig{
+			Type:    model.LogKindCommand,
+			Command: "tail -F /var/log/api/app.log",
+		},
+	}
+	assert.Equal(t, model.LogSourceTypeCommand, deploymentCollectorType(command))
+	assert.Equal(t, "tail -F /var/log/api/app.log", deploymentCollectorName(command))
+}

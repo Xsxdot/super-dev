@@ -91,6 +91,7 @@ describe('ProjectConfigEditor', () => {
         expect.objectContaining({
           deployments: expect.arrayContaining([
             expect.objectContaining({
+              control_mode: 'managed',
               runtime: expect.objectContaining({ type: 'command', command: 'npm run dev' }),
               logs: expect.objectContaining({ type: 'process' }),
             }),

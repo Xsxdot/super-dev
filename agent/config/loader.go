@@ -194,12 +194,13 @@ type envYAML struct {
 
 // deploymentYAML 对应 yaml 中的 deployments 条目。
 type deploymentYAML struct {
-	ID         string `yaml:"id,omitempty"`
-	Env        string `yaml:"env"`
-	Location   string `yaml:"location"`
-	Command    string `yaml:"command,omitempty"`
-	WorkingDir string `yaml:"working_dir,omitempty"`
-	EnvFile    string `yaml:"env_file,omitempty"`
+	ID          string `yaml:"id,omitempty"`
+	Env         string `yaml:"env"`
+	Location    string `yaml:"location"`
+	ControlMode string `yaml:"control_mode,omitempty"`
+	Command     string `yaml:"command,omitempty"`
+	WorkingDir  string `yaml:"working_dir,omitempty"`
+	EnvFile     string `yaml:"env_file,omitempty"`
 	// EnvVars 使用 yaml key "env_vars" 而非 "env"，因为 "env" 已被 Env 字段（env_name）
 	// 占用。serviceYAML 沿用老格式的 "env" key，两者最终都映射到 model.Deployment.Env。
 	EnvVars      map[string]string    `yaml:"env_vars,omitempty"`
@@ -262,6 +263,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			ID:           d.ID,
 			EnvName:      d.Env,
 			Location:     loc,
+			ControlMode:  model.ControlMode(d.ControlMode),
 			Command:      d.Command,
 			WorkDir:      resolveWorkDir(d.WorkingDir, rootPath),
 			EnvFile:      d.EnvFile,
@@ -337,6 +339,7 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			ID:           d.ID,
 			Env:          d.EnvName,
 			Location:     loc,
+			ControlMode:  string(d.ControlMode),
 			Command:      d.Command,
 			WorkingDir:   d.WorkDir,
 			EnvFile:      d.EnvFile,

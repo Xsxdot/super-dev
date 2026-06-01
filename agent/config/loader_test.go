@@ -494,6 +494,44 @@ func TestSaveAndReloadPreservesRuntimeAndProjectPipelines(t *testing.T) {
 	assert.Equal(t, "tk-dev.service", dep.Logs.Target)
 }
 
+func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {
+	dir := t.TempDir()
+	p := model.Project{
+		Name:     "tk",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{Name: "prod"},
+		},
+		Services: []model.Service{{
+			Name: "server",
+			Deployments: []model.Deployment{{
+				EnvName:     "prod",
+				Location:    model.LocationRemote,
+				HostIDs:     []string{"prod-01"},
+				ControlMode: model.ControlModeMonitor,
+				Runtime: &model.RuntimeConfig{
+					Type:        model.RuntimeTypeSystemd,
+					ServiceName: "tk-prod.service",
+				},
+				Logs: &model.LogConfig{
+					Type:    model.LogKindCommand,
+					Command: "tail -F /var/log/tk/app.log",
+				},
+			}},
+		}},
+	}
+
+	require.NoError(t, config.NewLoader(dir).Save(p))
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	dep := loaded.Services[0].Deployments[0]
+	assert.Equal(t, model.ControlModeMonitor, dep.ControlMode)
+	assert.True(t, dep.IsReadOnly())
+	require.NotNil(t, dep.Logs)
+	assert.Equal(t, model.LogKindCommand, dep.Logs.Type)
+	assert.Equal(t, "tail -F /var/log/tk/app.log", dep.Logs.Command)
+}
+
 func TestSavePreservesLogRulesWithNewFormat(t *testing.T) {
 	dir := t.TempDir()
 	loader := config.NewLoader(dir)

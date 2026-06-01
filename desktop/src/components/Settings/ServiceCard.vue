@@ -41,6 +41,7 @@ function enableDep() {
     id: '',
     env_name: props.envName,
     location: 'local',
+    control_mode: 'managed',
     runtime: { type: 'command', command: '', working_dir: defaultWorkDir.value },
     logs: { type: 'process' },
     status: '',

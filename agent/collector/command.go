@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 校验 name 仅允许安全字符，避免命令注入
-//   - 按 type 选择命令模板（journalctl / docker）
+//   - 按 type 选择命令模板（journalctl / docker / file tail / command）
 //   - 生成稳定的 CollectorID（hash(name+type)），保证幂等
 //
 // 边界：
@@ -26,8 +26,17 @@ import (
 // 长度限制：1-128。
 var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,128}$`)
 
+// pathRegex 限制 tail 文件路径只允许绝对路径和常见安全字符。
+var pathRegex = regexp.MustCompile(`^/[a-zA-Z0-9._/@+-]{1,512}$`)
+
 // ErrInvalidName 表示传入的 name 含非法字符或长度不符合要求。
 var ErrInvalidName = errors.New("invalid name: only [a-zA-Z0-9._-] allowed, length 1-128")
+
+// ErrInvalidPath 表示传入的日志文件路径不符合安全约束。
+var ErrInvalidPath = errors.New("invalid path: must be absolute and use safe characters")
+
+// ErrInvalidCommand 表示自定义日志命令为空或含换行等不可接受字符。
+var ErrInvalidCommand = errors.New("invalid command: must be non-empty single line")
 
 // ErrUnsupportedType 表示 LogSourceType 不在允许的枚举范围内。
 var ErrUnsupportedType = errors.New("unsupported log source type")
@@ -54,6 +63,39 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// ValidatePath 校验 tail 文件路径是否满足 pathRegex。
+//
+// 参数：
+//   - path: 待采集的日志文件绝对路径
+//
+// 返回：
+//   - 合法返回 nil；否则返回 ErrInvalidPath
+func ValidatePath(path string) error {
+	if !pathRegex.MatchString(path) {
+		return ErrInvalidPath
+	}
+	return nil
+}
+
+// ValidateCommand 校验自定义日志命令是否适合交给 sh -lc 执行。
+//
+// 参数：
+//   - command: 用户显式配置的日志命令
+//
+// 返回：
+//   - 非空单行命令返回 nil；否则返回 ErrInvalidCommand
+func ValidateCommand(command string) error {
+	if command == "" {
+		return ErrInvalidCommand
+	}
+	for _, r := range command {
+		if r == '\n' || r == '\r' || r == 0 {
+			return ErrInvalidCommand
+		}
+	}
+	return nil
+}
+
 // BuildCommand 按 type 模板组合 argv，name 作为参数（不进 shell 解析）。
 //
 // 参数：
@@ -65,9 +107,6 @@ func ValidateName(name string) error {
 //   - argv 切片，调用方用 exec.Command(argv[0], argv[1:]...) 执行
 //   - type 不支持、name 非法或 extraArgs 含非法字符时返回错误
 func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]string, error) {
-	if err := ValidateName(name); err != nil {
-		return nil, err
-	}
 	for _, arg := range extraArgs {
 		if !argRegex.MatchString(arg) {
 			return nil, fmt.Errorf("%w: %q", ErrInvalidArg, arg)
@@ -76,9 +115,25 @@ func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]str
 	var base []string
 	switch t {
 	case model.LogSourceTypeJournalctl:
+		if err := ValidateName(name); err != nil {
+			return nil, err
+		}
 		base = []string{"journalctl", "-fu", name, "-o", "cat", "--no-pager"}
 	case model.LogSourceTypeDocker:
+		if err := ValidateName(name); err != nil {
+			return nil, err
+		}
 		base = []string{"docker", "logs", "-f", name}
+	case model.LogSourceTypeFileTail:
+		if err := ValidatePath(name); err != nil {
+			return nil, err
+		}
+		base = []string{"tail", "-F", name}
+	case model.LogSourceTypeCommand:
+		if err := ValidateCommand(name); err != nil {
+			return nil, err
+		}
+		base = []string{"sh", "-lc", name}
 	default:
 		return nil, ErrUnsupportedType
 	}

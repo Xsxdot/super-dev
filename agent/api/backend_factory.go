@@ -33,14 +33,40 @@ func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store
 
 	// remote deployment：按 host 数量决定单节点还是联邦
 	if len(dep.HostIDs) == 1 {
-		remoteDeploymentID := collector.CollectorID(dep.LogTarget, dep.LogType)
+		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
 		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteDeploymentID, resolver)
 	}
 
 	children := make([]logbackend.LogBackend, 0, len(dep.HostIDs))
 	for _, hostID := range dep.HostIDs {
-		remoteDeploymentID := collector.CollectorID(dep.LogTarget, dep.LogType)
+		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
 		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteDeploymentID, resolver))
 	}
 	return logbackend.NewFederatedBackend(children)
+}
+
+// deploymentCollectorType 返回远程日志采集任务类型，优先使用新 logs 配置。
+func deploymentCollectorType(dep model.Deployment) model.LogSourceType {
+	if dep.Logs != nil && dep.Logs.Type != "" {
+		return model.LogSourceType(dep.Logs.Type)
+	}
+	return dep.LogType
+}
+
+// deploymentCollectorName 返回远程日志采集任务的目标名、路径或命令，优先使用新 logs 配置。
+func deploymentCollectorName(dep model.Deployment) string {
+	if dep.Logs == nil {
+		return dep.LogTarget
+	}
+	switch dep.Logs.Type {
+	case model.LogKindFileTail:
+		return dep.Logs.Path
+	case model.LogKindCommand:
+		return dep.Logs.Command
+	default:
+		if dep.Logs.Target != "" {
+			return dep.Logs.Target
+		}
+		return dep.LogTarget
+	}
 }

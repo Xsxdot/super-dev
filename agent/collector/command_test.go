@@ -60,6 +60,16 @@ func TestBuildCommand(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBuildCommandSupportsFileTailAndCustomCommand(t *testing.T) {
+	args, err := collector.BuildCommand(model.LogSourceTypeFileTail, "/var/log/nova-api/app.log", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tail", "-F", "/var/log/nova-api/app.log"}, args)
+
+	args, err = collector.BuildCommand(model.LogSourceTypeCommand, "tail -F /var/log/nova-api/app.log", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sh", "-lc", "tail -F /var/log/nova-api/app.log"}, args)
+}
+
 func TestBuildCommandExtraArgs(t *testing.T) {
 	// 合法的 extra args 正常追加
 	argv, err := collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--since", "1h"})

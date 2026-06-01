@@ -31,7 +31,10 @@ func (a *App) startCollector(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.collector.Start(req.Name, req.Type)
 	switch {
-	case errors.Is(err, collector.ErrInvalidName), errors.Is(err, collector.ErrUnsupportedType):
+	case errors.Is(err, collector.ErrInvalidName),
+		errors.Is(err, collector.ErrInvalidPath),
+		errors.Is(err, collector.ErrInvalidCommand),
+		errors.Is(err, collector.ErrUnsupportedType):
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	case errors.Is(err, collector.ErrTargetNotFound):

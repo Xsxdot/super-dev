@@ -58,6 +58,8 @@ func TestLogSourceJSON(t *testing.T) {
 func TestLogSourceTypeIsValid(t *testing.T) {
 	require.True(t, model.LogSourceTypeJournalctl.IsValid())
 	require.True(t, model.LogSourceTypeDocker.IsValid())
+	require.True(t, model.LogSourceTypeFileTail.IsValid())
+	require.True(t, model.LogSourceTypeCommand.IsValid())
 	require.False(t, model.LogSourceType("file").IsValid())
 }
 
@@ -101,6 +103,44 @@ func TestDeploymentRuntimeAndLogsJSON(t *testing.T) {
 	assert.Equal(t, "go run .", got.Runtime.Command)
 	require.NotNil(t, got.Logs)
 	assert.Equal(t, model.LogKindProcess, got.Logs.Type)
+}
+
+func TestDeploymentControlModeAndCustomLogsJSON(t *testing.T) {
+	d := model.Deployment{
+		ID:          "dep-1",
+		EnvName:     "prod",
+		Location:    model.LocationRemote,
+		ControlMode: model.ControlModeMonitor,
+		Runtime: &model.RuntimeConfig{
+			Type:        model.RuntimeTypeSystemd,
+			ServiceName: "api.service",
+		},
+		Logs: &model.LogConfig{
+			Type: model.LogKindFileTail,
+			Path: "/var/log/api/app.log",
+		},
+	}
+
+	data, err := json.Marshal(d)
+	require.NoError(t, err)
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, model.ControlModeMonitor, got.ControlMode)
+	require.NotNil(t, got.Logs)
+	assert.Equal(t, model.LogKindFileTail, got.Logs.Type)
+	assert.Equal(t, "/var/log/api/app.log", got.Logs.Path)
+
+	got.Logs = &model.LogConfig{
+		Type:    model.LogKindCommand,
+		Command: "tail -F /var/log/api/app.log",
+	}
+	data, err = json.Marshal(got)
+	require.NoError(t, err)
+	var commandLog model.Deployment
+	require.NoError(t, json.Unmarshal(data, &commandLog))
+	require.NotNil(t, commandLog.Logs)
+	assert.Equal(t, model.LogKindCommand, commandLog.Logs.Type)
+	assert.Equal(t, "tail -F /var/log/api/app.log", commandLog.Logs.Command)
 }
 
 func TestEnvironmentJSON(t *testing.T) {
@@ -212,6 +252,20 @@ func TestDeploymentReadOnlyUsesExplicitField(t *testing.T) {
 
 	d = model.Deployment{Location: model.LocationRemote, ReadOnly: true}
 	assert.True(t, d.IsReadOnly())
+}
+
+func TestDeploymentControlModeDefinesLifecycleCapability(t *testing.T) {
+	monitor := model.Deployment{Location: model.LocationRemote, ControlMode: model.ControlModeMonitor}
+	assert.Equal(t, model.ControlModeMonitor, monitor.EffectiveControlMode())
+	assert.True(t, monitor.IsReadOnly())
+
+	managed := model.Deployment{Location: model.LocationRemote, ControlMode: model.ControlModeManaged}
+	assert.Equal(t, model.ControlModeManaged, managed.EffectiveControlMode())
+	assert.False(t, managed.IsReadOnly())
+
+	legacy := model.Deployment{Location: model.LocationRemote, ReadOnly: true}
+	assert.Equal(t, model.ControlModeMonitor, legacy.EffectiveControlMode())
+	assert.True(t, legacy.IsReadOnly())
 }
 
 func TestDeploymentNotReadOnlyByDefault(t *testing.T) {
