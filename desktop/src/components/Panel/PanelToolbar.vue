@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const deploymentLogStore = useDeploymentLogStore()
+const { t } = useI18n()
 
 // 当前面板订阅的 deployment 日志键（deployment 单源）。
 const deploymentId = computed(() =>
@@ -83,7 +85,7 @@ function resolveExportPath(selected: string, defaultName: string): string {
 async function exportBookmark() {
   const text = bookmarkStore.formatBookmark(props.panelId)
   if (!text.trim()) {
-    window.alert('书签区间内没有可导出的日志')
+    window.alert(t('panel.bookmark.noExport'))
     return
   }
 
@@ -91,7 +93,7 @@ async function exportBookmark() {
   const { save } = await import('@tauri-apps/plugin-dialog')
   const selected = await save({
     defaultPath: defaultName,
-    title: '导出书签日志',
+    title: t('panel.bookmark.exportTitle'),
     filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
   })
   if (!selected) return
@@ -102,7 +104,7 @@ async function exportBookmark() {
     await writeTextFile(filePath, text)
   } catch (err) {
     console.error('[SuperDev] export bookmark failed:', err)
-    window.alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
+    window.alert(t('common.exportFailed', { message: err instanceof Error ? err.message : String(err) }))
   }
 }
 </script>
@@ -121,18 +123,18 @@ async function exportBookmark() {
         <button
           :class="{ active: panel.nextChipType === 'include' }"
           @click="filterStore.setNextChipType(panelId, 'include')"
-        >包含</button>
+        >{{ t('panel.filter.include') }}</button>
         <button
           :class="{ active: panel.nextChipType === 'exclude' }"
           @click="filterStore.setNextChipType(panelId, 'exclude')"
-        >排除</button>
+        >{{ t('panel.filter.exclude') }}</button>
       </div>
 
       <!-- 关键词输入 -->
       <input
         v-model="chipInput"
         class="chip-input"
-        :placeholder="panel.chips.length ? '添加关键词…' : '关键词过滤，回车添加'"
+        :placeholder="panel.chips.length ? t('panel.filter.placeholderAppend') : t('panel.filter.placeholderEmpty')"
         @keydown.enter="submitChip"
       />
 
@@ -160,14 +162,14 @@ async function exportBookmark() {
     <template v-if="rules.length">
       <div class="rules-divider" />
       <div class="rules-area">
-        <span class="rules-label">规则</span>
+        <span class="rules-label">{{ t('panel.filter.rules') }}</span>
         <button
           v-for="rule in rules"
           :key="rule.id"
           class="rule-chip"
           :class="{ enabled: rule.enabled }"
           @click="filterStore.toggleRule(projectId!, rule.id)"
-          :title="rule.enabled ? '点击禁用' : '点击启用'"
+          :title="rule.enabled ? t('panel.filter.disableRule') : t('panel.filter.enableRule')"
         >
           <span class="rule-arrow">{{ rule.type === 'include' ? '↑' : '↓' }}</span>
           <span :class="{ strikethrough: !rule.enabled }">{{ rule.name || rule.keywords[0] }}</span>
@@ -180,7 +182,7 @@ async function exportBookmark() {
     <!-- 操作区 -->
     <button
       class="rules-btn"
-      title="管理过滤规则"
+      :title="t('panel.filter.manageRules')"
       :disabled="!projectId"
       @click="openRuleManager('list')"
     >
@@ -189,10 +191,10 @@ async function exportBookmark() {
     <button
       v-if="panel.chips.length && projectId"
       class="save-rule-btn"
-      title="保存当前过滤为规则"
+      :title="t('panel.filter.saveAsRule')"
       @click="openRuleManager('current')"
     >
-      保存为规则
+      {{ t('panel.filter.saveAsRule') }}
     </button>
     <RuleManagerModal
       v-if="showRules && projectId"
@@ -206,18 +208,18 @@ async function exportBookmark() {
 
     <!-- 书签区 -->
     <template v-if="!bookmark || bookmark.state === 'idle'">
-      <button class="bookmark-btn start" title="开始书签录制" @click="startBookmark">⏺</button>
+      <button class="bookmark-btn start" :title="t('panel.bookmark.start')" @click="startBookmark">⏺</button>
     </template>
     <template v-else-if="bookmark.state === 'recording'">
-      <span class="record-count">● {{ bookmark.lockedLogs.length }} 条</span>
-      <button class="bookmark-btn stop" title="结束录制" @click="endBookmark">⏹</button>
+      <span class="record-count">● {{ t('panel.bookmark.count', { count: bookmark.lockedLogs.length }) }}</span>
+      <button class="bookmark-btn stop" :title="t('panel.bookmark.stop')" @click="endBookmark">⏹</button>
     </template>
     <template v-else>
-      <span class="done-count">{{ bookmark.lockedLogs.length }} 条</span>
-      <button class="icon-btn" title="复制" @click="copyBookmark">⎘</button>
-      <button class="icon-btn" title="导出" @click="exportBookmark">↑</button>
-      <button class="icon-btn" title="清除" @click="clearBookmark">✕</button>
-      <button class="bookmark-btn start" title="重新开始" @click="startBookmark">⏺</button>
+      <span class="done-count">{{ t('panel.bookmark.count', { count: bookmark.lockedLogs.length }) }}</span>
+      <button class="icon-btn" :title="t('common.copy')" @click="copyBookmark">⎘</button>
+      <button class="icon-btn" :title="t('common.export')" @click="exportBookmark">↑</button>
+      <button class="icon-btn" :title="t('common.clear')" @click="clearBookmark">✕</button>
+      <button class="bookmark-btn start" :title="t('panel.bookmark.restart')" @click="startBookmark">⏺</button>
     </template>
   </div>
 </template>

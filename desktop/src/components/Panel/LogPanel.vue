@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -37,6 +38,7 @@ const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const deploymentLogStore = useDeploymentLogStore()
 const logLifecycleStore = useLogLifecycleStore()
+const { t } = useI18n()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
 const isFollowing = ref(true)
@@ -466,8 +468,8 @@ const virtualizer = useVirtualizer(
       @end-bookmark="onEndBookmark"
     />
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
-      <div v-if="source?.type === 'deployment' && isLoadingHistory" class="history-loading">加载历史记录中…</div>
-      <div v-else-if="source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId)" class="history-end">— 已到最早记录 —</div>
+      <div v-if="source?.type === 'deployment' && isLoadingHistory" class="history-loading">{{ t('panel.log.historyLoading') }}</div>
+      <div v-else-if="source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId)" class="history-end">{{ t('panel.log.historyEnd') }}</div>
 
       <div :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }">
         <div
@@ -510,7 +512,7 @@ const virtualizer = useVirtualizer(
         v-if="activeSelectionText && activeSelectionRect"
         class="selection-add-btn"
         :style="selectionButtonStyle"
-        title="填入过滤关键词"
+        :title="t('panel.log.addSelectionToFilter')"
         @mousedown.prevent
         @click="fillChipFromSelection"
       >
@@ -520,18 +522,18 @@ const virtualizer = useVirtualizer(
 
     <Transition name="fade">
       <button v-if="!isFollowing && newLogCount > 0" class="new-log-pill" @click="jumpToBottom">
-        ↓ {{ newLogCount }} 条新日志
+        {{ t('panel.log.newLogs', { count: newLogCount }) }}
       </button>
     </Transition>
 
     <div class="status-bar">
       <span>
-        实时 · 显示 {{ stats.total }} 条
-        <template v-if="stats.folded > 0"> · 折叠 {{ stats.folded }} 条</template>
+        {{ t('panel.log.liveStats', { total: stats.total }) }}
+        <template v-if="stats.folded > 0"> · {{ t('panel.log.folded', { count: stats.folded }) }}</template>
       </span>
       <div class="status-badges">
-        <span v-if="stats.errors > 0" class="badge error">● {{ stats.errors }} 错误</span>
-        <span v-if="stats.warns > 0" class="badge warn">● {{ stats.warns }} 警告</span>
+        <span v-if="stats.errors > 0" class="badge error">{{ t('panel.log.errors', { count: stats.errors }) }}</span>
+        <span v-if="stats.warns > 0" class="badge warn">{{ t('panel.log.warnings', { count: stats.warns }) }}</span>
       </div>
     </div>
   </div>
