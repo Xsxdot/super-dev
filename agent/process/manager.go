@@ -1,7 +1,9 @@
 package process
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,8 @@ type Manager struct {
 	runners     map[string]*Runner
 	status      map[string]model.ServiceStatus
 	generations map[string]uint64 // 每次 Start 递增，防止旧监控 goroutine 覆盖新进程状态
+	runtimes    map[string]model.RuntimeType
+	launchdDeps map[string]model.Deployment
 	onLog       func(model.LogEntry)
 	runID       string
 	logSeq      atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
@@ -41,6 +45,8 @@ func NewManager(onLog func(model.LogEntry)) *Manager {
 		runners:     map[string]*Runner{},
 		status:      map[string]model.ServiceStatus{},
 		generations: map[string]uint64{},
+		runtimes:    map[string]model.RuntimeType{},
+		launchdDeps: map[string]model.Deployment{},
 		onLog:       onLog,
 	}
 }
@@ -75,6 +81,8 @@ func (m *Manager) Stop(serviceID string) {
 	m.mu.Lock()
 	r := m.runners[serviceID]
 	delete(m.runners, serviceID)
+	delete(m.runtimes, serviceID)
+	delete(m.launchdDeps, serviceID)
 	m.mu.Unlock()
 	if r != nil {
 		r.Stop()
@@ -175,12 +183,40 @@ func (m *Manager) StartDeployment(dep model.Deployment) error {
 	if dep.IsReadOnly() {
 		return nil
 	}
-	return m.startByID(dep.ID, deploymentToSpec(dep))
+	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLaunchd {
+		return m.startLaunchdDeployment(dep)
+	}
+	if err := m.startByID(dep.ID, deploymentToSpec(dep)); err != nil {
+		return err
+	}
+	m.recordRuntime(dep.ID, runtimeTypeOf(dep))
+	return nil
 }
 
 // StopDeployment 停止指定 deployment 的进程。
 // 与 Stop/Status 等方法共用同一 runners map，以 deploymentID 为键，语义上区分 service 和 deployment 两个命名空间。
 func (m *Manager) StopDeployment(deploymentID string) {
+	m.mu.Lock()
+	runtimeType := m.runtimes[deploymentID]
+	dep := m.launchdDeps[deploymentID]
+	m.mu.Unlock()
+	if runtimeType == model.RuntimeTypeLaunchd {
+		if err := runLaunchdStop(context.Background(), os.Getuid(), dep); err != nil {
+			m.emitLog(deploymentID, "ERROR", "stderr", "停止 launchd 服务失败: "+err.Error())
+		}
+		m.bumpGeneration(deploymentID)
+		m.mu.Lock()
+		r := m.runners[deploymentID]
+		delete(m.runners, deploymentID)
+		delete(m.runtimes, deploymentID)
+		delete(m.launchdDeps, deploymentID)
+		m.mu.Unlock()
+		if r != nil {
+			r.Stop()
+		}
+		m.setStatus(deploymentID, model.StatusStopped)
+		return
+	}
 	m.Stop(deploymentID)
 }
 
@@ -211,6 +247,43 @@ func (m *Manager) IsDeploymentActive(deploymentID string) bool {
 // 与 StartDeployment 共用 startByID 底座与同一 runners 命名空间。
 func (m *Manager) StartProcess(id string, spec ProcessSpec) error {
 	return m.startByID(id, spec)
+}
+
+func (m *Manager) recordRuntime(id string, runtimeType model.RuntimeType) {
+	m.mu.Lock()
+	m.runtimes[id] = runtimeType
+	m.mu.Unlock()
+}
+
+func (m *Manager) recordLaunchdDeployment(dep model.Deployment) {
+	m.mu.Lock()
+	m.runtimes[dep.ID] = model.RuntimeTypeLaunchd
+	m.launchdDeps[dep.ID] = dep
+	m.mu.Unlock()
+}
+
+func (m *Manager) startLaunchdDeployment(dep model.Deployment) error {
+	m.setStatus(dep.ID, model.StatusStarting)
+	if err := runLaunchdStart(context.Background(), os.Getuid(), dep); err != nil {
+		m.setStatus(dep.ID, model.StatusFailed)
+		m.emitLog(dep.ID, "ERROR", "stderr", "启动 launchd 服务失败: "+err.Error())
+		return err
+	}
+	m.recordLaunchdDeployment(dep)
+	if dep.Logs != nil && dep.Logs.Type == model.LogKindMacOSLog && dep.Logs.Target != "" {
+		// launchd 自身不把 stdout/stderr 交给当前进程；默认用 macOS unified log
+		// 拉起轻量采集进程，让日志面板仍按 deployment ID 接收实时日志。
+		if err := m.startByID(dep.ID, ProcessSpec{Command: macOSLogStreamCommand(dep.Logs.Target)}); err != nil {
+			m.setStatus(dep.ID, model.StatusFailed)
+			m.emitLog(dep.ID, "ERROR", "stderr", "启动 macOS 日志采集失败: "+err.Error())
+			return err
+		}
+		m.recordLaunchdDeployment(dep)
+		return nil
+	}
+	m.setStatus(dep.ID, model.StatusRunning)
+	m.emitLog(dep.ID, "INFO", "stdout", "launchd 服务已启动")
+	return nil
 }
 
 // startByID 以指定的 id 为键启动进程，是所有启动路径的核心实现。
@@ -296,4 +369,11 @@ func deploymentToSpec(dep model.Deployment) ProcessSpec {
 		envFile = ""
 	}
 	return ProcessSpec{Command: cmd, WorkDir: workDir, Env: env, EnvFile: envFile}
+}
+
+func runtimeTypeOf(dep model.Deployment) model.RuntimeType {
+	if dep.Runtime != nil && dep.Runtime.Type != "" {
+		return dep.Runtime.Type
+	}
+	return model.RuntimeTypeCommand
 }

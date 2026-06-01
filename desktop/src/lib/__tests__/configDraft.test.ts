@@ -112,6 +112,70 @@ describe('configDraft', () => {
     expect(out.logs).toEqual({ type: 'command', command: 'tail -F /var/log/api/app.log' })
   })
 
+  it('projectToDraft 和 draftToPayload 保留 launchd runtime 与 macOS 日志', () => {
+    const p = makeProject()
+    p.services[0].name = 'api'
+    p.services[0].deployments![0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: {
+        type: 'launchd',
+        label: 'com.example.api',
+        plist_path: '~/Library/LaunchAgents/com.example.api.plist',
+      },
+      logs: { type: 'macos_log', target: 'com.example.api' },
+      status: '',
+    }
+
+    const draft = projectToDraft(p)
+    const dep = draft.services[0].deployments[0]
+    expect(dep.runtime).toEqual({
+      type: 'launchd',
+      label: 'com.example.api',
+      plist_path: '~/Library/LaunchAgents/com.example.api.plist',
+    })
+    expect(dep.logs).toEqual({ type: 'macos_log', target: 'com.example.api' })
+
+    const out = draftToPayload(draft).services[0].deployments[0]
+    expect(out.runtime).toEqual(dep.runtime)
+    expect(out.logs).toEqual(dep.logs)
+    expect(out.log_type).toBeUndefined()
+  })
+
+  it('projectToDraft 为 launchd 默认生成 macOS 日志目标', () => {
+    const p = makeProject()
+    p.services[0].deployments![0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: { type: 'launchd', label: 'com.example.api' },
+      status: '',
+    }
+
+    const dep = projectToDraft(p).services[0].deployments[0]
+    expect(dep.logs).toEqual({ type: 'macos_log', target: 'com.example.api' })
+  })
+
+  it('validateDraft：launchd 接管必须填写 Label，macOS 日志必须填写目标', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].name = 'api'
+    draft.services[0].deployments[0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: { type: 'launchd', label: ' ' },
+      logs: { type: 'macos_log', target: '' },
+      status: '',
+    }
+
+    expect(validateDraft(draft)).toContain('服务「api」在「dev」环境的 Launchd Label 不能为空')
+    expect(validateDraft(draft)).toContain('服务「api」在「dev」环境的 macOS 日志目标不能为空')
+  })
+
   it('validateDraft：文件 tail 必须填写路径，自定义日志命令必须填写命令', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0].logs = { type: 'file_tail', path: '' }

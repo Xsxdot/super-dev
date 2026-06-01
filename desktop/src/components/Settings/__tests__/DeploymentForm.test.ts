@@ -142,6 +142,47 @@ describe('DeploymentForm', () => {
     expect(last.logs).toEqual({ type: 'journalctl', target: 'worker.service' })
   })
 
+  it('接管方式支持 Launchd 服务并默认联动 macOS 日志', async () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [] },
+    })
+
+    const options = wrapper.findAll('[data-test="dep-target-type"] option').map(option => option.attributes('value'))
+    expect(options).toContain('launchd')
+
+    await wrapper.find('[data-test="dep-target-type"]').setValue('launchd')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.runtime).toEqual({ type: 'launchd', label: '' })
+    expect(last.logs).toEqual({ type: 'macos_log', target: '' })
+  })
+
+  it('修改 launchd label 时同步默认 macOS 日志目标，并保存 plist 路径', async () => {
+    const dep: Deployment = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: { type: 'launchd', label: 'com.example.api' },
+      logs: { type: 'macos_log', target: 'com.example.api' },
+      status: '',
+    }
+    const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
+
+    await wrapper.find('[data-test="dep-launchd-label"]').setValue('com.example.worker')
+
+    const labelUpdate = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(labelUpdate.runtime?.label).toBe('com.example.worker')
+    expect(labelUpdate.logs).toEqual({ type: 'macos_log', target: 'com.example.worker' })
+
+    await wrapper.setProps({ modelValue: labelUpdate })
+    await wrapper.find('[data-test="dep-launchd-plist"]').setValue('~/Library/LaunchAgents/com.example.worker.plist')
+
+    const plistUpdate = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(plistUpdate.runtime?.plist_path).toBe('~/Library/LaunchAgents/com.example.worker.plist')
+  })
+
   it('日志来源支持文件 tail', async () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },

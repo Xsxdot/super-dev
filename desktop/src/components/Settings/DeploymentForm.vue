@@ -4,7 +4,7 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
 职责：
   - 编辑服务实例所在节点（本机 / 远程主机列表）
   - 用“监控 / 接管启停”表达 agent 对运行态的能力边界
-  - 配置运行态目标（systemd / docker / command / nginx）和日志来源
+  - 配置运行态目标（systemd / launchd / docker / command / nginx）和日志来源
   - 支持日志文件 tail 与自定义日志命令
 
 边界：
@@ -67,6 +67,7 @@ const controlMode = computed<ControlMode>(() => {
 
 function defaultLogsForRuntime(nextRuntime: RuntimeConfig): LogConfig {
   if (nextRuntime.type === 'systemd') return { type: 'journalctl', target: serviceLogTarget(nextRuntime.service_name) }
+  if (nextRuntime.type === 'launchd') return { type: 'macos_log', target: nextRuntime.label ?? '' }
   if (nextRuntime.type === 'docker') return { type: 'docker', target: nextRuntime.container }
   if (nextRuntime.type === 'nginx_static') return { type: 'nginx', target: nextRuntime.domain }
   return { type: 'process' }
@@ -143,7 +144,7 @@ function setControlMode(mode: ControlMode) {
 }
 
 function setLocation(location: Deployment['location']) {
-  const nextRuntime = location === 'local' && controlMode.value === 'managed' && runtime.value.type !== 'command'
+  const nextRuntime = location === 'local' && controlMode.value === 'managed' && runtime.value.type !== 'command' && runtime.value.type !== 'launchd'
     ? { type: 'command' as const, command: '' }
     : runtimeForMode(controlMode.value)
   const nextLogs = isDefaultLogForRuntime(logs.value, runtime.value) ? defaultLogsForRuntime(nextRuntime) : logs.value
@@ -159,6 +160,9 @@ function setRuntimeType(type: RuntimeType) {
     base.env_vars = runtime.value.env_vars ?? props.modelValue.env
   } else if (type === 'systemd') {
     base.service_name = runtime.value.service_name ?? serviceNameFromLogTarget(logs.value.target)
+  } else if (type === 'launchd') {
+    base.label = runtime.value.label ?? logs.value.target ?? ''
+    if (runtime.value.plist_path !== undefined) base.plist_path = runtime.value.plist_path
   } else if (type === 'docker') {
     base.container = runtime.value.container ?? logs.value.target
   } else if (type === 'nginx_static') {
@@ -173,6 +177,18 @@ function setSystemdServiceName(serviceName: string) {
   const shouldSyncLogs = logs.value.type === 'journalctl' && (!logs.value.target || logs.value.target === oldDefault)
   const nextLogs = shouldSyncLogs ? { type: 'journalctl' as const, target: serviceLogTarget(serviceName) } : logs.value
   patchRuntimeAndLogs(nextRuntime, nextLogs)
+}
+
+function setLaunchdLabel(label: string) {
+  const nextRuntime: RuntimeConfig = { ...runtime.value, type: 'launchd', label }
+  const oldDefault = runtime.value.label ?? ''
+  const shouldSyncLogs = logs.value.type === 'macos_log' && (!logs.value.target || logs.value.target === oldDefault)
+  const nextLogs = shouldSyncLogs ? { type: 'macos_log' as const, target: label } : logs.value
+  patchRuntimeAndLogs(nextRuntime, nextLogs)
+}
+
+function setLaunchdPlistPath(plistPath: string) {
+  patchRuntime({ type: 'launchd', plist_path: plistPath })
 }
 
 function setDockerContainer(container: string) {
@@ -198,6 +214,8 @@ function setLogKind(kind: LogKind) {
     patchRuntimeAndLogs(runtime.value, { type: kind })
   } else if (kind === 'journalctl') {
     patchRuntimeAndLogs(runtime.value, { type: kind, target: runtime.value.type === 'systemd' ? serviceLogTarget(runtime.value.service_name) : logs.value.target })
+  } else if (kind === 'macos_log') {
+    patchRuntimeAndLogs(runtime.value, { type: kind, target: runtime.value.type === 'launchd' ? runtime.value.label : logs.value.target })
   } else if (kind === 'docker') {
     patchRuntimeAndLogs(runtime.value, { type: kind, target: runtime.value.type === 'docker' ? runtime.value.container : logs.value.target })
   } else {
@@ -285,6 +303,7 @@ function setEnv(env: Record<string, string>) {
         >
           <option v-if="controlMode === 'managed'" value="command">Agent 执行命令</option>
           <option value="systemd">Systemd 服务</option>
+          <option v-if="controlMode === 'managed'" value="launchd">Launchd 服务</option>
           <option value="docker">Docker 容器</option>
           <option v-if="controlMode === 'monitor'" value="nginx_static">Nginx / 静态站点</option>
         </select>
@@ -343,6 +362,29 @@ function setEnv(env: Record<string, string>) {
         />
       </div>
 
+      <template v-else-if="runtime.type === 'launchd'">
+        <div class="dep-field">
+          <label class="dep-label">Label</label>
+          <input
+            class="dep-input"
+            data-test="dep-launchd-label"
+            placeholder="如：com.example.api"
+            :value="runtime.label"
+            @input="setLaunchdLabel(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <div class="dep-field">
+          <label class="dep-label">Plist 路径</label>
+          <input
+            class="dep-input"
+            data-test="dep-launchd-plist"
+            placeholder="如：~/Library/LaunchAgents/com.example.api.plist"
+            :value="runtime.plist_path"
+            @input="setLaunchdPlistPath(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+      </template>
+
       <div v-else-if="runtime.type === 'docker'" class="dep-field">
         <label class="dep-label">容器名</label>
         <input
@@ -378,6 +420,7 @@ function setEnv(env: Record<string, string>) {
         >
           <option value="process">跟随进程输出</option>
           <option value="journalctl">journalctl</option>
+          <option value="macos_log">macOS log stream</option>
           <option value="docker">docker logs</option>
           <option value="nginx">Nginx 日志</option>
           <option value="file_tail">文件 tail</option>
@@ -385,12 +428,12 @@ function setEnv(env: Record<string, string>) {
         </select>
       </div>
 
-      <div v-if="logs.type === 'journalctl' || logs.type === 'docker' || logs.type === 'nginx'" class="dep-field">
+      <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="dep-field">
         <label class="dep-label">日志目标</label>
         <input
           class="dep-input"
           data-test="dep-log-target"
-          placeholder="如：api.service / api-container / access.log"
+          placeholder="如：api.service / com.example.api / api-container / access.log"
           :value="logs.target"
           @input="patchLogs({ target: ($event.target as HTMLInputElement).value })"
         />

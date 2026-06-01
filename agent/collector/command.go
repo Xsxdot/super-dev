@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 校验 name 仅允许安全字符，避免命令注入
-//   - 按 type 选择命令模板（journalctl / docker / file tail / command）
+//   - 按 type 选择命令模板（journalctl / macOS log / docker / file tail / command）
 //   - 生成稳定的 CollectorID（hash(name+type)），保证幂等
 //
 // 边界：
@@ -119,6 +119,12 @@ func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]str
 			return nil, err
 		}
 		base = []string{"journalctl", "-fu", name, "-o", "cat", "--no-pager"}
+	case model.LogSourceTypeMacOSLog:
+		if err := ValidateName(name); err != nil {
+			return nil, err
+		}
+		predicate := fmt.Sprintf(`subsystem == "%s" OR process == "%s" OR eventMessage CONTAINS[c] "%s"`, name, name, name)
+		base = []string{"log", "stream", "--style", "compact", "--predicate", predicate}
 	case model.LogSourceTypeDocker:
 		if err := ValidateName(name); err != nil {
 			return nil, err

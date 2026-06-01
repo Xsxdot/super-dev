@@ -25,9 +25,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export type DeployLocation = 'local' | 'remote'
-export type RuntimeType = 'command' | 'systemd' | 'docker' | 'nginx_static' | 'external'
+export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
 export type ControlMode = 'monitor' | 'managed'
-export type LogKind = 'process' | 'journalctl' | 'docker' | 'nginx' | 'file_tail' | 'command'
+export type LogKind = 'process' | 'journalctl' | 'macos_log' | 'docker' | 'nginx' | 'file_tail' | 'command'
 
 export type PipelinePhase = 'build' | 'deploy' | 'finally'
 export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'canceled'
@@ -63,6 +63,8 @@ export interface RuntimeConfig {
   release_dir?: string
   current_dir?: string
   exec_start?: string
+  label?: string
+  plist_path?: string
   container?: string
   domain?: string
 }

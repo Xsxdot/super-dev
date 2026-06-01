@@ -123,6 +123,8 @@ type LogSourceType string
 const (
 	// LogSourceTypeJournalctl 表示通过 journalctl 采集 systemd 服务日志。
 	LogSourceTypeJournalctl LogSourceType = "journalctl"
+	// LogSourceTypeMacOSLog 表示通过 macOS unified logging 采集日志。
+	LogSourceTypeMacOSLog LogSourceType = "macos_log"
 	// LogSourceTypeDocker 表示通过 docker logs 采集容器日志。
 	LogSourceTypeDocker LogSourceType = "docker"
 	// LogSourceTypeFileTail 表示通过 tail -F 采集文件日志。
@@ -134,6 +136,7 @@ const (
 // IsValid 判断 LogSourceType 是否在允许的枚举范围内。
 func (t LogSourceType) IsValid() bool {
 	return t == LogSourceTypeJournalctl ||
+		t == LogSourceTypeMacOSLog ||
 		t == LogSourceTypeDocker ||
 		t == LogSourceTypeFileTail ||
 		t == LogSourceTypeCommand
@@ -191,6 +194,8 @@ const (
 	RuntimeTypeCommand RuntimeType = "command"
 	// RuntimeTypeSystemd 表示由 systemd service 接管运行。
 	RuntimeTypeSystemd RuntimeType = "systemd"
+	// RuntimeTypeLaunchd 表示由 macOS launchd 接管运行。
+	RuntimeTypeLaunchd RuntimeType = "launchd"
 	// RuntimeTypeDocker 表示由 Docker 容器接管运行。
 	RuntimeTypeDocker RuntimeType = "docker"
 	// RuntimeTypeNginxStatic 表示由 Nginx 托管静态资源。
@@ -217,6 +222,8 @@ const (
 	LogKindProcess LogKind = "process"
 	// LogKindJournalctl 表示通过 journalctl 采集 systemd 日志。
 	LogKindJournalctl LogKind = "journalctl"
+	// LogKindMacOSLog 表示通过 macOS unified logging 采集日志。
+	LogKindMacOSLog LogKind = "macos_log"
 	// LogKindDocker 表示通过 docker logs 采集容器日志。
 	LogKindDocker LogKind = "docker"
 	// LogKindNginx 表示采集 Nginx 访问或错误日志。
@@ -246,6 +253,8 @@ type RuntimeConfig struct {
 	ReleaseDir  string            `json:"release_dir,omitempty" yaml:"release_dir,omitempty"`
 	CurrentDir  string            `json:"current_dir,omitempty" yaml:"current_dir,omitempty"`
 	ExecStart   string            `json:"exec_start,omitempty" yaml:"exec_start,omitempty"`
+	Label       string            `json:"label,omitempty" yaml:"label,omitempty"`
+	PlistPath   string            `json:"plist_path,omitempty" yaml:"plist_path,omitempty"`
 	Container   string            `json:"container,omitempty" yaml:"container,omitempty"`
 	Domain      string            `json:"domain,omitempty" yaml:"domain,omitempty"`
 }

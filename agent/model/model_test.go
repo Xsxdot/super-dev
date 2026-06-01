@@ -57,6 +57,7 @@ func TestLogSourceJSON(t *testing.T) {
 
 func TestLogSourceTypeIsValid(t *testing.T) {
 	require.True(t, model.LogSourceTypeJournalctl.IsValid())
+	require.True(t, model.LogSourceTypeMacOSLog.IsValid())
 	require.True(t, model.LogSourceTypeDocker.IsValid())
 	require.True(t, model.LogSourceTypeFileTail.IsValid())
 	require.True(t, model.LogSourceTypeCommand.IsValid())
@@ -103,6 +104,30 @@ func TestDeploymentRuntimeAndLogsJSON(t *testing.T) {
 	assert.Equal(t, "go run .", got.Runtime.Command)
 	require.NotNil(t, got.Logs)
 	assert.Equal(t, model.LogKindProcess, got.Logs.Type)
+}
+
+func TestLaunchdRuntimeAndMacOSLogConfig(t *testing.T) {
+	dep := model.Deployment{
+		ID:          "dep-launchd",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:      model.RuntimeTypeLaunchd,
+			Label:     "com.example.api",
+			PlistPath: "~/Library/LaunchAgents/com.example.api.plist",
+		},
+		Logs: &model.LogConfig{
+			Type:   model.LogKindMacOSLog,
+			Target: "com.example.api",
+		},
+	}
+
+	assert.Equal(t, model.RuntimeTypeLaunchd, dep.Runtime.Type)
+	assert.Equal(t, "com.example.api", dep.Runtime.Label)
+	assert.Equal(t, "~/Library/LaunchAgents/com.example.api.plist", dep.Runtime.PlistPath)
+	assert.Equal(t, model.LogKindMacOSLog, dep.Logs.Type)
+	assert.Equal(t, "com.example.api", dep.Logs.Target)
 }
 
 func TestDeploymentControlModeAndCustomLogsJSON(t *testing.T) {

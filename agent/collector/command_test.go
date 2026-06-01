@@ -46,6 +46,14 @@ func TestBuildCommand(t *testing.T) {
 		args,
 	)
 
+	// macOS unified log 模板:log stream --predicate <label>
+	args, err = collector.BuildCommand(model.LogSourceTypeMacOSLog, "com.example.api", nil)
+	require.NoError(t, err)
+	assert.Equal(t,
+		[]string{"log", "stream", "--style", "compact", "--predicate", `subsystem == "com.example.api" OR process == "com.example.api" OR eventMessage CONTAINS[c] "com.example.api"`},
+		args,
+	)
+
 	// docker 模板:docker logs -f <name>
 	args, err = collector.BuildCommand(model.LogSourceTypeDocker, "nova-worker", nil)
 	require.NoError(t, err)

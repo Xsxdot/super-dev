@@ -532,6 +532,43 @@ func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {
 	assert.Equal(t, "tail -F /var/log/tk/app.log", dep.Logs.Command)
 }
 
+func TestSaveAndReloadPreservesLaunchdRuntimeAndMacOSLog(t *testing.T) {
+	dir := t.TempDir()
+	p := model.Project{
+		Name:     "tk",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{Name: "dev", IsDev: true},
+		},
+		Services: []model.Service{{
+			Name: "agent",
+			Deployments: []model.Deployment{{
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Runtime: &model.RuntimeConfig{
+					Type:      model.RuntimeTypeLaunchd,
+					Label:     "com.example.api",
+					PlistPath: "~/Library/LaunchAgents/com.example.api.plist",
+				},
+				Logs: &model.LogConfig{Type: model.LogKindMacOSLog, Target: "com.example.api"},
+			}},
+		}},
+	}
+
+	require.NoError(t, config.NewLoader(dir).Save(p))
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	dep := loaded.Services[0].Deployments[0]
+	require.NotNil(t, dep.Runtime)
+	assert.Equal(t, model.RuntimeTypeLaunchd, dep.Runtime.Type)
+	assert.Equal(t, "com.example.api", dep.Runtime.Label)
+	assert.Equal(t, "~/Library/LaunchAgents/com.example.api.plist", dep.Runtime.PlistPath)
+	require.NotNil(t, dep.Logs)
+	assert.Equal(t, model.LogKindMacOSLog, dep.Logs.Type)
+	assert.Equal(t, "com.example.api", dep.Logs.Target)
+}
+
 func TestSavePreservesLogRulesWithNewFormat(t *testing.T) {
 	dir := t.TempDir()
 	loader := config.NewLoader(dir)

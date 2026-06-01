@@ -4,7 +4,7 @@
 //   - journalctl 类型:运行 `systemctl status <unit> --no-pager`
 //     退出码 0 或 3 表示 unit 存在，其他情况视为不存在
 //   - docker 类型:运行 `docker inspect <name>`,退出码非零视为不存在
-//   - file_tail / command 类型:只做配置字符串校验,允许 tail -F 等待文件出现
+//   - macos_log / file_tail / command 类型:只做配置字符串校验,允许流式命令等待日志出现
 //
 // 边界：
 //   - 仅在远端运行;本机调用 Probe 时会通过 collector.Manager 的注入决定
@@ -27,7 +27,7 @@ func NewSystemProbe() *SystemProbe { return &SystemProbe{} }
 // Exists 检查 (t, name) 表示的目标是否存在于本机。
 //
 // 参数：
-//   - t: journalctl / docker / file_tail / command
+//   - t: journalctl / macos_log / docker / file_tail / command
 //   - name: 服务名、容器名、日志路径或自定义日志命令
 //
 // 返回：
@@ -59,6 +59,8 @@ func (p *SystemProbe) Exists(t model.LogSourceType, name string) error {
 			return ErrTargetNotFound
 		}
 		return nil
+	case model.LogSourceTypeMacOSLog:
+		return ValidateName(name)
 	case model.LogSourceTypeFileTail:
 		return ValidatePath(name)
 	case model.LogSourceTypeCommand:

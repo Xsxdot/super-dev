@@ -82,6 +82,9 @@ function normalizeRuntime(d: Deployment): RuntimeConfig {
     if (source.release_dir !== undefined) runtime.release_dir = source.release_dir
     if (source.current_dir !== undefined) runtime.current_dir = source.current_dir
     if (source.exec_start !== undefined) runtime.exec_start = source.exec_start
+  } else if (runtime.type === 'launchd') {
+    if (source.label !== undefined) runtime.label = source.label
+    if (source.plist_path !== undefined) runtime.plist_path = source.plist_path
   } else if (runtime.type === 'docker') {
     const container = source.container ?? d.log_target
     if (container !== undefined) runtime.container = container
@@ -105,14 +108,30 @@ function defaultLogKind(runtime: RuntimeConfig, location: Deployment['location']
   if (runtime.type === 'docker') return 'docker'
   if (runtime.type === 'nginx_static') return 'nginx'
   if (runtime.type === 'systemd') return 'journalctl'
+  if (runtime.type === 'launchd') return 'macos_log'
   return 'process'
+}
+
+function defaultLogTarget(runtime: RuntimeConfig): string | undefined {
+  if (runtime.type === 'systemd') {
+    if (!runtime.service_name) return undefined
+    return runtime.service_name.endsWith('.service') ? runtime.service_name : `${runtime.service_name}.service`
+  }
+  if (runtime.type === 'launchd') return runtime.label
+  if (runtime.type === 'docker') return runtime.container
+  if (runtime.type === 'nginx_static') return runtime.domain
+  return undefined
 }
 
 function normalizeLogs(d: Deployment, runtime: RuntimeConfig): LogConfig {
   const source = d.logs ?? ({} as LogConfig)
   const kind = source.type ?? (d.log_type as LogKind | undefined) ?? defaultLogKind(runtime, d.location)
   const logs: LogConfig = { type: kind }
-  const target = source.target ?? d.log_target
+  const target = source.target ?? d.log_target ?? (
+    kind === 'journalctl' || kind === 'macos_log' || kind === 'docker' || kind === 'nginx'
+      ? defaultLogTarget(runtime)
+      : undefined
+  )
   const path = source.path
   const command = source.command
   const extraArgs = source.extra_args ?? d.extra_args
@@ -295,6 +314,10 @@ export function validateDraft(draft: ConfigDraft): string[] {
         // command 接管需要明确启动命令；流水线已提升到项目级，不再作为命令替代品。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的本地命令不能为空`)
       }
+      if (dep.control_mode === 'managed' && dep.runtime?.type === 'launchd' && (dep.runtime.label ?? '').trim() === '') {
+        // launchd 接管依赖稳定 label，不能退化为自定义命令或隐式猜测。
+        errors.push(`服务「${s.name}」在「${d.env_name}」环境的 Launchd Label 不能为空`)
+      }
       if (d.location === 'remote' && (d.host_ids ?? []).length === 0) {
         // remote 运行配置必须明确主机；项目级流水线通过服务环境配置再解析目标。
         errors.push(`服务「${s.name}」在「${d.env_name}」环境未选择主机`)
@@ -306,7 +329,11 @@ export function validateDraft(draft: ConfigDraft): string[] {
       if (logs?.type === 'command' && (logs.command ?? '').trim() === '') {
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志命令不能为空`)
       }
-      if ((logs?.type === 'journalctl' || logs?.type === 'docker' || logs?.type === 'nginx') && (logs.target ?? '').trim() === '') {
+      if ((logs?.type === 'journalctl' || logs?.type === 'macos_log' || logs?.type === 'docker' || logs?.type === 'nginx') && (logs.target ?? '').trim() === '') {
+        if (logs?.type === 'macos_log') {
+          errors.push(`服务「${s.name}」在「${d.env_name}」环境的 macOS 日志目标不能为空`)
+          continue
+        }
         errors.push(`服务「${s.name}」在「${d.env_name}」环境的日志目标不能为空`)
       }
     }
