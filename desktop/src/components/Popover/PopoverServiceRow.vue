@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import type { Service } from '@/api/agent'
 
@@ -9,6 +10,7 @@ const props = defineProps<{
 }>()
 
 const agentStore = useAgentStore()
+const { t } = useI18n()
 const hovered = ref(false)
 
 // 托盘 Popover 无 env 选择，统一作用于项目的开发环境。
@@ -26,6 +28,13 @@ const statusColor = computed(() => {
   if (props.service.status === 'starting') return '#d29922'
   if (props.service.status === 'failed') return '#f85149'
   return '#6e7681'
+})
+
+const statusLabel = computed(() => {
+  if (props.service.status === 'running') return t('common.status.running')
+  if (props.service.status === 'starting') return t('common.status.starting')
+  if (props.service.status === 'failed') return t('common.status.failed')
+  return t('common.status.stopped')
 })
 
 const isChecked = computed(() =>
@@ -78,12 +87,12 @@ async function onRestart() {
       {{ service.name }}
     </span>
     <span class="status-label" :style="{ color: statusColor }">
-      {{ service.status === 'running' ? '运行中' : service.status === 'starting' ? '启动中…' : service.status === 'failed' ? '已退出' : '未启动' }}
+      {{ statusLabel }}
     </span>
     <div class="row-actions" v-if="hovered">
-      <button v-if="isActive" title="重启" class="btn" @click.stop="onRestart">↺</button>
+      <button v-if="isActive" :title="t('popover.restart')" class="btn" @click.stop="onRestart">↺</button>
       <button
-        :title="isActive ? '停止' : '启动'"
+        :title="isActive ? t('popover.stop') : t('popover.start')"
         class="btn"
         :class="isActive ? 'btn-stop' : 'btn-start'"
         @click.stop="onToggle"

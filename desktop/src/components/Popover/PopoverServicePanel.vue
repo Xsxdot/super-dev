@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
 import type { Project } from '@/api/agent'
@@ -8,6 +9,7 @@ import PopoverServiceRow from './PopoverServiceRow.vue'
 const props = defineProps<{ project: Project }>()
 const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
+const { t } = useI18n()
 
 // 托盘 Popover 无 env 选择，统一作用于项目的开发环境。
 const envName = computed(() => agentStore.devEnvName(props.project.id))
@@ -107,14 +109,14 @@ async function openMainWindow() {
       <div class="header-top">
         <span class="proj-name">{{ project.name }}</span>
         <div class="header-actions">
-          <button class="btn btn-secondary" @click="stopAll">全停</button>
-          <button class="btn btn-primary" :disabled="!canStartSelected" @click="startSelected">▶ 启动选中</button>
+          <button class="btn btn-secondary" @click="stopAll">{{ t('popover.stopAll') }}</button>
+          <button class="btn btn-primary" :disabled="!canStartSelected" @click="startSelected">▶ {{ t('popover.startSelected') }}</button>
         </div>
       </div>
       <div class="status-badges">
-        <span v-if="runningCount > 0" class="badge running">● {{ runningCount }} 运行中</span>
-        <span v-if="startingCount > 0" class="badge starting">● {{ startingCount }} 启动中</span>
-        <span v-if="stoppedCount > 0" class="badge stopped">● {{ stoppedCount }} 停止</span>
+        <span v-if="runningCount > 0" class="badge running">{{ t('popover.running', { count: runningCount }) }}</span>
+        <span v-if="startingCount > 0" class="badge starting">{{ t('popover.starting', { count: startingCount }) }}</span>
+        <span v-if="stoppedCount > 0" class="badge stopped">{{ t('popover.stopped', { count: stoppedCount }) }}</span>
       </div>
     </div>
 
@@ -130,10 +132,10 @@ async function openMainWindow() {
           <span v-if="allOptionalSelected">✓</span>
           <span v-else-if="someSelected">—</span>
         </span>
-        全选
+        {{ t('popover.selectAll') }}
       </button>
       <span class="toolbar-divider" />
-      <button class="toolbar-btn" @click="invertSelection">反选</button>
+      <button class="toolbar-btn" @click="invertSelection">{{ t('popover.invertSelection') }}</button>
     </div>
 
     <div class="toolbar-separator" />
@@ -141,7 +143,7 @@ async function openMainWindow() {
     <!-- 服务列表 -->
     <div class="service-list">
       <template v-if="requiredServices.length > 0">
-        <div class="group-label">必须启动</div>
+        <div class="group-label">{{ t('popover.requiredGroup') }}</div>
         <PopoverServiceRow
           v-for="svc in requiredServices"
           :key="svc.id"
@@ -150,7 +152,7 @@ async function openMainWindow() {
         />
       </template>
       <template v-if="optionalServices.length > 0">
-        <div class="group-label">可选</div>
+        <div class="group-label">{{ t('popover.optionalGroup') }}</div>
         <PopoverServiceRow
           v-for="svc in optionalServices"
           :key="svc.id"
@@ -165,7 +167,7 @@ async function openMainWindow() {
     <!-- Footer -->
     <div class="panel-footer">
       <button class="footer-btn" @click="openMainWindow">
-        ≡ 查看日志
+        ≡ {{ t('popover.viewLogs') }}
       </button>
     </div>
   </div>

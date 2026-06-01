@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import SearchBoard from './SearchBoard.vue'
@@ -21,6 +22,7 @@ const props = defineProps<{
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const { t } = useI18n()
 const input = ref('')
 
 const tab = computed(() => workspace.searchTab(props.tabId))
@@ -54,7 +56,7 @@ function submit() {
           v-model="input"
           class="search-input"
           data-test="search-input"
-          placeholder="输入 traceID、orderID、错误关键字..."
+          :placeholder="t('search.placeholder')"
           autofocus
         >
         <button
@@ -62,18 +64,18 @@ function submit() {
           data-test="search-submit"
           :disabled="tab.status === 'loading'"
         >
-          搜索
+          {{ t('search.submit') }}
         </button>
       </form>
       <div v-if="tab.status === 'results'" class="result-summary">
-        {{ tab.results.length }} / {{ localSearchTotal }} 条命中
+        {{ t('search.summary', { shown: tab.results.length, total: localSearchTotal }) }}
       </div>
     </div>
     <div v-if="tab.status === 'empty'" class="search-empty">
       <div class="search-brand">Trace Search</div>
     </div>
-    <div v-else-if="tab.status === 'loading'" class="search-state">搜索中...</div>
-    <div v-else-if="tab.status === 'emptyResults'" class="search-state">当前项目没有匹配日志</div>
+    <div v-else-if="tab.status === 'loading'" class="search-state">{{ t('search.loading') }}</div>
+    <div v-else-if="tab.status === 'emptyResults'" class="search-state">{{ t('search.emptyResults') }}</div>
     <div v-else-if="tab.status === 'error'" class="search-state error">{{ tab.error }}</div>
     <SearchBoard v-else :tab-id="tab.id" />
   </div>
