@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,4 +63,37 @@ func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
 	assert.NotEmpty(t, body.Digest)
 	assert.Equal(t, "Go Binary Build", body.Template.Name)
 	assert.Contains(t, body.YAML, "id: go-binary-build")
+}
+
+func TestPreviewPipelineTemplateFromYAML(t *testing.T) {
+	app := newTestAppInstance(t)
+	body := strings.NewReader(`{"yaml":"id: custom-build\nname: Custom Build\nversion: 1.0.0\nsteps:\n  - name: Build\n    type: local_command\n    with:\n      cmd: go build ./...\n"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/templates/preview", body)
+	rr := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got struct {
+		Template struct {
+			ID string `json:"id"`
+		} `json:"template"`
+		Digest string   `json:"digest"`
+		Errors []string `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, "custom-build", got.Template.ID)
+	assert.NotEmpty(t, got.Digest)
+	assert.Empty(t, got.Errors)
+}
+
+func TestPreviewPipelineTemplateRejectsMissingSource(t *testing.T) {
+	app := newTestAppInstance(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/templates/preview", strings.NewReader(`{}`))
+	rr := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "path or yaml is required")
 }
