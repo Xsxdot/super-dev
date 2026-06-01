@@ -14,6 +14,18 @@ function localDep(): Deployment {
   }
 }
 
+function systemdRemoteDep(): Deployment {
+  return {
+    id: 'd1',
+    env_name: 'prod',
+    location: 'remote',
+    host_ids: ['h1'],
+    runtime: { type: 'systemd', service_name: 'api' },
+    logs: { type: 'journalctl', target: 'api.service' },
+    status: '',
+  }
+}
+
 describe('DeploymentForm', () => {
   it('local 时展示命令/工作目录输入', () => {
     const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
@@ -75,22 +87,42 @@ describe('DeploymentForm', () => {
   })
 
   it('remote 日志类型写入 logs.type', async () => {
-    const dep: Deployment = {
-      id: 'd1',
-      env_name: 'dev',
-      location: 'remote',
-      host_ids: ['h1'],
-      runtime: { type: 'systemd', service_name: 'api' },
-      logs: { type: 'journalctl', target: 'api.service' },
-      status: '',
-    }
+    const dep: Deployment = systemdRemoteDep()
     const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [{ id: 'h1', name: 'box1' }] } })
 
+    await wrapper.find('[data-test="dep-log-toggle"]').trigger('click')
     await wrapper.find('[data-test="dep-log-type"]').setValue('docker')
 
     const emitted = wrapper.emitted('update:modelValue')
     const last = emitted![emitted!.length - 1][0] as Deployment
     expect(last.logs?.type).toBe('docker')
+  })
+
+  it('remote systemd 默认只展示服务名，不平铺发布路径和旧启停命令', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },
+    })
+
+    expect(wrapper.find('[data-test="dep-service-name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dep-release-dir"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-current-dir"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-exec-start"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-start-command"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-stop-command"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-log-type"]').exists()).toBe(false)
+  })
+
+  it('修改 systemd 服务名时同步默认 journalctl 日志目标', async () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },
+    })
+
+    await wrapper.find('[data-test="dep-service-name"]').setValue('worker')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.runtime?.service_name).toBe('worker')
+    expect(last.logs).toEqual({ type: 'journalctl', target: 'worker.service' })
   })
 
   it('does not render deployment-level pipeline wizard', () => {
