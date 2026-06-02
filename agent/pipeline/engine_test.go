@@ -12,10 +12,12 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +56,37 @@ func (p *contextCapturePlugin) Validate(model.Step) error { return nil }
 func (p *contextCapturePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
 	p.tempDir = ctx.RunTempDir
 	p.vars = ctx.Vars
+	return nil
+}
+
+type recordingPlugin struct {
+	mu       sync.Mutex
+	started  []string
+	finished []string
+	failHost string
+	delay    time.Duration
+}
+
+func (p *recordingPlugin) Name() string                   { return "recording" }
+func (p *recordingPlugin) Validate(step model.Step) error { return nil }
+func (p *recordingPlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	target := "local"
+	if len(targets) > 0 {
+		target = targets[0].HostID
+	}
+	p.mu.Lock()
+	p.started = append(p.started, target)
+	p.mu.Unlock()
+	ctx.LogLine("hello "+target, "stdout")
+	if p.delay > 0 {
+		time.Sleep(p.delay)
+	}
+	if target == p.failHost {
+		return fmt.Errorf("fail %s", target)
+	}
+	p.mu.Lock()
+	p.finished = append(p.finished, target)
+	p.mu.Unlock()
 	return nil
 }
 
@@ -151,4 +184,58 @@ func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
 	assert.Equal(t, "1.2.3", plugin.vars["version"])
 	_, statErr := os.Stat(plugin.tempDir)
 	assert.True(t, os.IsNotExist(statErr), "run temp dir removed after run")
+}
+
+func TestEngineSerialStopsAfterFirstHostFailure(t *testing.T) {
+	plugin := &recordingPlugin{failHost: "h1"}
+	engine := pipeline.NewEngine()
+	engine.Register(plugin)
+	plan, run := multiHostPlan("serial")
+	_, err := engine.Run(context.Background(), plan, run, nil)
+	require.Error(t, err)
+	assert.Equal(t, []string{"h1"}, plugin.started)
+}
+
+func TestEngineParallelRunsAllHostsBeforeFailing(t *testing.T) {
+	plugin := &recordingPlugin{failHost: "h2"}
+	engine := pipeline.NewEngine()
+	engine.Register(plugin)
+	plan, run := multiHostPlan("parallel")
+	_, err := engine.Run(context.Background(), plan, run, nil)
+	require.Error(t, err)
+	assert.ElementsMatch(t, []string{"h1", "h2", "h3"}, plugin.started)
+}
+
+func TestEngineBatchRunsChunksAndStopsNextBatchOnFailure(t *testing.T) {
+	plugin := &recordingPlugin{failHost: "h2"}
+	engine := pipeline.NewEngine()
+	engine.Register(plugin)
+	plan, run := multiHostPlan("batch:2")
+	_, err := engine.Run(context.Background(), plan, run, nil)
+	require.Error(t, err)
+	assert.ElementsMatch(t, []string{"h1", "h2"}, plugin.started)
+}
+
+func multiHostPlan(concurrency string) (pipeline.Plan, model.Run) {
+	step := model.Step{Name: "Deploy", Type: "recording", Concurrency: concurrency, Roles: []string{"targets"}}
+	plan := pipeline.Plan{
+		Phases: map[model.PipelinePhase][]model.Step{
+			model.PhaseBuild:   {},
+			model.PhaseDeploy:  {step},
+			model.PhaseFinally: {},
+		},
+		Variables: map[string]string{"version": "v1"},
+	}
+	run := model.Run{
+		ID: "run-1", DeploymentID: "dep-1", Status: model.StatusPending,
+		StepRuns: []model.StepRun{{
+			StepName: "Deploy", Type: "recording", Phase: model.PhaseDeploy, Status: model.StatusPending,
+			Tasks: []model.Task{
+				{HostID: "h1", HostName: "host-1", Status: model.StatusPending},
+				{HostID: "h2", HostName: "host-2", Status: model.StatusPending},
+				{HostID: "h3", HostName: "host-3", Status: model.StatusPending},
+			},
+		}},
+	}
+	return plan, run
 }

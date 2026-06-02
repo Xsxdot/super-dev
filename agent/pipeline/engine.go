@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/superdev/agent/model"
@@ -188,14 +189,88 @@ func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.Ste
 		markStepFailed(sr)
 		return err
 	}
-	markTasksRunning(sr, emit)
-	targets := targetsForStepRun(sr)
+	concurrency, err := ParseStepConcurrency(step.Concurrency)
+	if err != nil {
+		markStepFailed(sr)
+		return err
+	}
+	sr.Status = model.RunStatusRunning
+	err = e.executeStepTasks(ctx, plugin, step, sr, emit, runTempDir, runVars, concurrency)
+	if err != nil {
+		markStepFailed(sr)
+		return fmt.Errorf("step %s failed: %w", step.Name, err)
+	}
+	sr.Status = model.StatusSuccess
+	return nil
+}
+
+func (e *Engine) executeStepTasks(ctx context.Context, plugin StepPlugin, step model.Step, sr *model.StepRun, emit func(Event), runTempDir string, runVars map[string]string, concurrency StepConcurrency) error {
+	if len(sr.Tasks) == 1 {
+		target := taskTarget(sr.Tasks[0])
+		if target.IsLocal() {
+			return e.executeOneTask(ctx, plugin, step, sr, 0, nil, target, emit, runTempDir, runVars)
+		}
+	}
+	switch concurrency.Mode {
+	case ConcurrencySerial:
+		for i := range sr.Tasks {
+			target := taskTarget(sr.Tasks[i])
+			if err := e.executeOneTask(ctx, plugin, step, sr, i, []Target{target}, target, emit, runTempDir, runVars); err != nil {
+				return err
+			}
+		}
+		return nil
+	case ConcurrencyParallel:
+		return e.executeTaskBatch(ctx, plugin, step, sr, taskIndexes(sr.Tasks), emit, runTempDir, runVars)
+	case ConcurrencyBatch:
+		for start := 0; start < len(sr.Tasks); start += concurrency.BatchSize {
+			end := start + concurrency.BatchSize
+			if end > len(sr.Tasks) {
+				end = len(sr.Tasks)
+			}
+			if err := e.executeTaskBatch(ctx, plugin, step, sr, rangeIndexes(start, end), emit, runTempDir, runVars); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid concurrency mode %q", concurrency.Mode)
+	}
+}
+
+func (e *Engine) executeTaskBatch(ctx context.Context, plugin StepPlugin, step model.Step, sr *model.StepRun, indexes []int, emit func(Event), runTempDir string, runVars map[string]string) error {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []error
+	for _, idx := range indexes {
+		idx := idx
+		target := taskTarget(sr.Tasks[idx])
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.executeOneTask(ctx, plugin, step, sr, idx, []Target{target}, target, emit, runTempDir, runVars); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+func (e *Engine) executeOneTask(ctx context.Context, plugin StepPlugin, step model.Step, sr *model.StepRun, taskIndex int, targets []Target, target Target, emit func(Event), runTempDir string, runVars map[string]string) error {
+	startTask(sr, taskIndex, emit)
 	runCtx := NewRunContext(ctx, RunContextOptions{
 		RunTempDir: runTempDir,
 		Vars:       runVars,
+		Target:     target,
 		LogLine: func(line, stream string) {
 			if emit != nil {
-				emit(Event{Type: EventTaskLog, StepName: step.Name, Line: line, Stream: stream, At: time.Now().UnixMilli()})
+				emit(Event{Type: EventTaskLog, StepName: step.Name, HostID: target.HostID, Line: line, Stream: stream, At: time.Now().UnixMilli()})
 			}
 		},
 	})
@@ -203,12 +278,10 @@ func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.Ste
 		return plugin.Execute(runCtx, step, targets)
 	})
 	if err != nil {
-		markStepFailed(sr)
-		finishTasks(sr, model.RunStatusFailed, emit)
-		return fmt.Errorf("step %s failed: %w", step.Name, err)
+		finishTask(sr, taskIndex, model.RunStatusFailed, emit)
+		return err
 	}
-	sr.Status = model.StatusSuccess
-	finishTasks(sr, model.StatusSuccess, emit)
+	finishTask(sr, taskIndex, model.StatusSuccess, emit)
 	return nil
 }
 
@@ -308,37 +381,37 @@ func skipPhase(phase model.PipelinePhase, steps []model.Step, runs stepRunIndex)
 	}
 }
 
-func targetsForStepRun(sr *model.StepRun) []Target {
-	targets := make([]Target, 0, len(sr.Tasks))
-	for _, task := range sr.Tasks {
-		if task.HostID == "" && task.HostName == "" {
-			continue
-		}
-		targets = append(targets, Target{HostID: task.HostID, HostName: task.HostName})
-	}
-	return targets
+func taskTarget(task model.Task) Target {
+	return Target{HostID: task.HostID, HostName: task.HostName}
 }
 
-func markTasksRunning(sr *model.StepRun, emit func(Event)) {
-	sr.Status = model.RunStatusRunning
+func taskIndexes(tasks []model.Task) []int {
+	return rangeIndexes(0, len(tasks))
+}
+
+func rangeIndexes(start, end int) []int {
+	out := make([]int, 0, end-start)
+	for i := start; i < end; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+func startTask(sr *model.StepRun, index int, emit func(Event)) {
 	now := time.Now().UnixMilli()
-	for i := range sr.Tasks {
-		sr.Tasks[i].Status = model.RunStatusRunning
-		sr.Tasks[i].StartedAt = now
-		if emit != nil {
-			emit(Event{Type: EventTaskStarted, StepName: sr.StepName, HostID: sr.Tasks[i].HostID, At: now})
-		}
+	sr.Tasks[index].Status = model.RunStatusRunning
+	sr.Tasks[index].StartedAt = now
+	if emit != nil {
+		emit(Event{Type: EventTaskStarted, StepName: sr.StepName, HostID: sr.Tasks[index].HostID, At: now})
 	}
 }
 
-func finishTasks(sr *model.StepRun, status model.RunStatus, emit func(Event)) {
+func finishTask(sr *model.StepRun, index int, status model.RunStatus, emit func(Event)) {
 	now := time.Now().UnixMilli()
-	for i := range sr.Tasks {
-		sr.Tasks[i].Status = status
-		sr.Tasks[i].FinishedAt = now
-		if emit != nil {
-			emit(Event{Type: EventTaskFinished, StepName: sr.StepName, HostID: sr.Tasks[i].HostID, Status: status, ExitCode: sr.Tasks[i].ExitCode, At: now})
-		}
+	sr.Tasks[index].Status = status
+	sr.Tasks[index].FinishedAt = now
+	if emit != nil {
+		emit(Event{Type: EventTaskFinished, StepName: sr.StepName, HostID: sr.Tasks[index].HostID, Status: status, ExitCode: sr.Tasks[index].ExitCode, At: now})
 	}
 }
 

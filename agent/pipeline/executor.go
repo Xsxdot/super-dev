@@ -29,6 +29,7 @@ type RunContextOptions struct {
 	ProjectRoot string
 	RunTempDir  string
 	Vars        map[string]string
+	Target      Target
 	LogLine     func(line, stream string)
 }
 
@@ -38,6 +39,7 @@ type RunContext struct {
 	ProjectRoot string
 	RunTempDir  string
 	Vars        map[string]string
+	Target      Target
 	logLine     func(line, stream string)
 }
 
@@ -50,7 +52,19 @@ type RunContext struct {
 // 返回：
 //   - 可传给 StepPlugin.Execute 的 RunContext
 func NewRunContext(ctx context.Context, opts RunContextOptions) *RunContext {
-	return &RunContext{Context: ctx, ProjectRoot: opts.ProjectRoot, RunTempDir: opts.RunTempDir, Vars: opts.Vars, logLine: opts.LogLine}
+	return &RunContext{
+		Context:     ctx,
+		ProjectRoot: opts.ProjectRoot,
+		RunTempDir:  opts.RunTempDir,
+		Vars:        opts.Vars,
+		Target:      opts.Target,
+		logLine:     opts.LogLine,
+	}
+}
+
+// CurrentTarget 返回当前插件调用负责的 target。HostID 为空表示本地/global。
+func (c *RunContext) CurrentTarget() Target {
+	return c.Target
 }
 
 // LogLine records one plugin output line.
