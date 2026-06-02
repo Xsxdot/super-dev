@@ -3,6 +3,9 @@ environments:
   - name: dev
     is_dev: true
     order: 1
+  - name: prod-check
+    is_dev: false
+    order: 2
 env_selected_service_ids:
   dev:
     - api
@@ -33,6 +36,18 @@ services:
     deployments:
       - id: worker-dev
         env: dev
+        location: local
+        control_mode: managed
+        command: go run . --role worker
+        working_dir: .
+        runtime:
+          type: command
+          command: go run . --role worker
+          working_dir: .
+        logs:
+          type: process
+      - id: approval-prod-check
+        env: prod-check
         location: local
         control_mode: managed
         command: go run . --role worker

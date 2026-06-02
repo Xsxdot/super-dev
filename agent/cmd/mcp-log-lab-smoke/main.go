@@ -306,6 +306,10 @@ func run(ctx context.Context, cfg smokeConfig) error {
 	}
 	pass("get debug session")
 
+	if err := assertSafeOperations(ctx, agent.baseURL, mcp, dataDir); err != nil {
+		return err
+	}
+
 	cleanupDeployments(ctx, mcp)
 	pass("cleanup")
 	return nil
@@ -453,16 +457,9 @@ func startMCP(ctx context.Context, mcpBin, agentURL string) (*mcpClient, error) 
 }
 
 func (c *mcpClient) callTool(ctx context.Context, name string, arguments map[string]any) (map[string]any, error) {
-	raw, err := c.callRPC(ctx, "tools/call", map[string]any{
-		"name":      name,
-		"arguments": arguments,
-	})
+	result, err := c.callToolResult(ctx, name, arguments)
 	if err != nil {
 		return nil, err
-	}
-	var result callToolResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("parse %s result: %w", name, err)
 	}
 	if result.IsError {
 		return nil, fmt.Errorf("%s tool error: %s", name, contentText(result.Content))
@@ -471,6 +468,35 @@ func (c *mcpClient) callTool(ctx context.Context, name string, arguments map[str
 		return map[string]any{}, nil
 	}
 	return result.StructuredContent, nil
+}
+
+func (c *mcpClient) callToolError(ctx context.Context, name string, arguments map[string]any) (map[string]any, error) {
+	result, err := c.callToolResult(ctx, name, arguments)
+	if err != nil {
+		return nil, err
+	}
+	if !result.IsError {
+		return nil, fmt.Errorf("%s was expected to fail, got success: %v", name, result.StructuredContent)
+	}
+	if result.StructuredContent == nil {
+		return map[string]any{}, nil
+	}
+	return result.StructuredContent, nil
+}
+
+func (c *mcpClient) callToolResult(ctx context.Context, name string, arguments map[string]any) (callToolResult, error) {
+	raw, err := c.callRPC(ctx, "tools/call", map[string]any{
+		"name":      name,
+		"arguments": arguments,
+	})
+	if err != nil {
+		return callToolResult{}, err
+	}
+	var result callToolResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return callToolResult{}, fmt.Errorf("parse %s result: %w", name, err)
+	}
+	return result, nil
 }
 
 func (c *mcpClient) callRPC(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
@@ -583,11 +609,156 @@ func waitForDeploymentStatus(ctx context.Context, mcp *mcpClient, deploymentID, 
 	return nil
 }
 
+func assertSafeOperations(ctx context.Context, agentURL string, mcp *mcpClient, dataDir string) error {
+	preview, err := mcp.callTool(ctx, "preview_operation", map[string]any{
+		"kind":          "runtime.restart",
+		"deployment_id": "approval-prod-check",
+	})
+	if err != nil {
+		return fmt.Errorf("preview safe operation: %w", err)
+	}
+	if !boolField(preview, "data", "plan", "requires_approval") {
+		return fmt.Errorf("preview_operation did not require approval: %v", preview)
+	}
+	pass("preview safe operation")
+
+	required, err := mcp.callToolError(ctx, "restart_service", map[string]any{"deployment_id": "approval-prod-check"})
+	if err != nil {
+		return fmt.Errorf("runtime approval required: %w", err)
+	}
+	if code := stringField(required, "code"); code != "approval_required" {
+		return fmt.Errorf("restart_service error code %q, want approval_required", code)
+	}
+	runtimeApprovalID := stringField(required, "data", "approval", "id")
+	if runtimeApprovalID == "" {
+		return fmt.Errorf("restart_service approval_required returned no approval id: %v", required)
+	}
+	pass("runtime approval required")
+
+	if err := approveOperation(ctx, agentURL, runtimeApprovalID, "runtime smoke approved"); err != nil {
+		return err
+	}
+	runtimeDetail, err := mcp.callTool(ctx, "get_operation_approval", map[string]any{"approval_id": runtimeApprovalID})
+	if err != nil {
+		return fmt.Errorf("get runtime operation approval: %w", err)
+	}
+	runtimeToken := stringField(runtimeDetail, "data", "approval_token")
+	if runtimeToken == "" {
+		return errors.New("get_operation_approval returned no runtime approval token")
+	}
+	if _, err := mcp.callTool(ctx, "restart_service", map[string]any{
+		"deployment_id":  "approval-prod-check",
+		"approval_token": runtimeToken,
+	}); err != nil {
+		return fmt.Errorf("restart with approval token: %w", err)
+	}
+	pass("runtime approval token")
+
+	used, err := mcp.callToolError(ctx, "restart_service", map[string]any{
+		"deployment_id":  "approval-prod-check",
+		"approval_token": runtimeToken,
+	})
+	if err != nil {
+		return fmt.Errorf("runtime token one-time: %w", err)
+	}
+	if code := stringField(used, "code"); code != "approval_token_consumed" {
+		return fmt.Errorf("second restart code %q, want approval_token_consumed", code)
+	}
+	pass("runtime approval token one-time")
+
+	audit, err := mcp.callTool(ctx, "list_operation_audit", map[string]any{
+		"approval_id": runtimeApprovalID,
+		"limit":       20,
+	})
+	if err != nil {
+		return fmt.Errorf("list operation audit: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(audit), "executed") {
+		return fmt.Errorf("operation audit did not include executed event: %v", audit)
+	}
+	pass("operation audit")
+
+	templatePath, err := writeSmokeTemplate(dataDir, "smoke-safe-import")
+	if err != nil {
+		return err
+	}
+	templateRequired, err := mcp.callToolError(ctx, "import_pipeline_template", map[string]any{"path": templatePath})
+	if err != nil {
+		return fmt.Errorf("template import approval required: %w", err)
+	}
+	if code := stringField(templateRequired, "code"); code != "approval_required" {
+		return fmt.Errorf("template import error code %q, want approval_required", code)
+	}
+	templateApprovalID := stringField(templateRequired, "data", "approval", "id")
+	if templateApprovalID == "" {
+		return fmt.Errorf("template import approval_required returned no approval id: %v", templateRequired)
+	}
+	pass("template import approval required")
+
+	if err := approveOperation(ctx, agentURL, templateApprovalID, "template smoke approved"); err != nil {
+		return err
+	}
+	templateDetail, err := mcp.callTool(ctx, "get_operation_approval", map[string]any{"approval_id": templateApprovalID})
+	if err != nil {
+		return fmt.Errorf("get template operation approval: %w", err)
+	}
+	templateToken := stringField(templateDetail, "data", "approval_token")
+	if templateToken == "" {
+		return errors.New("get_operation_approval returned no template approval token")
+	}
+	imported, err := mcp.callTool(ctx, "import_pipeline_template", map[string]any{
+		"path":           templatePath,
+		"approval_token": templateToken,
+	})
+	if err != nil {
+		return fmt.Errorf("template import with approval token: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(imported), "smoke-safe-import") {
+		return fmt.Errorf("approved template import did not return template id: %v", imported)
+	}
+	pass("template import approved")
+	return nil
+}
+
+func approveOperation(ctx context.Context, baseURL string, approvalID string, note string) error {
+	body, err := json.Marshal(map[string]string{"decided_by": "smoke", "note": note})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/operation-approvals/"+approvalID+"/approve", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("approve operation %s: %w", approvalID, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("approve operation %s status %d: %s", approvalID, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func writeSmokeTemplate(dir string, id string) (string, error) {
+	path := filepath.Join(dir, id+".yaml")
+	yaml := "id: " + id + "\nname: Smoke Safe Import\nversion: 1.0.0\nsteps:\n  - name: Echo\n    type: local_command\n    with:\n      command: echo ok\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		return "", fmt.Errorf("write smoke template: %w", err)
+	}
+	return path, nil
+}
+
 func cleanupDeployments(ctx context.Context, mcp *mcpClient) {
 	if mcp == nil {
 		return
 	}
-	for _, depID := range []string{"api-dev", "worker-dev", "noisy-dev", "crasher-dev"} {
+	for _, depID := range []string{"api-dev", "worker-dev", "noisy-dev", "crasher-dev", "approval-prod-check"} {
 		_, _ = mcp.callTool(ctx, "stop_service", map[string]any{"deployment_id": depID})
 	}
 }
@@ -719,6 +890,19 @@ func stringField(payload map[string]any, path ...string) string {
 	}
 	s, _ := cur.(string)
 	return s
+}
+
+func boolField(payload map[string]any, path ...string) bool {
+	var cur any = payload
+	for _, key := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return false
+		}
+		cur = m[key]
+	}
+	b, _ := cur.(bool)
+	return b
 }
 
 func contentText(content []map[string]string) string {
