@@ -32,7 +32,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/superdev-agent"],
+    "externalBin": ["binaries/superdev-agent", "binaries/superdev-mcp"],
     "resources": {
       "resources/agent-install/": "agent-install/"
     }

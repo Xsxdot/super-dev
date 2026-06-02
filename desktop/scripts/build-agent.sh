@@ -7,7 +7,8 @@ AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
 RESOURCE_DIR="$ROOT/src-tauri/resources/agent-install"
 TARGET="$(rustc --print host-tuple)"
-OUT="$OUT_DIR/superdev-agent-$TARGET"
+OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
+OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET"
 BUILD_REMOTE_INSTALL=0
 
 for arg in "$@"; do
@@ -28,11 +29,12 @@ if [[ ! -f "$AGENT_SRC/main.go" ]]; then
 fi
 
 needs_build() {
-  if [[ ! -f "$OUT" ]] || [[ ! -s "$OUT" ]]; then
+  local out="$1"
+  if [[ ! -f "$out" ]] || [[ ! -s "$out" ]]; then
     return 0
   fi
   local bin_mtime
-  bin_mtime=$(stat -f '%m' "$OUT" 2>/dev/null || stat -c '%Y' "$OUT")
+  bin_mtime=$(stat -f '%m' "$out" 2>/dev/null || stat -c '%Y' "$out")
   local f mtime
   while IFS= read -r -d '' f; do
     mtime=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f")
@@ -43,7 +45,7 @@ needs_build() {
   return 1
 }
 
-if ! needs_build && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
+if ! needs_build "$OUT_AGENT" && ! needs_build "$OUT_MCP" && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
   exit 0
 fi
 
@@ -61,9 +63,14 @@ if [[ -z "$GO_BIN" ]]; then
   fi
 fi
 
-if needs_build; then
-  echo "build-agent: compiling agent -> $OUT"
-  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT" .)
+if needs_build "$OUT_AGENT"; then
+  echo "build-agent: compiling agent -> $OUT_AGENT"
+  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_AGENT" .)
+fi
+
+if needs_build "$OUT_MCP"; then
+  echo "build-agent: compiling mcp -> $OUT_MCP"
+  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_MCP" ./cmd/superdev-mcp)
 fi
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
