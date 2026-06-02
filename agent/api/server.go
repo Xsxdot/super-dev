@@ -278,6 +278,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/pipeline/templates/preview", a.previewPipelineTemplate)
 	mux.HandleFunc("POST /api/pipeline/templates/import", a.importPipelineTemplate)
 	mux.HandleFunc("POST /api/projects/{id}/pipelines/{pipelineId}/preview", a.previewProjectPipeline)
+	mux.HandleFunc("POST /api/projects/{id}/pipelines/{pipelineId}/deploy", a.deployProjectPipeline)
+	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs", a.listProjectPipelineRuns)
+	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}", a.getProjectPipelineRun)
+	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}/logs", a.readProjectPipelineRunLogs)
+	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/artifacts", a.listProjectPipelineArtifacts)
 
 	// Deployment 进程控制
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
