@@ -216,6 +216,19 @@ func TestEngineBatchRunsChunksAndStopsNextBatchOnFailure(t *testing.T) {
 	assert.ElementsMatch(t, []string{"h1", "h2"}, plugin.started)
 }
 
+func TestEngineRunWithOptionsStopsDeployWhenAfterBuildFails(t *testing.T) {
+	engine := pipeline.NewEngine()
+	engine.Register(&recordingPlugin{})
+	plan, run := buildAndDeployPlan()
+	_, err := engine.RunWithOptions(context.Background(), plan, run, nil, pipeline.RunOptions{
+		AfterBuild: func(run model.Run, vars map[string]string) (model.Run, error) {
+			return run, errors.New("artifact registration failed")
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "artifact registration failed")
+}
+
 func multiHostPlan(concurrency string) (pipeline.Plan, model.Run) {
 	step := model.Step{Name: "Deploy", Type: "recording", Concurrency: concurrency, Roles: []string{"targets"}}
 	plan := pipeline.Plan{
@@ -236,6 +249,29 @@ func multiHostPlan(concurrency string) (pipeline.Plan, model.Run) {
 				{HostID: "h3", HostName: "host-3", Status: model.StatusPending},
 			},
 		}},
+	}
+	return plan, run
+}
+
+func buildAndDeployPlan() (pipeline.Plan, model.Run) {
+	plan := pipeline.Plan{
+		Phases: map[model.PipelinePhase][]model.Step{
+			model.PhaseBuild: {
+				{Name: "Build", Type: "recording"},
+			},
+			model.PhaseDeploy: {
+				{Name: "Deploy", Type: "recording"},
+			},
+			model.PhaseFinally: {},
+		},
+		Variables: map[string]string{"version": "v1"},
+	}
+	run := model.Run{
+		ID: "run-hook", DeploymentID: "dep-hook", Status: model.StatusPending,
+		StepRuns: []model.StepRun{
+			{StepName: "Build", Type: "recording", Phase: model.PhaseBuild, Status: model.StatusPending, Tasks: []model.Task{{Status: model.StatusPending}}},
+			{StepName: "Deploy", Type: "recording", Phase: model.PhaseDeploy, Status: model.StatusPending, Tasks: []model.Task{{Status: model.StatusPending}}},
+		},
 	}
 	return plan, run
 }
