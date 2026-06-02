@@ -57,6 +57,14 @@ type AgentClient interface {
 	GetOperationApproval(context.Context, string) (OperationApprovalDetail, error)
 	// ListOperationAudit 查询写操作审计事件。
 	ListOperationAudit(context.Context, url.Values) (OperationAuditList, error)
+	// ProbeProjectConfig 探测项目目录配置，不写注册表或配置文件。
+	ProbeProjectConfig(context.Context, string) (model.Project, error)
+	// GetProjectConfig 读取可编辑项目配置快照。
+	GetProjectConfig(context.Context, string) (model.Project, error)
+	// PreviewConfigChange 预览配置 upsert diff 和 operation plan。
+	PreviewConfigChange(context.Context, ConfigChangeRequest) (ConfigChangePreview, error)
+	// ApplyConfigChange 经 safe operation 授权后应用配置 upsert。
+	ApplyConfigChange(context.Context, ConfigChangeRequest, string) (ConfigChangePreview, error)
 	// StartDeployment 请求 agent 启动 deployment。
 	StartDeployment(context.Context, string, string) error
 	// StopDeployment 请求 agent 停止 deployment。
@@ -325,6 +333,65 @@ func (c *HTTPAgentClient) GetOperationApproval(ctx context.Context, id string) (
 func (c *HTTPAgentClient) ListOperationAudit(ctx context.Context, q url.Values) (OperationAuditList, error) {
 	var out OperationAuditList
 	return out, c.get(ctx, withQuery("/api/operation-audit", q), &out)
+}
+
+// ProbeProjectConfig 探测项目目录配置，不产生副作用。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - rootPath: 项目根目录
+//
+// 返回：
+//   - 探测到的项目配置快照
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ProbeProjectConfig(ctx context.Context, rootPath string) (model.Project, error) {
+	var out model.Project
+	q := url.Values{}
+	q.Set("root_path", rootPath)
+	return out, c.get(ctx, withQuery("/api/projects/probe", q), &out)
+}
+
+// GetProjectConfig 读取可编辑项目配置快照。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//
+// 返回：
+//   - 可编辑项目配置快照
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) GetProjectConfig(ctx context.Context, projectID string) (model.Project, error) {
+	var out model.Project
+	return out, c.get(ctx, "/api/projects/"+url.PathEscape(projectID)+"/config", &out)
+}
+
+// PreviewConfigChange 预览配置 upsert。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - req: 配置 upsert 请求
+//
+// 返回：
+//   - diff、validation 和 operation plan
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) PreviewConfigChange(ctx context.Context, req ConfigChangeRequest) (ConfigChangePreview, error) {
+	var out ConfigChangePreview
+	return out, c.post(ctx, "/api/config-changes/preview", req, &out)
+}
+
+// ApplyConfigChange 应用配置 upsert。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - req: 配置 upsert 请求
+//   - approvalToken: 用户批准后发放的一次性 token，可为空
+//
+// 返回：
+//   - 应用后的 preview 结果
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) ApplyConfigChange(ctx context.Context, req ConfigChangeRequest, approvalToken string) (ConfigChangePreview, error) {
+	var out ConfigChangePreview
+	return out, c.postWithApprovalToken(ctx, "/api/config-changes/apply", req, approvalToken, &out)
 }
 
 // StartDeployment 请求 agent 启动 deployment。

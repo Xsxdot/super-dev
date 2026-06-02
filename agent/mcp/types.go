@@ -141,6 +141,47 @@ type OperationAuditList struct {
 	Count  int                   `json:"count"`
 }
 
+// ConfigChangeRequest 描述 MCP 侧配置 upsert 请求。
+type ConfigChangeRequest struct {
+	Kind           string         `json:"kind"`
+	ProjectID      string         `json:"project_id,omitempty"`
+	ProjectName    string         `json:"project_name,omitempty"`
+	RootPath       string         `json:"root_path,omitempty"`
+	ApprovalToken  string         `json:"approval_token,omitempty"`
+	DebugSessionID string         `json:"debug_session_id,omitempty"`
+	Project        map[string]any `json:"project,omitempty"`
+	Service        map[string]any `json:"service,omitempty"`
+	Pipeline       map[string]any `json:"pipeline,omitempty"`
+	Delete         bool           `json:"delete,omitempty"`
+	Remove         bool           `json:"remove,omitempty"`
+}
+
+// ConfigChangeValidation 描述 config change preview 的校验结果。
+type ConfigChangeValidation struct {
+	OK       bool     `json:"ok"`
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// ConfigChangeDiffEntry 描述配置变更中的一处差异。
+type ConfigChangeDiffEntry struct {
+	Path   string `json:"path"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+}
+
+// ConfigChangePreview 是 agent 返回给 MCP 的配置变更预览。
+type ConfigChangePreview struct {
+	ChangeID      string                  `json:"change_id"`
+	Kind          string                  `json:"kind"`
+	TargetSummary string                  `json:"target_summary"`
+	Diff          []ConfigChangeDiffEntry `json:"diff"`
+	Validation    ConfigChangeValidation  `json:"validation"`
+	Plan          OperationPlan           `json:"plan"`
+	Project       model.Project           `json:"project,omitempty"`
+	CreatedAt     time.Time               `json:"created_at"`
+}
+
 // DebugSession 是 MCP 侧使用的本机排障会话 DTO。
 type DebugSession struct {
 	ID           string     `json:"id"`

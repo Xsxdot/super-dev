@@ -143,6 +143,47 @@ func TestHTTPAgentClientOperationApprovalLifecycle(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestHTTPAgentClientConfigChangeLifecycle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/probe":
+			assert.Equal(t, "/tmp/demo", r.URL.Query().Get("root_path"))
+			jsonOKForMCPClientTest(w, model.Project{Name: "demo", RootPath: "/tmp/demo"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/p1/config":
+			jsonOKForMCPClientTest(w, model.Project{ID: "p1", Name: "demo"})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/config-changes/preview":
+			var req ConfigChangeRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			assert.Equal(t, "config.pipeline.upsert", req.Kind)
+			jsonOKForMCPClientTest(w, ConfigChangePreview{Kind: req.Kind, Validation: ConfigChangeValidation{OK: true}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/config-changes/apply":
+			assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
+			jsonOKForMCPClientTest(w, ConfigChangePreview{Kind: "config.pipeline.upsert", Validation: ConfigChangeValidation{OK: true}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	probed, err := client.ProbeProjectConfig(context.Background(), "/tmp/demo")
+	require.NoError(t, err)
+	assert.Equal(t, "demo", probed.Name)
+
+	config, err := client.GetProjectConfig(context.Background(), "p1")
+	require.NoError(t, err)
+	assert.Equal(t, "p1", config.ID)
+
+	req := ConfigChangeRequest{Kind: "config.pipeline.upsert", ProjectID: "p1"}
+	preview, err := client.PreviewConfigChange(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, preview.Validation.OK)
+
+	applied, err := client.ApplyConfigChange(context.Background(), req, "tok_1")
+	require.NoError(t, err)
+	assert.True(t, applied.Validation.OK)
+}
+
 func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

@@ -44,6 +44,10 @@ type fakeAgentClient struct {
 	operationApprovals      []OperationApproval
 	operationApprovalDetail OperationApprovalDetail
 	operationAudit          OperationAuditList
+	configProject           model.Project
+	configPreview           ConfigChangePreview
+	configApplyErr          error
+	lastConfigChange        ConfigChangeRequest
 	lastApprovalToken       string
 }
 
@@ -125,6 +129,28 @@ func (f *fakeAgentClient) GetOperationApproval(context.Context, string) (Operati
 
 func (f *fakeAgentClient) ListOperationAudit(context.Context, url.Values) (OperationAuditList, error) {
 	return f.operationAudit, nil
+}
+
+func (f *fakeAgentClient) ProbeProjectConfig(context.Context, string) (model.Project, error) {
+	return f.configProject, nil
+}
+
+func (f *fakeAgentClient) GetProjectConfig(context.Context, string) (model.Project, error) {
+	return f.configProject, nil
+}
+
+func (f *fakeAgentClient) PreviewConfigChange(_ context.Context, req ConfigChangeRequest) (ConfigChangePreview, error) {
+	f.lastConfigChange = req
+	return f.configPreview, nil
+}
+
+func (f *fakeAgentClient) ApplyConfigChange(_ context.Context, req ConfigChangeRequest, approvalToken string) (ConfigChangePreview, error) {
+	f.lastConfigChange = req
+	f.lastApprovalToken = approvalToken
+	if f.configApplyErr != nil {
+		return ConfigChangePreview{}, f.configApplyErr
+	}
+	return f.configPreview, nil
 }
 
 func (f *fakeAgentClient) StartDeployment(_ context.Context, id string, approvalToken string) error {
