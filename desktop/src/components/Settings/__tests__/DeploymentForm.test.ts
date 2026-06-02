@@ -211,7 +211,7 @@ describe('DeploymentForm', () => {
     expect(last.logs).toEqual({ type: 'command', command: 'tail -F /var/log/api/app.log' })
   })
 
-  it('does not render deployment-level pipeline wizard', () => {
+  it('only renders runtime and log controls', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: localDep(), hosts: [] },
     })

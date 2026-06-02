@@ -1,7 +1,7 @@
-// handler_pipeline_preview.go 实现 deployment pipeline 预览 HTTP 处理器。
+// handler_pipeline_preview.go 实现项目级 pipeline 预览 HTTP 处理器。
 //
 // 职责：
-//   - 定位 deployment 的 Pipeline 配置
+//   - 定位项目级 Pipeline 配置
 //   - 展开 include 模板
 //   - 构造 Plan 与 Run skeleton 返回给前端预览
 //
@@ -19,55 +19,6 @@ import (
 	"github.com/superdev/agent/pipeline"
 	pipelinetemplate "github.com/superdev/agent/template"
 )
-
-// previewDeploymentPipeline 处理 POST /api/deployments/{id}/pipeline/preview。
-func (a *App) previewDeploymentPipeline(w http.ResponseWriter, r *http.Request) {
-	depID := r.PathValue("id")
-	dep, project, ok := a.findDeployment(depID)
-	if !ok {
-		jsonError(w, http.StatusNotFound, "deployment not found")
-		return
-	}
-	if dep.Pipeline == nil {
-		jsonError(w, http.StatusBadRequest, "deployment pipeline is empty")
-		return
-	}
-	builtins, err := pipelinetemplate.LoadBuiltins()
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to load builtin templates: "+err.Error())
-		return
-	}
-	resolver := pipelinetemplate.NewStore(a.cfg.DataDir, builtins, project.RootPath)
-	pipelineConfig := *dep.Pipeline
-	if pipelineConfig.Variables == nil {
-		pipelineConfig.Variables = map[string]string{}
-	}
-	if err := pipeline.RejectReservedVariableOverrides(pipelineConfig.Variables); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	pipelineConfig.Variables = pipeline.MergeVariables(pipelineConfig.Variables, pipeline.PreviewReservedVars(pipeline.ReservedVarOptions{
-		Workspace: project.RootPath,
-		Env:       dep.EnvName,
-	}))
-	pipelineConfig.Variables = pipelinetemplate.RenderPipelineVariableMap(pipelineConfig.Variables)
-	expanded, err := expandDeploymentPipeline(pipelineConfig, resolver)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "failed to expand pipeline: "+err.Error())
-		return
-	}
-	hosts, err := a.hostRefs(pipelineHostIDs(dep.HostIDs, expanded.Roles))
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to load hosts: "+err.Error())
-		return
-	}
-	plan, run, err := pipeline.BuildPlan(dep.ID, expanded, hosts)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "failed to build pipeline plan: "+err.Error())
-		return
-	}
-	jsonOK(w, map[string]interface{}{"plan": plan, "run": run})
-}
 
 type projectPipelinePreviewRequest struct {
 	EnvName      string            `json:"env_name"`

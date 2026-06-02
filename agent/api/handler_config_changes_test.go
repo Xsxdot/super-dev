@@ -3,7 +3,7 @@
 // 职责：
 //   - 验证配置 preview/apply 只通过 agent 保存配置
 //   - 验证审批前不落盘
-//   - 验证不支持删除和 deployment-level pipeline
+//   - 验证不支持删除
 //
 // 边界：
 //   - 不通过 MCP tool 调用

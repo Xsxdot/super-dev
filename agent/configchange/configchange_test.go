@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 验证 upsert 不删除未提及配置
-//   - 验证删除和 deployment-level pipeline 会被拒绝
+//   - 验证删除会被拒绝
 //   - 验证 diff 脱敏和 plan fingerprint 稳定
 //
 // 边界：
@@ -71,23 +71,12 @@ func TestApplyChangeUpsertsProjectPipelineAndPreservesOthers(t *testing.T) {
 	assert.Equal(t, "Existing", findPipelineForTest(updated, "existing").Name)
 }
 
-func TestValidateRejectsDeleteAndDeploymentPipeline(t *testing.T) {
+func TestValidateRejectsDelete(t *testing.T) {
 	project := sampleProject()
 	deleteChange := ChangeRequest{Kind: KindServiceUpsert, Delete: true, Service: &ServicePatch{Name: "api"}}
 	deleteResult := Validate(project, deleteChange)
 	assert.False(t, deleteResult.OK)
 	assert.Contains(t, deleteResult.Errors, "delete is not supported by MCP config upsert")
-
-	pipelineChange := ChangeRequest{
-		Kind: KindServiceUpsert,
-		Service: &ServicePatch{Name: "api", Deployments: []DeploymentPatch{{
-			EnvName:  "dev",
-			Pipeline: &model.Pipeline{Build: []model.Step{{Name: "Build", Type: "local_command"}}},
-		}}},
-	}
-	pipelineResult := Validate(project, pipelineChange)
-	assert.False(t, pipelineResult.OK)
-	assert.Contains(t, pipelineResult.Errors, "deployment-level pipeline is not supported; use project.pipelines")
 }
 
 func TestValidateRejectsUnknownProjectPipelineService(t *testing.T) {

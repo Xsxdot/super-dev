@@ -259,7 +259,6 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           read_only: controlMode === 'monitor' ? true : undefined,
           start_command: dep.start_command,
           stop_command: dep.stop_command,
-          pipeline: dep.pipeline,
         }
       }),
     })),

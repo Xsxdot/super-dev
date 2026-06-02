@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 校验项目、环境、服务、deployment 和项目级流水线引用
-//   - 拒绝删除语义和已废弃的 deployment-level pipeline
+//   - 拒绝删除语义
 //
 // 边界：
 //   - 不保存配置
@@ -20,7 +20,7 @@ import (
 //
 // 参数：
 //   - project: 已应用 patch 后的项目配置
-//   - change: 原始变更请求，用于识别删除语义和 deployment-level pipeline
+//   - change: 原始变更请求，用于识别删除语义
 //
 // 返回：
 //   - ValidationResult.OK 为 false 时，apply endpoint 不得保存配置
@@ -35,7 +35,6 @@ func Validate(project model.Project, change ChangeRequest) ValidationResult {
 	result.Errors = append(result.Errors, validateEnvironments(project.Environments)...)
 	result.Errors = append(result.Errors, validateServices(project)...)
 	result.Errors = append(result.Errors, validateProjectPipelines(project)...)
-	result.Errors = append(result.Errors, validateNoDeploymentPipeline(change)...)
 	result.OK = len(result.Errors) == 0
 	return result
 }
@@ -150,18 +149,6 @@ func validatePipelineSteps(id string, pipeline model.Pipeline) []string {
 		}
 	}
 	return errs
-}
-
-func validateNoDeploymentPipeline(change ChangeRequest) []string {
-	if change.Service == nil {
-		return nil
-	}
-	for _, dep := range change.Service.Deployments {
-		if dep.Pipeline != nil {
-			return []string{"deployment-level pipeline is not supported; use project.pipelines"}
-		}
-	}
-	return nil
 }
 
 func deploymentCommand(dep model.Deployment) string {

@@ -184,7 +184,6 @@ export interface Deployment {
   read_only?: boolean
   start_command?: string
   stop_command?: string
-  pipeline?: Pipeline
   status: '' | 'starting' | 'running' | 'failed'
   pid?: number
 }
@@ -429,7 +428,6 @@ export interface SetupDeployment {
   read_only?: boolean
   start_command?: string
   stop_command?: string
-  pipeline?: Pipeline
 }
 
 export interface SetupServiceEntry {
@@ -675,10 +673,6 @@ export const api = {
     request<PipelineTemplateSummary>('/api/pipeline/templates/import', {
       method: 'POST',
       body: JSON.stringify({ path }),
-    }),
-  previewDeploymentPipeline: (deploymentId: string) =>
-    request<PipelinePreviewResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/pipeline/preview`, {
-      method: 'POST',
     }),
   previewProjectPipeline: (projectId: string, pipelineId: string, payload: ProjectPipelinePreviewRequest) =>
     request<PipelinePreviewResponse>(

@@ -213,7 +213,6 @@ type deploymentYAML struct {
 	ReadOnly     bool                 `yaml:"read_only,omitempty"`
 	StartCommand string               `yaml:"start_command,omitempty"`
 	StopCommand  string               `yaml:"stop_command,omitempty"`
-	Pipeline     *model.Pipeline      `yaml:"pipeline,omitempty"`
 }
 
 // serviceYAML 对应 yaml 文件中服务条目，仅作为 deployment 的逻辑分组。
@@ -277,7 +276,6 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
-			Pipeline:     d.Pipeline,
 		}
 		if dep.Runtime != nil {
 			if dep.Command == "" {
@@ -353,7 +351,6 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
-			Pipeline:     d.Pipeline,
 		}
 	}
 	return out

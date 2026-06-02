@@ -1,4 +1,4 @@
-// Package model_test 验证插件化 deployment pipeline 的声明与执行模型。
+// Package model_test 验证插件化项目流水线的声明与执行模型。
 //
 // 职责：
 //   - 验证 Pipeline / Step 的插件化 DAG JSON roundtrip

@@ -389,63 +389,6 @@ func TestSaveAndReloadWithEnvironmentsAndDeployments(t *testing.T) {
 	assert.True(t, prod.ReadOnly)
 }
 
-// TestSaveLoadPreservesPipeline 验证 deployment 的 pipeline 经 Save→Load 往返不丢失。
-func TestSaveLoadPreservesPipeline(t *testing.T) {
-	dir := t.TempDir()
-	loader := config.NewLoader(dir)
-
-	proj := model.Project{
-		Name:         "demo",
-		RootPath:     dir,
-		Environments: []model.Environment{{Name: "dev", IsDev: true}},
-		Services: []model.Service{{
-			ID:   "s1",
-			Name: "web",
-			Deployments: []model.Deployment{{
-				ID:       "d1",
-				EnvName:  "dev",
-				Location: model.LocationRemote,
-				HostIDs:  []string{"h1"},
-				Pipeline: &model.Pipeline{
-					Variables: map[string]string{"app_name": "web"},
-					Roles:     map[string][]string{"compute": {"h1"}},
-					Build: []model.Step{{
-						Name: "Build",
-						Type: "local_command",
-						With: map[string]interface{}{"cmd": "go build ./cmd/web"},
-					}},
-					Deploy: []model.Step{{
-						Name: "Deploy",
-						Type: "include",
-						With: map[string]interface{}{
-							"template": "builtin://systemd-seamless-deploy",
-							"version":  "1.0.0",
-							"digest":   "sha256:abc",
-							"vars": map[string]interface{}{
-								"role":     "compute",
-								"app_name": "${app_name}",
-							},
-						},
-					}},
-				},
-			}},
-		}},
-	}
-
-	require.NoError(t, loader.Save(proj))
-	loaded, err := loader.Load()
-	require.NoError(t, err)
-	dep := loaded.Services[0].Deployments[0]
-	require.NotNil(t, dep.Pipeline)
-	assert.Equal(t, "web", dep.Pipeline.Variables["app_name"])
-	assert.Equal(t, []string{"h1"}, dep.Pipeline.Roles["compute"])
-	require.Len(t, dep.Pipeline.Build, 1)
-	assert.Equal(t, "local_command", dep.Pipeline.Build[0].Type)
-	require.Len(t, dep.Pipeline.Deploy, 1)
-	assert.Equal(t, "include", dep.Pipeline.Deploy[0].Type)
-	assert.Equal(t, "builtin://systemd-seamless-deploy", dep.Pipeline.Deploy[0].With["template"])
-}
-
 func TestSaveAndReloadPreservesRuntimeAndProjectPipelines(t *testing.T) {
 	dir := t.TempDir()
 	p := model.Project{

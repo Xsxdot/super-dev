@@ -154,7 +154,6 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 		ExtraArgs:    patch.ExtraArgs,
 		StartCommand: patch.StartCommand,
 		StopCommand:  patch.StopCommand,
-		Pipeline:     patch.Pipeline,
 	}
 	if patch.ReadOnly != nil {
 		dep.ReadOnly = *patch.ReadOnly
@@ -211,9 +210,6 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	}
 	if patch.StopCommand != "" {
 		dep.StopCommand = patch.StopCommand
-	}
-	if patch.Pipeline != nil {
-		dep.Pipeline = patch.Pipeline
 	}
 	return dep
 }

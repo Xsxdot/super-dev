@@ -309,22 +309,3 @@ func TestDeploymentCommandPresenceDoesNotControlReadOnly(t *testing.T) {
 	}
 	assert.False(t, withCommands.IsReadOnly())
 }
-
-func TestDeploymentPipelineOptional(t *testing.T) {
-	// 无 pipeline 的 deployment：字段为 nil，行为不变。
-	d := model.Deployment{ID: "d1", Location: model.LocationLocal, Command: "go run ."}
-	assert.Nil(t, d.Pipeline)
-
-	// 带插件化 pipeline 的 deployment：可序列化往返。
-	d.Pipeline = &model.Pipeline{Build: []model.Step{
-		{Name: "构建", Type: "local_command", With: map[string]interface{}{"cmd": "make"}},
-	}}
-	data, err := json.Marshal(d)
-	require.NoError(t, err)
-	var got model.Deployment
-	require.NoError(t, json.Unmarshal(data, &got))
-	require.NotNil(t, got.Pipeline)
-	require.Len(t, got.Pipeline.Build, 1)
-	assert.Equal(t, "构建", got.Pipeline.Build[0].Name)
-	assert.Equal(t, "local_command", got.Pipeline.Build[0].Type)
-}

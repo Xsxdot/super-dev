@@ -8,7 +8,7 @@
 // 边界：
 //   - 不直接读取或写入 .superdev/config.yaml
 //   - 不导入 agent/config、agent/operation 或 agent/store
-//   - 不支持删除和 deployment-level pipeline 编辑
+//   - 不支持删除
 package mcp
 
 import (

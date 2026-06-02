@@ -215,18 +215,18 @@ describe('configDraft', () => {
     expect(validateDraft(projectToDraft(makeProject()))).toEqual([])
   })
 
-  it('projectToDraft 深拷贝嵌套对象：改草稿的 env / pipeline 不影响原 Project', () => {
+  it('projectToDraft 深拷贝嵌套对象：改草稿的 env / logs 不影响原 Project', () => {
     const p = makeProject()
     const origDep = p.services[0]!.deployments![0]!
-    origDep.pipeline = { build: [{ name: 'Build', type: 'local_command', with: { cmd: 'make' } }] }
+    origDep.logs = { type: 'command', command: 'tail -F app.log', extra_args: ['--since', '1h'] }
     const draft = projectToDraft(p)
-    // 改草稿里的 env map 和 pipeline 步骤
+    // 改草稿里的 env map 和 logs 参数
     const draftDep = draft.services[0]!.deployments[0]!
     draftDep.env!.A = 'mutated'
-    ;(draftDep.pipeline!.build![0]!.with as Record<string, unknown>).cmd = 'mutated'
+    draftDep.logs!.extra_args![1] = '2h'
     // 原 Project 不应被影响
     expect(origDep.env!.A).toBe('1')
-    expect(origDep.pipeline!.build![0]!.with!.cmd).toBe('make')
+    expect(origDep.logs!.extra_args![1]).toBe('1h')
   })
 
   it('draftToPayload 透传 extra_args 与 env_file（编辑器未暴露但不应丢失）', () => {
@@ -286,14 +286,14 @@ describe('configDraft', () => {
     expect(payload.services[0].deployments[0].logs?.type).toBe('process')
   })
 
-  it('不允许 local deployment 使用 deployment-level pipeline 替代 command', () => {
+  it('不允许 local command deployment 省略 command', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0] = {
       id: 'd1',
       env_name: 'dev',
       location: 'local',
       status: '',
-      pipeline: { build: [{ name: 'Build', type: 'local_command', with: { cmd: 'go build' } }] },
+      runtime: { type: 'command', command: '' },
     }
     expect(validateDraft(draft).some(e => e.includes('命令'))).toBe(true)
   })
@@ -310,7 +310,7 @@ describe('configDraft', () => {
     expect(errors.some(e => e.includes('插件类型不能为空'))).toBe(true)
   })
 
-  it('remote deployment 必须选择主机，不能依赖 deployment-level pipeline 目标', () => {
+  it('remote deployment 必须选择主机', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].name = 'api'
     draft.services[0].deployments[0] = {
@@ -319,10 +319,6 @@ describe('configDraft', () => {
       location: 'remote',
       host_ids: [],
       status: '',
-      pipeline: {
-        roles: { deploy_1_targets: [] },
-        deploy: [{ name: 'Deploy', type: 'include', with: { vars: { role: 'deploy_1_targets' } } }],
-      },
     }
 
     expect(validateDraft(draft)).toContain('服务「api」在「dev」环境未选择主机')

@@ -29,7 +29,7 @@ const (
 var (
 	// ErrInvalidChange 表示配置变更 kind 或目标字段不合法。
 	ErrInvalidChange = errors.New("invalid config change")
-	// ErrUnsupportedOperation 表示请求包含删除或 deployment-level pipeline 等本期不支持的能力。
+	// ErrUnsupportedOperation 表示请求包含删除等本期不支持的能力。
 	ErrUnsupportedOperation = errors.New("unsupported config operation")
 )
 
@@ -83,7 +83,6 @@ type DeploymentPatch struct {
 	ReadOnly     *bool                `json:"read_only,omitempty"`
 	StartCommand string               `json:"start_command,omitempty"`
 	StopCommand  string               `json:"stop_command,omitempty"`
-	Pipeline     *model.Pipeline      `json:"pipeline,omitempty"`
 }
 
 // ProjectPipelinePatch 描述项目级流水线的 upsert。

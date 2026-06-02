@@ -325,6 +325,7 @@ type Environment struct {
 //
 // 边界：
 //   - 不负责把代码/构建包传到远程主机（那是部署系统的职责）
+//   - 不保存部署流水线，部署编排由 Project.Pipelines 统一承载
 //   - 运行时字段（Status、PID）不持久化到配置文件
 type Deployment struct {
 	ID       string         `json:"id"`
@@ -357,10 +358,6 @@ type Deployment struct {
 	// 远程可选启停命令；是否允许启停由 ReadOnly 显式控制。
 	StartCommand string `json:"start_command,omitempty"`
 	StopCommand  string `json:"stop_command,omitempty"`
-
-	// Pipeline 可选的部署流水线。非空时启停走流水线引擎而非单命令；
-	// 为空时使用 Command(local) / StartCommand+StopCommand(remote) 的单命令模式。
-	Pipeline *Pipeline `json:"pipeline,omitempty" yaml:"pipeline,omitempty"`
 
 	// 运行时字段，不持久化
 	Status ServiceStatus `json:"status" yaml:"-"`
