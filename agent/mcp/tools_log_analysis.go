@@ -45,6 +45,16 @@ type errorWindowArgs struct {
 	Limit        int    `json:"limit"`
 }
 
+type appendLogAnalysisArgs struct {
+	traceLogAnalysisArgs
+	SessionID    string `json:"session_id"`
+	AnalysisType string `json:"analysis_type"`
+	DeploymentID string `json:"deployment_id"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+	Since        string `json:"since"`
+}
+
 func (s *Server) analyzeTraceLogsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req traceLogAnalysisArgs
 	if err := decodeToolArgs(args, &req); err != nil {
@@ -67,6 +77,72 @@ func (s *Server) summarizeErrorWindowTool(ctx context.Context, args json.RawMess
 		return result, nil
 	}
 	return toolSuccess("error window summarized", errorWindowPayload(summary), nil, summary.NextSteps), nil
+}
+
+func (s *Server) appendLogAnalysisToSessionTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
+	var req appendLogAnalysisArgs
+	if err := decodeToolArgs(args, &req); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.AnalysisType = strings.TrimSpace(req.AnalysisType)
+	if req.SessionID == "" {
+		return toolError("invalid_arguments", "session_id is required", nil), nil
+	}
+	if req.AnalysisType != "trace" && req.AnalysisType != "error_window" {
+		return toolError("invalid_arguments", "analysis_type must be trace or error_window", nil), nil
+	}
+
+	var analysis any
+	var nextSteps []string
+	var result CallToolResult
+	var ok bool
+	switch req.AnalysisType {
+	case "trace":
+		traceReq := req.traceLogAnalysisArgs
+		analysisResult, toolResult, collected := s.collectTraceLogAnalysis(ctx, traceReq)
+		result = toolResult
+		ok = collected
+		analysis = traceAnalysisPayload(analysisResult)
+		nextSteps = analysisResult.NextSteps
+	case "error_window":
+		errorReq := errorWindowArgs{
+			ProjectID:    req.ProjectID,
+			ProjectName:  req.ProjectName,
+			DeploymentID: req.DeploymentID,
+			From:         req.From,
+			To:           req.To,
+			Since:        req.Since,
+			Limit:        req.Limit,
+		}
+		summary, toolResult, collected := s.collectErrorWindowSummary(ctx, errorReq)
+		result = toolResult
+		ok = collected
+		analysis = errorWindowPayload(summary)
+		nextSteps = summary.NextSteps
+	}
+	if !ok {
+		return result, nil
+	}
+
+	event, err := s.client.AppendDebugSessionEvent(ctx, req.SessionID, DebugSessionAppendEventRequest{
+		Type:    "log_analysis",
+		Actor:   "assistant",
+		Summary: req.AnalysisType + " analysis collected",
+		Data: map[string]any{
+			"analysis_type": req.AnalysisType,
+			"analysis":      analysis,
+		},
+	})
+	if err != nil {
+		return clientToolError(err), nil
+	}
+	data := map[string]any{
+		"event":         event,
+		"analysis_type": req.AnalysisType,
+		"analysis":      analysis,
+	}
+	return toolSuccess("log analysis appended to debug session", data, nil, nextSteps), nil
 }
 
 func (s *Server) collectTraceLogAnalysis(ctx context.Context, req traceLogAnalysisArgs) (TraceAnalysis, CallToolResult, bool) {

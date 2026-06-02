@@ -233,6 +233,19 @@ func summarizeErrorWindowInputSchema() map[string]any {
 	}
 }
 
+func appendLogAnalysisInputSchema() map[string]any {
+	schema := analyzeTraceLogsInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["session_id"] = map[string]any{"type": "string"}
+	properties["analysis_type"] = map[string]any{"type": "string", "enum": []string{"trace", "error_window"}}
+	properties["from"] = map[string]any{"type": "string"}
+	properties["to"] = map[string]any{"type": "string"}
+	properties["since"] = map[string]any{"type": "string"}
+	properties["deployment_id"] = map[string]any{"type": "string"}
+	schema["required"] = []string{"session_id", "analysis_type"}
+	return schema
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
 		{
@@ -363,6 +376,15 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.summarizeErrorWindowTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "append_log_analysis_to_session",
+				Title:       "Append log analysis to debug session",
+				Description: "Run deterministic log analysis and append the result as a local diagnostic record only; it does not change runtime state or configuration.",
+				InputSchema: appendLogAnalysisInputSchema(),
+			},
+			Handler: s.appendLogAnalysisToSessionTool,
 		},
 		{
 			Tool: Tool{

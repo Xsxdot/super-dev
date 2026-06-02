@@ -51,3 +51,29 @@ func TestSummarizeErrorWindowRequiresProject(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
+
+func TestAppendLogAnalysisToSessionRunsTraceAnalysisAndStoresEvent(t *testing.T) {
+	base := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		search: LogSearchResponse{
+			Query: "trace_id=t1",
+			Items: []model.LogEntry{{
+				ID:           9,
+				DeploymentID: "dep-api-dev",
+				Timestamp:    base,
+				Level:        "ERROR",
+				Message:      "trace_id=t1 connection refused",
+			}},
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "append_log_analysis_to_session", `{"session_id":"dbg_1","analysis_type":"trace","project_name":"demo","trace_id":"t1"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, "dbg_1", client.appendedSessionID)
+	assert.Equal(t, "log_analysis", client.appendedEventRequest.Type)
+	assert.Contains(t, client.appendedEventRequest.Data, "analysis")
+}
