@@ -125,10 +125,13 @@ export interface ProjectPipelineRole {
   hosts?: string[]
 }
 
+export type ArtifactKind = 'file' | 'image'
+
 export interface ProjectPipeline {
   id: string
   name: string
   services?: string[]
+  artifact_kind?: ArtifactKind
   variables?: Record<string, string>
   environments?: Record<string, PipelineEnvironment>
   roles?: Record<string, ProjectPipelineRole>
@@ -194,6 +197,62 @@ export interface PipelinePreviewResponse {
       tasks: Array<{ host_id?: string; host_name?: string; status: RunStatus }>
     }>
   }
+}
+
+export interface RunTask {
+  host_id?: string
+  host_name?: string
+  status: RunStatus
+  exit_code?: number
+  started_at?: number
+  finished_at?: number
+}
+
+export interface StepRun {
+  step_name: string
+  type: string
+  phase: PipelinePhase
+  needs?: string[]
+  status: RunStatus
+  tasks: RunTask[]
+}
+
+export interface Run {
+  id: string
+  project_id?: string
+  pipeline_id?: string
+  env_name?: string
+  deployment_id: string
+  artifact_version?: string
+  status: RunStatus
+  step_runs: StepRun[]
+  started_at: number
+  finished_at?: number
+}
+
+export interface ProjectPipelineRunsResponse {
+  items: Run[]
+}
+
+export interface ProjectPipelineDeployRequest {
+  env_name: string
+  host_ids?: string[]
+  artifact_version?: string
+  variables?: Record<string, string>
+}
+
+export interface RunLogLine {
+  id: number
+  run_id: string
+  step_name: string
+  host_id?: string
+  stream: string
+  line: string
+  at: number
+}
+
+export interface ProjectPipelineRunLogsResponse {
+  items: RunLogLine[]
 }
 
 export interface Deployment {
@@ -710,6 +769,19 @@ export const api = {
     request<PipelinePreviewResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/preview`,
       { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  deployProjectPipeline: (projectId: string, pipelineId: string, payload: ProjectPipelineDeployRequest) =>
+    request<Run>(`/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/deploy`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listProjectPipelineRuns: (projectId: string, pipelineId: string) =>
+    request<ProjectPipelineRunsResponse>(`/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`),
+  getProjectPipelineRun: (projectId: string, pipelineId: string, runId: string) =>
+    request<Run>(`/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}`),
+  readProjectPipelineRunLogs: (projectId: string, pipelineId: string, runId: string, params?: { step_name?: string; host_id?: string; limit?: number; before?: number }) =>
+    request<ProjectPipelineRunLogsResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/runs/${encodeURIComponent(runId)}/logs${qs(params)}`,
     ),
 
   // Env 级 selected
