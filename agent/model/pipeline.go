@@ -33,16 +33,15 @@ type Pipeline struct {
 
 // Step 是流水线中的插件化执行单元。
 type Step struct {
-	Name             string                 `json:"name" yaml:"name"`
-	Type             string                 `json:"type" yaml:"type"`
-	Needs            []string               `json:"needs,omitempty" yaml:"needs,omitempty"`
-	Roles            []string               `json:"roles,omitempty" yaml:"roles,omitempty"`
-	RunIf            string                 `json:"run_if,omitempty" yaml:"run_if,omitempty"`
-	BatchSize        int                    `json:"batch_size,omitempty" yaml:"batch_size,omitempty"`
-	Retries          int                    `json:"retries,omitempty" yaml:"retries,omitempty"`
-	RetryDelay       string                 `json:"retry_delay,omitempty" yaml:"retry_delay,omitempty"`
-	TolerateFailures string                 `json:"tolerate_failures,omitempty" yaml:"tolerate_failures,omitempty"`
-	With             map[string]interface{} `json:"with,omitempty" yaml:"with,omitempty"`
+	Name        string                 `json:"name" yaml:"name"`
+	Type        string                 `json:"type" yaml:"type"`
+	Needs       []string               `json:"needs,omitempty" yaml:"needs,omitempty"`
+	Roles       []string               `json:"roles,omitempty" yaml:"roles,omitempty"`
+	RunIf       string                 `json:"run_if,omitempty" yaml:"run_if,omitempty"`
+	Concurrency string                 `json:"concurrency,omitempty" yaml:"concurrency,omitempty"`
+	Retries     int                    `json:"retries,omitempty" yaml:"retries,omitempty"`
+	RetryDelay  string                 `json:"retry_delay,omitempty" yaml:"retry_delay,omitempty"`
+	With        map[string]interface{} `json:"with,omitempty" yaml:"with,omitempty"`
 }
 
 // RunStatus 通用执行状态，Run / StepRun / Task 共用。
@@ -65,12 +64,16 @@ const (
 
 // Run 一次流水线执行。
 type Run struct {
-	ID           string    `json:"id"`
-	DeploymentID string    `json:"deployment_id"`
-	Status       RunStatus `json:"status"`
-	StepRuns     []StepRun `json:"step_runs"`
-	StartedAt    int64     `json:"started_at"`
-	FinishedAt   int64     `json:"finished_at,omitempty"`
+	ID              string    `json:"id"`
+	ProjectID       string    `json:"project_id,omitempty"`
+	PipelineID      string    `json:"pipeline_id,omitempty"`
+	EnvName         string    `json:"env_name,omitempty"`
+	DeploymentID    string    `json:"deployment_id"`
+	ArtifactVersion string    `json:"artifact_version,omitempty"`
+	Status          RunStatus `json:"status"`
+	StepRuns        []StepRun `json:"step_runs"`
+	StartedAt       int64     `json:"started_at"`
+	FinishedAt      int64     `json:"finished_at,omitempty"`
 }
 
 // StepRun 是一个插件步骤在本次 Run 中的执行状态。

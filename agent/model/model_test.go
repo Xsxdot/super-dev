@@ -247,6 +247,32 @@ func TestProjectPipelinesJSON(t *testing.T) {
 	assert.Equal(t, "api", got.Pipelines[0].Roles["api_targets"].FromService)
 }
 
+func TestProjectPipelineArtifactKindJSON(t *testing.T) {
+	p := model.ProjectPipeline{
+		ID:           "deploy-prod",
+		Name:         "Deploy Prod",
+		ArtifactKind: model.ArtifactKindImage,
+		Variables:    map[string]string{"artifact": "registry.example.com/api:${version}"},
+		Pipeline: model.Pipeline{
+			Build: []model.Step{{Name: "Build", Type: "local_command"}},
+		},
+	}
+
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	var got model.ProjectPipeline
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, model.ArtifactKindImage, got.ArtifactKind)
+	assert.Equal(t, "registry.example.com/api:${version}", got.Variables["artifact"])
+}
+
+// 默认 file：未声明 artifact_kind 时反序列化应得到空值，由消费方按 file 兜底。
+func TestProjectPipelineArtifactKindDefaultsEmpty(t *testing.T) {
+	var got model.ProjectPipeline
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"p","name":"P"}`), &got))
+	assert.Equal(t, model.ArtifactKind(""), got.ArtifactKind)
+}
+
 func TestLogEntrySourceID(t *testing.T) {
 	e := model.LogEntry{ID: 1, DeploymentID: "svc-1", SourceID: "superdev-a3f9", Message: "hi"}
 	data, err := json.Marshal(e)

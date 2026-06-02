@@ -187,8 +187,8 @@ func renderSteps(steps []model.Step, vars map[string]string) []model.Step {
 		out[i].Roles = renderStringSlice(step.Roles, vars)
 		out[i].Needs = renderStringSlice(step.Needs, vars)
 		out[i].RunIf = pipelinetemplate.RenderPipelineVars(step.RunIf, vars)
+		out[i].Concurrency = pipelinetemplate.RenderPipelineVars(step.Concurrency, vars)
 		out[i].RetryDelay = pipelinetemplate.RenderPipelineVars(step.RetryDelay, vars)
-		out[i].TolerateFailures = pipelinetemplate.RenderPipelineVars(step.TolerateFailures, vars)
 		out[i].With = renderInterfaceMap(step.With, vars)
 	}
 	return out

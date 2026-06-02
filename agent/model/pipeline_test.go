@@ -79,3 +79,32 @@ func TestRunJSONRoundTripUsesDAGStepRun(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, r, got)
 }
+
+func TestStepConcurrencyAndRunArtifactVersionJSON(t *testing.T) {
+	run := model.Run{
+		ID:              "run-1",
+		ProjectID:       "p1",
+		PipelineID:      "deploy-prod",
+		EnvName:         "prod",
+		DeploymentID:    "project:p1:pipeline:deploy-prod:env:prod",
+		ArtifactVersion: "20260602112233",
+		Status:          model.RunStatusRunning,
+		StepRuns: []model.StepRun{{
+			StepName: "Upload",
+			Type:     "transfer",
+			Phase:    model.PhaseDeploy,
+			Status:   model.StatusPending,
+			Tasks:    []model.Task{{HostID: "h1", HostName: "host-1", Status: model.StatusPending}},
+		}},
+	}
+	step := model.Step{Name: "Upload", Type: "transfer", Concurrency: "batch:2"}
+	data, err := json.Marshal(map[string]any{"run": run, "step": step})
+	require.NoError(t, err)
+	var got struct {
+		Run  model.Run  `json:"run"`
+		Step model.Step `json:"step"`
+	}
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "20260602112233", got.Run.ArtifactVersion)
+	assert.Equal(t, "batch:2", got.Step.Concurrency)
+}

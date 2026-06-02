@@ -107,8 +107,8 @@ func RenderStepTemplateVars(step Step, vars map[string]interface{}) (Step, error
 	out.Needs = renderTemplateStringSlice(out.Needs, vars)
 	out.Roles = renderTemplateStringSlice(out.Roles, vars)
 	out.RunIf = renderTemplateString(out.RunIf, vars)
+	out.Concurrency = renderTemplateString(out.Concurrency, vars)
 	out.RetryDelay = renderTemplateString(out.RetryDelay, vars)
-	out.TolerateFailures = renderTemplateString(out.TolerateFailures, vars)
 	out.With = renderTemplateMap(out.With, vars)
 	return out, nil
 }

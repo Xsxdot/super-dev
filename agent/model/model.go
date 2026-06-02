@@ -296,9 +296,13 @@ type ProjectPipelineRole struct {
 //   - 不描述单个服务如何长期运行，该职责属于 Deployment.Runtime
 //   - 不保存 Run 状态
 type ProjectPipeline struct {
-	ID           string                         `json:"id" yaml:"id"`
-	Name         string                         `json:"name" yaml:"name"`
-	Services     []string                       `json:"services,omitempty" yaml:"services,omitempty"`
+	ID       string   `json:"id" yaml:"id"`
+	Name     string   `json:"name" yaml:"name"`
+	Services []string `json:"services,omitempty" yaml:"services,omitempty"`
+	// ArtifactKind 声明本流水线产出的制品类型，决定引擎如何登记与回滚。
+	// 制品位置由保留字变量 artifact 提供：file 时是本地路径，image 时是 registry/image:tag。
+	// 为空时按 file 兜底。
+	ArtifactKind ArtifactKind                   `json:"artifact_kind,omitempty" yaml:"artifact_kind,omitempty"`
 	Variables    map[string]string              `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments map[string]PipelineEnvironment `json:"environments,omitempty" yaml:"environments,omitempty"`
 	Roles        map[string]ProjectPipelineRole `json:"roles,omitempty" yaml:"roles,omitempty"`
