@@ -100,7 +100,7 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
-	a.projects = append(a.projects, p)
+	a.appendProjectLocked(p)
 	a.mu.Unlock()
 
 	jsonOK(w, p)

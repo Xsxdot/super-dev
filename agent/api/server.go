@@ -285,15 +285,24 @@ func (a *App) loadRegisteredProjects() {
 		// 将新生成的 ID 写回配置，避免重启后 ID 变化
 		_ = loader.Save(p)
 		a.mu.Lock()
-		a.projects = append(a.projects, p)
-		// 为该项目所有 deployment 构造 LogBackend
-		for _, svc := range p.Services {
-			for _, dep := range svc.Deployments {
-				b := buildBackend(dep, svc.ID, a.store, a.buf, a.tunnelResolver)
-				a.backends[dep.ID] = b
-			}
-		}
+		a.appendProjectLocked(p)
 		a.mu.Unlock()
+	}
+}
+
+func (a *App) appendProjectLocked(p model.Project) {
+	a.projects = append(a.projects, p)
+	a.registerProjectBackendsLocked(p)
+}
+
+func (a *App) registerProjectBackendsLocked(p model.Project) {
+	for _, svc := range p.Services {
+		for _, dep := range svc.Deployments {
+			// 新增项目和启动时加载项目必须共享同一套 backend 构建逻辑，
+			// 否则运行期注册项目后 deployment 日志接口会短暂或永久 404。
+			b := buildBackend(dep, svc.ID, a.store, a.buf, a.tunnelResolver)
+			a.backends[dep.ID] = b
+		}
 	}
 }
 

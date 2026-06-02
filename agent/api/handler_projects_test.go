@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,4 +84,57 @@ func TestAddProject_EmptyDirCreatesSkeleton(t *testing.T) {
 	var projects []model.Project
 	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
 	assert.Len(t, projects, 1, "addProject 应落地项目")
+}
+
+// TestAddProject_BuildsDeploymentLogBackends 验证新增项目后日志接口立刻可用。
+//
+// 这个场景覆盖运行期添加项目：loadRegisteredProjects 会在 agent 启动时构造
+// backends，但 POST /api/projects 也必须同步构造，否则 MCP tail_logs 会 404。
+func TestAddProject_BuildsDeploymentLogBackends(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeProjectWithDeployment(t, dir)
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	logsResp, err := http.Get(srv.URL + "/api/deployments/web-dev/logs")
+	require.NoError(t, err)
+	defer logsResp.Body.Close()
+	require.Equal(t, http.StatusOK, logsResp.StatusCode)
+
+	var body struct {
+		Items []model.LogEntry `json:"items"`
+	}
+	require.NoError(t, json.NewDecoder(logsResp.Body).Decode(&body))
+	assert.NotNil(t, body.Items)
+}
+
+func writeProjectWithDeployment(t *testing.T, dir string) {
+	t.Helper()
+	cfgDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	content := `
+name: backend-sync
+environments:
+  - name: dev
+    is_dev: true
+    order: 1
+services:
+  - id: web
+    name: web
+    deployments:
+      - id: web-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: echo ready
+        working_dir: .
+        logs:
+          type: process
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(content), 0o644))
 }
