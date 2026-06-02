@@ -18,13 +18,20 @@ import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
 import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
 import PipelinesTab from '@/components/Overview/PipelinesTab.vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const route = useRoute()
 const agentStore = useAgentStore()
+const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
 const activeTab = ref<'runtime' | 'pipelines'>('runtime')
 const projectId = computed(() => String(route.params.id ?? ''))
 const project = computed(() => agentStore.projectById(projectId.value))
+
+function openInstanceLogs(deploymentId: string) {
+  const info = agentStore.serviceForDeployment(deploymentId)
+  workspace.openDeployment(deploymentId, info ? `${info.service.name} · ${info.envName}` : deploymentId)
+}
 </script>
 
 <template>
@@ -42,6 +49,7 @@ const project = computed(() => agentStore.projectById(projectId.value))
         v-if="activeTab === 'runtime'"
         :project-id="project.id"
         :active="activeTab === 'runtime'"
+        @open-logs="openInstanceLogs"
       />
       <PipelinesTab v-else :project="project" />
     </template>
