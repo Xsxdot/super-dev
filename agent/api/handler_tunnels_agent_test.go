@@ -1,0 +1,118 @@
+// handler_tunnels_agent_test.go 验证隧道接口外贴 agent 健康状态。
+//
+// 职责：
+//   - 验证 /api/tunnels 快照包含当前 agent 健康状态
+//   - 验证 /ws/tunnels 能转发只包含 host_id + agent 的部分更新
+//
+// 边界：
+//   - 不建立真实 SSH 隧道，Dialer 使用 fake conn
+//   - 不测试前端 merge 行为
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/agenthealth"
+	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/tunnel"
+)
+
+// successTunnelDialer 避免测试建立真实 SSH 隧道。
+type successTunnelDialer struct{}
+
+func (successTunnelDialer) Dial(host model.Host) (*tunnel.Conn, error) {
+	return tunnel.NewFakeConn(57100), nil
+}
+
+// staticAgentHealthProber 给测试 Monitor 注入固定探活结果。
+type staticAgentHealthProber struct {
+	result agenthealth.ProbeResult
+	err    error
+}
+
+func (s staticAgentHealthProber) Probe(ctx context.Context, hostID string) (agenthealth.ProbeResult, error) {
+	if s.err != nil {
+		return agenthealth.ProbeResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func TestListTunnelsIncludesAgentStatus(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+
+	host, err := app.remoteStore.AddHost(model.Host{
+		ID:      "h1",
+		Name:    "srv",
+		SSHHost: "127.0.0.1",
+		SSHUser: "root",
+		Tags:    []string{},
+	})
+	require.NoError(t, err)
+	_, err = app.tunnels.EnsureConnected(host)
+	require.NoError(t, err)
+	app.agentHealth.ProbeOnce(context.Background(), host.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tunnels", nil)
+	rr := httptest.NewRecorder()
+	app.listTunnels(rr, req)
+
+	var got []tunnelStatusDTO
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.Len(t, got, 1)
+	assert.Equal(t, "h1", got[0].HostID)
+	assert.Equal(t, "open", got[0].State)
+	assert.Equal(t, "healthy", got[0].Agent)
+}
+
+func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+	app.agentHealth.SetPollInterval(time.Hour)
+
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/tunnels"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Dial 返回后 handler 仍可能刚完成 Upgrade；给订阅注册一个短暂窗口，避免丢掉首个 agent 事件。
+	time.Sleep(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	signals := make(chan agenthealth.TunnelSignal, 1)
+	go app.agentHealth.Run(ctx, signals)
+	signals <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+
+	var got map[string]any
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, conn.ReadJSON(&got))
+	assert.Equal(t, "h1", got["host_id"])
+	assert.Equal(t, "healthy", got["agent"])
+	assert.NotContains(t, got, "state")
+	assert.NotContains(t, got, "local_port")
+	assert.NotContains(t, got, "error")
+}

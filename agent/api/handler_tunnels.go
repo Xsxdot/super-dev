@@ -35,9 +35,10 @@ func tunnelStateLabel(s tunnel.Status) string {
 
 type tunnelStatusDTO struct {
 	HostID    string `json:"host_id"`
-	State     string `json:"state"`
-	LocalPort int    `json:"local_port"`
+	State     string `json:"state,omitempty"`
+	LocalPort int    `json:"local_port,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Agent     string `json:"agent,omitempty"`
 }
 
 // listTunnels 处理 GET /api/tunnels。
@@ -58,6 +59,7 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 			State:     tunnelStateLabel(st),
 			LocalPort: a.tunnels.LocalPort(h.ID),
 			Error:     a.tunnels.ErrorOf(h.ID),
+			Agent:     string(a.agentHealth.Status(h.ID)),
 		})
 	}
 	jsonOK(w, out)
@@ -97,7 +99,7 @@ func (a *App) disconnectTunnel(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "disconnected"})
 }
 
-// wsTunnels 处理 GET /ws/tunnels,推送状态变化事件。
+// wsTunnels 处理 GET /ws/tunnels,推送隧道状态与 agent 健康变化事件。
 func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -106,12 +108,15 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	subID := uuid.NewString()
-	ch := a.tunnels.Subscribe(subID)
+	tunCh := a.tunnels.Subscribe(subID)
 	defer a.tunnels.Unsubscribe(subID)
+	agentCh := a.agentHealth.Subscribe(subID)
+	defer a.agentHealth.Unsubscribe(subID)
+
 	ctx := r.Context()
 	for {
 		select {
-		case ev, ok := <-ch:
+		case ev, ok := <-tunCh:
 			if !ok {
 				return
 			}
@@ -120,7 +125,17 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 				State:     tunnelStateLabel(ev.Status),
 				LocalPort: a.tunnels.LocalPort(ev.HostID),
 				Error:     ev.Err,
+				Agent:     string(a.agentHealth.Status(ev.HostID)),
 			}
+			if err := conn.WriteJSON(dto); err != nil {
+				return
+			}
+		case ev, ok := <-agentCh:
+			if !ok {
+				return
+			}
+			// agent 部分更新：只带 host_id + agent，靠前端 merge 保留隧道字段。
+			dto := tunnelStatusDTO{HostID: ev.HostID, Agent: string(ev.Status)}
 			if err := conn.WriteJSON(dto); err != nil {
 				return
 			}
