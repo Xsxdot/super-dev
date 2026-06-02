@@ -26,6 +26,14 @@ import (
 type debugSessionDetailResponse struct {
 	Session debugsession.Session `json:"session"`
 	Events  []debugsession.Event `json:"events"`
+	Count   int                  `json:"count"`
+	// Truncated 表示事件列表因 limit 被截断，避免调用方误以为拿到了完整历史。
+	Truncated bool `json:"truncated"`
+}
+
+type debugSessionCreateResponse struct {
+	Session debugsession.Session `json:"session"`
+	Event   debugsession.Event   `json:"event"`
 }
 
 // listDebugSessions 处理 GET /api/debug-sessions。
@@ -65,12 +73,12 @@ func (a *App) createDebugSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, _, err := a.debugSessions.Create(r.Context(), resolved)
+	session, event, err := a.debugSessions.Create(r.Context(), resolved)
 	if err != nil {
 		writeDebugSessionStoreError(w, err)
 		return
 	}
-	jsonOK(w, session)
+	jsonOK(w, debugSessionCreateResponse{Session: session, Event: event})
 }
 
 // getDebugSession 处理 GET /api/debug-sessions/{id}。
@@ -85,12 +93,18 @@ func (a *App) getDebugSession(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	session, events, err := a.debugSessions.Get(r.Context(), r.PathValue("id"), limit)
+	session, events, err := a.debugSessions.Get(r.Context(), r.PathValue("id"), 0)
 	if err != nil {
 		writeDebugSessionStoreError(w, err)
 		return
 	}
-	jsonOK(w, debugSessionDetailResponse{Session: session, Events: events})
+	count := len(events)
+	truncated := false
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+		truncated = true
+	}
+	jsonOK(w, debugSessionDetailResponse{Session: session, Events: events, Count: count, Truncated: truncated})
 }
 
 // appendDebugSessionEvent 处理 POST /api/debug-sessions/{id}/events。

@@ -38,9 +38,12 @@ func TestDebugSessionAPI_CreateAppendGetClose(t *testing.T) {
 		"title":         "API failure",
 		"question":      "Why does api-dev fail?",
 	}
-	session := postJSONForTest[debugsession.Session](t, srv.URL+"/api/debug-sessions", createBody, http.StatusOK)
+	created := postJSONForTest[debugSessionCreateResponse](t, srv.URL+"/api/debug-sessions", createBody, http.StatusOK)
+	session := created.Session
 	require.NotEmpty(t, session.ID)
+	require.NotEmpty(t, created.Event.ID)
 	assert.Equal(t, debugsession.StatusOpen, session.Status)
+	assert.Equal(t, debugsession.EventStatusChange, created.Event.Type)
 
 	event := postJSONForTest[debugsession.Event](t, srv.URL+"/api/debug-sessions/"+session.ID+"/events", map[string]any{
 		"type":    debugsession.EventObservation,
@@ -56,13 +59,12 @@ func TestDebugSessionAPI_CreateAppendGetClose(t *testing.T) {
 	require.NoError(t, err)
 	defer detailResp.Body.Close()
 	require.Equal(t, http.StatusOK, detailResp.StatusCode)
-	var detail struct {
-		Session debugsession.Session `json:"session"`
-		Events  []debugsession.Event `json:"events"`
-	}
+	var detail debugSessionDetailResponse
 	require.NoError(t, json.NewDecoder(detailResp.Body).Decode(&detail))
 	assert.Equal(t, session.ID, detail.Session.ID)
 	assert.Len(t, detail.Events, 2)
+	assert.Equal(t, 2, detail.Count)
+	assert.False(t, detail.Truncated)
 
 	closed := postJSONForTest[debugsession.Session](t, srv.URL+"/api/debug-sessions/"+session.ID+"/close", map[string]any{
 		"summary": "collected enough evidence",
@@ -98,11 +100,12 @@ func TestDebugSessionAPI_RejectsAppendToClosedSession(t *testing.T) {
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 
-	session := postJSONForTest[debugsession.Session](t, srv.URL+"/api/debug-sessions", map[string]any{
+	created := postJSONForTest[debugSessionCreateResponse](t, srv.URL+"/api/debug-sessions", map[string]any{
 		"project_id": "proj-debug",
 		"title":      "closed",
 		"question":   "closed",
 	}, http.StatusOK)
+	session := created.Session
 	_ = postJSONForTest[debugsession.Session](t, srv.URL+"/api/debug-sessions/"+session.ID+"/close", map[string]any{}, http.StatusOK)
 
 	postJSONForTest[map[string]string](t, srv.URL+"/api/debug-sessions/"+session.ID+"/events", map[string]any{

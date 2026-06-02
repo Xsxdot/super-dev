@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,16 @@ type AgentClient interface {
 	SearchLogs(context.Context, url.Values) (LogSearchResponse, error)
 	// FetchLogContext 拉取指定日志附近的跨服务上下文。
 	FetchLogContext(context.Context, url.Values) (LogContextResponse, error)
+	// CreateDebugSession 创建本机排障会话。
+	CreateDebugSession(context.Context, DebugSessionCreateRequest) (DebugSessionCreateResponse, error)
+	// ListDebugSessions 查询本机排障会话列表。
+	ListDebugSessions(context.Context, url.Values) ([]DebugSession, error)
+	// GetDebugSession 读取本机排障会话详情。
+	GetDebugSession(context.Context, string, int) (DebugSessionDetailResponse, error)
+	// AppendDebugSessionEvent 追加本机排障会话事件。
+	AppendDebugSessionEvent(context.Context, string, DebugSessionAppendEventRequest) (DebugSessionEvent, error)
+	// CloseDebugSession 关闭本机排障会话。
+	CloseDebugSession(context.Context, string, string) (DebugSession, error)
 	// StartDeployment 请求 agent 启动 deployment。
 	StartDeployment(context.Context, string) error
 	// StopDeployment 请求 agent 停止 deployment。
@@ -156,6 +167,84 @@ func (c *HTTPAgentClient) SearchLogs(ctx context.Context, q url.Values) (LogSear
 func (c *HTTPAgentClient) FetchLogContext(ctx context.Context, q url.Values) (LogContextResponse, error) {
 	var out LogContextResponse
 	return out, c.get(ctx, withQuery("/api/logs/context", q), &out)
+}
+
+// CreateDebugSession 创建本机排障会话。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - req: 会话归属和问题描述
+//
+// 返回：
+//   - 创建后的会话和初始事件
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) CreateDebugSession(ctx context.Context, req DebugSessionCreateRequest) (DebugSessionCreateResponse, error) {
+	var out DebugSessionCreateResponse
+	return out, c.post(ctx, "/api/debug-sessions", req, &out)
+}
+
+// ListDebugSessions 查询本机排障会话列表。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - q: 过滤查询参数
+//
+// 返回：
+//   - 会话列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListDebugSessions(ctx context.Context, q url.Values) ([]DebugSession, error) {
+	var out []DebugSession
+	return out, c.get(ctx, withQuery("/api/debug-sessions", q), &out)
+}
+
+// GetDebugSession 读取本机排障会话详情。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - id: 会话 ID
+//   - limit: 事件数量限制，正数时传给 agent
+//
+// 返回：
+//   - 会话详情
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) GetDebugSession(ctx context.Context, id string, limit int) (DebugSessionDetailResponse, error) {
+	var out DebugSessionDetailResponse
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	path := "/api/debug-sessions/" + url.PathEscape(id)
+	return out, c.get(ctx, withQuery(path, q), &out)
+}
+
+// AppendDebugSessionEvent 追加本机排障会话事件。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - id: 会话 ID
+//   - req: 事件内容
+//
+// 返回：
+//   - 新事件
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) AppendDebugSessionEvent(ctx context.Context, id string, req DebugSessionAppendEventRequest) (DebugSessionEvent, error) {
+	var out DebugSessionEvent
+	return out, c.post(ctx, "/api/debug-sessions/"+url.PathEscape(id)+"/events", req, &out)
+}
+
+// CloseDebugSession 关闭本机排障会话。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - id: 会话 ID
+//   - summary: 关闭原因摘要
+//
+// 返回：
+//   - 关闭后的会话
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) CloseDebugSession(ctx context.Context, id string, summary string) (DebugSession, error) {
+	var out DebugSession
+	return out, c.post(ctx, "/api/debug-sessions/"+url.PathEscape(id)+"/close", map[string]string{"summary": summary}, &out)
 }
 
 // StartDeployment 请求 agent 启动 deployment。

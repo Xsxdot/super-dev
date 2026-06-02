@@ -53,3 +53,65 @@ type PipelineTemplateSummary struct {
 
 // PipelineTemplatePreview 是模板 dry-run preview 结果。
 type PipelineTemplatePreview = pipelinetemplate.PreviewResult
+
+// DebugSession 是 MCP 侧使用的本机排障会话 DTO。
+type DebugSession struct {
+	ID           string     `json:"id"`
+	ProjectID    string     `json:"project_id"`
+	ProjectName  string     `json:"project_name"`
+	EnvName      string     `json:"env_name,omitempty"`
+	ServiceID    string     `json:"service_id,omitempty"`
+	ServiceName  string     `json:"service_name,omitempty"`
+	DeploymentID string     `json:"deployment_id,omitempty"`
+	Title        string     `json:"title"`
+	Question     string     `json:"question"`
+	Status       string     `json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+}
+
+// DebugSessionEvent 是 MCP 侧使用的排障会话事件 DTO。
+type DebugSessionEvent struct {
+	ID        string         `json:"id"`
+	SessionID string         `json:"session_id"`
+	Type      string         `json:"type"`
+	Actor     string         `json:"actor"`
+	Summary   string         `json:"summary"`
+	Data      map[string]any `json:"data,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// DebugSessionCreateRequest 描述 MCP 创建排障会话的请求。
+type DebugSessionCreateRequest struct {
+	ProjectID    string `json:"project_id,omitempty"`
+	ProjectName  string `json:"project_name,omitempty"`
+	EnvName      string `json:"env_name,omitempty"`
+	ServiceID    string `json:"service_id,omitempty"`
+	ServiceName  string `json:"service_name,omitempty"`
+	DeploymentID string `json:"deployment_id,omitempty"`
+	Title        string `json:"title"`
+	Question     string `json:"question"`
+}
+
+// DebugSessionAppendEventRequest 描述 MCP 追加排障会话事件的请求。
+type DebugSessionAppendEventRequest struct {
+	Type    string         `json:"type"`
+	Actor   string         `json:"actor"`
+	Summary string         `json:"summary"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
+// DebugSessionCreateResponse 是创建排障会话后的响应。
+type DebugSessionCreateResponse struct {
+	Session DebugSession      `json:"session"`
+	Event   DebugSessionEvent `json:"event"`
+}
+
+// DebugSessionDetailResponse 是读取排障会话详情后的响应。
+type DebugSessionDetailResponse struct {
+	Session   DebugSession        `json:"session"`
+	Events    []DebugSessionEvent `json:"events"`
+	Count     int                 `json:"count"`
+	Truncated bool                `json:"truncated"`
+}
