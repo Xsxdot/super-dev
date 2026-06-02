@@ -72,6 +72,7 @@ export default {
       projects: '项目',
       hosts: '主机管理',
       templates: '模板',
+      approvals: '操作审批',
     },
     general: {
       title: '通用',
@@ -108,6 +109,17 @@ export default {
       version: '版本',
       digest: '摘要',
       actions: '操作',
+    },
+    approvals: {
+      title: '操作审批',
+      empty: '暂无待审批操作',
+      approve: '批准',
+      reject: '拒绝',
+      refresh: '刷新',
+      risk: '风险',
+      effects: '影响',
+      reasons: '原因',
+      pendingCount: '{count} 个待审批',
     },
     hosts: {
       title: '主机管理',

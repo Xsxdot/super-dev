@@ -57,3 +57,28 @@ describe('pipeline template api', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/pipeline/templates'), expect.any(Object))
   })
 })
+
+describe('operation approval api', () => {
+  it('loads approvals and approves one request', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([
+          { id: 'opa_1', status: 'pending', plan: { id: 'op_1', kind: 'runtime.restart', risk_level: 'high', target: {}, fingerprint: 'fp_1' } },
+        ]),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'opa_1',
+          status: 'approved',
+        }),
+      } as Response)
+
+    const approvals = await api.listOperationApprovals({ status: 'pending' })
+    expect(approvals[0].id).toBe('opa_1')
+
+    await api.approveOperationApproval('opa_1', { decided_by: 'user', note: 'ok' })
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(expect.stringContaining('/api/operation-approvals/opa_1/approve'), expect.any(Object))
+  })
+})

@@ -72,6 +72,7 @@ export default {
       projects: 'Projects',
       hosts: 'Hosts',
       templates: 'Templates',
+      approvals: 'Approvals',
     },
     general: {
       title: 'General',
@@ -108,6 +109,17 @@ export default {
       version: 'Version',
       digest: 'Digest',
       actions: 'Actions',
+    },
+    approvals: {
+      title: 'Operation Approvals',
+      empty: 'No pending operations',
+      approve: 'Approve',
+      reject: 'Reject',
+      refresh: 'Refresh',
+      risk: 'Risk',
+      effects: 'Effects',
+      reasons: 'Reasons',
+      pendingCount: '{count} pending',
     },
     hosts: {
       title: 'Hosts',

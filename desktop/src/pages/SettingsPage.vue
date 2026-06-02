@@ -16,9 +16,11 @@ import { useI18n } from 'vue-i18n'
 import { open, message, ask } from '@tauri-apps/plugin-dialog'
 import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
+import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
@@ -26,22 +28,30 @@ import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.v
 import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates' | 'approvals'
 
 const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
+const operationApprovalStore = useOperationApprovalStore()
 const pipelineTemplateStore = usePipelineTemplateStore()
 const settingsStore = useSettingsStore()
 const { t } = useI18n()
 const selectedTab = ref<SettingsTab>(
-  route.query.tab === 'hosts' ? 'hosts' : route.query.tab === 'templates' ? 'templates' : 'general',
+  route.query.tab === 'hosts'
+    ? 'hosts'
+    : route.query.tab === 'templates'
+      ? 'templates'
+      : route.query.tab === 'approvals'
+        ? 'approvals'
+        : 'general',
 )
 
 onMounted(() => {
   void settingsStore.loadAgentSettings()
   void settingsStore.loadAutostart()
   void pipelineTemplateStore.loadTemplates().catch(() => undefined)
+  void operationApprovalStore.loadPending()
 })
 
 const editorProject = ref<Project | null>(null)
@@ -273,6 +283,19 @@ const retentionDays = computed({
         </svg>
         {{ t('settings.tabs.templates') }}
       </button>
+      <button
+        data-test="settings-tab-approvals"
+        class="tab-btn"
+        :class="{ active: selectedTab === 'approvals' }"
+        @click="selectedTab = 'approvals'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <path d="M8 1.8l5 2v3.7c0 3.1-1.8 5.8-5 7-3.2-1.2-5-3.9-5-7V3.8z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M5.5 8.2l1.5 1.5 3.3-3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        {{ t('settings.tabs.approvals') }}
+        <span v-if="operationApprovalStore.pendingCount > 0" class="tab-count">{{ operationApprovalStore.pendingCount }}</span>
+      </button>
     </aside>
 
     <main class="settings-main">
@@ -395,12 +418,16 @@ const retentionDays = computed({
         <HostManagerTab />
       </section>
 
-      <section v-else class="pane">
+      <section v-else-if="selectedTab === 'templates'" class="pane">
         <TemplateManagerTab
           :templates="pipelineTemplateStore.templates"
           :on-import="importPipelineTemplate"
           :on-view="viewTemplate"
         />
+      </section>
+
+      <section v-else class="pane">
+        <OperationApprovalsTab />
       </section>
     </main>
 
@@ -460,6 +487,17 @@ const retentionDays = computed({
 .tab-btn.active {
   background: var(--bg-overlay);
   color: var(--text-primary);
+}
+.tab-count {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
 }
 .settings-main {
   flex: 1;

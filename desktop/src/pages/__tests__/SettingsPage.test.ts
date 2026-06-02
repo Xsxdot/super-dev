@@ -152,6 +152,17 @@ describe('SettingsPage', () => {
     expect(wrapper.text()).toContain('模板')
   })
 
+  it('支持打开操作审批 tab', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await wrapper.find('[data-test="settings-tab-approvals"]').trigger('click')
+
+    expect(wrapper.find('[data-test="operation-approvals-tab"]').exists()).toBe(true)
+  })
+
   it('导入模板时打开 YAML 文件选择器并刷新模板 store', async () => {
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)

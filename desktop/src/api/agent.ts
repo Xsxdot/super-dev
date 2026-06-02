@@ -24,6 +24,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+function qs(params?: Record<string, string | number | undefined>): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  }
+  const encoded = query.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
 export type DeployLocation = 'local' | 'remote'
 export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
 export type ControlMode = 'monitor' | 'managed'
@@ -232,6 +241,74 @@ export interface LogRule {
 
 export interface AgentSettings {
   log_retention_days: number
+}
+
+export interface OperationTarget {
+  project_id?: string
+  project_name?: string
+  env_name?: string
+  service_id?: string
+  service_name?: string
+  deployment_id?: string
+  template_path?: string
+  template_digest?: string
+  pipeline_id?: string
+}
+
+export interface OperationCheck {
+  name: string
+  status: string
+  message: string
+}
+
+export interface OperationPlan {
+  id: string
+  kind: string
+  target: OperationTarget
+  target_summary?: string
+  risk_level: 'low' | 'medium' | 'high' | 'critical' | string
+  requires_approval: boolean
+  denied: boolean
+  reasons?: string[]
+  expected_effects?: string[]
+  checks?: OperationCheck[]
+  fingerprint: string
+  created_at?: string
+  expires_at?: string
+}
+
+export interface OperationApproval {
+  id: string
+  plan: OperationPlan
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'used' | string
+  requested_by?: string
+  requester_label?: string
+  created_at?: string
+  updated_at?: string
+  expires_at?: string
+  decided_by?: string
+  decision_note?: string
+}
+
+export interface OperationApprovalDetail {
+  approval: OperationApproval
+  approval_token?: string
+}
+
+export interface OperationAuditEvent {
+  id: string
+  kind: string
+  action: string
+  approval_id?: string
+  plan: OperationPlan
+  summary: string
+  data?: Record<string, unknown>
+  created_at?: string
+}
+
+export interface OperationAuditList {
+  events: OperationAuditEvent[]
+  count: number
 }
 
 export interface FetchLogsParams {
@@ -555,6 +632,24 @@ export const api = {
   getSettings: () => request<AgentSettings>('/api/settings'),
   putSettings: (settings: AgentSettings) =>
     request<AgentSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+
+  // Operation 审批
+  listOperationApprovals: (params?: { status?: string; project_id?: string; limit?: number }) =>
+    request<OperationApproval[]>(`/api/operation-approvals${qs(params)}`),
+  getOperationApproval: (id: string) =>
+    request<OperationApprovalDetail>(`/api/operation-approvals/${encodeURIComponent(id)}`),
+  approveOperationApproval: (id: string, payload: { decided_by: string; note?: string }) =>
+    request<OperationApproval>(`/api/operation-approvals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  rejectOperationApproval: (id: string, payload: { decided_by: string; note?: string }) =>
+    request<OperationApproval>(`/api/operation-approvals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listOperationAudit: (params?: { project_id?: string; kind?: string; approval_id?: string; since?: string; limit?: number }) =>
+    request<OperationAuditList>(`/api/operation-audit${qs(params)}`),
 
   // 服务
   listServices: (projectId?: string) => {
