@@ -105,6 +105,20 @@ function tunnelLabel(hostId: string): string {
   return status.state
 }
 
+function agentHealthLabel(hostId: string): string {
+  const status = store.tunnelOf(hostId)
+  // 隧道未连接时不显示 agent 状态（agent 状态依附隧道连通）
+  if (!status || !status.state || status.state !== 'open') return ''
+  return status.agent ?? 'unknown'
+}
+
+function agentHealthClass(hostId: string): string {
+  const agent = store.tunnelOf(hostId)?.agent
+  if (agent === 'unreachable' || agent === 'version-mismatch') return 'agent-health-bad'
+  if (agent === 'healthy') return 'agent-health-ok'
+  return ''
+}
+
 function toggleError(hostId: string) {
   const next = new Set(expandedErrors.value)
   if (next.has(hostId)) next.delete(hostId)
@@ -211,6 +225,14 @@ async function installAgent(host: Host) {
               <span v-if="hasHostError(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
             </td>
             <td class="agent-cell">
+              <span
+                v-if="agentHealthLabel(host.id)"
+                class="agent-health-badge"
+                :class="agentHealthClass(host.id)"
+                data-test="agent-health"
+              >
+                {{ agentHealthLabel(host.id) }}
+              </span>
               <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
               <button
                 v-if="!host.is_self"
@@ -357,6 +379,15 @@ h1 {
 .agent-ok {
   color: var(--status-running);
   font-size: 11px;
+}
+.agent-health-badge {
+  font-size: 11px;
+}
+.agent-health-ok {
+  color: var(--status-running);
+}
+.agent-health-bad {
+  color: var(--status-failed);
 }
 .tunnel-failed {
   color: var(--status-failed);

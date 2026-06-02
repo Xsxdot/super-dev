@@ -154,4 +154,29 @@ describe('HostManagerTab', () => {
 
     expect(wrapper.text()).toContain('verify: connection refused')
   })
+
+  it('渲染 agent 健康徽章（与隧道状态正交）', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await new Promise(resolve => setTimeout(resolve))
+
+    store.hosts = [{
+      id: 'h1',
+      name: 'srv',
+      ssh_host: '1.1.1.1',
+      ssh_port: 22,
+      ssh_user: 'root',
+      remote_agent_port: 57017,
+      local_tunnel_port: 0,
+      tags: [],
+    }]
+    // 隧道 open 且 agent unreachable —— 必须能同时看到两种状态
+    store.applyTunnelUpdate({ host_id: 'h1', state: 'open', local_port: 57100 })
+    store.applyTunnelUpdate({ host_id: 'h1', agent: 'unreachable' })
+
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('open :57100')
+    expect(wrapper.find('[data-test="agent-health"]').text()).toBe('unreachable')
+  })
 })
