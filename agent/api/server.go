@@ -4,6 +4,7 @@
 //   - 暴露项目管理接口（列表、添加、删除、规则读写）
 //   - 暴露服务列表与 deployment 级启停接口
 //   - 暴露日志查询接口（REST 分页 + WebSocket 实时推送）
+//   - 暴露本机排障会话接口，供 MCP 与用户共享诊断上下文
 //   - 生命周期管理：启动时从注册表加载已注册项目
 //
 // 边界：
@@ -22,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
+	"github.com/superdev/agent/debugsession"
 	"github.com/superdev/agent/identity"
 	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/logbackend"
@@ -66,6 +68,8 @@ type App struct {
 	collector   *collector.Manager
 	remoteStore *remote.Store
 	tunnels     *tunnel.Manager
+	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
+	debugSessions debugsession.Store
 	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
 	tunnelResolver remote.TunnelResolver
 	// backends 按 deployment ID 索引对应的 LogBackend。
@@ -125,6 +129,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	debugSessions := debugsession.NewFileStore(filepath.Join(cfg.DataDir, "debug-sessions.json"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	var resolver remote.TunnelResolver = newTunnelResolverAdapter(tunnels)
 	if cfg.TunnelOverride != nil {
@@ -147,6 +152,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		collector:          colMgr,
 		remoteStore:        remoteStore,
 		tunnels:            tunnels,
+		debugSessions:      debugSessions,
 		tunnelResolver:     resolver,
 		backends:           map[string]logbackend.LogBackend{},
 		identity:           id,
@@ -188,6 +194,13 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
+
+	// Debug sessions（本机排障记录，不修改运行态或配置）
+	mux.HandleFunc("GET /api/debug-sessions", a.listDebugSessions)
+	mux.HandleFunc("POST /api/debug-sessions", a.createDebugSession)
+	mux.HandleFunc("GET /api/debug-sessions/{id}", a.getDebugSession)
+	mux.HandleFunc("POST /api/debug-sessions/{id}/events", a.appendDebugSessionEvent)
+	mux.HandleFunc("POST /api/debug-sessions/{id}/close", a.closeDebugSession)
 
 	// 服务管理（service 级启停/选择已下线，统一走 deployment 级接口）
 	mux.HandleFunc("GET /api/services", a.listServices)
