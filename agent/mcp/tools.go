@@ -131,6 +131,76 @@ func templateImportInputSchema() map[string]any {
 	}
 }
 
+func createDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":    map[string]any{"type": "string"},
+			"project_name":  map[string]any{"type": "string"},
+			"env_name":      map[string]any{"type": "string"},
+			"service_id":    map[string]any{"type": "string"},
+			"service_name":  map[string]any{"type": "string"},
+			"deployment_id": map[string]any{"type": "string"},
+			"title":         map[string]any{"type": "string"},
+			"question":      map[string]any{"type": "string"},
+		},
+		"required": []string{"title", "question"},
+	}
+}
+
+func listDebugSessionsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"status":       map[string]any{"type": "string", "enum": []string{"open", "closed"}},
+			"limit":        map[string]any{"type": "integer", "minimum": 1},
+		},
+	}
+}
+
+func getDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"limit":      map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func appendDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"type":       map[string]any{"type": "string", "enum": []string{"note", "tool_call", "observation"}},
+			"actor":      map[string]any{"type": "string", "enum": []string{"user", "assistant", "system"}},
+			"summary":    map[string]any{"type": "string"},
+			"data":       map[string]any{"type": "object"},
+		},
+		"required": []string{"session_id", "type", "actor", "summary"},
+	}
+}
+
+func closeDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"summary":    map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
 		{
@@ -241,6 +311,53 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.diagnoseServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "create_debug_session",
+				Title:       "Create debug session",
+				Description: "Create a local diagnostic session record only; it does not change runtime state or configuration.",
+				InputSchema: createDebugSessionInputSchema(),
+			},
+			Handler: s.createDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_debug_sessions",
+				Title:       "List debug sessions",
+				Description: "List local diagnostic session records from the SuperDev agent.",
+				InputSchema: listDebugSessionsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listDebugSessionsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_debug_session",
+				Title:       "Get debug session",
+				Description: "Read one local diagnostic session and its events.",
+				InputSchema: getDebugSessionInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "append_debug_session_note",
+				Title:       "Append debug session note",
+				Description: "Append a local diagnostic note or observation only; it does not change runtime state or configuration.",
+				InputSchema: appendDebugSessionInputSchema(),
+			},
+			Handler: s.appendDebugSessionNoteTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "close_debug_session",
+				Title:       "Close debug session",
+				Description: "Close a local diagnostic session record only; it does not change runtime state or configuration.",
+				InputSchema: closeDebugSessionInputSchema(),
+			},
+			Handler: s.closeDebugSessionTool,
 		},
 		{
 			Tool: Tool{
