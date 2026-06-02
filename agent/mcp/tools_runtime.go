@@ -13,6 +13,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -146,52 +147,58 @@ func (s *Server) listServicesTool(ctx context.Context, args json.RawMessage) (Ca
 }
 
 func (s *Server) startServiceTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	target, result, err := s.resolveControlTarget(ctx, args)
+	target, req, result, err := s.resolveControlTarget(ctx, args)
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StartDeployment(ctx, target.Deployment.ID, ""); err != nil {
+	if err := s.client.StartDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.start", "start operation failed", err)
 		return clientToolError(err), nil
 	}
+	s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.start", "start operation requested", nil)
 	return toolSuccess("start requested", map[string]any{"target": sanitizeTarget(target), "action": "start"}, nil, nil), nil
 }
 
 func (s *Server) stopServiceTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	target, result, err := s.resolveControlTarget(ctx, args)
+	target, req, result, err := s.resolveControlTarget(ctx, args)
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StopDeployment(ctx, target.Deployment.ID, ""); err != nil {
+	if err := s.client.StopDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.stop", "stop operation failed", err)
 		return clientToolError(err), nil
 	}
+	s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.stop", "stop operation requested", nil)
 	return toolSuccess("stop requested", map[string]any{"target": sanitizeTarget(target), "action": "stop"}, nil, nil), nil
 }
 
 func (s *Server) restartServiceTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	target, result, err := s.resolveControlTarget(ctx, args)
+	target, req, result, err := s.resolveControlTarget(ctx, args)
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.RestartDeployment(ctx, target.Deployment.ID, ""); err != nil {
+	if err := s.client.RestartDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.restart", "restart operation failed", err)
 		return clientToolError(err), nil
 	}
+	s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.restart", "restart operation requested", nil)
 	return toolSuccess("restart requested", map[string]any{"target": sanitizeTarget(target), "action": "restart"}, nil, nil), nil
 }
 
-func (s *Server) resolveControlTarget(ctx context.Context, args json.RawMessage) (resolvedTarget, CallToolResult, error) {
+func (s *Server) resolveControlTarget(ctx context.Context, args json.RawMessage) (resolvedTarget, targetArgs, CallToolResult, error) {
 	var req targetArgs
 	if err := decodeToolArgs(args, &req); err != nil {
-		return resolvedTarget{}, toolError("invalid_arguments", err.Error(), nil), nil
+		return resolvedTarget{}, targetArgs{}, toolError("invalid_arguments", err.Error(), nil), nil
 	}
 	projects, err := s.client.ListProjects(ctx)
 	if err != nil {
-		return resolvedTarget{}, clientToolError(err), nil
+		return resolvedTarget{}, req, clientToolError(err), nil
 	}
 	target, errResp := resolveDeploymentTarget(projects, req)
 	if errResp != nil {
-		return resolvedTarget{}, toolError(errResp.Code, errResp.Message, errResp), nil
+		return resolvedTarget{}, req, toolError(errResp.Code, errResp.Message, errResp), nil
 	}
-	return target, CallToolResult{}, nil
+	return target, req, CallToolResult{}, nil
 }
 
 func decodeToolArgs(args json.RawMessage, out any) error {
@@ -208,7 +215,42 @@ func clientToolError(err error) CallToolResult {
 	if strings.Contains(err.Error(), "agent unavailable") {
 		return toolError("agent_unavailable", err.Error(), nil)
 	}
+	var agentErr AgentError
+	if errors.As(err, &agentErr) {
+		code := agentErr.Code
+		if code == "" {
+			code = "operation_failed"
+		}
+		return toolError(code, agentErr.Message, map[string]any{
+			"plan":     agentErr.Plan,
+			"approval": agentErr.Approval,
+		})
+	}
 	return toolError("operation_failed", err.Error(), nil)
+}
+
+func (s *Server) appendOperationToolObservation(ctx context.Context, sessionID string, operationKind string, summary string, err error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	data := map[string]any{"operation_kind": operationKind}
+	var agentErr AgentError
+	if err != nil && errors.As(err, &agentErr) {
+		if agentErr.Plan.Kind != "" {
+			data["operation_kind"] = agentErr.Plan.Kind
+		}
+		if agentErr.Approval.ID != "" {
+			data["approval_id"] = agentErr.Approval.ID
+		}
+		data["error_code"] = agentErr.Code
+	}
+	_, _ = s.client.AppendDebugSessionEvent(ctx, sessionID, DebugSessionAppendEventRequest{
+		Type:    "observation",
+		Actor:   "assistant",
+		Summary: summary,
+		Data:    data,
+	})
 }
 
 func sanitizeProjects(projects []model.Project) []model.Project {

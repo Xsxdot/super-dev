@@ -40,12 +40,14 @@ func targetInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"project_id":    map[string]any{"type": "string"},
-			"project_name":  map[string]any{"type": "string"},
-			"env_name":      map[string]any{"type": "string"},
-			"service_id":    map[string]any{"type": "string"},
-			"service_name":  map[string]any{"type": "string"},
-			"deployment_id": map[string]any{"type": "string"},
+			"project_id":       map[string]any{"type": "string"},
+			"project_name":     map[string]any{"type": "string"},
+			"env_name":         map[string]any{"type": "string"},
+			"service_id":       map[string]any{"type": "string"},
+			"service_name":     map[string]any{"type": "string"},
+			"deployment_id":    map[string]any{"type": "string"},
+			"approval_token":   map[string]any{"type": "string"},
+			"debug_session_id": map[string]any{"type": "string"},
 		},
 	}
 }
@@ -125,9 +127,61 @@ func templateImportInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string"},
+			"path":             map[string]any{"type": "string"},
+			"approval_token":   map[string]any{"type": "string"},
+			"debug_session_id": map[string]any{"type": "string"},
 		},
 		"required": []string{"path"},
+	}
+}
+
+func previewOperationInputSchema() map[string]any {
+	schema := targetInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["kind"] = map[string]any{"type": "string", "enum": []string{"runtime.start", "runtime.stop", "runtime.restart", "template.import"}}
+	properties["template_path"] = map[string]any{"type": "string"}
+	delete(properties, "approval_token")
+	delete(properties, "debug_session_id")
+	schema["required"] = []string{"kind"}
+	return schema
+}
+
+func listOperationApprovalsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"status":       map[string]any{"type": "string"},
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"limit":        map[string]any{"type": "integer", "minimum": 1},
+		},
+	}
+}
+
+func getOperationApprovalInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"approval_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"approval_id"},
+	}
+}
+
+func listOperationAuditInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"kind":         map[string]any{"type": "string"},
+			"approval_id":  map[string]any{"type": "string"},
+			"since":        map[string]any{"type": "string"},
+			"limit":        map[string]any{"type": "integer", "minimum": 1},
+		},
 	}
 }
 
@@ -287,6 +341,46 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.listServicesTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "preview_operation",
+				Title:       "Preview operation",
+				Description: "Create a deterministic safety preflight plan for one write operation.",
+				InputSchema: previewOperationInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.previewOperationTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_operation_approvals",
+				Title:       "List operation approvals",
+				Description: "List pending or historical operation approval requests.",
+				InputSchema: listOperationApprovalsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listOperationApprovalsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_operation_approval",
+				Title:       "Get operation approval",
+				Description: "Read one operation approval and return a one-time token when approved.",
+				InputSchema: getOperationApprovalInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getOperationApprovalTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_operation_audit",
+				Title:       "List operation audit",
+				Description: "List local operation safety audit events.",
+				InputSchema: listOperationAuditInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listOperationAuditTool,
 		},
 		{
 			Tool: Tool{

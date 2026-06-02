@@ -49,3 +49,16 @@ func TestImportPipelineTemplateCallsAgent(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Equal(t, "/tmp/custom.yaml", client.importedTemplatePath)
 }
+
+func TestImportPipelineTemplatePassesApprovalToken(t *testing.T) {
+	client := &fakeAgentClient{
+		importedTemplate: PipelineTemplateSummary{Source: "user", ID: "custom", Version: "1.0.0", Digest: "sha256:abc"},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "import_pipeline_template", `{"path":"/tmp/custom.yaml","approval_token":"tok_1"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, "tok_1", client.lastApprovalToken)
+}
