@@ -170,6 +170,33 @@ func migrate(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_pipeline_artifacts_created
 			ON pipeline_artifacts(project_id, pipeline_id, created_at DESC);
+
+		CREATE TABLE IF NOT EXISTS pipeline_runs (
+			id               TEXT PRIMARY KEY,
+			project_id       TEXT NOT NULL,
+			pipeline_id      TEXT NOT NULL,
+			env_name         TEXT NOT NULL,
+			deployment_id    TEXT NOT NULL,
+			artifact_version TEXT NOT NULL,
+			status           TEXT NOT NULL,
+			started_at       INTEGER NOT NULL,
+			finished_at      INTEGER NOT NULL,
+			run_json         TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_pipeline
+			ON pipeline_runs(project_id, pipeline_id, started_at DESC);
+
+		CREATE TABLE IF NOT EXISTS pipeline_run_logs (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id    TEXT NOT NULL,
+			step_name TEXT NOT NULL,
+			host_id   TEXT NOT NULL,
+			stream    TEXT NOT NULL,
+			line      TEXT NOT NULL,
+			at        INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_pipeline_run_logs_filter
+			ON pipeline_run_logs(run_id, step_name, host_id, id);
 	`)
 	return err
 }
