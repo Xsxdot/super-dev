@@ -352,6 +352,14 @@ export default {
     pin: '固定',
     selectHitForContext: '点击左侧命中日志查看跨服务上下文',
   },
+  overview: {
+    title: '项目概览',
+    openOverview: '项目概览',
+    openOverviewForProject: '打开「{name}」项目概览',
+    runtime: '运行状态',
+    pipelines: '流水线',
+    projectNotFound: '项目不存在',
+  },
   popover: {
     serviceSearchPlaceholder: '搜索服务...',
     disconnected: '未连接',

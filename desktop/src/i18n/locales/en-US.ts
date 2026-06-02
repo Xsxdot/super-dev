@@ -352,6 +352,14 @@ export default {
     pin: 'Pin',
     selectHitForContext: 'Select a hit on the left to view cross-service context',
   },
+  overview: {
+    title: 'Project Overview',
+    openOverview: 'Project overview',
+    openOverviewForProject: '{name} overview',
+    runtime: 'Runtime',
+    pipelines: 'Pipelines',
+    projectNotFound: 'Project not found',
+  },
   popover: {
     serviceSearchPlaceholder: 'Search services...',
     disconnected: 'Disconnected',
