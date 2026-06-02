@@ -30,6 +30,12 @@ const (
 	OperationRuntimeRestart = "runtime.restart"
 	// OperationTemplateImport 表示导入流水线模板的写操作。
 	OperationTemplateImport = "template.import"
+	// OperationConfigProjectUpsert 表示新增或编辑项目基础配置。
+	OperationConfigProjectUpsert = "config.project.upsert"
+	// OperationConfigServiceUpsert 表示新增或编辑 service 配置。
+	OperationConfigServiceUpsert = "config.service.upsert"
+	// OperationConfigPipelineUpsert 表示新增或编辑项目级流水线。
+	OperationConfigPipelineUpsert = "config.pipeline.upsert"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"

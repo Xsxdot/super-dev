@@ -119,6 +119,41 @@ func TestDiffRedactsSecretValues(t *testing.T) {
 	assert.Contains(t, diff, DiffEntry{Path: "variables.PUBLIC", Before: "old", After: "new-public"})
 }
 
+func TestPlanConfigChangeRequiresApprovalAndHasStableFingerprint(t *testing.T) {
+	before := sampleProject()
+	change := ChangeRequest{
+		Kind: KindPipelineUpsert,
+		Pipeline: &ProjectPipelinePatch{
+			ID: "deploy-dev", Name: "Deploy Dev", Services: []string{"worker"}, Pipeline: model.Pipeline{},
+		},
+	}
+	after, err := Apply(before, change)
+	require.NoError(t, err)
+	diff := Diff(before, after)
+	validation := Validate(after, change)
+
+	first := Plan(before, after, change, diff, validation)
+	second := Plan(before, after, change, diff, validation)
+
+	assert.Equal(t, KindPipelineUpsert, first.Kind)
+	assert.True(t, first.RequiresApproval)
+	assert.Equal(t, "high", first.RiskLevel)
+	assert.Equal(t, first.Fingerprint, second.Fingerprint)
+	assert.Contains(t, first.ExpectedEffects[0], "update project pipeline deploy-dev")
+}
+
+func TestPlanConfigChangeDeniesUnsupportedOperation(t *testing.T) {
+	before := sampleProject()
+	change := ChangeRequest{Kind: KindServiceUpsert, Delete: true, Service: &ServicePatch{Name: "api"}}
+	validation := Validate(before, change)
+
+	plan := Plan(before, before, change, nil, validation)
+
+	assert.True(t, plan.Denied)
+	assert.Equal(t, "critical", plan.RiskLevel)
+	assert.Contains(t, plan.Reasons, "delete is not supported by MCP config upsert")
+}
+
 func sampleProject() model.Project {
 	return model.Project{
 		ID:       "p1",
