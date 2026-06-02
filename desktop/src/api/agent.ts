@@ -655,6 +655,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+  getRuntimeStatus: (projectId: string) =>
+    request<RuntimeStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/runtime-status`),
 
   // 设置
   getSettings: () => request<AgentSettings>('/api/settings'),
