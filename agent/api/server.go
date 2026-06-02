@@ -13,6 +13,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/identity"
+	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
@@ -39,6 +41,15 @@ type AppConfig struct {
 	ProbeOverride collector.Probe
 	// TunnelOverride 注入自定义隧道解析器,仅用于测试。
 	TunnelOverride remote.TunnelResolver
+	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
+	InstallBinaryDir string
+	// InstallerOverride 注入自定义远端 agent 安装器，仅用于测试。
+	InstallerOverride HostAgentInstaller
+}
+
+// HostAgentInstaller 安装或重装远端 SuperDev agent。
+type HostAgentInstaller interface {
+	Install(ctx context.Context, host model.Host) (installer.Result, error)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -59,9 +70,10 @@ type App struct {
 	tunnelResolver remote.TunnelResolver
 	// backends 按 deployment ID 索引对应的 LogBackend。
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
-	backends map[string]logbackend.LogBackend
-	identity identity.Identity
-	pidStore *process.PIDStore
+	backends           map[string]logbackend.LogBackend
+	identity           identity.Identity
+	pidStore           *process.PIDStore
+	hostAgentInstaller HostAgentInstaller
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -118,23 +130,28 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if cfg.TunnelOverride != nil {
 		resolver = cfg.TunnelOverride
 	}
+	hostAgentInstaller := cfg.InstallerOverride
+	if hostAgentInstaller == nil {
+		hostAgentInstaller = installer.New(installer.Options{BinaryDir: cfg.InstallBinaryDir})
+	}
 
 	return &App{
-		cfg:            cfg,
-		projects:       []model.Project{},
-		managers:       map[string]*process.Manager{},
-		buf:            buf,
-		store:          s,
-		registry:       registry,
-		settings:       settingsStore,
-		procMgr:        procMgr,
-		collector:      colMgr,
-		remoteStore:    remoteStore,
-		tunnels:        tunnels,
-		tunnelResolver: resolver,
-		backends:       map[string]logbackend.LogBackend{},
-		identity:       id,
-		pidStore:       process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
+		cfg:                cfg,
+		projects:           []model.Project{},
+		managers:           map[string]*process.Manager{},
+		buf:                buf,
+		store:              s,
+		registry:           registry,
+		settings:           settingsStore,
+		procMgr:            procMgr,
+		collector:          colMgr,
+		remoteStore:        remoteStore,
+		tunnels:            tunnels,
+		tunnelResolver:     resolver,
+		backends:           map[string]logbackend.LogBackend{},
+		identity:           id,
+		pidStore:           process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
+		hostAgentInstaller: hostAgentInstaller,
 	}, nil
 }
 
@@ -195,6 +212,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
+	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
 	// 远程日志源管理

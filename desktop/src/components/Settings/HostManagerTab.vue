@@ -4,6 +4,7 @@ HostManagerTab：设置页主机管理标签页。
 职责：
   - 列出所有远程 Host 及其 SSH、tag 和隧道状态
   - 提供 Host 新建、编辑、删除入口
+  - 触发远端 Agent 安装/重装并展示结果
 
 边界：
   - 不管理 LogSource，监听任务由 Sidebar 负责
@@ -25,6 +26,9 @@ const formVisible = ref(false)
 const editing = ref<Host | null>(null)
 const error = ref<string | null>(null)
 const expandedErrors = ref<Set<string>>(new Set())
+const installingHostIds = ref<Set<string>>(new Set())
+const installMessages = ref<Map<string, string>>(new Map())
+const installErrors = ref<Map<string, string>>(new Map())
 
 const sortedHosts = computed(() =>
   [...store.hosts].sort((a, b) => a.name.localeCompare(b.name)),
@@ -115,6 +119,51 @@ function tunnelError(hostId: string): string {
 function isFailed(hostId: string): boolean {
   return store.tunnelOf(hostId)?.state === 'failed'
 }
+
+function isInstalling(hostId: string): boolean {
+  return installingHostIds.value.has(hostId)
+}
+
+function installMessage(hostId: string): string {
+  return installMessages.value.get(hostId) || ''
+}
+
+function hostError(hostId: string): string {
+  return installErrors.value.get(hostId) || tunnelError(hostId)
+}
+
+function hasHostError(hostId: string): boolean {
+  return installErrors.value.has(hostId) || isFailed(hostId)
+}
+
+async function installAgent(host: Host) {
+  const installing = new Set(installingHostIds.value)
+  installing.add(host.id)
+  installingHostIds.value = installing
+
+  const errors = new Map(installErrors.value)
+  errors.delete(host.id)
+  installErrors.value = errors
+
+  try {
+    const result = await store.installHostAgent(host.id)
+    const messages = new Map(installMessages.value)
+    messages.set(host.id, t('settings.hosts.installed', { platform: result.platform }))
+    installMessages.value = messages
+    await store.loadTunnels()
+  } catch (err) {
+    const next = new Map(installErrors.value)
+    next.set(host.id, err instanceof Error ? err.message : t('settings.hosts.installFailed'))
+    installErrors.value = next
+    const expanded = new Set(expandedErrors.value)
+    expanded.add(host.id)
+    expandedErrors.value = expanded
+  } finally {
+    const next = new Set(installingHostIds.value)
+    next.delete(host.id)
+    installingHostIds.value = next
+  }
+}
 </script>
 
 <template>
@@ -134,6 +183,7 @@ function isFailed(hostId: string): boolean {
           <th>{{ t('settings.hosts.address') }}</th>
           <th>{{ t('settings.hosts.tags') }}</th>
           <th>{{ t('settings.hosts.tunnel') }}</th>
+          <th>{{ t('settings.hosts.agent') }}</th>
           <th></th>
         </tr>
       </thead>
@@ -154,20 +204,32 @@ function isFailed(hostId: string): boolean {
             </td>
             <td
               class="mono tunnel-cell"
-              :class="{ 'tunnel-failed': isFailed(host.id) }"
-              @click="isFailed(host.id) && toggleError(host.id)"
+              :class="{ 'tunnel-failed': hasHostError(host.id) }"
+              @click="hasHostError(host.id) && toggleError(host.id)"
             >
               {{ tunnelLabel(host.id) }}
-              <span v-if="isFailed(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
+              <span v-if="hasHostError(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
+            </td>
+            <td class="agent-cell">
+              <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
+              <button
+                v-if="!host.is_self"
+                type="button"
+                :disabled="isInstalling(host.id)"
+                data-test="host-install-agent"
+                @click="installAgent(host)"
+              >
+                {{ isInstalling(host.id) ? t('settings.hosts.installing') : t('settings.hosts.installAction') }}
+              </button>
             </td>
             <td class="row-actions">
               <button @click="openEdit(host)">{{ t('common.edit') }}</button>
               <button class="danger" @click="handleDelete(host)">{{ t('common.delete') }}</button>
             </td>
           </tr>
-          <tr v-if="isFailed(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
-            <td colspan="5">
-              <div class="tunnel-error-detail">{{ tunnelError(host.id) }}</div>
+          <tr v-if="hasHostError(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
+            <td colspan="6">
+              <div class="tunnel-error-detail">{{ hostError(host.id) }}</div>
             </td>
           </tr>
         </template>
@@ -273,6 +335,28 @@ h1 {
 }
 .tunnel-cell {
   white-space: nowrap;
+}
+.agent-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.agent-cell button {
+  padding: 0 4px;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+}
+.agent-cell button:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.agent-ok {
+  color: var(--status-running);
+  font-size: 11px;
 }
 .tunnel-failed {
   color: var(--status-failed);

@@ -31,6 +31,12 @@ vi.mock('@/api/agent', async () => {
       createHost: vi.fn(),
       updateHost: vi.fn(),
       deleteHost: vi.fn(),
+      installHostAgent: vi.fn().mockResolvedValue({
+        ok: true,
+        host_id: 'h1',
+        platform: 'linux/amd64',
+        message: 'Agent installed and started',
+      }),
       detectSshKeys: vi.fn().mockResolvedValue([]),
       testConnection: vi.fn().mockResolvedValue({ ok: true, message: '连接成功', latency_ms: 10 }),
     },
@@ -96,5 +102,56 @@ describe('HostManagerTab', () => {
 
     expect(wrapper.text()).toContain('Hosts')
     expect(wrapper.text()).toContain('New Host')
+  })
+
+  it('点击安装 Agent 调用 store.installHostAgent', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await new Promise(resolve => setTimeout(resolve))
+    store.hosts = [{
+      id: 'h1',
+      name: 'host-test',
+      ssh_host: '1.1.1.1',
+      ssh_port: 22,
+      ssh_user: 'root',
+      remote_agent_port: 57017,
+      local_tunnel_port: 0,
+      tags: [],
+    }]
+    const spy = vi.spyOn(store, 'installHostAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'Agent installed and started',
+    })
+    vi.spyOn(store, 'loadTunnels').mockResolvedValue(undefined)
+
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="host-install-agent"]').trigger('click')
+
+    expect(spy).toHaveBeenCalledWith('h1')
+  })
+
+  it('安装 Agent 失败时展示错误详情', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await new Promise(resolve => setTimeout(resolve))
+    store.hosts = [{
+      id: 'h1',
+      name: 'host-test',
+      ssh_host: '1.1.1.1',
+      ssh_port: 22,
+      ssh_user: 'root',
+      remote_agent_port: 57017,
+      local_tunnel_port: 0,
+      tags: [],
+    }]
+    vi.spyOn(store, 'installHostAgent').mockRejectedValue(new Error('verify: connection refused'))
+
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="host-install-agent"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('verify: connection refused')
   })
 })

@@ -1,7 +1,7 @@
 // Package main 是 SuperDev agent 的启动入口。
 //
 // 职责：
-//   - 解析命令行标志（--addr 监听地址，--data 数据目录）
+//   - 解析命令行标志（--addr 监听地址，--data 数据目录，--install-binaries 安装二进制目录）
 //   - 创建和启动 HTTP API 服务
 //   - 管理应用生命周期
 //
@@ -23,13 +23,17 @@ import (
 func main() {
 	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
+	installBinariesDir := flag.String("install-binaries", "", "Directory containing remote install agent binaries")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatal("create data dir:", err)
 	}
 
-	app, err := api.NewApp(api.AppConfig{DataDir: *dataDir})
+	app, err := api.NewApp(api.AppConfig{
+		DataDir:          *dataDir,
+		InstallBinaryDir: *installBinariesDir,
+	})
 	if err != nil {
 		log.Fatal("create app:", err)
 	}

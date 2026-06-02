@@ -22,6 +22,7 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/remote"
 	"github.com/superdev/agent/tunnel"
@@ -94,6 +95,46 @@ func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// installHostAgent 处理 POST /api/hosts/{id}/agent/install。
+//
+// 通过本机 agent 使用 Host 的 SSH 凭据安装或重装远端 SuperDev agent。
+func (a *App) installHostAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hosts, err := a.remoteStore.ListHosts()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var host model.Host
+	found := false
+	for _, h := range hosts {
+		if h.ID == id {
+			host = h
+			found = true
+			break
+		}
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	result, err := a.hostAgentInstaller.Install(r.Context(), host)
+	if err != nil {
+		var installErr *installer.InstallError
+		if errors.As(err, &installErr) {
+			jsonWrite(w, http.StatusBadGateway, map[string]string{
+				"error": installErr.Error(),
+				"stage": installErr.Stage,
+			})
+			return
+		}
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	jsonOK(w, result)
 }
 
 // testConnectionRequest 是 POST /api/hosts/test-connection 的请求体。

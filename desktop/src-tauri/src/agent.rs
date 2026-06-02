@@ -1,10 +1,11 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
@@ -31,6 +32,26 @@ enum EndpointProbe {
 }
 
 pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
+
+fn install_binaries_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("agent-install");
+        if bundled.is_dir() {
+            return Some(bundled);
+        }
+    }
+    if cfg!(debug_assertions) {
+        let workspace = std::env::current_dir()
+            .ok()?
+            .join("src-tauri")
+            .join("resources")
+            .join("agent-install");
+        if workspace.is_dir() {
+            return Some(workspace);
+        }
+    }
+    None
+}
 
 impl AgentProcess {
     /// new 创建 AgentProcess 容器。
@@ -81,11 +102,22 @@ impl AgentProcess {
             other => return Err(format_probe_error(addr, &other)),
         }
 
+        let mut args = vec![
+            "--addr".to_string(),
+            addr.to_string(),
+            "--data".to_string(),
+            data_dir,
+        ];
+        if let Some(dir) = install_binaries_dir(app) {
+            args.push("--install-binaries".to_string());
+            args.push(dir.to_string_lossy().to_string());
+        }
+
         let (_rx, child) = app
             .shell()
             .sidecar("superdev-agent")
             .map_err(|e| format!("找不到 agent sidecar: {e}"))?
-            .args(["--addr", addr, "--data", &data_dir])
+            .args(args)
             .spawn()
             .map_err(|e| format!("启动 agent 失败: {e}"))?;
 

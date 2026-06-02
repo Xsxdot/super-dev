@@ -5,8 +5,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
+RESOURCE_DIR="$ROOT/src-tauri/resources/agent-install"
 TARGET="$(rustc --print host-tuple)"
 OUT="$OUT_DIR/superdev-agent-$TARGET"
+BUILD_REMOTE_INSTALL=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --remote-install) BUILD_REMOTE_INSTALL=1 ;;
+    *)
+      echo "build-agent: unknown argument $arg" >&2
+      exit 2
+      ;;
+  esac
+done
 
 mkdir -p "$OUT_DIR"
 
@@ -31,7 +43,7 @@ needs_build() {
   return 1
 }
 
-if ! needs_build; then
+if ! needs_build && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
   exit 0
 fi
 
@@ -49,5 +61,23 @@ if [[ -z "$GO_BIN" ]]; then
   fi
 fi
 
-echo "build-agent: compiling agent -> $OUT"
-(cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT" .)
+if needs_build; then
+  echo "build-agent: compiling agent -> $OUT"
+  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT" .)
+fi
+
+if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
+  mkdir -p "$RESOURCE_DIR"
+  targets=(
+    "darwin amd64"
+    "darwin arm64"
+    "linux amd64"
+    "linux arm64"
+  )
+  for target in "${targets[@]}"; do
+    read -r goos goarch <<<"$target"
+    remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch"
+    echo "build-agent: compiling remote agent -> $remote_out"
+    (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
+  done
+fi
