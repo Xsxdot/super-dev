@@ -10,7 +10,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 
@@ -89,9 +88,10 @@ func (a *App) listPipelineTemplates(w http.ResponseWriter, r *http.Request) {
 // importPipelineTemplate 处理 POST /api/pipeline/templates/import。
 func (a *App) importPipelineTemplate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path string `json:"path"`
+		Path          string `json:"path"`
+		ApprovalToken string `json:"approval_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONPreserveBody(r, &req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -99,9 +99,19 @@ func (a *App) importPipelineTemplate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "path is required")
 		return
 	}
+	plan, err := a.planTemplateImport(req.Path)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to import template: "+err.Error())
+		return
+	}
+	allowed, approval := a.authorizeOperation(w, r, plan)
+	if !allowed {
+		return
+	}
 	store := pipelinetemplate.NewStore(a.cfg.DataDir, nil, "")
 	imported, err := store.ImportFile(req.Path)
 	if err != nil {
+		a.appendOperationExecutionFailure(r, plan, approval, "failed to import template: "+err.Error())
 		jsonError(w, http.StatusBadRequest, "failed to import template: "+err.Error())
 		return
 	}
