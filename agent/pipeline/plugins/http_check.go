@@ -6,7 +6,7 @@
 //   - 支持按 target 替换 `${host}`
 //
 // 边界：
-//   - 不管理重试，重试由 engine 统一处理
+//   - 只做健康检查轮询，不执行部署或回滚动作
 //   - 不处理证书文件生成或 Nginx 配置
 package plugins
 
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/pipeline"
@@ -76,19 +77,62 @@ func (p *HTTPCheck) Execute(ctx *pipeline.RunContext, step model.Step, targets [
 	}
 	url := withString(step.With, "url")
 	expected := withInt(step.With, "expected_status", http.StatusOK)
+	timeout, hasTimeout, err := withDuration(step.With, "timeout")
+	if err != nil {
+		return err
+	}
+	interval, _, err := withDuration(step.With, "interval")
+	if err != nil {
+		return err
+	}
 	if len(targets) == 0 {
-		return p.check(ctx.Context, url, expected)
+		return p.checkMaybePolling(ctx.Context, url, expected, timeout, interval, hasTimeout)
 	}
 	for _, target := range targets {
 		host := target.HostName
 		if host == "" {
 			host = target.HostID
 		}
-		if err := p.check(ctx.Context, strings.ReplaceAll(url, "${host}", host), expected); err != nil {
+		if err := p.checkMaybePolling(ctx.Context, strings.ReplaceAll(url, "${host}", host), expected, timeout, interval, hasTimeout); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *HTTPCheck) checkMaybePolling(ctx context.Context, url string, expected int, timeout time.Duration, interval time.Duration, hasTimeout bool) error {
+	if !hasTimeout {
+		return p.check(ctx, url, expected)
+	}
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = p.check(ctx, url, expected)
+		if lastErr == nil {
+			return nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("http_check timed out after %s: %w", timeout, lastErr)
+		}
+		wait := interval
+		if wait > remaining {
+			wait = remaining
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (p *HTTPCheck) check(ctx context.Context, url string, expected int) error {
@@ -129,4 +173,16 @@ func withInt(values map[string]interface{}, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func withDuration(values map[string]interface{}, key string) (time.Duration, bool, error) {
+	raw := withString(values, key)
+	if raw == "" {
+		return 0, false, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, true, fmt.Errorf("%s must be a duration: %w", key, err)
+	}
+	return d, true, nil
 }

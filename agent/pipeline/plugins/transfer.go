@@ -2,11 +2,11 @@
 //
 // 职责：
 //   - 校验 transfer 参数
-//   - 将文件传输请求分发给注入的 FileTransfer
+//   - 将文件或目录传输请求分发给注入的 FileTransfer
 //
 // 边界：
 //   - 不直接实现 SCP/SSH 协议
-//   - 不递归打包目录，目录处理由 archive 插件负责
+//   - 不直接打包目录，目录 source 由注入的传输能力处理
 package plugins
 
 import (
@@ -22,7 +22,7 @@ type FileTransfer interface {
 	Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error
 }
 
-// Transfer copies one local file to remote targets.
+// Transfer copies one local file or directory source to remote targets.
 type Transfer struct {
 	transfer FileTransfer
 }

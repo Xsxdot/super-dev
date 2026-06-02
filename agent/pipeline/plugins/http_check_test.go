@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/pipeline"
@@ -36,4 +37,25 @@ func TestHTTPCheckAcceptsExpectedStatus(t *testing.T) {
 	step := model.Step{With: map[string]interface{}{"url": server.URL, "expected_status": 204}}
 	err := plugin.Execute(pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{}), step, nil)
 	require.NoError(t, err)
+}
+
+func TestHTTPCheckPollsUntilReady(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits < 3 {
+			http.Error(w, "warming", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	check := plugins.NewHTTPCheck(srv.Client())
+	step := model.Step{Type: "http_check", With: map[string]interface{}{
+		"url": srv.URL, "expected_status": 200, "timeout": "500ms", "interval": "10ms",
+	}}
+	err := check.Execute(pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{}), step, nil)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, hits, 3)
 }

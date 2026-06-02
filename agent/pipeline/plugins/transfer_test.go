@@ -11,6 +11,8 @@ package plugins_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,4 +50,17 @@ func TestTransferExecutesTargets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"h1:a.tar.gz:/opt/api/a.tar.gz"}, transfer.calls)
 	assert.Contains(t, logs, "stdout:sent")
+}
+
+func TestTransferAllowsDirectorySource(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644))
+	transfer := &fakeFileTransfer{}
+	plugin := plugins.NewTransfer(transfer)
+	step := model.Step{Type: "transfer", With: map[string]interface{}{"source": dir, "target": "/tmp/site.tar.gz"}}
+
+	err := plugin.Execute(pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{}), step, []pipeline.Target{{HostID: "h1"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h1:" + dir + ":/tmp/site.tar.gz"}, transfer.calls)
 }

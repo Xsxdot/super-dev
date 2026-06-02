@@ -2,23 +2,26 @@
 //
 // 职责：
 //   - 通过 SSH 在远程 host 上执行 shell 命令，逐行回调输出
-//   - 通过 SCP sink 协议把本地单文件传输到远程 host
+//   - 通过 SCP sink 协议把本地文件或目录包传输到远程 host
 //   - 复用 tunnel.BuildClientConfig 进行 SSH 认证装配，不重写认证逻辑
 //
 // 边界：
 //   - 不持久化执行状态，全部通过 onLine 回调上报
-//   - 不处理目录传输，target 目标目录必须已存在
+//   - 目录 source 会先打成 tar.gz，target 目标目录必须已存在
 //   - 上层通过注入 HostLookup 提供 host 连接信息，本包不依赖 store
 package pipeline
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 
 	"github.com/superdev/agent/model"
@@ -127,17 +130,17 @@ func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd stri
 	return -1, err
 }
 
-// Transfer 把本地单文件传到远程 targetPath（scp sink 协议）。
+// Transfer 把本地文件或目录包传到远程 targetPath（scp sink 协议）。
 //
 // 参数：
 //   - ctx: 上下文（当前 SSH session.Run 会阻塞至传输结束）
 //   - target: 目标主机，HostID 用于 HostLookup
-//   - source: 本地文件路径
+//   - source: 本地文件路径；目录会先打包为 tar.gz
 //   - targetPath: 远程文件完整路径（含文件名）
 //   - onLine: 本函数暂无行输出，参数保留以满足插件能力语义
 //
 // 返回：
-//   - 连接、读取源文件、传输失败或 source 为目录时返回错误
+//   - 连接、读取源文件或传输失败时返回错误
 func (s *SSHExecutor) Transfer(ctx context.Context, target Target, source string, targetPath string, onLine func(line, stream string)) error {
 	if source == "" {
 		return fmt.Errorf("transfer source is required")
@@ -145,13 +148,19 @@ func (s *SSHExecutor) Transfer(ctx context.Context, target Target, source string
 	if targetPath == "" {
 		return fmt.Errorf("transfer target is required")
 	}
+	prepared, cleanup, err := prepareTransferSource(source)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	client, err := s.dial(target)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	f, err := os.Open(source)
+	f, err := os.Open(prepared)
 	if err != nil {
 		return err
 	}
@@ -159,9 +168,6 @@ func (s *SSHExecutor) Transfer(ctx context.Context, target Target, source string
 	stat, err := f.Stat()
 	if err != nil {
 		return err
-	}
-	if stat.IsDir() {
-		return fmt.Errorf("transfer source must be a file")
 	}
 
 	session, err := client.NewSession()
@@ -195,6 +201,82 @@ func (s *SSHExecutor) Transfer(ctx context.Context, target Target, source string
 		return err
 	}
 	return <-errCh
+}
+
+func prepareTransferSource(source string) (prepared string, cleanup func(), err error) {
+	noop := func() {}
+	stat, err := os.Stat(source)
+	if err != nil {
+		return "", noop, err
+	}
+	if !stat.IsDir() {
+		return source, noop, nil
+	}
+
+	tmp, err := os.CreateTemp("", "superdev-transfer-*.tar.gz")
+	if err != nil {
+		return "", noop, err
+	}
+	cleanup = func() { _ = os.Remove(tmp.Name()) }
+	gz := gzip.NewWriter(tmp)
+	tw := tar.NewWriter(gz)
+	err = writeTarDirectory(source, tw)
+	if closeErr := tw.Close(); err == nil {
+		err = closeErr
+	}
+	if closeErr := gz.Close(); err == nil {
+		err = closeErr
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		cleanup()
+		return "", noop, err
+	}
+	return tmp.Name(), cleanup, nil
+}
+
+func writeTarDirectory(source string, tw *tar.Writer) error {
+	return filepath.WalkDir(source, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, filePath)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(rel)
+		if entry.IsDir() {
+			header.Name += "/"
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		in, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(tw, in); err != nil {
+			_ = in.Close()
+			return err
+		}
+		return in.Close()
+	})
 }
 
 // streamLines 从 r 逐行读取并通过 onLine 回调上报。
