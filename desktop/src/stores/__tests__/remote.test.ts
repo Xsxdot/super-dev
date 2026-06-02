@@ -263,5 +263,22 @@ describe('useRemoteStore', () => {
       expect(store.tunnelOf('h1')?.state).toBe('open')
       expect(store.tunnelOf('h1')?.local_port).toBe(57100)
     })
+
+    it('applyTunnelUpdate 部分更新保留已有字段（隧道与 agent 正交）', () => {
+      const store = useRemoteStore()
+      // 先收到隧道 open
+      store.applyTunnelUpdate({ host_id: 'h1', state: 'open', local_port: 57100 })
+      // 再收到 agent 部分更新（只带 agent，不带 state）
+      store.applyTunnelUpdate({ host_id: 'h1', agent: 'healthy' })
+
+      expect(store.tunnelOf('h1')?.state).toBe('open')
+      expect(store.tunnelOf('h1')?.local_port).toBe(57100)
+      expect(store.tunnelOf('h1')?.agent).toBe('healthy')
+
+      // agent 变 unreachable 不影响隧道 state
+      store.applyTunnelUpdate({ host_id: 'h1', agent: 'unreachable' })
+      expect(store.tunnelOf('h1')?.state).toBe('open')
+      expect(store.tunnelOf('h1')?.agent).toBe('unreachable')
+    })
   })
 })

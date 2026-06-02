@@ -550,12 +550,15 @@ export interface SshConfigEntry {
 
 export type TunnelState = 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
 
+export type AgentHealth = 'unknown' | 'healthy' | 'unreachable' | 'version-mismatch'
+
 export interface TunnelStatus {
   host_id: string
-  state: TunnelState
+  state?: TunnelState
   local_port?: number
   error?: string
   last_active?: string
+  agent?: AgentHealth
 }
 
 export interface RemoteLogEntry extends LogEntry {

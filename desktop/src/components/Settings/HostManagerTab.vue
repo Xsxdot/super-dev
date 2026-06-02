@@ -96,10 +96,10 @@ async function handleDelete(host: Host) {
 
 function tunnelLabel(hostId: string): string {
   const status = store.tunnelOf(hostId)
-  if (!status) return '-'
+  if (!status?.state) return '-'
   if (status.state === 'open' && status.local_port) return `open :${status.local_port}`
   if (status.state === 'failed' && status.error) {
-    const brief = status.error.length > 40 ? status.error.slice(0, 40) + '…' : status.error
+    const brief = status.error.length > 40 ? status.error.slice(0, 40) + '...' : status.error
     return `failed: ${brief}`
   }
   return status.state
