@@ -11,6 +11,7 @@ These examples validate builtin pipeline templates for build plus systemd deploy
 | `rust-http` | `rust-cargo-build` | 18084 | Rust binary |
 | `php-http` | `php-standard-build` | 18085 | PHP built-in server |
 | `vue-go-combined` | `vue-go-combined-build` | 18086 | Go serving Vue dist |
+| `mcp-log-lab` | MCP runtime/log diagnostics fixture | 18190 | Go command services |
 
 Nginx, DNS, and Docker are outside this example matrix.
 

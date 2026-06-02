@@ -1,0 +1,87 @@
+name: mcp-log-lab
+environments:
+  - name: dev
+    is_dev: true
+    order: 1
+env_selected_service_ids:
+  dev:
+    - api
+    - worker
+    - noisy
+services:
+  - id: api
+    name: api
+    required: true
+    order: 1
+    deployments:
+      - id: api-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: go run . --role api --port 18190
+        working_dir: .
+        runtime:
+          type: command
+          command: go run . --role api --port 18190
+          working_dir: .
+        logs:
+          type: process
+  - id: worker
+    name: worker
+    required: true
+    order: 2
+    deployments:
+      - id: worker-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: go run . --role worker
+        working_dir: .
+        runtime:
+          type: command
+          command: go run . --role worker
+          working_dir: .
+        logs:
+          type: process
+  - id: noisy
+    name: noisy
+    required: false
+    order: 3
+    deployments:
+      - id: noisy-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: go run . --role noisy
+        working_dir: .
+        runtime:
+          type: command
+          command: go run . --role noisy
+          working_dir: .
+        logs:
+          type: process
+  - id: crasher
+    name: crasher
+    required: false
+    order: 4
+    deployments:
+      - id: crasher-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: go run . --role crasher
+        working_dir: .
+        runtime:
+          type: command
+          command: go run . --role crasher
+          working_dir: .
+        logs:
+          type: process
+log_rules:
+  - id: exclude-heartbeat
+    name: Exclude heartbeat noise
+    type: exclude
+    keywords:
+      - HEARTBEAT
+    logic: or
+    enabled: true
