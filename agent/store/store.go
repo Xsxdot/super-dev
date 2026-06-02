@@ -14,6 +14,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,7 +28,8 @@ var ErrLogEntryNotFound = sql.ErrNoRows
 
 // Store 封装 SQLite 数据库连接，提供日志的读写操作。
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	artifactRoot string
 }
 
 // FetchParams 定义日志查询的过滤与分页参数。
@@ -117,13 +120,21 @@ func New(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	artifactRoot := filepath.Join(filepath.Dir(path), "artifacts")
+	if path == ":memory:" {
+		artifactRoot, err = os.MkdirTemp("", "superdev-artifacts-*")
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	// 限制最大连接数为 1，将写操作串行化，防止 SQLite 并发写冲突。
 	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, artifactRoot: artifactRoot}, nil
 }
 
 // Close 关闭底层数据库连接，释放资源。
@@ -146,6 +157,19 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_deployment_id ON log_entries(deployment_id);
 		CREATE INDEX IF NOT EXISTS idx_run_id        ON log_entries(run_id);
 		CREATE INDEX IF NOT EXISTS idx_timestamp     ON log_entries(timestamp);
+
+		CREATE TABLE IF NOT EXISTS pipeline_artifacts (
+			project_id  TEXT NOT NULL,
+			pipeline_id TEXT NOT NULL,
+			version     TEXT NOT NULL,
+			kind        TEXT NOT NULL,
+			location    TEXT NOT NULL,
+			meta_json   TEXT NOT NULL,
+			created_at  INTEGER NOT NULL,
+			PRIMARY KEY(project_id, pipeline_id, version)
+		);
+		CREATE INDEX IF NOT EXISTS idx_pipeline_artifacts_created
+			ON pipeline_artifacts(project_id, pipeline_id, created_at DESC);
 	`)
 	return err
 }
