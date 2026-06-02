@@ -49,6 +49,12 @@ type fakeAgentClient struct {
 	configApplyErr          error
 	lastConfigChange        ConfigChangeRequest
 	lastApprovalToken       string
+	pipelineRun             model.Run
+	pipelineRuns            []model.Run
+	pipelineArtifacts       []model.ArtifactRef
+	pipelineLogs            []model.RunLogLine
+	lastPipelineDeploy      PipelineDeployRequest
+	lastPipelineLogQuery    url.Values
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -180,6 +186,40 @@ func (f *fakeAgentClient) ImportPipelineTemplate(_ context.Context, path string,
 	f.importedTemplatePath = path
 	f.lastApprovalToken = approvalToken
 	return f.importedTemplate, nil
+}
+
+func (f *fakeAgentClient) DeployProjectPipeline(_ context.Context, _ string, _ string, req PipelineDeployRequest) (model.Run, error) {
+	f.lastPipelineDeploy = req
+	if f.pipelineRun.ID != "" {
+		return f.pipelineRun, nil
+	}
+	version := req.Variables["version"]
+	if version == "" {
+		version = req.ArtifactVersion
+	}
+	return model.Run{ID: "run-1", ArtifactVersion: version, Status: model.StatusSuccess}, nil
+}
+
+func (f *fakeAgentClient) ListPipelineRuns(context.Context, string, string) ([]model.Run, error) {
+	if f.pipelineRuns != nil {
+		return f.pipelineRuns, nil
+	}
+	return []model.Run{{ID: "run-1", Status: model.StatusSuccess}}, nil
+}
+
+func (f *fakeAgentClient) ListPipelineArtifacts(context.Context, string, string) ([]model.ArtifactRef, error) {
+	if f.pipelineArtifacts != nil {
+		return f.pipelineArtifacts, nil
+	}
+	return []model.ArtifactRef{{Version: "v1", Kind: model.ArtifactKindFile}}, nil
+}
+
+func (f *fakeAgentClient) ReadPipelineRunLogs(_ context.Context, _ string, _ string, _ string, q url.Values) ([]model.RunLogLine, error) {
+	f.lastPipelineLogQuery = q
+	if f.pipelineLogs != nil {
+		return f.pipelineLogs, nil
+	}
+	return []model.RunLogLine{{RunID: "run-1", StepName: q.Get("step_name"), HostID: q.Get("host_id"), Line: "ok"}}, nil
 }
 
 func (s *Server) callToolForTest(ctx context.Context, name string, args string) (CallToolResult, error) {

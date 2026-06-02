@@ -75,6 +75,14 @@ type AgentClient interface {
 	PreviewPipelineTemplate(context.Context, string, string) (PipelineTemplatePreview, error)
 	// ImportPipelineTemplate 请求 agent 导入用户模板文件。
 	ImportPipelineTemplate(context.Context, string, string) (PipelineTemplateSummary, error)
+	// DeployProjectPipeline 通过项目级 pipeline 触发部署或回滚。
+	DeployProjectPipeline(context.Context, string, string, PipelineDeployRequest) (model.Run, error)
+	// ListPipelineRuns 查询项目级 pipeline 执行历史。
+	ListPipelineRuns(context.Context, string, string) ([]model.Run, error)
+	// ListPipelineArtifacts 查询项目级 pipeline 制品历史。
+	ListPipelineArtifacts(context.Context, string, string) ([]model.ArtifactRef, error)
+	// ReadPipelineRunLogs 查询项目级 pipeline 单次执行日志。
+	ReadPipelineRunLogs(context.Context, string, string, string, url.Values) ([]model.RunLogLine, error)
 }
 
 // AgentError 保留 agent 业务错误中的机器可读 code 和结构化数据。
@@ -461,6 +469,79 @@ func (c *HTTPAgentClient) PreviewPipelineTemplate(ctx context.Context, path, yam
 func (c *HTTPAgentClient) ImportPipelineTemplate(ctx context.Context, path string, approvalToken string) (PipelineTemplateSummary, error) {
 	var out PipelineTemplateSummary
 	return out, c.postWithApprovalToken(ctx, "/api/pipeline/templates/import", map[string]string{"path": path}, approvalToken, &out)
+}
+
+// DeployProjectPipeline 通过项目级 pipeline 触发部署或回滚。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - pipelineID: 项目级 pipeline ID
+//   - req: 部署或回滚请求体
+//
+// 返回：
+//   - agent 返回的 Run 终态
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) DeployProjectPipeline(ctx context.Context, projectID, pipelineID string, req PipelineDeployRequest) (model.Run, error) {
+	var out model.Run
+	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/deploy"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// ListPipelineRuns 查询项目级 pipeline 执行历史。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - pipelineID: 项目级 pipeline ID
+//
+// 返回：
+//   - 最近的 Run 列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListPipelineRuns(ctx context.Context, projectID, pipelineID string) ([]model.Run, error) {
+	var out struct {
+		Items []model.Run `json:"items"`
+	}
+	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/runs"
+	return out.Items, c.get(ctx, path, &out)
+}
+
+// ListPipelineArtifacts 查询项目级 pipeline 制品历史。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - pipelineID: 项目级 pipeline ID
+//
+// 返回：
+//   - 制品引用列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListPipelineArtifacts(ctx context.Context, projectID, pipelineID string) ([]model.ArtifactRef, error) {
+	var out struct {
+		Items []model.ArtifactRef `json:"items"`
+	}
+	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/artifacts"
+	return out.Items, c.get(ctx, path, &out)
+}
+
+// ReadPipelineRunLogs 查询项目级 pipeline 单次执行日志。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - pipelineID: 项目级 pipeline ID
+//   - runID: Run ID
+//   - q: step_name、host_id、limit、before 等查询参数
+//
+// 返回：
+//   - 日志行列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ReadPipelineRunLogs(ctx context.Context, projectID, pipelineID, runID string, q url.Values) ([]model.RunLogLine, error) {
+	var out struct {
+		Items []model.RunLogLine `json:"items"`
+	}
+	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/runs/" + url.PathEscape(runID) + "/logs"
+	return out.Items, c.get(ctx, withQuery(path, q), &out)
 }
 
 func (c *HTTPAgentClient) get(ctx context.Context, path string, out any) error {

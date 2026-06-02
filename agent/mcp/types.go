@@ -54,6 +54,18 @@ type PipelineTemplateSummary struct {
 // PipelineTemplatePreview 是模板 dry-run preview 结果。
 type PipelineTemplatePreview = pipelinetemplate.PreviewResult
 
+// PipelineDeployRequest 描述项目级 pipeline 部署或回滚请求。
+type PipelineDeployRequest struct {
+	ProjectID       string            `json:"project_id,omitempty"`
+	ProjectName     string            `json:"project_name,omitempty"`
+	PipelineID      string            `json:"pipeline_id"`
+	EnvName         string            `json:"env_name"`
+	HostIDs         []string          `json:"host_ids,omitempty"`
+	ArtifactVersion string            `json:"artifact_version,omitempty"`
+	Variables       map[string]string `json:"variables,omitempty"`
+	DebugSessionID  string            `json:"debug_session_id,omitempty"`
+}
+
 // OperationRequest 描述 MCP 请求 agent 生成 operation plan 的参数。
 type OperationRequest struct {
 	Kind         string `json:"kind"`

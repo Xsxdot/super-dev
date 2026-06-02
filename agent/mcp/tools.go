@@ -229,6 +229,48 @@ func upsertProjectPipelineInputSchema() map[string]any {
 	return schema
 }
 
+func deployProjectPipelineInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":       map[string]any{"type": "string"},
+			"project_name":     map[string]any{"type": "string"},
+			"pipeline_id":      map[string]any{"type": "string"},
+			"env_name":         map[string]any{"type": "string"},
+			"host_ids":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"artifact_version": map[string]any{"type": "string"},
+			"variables":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"debug_session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"pipeline_id", "env_name"},
+	}
+}
+
+func listPipelineRunsInputSchema() map[string]any {
+	schema := projectInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["pipeline_id"] = map[string]any{"type": "string"}
+	schema["required"] = []string{"pipeline_id"}
+	return schema
+}
+
+func listPipelineArtifactsInputSchema() map[string]any {
+	return listPipelineRunsInputSchema()
+}
+
+func readPipelineRunLogsInputSchema() map[string]any {
+	schema := listPipelineRunsInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["run_id"] = map[string]any{"type": "string"}
+	properties["step_name"] = map[string]any{"type": "string"}
+	properties["host_id"] = map[string]any{"type": "string"}
+	properties["limit"] = map[string]any{"type": "integer", "minimum": 1}
+	properties["before"] = map[string]any{"type": "integer", "minimum": 1}
+	schema["required"] = []string{"pipeline_id", "run_id"}
+	return schema
+}
+
 func createDebugSessionInputSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -491,6 +533,45 @@ func defaultTools(s *Server) []registeredTool {
 				InputSchema: upsertProjectPipelineInputSchema(),
 			},
 			Handler: s.upsertProjectPipelineTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "deploy_project_pipeline",
+				Title:       "Deploy project pipeline",
+				Description: "Execute a project-level pipeline deploy or rollback through the local agent.",
+				InputSchema: deployProjectPipelineInputSchema(),
+			},
+			Handler: s.deployProjectPipelineTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_pipeline_runs",
+				Title:       "List pipeline runs",
+				Description: "List project-level pipeline execution history.",
+				InputSchema: listPipelineRunsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listPipelineRunsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_pipeline_artifacts",
+				Title:       "List pipeline artifacts",
+				Description: "List project-level pipeline artifact history.",
+				InputSchema: listPipelineArtifactsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listPipelineArtifactsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "read_pipeline_run_logs",
+				Title:       "Read pipeline run logs",
+				Description: "Read stored logs for one project-level pipeline run.",
+				InputSchema: readPipelineRunLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.readPipelineRunLogsTool,
 		},
 		{
 			Tool: Tool{
