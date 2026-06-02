@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/superdev/agent/agenthealth"
 	"github.com/superdev/agent/collector"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/debugsession"
@@ -94,6 +95,9 @@ type App struct {
 	runtimeMetricsSampler       metrics.MetricsSampler
 	runtimeStatusClient         RuntimeStatusClient
 	runtimeStatusRequestTimeout time.Duration
+	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
+	agentHealth       *agenthealth.Monitor
+	agentHealthCancel context.CancelFunc
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -153,6 +157,35 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if cfg.TunnelOverride != nil {
 		resolver = cfg.TunnelOverride
 	}
+	agentHealthCtx, agentHealthCancel := context.WithCancel(context.Background())
+	agentHealthMonitor := agenthealth.NewMonitor(newAgentHealthProber(resolver))
+	// 订阅隧道事件，桥接为 agenthealth 信号；桥接与 Run 都绑定 App 生命周期。
+	tunnelEvents := tunnels.Subscribe("agent-health-monitor")
+	signals := make(chan agenthealth.TunnelSignal, 64)
+	go func() {
+		defer close(signals)
+		defer tunnels.Unsubscribe("agent-health-monitor")
+		for {
+			select {
+			case <-agentHealthCtx.Done():
+				return
+			case ev, ok := <-tunnelEvents:
+				if !ok {
+					return
+				}
+				sig := agenthealth.TunnelSignal{
+					HostID:    ev.HostID,
+					Connected: ev.Status == tunnel.StatusConnected,
+				}
+				select {
+				case signals <- sig:
+				case <-agentHealthCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+	go agentHealthMonitor.Run(agentHealthCtx, signals)
 	runtimeSampler := cfg.RuntimeMetricsSampler
 	if runtimeSampler == nil {
 		runtimeSampler = metrics.NewSampler(metrics.ExecCommandExecutor{})
@@ -193,6 +226,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		runtimeMetricsSampler:       runtimeSampler,
 		runtimeStatusClient:         runtimeClient,
 		runtimeStatusRequestTimeout: runtimeTimeout,
+		agentHealth:                 agentHealthMonitor,
+		agentHealthCancel:           agentHealthCancel,
 	}, nil
 }
 
@@ -200,6 +235,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 //
 // 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
 func (a *App) Close() {
+	if a.agentHealthCancel != nil {
+		a.agentHealthCancel()
+	}
 	if a.procMgr != nil {
 		a.procMgr.StopAll()
 	}
