@@ -201,6 +201,38 @@ func closeDebugSessionInputSchema() map[string]any {
 	}
 }
 
+func analyzeTraceLogsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"trace_id":     map[string]any{"type": "string"},
+			"request_id":   map[string]any{"type": "string"},
+			"limit":        map[string]any{"type": "integer", "minimum": 1},
+			"before_ms":    map[string]any{"type": "integer", "minimum": 1},
+			"after_ms":     map[string]any{"type": "integer", "minimum": 1},
+		},
+	}
+}
+
+func summarizeErrorWindowInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":    map[string]any{"type": "string"},
+			"project_name":  map[string]any{"type": "string"},
+			"deployment_id": map[string]any{"type": "string"},
+			"from":          map[string]any{"type": "string"},
+			"to":            map[string]any{"type": "string"},
+			"since":         map[string]any{"type": "string"},
+			"limit":         map[string]any{"type": "integer", "minimum": 1},
+		},
+	}
+}
+
 func defaultTools(s *Server) []registeredTool {
 	return []registeredTool{
 		{
@@ -311,6 +343,26 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.diagnoseServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "analyze_trace_logs",
+				Title:       "Analyze trace logs",
+				Description: "Collect deterministic trace/request log evidence without claiming root cause.",
+				InputSchema: analyzeTraceLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.analyzeTraceLogsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "summarize_error_window",
+				Title:       "Summarize error window",
+				Description: "Summarize deterministic error signals in a project or deployment time window without claiming root cause.",
+				InputSchema: summarizeErrorWindowInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.summarizeErrorWindowTool,
 		},
 		{
 			Tool: Tool{
