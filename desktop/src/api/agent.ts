@@ -37,6 +37,36 @@ export type DeployLocation = 'local' | 'remote'
 export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
 export type ControlMode = 'monitor' | 'managed'
 export type LogKind = 'process' | 'journalctl' | 'macos_log' | 'docker' | 'nginx' | 'file_tail' | 'command'
+export type Health = 'running' | 'healthy' | 'restarting' | 'stopped' | 'failed' | 'unknown'
+
+export interface InstanceMetrics {
+  cpu_percent: number | null
+  mem_bytes: number | null
+  uptime_sec: number | null
+  restarts: number | null
+  health: Health
+  base: RuntimeType | 'process' | 'unknown' | string
+}
+
+export interface RuntimeInstanceStatus {
+  service_id: string
+  service_name: string
+  deployment_id: string
+  node_id: string
+  node_name: string
+  is_local: boolean
+  error?: string
+  metrics: InstanceMetrics
+}
+
+export interface EnvRuntimeStatus {
+  env_name: string
+  instances: RuntimeInstanceStatus[]
+}
+
+export interface RuntimeStatusResponse {
+  environments: EnvRuntimeStatus[]
+}
 
 export type PipelinePhase = 'build' | 'deploy' | 'finally'
 export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'canceled'
