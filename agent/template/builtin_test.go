@@ -22,6 +22,7 @@ func TestLoadBuiltinTemplates(t *testing.T) {
 	require.NoError(t, err)
 	for _, id := range []string{
 		"archive-package",
+		"docker-container-deploy",
 		"go-binary-build",
 		"java-maven-build",
 		"nginx-static-deploy",
@@ -105,6 +106,17 @@ func TestSystemdSeamlessDeployIsSelfContained(t *testing.T) {
 	assert.Contains(t, stepCommand(t, tpl.Steps, "Restart"), "systemctl reset-failed")
 }
 
+func TestProductionDeployTemplatesExist(t *testing.T) {
+	builtins, err := pipelinetemplate.LoadBuiltins()
+	require.NoError(t, err)
+	for _, id := range []string{"systemd-seamless-deploy", "docker-container-deploy"} {
+		tpl := builtins[id]
+		require.NotEmpty(t, tpl.Steps, id)
+		assert.Contains(t, stepNames(tpl.Steps), "Health Check")
+	}
+	assert.Equal(t, "target_role", builtins["docker-container-deploy"].Inputs["role"].Type)
+}
+
 func stepCommand(t *testing.T, steps []pipelinetemplate.Step, name string) string {
 	t.Helper()
 	for _, step := range steps {
@@ -117,4 +129,12 @@ func stepCommand(t *testing.T, steps []pipelinetemplate.Step, name string) strin
 	}
 	require.FailNow(t, "step not found", name)
 	return ""
+}
+
+func stepNames(steps []pipelinetemplate.Step) []string {
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		names = append(names, step.Name)
+	}
+	return names
 }

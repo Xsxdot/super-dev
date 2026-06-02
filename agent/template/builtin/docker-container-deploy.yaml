@@ -1,0 +1,63 @@
+id: docker-container-deploy
+name: Docker Container Deploy
+description: Pull or use a tagged image, recreate one container, and verify HTTP health.
+version: 1.0.0
+inputs:
+  role:
+    label: Target machines
+    type: target_role
+    required: true
+    description: Docker machines that run the container.
+  container_name:
+    label: Container name
+    type: string
+    required: true
+    description: Container name to replace.
+  full_image:
+    label: Full image
+    type: string
+    required: true
+    description: Full Docker image reference, including tag.
+  port:
+    label: Health port
+    type: number
+    required: true
+    default: "8080"
+    description: HTTP port used for the post-start health check.
+  health_path:
+    label: Health path
+    type: string
+    required: true
+    default: /health
+    description: HTTP path used for the post-start health check.
+  run_args:
+    label: Docker run args
+    type: string
+    description: Extra arguments passed to docker run before image name.
+  skip_http_check:
+    label: Skip HTTP check
+    type: boolean
+    default: "false"
+    description: Set to true when the container should start without HTTP health verification.
+steps:
+  - name: Pull Image
+    type: remote_command
+    roles: ["${vars.role}"]
+    with:
+      cmd: docker pull ${vars.full_image}
+  - name: Recreate Container
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Pull Image]
+    with:
+      cmd: docker rm -f ${vars.container_name} 2>/dev/null || true; docker run -d --name ${vars.container_name} ${vars.run_args:-} ${vars.full_image}
+  - name: Health Check
+    type: http_check
+    roles: ["${vars.role}"]
+    needs: [Recreate Container]
+    run_if: '"${vars.skip_http_check:-false}" != "true"'
+    with:
+      url: http://${host}:${vars.port}${vars.health_path}
+      expected_status: 200
+      timeout: 30s
+      interval: 1s
