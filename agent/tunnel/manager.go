@@ -66,12 +66,12 @@ type Dialer interface {
 
 // Manager 管理多个 Host 的隧道。
 type Manager struct {
-	mu         sync.Mutex
-	dialer     Dialer
-	conns      map[string]*Conn
-	status     map[string]Status
-	errors     map[string]string // 最近一次连接失败的错误消息；连接成功或断开时清除
-	subs       map[string]chan Event
+	mu     sync.Mutex
+	dialer Dialer
+	conns  map[string]*Conn
+	status map[string]Status
+	errors map[string]string // 最近一次连接失败的错误消息；连接成功或断开时清除
+	subs   map[string]chan Event
 	// connecting 用于防止并发 EnsureConnected 对同一 host 发起两次拨号:
 	// 先到者写入 channel,后到者等待该 channel 关闭后复用已建立的 conn。
 	connecting map[string]chan struct{}
@@ -224,25 +224,23 @@ func (m *Manager) Close() {
 	subs := m.subs
 	m.conns = map[string]*Conn{}
 	m.subs = map[string]chan Event{}
+	for _, ch := range subs {
+		close(ch)
+	}
 	m.mu.Unlock()
 	for _, c := range conns {
 		c.Close()
-	}
-	for _, ch := range subs {
-		close(ch)
 	}
 }
 
 // emit 向所有订阅者广播一次状态变化(非阻塞,channel 满则丢弃)。
 func (m *Manager) emit(hostID string, st Status, errMsg string) {
 	m.mu.Lock()
-	subs := make([]chan Event, 0, len(m.subs))
-	for _, ch := range m.subs {
-		subs = append(subs, ch)
-	}
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 	ev := Event{HostID: hostID, Status: st, Err: errMsg}
-	for _, ch := range subs {
+	for _, ch := range m.subs {
+		// 持锁发送是为了和 Unsubscribe/Close 的 close 互斥，避免向已关闭 channel 发送。
+		// 发送为非阻塞，channel 满时丢弃事件，不会拖慢隧道状态更新。
 		select {
 		case ch <- ev:
 		default:

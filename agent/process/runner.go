@@ -39,9 +39,11 @@ type RunnerConfig struct {
 //
 // 线程安全：Start、Stop、IsRunning、PID 可并发调用。
 type Runner struct {
-	cfg RunnerConfig
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	cfg      RunnerConfig
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	running  bool
+	exitCode int
 }
 
 // NewRunner 创建一个新的 Runner，尚未启动进程。
@@ -80,11 +82,26 @@ func (r *Runner) Start() error {
 		return err
 	}
 	r.cmd = cmd
+	r.running = true
+	r.exitCode = 0
 
 	go r.scanLines(bufio.NewScanner(stdout), "stdout")
 	go r.scanLines(bufio.NewScanner(stderr), "stderr")
-	// 等待进程退出，更新 ProcessState，使 IsRunning() 可感知退出。
-	go func() { _ = cmd.Wait() }()
+	// 等待进程退出后把状态复制到 Runner 自己的字段中。
+	// 不让其他 goroutine 直接读取 cmd.ProcessState，避免与 os/exec.Wait 内部写入竞态。
+	go func() {
+		_ = cmd.Wait()
+		exitCode := 0
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		r.mu.Lock()
+		if r.cmd == cmd {
+			r.running = false
+			r.exitCode = exitCode
+		}
+		r.mu.Unlock()
+	}()
 
 	return nil
 }
@@ -105,20 +122,18 @@ func (r *Runner) Stop() {
 }
 
 // IsRunning 返回子进程是否仍在运行。
-//
-// 通过检查 cmd.ProcessState 判断：ProcessState 非 nil 表示进程已退出。
 func (r *Runner) IsRunning() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.cmd != nil && r.cmd.ProcessState == nil
+	return r.cmd != nil && r.running
 }
 
 // ExitCode 返回子进程退出码；进程仍在运行或未启动时返回 0。
 func (r *Runner) ExitCode() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cmd != nil && r.cmd.ProcessState != nil {
-		return r.cmd.ProcessState.ExitCode()
+	if r.cmd != nil && !r.running {
+		return r.exitCode
 	}
 	return 0
 }

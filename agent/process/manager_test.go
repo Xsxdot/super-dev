@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,8 +15,13 @@ import (
 )
 
 func TestManagerStartStopDeployment(t *testing.T) {
+	var entriesMu sync.Mutex
 	var entries []model.LogEntry
-	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
+	mgr := process.NewManager(func(e model.LogEntry) {
+		entriesMu.Lock()
+		entries = append(entries, e)
+		entriesMu.Unlock()
+	})
 
 	dep1 := model.Deployment{
 		ID:       "dep-1",
@@ -44,7 +50,10 @@ func TestManagerStartStopDeployment(t *testing.T) {
 	assert.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-2"))
 
 	// 所有日志条目的 DeploymentID 应正确归属
-	for _, e := range entries {
+	entriesMu.Lock()
+	entriesSnapshot := append([]model.LogEntry(nil), entries...)
+	entriesMu.Unlock()
+	for _, e := range entriesSnapshot {
 		assert.NotEmpty(t, e.DeploymentID)
 	}
 }
@@ -125,16 +134,24 @@ func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 }
 
 func TestManagerStartProcess(t *testing.T) {
+	var entriesMu sync.Mutex
 	var entries []model.LogEntry
-	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
+	mgr := process.NewManager(func(e model.LogEntry) {
+		entriesMu.Lock()
+		entries = append(entries, e)
+		entriesMu.Unlock()
+	})
 
 	require.NoError(t, mgr.StartProcess("proc-1", process.ProcessSpec{Command: `echo "hello"`, WorkDir: t.TempDir()}))
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, model.StatusStopped, mgr.Status("proc-1"))
 
 	// 通过 StartProcess 启动的进程，其日志应以传入的 id 作为 DeploymentID 归属
-	require.NotEmpty(t, entries)
-	for _, e := range entries {
+	entriesMu.Lock()
+	entriesSnapshot := append([]model.LogEntry(nil), entries...)
+	entriesMu.Unlock()
+	require.NotEmpty(t, entriesSnapshot)
+	for _, e := range entriesSnapshot {
 		assert.Equal(t, "proc-1", e.DeploymentID, "StartProcess 的日志应归属于传入 id")
 	}
 }
@@ -198,8 +215,13 @@ func TestManagerDeploymentIsolation(t *testing.T) {
 }
 
 func TestManagerLogEntryDeploymentID(t *testing.T) {
+	var entriesMu sync.Mutex
 	var entries []model.LogEntry
-	mgr := process.NewManager(func(e model.LogEntry) { entries = append(entries, e) })
+	mgr := process.NewManager(func(e model.LogEntry) {
+		entriesMu.Lock()
+		entries = append(entries, e)
+		entriesMu.Unlock()
+	})
 
 	dep := model.Deployment{
 		ID:       "dep-log",
@@ -211,8 +233,11 @@ func TestManagerLogEntryDeploymentID(t *testing.T) {
 	require.NoError(t, mgr.StartDeployment(dep))
 	time.Sleep(300 * time.Millisecond)
 
-	require.NotEmpty(t, entries)
-	for _, e := range entries {
+	entriesMu.Lock()
+	entriesSnapshot := append([]model.LogEntry(nil), entries...)
+	entriesMu.Unlock()
+	require.NotEmpty(t, entriesSnapshot)
+	for _, e := range entriesSnapshot {
 		assert.Equal(t, "dep-log", e.DeploymentID, "所有日志条目应归属于 dep.ID")
 	}
 }
