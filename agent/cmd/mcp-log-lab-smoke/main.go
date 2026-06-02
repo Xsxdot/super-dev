@@ -4,7 +4,7 @@
 //   - 启动临时 SuperDev agent
 //   - 注册 examples/mcp-log-lab 项目的临时副本
 //   - 通过 superdev-mcp stdio JSON-RPC 调用 MCP 工具
-//   - 断言服务控制、日志 tail、日志搜索、上下文和诊断结果
+//   - 断言服务控制、日志 tail、日志搜索、上下文、诊断和 debug session 结果
 //
 // 边界：
 //   - 不读写用户真实 ~/.superdev 数据
@@ -237,6 +237,74 @@ func run(ctx context.Context, cfg smokeConfig) error {
 		return errors.New("diagnose_service did not include failed status or recent error evidence")
 	}
 	pass("diagnose crasher")
+
+	sessionPayload, err := mcp.callTool(ctx, "create_debug_session", map[string]any{
+		"project_name": projectName,
+		"title":        "MCP log lab smoke",
+		"question":     "Can MCP persist trace and error evidence?",
+	})
+	if err != nil {
+		return fmt.Errorf("create debug session: %w", err)
+	}
+	sessionID := stringField(sessionPayload, "data", "session", "id")
+	if sessionID == "" {
+		return errors.New("create_debug_session returned no session id")
+	}
+	pass("create debug session")
+
+	tracePayload, err := mcp.callTool(ctx, "analyze_trace_logs", map[string]any{
+		"project_name": projectName,
+		"trace_id":     targetTraceID,
+		"limit":        80,
+	})
+	if err != nil {
+		return fmt.Errorf("analyze trace logs: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(tracePayload), targetTraceID) && !strings.Contains(fmt.Sprint(tracePayload), "timeline") {
+		return errors.New("analyze_trace_logs did not include trace timeline evidence")
+	}
+	pass("analyze trace logs")
+
+	errorPayload, err := mcp.callTool(ctx, "summarize_error_window", map[string]any{
+		"project_name":  projectName,
+		"deployment_id": "crasher-dev",
+		"since":         "2m",
+		"limit":         80,
+	})
+	if err != nil {
+		return fmt.Errorf("summarize error window: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(errorPayload), "retry_exhausted") && !strings.Contains(fmt.Sprint(errorPayload), "connection_refused") {
+		return errors.New("summarize_error_window did not include expected failure signals")
+	}
+	pass("summarize error window")
+
+	appendPayload, err := mcp.callTool(ctx, "append_log_analysis_to_session", map[string]any{
+		"session_id":    sessionID,
+		"analysis_type": "trace",
+		"project_name":  projectName,
+		"trace_id":      targetTraceID,
+		"limit":         80,
+	})
+	if err != nil {
+		return fmt.Errorf("append log analysis: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(appendPayload), "event") {
+		return errors.New("append_log_analysis_to_session returned no event")
+	}
+	pass("append log analysis")
+
+	detailPayload, err := mcp.callTool(ctx, "get_debug_session", map[string]any{
+		"session_id": sessionID,
+		"limit":      20,
+	})
+	if err != nil {
+		return fmt.Errorf("get debug session: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(detailPayload), "log_analysis") {
+		return errors.New("get_debug_session did not include log_analysis event")
+	}
+	pass("get debug session")
 
 	cleanupDeployments(ctx, mcp)
 	pass("cleanup")
@@ -638,6 +706,19 @@ func numberField(entry map[string]any, name string) (float64, bool) {
 	}
 	number, ok := value.(float64)
 	return number, ok
+}
+
+func stringField(payload map[string]any, path ...string) string {
+	var cur any = payload
+	for _, key := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return ""
+		}
+		cur = m[key]
+	}
+	s, _ := cur.(string)
+	return s
 }
 
 func contentText(content []map[string]string) string {
