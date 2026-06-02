@@ -1,0 +1,263 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/superdev/agent/metrics"
+	"github.com/superdev/agent/model"
+)
+
+type runtimeStatusService struct {
+	app *App
+}
+
+func (a *App) runtimeStatusService() *runtimeStatusService {
+	return &runtimeStatusService{app: a}
+}
+
+// Snapshot 聚合一个项目在所有环境和节点上的运行态快照。
+func (s *runtimeStatusService) Snapshot(ctx context.Context, project model.Project) model.RuntimeStatusResponse {
+	timeout := s.app.runtimeStatusRequestTimeout
+	if timeout == 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	hostsByID := s.hostsByID()
+	sections := map[string][]model.InstanceStatus{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, svc := range project.Services {
+		service := svc
+		for _, dep := range service.Deployments {
+			deployment := dep
+			envName := deployment.EnvName
+			if envName == "" {
+				envName = "default"
+			}
+			if deployment.Location == model.LocationRemote {
+				for _, hostID := range deployment.HostIDs {
+					hostID := hostID
+					host := hostsByID[hostID]
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						inst := s.remoteInstance(ctx, project.ID, service, deployment, hostID, host)
+						mu.Lock()
+						sections[envName] = append(sections[envName], inst)
+						mu.Unlock()
+					}()
+				}
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				inst := s.localInstance(ctx, project.ID, service, deployment)
+				mu.Lock()
+				sections[envName] = append(sections[envName], inst)
+				mu.Unlock()
+			}()
+		}
+	}
+
+	wg.Wait()
+	return orderRuntimeStatus(project, sections)
+}
+
+func (s *runtimeStatusService) localInstance(ctx context.Context, projectID string, svc model.Service, dep model.Deployment) model.InstanceStatus {
+	target := s.sampleTarget(projectID, dep)
+	got, err := s.app.runtimeMetricsSampler.Sample(ctx, target)
+	inst := model.InstanceStatus{
+		ServiceID:    svc.ID,
+		ServiceName:  svc.Name,
+		DeploymentID: dep.ID,
+		NodeID:       s.localNodeID(),
+		NodeName:     s.localNodeName(),
+		IsLocal:      true,
+		Metrics:      got,
+	}
+	if err != nil {
+		inst.Error = err.Error()
+	}
+	return inst
+}
+
+func (s *runtimeStatusService) remoteInstance(ctx context.Context, projectID string, svc model.Service, dep model.Deployment, hostID string, host model.Host) model.InstanceStatus {
+	resp, err := s.app.runtimeStatusClient.Fetch(ctx, hostID, projectID)
+	if err != nil {
+		return unknownInstance(svc, dep, hostID, runtimeHostName(hostID, host), false, err)
+	}
+	for _, env := range resp.Environments {
+		for _, inst := range env.Instances {
+			if inst.DeploymentID != dep.ID {
+				continue
+			}
+			inst.ServiceID = svc.ID
+			inst.ServiceName = svc.Name
+			inst.DeploymentID = dep.ID
+			inst.NodeID = hostID
+			inst.NodeName = runtimeHostName(hostID, host)
+			inst.IsLocal = false
+			return inst
+		}
+	}
+	return unknownInstance(svc, dep, hostID, runtimeHostName(hostID, host), false, fmt.Errorf("remote runtime-status missing deployment %s", dep.ID))
+}
+
+func (s *runtimeStatusService) hostsByID() map[string]model.Host {
+	hosts, err := s.app.remoteStore.ListHosts()
+	if err != nil {
+		return map[string]model.Host{}
+	}
+	out := make(map[string]model.Host, len(hosts))
+	for _, host := range hosts {
+		out[host.ID] = host
+	}
+	return out
+}
+
+func (s *runtimeStatusService) sampleTarget(projectID string, dep model.Deployment) metrics.SampleTarget {
+	base := "process"
+	target := metrics.SampleTarget{DeploymentID: dep.ID, Base: base}
+	if dep.Runtime != nil && dep.Runtime.Type != "" {
+		target.Base = string(dep.Runtime.Type)
+		switch dep.Runtime.Type {
+		case model.RuntimeTypeSystemd:
+			target.Unit = dep.Runtime.ServiceName
+		case model.RuntimeTypeDocker:
+			target.Container = dep.Runtime.Container
+		}
+	}
+	if target.Base == string(model.RuntimeTypeCommand) || target.Base == string(model.RuntimeTypeLaunchd) || target.Base == "process" {
+		s.app.mu.RLock()
+		mgr := s.app.managers[projectID]
+		s.app.mu.RUnlock()
+		if mgr != nil {
+			target.PID = mgr.DeploymentPID(dep.ID)
+		}
+	}
+	return target
+}
+
+func orderRuntimeStatus(project model.Project, sections map[string][]model.InstanceStatus) model.RuntimeStatusResponse {
+	serviceOrder := map[string]int{}
+	serviceName := map[string]string{}
+	for i, svc := range project.Services {
+		order := svc.Order
+		if order == 0 {
+			order = i + 1
+		}
+		serviceOrder[svc.ID] = order
+		serviceName[svc.ID] = svc.Name
+	}
+	for envName := range sections {
+		sort.SliceStable(sections[envName], func(i, j int) bool {
+			left := sections[envName][i]
+			right := sections[envName][j]
+			if serviceOrder[left.ServiceID] != serviceOrder[right.ServiceID] {
+				return serviceOrder[left.ServiceID] < serviceOrder[right.ServiceID]
+			}
+			leftName := serviceName[left.ServiceID]
+			if leftName == "" {
+				leftName = left.ServiceName
+			}
+			rightName := serviceName[right.ServiceID]
+			if rightName == "" {
+				rightName = right.ServiceName
+			}
+			if leftName != rightName {
+				return leftName < rightName
+			}
+			if left.NodeName != right.NodeName {
+				return left.NodeName < right.NodeName
+			}
+			return left.NodeID < right.NodeID
+		})
+	}
+
+	envRank := map[string]int{}
+	for _, env := range project.Environments {
+		envRank[env.Name] = env.Order
+	}
+	envNames := make([]string, 0, len(sections))
+	for envName := range sections {
+		envNames = append(envNames, envName)
+	}
+	sort.SliceStable(envNames, func(i, j int) bool {
+		left, leftKnown := envRank[envNames[i]]
+		right, rightKnown := envRank[envNames[j]]
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if leftKnown && rightKnown {
+			if left != right {
+				return left < right
+			}
+		}
+		return envNames[i] < envNames[j]
+	})
+
+	out := model.RuntimeStatusResponse{Environments: make([]model.EnvStatus, 0, len(envNames))}
+	for _, envName := range envNames {
+		out.Environments = append(out.Environments, model.EnvStatus{
+			EnvName:   envName,
+			Instances: sections[envName],
+		})
+	}
+	return out
+}
+
+func unknownInstance(svc model.Service, dep model.Deployment, hostID, hostName string, isLocal bool, err error) model.InstanceStatus {
+	base := runtimeBase(dep)
+	inst := model.InstanceStatus{
+		ServiceID:    svc.ID,
+		ServiceName:  svc.Name,
+		DeploymentID: dep.ID,
+		NodeID:       hostID,
+		NodeName:     hostName,
+		IsLocal:      isLocal,
+		Metrics: model.InstanceMetrics{
+			Health: model.HealthUnknown,
+			Base:   base,
+		},
+	}
+	if err != nil {
+		inst.Error = err.Error()
+	}
+	return inst
+}
+
+func (s *runtimeStatusService) localNodeID() string {
+	if s.app.identity.NodeID != "" {
+		return s.app.identity.NodeID
+	}
+	return "local"
+}
+
+func (s *runtimeStatusService) localNodeName() string {
+	if s.app.identity.DisplayName != "" {
+		return s.app.identity.DisplayName
+	}
+	return s.localNodeID()
+}
+
+func runtimeHostName(hostID string, host model.Host) string {
+	if host.Name != "" {
+		return host.Name
+	}
+	return hostID
+}
+
+func runtimeBase(dep model.Deployment) string {
+	if dep.Runtime != nil && dep.Runtime.Type != "" {
+		return string(dep.Runtime.Type)
+	}
+	return "process"
+}

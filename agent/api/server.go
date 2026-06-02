@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/superdev/agent/collector"
@@ -28,6 +29,7 @@ import (
 	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
+	"github.com/superdev/agent/metrics"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/operation"
 	"github.com/superdev/agent/process"
@@ -48,6 +50,12 @@ type AppConfig struct {
 	InstallBinaryDir string
 	// InstallerOverride 注入自定义远端 agent 安装器，仅用于测试。
 	InstallerOverride HostAgentInstaller
+	// RuntimeMetricsSampler 注入进程级指标采样器；nil 时使用 metrics.NewSampler。
+	RuntimeMetricsSampler metrics.MetricsSampler
+	// RuntimeStatusClient 注入远端 runtime-status client；nil 时通过 SSH 隧道调用远端 agent。
+	RuntimeStatusClient RuntimeStatusClient
+	// RuntimeStatusRequestTimeout 是一次聚合的整体超时；0 时使用 3 秒。
+	RuntimeStatusRequestTimeout time.Duration
 }
 
 // HostAgentInstaller 安装或重装远端 SuperDev agent。
@@ -79,10 +87,13 @@ type App struct {
 	tunnelResolver remote.TunnelResolver
 	// backends 按 deployment ID 索引对应的 LogBackend。
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
-	backends           map[string]logbackend.LogBackend
-	identity           identity.Identity
-	pidStore           *process.PIDStore
-	hostAgentInstaller HostAgentInstaller
+	backends                    map[string]logbackend.LogBackend
+	identity                    identity.Identity
+	pidStore                    *process.PIDStore
+	hostAgentInstaller          HostAgentInstaller
+	runtimeMetricsSampler       metrics.MetricsSampler
+	runtimeStatusClient         RuntimeStatusClient
+	runtimeStatusRequestTimeout time.Duration
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -142,31 +153,46 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if cfg.TunnelOverride != nil {
 		resolver = cfg.TunnelOverride
 	}
+	runtimeSampler := cfg.RuntimeMetricsSampler
+	if runtimeSampler == nil {
+		runtimeSampler = metrics.NewSampler(metrics.ExecCommandExecutor{})
+	}
+	runtimeClient := cfg.RuntimeStatusClient
+	if runtimeClient == nil {
+		runtimeClient = newTunnelRuntimeStatusClient(resolver)
+	}
+	runtimeTimeout := cfg.RuntimeStatusRequestTimeout
+	if runtimeTimeout == 0 {
+		runtimeTimeout = 3 * time.Second
+	}
 	hostAgentInstaller := cfg.InstallerOverride
 	if hostAgentInstaller == nil {
 		hostAgentInstaller = installer.New(installer.Options{BinaryDir: cfg.InstallBinaryDir})
 	}
 
 	return &App{
-		cfg:                cfg,
-		projects:           []model.Project{},
-		managers:           map[string]*process.Manager{},
-		buf:                buf,
-		store:              s,
-		registry:           registry,
-		settings:           settingsStore,
-		procMgr:            procMgr,
-		collector:          colMgr,
-		remoteStore:        remoteStore,
-		tunnels:            tunnels,
-		debugSessions:      debugSessions,
-		operationApprovals: operationApprovals,
-		operationAudit:     operationAudit,
-		tunnelResolver:     resolver,
-		backends:           map[string]logbackend.LogBackend{},
-		identity:           id,
-		pidStore:           process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
-		hostAgentInstaller: hostAgentInstaller,
+		cfg:                         cfg,
+		projects:                    []model.Project{},
+		managers:                    map[string]*process.Manager{},
+		buf:                         buf,
+		store:                       s,
+		registry:                    registry,
+		settings:                    settingsStore,
+		procMgr:                     procMgr,
+		collector:                   colMgr,
+		remoteStore:                 remoteStore,
+		tunnels:                     tunnels,
+		debugSessions:               debugSessions,
+		operationApprovals:          operationApprovals,
+		operationAudit:              operationAudit,
+		tunnelResolver:              resolver,
+		backends:                    map[string]logbackend.LogBackend{},
+		identity:                    id,
+		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
+		hostAgentInstaller:          hostAgentInstaller,
+		runtimeMetricsSampler:       runtimeSampler,
+		runtimeStatusClient:         runtimeClient,
+		runtimeStatusRequestTimeout: runtimeTimeout,
 	}, nil
 }
 
@@ -204,6 +230,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/config-changes/apply", a.applyConfigChange)
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
+	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
 

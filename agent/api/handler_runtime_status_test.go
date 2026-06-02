@@ -1,0 +1,224 @@
+// Package api_test 验证项目 runtime-status HTTP 聚合接口。
+//
+// 职责：
+//   - 验证本机 deployment 按环境聚合
+//   - 验证远端 host 失败隔离
+//   - 锁定 runtime sampler 的 SampleTarget 映射
+//
+// 边界：
+//   - 不执行真实 systemd/docker/ps 命令
+//   - 不建立真实 SSH 隧道
+package api_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/api"
+	"github.com/superdev/agent/metrics"
+	"github.com/superdev/agent/model"
+)
+
+type fakeRuntimeSampler struct {
+	mu           sync.Mutex
+	byDeployment map[string]model.InstanceMetrics
+	targets      []metrics.SampleTarget
+}
+
+func (f *fakeRuntimeSampler) Sample(ctx context.Context, target metrics.SampleTarget) (model.InstanceMetrics, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.targets = append(f.targets, target)
+	if got, ok := f.byDeployment[target.DeploymentID]; ok {
+		return got, nil
+	}
+	return model.InstanceMetrics{Health: model.HealthUnknown, Base: target.Base}, errors.New("missing fake sample")
+}
+
+func (f *fakeRuntimeSampler) targetsByDeployment() map[string]metrics.SampleTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]metrics.SampleTarget{}
+	for _, target := range f.targets {
+		out[target.DeploymentID] = target
+	}
+	return out
+}
+
+type fakeRemoteRuntimeStatusClient struct {
+	byHost map[string]model.RuntimeStatusResponse
+	errs   map[string]error
+}
+
+func (f fakeRemoteRuntimeStatusClient) Fetch(ctx context.Context, hostID, projectID string) (model.RuntimeStatusResponse, error) {
+	if err := f.errs[hostID]; err != nil {
+		return model.RuntimeStatusResponse{}, err
+	}
+	return f.byHost[hostID], nil
+}
+
+func TestRuntimeStatusAggregatesLocalDeploymentsByEnvironment(t *testing.T) {
+	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
+		"dep-api-dev":  runningMetrics(12.5, 1000, "process"),
+		"dep-web-prod": runningMetrics(1.5, 2000, "docker"),
+	}}
+	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	projectID := addRuntimeStatusProject(t, app, `
+id: overview-local
+name: overview-local
+environments:
+  - name: dev
+  - name: prod
+services:
+  - id: svc-api
+    name: api
+    deployments:
+      - id: dep-api-dev
+        env: dev
+        location: local
+        runtime:
+          type: command
+          command: echo api
+  - id: svc-web
+    name: web
+    deployments:
+      - id: dep-web-prod
+        env: prod
+        location: local
+        runtime:
+          type: docker
+          container: web-prod
+`)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got model.RuntimeStatusResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.Len(t, got.Environments, 2)
+	assert.Equal(t, "dev", got.Environments[0].EnvName)
+	assert.Equal(t, "prod", got.Environments[1].EnvName)
+	assert.Equal(t, "api", got.Environments[0].Instances[0].ServiceName)
+	assert.True(t, got.Environments[0].Instances[0].IsLocal)
+	assert.Equal(t, model.HealthRunning, got.Environments[0].Instances[0].Metrics.Health)
+	targets := sampler.targetsByDeployment()
+	assert.Equal(t, "docker", targets["dep-web-prod"].Base)
+	assert.Equal(t, "web-prod", targets["dep-web-prod"].Container)
+}
+
+func TestRuntimeStatusIsolatesRemoteHostFailure(t *testing.T) {
+	app := newRuntimeStatusApp(t, &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}}, fakeRemoteRuntimeStatusClient{
+		byHost: map[string]model.RuntimeStatusResponse{
+			"host-ok": {Environments: []model.EnvStatus{{
+				EnvName: "prod",
+				Instances: []model.InstanceStatus{{
+					ServiceID: "svc-api", ServiceName: "api", DeploymentID: "dep-api-prod",
+					NodeID: "host-ok", NodeName: "ok-node", IsLocal: false,
+					Metrics: runningMetrics(7, 3000, "systemd"),
+				}},
+			}}},
+		},
+		errs: map[string]error{"host-bad": errors.New("tunnel timeout")},
+	})
+	projectID := addRuntimeStatusProject(t, app, `
+id: overview-remote
+name: overview-remote
+environments:
+  - name: prod
+services:
+  - id: svc-api
+    name: api
+    deployments:
+      - id: dep-api-prod
+        env: prod
+        location: remote
+        hosts: [host-ok, host-bad]
+        runtime:
+          type: systemd
+          service_name: api.service
+`)
+
+	createHost(t, app, "host-ok", "ok-node")
+	createHost(t, app, "host-bad", "bad-node")
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got model.RuntimeStatusResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.Len(t, got.Environments, 1)
+	require.Len(t, got.Environments[0].Instances, 2)
+	byNode := map[string]model.InstanceStatus{}
+	for _, inst := range got.Environments[0].Instances {
+		byNode[inst.NodeID] = inst
+	}
+	assert.Equal(t, model.HealthRunning, byNode["host-ok"].Metrics.Health)
+	assert.Equal(t, model.HealthUnknown, byNode["host-bad"].Metrics.Health)
+	assert.Contains(t, byNode["host-bad"].Error, "tunnel timeout")
+}
+
+func runningMetrics(cpu float64, mem int64, base string) model.InstanceMetrics {
+	restarts := 0
+	uptime := int64(60)
+	return model.InstanceMetrics{
+		CPUPercent: &cpu,
+		MemBytes:   &mem,
+		UptimeSec:  &uptime,
+		Restarts:   &restarts,
+		Health:     model.HealthRunning,
+		Base:       base,
+	}
+}
+
+func newRuntimeStatusApp(t *testing.T, sampler metrics.MetricsSampler, remoteClient api.RuntimeStatusClient) *api.App {
+	t.Helper()
+	app, err := api.NewApp(api.AppConfig{
+		DataDir:                     t.TempDir(),
+		RuntimeMetricsSampler:       sampler,
+		RuntimeStatusClient:         remoteClient,
+		RuntimeStatusRequestTimeout: 200 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	return app
+}
+
+func addRuntimeStatusProject(t *testing.T, app *api.App, yaml string) string {
+	t.Helper()
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".superdev")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(yaml), 0o644))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var project model.Project
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&project))
+	return project.ID
+}
+
+func createHost(t *testing.T, app *api.App, id, name string) {
+	t.Helper()
+	body := strings.NewReader(`{"id":"` + id + `","name":"` + name + `","ssh_host":"127.0.0.1","ssh_user":"me"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/hosts", body)
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+}
