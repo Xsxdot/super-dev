@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/superdev/agent/configchange"
 	"github.com/superdev/agent/model"
 	"github.com/superdev/agent/operation"
 	pipelinetemplate "github.com/superdev/agent/template"
@@ -37,14 +38,20 @@ type operationAuditListResponse struct {
 }
 
 type operationTargetRequest struct {
-	Kind         string `json:"kind"`
-	ProjectID    string `json:"project_id"`
-	ProjectName  string `json:"project_name"`
-	EnvName      string `json:"env_name"`
-	ServiceID    string `json:"service_id"`
-	ServiceName  string `json:"service_name"`
-	DeploymentID string `json:"deployment_id"`
-	TemplatePath string `json:"template_path"`
+	Kind         string                             `json:"kind"`
+	ProjectID    string                             `json:"project_id"`
+	ProjectName  string                             `json:"project_name"`
+	RootPath     string                             `json:"root_path"`
+	EnvName      string                             `json:"env_name"`
+	ServiceID    string                             `json:"service_id"`
+	ServiceName  string                             `json:"service_name"`
+	DeploymentID string                             `json:"deployment_id"`
+	TemplatePath string                             `json:"template_path"`
+	Project      *configchange.ProjectPatch         `json:"project,omitempty"`
+	Service      *configchange.ServicePatch         `json:"service,omitempty"`
+	Pipeline     *configchange.ProjectPipelinePatch `json:"pipeline,omitempty"`
+	Delete       bool                               `json:"delete,omitempty"`
+	Remove       bool                               `json:"remove,omitempty"`
 }
 
 type operationDecisionRequest struct {
@@ -199,6 +206,22 @@ func (a *App) planOperation(req operationTargetRequest) (operation.Plan, int, st
 			return operation.Plan{}, http.StatusBadRequest, err.Error()
 		}
 		return plan, http.StatusOK, ""
+	case operation.OperationConfigProjectUpsert, operation.OperationConfigServiceUpsert, operation.OperationConfigPipelineUpsert:
+		preview, status, msg := a.previewConfigChangeRequest(configchange.ChangeRequest{
+			Kind:        req.Kind,
+			ProjectID:   req.ProjectID,
+			ProjectName: req.ProjectName,
+			RootPath:    req.RootPath,
+			Project:     req.Project,
+			Service:     req.Service,
+			Pipeline:    req.Pipeline,
+			Delete:      req.Delete,
+			Remove:      req.Remove,
+		})
+		if status != http.StatusOK {
+			return operation.Plan{}, status, msg
+		}
+		return preview.Plan, http.StatusOK, ""
 	default:
 		return operation.Plan{}, http.StatusBadRequest, "invalid operation kind"
 	}

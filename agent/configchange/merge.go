@@ -10,9 +10,10 @@
 package configchange
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/superdev/agent/model"
 )
 
@@ -62,7 +63,7 @@ func applyProject(project model.Project, patch *ProjectPatch) model.Project {
 	for _, env := range patch.Environments {
 		env.Name = strings.TrimSpace(env.Name)
 		if env.ID == "" {
-			env.ID = uuid.NewString()
+			env.ID = StableID("env", project.ID, project.RootPath, env.Name)
 		}
 		idx := findEnvironmentIndex(project.Environments, env)
 		if idx >= 0 {
@@ -85,7 +86,7 @@ func applyService(project model.Project, patch *ServicePatch) model.Project {
 		svc = project.Services[idx]
 	}
 	if svc.ID == "" {
-		svc.ID = uuid.NewString()
+		svc.ID = StableID("svc", project.ID, project.RootPath, svc.Name)
 	}
 	if strings.TrimSpace(patch.Name) != "" {
 		svc.Name = strings.TrimSpace(patch.Name)
@@ -104,7 +105,7 @@ func applyService(project model.Project, patch *ServicePatch) model.Project {
 			continue
 		}
 		if dep.ID == "" {
-			dep.ID = uuid.NewString()
+			dep.ID = StableID("dep", project.ID, project.RootPath, svc.Name, dep.EnvName)
 		}
 		svc.Deployments = append(svc.Deployments, dep)
 	}
@@ -279,7 +280,29 @@ func slugID(name string) string {
 	}
 	out := strings.Trim(b.String(), "-")
 	if out == "" {
-		return uuid.NewString()
+		return StableID("pipeline", name)
 	}
 	return out
+}
+
+// StableID 基于配置 upsert 的稳定输入生成可重复 ID。
+//
+// 参数：
+//   - prefix: ID 类型前缀，如 project、svc、dep
+//   - parts: 能稳定标识对象的输入字段
+//
+// 返回：
+//   - 形如 prefix_ + 16 位十六进制摘要的稳定 ID
+//
+// 注意：
+//   - 仅用于 config upsert 预览/审批/应用的幂等路径
+//   - 已存在的配置 ID 不会被该函数替换
+func StableID(prefix string, parts ...string) string {
+	h := sha256.New()
+	for _, part := range parts {
+		h.Write([]byte(strings.TrimSpace(part)))
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return prefix + "_" + hex.EncodeToString(sum[:8])
 }

@@ -199,6 +199,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/probe", a.probeProject)
 	mux.HandleFunc("GET /api/projects/{id}/rules", a.getProjectRules)
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
+	mux.HandleFunc("GET /api/projects/{id}/config", a.getProjectConfig)
+	mux.HandleFunc("POST /api/config-changes/preview", a.previewConfigChange)
+	mux.HandleFunc("POST /api/config-changes/apply", a.applyConfigChange)
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
@@ -332,6 +335,14 @@ func (a *App) registerProjectBackendsLocked(p model.Project) {
 			// 否则运行期注册项目后 deployment 日志接口会短暂或永久 404。
 			b := buildBackend(dep, svc.ID, a.store, a.buf, a.tunnelResolver)
 			a.backends[dep.ID] = b
+		}
+	}
+}
+
+func (a *App) clearProjectBackendsLocked(project model.Project) {
+	for _, svc := range project.Services {
+		for _, dep := range svc.Deployments {
+			delete(a.backends, dep.ID)
 		}
 	}
 }
