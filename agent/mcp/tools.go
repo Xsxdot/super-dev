@@ -185,6 +185,50 @@ func listOperationAuditInputSchema() map[string]any {
 	}
 }
 
+func configChangeInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"kind":             map[string]any{"type": "string", "enum": []string{"config.project.upsert", "config.service.upsert", "config.pipeline.upsert"}},
+			"project_id":       map[string]any{"type": "string"},
+			"project_name":     map[string]any{"type": "string"},
+			"root_path":        map[string]any{"type": "string"},
+			"approval_token":   map[string]any{"type": "string"},
+			"debug_session_id": map[string]any{"type": "string"},
+			"project":          map[string]any{"type": "object"},
+			"service":          map[string]any{"type": "object"},
+			"pipeline":         map[string]any{"type": "object"},
+		},
+		"required": []string{"kind"},
+	}
+}
+
+func projectConfigInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id": map[string]any{"type": "string"},
+			"root_path":  map[string]any{"type": "string"},
+		},
+	}
+}
+
+func upsertServiceInputSchema() map[string]any {
+	schema := configChangeInputSchema()
+	delete(schema["properties"].(map[string]any), "kind")
+	schema["required"] = []string{"service"}
+	return schema
+}
+
+func upsertProjectPipelineInputSchema() map[string]any {
+	schema := configChangeInputSchema()
+	delete(schema["properties"].(map[string]any), "kind")
+	schema["required"] = []string{"pipeline"}
+	return schema
+}
+
 func createDebugSessionInputSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -381,6 +425,72 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.listOperationAuditTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "probe_project_config",
+				Title:       "Probe project config",
+				Description: "Probe a project directory through the local agent without writing config.",
+				InputSchema: projectConfigInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.probeProjectConfigTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_project_config",
+				Title:       "Get project config",
+				Description: "Read an editable project config snapshot from the local agent.",
+				InputSchema: projectConfigInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getProjectConfigTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "preview_config_change",
+				Title:       "Preview config change",
+				Description: "Preview a project/service/project-pipeline config upsert without writing YAML.",
+				InputSchema: configChangeInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.previewConfigChangeTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "apply_config_change",
+				Title:       "Apply config change",
+				Description: "Apply a config upsert through the local agent safe-operation flow.",
+				InputSchema: configChangeInputSchema(),
+			},
+			Handler: s.applyConfigChangeTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "upsert_project_config",
+				Title:       "Upsert project config",
+				Description: "Create or edit project base config through the local agent.",
+				InputSchema: configChangeInputSchema(),
+			},
+			Handler: s.upsertProjectConfigTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "upsert_service",
+				Title:       "Upsert service",
+				Description: "Create or edit one service and its deployments through the local agent.",
+				InputSchema: upsertServiceInputSchema(),
+			},
+			Handler: s.upsertServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "upsert_project_pipeline",
+				Title:       "Upsert project pipeline",
+				Description: "Create or edit one project-level pipeline through the local agent.",
+				InputSchema: upsertProjectPipelineInputSchema(),
+			},
+			Handler: s.upsertProjectPipelineTool,
 		},
 		{
 			Tool: Tool{
