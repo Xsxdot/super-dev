@@ -89,6 +89,46 @@ func TestResolveProjectPipelineAppliesEnvVariablesAndServiceRoles(t *testing.T) 
 	assert.Equal(t, "project:p1:pipeline:deploy-dev:env:dev", resolved.RunID)
 }
 
+func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
+	project := model.Project{
+		ID:        "p1",
+		RootPath:  "/repo",
+		Variables: map[string]string{"app_name": "api"},
+		Environments: []model.Environment{
+			{Name: "prod"},
+		},
+		Services: []model.Service{{
+			ID:   "svc-api",
+			Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-api-prod", EnvName: "prod", HostIDs: []string{"h1"},
+			}},
+		}},
+		Pipelines: []model.ProjectPipeline{{
+			ID:           "deploy-prod",
+			Name:         "Deploy Prod",
+			ArtifactKind: model.ArtifactKindFile,
+			Variables:    map[string]string{"artifact": "${artifacts}/${app_name}-${version}.tar.gz"},
+			Roles:        map[string]model.ProjectPipelineRole{"api_targets": {FromService: "api"}},
+			Pipeline: model.Pipeline{Deploy: []model.Step{{
+				Name: "Upload ${env}", Type: "transfer", Roles: []string{"api_targets"}, Concurrency: "batch:2",
+			}}},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:      project,
+		PipelineID:   "deploy-prod",
+		EnvName:      "prod",
+		RunVariables: map[string]string{"version": "v1"},
+		Preview:      true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.ArtifactKindFile, resolved.ProjectPipeline.ArtifactKind)
+	// 制品位置来自渲染后的保留字变量 artifact。
+	assert.Equal(t, "/tmp/super-debug-pipeline-preview/artifacts/api-v1.tar.gz", resolved.Pipeline.Variables["artifact"])
+	assert.Equal(t, "batch:2", resolved.Pipeline.Deploy[0].Concurrency)
+}
+
 func TestResolveProjectPipelineRejectsReservedVariables(t *testing.T) {
 	project := projectForResolve()
 	project.Variables = map[string]string{"workspace": "/bad"}

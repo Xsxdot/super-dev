@@ -437,6 +437,58 @@ func TestSaveAndReloadPreservesRuntimeAndProjectPipelines(t *testing.T) {
 	assert.Equal(t, "tk-dev.service", dep.Logs.Target)
 }
 
+func TestLoadAndSaveProjectPipelineArtifactAndConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yaml := `
+name: tk
+environments:
+  - name: prod
+services:
+  - name: api
+    deployments:
+      - env: prod
+        location: remote
+        hosts: [h1]
+pipelines:
+  - id: deploy-prod
+    name: Deploy Prod
+    services: [api]
+    artifact_kind: file
+    variables:
+      artifact: "${artifacts}/api-${version}.tar.gz"
+    pipeline:
+      deploy:
+        - name: Upload
+          type: transfer
+          concurrency: batch:2
+          roles: [api_targets]
+          with:
+            source: "${artifact}"
+            target: /opt/api/uploads/api.tar.gz
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yaml), 0o644))
+
+	loader := config.NewLoader(dir)
+	project, err := loader.Load()
+	require.NoError(t, err)
+	require.Len(t, project.Pipelines, 1)
+	assert.Equal(t, model.ArtifactKindFile, project.Pipelines[0].ArtifactKind)
+	assert.Equal(t, "${artifacts}/api-${version}.tar.gz", project.Pipelines[0].Variables["artifact"])
+	assert.Equal(t, "batch:2", project.Pipelines[0].Pipeline.Deploy[0].Concurrency)
+
+	require.NoError(t, loader.Save(project))
+	data, err := os.ReadFile(filepath.Join(superdevDir, "config.yaml"))
+	require.NoError(t, err)
+	saved := string(data)
+	assert.Contains(t, saved, "artifact_kind: file")
+	assert.Contains(t, saved, "concurrency: batch:2")
+	assert.NotContains(t, saved, "batch_size:")
+	assert.NotContains(t, saved, "tolerate_failures:")
+}
+
 func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {
 	dir := t.TempDir()
 	p := model.Project{
