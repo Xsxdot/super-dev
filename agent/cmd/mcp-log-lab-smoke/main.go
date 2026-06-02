@@ -309,6 +309,9 @@ func run(ctx context.Context, cfg smokeConfig) error {
 	if err := assertSafeOperations(ctx, agent.baseURL, mcp, dataDir); err != nil {
 		return err
 	}
+	if err := assertConfigUpsert(ctx, agent.baseURL, mcp); err != nil {
+		return err
+	}
 
 	cleanupDeployments(ctx, mcp)
 	pass("cleanup")
@@ -717,6 +720,72 @@ func assertSafeOperations(ctx context.Context, agentURL string, mcp *mcpClient, 
 		return fmt.Errorf("approved template import did not return template id: %v", imported)
 	}
 	pass("template import approved")
+	return nil
+}
+
+func assertConfigUpsert(ctx context.Context, agentURL string, mcp *mcpClient) error {
+	body := map[string]any{
+		"project_name": projectName,
+		"pipeline": map[string]any{
+			"id":       "mcp-smoke-deploy",
+			"name":     "MCP Smoke Deploy",
+			"services": []string{"api"},
+			"pipeline": map[string]any{
+				"build": []map[string]any{{
+					"name": "Smoke Build",
+					"type": "local_command",
+					"with": map[string]any{"command": "echo smoke"},
+				}},
+			},
+		},
+	}
+	previewArgs := map[string]any{
+		"kind":         "config.pipeline.upsert",
+		"project_name": projectName,
+		"pipeline":     body["pipeline"],
+	}
+	preview, err := mcp.callTool(ctx, "preview_config_change", previewArgs)
+	if err != nil {
+		return fmt.Errorf("preview config pipeline upsert: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(preview), "mcp-smoke-deploy") {
+		return fmt.Errorf("preview config change missing pipeline id: %v", preview)
+	}
+	pass("preview config upsert")
+
+	required, err := mcp.callToolError(ctx, "upsert_project_pipeline", body)
+	if err != nil {
+		return fmt.Errorf("config upsert approval required: %w", err)
+	}
+	if code := stringField(required, "code"); code != "approval_required" {
+		return fmt.Errorf("config upsert code %q, want approval_required", code)
+	}
+	approvalID := stringField(required, "data", "approval", "id")
+	if approvalID == "" {
+		return fmt.Errorf("config upsert returned no approval id: %v", required)
+	}
+	pass("config upsert approval required")
+
+	if err := approveOperation(ctx, agentURL, approvalID, "config smoke approved"); err != nil {
+		return err
+	}
+	detail, err := mcp.callTool(ctx, "get_operation_approval", map[string]any{"approval_id": approvalID})
+	if err != nil {
+		return fmt.Errorf("get config approval: %w", err)
+	}
+	token := stringField(detail, "data", "approval_token")
+	if token == "" {
+		return errors.New("get_operation_approval returned no config approval token")
+	}
+	body["approval_token"] = token
+	applied, err := mcp.callTool(ctx, "upsert_project_pipeline", body)
+	if err != nil {
+		return fmt.Errorf("config upsert with token: %w", err)
+	}
+	if !strings.Contains(fmt.Sprint(applied), "mcp-smoke-deploy") {
+		return fmt.Errorf("approved config upsert did not return pipeline id: %v", applied)
+	}
+	pass("config upsert approved")
 	return nil
 }
 
