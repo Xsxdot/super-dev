@@ -4,7 +4,10 @@ package agenthealth_test
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/superdev/agent/agenthealth"
@@ -59,4 +62,122 @@ func TestProbeOnceMapsUnreachable(t *testing.T) {
 func TestStatusUnknownByDefault(t *testing.T) {
 	m := agenthealth.NewMonitor(&fakeProber{})
 	assert.Equal(t, agenthealth.StatusUnknown, m.Status("never-probed"))
+}
+
+// flappingProber 每次探活都在 healthy / version-mismatch 间切换，用来制造连续状态变化。
+type flappingProber struct {
+	n int32
+}
+
+func (f *flappingProber) Probe(ctx context.Context, hostID string) (agenthealth.ProbeResult, error) {
+	next := atomic.AddInt32(&f.n, 1)
+	return agenthealth.ProbeResult{AllEndpointsOK: next%2 == 0}, nil
+}
+
+func TestRunStartsPollingOnTunnelConnected(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {AllEndpointsOK: true},
+	}}
+	m := agenthealth.NewMonitor(prober)
+	m.SetPollInterval(5 * time.Millisecond)
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+
+	// 轮询应在短时间内把状态推进到 healthy
+	assert.Eventually(t, func() bool {
+		return m.Status("h1") == agenthealth.StatusHealthy
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestRunStopsPollingOnTunnelDisconnected(t *testing.T) {
+	prober := &fakeProber{errs: map[string]error{"h1": errors.New("down")}}
+	m := agenthealth.NewMonitor(prober)
+	m.SetPollInterval(5 * time.Millisecond)
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+	assert.Eventually(t, func() bool {
+		return m.Status("h1") == agenthealth.StatusUnreachable
+	}, time.Second, 5*time.Millisecond)
+
+	// 断开后状态清回 unknown，且不再轮询
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: false}
+	assert.Eventually(t, func() bool {
+		return m.Status("h1") == agenthealth.StatusUnknown
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestSubscribeReceivesStatusChange(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {AllEndpointsOK: true},
+	}}
+	m := agenthealth.NewMonitor(prober)
+	m.SetPollInterval(5 * time.Millisecond)
+
+	sub := m.Subscribe("sub-1")
+	defer m.Unsubscribe("sub-1")
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+
+	select {
+	case ev := <-sub:
+		assert.Equal(t, "h1", ev.HostID)
+		assert.Equal(t, agenthealth.StatusHealthy, ev.Status)
+	case <-time.After(time.Second):
+		t.Fatal("expected agent health event, got none")
+	}
+}
+
+func TestRunDoesNotEmitWhenDisconnectKeepsUnknown(t *testing.T) {
+	m := agenthealth.NewMonitor(&fakeProber{})
+
+	sub := m.Subscribe("sub-unknown")
+	defer m.Unsubscribe("sub-unknown")
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: false}
+
+	select {
+	case ev := <-sub:
+		t.Fatalf("expected no event when status remains unknown, got %+v", ev)
+	case <-time.After(30 * time.Millisecond):
+	}
+}
+
+func TestUnsubscribeConcurrentWithStatusEventsDoesNotPanic(t *testing.T) {
+	m := agenthealth.NewMonitor(&flappingProber{})
+	m.SetPollInterval(time.Millisecond)
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+
+	for i := 0; i < 200; i++ {
+		subID := "sub-" + strconv.Itoa(i)
+		_ = m.Subscribe(subID)
+		m.Unsubscribe(subID)
+	}
+
+	assert.Eventually(t, func() bool {
+		return m.Status("h1") == agenthealth.StatusHealthy ||
+			m.Status("h1") == agenthealth.StatusVersionMismatch
+	}, time.Second, 5*time.Millisecond)
 }
