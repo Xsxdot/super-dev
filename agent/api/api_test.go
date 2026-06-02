@@ -336,7 +336,10 @@ services:
 	for _, action := range []string{"start", "stop", "restart"} {
 		resp, err := http.Post(srv.URL+"/api/deployments/"+depID+"/"+action, "application/json", nil)
 		require.NoError(t, err)
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, action)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode, action)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, "operation_denied", body["code"], action)
 		_ = resp.Body.Close()
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/operation"
 	"github.com/superdev/agent/process"
 	"github.com/superdev/agent/remote"
 	"github.com/superdev/agent/store"
@@ -70,6 +71,10 @@ type App struct {
 	tunnels     *tunnel.Manager
 	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
 	debugSessions debugsession.Store
+	// operationApprovals 持久化 MCP 写操作审批请求和一次性 token 状态。
+	operationApprovals operation.ApprovalStore
+	// operationAudit 持久化 MCP 写操作安全链路审计事件。
+	operationAudit operation.AuditStore
 	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
 	tunnelResolver remote.TunnelResolver
 	// backends 按 deployment ID 索引对应的 LogBackend。
@@ -130,6 +135,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
 	debugSessions := debugsession.NewFileStore(filepath.Join(cfg.DataDir, "debug-sessions.json"))
+	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
+	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	var resolver remote.TunnelResolver = newTunnelResolverAdapter(tunnels)
 	if cfg.TunnelOverride != nil {
@@ -153,6 +160,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		remoteStore:        remoteStore,
 		tunnels:            tunnels,
 		debugSessions:      debugSessions,
+		operationApprovals: operationApprovals,
+		operationAudit:     operationAudit,
 		tunnelResolver:     resolver,
 		backends:           map[string]logbackend.LogBackend{},
 		identity:           id,
@@ -201,6 +210,14 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/debug-sessions/{id}", a.getDebugSession)
 	mux.HandleFunc("POST /api/debug-sessions/{id}/events", a.appendDebugSessionEvent)
 	mux.HandleFunc("POST /api/debug-sessions/{id}/close", a.closeDebugSession)
+
+	// Operation safety（本机写操作预检、审批与审计）
+	mux.HandleFunc("POST /api/operations/preflight", a.preflightOperation)
+	mux.HandleFunc("GET /api/operation-approvals", a.listOperationApprovals)
+	mux.HandleFunc("GET /api/operation-approvals/{id}", a.getOperationApproval)
+	mux.HandleFunc("POST /api/operation-approvals/{id}/approve", a.approveOperationApproval)
+	mux.HandleFunc("POST /api/operation-approvals/{id}/reject", a.rejectOperationApproval)
+	mux.HandleFunc("GET /api/operation-audit", a.listOperationAudit)
 
 	// 服务管理（service 级启停/选择已下线，统一走 deployment 级接口）
 	mux.HandleFunc("GET /api/services", a.listServices)

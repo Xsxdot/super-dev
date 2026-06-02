@@ -37,6 +37,7 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 
 	now := time.Now().UTC()
 	env, isDev := findEnvironment(project, dep.EnvName)
+	location := effectiveDeployLocation(dep)
 	target := Target{
 		ProjectID:    project.ID,
 		ProjectName:  project.Name,
@@ -71,17 +72,17 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 		plan.RiskLevel = RiskCritical
 		plan.Reasons = append(plan.Reasons, "deployment is read-only")
 	}
-	if dep.Location == model.LocationRemote {
+	if location == model.LocationRemote {
 		plan.Denied = true
 		plan.RiskLevel = RiskCritical
 		plan.Reasons = append(plan.Reasons, "remote deployment control is not supported by MCP safe operations")
 	}
-	if dep.Location == model.LocationLocal && !isDev && !plan.Denied {
+	if location == model.LocationLocal && !isDev && !plan.Denied {
 		plan.RiskLevel = RiskHigh
 		plan.RequiresApproval = true
 		plan.Reasons = append(plan.Reasons, "environment is not marked as dev")
 	}
-	if dep.Location == model.LocationLocal && isDev && !plan.Denied {
+	if location == model.LocationLocal && isDev && !plan.Denied {
 		plan.RiskLevel = RiskLow
 		plan.RequiresApproval = false
 	}
@@ -94,6 +95,13 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 		"denied":           plan.Denied,
 	})
 	return plan, nil
+}
+
+func effectiveDeployLocation(dep model.Deployment) model.DeployLocation {
+	if dep.Location == "" {
+		return model.LocationLocal
+	}
+	return dep.Location
 }
 
 // PlanTemplateImport 为用户模板导入生成安全预检计划。

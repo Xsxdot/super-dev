@@ -40,6 +40,16 @@ func TestPlanRuntimeRequiresApprovalForNonDevLocalDeployment(t *testing.T) {
 	assert.Contains(t, plan.Reasons, "environment is not marked as dev")
 }
 
+func TestPlanRuntimeTreatsEmptyLocationAsLocalForSafety(t *testing.T) {
+	project := operationProject(false, "", false)
+	plan, err := PlanRuntime(OperationRuntimeRestart, project, project.Services[0], project.Services[0].Deployments[0])
+
+	require.NoError(t, err)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, RiskHigh, plan.RiskLevel)
+	assert.Contains(t, plan.Reasons, "environment is not marked as dev")
+}
+
 func TestPlanRuntimeDeniesReadOnlyAndRemoteDeployment(t *testing.T) {
 	readOnlyProject := operationProject(true, model.LocationLocal, true)
 	readOnlyPlan, err := PlanRuntime(OperationRuntimeStop, readOnlyProject, readOnlyProject.Services[0], readOnlyProject.Services[0].Deployments[0])
