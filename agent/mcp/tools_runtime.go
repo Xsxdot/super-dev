@@ -150,7 +150,7 @@ func (s *Server) startServiceTool(ctx context.Context, args json.RawMessage) (Ca
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StartDeployment(ctx, target.Deployment.ID); err != nil {
+	if err := s.client.StartDeployment(ctx, target.Deployment.ID, ""); err != nil {
 		return clientToolError(err), nil
 	}
 	return toolSuccess("start requested", map[string]any{"target": sanitizeTarget(target), "action": "start"}, nil, nil), nil
@@ -161,7 +161,7 @@ func (s *Server) stopServiceTool(ctx context.Context, args json.RawMessage) (Cal
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StopDeployment(ctx, target.Deployment.ID); err != nil {
+	if err := s.client.StopDeployment(ctx, target.Deployment.ID, ""); err != nil {
 		return clientToolError(err), nil
 	}
 	return toolSuccess("stop requested", map[string]any{"target": sanitizeTarget(target), "action": "stop"}, nil, nil), nil
@@ -172,7 +172,7 @@ func (s *Server) restartServiceTool(ctx context.Context, args json.RawMessage) (
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.RestartDeployment(ctx, target.Deployment.ID); err != nil {
+	if err := s.client.RestartDeployment(ctx, target.Deployment.ID, ""); err != nil {
 		return clientToolError(err), nil
 	}
 	return toolSuccess("restart requested", map[string]any{"target": sanitizeTarget(target), "action": "restart"}, nil, nil), nil

@@ -52,7 +52,7 @@ func (s *Server) importPipelineTemplateTool(ctx context.Context, args json.RawMe
 	if req.Path == "" {
 		return toolError("invalid_arguments", "path is required", nil), nil
 	}
-	summary, err := s.client.ImportPipelineTemplate(ctx, req.Path)
+	summary, err := s.client.ImportPipelineTemplate(ctx, req.Path, "")
 	if err != nil {
 		return clientToolError(err), nil
 	}

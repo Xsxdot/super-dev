@@ -20,26 +20,31 @@ import (
 )
 
 type fakeAgentClient struct {
-	projects              []model.Project
-	services              []model.Service
-	rules                 []model.LogRule
-	logs                  LogsResponse
-	search                LogSearchResponse
-	contextResp           LogContextResponse
-	contextQuery          url.Values
-	debugSessions         []DebugSession
-	debugSessionDetail    DebugSessionDetailResponse
-	createdDebugSession   DebugSessionCreateRequest
-	appendedSessionID     string
-	appendedEventRequest  DebugSessionAppendEventRequest
-	closedSessionID       string
-	stopCalled            bool
-	startedDeploymentID   string
-	stoppedDeploymentID   string
-	restartedDeploymentID string
-	templatePreview       PipelineTemplatePreview
-	importedTemplate      PipelineTemplateSummary
-	importedTemplatePath  string
+	projects                []model.Project
+	services                []model.Service
+	rules                   []model.LogRule
+	logs                    LogsResponse
+	search                  LogSearchResponse
+	contextResp             LogContextResponse
+	contextQuery            url.Values
+	debugSessions           []DebugSession
+	debugSessionDetail      DebugSessionDetailResponse
+	createdDebugSession     DebugSessionCreateRequest
+	appendedSessionID       string
+	appendedEventRequest    DebugSessionAppendEventRequest
+	closedSessionID         string
+	stopCalled              bool
+	startedDeploymentID     string
+	stoppedDeploymentID     string
+	restartedDeploymentID   string
+	templatePreview         PipelineTemplatePreview
+	importedTemplate        PipelineTemplateSummary
+	importedTemplatePath    string
+	operationPlan           OperationPlan
+	operationApprovals      []OperationApproval
+	operationApprovalDetail OperationApprovalDetail
+	operationAudit          OperationAuditList
+	lastApprovalToken       string
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -106,19 +111,38 @@ func (f *fakeAgentClient) CloseDebugSession(_ context.Context, id string, summar
 	return DebugSession{ID: id, Status: "closed", Title: summary}, nil
 }
 
-func (f *fakeAgentClient) StartDeployment(_ context.Context, id string) error {
+func (f *fakeAgentClient) PreviewOperation(context.Context, OperationRequest) (OperationPlan, error) {
+	return f.operationPlan, nil
+}
+
+func (f *fakeAgentClient) ListOperationApprovals(context.Context, url.Values) ([]OperationApproval, error) {
+	return f.operationApprovals, nil
+}
+
+func (f *fakeAgentClient) GetOperationApproval(context.Context, string) (OperationApprovalDetail, error) {
+	return f.operationApprovalDetail, nil
+}
+
+func (f *fakeAgentClient) ListOperationAudit(context.Context, url.Values) (OperationAuditList, error) {
+	return f.operationAudit, nil
+}
+
+func (f *fakeAgentClient) StartDeployment(_ context.Context, id string, approvalToken string) error {
 	f.startedDeploymentID = id
+	f.lastApprovalToken = approvalToken
 	return nil
 }
 
-func (f *fakeAgentClient) StopDeployment(_ context.Context, id string) error {
+func (f *fakeAgentClient) StopDeployment(_ context.Context, id string, approvalToken string) error {
 	f.stopCalled = true
 	f.stoppedDeploymentID = id
+	f.lastApprovalToken = approvalToken
 	return nil
 }
 
-func (f *fakeAgentClient) RestartDeployment(_ context.Context, id string) error {
+func (f *fakeAgentClient) RestartDeployment(_ context.Context, id string, approvalToken string) error {
 	f.restartedDeploymentID = id
+	f.lastApprovalToken = approvalToken
 	return nil
 }
 
@@ -126,8 +150,9 @@ func (f *fakeAgentClient) PreviewPipelineTemplate(context.Context, string, strin
 	return f.templatePreview, nil
 }
 
-func (f *fakeAgentClient) ImportPipelineTemplate(_ context.Context, path string) (PipelineTemplateSummary, error) {
+func (f *fakeAgentClient) ImportPipelineTemplate(_ context.Context, path string, approvalToken string) (PipelineTemplateSummary, error) {
 	f.importedTemplatePath = path
+	f.lastApprovalToken = approvalToken
 	return f.importedTemplate, nil
 }
 

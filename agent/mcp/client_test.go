@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func TestHTTPAgentClientMapsAgentError(t *testing.T) {
 	defer srv.Close()
 
 	client := NewHTTPAgentClient(srv.URL, srv.Client())
-	err := client.StartDeployment(context.Background(), "dep-1")
+	err := client.StartDeployment(context.Background(), "dep-1", "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deployment is read-only")
@@ -99,6 +100,73 @@ func TestHTTPAgentClientDebugSessionLifecycle(t *testing.T) {
 	detail, err := client.GetDebugSession(context.Background(), "dbg_1", 20)
 	require.NoError(t, err)
 	assert.Len(t, detail.Events, 2)
+}
+
+func TestHTTPAgentClientOperationApprovalLifecycle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/operations/preflight":
+			jsonOKForMCPClientTest(w, OperationPlan{ID: "op_1", Kind: "runtime.restart", RequiresApproval: true, Fingerprint: "fp_1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/operation-approvals":
+			jsonOKForMCPClientTest(w, []OperationApproval{{ID: "opa_1", Status: "pending"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/operation-approvals/opa_1":
+			jsonOKForMCPClientTest(w, OperationApprovalDetail{Approval: OperationApproval{ID: "opa_1", Status: "approved"}, ApprovalToken: "tok_1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/operation-audit":
+			jsonOKForMCPClientTest(w, OperationAuditList{Events: []OperationAuditEvent{{ID: "aud_1", Action: "executed"}}, Count: 1})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/dep-1/restart":
+			assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
+			jsonOKForMCPClientTest(w, map[string]string{"status": "starting"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	plan, err := client.PreviewOperation(context.Background(), OperationRequest{Kind: "runtime.restart", DeploymentID: "dep-1"})
+	require.NoError(t, err)
+	assert.Equal(t, "op_1", plan.ID)
+
+	approvals, err := client.ListOperationApprovals(context.Background(), url.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, "opa_1", approvals[0].ID)
+
+	detail, err := client.GetOperationApproval(context.Background(), "opa_1")
+	require.NoError(t, err)
+	assert.Equal(t, "tok_1", detail.ApprovalToken)
+
+	audit, err := client.ListOperationAudit(context.Background(), url.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, audit.Count)
+
+	err = client.RestartDeployment(context.Background(), "dep-1", "tok_1")
+	require.NoError(t, err)
+}
+
+func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		jsonOKForMCPClientTest(w, map[string]any{
+			"code":  "approval_required",
+			"error": "approval required",
+			"plan": map[string]any{
+				"id": "op_1", "kind": "runtime.restart", "requires_approval": true, "fingerprint": "fp_1",
+			},
+			"approval": map[string]any{
+				"id": "opa_1", "status": "pending",
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	err := client.RestartDeployment(context.Background(), "dep-1", "")
+
+	var agentErr AgentError
+	require.ErrorAs(t, err, &agentErr)
+	assert.Equal(t, "approval_required", agentErr.Code)
+	assert.Equal(t, "op_1", agentErr.Plan.ID)
+	assert.Equal(t, "opa_1", agentErr.Approval.ID)
 }
 
 func jsonOKForMCPClientTest(w http.ResponseWriter, v any) {

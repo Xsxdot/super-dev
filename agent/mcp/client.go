@@ -49,16 +49,40 @@ type AgentClient interface {
 	AppendDebugSessionEvent(context.Context, string, DebugSessionAppendEventRequest) (DebugSessionEvent, error)
 	// CloseDebugSession 关闭本机排障会话。
 	CloseDebugSession(context.Context, string, string) (DebugSession, error)
+	// PreviewOperation 请求 agent 生成写操作预检计划。
+	PreviewOperation(context.Context, OperationRequest) (OperationPlan, error)
+	// ListOperationApprovals 查询写操作审批请求。
+	ListOperationApprovals(context.Context, url.Values) ([]OperationApproval, error)
+	// GetOperationApproval 读取单条审批详情，已批准时可能返回一次性 token。
+	GetOperationApproval(context.Context, string) (OperationApprovalDetail, error)
+	// ListOperationAudit 查询写操作审计事件。
+	ListOperationAudit(context.Context, url.Values) (OperationAuditList, error)
 	// StartDeployment 请求 agent 启动 deployment。
-	StartDeployment(context.Context, string) error
+	StartDeployment(context.Context, string, string) error
 	// StopDeployment 请求 agent 停止 deployment。
-	StopDeployment(context.Context, string) error
+	StopDeployment(context.Context, string, string) error
 	// RestartDeployment 请求 agent 重启 deployment。
-	RestartDeployment(context.Context, string) error
+	RestartDeployment(context.Context, string, string) error
 	// PreviewPipelineTemplate 请求 agent dry-run 解析模板。
 	PreviewPipelineTemplate(context.Context, string, string) (PipelineTemplatePreview, error)
 	// ImportPipelineTemplate 请求 agent 导入用户模板文件。
-	ImportPipelineTemplate(context.Context, string) (PipelineTemplateSummary, error)
+	ImportPipelineTemplate(context.Context, string, string) (PipelineTemplateSummary, error)
+}
+
+// AgentError 保留 agent 业务错误中的机器可读 code 和结构化数据。
+type AgentError struct {
+	Code     string
+	Message  string
+	Plan     OperationPlan
+	Approval OperationApproval
+}
+
+// Error 返回适合日志和工具错误展示的 agent 错误摘要。
+func (e AgentError) Error() string {
+	if e.Code == "" {
+		return e.Message
+	}
+	return e.Code + ": " + e.Message
 }
 
 // HTTPAgentClient 是 AgentClient 的 HTTP 实现。
@@ -247,16 +271,73 @@ func (c *HTTPAgentClient) CloseDebugSession(ctx context.Context, id string, summ
 	return out, c.post(ctx, "/api/debug-sessions/"+url.PathEscape(id)+"/close", map[string]string{"summary": summary}, &out)
 }
 
+// PreviewOperation 请求 agent 生成写操作预检计划。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - req: operation kind 和目标解析参数
+//
+// 返回：
+//   - agent 生成的稳定 operation plan
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) PreviewOperation(ctx context.Context, req OperationRequest) (OperationPlan, error) {
+	var out OperationPlan
+	return out, c.post(ctx, "/api/operations/preflight", req, &out)
+}
+
+// ListOperationApprovals 查询写操作审批请求。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - q: status、project_id、limit 等过滤参数
+//
+// 返回：
+//   - 审批请求列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListOperationApprovals(ctx context.Context, q url.Values) ([]OperationApproval, error) {
+	var out []OperationApproval
+	return out, c.get(ctx, withQuery("/api/operation-approvals", q), &out)
+}
+
+// GetOperationApproval 读取单条审批详情。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - id: 审批请求 ID
+//
+// 返回：
+//   - 审批详情，已批准时可能包含一次性 token
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) GetOperationApproval(ctx context.Context, id string) (OperationApprovalDetail, error) {
+	var out OperationApprovalDetail
+	return out, c.get(ctx, "/api/operation-approvals/"+url.PathEscape(id), &out)
+}
+
+// ListOperationAudit 查询写操作审计事件。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - q: project_id、kind、approval_id、since、limit 等过滤参数
+//
+// 返回：
+//   - 审计事件列表响应
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListOperationAudit(ctx context.Context, q url.Values) (OperationAuditList, error) {
+	var out OperationAuditList
+	return out, c.get(ctx, withQuery("/api/operation-audit", q), &out)
+}
+
 // StartDeployment 请求 agent 启动 deployment。
 //
 // 参数：
 //   - ctx: 请求上下文
 //   - depID: deployment ID
+//   - approvalToken: 用户批准后发放的一次性 token，可为空
 //
 // 返回：
 //   - HTTP 或 agent 业务错误
-func (c *HTTPAgentClient) StartDeployment(ctx context.Context, depID string) error {
-	return c.post(ctx, "/api/deployments/"+url.PathEscape(depID)+"/start", nil, nil)
+func (c *HTTPAgentClient) StartDeployment(ctx context.Context, depID string, approvalToken string) error {
+	return c.postWithApprovalToken(ctx, "/api/deployments/"+url.PathEscape(depID)+"/start", nil, approvalToken, nil)
 }
 
 // StopDeployment 请求 agent 停止 deployment。
@@ -264,11 +345,12 @@ func (c *HTTPAgentClient) StartDeployment(ctx context.Context, depID string) err
 // 参数：
 //   - ctx: 请求上下文
 //   - depID: deployment ID
+//   - approvalToken: 用户批准后发放的一次性 token，可为空
 //
 // 返回：
 //   - HTTP 或 agent 业务错误
-func (c *HTTPAgentClient) StopDeployment(ctx context.Context, depID string) error {
-	return c.post(ctx, "/api/deployments/"+url.PathEscape(depID)+"/stop", nil, nil)
+func (c *HTTPAgentClient) StopDeployment(ctx context.Context, depID string, approvalToken string) error {
+	return c.postWithApprovalToken(ctx, "/api/deployments/"+url.PathEscape(depID)+"/stop", nil, approvalToken, nil)
 }
 
 // RestartDeployment 请求 agent 重启 deployment。
@@ -276,11 +358,12 @@ func (c *HTTPAgentClient) StopDeployment(ctx context.Context, depID string) erro
 // 参数：
 //   - ctx: 请求上下文
 //   - depID: deployment ID
+//   - approvalToken: 用户批准后发放的一次性 token，可为空
 //
 // 返回：
 //   - HTTP 或 agent 业务错误
-func (c *HTTPAgentClient) RestartDeployment(ctx context.Context, depID string) error {
-	return c.post(ctx, "/api/deployments/"+url.PathEscape(depID)+"/restart", nil, nil)
+func (c *HTTPAgentClient) RestartDeployment(ctx context.Context, depID string, approvalToken string) error {
+	return c.postWithApprovalToken(ctx, "/api/deployments/"+url.PathEscape(depID)+"/restart", nil, approvalToken, nil)
 }
 
 // PreviewPipelineTemplate 请求 agent dry-run 解析模板。
@@ -303,13 +386,14 @@ func (c *HTTPAgentClient) PreviewPipelineTemplate(ctx context.Context, path, yam
 // 参数：
 //   - ctx: 请求上下文
 //   - path: 模板 YAML 文件路径
+//   - approvalToken: 用户批准后发放的一次性 token，可为空
 //
 // 返回：
 //   - 导入后的模板摘要
 //   - HTTP 或 agent 业务错误
-func (c *HTTPAgentClient) ImportPipelineTemplate(ctx context.Context, path string) (PipelineTemplateSummary, error) {
+func (c *HTTPAgentClient) ImportPipelineTemplate(ctx context.Context, path string, approvalToken string) (PipelineTemplateSummary, error) {
 	var out PipelineTemplateSummary
-	return out, c.post(ctx, "/api/pipeline/templates/import", map[string]string{"path": path}, &out)
+	return out, c.postWithApprovalToken(ctx, "/api/pipeline/templates/import", map[string]string{"path": path}, approvalToken, &out)
 }
 
 func (c *HTTPAgentClient) get(ctx context.Context, path string, out any) error {
@@ -321,6 +405,10 @@ func (c *HTTPAgentClient) get(ctx context.Context, path string, out any) error {
 }
 
 func (c *HTTPAgentClient) post(ctx context.Context, path string, body any, out any) error {
+	return c.postWithApprovalToken(ctx, path, body, "", out)
+}
+
+func (c *HTTPAgentClient) postWithApprovalToken(ctx context.Context, path string, body any, approvalToken string, out any) error {
 	var reader *bytes.Reader
 	if body == nil {
 		reader = bytes.NewReader(nil)
@@ -336,6 +424,9 @@ func (c *HTTPAgentClient) post(ctx context.Context, path string, body any, out a
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(approvalToken) != "" {
+		req.Header.Set("X-SuperDev-Approval-Token", strings.TrimSpace(approvalToken))
+	}
 	return c.do(req, out)
 }
 
@@ -347,11 +438,17 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var body struct {
-			Error string `json:"error"`
+			Code     string            `json:"code"`
+			Error    string            `json:"error"`
+			Plan     OperationPlan     `json:"plan"`
+			Approval OperationApproval `json:"approval"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		if body.Error == "" {
 			body.Error = resp.Status
+		}
+		if body.Code != "" {
+			return AgentError{Code: body.Code, Message: body.Error, Plan: body.Plan, Approval: body.Approval}
 		}
 		return fmt.Errorf("agent error: %s", body.Error)
 	}
