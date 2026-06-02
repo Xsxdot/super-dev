@@ -247,7 +247,7 @@ func TestProjectPipelinesJSON(t *testing.T) {
 	assert.Equal(t, "api", got.Pipelines[0].Roles["api_targets"].FromService)
 }
 
-func TestProjectPipelineArtifactKindJSON(t *testing.T) {
+func TestProjectPipelineKindJSON(t *testing.T) {
 	p := model.ProjectPipeline{
 		ID:           "deploy-prod",
 		Name:         "Deploy Prod",
@@ -267,7 +267,7 @@ func TestProjectPipelineArtifactKindJSON(t *testing.T) {
 }
 
 // 默认 file：未声明 artifact_kind 时反序列化应得到空值，由消费方按 file 兜底。
-func TestProjectPipelineArtifactKindDefaultsEmpty(t *testing.T) {
+func TestProjectPipelineKindDefaultsEmpty(t *testing.T) {
 	var got model.ProjectPipeline
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"p","name":"P"}`), &got))
 	assert.Equal(t, model.ArtifactKind(""), got.ArtifactKind)

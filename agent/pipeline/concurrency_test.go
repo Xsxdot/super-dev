@@ -13,7 +13,7 @@ func TestParseStepConcurrencyDefaultsToSerial(t *testing.T) {
 	c, err := pipeline.ParseStepConcurrency("")
 	require.NoError(t, err)
 	assert.Equal(t, pipeline.ConcurrencySerial, c.Mode)
-	assert.Equal(t, 1, c.BatchSize)
+	assert.Equal(t, 1, c.Limit)
 }
 
 func TestParseStepConcurrencyModes(t *testing.T) {
@@ -24,7 +24,7 @@ func TestParseStepConcurrencyModes(t *testing.T) {
 	c, err = pipeline.ParseStepConcurrency("batch:3")
 	require.NoError(t, err)
 	assert.Equal(t, pipeline.ConcurrencyBatch, c.Mode)
-	assert.Equal(t, 3, c.BatchSize)
+	assert.Equal(t, 3, c.Limit)
 }
 
 func TestParseStepConcurrencyRejectsInvalidBatch(t *testing.T) {

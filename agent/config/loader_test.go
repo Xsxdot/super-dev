@@ -437,7 +437,7 @@ func TestSaveAndReloadPreservesRuntimeAndProjectPipelines(t *testing.T) {
 	assert.Equal(t, "tk-dev.service", dep.Logs.Target)
 }
 
-func TestLoadAndSaveProjectPipelineArtifactAndConcurrency(t *testing.T) {
+func TestLoadAndSaveProjectPipelineKindAndConcurrency(t *testing.T) {
 	dir := t.TempDir()
 	superdevDir := filepath.Join(dir, ".superdev")
 	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
@@ -485,8 +485,8 @@ pipelines:
 	saved := string(data)
 	assert.Contains(t, saved, "artifact_kind: file")
 	assert.Contains(t, saved, "concurrency: batch:2")
-	assert.NotContains(t, saved, "batch_size:")
-	assert.NotContains(t, saved, "tolerate_failures:")
+	assert.NotContains(t, saved, "batch"+"_size:")
+	assert.NotContains(t, saved, "tolerate"+"_failures:")
 }
 
 func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {

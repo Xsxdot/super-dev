@@ -299,8 +299,8 @@ func (e *Engine) executeStepTasks(ctx context.Context, plugin StepPlugin, step m
 	case ConcurrencyParallel:
 		return e.executeTaskBatch(ctx, plugin, step, sr, taskIndexes(sr.Tasks), emit, runTempDir, runVars)
 	case ConcurrencyBatch:
-		for start := 0; start < len(sr.Tasks); start += concurrency.BatchSize {
-			end := start + concurrency.BatchSize
+		for start := 0; start < len(sr.Tasks); start += concurrency.Limit {
+			end := start + concurrency.Limit
 			if end > len(sr.Tasks) {
 				end = len(sr.Tasks)
 			}

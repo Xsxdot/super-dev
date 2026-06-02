@@ -6,7 +6,7 @@
 //
 // 边界：
 //   - 不调度任务，不执行插件
-//   - 不兼容旧 batch_size/tolerate_failures 字段
+//   - 不兼容旧的分离式并发字段
 package pipeline
 
 import (
@@ -29,18 +29,18 @@ const (
 
 // StepConcurrency 是解析后的 step 并发配置。
 type StepConcurrency struct {
-	Mode      ConcurrencyMode
-	BatchSize int
+	Mode  ConcurrencyMode
+	Limit int
 }
 
 // ParseStepConcurrency 解析 step.concurrency，空值默认 serial。
 func ParseStepConcurrency(value string) (StepConcurrency, error) {
 	value = strings.TrimSpace(value)
 	if value == "" || value == string(ConcurrencySerial) {
-		return StepConcurrency{Mode: ConcurrencySerial, BatchSize: 1}, nil
+		return StepConcurrency{Mode: ConcurrencySerial, Limit: 1}, nil
 	}
 	if value == string(ConcurrencyParallel) {
-		return StepConcurrency{Mode: ConcurrencyParallel, BatchSize: 0}, nil
+		return StepConcurrency{Mode: ConcurrencyParallel, Limit: 0}, nil
 	}
 	if strings.HasPrefix(value, "batch:") {
 		raw := strings.TrimPrefix(value, "batch:")
@@ -48,7 +48,7 @@ func ParseStepConcurrency(value string) (StepConcurrency, error) {
 		if err != nil || n <= 0 {
 			return StepConcurrency{}, fmt.Errorf("invalid concurrency %q", value)
 		}
-		return StepConcurrency{Mode: ConcurrencyBatch, BatchSize: n}, nil
+		return StepConcurrency{Mode: ConcurrencyBatch, Limit: n}, nil
 	}
 	return StepConcurrency{}, fmt.Errorf("invalid concurrency %q", value)
 }

@@ -282,7 +282,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs", a.listProjectPipelineRuns)
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}", a.getProjectPipelineRun)
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}/logs", a.readProjectPipelineRunLogs)
-	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/artifacts", a.listProjectPipelineArtifacts)
+	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/artifacts", a.listProjectArtifactsForPipeline)
 
 	// Deployment 进程控制
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)

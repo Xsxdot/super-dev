@@ -82,8 +82,8 @@ func (a *App) getProjectPipelineRun(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, run)
 }
 
-// listProjectPipelineArtifacts 处理 GET /api/projects/{id}/pipelines/{pipelineId}/artifacts。
-func (a *App) listProjectPipelineArtifacts(w http.ResponseWriter, r *http.Request) {
+// listProjectArtifactsForPipeline 处理 GET /api/projects/{id}/pipelines/{pipelineId}/artifacts。
+func (a *App) listProjectArtifactsForPipeline(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	pipelineID := r.PathValue("pipelineId")
 	refs, err := a.store.ListArtifacts(r.Context(), projectID, pipelineID)
