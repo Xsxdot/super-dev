@@ -48,8 +48,7 @@ func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
-		Project:      project,
+	resolved, expanded, err := a.resolveExpandedProjectPipeline(project, pipelineID, pipeline.ProjectPipelineRequest{
 		PipelineID:   pipelineID,
 		EnvName:      req.EnvName,
 		ServiceNames: req.ServiceNames,
@@ -58,18 +57,6 @@ func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	builtins, err := pipelinetemplate.LoadBuiltins()
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to load builtin templates: "+err.Error())
-		return
-	}
-	resolver := pipelinetemplate.NewStore(a.cfg.DataDir, builtins, project.RootPath)
-	expanded, err := expandDeploymentPipeline(resolved.Pipeline, resolver)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "failed to expand pipeline: "+err.Error())
 		return
 	}
 	hosts, err := a.hostRefs(pipelineHostIDs(nil, expanded.Roles))
@@ -83,6 +70,25 @@ func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]interface{}{"plan": plan, "run": run})
+}
+
+func (a *App) resolveExpandedProjectPipeline(project model.Project, pipelineID string, req pipeline.ProjectPipelineRequest) (pipeline.ResolvedProjectPipeline, model.Pipeline, error) {
+	req.Project = project
+	req.PipelineID = pipelineID
+	resolved, err := pipeline.ResolveProjectPipeline(req)
+	if err != nil {
+		return pipeline.ResolvedProjectPipeline{}, model.Pipeline{}, err
+	}
+	builtins, err := pipelinetemplate.LoadBuiltins()
+	if err != nil {
+		return pipeline.ResolvedProjectPipeline{}, model.Pipeline{}, err
+	}
+	resolver := pipelinetemplate.NewStore(a.cfg.DataDir, builtins, project.RootPath)
+	expanded, err := expandDeploymentPipeline(resolved.Pipeline, resolver)
+	if err != nil {
+		return pipeline.ResolvedProjectPipeline{}, model.Pipeline{}, err
+	}
+	return resolved, expanded, nil
 }
 
 func expandDeploymentPipeline(p model.Pipeline, resolver pipelinetemplate.Resolver) (model.Pipeline, error) {

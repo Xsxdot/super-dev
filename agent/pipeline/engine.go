@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/superdev/agent/model"
+	pipelinetemplate "github.com/superdev/agent/template"
 )
 
 // EventType 进度事件类型。
@@ -38,6 +39,14 @@ type Event struct {
 // Engine 按 Plan 和 Run 骨架调度插件执行。
 type Engine struct {
 	plugins map[string]StepPlugin
+}
+
+// RunOptions 定义引擎阶段间的外部接线点。
+type RunOptions struct {
+	SkipBuild    bool
+	AfterBuild   func(run model.Run, vars map[string]string) (model.Run, error)
+	BeforeDeploy func(run model.Run, vars map[string]string) (model.Run, error)
+	OnRunUpdate  func(run model.Run)
 }
 
 // NewEngine 创建插件化流水线引擎。
@@ -78,6 +87,11 @@ func (e *Engine) Register(plugin StepPlugin) {
 //   - build 失败会跳过 deploy，但 finally 总会执行
 //   - 本实现按拓扑顺序串行执行步骤；并发优化可在保持语义后再引入
 func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Event)) (model.Run, error) {
+	return e.RunWithOptions(ctx, plan, run, emit, RunOptions{})
+}
+
+// RunWithOptions 执行整条流水线，并在阶段边界调用外部 hook。
+func (e *Engine) RunWithOptions(ctx context.Context, plan Plan, run model.Run, emit func(Event), opts RunOptions) (model.Run, error) {
 	run.Status = model.RunStatusRunning
 	run.StartedAt = time.Now().UnixMilli()
 	stepRuns := indexStepRuns(run.StepRuns)
@@ -93,29 +107,66 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 		Version:   plan.Variables["version"],
 		Env:       plan.Variables["env"],
 	}))
+	runVars = pipelinetemplate.RenderPipelineVariableMap(runVars)
+	executionPlan := renderRuntimePlan(plan, runVars)
 	if err := ensureRunReservedDirs(runVars); err != nil {
 		run.Status = model.RunStatusFailed
 		run.FinishedAt = time.Now().UnixMilli()
 		return run, err
 	}
+	notify := func() {
+		if opts.OnRunUpdate != nil {
+			run.StepRuns = stepRuns.slice
+			opts.OnRunUpdate(run)
+		}
+	}
 
 	var runErr error
-	buildFailed, err := e.runPhase(ctx, model.PhaseBuild, plan.Phases[model.PhaseBuild], stepRuns, emit, runTempDir, runVars)
-	if err != nil {
-		runErr = err
-	}
-	if buildFailed {
-		skipPhase(model.PhaseDeploy, plan.Phases[model.PhaseDeploy], stepRuns)
+	buildFailed := false
+	if opts.SkipBuild {
+		skipPhase(model.PhaseBuild, executionPlan.Phases[model.PhaseBuild], stepRuns)
+		notify()
 	} else {
-		deployFailed, err := e.runPhase(ctx, model.PhaseDeploy, plan.Phases[model.PhaseDeploy], stepRuns, emit, runTempDir, runVars)
-		if err != nil && runErr == nil {
+		var err error
+		buildFailed, err = e.runPhase(ctx, model.PhaseBuild, executionPlan.Phases[model.PhaseBuild], stepRuns, emit, runTempDir, runVars, notify)
+		if err != nil {
 			runErr = err
 		}
-		if deployFailed {
-			run.Status = model.RunStatusFailed
+		if !buildFailed && opts.AfterBuild != nil {
+			run.StepRuns = stepRuns.slice
+			run, err = opts.AfterBuild(run, runVars)
+			if err != nil {
+				buildFailed = true
+				runErr = err
+			}
+			notify()
 		}
 	}
-	_, finallyErr := e.runPhase(ctx, model.PhaseFinally, plan.Phases[model.PhaseFinally], stepRuns, emit, runTempDir, runVars)
+	if buildFailed {
+		skipPhase(model.PhaseDeploy, executionPlan.Phases[model.PhaseDeploy], stepRuns)
+		notify()
+	} else {
+		if opts.BeforeDeploy != nil {
+			run.StepRuns = stepRuns.slice
+			var err error
+			run, err = opts.BeforeDeploy(run, runVars)
+			if err != nil {
+				runErr = err
+				skipPhase(model.PhaseDeploy, executionPlan.Phases[model.PhaseDeploy], stepRuns)
+				notify()
+			}
+		}
+		if runErr == nil {
+			deployFailed, err := e.runPhase(ctx, model.PhaseDeploy, executionPlan.Phases[model.PhaseDeploy], stepRuns, emit, runTempDir, runVars, notify)
+			if err != nil && runErr == nil {
+				runErr = err
+			}
+			if deployFailed {
+				run.Status = model.RunStatusFailed
+			}
+		}
+	}
+	_, finallyErr := e.runPhase(ctx, model.PhaseFinally, executionPlan.Phases[model.PhaseFinally], stepRuns, emit, runTempDir, runVars, notify)
 	if finallyErr != nil && runErr == nil {
 		runErr = finallyErr
 	}
@@ -130,10 +181,13 @@ func (e *Engine) Run(ctx context.Context, plan Plan, run model.Run, emit func(Ev
 	if emit != nil {
 		emit(Event{Type: EventRunFinished, Status: run.Status, At: run.FinishedAt})
 	}
+	if opts.OnRunUpdate != nil {
+		opts.OnRunUpdate(run)
+	}
 	return run, runErr
 }
 
-func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps []model.Step, runs stepRunIndex, emit func(Event), runTempDir string, runVars map[string]string) (bool, error) {
+func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps []model.Step, runs stepRunIndex, emit func(Event), runTempDir string, runVars map[string]string, onStepComplete func()) (bool, error) {
 	statuses := map[string]model.RunStatus{}
 	var phaseErr error
 	for _, step := range steps {
@@ -142,9 +196,15 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 			phaseErr = fmt.Errorf("%s phase step %q has no run skeleton", phase, step.Name)
 			continue
 		}
+		completeStep := func() {
+			if onStepComplete != nil {
+				onStepComplete()
+			}
+		}
 		if dependencyBlocked(step, statuses) {
 			markStepSkipped(sr)
 			statuses[step.Name] = model.StatusSkipped
+			completeStep()
 			continue
 		}
 		shouldRun, err := EvaluateRunIf(step.RunIf)
@@ -154,16 +214,19 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 			if phaseErr == nil {
 				phaseErr = err
 			}
+			completeStep()
 			continue
 		}
 		if !shouldRun {
 			markStepSkipped(sr)
 			statuses[step.Name] = model.StatusSkipped
+			completeStep()
 			continue
 		}
 		if len(sr.Tasks) == 0 {
 			sr.Status = model.StatusSuccess
 			statuses[step.Name] = model.StatusSuccess
+			completeStep()
 			continue
 		}
 		err = e.executeStep(ctx, step, sr, emit, runTempDir, runVars)
@@ -172,11 +235,24 @@ func (e *Engine) runPhase(ctx context.Context, phase model.PipelinePhase, steps 
 			if phaseErr == nil {
 				phaseErr = err
 			}
+			completeStep()
 			continue
 		}
 		statuses[step.Name] = model.StatusSuccess
+		completeStep()
 	}
 	return phaseErr != nil, phaseErr
+}
+
+func renderRuntimePlan(plan Plan, vars map[string]string) Plan {
+	out := Plan{
+		Phases:    map[model.PipelinePhase][]model.Step{},
+		Variables: vars,
+	}
+	for phase, steps := range plan.Phases {
+		out.Phases[phase] = renderSteps(steps, vars)
+	}
+	return out
 }
 
 func (e *Engine) executeStep(ctx context.Context, step model.Step, sr *model.StepRun, emit func(Event), runTempDir string, runVars map[string]string) error {
