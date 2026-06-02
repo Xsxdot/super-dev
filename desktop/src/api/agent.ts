@@ -930,3 +930,8 @@ export const api = {
 export function deploymentWsUrl(deploymentId: string): string {
   return `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
 }
+
+/** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL。 */
+export function runLogsWsUrl(runId: string): string {
+  return `${WS_BASE}/ws/runs/${encodeURIComponent(runId)}/logs`
+}
