@@ -335,21 +335,27 @@ func (in Ingress) NormalizedDNSRecords() []Record {
 // 注意：
 //   - 多 host 场景必须显式填写目标值，避免错误地把流量指到单台机器
 func ResolveDNSRecordValue(in Ingress, hosts []model.Host) DNSValueDecision {
-	if strings.TrimSpace(in.DNS.Record.Value) != "" {
-		return DNSValueDecision{OK: true, Value: strings.TrimSpace(in.DNS.Record.Value)}
+	normalized := in.NormalizeLegacy()
+	records := normalized.NormalizedDNSRecords()
+	if len(records) > 0 && strings.TrimSpace(records[0].Value) != "" {
+		return DNSValueDecision{OK: true, Value: strings.TrimSpace(records[0].Value)}
 	}
-	if len(in.HostIDs) != 1 {
+	if len(normalized.Proxy.HostIDs) != 1 {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required for multiple hosts"}
 	}
 	byID := map[string]model.Host{}
 	for _, host := range hosts {
 		byID[host.ID] = host
 	}
-	host, ok := byID[in.HostIDs[0]]
+	host, ok := byID[normalized.Proxy.HostIDs[0]]
 	if !ok {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required because host was not found"}
 	}
-	ip := net.ParseIP(strings.TrimSpace(host.SSHHost))
+	address := strings.TrimSpace(host.PublicIP)
+	if address == "" {
+		address = strings.TrimSpace(host.SSHHost)
+	}
+	ip := net.ParseIP(address)
 	if ip == nil || !isPublicIP(ip) {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required because host address is not a public IP"}
 	}

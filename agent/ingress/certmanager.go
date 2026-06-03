@@ -126,6 +126,7 @@ func (m *CertManager) renewState(ctx context.Context, state AppliedState) error 
 	if !ok {
 		return nil
 	}
+	in = in.NormalizeLegacy()
 
 	dnsProvider, err := m.registry.DNS(in.DNS.Provider)
 	if err != nil {
@@ -147,7 +148,7 @@ func (m *CertManager) renewState(ctx context.Context, state AppliedState) error 
 		return err
 	}
 
-	proxyProvider, err := m.registry.Proxy(in.ProxyProvider)
+	proxyProvider, err := m.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func (m *CertManager) renewState(ctx context.Context, state AppliedState) error 
 	if err != nil {
 		return err
 	}
-	hosts, err := m.hostLookup(in.HostIDs)
+	hosts, err := m.hostLookup(in.Proxy.HostIDs)
 	if err != nil {
 		return err
 	}

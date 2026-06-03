@@ -45,6 +45,7 @@ type ApplyOptions struct {
 type PreviewResult struct {
 	Ingress              Ingress           `json:"ingress"`
 	DNSRecord            Record            `json:"dns_record"`
+	DNSRecords           []Record          `json:"dns_records"`
 	DNSValueDecision     DNSValueDecision  `json:"dns_value_decision"`
 	RenderedConfigByHost map[string]string `json:"rendered_config_by_host"`
 	ManualInstructions   []string          `json:"manual_instructions,omitempty"`
@@ -90,39 +91,45 @@ func (s *Service) Preview(ctx context.Context, in Ingress) (PreviewResult, error
 	if err := in.Validate(); err != nil {
 		return PreviewResult{}, err
 	}
+	in = in.NormalizeLegacy()
 
-	hosts, err := s.hostLookup(in.HostIDs)
+	hosts, err := s.hostLookup(in.Proxy.HostIDs)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	decision := ResolveDNSRecordValue(in, hosts)
+	records, decision, err := resolveDNSRecords(in, hosts)
 	result := PreviewResult{
 		Ingress:              in,
 		DNSValueDecision:     decision,
 		RenderedConfigByHost: map[string]string{},
 	}
-	if !decision.OK {
+	if err != nil {
 		return result, fmt.Errorf("dns record value is not ready: %s", decision.Message)
 	}
 
-	record := in.DNS.Record.WithDefaults(in.Domain, decision.Value)
-	in.DNS.Record = record
+	if len(records) > 0 {
+		in.DNS.Record = records[0]
+		result.DNSRecord = records[0]
+	}
+	in.DNS.Records = records
 	result.Ingress = in
-	result.DNSRecord = record
+	result.DNSRecords = records
 
 	if in.DNS.Provider == ProviderManual {
 		dnsProvider, err := s.registry.DNS(in.DNS.Provider)
 		if err != nil {
 			return PreviewResult{}, err
 		}
-		recordResult, err := dnsProvider.EnsureRecord(ctx, record)
-		if err != nil {
-			return PreviewResult{}, err
+		for _, record := range records {
+			recordResult, err := dnsProvider.EnsureRecord(ctx, record)
+			if err != nil {
+				return PreviewResult{}, err
+			}
+			result.ManualInstructions = append(result.ManualInstructions, recordResult.Instructions...)
 		}
-		result.ManualInstructions = append(result.ManualInstructions, recordResult.Instructions...)
 	}
 
-	proxyProvider, err := s.registry.Proxy(in.ProxyProvider)
+	proxyProvider, err := s.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -161,28 +168,35 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 	if err := in.Validate(); err != nil {
 		return AppliedState{}, err
 	}
+	in = in.NormalizeLegacy()
 
-	hosts, err := s.hostLookup(in.HostIDs)
+	hosts, err := s.hostLookup(in.Proxy.HostIDs)
 	if err != nil {
 		return AppliedState{}, err
 	}
-	decision := ResolveDNSRecordValue(in, hosts)
-	if !decision.OK {
+	records, decision, err := resolveDNSRecords(in, hosts)
+	if err != nil {
 		return AppliedState{}, fmt.Errorf("dns record value is not ready: %s", decision.Message)
 	}
 	if decision.RequiresConfirmation && strings.TrimSpace(opts.ConfirmedDNSValue) != decision.Value {
 		return AppliedState{}, fmt.Errorf("confirmed_dns_value must match inferred DNS value %s", decision.Value)
 	}
-	record := in.DNS.Record.WithDefaults(in.Domain, decision.Value)
-	in.DNS.Record = record
+	in.DNS.Records = records
+	if len(records) > 0 {
+		in.DNS.Record = records[0]
+	}
 
 	dnsProvider, err := s.registry.DNS(in.DNS.Provider)
 	if err != nil {
 		return AppliedState{}, err
 	}
-	recordResult, err := dnsProvider.EnsureRecord(ctx, record)
-	if err != nil {
-		return AppliedState{}, err
+	recordResults := make([]Record, 0, len(records))
+	for _, record := range records {
+		recordResult, err := dnsProvider.EnsureRecord(ctx, record)
+		if err != nil {
+			return AppliedState{}, err
+		}
+		recordResults = append(recordResults, recordResult.Record)
 	}
 
 	var cert *Certificate
@@ -202,7 +216,7 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 		cert = &obtained
 	}
 
-	proxyProvider, err := s.registry.Proxy(in.ProxyProvider)
+	proxyProvider, err := s.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return AppliedState{}, err
 	}
@@ -222,7 +236,7 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 
 	state := AppliedState{
 		IngressID: in.ID,
-		Records:   []Record{recordResult.Record},
+		Records:   recordResults,
 		Hosts:     hostStates,
 		Cert:      cert,
 	}
@@ -249,6 +263,7 @@ func (s *Service) DetectOrphans(ctx context.Context, ingressID string) (OrphanRe
 	if err != nil {
 		return OrphanReport{}, err
 	}
+	in = in.NormalizeLegacy()
 	declared, err := s.store.ListIngress()
 	if err != nil {
 		return OrphanReport{}, err
@@ -258,7 +273,7 @@ func (s *Service) DetectOrphans(ctx context.Context, ingressID string) (OrphanRe
 		return OrphanReport{}, err
 	}
 
-	proxyProvider, err := s.registry.Proxy(in.ProxyProvider)
+	proxyProvider, err := s.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return OrphanReport{}, err
 	}
@@ -308,6 +323,7 @@ func (s *Service) RemoveOrphans(ctx context.Context, ingressID string, report Or
 	if err != nil {
 		return err
 	}
+	in = in.NormalizeLegacy()
 	hosts, err := s.operationHosts(in)
 	if err != nil {
 		return err
@@ -317,7 +333,7 @@ func (s *Service) RemoveOrphans(ctx context.Context, ingressID string, report Or
 		hostsByID[host.ID] = host
 	}
 
-	proxyProvider, err := s.registry.Proxy(in.ProxyProvider)
+	proxyProvider, err := s.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return err
 	}
@@ -343,6 +359,34 @@ func (s *Service) RemoveOrphans(ctx context.Context, ingressID string, report Or
 	return nil
 }
 
+func resolveDNSRecords(in Ingress, hosts []model.Host) ([]Record, DNSValueDecision, error) {
+	records := in.NormalizedDNSRecords()
+	if len(records) == 0 {
+		decision := DNSValueDecision{RequiresInput: true, Message: "at least one dns record is required"}
+		return nil, decision, errors.New(decision.Message)
+	}
+
+	out := make([]Record, 0, len(records))
+	decision := DNSValueDecision{OK: true}
+	for i, record := range records {
+		value := strings.TrimSpace(record.Value)
+		if value == "" {
+			inferred := ResolveDNSRecordValue(in, hosts)
+			decision = inferred
+			if !inferred.OK {
+				return nil, inferred, errors.New(inferred.Message)
+			}
+			value = inferred.Value
+		}
+		record = record.WithDefaults(in.Domain, value)
+		if i == 0 && decision.Value == "" {
+			decision.Value = record.Value
+		}
+		out = append(out, record)
+	}
+	return out, decision, nil
+}
+
 func (s *Service) ensureReady() error {
 	if s.store == nil {
 		return errors.New("ingress store is required")
@@ -365,7 +409,8 @@ func (s *Service) loadIngress(ingressID string) (Ingress, error) {
 }
 
 func (s *Service) operationHosts(in Ingress) ([]model.Host, error) {
-	ids := append([]string(nil), in.HostIDs...)
+	in = in.NormalizeLegacy()
+	ids := append([]string(nil), in.Proxy.HostIDs...)
 	seen := map[string]bool{}
 	for _, id := range ids {
 		seen[id] = true
@@ -389,8 +434,11 @@ func (s *Service) operationHosts(in Ingress) ([]model.Host, error) {
 func declaredRecordKeys(declared []Ingress) map[string]bool {
 	keys := map[string]bool{}
 	for _, in := range declared {
-		record := in.DNS.Record.WithDefaults(in.Domain, in.DNS.Record.Value)
-		keys[recordKey(record)] = true
+		in = in.NormalizeLegacy()
+		for _, record := range in.NormalizedDNSRecords() {
+			record = record.WithDefaults(in.Domain, record.Value)
+			keys[recordKey(record)] = true
+		}
 	}
 	return keys
 }

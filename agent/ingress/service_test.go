@@ -51,6 +51,47 @@ func TestServiceApplyOrderAndState(t *testing.T) {
 	}
 }
 
+func TestServiceApplyEnsuresAllDNSRecordsAndAppliesProxyHosts(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	in := validProjectIngress("proj-1", "api.example.com")
+	in.Proxy.HostIDs = []string{"edge-a", "edge-b"}
+	in.Upstreams = []Upstream{{IP: "10.0.0.12", Port: 8080}}
+	in.DNS.Records = []Record{
+		{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10", TTL: 300},
+		{Type: RecordA, Name: "api.example.com", Value: "203.0.113.11", TTL: 300},
+	}
+	saved, err := store.UpsertIngress(in)
+	requireNoError(t, err)
+
+	events := []string{}
+	dns := &orderedDNS{name: ProviderManual, events: &events}
+	proxy := &orderedProxy{name: ProviderNginx, events: &events}
+	registry := NewRegistry()
+	registry.RegisterDNS(dns)
+	registry.RegisterProxy(proxy)
+
+	service := NewService(ServiceConfig{
+		Store:    store,
+		Registry: registry,
+		HostLookup: func(ids []string) ([]model.Host, error) {
+			assertStringSliceEqual(t, ids, []string{"edge-a", "edge-b"})
+			return []model.Host{
+				{ID: "edge-a", Name: "edge-a"},
+				{ID: "edge-b", Name: "edge-b"},
+			}, nil
+		},
+	})
+
+	state, err := service.Apply(context.Background(), saved.ID, ApplyOptions{})
+	requireNoError(t, err)
+	assertLen(t, dns.ensured, 2)
+	assertEqual(t, dns.ensured[0].Value, "203.0.113.10")
+	assertEqual(t, dns.ensured[1].Value, "203.0.113.11")
+	assertStringSliceEqual(t, events, []string{"dns.ensure", "dns.ensure", "proxy.render", "proxy.apply:edge-a", "proxy.apply:edge-b"})
+	assertLen(t, state.Records, 2)
+	assertLen(t, state.Hosts, 2)
+}
+
 func TestServiceApplyStopsOnDNSFailure(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	reg := NewRegistry()
@@ -92,6 +133,7 @@ func TestServiceApplyRequiresConfirmedDNSValueForInferredHostIP(t *testing.T) {
 	in := validAutomaticIngress()
 	in.TLS = TLSConfig{}
 	in.DNS.Record.Value = ""
+	in.DNS.Records[0].Value = ""
 	saved, err := store.UpsertIngress(in)
 	requireNoError(t, err)
 
@@ -212,6 +254,7 @@ type orderedDNS struct {
 	events  *[]string
 	err     error
 	records []Record
+	ensured []Record
 }
 
 func (d *orderedDNS) Name() string { return d.name }
@@ -223,6 +266,7 @@ func (d *orderedDNS) EnsureRecord(ctx context.Context, record Record) (RecordRes
 	if d.err != nil {
 		return RecordResult{}, d.err
 	}
+	d.ensured = append(d.ensured, record)
 	return RecordResult{Record: record, Changed: true}, nil
 }
 
