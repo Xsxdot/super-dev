@@ -28,8 +28,28 @@ const (
 // RemoteTransport 定义 nginx provider 后续落地配置时使用的远端通道。
 type RemoteTransport interface {
 	// RunRemote 在目标 host 上执行命令。
+	//
+	// 参数：
+	//   - ctx: 上下文，用于取消远端命令
+	//   - target: 目标 host
+	//   - cmd: 待执行命令
+	//   - workDir: 命令工作目录，可为空
+	//   - onLine: 输出回调，可为空
+	//
+	// 返回：
+	//   - 命令执行失败时返回错误
 	RunRemote(ctx context.Context, target Target, cmd string, workDir string, onLine func(string, string)) error
 	// Transfer 将本地文件传输到目标 host。
+	//
+	// 参数：
+	//   - ctx: 上下文，用于取消传输
+	//   - target: 目标 host
+	//   - source: 本地文件路径
+	//   - targetPath: 远端目标路径
+	//   - onLine: 输出回调，可为空
+	//
+	// 返回：
+	//   - 传输失败时返回错误
 	Transfer(ctx context.Context, target Target, source string, targetPath string, onLine func(string, string)) error
 }
 
