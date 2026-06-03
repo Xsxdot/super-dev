@@ -9,7 +9,7 @@
  *   - 不访问真实 agent HTTP 接口
  *   - 不调起真实 Tauri 文件对话框
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
@@ -48,6 +48,10 @@ describe('HostManagerTab', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('空态展示提示文案', async () => {
@@ -178,5 +182,40 @@ describe('HostManagerTab', () => {
 
     expect(wrapper.text()).toContain('open :57100')
     expect(wrapper.find('[data-test="agent-health"]').text()).toBe('unreachable')
+  })
+
+  it('渲染 agent 版本、最近检测和安装安全说明', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-03T10:00:00Z'))
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    store.hosts = [{
+      id: 'h1',
+      name: 'srv',
+      ssh_host: '1.1.1.1',
+      ssh_port: 22,
+      ssh_user: 'root',
+      remote_agent_port: 57017,
+      local_tunnel_port: 0,
+      tags: [],
+    }]
+    store.applyTunnelUpdate({
+      host_id: 'h1',
+      state: 'open',
+      local_port: 57100,
+      agent: 'healthy',
+      agent_version: '0.1.0',
+      agent_checked_at: '2026-06-03T09:59:48Z',
+    })
+
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="agent-meta"]').text()).toContain('v0.1.0 · 12s 前')
+    const install = wrapper.find('[data-test="host-install-agent"]')
+    expect(install.attributes('title')).toContain('通过 SSH 上传 agent 二进制')
+    expect(wrapper.find('[data-test="host-install-help"]').text()).toContain('不影响业务进程')
   })
 })

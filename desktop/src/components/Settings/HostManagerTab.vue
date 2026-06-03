@@ -15,6 +15,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRemoteStore } from '@/stores/remote'
 import { tagColor } from '@/lib/tagColor'
+import { formatRelativeAge } from '@/lib/timeDisplay'
 import { WS_BASE, type TunnelStatus } from '@/api/agent'
 import HostFormModal from './HostFormModal.vue'
 import type { Host, HostCreatePayload } from '@/api/agent'
@@ -119,6 +120,26 @@ function agentHealthClass(hostId: string): string {
   return ''
 }
 
+function agentVersionLabel(hostId: string): string {
+  const version = store.tunnelOf(hostId)?.agent_version?.trim()
+  if (!version) return ''
+  return version.startsWith('v') ? version : `v${version}`
+}
+
+function agentCheckedLabel(hostId: string): string {
+  return formatRelativeAge(
+    store.tunnelOf(hostId)?.agent_checked_at,
+    count => t('settings.hosts.checkedSecondsAgo', { count }),
+    count => t('settings.hosts.checkedMinutesAgo', { count }),
+    count => t('settings.hosts.checkedHoursAgo', { count }),
+  )
+}
+
+function agentMetaLabel(hostId: string): string {
+  const parts = [agentVersionLabel(hostId), agentCheckedLabel(hostId)].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : t('settings.hosts.agentMetaEmpty')
+}
+
 function toggleError(hostId: string) {
   const next = new Set(expandedErrors.value)
   if (next.has(hostId)) next.delete(hostId)
@@ -198,6 +219,7 @@ async function installAgent(host: Host) {
           <th>{{ t('settings.hosts.tags') }}</th>
           <th>{{ t('settings.hosts.tunnel') }}</th>
           <th>{{ t('settings.hosts.agent') }}</th>
+          <th>{{ t('settings.hosts.agentMeta') }}</th>
           <th></th>
         </tr>
       </thead>
@@ -238,11 +260,18 @@ async function installAgent(host: Host) {
                 v-if="!host.is_self"
                 type="button"
                 :disabled="isInstalling(host.id)"
+                :title="t('settings.hosts.agentInstallHelp')"
                 data-test="host-install-agent"
                 @click="installAgent(host)"
               >
                 {{ isInstalling(host.id) ? t('settings.hosts.installing') : t('settings.hosts.installAction') }}
               </button>
+              <span v-if="!host.is_self" class="install-help" data-test="host-install-help">
+                {{ t('settings.hosts.agentInstallHelp') }}
+              </span>
+            </td>
+            <td class="agent-meta-cell" data-test="agent-meta">
+              {{ agentMetaLabel(host.id) }}
             </td>
             <td class="row-actions">
               <button @click="openEdit(host)">{{ t('common.edit') }}</button>
@@ -250,7 +279,7 @@ async function installAgent(host: Host) {
             </td>
           </tr>
           <tr v-if="hasHostError(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
-            <td colspan="6">
+            <td colspan="7">
               <div class="tunnel-error-detail">{{ hostError(host.id) }}</div>
             </td>
           </tr>
@@ -363,6 +392,7 @@ h1 {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  flex-wrap: wrap;
 }
 .agent-cell button {
   padding: 0 4px;
@@ -388,6 +418,16 @@ h1 {
 }
 .agent-health-bad {
   color: var(--status-failed);
+}
+.agent-meta-cell {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.install-help {
+  max-width: 300px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: normal;
 }
 .tunnel-failed {
   color: var(--status-failed);
