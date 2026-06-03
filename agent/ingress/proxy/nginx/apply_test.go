@@ -99,6 +99,31 @@ func TestApplyDoesNotReloadWhenNginxTestFails(t *testing.T) {
 	})
 }
 
+func TestDeployCertificateTransfersCertAndReloads(t *testing.T) {
+	transport := &fakeTransport{}
+	provider := New(transport)
+
+	deployment, err := provider.DeployCertificate(context.Background(), model.Host{ID: "host-a", Name: "gateway-a"}, "api.example.com", ingress.Certificate{
+		Domain:  "api.example.com",
+		CertPEM: "CERT",
+		KeyPEM:  "KEY",
+	})
+	if err != nil {
+		t.Fatalf("DeployCertificate() error = %v", err)
+	}
+
+	assertEqual(t, deployment.HostID, "host-a")
+	assertEqual(t, deployment.CertPath, "/etc/superdev/ingress/certs/api.example.com/fullchain.pem")
+	assertEqual(t, deployment.KeyPath, "/etc/superdev/ingress/certs/api.example.com/privkey.pem")
+	assertStringSliceEqual(t, transport.events, []string{
+		"cmd:mkdir -p /etc/superdev/ingress/certs/api.example.com",
+		"transfer:/etc/superdev/ingress/certs/api.example.com/fullchain.pem",
+		"transfer:/etc/superdev/ingress/certs/api.example.com/privkey.pem",
+		"cmd:nginx -t",
+		"cmd:systemctl reload nginx",
+	})
+}
+
 func TestDetectReturnsOnlyUndeclaredSuperdevConfigs(t *testing.T) {
 	transport := &fakeTransport{}
 	provider := New(transport)

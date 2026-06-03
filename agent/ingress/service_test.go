@@ -278,6 +278,7 @@ func (d *orderedDNS) RemoveRecord(ctx context.Context, record Record) error {
 type orderedCert struct {
 	name   string
 	events *[]string
+	err    error
 }
 
 func (c *orderedCert) Name() string { return c.name }
@@ -285,6 +286,9 @@ func (c *orderedCert) Name() string { return c.name }
 func (c *orderedCert) Obtain(ctx context.Context, domains []string, dns DnsProvider) (Certificate, error) {
 	if c.events != nil {
 		*c.events = append(*c.events, "cert.obtain")
+	}
+	if c.err != nil {
+		return Certificate{}, c.err
 	}
 	domain := ""
 	if len(domains) > 0 {
@@ -296,6 +300,9 @@ func (c *orderedCert) Obtain(ctx context.Context, domains []string, dns DnsProvi
 func (c *orderedCert) Renew(ctx context.Context, cert Certificate, domains []string, dns DnsProvider) (Certificate, error) {
 	if c.events != nil {
 		*c.events = append(*c.events, "cert.renew")
+	}
+	if c.err != nil {
+		return Certificate{}, c.err
 	}
 	cert.CertPEM = "NEWCERT"
 	cert.ExpiresAt = time.Now().Add(90 * 24 * time.Hour)
@@ -324,6 +331,18 @@ func (p *orderedProxy) Apply(ctx context.Context, host model.Host, cfg RenderedC
 		*p.events = append(*p.events, "proxy.apply:"+host.ID)
 	}
 	return HostState{HostID: host.ID, ConfigPath: "/etc/nginx/conf.d/superdev-" + cfg.Filename}, nil
+}
+
+func (p *orderedProxy) DeployCertificate(ctx context.Context, host model.Host, domain string, cert Certificate) (CertDeployment, error) {
+	if p.events != nil {
+		*p.events = append(*p.events, "proxy.deploy-cert:"+host.ID)
+	}
+	return CertDeployment{
+		HostID:     host.ID,
+		CertPath:   "/etc/superdev/ingress/certs/" + domain + "/fullchain.pem",
+		KeyPath:    "/etc/superdev/ingress/certs/" + domain + "/privkey.pem",
+		DeployedAt: time.Now().UTC(),
+	}, nil
 }
 
 func (p *orderedProxy) Detect(ctx context.Context, host model.Host, declared []Ingress) ([]OrphanConfig, error) {

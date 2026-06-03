@@ -31,6 +31,10 @@ func (f fakeProxyProvider) Apply(ctx context.Context, host model.Host, cfg Rende
 	return HostState{HostID: host.ID, ConfigPath: "/etc/nginx/conf.d/" + cfg.Filename}, nil
 }
 
+func (f fakeProxyProvider) DeployCertificate(ctx context.Context, host model.Host, domain string, cert Certificate) (CertDeployment, error) {
+	return CertDeployment{HostID: host.ID, CertPath: "/cert", KeyPath: "/key"}, nil
+}
+
 func (f fakeProxyProvider) Detect(ctx context.Context, host model.Host, declared []Ingress) ([]OrphanConfig, error) {
 	return nil, nil
 }

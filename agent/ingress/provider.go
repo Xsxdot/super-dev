@@ -30,6 +30,8 @@ type ProxyProvider interface {
 	Render(ingress Ingress, cert *Certificate) (RenderedConfig, error)
 	// Apply 将配置落地到单台 host，并返回落地状态。
 	Apply(ctx context.Context, host model.Host, cfg RenderedConfig) (HostState, error)
+	// DeployCertificate 只将证书材料落地到单台 host，并返回证书路径。
+	DeployCertificate(ctx context.Context, host model.Host, domain string, cert Certificate) (CertDeployment, error)
 	// Detect 探测 host 上由 SuperDev 管理但不再属于声明的配置。
 	Detect(ctx context.Context, host model.Host, declared []Ingress) ([]OrphanConfig, error)
 	// Remove 删除人工确认后的孤儿 proxy 配置。

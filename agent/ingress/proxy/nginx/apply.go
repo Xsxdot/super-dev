@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/superdev/agent/ingress"
 	"github.com/superdev/agent/model"
@@ -73,6 +74,40 @@ func (p *Provider) Apply(ctx context.Context, host model.Host, cfg ingress.Rende
 		return ingress.HostState{}, err
 	}
 	return state, nil
+}
+
+// DeployCertificate 只将证书材料落地到 host，并 reload nginx 使已引用路径读取新材料。
+//
+// 参数：
+//   - ctx: 上下文，用于取消远端命令和传输
+//   - host: 目标主机
+//   - domain: 证书在 host 上使用的目录名
+//   - cert: 待部署的证书材料
+//
+// 返回：
+//   - host 上实际写入的证书路径
+//   - 远端命令、传输或 nginx 校验失败时返回错误
+func (p *Provider) DeployCertificate(ctx context.Context, host model.Host, domain string, cert ingress.Certificate) (ingress.CertDeployment, error) {
+	if p.transport == nil {
+		return ingress.CertDeployment{}, errTransportRequired()
+	}
+
+	target := Target{HostID: host.ID, HostName: host.Name}
+	certPath := path.Join(certDir, domain)
+	if err := p.transport.RunRemote(ctx, target, "mkdir -p "+shellArg(certPath), "", nil); err != nil {
+		return ingress.CertDeployment{}, err
+	}
+	fullchainTarget, privkeyTarget, err := p.transferCertificate(ctx, target, certPath, &cert)
+	if err != nil {
+		return ingress.CertDeployment{}, err
+	}
+	if err := p.transport.RunRemote(ctx, target, "nginx -t", "", nil); err != nil {
+		return ingress.CertDeployment{}, err
+	}
+	if err := p.transport.RunRemote(ctx, target, "systemctl reload nginx", "", nil); err != nil {
+		return ingress.CertDeployment{}, err
+	}
+	return ingress.CertDeployment{HostID: host.ID, CertPath: fullchainTarget, KeyPath: privkeyTarget, DeployedAt: time.Now().UTC()}, nil
 }
 
 // Detect 探测 host 上由 SuperDev 管理但已不在声明里的 nginx 配置。
