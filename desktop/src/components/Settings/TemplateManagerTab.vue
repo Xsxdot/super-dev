@@ -45,14 +45,14 @@ const { t } = useI18n()
         <span>{{ t('settings.templates.source') }}</span>
         <span>{{ t('settings.templates.name') }}</span>
         <span>{{ t('settings.templates.version') }}</span>
-        <span>{{ t('settings.templates.digest') }}</span>
+        <span>{{ t('settings.templates.descriptionColumn') }}</span>
         <span>{{ t('settings.templates.actions') }}</span>
       </div>
       <div v-for="template in templates" :key="`${template.source}:${template.id}:${template.version}`" class="template-row">
         <span class="source">{{ template.source }}</span>
         <span class="name">{{ template.name }}</span>
         <span>{{ template.version }}</span>
-        <span class="digest">{{ template.digest }}</span>
+        <span class="description">{{ template.description || t('settings.templates.noDescription') }}</span>
         <button type="button" class="text-btn" :data-test="`template-view-${template.id}`" @click="props.onView?.(template)">
           {{ t('common.view') }}
         </button>
@@ -102,7 +102,7 @@ const { t } = useI18n()
 }
 .template-row {
   display: grid;
-  grid-template-columns: 90px minmax(160px, 1fr) 80px minmax(180px, 1.2fr) 56px;
+  grid-template-columns: 90px minmax(160px, 1fr) 80px minmax(220px, 1.4fr) 56px;
   gap: 10px;
   align-items: center;
   padding: 7px 10px;
@@ -123,7 +123,7 @@ const { t } = useI18n()
   font-weight: 600;
 }
 .source,
-.digest {
+.description {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

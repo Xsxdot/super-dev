@@ -35,12 +35,13 @@ const props = defineProps<{
   hosts?: Array<{ id: string; name: string }>
   preview?: PipelinePreviewResponse
   previewError?: string
-  onViewTemplate?: (template: PipelineTemplateSummary) => void
+  onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
+  initialMode?: 'template' | 'blank'
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
 const phases: PipelinePhase[] = ['build', 'deploy', 'finally']
-const enabled = ref(Boolean(props.modelValue))
+const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
@@ -52,7 +53,7 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
 }))
 
 watch(() => props.modelValue, (value) => {
-  enabled.value = Boolean(value) || enabled.value
+  enabled.value = Boolean(value) || enabled.value || props.initialMode === 'template'
   hydrateFromPipeline(value)
 }, { immediate: true })
 
@@ -240,7 +241,7 @@ function normalizeFileList(value: unknown): TemplateFileItem[] {
 
 function viewSelected(block: TemplateBlock) {
   const template = selectedFor(block)
-  if (template) props.onViewTemplate?.(template)
+  if (template) props.onViewTemplate?.(template, saveTemplate)
 }
 
 function saveTemplate() {
@@ -325,7 +326,15 @@ function saveTemplate() {
                   {{ template.name }} · {{ template.source }} · {{ template.version }}
                 </option>
               </select>
-              <button type="button" class="text-btn" :disabled="!selectedFor(block)" @click="viewSelected(block)">{{ t('settings.pipeline.viewTemplate') }}</button>
+              <button
+                type="button"
+                class="text-btn"
+                :data-test="`block-${block.id}-view-template`"
+                :disabled="!selectedFor(block)"
+                @click="viewSelected(block)"
+              >
+                {{ t('settings.pipeline.viewTemplate') }}
+              </button>
               <button type="button" class="danger-btn" @click="removeBlock(block)">{{ t('common.remove') }}</button>
             </div>
 

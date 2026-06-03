@@ -10,6 +10,8 @@
  *   - 不测试第三方 vue-i18n 内部行为
  */
 import { beforeEach, describe, expect, it } from 'vitest'
+import zhCN from '@/i18n/locales/zh-CN'
+import enUS from '@/i18n/locales/en-US'
 import {
   LOCALE_STORAGE_KEY,
   i18n,
@@ -17,6 +19,13 @@ import {
   resolveInitialLocale,
   setLocale,
 } from '@/i18n'
+
+function flattenKeys(value: unknown, prefix = ''): string[] {
+  if (!value || typeof value !== 'object') return [prefix]
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    flattenKeys(child, prefix ? `${prefix}.${key}` : key),
+  )
+}
 
 describe('i18n', () => {
   beforeEach(() => {
@@ -54,5 +63,9 @@ describe('i18n', () => {
     expect(i18n.global.locale.value).toBe('en-US')
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en-US')
     expect(document.documentElement.lang).toBe('en-US')
+  })
+
+  it('zh-CN and en-US message keys stay aligned', () => {
+    expect(flattenKeys(enUS).sort()).toEqual(flattenKeys(zhCN).sort())
   })
 })

@@ -279,6 +279,11 @@ describe('useRemoteStore', () => {
       store.applyTunnelUpdate({ host_id: 'h1', agent: 'unreachable' })
       expect(store.tunnelOf('h1')?.state).toBe('open')
       expect(store.tunnelOf('h1')?.agent).toBe('unreachable')
+
+      store.applyTunnelUpdate({ host_id: 'h1', agent: 'healthy', agent_version: '0.1.0', agent_checked_at: '2026-06-03T10:00:00Z' })
+      expect(store.tunnelOf('h1')?.state).toBe('open')
+      expect(store.tunnelOf('h1')?.agent_version).toBe('0.1.0')
+      expect(store.tunnelOf('h1')?.agent_checked_at).toBe('2026-06-03T10:00:00Z')
     })
   })
 })

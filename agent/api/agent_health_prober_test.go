@@ -45,7 +45,7 @@ func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 			assert.Equal(t, "version=1.0.0", r.URL.RawQuery)
 			return agentHealthProbeResponse(http.StatusOK), nil
 		case r.Method == http.MethodGet && r.URL.Path == "/api/exec/health":
-			return agentHealthProbeResponse(http.StatusNoContent), nil
+			return agentHealthProbeJSONResponse(http.StatusOK, `{"version":"0.1.0"}`), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/transfer":
 			return agentHealthProbeResponse(http.StatusBadRequest), nil
 		default:
@@ -56,6 +56,7 @@ func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, res.AllEndpointsOK)
+	assert.Equal(t, "0.1.0", res.Version)
 }
 
 func TestAgentHealthProberMissingEndpoint(t *testing.T) {
@@ -98,6 +99,20 @@ func TestAgentHealthProberMissingExecEndpointIsVersionMismatch(t *testing.T) {
 	assert.False(t, res.AllEndpointsOK)
 }
 
+func TestAgentHealthProberAcceptsOldNoContentExecHealth(t *testing.T) {
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/exec/health" && r.Method == http.MethodGet {
+			return agentHealthProbeResponse(http.StatusNoContent), nil
+		}
+		return agentHealthProbeResponse(statusForKnownAgentHealthEndpoint(r)), nil
+	})
+	res, err := p.Probe(context.Background(), "h1")
+
+	require.NoError(t, err)
+	assert.True(t, res.AllEndpointsOK)
+	assert.Empty(t, res.Version)
+}
+
 func TestAgentHealthProberUnreachableWhenNoBaseURL(t *testing.T) {
 	p := newAgentHealthProber(staticResolver{err: errors.New("no tunnel")})
 	_, err := p.Probe(context.Background(), "h1")
@@ -122,6 +137,13 @@ func agentHealthProbeResponse(status int) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(bytes.NewReader(nil)),
 	}
+}
+
+func agentHealthProbeJSONResponse(status int, body string) *http.Response {
+	resp := agentHealthProbeResponse(status)
+	resp.Body = io.NopCloser(bytes.NewReader([]byte(body)))
+	resp.Header.Set("Content-Type", "application/json")
+	return resp
 }
 
 func statusForKnownAgentHealthEndpoint(r *http.Request) int {

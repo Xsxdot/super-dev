@@ -26,7 +26,7 @@ import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import type { SupportedLocale } from '@/i18n'
-import type { PipelineTemplateSummary, Project, Service } from '@/api/agent'
+import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'templates' | 'approvals'
 
@@ -61,7 +61,7 @@ const templateModalOpen = ref(false)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetailLoading = ref(false)
 const templateDetailError = ref('')
-const templateDetailYAML = ref('')
+const templateDetail = ref<PipelineTemplateDetail | null>(null)
 
 function openEditor(project: Project) {
   editorProject.value = project
@@ -179,11 +179,11 @@ async function viewTemplate(template: PipelineTemplateSummary) {
   selectedTemplate.value = template
   templateModalOpen.value = true
   templateDetailError.value = ''
-  templateDetailYAML.value = ''
+  templateDetail.value = null
   templateDetailLoading.value = true
   try {
     const detail = await pipelineTemplateStore.loadTemplateDetail(template.source, template.id, template.version)
-    templateDetailYAML.value = detail.yaml
+    templateDetail.value = detail
   } catch (error) {
     templateDetailError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -462,7 +462,8 @@ const retentionDays = computed({
     <TemplateContentModal
       :open="templateModalOpen"
       :title="selectedTemplate?.name ?? t('settings.templates.contentTitle')"
-      :yaml="templateDetailYAML"
+      :yaml="templateDetail?.yaml ?? ''"
+      :detail="templateDetail"
       :loading="templateDetailLoading"
       :error="templateDetailError"
       @close="templateModalOpen = false"

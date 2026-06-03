@@ -3,10 +3,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RuntimeStatusTab from '../RuntimeStatusTab.vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
+import { setLocale } from '@/i18n'
 
 describe('RuntimeStatusTab', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    setLocale('en-US')
   })
 
   it('starts polling on mount and stops on unmount', () => {

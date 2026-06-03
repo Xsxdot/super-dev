@@ -18,13 +18,33 @@ describe('TemplateManagerTab', () => {
   it('展示模板列表', () => {
     const wrapper = mount(TemplateManagerTab, {
       props: {
-        templates: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' }],
+        templates: [{
+          source: 'builtin',
+          id: 'go-binary-build',
+          name: 'Go Build',
+          version: '1.0.0',
+          digest: 'sha256:x',
+          description: 'Builds a Go binary',
+        }],
       },
       global: { plugins: [installTestI18n()] },
     })
 
     expect(wrapper.text()).toContain('Go Build')
     expect(wrapper.text()).toContain('builtin')
+    expect(wrapper.text()).toContain('Builds a Go binary')
+    expect(wrapper.text()).not.toContain('sha256:x')
+  })
+
+  it('模板无 description 时显示兜底文案', () => {
+    const wrapper = mount(TemplateManagerTab, {
+      props: {
+        templates: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' }],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.text()).toContain('暂无描述')
   })
 
   it('点击导入触发 import', async () => {

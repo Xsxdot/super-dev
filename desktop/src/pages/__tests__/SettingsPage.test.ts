@@ -182,6 +182,45 @@ describe('SettingsPage', () => {
     expect(importTemplate).toHaveBeenCalledWith('/tmp/custom.yaml')
   })
 
+  it('查看模板时把完整 detail 传给内容弹窗', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    const templateStore = usePipelineTemplateStore()
+    vi.spyOn(templateStore, 'loadTemplates').mockResolvedValue(undefined)
+    templateStore.templates = [{
+      source: 'builtin',
+      id: 'systemd',
+      name: 'Systemd',
+      version: '1.0.0',
+      digest: 'sha256:summary',
+      description: 'Deploy via systemd',
+    }]
+    vi.spyOn(templateStore, 'loadTemplateDetail').mockResolvedValue({
+      source: 'builtin',
+      id: 'systemd',
+      version: '1.0.0',
+      digest: 'sha256:systemd',
+      yaml: 'id: systemd\n',
+      template: {
+        id: 'systemd',
+        name: 'Systemd',
+        version: '1.0.0',
+        inputs: { app_name: { label: '应用名', type: 'string' } },
+        steps: [],
+      },
+    })
+
+    const wrapper = mountSettingsPage()
+    await wrapper.find('[data-test="settings-tab-templates"]').trigger('click')
+    await wrapper.find('[data-test="template-view-systemd"]').trigger('click')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('sha256:systemd')
+    expect(wrapper.text()).toContain('应用名')
+  })
+
   it('通用页可切换到英文并立即更新界面文案', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }

@@ -53,7 +53,7 @@ func TestListTunnelsIncludesAgentStatus(t *testing.T) {
 
 	app.tunnels = tunnel.NewManager(successTunnelDialer{})
 	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
-		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
 
 	host, err := app.remoteStore.AddHost(model.Host{
@@ -78,6 +78,8 @@ func TestListTunnelsIncludesAgentStatus(t *testing.T) {
 	assert.Equal(t, "h1", got[0].HostID)
 	assert.Equal(t, "open", got[0].State)
 	assert.Equal(t, "healthy", got[0].Agent)
+	assert.Equal(t, "0.1.0", got[0].AgentVersion)
+	assert.NotEmpty(t, got[0].AgentCheckedAt)
 }
 
 func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {
@@ -86,7 +88,7 @@ func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {
 	defer app.Close()
 
 	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
-		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
 	app.agentHealth.SetPollInterval(time.Hour)
 
@@ -112,6 +114,8 @@ func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {
 	require.NoError(t, conn.ReadJSON(&got))
 	assert.Equal(t, "h1", got["host_id"])
 	assert.Equal(t, "healthy", got["agent"])
+	assert.Equal(t, "0.1.0", got["agent_version"])
+	assert.NotEmpty(t, got["agent_checked_at"])
 	assert.NotContains(t, got, "state")
 	assert.NotContains(t, got, "local_port")
 	assert.NotContains(t, got, "error")

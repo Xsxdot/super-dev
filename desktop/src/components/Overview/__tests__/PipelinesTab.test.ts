@@ -1,8 +1,10 @@
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setActivePinia, createPinia } from 'pinia'
 import PipelinesTab from '../PipelinesTab.vue'
 import type { Project, Run } from '@/api/agent'
 import { api } from '@/api/agent'
+import { installTestI18n } from '@/test-utils/i18n'
 
 const push = vi.fn()
 
@@ -18,12 +20,16 @@ vi.mock('@/api/agent', async (importOriginal) => {
       ...actual.api,
       listProjectPipelineRuns: vi.fn(),
       deployProjectPipeline: vi.fn(),
+      listPipelineTemplates: vi.fn().mockResolvedValue({ items: [] }),
     },
   }
 })
 
 vi.mock('@/components/Settings/ProjectPipelineEditor.vue', () => ({
-  default: { template: '<div data-test="pipeline-editor"><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>' },
+  default: {
+    props: ['initialMode'],
+    template: '<div data-test="pipeline-editor" :data-mode="initialMode"><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>',
+  },
 }))
 
 function project(): Project {
@@ -35,6 +41,10 @@ function project(): Project {
     environments: [{ id: 'env-dev', name: 'dev', is_dev: true, order: 0 }],
     pipelines: [{ id: 'deploy-dev', name: 'Deploy Dev', services: ['api'], artifact_kind: 'file', pipeline: {} }],
   }
+}
+
+function emptyProject(): Project {
+  return { ...project(), pipelines: [] }
 }
 
 function run(partial: Partial<Run> = {}): Run {
@@ -55,12 +65,14 @@ function run(partial: Partial<Run> = {}): Run {
 
 describe('PipelinesTab', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({ items: [run()] })
+    vi.mocked(api.listPipelineTemplates).mockResolvedValue({ items: [] })
   })
 
   it('renders pipeline row and loads history when expanded', async () => {
-    const wrapper = mount(PipelinesTab, { props: { project: project() } })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     expect(wrapper.text()).toContain('Deploy Dev')
     await wrapper.find('[data-test="pipeline-expand"]').trigger('click')
@@ -72,7 +84,7 @@ describe('PipelinesTab', () => {
 
   it('deploys selected environment and navigates to live console', async () => {
     vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-live', status: 'running' }))
-    const wrapper = mount(PipelinesTab, { props: { project: project() } })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="pipeline-run"]').trigger('click')
     await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
@@ -84,7 +96,7 @@ describe('PipelinesTab', () => {
 
   it('rolls back by reusing deploy path with artifact version', async () => {
     vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-rollback', status: 'running' }))
-    const wrapper = mount(PipelinesTab, { props: { project: project() } })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="pipeline-expand"]').trigger('click')
     await new Promise(r => setTimeout(r))
@@ -99,10 +111,21 @@ describe('PipelinesTab', () => {
   })
 
   it('opens existing ProjectPipelineEditor for edit', async () => {
-    const wrapper = mount(PipelinesTab, { props: { project: project() } })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="pipeline-edit"]').trigger('click')
 
     expect(wrapper.find('[data-test="pipeline-editor"]').exists()).toBe(true)
+  })
+
+  it('空流水线时展示模板和空白创建入口', async () => {
+    const wrapper = mount(PipelinesTab, { props: { project: emptyProject() }, global: { plugins: [installTestI18n()] } })
+
+    expect(wrapper.find('[data-test="pipeline-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-create-from-template"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-create-blank"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="pipeline-create-from-template"]').trigger('click')
+    expect(wrapper.find('[data-test="pipeline-editor"]').attributes('data-mode')).toBe('template')
   })
 })

@@ -12,11 +12,32 @@ TemplateContentModal：模板内容只读查看弹窗。
 -->
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import type { PipelineTemplateDetail, TemplateInput } from '@/api/agent'
 
-defineProps<{ open: boolean; title: string; yaml: string; loading?: boolean; error?: string }>()
-defineEmits<{ close: [] }>()
+const props = defineProps<{
+  open: boolean
+  title: string
+  yaml: string
+  detail?: PipelineTemplateDetail | null
+  loading?: boolean
+  error?: string
+  canApply?: boolean
+  applying?: boolean
+}>()
+defineEmits<{ close: []; apply: [] }>()
 
 const { t } = useI18n()
+
+function inputEntries(): [string, TemplateInput][] {
+  return Object.entries(props.detail?.template.inputs ?? {})
+}
+
+function inputMeta(input: TemplateInput): string[] {
+  const parts = [input.type, input.required ? t('settings.templates.required') : t('settings.templates.optional')]
+  if (input.default) parts.push(t('settings.templates.defaultValue', { value: input.default }))
+  if (input.options?.length) parts.push(t('settings.templates.options', { value: input.options.join(', ') }))
+  return parts
+}
 </script>
 
 <template>
@@ -24,11 +45,44 @@ const { t } = useI18n()
     <section class="modal-panel" role="dialog" aria-modal="true">
       <header class="modal-head">
         <h2>{{ title }}</h2>
-        <button type="button" data-test="template-modal-close" @click="$emit('close')">{{ t('common.cancel') }}</button>
+        <div class="modal-actions">
+          <button
+            v-if="canApply"
+            type="button"
+            class="primary-action"
+            data-test="template-apply"
+            :disabled="applying"
+            @click="$emit('apply')"
+          >
+            {{ t('settings.templates.applyToProject') }}
+          </button>
+          <button type="button" data-test="template-modal-close" @click="$emit('close')">{{ t('common.cancel') }}</button>
+        </div>
       </header>
       <div v-if="loading" class="modal-state">{{ t('common.loading') }}</div>
       <div v-else-if="error" class="modal-error">{{ error }}</div>
-      <pre v-else class="yaml-view"><code>{{ yaml }}</code></pre>
+      <template v-else>
+        <div v-if="detail" class="template-summary">
+          <div class="summary-line">
+            <span>{{ t('settings.templates.digest') }}</span>
+            <code>{{ detail.digest }}</code>
+          </div>
+          <section class="input-summary">
+            <h3>{{ t('settings.templates.inputSummary') }}</h3>
+            <div v-if="inputEntries().length === 0" class="modal-state">{{ t('settings.templates.noInputs') }}</div>
+            <article v-for="[name, input] in inputEntries()" :key="name" class="input-row">
+              <div class="input-main">
+                <strong>{{ input.label || name }}</strong>
+                <span>{{ name }}</span>
+              </div>
+              <div class="input-meta">{{ inputMeta(input).join(' · ') }}</div>
+              <p v-if="input.description">{{ input.description }}</p>
+            </article>
+          </section>
+        </div>
+        <slot />
+        <pre class="yaml-view"><code>{{ yaml }}</code></pre>
+      </template>
     </section>
   </div>
 </template>
@@ -63,7 +117,12 @@ const { t } = useI18n()
   margin: 0;
   font-size: 14px;
 }
-.modal-head button {
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-actions button {
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
   background: var(--bg-overlay);
@@ -71,6 +130,54 @@ const { t } = useI18n()
   cursor: pointer;
   padding: 4px 9px;
   font-size: 11px;
+}
+.modal-actions .primary-action {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.modal-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.template-summary {
+  padding: 12px 12px 0;
+}
+.summary-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.summary-line code {
+  color: var(--text-secondary);
+}
+.input-summary h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.input-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--border-secondary);
+}
+.input-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.input-main strong {
+  font-size: 12px;
+}
+.input-main span,
+.input-meta,
+.input-row p {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.input-row p {
+  margin: 4px 0 0;
 }
 .yaml-view {
   margin: 0;
