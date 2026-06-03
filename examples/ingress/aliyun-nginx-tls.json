@@ -1,0 +1,24 @@
+{
+  "name": "go-http-aliyun",
+  "domain": "go-http.example.com",
+  "host_ids": ["local-02"],
+  "backend": "127.0.0.1:18080",
+  "proxy_provider": "nginx",
+  "proxy_options": {
+    "websocket": false,
+    "proxy_timeout": "60s"
+  },
+  "tls": {
+    "enabled": true,
+    "cert_provider": "acme"
+  },
+  "dns": {
+    "provider": "aliyun-prod",
+    "record": {
+      "type": "A",
+      "name": "go-http.example.com",
+      "value": "203.0.113.10",
+      "ttl": 300
+    }
+  }
+}

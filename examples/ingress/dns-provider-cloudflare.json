@@ -1,0 +1,9 @@
+{
+  "id": "cloudflare-prod",
+  "name": "Cloudflare Production",
+  "type": "cloudflare",
+  "zone_id": "replace-with-cloudflare-zone-id",
+  "secrets": {
+    "api_token": "replace-with-cloudflare-api-token"
+  }
+}

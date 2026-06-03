@@ -13,7 +13,9 @@ These examples validate builtin pipeline templates for build plus systemd deploy
 | `vue-go-combined` | `vue-go-combined-build` | 18086 | Go serving Vue dist |
 | `mcp-log-lab` | MCP runtime/log diagnostics fixture | 18190 | Go command services |
 
-Nginx, DNS, and Docker are outside this example matrix.
+Ingress examples live in `examples/ingress`. They cover DNS provider configs and nginx ingress declarations; they are not pipeline templates.
+
+Docker is outside this example matrix.
 
 Run unit validation:
 
