@@ -471,6 +471,8 @@ export interface Host {
   ssh_key_path?: string
   remote_agent_port: number
   local_tunnel_port: number
+  public_ip?: string
+  private_ip?: string
   tags: string[]
   is_self?: boolean
   node_id?: string
@@ -673,6 +675,8 @@ export interface HostCreatePayload {
   ssh_password?: string
   ssh_key_path?: string
   remote_agent_port?: number
+  public_ip?: string
+  private_ip?: string
   tags?: string[]
 }
 

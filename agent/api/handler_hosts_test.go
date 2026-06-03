@@ -77,6 +77,42 @@ func TestHostCRUD(t *testing.T) {
 	assert.True(t, afterDel[0].IsSelf)
 }
 
+func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	body, _ := json.Marshal(model.Host{
+		ID:        "edge-1",
+		Name:      "edge",
+		SSHHost:   "ssh.example.com",
+		SSHPort:   22,
+		SSHUser:   "deploy",
+		PublicIP:  "203.0.113.10",
+		PrivateIP: "10.0.0.10",
+	})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Host
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.Equal(t, "ssh.example.com", created.SSHHost)
+	assert.Equal(t, "203.0.113.10", created.PublicIP)
+	assert.Equal(t, "10.0.0.10", created.PrivateIP)
+
+	listResp, err := http.Get(srv.URL + "/api/hosts")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	require.Equal(t, http.StatusOK, listResp.StatusCode)
+
+	var hosts []hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&hosts))
+	require.Len(t, hosts, 2)
+	assert.Equal(t, "ssh.example.com", hosts[1].SSHHost)
+	assert.Equal(t, "203.0.113.10", hosts[1].PublicIP)
+	assert.Equal(t, "10.0.0.10", hosts[1].PrivateIP)
+}
+
 func TestDetectSshKeys(t *testing.T) {
 	srv, _ := newTestApp(t)
 
@@ -222,6 +258,8 @@ type hostDTOWithSelf struct {
 	SSHUser         string   `json:"ssh_user"`
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
+	PublicIP        string   `json:"public_ip,omitempty"`
+	PrivateIP       string   `json:"private_ip,omitempty"`
 	Tags            []string `json:"tags"`
 	IsSelf          bool     `json:"is_self"`
 	NodeID          string   `json:"node_id"`

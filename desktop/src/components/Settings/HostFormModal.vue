@@ -2,7 +2,7 @@
 HostFormModal：单 Host 新建与编辑表单。
 
 职责：
-  - 收集 Host 的 SSH、远端 agent 端口和 tag 字段
+  - 收集 Host 的 SSH、入口地址元数据、远端 agent 端口和 tag 字段
   - ssh_user 新建时默认 root
   - ssh_key_path 提供浏览和自动检测两种入口
   - 提供测试连接入口，展示完整错误信息
@@ -46,6 +46,8 @@ function emptyForm(): HostCreatePayload {
     ssh_password: '',
     ssh_key_path: '',
     remote_agent_port: 57017,
+    public_ip: '',
+    private_ip: '',
     tags: [],
   }
 }
@@ -66,6 +68,8 @@ watch(
         ssh_password: initial.ssh_password ?? '',
         ssh_key_path: initial.ssh_key_path ?? '',
         remote_agent_port: initial.remote_agent_port,
+        public_ip: initial.public_ip ?? '',
+        private_ip: initial.private_ip ?? '',
         tags: [...initial.tags],
       }
       return
@@ -141,6 +145,17 @@ function submit() {
         <div class="field port">
           <label>{{ t('settings.hostForm.port') }}</label>
           <input v-model.number="form.ssh_port" type="number" min="1" data-test="host-form-port" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field flex">
+          <label>{{ t('settings.hostForm.publicIP') }}</label>
+          <input v-model="form.public_ip" placeholder="203.0.113.10" data-test="host-form-public-ip" />
+        </div>
+        <div class="field flex">
+          <label>{{ t('settings.hostForm.privateIP') }}</label>
+          <input v-model="form.private_ip" placeholder="10.0.0.10" data-test="host-form-private-ip" />
         </div>
       </div>
 

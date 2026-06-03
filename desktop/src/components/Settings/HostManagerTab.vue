@@ -227,7 +227,13 @@ async function installAgent(host: Host) {
         <template v-for="host in sortedHosts" :key="host.id">
           <tr data-test="host-row">
             <td>{{ host.name }}</td>
-            <td class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</td>
+            <td>
+              <div class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</div>
+              <div v-if="host.public_ip || host.private_ip" class="address-meta" data-test="host-address-meta">
+                <span v-if="host.public_ip">{{ t('settings.hostForm.publicIP') }} {{ host.public_ip }}</span>
+                <span v-if="host.private_ip">{{ t('settings.hostForm.privateIP') }} {{ host.private_ip }}</span>
+              </div>
+            </td>
             <td>
               <span
                 v-for="tag in host.tags"
@@ -355,6 +361,14 @@ h1 {
 }
 .mono {
   font-family: var(--font-mono, monospace);
+}
+.address-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 10px;
 }
 .tag-chip {
   display: inline-block;

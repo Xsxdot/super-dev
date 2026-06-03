@@ -27,6 +27,8 @@ type hostDTO struct {
 	SSHUser         string   `json:"ssh_user"`
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
+	PublicIP        string   `json:"public_ip,omitempty"`
+	PrivateIP       string   `json:"private_ip,omitempty"`
 	Tags            []string `json:"tags"`
 	// IsSelf 为 true 表示该条目代表本机，不可删除。远端 host 为 false。
 	IsSelf bool `json:"is_self"`
@@ -43,6 +45,8 @@ func toHostDTO(h model.Host) hostDTO {
 		SSHUser:         h.SSHUser,
 		RemoteAgentPort: h.RemoteAgentPort,
 		LocalTunnelPort: h.LocalTunnelPort,
+		PublicIP:        h.PublicIP,
+		PrivateIP:       h.PrivateIP,
 		Tags:            h.Tags,
 	}
 }

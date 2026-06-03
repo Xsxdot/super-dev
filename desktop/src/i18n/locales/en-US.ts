@@ -171,6 +171,8 @@ export default {
       readSshFailed: 'Failed to read SSH config',
       sshAddress: 'SSH address',
       port: 'Port',
+      publicIP: 'Public IP',
+      privateIP: 'Private IP',
       sshUser: 'SSH user',
       sshPassword: 'SSH password',
       sshKeyPath: 'SSH private key path',

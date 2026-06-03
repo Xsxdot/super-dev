@@ -171,6 +171,8 @@ export default {
       readSshFailed: '读取 SSH config 失败',
       sshAddress: 'SSH 地址',
       port: '端口',
+      publicIP: '公网 IP',
+      privateIP: '内网 IP',
       sshUser: 'SSH 用户',
       sshPassword: 'SSH 密码',
       sshKeyPath: 'SSH 私钥路径',
