@@ -46,6 +46,18 @@ type Store interface {
 	UpsertDNSProvider(cfg DNSProviderConfig) (DNSProviderConfig, error)
 	// DeleteDNSProvider 删除 DNS provider 配置。
 	DeleteDNSProvider(id string) error
+	// ListCertificates 返回托管证书列表，并隐藏 Material.KeyPEM。
+	ListCertificates() ([]ManagedCertificate, error)
+	// GetCertificate 读取包含完整 PEM 的托管证书，供内部申请、续期和部署使用。
+	GetCertificate(id string) (ManagedCertificate, bool, error)
+	// UpsertCertificate 新增或覆盖托管证书。
+	UpsertCertificate(cert ManagedCertificate) (ManagedCertificate, error)
+	// DeleteCertificate 删除托管证书。
+	DeleteCertificate(id string) error
+	// GetACMEAccount 读取全局 ACME 账号。
+	GetACMEAccount() (ACMEAccount, error)
+	// SaveACMEAccount 保存全局 ACME 账号。
+	SaveACMEAccount(acc ACMEAccount) error
 }
 
 // DNSProviderConfig 描述一个 DNS provider 实例及其本机保存的密文配置。
@@ -66,11 +78,17 @@ type providerStoreData struct {
 	DNSProviders []DNSProviderConfig `json:"dns_providers"`
 }
 
+type certStoreData struct {
+	Account      ACMEAccount          `json:"account"`
+	Certificates []ManagedCertificate `json:"certificates"`
+}
+
 // FileStore 使用 DataDir 下的 JSON 文件保存入口配置子系统状态。
 type FileStore struct {
 	mu            sync.Mutex
 	ingressPath   string
 	providersPath string
+	certsPath     string
 }
 
 // NewFileStore 创建一个 JSON 文件存储。
@@ -79,11 +97,12 @@ type FileStore struct {
 //   - dataDir: agent 数据目录
 //
 // 返回：
-//   - 可读写 ingress.json 和 ingress-providers.json 的 FileStore
+//   - 可读写 ingress.json、ingress-providers.json 和 ingress-certs.json 的 FileStore
 func NewFileStore(dataDir string) *FileStore {
 	return &FileStore{
 		ingressPath:   filepath.Join(dataDir, "ingress.json"),
 		providersPath: filepath.Join(dataDir, "ingress-providers.json"),
+		certsPath:     filepath.Join(dataDir, "ingress-certs.json"),
 	}
 }
 
@@ -374,6 +393,144 @@ func (s *FileStore) DeleteDNSProvider(id string) error {
 	return s.saveProviderData(data)
 }
 
+// ListCertificates 返回托管证书列表，并隐藏私钥材料。
+//
+// 返回：
+//   - 脱敏后的托管证书列表
+//   - 读取或解析失败时返回错误
+func (s *FileStore) ListCertificates() ([]ManagedCertificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return nil, err
+	}
+	out := append([]ManagedCertificate(nil), data.Certificates...)
+	for i := range out {
+		redactCertificateMaterial(&out[i])
+	}
+	return out, nil
+}
+
+// GetCertificate 按 ID 读取包含完整 PEM 的托管证书。
+//
+// 参数：
+//   - id: 托管证书 ID
+//
+// 返回：
+//   - 命中的托管证书
+//   - 是否存在
+//   - 读取或解析失败时返回错误
+func (s *FileStore) GetCertificate(id string) (ManagedCertificate, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return ManagedCertificate{}, false, err
+	}
+	for _, cert := range data.Certificates {
+		if cert.ID == id {
+			return cert, true, nil
+		}
+	}
+	return ManagedCertificate{}, false, nil
+}
+
+// UpsertCertificate 新增或覆盖托管证书。
+//
+// 参数：
+//   - cert: 待保存的托管证书，ID 为空时会自动分配
+//
+// 返回：
+//   - 保存后的托管证书，包含稳定 ID 和更新时间
+//   - 读写失败时返回错误
+func (s *FileStore) UpsertCertificate(cert ManagedCertificate) (ManagedCertificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return ManagedCertificate{}, err
+	}
+	now := time.Now().UTC()
+	if cert.ID == "" {
+		cert.ID = uuid.NewString()
+		cert.CreatedAt = now
+	}
+	cert.UpdatedAt = now
+	for i, existing := range data.Certificates {
+		if existing.ID == cert.ID {
+			if cert.CreatedAt.IsZero() {
+				cert.CreatedAt = existing.CreatedAt
+			}
+			data.Certificates[i] = cert
+			return cert, s.saveCertData(data)
+		}
+	}
+	if cert.CreatedAt.IsZero() {
+		cert.CreatedAt = now
+	}
+	data.Certificates = append(data.Certificates, cert)
+	return cert, s.saveCertData(data)
+}
+
+// DeleteCertificate 删除托管证书。
+//
+// 参数：
+//   - id: 托管证书 ID
+//
+// 返回：
+//   - 写入失败时返回错误
+func (s *FileStore) DeleteCertificate(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return err
+	}
+	filtered := data.Certificates[:0]
+	for _, cert := range data.Certificates {
+		if cert.ID != id {
+			filtered = append(filtered, cert)
+		}
+	}
+	data.Certificates = filtered
+	return s.saveCertData(data)
+}
+
+// GetACMEAccount 读取全局 ACME 账号配置。
+//
+// 返回：
+//   - ACME 账号配置，文件不存在时返回零值
+//   - 读取或解析失败时返回错误
+func (s *FileStore) GetACMEAccount() (ACMEAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	return data.Account, nil
+}
+
+// SaveACMEAccount 保存全局 ACME 账号配置。
+//
+// 参数：
+//   - acc: 待保存的账号配置
+//
+// 返回：
+//   - 写入失败时返回错误
+func (s *FileStore) SaveACMEAccount(acc ACMEAccount) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadCertData()
+	if err != nil {
+		return err
+	}
+	acc.UpdatedAt = time.Now().UTC()
+	data.Account = acc
+	return s.saveCertData(data)
+}
+
 func (s *FileStore) loadData() (fileStoreData, error) {
 	data, err := os.ReadFile(s.ingressPath)
 	if os.IsNotExist(err) {
@@ -387,6 +544,36 @@ func (s *FileStore) loadData() (fileStoreData, error) {
 		return fileStoreData{}, err
 	}
 	return out, nil
+}
+
+func (s *FileStore) loadCertData() (certStoreData, error) {
+	data, err := os.ReadFile(s.certsPath)
+	if os.IsNotExist(err) {
+		return certStoreData{Certificates: []ManagedCertificate{}}, nil
+	}
+	if err != nil {
+		return certStoreData{}, err
+	}
+	var out certStoreData
+	if err := json.Unmarshal(data, &out); err != nil {
+		return certStoreData{}, err
+	}
+	return out, nil
+}
+
+func (s *FileStore) saveCertData(data certStoreData) error {
+	if err := os.MkdirAll(filepath.Dir(s.certsPath), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	if err := os.WriteFile(s.certsPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(s.certsPath, 0o600)
 }
 
 func (s *FileStore) saveData(data fileStoreData) error {
@@ -432,4 +619,13 @@ func (s *FileStore) saveProviderData(data providerStoreData) error {
 		return err
 	}
 	return os.Chmod(s.providersPath, 0o600)
+}
+
+func redactCertificateMaterial(cert *ManagedCertificate) {
+	if cert.Material == nil {
+		return
+	}
+	copied := *cert.Material
+	copied.KeyPEM = ""
+	cert.Material = &copied
 }

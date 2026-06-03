@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +93,74 @@ func TestFileStoreProviderSecretsRedactedFromList(t *testing.T) {
 	stat, err := os.Stat(filepath.Join(dir, "ingress-providers.json"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), stat.Mode().Perm())
+}
+
+func TestFileStoreCertificateCRUDAndRedaction(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	saved, err := store.UpsertCertificate(ManagedCertificate{
+		Domains:     []string{"api.example.com"},
+		Issuer:      CertificateIssuerACME,
+		DNSProvider: "cloudflare-prod",
+		Status:      CertActive,
+		Material: &Certificate{
+			Domain:    "api.example.com",
+			CertPEM:   "CERT",
+			KeyPEM:    "SECRET-KEY",
+			Provider:  ProviderACME,
+			ExpiresAt: time.Now().Add(90 * 24 * time.Hour),
+		},
+		AutoRenew: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, saved.ID)
+
+	list, err := store.ListCertificates()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "CERT", list[0].Material.CertPEM)
+	require.Empty(t, list[0].Material.KeyPEM)
+
+	full, ok, err := store.GetCertificate(saved.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "SECRET-KEY", full.Material.KeyPEM)
+
+	require.NoError(t, store.DeleteCertificate(saved.ID))
+	list, err = store.ListCertificates()
+	require.NoError(t, err)
+	require.Empty(t, list)
+}
+
+func TestFileStoreACMEAccountSingleton(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	initial, err := store.GetACMEAccount()
+	require.NoError(t, err)
+	require.Empty(t, initial.Email)
+
+	require.NoError(t, store.SaveACMEAccount(ACMEAccount{
+		Email:        "ops@example.com",
+		DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
+	}))
+	got, err := store.GetACMEAccount()
+	require.NoError(t, err)
+	require.Equal(t, "ops@example.com", got.Email)
+	require.NotZero(t, got.UpdatedAt)
+}
+
+func TestFileStoreCertificatesFileUses0600(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ingress-certs.json"), []byte(`{"certificates":[]}`), 0o644))
+	store := NewFileStore(dir)
+	_, err := store.UpsertCertificate(ManagedCertificate{
+		Domains: []string{"api.example.com"},
+		Issuer:  CertificateIssuerManual,
+		Status:  CertPending,
+	})
+	require.NoError(t, err)
+
+	stat, err := os.Stat(filepath.Join(dir, "ingress-certs.json"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), stat.Mode().Perm())
 }
 
 func validProjectIngress(projectID string, domain string) Ingress {
