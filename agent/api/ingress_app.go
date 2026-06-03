@@ -63,14 +63,14 @@ func (a *App) initIngress(ctx context.Context) error {
 		Registry:   a.ingressRegistry,
 		HostLookup: a.lookupIngressHosts,
 	})
-	certService := ingress.NewCertService(ingress.CertServiceConfig{
+	a.ingressCertService = ingress.NewCertService(ingress.CertServiceConfig{
 		Store:      a.ingressStore,
 		Registry:   a.ingressRegistry,
 		HostLookup: a.lookupIngressHosts,
 	})
 	a.ingressCertManager = ingress.NewCertManager(ingress.CertManagerConfig{
 		Store:       a.ingressStore,
-		CertService: certService,
+		CertService: a.ingressCertService,
 		RenewBefore: 30 * 24 * time.Hour,
 		Interval:    24 * time.Hour,
 	})

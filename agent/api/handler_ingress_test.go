@@ -32,9 +32,6 @@ func TestIngressCRUDAndPreview(t *testing.T) {
 		"domain": "api.example.com",
 		"proxy": {"provider": "nginx", "host_ids": ["self"]},
 		"upstreams": [{"ip": "127.0.0.1", "port": 8080}],
-		"host_ids": ["self"],
-		"backend": "127.0.0.1:8080",
-		"proxy_provider": "nginx",
 		"proxy_options": {"raw_template": "server { server_name api.example.com; }"},
 		"dns": {
 			"provider": "manual",
@@ -42,12 +39,7 @@ func TestIngressCRUDAndPreview(t *testing.T) {
 				"type": "A",
 				"name": "api.example.com",
 				"value": "203.0.113.10"
-			}],
-			"record": {
-				"type": "A",
-				"name": "api.example.com",
-				"value": "203.0.113.10"
-			}
+			}]
 		}
 	}`)
 	defer resp.Body.Close()
@@ -69,8 +61,8 @@ func TestIngressCRUDAndPreview(t *testing.T) {
 	assert.Contains(t, preview.RenderedConfigByHost["self"], "server_name api.example.com")
 }
 
-// TestIngressApplyRejectsManualDNSWithTLS 验证 TLS + manual DNS 的 ACME 组合会在应用前被拒绝。
-func TestIngressApplyRejectsManualDNSWithTLS(t *testing.T) {
+// TestIngressApplyRejectsTLSWithoutCertificateID 验证启用 TLS 但未引用证书会在应用前被拒绝。
+func TestIngressApplyRejectsTLSWithoutCertificateID(t *testing.T) {
 	srv, _ := newTestApp(t)
 
 	resp := postIngressJSON(t, srv.URL+"/api/ingress", `{
@@ -79,23 +71,15 @@ func TestIngressApplyRejectsManualDNSWithTLS(t *testing.T) {
 		"domain": "tls.example.com",
 		"proxy": {"provider": "nginx", "host_ids": ["self"]},
 		"upstreams": [{"ip": "127.0.0.1", "port": 8080}],
-		"host_ids": ["self"],
-		"backend": "127.0.0.1:8080",
-		"proxy_provider": "nginx",
 		"proxy_options": {"raw_template": "server { server_name tls.example.com; }"},
-		"tls": {"enabled": true, "cert_provider": "acme"},
+		"tls": {"enabled": true},
 		"dns": {
 			"provider": "manual",
 			"records": [{
 				"type": "A",
 				"name": "tls.example.com",
 				"value": "203.0.113.10"
-			}],
-			"record": {
-				"type": "A",
-				"name": "tls.example.com",
-				"value": "203.0.113.10"
-			}
+			}]
 		}
 	}`)
 	defer resp.Body.Close()
@@ -110,7 +94,7 @@ func TestIngressApplyRejectsManualDNSWithTLS(t *testing.T) {
 
 	body, err := io.ReadAll(applyResp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), "manual DNS cannot automate ACME DNS-01")
+	assert.Contains(t, string(body), "tls.cert_id is required")
 }
 
 // TestIngressDNSProviderListRedactsSecrets 验证保存 DNS provider 后列表接口会隐藏 secrets。
@@ -163,16 +147,16 @@ func TestIngressOrphanRemovalWithEmptySelectionIsNoop(t *testing.T) {
 	resp := postIngressJSON(t, srv.URL+"/api/ingress", `{
 		"name": "api",
 		"domain": "api.example.com",
-		"host_ids": ["self"],
-		"backend": "127.0.0.1:8080",
-		"proxy_provider": "nginx",
+		"proxy": {"provider": "nginx", "host_ids": ["self"]},
+		"upstreams": [{"ip": "127.0.0.1", "port": 8080}],
+		"proxy_options": {"raw_template": "server { server_name api.example.com; }"},
 		"dns": {
 			"provider": "manual",
-			"record": {
+			"records": [{
 				"type": "A",
 				"name": "api.example.com",
 				"value": "203.0.113.10"
-			}
+			}]
 		}
 	}`)
 	defer resp.Body.Close()

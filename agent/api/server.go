@@ -116,6 +116,8 @@ type App struct {
 	ingressRegistry *ingress.Registry
 	// ingressService 编排入口声明的预览、落地和孤儿资源处理。
 	ingressService *ingress.Service
+	// ingressCertService 编排全局 SSL 证书申请、续期和部署。
+	ingressCertService *ingress.CertService
 	// ingressCertManager 定期续期已托管的入口证书。
 	ingressCertManager *ingress.CertManager
 }
@@ -327,6 +329,16 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/ingress/{ingressID}/orphan-removals", a.removeProjectIngressOrphans)
 	mux.HandleFunc("GET /api/ingress", a.listIngress)
 	mux.HandleFunc("POST /api/ingress", a.upsertIngress)
+	mux.HandleFunc("GET /api/ingress/certs", a.listIngressCertificates)
+	mux.HandleFunc("POST /api/ingress/certs", a.createIngressCertificate)
+	mux.HandleFunc("GET /api/ingress/certs/match", a.matchIngressCertificate)
+	mux.HandleFunc("GET /api/ingress/certs/{id}", a.getIngressCertificate)
+	mux.HandleFunc("DELETE /api/ingress/certs/{id}", a.deleteIngressCertificate)
+	mux.HandleFunc("POST /api/ingress/certs/{id}/issue", a.issueIngressCertificate)
+	mux.HandleFunc("POST /api/ingress/certs/{id}/renew", a.renewIngressCertificate)
+	mux.HandleFunc("POST /api/ingress/certs/{id}/deploy", a.deployIngressCertificate)
+	mux.HandleFunc("GET /api/ingress/acme-account", a.getIngressACMEAccount)
+	mux.HandleFunc("POST /api/ingress/acme-account", a.saveIngressACMEAccount)
 	mux.HandleFunc("GET /api/ingress/{id}", a.getIngress)
 	mux.HandleFunc("PUT /api/ingress/{id}", a.updateIngress)
 	mux.HandleFunc("DELETE /api/ingress/{id}", a.deleteIngress)

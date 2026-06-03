@@ -418,6 +418,9 @@ func ingressErrorStatus(err error) int {
 		strings.Contains(msg, "cannot") ||
 		strings.Contains(msg, "must match") ||
 		strings.Contains(msg, "not ready") ||
+		strings.Contains(msg, "certificate") ||
+		strings.Contains(msg, "证书") ||
+		strings.Contains(msg, "acme account email is required") ||
 		strings.Contains(msg, "unsupported") {
 		return http.StatusBadRequest
 	}
