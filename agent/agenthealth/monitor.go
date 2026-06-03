@@ -33,9 +33,10 @@ const (
 )
 
 // ProbeResult 是一次探活的结果。
-// AllEndpointsOK 为 true 表示所有必需 endpoint 均返回 200。
+// AllEndpointsOK 为 true 表示所有必需 endpoint 均返回可接受状态。
 type ProbeResult struct {
 	AllEndpointsOK bool
+	Version        string
 }
 
 // Prober 抽象“对某个 host 的远端 agent 探活一次”。生产实现见 api 层（通过隧道 baseURL 请求必需 endpoint）。
@@ -52,8 +53,17 @@ type TunnelSignal struct {
 
 // Event 表示一次 agent 健康状态变化。
 type Event struct {
-	HostID string `json:"host_id"`
-	Status Status `json:"agent"`
+	HostID    string `json:"host_id"`
+	Status    Status `json:"agent"`
+	Version   string `json:"agent_version,omitempty"`
+	CheckedAt string `json:"agent_checked_at,omitempty"`
+}
+
+// Info 是指定 host 最近一次 agent 探活的可展示元信息。
+type Info struct {
+	Status    Status
+	Version   string
+	CheckedAt time.Time
 }
 
 const defaultPollInterval = 10 * time.Second
@@ -64,7 +74,7 @@ type Monitor struct {
 	interval time.Duration
 
 	mu       sync.Mutex
-	status   map[string]Status
+	status   map[string]Info
 	cancels  map[string]context.CancelFunc // hostID → 停止该 host 轮询
 	pollIDs  map[string]uint64
 	nextPoll uint64
@@ -82,7 +92,7 @@ func NewMonitor(prober Prober) *Monitor {
 	return &Monitor{
 		prober:   prober,
 		interval: defaultPollInterval,
-		status:   map[string]Status{},
+		status:   map[string]Info{},
 		cancels:  map[string]context.CancelFunc{},
 		pollIDs:  map[string]uint64{},
 		subs:     map[string]chan Event{},
@@ -98,12 +108,17 @@ func (m *Monitor) SetPollInterval(d time.Duration) {
 
 // Status 返回指定 host 的 agent 健康状态；从未探过返回 StatusUnknown。
 func (m *Monitor) Status(hostID string) Status {
+	return m.Info(hostID).Status
+}
+
+// Info 返回指定 host 最近一次 agent 探活元信息；从未探过返回 unknown 空信息。
+func (m *Monitor) Info(hostID string) Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.status[hostID]; ok {
 		return s
 	}
-	return StatusUnknown
+	return Info{Status: StatusUnknown}
 }
 
 // ProbeOnce 对 host 探活一次并更新其健康状态。
@@ -171,16 +186,17 @@ func (m *Monitor) Unsubscribe(id string) {
 	}
 }
 
-// classify 执行一次探活并把结果归类为健康状态。
-func (m *Monitor) classify(ctx context.Context, hostID string) Status {
+// classify 执行一次探活并把结果归类为健康状态与展示元信息。
+func (m *Monitor) classify(ctx context.Context, hostID string) Info {
+	now := time.Now().UTC()
 	res, err := m.prober.Probe(ctx, hostID)
 	if err != nil {
-		return StatusUnreachable
+		return Info{Status: StatusUnreachable, CheckedAt: now}
 	}
 	if res.AllEndpointsOK {
-		return StatusHealthy
+		return Info{Status: StatusHealthy, Version: res.Version, CheckedAt: now}
 	}
-	return StatusVersionMismatch
+	return Info{Status: StatusVersionMismatch, Version: res.Version, CheckedAt: now}
 }
 
 // startPolling 为 host 启动轮询；已在轮询则忽略（幂等）。
@@ -225,14 +241,14 @@ func (m *Monitor) stopPolling(hostID string) {
 		delete(m.pollIDs, hostID)
 	}
 	current, seen := m.status[hostID]
-	changed := seen && current != StatusUnknown
-	m.status[hostID] = StatusUnknown
+	changed := seen && current.Status != StatusUnknown
+	m.status[hostID] = Info{Status: StatusUnknown}
 	m.mu.Unlock()
 	if ok {
 		cancel()
 	}
 	if changed {
-		m.emit(Event{HostID: hostID, Status: StatusUnknown})
+		m.emit(eventFromInfo(hostID, Info{Status: StatusUnknown}))
 	}
 }
 
@@ -260,7 +276,20 @@ func (m *Monitor) probeAndEmit(ctx context.Context, hostID string, pollID uint64
 	m.status[hostID] = next
 	m.mu.Unlock()
 	if changed {
-		m.emit(Event{HostID: hostID, Status: next})
+		m.emit(eventFromInfo(hostID, next))
+	}
+}
+
+func eventFromInfo(hostID string, info Info) Event {
+	checkedAt := ""
+	if !info.CheckedAt.IsZero() {
+		checkedAt = info.CheckedAt.Format(time.RFC3339)
+	}
+	return Event{
+		HostID:    hostID,
+		Status:    info.Status,
+		Version:   info.Version,
+		CheckedAt: checkedAt,
 	}
 }
 

@@ -13,8 +13,10 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/superdev/agent/agenthealth"
 	"github.com/superdev/agent/tunnel"
 )
 
@@ -34,11 +36,21 @@ func tunnelStateLabel(s tunnel.Status) string {
 }
 
 type tunnelStatusDTO struct {
-	HostID    string `json:"host_id"`
-	State     string `json:"state,omitempty"`
-	LocalPort int    `json:"local_port,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Agent     string `json:"agent,omitempty"`
+	HostID         string `json:"host_id"`
+	State          string `json:"state,omitempty"`
+	LocalPort      int    `json:"local_port,omitempty"`
+	Error          string `json:"error,omitempty"`
+	Agent          string `json:"agent,omitempty"`
+	AgentVersion   string `json:"agent_version,omitempty"`
+	AgentCheckedAt string `json:"agent_checked_at,omitempty"`
+}
+
+func agentInfoDTO(info agenthealth.Info) (string, string, string) {
+	checkedAt := ""
+	if !info.CheckedAt.IsZero() {
+		checkedAt = info.CheckedAt.Format(time.RFC3339)
+	}
+	return string(info.Status), info.Version, checkedAt
 }
 
 // listTunnels 处理 GET /api/tunnels。
@@ -54,12 +66,15 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 		if st == tunnel.StatusDisconnected {
 			continue
 		}
+		agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(a.agentHealth.Info(h.ID))
 		out = append(out, tunnelStatusDTO{
-			HostID:    h.ID,
-			State:     tunnelStateLabel(st),
-			LocalPort: a.tunnels.LocalPort(h.ID),
-			Error:     a.tunnels.ErrorOf(h.ID),
-			Agent:     string(a.agentHealth.Status(h.ID)),
+			HostID:         h.ID,
+			State:          tunnelStateLabel(st),
+			LocalPort:      a.tunnels.LocalPort(h.ID),
+			Error:          a.tunnels.ErrorOf(h.ID),
+			Agent:          agentStatus,
+			AgentVersion:   agentVersion,
+			AgentCheckedAt: agentCheckedAt,
 		})
 	}
 	jsonOK(w, out)
@@ -120,12 +135,15 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(a.agentHealth.Info(ev.HostID))
 			dto := tunnelStatusDTO{
-				HostID:    ev.HostID,
-				State:     tunnelStateLabel(ev.Status),
-				LocalPort: a.tunnels.LocalPort(ev.HostID),
-				Error:     ev.Err,
-				Agent:     string(a.agentHealth.Status(ev.HostID)),
+				HostID:         ev.HostID,
+				State:          tunnelStateLabel(ev.Status),
+				LocalPort:      a.tunnels.LocalPort(ev.HostID),
+				Error:          ev.Err,
+				Agent:          agentStatus,
+				AgentVersion:   agentVersion,
+				AgentCheckedAt: agentCheckedAt,
 			}
 			if err := conn.WriteJSON(dto); err != nil {
 				return
@@ -134,8 +152,13 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			// agent 部分更新：只带 host_id + agent，靠前端 merge 保留隧道字段。
-			dto := tunnelStatusDTO{HostID: ev.HostID, Agent: string(ev.Status)}
+			// agent 部分更新：只带 host_id + agent 元信息，靠前端 merge 保留隧道字段。
+			dto := tunnelStatusDTO{
+				HostID:         ev.HostID,
+				Agent:          string(ev.Status),
+				AgentVersion:   ev.Version,
+				AgentCheckedAt: ev.CheckedAt,
+			}
 			if err := conn.WriteJSON(dto); err != nil {
 				return
 			}

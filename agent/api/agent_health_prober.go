@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -24,13 +25,17 @@ type agentHealthEndpoint struct {
 	Acceptable []int
 }
 
+type agentExecHealthResponse struct {
+	Version string `json:"version"`
+}
+
 // agentHealthRequiredEndpoints 是判定 agent 接口齐全的必需路径，
 // 与 desktop/src-tauri/src/agent.rs 的 REQUIRED_AGENT_ENDPOINTS 同源。
 var agentHealthRequiredEndpoints = []agentHealthEndpoint{
 	{Method: http.MethodGet, Path: "/api/hosts", Acceptable: []int{http.StatusOK}},
 	{Method: http.MethodGet, Path: "/api/tunnels", Acceptable: []int{http.StatusOK}},
 	{Method: http.MethodGet, Path: "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0", Acceptable: []int{http.StatusOK}},
-	{Method: http.MethodGet, Path: "/api/exec/health", Acceptable: []int{http.StatusNoContent}},
+	{Method: http.MethodGet, Path: "/api/exec/health", Acceptable: []int{http.StatusOK, http.StatusNoContent}},
 	// /api/transfer exists when an empty POST reaches the handler and fails validation.
 	{Method: http.MethodPost, Path: "/api/transfer", Acceptable: []int{http.StatusBadRequest}},
 }
@@ -67,6 +72,7 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 	if base == "" {
 		return agenthealth.ProbeResult{}, remote.ErrHostUnreachable
 	}
+	version := ""
 	for _, ep := range agentHealthRequiredEndpoints {
 		req, err := http.NewRequestWithContext(ctx, ep.Method, base+ep.Path, nil)
 		if err != nil {
@@ -77,13 +83,19 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 			return agenthealth.ProbeResult{}, err
 		}
 		status := resp.StatusCode
+		if ep.Method == http.MethodGet && ep.Path == "/api/exec/health" && status == http.StatusOK {
+			var body agentExecHealthResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
+				version = body.Version
+			}
+		}
 		resp.Body.Close()
 		if !endpointStatusOK(status, ep.Acceptable) {
 			// 探得到但接口不全：交给 Monitor 归类为 version-mismatch。
-			return agenthealth.ProbeResult{AllEndpointsOK: false}, nil
+			return agenthealth.ProbeResult{AllEndpointsOK: false, Version: version}, nil
 		}
 	}
-	return agenthealth.ProbeResult{AllEndpointsOK: true}, nil
+	return agenthealth.ProbeResult{AllEndpointsOK: true, Version: version}, nil
 }
 
 func endpointStatusOK(status int, acceptable []int) bool {

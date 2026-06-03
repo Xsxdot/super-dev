@@ -18,6 +18,12 @@ import (
 	"github.com/superdev/agent/remoteexec"
 )
 
+type execHealthResponse struct {
+	Version string `json:"version"`
+}
+
+const agentAPIVersion = "0.1.0"
+
 // wsExec 处理 GET /ws/exec，在 agent 本机执行一条命令并流式回传结果。
 //
 // 注意：
@@ -50,5 +56,5 @@ func (a *App) wsExec(w http.ResponseWriter, r *http.Request) {
 
 // execHealth 处理 GET /api/exec/health，用于 agent 版本兼容探测。
 func (a *App) execHealth(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNoContent)
+	jsonOK(w, execHealthResponse{Version: agentAPIVersion})
 }
