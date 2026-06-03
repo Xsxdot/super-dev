@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/superdev/agent/model"
 )
@@ -180,6 +181,27 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 	}
 	in.DNS.Records = records
 
+	var cert *Certificate
+	var certRecord *ManagedCertificate
+	if in.TLS.Enabled {
+		if strings.TrimSpace(in.TLS.CertID) == "" {
+			return AppliedState{}, errors.New("tls.cert_id is required")
+		}
+		managed, ok, err := s.store.GetCertificate(in.TLS.CertID)
+		if err != nil {
+			return AppliedState{}, err
+		}
+		if !ok {
+			return AppliedState{}, fmt.Errorf("certificate %s not found", in.TLS.CertID)
+		}
+		if managed.Status != CertActive || managed.Material == nil {
+			return AppliedState{}, fmt.Errorf("证书 %s 尚未就绪，请先在 SSL 管理页申请", in.TLS.CertID)
+		}
+		copied := *managed.Material
+		cert = &copied
+		certRecord = &managed
+	}
+
 	dnsProvider, err := s.registry.DNS(in.DNS.Provider)
 	if err != nil {
 		return AppliedState{}, err
@@ -197,7 +219,7 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 	if err != nil {
 		return AppliedState{}, err
 	}
-	rendered, err := proxyProvider.Render(in, nil)
+	rendered, err := proxyProvider.Render(in, cert)
 	if err != nil {
 		return AppliedState{}, err
 	}
@@ -209,6 +231,28 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 			return AppliedState{}, err
 		}
 		hostStates = append(hostStates, state)
+	}
+
+	if certRecord != nil {
+		deployments := map[string]CertDeployment{}
+		for _, existing := range certRecord.Deployments {
+			deployments[existing.HostID] = existing
+		}
+		for _, hostState := range hostStates {
+			if len(hostState.CertPaths) < 2 {
+				continue
+			}
+			deployments[hostState.HostID] = CertDeployment{
+				HostID:     hostState.HostID,
+				CertPath:   hostState.CertPaths[0],
+				KeyPath:    hostState.CertPaths[1],
+				DeployedAt: time.Now().UTC(),
+			}
+		}
+		certRecord.Deployments = sortedDeployments(deployments)
+		if _, err := s.store.UpsertCertificate(*certRecord); err != nil {
+			return AppliedState{}, err
+		}
 	}
 
 	state := AppliedState{

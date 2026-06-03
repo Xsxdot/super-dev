@@ -22,6 +22,7 @@ import (
 
 func TestServiceApplyOrderAndState(t *testing.T) {
 	store := NewFileStore(t.TempDir())
+	seedActiveCertificate(t, store, "cert-1")
 	reg := NewRegistry()
 	events := []string{}
 	reg.RegisterDNS(&orderedDNS{name: "dns-prod", events: &events})
@@ -90,6 +91,7 @@ func TestServiceApplyEnsuresAllDNSRecordsAndAppliesProxyHosts(t *testing.T) {
 
 func TestServiceApplyStopsOnDNSFailure(t *testing.T) {
 	store := NewFileStore(t.TempDir())
+	seedActiveCertificate(t, store, "cert-1")
 	reg := NewRegistry()
 	events := []string{}
 	reg.RegisterDNS(&orderedDNS{name: "dns-prod", events: &events, err: errors.New("dns down")})
@@ -134,6 +136,71 @@ func TestServiceApplyRequiresConfirmedDNSValueForInferredHostIP(t *testing.T) {
 	_, err = svc.Apply(context.Background(), saved.ID, ApplyOptions{})
 	requireErrorContains(t, err, "confirmed_dns_value")
 	assertStringSliceEqual(t, events, []string{})
+}
+
+func TestServiceApplyUsesReferencedActiveCertificate(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	cert, err := store.UpsertCertificate(ManagedCertificate{
+		Domains: []string{"api.example.com"},
+		Issuer:  CertificateIssuerACME,
+		Status:  CertActive,
+		Material: &Certificate{
+			Domain: "api.example.com", CertPEM: "CERT", KeyPEM: "KEY", Provider: ProviderACME,
+		},
+	})
+	requireNoError(t, err)
+	in := validAutomaticIngress()
+	in.TLS = TLSConfig{Enabled: true, CertID: cert.ID}
+	saved, err := store.UpsertIngress(in)
+	requireNoError(t, err)
+	events := []string{}
+	reg := NewRegistry()
+	reg.RegisterDNS(&orderedDNS{name: "dns-prod", events: &events})
+	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
+	svc := NewService(ServiceConfig{
+		Store:    store,
+		Registry: reg,
+		HostLookup: func(ids []string) ([]model.Host, error) {
+			return []model.Host{{ID: "host-a"}}, nil
+		},
+	})
+
+	state, err := svc.Apply(context.Background(), saved.ID, ApplyOptions{ConfirmedDNSValue: "203.0.113.10"})
+	requireNoError(t, err)
+
+	assertStringSliceEqual(t, events, []string{"dns.ensure", "proxy.render", "proxy.apply:host-a"})
+	assertLen(t, state.Hosts, 1)
+	got, ok, err := store.GetCertificate(cert.ID)
+	requireNoError(t, err)
+	assertBool(t, ok, true)
+	assertLen(t, got.Deployments, 1)
+}
+
+func TestServiceApplyRejectsNonActiveCertificate(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	cert, err := store.UpsertCertificate(ManagedCertificate{
+		Domains: []string{"api.example.com"},
+		Status:  CertPending,
+	})
+	requireNoError(t, err)
+	in := validAutomaticIngress()
+	in.TLS = TLSConfig{Enabled: true, CertID: cert.ID}
+	saved, err := store.UpsertIngress(in)
+	requireNoError(t, err)
+	reg := NewRegistry()
+	reg.RegisterDNS(&orderedDNS{name: "dns-prod"})
+	reg.RegisterProxy(&orderedProxy{name: ProviderNginx})
+	svc := NewService(ServiceConfig{
+		Store:    store,
+		Registry: reg,
+		HostLookup: func(ids []string) ([]model.Host, error) {
+			return []model.Host{{ID: "host-a"}}, nil
+		},
+	})
+
+	_, err = svc.Apply(context.Background(), saved.ID, ApplyOptions{ConfirmedDNSValue: "203.0.113.10"})
+
+	requireErrorContains(t, err, "证书 "+cert.ID+" 尚未就绪，请先在 SSL 管理页申请")
 }
 
 func TestServicePreviewHasNoSideEffects(t *testing.T) {
@@ -330,7 +397,14 @@ func (p *orderedProxy) Apply(ctx context.Context, host model.Host, cfg RenderedC
 	if p.events != nil {
 		*p.events = append(*p.events, "proxy.apply:"+host.ID)
 	}
-	return HostState{HostID: host.ID, ConfigPath: "/etc/nginx/conf.d/superdev-" + cfg.Filename}, nil
+	state := HostState{HostID: host.ID, ConfigPath: "/etc/nginx/conf.d/superdev-" + cfg.Filename}
+	if cfg.Certificate != nil {
+		state.CertPaths = []string{
+			"/etc/superdev/ingress/certs/" + cfg.Domain + "/fullchain.pem",
+			"/etc/superdev/ingress/certs/" + cfg.Domain + "/privkey.pem",
+		}
+	}
+	return state, nil
 }
 
 func (p *orderedProxy) DeployCertificate(ctx context.Context, host model.Host, domain string, cert Certificate) (CertDeployment, error) {
@@ -370,6 +444,20 @@ func validAutomaticIngress() Ingress {
 			Records:  []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
 		},
 	}
+}
+
+func seedActiveCertificate(t *testing.T, store Store, certID string) {
+	t.Helper()
+	_, err := store.UpsertCertificate(ManagedCertificate{
+		ID:      certID,
+		Domains: []string{"api.example.com"},
+		Issuer:  CertificateIssuerACME,
+		Status:  CertActive,
+		Material: &Certificate{
+			Domain: "api.example.com", CertPEM: "CERT", KeyPEM: "KEY", Provider: ProviderACME,
+		},
+	})
+	requireNoError(t, err)
 }
 
 func validManualIngress() Ingress {

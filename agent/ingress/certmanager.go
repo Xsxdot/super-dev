@@ -14,15 +14,12 @@ import (
 	"context"
 	"errors"
 	"time"
-
-	"github.com/superdev/agent/model"
 )
 
 // CertManagerConfig 描述证书续期管理器依赖和时间参数。
 type CertManagerConfig struct {
 	Store       Store
-	Registry    *Registry
-	HostLookup  HostLookup
+	CertService *CertService
 	RenewBefore time.Duration
 	Interval    time.Duration
 }
@@ -30,8 +27,7 @@ type CertManagerConfig struct {
 // CertManager 负责后台证书巡检调度。
 type CertManager struct {
 	store       Store
-	registry    *Registry
-	hostLookup  HostLookup
+	certService *CertService
 	renewBefore time.Duration
 	interval    time.Duration
 }
@@ -39,17 +35,11 @@ type CertManager struct {
 // NewCertManager 创建证书续期管理器。
 //
 // 参数：
-//   - cfg: Store、Registry、HostLookup 和续期时间参数
+//   - cfg: Store、CertService 和续期时间参数
 //
 // 返回：
 //   - 可执行 Run/RunOnce 的 CertManager
 func NewCertManager(cfg CertManagerConfig) *CertManager {
-	hostLookup := cfg.HostLookup
-	if hostLookup == nil {
-		hostLookup = func(ids []string) ([]model.Host, error) {
-			return nil, errors.New("host lookup is required")
-		}
-	}
 	renewBefore := cfg.RenewBefore
 	if renewBefore == 0 {
 		renewBefore = 30 * 24 * time.Hour
@@ -60,8 +50,7 @@ func NewCertManager(cfg CertManagerConfig) *CertManager {
 	}
 	return &CertManager{
 		store:       cfg.Store,
-		registry:    cfg.Registry,
-		hostLookup:  hostLookup,
+		certService: cfg.CertService,
 		renewBefore: renewBefore,
 		interval:    interval,
 	}
@@ -100,6 +89,21 @@ func (m *CertManager) RunOnce(ctx context.Context, now time.Time) error {
 	if err := m.ensureReady(); err != nil {
 		return err
 	}
+	certs, err := m.store.ListCertificates()
+	if err != nil {
+		return err
+	}
+	for _, cert := range certs {
+		if cert.Status != CertActive || cert.Issuer != CertificateIssuerACME || !cert.AutoRenew || cert.Material == nil {
+			continue
+		}
+		if cert.Material.ExpiresAt.Sub(now) >= m.renewBefore {
+			continue
+		}
+		if _, err := m.certService.Renew(ctx, cert.ID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -107,8 +111,8 @@ func (m *CertManager) ensureReady() error {
 	if m.store == nil {
 		return errors.New("ingress store is required")
 	}
-	if m.registry == nil {
-		return errors.New("ingress registry is required")
+	if m.certService == nil {
+		return errors.New("certificate service is required")
 	}
 	return nil
 }
