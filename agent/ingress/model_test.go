@@ -45,6 +45,7 @@ func TestProjectIngressJSONShape(t *testing.T) {
 			ProxyTimeout: Duration{Duration: 60 * time.Second},
 			RawTemplate:  "server { server_name api.example.com; }",
 		},
+		TLS: TLSConfig{Enabled: true, CertID: "cert-1"},
 		DNS: DNSConfig{
 			Provider: "cloudflare-prod",
 			Records: []Record{
@@ -62,8 +63,77 @@ func TestProjectIngressJSONShape(t *testing.T) {
 	assert.Equal(t, []string{"edge-a", "edge-b"}, got.Proxy.HostIDs)
 	require.Len(t, got.Upstreams, 1)
 	assert.Equal(t, "10.0.0.12", got.Upstreams[0].IP)
+	assert.Equal(t, "cert-1", got.TLS.CertID)
 	require.Len(t, got.DNS.Records, 2)
 	assert.Equal(t, "203.0.113.11", got.DNS.Records[1].Value)
+}
+
+func TestManagedCertificateJSONShape(t *testing.T) {
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	cert := ManagedCertificate{
+		ID:          "cert-1",
+		Domains:     []string{"*.example.com", "api.example.com"},
+		Issuer:      CertificateIssuerACME,
+		DNSProvider: "cloudflare-prod",
+		Status:      CertActive,
+		Material: &Certificate{
+			Domain:     "*.example.com",
+			CertPEM:    "CERT",
+			KeyPEM:     "KEY",
+			Issuer:     string(CertificateIssuerACME),
+			ObtainedAt: now,
+			ExpiresAt:  now.Add(90 * 24 * time.Hour),
+			Provider:   ProviderACME,
+		},
+		Deployments: []CertDeployment{{
+			HostID:     "edge-a",
+			CertPath:   "/etc/superdev/ingress/certs/api.example.com/fullchain.pem",
+			KeyPath:    "/etc/superdev/ingress/certs/api.example.com/privkey.pem",
+			DeployedAt: now,
+		}},
+		AutoRenew: true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	raw, err := json.Marshal(cert)
+	require.NoError(t, err)
+	var got ManagedCertificate
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, []string{"*.example.com", "api.example.com"}, got.Domains)
+	require.Equal(t, CertActive, got.Status)
+	require.True(t, got.AutoRenew)
+	require.Equal(t, "edge-a", got.Deployments[0].HostID)
+}
+
+func TestMatchCertificateExactPreferredOverWildcard(t *testing.T) {
+	wildcard := ManagedCertificate{ID: "wildcard", Domains: []string{"*.example.com"}, Status: CertActive}
+	exact := ManagedCertificate{ID: "exact", Domains: []string{"api.example.com"}, Status: CertActive}
+
+	got, ok := MatchCertificate("api.example.com", []ManagedCertificate{wildcard, exact})
+
+	require.True(t, ok)
+	require.Equal(t, "exact", got.ID)
+}
+
+func TestMatchCertificateWildcardDoesNotMatchBareDomain(t *testing.T) {
+	_, ok := MatchCertificate("example.com", []ManagedCertificate{{
+		ID: "wildcard", Domains: []string{"*.example.com"}, Status: CertActive,
+	}})
+	require.False(t, ok)
+}
+
+func TestMatchCertificateMatchesSingleLevelWildcardAndMultiSAN(t *testing.T) {
+	cert, ok := MatchCertificate("api.example.com", []ManagedCertificate{{
+		ID: "multi", Domains: []string{"admin.foo.com", "*.example.com"}, Status: CertActive,
+	}})
+	require.True(t, ok)
+	require.Equal(t, "multi", cert.ID)
+
+	_, ok = MatchCertificate("v1.api.example.com", []ManagedCertificate{{
+		ID: "wildcard", Domains: []string{"*.example.com"}, Status: CertActive,
+	}})
+	require.False(t, ok)
 }
 
 func TestIngressValidateRequiresProjectProxyUpstreamDNSAndTemplate(t *testing.T) {
@@ -92,7 +162,7 @@ func TestIngressValidateRequiresProjectProxyUpstreamDNSAndTemplate(t *testing.T)
 	assert.Contains(t, err.Error(), "raw_template is required")
 }
 
-func TestIngressValidateRejectsManualDNSWithAutomaticACME(t *testing.T) {
+func TestIngressValidateRequiresCertIDWhenTLSEnabled(t *testing.T) {
 	err := Ingress{
 		ProjectID: "proj-1",
 		Domain:    "api.example.com",
@@ -101,18 +171,18 @@ func TestIngressValidateRejectsManualDNSWithAutomaticACME(t *testing.T) {
 		ProxyOptions: ProxyOptions{
 			RawTemplate: "server { server_name api.example.com; }",
 		},
-		TLS: TLSConfig{Enabled: true, CertProvider: ProviderACME},
+		TLS: TLSConfig{Enabled: true},
 		DNS: DNSConfig{
 			Provider: ProviderManual,
 			Records:  []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
 		},
 	}.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "manual DNS cannot automate ACME DNS-01")
+	assert.Contains(t, err.Error(), "tls.cert_id is required")
 }
 
 func TestResolveDNSRecordValueRequiresExplicitValueForMultipleHosts(t *testing.T) {
-	in := Ingress{Domain: "api.example.com", HostIDs: []string{"host-a", "host-b"}}
+	in := Ingress{Domain: "api.example.com", Proxy: ProxyConfig{HostIDs: []string{"host-a", "host-b"}}}
 	decision := ResolveDNSRecordValue(in, []model.Host{
 		{ID: "host-a", SSHHost: "203.0.113.10"},
 		{ID: "host-b", SSHHost: "203.0.113.11"},
@@ -123,7 +193,7 @@ func TestResolveDNSRecordValueRequiresExplicitValueForMultipleHosts(t *testing.T
 }
 
 func TestResolveDNSRecordValueInfersSinglePublicIPForPreview(t *testing.T) {
-	in := Ingress{Domain: "api.example.com", HostIDs: []string{"host-a"}}
+	in := Ingress{Domain: "api.example.com", Proxy: ProxyConfig{HostIDs: []string{"host-a"}}}
 	decision := ResolveDNSRecordValue(in, []model.Host{{ID: "host-a", SSHHost: "203.0.113.10"}})
 	assert.True(t, decision.OK)
 	assert.True(t, decision.RequiresConfirmation)
@@ -132,9 +202,9 @@ func TestResolveDNSRecordValueInfersSinglePublicIPForPreview(t *testing.T) {
 
 func TestResolveDNSRecordValueAcceptsExplicitRecordValue(t *testing.T) {
 	in := Ingress{
-		Domain:  "api.example.com",
-		HostIDs: []string{"host-a", "host-b"},
-		DNS:     DNSConfig{Record: Record{Value: "198.51.100.8"}},
+		Domain: "api.example.com",
+		Proxy:  ProxyConfig{HostIDs: []string{"host-a", "host-b"}},
+		DNS:    DNSConfig{Records: []Record{{Value: "198.51.100.8"}}},
 	}
 	decision := ResolveDNSRecordValue(in, nil)
 	assert.True(t, decision.OK)

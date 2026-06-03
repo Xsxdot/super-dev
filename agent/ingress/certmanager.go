@@ -1,13 +1,13 @@
-// certmanager.go 巡检并续期 Ingress 托管证书。
+// certmanager.go 维护 Ingress 证书续期后台循环。
 //
 // 职责：
-//   - 定期扫描已落地状态中的托管证书
-//   - 对进入续期窗口的证书执行 renew
-//   - 将续期后的证书重新渲染并分发到入口声明的 host
+//   - 提供可按固定间隔执行的证书巡检入口
+//   - 校验证书管理器运行所需依赖
+//   - 在托管证书服务接入后承接自动续期调度
 //
 // 边界：
-//   - 不申请首次证书，首次申请由 Service.Apply 负责
-//   - 不处理已删除声明对应的历史状态
+//   - 不从 Ingress AppliedState 读取证书材料
+//   - 不申请首次证书，首次申请由 SSL 管理页显式触发
 package ingress
 
 import (
@@ -27,7 +27,7 @@ type CertManagerConfig struct {
 	Interval    time.Duration
 }
 
-// CertManager 负责后台巡检和续期托管证书。
+// CertManager 负责后台证书巡检调度。
 type CertManager struct {
 	store       Store
 	registry    *Registry
@@ -88,10 +88,10 @@ func (m *CertManager) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce 执行一次托管证书续期巡检。
+// RunOnce 执行一次证书续期巡检。
 //
 // 参数：
-//   - ctx: 上下文，用于取消 provider 调用
+//   - ctx: 上下文，用于取消后续证书服务调用
 //   - now: 当前时间，测试可注入
 //
 // 返回：
@@ -100,78 +100,7 @@ func (m *CertManager) RunOnce(ctx context.Context, now time.Time) error {
 	if err := m.ensureReady(); err != nil {
 		return err
 	}
-	states, err := m.store.ListStates()
-	if err != nil {
-		return err
-	}
-	for _, state := range states {
-		if state.Cert == nil {
-			continue
-		}
-		if state.Cert.ExpiresAt.Sub(now) >= m.renewBefore {
-			continue
-		}
-		if err := m.renewState(ctx, state); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func (m *CertManager) renewState(ctx context.Context, state AppliedState) error {
-	in, ok, err := m.store.GetIngress(state.IngressID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-	in = in.NormalizeLegacy()
-
-	dnsProvider, err := m.registry.DNS(in.DNS.Provider)
-	if err != nil {
-		return err
-	}
-	certProviderName := state.Cert.Provider
-	if certProviderName == "" {
-		certProviderName = in.TLS.CertProvider
-	}
-	if certProviderName == "" {
-		certProviderName = ProviderACME
-	}
-	certProvider, err := m.registry.Cert(certProviderName)
-	if err != nil {
-		return err
-	}
-	renewed, err := certProvider.Renew(ctx, *state.Cert, dnsProvider)
-	if err != nil {
-		return err
-	}
-
-	proxyProvider, err := m.registry.Proxy(in.Proxy.Provider)
-	if err != nil {
-		return err
-	}
-	rendered, err := proxyProvider.Render(in, &renewed)
-	if err != nil {
-		return err
-	}
-	hosts, err := m.hostLookup(in.Proxy.HostIDs)
-	if err != nil {
-		return err
-	}
-	hostStates := make([]HostState, 0, len(hosts))
-	for _, host := range hosts {
-		hostState, err := proxyProvider.Apply(ctx, host, rendered)
-		if err != nil {
-			return err
-		}
-		hostStates = append(hostStates, hostState)
-	}
-
-	state.Cert = &renewed
-	state.Hosts = hostStates
-	return m.store.SaveState(state)
 }
 
 func (m *CertManager) ensureReady() error {

@@ -25,7 +25,6 @@ func TestServiceApplyOrderAndState(t *testing.T) {
 	reg := NewRegistry()
 	events := []string{}
 	reg.RegisterDNS(&orderedDNS{name: "dns-prod", events: &events})
-	reg.RegisterCert(&orderedCert{name: ProviderACME, events: &events})
 	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
 	svc := NewService(ServiceConfig{
 		Store:    store,
@@ -40,15 +39,12 @@ func TestServiceApplyOrderAndState(t *testing.T) {
 	result, err := svc.Apply(context.Background(), in.ID, ApplyOptions{ConfirmedDNSValue: "203.0.113.10"})
 	requireNoError(t, err)
 
-	assertStringSliceEqual(t, events, []string{"dns.ensure", "cert.obtain", "proxy.render", "proxy.apply:host-a"})
+	assertStringSliceEqual(t, events, []string{"dns.ensure", "proxy.render", "proxy.apply:host-a"})
 	assertLen(t, result.Hosts, 1)
 	state, ok, err := store.GetState(in.ID)
 	requireNoError(t, err)
 	assertBool(t, ok, true)
 	assertLen(t, state.Records, 1)
-	if state.Cert == nil {
-		t.Fatal("state.Cert = nil, want certificate")
-	}
 }
 
 func TestServiceApplyEnsuresAllDNSRecordsAndAppliesProxyHosts(t *testing.T) {
@@ -97,7 +93,6 @@ func TestServiceApplyStopsOnDNSFailure(t *testing.T) {
 	reg := NewRegistry()
 	events := []string{}
 	reg.RegisterDNS(&orderedDNS{name: "dns-prod", events: &events, err: errors.New("dns down")})
-	reg.RegisterCert(&orderedCert{name: ProviderACME, events: &events})
 	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
 	svc := NewService(ServiceConfig{
 		Store:    store,
@@ -132,7 +127,6 @@ func TestServiceApplyRequiresConfirmedDNSValueForInferredHostIP(t *testing.T) {
 	})
 	in := validAutomaticIngress()
 	in.TLS = TLSConfig{}
-	in.DNS.Record.Value = ""
 	in.DNS.Records[0].Value = ""
 	saved, err := store.UpsertIngress(in)
 	requireNoError(t, err)
@@ -341,39 +335,31 @@ func (p *orderedProxy) Remove(ctx context.Context, host model.Host, orphan Orpha
 
 func validAutomaticIngress() Ingress {
 	return Ingress{
-		ID:            "ing-1",
-		ProjectID:     "proj-1",
-		Domain:        "api.example.com",
-		Proxy:         ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
-		Upstreams:     []Upstream{{IP: "127.0.0.1", Port: 8080}},
-		HostIDs:       []string{"host-a"},
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
-		ProxyOptions:  ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
-		TLS:           TLSConfig{Enabled: true, CertProvider: ProviderACME},
+		ID:           "ing-1",
+		ProjectID:    "proj-1",
+		Domain:       "api.example.com",
+		Proxy:        ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
+		Upstreams:    []Upstream{{IP: "127.0.0.1", Port: 8080}},
+		ProxyOptions: ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
+		TLS:          TLSConfig{Enabled: true, CertID: "cert-1"},
 		DNS: DNSConfig{
 			Provider: "dns-prod",
 			Records:  []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
-			Record:   Record{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"},
 		},
 	}
 }
 
 func validManualIngress() Ingress {
 	return Ingress{
-		ID:            "ing-manual",
-		ProjectID:     "proj-1",
-		Domain:        "api.example.com",
-		Proxy:         ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
-		Upstreams:     []Upstream{{IP: "127.0.0.1", Port: 8080}},
-		HostIDs:       []string{"host-a"},
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
-		ProxyOptions:  ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
+		ID:           "ing-manual",
+		ProjectID:    "proj-1",
+		Domain:       "api.example.com",
+		Proxy:        ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
+		Upstreams:    []Upstream{{IP: "127.0.0.1", Port: 8080}},
+		ProxyOptions: ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
 		DNS: DNSConfig{
 			Provider: ProviderManual,
 			Records:  []Record{{Type: RecordA, Name: "api.example.com"}},
-			Record:   Record{Type: RecordA, Name: "api.example.com"},
 		},
 	}
 }

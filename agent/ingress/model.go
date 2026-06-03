@@ -12,9 +12,7 @@ package ingress
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -105,11 +103,6 @@ type Ingress struct {
 	DNS          DNSConfig    `json:"dns"`
 	CreatedAt    time.Time    `json:"created_at,omitempty"`
 	UpdatedAt    time.Time    `json:"updated_at,omitempty"`
-
-	// Legacy fields are kept loadable while the subsystem migrates existing declarations.
-	HostIDs       []string `json:"host_ids,omitempty"`
-	Backend       string   `json:"backend,omitempty"`
-	ProxyProvider string   `json:"proxy_provider,omitempty"`
 }
 
 // SourceHint 记录入口默认值由哪个项目流水线线索推断。
@@ -147,17 +140,16 @@ type LocationOption struct {
 	Raw  string `json:"raw"`
 }
 
-// TLSConfig 描述入口是否启用自动托管证书。
+// TLSConfig 描述入口是否启用 TLS 以及引用的全局证书。
 type TLSConfig struct {
-	Enabled      bool   `json:"enabled"`
-	CertProvider string `json:"cert_provider,omitempty"`
+	Enabled bool   `json:"enabled"`
+	CertID  string `json:"cert_id,omitempty"`
 }
 
 // DNSConfig 描述服务解析记录的 provider 和目标记录。
 type DNSConfig struct {
 	Provider string   `json:"provider"`
 	Records  []Record `json:"records"`
-	Record   Record   `json:"record,omitempty"`
 }
 
 // Record 描述一条 DNS 记录。
@@ -188,6 +180,60 @@ type Certificate struct {
 	Provider   string    `json:"provider"`
 }
 
+// ManagedCertificate 描述 agent 级全局托管证书。
+type ManagedCertificate struct {
+	ID          string            `json:"id"`
+	Domains     []string          `json:"domains"`
+	Issuer      CertificateIssuer `json:"issuer"`
+	DNSProvider string            `json:"dns_provider,omitempty"`
+	Status      CertStatus        `json:"status"`
+	Material    *Certificate      `json:"material,omitempty"`
+	Deployments []CertDeployment  `json:"deployments,omitempty"`
+	LastError   string            `json:"last_error,omitempty"`
+	AutoRenew   bool              `json:"auto_renew"`
+	CreatedAt   time.Time         `json:"created_at,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
+}
+
+// CertificateIssuer 表示证书材料的来源。
+type CertificateIssuer string
+
+const (
+	// CertificateIssuerACME 表示通过 ACME DNS-01 自动签发。
+	CertificateIssuerACME CertificateIssuer = "acme"
+	// CertificateIssuerManual 表示用户手动上传 PEM 材料。
+	CertificateIssuerManual CertificateIssuer = "manual"
+)
+
+// CertStatus 表示托管证书当前状态。
+type CertStatus string
+
+const (
+	// CertPending 表示证书正在申请或等待材料。
+	CertPending CertStatus = "pending"
+	// CertActive 表示证书材料可用于入口渲染和部署。
+	CertActive CertStatus = "active"
+	// CertExpiring 表示证书即将进入续期窗口。
+	CertExpiring CertStatus = "expiring"
+	// CertFailed 表示最近一次申请或续期失败。
+	CertFailed CertStatus = "failed"
+)
+
+// CertDeployment 记录证书材料已经部署到哪个 host 和路径。
+type CertDeployment struct {
+	HostID     string    `json:"host_id"`
+	CertPath   string    `json:"cert_path"`
+	KeyPath    string    `json:"key_path"`
+	DeployedAt time.Time `json:"deployed_at"`
+}
+
+// ACMEAccount 保存全局唯一 ACME 账号配置。
+type ACMEAccount struct {
+	Email        string    `json:"email"`
+	DirectoryURL string    `json:"directory_url,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+}
+
 // RenderedConfig 是 proxy provider 渲染出的目标配置。
 type RenderedConfig struct {
 	Domain      string       `json:"domain"`
@@ -198,11 +244,10 @@ type RenderedConfig struct {
 
 // AppliedState 记录一次入口收敛后落地的资源。
 type AppliedState struct {
-	IngressID string       `json:"ingress_id"`
-	Records   []Record     `json:"records,omitempty"`
-	Hosts     []HostState  `json:"hosts,omitempty"`
-	Cert      *Certificate `json:"cert,omitempty"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	IngressID string      `json:"ingress_id"`
+	Records   []Record    `json:"records,omitempty"`
+	Hosts     []HostState `json:"hosts,omitempty"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // HostState 记录单个 host 上的 proxy 配置和证书路径。
@@ -243,23 +288,22 @@ type DNSValueDecision struct {
 // 注意：
 //   - manual DNS 无法在 ACME DNS-01 的时间窗口内自动写 TXT 记录，因此直接拒绝
 func (in Ingress) Validate() error {
-	normalized := in.NormalizeLegacy()
-	if strings.TrimSpace(normalized.ProjectID) == "" {
+	if strings.TrimSpace(in.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if strings.TrimSpace(normalized.Domain) == "" {
+	if strings.TrimSpace(in.Domain) == "" {
 		return errors.New("domain is required")
 	}
-	if strings.TrimSpace(normalized.Proxy.Provider) == "" {
+	if strings.TrimSpace(in.Proxy.Provider) == "" {
 		return errors.New("proxy.provider is required")
 	}
-	if len(normalized.Proxy.HostIDs) == 0 {
+	if len(in.Proxy.HostIDs) == 0 {
 		return errors.New("at least one proxy host is required")
 	}
-	if len(normalized.Upstreams) == 0 {
+	if len(in.Upstreams) == 0 {
 		return errors.New("at least one upstream is required")
 	}
-	for _, upstream := range normalized.Upstreams {
+	for _, upstream := range in.Upstreams {
 		if strings.TrimSpace(upstream.IP) == "" {
 			return errors.New("upstream.ip is required")
 		}
@@ -267,58 +311,17 @@ func (in Ingress) Validate() error {
 			return errors.New("upstream.port is required")
 		}
 	}
-	if strings.TrimSpace(normalized.ProxyOptions.RawTemplate) == "" {
+	if strings.TrimSpace(in.ProxyOptions.RawTemplate) == "" {
 		return errors.New("raw_template is required")
 	}
-	if strings.TrimSpace(normalized.DNS.Provider) == "" {
+	if strings.TrimSpace(in.DNS.Provider) == "" {
 		return errors.New("dns.provider is required")
 	}
-	if len(normalized.NormalizedDNSRecords()) == 0 {
+	if len(in.DNS.Records) == 0 {
 		return errors.New("at least one dns record is required")
 	}
-	if normalized.TLS.Enabled && normalized.TLS.CertProvider == ProviderACME && normalized.DNS.Provider == ProviderManual {
-		return errors.New("manual DNS cannot automate ACME DNS-01")
-	}
-	return nil
-}
-
-// NormalizeLegacy 将旧版入口字段映射到项目级声明结构。
-//
-// 返回：
-//   - 填充了 Proxy、Upstreams 和 DNS.Records 的 Ingress 副本
-//
-// 注意：
-//   - 该方法不丢弃旧字段，方便旧代码在同一轮迁移中继续读取
-func (in Ingress) NormalizeLegacy() Ingress {
-	out := in
-	if out.Proxy.Provider == "" && out.ProxyProvider != "" {
-		out.Proxy.Provider = out.ProxyProvider
-	}
-	if len(out.Proxy.HostIDs) == 0 && len(out.HostIDs) > 0 {
-		out.Proxy.HostIDs = append([]string(nil), out.HostIDs...)
-	}
-	if len(out.Upstreams) == 0 && strings.TrimSpace(out.Backend) != "" {
-		host, port, ok := strings.Cut(strings.TrimSpace(out.Backend), ":")
-		if ok {
-			parsedPort, err := strconv.Atoi(port)
-			if err == nil && parsedPort > 0 {
-				out.Upstreams = []Upstream{{IP: host, Port: parsedPort}}
-			}
-		}
-	}
-	if len(out.DNS.Records) == 0 && (out.DNS.Record.Name != "" || out.DNS.Record.Value != "") {
-		out.DNS.Records = []Record{out.DNS.Record}
-	}
-	return out
-}
-
-// NormalizedDNSRecords 返回兼容新旧字段的 DNS 记录列表副本。
-func (in Ingress) NormalizedDNSRecords() []Record {
-	if len(in.DNS.Records) > 0 {
-		return append([]Record(nil), in.DNS.Records...)
-	}
-	if in.DNS.Record.Name != "" || in.DNS.Record.Value != "" {
-		return []Record{in.DNS.Record}
+	if in.TLS.Enabled && strings.TrimSpace(in.TLS.CertID) == "" {
+		return errors.New("tls.cert_id is required")
 	}
 	return nil
 }
@@ -326,7 +329,7 @@ func (in Ingress) NormalizedDNSRecords() []Record {
 // ResolveDNSRecordValue 推断或读取服务 A 记录目标值。
 //
 // 参数：
-//   - in: 入口声明，优先使用 in.DNS.Record.Value
+//   - in: 入口声明，优先使用 in.DNS.Records 的首条显式值
 //   - hosts: 声明引用的 host 列表，用于单 host 自动推断公网 IP
 //
 // 返回：
@@ -335,19 +338,17 @@ func (in Ingress) NormalizedDNSRecords() []Record {
 // 注意：
 //   - 多 host 场景必须显式填写目标值，避免错误地把流量指到单台机器
 func ResolveDNSRecordValue(in Ingress, hosts []model.Host) DNSValueDecision {
-	normalized := in.NormalizeLegacy()
-	records := normalized.NormalizedDNSRecords()
-	if len(records) > 0 && strings.TrimSpace(records[0].Value) != "" {
-		return DNSValueDecision{OK: true, Value: strings.TrimSpace(records[0].Value)}
+	if len(in.DNS.Records) > 0 && strings.TrimSpace(in.DNS.Records[0].Value) != "" {
+		return DNSValueDecision{OK: true, Value: strings.TrimSpace(in.DNS.Records[0].Value)}
 	}
-	if len(normalized.Proxy.HostIDs) != 1 {
+	if len(in.Proxy.HostIDs) != 1 {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required for multiple hosts"}
 	}
 	byID := map[string]model.Host{}
 	for _, host := range hosts {
 		byID[host.ID] = host
 	}
-	host, ok := byID[normalized.Proxy.HostIDs[0]]
+	host, ok := byID[in.Proxy.HostIDs[0]]
 	if !ok {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required because host was not found"}
 	}
@@ -400,5 +401,61 @@ func (in Ingress) DisplayName() string {
 	if strings.TrimSpace(in.Name) != "" {
 		return in.Name
 	}
-	return fmt.Sprintf("%s -> %s", in.Domain, in.Backend)
+	if strings.TrimSpace(in.Domain) != "" {
+		return in.Domain
+	}
+	return "unnamed ingress"
+}
+
+// MatchCertificate 按域名匹配已有 active 证书，精确匹配优先于通配符匹配。
+//
+// 参数：
+//   - domain: 待匹配域名，大小写不敏感
+//   - certs: 候选托管证书列表
+//
+// 返回：
+//   - 命中的证书指针；无匹配时为 nil
+//   - 是否命中
+//
+// 注意：
+//   - 通配符只覆盖一级子域，`*.example.com` 不匹配 `example.com` 或 `v1.api.example.com`
+func MatchCertificate(domain string, certs []ManagedCertificate) (*ManagedCertificate, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(domain))
+	if normalized == "" {
+		return nil, false
+	}
+	for i := range certs {
+		if certs[i].Status != CertActive {
+			continue
+		}
+		for _, candidate := range certs[i].Domains {
+			if strings.ToLower(strings.TrimSpace(candidate)) == normalized {
+				return &certs[i], true
+			}
+		}
+	}
+	for i := range certs {
+		if certs[i].Status != CertActive {
+			continue
+		}
+		for _, candidate := range certs[i].Domains {
+			if wildcardMatchesDomain(strings.ToLower(strings.TrimSpace(candidate)), normalized) {
+				return &certs[i], true
+			}
+		}
+	}
+	return nil, false
+}
+
+func wildcardMatchesDomain(pattern string, domain string) bool {
+	const prefix = "*."
+	if !strings.HasPrefix(pattern, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(pattern, prefix)
+	if suffix == "" || domain == suffix || !strings.HasSuffix(domain, "."+suffix) {
+		return false
+	}
+	left := strings.TrimSuffix(domain, "."+suffix)
+	return left != "" && !strings.Contains(left, ".")
 }

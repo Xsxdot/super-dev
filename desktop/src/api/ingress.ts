@@ -44,7 +44,6 @@ export interface DNSRecord {
 export interface DNSConfig {
   provider: string
   records: DNSRecord[]
-  record?: DNSRecord
 }
 
 export interface SourceHint {
@@ -67,7 +66,7 @@ export interface Upstream {
 
 export interface TLSConfig {
   enabled: boolean
-  cert_provider?: string
+  cert_id?: string
 }
 
 export interface LocationOption {
@@ -95,11 +94,6 @@ export interface Ingress {
   dns: DNSConfig
   created_at?: string
   updated_at?: string
-
-  // Legacy fields remain readable while the UI migrates from global ingress screens.
-  host_ids?: string[]
-  backend?: string
-  proxy_provider?: string
 }
 
 export interface DNSValueDecision {
@@ -138,7 +132,6 @@ export interface AppliedState {
   ingress_id: string
   records?: DNSRecord[]
   hosts?: HostState[]
-  cert?: Certificate
   updated_at?: string
 }
 

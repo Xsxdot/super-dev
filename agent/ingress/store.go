@@ -117,7 +117,6 @@ func (s *FileStore) ListIngressByProject(projectID string) ([]Ingress, error) {
 	}
 	out := make([]Ingress, 0, len(items))
 	for _, item := range items {
-		item = item.NormalizeLegacy()
 		if item.ProjectID == projectID {
 			out = append(out, item)
 		}
@@ -386,9 +385,6 @@ func (s *FileStore) loadData() (fileStoreData, error) {
 	var out fileStoreData
 	if err := json.Unmarshal(data, &out); err != nil {
 		return fileStoreData{}, err
-	}
-	for i := range out.Ingresses {
-		out.Ingresses[i] = out.Ingresses[i].NormalizeLegacy()
 	}
 	return out, nil
 }

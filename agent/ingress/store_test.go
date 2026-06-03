@@ -54,29 +54,6 @@ func TestFileStoreListIngressByProject(t *testing.T) {
 	assert.Equal(t, "proj-a", items[0].ProjectID)
 }
 
-func TestFileStoreNormalizesLegacyIngressOnLoad(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "ingress.json"), []byte(`{
-		"ingresses":[{
-			"id":"legacy",
-			"project_id":"proj-a",
-			"domain":"api.example.com",
-			"host_ids":["edge-a"],
-			"backend":"10.0.0.12:8080",
-			"proxy_provider":"nginx",
-			"proxy_options":{"raw_template":"server { server_name api.example.com; }"},
-			"dns":{"provider":"manual","record":{"type":"A","name":"api.example.com","value":"203.0.113.10"}}
-		}]
-	}`), 0o600))
-
-	items, err := NewFileStore(dir).ListIngressByProject("proj-a")
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, []string{"edge-a"}, items[0].Proxy.HostIDs)
-	assert.Equal(t, []Upstream{{IP: "10.0.0.12", Port: 8080}}, items[0].Upstreams)
-	require.Len(t, items[0].DNS.Records, 1)
-}
-
 func TestFileStoreAppliedState(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	state := AppliedState{

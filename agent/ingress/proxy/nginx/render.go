@@ -145,7 +145,7 @@ func renderRawTemplate(raw string, in ingress.Ingress, cert *ingress.Certificate
 	var b bytes.Buffer
 	data := map[string]any{
 		"Domain":             in.Domain,
-		"Backend":            in.Backend,
+		"Backend":            primaryBackend(in.Upstreams),
 		"Ingress":            in,
 		"Upstreams":          in.Upstreams,
 		"TLS":                in.TLS,
@@ -157,6 +157,17 @@ func renderRawTemplate(raw string, in ingress.Ingress, cert *ingress.Certificate
 		return "", err
 	}
 	return b.String(), nil
+}
+
+func primaryBackend(upstreams []ingress.Upstream) string {
+	if len(upstreams) == 0 {
+		return ""
+	}
+	upstream := upstreams[0]
+	if upstream.Port <= 0 {
+		return strings.TrimSpace(upstream.IP)
+	}
+	return fmt.Sprintf("%s:%d", strings.TrimSpace(upstream.IP), upstream.Port)
 }
 
 func safeDomainFilename(domain string) string {

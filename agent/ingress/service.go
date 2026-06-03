@@ -91,7 +91,6 @@ func (s *Service) Preview(ctx context.Context, in Ingress) (PreviewResult, error
 	if err := in.Validate(); err != nil {
 		return PreviewResult{}, err
 	}
-	in = in.NormalizeLegacy()
 
 	hosts, err := s.hostLookup(in.Proxy.HostIDs)
 	if err != nil {
@@ -108,7 +107,6 @@ func (s *Service) Preview(ctx context.Context, in Ingress) (PreviewResult, error
 	}
 
 	if len(records) > 0 {
-		in.DNS.Record = records[0]
 		result.DNSRecord = records[0]
 	}
 	in.DNS.Records = records
@@ -168,7 +166,6 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 	if err := in.Validate(); err != nil {
 		return AppliedState{}, err
 	}
-	in = in.NormalizeLegacy()
 
 	hosts, err := s.hostLookup(in.Proxy.HostIDs)
 	if err != nil {
@@ -182,9 +179,6 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 		return AppliedState{}, fmt.Errorf("confirmed_dns_value must match inferred DNS value %s", decision.Value)
 	}
 	in.DNS.Records = records
-	if len(records) > 0 {
-		in.DNS.Record = records[0]
-	}
 
 	dnsProvider, err := s.registry.DNS(in.DNS.Provider)
 	if err != nil {
@@ -199,28 +193,11 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 		recordResults = append(recordResults, recordResult.Record)
 	}
 
-	var cert *Certificate
-	if in.TLS.Enabled {
-		certProviderName := in.TLS.CertProvider
-		if certProviderName == "" {
-			certProviderName = ProviderACME
-		}
-		certProvider, err := s.registry.Cert(certProviderName)
-		if err != nil {
-			return AppliedState{}, err
-		}
-		obtained, err := certProvider.Obtain(ctx, in.Domain, dnsProvider)
-		if err != nil {
-			return AppliedState{}, err
-		}
-		cert = &obtained
-	}
-
 	proxyProvider, err := s.registry.Proxy(in.Proxy.Provider)
 	if err != nil {
 		return AppliedState{}, err
 	}
-	rendered, err := proxyProvider.Render(in, cert)
+	rendered, err := proxyProvider.Render(in, nil)
 	if err != nil {
 		return AppliedState{}, err
 	}
@@ -238,7 +215,6 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 		IngressID: in.ID,
 		Records:   recordResults,
 		Hosts:     hostStates,
-		Cert:      cert,
 	}
 	if err := s.store.SaveState(state); err != nil {
 		return AppliedState{}, err
@@ -263,7 +239,6 @@ func (s *Service) DetectOrphans(ctx context.Context, ingressID string) (OrphanRe
 	if err != nil {
 		return OrphanReport{}, err
 	}
-	in = in.NormalizeLegacy()
 	declared, err := s.store.ListIngress()
 	if err != nil {
 		return OrphanReport{}, err
@@ -323,7 +298,6 @@ func (s *Service) RemoveOrphans(ctx context.Context, ingressID string, report Or
 	if err != nil {
 		return err
 	}
-	in = in.NormalizeLegacy()
 	hosts, err := s.operationHosts(in)
 	if err != nil {
 		return err
@@ -360,7 +334,7 @@ func (s *Service) RemoveOrphans(ctx context.Context, ingressID string, report Or
 }
 
 func resolveDNSRecords(in Ingress, hosts []model.Host) ([]Record, DNSValueDecision, error) {
-	records := in.NormalizedDNSRecords()
+	records := append([]Record(nil), in.DNS.Records...)
 	if len(records) == 0 {
 		decision := DNSValueDecision{RequiresInput: true, Message: "at least one dns record is required"}
 		return nil, decision, errors.New(decision.Message)
@@ -409,7 +383,6 @@ func (s *Service) loadIngress(ingressID string) (Ingress, error) {
 }
 
 func (s *Service) operationHosts(in Ingress) ([]model.Host, error) {
-	in = in.NormalizeLegacy()
 	ids := append([]string(nil), in.Proxy.HostIDs...)
 	seen := map[string]bool{}
 	for _, id := range ids {
@@ -434,8 +407,7 @@ func (s *Service) operationHosts(in Ingress) ([]model.Host, error) {
 func declaredRecordKeys(declared []Ingress) map[string]bool {
 	keys := map[string]bool{}
 	for _, in := range declared {
-		in = in.NormalizeLegacy()
-		for _, record := range in.NormalizedDNSRecords() {
+		for _, record := range in.DNS.Records {
 			record = record.WithDefaults(in.Domain, record.Value)
 			keys[recordKey(record)] = true
 		}

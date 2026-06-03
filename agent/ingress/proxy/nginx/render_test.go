@@ -20,8 +20,8 @@ func TestRenderHTTPRawTemplateVariables(t *testing.T) {
 	provider := New(nil)
 
 	cfg, err := provider.Render(ingress.Ingress{
-		Domain:  "api.example.com",
-		Backend: "127.0.0.1:8080",
+		Domain:    "api.example.com",
+		Upstreams: []ingress.Upstream{{IP: "127.0.0.1", Port: 8080}},
 		ProxyOptions: ingress.ProxyOptions{
 			RawTemplate: "server {\n  listen 80;\n  server_name {{ .Domain }};\n  location / { proxy_pass http://{{ .Backend }}; }\n}\n",
 		},
@@ -66,8 +66,8 @@ func TestRenderRawTemplate(t *testing.T) {
 	provider := New(nil)
 
 	cfg, err := provider.Render(ingress.Ingress{
-		Domain:  "api.example.com",
-		Backend: "127.0.0.1:8080",
+		Domain:    "api.example.com",
+		Upstreams: []ingress.Upstream{{IP: "127.0.0.1", Port: 8080}},
 		ProxyOptions: ingress.ProxyOptions{
 			RawTemplate: "server_name {{domain}};\nproxy_pass http://{{backend}};\n",
 		},
