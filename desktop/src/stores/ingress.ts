@@ -67,6 +67,19 @@ export const useIngressStore = defineStore('ingress', () => {
     }
   }
 
+  async function loadDNSProviders() {
+    loading.value = true
+    error.value = ''
+    try {
+      dnsProviders.value = await ingressApi.listDNSProviders()
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err)
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function saveIngress(payload: Ingress) {
     const saved = payload.id
       ? await ingressApi.updateIngress(payload.id, payload)
@@ -178,6 +191,7 @@ export const useIngressStore = defineStore('ingress', () => {
     error,
     loadAll,
     loadProject,
+    loadDNSProviders,
     saveIngress,
     saveProjectIngress,
     deleteIngress,

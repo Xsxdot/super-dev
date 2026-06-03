@@ -38,6 +38,10 @@ vi.mock('@/components/Settings/HostManagerTab.vue', () => ({
   default: { template: '<section>主机管理</section>' },
 }))
 
+vi.mock('@/components/Settings/DNSProviderTab.vue', () => ({
+  default: { template: '<section data-test="dns-provider-tab">DNS 提供商</section>' },
+}))
+
 function service(id: string, name: string, required = false): Service {
   return {
     id,
@@ -139,6 +143,32 @@ describe('SettingsPage', () => {
 
     expect(wrapper.find('[data-test="settings-tab-hosts"]').classes()).toContain('active')
     expect(wrapper.text()).toContain('主机管理')
+  })
+
+  it('设置页只在 DNS Provider tab 管理全局 DNS 提供商', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await wrapper.find('[data-test="settings-tab-dns"]').trigger('click')
+
+    expect(wrapper.find('[data-test="dns-provider-tab"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('DNS 提供商')
+    expect(wrapper.find('[data-test="settings-tab-ingress"]').exists()).toBe(false)
+  })
+
+  it('兼容旧 ingress query 并打开 DNS Provider tab', async () => {
+    routeState.query = { tab: 'ingress' }
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="settings-tab-dns"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="dns-provider-tab"]').exists()).toBe(true)
   })
 
   it('支持打开模板管理 tab', async () => {

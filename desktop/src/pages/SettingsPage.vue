@@ -20,7 +20,7 @@ import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
-import IngressManagerTab from '@/components/Ingress/IngressManagerTab.vue'
+import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
 import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
@@ -29,7 +29,7 @@ import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.v
 import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'ingress' | 'templates' | 'approvals'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'templates' | 'approvals'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,8 +41,8 @@ const { t } = useI18n()
 const selectedTab = ref<SettingsTab>(
   route.query.tab === 'hosts'
     ? 'hosts'
-    : route.query.tab === 'ingress'
-      ? 'ingress'
+    : route.query.tab === 'dns' || route.query.tab === 'ingress'
+      ? 'dns'
     : route.query.tab === 'templates'
       ? 'templates'
       : route.query.tab === 'approvals'
@@ -275,16 +275,16 @@ const retentionDays = computed({
         {{ t('settings.tabs.hosts') }}
       </button>
       <button
-        data-test="settings-tab-ingress"
+        data-test="settings-tab-dns"
         class="tab-btn"
-        :class="{ active: selectedTab === 'ingress' }"
-        @click="selectedTab = 'ingress'"
+        :class="{ active: selectedTab === 'dns' }"
+        @click="selectedTab = 'dns'"
       >
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
           <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
           <path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.4 2.3 5.5S9.6 11.9 8 13.5C6.4 11.9 5.7 10.1 5.7 8S6.4 4.1 8 2.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        {{ t('settings.tabs.ingress') }}
+        {{ t('settings.tabs.dnsProvider') }}
       </button>
       <button
         data-test="settings-tab-templates"
@@ -447,8 +447,8 @@ const retentionDays = computed({
         <HostManagerTab />
       </section>
 
-      <section v-else-if="selectedTab === 'ingress'" class="pane">
-        <IngressManagerTab />
+      <section v-else-if="selectedTab === 'dns'" class="pane">
+        <DNSProviderTab />
       </section>
 
       <section v-else-if="selectedTab === 'templates'" class="pane">
