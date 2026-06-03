@@ -21,6 +21,10 @@ vi.mock('@/components/Overview/PipelinesTab.vue', () => ({
   default: { template: '<div data-test="pipelines-tab">pipelines</div>' },
 }))
 
+vi.mock('@/components/Overview/ProjectIngressTab.vue', () => ({
+  default: { template: '<div data-test="project-ingress-tab">ingress</div>' },
+}))
+
 describe('ProjectOverviewPage', () => {
   beforeEach(() => {
     route.params.id = 'p1'
@@ -71,6 +75,17 @@ describe('ProjectOverviewPage', () => {
     await wrapper.find('[data-test="overview-tab-pipelines"]').trigger('click')
 
     expect(wrapper.find('[data-test="pipelines-tab"]').exists()).toBe(true)
+  })
+
+  it('switches to project ingress tab', async () => {
+    const agent = useAgentStore()
+    agent.projects = [{ id: 'p1', name: 'demo', root_path: '/tmp/demo', services: [] }]
+    const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    await wrapper.find('[data-test="overview-tab-ingress"]').trigger('click')
+
+    expect(wrapper.find('[data-test="project-ingress-tab"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('入口配置')
   })
 
   it('shows missing project state for unknown route id', () => {

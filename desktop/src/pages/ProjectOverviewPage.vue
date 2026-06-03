@@ -3,7 +3,7 @@ ProjectOverviewPage：项目级运维概览页。
 
 职责：
   - 根据路由 project id 找到当前项目
-  - 承载运行状态和流水线两个主视图
+  - 承载运行状态、流水线和入口配置三个主视图
   - 复用现有项目流水线编辑器
 
 边界：
@@ -17,6 +17,7 @@ import { useAgentStore } from '@/stores/agent'
 import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
 import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
 import PipelinesTab from '@/components/Overview/PipelinesTab.vue'
+import ProjectIngressTab from '@/components/Overview/ProjectIngressTab.vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -25,7 +26,7 @@ const router = useRouter()
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
-const activeTab = ref<'runtime' | 'pipelines'>('runtime')
+const activeTab = ref<'runtime' | 'pipelines' | 'ingress'>('runtime')
 const projectId = computed(() => String(route.params.id ?? ''))
 const project = computed(() => agentStore.projectById(projectId.value))
 
@@ -63,7 +64,8 @@ function openInstanceLogs(deploymentId: string) {
         :active="activeTab === 'runtime'"
         @open-logs="openInstanceLogs"
       />
-      <PipelinesTab v-else :project="project" />
+      <PipelinesTab v-else-if="activeTab === 'pipelines'" :project="project" />
+      <ProjectIngressTab v-else :project="project" />
     </template>
   </main>
 </template>
