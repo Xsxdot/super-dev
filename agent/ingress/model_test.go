@@ -20,27 +20,37 @@ import (
 	"github.com/superdev/agent/model"
 )
 
-func TestIngressJSONShape(t *testing.T) {
+func TestProjectIngressJSONShape(t *testing.T) {
 	in := Ingress{
-		ID:            "ing-1",
-		ProjectID:     "proj-1",
-		Name:          "api",
-		Domain:        "api.example.com",
-		HostIDs:       []string{"host-a", "host-b"},
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
+		ID:        "ing-1",
+		ProjectID: "proj-1",
+		Name:      "api",
+		Domain:    "api.example.com",
+		SourceHint: SourceHint{
+			EnvName:    "prod",
+			PipelineID: "deploy-prod",
+			Role:       "api_targets",
+		},
+		Proxy: ProxyConfig{
+			Provider: ProviderNginx,
+			HostIDs:  []string{"edge-a", "edge-b"},
+		},
+		Upstreams: []Upstream{{
+			HostID: "app-a",
+			IP:     "10.0.0.12",
+			Port:   8080,
+		}},
 		ProxyOptions: ProxyOptions{
 			Websocket:    true,
 			ProxyTimeout: Duration{Duration: 60 * time.Second},
-			ExtraLocations: []LocationOption{{
-				Path: "/metrics",
-				Raw:  "return 404;",
-			}},
+			RawTemplate:  "server { server_name api.example.com; }",
 		},
-		TLS: TLSConfig{Enabled: true, CertProvider: ProviderACME},
 		DNS: DNSConfig{
 			Provider: "cloudflare-prod",
-			Record:   Record{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10", TTL: 300},
+			Records: []Record{
+				{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10", TTL: 300},
+				{Type: RecordA, Name: "api.example.com", Value: "203.0.113.11", TTL: 300},
+			},
 		},
 	}
 
@@ -48,39 +58,54 @@ func TestIngressJSONShape(t *testing.T) {
 	require.NoError(t, err)
 	var got Ingress
 	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, "api.example.com", got.Domain)
-	assert.Equal(t, []string{"host-a", "host-b"}, got.HostIDs)
-	assert.Equal(t, ProviderNginx, got.ProxyProvider)
-	assert.True(t, got.ProxyOptions.Websocket)
-	assert.Equal(t, 60*time.Second, got.ProxyOptions.ProxyTimeout.Duration)
-	assert.True(t, got.TLS.Enabled)
-	assert.Equal(t, ProviderACME, got.TLS.CertProvider)
-	assert.Equal(t, RecordA, got.DNS.Record.Type)
+	assert.Equal(t, "proj-1", got.ProjectID)
+	assert.Equal(t, []string{"edge-a", "edge-b"}, got.Proxy.HostIDs)
+	require.Len(t, got.Upstreams, 1)
+	assert.Equal(t, "10.0.0.12", got.Upstreams[0].IP)
+	require.Len(t, got.DNS.Records, 2)
+	assert.Equal(t, "203.0.113.11", got.DNS.Records[1].Value)
 }
 
-func TestIngressValidateRejectsMissingRequiredFields(t *testing.T) {
+func TestIngressValidateRequiresProjectProxyUpstreamDNSAndTemplate(t *testing.T) {
 	err := (Ingress{}).Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "domain is required")
+	assert.Contains(t, err.Error(), "project_id is required")
 
 	err = Ingress{
-		Domain:        "api.example.com",
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
-		DNS:           DNSConfig{Provider: ProviderManual},
+		ProjectID: "proj-1",
+		Domain:    "api.example.com",
+		Proxy:     ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"edge-a"}},
+		DNS:       DNSConfig{Provider: ProviderManual},
 	}.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one host is required")
+	assert.Contains(t, err.Error(), "at least one upstream is required")
+
+	err = Ingress{
+		ProjectID:    "proj-1",
+		Domain:       "api.example.com",
+		Proxy:        ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"edge-a"}},
+		Upstreams:    []Upstream{{IP: "10.0.0.12", Port: 8080}},
+		DNS:          DNSConfig{Provider: ProviderManual, Records: []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}}},
+		ProxyOptions: ProxyOptions{},
+	}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "raw_template is required")
 }
 
 func TestIngressValidateRejectsManualDNSWithAutomaticACME(t *testing.T) {
 	err := Ingress{
-		Domain:        "api.example.com",
-		HostIDs:       []string{"host-a"},
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
-		TLS:           TLSConfig{Enabled: true, CertProvider: ProviderACME},
-		DNS:           DNSConfig{Provider: ProviderManual},
+		ProjectID: "proj-1",
+		Domain:    "api.example.com",
+		Proxy:     ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"edge-a"}},
+		Upstreams: []Upstream{{IP: "10.0.0.12", Port: 8080}},
+		ProxyOptions: ProxyOptions{
+			RawTemplate: "server { server_name api.example.com; }",
+		},
+		TLS: TLSConfig{Enabled: true, CertProvider: ProviderACME},
+		DNS: DNSConfig{
+			Provider: ProviderManual,
+			Records:  []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
+		},
 	}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "manual DNS cannot automate ACME DNS-01")

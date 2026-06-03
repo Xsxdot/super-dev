@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,18 +93,44 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 
 // Ingress 描述一个期望存在的对外入口。
 type Ingress struct {
-	ID            string       `json:"id"`
-	ProjectID     string       `json:"project_id,omitempty"`
-	Name          string       `json:"name"`
-	Domain        string       `json:"domain"`
-	HostIDs       []string     `json:"host_ids"`
-	Backend       string       `json:"backend"`
-	ProxyProvider string       `json:"proxy_provider"`
-	ProxyOptions  ProxyOptions `json:"proxy_options,omitempty"`
-	TLS           TLSConfig    `json:"tls"`
-	DNS           DNSConfig    `json:"dns"`
-	CreatedAt     time.Time    `json:"created_at,omitempty"`
-	UpdatedAt     time.Time    `json:"updated_at,omitempty"`
+	ID           string       `json:"id"`
+	ProjectID    string       `json:"project_id"`
+	Name         string       `json:"name"`
+	Domain       string       `json:"domain"`
+	SourceHint   SourceHint   `json:"source_hint,omitempty"`
+	Proxy        ProxyConfig  `json:"proxy"`
+	Upstreams    []Upstream   `json:"upstreams"`
+	ProxyOptions ProxyOptions `json:"proxy_options,omitempty"`
+	TLS          TLSConfig    `json:"tls"`
+	DNS          DNSConfig    `json:"dns"`
+	CreatedAt    time.Time    `json:"created_at,omitempty"`
+	UpdatedAt    time.Time    `json:"updated_at,omitempty"`
+
+	// Legacy fields are kept loadable while the subsystem migrates existing declarations.
+	HostIDs       []string `json:"host_ids,omitempty"`
+	Backend       string   `json:"backend,omitempty"`
+	ProxyProvider string   `json:"proxy_provider,omitempty"`
+}
+
+// SourceHint 记录入口默认值由哪个项目流水线线索推断。
+type SourceHint struct {
+	EnvName    string `json:"env_name,omitempty"`
+	PipelineID string `json:"pipeline_id,omitempty"`
+	Role       string `json:"role,omitempty"`
+	Service    string `json:"service,omitempty"`
+}
+
+// ProxyConfig 描述反向代理 provider 和部署目标节点。
+type ProxyConfig struct {
+	Provider string   `json:"provider"`
+	HostIDs  []string `json:"host_ids"`
+}
+
+// Upstream 描述 nginx upstream 中一个可编辑 IP:port 行。
+type Upstream struct {
+	HostID string `json:"host_id,omitempty"`
+	IP     string `json:"ip"`
+	Port   int    `json:"port"`
 }
 
 // ProxyOptions 描述 proxy provider 的可配置覆盖项。
@@ -128,8 +155,9 @@ type TLSConfig struct {
 
 // DNSConfig 描述服务解析记录的 provider 和目标记录。
 type DNSConfig struct {
-	Provider string `json:"provider"`
-	Record   Record `json:"record"`
+	Provider string   `json:"provider"`
+	Records  []Record `json:"records"`
+	Record   Record   `json:"record,omitempty"`
 }
 
 // Record 描述一条 DNS 记录。
@@ -215,23 +243,82 @@ type DNSValueDecision struct {
 // 注意：
 //   - manual DNS 无法在 ACME DNS-01 的时间窗口内自动写 TXT 记录，因此直接拒绝
 func (in Ingress) Validate() error {
-	if strings.TrimSpace(in.Domain) == "" {
+	normalized := in.NormalizeLegacy()
+	if strings.TrimSpace(normalized.ProjectID) == "" {
+		return errors.New("project_id is required")
+	}
+	if strings.TrimSpace(normalized.Domain) == "" {
 		return errors.New("domain is required")
 	}
-	if len(in.HostIDs) == 0 {
-		return errors.New("at least one host is required")
+	if strings.TrimSpace(normalized.Proxy.Provider) == "" {
+		return errors.New("proxy.provider is required")
 	}
-	if strings.TrimSpace(in.Backend) == "" {
-		return errors.New("backend is required")
+	if len(normalized.Proxy.HostIDs) == 0 {
+		return errors.New("at least one proxy host is required")
 	}
-	if in.ProxyProvider == "" {
-		return errors.New("proxy_provider is required")
+	if len(normalized.Upstreams) == 0 {
+		return errors.New("at least one upstream is required")
 	}
-	if in.DNS.Provider == "" {
+	for _, upstream := range normalized.Upstreams {
+		if strings.TrimSpace(upstream.IP) == "" {
+			return errors.New("upstream.ip is required")
+		}
+		if upstream.Port <= 0 {
+			return errors.New("upstream.port is required")
+		}
+	}
+	if strings.TrimSpace(normalized.ProxyOptions.RawTemplate) == "" {
+		return errors.New("raw_template is required")
+	}
+	if strings.TrimSpace(normalized.DNS.Provider) == "" {
 		return errors.New("dns.provider is required")
 	}
-	if in.TLS.Enabled && in.TLS.CertProvider == ProviderACME && in.DNS.Provider == ProviderManual {
+	if len(normalized.NormalizedDNSRecords()) == 0 {
+		return errors.New("at least one dns record is required")
+	}
+	if normalized.TLS.Enabled && normalized.TLS.CertProvider == ProviderACME && normalized.DNS.Provider == ProviderManual {
 		return errors.New("manual DNS cannot automate ACME DNS-01")
+	}
+	return nil
+}
+
+// NormalizeLegacy 将旧版入口字段映射到项目级声明结构。
+//
+// 返回：
+//   - 填充了 Proxy、Upstreams 和 DNS.Records 的 Ingress 副本
+//
+// 注意：
+//   - 该方法不丢弃旧字段，方便旧代码在同一轮迁移中继续读取
+func (in Ingress) NormalizeLegacy() Ingress {
+	out := in
+	if out.Proxy.Provider == "" && out.ProxyProvider != "" {
+		out.Proxy.Provider = out.ProxyProvider
+	}
+	if len(out.Proxy.HostIDs) == 0 && len(out.HostIDs) > 0 {
+		out.Proxy.HostIDs = append([]string(nil), out.HostIDs...)
+	}
+	if len(out.Upstreams) == 0 && strings.TrimSpace(out.Backend) != "" {
+		host, port, ok := strings.Cut(strings.TrimSpace(out.Backend), ":")
+		if ok {
+			parsedPort, err := strconv.Atoi(port)
+			if err == nil && parsedPort > 0 {
+				out.Upstreams = []Upstream{{IP: host, Port: parsedPort}}
+			}
+		}
+	}
+	if len(out.DNS.Records) == 0 && (out.DNS.Record.Name != "" || out.DNS.Record.Value != "") {
+		out.DNS.Records = []Record{out.DNS.Record}
+	}
+	return out
+}
+
+// NormalizedDNSRecords 返回兼容新旧字段的 DNS 记录列表副本。
+func (in Ingress) NormalizedDNSRecords() []Record {
+	if len(in.DNS.Records) > 0 {
+		return append([]Record(nil), in.DNS.Records...)
+	}
+	if in.DNS.Record.Name != "" || in.DNS.Record.Value != "" {
+		return []Record{in.DNS.Record}
 	}
 	return nil
 }

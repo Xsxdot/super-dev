@@ -43,7 +43,26 @@ export interface DNSRecord {
 
 export interface DNSConfig {
   provider: string
-  record: DNSRecord
+  records: DNSRecord[]
+  record?: DNSRecord
+}
+
+export interface SourceHint {
+  env_name?: string
+  pipeline_id?: string
+  role?: string
+  service?: string
+}
+
+export interface ProxyConfig {
+  provider: string
+  host_ids: string[]
+}
+
+export interface Upstream {
+  host_id?: string
+  ip: string
+  port: number | ''
 }
 
 export interface TLSConfig {
@@ -65,17 +84,22 @@ export interface ProxyOptions {
 
 export interface Ingress {
   id?: string
-  project_id?: string
+  project_id: string
   name: string
   domain: string
-  host_ids: string[]
-  backend: string
-  proxy_provider: string
+  source_hint?: SourceHint
+  proxy: ProxyConfig
+  upstreams: Upstream[]
   proxy_options?: ProxyOptions
   tls: TLSConfig
   dns: DNSConfig
   created_at?: string
   updated_at?: string
+
+  // Legacy fields remain readable while the UI migrates from global ingress screens.
+  host_ids?: string[]
+  backend?: string
+  proxy_provider?: string
 }
 
 export interface DNSValueDecision {

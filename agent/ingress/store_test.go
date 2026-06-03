@@ -21,13 +21,7 @@ import (
 
 func TestFileStoreIngressCRUD(t *testing.T) {
 	store := NewFileStore(t.TempDir())
-	saved, err := store.UpsertIngress(Ingress{
-		Domain:        "api.example.com",
-		HostIDs:       []string{"host-a"},
-		Backend:       "127.0.0.1:8080",
-		ProxyProvider: ProviderNginx,
-		DNS:           DNSConfig{Provider: ProviderManual},
-	})
+	saved, err := store.UpsertIngress(validProjectIngress("proj-a", "api.example.com"))
 	require.NoError(t, err)
 	require.NotEmpty(t, saved.ID)
 
@@ -45,6 +39,42 @@ func TestFileStoreIngressCRUD(t *testing.T) {
 	list, err = store.ListIngress()
 	require.NoError(t, err)
 	assert.Empty(t, list)
+}
+
+func TestFileStoreListIngressByProject(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	_, err := store.UpsertIngress(validProjectIngress("proj-a", "api-a.example.com"))
+	require.NoError(t, err)
+	_, err = store.UpsertIngress(validProjectIngress("proj-b", "api-b.example.com"))
+	require.NoError(t, err)
+
+	items, err := store.ListIngressByProject("proj-a")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "proj-a", items[0].ProjectID)
+}
+
+func TestFileStoreNormalizesLegacyIngressOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ingress.json"), []byte(`{
+		"ingresses":[{
+			"id":"legacy",
+			"project_id":"proj-a",
+			"domain":"api.example.com",
+			"host_ids":["edge-a"],
+			"backend":"10.0.0.12:8080",
+			"proxy_provider":"nginx",
+			"proxy_options":{"raw_template":"server { server_name api.example.com; }"},
+			"dns":{"provider":"manual","record":{"type":"A","name":"api.example.com","value":"203.0.113.10"}}
+		}]
+	}`), 0o600))
+
+	items, err := NewFileStore(dir).ListIngressByProject("proj-a")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, []string{"edge-a"}, items[0].Proxy.HostIDs)
+	assert.Equal(t, []Upstream{{IP: "10.0.0.12", Port: 8080}}, items[0].Upstreams)
+	require.Len(t, items[0].DNS.Records, 1)
 }
 
 func TestFileStoreAppliedState(t *testing.T) {
@@ -85,4 +115,20 @@ func TestFileStoreProviderSecretsRedactedFromList(t *testing.T) {
 	stat, err := os.Stat(filepath.Join(dir, "ingress-providers.json"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), stat.Mode().Perm())
+}
+
+func validProjectIngress(projectID string, domain string) Ingress {
+	return Ingress{
+		ProjectID: projectID,
+		Domain:    domain,
+		Proxy:     ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"edge-a"}},
+		Upstreams: []Upstream{{IP: "10.0.0.12", Port: 8080}},
+		ProxyOptions: ProxyOptions{
+			RawTemplate: "server { server_name " + domain + "; }",
+		},
+		DNS: DNSConfig{
+			Provider: ProviderManual,
+			Records:  []Record{{Type: RecordA, Name: domain, Value: "203.0.113.10", TTL: 300}},
+		},
+	}
 }

@@ -298,23 +298,39 @@ func (p *orderedProxy) Remove(ctx context.Context, host model.Host, orphan Orpha
 func validAutomaticIngress() Ingress {
 	return Ingress{
 		ID:            "ing-1",
+		ProjectID:     "proj-1",
 		Domain:        "api.example.com",
+		Proxy:         ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
+		Upstreams:     []Upstream{{IP: "127.0.0.1", Port: 8080}},
 		HostIDs:       []string{"host-a"},
 		Backend:       "127.0.0.1:8080",
 		ProxyProvider: ProviderNginx,
+		ProxyOptions:  ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
 		TLS:           TLSConfig{Enabled: true, CertProvider: ProviderACME},
-		DNS:           DNSConfig{Provider: "dns-prod", Record: Record{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
+		DNS: DNSConfig{
+			Provider: "dns-prod",
+			Records:  []Record{{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"}},
+			Record:   Record{Type: RecordA, Name: "api.example.com", Value: "203.0.113.10"},
+		},
 	}
 }
 
 func validManualIngress() Ingress {
 	return Ingress{
 		ID:            "ing-manual",
+		ProjectID:     "proj-1",
 		Domain:        "api.example.com",
+		Proxy:         ProxyConfig{Provider: ProviderNginx, HostIDs: []string{"host-a"}},
+		Upstreams:     []Upstream{{IP: "127.0.0.1", Port: 8080}},
 		HostIDs:       []string{"host-a"},
 		Backend:       "127.0.0.1:8080",
 		ProxyProvider: ProviderNginx,
-		DNS:           DNSConfig{Provider: ProviderManual, Record: Record{Type: RecordA, Name: "api.example.com"}},
+		ProxyOptions:  ProxyOptions{RawTemplate: "server { server_name api.example.com; }"},
+		DNS: DNSConfig{
+			Provider: ProviderManual,
+			Records:  []Record{{Type: RecordA, Name: "api.example.com"}},
+			Record:   Record{Type: RecordA, Name: "api.example.com"},
+		},
 	}
 }
 

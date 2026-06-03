@@ -24,6 +24,8 @@ import (
 type Store interface {
 	// ListIngress 返回所有入口声明。
 	ListIngress() ([]Ingress, error)
+	// ListIngressByProject 返回指定项目下的入口声明。
+	ListIngressByProject(projectID string) ([]Ingress, error)
 	// GetIngress 按 ID 读取入口声明。
 	GetIngress(id string) (Ingress, bool, error)
 	// UpsertIngress 新增或覆盖入口声明。
@@ -98,6 +100,29 @@ func (s *FileStore) ListIngress() ([]Ingress, error) {
 		return nil, err
 	}
 	return append([]Ingress(nil), data.Ingresses...), nil
+}
+
+// ListIngressByProject 返回指定项目下的入口声明。
+//
+// 参数：
+//   - projectID: 项目 ID
+//
+// 返回：
+//   - 只属于该项目的入口声明列表
+//   - 读取或解析失败时返回错误
+func (s *FileStore) ListIngressByProject(projectID string) ([]Ingress, error) {
+	items, err := s.ListIngress()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Ingress, 0, len(items))
+	for _, item := range items {
+		item = item.NormalizeLegacy()
+		if item.ProjectID == projectID {
+			out = append(out, item)
+		}
+	}
+	return out, nil
 }
 
 // GetIngress 按 ID 读取入口声明。
@@ -361,6 +386,9 @@ func (s *FileStore) loadData() (fileStoreData, error) {
 	var out fileStoreData
 	if err := json.Unmarshal(data, &out); err != nil {
 		return fileStoreData{}, err
+	}
+	for i := range out.Ingresses {
+		out.Ingresses[i] = out.Ingresses[i].NormalizeLegacy()
 	}
 	return out, nil
 }

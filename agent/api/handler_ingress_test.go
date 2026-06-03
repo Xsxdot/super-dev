@@ -27,13 +27,22 @@ func TestIngressCRUDAndPreview(t *testing.T) {
 	srv, _ := newTestApp(t)
 
 	resp := postIngressJSON(t, srv.URL+"/api/ingress", `{
+		"project_id": "proj-a",
 		"name": "api",
 		"domain": "api.example.com",
+		"proxy": {"provider": "nginx", "host_ids": ["self"]},
+		"upstreams": [{"ip": "127.0.0.1", "port": 8080}],
 		"host_ids": ["self"],
 		"backend": "127.0.0.1:8080",
 		"proxy_provider": "nginx",
+		"proxy_options": {"raw_template": "server { server_name api.example.com; }"},
 		"dns": {
 			"provider": "manual",
+			"records": [{
+				"type": "A",
+				"name": "api.example.com",
+				"value": "203.0.113.10"
+			}],
 			"record": {
 				"type": "A",
 				"name": "api.example.com",
@@ -65,14 +74,23 @@ func TestIngressApplyRejectsManualDNSWithTLS(t *testing.T) {
 	srv, _ := newTestApp(t)
 
 	resp := postIngressJSON(t, srv.URL+"/api/ingress", `{
+		"project_id": "proj-a",
 		"name": "tls-api",
 		"domain": "tls.example.com",
+		"proxy": {"provider": "nginx", "host_ids": ["self"]},
+		"upstreams": [{"ip": "127.0.0.1", "port": 8080}],
 		"host_ids": ["self"],
 		"backend": "127.0.0.1:8080",
 		"proxy_provider": "nginx",
+		"proxy_options": {"raw_template": "server { server_name tls.example.com; }"},
 		"tls": {"enabled": true, "cert_provider": "acme"},
 		"dns": {
 			"provider": "manual",
+			"records": [{
+				"type": "A",
+				"name": "tls.example.com",
+				"value": "203.0.113.10"
+			}],
 			"record": {
 				"type": "A",
 				"name": "tls.example.com",
