@@ -3,10 +3,11 @@ import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import ProjectHeader from './ProjectHeader.vue'
 import EnvGroup from './EnvGroup.vue'
+import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import type { Service } from '@/api/agent'
-import { open, message } from '@tauri-apps/plugin-dialog'
 import { useRouter } from 'vue-router'
 
 const agentStore = useAgentStore()
@@ -14,6 +15,13 @@ const panelStore = usePanelStore()
 const workspace = useWorkspaceStore()
 const router = useRouter()
 const { t } = useI18n()
+const {
+  editorProject,
+  editorIsNew,
+  addProject,
+  closeEditor,
+  onEditorSaved,
+} = useAddProjectFlow()
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
   workspace.openDeployment(payload.deploymentId, payload.title)
@@ -35,20 +43,6 @@ function openDeploymentIdSet(): Set<string> {
   const active = workspace.activeTab
   if (!active || active.type !== 'project') return new Set()
   return new Set(panelStore.allLeaves.map(l => l.serviceId).filter(Boolean) as string[])
-}
-
-async function addProject() {
-  const selected = await open({ directory: true, multiple: false, title: t('shell.sidebar.selectProjectRootTitle') })
-  if (!selected || Array.isArray(selected)) return
-  try {
-    await agentStore.addProject(selected)
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : t('shell.sidebar.addProjectFailed')
-    await message(
-      msg.includes('config') ? `${msg}\n${t('shell.sidebar.configMissingHint')}` : msg,
-      { title: t('shell.sidebar.unableAddProject'), kind: 'error' },
-    )
-  }
 }
 </script>
 
@@ -74,6 +68,13 @@ async function addProject() {
     <div class="settings-entry" @click="router.push('/settings')">⚙ {{ t('shell.sidebar.settings') }}</div>
     <div class="add-project" @click="addProject">+ {{ t('shell.sidebar.addProject') }}</div>
   </div>
+  <ProjectConfigEditor
+    v-if="editorProject"
+    :project="editorProject"
+    :is-new="editorIsNew"
+    @saved="onEditorSaved"
+    @cancel="closeEditor"
+  />
 </template>
 
 <style scoped>

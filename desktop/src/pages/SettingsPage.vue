@@ -13,12 +13,12 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { open, message, ask } from '@tauri-apps/plugin-dialog'
-import { api } from '@/api/agent'
+import { message, open } from '@tauri-apps/plugin-dialog'
 import { useAgentStore } from '@/stores/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
+import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
 import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
@@ -57,24 +57,20 @@ onMounted(() => {
   void operationApprovalStore.loadPending()
 })
 
-const editorProject = ref<Project | null>(null)
-const editorIsNew = ref(false)
 const pipelineEditorProject = ref<Project | null>(null)
 const templateModalOpen = ref(false)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetailLoading = ref(false)
 const templateDetailError = ref('')
 const templateDetail = ref<PipelineTemplateDetail | null>(null)
-
-function openEditor(project: Project) {
-  editorProject.value = project
-  editorIsNew.value = false
-}
-
-function onEditorSaved() {
-  editorProject.value = null
-  editorIsNew.value = false
-}
+const {
+  editorProject,
+  editorIsNew,
+  addProject,
+  openExistingProjectEditor,
+  closeEditor,
+  onEditorSaved,
+} = useAddProjectFlow()
 
 function openPipelineEditor(project: Project) {
   pipelineEditorProject.value = project
@@ -82,85 +78,6 @@ function openPipelineEditor(project: Project) {
 
 function onPipelineEditorSaved() {
   pipelineEditorProject.value = null
-}
-
-/**
- * tryImportVscodeLaunch 尝试从项目的 .vscode/launch.json 导入启动配置。
- *
- * 后端 GET /api/projects/{id}/vscode-launch 已完成 launch.json 解析与命令构造
- * （按 type 生成 go run / npm 等命令、替换 ${workspaceFolder}、提取 env）。
- * 本函数仅负责：询问用户 → 把后端返回的配置填入草稿 service（绑定 dev 环境）。
- *
- * 参数：
- *   - created: 刚落地的项目（services 可能为空骨架）
- *
- * 注意：
- *   - 仅当后端返回非空配置、且项目当前无 service 时才导入，避免覆盖已有 config
- *   - 草稿仅在内存中修改，进入编辑器后由用户确认再保存
- */
-async function tryImportVscodeLaunch(created: Project): Promise<void> {
-  let configs
-  try {
-    configs = await api.getVscodeLaunch(created.id)
-  } catch {
-    // 无 launch.json 或解析失败时静默跳过，不阻塞添加项目
-    return
-  }
-  if (!configs || configs.length === 0) return
-
-  const confirmed = await ask(
-    t('settings.projects.importVscodeMessage', { count: configs.length }),
-    { title: t('settings.projects.importVscodeTitle'), kind: 'info' },
-  )
-  if (!confirmed) return
-
-  // 已有 service（来自已有 config 文件）时不覆盖
-  if (created.services && created.services.length > 0) return
-
-  // 确保 dev 环境存在：无则自动创建并绑定导入的服务
-  if (!created.environments) created.environments = []
-  let devEnv = created.environments.find(e => e.is_dev) ?? created.environments[0]
-  if (!devEnv) {
-    devEnv = { id: '', name: 'dev', is_dev: true, order: 0 }
-    created.environments.push(devEnv)
-  }
-  const devEnvName = devEnv.name
-
-  created.services = configs.map((c, i) => ({
-    id: '',
-    project_id: created.id,
-    name: c.name,
-    required: false,
-    order: i,
-    status: '' as const,
-    deployments: [{
-      id: '',
-      env_name: devEnvName,
-      location: 'local' as const,
-      command: c.command,
-      work_dir: c.work_dir,
-      env: c.env,
-      status: '',
-    }],
-  }))
-}
-
-async function addProject() {
-  const selected = await open({ directory: true, multiple: false, title: t('settings.projects.selectProjectRootTitle') })
-  if (!selected || Array.isArray(selected)) return
-  try {
-    // 落地项目（空目录返回空骨架，已有 config 则解析），再进编辑器
-    const created = await agentStore.addProject(selected)
-
-    // 尝试导入 .vscode/launch.json（后端解析，本函数仅填充草稿）
-    await tryImportVscodeLaunch(created)
-
-    editorProject.value = created
-    editorIsNew.value = true
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    await message(msg, { title: t('settings.projects.unableAddProject'), kind: 'error' })
-  }
 }
 
 async function importPipelineTemplate() {
@@ -400,7 +317,7 @@ const retentionDays = computed({
                 <button
                   class="ghost-btn"
                   :data-test="`setup-project-${project.id}`"
-                  @click="openEditor(project)"
+                  @click="openExistingProjectEditor(project)"
                 >
                   {{ t('settings.projects.editConfig') }}
                 </button>
@@ -469,7 +386,7 @@ const retentionDays = computed({
       :project="editorProject"
       :is-new="editorIsNew"
       @saved="onEditorSaved"
-      @cancel="editorProject = null; editorIsNew = false"
+      @cancel="closeEditor"
     />
     <ProjectPipelineEditor
       v-if="pipelineEditorProject"
