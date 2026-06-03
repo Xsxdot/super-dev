@@ -11,11 +11,12 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
-const REQUIRED_AGENT_ENDPOINTS: [&str; 4] = [
+const REQUIRED_AGENT_ENDPOINTS: [&str; 5] = [
     "/api/hosts",
     "/api/tunnels",
     "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
     "/api/projects/__compat_probe__/ingress",
+    "/api/ingress/certs",
 ];
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -408,6 +409,7 @@ mod tests {
                 200,
             ),
             ("/api/projects/__compat_probe__/ingress", 200),
+            ("/api/ingress/certs", 200),
         ]);
 
         let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
@@ -470,6 +472,30 @@ mod tests {
             outcome,
             ProbeOutcome::Incompatible {
                 endpoint: "/api/projects/__compat_probe__/ingress",
+                status: 404,
+            }
+        );
+    }
+
+    #[test]
+    fn probe_reports_incompatible_when_existing_agent_lacks_ingress_certs_endpoint() {
+        let addr = serve_statuses(vec![
+            ("/api/hosts", 200),
+            ("/api/tunnels", 200),
+            (
+                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
+                200,
+            ),
+            ("/api/projects/__compat_probe__/ingress", 200),
+            ("/api/ingress/certs", 404),
+        ]);
+
+        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
+
+        assert_eq!(
+            outcome,
+            ProbeOutcome::Incompatible {
+                endpoint: "/api/ingress/certs",
                 status: 404,
             }
         );
