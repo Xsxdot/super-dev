@@ -188,7 +188,7 @@ function openEdit(ingress: Ingress) {
       provider: ingress.proxy?.provider ?? 'nginx',
       host_ids: [...(ingress.proxy?.host_ids ?? [])],
     },
-    upstreams: (ingress.upstreams?.length ? ingress.upstreams : [{ ip: '', port: '' }]).map(row => ({ ...row })),
+    upstreams: (ingress.upstreams?.length ? ingress.upstreams : [{ ip: '', port: '' as const }]).map(row => ({ ...row })),
     proxy_options: {
       websocket: ingress.proxy_options?.websocket ?? false,
       proxy_timeout: ingress.proxy_options?.proxy_timeout ?? '60s',
