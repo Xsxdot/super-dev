@@ -44,13 +44,17 @@ const mockedApi = ingressApi as unknown as Record<string, Mock>
 function makeIngress(overrides: Partial<Ingress> = {}): Ingress {
   return {
     id: 'ing-1',
+    project_id: 'p1',
     name: 'api',
     domain: 'api.example.com',
     host_ids: ['self'],
     backend: '127.0.0.1:8080',
     proxy_provider: 'nginx',
+    proxy: { provider: 'nginx', host_ids: ['self'] },
+    upstreams: [{ ip: '127.0.0.1', port: 8080 }],
     dns: {
       provider: 'manual',
+      records: [{ type: 'A', name: 'api.example.com', value: '203.0.113.10' }],
       record: { type: 'A', name: 'api.example.com', value: '203.0.113.10' },
     },
     tls: { enabled: false },
