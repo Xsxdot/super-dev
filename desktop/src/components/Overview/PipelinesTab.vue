@@ -11,10 +11,11 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
   - 不执行 pipeline 引擎逻辑
 -->
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import PipelineRow from './PipelineRow.vue'
 import RunHistoryList from './RunHistoryList.vue'
@@ -22,12 +23,19 @@ import RunHistoryList from './RunHistoryList.vue'
 const props = defineProps<{ project: Project }>()
 const router = useRouter()
 const { t } = useAppI18n()
+const templateStore = usePipelineTemplateStore()
 const expanded = ref<string | null>(null)
 const runsByPipeline = reactive<Record<string, Run[]>>({})
 const loadingRuns = reactive<Record<string, boolean>>({})
 const editing = ref(false)
+const editorMode = ref<'template' | 'blank'>('blank')
 const pending = ref<{ pipeline: ProjectPipeline; rollbackRun?: Run } | null>(null)
 const deployError = ref<string | null>(null)
+const hasPipelines = computed(() => (props.project.pipelines ?? []).length > 0)
+
+onMounted(() => {
+  void templateStore.loadTemplates().catch(() => undefined)
+})
 
 async function toggleHistory(pipeline: ProjectPipeline) {
   expanded.value = expanded.value === pipeline.id ? null : pipeline.id
@@ -54,6 +62,11 @@ function requestRollback(pipeline: ProjectPipeline, run: Run) {
   deployError.value = null
 }
 
+function openEditor(mode: 'template' | 'blank') {
+  editorMode.value = mode
+  editing.value = true
+}
+
 async function confirmDeploy() {
   if (!pending.value) return
   const { pipeline, rollbackRun } = pending.value
@@ -77,15 +90,27 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 <template>
   <section class="pipelines-tab">
     <div class="pipeline-toolbar">
-      <button type="button" data-test="pipeline-add" @click="editing = true">{{ t('overview.pipeline.add') }}</button>
+      <button type="button" data-test="pipeline-add" @click="openEditor('blank')">{{ t('overview.pipeline.add') }}</button>
     </div>
+    <article v-if="!hasPipelines" class="pipeline-empty-card" data-test="pipeline-empty">
+      <h2>{{ t('overview.pipeline.emptyTitle') }}</h2>
+      <p>{{ t('overview.pipeline.emptyDescription') }}</p>
+      <div class="empty-actions">
+        <button type="button" class="primary-empty-action" data-test="pipeline-create-from-template" @click="openEditor('template')">
+          {{ t('overview.pipeline.createFromTemplate') }}
+        </button>
+        <button type="button" data-test="pipeline-create-blank" @click="openEditor('blank')">
+          {{ t('overview.pipeline.createBlank') }}
+        </button>
+      </div>
+    </article>
     <div v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" class="pipeline-block">
       <PipelineRow
         :pipeline="pipeline"
         :expanded="expanded === pipeline.id"
         @toggle="toggleHistory(pipeline)"
         @run="requestRun(pipeline)"
-        @edit="editing = true"
+        @edit="openEditor('blank')"
       />
       <RunHistoryList
         v-if="expanded === pipeline.id"
@@ -95,7 +120,14 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         @rollback="requestRollback(pipeline, $event)"
       />
     </div>
-    <ProjectPipelineEditor v-if="editing" :project="project" @cancel="editing = false" @saved="editing = false" />
+    <ProjectPipelineEditor
+      v-if="editing"
+      :project="project"
+      :pipeline-templates="templateStore.templates"
+      :initial-mode="editorMode"
+      @cancel="editing = false"
+      @saved="editing = false"
+    />
     <div v-if="pending" class="deploy-dialog">
       <div>{{ pending.rollbackRun ? t('overview.pipeline.rollback') : t('overview.pipeline.run') }} · {{ pending.pipeline.name }}</div>
       <div v-if="deployError" class="deploy-error">{{ deployError }}</div>
@@ -128,6 +160,42 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .pipeline-block + .pipeline-block {
   margin-top: 8px;
+}
+.pipeline-empty-card {
+  padding: 18px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.pipeline-empty-card h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.pipeline-empty-card p {
+  max-width: 560px;
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.empty-actions button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+}
+.empty-actions .primary-empty-action {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .deploy-dialog {
   position: fixed;

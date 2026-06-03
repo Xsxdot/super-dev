@@ -379,6 +379,10 @@ export default {
       cancel: 'Cancel',
       deployFailed: 'Deploy failed',
       detail: 'Detail',
+      emptyTitle: 'No project pipelines yet',
+      emptyDescription: 'Pipelines connect build, deploy, and cleanup steps while keeping every run history.',
+      createFromTemplate: 'Create from Template',
+      createBlank: 'Create Blank',
     },
     runtimeStatus: {
       updateFailed: 'Update failed',

@@ -36,11 +36,12 @@ const props = defineProps<{
   preview?: PipelinePreviewResponse
   previewError?: string
   onViewTemplate?: (template: PipelineTemplateSummary) => void
+  initialMode?: 'template' | 'blank'
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
 const phases: PipelinePhase[] = ['build', 'deploy', 'finally']
-const enabled = ref(Boolean(props.modelValue))
+const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
@@ -52,7 +53,7 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
 }))
 
 watch(() => props.modelValue, (value) => {
-  enabled.value = Boolean(value) || enabled.value
+  enabled.value = Boolean(value) || enabled.value || props.initialMode === 'template'
   hydrateFromPipeline(value)
 }, { immediate: true })
 

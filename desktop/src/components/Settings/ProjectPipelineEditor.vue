@@ -18,7 +18,11 @@ import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
 import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
 
-const props = defineProps<{ project: Project; pipelineTemplates?: PipelineTemplateSummary[] }>()
+const props = defineProps<{
+  project: Project
+  pipelineTemplates?: PipelineTemplateSummary[]
+  initialMode?: 'template' | 'blank'
+}>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
 const agentStore = useAgentStore()
@@ -81,6 +85,7 @@ async function save() {
         :services="draft.services"
         :hosts="hosts"
         :templates="pipelineTemplates ?? []"
+        :initial-mode="initialMode"
         @update:model-value="updatePipelines"
       />
 

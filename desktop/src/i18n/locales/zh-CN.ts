@@ -379,6 +379,10 @@ export default {
       cancel: '取消',
       deployFailed: '部署失败',
       detail: '详情',
+      emptyTitle: '还没有项目流水线',
+      emptyDescription: '流水线用于把构建、发布、清理步骤串起来，并记录每次运行历史。',
+      createFromTemplate: '从模板创建',
+      createBlank: '空白创建',
     },
     runtimeStatus: {
       updateFailed: '更新失败',
