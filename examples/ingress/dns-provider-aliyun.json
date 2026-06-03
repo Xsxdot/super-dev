@@ -1,0 +1,9 @@
+{
+  "id": "aliyun-prod",
+  "name": "Aliyun Production",
+  "type": "aliyun",
+  "secrets": {
+    "access_key_id": "replace-with-aliyun-access-key-id",
+    "access_key_secret": "replace-with-aliyun-access-key-secret"
+  }
+}

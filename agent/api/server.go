@@ -28,6 +28,7 @@ import (
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/debugsession"
 	"github.com/superdev/agent/identity"
+	"github.com/superdev/agent/ingress"
 	"github.com/superdev/agent/installer"
 	"github.com/superdev/agent/logbackend"
 	"github.com/superdev/agent/logbuf"
@@ -109,6 +110,14 @@ type App struct {
 	executionAuthorizer remoteexec.Authorizer
 	// pipelineAgentRunner 仅供包内测试替换 pipeline agent 通道；nil 时使用真实 tunnel runner。
 	pipelineAgentRunner pipelineRemoteTransport
+	// ingressStore 持久化入口声明、落地状态和 DNS provider 配置。
+	ingressStore ingress.Store
+	// ingressRegistry 持有入口子系统的 proxy、DNS 和证书 provider。
+	ingressRegistry *ingress.Registry
+	// ingressService 编排入口声明的预览、落地和孤儿资源处理。
+	ingressService *ingress.Service
+	// ingressCertManager 定期续期已托管的入口证书。
+	ingressCertManager *ingress.CertManager
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -228,7 +237,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		executionAuthorizer = remoteexec.AllowAll{}
 	}
 
-	return &App{
+	app := &App{
 		cfg:                         cfg,
 		projects:                    []model.Project{},
 		managers:                    map[string]*process.Manager{},
@@ -254,7 +263,14 @@ func NewApp(cfg AppConfig) (*App, error) {
 		agentHealth:                 agentHealthMonitor,
 		agentHealthCancel:           agentHealthCancel,
 		executionAuthorizer:         executionAuthorizer,
-	}, nil
+		ingressStore:                ingress.NewFileStore(cfg.DataDir),
+		ingressRegistry:             ingress.NewRegistry(),
+	}
+	if err := app.initIngress(agentHealthCtx); err != nil {
+		app.Close()
+		return nil, err
+	}
+	return app, nil
 }
 
 // Close 停止 Buffer 的 flush goroutine 并关闭 Store 数据库连接，释放所有资源。
@@ -297,6 +313,20 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
+
+	// Ingress 入口配置
+	mux.HandleFunc("GET /api/ingress", a.listIngress)
+	mux.HandleFunc("POST /api/ingress", a.upsertIngress)
+	mux.HandleFunc("GET /api/ingress/{id}", a.getIngress)
+	mux.HandleFunc("PUT /api/ingress/{id}", a.updateIngress)
+	mux.HandleFunc("DELETE /api/ingress/{id}", a.deleteIngress)
+	mux.HandleFunc("POST /api/ingress/{id}/preview", a.previewIngress)
+	mux.HandleFunc("POST /api/ingress/{id}/apply", a.applyIngress)
+	mux.HandleFunc("POST /api/ingress/{id}/detect-orphans", a.detectIngressOrphans)
+	mux.HandleFunc("POST /api/ingress/{id}/orphan-removals", a.removeIngressOrphans)
+	mux.HandleFunc("GET /api/ingress/providers/dns", a.listIngressDNSProviders)
+	mux.HandleFunc("POST /api/ingress/providers/dns", a.upsertIngressDNSProvider)
+	mux.HandleFunc("DELETE /api/ingress/providers/dns/{id}", a.deleteIngressDNSProvider)
 
 	// Debug sessions（本机排障记录，不修改运行态或配置）
 	mux.HandleFunc("GET /api/debug-sessions", a.listDebugSessions)
