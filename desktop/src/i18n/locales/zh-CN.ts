@@ -204,6 +204,7 @@ export default {
       saveDraft: '保存流水线草稿',
       saveTemplate: '保存流水线',
       preview: '预览',
+      applyPreviewFailed: '模板预览失败',
       dependency: '依赖：{items}',
       target: '目标：{target}',
       template: '流水线模板',

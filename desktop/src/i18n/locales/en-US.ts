@@ -204,6 +204,7 @@ export default {
       saveDraft: 'Save Pipeline Draft',
       saveTemplate: 'Save Pipeline',
       preview: 'Preview',
+      applyPreviewFailed: 'Template preview failed',
       dependency: 'Depends on: {items}',
       target: 'Target: {target}',
       template: 'Pipeline Template',

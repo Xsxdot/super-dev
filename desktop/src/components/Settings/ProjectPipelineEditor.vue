@@ -13,10 +13,19 @@ ProjectPipelineEditor：项目流水线独立编辑器。
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api, type PipelineTemplateSummary, type Project, type ProjectPipeline } from '@/api/agent'
+import {
+  api,
+  type PipelinePreviewResponse,
+  type PipelineTemplateDetail,
+  type PipelineTemplateSummary,
+  type Project,
+  type ProjectPipeline,
+} from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
+import PipelinePreview from './PipelinePreview.vue'
 import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
+import TemplateContentModal from './TemplateContentModal.vue'
 
 const props = defineProps<{
   project: Project
@@ -32,6 +41,15 @@ const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
 const saveError = ref<string | null>(null)
+const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
+const templateDetail = ref<PipelineTemplateDetail | null>(null)
+const templateLoading = ref(false)
+const templateError = ref('')
+const templateModalOpen = ref(false)
+const applyPreview = ref<PipelinePreviewResponse | null>(null)
+const applyPreviewError = ref('')
+const applyingTemplate = ref(false)
+const applyTemplateDraft = ref<(() => void) | null>(null)
 
 onMounted(async () => {
   try {
@@ -51,6 +69,50 @@ function pipelineValidationErrors(): string[] {
   return validateDraftDetailed(draft.value)
     .filter(error => error.scope === 'pipeline')
     .map(formatValidationIssue)
+}
+
+function defaultEnvName() {
+  return props.project.environments?.find(env => env.is_dev)?.name ?? props.project.environments?.[0]?.name ?? 'dev'
+}
+
+function firstPipelineId() {
+  return draft.value.pipelines[0]?.id || 'pipeline-1'
+}
+
+async function viewTemplate(template: PipelineTemplateSummary, apply: () => void) {
+  selectedTemplate.value = template
+  applyTemplateDraft.value = apply
+  templateDetail.value = null
+  applyPreview.value = null
+  applyPreviewError.value = ''
+  templateError.value = ''
+  templateModalOpen.value = true
+  templateLoading.value = true
+  try {
+    templateDetail.value = await api.getPipelineTemplate(template.source, template.id, template.version)
+  } catch (e) {
+    templateError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    templateLoading.value = false
+  }
+}
+
+async function applyViewedTemplate() {
+  applyTemplateDraft.value?.()
+  applyingTemplate.value = true
+  applyPreview.value = null
+  applyPreviewError.value = ''
+  try {
+    applyPreview.value = await api.previewProjectPipeline(props.project.id, firstPipelineId(), {
+      env_name: defaultEnvName(),
+      service_names: draft.value.pipelines[0]?.services ?? [],
+      variables: draft.value.pipelines[0]?.variables,
+    })
+  } catch (e) {
+    applyPreviewError.value = e instanceof Error ? e.message : t('settings.pipeline.applyPreviewFailed')
+  } finally {
+    applyingTemplate.value = false
+  }
 }
 
 async function save() {
@@ -86,6 +148,7 @@ async function save() {
         :hosts="hosts"
         :templates="pipelineTemplates ?? []"
         :initial-mode="initialMode"
+        :on-view-template="viewTemplate"
         @update:model-value="updatePipelines"
       />
 
@@ -95,6 +158,22 @@ async function save() {
           {{ saving ? t('common.loading') : t('common.save') }}
         </button>
       </div>
+
+      <TemplateContentModal
+        :open="templateModalOpen"
+        :title="selectedTemplate?.name ?? t('settings.templates.contentTitle')"
+        :yaml="templateDetail?.yaml ?? ''"
+        :detail="templateDetail"
+        :loading="templateLoading"
+        :error="templateError"
+        :can-apply="Boolean(templateDetail)"
+        :applying="applyingTemplate"
+        @apply="applyViewedTemplate"
+        @close="templateModalOpen = false"
+      >
+        <div v-if="applyPreviewError" class="err-list">{{ applyPreviewError }}</div>
+        <PipelinePreview v-if="applyPreview" :preview="applyPreview" />
+      </TemplateContentModal>
     </div>
   </div>
 </template>

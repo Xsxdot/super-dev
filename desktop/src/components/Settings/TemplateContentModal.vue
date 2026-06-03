@@ -80,6 +80,7 @@ function inputMeta(input: TemplateInput): string[] {
             </article>
           </section>
         </div>
+        <slot />
         <pre class="yaml-view"><code>{{ yaml }}</code></pre>
       </template>
     </section>

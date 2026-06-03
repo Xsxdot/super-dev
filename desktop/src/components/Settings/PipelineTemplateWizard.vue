@@ -35,7 +35,7 @@ const props = defineProps<{
   hosts?: Array<{ id: string; name: string }>
   preview?: PipelinePreviewResponse
   previewError?: string
-  onViewTemplate?: (template: PipelineTemplateSummary) => void
+  onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
   initialMode?: 'template' | 'blank'
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
@@ -241,7 +241,7 @@ function normalizeFileList(value: unknown): TemplateFileItem[] {
 
 function viewSelected(block: TemplateBlock) {
   const template = selectedFor(block)
-  if (template) props.onViewTemplate?.(template)
+  if (template) props.onViewTemplate?.(template, saveTemplate)
 }
 
 function saveTemplate() {
@@ -326,7 +326,15 @@ function saveTemplate() {
                   {{ template.name }} · {{ template.source }} · {{ template.version }}
                 </option>
               </select>
-              <button type="button" class="text-btn" :disabled="!selectedFor(block)" @click="viewSelected(block)">{{ t('settings.pipeline.viewTemplate') }}</button>
+              <button
+                type="button"
+                class="text-btn"
+                :data-test="`block-${block.id}-view-template`"
+                :disabled="!selectedFor(block)"
+                @click="viewSelected(block)"
+              >
+                {{ t('settings.pipeline.viewTemplate') }}
+              </button>
               <button type="button" class="danger-btn" @click="removeBlock(block)">{{ t('common.remove') }}</button>
             </div>
 
