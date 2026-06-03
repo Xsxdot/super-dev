@@ -11,6 +11,7 @@ package nginx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -97,41 +98,15 @@ func (p *Provider) Name() string {
 //   - raw template 是逃生舱，存在时完全接管 server block 内容
 func (p *Provider) Render(in ingress.Ingress, cert *ingress.Certificate) (ingress.RenderedConfig, error) {
 	filename := safeDomainFilename(in.Domain)
-	if strings.TrimSpace(in.ProxyOptions.RawTemplate) != "" {
-		content, err := renderRawTemplate(in.ProxyOptions.RawTemplate, in, cert)
-		if err != nil {
-			return ingress.RenderedConfig{}, err
-		}
-		return ingress.RenderedConfig{Domain: in.Domain, Filename: filename, Content: content, Certificate: cert}, nil
+	raw := in.ProxyOptions.RawTemplate
+	if strings.TrimSpace(raw) == "" {
+		return ingress.RenderedConfig{}, errors.New("raw_template is required")
 	}
-
-	timeout := in.ProxyOptions.ProxyTimeout.Duration
-	if timeout == 0 {
-		timeout = 60 * time.Second
+	content, err := renderRawTemplate(raw, in, cert)
+	if err != nil {
+		return ingress.RenderedConfig{}, err
 	}
-
-	var b bytes.Buffer
-	if cert != nil {
-		fmt.Fprintf(&b, "server {\n  listen 80;\n  server_name %s;\n  return 301 https://$host$request_uri;\n}\n\n", in.Domain)
-	}
-
-	b.WriteString("server {\n")
-	if cert != nil {
-		b.WriteString("  listen 443 ssl;\n")
-		fmt.Fprintf(&b, "  ssl_certificate %s;\n", certFile(in.Domain, "fullchain.pem"))
-		fmt.Fprintf(&b, "  ssl_certificate_key %s;\n", certFile(in.Domain, "privkey.pem"))
-	} else {
-		b.WriteString("  listen 80;\n")
-	}
-	fmt.Fprintf(&b, "  server_name %s;\n\n", in.Domain)
-
-	writeProxyLocation(&b, "/", in.Backend, timeout, in.ProxyOptions.Websocket, "")
-	for _, loc := range in.ProxyOptions.ExtraLocations {
-		writeProxyLocation(&b, loc.Path, in.Backend, timeout, in.ProxyOptions.Websocket, loc.Raw)
-	}
-
-	b.WriteString("}\n")
-	return ingress.RenderedConfig{Domain: in.Domain, Filename: filename, Content: b.String(), Certificate: cert}, nil
+	return ingress.RenderedConfig{Domain: in.Domain, Filename: filename, Content: content, Certificate: cert}, nil
 }
 
 func writeProxyLocation(b *bytes.Buffer, locPath string, backend string, timeout time.Duration, websocket bool, raw string) {
@@ -169,9 +144,14 @@ func renderRawTemplate(raw string, in ingress.Ingress, cert *ingress.Certificate
 
 	var b bytes.Buffer
 	data := map[string]any{
-		"Domain":  in.Domain,
-		"Backend": in.Backend,
-		"Cert":    cert,
+		"Domain":             in.Domain,
+		"Backend":            in.Backend,
+		"Ingress":            in,
+		"Upstreams":          in.Upstreams,
+		"TLS":                in.TLS,
+		"Cert":               cert,
+		"CertFullchainPath":  certFile(in.Domain, "fullchain.pem"),
+		"CertPrivateKeyPath": certFile(in.Domain, "privkey.pem"),
 	}
 	if err := tpl.Execute(&b, data); err != nil {
 		return "", err
