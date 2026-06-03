@@ -13,14 +13,19 @@ ProjectIngressTab：项目概览中的入口配置管理。
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+import { useCertStore } from '@/stores/cert'
 import { useIngressStore } from '@/stores/ingress'
 import { useRemoteStore } from '@/stores/remote'
 import { buildNginxRawTemplate } from '@/lib/ingressTemplate'
+import type { ManagedCertificate } from '@/api/cert'
 import type { DNSRecord, Ingress, RecordType, Upstream } from '@/api/ingress'
 import type { Host, Project } from '@/api/agent'
 
 const props = defineProps<{ project: Project }>()
 
+const router = useRouter()
+const certStore = useCertStore()
 const ingressStore = useIngressStore()
 const remoteStore = useRemoteStore()
 const { t } = useI18n()
@@ -46,7 +51,7 @@ interface Draft {
   }
   tls: {
     enabled: boolean
-    cert_provider: string
+    cert_id: string
   }
   dns: {
     provider: string
@@ -63,6 +68,9 @@ const formError = ref('')
 const warnings = ref<string[]>([])
 const previewIngressId = ref('')
 const orphanIngressId = ref('')
+const matchingCertID = ref('')
+const certMatchLoading = ref(false)
+let certMatchSeq = 0
 
 const draft = reactive<Draft>(emptyDraft())
 
@@ -71,6 +79,9 @@ const sortedIngresses = computed(() =>
 )
 const sortedHosts = computed(() =>
   [...remoteStore.hosts].sort((a, b) => a.name.localeCompare(b.name)),
+)
+const activeCertificates = computed(() =>
+  certStore.certificates.filter(cert => cert.status === 'active'),
 )
 const dnsProviderOptions = computed(() => [
   { id: 'manual', name: t('settings.dnsProviders.manual'), type: 'manual' },
@@ -92,6 +103,7 @@ onMounted(async () => {
     await Promise.all([
       ingressStore.loadProject(props.project.id),
       remoteStore.loadHosts(),
+      certStore.loadAll(),
     ])
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -124,7 +136,7 @@ function emptyDraft(): Draft {
     },
     tls: {
       enabled: false,
-      cert_provider: 'acme',
+      cert_id: '',
     },
     dns: {
       provider: 'manual',
@@ -152,6 +164,7 @@ function resetDraft(next: Draft) {
 function openCreate() {
   warnings.value = []
   formError.value = ''
+  matchingCertID.value = ''
   resetDraft(emptyDraft())
   regenerateTemplate()
   formOpen.value = true
@@ -160,7 +173,8 @@ function openCreate() {
 function openEdit(ingress: Ingress) {
   warnings.value = []
   formError.value = ''
-  const firstRecord = ingress.dns.records?.[0] ?? ingress.dns.record
+  matchingCertID.value = ''
+  const firstRecord = ingress.dns.records?.[0]
   resetDraft({
     id: ingress.id,
     name: ingress.name,
@@ -171,10 +185,10 @@ function openEdit(ingress: Ingress) {
       role: ingress.source_hint?.role ?? '',
     },
     proxy: {
-      provider: ingress.proxy?.provider ?? ingress.proxy_provider ?? 'nginx',
-      host_ids: [...(ingress.proxy?.host_ids ?? ingress.host_ids ?? [])],
+      provider: ingress.proxy?.provider ?? 'nginx',
+      host_ids: [...(ingress.proxy?.host_ids ?? [])],
     },
-    upstreams: (ingress.upstreams?.length ? ingress.upstreams : [backendToUpstream(ingress.backend)]).map(row => ({ ...row })),
+    upstreams: (ingress.upstreams?.length ? ingress.upstreams : [{ ip: '', port: '' }]).map(row => ({ ...row })),
     proxy_options: {
       websocket: ingress.proxy_options?.websocket ?? false,
       proxy_timeout: ingress.proxy_options?.proxy_timeout ?? '60s',
@@ -182,7 +196,7 @@ function openEdit(ingress: Ingress) {
     },
     tls: {
       enabled: ingress.tls.enabled,
-      cert_provider: ingress.tls.cert_provider ?? 'acme',
+      cert_id: ingress.tls.cert_id ?? '',
     },
     dns: {
       provider: ingress.dns.provider,
@@ -193,11 +207,7 @@ function openEdit(ingress: Ingress) {
   })
   if (draft.dns.records.length === 0) addDNSRecord()
   formOpen.value = true
-}
-
-function backendToUpstream(backend?: string): Upstream {
-  const [ip = '', port = ''] = (backend ?? '').split(':')
-  return { ip, port: port === '' ? '' : Number(port) }
+  void refreshCertificateMatch()
 }
 
 function hostLabel(hostID: string): string {
@@ -209,6 +219,10 @@ function hostAddress(host: Host): string {
   const publicPart = host.public_ip ? `public ${host.public_ip}` : ''
   const privatePart = host.private_ip ? `private ${host.private_ip}` : ''
   return [publicPart, privatePart].filter(Boolean).join(' · ') || host.ssh_host
+}
+
+function certLabel(cert: ManagedCertificate): string {
+  return cert.domains.join(', ')
 }
 
 function isProxyHostSelected(hostID: string): boolean {
@@ -279,6 +293,45 @@ function regenerateTemplate() {
   })
 }
 
+async function refreshCertificateMatch() {
+  const seq = ++certMatchSeq
+  const previousMatchID = matchingCertID.value
+  matchingCertID.value = ''
+  if (!draft.tls.enabled || !draft.domain.trim()) return
+  certMatchLoading.value = true
+  try {
+    const matched = await certStore.matchCertificate(draft.domain.trim())
+    if (seq !== certMatchSeq) return
+    matchingCertID.value = matched?.id ?? ''
+    if (matched?.id && (!draft.tls.cert_id || draft.tls.cert_id === previousMatchID)) {
+      draft.tls.cert_id = matched.id
+    } else if (!matched?.id && draft.tls.cert_id === previousMatchID) {
+      draft.tls.cert_id = ''
+    }
+  } catch (err) {
+    if (seq !== certMatchSeq) return
+    formError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (seq === certMatchSeq) {
+      certMatchLoading.value = false
+    }
+  }
+}
+
+function toggleTLS(checked: boolean) {
+  draft.tls.enabled = checked
+  if (!checked) {
+    draft.tls.cert_id = ''
+    matchingCertID.value = ''
+  }
+  regenerateTemplate()
+  void refreshCertificateMatch()
+}
+
+function openSSLSettings() {
+  void router.push({ path: '/settings', query: { tab: 'ssl', domain: draft.domain.trim() } })
+}
+
 async function inferDefaults() {
   formError.value = ''
   syncRecordNames()
@@ -325,6 +378,10 @@ async function submitIngress() {
     formError.value = t('overview.ingress.validationRawTemplate')
     return
   }
+  if (draft.tls.enabled && !draft.tls.cert_id) {
+    formError.value = t('overview.ingress.validationCertificate')
+    return
+  }
 
   saving.value = true
   try {
@@ -346,7 +403,7 @@ async function submitIngress() {
       },
       tls: {
         enabled: draft.tls.enabled,
-        cert_provider: draft.tls.enabled ? draft.tls.cert_provider : undefined,
+        cert_id: draft.tls.enabled ? draft.tls.cert_id : undefined,
       },
       dns: {
         provider: draft.dns.provider,
@@ -453,11 +510,11 @@ async function deleteIngress(ingress: Ingress) {
           <td class="mono">{{ item.domain }}</td>
           <td>{{ item.upstreams?.length ?? 0 }}</td>
           <td>
-            <span v-for="hostID in item.proxy?.host_ids ?? item.host_ids ?? []" :key="hostID" class="chip">
+            <span v-for="hostID in item.proxy?.host_ids ?? []" :key="hostID" class="chip">
               {{ hostLabel(hostID) }}
             </span>
           </td>
-          <td>{{ item.dns.records?.length ?? (item.dns.record ? 1 : 0) }} · {{ item.dns.provider }}</td>
+          <td>{{ item.dns.records?.length ?? 0 }} · {{ item.dns.provider }}</td>
           <td class="actions">
             <button type="button" @click="openEdit(item)">{{ t('common.edit') }}</button>
             <button type="button" @click="previewIngress(item)">{{ t('overview.ingress.preview') }}</button>
@@ -503,7 +560,7 @@ async function deleteIngress(ingress: Ingress) {
               :value="draft.domain"
               data-test="ingress-domain"
               placeholder="api.example.com"
-              @input="draft.domain = ($event.target as HTMLInputElement).value; syncRecordNames(); regenerateTemplate()"
+              @input="draft.domain = ($event.target as HTMLInputElement).value; syncRecordNames(); regenerateTemplate(); void refreshCertificateMatch()"
             />
           </label>
         </div>
@@ -644,8 +701,22 @@ async function deleteIngress(ingress: Ingress) {
           <h3>{{ t('overview.ingress.nginx') }}</h3>
           <div class="form-grid three">
             <label class="inline-check">
-              <input v-model="draft.tls.enabled" type="checkbox" @change="regenerateTemplate" />
+              <input
+                data-test="ingress-tls-enabled"
+                type="checkbox"
+                :checked="draft.tls.enabled"
+                @change="toggleTLS(($event.target as HTMLInputElement).checked)"
+              />
               {{ t('overview.ingress.tls') }}
+            </label>
+            <label v-if="draft.tls.enabled">
+              <span>{{ t('overview.ingress.certificate') }}</span>
+              <select v-model="draft.tls.cert_id" data-test="ingress-cert-select">
+                <option value="">{{ t('overview.ingress.selectCertificate') }}</option>
+                <option v-for="cert in activeCertificates" :key="cert.id" :value="cert.id">
+                  {{ certLabel(cert) }}{{ cert.id === matchingCertID ? ` (${t('overview.ingress.autoMatched')})` : '' }}
+                </option>
+              </select>
             </label>
             <label class="inline-check">
               <input v-model="draft.proxy_options.websocket" type="checkbox" @change="regenerateTemplate" />
@@ -659,6 +730,16 @@ async function deleteIngress(ingress: Ingress) {
                 @input="regenerateTemplate"
               />
             </label>
+          </div>
+          <div
+            v-if="draft.tls.enabled && !draft.tls.cert_id && !matchingCertID && !certMatchLoading"
+            class="warning"
+            data-test="ingress-cert-missing"
+          >
+            {{ t('overview.ingress.noMatchingCertificate') }}
+            <button type="button" class="secondary" data-test="ingress-cert-request" @click="openSSLSettings">
+              {{ t('overview.ingress.requestCertificate') }}
+            </button>
           </div>
           <label class="raw-template">
             <span>{{ t('overview.ingress.rawTemplate') }}</span>

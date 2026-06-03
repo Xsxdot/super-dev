@@ -15,9 +15,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import ProjectIngressTab from '@/components/Overview/ProjectIngressTab.vue'
 import { ingressApi, type Ingress } from '@/api/ingress'
+import { certApi } from '@/api/cert'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Host, Project } from '@/api/agent'
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}))
 
 vi.mock('@/api/ingress', async () => {
   const actual = await vi.importActual<typeof import('@/api/ingress')>('@/api/ingress')
@@ -39,7 +44,20 @@ vi.mock('@/api/ingress', async () => {
   }
 })
 
+vi.mock('@/api/cert', async () => {
+  const actual = await vi.importActual<typeof import('@/api/cert')>('@/api/cert')
+  return {
+    ...actual,
+    certApi: {
+      listCertificates: vi.fn(),
+      getACMEAccount: vi.fn(),
+      matchCertificate: vi.fn(),
+    },
+  }
+})
+
 const mockedApi = ingressApi as unknown as Record<string, Mock>
+const certMock = certApi as unknown as Record<string, Mock>
 
 function makeProject(): Project {
   return {
@@ -82,6 +100,9 @@ describe('ProjectIngressTab', () => {
     mockedApi.listDNSProviders.mockResolvedValue([
       { id: 'cloudflare-prod', name: 'Cloudflare Prod', type: 'cloudflare' },
     ])
+    certMock.listCertificates.mockResolvedValue([])
+    certMock.getACMEAccount.mockResolvedValue({ email: '', directory_url: '' })
+    certMock.matchCertificate.mockResolvedValue(null)
     mockedApi.createProjectIngress.mockImplementation(async (_projectId: string, payload: Ingress) => ({
       ...payload,
       id: 'ing-new',
@@ -162,6 +183,47 @@ describe('ProjectIngressTab', () => {
         raw_template: expect.stringContaining('server 10.0.0.12:8080;'),
       }),
     }))
+  })
+
+  it('auto-selects matching active certificate when HTTPS is enabled', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [makeHost({ id: 'edge-a', name: 'edge-a' })]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+    certMock.listCertificates.mockResolvedValue([
+      { id: 'cert-wild', domains: ['*.example.com'], issuer: 'acme', status: 'active', auto_renew: true },
+    ])
+    certMock.getACMEAccount.mockResolvedValue({ email: 'ops@example.com', directory_url: '' })
+    certMock.matchCertificate.mockResolvedValue({ id: 'cert-wild', domains: ['*.example.com'], issuer: 'acme', status: 'active', auto_renew: true })
+
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+    await wrapper.find('[data-test="ingress-domain"]').setValue('api.example.com')
+    await wrapper.find('[data-test="ingress-tls-enabled"]').setValue(true)
+    await flush()
+
+    expect((wrapper.find('[data-test="ingress-cert-select"]').element as HTMLSelectElement).value).toBe('cert-wild')
+  })
+
+  it('shows SSL settings link when no matching certificate exists', async () => {
+    certMock.listCertificates.mockResolvedValue([])
+    certMock.getACMEAccount.mockResolvedValue({ email: '', directory_url: '' })
+    certMock.matchCertificate.mockResolvedValue(null)
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+    await wrapper.find('[data-test="ingress-domain"]').setValue('api.example.com')
+    await wrapper.find('[data-test="ingress-tls-enabled"]').setValue(true)
+    await flush()
+
+    expect(wrapper.find('[data-test="ingress-cert-missing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ingress-cert-request"]').exists()).toBe(true)
   })
 })
 
