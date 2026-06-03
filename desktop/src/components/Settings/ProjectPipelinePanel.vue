@@ -60,7 +60,7 @@ onMounted(() => {
   <section class="project-pipelines">
     <div class="section-head">
       <div class="section-title">{{ t('settings.pipeline.title') }}</div>
-      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline">{{ t('settings.pipeline.add') }}</button>
+      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline()">{{ t('settings.pipeline.add') }}</button>
     </div>
 
     <div v-if="modelValue.length === 0" class="pipeline-empty">{{ t('settings.pipeline.empty') }}</div>
