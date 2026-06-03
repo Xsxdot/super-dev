@@ -282,14 +282,18 @@ type orderedCert struct {
 
 func (c *orderedCert) Name() string { return c.name }
 
-func (c *orderedCert) Obtain(ctx context.Context, domain string, dns DnsProvider) (Certificate, error) {
+func (c *orderedCert) Obtain(ctx context.Context, domains []string, dns DnsProvider) (Certificate, error) {
 	if c.events != nil {
 		*c.events = append(*c.events, "cert.obtain")
+	}
+	domain := ""
+	if len(domains) > 0 {
+		domain = domains[0]
 	}
 	return Certificate{Domain: domain, CertPEM: "CERT", KeyPEM: "KEY", Provider: c.name, ExpiresAt: time.Now().Add(90 * 24 * time.Hour)}, nil
 }
 
-func (c *orderedCert) Renew(ctx context.Context, cert Certificate, dns DnsProvider) (Certificate, error) {
+func (c *orderedCert) Renew(ctx context.Context, cert Certificate, domains []string, dns DnsProvider) (Certificate, error) {
 	if c.events != nil {
 		*c.events = append(*c.events, "cert.renew")
 	}

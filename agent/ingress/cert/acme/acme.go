@@ -34,31 +34,36 @@ type Client interface {
 	//
 	// 参数：
 	//   - ctx: 上下文，用于 DNS 回调取消
-	//   - domain: 待申请证书的域名
+	//   - domains: 待申请证书覆盖的域名列表
 	//   - present: 写入 DNS-01 TXT 的回调
 	//   - cleanup: 清理 DNS-01 TXT 的回调
 	//
 	// 返回：
 	//   - 申请成功后的证书材料
 	//   - 申请失败时返回错误
-	Obtain(ctx context.Context, domain string, present func(name string, value string) error, cleanup func(name string, value string) error) (ingress.Certificate, error)
+	Obtain(ctx context.Context, domains []string, present func(name string, value string) error, cleanup func(name string, value string) error) (ingress.Certificate, error)
 	// Renew 续期一张已有证书。
 	//
 	// 参数：
 	//   - ctx: 上下文，用于 DNS 回调取消
 	//   - cert: 待续期证书
+	//   - domains: 续期证书覆盖的域名列表
 	//   - present: 写入 DNS-01 TXT 的回调
 	//   - cleanup: 清理 DNS-01 TXT 的回调
 	//
 	// 返回：
 	//   - 续期后的证书材料
 	//   - 续期失败时返回错误
-	Renew(ctx context.Context, cert ingress.Certificate, present func(name string, value string) error, cleanup func(name string, value string) error) (ingress.Certificate, error)
+	Renew(ctx context.Context, cert ingress.Certificate, domains []string, present func(name string, value string) error, cleanup func(name string, value string) error) (ingress.Certificate, error)
 }
+
+// AccountGetter 返回当前全局 ACME 账号配置。
+type AccountGetter func() ingress.ACMEAccount
 
 // Provider 使用 ACME DNS-01 管理证书。
 type Provider struct {
-	client Client
+	client        Client
+	accountGetter AccountGetter
 }
 
 var _ ingress.CertProvider = (*Provider)(nil)
@@ -66,13 +71,12 @@ var _ ingress.CertProvider = (*Provider)(nil)
 // New 创建生产 ACME provider。
 //
 // 参数：
-//   - email: ACME 账号邮箱
-//   - directoryURL: ACME directory URL；为空时使用 Let's Encrypt production
+//   - accountGetter: 运行时读取全局 ACME 账号的函数
 //
 // 返回：
 //   - ACME Provider 实例
-func New(email string, directoryURL string) *Provider {
-	return &Provider{client: newLegoClient(email, directoryURL)}
+func New(accountGetter AccountGetter) *Provider {
+	return &Provider{accountGetter: accountGetter}
 }
 
 // NewWithClient 创建带测试 seam 的 ACME provider。
@@ -98,28 +102,30 @@ func (p *Provider) Name() string {
 //
 // 参数：
 //   - ctx: 上下文，用于取消 DNS 回调
-//   - domain: 待申请证书的域名
+//   - domains: 待申请证书覆盖的域名列表
 //   - dns: 用于 DNS-01 的 DNS provider
 //
 // 返回：
 //   - 申请成功后的证书材料
 //   - DNS 写入、DNS 清理或 ACME 申请失败时返回错误
-//
-// 注意：
-//   - manual DNS provider 不适合自动 DNS-01，上层 Validate 会提前拒绝
-func (p *Provider) Obtain(ctx context.Context, domain string, dns ingress.DnsProvider) (ingress.Certificate, error) {
-	if p.client == nil {
-		return ingress.Certificate{}, errors.New("acme client is required")
+func (p *Provider) Obtain(ctx context.Context, domains []string, dns ingress.DnsProvider) (ingress.Certificate, error) {
+	primary := firstDomain(domains, "")
+	if primary == "" {
+		return ingress.Certificate{}, errors.New("at least one domain is required")
+	}
+	client, err := p.clientForRequest()
+	if err != nil {
+		return ingress.Certificate{}, err
 	}
 	present, cleanup, err := dnsCallbacks(ctx, dns)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	cert, err := p.client.Obtain(ctx, domain, present, cleanup)
+	cert, err := client.Obtain(ctx, domains, present, cleanup)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	return normalizeCertificate(cert, domain), nil
+	return normalizeCertificate(cert, primary), nil
 }
 
 // Renew 续期已有托管证书。
@@ -127,24 +133,30 @@ func (p *Provider) Obtain(ctx context.Context, domain string, dns ingress.DnsPro
 // 参数：
 //   - ctx: 上下文，用于取消 DNS 回调
 //   - cert: 待续期证书
+//   - domains: 续期证书覆盖的域名列表
 //   - dns: 用于 DNS-01 的 DNS provider
 //
 // 返回：
 //   - 续期后的证书材料
 //   - DNS 写入、DNS 清理或 ACME 续期失败时返回错误
-func (p *Provider) Renew(ctx context.Context, cert ingress.Certificate, dns ingress.DnsProvider) (ingress.Certificate, error) {
-	if p.client == nil {
-		return ingress.Certificate{}, errors.New("acme client is required")
+func (p *Provider) Renew(ctx context.Context, cert ingress.Certificate, domains []string, dns ingress.DnsProvider) (ingress.Certificate, error) {
+	primary := firstDomain(domains, cert.Domain)
+	if primary == "" {
+		return ingress.Certificate{}, errors.New("at least one domain is required")
+	}
+	client, err := p.clientForRequest()
+	if err != nil {
+		return ingress.Certificate{}, err
 	}
 	present, cleanup, err := dnsCallbacks(ctx, dns)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	renewed, err := p.client.Renew(ctx, cert, present, cleanup)
+	renewed, err := client.Renew(ctx, cert, domains, present, cleanup)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	return normalizeCertificate(renewed, cert.Domain), nil
+	return normalizeCertificate(renewed, primary), nil
 }
 
 // ExpiresAt 返回证书过期时间。
@@ -156,6 +168,20 @@ func (p *Provider) Renew(ctx context.Context, cert ingress.Certificate, dns ingr
 //   - 证书过期时间
 func (p *Provider) ExpiresAt(cert ingress.Certificate) time.Time {
 	return cert.ExpiresAt
+}
+
+func (p *Provider) clientForRequest() (Client, error) {
+	if p.client != nil {
+		return p.client, nil
+	}
+	if p.accountGetter == nil {
+		return nil, errors.New("acme account getter is required")
+	}
+	account := p.accountGetter()
+	if strings.TrimSpace(account.Email) == "" {
+		return nil, errors.New("acme account email is required")
+	}
+	return newLegoClient(account.Email, account.DirectoryURL), nil
 }
 
 func dnsCallbacks(ctx context.Context, dns ingress.DnsProvider) (func(string, string) error, func(string, string) error, error) {
@@ -243,38 +269,53 @@ func newLegoClient(email string, directoryURL string) *legoClient {
 	}
 }
 
-func (c *legoClient) Obtain(ctx context.Context, domain string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
+func (c *legoClient) Obtain(ctx context.Context, domains []string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
 	if err := ctx.Err(); err != nil {
 		return ingress.Certificate{}, err
+	}
+	primary := firstDomain(domains, "")
+	if primary == "" {
+		return ingress.Certificate{}, errors.New("at least one domain is required")
 	}
 	client, err := c.client(present, cleanup)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	resource, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: []string{domain}, Bundle: true})
+	resource, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: domains, Bundle: true})
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	return resourceToCertificate(domain, resource)
+	return resourceToCertificate(primary, resource)
 }
 
-func (c *legoClient) Renew(ctx context.Context, cert ingress.Certificate, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
+func (c *legoClient) Renew(ctx context.Context, cert ingress.Certificate, domains []string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
 	if err := ctx.Err(); err != nil {
 		return ingress.Certificate{}, err
+	}
+	primary := firstDomain(domains, cert.Domain)
+	if primary == "" {
+		return ingress.Certificate{}, errors.New("at least one domain is required")
 	}
 	client, err := c.client(present, cleanup)
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
 	resource, err := client.Certificate.RenewWithOptions(certificate.Resource{
-		Domain:      cert.Domain,
+		Domain:      primary,
 		Certificate: []byte(cert.CertPEM),
 		PrivateKey:  []byte(cert.KeyPEM),
 	}, &certificate.RenewOptions{Bundle: true})
 	if err != nil {
 		return ingress.Certificate{}, err
 	}
-	return resourceToCertificate(cert.Domain, resource)
+	return resourceToCertificate(primary, resource)
+}
+
+func firstDomain(domains []string, fallback string) string {
+	if len(domains) > 0 && strings.TrimSpace(domains[0]) != "" {
+		return strings.TrimSpace(domains[0])
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func (c *legoClient) client(present func(string, string) error, cleanup func(string, string) error) (*lego.Client, error) {

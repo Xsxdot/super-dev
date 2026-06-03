@@ -59,11 +59,15 @@ type fakeCertProvider struct{ name string }
 
 func (f fakeCertProvider) Name() string { return f.name }
 
-func (f fakeCertProvider) Obtain(ctx context.Context, domain string, dns DnsProvider) (Certificate, error) {
+func (f fakeCertProvider) Obtain(ctx context.Context, domains []string, dns DnsProvider) (Certificate, error) {
+	domain := ""
+	if len(domains) > 0 {
+		domain = domains[0]
+	}
 	return Certificate{Domain: domain, Provider: f.name, ExpiresAt: time.Now().Add(90 * 24 * time.Hour)}, nil
 }
 
-func (f fakeCertProvider) Renew(ctx context.Context, cert Certificate, dns DnsProvider) (Certificate, error) {
+func (f fakeCertProvider) Renew(ctx context.Context, cert Certificate, domains []string, dns DnsProvider) (Certificate, error) {
 	cert.ExpiresAt = time.Now().Add(90 * 24 * time.Hour)
 	return cert, nil
 }

@@ -40,10 +40,15 @@ func (r *recordingDNS) RemoveRecord(ctx context.Context, record ingress.Record) 
 	return nil
 }
 
-type fakeClient struct{}
+type fakeClient struct {
+	obtainedDomains []string
+	renewedDomains  []string
+}
 
-func (fakeClient) Obtain(ctx context.Context, domain string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
+func (f *fakeClient) Obtain(ctx context.Context, domains []string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
 	t := testingContext(ctx)
+	f.obtainedDomains = append([]string(nil), domains...)
+	domain := domains[0]
 	if err := present("_acme-challenge."+domain, "token-value"); err != nil {
 		t.Fatalf("present() error = %v", err)
 	}
@@ -59,7 +64,8 @@ func (fakeClient) Obtain(ctx context.Context, domain string, present func(string
 	}, nil
 }
 
-func (fakeClient) Renew(ctx context.Context, cert ingress.Certificate, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
+func (f *fakeClient) Renew(ctx context.Context, cert ingress.Certificate, domains []string, present func(string, string) error, cleanup func(string, string) error) (ingress.Certificate, error) {
+	f.renewedDomains = append([]string(nil), domains...)
 	cert.CertPEM = "NEWCERT"
 	cert.ExpiresAt = time.Now().Add(90 * 24 * time.Hour)
 	return cert, nil
@@ -68,9 +74,9 @@ func (fakeClient) Renew(ctx context.Context, cert ingress.Certificate, present f
 func TestObtainWritesAndRemovesChallengeTXT(t *testing.T) {
 	ctx := context.WithValue(context.Background(), testKey{}, t)
 	dns := &recordingDNS{}
-	provider := NewWithClient(fakeClient{})
+	provider := NewWithClient(&fakeClient{})
 
-	cert, err := provider.Obtain(ctx, "api.example.com", dns)
+	cert, err := provider.Obtain(ctx, []string{"api.example.com"}, dns)
 	if err != nil {
 		t.Fatalf("Obtain() error = %v", err)
 	}
@@ -91,7 +97,7 @@ func TestObtainWritesAndRemovesChallengeTXT(t *testing.T) {
 
 func TestRenewReturnsUpdatedCertificate(t *testing.T) {
 	ctx := context.WithValue(context.Background(), testKey{}, t)
-	provider := NewWithClient(fakeClient{})
+	provider := NewWithClient(&fakeClient{})
 	oldExpiry := time.Now().Add(10 * 24 * time.Hour)
 
 	cert, err := provider.Renew(ctx, ingress.Certificate{
@@ -100,7 +106,7 @@ func TestRenewReturnsUpdatedCertificate(t *testing.T) {
 		KeyPEM:    "KEY",
 		Provider:  ingress.ProviderACME,
 		ExpiresAt: oldExpiry,
-	}, &recordingDNS{})
+	}, []string{"api.example.com"}, &recordingDNS{})
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
@@ -109,6 +115,30 @@ func TestRenewReturnsUpdatedCertificate(t *testing.T) {
 	if !provider.ExpiresAt(cert).After(oldExpiry) {
 		t.Fatalf("ExpiresAt() = %s, want after %s", provider.ExpiresAt(cert), oldExpiry)
 	}
+}
+
+func TestObtainPassesAllDomains(t *testing.T) {
+	ctx := context.WithValue(context.Background(), testKey{}, t)
+	client := &fakeClient{}
+	provider := NewWithClient(client)
+
+	_, err := provider.Obtain(ctx, []string{"api.example.com", "www.example.com"}, &recordingDNS{})
+	if err != nil {
+		t.Fatalf("Obtain() error = %v", err)
+	}
+	assertStringSliceEqual(t, client.obtainedDomains, []string{"api.example.com", "www.example.com"})
+}
+
+func TestRenewPassesAllDomains(t *testing.T) {
+	ctx := context.WithValue(context.Background(), testKey{}, t)
+	client := &fakeClient{}
+	provider := NewWithClient(client)
+
+	_, err := provider.Renew(ctx, ingress.Certificate{Domain: "api.example.com", CertPEM: "CERT", KeyPEM: "KEY"}, []string{"api.example.com", "www.example.com"}, &recordingDNS{})
+	if err != nil {
+		t.Fatalf("Renew() error = %v", err)
+	}
+	assertStringSliceEqual(t, client.renewedDomains, []string{"api.example.com", "www.example.com"})
 }
 
 type testKey struct{}
@@ -122,5 +152,17 @@ func assertEqual[T comparable](t *testing.T, got T, want T) {
 	t.Helper()
 	if got != want {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func assertStringSliceEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
 	}
 }

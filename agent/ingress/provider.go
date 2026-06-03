@@ -52,10 +52,10 @@ type DnsProvider interface {
 type CertProvider interface {
 	// Name 返回 provider 注册名。
 	Name() string
-	// Obtain 首次申请证书。
-	Obtain(ctx context.Context, domain string, dns DnsProvider) (Certificate, error)
+	// Obtain 首次申请一张可覆盖多个域名的证书。
+	Obtain(ctx context.Context, domains []string, dns DnsProvider) (Certificate, error)
 	// Renew 续期已有托管证书。
-	Renew(ctx context.Context, cert Certificate, dns DnsProvider) (Certificate, error)
+	Renew(ctx context.Context, cert Certificate, domains []string, dns DnsProvider) (Certificate, error)
 	// ExpiresAt 返回证书过期时间。
 	ExpiresAt(cert Certificate) time.Time
 }

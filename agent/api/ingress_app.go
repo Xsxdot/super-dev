@@ -48,7 +48,13 @@ func (t ingressPipelineTransport) Transfer(ctx context.Context, target nginx.Tar
 func (a *App) initIngress(ctx context.Context) error {
 	a.ingressRegistry.RegisterDNS(manual.New())
 	a.ingressRegistry.RegisterProxy(nginx.New(a.newIngressRemoteTransport()))
-	a.ingressRegistry.RegisterCert(acme.New("", ""))
+	a.ingressRegistry.RegisterCert(acme.New(func() ingress.ACMEAccount {
+		account, err := a.ingressStore.GetACMEAccount()
+		if err != nil {
+			return ingress.ACMEAccount{}
+		}
+		return account
+	}))
 	if err := a.registerStoredIngressDNSProviders(); err != nil {
 		return err
 	}
