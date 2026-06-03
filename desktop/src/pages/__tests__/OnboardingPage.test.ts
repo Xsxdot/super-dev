@@ -10,10 +10,13 @@
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
+import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OnboardingPage from '../OnboardingPage.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useSettingsStore } from '@/stores/settings'
+import { LOCALE_STORAGE_KEY } from '@/i18n'
+import { installTestI18n } from '@/test-utils/i18n'
 
 const push = vi.fn()
 
@@ -25,20 +28,116 @@ describe('OnboardingPage', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
+    localStorage.clear()
     push.mockReset()
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
   })
 
-  it('selects agent and installs mcp', async () => {
+  it('syncs onboarding language selection with settings', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'setLocale')
     const store = useOnboardingStore()
-    vi.spyOn(store, 'installSelectedMcp').mockResolvedValue(undefined)
+    vi.spyOn(store, 'detectInstalledAgents').mockResolvedValue(undefined)
+    const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect((wrapper.find('[data-test="onboarding-locale-select"]').element as HTMLSelectElement).value).toBe('zh-CN')
+    expect(wrapper.text()).toContain('选择你的编程智能体')
+
+    await wrapper.find('[data-test="onboarding-locale-select"]').setValue('en-US')
+    await nextTick()
+
+    expect(settings.setLocale).toHaveBeenCalledWith('en-US')
+    expect(settings.locale).toBe('en-US')
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en-US')
+    expect(wrapper.text()).toContain('Choose your coding agents')
+  })
+
+  it('shows installed agents as selectable and unavailable agents as disabled', async () => {
+    const store = useOnboardingStore()
+    vi.spyOn(store, 'detectInstalledAgents').mockResolvedValue(undefined)
+    store.agentStatuses = {
+      'claude-code': { agent: 'claude-code', installed: true, detection_path: '/usr/local/bin/claude' },
+      codex: { agent: 'codex', installed: true, detection_path: '/usr/local/bin/codex' },
+      cursor: { agent: 'cursor', installed: false, detection_path: null },
+    }
+    store.selectedAgents = ['claude-code']
     const wrapper = mount(OnboardingPage)
 
     await wrapper.find('[data-test="agent-codex"]').trigger('click')
+    await wrapper.find('[data-test="agent-cursor"]').trigger('click')
+    await nextTick()
+
+    expect(store.selectedAgents).toEqual(['claude-code', 'codex'])
+    expect(wrapper.find('[data-test="agent-cursor"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="agent-cursor-status"]').text()).toBe('未检测到')
+  })
+
+  it('installs mcp for selected agents', async () => {
+    const store = useOnboardingStore()
+    vi.spyOn(store, 'detectInstalledAgents').mockResolvedValue(undefined)
+    vi.spyOn(store, 'installSelectedMcp').mockResolvedValue(undefined)
+    store.agentStatuses = {
+      'claude-code': { agent: 'claude-code', installed: true, detection_path: '/usr/local/bin/claude' },
+      codex: { agent: 'codex', installed: true, detection_path: '/usr/local/bin/codex' },
+      cursor: { agent: 'cursor', installed: false, detection_path: null },
+    }
+    store.selectedAgents = ['claude-code', 'codex']
+    const wrapper = mount(OnboardingPage)
+
     await wrapper.find('[data-test="install-mcp"]').trigger('click')
 
-    expect(store.selectedAgent).toBe('codex')
     expect(store.installSelectedMcp).toHaveBeenCalled()
+  })
+
+  it('shows bundled skill installation result for successful mcp installs', async () => {
+    const store = useOnboardingStore()
+    vi.spyOn(store, 'detectInstalledAgents').mockResolvedValue(undefined)
+    store.installOutcomes = [{
+      agent: 'claude-code',
+      installed: true,
+      already_present: false,
+      backup_path: null,
+      config_path: '/home/me/.claude.json',
+      manual_config: '{"mcpServers":{}}',
+      skill: {
+        installed: true,
+        already_present: false,
+        target_path: '/home/me/.claude/skills/superdev',
+        backup_path: null,
+        error: null,
+      },
+    }]
+
+    const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="skill-install-success"]').text()).toContain('使用指南 skill 已安装')
+    expect(wrapper.find('[data-test="skill-install-success"]').text()).toContain('/home/me/.claude/skills/superdev')
+  })
+
+  it('shows degraded skill installation without turning mcp success into failure', async () => {
+    const store = useOnboardingStore()
+    vi.spyOn(store, 'detectInstalledAgents').mockResolvedValue(undefined)
+    store.installOutcomes = [{
+      agent: 'claude-code',
+      installed: true,
+      already_present: false,
+      backup_path: null,
+      config_path: '/home/me/.claude.json',
+      manual_config: '{"mcpServers":{}}',
+      skill: {
+        installed: false,
+        already_present: false,
+        target_path: '/home/me/.claude/skills/superdev',
+        backup_path: null,
+        error: '找不到 SuperDev skill 资源目录，请检查桌面端打包配置',
+      },
+    }]
+
+    const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="install-success"]').text()).toContain('已装好')
+    expect(wrapper.find('[data-test="skill-install-error"]').text()).toContain('使用指南 skill 未安装')
+    expect(wrapper.find('[data-test="skill-install-error"]').text()).toContain('找不到 SuperDev skill')
   })
 
   it('copies prompt and marks completion', async () => {
@@ -50,6 +149,17 @@ describe('OnboardingPage', () => {
     await wrapper.find('[data-test="finish-onboarding"]').trigger('click')
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('superdev-sample'))
+    expect(settings.setOnboardingCompleted).toHaveBeenCalledWith(true)
+    expect(push).toHaveBeenCalledWith('/')
+  })
+
+  it('skips onboarding from the bottom action', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'setOnboardingCompleted').mockResolvedValue(undefined)
+    const wrapper = mount(OnboardingPage)
+
+    await wrapper.find('[data-test="skip-onboarding"]').trigger('click')
+
     expect(settings.setOnboardingCompleted).toHaveBeenCalledWith(true)
     expect(push).toHaveBeenCalledWith('/')
   })

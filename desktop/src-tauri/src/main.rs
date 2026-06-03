@@ -3,7 +3,7 @@
 mod agent;
 mod mcp_install;
 use agent::AgentProcess;
-use mcp_install::{install_mcp, mcp_install_hint};
+use mcp_install::{detect_coding_agents, install_mcp, mcp_install_hint};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -199,6 +199,7 @@ fn main() {
         ))
         .invoke_handler(tauri::generate_handler![
             show_main_window,
+            detect_coding_agents,
             install_mcp,
             mcp_install_hint
         ])
@@ -215,10 +216,9 @@ fn main() {
             let menu = Menu::with_items(app, &[&settings, &quit])?;
 
             // 菜单栏用专用彩色图标（按 superdev-logo-v5-launch.svg 设计），不用 app icon
-            let tray_icon = tauri::image::Image::from_bytes(
-                include_bytes!("../icons/tray-icon.png"),
-            )
-            .map_err(|e| format!("加载托盘图标失败: {e}"))?;
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                    .map_err(|e| format!("加载托盘图标失败: {e}"))?;
 
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)

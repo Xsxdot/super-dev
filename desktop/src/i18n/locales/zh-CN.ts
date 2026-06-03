@@ -83,7 +83,7 @@ export default {
       languageTitle: '语言',
       languageDesc: '切换 SuperDev 桌面端界面语言',
       onboardingTitle: '首次引导',
-      onboardingDesc: '重新安装 MCP 连接并复制 AI 演示提示词',
+      onboardingDesc: '重新安装 MCP 连接、使用指南 skill 并复制 AI 演示提示词',
       onboardingAction: '重新运行引导',
     },
     projects: {
@@ -255,6 +255,39 @@ export default {
       logCommand: '日志命令',
       logCommandPlaceholder: '如：tail -F /var/log/api/app.log',
     },
+  },
+  onboarding: {
+    tagline: '让 AI 安全地操作你的本地环境。',
+    languageLabel: '语言',
+    chooseAgents: '选择你的编程智能体',
+    installMcp: '安装 MCP 连接',
+    installSelected: '安装 {count} 个',
+    installAfterSelection: '选择后安装',
+    installing: '安装中...',
+    installDone: '已装好',
+    installAlreadyPresent: '已是最新',
+    backupSaved: '{agent} 已备份：{path}',
+    configPath: '配置文件：{path}',
+    skillInstallDone: '使用指南 skill 已安装',
+    skillInstallAlreadyPresent: '使用指南 skill 已是最新',
+    skillInstallFailed: '使用指南 skill 未安装：{message}',
+    skillInstallPath: 'skill 目录：{path}',
+    skillBackupSaved: '旧 skill 已备份：{path}',
+    sendToAi: '把这句话发给 AI',
+    finish: '我已发给 AI',
+    skip: '跳过',
+    detectionError: '检测失败：{message}',
+    agentStatus: {
+      detecting: '检测中',
+      installed: '已检测到',
+      failed: '检测失败',
+      missing: '未检测到',
+    },
+    demoPrompt:
+      '帮我体验 SuperDev：请使用 SuperDev MCP 工具找到 superdev-sample 示例项目，查看它的服务状态和日志。' +
+      '如果日志暂时为空，请对 sample-api 的 demo deployment 执行 restart_service。' +
+      '这个重启动作会触发一次安全审批；请先告诉我去 SuperDev 的操作审批界面批准，批准后用 get_operation_approval 取得 approval token，再继续重启。' +
+      '执行成功后再次读取日志，找出 WARN/ERROR 的含义，并用一两句话总结 SuperDev 如何在 AI 操作真实环境前把关。',
   },
   shell: {
     emptyWorkspace: '选择左侧服务或点击项目搜索',

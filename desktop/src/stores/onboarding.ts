@@ -12,9 +12,12 @@
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { i18n } from '@/i18n'
 import {
+  detectCodingAgents,
   getMcpInstallHint,
   installMcp,
+  type CodingAgentAvailability,
   type CodingAgent,
   type InstallHint,
   type InstallOutcome,
@@ -26,41 +29,159 @@ export const codingAgents: Array<{ id: CodingAgent; label: string }> = [
   { id: 'cursor', label: 'Cursor' },
 ]
 
-export const useOnboardingStore = defineStore('onboarding', () => {
-  const selectedAgent = ref<CodingAgent>('claude-code')
-  const installing = ref(false)
-  const installOutcome = ref<InstallOutcome | null>(null)
-  const installHint = ref<InstallHint | null>(null)
-  const installError = ref('')
+interface AgentStatus {
+  agent: CodingAgent
+  installed: boolean | null
+  detection_path?: string | null
+}
 
-  const demoPrompt = computed(() =>
-    '帮我体验 SuperDev：请使用 SuperDev MCP 工具找到 superdev-sample 示例项目，查看它的服务状态和日志。' +
-    '如果日志暂时为空，请对 sample-api 的 demo deployment 执行 restart_service。' +
-    '这个重启动作会触发一次安全审批；请先告诉我去 SuperDev 的操作审批界面批准，批准后用 get_operation_approval 取得 approval token，再继续重启。' +
-    '执行成功后再次读取日志，找出 WARN/ERROR 的含义，并用一两句话总结 SuperDev 如何在 AI 操作真实环境前把关。'
+type AgentStatusMap = Record<CodingAgent, AgentStatus>
+
+interface InstallFailure {
+  agent: CodingAgent
+  error: string
+  hint: InstallHint | null
+}
+
+function createAgentStatuses(installed: boolean | null): AgentStatusMap {
+  return codingAgents.reduce((statuses, agent) => {
+    statuses[agent.id] = {
+      agent: agent.id,
+      installed,
+      detection_path: null,
+    }
+    return statuses
+  }, {} as AgentStatusMap)
+}
+
+function agentLabel(agent: CodingAgent): string {
+  return codingAgents.find((item) => item.id === agent)?.label ?? agent
+}
+
+export const useOnboardingStore = defineStore('onboarding', () => {
+  const selectedAgents = ref<CodingAgent[]>([])
+  const agentStatuses = ref<AgentStatusMap>(createAgentStatuses(null))
+  const detectingAgents = ref(false)
+  const detectionError = ref('')
+  const installing = ref(false)
+  const installOutcomes = ref<InstallOutcome[]>([])
+  const installFailures = ref<InstallFailure[]>([])
+  const installOutcome = computed(() => installOutcomes.value[0] ?? null)
+  const installHint = computed(() => installFailures.value[0]?.hint ?? null)
+  const installError = computed(() =>
+    installFailures.value.map((failure) => `${agentLabel(failure.agent)}: ${failure.error}`).join('；')
   )
+
+  const demoPrompt = computed(() => {
+    // 显式读取 locale，让复制内容和页面语言保持同一个响应式来源。
+    i18n.global.locale.value
+    return i18n.global.t('onboarding.demoPrompt')
+  })
+
+  function isAgentInstalled(agent: CodingAgent) {
+    return agentStatuses.value[agent]?.installed === true
+  }
+
+  function isAgentSelected(agent: CodingAgent) {
+    return selectedAgents.value.includes(agent)
+  }
+
+  function agentAvailabilityLabel(agent: CodingAgent) {
+    const status = agentStatuses.value[agent]
+    if (detectingAgents.value && status?.installed === null) {
+      return '检测中'
+    }
+    if (status?.installed === true) {
+      return '已检测到'
+    }
+    if (detectionError.value && status?.installed === null) {
+      return '检测失败'
+    }
+    return '未检测到'
+  }
+
+  function toggleAgentSelection(agent: CodingAgent) {
+    if (!isAgentInstalled(agent)) {
+      return
+    }
+    if (selectedAgents.value.includes(agent)) {
+      selectedAgents.value = selectedAgents.value.filter((item) => item !== agent)
+      return
+    }
+    selectedAgents.value = [...selectedAgents.value, agent]
+  }
+
+  async function detectInstalledAgents() {
+    detectingAgents.value = true
+    detectionError.value = ''
+    try {
+      const result = await detectCodingAgents()
+      const next = createAgentStatuses(false)
+      for (const status of result) {
+        next[status.agent] = normalizeAgentStatus(status)
+      }
+      agentStatuses.value = next
+      const installedAgents = codingAgents
+        .filter((agent) => next[agent.id].installed === true)
+        .map((agent) => agent.id)
+      const preservedSelection = selectedAgents.value.filter((agent) => next[agent].installed === true)
+      selectedAgents.value = preservedSelection.length > 0 ? preservedSelection : installedAgents
+    } catch (error) {
+      detectionError.value = error instanceof Error ? error.message : String(error)
+      agentStatuses.value = createAgentStatuses(false)
+      selectedAgents.value = []
+    } finally {
+      detectingAgents.value = false
+    }
+  }
 
   async function installSelectedMcp() {
     installing.value = true
-    installError.value = ''
-    installHint.value = null
+    installOutcomes.value = []
+    installFailures.value = []
     try {
-      installOutcome.value = await installMcp(selectedAgent.value)
-    } catch (error) {
-      installError.value = error instanceof Error ? error.message : String(error)
-      installHint.value = await getMcpInstallHint(selectedAgent.value).catch(() => null)
+      const agents = selectedAgents.value.filter((agent) => isAgentInstalled(agent))
+      for (const agent of agents) {
+        try {
+          installOutcomes.value.push(await installMcp(agent))
+        } catch (error) {
+          installFailures.value.push({
+            agent,
+            error: error instanceof Error ? error.message : String(error),
+            hint: await getMcpInstallHint(agent).catch(() => null),
+          })
+        }
+      }
     } finally {
       installing.value = false
     }
   }
 
   return {
-    selectedAgent,
+    selectedAgents,
+    agentStatuses,
+    detectingAgents,
+    detectionError,
     installing,
     installOutcome,
+    installOutcomes,
     installHint,
     installError,
+    installFailures,
     demoPrompt,
+    detectInstalledAgents,
+    isAgentInstalled,
+    isAgentSelected,
+    agentAvailabilityLabel,
+    toggleAgentSelection,
     installSelectedMcp,
   }
 })
+
+function normalizeAgentStatus(status: CodingAgentAvailability): AgentStatus {
+  return {
+    agent: status.agent,
+    installed: status.installed,
+    detection_path: status.detection_path ?? null,
+  }
+}

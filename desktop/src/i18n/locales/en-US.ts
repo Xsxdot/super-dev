@@ -83,7 +83,7 @@ export default {
       languageTitle: 'Language',
       languageDesc: 'Switch the SuperDev desktop interface language',
       onboardingTitle: 'Onboarding',
-      onboardingDesc: 'Install the MCP connection again and copy the AI demo prompt',
+      onboardingDesc: 'Install the MCP connection and guide skill again, then copy the AI demo prompt',
       onboardingAction: 'Run onboarding again',
     },
     projects: {
@@ -255,6 +255,39 @@ export default {
       logCommand: 'Log command',
       logCommandPlaceholder: 'Example: tail -F /var/log/api/app.log',
     },
+  },
+  onboarding: {
+    tagline: 'Let AI operate your local environment safely.',
+    languageLabel: 'Language',
+    chooseAgents: 'Choose your coding agents',
+    installMcp: 'Install MCP connections',
+    installSelected: 'Install {count}',
+    installAfterSelection: 'Select agents first',
+    installing: 'Installing...',
+    installDone: 'installed',
+    installAlreadyPresent: 'already up to date',
+    backupSaved: '{agent} backup saved: {path}',
+    configPath: 'Config file: {path}',
+    skillInstallDone: 'Guide skill installed',
+    skillInstallAlreadyPresent: 'Guide skill already up to date',
+    skillInstallFailed: 'Guide skill was not installed: {message}',
+    skillInstallPath: 'Skill directory: {path}',
+    skillBackupSaved: 'Old skill backup saved: {path}',
+    sendToAi: 'Send this to AI',
+    finish: 'I sent it to AI',
+    skip: 'Skip',
+    detectionError: 'Detection failed: {message}',
+    agentStatus: {
+      detecting: 'Detecting',
+      installed: 'Detected',
+      failed: 'Detection failed',
+      missing: 'Not detected',
+    },
+    demoPrompt:
+      'Help me try SuperDev: use the SuperDev MCP tools to find the superdev-sample project, then inspect its service status and logs. ' +
+      'If the logs are empty, run restart_service on the sample-api demo deployment. ' +
+      'That restart will trigger a safety approval; first tell me to approve it in SuperDev operation approvals, then use get_operation_approval to fetch the approval token and continue. ' +
+      'After it succeeds, read the logs again, explain what WARN/ERROR mean, and summarize in one or two sentences how SuperDev gates AI actions before they touch a real environment.',
   },
   shell: {
     emptyWorkspace: 'Select a service on the left or search this project',

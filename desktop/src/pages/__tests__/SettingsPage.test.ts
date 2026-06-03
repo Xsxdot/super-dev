@@ -208,6 +208,7 @@ describe('SettingsPage', () => {
 
     const wrapper = mountSettingsPage()
     await nextTick()
+    expect(wrapper.text()).toContain('使用指南 skill')
     await wrapper.find('[data-test="rerun-onboarding"]').trigger('click')
 
     expect(wrapper.text()).toContain('首次引导')

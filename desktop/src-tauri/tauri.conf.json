@@ -38,7 +38,8 @@
       "binaries/superdev-sample"
     ],
     "resources": {
-      "resources/agent-install/": "agent-install/"
+      "resources/agent-install/": "agent-install/",
+      "resources/skills/": "skills/"
     }
   }
 }
