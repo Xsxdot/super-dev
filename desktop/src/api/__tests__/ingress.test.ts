@@ -27,6 +27,36 @@ function okJSON(body: unknown): Response {
 }
 
 describe('ingressApi', () => {
+  it('lists project scoped ingresses', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(okJSON([{ id: 'ing-1', project_id: 'p1' }]))
+
+    const result = await ingressApi.listProjectIngresses('p1')
+
+    expect(result).toEqual([{ id: 'ing-1', project_id: 'p1' }])
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/projects/p1/ingress'),
+      expect.any(Object),
+    )
+  })
+
+  it('requests inferred ingress defaults for a project', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(okJSON({ upstreams: [], dns_records: [], requires_port_input: true }))
+
+    await ingressApi.inferDefaults('p1', {
+      env_name: 'prod',
+      pipeline_id: 'deploy-prod',
+      role: 'api_targets',
+      proxy_host_ids: ['edge-a'],
+      domain: 'api.example.com',
+      record_type: 'A',
+    })
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/projects/p1/ingress/defaults'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('createIngress posts to /api/ingress', async () => {
     const payload: Ingress = {
       name: 'api',

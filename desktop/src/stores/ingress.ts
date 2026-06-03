@@ -16,6 +16,7 @@ import {
   type AppliedState,
   type ApplyIngressOptions,
   type DNSProviderConfig,
+  type InferDefaultsRequest,
   type Ingress,
   type OrphanReport,
   type PreviewResult,
@@ -48,12 +49,46 @@ export const useIngressStore = defineStore('ingress', () => {
     }
   }
 
+  async function loadProject(projectId: string) {
+    loading.value = true
+    error.value = ''
+    try {
+      const [nextIngresses, nextProviders] = await Promise.all([
+        ingressApi.listProjectIngresses(projectId),
+        ingressApi.listDNSProviders(),
+      ])
+      ingresses.value = nextIngresses
+      dnsProviders.value = nextProviders
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err)
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function saveIngress(payload: Ingress) {
     const saved = payload.id
       ? await ingressApi.updateIngress(payload.id, payload)
       : await ingressApi.createIngress(payload)
     upsertLocalIngress(saved)
     return saved
+  }
+
+  async function saveProjectIngress(projectId: string, payload: Ingress) {
+    const saved = payload.id
+      ? await ingressApi.updateProjectIngress(projectId, payload.id, payload)
+      : await ingressApi.createProjectIngress(projectId, payload)
+    upsertLocalIngress(saved)
+    return saved
+  }
+
+  async function deleteProjectIngress(projectId: string, id: string) {
+    await ingressApi.deleteProjectIngress(projectId, id)
+    ingresses.value = ingresses.value.filter(item => item.id !== id)
+    delete previews.value[id]
+    delete appliedStates.value[id]
+    delete orphanReports.value[id]
   }
 
   async function deleteIngress(id: string) {
@@ -70,8 +105,20 @@ export const useIngressStore = defineStore('ingress', () => {
     return preview
   }
 
+  async function previewProjectIngress(projectId: string, id: string) {
+    const preview = await ingressApi.previewProjectIngress(projectId, id)
+    previews.value = { ...previews.value, [id]: preview }
+    return preview
+  }
+
   async function applyIngress(id: string, options: ApplyIngressOptions = {}) {
     const state = await ingressApi.applyIngress(id, options)
+    appliedStates.value = { ...appliedStates.value, [id]: state }
+    return state
+  }
+
+  async function applyProjectIngress(projectId: string, id: string, options: ApplyIngressOptions = {}) {
+    const state = await ingressApi.applyProjectIngress(projectId, id, options)
     appliedStates.value = { ...appliedStates.value, [id]: state }
     return state
   }
@@ -82,9 +129,24 @@ export const useIngressStore = defineStore('ingress', () => {
     return report
   }
 
+  async function detectProjectOrphans(projectId: string, id: string) {
+    const report = await ingressApi.detectProjectOrphans(projectId, id)
+    orphanReports.value = { ...orphanReports.value, [id]: report }
+    return report
+  }
+
   async function removeOrphans(id: string, report: OrphanReport) {
     await ingressApi.removeOrphans(id, report)
     orphanReports.value = { ...orphanReports.value, [id]: { configs: [], records: [] } }
+  }
+
+  async function removeProjectOrphans(projectId: string, id: string, report: OrphanReport) {
+    await ingressApi.removeProjectOrphans(projectId, id, report)
+    orphanReports.value = { ...orphanReports.value, [id]: { configs: [], records: [] } }
+  }
+
+  async function inferDefaults(projectId: string, payload: InferDefaultsRequest) {
+    return ingressApi.inferDefaults(projectId, payload)
   }
 
   async function saveDNSProvider(payload: DNSProviderConfig) {
@@ -115,12 +177,20 @@ export const useIngressStore = defineStore('ingress', () => {
     loading,
     error,
     loadAll,
+    loadProject,
     saveIngress,
+    saveProjectIngress,
     deleteIngress,
+    deleteProjectIngress,
     previewIngress,
+    previewProjectIngress,
     applyIngress,
+    applyProjectIngress,
     detectOrphans,
+    detectProjectOrphans,
     removeOrphans,
+    removeProjectOrphans,
+    inferDefaults,
     saveDNSProvider,
     deleteDNSProvider,
   }

@@ -165,7 +165,41 @@ export interface ApplyIngressOptions {
   confirmed_dns_value?: string
 }
 
+export interface InferDefaultsRequest {
+  env_name: string
+  pipeline_id: string
+  role: string
+  proxy_host_ids: string[]
+  domain: string
+  record_type: RecordType
+}
+
+export interface InferDefaultsResult {
+  upstreams: Upstream[]
+  dns_records: DNSRecord[]
+  warnings?: string[]
+  requires_port_input: boolean
+}
+
 export const ingressApi = {
+  listProjectIngresses: (projectId: string) =>
+    request<Ingress[]>(`/api/projects/${encodeURIComponent(projectId)}/ingress`),
+  createProjectIngress: (projectId: string, payload: Ingress) =>
+    request<Ingress>(`/api/projects/${encodeURIComponent(projectId)}/ingress`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateProjectIngress: (projectId: string, id: string, payload: Ingress) =>
+    request<Ingress>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteProjectIngress: (projectId: string, id: string) =>
+    request<{ status: string }>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  previewProjectIngress: (projectId: string, id: string) =>
+    request<PreviewResult>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}/preview`, { method: 'POST', body: '{}' }),
+  applyProjectIngress: (projectId: string, id: string, options: ApplyIngressOptions = {}) =>
+    request<AppliedState>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify(options) }),
+  detectProjectOrphans: (projectId: string, id: string) =>
+    request<OrphanReport>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}/detect-orphans`, { method: 'POST', body: '{}' }),
+  removeProjectOrphans: (projectId: string, id: string, report: OrphanReport) =>
+    request<{ status: string }>(`/api/projects/${encodeURIComponent(projectId)}/ingress/${encodeURIComponent(id)}/orphan-removals`, { method: 'POST', body: JSON.stringify(report) }),
+  inferDefaults: (projectId: string, payload: InferDefaultsRequest) =>
+    request<InferDefaultsResult>(`/api/projects/${encodeURIComponent(projectId)}/ingress/defaults`, { method: 'POST', body: JSON.stringify(payload) }),
   listIngresses: () => request<Ingress[]>('/api/ingress'),
   createIngress: (payload: Ingress) =>
     request<Ingress>('/api/ingress', { method: 'POST', body: JSON.stringify(payload) }),

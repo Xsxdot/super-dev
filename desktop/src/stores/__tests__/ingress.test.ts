@@ -20,9 +20,14 @@ vi.mock('@/api/ingress', async () => {
     ...actual,
     ingressApi: {
       listIngresses: vi.fn(),
+      listProjectIngresses: vi.fn(),
       createIngress: vi.fn(),
+      createProjectIngress: vi.fn(),
       updateIngress: vi.fn(),
+      updateProjectIngress: vi.fn(),
       deleteIngress: vi.fn(),
+      deleteProjectIngress: vi.fn(),
+      inferDefaults: vi.fn(),
       previewIngress: vi.fn(),
       applyIngress: vi.fn(),
       detectOrphans: vi.fn(),
@@ -53,6 +58,24 @@ function makeIngress(overrides: Partial<Ingress> = {}): Ingress {
   }
 }
 
+function makeProjectIngress(overrides: Partial<Ingress> = {}): Ingress {
+  return {
+    id: 'ing-1',
+    project_id: 'p1',
+    name: 'api',
+    domain: 'api.example.com',
+    proxy: { provider: 'nginx', host_ids: ['edge-a'] },
+    upstreams: [{ ip: '10.0.0.12', port: 8080 }],
+    proxy_options: { raw_template: 'server { server_name api.example.com; }' },
+    dns: {
+      provider: 'manual',
+      records: [{ type: 'A', name: 'api.example.com', value: '203.0.113.10' }],
+    },
+    tls: { enabled: false },
+    ...overrides,
+  }
+}
+
 describe('useIngressStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -70,6 +93,31 @@ describe('useIngressStore', () => {
 
     expect(store.ingresses).toHaveLength(1)
     expect(store.dnsProviders[0].id).toBe('cloudflare-prod')
+  })
+
+  it('loadProject loads only project ingress declarations and global DNS providers', async () => {
+    mockedApi.listProjectIngresses.mockResolvedValue([makeProjectIngress()])
+    mockedApi.listDNSProviders.mockResolvedValue([
+      { id: 'cloudflare-prod', name: 'Cloudflare', type: 'cloudflare' },
+    ])
+    const store = useIngressStore()
+
+    await store.loadProject('p1')
+
+    expect(mockedApi.listProjectIngresses).toHaveBeenCalledWith('p1')
+    expect(store.ingresses).toHaveLength(1)
+    expect(store.dnsProviders).toHaveLength(1)
+  })
+
+  it('saveProjectIngress sends project id to API', async () => {
+    const payload = makeProjectIngress({ id: undefined })
+    mockedApi.createProjectIngress.mockResolvedValue({ ...payload, id: 'ing-new' })
+    const store = useIngressStore()
+
+    await store.saveProjectIngress('p1', payload)
+
+    expect(mockedApi.createProjectIngress).toHaveBeenCalledWith('p1', payload)
+    expect(store.ingresses[0].id).toBe('ing-new')
   })
 
   it('saveIngress appends newly created ingress', async () => {
