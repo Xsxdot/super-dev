@@ -6,7 +6,7 @@
  *   - 验证 Host 表单提交会走 remote store action
  *
  * 边界：
- *   - 不访问真实 agent HTTP 接口
+ *   - 不访问真实 agent HTTP 或 WebSocket 接口
  *   - 不调起真实 Tauri 文件对话框
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -43,14 +43,35 @@ vi.mock('@/api/agent', async () => {
   }
 })
 
+class MockWebSocket {
+  static instances: MockWebSocket[] = []
+  url: string
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  readyState = 1
+
+  constructor(url: string) {
+    this.url = url
+    MockWebSocket.instances.push(this)
+  }
+
+  close() {
+    this.readyState = 3
+    this.onclose?.()
+  }
+}
+
 describe('HostManagerTab', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    MockWebSocket.instances = []
+    vi.stubGlobal('WebSocket', MockWebSocket)
     localStorage.clear()
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     vi.useRealTimers()
   })
 
