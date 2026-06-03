@@ -10,10 +10,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,12 +35,23 @@ func (s staticResolver) BaseURL(hostID string) (string, error) {
 }
 
 func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	p := newAgentHealthProber(staticResolver{base: srv.URL})
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/hosts":
+			return agentHealthProbeResponse(http.StatusOK), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/tunnels":
+			return agentHealthProbeResponse(http.StatusOK), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/pipeline/templates/builtin/go-binary-build":
+			assert.Equal(t, "version=1.0.0", r.URL.RawQuery)
+			return agentHealthProbeResponse(http.StatusOK), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/exec/health":
+			return agentHealthProbeResponse(http.StatusNoContent), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/transfer":
+			return agentHealthProbeResponse(http.StatusBadRequest), nil
+		default:
+			return agentHealthProbeResponse(http.StatusNotFound), nil
+		}
+	})
 	res, err := p.Probe(context.Background(), "h1")
 
 	require.NoError(t, err)
@@ -47,16 +59,12 @@ func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 }
 
 func TestAgentHealthProberMissingEndpoint(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/tunnels" {
-			w.WriteHeader(http.StatusNotFound)
-			return
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/tunnels" && r.Method == http.MethodGet {
+			return agentHealthProbeResponse(http.StatusNotFound), nil
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	p := newAgentHealthProber(staticResolver{base: srv.URL})
+		return agentHealthProbeResponse(statusForKnownAgentHealthEndpoint(r)), nil
+	})
 	res, err := p.Probe(context.Background(), "h1")
 
 	require.NoError(t, err)
@@ -64,17 +72,26 @@ func TestAgentHealthProberMissingEndpoint(t *testing.T) {
 }
 
 func TestAgentHealthProberMissingTemplateEndpoint(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/api/pipeline/templates/builtin/go-binary-build" {
 			assert.Equal(t, "version=1.0.0", r.URL.RawQuery)
-			w.WriteHeader(http.StatusNotFound)
-			return
+			return agentHealthProbeResponse(http.StatusNotFound), nil
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+		return agentHealthProbeResponse(statusForKnownAgentHealthEndpoint(r)), nil
+	})
+	res, err := p.Probe(context.Background(), "h1")
 
-	p := newAgentHealthProber(staticResolver{base: srv.URL})
+	require.NoError(t, err)
+	assert.False(t, res.AllEndpointsOK)
+}
+
+func TestAgentHealthProberMissingExecEndpointIsVersionMismatch(t *testing.T) {
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/exec/health" && r.Method == http.MethodGet {
+			return agentHealthProbeResponse(http.StatusNotFound), nil
+		}
+		return agentHealthProbeResponse(statusForKnownAgentHealthEndpoint(r)), nil
+	})
 	res, err := p.Probe(context.Background(), "h1")
 
 	require.NoError(t, err)
@@ -85,4 +102,41 @@ func TestAgentHealthProberUnreachableWhenNoBaseURL(t *testing.T) {
 	p := newAgentHealthProber(staticResolver{err: errors.New("no tunnel")})
 	_, err := p.Probe(context.Background(), "h1")
 	assert.Error(t, err)
+}
+
+type apiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f apiRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func agentHealthProberWithRoundTrip(fn apiRoundTripFunc) *agentHealthProber {
+	p := newAgentHealthProber(staticResolver{base: "http://agent.local"})
+	p.client = &http.Client{Transport: fn}
+	return p
+}
+
+func agentHealthProbeResponse(status int) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+	}
+}
+
+func statusForKnownAgentHealthEndpoint(r *http.Request) int {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/hosts":
+		return http.StatusOK
+	case r.Method == http.MethodGet && r.URL.Path == "/api/tunnels":
+		return http.StatusOK
+	case r.Method == http.MethodGet && r.URL.Path == "/api/pipeline/templates/builtin/go-binary-build":
+		return http.StatusOK
+	case r.Method == http.MethodGet && r.URL.Path == "/api/exec/health":
+		return http.StatusNoContent
+	case r.Method == http.MethodPost && r.URL.Path == "/api/transfer":
+		return http.StatusBadRequest
+	default:
+		return http.StatusNotFound
+	}
 }

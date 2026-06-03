@@ -103,6 +103,8 @@ type App struct {
 	agentHealthCancel context.CancelFunc
 	// executionAuthorizer 在 /ws/exec 每次命令执行前进行授权。
 	executionAuthorizer remoteexec.Authorizer
+	// pipelineAgentRunner 仅供包内测试替换 pipeline agent 通道；nil 时使用真实 tunnel runner。
+	pipelineAgentRunner pipelineRemoteTransport
 }
 
 // NewApp 创建并初始化 App 实例。

@@ -7,7 +7,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/agenthealth"
 	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/pipeline"
+	"github.com/superdev/agent/remoteexec"
+	"github.com/superdev/agent/store"
 )
 
 func TestExecuteProjectPipelineDeployRegistersArtifactBeforeDeploy(t *testing.T) {
@@ -41,6 +45,54 @@ func TestExecuteProjectPipelineRollbackSkipsBuildAndRestoresArtifact(t *testing.
 	assert.Equal(t, "old", result.ArtifactVersion)
 }
 
+type recordingPipelineAgentRunner struct {
+	requests []remoteexec.CommandRequest
+	targets  []pipeline.Target
+}
+
+func (r *recordingPipelineAgentRunner) RunRemote(ctx context.Context, target pipeline.Target, cmd string, workDir string, onLine func(string, string)) error {
+	r.targets = append(r.targets, target)
+	r.requests = append(r.requests, remoteexec.CommandRequest{Command: cmd, WorkDir: workDir})
+	if onLine != nil {
+		onLine("agent ran", "stdout")
+	}
+	return nil
+}
+
+func (r *recordingPipelineAgentRunner) Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error {
+	return nil
+}
+
+func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
+	app := newTestAppForPackage(t)
+	project := projectWithAgentRemotePipeline(t, "p-agent", "deploy-agent")
+	app.projects = []model.Project{project}
+	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "agent-host", SSHHost: "127.0.0.1", SSHUser: "ops"})
+	require.NoError(t, err)
+
+	agentRunner := &recordingPipelineAgentRunner{}
+	app.pipelineAgentRunner = agentRunner
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+	app.agentHealth.ProbeOnce(context.Background(), "h1")
+
+	result, err := app.executeProjectPipeline(context.Background(), project.ID, "deploy-agent", projectPipelineDeployRequest{
+		EnvName:   "prod",
+		Variables: map[string]string{"version": "v1"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusSuccess, result.Status)
+	assert.Equal(t, []remoteexec.CommandRequest{{Command: "printf deploy", WorkDir: "/srv/app"}}, agentRunner.requests)
+	require.Len(t, agentRunner.targets, 1)
+	assert.Equal(t, "h1", agentRunner.targets[0].HostID)
+	lines, err := app.store.ReadRunLogs(store.RunLogQuery{RunID: result.ID, HostID: "h1"})
+	require.NoError(t, err)
+	assert.Contains(t, runLogLines(lines), "remote route host h1 -> agent")
+	assert.Contains(t, runLogLines(lines), "agent ran")
+}
+
 func projectWithArtifactPipeline(t *testing.T, projectID, pipelineID string) model.Project {
 	t.Helper()
 	root := t.TempDir()
@@ -68,4 +120,41 @@ func projectWithArtifactPipeline(t *testing.T, projectID, pipelineID string) mod
 			},
 		}},
 	}
+}
+
+func projectWithAgentRemotePipeline(t *testing.T, projectID, pipelineID string) model.Project {
+	t.Helper()
+	return model.Project{
+		ID: projectID, Name: "demo", RootPath: t.TempDir(),
+		Environments: []model.Environment{{Name: "prod"}},
+		Services: []model.Service{{
+			ID: "svc-api", Name: "api", Deployments: []model.Deployment{{
+				ID: "dep-api-prod", EnvName: "prod", Location: model.LocationLocal,
+			}},
+		}},
+		Pipelines: []model.ProjectPipeline{{
+			ID: pipelineID, Name: "Deploy Via Agent", Services: []string{"api"},
+			ArtifactKind: model.ArtifactKindImage,
+			Variables:    map[string]string{"artifact": "demo:${version}"},
+			Roles:        map[string]model.ProjectPipelineRole{"web": {Hosts: []string{"h1"}}},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Build Marker", Type: "local_command",
+					With: map[string]interface{}{"cmd": "printf built"},
+				}},
+				Deploy: []model.Step{{
+					Name: "Deploy Remote", Type: "remote_command", Roles: []string{"web"},
+					With: map[string]interface{}{"cmd": "printf deploy", "workDir": "/srv/app"},
+				}},
+			},
+		}},
+	}
+}
+
+func runLogLines(lines []model.RunLogLine) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, line.Line)
+	}
+	return out
 }

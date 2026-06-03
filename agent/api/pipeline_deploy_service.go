@@ -32,6 +32,11 @@ type projectPipelineDeployRequest struct {
 	Variables       map[string]string `json:"variables"`
 }
 
+type pipelineRemoteTransport interface {
+	RunRemote(ctx context.Context, target pipeline.Target, cmd string, workDir string, onLine func(string, string)) error
+	Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error
+}
+
 func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID string, req projectPipelineDeployRequest) (model.Run, error) {
 	if req.EnvName == "" {
 		return model.Run{}, errors.New("env_name is required")
@@ -164,9 +169,14 @@ func (a *App) newPipelineEngine() *pipeline.Engine {
 		}
 		return model.Host{}, false
 	})
+	agentRunner := a.pipelineAgentRunner
+	if agentRunner == nil {
+		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+	}
+	remoteRunner := pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)
 	engine.Register(plugins.NewLocalCommand())
-	engine.Register(plugins.NewRemoteCommand(sshExecutor))
-	engine.Register(plugins.NewTransfer(sshExecutor))
+	engine.Register(plugins.NewRemoteCommand(remoteRunner))
+	engine.Register(plugins.NewTransfer(remoteRunner))
 	engine.Register(plugins.NewHTTPCheck(nil))
 	engine.Register(plugins.NewArchive())
 	engine.Register(plugins.NewArchivePackage())

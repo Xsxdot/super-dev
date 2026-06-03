@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 用 TunnelResolver 解析 host 的本机隧道 baseURL
-//   - 请求一组必需 endpoint，全部 200 视为接口齐全
+//   - 请求一组必需 endpoint，全部返回可接受状态视为接口齐全
 //
 // 边界：
 //   - 不管理隧道生命周期；baseURL 拿不到即视为不可达（返回 error）
@@ -18,12 +18,21 @@ import (
 	"github.com/superdev/agent/remote"
 )
 
+type agentHealthEndpoint struct {
+	Method     string
+	Path       string
+	Acceptable []int
+}
+
 // agentHealthRequiredEndpoints 是判定 agent 接口齐全的必需路径，
 // 与 desktop/src-tauri/src/agent.rs 的 REQUIRED_AGENT_ENDPOINTS 同源。
-var agentHealthRequiredEndpoints = []string{
-	"/api/hosts",
-	"/api/tunnels",
-	"/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
+var agentHealthRequiredEndpoints = []agentHealthEndpoint{
+	{Method: http.MethodGet, Path: "/api/hosts", Acceptable: []int{http.StatusOK}},
+	{Method: http.MethodGet, Path: "/api/tunnels", Acceptable: []int{http.StatusOK}},
+	{Method: http.MethodGet, Path: "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0", Acceptable: []int{http.StatusOK}},
+	{Method: http.MethodGet, Path: "/api/exec/health", Acceptable: []int{http.StatusNoContent}},
+	// /api/transfer exists when an empty POST reaches the handler and fails validation.
+	{Method: http.MethodPost, Path: "/api/transfer", Acceptable: []int{http.StatusBadRequest}},
 }
 
 const agentHealthProbeTimeout = 3 * time.Second
@@ -49,7 +58,7 @@ func newAgentHealthProber(resolver remote.TunnelResolver) *agentHealthProber {
 }
 
 // Probe 对 host 探活：baseURL 拿不到或请求失败返回 error；
-// 任一必需 endpoint 非 200 时 AllEndpointsOK 为 false。
+// 任一必需 endpoint 返回不可接受状态时 AllEndpointsOK 为 false。
 func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agenthealth.ProbeResult, error) {
 	base, err := p.resolver.BaseURL(hostID)
 	if err != nil {
@@ -59,7 +68,7 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 		return agenthealth.ProbeResult{}, remote.ErrHostUnreachable
 	}
 	for _, ep := range agentHealthRequiredEndpoints {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+ep, nil)
+		req, err := http.NewRequestWithContext(ctx, ep.Method, base+ep.Path, nil)
 		if err != nil {
 			return agenthealth.ProbeResult{}, err
 		}
@@ -69,10 +78,19 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 		}
 		status := resp.StatusCode
 		resp.Body.Close()
-		if status != http.StatusOK {
+		if !endpointStatusOK(status, ep.Acceptable) {
 			// 探得到但接口不全：交给 Monitor 归类为 version-mismatch。
 			return agenthealth.ProbeResult{AllEndpointsOK: false}, nil
 		}
 	}
 	return agenthealth.ProbeResult{AllEndpointsOK: true}, nil
+}
+
+func endpointStatusOK(status int, acceptable []int) bool {
+	for _, ok := range acceptable {
+		if status == ok {
+			return true
+		}
+	}
+	return false
 }
