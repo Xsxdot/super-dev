@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/superdev/agent/ingress"
+	"github.com/superdev/agent/model"
 )
 
 type ingressApplyRequest struct {
@@ -37,6 +38,32 @@ func (a *App) listIngress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, list)
 }
 
+func (a *App) listProjectIngress(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	list, err := a.ingressStore.ListIngressByProject(projectID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, list)
+}
+
+func (a *App) createProjectIngress(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	var in ingress.Ingress
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	in.ProjectID = projectID
+	saved, err := a.ingressStore.UpsertIngress(in)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, saved)
+}
+
 func (a *App) upsertIngress(w http.ResponseWriter, r *http.Request) {
 	var in ingress.Ingress
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -51,6 +78,14 @@ func (a *App) upsertIngress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, saved)
 }
 
+func (a *App) getProjectIngress(w http.ResponseWriter, r *http.Request) {
+	in, ok := a.projectIngressForRequest(w, r)
+	if !ok {
+		return
+	}
+	jsonOK(w, in)
+}
+
 func (a *App) getIngress(w http.ResponseWriter, r *http.Request) {
 	in, ok, err := a.ingressStore.GetIngress(r.PathValue("id"))
 	if err != nil {
@@ -62,6 +97,28 @@ func (a *App) getIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, in)
+}
+
+func (a *App) updateProjectIngress(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	ingressID := r.PathValue("ingressID")
+	if _, ok := a.projectIngressForRequest(w, r); !ok {
+		return
+	}
+
+	var in ingress.Ingress
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	in.ID = ingressID
+	in.ProjectID = projectID
+	saved, err := a.ingressStore.UpsertIngress(in)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, saved)
 }
 
 func (a *App) updateIngress(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +145,17 @@ func (a *App) updateIngress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, saved)
 }
 
+func (a *App) deleteProjectIngress(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.projectIngressForRequest(w, r); !ok {
+		return
+	}
+	if err := a.ingressStore.DeleteIngress(r.PathValue("ingressID")); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
 func (a *App) deleteIngress(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok, err := a.ingressStore.GetIngress(id); err != nil {
@@ -102,6 +170,19 @@ func (a *App) deleteIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+func (a *App) previewProjectIngress(w http.ResponseWriter, r *http.Request) {
+	in, ok := a.projectIngressForRequest(w, r)
+	if !ok {
+		return
+	}
+	result, err := a.ingressService.Preview(r.Context(), in)
+	if err != nil {
+		jsonError(w, ingressErrorStatus(err), err.Error())
+		return
+	}
+	jsonOK(w, result)
 }
 
 func (a *App) previewIngress(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +203,25 @@ func (a *App) previewIngress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
+func (a *App) applyProjectIngress(w http.ResponseWriter, r *http.Request) {
+	var req ingressApplyRequest
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, ok := a.projectIngressForRequest(w, r); !ok {
+		return
+	}
+	state, err := a.ingressService.Apply(r.Context(), r.PathValue("ingressID"), ingress.ApplyOptions{
+		ConfirmedDNSValue: req.ConfirmedDNSValue,
+	})
+	if err != nil {
+		jsonError(w, ingressErrorStatus(err), err.Error())
+		return
+	}
+	jsonOK(w, state)
+}
+
 func (a *App) applyIngress(w http.ResponseWriter, r *http.Request) {
 	var req ingressApplyRequest
 	if err := decodeOptionalJSON(r, &req); err != nil {
@@ -138,6 +238,18 @@ func (a *App) applyIngress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, state)
 }
 
+func (a *App) detectProjectIngressOrphans(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.projectIngressForRequest(w, r); !ok {
+		return
+	}
+	report, err := a.ingressService.DetectOrphans(r.Context(), r.PathValue("ingressID"))
+	if err != nil {
+		jsonError(w, ingressErrorStatus(err), err.Error())
+		return
+	}
+	jsonOK(w, report)
+}
+
 func (a *App) detectIngressOrphans(w http.ResponseWriter, r *http.Request) {
 	report, err := a.ingressService.DetectOrphans(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -145,6 +257,23 @@ func (a *App) detectIngressOrphans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, report)
+}
+
+func (a *App) removeProjectIngressOrphans(w http.ResponseWriter, r *http.Request) {
+	var req ingressOrphanRemovalRequest
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, ok := a.projectIngressForRequest(w, r); !ok {
+		return
+	}
+	report := ingress.OrphanReport{Configs: req.Configs, Records: req.Records}
+	if err := a.ingressService.RemoveOrphans(r.Context(), r.PathValue("ingressID"), report); err != nil {
+		jsonError(w, ingressErrorStatus(err), err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
 func (a *App) removeIngressOrphans(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +288,67 @@ func (a *App) removeIngressOrphans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+func (a *App) inferProjectIngressDefaults(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	project, ok := a.projectForIngressRequest(projectID)
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	var req ingress.InferRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	hosts, err := a.ingressInferenceHosts()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result, err := ingress.InferDefaults(project, hosts, req)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonOK(w, result)
+}
+
+func (a *App) projectIngressForRequest(w http.ResponseWriter, r *http.Request) (ingress.Ingress, bool) {
+	projectID := r.PathValue("id")
+	in, ok, err := a.ingressStore.GetIngress(r.PathValue("ingressID"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return ingress.Ingress{}, false
+	}
+	if !ok {
+		jsonError(w, http.StatusNotFound, "ingress not found")
+		return ingress.Ingress{}, false
+	}
+	if in.ProjectID != projectID {
+		jsonError(w, http.StatusNotFound, "ingress not found")
+		return ingress.Ingress{}, false
+	}
+	return in, true
+}
+
+func (a *App) projectForIngressRequest(projectID string) (model.Project, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.findProject(projectID)
+}
+
+func (a *App) ingressInferenceHosts() ([]model.Host, error) {
+	hosts, err := a.remoteStore.ListHosts()
+	if err != nil {
+		return nil, err
+	}
+	return append([]model.Host{{
+		ID:      a.identity.NodeID,
+		Name:    a.identity.DisplayName,
+		SSHHost: "127.0.0.1",
+	}}, hosts...), nil
 }
 
 func (a *App) listIngressDNSProviders(w http.ResponseWriter, r *http.Request) {

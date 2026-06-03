@@ -315,6 +315,16 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
 
 	// Ingress 入口配置
+	mux.HandleFunc("GET /api/projects/{id}/ingress", a.listProjectIngress)
+	mux.HandleFunc("POST /api/projects/{id}/ingress", a.createProjectIngress)
+	mux.HandleFunc("POST /api/projects/{id}/ingress/defaults", a.inferProjectIngressDefaults)
+	mux.HandleFunc("GET /api/projects/{id}/ingress/{ingressID}", a.getProjectIngress)
+	mux.HandleFunc("PUT /api/projects/{id}/ingress/{ingressID}", a.updateProjectIngress)
+	mux.HandleFunc("DELETE /api/projects/{id}/ingress/{ingressID}", a.deleteProjectIngress)
+	mux.HandleFunc("POST /api/projects/{id}/ingress/{ingressID}/preview", a.previewProjectIngress)
+	mux.HandleFunc("POST /api/projects/{id}/ingress/{ingressID}/apply", a.applyProjectIngress)
+	mux.HandleFunc("POST /api/projects/{id}/ingress/{ingressID}/detect-orphans", a.detectProjectIngressOrphans)
+	mux.HandleFunc("POST /api/projects/{id}/ingress/{ingressID}/orphan-removals", a.removeProjectIngressOrphans)
 	mux.HandleFunc("GET /api/ingress", a.listIngress)
 	mux.HandleFunc("POST /api/ingress", a.upsertIngress)
 	mux.HandleFunc("GET /api/ingress/{id}", a.getIngress)
