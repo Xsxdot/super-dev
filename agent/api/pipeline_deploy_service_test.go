@@ -41,14 +41,6 @@ func TestExecuteProjectPipelineRollbackSkipsBuildAndRestoresArtifact(t *testing.
 	assert.Equal(t, "old", result.ArtifactVersion)
 }
 
-func newTestAppForPackage(t *testing.T) *App {
-	t.Helper()
-	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
-	require.NoError(t, err)
-	t.Cleanup(app.Close)
-	return app
-}
-
 func projectWithArtifactPipeline(t *testing.T, projectID, pipelineID string) model.Project {
 	t.Helper()
 	root := t.TempDir()

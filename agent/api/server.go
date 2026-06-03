@@ -35,6 +35,7 @@ import (
 	"github.com/superdev/agent/operation"
 	"github.com/superdev/agent/process"
 	"github.com/superdev/agent/remote"
+	"github.com/superdev/agent/remoteexec"
 	"github.com/superdev/agent/store"
 	"github.com/superdev/agent/tunnel"
 )
@@ -57,6 +58,8 @@ type AppConfig struct {
 	RuntimeStatusClient RuntimeStatusClient
 	// RuntimeStatusRequestTimeout 是一次聚合的整体超时；0 时使用 3 秒。
 	RuntimeStatusRequestTimeout time.Duration
+	// ExecutionAuthorizer 注入 /ws/exec 命令授权器；nil 时使用 remoteexec.AllowAll。
+	ExecutionAuthorizer remoteexec.Authorizer
 }
 
 // HostAgentInstaller 安装或重装远端 SuperDev agent。
@@ -98,6 +101,8 @@ type App struct {
 	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
 	agentHealth       *agenthealth.Monitor
 	agentHealthCancel context.CancelFunc
+	// executionAuthorizer 在 /ws/exec 每次命令执行前进行授权。
+	executionAuthorizer remoteexec.Authorizer
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -202,6 +207,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if hostAgentInstaller == nil {
 		hostAgentInstaller = installer.New(installer.Options{BinaryDir: cfg.InstallBinaryDir})
 	}
+	executionAuthorizer := cfg.ExecutionAuthorizer
+	if executionAuthorizer == nil {
+		executionAuthorizer = remoteexec.AllowAll{}
+	}
 
 	return &App{
 		cfg:                         cfg,
@@ -228,6 +237,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		runtimeStatusRequestTimeout: runtimeTimeout,
 		agentHealth:                 agentHealthMonitor,
 		agentHealthCancel:           agentHealthCancel,
+		executionAuthorizer:         executionAuthorizer,
 	}, nil
 }
 
@@ -298,6 +308,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
 	mux.HandleFunc("GET /api/logs/context/page", a.fetchLogContextPage)
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
+	mux.HandleFunc("GET /ws/exec", a.wsExec)
+	mux.HandleFunc("GET /api/exec/health", a.execHealth)
 
 	// Collector 控制(远端 agent 接收本机隧道请求)
 	mux.HandleFunc("POST /api/collectors", a.startCollector)

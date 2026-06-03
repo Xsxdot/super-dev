@@ -140,7 +140,12 @@ func scanCommandOutput(r io.Reader, stream string, emit func(Message) error, err
 			return
 		}
 	}
-	errCh <- scanner.Err()
+	if err := scanner.Err(); errors.Is(err, os.ErrClosed) {
+		errCh <- nil
+		return
+	} else {
+		errCh <- err
+	}
 }
 
 func commandExitCode(err error) (int, error) {
