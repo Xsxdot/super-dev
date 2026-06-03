@@ -37,6 +37,21 @@ func TestProbeOnceMapsHealthy(t *testing.T) {
 	assert.Equal(t, agenthealth.StatusHealthy, m.Status("h1"))
 }
 
+func TestProbeOnceRecordsVersionAndCheckedAt(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {AllEndpointsOK: true, Version: "0.1.0"},
+	}}
+	m := agenthealth.NewMonitor(prober)
+	before := time.Now().UTC()
+
+	m.ProbeOnce(context.Background(), "h1")
+
+	info := m.Info("h1")
+	assert.Equal(t, agenthealth.StatusHealthy, info.Status)
+	assert.Equal(t, "0.1.0", info.Version)
+	assert.WithinDuration(t, before, info.CheckedAt, time.Second)
+}
+
 func TestProbeOnceMapsVersionMismatch(t *testing.T) {
 	// 探得到但接口不全（某关键 endpoint 404）→ version-mismatch
 	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
@@ -136,6 +151,33 @@ func TestSubscribeReceivesStatusChange(t *testing.T) {
 	case ev := <-sub:
 		assert.Equal(t, "h1", ev.HostID)
 		assert.Equal(t, agenthealth.StatusHealthy, ev.Status)
+	case <-time.After(time.Second):
+		t.Fatal("expected agent health event, got none")
+	}
+}
+
+func TestSubscribeReceivesVersionAndCheckedAt(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {AllEndpointsOK: true, Version: "0.1.0"},
+	}}
+	m := agenthealth.NewMonitor(prober)
+	m.SetPollInterval(5 * time.Millisecond)
+
+	sub := m.Subscribe("sub-meta")
+	defer m.Unsubscribe("sub-meta")
+
+	events := make(chan agenthealth.TunnelSignal, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, events)
+	events <- agenthealth.TunnelSignal{HostID: "h1", Connected: true}
+
+	select {
+	case ev := <-sub:
+		assert.Equal(t, "h1", ev.HostID)
+		assert.Equal(t, agenthealth.StatusHealthy, ev.Status)
+		assert.Equal(t, "0.1.0", ev.Version)
+		assert.NotEmpty(t, ev.CheckedAt)
 	case <-time.After(time.Second):
 		t.Fatal("expected agent health event, got none")
 	}

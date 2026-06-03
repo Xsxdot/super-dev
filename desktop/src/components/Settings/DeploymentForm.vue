@@ -366,7 +366,7 @@ function setEnv(env: Record<string, string>) {
 
       <template v-else-if="runtime.type === 'launchd'">
         <div class="dep-field">
-          <label class="dep-label">Label</label>
+          <label class="dep-label">{{ t('settings.deployment.launchdLabel') }}</label>
           <input
             class="dep-input"
             data-test="dep-launchd-label"

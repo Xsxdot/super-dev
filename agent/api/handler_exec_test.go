@@ -87,14 +87,15 @@ func TestWsExecReturnsErrorWhenAuthorizerRejects(t *testing.T) {
 	assert.Contains(t, msg.Error, "denied")
 }
 
-func TestExecHealthReturnsNoContent(t *testing.T) {
+func TestExecHealthReturnsVersion(t *testing.T) {
 	app := newTestAppForPackage(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/exec/health", nil)
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"version":"0.1.0"`)
 }
 
 func dialAppWebSocket(t *testing.T, app *App, path string) *websocket.Conn {

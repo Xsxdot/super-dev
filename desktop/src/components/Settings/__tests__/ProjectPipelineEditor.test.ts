@@ -14,6 +14,21 @@ vi.mock('@/api/agent', async () => {
       listHosts: vi.fn().mockResolvedValue([{ id: 'h1', name: 'host-1' }]),
       putProjectSetup: vi.fn().mockResolvedValue({ id: 'p1' }),
       listProjects: vi.fn().mockResolvedValue([]),
+      previewProjectPipeline: vi.fn().mockResolvedValue({
+        run: {
+          deployment_id: 'project:p1:pipeline:pipeline-1:env:dev',
+          status: 'pending',
+          step_runs: [{ step_name: 'Deploy', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [] }],
+        },
+      }),
+      getPipelineTemplate: vi.fn().mockResolvedValue({
+        source: 'builtin',
+        id: 'systemd',
+        version: '1.0.0',
+        digest: 'sha256:systemd',
+        yaml: 'id: systemd\n',
+        template: { id: 'systemd', name: 'Systemd', version: '1.0.0', inputs: {}, steps: [] },
+      }),
     },
   }
 })
@@ -91,5 +106,44 @@ describe('ProjectPipelineEditor', () => {
 
     expect(wrapper.text()).toContain('Save')
     expect(wrapper.text()).toContain('Cancel')
+  })
+
+  it('从项目上下文查看模板时可预览并保存套用结果', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: project(),
+        pipelineTemplates: [{ source: 'builtin', id: 'systemd', name: 'Systemd', version: '1.0.0', digest: 'sha256:systemd' }],
+        initialMode: 'template',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await new Promise(r => setTimeout(r))
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd@1.0.0')
+    await wrapper.find('[data-test="block-0-view-template"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="template-apply"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.previewProjectPipeline).toHaveBeenCalledWith('p1', 'pipeline-1', expect.objectContaining({ env_name: 'dev' }))
+    expect(wrapper.text()).toContain('Deploy')
+    await wrapper.find('[data-test="pipeline-config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      pipelines: expect.arrayContaining([
+        expect.objectContaining({
+          pipeline: expect.objectContaining({
+            deploy: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'include',
+                with: expect.objectContaining({ template: 'builtin://systemd', version: '1.0.0' }),
+              }),
+            ]),
+          }),
+        }),
+      ]),
+    }))
   })
 })

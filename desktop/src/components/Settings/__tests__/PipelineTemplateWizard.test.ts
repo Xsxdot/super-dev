@@ -57,6 +57,15 @@ describe('PipelineTemplateWizard', () => {
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(true)
   })
 
+  it('initialMode=template 时直接进入模板配置界面', () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: undefined, templates: [buildTemplate], initialMode: 'template' },
+    })
+
+    expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(true)
+  })
+
   it('按阶段保存多个模板和目标机器角色', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {

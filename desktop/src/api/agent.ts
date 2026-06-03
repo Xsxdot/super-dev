@@ -563,6 +563,8 @@ export interface TunnelStatus {
   error?: string
   last_active?: string
   agent?: AgentHealth
+  agent_version?: string
+  agent_checked_at?: string
 }
 
 export interface RemoteLogEntry extends LogEntry {

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
@@ -31,25 +31,43 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// reveal_main_window_from_aux_context 从 popover/tray/menu 等辅助上下文唤起主窗口。
+///
+/// macOS 菜单栏 popover 上下文不会自动激活应用；先隐藏置顶 popover，再显示、
+/// 反最小化并聚焦主窗口，最后把应用激活为 Regular，保证视觉上真正回到前台。
+fn reveal_main_window_from_aux_context(app: &tauri::AppHandle, route_hash: Option<&str>) {
+    if let Some(popover) = app.get_webview_window("popover") {
+        let _ = popover.hide();
+    }
+
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        if let Some(hash) = route_hash {
+            let script = format!("window.location.hash = '{}'", hash);
+            let _ = main.eval(&script);
+        }
+        let _ = main.set_focus();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+}
+
 /// show_main_window 显示并聚焦主窗口。
 ///
 /// 供 Popover 等非主窗口通过 Tauri invoke 调用，
 /// 点击"查看日志"等按钮时将主窗口带到前台。
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    reveal_main_window_from_aux_context(&app, None);
 }
 
 /// show_settings_window 显示主窗口并切换到设置页。
 fn show_settings_window(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.eval("window.location.hash = '#/settings'");
-        let _ = w.set_focus();
-    }
+    reveal_main_window_from_aux_context(app, Some("#/settings"));
 }
 
 /// toggle_popover 切换 popover 窗口的显示/隐藏状态。
@@ -188,6 +206,56 @@ fn position_and_show_popover(
     // 不 set_focus：避免菜单栏点击后立刻失焦导致刚打开就被隐藏
 }
 
+fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
+    match id {
+        "settings" => show_settings_window(app),
+        "quit" => {
+            app.state::<AgentProcess>().stop();
+            app.exit(0);
+        }
+        _ => {}
+    }
+}
+
+fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
+    let about = PredefinedMenuItem::about(
+        app,
+        Some("关于 SuperDev"),
+        Some(AboutMetadata {
+            name: Some("SuperDev".to_string()),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            ..Default::default()
+        }),
+    )?;
+    let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
+    let app_menu = Submenu::with_items(
+        app,
+        "SuperDev",
+        true,
+        &[
+            &about,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    let window_menu = Submenu::with_items(
+        app,
+        "窗口",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, Some("最小化"))?,
+            &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+        ],
+    )?;
+    let help_menu = Submenu::with_items(app, "帮助", true, &[])?;
+    let menu = Menu::with_items(app, &[&app_menu, &window_menu, &help_menu])?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -203,12 +271,14 @@ fn main() {
             install_mcp,
             mcp_install_hint
         ])
+        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .setup(|app| {
             let agent = AgentProcess::new();
             if let Err(e) = agent.start(app.handle()) {
                 return Err(e.into());
             }
             app.manage(agent);
+            install_app_menu(app)?;
 
             // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
             let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
@@ -225,16 +295,7 @@ fn main() {
                 .icon_as_template(false)
                 .show_menu_on_left_click(false)
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "settings" => {
-                        show_settings_window(app);
-                    }
-                    "quit" => {
-                        app.state::<AgentProcess>().stop();
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
+                .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
                 .on_tray_icon_event(|tray, event| {
                     match event {
                         // 左键抬起 → 切换 Popover（左键不弹出菜单，见 show_menu_on_left_click(false)）

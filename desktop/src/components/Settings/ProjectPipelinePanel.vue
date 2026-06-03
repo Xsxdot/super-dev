@@ -11,6 +11,7 @@ ProjectPipelinePanel：项目级流水线编辑面板。
   - 不直接保存项目配置
 -->
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { ProjectPipeline, Pipeline, PipelineTemplateSummary } from '@/api/agent'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
@@ -20,6 +21,8 @@ const props = defineProps<{
   services: Array<{ id: string; name: string }>
   hosts: Array<{ id: string; name: string }>
   templates: PipelineTemplateSummary[]
+  initialMode?: 'template' | 'blank'
+  onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
 }>()
 
 const emit = defineEmits<{ 'update:modelValue': [ProjectPipeline[]] }>()
@@ -30,11 +33,11 @@ function patch(index: number, partial: Partial<ProjectPipeline>) {
   emit('update:modelValue', next)
 }
 
-function addPipeline() {
+function addPipeline(useTemplate = false) {
   const id = `pipeline-${props.modelValue.length + 1}`
   emit('update:modelValue', [
     ...props.modelValue,
-    { id, name: 'Deploy', services: [], pipeline: {} as Pipeline },
+    { id, name: 'Deploy', services: [], pipeline: useTemplate ? ({ deploy: [] } as Pipeline) : ({} as Pipeline) },
   ])
 }
 
@@ -45,13 +48,19 @@ function removePipeline(index: number) {
 function setPipeline(index: number, pipeline: Pipeline | undefined) {
   patch(index, { pipeline: pipeline ?? {} })
 }
+
+onMounted(() => {
+  if (props.initialMode === 'template' && props.modelValue.length === 0) {
+    addPipeline(true)
+  }
+})
 </script>
 
 <template>
   <section class="project-pipelines">
     <div class="section-head">
       <div class="section-title">{{ t('settings.pipeline.title') }}</div>
-      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline">{{ t('settings.pipeline.add') }}</button>
+      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline()">{{ t('settings.pipeline.add') }}</button>
     </div>
 
     <div v-if="modelValue.length === 0" class="pipeline-empty">{{ t('settings.pipeline.empty') }}</div>
@@ -83,6 +92,8 @@ function setPipeline(index: number, pipeline: Pipeline | undefined) {
         :model-value="item.pipeline"
         :templates="templates"
         :hosts="hosts"
+        :initial-mode="initialMode"
+        :on-view-template="onViewTemplate"
         @update:model-value="setPipeline(index, $event)"
       />
 

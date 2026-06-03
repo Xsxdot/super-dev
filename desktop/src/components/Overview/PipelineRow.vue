@@ -11,9 +11,11 @@ PipelineRow：项目概览页的一条流水线行。
 -->
 <script setup lang="ts">
 import type { ProjectPipeline } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 defineProps<{ pipeline: ProjectPipeline; expanded: boolean }>()
 const emit = defineEmits<{ run: []; edit: []; toggle: [] }>()
+const { t } = useAppI18n()
 </script>
 
 <template>
@@ -25,8 +27,8 @@ const emit = defineEmits<{ run: []; edit: []; toggle: [] }>()
       <div class="pipeline-name">{{ pipeline.name }}</div>
       <div class="pipeline-meta">{{ pipeline.artifact_kind || 'file' }}</div>
     </div>
-    <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">Run</button>
-    <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">Edit</button>
+    <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">{{ t('overview.pipeline.run') }}</button>
+    <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">{{ t('overview.pipeline.edit') }}</button>
   </div>
 </template>
 
