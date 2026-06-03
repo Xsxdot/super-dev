@@ -5,8 +5,8 @@
 # SuperDev
 
 <p align="center">
-  <strong>AI-native 的本地开发与部署控制台。</strong><br />
-  让 AI 看见、诊断，并在你批准后操作真实环境。
+  <strong>AI-native 的运行态协作层。</strong><br />
+  让开发者与 AI 共享服务、日志、部署与审批上下文，在同一个真实环境里持续协作。
 </p>
 
 <p align="center">
@@ -26,13 +26,28 @@
 
 ## 为什么是 SuperDev
 
-AI 编程工具已经能读代码、改代码、跑命令，但真实开发环境不只是代码仓库：它还有本地服务、远程主机、日志、部署流水线、入口配置和一堆“不能乱动”的运行态。
+AI 编程工具已经能读代码、改代码、跑命令，但代码协作只解决了“AI 知道仓库里有什么”。真正开发时，最难的是“AI 不知道你此刻正在运行什么”：哪些服务已经启动，哪个端口正在被使用，哪段日志对应当前功能，哪次 pipeline 刚刚发布，哪个远端 deployment 正在出错。
 
-SuperDev 把这些状态收敛到一个本地优先的桌面控制台里，并通过 MCP 暴露给 Claude Code、Codex、Cursor 等智能体。AI 可以先观察、采证、推理；真正要启动、停止、重启服务或导入模板时，必须经过 SuperDev agent 的预检、审批、一次性 token 和审计。
+如果 AI 看不到这些运行态，它就会另起服务、抢占端口、制造一套影子环境；每次对话都像从零开始，无法持续追踪某一项功能从本地调试、日志变化、部署流水线到线上错误的完整生命线。
 
-这不是“让 AI 随便操作你的机器”，而是给 AI 一条有护栏的道路。
+SuperDev 把本地服务、远端主机、日志、pipeline、ingress 和审批上下文收敛成一份本地优先的事实源，并通过 MCP 暴露给 Claude Code、Codex、Cursor 等智能体。AI 不再站在代码仓库外猜测，而是和你进入同一个真实开发现场。
+
+## 第一目标：与 AI 共享运行态
+
+SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标是建立一种真正的协作：让开发者和 AI 在同一份运行态上工作。
+
+这意味着 AI 先看见你已经启动的服务，而不是再启动一套；先读取同一段日志，而不是让你复制粘贴；先理解当前 deployment、pipeline、ingress 和审批上下文，而不是把线上错误当成孤立文本来猜。
+
+当 AI 和人共享运行态，协作才会连续：一个功能可以被持续跟踪，一次线上错误可以沿着服务、日志、部署和入口状态被追到源头，真实环境里的操作也可以在预检、审批、一次性 token 和审计之下完成。
 
 ## 高光功能
+
+### 共享运行态，不抢占用户服务
+
+- AI 先观察已有服务、端口、日志和部署状态，再决定是否需要请求操作。
+- 避免 AI 另起一套 shadow environment，减少端口竞争、重复进程和状态分叉。
+- 同一项功能可以从本地运行、日志变化、pipeline run、远端 deployment 到 ingress 持续追踪。
+- 线上错误不再只是贴给 AI 的一段文本，而是能被放回服务、部署、日志和入口上下文里共同处理。
 
 ### AI 安全操作真实环境
 
@@ -165,8 +180,8 @@ Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制�
 # SuperDev
 
 <p align="center">
-  <strong>An AI-native local development and deployment console.</strong><br />
-  Let AI inspect, diagnose, and operate real environments only after you approve the action.
+  <strong>An AI-native runtime collaboration layer.</strong><br />
+  Let developers and AI share services, logs, deployments, and approval context in one real environment.
 </p>
 
 | Chinese UI | English UI |
@@ -177,13 +192,28 @@ Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制�
 
 ## Why SuperDev
 
-AI coding tools can read code, edit code, and run commands. Real development environments are larger than a repository: they include local services, remote hosts, logs, deployment pipelines, ingress rules, certificates, and runtime state that should not be changed casually.
+AI coding tools can read code, edit code, and run commands. But code collaboration only answers "what is in the repository." Real development depends on the runtime state that exists right now: which services are already running, which ports are occupied, which logs belong to the current feature, which pipeline just shipped, and which remote deployment is failing.
 
-SuperDev brings that state into a local-first desktop console and exposes it to Claude Code, Codex, Cursor, and other coding agents through MCP. AI can observe, collect evidence, and reason about the system. When it wants to start, stop, restart, or import something that changes runtime state, the local SuperDev agent enforces preflight checks, human approval, one-time tokens, and audit logs.
+When AI cannot see that runtime state, it starts another service, competes for ports, and creates a shadow environment. Each conversation feels like a restart. AI cannot continuously follow a feature from local debugging, through log changes and pipeline runs, to a production error.
 
-This is not unrestricted machine control. It is a guarded path for AI-assisted operations.
+SuperDev brings local services, remote hosts, logs, pipelines, ingress, and approval context into one local-first source of truth, then exposes it to Claude Code, Codex, Cursor, and other coding agents through MCP. AI stops guessing from outside the repository and starts collaborating inside the same real development scene.
+
+## First Goal: Shared Runtime Collaboration
+
+SuperDev is not just diagnostics or remote control for AI. Its first goal is a new kind of collaboration: developers and AI agents working over the same runtime state.
+
+That means AI sees the services you already started instead of starting another copy. It reads the same logs instead of asking you to paste fragments. It understands the current deployment, pipeline, ingress, and approval context instead of treating a production error as isolated text.
+
+When AI and humans share runtime state, collaboration becomes continuous. A feature can be followed across services, logs, deployments, and edge state. A production error can be traced through the system that produced it. Real-environment actions can still stay behind preflight checks, human approval, one-time tokens, and audit logs.
 
 ## Highlights
+
+### Shared runtime, no competing services
+
+- AI observes existing services, ports, logs, and deployments before deciding whether it needs to request an action.
+- Avoid shadow environments, port contention, duplicate processes, and split runtime state.
+- Follow one feature across local services, log changes, pipeline runs, remote deployments, and ingress.
+- Treat production errors as shared runtime context, not pasted text detached from the system that produced it.
 
 ### Safe AI operations
 
