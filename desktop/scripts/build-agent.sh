@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 仅在 agent 源码比 sidecar 新（或二进制缺失）时编译，避免 tauri dev 监听循环。
+# 每次桌面端启动前都刷新本机 sidecar，避免 stale 二进制通过 mtime 缓存被误用。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
 RESOURCE_DIR="$ROOT/src-tauri/resources/agent-install"
+DEV_OUT_DIR="$ROOT/src-tauri/target/debug"
 TARGET="$(rustc --print host-tuple)"
 OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
 OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET"
@@ -46,9 +47,13 @@ needs_build() {
   return 1
 }
 
-if ! needs_build "$OUT_AGENT" && ! needs_build "$OUT_MCP" && ! needs_build "$OUT_SAMPLE" && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
-  exit 0
-fi
+sync_dev_sidecar() {
+  local src="$1"
+  local name="$2"
+  mkdir -p "$DEV_OUT_DIR"
+  cp "$src" "$DEV_OUT_DIR/$name"
+  chmod +x "$DEV_OUT_DIR/$name"
+}
 
 GO_BIN="${GO_BIN:-}"
 if [[ -z "$GO_BIN" ]]; then
@@ -64,20 +69,18 @@ if [[ -z "$GO_BIN" ]]; then
   fi
 fi
 
-if needs_build "$OUT_AGENT"; then
-  echo "build-agent: compiling agent -> $OUT_AGENT"
-  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_AGENT" .)
-fi
+echo "build-agent: compiling agent -> $OUT_AGENT"
+(cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_AGENT" .)
 
-if needs_build "$OUT_MCP"; then
-  echo "build-agent: compiling mcp -> $OUT_MCP"
-  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_MCP" ./cmd/superdev-mcp)
-fi
+echo "build-agent: compiling mcp -> $OUT_MCP"
+(cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_MCP" ./cmd/superdev-mcp)
 
-if needs_build "$OUT_SAMPLE"; then
-  echo "build-agent: compiling sample -> $OUT_SAMPLE"
-  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_SAMPLE" ./cmd/superdev-sample)
-fi
+echo "build-agent: compiling sample -> $OUT_SAMPLE"
+(cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_SAMPLE" ./cmd/superdev-sample)
+
+sync_dev_sidecar "$OUT_AGENT" "superdev-agent"
+sync_dev_sidecar "$OUT_MCP" "superdev-mcp"
+sync_dev_sidecar "$OUT_SAMPLE" "superdev-sample"
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   mkdir -p "$RESOURCE_DIR"

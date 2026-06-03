@@ -378,10 +378,6 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
     Ok(MergeResult { content, changed })
 }
 
-fn install_json_to_path(path: &Path, entry: &McpEntry) -> Result<ConfigInstallOutcome, String> {
-    install_json_kind_to_path(path, entry, "claude-code")
-}
-
 fn install_json_kind_to_path(
     path: &Path,
     entry: &McpEntry,
@@ -774,7 +770,7 @@ command = "gh"
         let config = dir.join("mcp.json");
         fs::write(&config, r#"{"mcpServers":{"github":{"command":"gh"}}}"#).expect("seed config");
 
-        let outcome = install_json_to_path(&config, &entry()).expect("install");
+        let outcome = install_json_kind_to_path(&config, &entry(), "claude-code").expect("install");
 
         assert!(outcome.installed);
         assert!(!outcome.already_present);
