@@ -310,6 +310,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
 	mux.HandleFunc("GET /ws/exec", a.wsExec)
 	mux.HandleFunc("GET /api/exec/health", a.execHealth)
+	mux.HandleFunc("POST /api/transfer", a.transferFile)
 
 	// Collector 控制(远端 agent 接收本机隧道请求)
 	mux.HandleFunc("POST /api/collectors", a.startCollector)
