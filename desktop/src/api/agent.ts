@@ -329,7 +329,11 @@ export interface LogRule {
 
 export interface AgentSettings {
   log_retention_days: number
+  sample_seeded?: boolean
+  onboarding_completed?: boolean
 }
+
+export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed'>>
 
 export interface OperationTarget {
   project_id?: string
@@ -722,7 +726,7 @@ export const api = {
 
   // 设置
   getSettings: () => request<AgentSettings>('/api/settings'),
-  putSettings: (settings: AgentSettings) =>
+  putSettings: (settings: AgentSettingsPatch) =>
     request<AgentSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 
   // Operation 审批

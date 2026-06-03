@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod mcp_install;
 use agent::AgentProcess;
+use mcp_install::{install_mcp, mcp_install_hint};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -195,7 +197,11 @@ fn main() {
             MacosLauncher::LaunchAgent,
             None,
         ))
-        .invoke_handler(tauri::generate_handler![show_main_window])
+        .invoke_handler(tauri::generate_handler![
+            show_main_window,
+            install_mcp,
+            mcp_install_hint
+        ])
         .setup(|app| {
             let agent = AgentProcess::new();
             if let Err(e) = agent.start(app.handle()) {

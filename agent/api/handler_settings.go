@@ -12,8 +12,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/superdev/agent/config"
 )
 
 // getSettings 处理 GET /api/settings。
@@ -28,14 +26,30 @@ func (a *App) getSettings(w http.ResponseWriter, r *http.Request) {
 
 // putSettings 处理 PUT /api/settings。
 func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
-	var settings config.AgentSettings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+	current, err := a.settings.Load()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to load settings: "+err.Error())
+		return
+	}
+	var req settingsPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := a.settings.Save(settings); err != nil {
+	if req.LogRetentionDays != nil {
+		current.LogRetentionDays = *req.LogRetentionDays
+	}
+	if req.OnboardingCompleted != nil {
+		current.OnboardingCompleted = *req.OnboardingCompleted
+	}
+	if err := a.settings.Save(current); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	jsonOK(w, settings)
+	jsonOK(w, current)
+}
+
+type settingsPatchRequest struct {
+	LogRetentionDays    *int  `json:"log_retention_days"`
+	OnboardingCompleted *bool `json:"onboarding_completed"`
 }

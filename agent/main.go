@@ -12,7 +12,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -24,6 +23,7 @@ func main() {
 	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
 	installBinariesDir := flag.String("install-binaries", "", "Directory containing remote install agent binaries")
+	sampleBinary := flag.String("sample-binary", "", "Path to bundled onboarding sample service binary")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
@@ -33,13 +33,14 @@ func main() {
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:          *dataDir,
 		InstallBinaryDir: *installBinariesDir,
+		SampleBinaryPath: *sampleBinary,
 	})
 	if err != nil {
 		log.Fatal("create app:", err)
 	}
 	defer app.Close()
 
-	fmt.Printf("SuperDev agent listening on %s\n", *addr)
+	log.Printf("SuperDev agent listening on %s", *addr)
 	log.Fatal(app.Start(*addr))
 }
 

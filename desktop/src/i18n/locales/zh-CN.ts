@@ -82,6 +82,9 @@ export default {
       autostartDesc: '登录系统后自动启动 SuperDev 桌面应用',
       languageTitle: '语言',
       languageDesc: '切换 SuperDev 桌面端界面语言',
+      onboardingTitle: '首次引导',
+      onboardingDesc: '重新安装 MCP 连接并复制 AI 演示提示词',
+      onboardingAction: '重新运行引导',
     },
     projects: {
       title: '项目',

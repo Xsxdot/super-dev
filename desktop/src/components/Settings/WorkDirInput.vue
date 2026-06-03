@@ -11,6 +11,7 @@ WorkDirInput：工作目录输入框（含文件夹选择按钮）。
   - 不依赖具体业务，通用于任何路径选择场景
 -->
 <script setup lang="ts">
+import { open } from '@tauri-apps/plugin-dialog'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{
@@ -21,7 +22,6 @@ const emit = defineEmits<{ 'update:modelValue': [string] }>()
 const { t } = useAppI18n()
 
 async function pickDir() {
-  const { open } = await import('@tauri-apps/plugin-dialog')
   const selected = await open({
     directory: true,
     multiple: false,

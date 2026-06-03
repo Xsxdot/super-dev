@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { save } from '@tauri-apps/plugin-dialog'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
@@ -90,7 +91,6 @@ async function exportBookmark() {
   }
 
   const defaultName = `superdev-log-${Date.now()}.log`
-  const { save } = await import('@tauri-apps/plugin-dialog')
   const selected = await save({
     defaultPath: defaultName,
     title: t('panel.bookmark.exportTitle'),

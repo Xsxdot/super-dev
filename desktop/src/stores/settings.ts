@@ -35,7 +35,11 @@ function saveHiddenServiceIds(ids: string[]) {
 }
 
 export const useSettingsStore = defineStore('settings', () => {
-  const agentSettings = ref<AgentSettings>({ log_retention_days: 7 })
+  const agentSettings = ref<AgentSettings>({
+    log_retention_days: 7,
+    sample_seeded: false,
+    onboarding_completed: false,
+  })
   const hiddenServiceIds = ref<string[]>(loadHiddenServiceIds())
   const autostartEnabled = ref(false)
   const locale = ref<SupportedLocale>(currentLocale())
@@ -57,6 +61,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function saveLogRetentionDays(days: number) {
     const saved = await api.putSettings({ log_retention_days: days })
+    agentSettings.value = saved
+  }
+
+  async function setOnboardingCompleted(completed: boolean) {
+    const saved = await api.putSettings({ onboarding_completed: completed })
     agentSettings.value = saved
   }
 
@@ -99,6 +108,7 @@ export const useSettingsStore = defineStore('settings', () => {
     error,
     loadAgentSettings,
     saveLogRetentionDays,
+    setOnboardingCompleted,
     loadAutostart,
     setAutostart,
     isServiceHidden,

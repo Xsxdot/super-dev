@@ -9,6 +9,7 @@ RESOURCE_DIR="$ROOT/src-tauri/resources/agent-install"
 TARGET="$(rustc --print host-tuple)"
 OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
 OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET"
+OUT_SAMPLE="$OUT_DIR/superdev-sample-$TARGET"
 BUILD_REMOTE_INSTALL=0
 
 for arg in "$@"; do
@@ -45,7 +46,7 @@ needs_build() {
   return 1
 }
 
-if ! needs_build "$OUT_AGENT" && ! needs_build "$OUT_MCP" && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
+if ! needs_build "$OUT_AGENT" && ! needs_build "$OUT_MCP" && ! needs_build "$OUT_SAMPLE" && [[ "$BUILD_REMOTE_INSTALL" != "1" ]]; then
   exit 0
 fi
 
@@ -71,6 +72,11 @@ fi
 if needs_build "$OUT_MCP"; then
   echo "build-agent: compiling mcp -> $OUT_MCP"
   (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_MCP" ./cmd/superdev-mcp)
+fi
+
+if needs_build "$OUT_SAMPLE"; then
+  echo "build-agent: compiling sample -> $OUT_SAMPLE"
+  (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_SAMPLE" ./cmd/superdev-sample)
 fi
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then

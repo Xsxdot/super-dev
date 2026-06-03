@@ -82,6 +82,9 @@ export default {
       autostartDesc: 'Start the SuperDev desktop app after system login',
       languageTitle: 'Language',
       languageDesc: 'Switch the SuperDev desktop interface language',
+      onboardingTitle: 'Onboarding',
+      onboardingDesc: 'Install the MCP connection again and copy the AI demo prompt',
+      onboardingAction: 'Run onboarding again',
     },
     projects: {
       title: 'Projects',

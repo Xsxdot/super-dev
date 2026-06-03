@@ -1,0 +1,26 @@
+name: superdev-sample
+environments:
+  - name: demo
+    is_dev: false
+    order: 1
+env_selected_service_ids:
+  demo:
+    - sample-api
+services:
+  - id: sample-api
+    name: sample-api
+    required: true
+    order: 1
+    deployments:
+      - id: sample-api-demo
+        env: demo
+        location: local
+        control_mode: managed
+        command: "{{SAMPLE_BINARY}} --port 18191"
+        working_dir: "."
+        runtime:
+          type: command
+          command: "{{SAMPLE_BINARY}} --port 18191"
+          working_dir: "."
+        logs:
+          type: process

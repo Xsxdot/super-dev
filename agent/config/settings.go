@@ -28,7 +28,9 @@ const (
 
 // AgentSettings 表示 agent 级全局设置。
 type AgentSettings struct {
-	LogRetentionDays int `json:"log_retention_days"`
+	LogRetentionDays    int  `json:"log_retention_days"`
+	SampleSeeded        bool `json:"sample_seeded"`
+	OnboardingCompleted bool `json:"onboarding_completed"`
 }
 
 // SettingsStore 负责读写 agent 数据目录下的 settings.json。
@@ -44,6 +46,22 @@ func NewSettingsStore(dataDir string) *SettingsStore {
 // DefaultAgentSettings 返回默认 agent 设置。
 func DefaultAgentSettings() AgentSettings {
 	return AgentSettings{LogRetentionDays: DefaultLogRetentionDays}
+}
+
+// MarkSampleSeeded 将示例落地标记置为 true，并保留其他设置。
+//
+// 返回：
+//   - 设置读取或保存失败时返回错误
+//
+// 注意：
+//   - 该方法只由 agent 首启示例落地流程调用，桌面端 settings PUT 不应直接修改此字段
+func (s *SettingsStore) MarkSampleSeeded() error {
+	settings, err := s.Load()
+	if err != nil {
+		return err
+	}
+	settings.SampleSeeded = true
+	return s.Save(settings)
 }
 
 // ValidateAgentSettings 校验 agent 设置字段范围。

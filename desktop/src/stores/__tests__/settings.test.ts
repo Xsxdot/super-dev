@@ -38,13 +38,32 @@ describe('settingsStore', () => {
   })
 
   it('saveLogRetentionDays 持久化到 agent 并更新本地状态', async () => {
-    vi.spyOn(agentApi, 'putSettings').mockResolvedValue({ log_retention_days: 21 })
+    vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
+      log_retention_days: 21,
+      sample_seeded: false,
+      onboarding_completed: false,
+    })
     const store = useSettingsStore()
 
     await store.saveLogRetentionDays(21)
 
     expect(agentApi.putSettings).toHaveBeenCalledWith({ log_retention_days: 21 })
     expect(store.agentSettings.log_retention_days).toBe(21)
+  })
+
+  it('setOnboardingCompleted patches only completion flag', async () => {
+    vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
+      log_retention_days: 7,
+      sample_seeded: true,
+      onboarding_completed: true,
+    })
+    const store = useSettingsStore()
+    store.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
+
+    await store.setOnboardingCompleted(true)
+
+    expect(agentApi.putSettings).toHaveBeenCalledWith({ onboarding_completed: true })
+    expect(store.agentSettings.onboarding_completed).toBe(true)
   })
 
   it('toggleServiceHidden 将隐藏服务偏好写入 localStorage', () => {

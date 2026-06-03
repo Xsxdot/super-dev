@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -32,6 +33,7 @@ import (
 	"github.com/superdev/agent/logbuf"
 	"github.com/superdev/agent/metrics"
 	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/onboarding"
 	"github.com/superdev/agent/operation"
 	"github.com/superdev/agent/process"
 	"github.com/superdev/agent/remote"
@@ -50,6 +52,8 @@ type AppConfig struct {
 	TunnelOverride remote.TunnelResolver
 	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
 	InstallBinaryDir string
+	// SampleBinaryPath 是随桌面端打包的 onboarding 示例服务二进制；为空时跳过示例落地。
+	SampleBinaryPath string
 	// InstallerOverride 注入自定义远端 agent 安装器，仅用于测试。
 	InstallerOverride HostAgentInstaller
 	// RuntimeMetricsSampler 注入进程级指标采样器；nil 时使用 metrics.NewSampler。
@@ -146,6 +150,16 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(s, 2000, id.NodeID)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
+	if result, err := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
+		DataDir:          cfg.DataDir,
+		SampleBinaryPath: cfg.SampleBinaryPath,
+		Registry:         registry,
+		Settings:         settingsStore,
+	}); err != nil {
+		log.Printf("[SuperDev] sample seed skipped: %v", err)
+	} else if result.Reason != "" {
+		log.Printf("[SuperDev] sample seed skipped: %s", result.Reason)
+	}
 	procMgr := process.NewManager(buf.Append)
 	probe := collector.Probe(collector.NewSystemProbe())
 	if cfg.ProbeOverride != nil {

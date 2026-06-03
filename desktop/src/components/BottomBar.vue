@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { save } from '@tauri-apps/plugin-dialog'
 import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -187,7 +188,6 @@ async function exportSyncBookmarks() {
   }
 
   const defaultName = `superdev-sync-${Date.now()}.log`
-  const { save } = await import('@tauri-apps/plugin-dialog')
   const selected = await save({
     defaultPath: defaultName,
     title: t('bottomBar.exportTitle'),

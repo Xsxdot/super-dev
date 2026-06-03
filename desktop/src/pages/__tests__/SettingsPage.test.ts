@@ -76,7 +76,7 @@ describe('SettingsPage', () => {
 
   it('通用页展示日志保留天数并保存', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7 }
+    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
     vi.spyOn(settings, 'saveLogRetentionDays').mockResolvedValue(undefined)
@@ -184,7 +184,7 @@ describe('SettingsPage', () => {
 
   it('通用页可切换到英文并立即更新界面文案', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7 }
+    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
@@ -198,5 +198,18 @@ describe('SettingsPage', () => {
     expect(wrapper.text()).toContain('General')
     expect(wrapper.text()).toContain('Language')
     expect(wrapper.text()).toContain('Log retention days')
+  })
+
+  it('通用页可重新运行首次引导', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    await wrapper.find('[data-test="rerun-onboarding"]').trigger('click')
+
+    expect(wrapper.text()).toContain('首次引导')
   })
 })

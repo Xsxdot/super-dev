@@ -352,6 +352,20 @@ const retentionDays = computed({
             <span />
           </label>
         </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">{{ t('settings.general.onboardingTitle') }}</div>
+            <div class="setting-desc">{{ t('settings.general.onboardingDesc') }}</div>
+          </div>
+          <button
+            class="secondary-btn"
+            data-test="rerun-onboarding"
+            type="button"
+            @click="router.push('/onboarding')"
+          >
+            {{ t('settings.general.onboardingAction') }}
+          </button>
+        </div>
       </section>
 
       <section v-else-if="selectedTab === 'projects'" class="pane">

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use crate::mcp_install::resolve_sidecar_binary;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -126,6 +127,10 @@ impl AgentProcess {
         if let Some(dir) = install_binaries_dir(app) {
             args.push("--install-binaries".to_string());
             args.push(dir.to_string_lossy().to_string());
+        }
+        if let Ok(sample) = resolve_sidecar_binary(app, "superdev-sample") {
+            args.push("--sample-binary".to_string());
+            args.push(sample.to_string_lossy().to_string());
         }
 
         let (_rx, child) = app

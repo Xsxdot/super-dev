@@ -160,15 +160,19 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var defaults struct {
-		LogRetentionDays int `json:"log_retention_days"`
+		LogRetentionDays    int  `json:"log_retention_days"`
+		SampleSeeded        bool `json:"sample_seeded"`
+		OnboardingCompleted bool `json:"onboarding_completed"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&defaults))
 	assert.Equal(t, 7, defaults.LogRetentionDays)
+	assert.False(t, defaults.SampleSeeded)
+	assert.False(t, defaults.OnboardingCompleted)
 
 	req, err := http.NewRequest(
 		http.MethodPut,
 		srv.URL+"/api/settings",
-		strings.NewReader(`{"log_retention_days": 14}`),
+		strings.NewReader(`{"log_retention_days": 14, "onboarding_completed": true}`),
 	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -181,6 +185,32 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	raw, err := os.ReadFile(settingsPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"log_retention_days": 14`)
+	assert.Contains(t, string(raw), `"onboarding_completed": true`)
+}
+
+// TestSettingsPutPreservesSampleSeeded 验证桌面端更新设置时不会清掉 agent 内部示例落地标记。
+func TestSettingsPutPreservesSampleSeeded(t *testing.T) {
+	dataDir := t.TempDir()
+	settingsPath := filepath.Join(dataDir, "settings.json")
+	require.NoError(t, os.WriteFile(settingsPath, []byte(`{"log_retention_days":7,"sample_seeded":true}`), 0o644))
+	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
+	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(`{"log_retention_days":21}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	raw, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"sample_seeded": true`)
+	assert.Contains(t, string(raw), `"log_retention_days": 21`)
 }
 
 // TestSettingsRejectsInvalidRetention 验证日志保留天数范围为 1 到 90。
@@ -230,6 +260,30 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "recent", got[0].Message)
+}
+
+// TestNewAppSeedsSampleProjectWhenBinaryProvided 验证 agent 启动时会落地并注册 onboarding 示例项目。
+func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
+	dataDir := t.TempDir()
+	bin := filepath.Join(dataDir, "superdev-sample")
+	require.NoError(t, os.WriteFile(bin, []byte("bin"), 0o755))
+
+	app, err := api.NewApp(api.AppConfig{DataDir: dataDir, SampleBinaryPath: bin})
+	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
+
+	projectDir := filepath.Join(dataDir, "examples", "superdev-sample")
+	rawConfig, err := os.ReadFile(filepath.Join(projectDir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(rawConfig), bin)
+
+	rawRegistry, err := os.ReadFile(filepath.Join(dataDir, "projects.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(rawRegistry), projectDir)
+
+	rawSettings, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(rawSettings), `"sample_seeded": true`)
 }
 
 func addProjectFromConfig(t *testing.T, srvURL string, cfg string) model.Project {
