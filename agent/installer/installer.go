@@ -15,13 +15,16 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/superdev/agent/model"
 )
 
 // Options 配置远端 agent 安装器。
 type Options struct {
-	BinaryDir string
+	BinaryDir      string
+	VerifyAttempts int
+	VerifyDelay    time.Duration
 }
 
 // Result 描述一次安装结果。
@@ -151,7 +154,7 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 	if err := installCommands(ctx, remote, platform, remoteTmp, port); err != nil {
 		return Result{}, err
 	}
-	if _, err := remote.Run(ctx, fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/hosts >/dev/null", port)); err != nil {
+	if err := verifyAgentReady(ctx, remote, port, i.verifyAttempts(), i.verifyDelay()); err != nil {
 		return Result{}, stageErr("verify", err)
 	}
 	return Result{
@@ -200,6 +203,44 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		return stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
 	}
 	return nil
+}
+
+func (i *Installer) verifyAttempts() int {
+	if i.opts.VerifyAttempts > 0 {
+		return i.opts.VerifyAttempts
+	}
+	return 12
+}
+
+func (i *Installer) verifyDelay() time.Duration {
+	if i.opts.VerifyDelay > 0 {
+		return i.opts.VerifyDelay
+	}
+	return 500 * time.Millisecond
+}
+
+func verifyAgentReady(ctx context.Context, remote Remote, port int, attempts int, delay time.Duration) error {
+	cmd := fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/hosts >/dev/null", port)
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if _, err := remote.Run(ctx, cmd); err != nil {
+			lastErr = err
+		} else {
+			return nil
+		}
+		if attempt == attempts {
+			break
+		}
+		// systemd/launchd 只保证进程被拉起，不保证 HTTP 监听点已经 ready。
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
 }
 
 func stageErr(stage string, err error) error {

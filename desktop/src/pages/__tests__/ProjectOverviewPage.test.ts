@@ -6,10 +6,11 @@ import { useAgentStore } from '@/stores/agent'
 import { installTestI18n } from '@/test-utils/i18n'
 
 const route = { params: { id: 'p1' } }
+const push = vi.fn()
 
 vi.mock('vue-router', () => ({
   useRoute: () => route,
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }))
 
 vi.mock('@/components/Overview/RuntimeStatusTab.vue', () => ({
@@ -23,6 +24,7 @@ vi.mock('@/components/Overview/PipelinesTab.vue', () => ({
 describe('ProjectOverviewPage', () => {
   beforeEach(() => {
     route.params.id = 'p1'
+    push.mockClear()
     setActivePinia(createPinia())
   })
 
@@ -41,6 +43,24 @@ describe('ProjectOverviewPage', () => {
 
     expect(wrapper.text()).toContain('demo')
     expect(wrapper.find('[data-test="runtime-tab"]').exists()).toBe(true)
+  })
+
+  it('returns to the main workspace from the overview header', async () => {
+    const agent = useAgentStore()
+    agent.projects = [{
+      id: 'p1',
+      name: 'demo',
+      root_path: '/tmp/demo',
+      services: [],
+      pipelines: [],
+      environments: [],
+    }]
+
+    const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('en-US')] } })
+
+    await wrapper.find('[data-test="overview-back"]').trigger('click')
+
+    expect(push).toHaveBeenCalledWith('/')
   })
 
   it('switches to pipelines tab', async () => {

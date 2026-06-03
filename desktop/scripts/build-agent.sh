@@ -84,7 +84,9 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   for target in "${targets[@]}"; do
     read -r goos goarch <<<"$target"
     remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch"
-    echo "build-agent: compiling remote agent -> $remote_out"
-    (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
+    if needs_build "$remote_out"; then
+      echo "build-agent: compiling remote agent -> $remote_out"
+      (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
+    fi
   done
 fi

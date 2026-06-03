@@ -12,9 +12,11 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,13 +24,21 @@ import (
 )
 
 type fakeRemote struct {
-	outputs  []string
-	uploads  []string
-	commands []string
+	outputs      []string
+	uploads      []string
+	commands     []string
+	failCommands map[string][]error
 }
 
 func (f *fakeRemote) Run(ctx context.Context, cmd string) (string, error) {
 	f.commands = append(f.commands, cmd)
+	if failures := f.failCommands[cmd]; len(failures) > 0 {
+		err := failures[0]
+		f.failCommands[cmd] = failures[1:]
+		if err != nil {
+			return "", err
+		}
+	}
 	if len(f.outputs) == 0 {
 		return "", nil
 	}
@@ -69,6 +79,30 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57019/api/hosts >/dev/null")
 }
 
+func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	verifyCmd := "curl -fsS http://127.0.0.1:57019/api/hosts >/dev/null"
+	remote := &fakeRemote{
+		outputs: []string{"Linux\n", "x86_64\n"},
+		failCommands: map[string][]error{
+			verifyCmd: {errors.New("connection refused"), nil},
+		},
+	}
+
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir, VerifyDelay: time.Millisecond}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Install(context.Background(), model.Host{
+		ID: "h1", SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57019,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, 2, countCommand(remote.commands, verifyCmd))
+}
+
 func TestInstallerInstallsMacOSAgent(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-darwin-arm64")
@@ -101,4 +135,14 @@ func TestInstallerWrapsStageOnMissingBinary(t *testing.T) {
 	var installErr *InstallError
 	require.ErrorAs(t, err, &installErr)
 	assert.Equal(t, "resolve_binary", installErr.Stage)
+}
+
+func countCommand(commands []string, target string) int {
+	count := 0
+	for _, cmd := range commands {
+		if cmd == target {
+			count++
+		}
+	}
+	return count
 }

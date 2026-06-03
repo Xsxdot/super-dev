@@ -36,7 +36,7 @@ pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
 fn install_binaries_dir(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let bundled = resource_dir.join("agent-install");
-        if bundled.is_dir() {
+        if has_install_binaries(&bundled) {
             return Some(bundled);
         }
     }
@@ -46,11 +46,26 @@ fn install_binaries_dir(app: &AppHandle) -> Option<PathBuf> {
             .join("src-tauri")
             .join("resources")
             .join("agent-install");
-        if workspace.is_dir() {
+        if has_install_binaries(&workspace) {
             return Some(workspace);
         }
     }
     None
+}
+
+fn has_install_binaries(dir: &PathBuf) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with("superdev-agent-"))
+    })
 }
 
 impl AgentProcess {

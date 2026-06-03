@@ -12,7 +12,7 @@ ProjectOverviewPage：项目级运维概览页。
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
 import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
 import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
@@ -21,6 +21,7 @@ import { useAppI18n } from '@/i18n/useAppI18n'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const route = useRoute()
+const router = useRouter()
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
@@ -39,9 +40,20 @@ function openInstanceLogs(deploymentId: string) {
     <div v-if="!project" class="overview-missing">{{ t('overview.projectNotFound') }}</div>
     <template v-else>
       <header class="overview-head">
-        <div class="overview-title-group">
-          <div class="overview-kicker">{{ t('overview.title') }}</div>
-          <h1>{{ project.name }}</h1>
+        <div class="overview-title-area">
+          <button
+            class="overview-back"
+            data-test="overview-back"
+            type="button"
+            @click="router.push('/')"
+          >
+            <span aria-hidden="true">←</span>
+            {{ t('common.back') }}
+          </button>
+          <div class="overview-title-group">
+            <div class="overview-kicker">{{ t('overview.title') }}</div>
+            <h1>{{ project.name }}</h1>
+          </div>
         </div>
         <OverviewTabs v-model="activeTab" />
       </header>
@@ -72,6 +84,32 @@ function openInstanceLogs(deploymentId: string) {
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--border-secondary);
 }
+.overview-title-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.overview-back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.overview-back:hover {
+  border-color: var(--border);
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
 .overview-title-group {
   min-width: 0;
 }
@@ -101,6 +139,11 @@ function openInstanceLogs(deploymentId: string) {
   .overview-head {
     align-items: stretch;
     flex-direction: column;
+  }
+  .overview-title-area {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 }
 </style>
