@@ -14,12 +14,14 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import PipelineRow from './PipelineRow.vue'
 import RunHistoryList from './RunHistoryList.vue'
 
 const props = defineProps<{ project: Project }>()
 const router = useRouter()
+const { t } = useAppI18n()
 const expanded = ref<string | null>(null)
 const runsByPipeline = reactive<Record<string, Run[]>>({})
 const loadingRuns = reactive<Record<string, boolean>>({})
@@ -63,7 +65,7 @@ async function confirmDeploy() {
     pending.value = null
     await router.push(`/project/${props.project.id}/pipelines/${pipeline.id}/runs/${run.id}?mode=live`)
   } catch (e) {
-    deployError.value = e instanceof Error ? e.message : 'Deploy failed'
+    deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
   }
 }
 
@@ -75,7 +77,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 <template>
   <section class="pipelines-tab">
     <div class="pipeline-toolbar">
-      <button type="button" data-test="pipeline-add" @click="editing = true">Add</button>
+      <button type="button" data-test="pipeline-add" @click="editing = true">{{ t('overview.pipeline.add') }}</button>
     </div>
     <div v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" class="pipeline-block">
       <PipelineRow
@@ -95,10 +97,10 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
     </div>
     <ProjectPipelineEditor v-if="editing" :project="project" @cancel="editing = false" @saved="editing = false" />
     <div v-if="pending" class="deploy-dialog">
-      <div>{{ pending.rollbackRun ? 'Rollback' : 'Run' }} · {{ pending.pipeline.name }}</div>
+      <div>{{ pending.rollbackRun ? t('overview.pipeline.rollback') : t('overview.pipeline.run') }} · {{ pending.pipeline.name }}</div>
       <div v-if="deployError" class="deploy-error">{{ deployError }}</div>
-      <button type="button" data-test="deploy-confirm" @click="confirmDeploy">Confirm</button>
-      <button type="button" @click="pending = null">Cancel</button>
+      <button type="button" data-test="deploy-confirm" @click="confirmDeploy">{{ t('overview.pipeline.confirm') }}</button>
+      <button type="button" @click="pending = null">{{ t('overview.pipeline.cancel') }}</button>
     </div>
   </section>
 </template>

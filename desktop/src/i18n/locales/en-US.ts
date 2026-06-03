@@ -241,6 +241,7 @@ export default {
       addEnvVar: '+ Add Variable',
       serviceName: 'Service name',
       serviceNamePlaceholder: 'Example: api.service',
+      launchdLabel: 'Label',
       launchdLabelPlaceholder: 'Example: com.example.api',
       plistPath: 'Plist path',
       plistPathPlaceholder: 'Example: ~/Library/LaunchAgents/com.example.api.plist',
@@ -295,6 +296,7 @@ export default {
   },
   panel: {
     emptyTitle: 'No selection',
+    deploymentFallbackTitle: 'Deploy: {id}',
     maxLeavesAlert: 'Maximum panel columns reached ({count}). Close an existing column before adding another.',
     filter: {
       include: 'Include',
@@ -368,6 +370,20 @@ export default {
     runtime: 'Runtime',
     pipelines: 'Pipelines',
     projectNotFound: 'Project not found',
+    pipeline: {
+      add: 'Add',
+      run: 'Run',
+      edit: 'Edit',
+      rollback: 'Rollback',
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      deployFailed: 'Deploy failed',
+      detail: 'Detail',
+    },
+    runtimeStatus: {
+      updateFailed: 'Update failed',
+      instancesSummary: '{count} instances · {abnormal} abnormal',
+    },
   },
   popover: {
     serviceSearchPlaceholder: 'Search services...',

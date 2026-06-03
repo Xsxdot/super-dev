@@ -241,6 +241,7 @@ export default {
       addEnvVar: '+ 添加变量',
       serviceName: '服务名',
       serviceNamePlaceholder: '如：api.service',
+      launchdLabel: 'Label',
       launchdLabelPlaceholder: '如：com.example.api',
       plistPath: 'Plist 路径',
       plistPathPlaceholder: '如：~/Library/LaunchAgents/com.example.api.plist',
@@ -295,6 +296,7 @@ export default {
   },
   panel: {
     emptyTitle: '未选择',
+    deploymentFallbackTitle: '部署：{id}',
     maxLeavesAlert: '已达到最大分栏数（{count} 个），请先关闭已有分栏后再添加。',
     filter: {
       include: '包含',
@@ -368,6 +370,20 @@ export default {
     runtime: '运行状态',
     pipelines: '流水线',
     projectNotFound: '项目不存在',
+    pipeline: {
+      add: '新增',
+      run: '运行',
+      edit: '编辑',
+      rollback: '回滚',
+      confirm: '确认',
+      cancel: '取消',
+      deployFailed: '部署失败',
+      detail: '详情',
+    },
+    runtimeStatus: {
+      updateFailed: '更新失败',
+      instancesSummary: '{count} 个实例 · {abnormal} 个异常',
+    },
   },
   popover: {
     serviceSearchPlaceholder: '搜索服务...',

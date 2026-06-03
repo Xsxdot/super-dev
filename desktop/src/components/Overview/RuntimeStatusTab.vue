@@ -13,11 +13,13 @@ RuntimeStatusTab：项目概览页的运行状态视图。
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
+import { useAppI18n } from '@/i18n/useAppI18n'
 import InstanceCard from './InstanceCard.vue'
 
 const props = defineProps<{ projectId: string; active: boolean }>()
 const emit = defineEmits<{ 'open-logs': [deploymentId: string, nodeId: string] }>()
 const store = useRuntimeStatusStore()
+const { t } = useAppI18n()
 
 const status = computed(() => store.statusByProject[props.projectId])
 const error = computed(() => store.errorByProject[props.projectId])
@@ -44,11 +46,11 @@ watch(() => props.projectId, (projectId, oldProjectId) => {
 
 <template>
   <section class="runtime-status">
-    <div v-if="error" class="status-error">Update failed · {{ error }}</div>
+    <div v-if="error" class="status-error">{{ t('overview.runtimeStatus.updateFailed') }} · {{ error }}</div>
     <div v-for="env in status?.environments ?? []" :key="env.env_name" class="env-section">
       <header class="env-head">
         <h2>{{ env.env_name }}</h2>
-        <span>{{ env.instances.length }} instances · {{ abnormalCount(env.instances) }} abnormal</span>
+        <span>{{ t('overview.runtimeStatus.instancesSummary', { count: env.instances.length, abnormal: abnormalCount(env.instances) }) }}</span>
       </header>
       <div class="instance-list">
         <InstanceCard

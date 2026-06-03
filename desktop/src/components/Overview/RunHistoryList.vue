@@ -11,9 +11,11 @@ RunHistoryList：展示单条流水线下的 run 历史。
 -->
 <script setup lang="ts">
 import type { Run } from '@/api/agent'
+import { useAppI18n } from '@/i18n/useAppI18n'
 
 defineProps<{ runs: Run[]; loading?: boolean }>()
 const emit = defineEmits<{ detail: [run: Run]; rollback: [run: Run] }>()
+const { t } = useAppI18n()
 
 function duration(run: Run) {
   if (!run.finished_at || !run.started_at) return '--'
@@ -23,14 +25,14 @@ function duration(run: Run) {
 
 <template>
   <div class="run-history">
-    <div v-if="loading" class="history-loading">Loading</div>
+    <div v-if="loading" class="history-loading">{{ t('common.loading') }}</div>
     <div v-for="run in runs" :key="run.id" class="run-row">
       <span class="run-status">{{ run.status }}</span>
       <span class="run-version">{{ run.artifact_version || '--' }}</span>
       <span>{{ run.env_name || '--' }}</span>
       <span>{{ duration(run) }}</span>
-      <button type="button" data-test="run-detail" @click="emit('detail', run)">Detail</button>
-      <button type="button" data-test="run-rollback" @click="emit('rollback', run)">Rollback</button>
+      <button type="button" data-test="run-detail" @click="emit('detail', run)">{{ t('overview.pipeline.detail') }}</button>
+      <button type="button" data-test="run-rollback" @click="emit('rollback', run)">{{ t('overview.pipeline.rollback') }}</button>
     </div>
   </div>
 </template>

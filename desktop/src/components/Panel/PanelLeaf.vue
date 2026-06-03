@@ -52,7 +52,7 @@ const headerTitle = computed(() => {
     const info = deploymentInfo.value
     if (info) return `${info.service.name} · ${info.envName}`
     // 反查不到（数据尚未加载或已删除）时退回截断的 deployment id
-    return `Deploy: ${source.value.deploymentId.slice(0, 12)}`
+    return t('panel.deploymentFallbackTitle', { id: source.value.deploymentId.slice(0, 12) })
   }
   return t('panel.emptyTitle')
 })
