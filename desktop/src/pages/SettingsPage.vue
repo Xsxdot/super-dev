@@ -21,6 +21,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
+import CertificateTab from '@/components/Settings/CertificateTab.vue'
 import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
@@ -29,7 +30,7 @@ import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.v
 import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'templates' | 'approvals'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'ssl' | 'templates' | 'approvals'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,11 +44,13 @@ const selectedTab = ref<SettingsTab>(
     ? 'hosts'
     : route.query.tab === 'dns' || route.query.tab === 'ingress'
       ? 'dns'
-    : route.query.tab === 'templates'
-      ? 'templates'
-      : route.query.tab === 'approvals'
-        ? 'approvals'
-        : 'general',
+      : route.query.tab === 'ssl'
+        ? 'ssl'
+        : route.query.tab === 'templates'
+          ? 'templates'
+          : route.query.tab === 'approvals'
+            ? 'approvals'
+            : 'general',
 )
 
 onMounted(() => {
@@ -202,6 +205,18 @@ const retentionDays = computed({
           <path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.4 2.3 5.5S9.6 11.9 8 13.5C6.4 11.9 5.7 10.1 5.7 8S6.4 4.1 8 2.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         {{ t('settings.tabs.dnsProvider') }}
+      </button>
+      <button
+        data-test="settings-tab-ssl"
+        class="tab-btn"
+        :class="{ active: selectedTab === 'ssl' }"
+        @click="selectedTab = 'ssl'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <path d="M8 1.8l4.8 1.8v3.7c0 3-1.8 5.5-4.8 6.9-3-1.4-4.8-3.9-4.8-6.9V3.6z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M6 8h4M8 6v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        {{ t('settings.tabs.sslCertificates') }}
       </button>
       <button
         data-test="settings-tab-templates"
@@ -366,6 +381,10 @@ const retentionDays = computed({
 
       <section v-else-if="selectedTab === 'dns'" class="pane">
         <DNSProviderTab />
+      </section>
+
+      <section v-else-if="selectedTab === 'ssl'" class="pane">
+        <CertificateTab />
       </section>
 
       <section v-else-if="selectedTab === 'templates'" class="pane">

@@ -42,6 +42,10 @@ vi.mock('@/components/Settings/DNSProviderTab.vue', () => ({
   default: { template: '<section data-test="dns-provider-tab">DNS 提供商</section>' },
 }))
 
+vi.mock('@/components/Settings/CertificateTab.vue', () => ({
+  default: { template: '<section data-test="certificate-tab">SSL 证书</section>' },
+}))
+
 function service(id: string, name: string, required = false): Service {
   return {
     id,
@@ -169,6 +173,19 @@ describe('SettingsPage', () => {
 
     expect(wrapper.find('[data-test="settings-tab-dns"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="dns-provider-tab"]').exists()).toBe(true)
+  })
+
+  it('支持打开 SSL 证书 tab', async () => {
+    routeState.query = { tab: 'ssl' }
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="settings-tab-ssl"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="certificate-tab"]').exists()).toBe(true)
   })
 
   it('支持打开模板管理 tab', async () => {
