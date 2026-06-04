@@ -177,7 +177,6 @@ export default {
       reasons: '原因',
       pendingCount: '{count} 个待审批',
       noticeTitle: '需要操作审批',
-      noticeAction: '去审批',
     },
     hosts: {
       title: '主机管理',

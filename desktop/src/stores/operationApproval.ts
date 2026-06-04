@@ -75,9 +75,17 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
   }
 
   async function reject(id: string, note = '') {
-    await api.rejectOperationApproval(id, { decided_by: 'user', note })
-    if (notice.value?.approval_id === id) notice.value = null
-    await loadPending()
+    loading.value = true
+    error.value = ''
+    try {
+      await api.rejectOperationApproval(id, { decided_by: 'user', note })
+      if (notice.value?.approval_id === id) notice.value = null
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      loading.value = false
+      await loadPending(false)
+    }
   }
 
   async function captureApprovalRequired(err: unknown): Promise<boolean> {

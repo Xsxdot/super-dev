@@ -177,7 +177,6 @@ export default {
       reasons: 'Reasons',
       pendingCount: '{count} pending',
       noticeTitle: 'Approval required',
-      noticeAction: 'Review',
     },
     hosts: {
       title: 'Hosts',

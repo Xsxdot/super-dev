@@ -94,4 +94,38 @@ describe('operationApproval store', () => {
 
     expect(getDetail).not.toHaveBeenCalled()
   })
+
+  it('clears the active notification after rejecting from the notification', async () => {
+    vi.spyOn(api, 'rejectOperationApproval').mockResolvedValue({ id: 'opa_1', status: 'rejected' } as any)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+    }
+    store.error = 'old error'
+    await store.reject('opa_1', 'no')
+
+    expect(api.rejectOperationApproval).toHaveBeenCalledWith('opa_1', { decided_by: 'user', note: 'no' })
+    expect(store.notice).toBeNull()
+    expect(store.error).toBe('')
+  })
+
+  it('records reject failures instead of throwing from notification actions', async () => {
+    vi.spyOn(api, 'rejectOperationApproval').mockRejectedValue(new Error('reject failed'))
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+    }
+    await store.reject('opa_1', '')
+
+    expect(store.notice?.approval_id).toBe('opa_1')
+    expect(store.error).toBe('reject failed')
+  })
 })

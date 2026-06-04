@@ -188,6 +188,26 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.Contains(t, string(raw), `"onboarding_completed": true`)
 }
 
+// TestCORSAllowsDesktopRequesterHeaders 验证桌面端自定义请求头能通过浏览器预检。
+func TestCORSAllowsDesktopRequesterHeaders(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/settings", nil)
+	require.NoError(t, err)
+	req.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	req.Header.Set("Access-Control-Request-Headers", "content-type,x-superdev-requester,x-superdev-requester-label")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	allowedHeaders := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
+	assert.Contains(t, allowedHeaders, "content-type")
+	assert.Contains(t, allowedHeaders, "x-superdev-requester")
+	assert.Contains(t, allowedHeaders, "x-superdev-requester-label")
+}
+
 // TestSettingsPutPreservesSampleSeeded 验证桌面端更新设置时不会清掉 agent 内部示例落地标记。
 func TestSettingsPutPreservesSampleSeeded(t *testing.T) {
 	dataDir := t.TempDir()
