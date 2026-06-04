@@ -219,4 +219,13 @@ describe('BottomBar', () => {
     await wrapper.find('[data-test="sync-toggle"]').setValue(false)
     expect(bookmarkStore.syncEnabled).toBe(false)
   })
+
+  it('renders bottom bar as grouped runtime action clusters', async () => {
+    const { wrapper } = await mountBottomBarWithServices('en-US')
+
+    expect(wrapper.find('[data-test="bottom-open-deployments"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-deployment-actions"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-evidence"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-runtime-status"]').exists()).toBe(true)
+  })
 })

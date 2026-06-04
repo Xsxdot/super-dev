@@ -470,6 +470,8 @@ export default {
   bottomBar: {
     panelServices: '面板服务',
     openDeployments: '打开的部署',
+    selectedActions: '部署操作',
+    runtimeStatus: '运行状态',
     restart: '重启',
     stop: '停止',
     syncRecording: '同步录制',

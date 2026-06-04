@@ -470,6 +470,8 @@ export default {
   bottomBar: {
     panelServices: 'Panel Services',
     openDeployments: 'Open Deployments',
+    selectedActions: 'Deployment actions',
+    runtimeStatus: 'Runtime status',
     restart: 'Restart',
     stop: 'Stop',
     syncRecording: 'Sync Recording',

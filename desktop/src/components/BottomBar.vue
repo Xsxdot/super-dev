@@ -230,40 +230,37 @@ onMounted(() => {
 
 <template>
   <div class="bottom-bar">
-    <span class="label">{{ t('bottomBar.openDeployments') }}</span>
-
-    <div class="service-chips">
-      <div
-        v-for="svc in panelServices"
-        :key="svc.id"
-        class="service-chip"
-      >
-        <input
-          type="checkbox"
-          :checked="checkedIds.has(svc.id)"
-          @change="toggleCheck(svc.id)"
-          style="accent-color: #1f6feb; width: 11px; height: 11px; cursor: pointer;"
-        />
-        <span class="dot" :style="{ background: statusColor(svc.status) }" />
-        <span class="svc-name">{{ svc.name }}</span>
+    <section class="bottom-group open-group" data-test="bottom-open-deployments">
+      <span class="group-label">{{ t('bottomBar.openDeployments') }}</span>
+      <div class="service-chips">
+        <div
+          v-for="svc in panelServices"
+          :key="svc.id"
+          class="service-chip"
+        >
+          <input
+            type="checkbox"
+            :checked="checkedIds.has(svc.id)"
+            @change="toggleCheck(svc.id)"
+          />
+          <span class="dot" :style="{ background: statusColor(svc.status) }" />
+          <span class="svc-name">{{ svc.name }}</span>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <template v-if="checkedServiceIds.length > 0">
-      <div class="divider" />
-      <button class="action-btn" @click="restartChecked">↺ {{ t('bottomBar.restart') }}</button>
-      <button class="action-btn danger" @click="stopChecked">⏹ {{ t('bottomBar.stop') }}</button>
-    </template>
+    <section class="bottom-group action-group" data-test="bottom-deployment-actions">
+      <span class="group-label">{{ t('bottomBar.selectedActions') }}</span>
+      <button class="action-btn" :disabled="checkedServiceIds.length === 0" @click="restartChecked">↺ {{ t('bottomBar.restart') }}</button>
+      <button class="action-btn danger" :disabled="checkedServiceIds.length === 0" @click="stopChecked">⏹ {{ t('bottomBar.stop') }}</button>
+    </section>
 
-    <div class="divider" />
-
-    <div class="sync-group">
+    <section class="bottom-group evidence-group" data-test="bottom-evidence">
       <label class="sync-label">
         <input
           data-test="sync-toggle"
           type="checkbox"
           :checked="syncEnabled"
-          style="accent-color:#1f6feb;"
           @change="toggleSync"
         />
         <span>{{ t('bottomBar.syncEvidenceCapture') }}</span>
@@ -296,11 +293,10 @@ onMounted(() => {
           ↑
         </button>
       </template>
-    </div>
+    </section>
 
-    <div class="flex-1" />
-
-    <div class="runtime-status-group">
+    <section class="bottom-group runtime-group" data-test="bottom-runtime-status">
+      <span class="group-label">{{ t('bottomBar.runtimeStatus') }}</span>
       <div data-test="agent-status" class="agent-status" :title="agentHost">
         <span class="agent-dot" :class="{ connected: agentStore.connected }" />
         <span>{{ t('bottomBar.agent') }}</span>
@@ -322,7 +318,7 @@ onMounted(() => {
           {{ operationApprovalStore.pendingCount }}
         </span>
       </button>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -330,148 +326,209 @@ onMounted(() => {
 .bottom-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 10px;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  min-height: 34px;
+  gap: 14px;
+  min-height: 72px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-secondary);
+  background: rgba(13, 22, 30, 0.98);
+  color: var(--text-secondary);
+  font-size: 12px;
   overflow-x: auto;
-}
-.label {
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
   flex-shrink: 0;
 }
-.service-chips { display: flex; gap: 10px; align-items: center; }
-.service-chip { display: flex; align-items: center; gap: 4px; }
-.dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.svc-name { font-size: 11px; color: var(--text-primary); white-space: nowrap; }
 
-.divider { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
-.flex-1 { flex: 1; }
+.bottom-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-right: 14px;
+  border-right: 1px solid rgba(139, 148, 158, 0.18);
+  flex-shrink: 0;
+}
+
+.bottom-group:last-child {
+  border-right: 0;
+  padding-right: 0;
+  margin-left: auto;
+}
+
+.group-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.service-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.service-chip,
+.action-btn,
+.sync-label,
+.sync-record-btn,
+.sync-icon-btn,
+.agent-status,
+.mcp-status,
+.approvals-entry {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.service-chip {
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid rgba(139, 148, 158, 0.22);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.service-chip input,
+.sync-label input {
+  accent-color: #1f6feb;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.svc-name {
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 .action-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 10px;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  background: rgba(255, 255, 255, 0.035);
   color: var(--text-secondary);
+  font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
 }
-.action-btn:hover { background: var(--bg-overlay); }
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .action-btn.danger {
   border-color: rgba(248,81,73,0.3);
   color: #f85149;
 }
 
-.sync-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  flex-shrink: 0;
-}
 .sync-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  background: rgba(255, 255, 255, 0.03);
   font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
 }
+
 .sync-record-btn {
-  background: transparent;
-  border: none;
-  font-size: 15px;
+  justify-content: center;
+  width: 32px;
+  border: 1px solid rgba(63, 185, 80, 0.28);
+  background: rgba(63, 185, 80, 0.08);
+  color: #3fb950;
+  font-size: 14px;
   cursor: pointer;
   line-height: 1;
   flex-shrink: 0;
-  padding: 0 2px;
-  color: #3fb950;
 }
-.sync-record-btn.recording { color: #f85149; }
+
+.sync-record-btn.recording {
+  border-color: rgba(248, 81, 73, 0.32);
+  background: rgba(248, 81, 73, 0.08);
+  color: #f85149;
+}
+
 .sync-icon-btn {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
+  justify-content: center;
+  width: 32px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  background: rgba(255, 255, 255, 0.035);
   color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
 }
+
 .sync-icon-btn:hover {
-  background: var(--bg-overlay);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
 }
 
-.runtime-status-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+.runtime-group {
+  gap: 10px;
 }
-.agent-status {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
+
+.agent-status,
 .mcp-status {
-  display: flex;
-  align-items: center;
   gap: 5px;
-  font-size: 10px;
+  padding: 0 2px;
   color: var(--text-tertiary);
+  font-size: 11px;
   white-space: nowrap;
   flex-shrink: 0;
 }
+
 .status-meta {
   color: var(--text-secondary);
 }
+
 .agent-dot {
-  width: 6px; height: 6px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #6e7681;
 }
-.agent-dot.connected { background: #3fb950; }
+
+.agent-dot.connected {
+  background: #3fb950;
+}
+
 .approvals-entry {
-  display: flex;
-  align-items: center;
   gap: 5px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
+  padding: 0 9px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  background: rgba(255, 255, 255, 0.035);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
+
 .approvals-entry:hover {
-  background: var(--bg-overlay);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
 }
+
 .approvals-entry.attention {
   border-color: rgba(210,153,34,0.35);
   color: #d29922;
 }
+
 .approval-count {
   min-width: 16px;
   height: 16px;
