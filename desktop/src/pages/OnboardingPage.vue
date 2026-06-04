@@ -13,7 +13,7 @@
   - 不注册示例项目，示例落地由 agent 启动钩子完成
 -->
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { codingAgents, useOnboardingStore } from '@/stores/onboarding'
 import { useSettingsStore } from '@/stores/settings'
@@ -25,10 +25,40 @@ const router = useRouter()
 const onboarding = useOnboardingStore()
 const settings = useSettingsStore()
 const { t } = useAppI18n()
+const copyState = ref<'idle' | 'success' | 'error'>('idle')
+const copyError = ref('')
+const finishAction = ref<'confirm' | 'skip' | null>(null)
+const finishFeedback = ref('')
+const finishFeedbackTone = ref<'muted' | 'error'>('muted')
+const hasSuccessfulInstall = computed(() => onboarding.installOutcomes.length > 0)
+let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(() => {
   void onboarding.detectInstalledAgents()
 })
+
+onBeforeUnmount(() => {
+  clearCopyFeedbackTimer()
+})
+
+function clearCopyFeedbackTimer() {
+  if (!copyFeedbackTimer) return
+  clearTimeout(copyFeedbackTimer)
+  copyFeedbackTimer = null
+}
+
+function scheduleCopyFeedbackReset() {
+  clearCopyFeedbackTimer()
+  copyFeedbackTimer = setTimeout(() => {
+    copyState.value = 'idle'
+    copyError.value = ''
+    copyFeedbackTimer = null
+  }, 1800)
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 function agentLabel(agent: CodingAgent) {
   return codingAgents.find((item) => item.id === agent)?.label ?? agent
@@ -53,12 +83,37 @@ function changeLocale(event: Event) {
 }
 
 async function copyPrompt() {
-  await navigator.clipboard.writeText(onboarding.demoPrompt)
+  clearCopyFeedbackTimer()
+  try {
+    await navigator.clipboard.writeText(onboarding.demoPrompt)
+    copyState.value = 'success'
+    copyError.value = ''
+  } catch (error) {
+    copyState.value = 'error'
+    copyError.value = errorMessage(error)
+  } finally {
+    scheduleCopyFeedbackReset()
+  }
 }
 
-async function finish() {
-  await settings.setOnboardingCompleted(true)
-  await router.push('/')
+async function finish(action: 'confirm' | 'skip') {
+  if (finishAction.value) return
+  finishFeedback.value = ''
+  if (action === 'confirm' && !hasSuccessfulInstall.value) {
+    finishFeedbackTone.value = 'muted'
+    finishFeedback.value = t('onboarding.finishRequiresInstall')
+    return
+  }
+  finishAction.value = action
+  try {
+    await settings.setOnboardingCompleted(true)
+    await router.push('/')
+  } catch (error) {
+    finishFeedbackTone.value = 'error'
+    finishFeedback.value = t('onboarding.finishFailed', { message: errorMessage(error) })
+  } finally {
+    finishAction.value = null
+  }
 }
 </script>
 
@@ -205,19 +260,57 @@ async function finish() {
           <h2>{{ t('onboarding.sendToAi') }}</h2>
           <div class="prompt-box" data-test="demo-prompt">{{ onboarding.demoPrompt }}</div>
           <div class="actions">
-            <button class="secondary-btn" data-test="copy-prompt" type="button" @click="copyPrompt">
-              {{ t('common.copy') }}
+            <button
+              class="secondary-btn"
+              :class="{ 'feedback-active': copyState === 'success' }"
+              data-test="copy-prompt"
+              type="button"
+              @click="copyPrompt"
+            >
+              {{ copyState === 'success' ? t('onboarding.copySucceeded') : t('common.copy') }}
             </button>
-            <button class="primary-btn" data-test="finish-onboarding" type="button" @click="finish">
-              {{ t('onboarding.finish') }}
+            <button
+              class="primary-btn"
+              data-test="finish-onboarding"
+              type="button"
+              :disabled="finishAction !== null"
+              @click="finish('confirm')"
+            >
+              {{ finishAction === 'confirm' ? t('onboarding.finishing') : t('onboarding.finish') }}
             </button>
           </div>
+          <p
+            v-if="copyState !== 'idle'"
+            class="feedback-line"
+            :class="copyState === 'error' ? 'state-error' : 'state-ok'"
+            data-test="copy-feedback"
+          >
+            {{
+              copyState === 'error'
+                ? t('onboarding.copyFailed', { message: copyError })
+                : t('onboarding.copySucceeded')
+            }}
+          </p>
+          <p
+            v-if="finishFeedback"
+            class="feedback-line"
+            :class="finishFeedbackTone === 'error' ? 'state-error' : 'state-muted'"
+            data-test="finish-feedback"
+          >
+            {{ finishFeedback }}
+          </p>
         </div>
       </section>
 
       <footer class="onboarding-footer">
-        <button class="secondary-btn" data-test="skip-onboarding" type="button" @click="finish">
-          {{ t('onboarding.skip') }}
+        <button
+          class="secondary-btn"
+          data-test="skip-onboarding"
+          type="button"
+          :disabled="finishAction !== null"
+          @click="finish('skip')"
+        >
+          {{ finishAction === 'skip' ? t('onboarding.skipping') : t('onboarding.skip') }}
         </button>
       </footer>
     </section>
@@ -356,8 +449,30 @@ h2 {
   background: transparent;
 }
 
+.primary-btn:disabled,
+.secondary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.secondary-btn.feedback-active {
+  border-color: var(--status-running);
+  color: var(--status-running);
+  animation: onboarding-pop 180ms ease-out;
+}
+
 .state-ok {
   color: var(--status-running);
+}
+
+.state-error {
+  color: var(--status-failed);
+}
+
+.feedback-line {
+  margin: 8px 0 0;
+  font-size: 13px;
+  animation: onboarding-pop 180ms ease-out;
 }
 
 .skill-result {
@@ -393,6 +508,18 @@ pre,
   justify-content: flex-end;
   margin-top: auto;
   padding-top: 20px;
+}
+
+@keyframes onboarding-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @media (max-width: 640px) {

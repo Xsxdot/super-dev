@@ -143,14 +143,47 @@ describe('OnboardingPage', () => {
   it('copies prompt and marks completion', async () => {
     const settings = useSettingsStore()
     vi.spyOn(settings, 'setOnboardingCompleted').mockResolvedValue(undefined)
+    const store = useOnboardingStore()
+    store.installOutcomes = [{
+      agent: 'claude-code',
+      installed: true,
+      already_present: false,
+      backup_path: null,
+      config_path: '/home/me/.claude.json',
+      manual_config: '{"mcpServers":{}}',
+      skill: {
+        installed: true,
+        already_present: false,
+        target_path: '/home/me/.claude/skills/superdev',
+        backup_path: null,
+        error: null,
+      },
+    }]
     const wrapper = mount(OnboardingPage)
 
     await wrapper.find('[data-test="copy-prompt"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-test="copy-feedback"]').text()).toContain('已复制')
+
     await wrapper.find('[data-test="finish-onboarding"]').trigger('click')
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('superdev-sample'))
     expect(settings.setOnboardingCompleted).toHaveBeenCalledWith(true)
     expect(push).toHaveBeenCalledWith('/')
+  })
+
+  it('asks users to install mcp before confirming the prompt was sent', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'setOnboardingCompleted').mockResolvedValue(undefined)
+    const wrapper = mount(OnboardingPage)
+
+    await wrapper.find('[data-test="finish-onboarding"]').trigger('click')
+    await nextTick()
+
+    expect(settings.setOnboardingCompleted).not.toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="finish-feedback"]').text()).toContain('请先安装 MCP 连接')
   })
 
   it('skips onboarding from the bottom action', async () => {
@@ -162,5 +195,17 @@ describe('OnboardingPage', () => {
 
     expect(settings.setOnboardingCompleted).toHaveBeenCalledWith(true)
     expect(push).toHaveBeenCalledWith('/')
+  })
+
+  it('shows a visible error when skip cannot save completion', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'setOnboardingCompleted').mockRejectedValue(new Error('agent offline'))
+    const wrapper = mount(OnboardingPage)
+
+    await wrapper.find('[data-test="skip-onboarding"]').trigger('click')
+    await nextTick()
+
+    expect(push).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="finish-feedback"]').text()).toContain('agent offline')
   })
 })

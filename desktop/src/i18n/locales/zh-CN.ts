@@ -176,6 +176,8 @@ export default {
       effects: '影响',
       reasons: '原因',
       pendingCount: '{count} 个待审批',
+      noticeTitle: '需要操作审批',
+      noticeAction: '去审批',
     },
     hosts: {
       title: '主机管理',
@@ -397,7 +399,13 @@ export default {
     skillBackupSaved: '旧 skill 已备份：{path}',
     sendToAi: '把这句话发给 AI',
     finish: '我已发给 AI',
+    finishing: '正在完成...',
     skip: '跳过',
+    skipping: '正在跳过...',
+    copySucceeded: '已复制',
+    copyFailed: '复制失败：{message}',
+    finishRequiresInstall: '请先安装 MCP 连接，或点击跳过退出引导。',
+    finishFailed: '保存引导状态失败：{message}',
     detectionError: '检测失败：{message}',
     agentStatus: {
       detecting: '检测中',

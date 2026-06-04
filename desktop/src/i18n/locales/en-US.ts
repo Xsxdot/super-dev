@@ -176,6 +176,8 @@ export default {
       effects: 'Effects',
       reasons: 'Reasons',
       pendingCount: '{count} pending',
+      noticeTitle: 'Approval required',
+      noticeAction: 'Review',
     },
     hosts: {
       title: 'Hosts',
@@ -397,7 +399,13 @@ export default {
     skillBackupSaved: 'Old skill backup saved: {path}',
     sendToAi: 'Send this to AI',
     finish: 'I sent it to AI',
+    finishing: 'Finishing...',
     skip: 'Skip',
+    skipping: 'Skipping...',
+    copySucceeded: 'Copied',
+    copyFailed: 'Copy failed: {message}',
+    finishRequiresInstall: 'Install the MCP connection first, or choose Skip to leave onboarding.',
+    finishFailed: 'Failed to save onboarding state: {message}',
     detectionError: 'Detection failed: {message}',
     agentStatus: {
       detecting: 'Detecting',

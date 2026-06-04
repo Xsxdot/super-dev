@@ -11,10 +11,25 @@ package operation
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/superdev/agent/model"
 )
+
+// RuntimeDeploymentTarget 描述批量运行态操作中的单个 deployment 目标。
+//
+// 参数：
+//   - Service: deployment 所属服务，用于生成可读目标摘要
+//   - Deployment: 将要被操作的 deployment
+//
+// 注意：
+//   - 调用方应先完成“哪些服务被选中、哪些已运行”的业务过滤
+//   - 本类型只承载安全预检所需的稳定目标信息
+type RuntimeDeploymentTarget struct {
+	Service    model.Service
+	Deployment model.Deployment
+}
 
 // PlanRuntime 为 deployment 运行态写操作生成安全预检计划。
 //
@@ -91,6 +106,102 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 	plan.Fingerprint = stableFingerprint(map[string]any{
 		"kind":             plan.Kind,
 		"target":           plan.Target,
+		"expected_effects": plan.ExpectedEffects,
+		"denied":           plan.Denied,
+	})
+	return plan, nil
+}
+
+// PlanRuntimeStartSelected 为项目环境下的“启动所选”批量操作生成安全预检计划。
+//
+// 参数：
+//   - project: deployment 所属项目
+//   - envName: 被操作的环境名称
+//   - targets: 已解析且需要启动的 deployment 目标列表
+//
+// 返回：
+//   - 可用于审批和执行授权的稳定 plan
+//   - envName 为空或 targets 为空时返回错误
+//
+// 注意：
+//   - 此函数不判断服务是否被用户选中，只验证批量目标的安全边界
+//   - fingerprint 会绑定 deployment ID 列表，避免 token 被换目标复用
+func PlanRuntimeStartSelected(project model.Project, envName string, targets []RuntimeDeploymentTarget) (Plan, error) {
+	envName = trim(envName)
+	if envName == "" || len(targets) == 0 {
+		return Plan{}, ErrInvalidOperation
+	}
+
+	now := time.Now().UTC()
+	env, isDev := findEnvironment(project, envName)
+	target := Target{
+		ProjectID:   project.ID,
+		ProjectName: project.Name,
+		EnvName:     envName,
+	}
+	plan := Plan{
+		ID:               newID("op"),
+		Kind:             OperationRuntimeStartSelected,
+		Target:           target,
+		TargetSummary:    fmt.Sprintf("%s/%s selected services", project.Name, envName),
+		RiskLevel:        RiskLow,
+		RequiresApproval: false,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+		Checks: []Check{
+			{Name: "target_resolved", Status: "passed", Message: fmt.Sprintf("%d deployment target(s) resolved by agent", len(targets))},
+		},
+	}
+
+	deploymentIDs := make([]string, 0, len(targets))
+	effects := make([]string, 0, len(targets))
+	for _, item := range targets {
+		dep := item.Deployment
+		serviceName := item.Service.Name
+		if serviceName == "" {
+			serviceName = item.Service.ID
+		}
+		deploymentIDs = append(deploymentIDs, dep.ID)
+		effects = append(effects, fmt.Sprintf("start local deployment %s", dep.ID))
+		if dep.EnvName != envName {
+			plan.Denied = true
+			plan.RiskLevel = RiskCritical
+			plan.Reasons = append(plan.Reasons, fmt.Sprintf("deployment %s is not in environment %s", dep.ID, envName))
+		}
+		if dep.IsReadOnly() {
+			plan.Denied = true
+			plan.RiskLevel = RiskCritical
+			plan.Reasons = append(plan.Reasons, fmt.Sprintf("deployment %s is read-only", dep.ID))
+		}
+		if effectiveDeployLocation(dep) == model.LocationRemote {
+			plan.Denied = true
+			plan.RiskLevel = RiskCritical
+			plan.Reasons = append(plan.Reasons, fmt.Sprintf("remote deployment %s/%s is not supported by safe operations", serviceName, dep.ID))
+		}
+	}
+	sort.Strings(deploymentIDs)
+	sort.Strings(effects)
+	plan.ExpectedEffects = effects
+
+	if env.Name == "" {
+		plan.RiskLevel = RiskHigh
+		plan.RequiresApproval = true
+		plan.Reasons = append(plan.Reasons, "environment definition not found")
+	}
+	if !plan.Denied && !isDev {
+		plan.RiskLevel = RiskHigh
+		plan.RequiresApproval = true
+		plan.Reasons = append(plan.Reasons, "environment is not marked as dev")
+	}
+	if !plan.Denied && isDev {
+		plan.RiskLevel = RiskLow
+		plan.RequiresApproval = false
+	}
+
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"deployment_ids":   deploymentIDs,
 		"expected_effects": plan.ExpectedEffects,
 		"denied":           plan.Denied,
 	})

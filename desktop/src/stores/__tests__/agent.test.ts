@@ -11,7 +11,8 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAgentStore } from '../agent'
 import { useLogLifecycleStore } from '../logLifecycle'
-import { api } from '@/api/agent'
+import { useOperationApprovalStore } from '../operationApproval'
+import { AgentAPIError, api } from '@/api/agent'
 
 vi.mock('@/api/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/agent')>()
@@ -22,6 +23,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
       startDeployment: vi.fn().mockResolvedValue(undefined),
       stopDeployment: vi.fn().mockResolvedValue(undefined),
       restartDeployment: vi.fn().mockResolvedValue(undefined),
+      listOperationApprovals: vi.fn().mockResolvedValue([]),
     },
   }
 })
@@ -51,5 +53,41 @@ describe('agent deployment lifecycle markers', () => {
     await expect(agent.startDeployment('dep-1')).rejects.toThrow('boom')
 
     expect(lifecycle.getMarkers('dep-1')).toEqual([])
+  })
+
+  it('captures approval_required responses for desktop prompts', async () => {
+    const approval = {
+      id: 'opa_1',
+      status: 'pending',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_1',
+        kind: 'runtime.start',
+        target: { deployment_id: 'dep-prod' },
+        target_summary: 'demo/prod/api',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_1',
+      },
+    } as any
+    vi.mocked(api.startDeployment).mockRejectedValueOnce(new AgentAPIError('approval required', 403, {
+      code: 'approval_required',
+      error: 'approval required',
+      approval,
+      plan: approval.plan,
+    }))
+    vi.mocked(api.listOperationApprovals).mockResolvedValueOnce([approval])
+
+    const agent = useAgentStore()
+    const approvals = useOperationApprovalStore()
+    const lifecycle = useLogLifecycleStore()
+
+    await agent.startDeployment('dep-prod')
+
+    expect(approvals.pendingCount).toBe(1)
+    expect(approvals.notice?.approval_id).toBe('opa_1')
+    expect(lifecycle.getMarkers('dep-prod')).toEqual([])
   })
 })

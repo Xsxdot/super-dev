@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
+import OperationApprovalNotice from '@/components/OperationApprovalNotice.vue'
 import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
@@ -17,4 +18,5 @@ onMounted(async () => {
 
 <template>
   <RouterView />
+  <OperationApprovalNotice />
 </template>

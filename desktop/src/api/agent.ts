@@ -6,20 +6,102 @@ const BASE = `http://${AGENT_HOST}`
 export const WS_BASE = `ws://${AGENT_HOST}`
 export { AGENT_HOST }
 
+// AgentAPIErrorPayload 描述 agent 结构化错误响应。
+//
+// 参数：
+//   - code: 稳定错误码，例如 approval_required
+//   - error: 可展示错误信息
+//   - plan: operation 预检计划
+//   - approval: 待处理审批请求
+//
+// 注意：
+//   - 该结构只用于保留 agent 返回的错误上下文，不自行计算审批状态
+export interface AgentAPIErrorPayload {
+  code?: string
+  error?: string
+  plan?: OperationPlan
+  approval?: OperationApproval
+}
+
+// AgentAPIError 表示 agent HTTP API 返回的结构化错误。
+//
+// 参数：
+//   - message: 可展示错误信息
+//   - status: HTTP 状态码
+//   - payload: agent 返回的结构化错误体
+//
+// 返回：
+//   - 可被调用方用 code/plan/approval 精确分支处理的 Error
+//
+// 注意：
+//   - approval token 不会出现在该错误对象中
+export class AgentAPIError extends Error {
+  status: number
+  code?: string
+  plan?: OperationPlan
+  approval?: OperationApproval
+
+  constructor(message: string, status: number, payload?: AgentAPIErrorPayload) {
+    super(message)
+    this.name = 'AgentAPIError'
+    this.status = status
+    this.code = payload?.code
+    this.plan = payload?.plan
+    this.approval = payload?.approval
+  }
+}
+
+// isApprovalRequiredError 判断错误是否为需要用户审批的结构化响应。
+//
+// 参数：
+//   - error: 任意捕获到的异常值
+//
+// 返回：
+//   - true 表示包含 approval_required code 和 approval 对象
+//
+// 注意：
+//   - 调用方仍需通过审批页批准并取得一次性 token 后才能重试操作
+export function isApprovalRequiredError(error: unknown): error is AgentAPIError & { approval: OperationApproval } {
+  return error instanceof AgentAPIError && error.code === 'approval_required' && !!error.approval
+}
+
+function requestHeaders(headers?: HeadersInit): Record<string, string> {
+  const merged: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-SuperDev-Requester': 'desktop',
+    'X-SuperDev-Requester-Label': 'SuperDev Desktop',
+  }
+  if (!headers) return merged
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      merged[key] = value
+    })
+    return merged
+  }
+  if (Array.isArray(headers)) {
+    for (const [key, value] of headers) merged[key] = value
+    return merged
+  }
+  const plainHeaders = headers as Record<string, string>
+  return { ...merged, ...plainHeaders }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const { headers, ...rest } = options ?? {}
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
+    ...rest,
+    headers: requestHeaders(headers),
   })
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
+    let body: AgentAPIErrorPayload | undefined
     try {
-      const body = (await res.json()) as { error?: string }
+      body = (await res.json()) as AgentAPIErrorPayload
       if (body.error) message = body.error
     } catch {
       /* 非 JSON 错误体 */
     }
-    throw new Error(message)
+    throw new AgentAPIError(message, res.status, body)
   }
   return res.json() as Promise<T>
 }
@@ -31,6 +113,13 @@ function qs(params?: Record<string, string | number | undefined>): string {
   }
   const encoded = query.toString()
   return encoded ? `?${encoded}` : ''
+}
+
+function postWithApprovalToken(approvalToken?: string): RequestInit {
+  return {
+    method: 'POST',
+    headers: approvalToken ? { 'X-SuperDev-Approval-Token': approvalToken } : undefined,
+  }
 }
 
 export type DeployLocation = 'local' | 'remote'
@@ -760,12 +849,12 @@ export const api = {
   },
 
   // Deployment 进程控制
-  startDeployment: (id: string) =>
-    request<void>(`/api/deployments/${encodeURIComponent(id)}/start`, { method: 'POST' }),
-  stopDeployment: (id: string) =>
-    request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-  restartDeployment: (id: string) =>
-    request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
+  startDeployment: (id: string, approvalToken?: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/start`, postWithApprovalToken(approvalToken)),
+  stopDeployment: (id: string, approvalToken?: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, postWithApprovalToken(approvalToken)),
+  restartDeployment: (id: string, approvalToken?: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, postWithApprovalToken(approvalToken)),
 
   // Pipeline 模板与预览
   listPipelineTemplates: () => request<PipelineTemplatesResponse>('/api/pipeline/templates'),
@@ -803,9 +892,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ env_name: envName, names }),
     }),
-  startEnvSelected: (projectId: string, envName: string) =>
+  startEnvSelected: (projectId: string, envName: string, approvalToken?: string) =>
     request<void>(`/api/projects/${encodeURIComponent(projectId)}/envs/${encodeURIComponent(envName)}/start-selected`, {
       method: 'POST',
+      headers: approvalToken ? { 'X-SuperDev-Approval-Token': approvalToken } : undefined,
     }),
 
   // 日志

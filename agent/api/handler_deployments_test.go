@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/superdev/agent/operation"
 )
 
 func TestDeploymentRuntimeEndpoint_AllowsDevLocalWithoutApproval(t *testing.T) {
@@ -48,4 +49,35 @@ func TestDeploymentRuntimeEndpoint_RequiresApprovalForNonDevLocal(t *testing.T) 
 	assert.Equal(t, "approval_required", resp["code"])
 	assert.NotNil(t, resp["plan"])
 	assert.NotNil(t, resp["approval"])
+}
+
+func TestStartEnvSelectedRequiresApprovalForNonDevLocal(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := operationAPIProject(false, false)
+	project.Services[0].Required = true
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	required := postJSONForRawTest(t, srv.URL+"/api/projects/proj-op/envs/prod/start-selected", map[string]any{}, http.StatusForbidden)
+
+	assert.Equal(t, "approval_required", required["code"])
+	plan := required["plan"].(map[string]any)
+	assert.Equal(t, operation.OperationRuntimeStartSelected, plan["kind"])
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	_ = postJSONForTest[operation.Approval](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"decided_by": "user",
+		"note":       "start selected",
+	}, http.StatusOK)
+	detail := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+
+	ok := postJSONWithHeadersForTest[map[string]string](t, srv.URL+"/api/projects/proj-op/envs/prod/start-selected", map[string]any{}, map[string]string{
+		"X-SuperDev-Approval-Token": detail.ApprovalToken,
+	}, http.StatusOK)
+
+	assert.Equal(t, "starting", ok["status"])
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { api, deploymentWsUrl } from '@/api/agent'
+import { api, deploymentWsUrl, isApprovalRequiredError } from '@/api/agent'
 
 const originalFetch = globalThis.fetch
 
@@ -80,5 +80,72 @@ describe('operation approval api', () => {
 
     await api.approveOperationApproval('opa_1', { decided_by: 'user', note: 'ok' })
     expect(globalThis.fetch).toHaveBeenLastCalledWith(expect.stringContaining('/api/operation-approvals/opa_1/approve'), expect.any(Object))
+  })
+
+  it('preserves structured approval_required errors', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: () => Promise.resolve({
+        code: 'approval_required',
+        error: 'approval required',
+        plan: {
+          id: 'op_1',
+          kind: 'runtime.start',
+          target: { deployment_id: 'dep-prod' },
+          risk_level: 'high',
+          requires_approval: true,
+          denied: false,
+          fingerprint: 'fp_1',
+        },
+        approval: {
+          id: 'opa_1',
+          status: 'pending',
+          requested_by: 'desktop',
+          plan: {
+            id: 'op_1',
+            kind: 'runtime.start',
+            target: { deployment_id: 'dep-prod' },
+            risk_level: 'high',
+            requires_approval: true,
+            denied: false,
+            fingerprint: 'fp_1',
+          },
+        },
+      }),
+    } as Response)
+
+    let caught: unknown
+    try {
+      await api.startDeployment('dep-prod')
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toMatchObject({
+      code: 'approval_required',
+      approval: expect.objectContaining({ id: 'opa_1' }),
+    })
+    expect(isApprovalRequiredError(caught)).toBe(true)
+  })
+
+  it('marks desktop requests with requester headers', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'starting' }),
+    } as Response)
+
+    await api.startDeployment('dep-dev')
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/deployments/dep-dev/start'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-SuperDev-Requester': 'desktop',
+          'X-SuperDev-Requester-Label': 'SuperDev Desktop',
+        }),
+      }),
+    )
   })
 })

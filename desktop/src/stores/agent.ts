@@ -4,6 +4,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api, type Deployment, type Project, type Service } from '@/api/agent'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 
 export const useAgentStore = defineStore('agent', () => {
   const projects = ref<Project[]>([])
@@ -73,17 +74,32 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   async function startDeployment(id: string) {
-    await api.startDeployment(id)
+    try {
+      await api.startDeployment(id)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
     logLifecycleStore.recordMarker(id, 'start')
   }
 
   async function stopDeployment(id: string) {
-    await api.stopDeployment(id)
+    try {
+      await api.stopDeployment(id)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
     logLifecycleStore.recordMarker(id, 'stop')
   }
 
   async function restartDeployment(id: string) {
-    await api.restartDeployment(id)
+    try {
+      await api.restartDeployment(id)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
     logLifecycleStore.recordMarker(id, 'restart')
   }
 
@@ -97,7 +113,17 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   async function startEnvSelected(projectId: string, envName: string) {
-    await api.startEnvSelected(projectId, envName)
+    try {
+      await api.startEnvSelected(projectId, envName)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
+  }
+
+  async function captureApprovalRequired(err: unknown): Promise<boolean> {
+    const operationApprovalStore = useOperationApprovalStore()
+    return operationApprovalStore.captureApprovalRequired(err)
   }
 
   function isServiceEnvSelected(projectId: string, envName: string, serviceName: string): boolean {

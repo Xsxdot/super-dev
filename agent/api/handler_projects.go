@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/superdev/agent/config"
 	"github.com/superdev/agent/model"
+	"github.com/superdev/agent/operation"
 )
 
 // jsonOK 将 v 序列化为 JSON 并以 200 状态码响应。
@@ -337,9 +338,8 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mgr := a.getOrCreateManager(projectID)
-	mgr.SetRunID(uuid.NewString())
 
-	var toStart []model.Deployment
+	var toStart []operation.RuntimeDeploymentTarget
 	for _, svc := range p.Services {
 		if !svc.Required {
 			if _, ok := selectedNames[svc.Name]; !ok {
@@ -353,7 +353,7 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 		if mgr.IsDeploymentActive(dep.ID) {
 			continue
 		}
-		toStart = append(toStart, *dep)
+		toStart = append(toStart, operation.RuntimeDeploymentTarget{Service: svc, Deployment: *dep})
 	}
 
 	if len(toStart) == 0 {
@@ -361,15 +361,28 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plan, err := operation.PlanRuntimeStartSelected(p, envName, toStart)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid operation")
+		return
+	}
+	allowed, approval := a.authorizeOperation(w, r, plan)
+	if !allowed {
+		return
+	}
+
+	mgr.SetRunID(uuid.NewString())
+
 	var started []model.Deployment
-	for _, dep := range toStart {
-		dep := dep
+	for _, target := range toStart {
+		dep := target.Deployment
 		if err := mgr.StartDeployment(dep); err != nil {
 			// 部分失败：先把已启动的 PID 持久化，避免遗漏孤儿进程
 			for _, d := range started {
 				a.pidStore.Set(d.ID, mgr.DeploymentPID(d.ID))
 			}
 			_ = a.pidStore.Flush()
+			a.appendOperationExecutionFailure(r, plan, approval, "failed to start deployment "+dep.ID+": "+err.Error())
 			jsonError(w, http.StatusInternalServerError, "failed to start deployment "+dep.ID+": "+err.Error())
 			return
 		}

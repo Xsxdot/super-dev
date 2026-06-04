@@ -40,4 +40,58 @@ describe('operationApproval store', () => {
     expect(api.approveOperationApproval).toHaveBeenCalledWith('opa_1', { decided_by: 'user', note: 'ok' })
     expect(store.pendingCount).toBe(0)
   })
+
+  it('resumes a desktop runtime operation after approval', async () => {
+    const approval = {
+      id: 'opa_1',
+      status: 'approved',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_1',
+        kind: 'runtime.start',
+        target: { deployment_id: 'dep-prod' },
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_1',
+      },
+    } as any
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue(approval)
+    vi.spyOn(api, 'getOperationApproval').mockResolvedValue({ approval, approval_token: 'tok_1' })
+    vi.spyOn(api, 'startDeployment').mockResolvedValue(undefined)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_1', 'ok')
+
+    expect(api.getOperationApproval).toHaveBeenCalledWith('opa_1')
+    expect(api.startDeployment).toHaveBeenCalledWith('dep-prod', 'tok_1')
+    expect(store.error).toBe('')
+  })
+
+  it('does not issue a token for MCP-requested approvals', async () => {
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({
+      id: 'opa_1',
+      status: 'approved',
+      requested_by: 'mcp',
+      requester_label: 'Codex',
+      plan: {
+        id: 'op_1',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'dep-prod' },
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_1',
+      },
+    } as any)
+    const getDetail = vi.spyOn(api, 'getOperationApproval').mockResolvedValue({} as any)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_1', '')
+
+    expect(getDetail).not.toHaveBeenCalled()
+  })
 })

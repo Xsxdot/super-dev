@@ -28,6 +28,8 @@ const (
 	OperationRuntimeStop = "runtime.stop"
 	// OperationRuntimeRestart 表示重启 deployment 的写操作。
 	OperationRuntimeRestart = "runtime.restart"
+	// OperationRuntimeStartSelected 表示启动项目某环境下已选 deployment 的批量写操作。
+	OperationRuntimeStartSelected = "runtime.start_selected"
 	// OperationTemplateImport 表示导入流水线模板的写操作。
 	OperationTemplateImport = "template.import"
 	// OperationConfigProjectUpsert 表示新增或编辑项目基础配置。

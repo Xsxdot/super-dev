@@ -35,7 +35,7 @@ function shortFingerprint(approval: OperationApproval): string {
         <h1>{{ t('settings.approvals.title') }}</h1>
         <p>{{ t('settings.approvals.pendingCount', { count: store.pendingCount }) }}</p>
       </div>
-      <button class="ghost-btn" type="button" :disabled="store.loading" @click="store.loadPending">
+      <button class="ghost-btn" type="button" :disabled="store.loading" @click="() => store.loadPending()">
         {{ t('settings.approvals.refresh') }}
       </button>
     </header>

@@ -14,6 +14,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { installTestI18n } from '@/test-utils/i18n'
 
 const routeState = vi.hoisted(() => ({ path: '/' }))
 const replace = vi.hoisted(() => vi.fn())
@@ -38,7 +39,7 @@ describe('App', () => {
       settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
     })
 
-    mount(App)
+    mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
     await flushPromises()
 
     expect(replace).toHaveBeenCalledWith('/onboarding')
@@ -51,7 +52,7 @@ describe('App', () => {
       settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
     })
 
-    mount(App)
+    mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
     await flushPromises()
 
     expect(replace).not.toHaveBeenCalled()
