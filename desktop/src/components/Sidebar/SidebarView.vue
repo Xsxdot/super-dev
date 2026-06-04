@@ -168,17 +168,18 @@ function openDeploymentIdSet(): Set<string> {
 .drop-hint {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  margin: 0 10px 12px;
-  padding: 8px 10px;
-  border: 1px dashed rgba(88, 166, 255, 0.45);
-  border-radius: 6px;
+  gap: 7px;
+  min-height: 28px;
+  margin: 0 12px 10px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
   color: var(--text-tertiary);
   font-size: 11px;
 }
 .drop-icon {
   color: #58a6ff;
+  opacity: 0.8;
   flex-shrink: 0;
 }
 .settings-entry {

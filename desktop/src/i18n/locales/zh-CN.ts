@@ -450,6 +450,8 @@ export default {
       start: '启动',
       restart: '重启',
       stop: '停止',
+      serviceMetaFallback: '{location} · {mode}',
+      replicaCount: '{count} replicas',
     },
   },
   runtimeWorkbench: {

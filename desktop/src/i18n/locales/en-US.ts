@@ -450,6 +450,8 @@ export default {
       start: 'Start',
       restart: 'Restart',
       stop: 'Stop',
+      serviceMetaFallback: '{location} · {mode}',
+      replicaCount: '{count} replicas',
     },
   },
   runtimeWorkbench: {

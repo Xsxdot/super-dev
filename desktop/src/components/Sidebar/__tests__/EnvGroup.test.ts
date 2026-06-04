@@ -6,7 +6,13 @@ import { useAgentStore } from '@/stores/agent'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Deployment, Service } from '@/api/agent'
 
-const makeService = (id: string, name: string, envName: string, depExtra: Partial<Deployment> = {}): Service => ({
+const makeService = (
+  id: string,
+  name: string,
+  envName: string,
+  depExtra: Partial<Deployment> = {},
+  serviceExtra: Partial<Service> = {},
+): Service => ({
   id,
   project_id: 'proj-1',
   name,
@@ -14,6 +20,7 @@ const makeService = (id: string, name: string, envName: string, depExtra: Partia
   order: 0,
   status: '',
   deployments: [{ id: 'dep-' + id, env_name: envName, location: 'local', status: '', ...depExtra }],
+  ...serviceExtra,
 })
 
 describe('EnvGroup', () => {
@@ -162,5 +169,36 @@ describe('EnvGroup', () => {
 
     expect(wrapper.find('[data-test="row-restart"]').attributes('title')).toBe('Restart')
     expect(wrapper.find('[data-test="row-stop"]').attributes('title')).toBe('Stop')
+  })
+
+  it('渲染 service 版本和副本数元信息', () => {
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'dev',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'web', 'dev', {}, { version: 'v1.2.3', replicas: 2 } as Partial<Service>)],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.find('[data-test="service-meta"]').text()).toContain('v1.2.3')
+    expect(wrapper.find('[data-test="service-meta"]').text()).toContain('2 replicas')
+  })
+
+  it('打开的 deployment 行保持高亮', () => {
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'dev',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'web', 'dev')],
+        selectedServiceIds: new Set<string>(['dep-svc-1']),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.find('[data-test="env-service-row"]').classes()).toContain('selected')
   })
 })

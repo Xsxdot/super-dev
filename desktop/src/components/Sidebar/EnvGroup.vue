@@ -79,6 +79,26 @@ function deploymentForService(svc: Service) {
   return svc.deployments?.find(d => d.env_name === props.envName)
 }
 
+function serviceVersionLabel(svc: Service): string | null {
+  const version = svc.version?.trim()
+  if (!version) return null
+  return version.startsWith('v') ? version : `v${version}`
+}
+
+function serviceReplicaLabel(svc: Service): string | null {
+  if (typeof svc.replicas !== 'number' || svc.replicas <= 0) return null
+  return t('shell.env.replicaCount', { count: svc.replicas })
+}
+
+function deploymentMetaLabel(svc: Service): string {
+  const dep = deploymentForService(svc)
+  const parts = [serviceVersionLabel(svc), serviceReplicaLabel(svc)].filter(Boolean)
+  if (parts.length) return parts.join(' · ')
+  if (!dep) return ''
+  const mode = dep.control_mode ?? dep.runtime?.type ?? dep.location
+  return t('shell.env.serviceMetaFallback', { location: dep.location, mode })
+}
+
 // isServiceOpen 判断本 env 下 service 的 deployment 是否已在某面板打开（用于行高亮）。
 function isServiceOpen(svc: Service): boolean {
   const dep = deploymentForService(svc)
@@ -274,7 +294,12 @@ onUnmounted(() => {
             ),
           }"
         />
-        <span class="service-name">{{ svc.name }}</span>
+        <div class="service-main">
+          <div class="service-topline">
+            <span class="service-name">{{ svc.name }}</span>
+          </div>
+          <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}</div>
+        </div>
         <div
           v-if="canControlDeployment(svc)"
           class="row-actions"
@@ -380,24 +405,27 @@ onUnmounted(() => {
 }
 
 .env-service-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 20px;
-  border-radius: 4px;
+  gap: 7px;
+  min-height: 54px;
+  padding: 7px 8px 7px 18px;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
   color: var(--text-primary, #e6edf3);
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s;
   user-select: none;
 }
 
 .env-service-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .env-service-row.selected {
-  background: rgba(31, 111, 235, 0.12);
+  border-left-color: #1f6feb;
+  background: rgba(31, 111, 235, 0.14);
 }
 
 .service-checkbox {
@@ -409,14 +437,37 @@ onUnmounted(() => {
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
+.service-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.service-topline {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .service-name {
-  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.service-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
