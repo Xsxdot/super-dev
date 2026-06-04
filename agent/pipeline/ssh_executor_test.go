@@ -39,6 +39,14 @@ func TestSSHExecutorUnknownHost(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRemoteCommandExitErrorIncludesCommand(t *testing.T) {
+	err := remoteCommandExitError("nginx -t", 127)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nginx -t")
+	assert.Contains(t, err.Error(), "code 127")
+}
+
 func TestPrepareTransferSourcePackagesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644))

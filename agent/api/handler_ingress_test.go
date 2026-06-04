@@ -123,6 +123,39 @@ func TestIngressDNSProviderListRedactsSecrets(t *testing.T) {
 	assert.Empty(t, providers[0].Secrets)
 }
 
+// TestIngressDNSProviderDropsAliyunZoneID 验证 Aliyun provider 保存时会丢弃无效的 zone_id 字段。
+func TestIngressDNSProviderDropsAliyunZoneID(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	resp := postIngressJSON(t, srv.URL+"/api/ingress/providers/dns", `{
+		"id": "aliyun-prod",
+		"name": "Aliyun Production",
+		"type": "aliyun",
+		"zone_id": "should-be-dropped",
+		"secrets": {
+			"access_key_id": "ak",
+			"access_key_secret": "sk"
+		}
+	}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var saved ingress.DNSProviderConfig
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&saved))
+	assert.Empty(t, saved.ZoneID)
+
+	listResp, err := http.Get(srv.URL + "/api/ingress/providers/dns")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	require.Equal(t, http.StatusOK, listResp.StatusCode)
+
+	var providers []ingress.DNSProviderConfig
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&providers))
+	require.Len(t, providers, 1)
+	assert.Equal(t, "aliyun-prod", providers[0].ID)
+	assert.Empty(t, providers[0].ZoneID)
+}
+
 // TestIngressDNSProviderRejectsManualConfig 验证 manual DNS 是内置 provider，不允许保存成自定义配置。
 func TestIngressDNSProviderRejectsManualConfig(t *testing.T) {
 	srv, _ := newTestApp(t)

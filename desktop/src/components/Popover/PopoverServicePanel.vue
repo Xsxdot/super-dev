@@ -25,14 +25,22 @@ const optionalServices = computed(() =>
   visibleServices.value.filter(s => !s.required)
 )
 
+function deploymentStatus(svc: Project['services'][number]): string {
+  return agentStore.deploymentForServiceInEnv(svc.id, envName.value)?.status ?? ''
+}
+
+function isActiveStatus(status: string): boolean {
+  return status === 'running' || status === 'starting'
+}
+
 const runningCount = computed(() =>
-  visibleServices.value.filter(s => s.status === 'running').length
+  visibleServices.value.filter(s => deploymentStatus(s) === 'running').length
 )
 const startingCount = computed(() =>
-  visibleServices.value.filter(s => s.status === 'starting').length
+  visibleServices.value.filter(s => deploymentStatus(s) === 'starting').length
 )
 const stoppedCount = computed(() =>
-  visibleServices.value.filter(s => s.status !== 'running' && s.status !== 'starting').length
+  visibleServices.value.filter(s => !isActiveStatus(deploymentStatus(s))).length
 )
 
 const selectedNames = computed(() => props.project.env_selected_service_ids?.[envName.value] ?? [])
@@ -45,7 +53,7 @@ const selectedServices = computed(() =>
 
 const canStartSelected = computed(() =>
   selectedServices.value.some(
-    s => s.status !== 'running' && s.status !== 'starting'
+    s => !isActiveStatus(deploymentStatus(s))
   )
 )
 

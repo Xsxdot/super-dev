@@ -18,22 +18,23 @@ const envName = computed(() => agentStore.devEnvName(props.projectId))
 const devDeployment = computed(() =>
   agentStore.deploymentForServiceInEnv(props.service.id, envName.value),
 )
+const deploymentStatus = computed(() => devDeployment.value?.status ?? '')
 
 const isActive = computed(() =>
-  props.service.status === 'running' || props.service.status === 'starting'
+  deploymentStatus.value === 'running' || deploymentStatus.value === 'starting'
 )
 
 const statusColor = computed(() => {
-  if (props.service.status === 'running') return '#3fb950'
-  if (props.service.status === 'starting') return '#d29922'
-  if (props.service.status === 'failed') return '#f85149'
+  if (deploymentStatus.value === 'running') return '#3fb950'
+  if (deploymentStatus.value === 'starting') return '#d29922'
+  if (deploymentStatus.value === 'failed') return '#f85149'
   return '#6e7681'
 })
 
 const statusLabel = computed(() => {
-  if (props.service.status === 'running') return t('common.status.running')
-  if (props.service.status === 'starting') return t('common.status.starting')
-  if (props.service.status === 'failed') return t('common.status.failed')
+  if (deploymentStatus.value === 'running') return t('common.status.running')
+  if (deploymentStatus.value === 'starting') return t('common.status.starting')
+  if (deploymentStatus.value === 'failed') return t('common.status.failed')
   return t('common.status.stopped')
 })
 
@@ -83,7 +84,7 @@ async function onRestart() {
       class="svc-checkbox"
     />
     <span class="status-dot" :style="{ background: statusColor }" />
-    <span class="svc-name" :class="{ dimmed: !isActive && service.status !== '' }">
+    <span class="svc-name" :class="{ dimmed: !isActive && deploymentStatus !== '' }">
       {{ service.name }}
     </span>
     <span class="status-label" :style="{ color: statusColor }">

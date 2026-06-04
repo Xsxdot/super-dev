@@ -95,6 +95,15 @@ describe('useIngressStore', () => {
     expect(store.dnsProviders[0].id).toBe('cloudflare-prod')
   })
 
+  it('normalizes missing DNS provider list to an empty array', async () => {
+    mockedApi.listDNSProviders.mockResolvedValue(null)
+    const store = useIngressStore()
+
+    await store.loadDNSProviders()
+
+    expect(store.dnsProviders).toEqual([])
+  })
+
   it('loadProject loads only project ingress declarations and global DNS providers', async () => {
     mockedApi.listProjectIngresses.mockResolvedValue([makeProjectIngress()])
     mockedApi.listDNSProviders.mockResolvedValue([

@@ -83,9 +83,13 @@ func (s *SSHExecutor) RunRemote(ctx context.Context, target Target, cmd string, 
 		return err
 	}
 	if code != 0 {
-		return fmt.Errorf("remote command exited with code %d", code)
+		return remoteCommandExitError(cmd, code)
 	}
 	return nil
+}
+
+func remoteCommandExitError(cmd string, code int) error {
+	return fmt.Errorf("remote command %q exited with code %d", cmd, code)
 }
 
 func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd string, workDir string, onLine func(line, stream string)) (int, error) {

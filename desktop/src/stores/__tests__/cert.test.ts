@@ -56,6 +56,30 @@ describe('useCertStore', () => {
     expect(store.acmeAccount.email).toBe('ops@example.com')
   })
 
+  it('normalizes null certificate lists before local upserts', async () => {
+    mockedApi.listCertificates.mockResolvedValue(null)
+    mockedApi.getACMEAccount.mockResolvedValue({ email: '', directory_url: '' })
+    mockedApi.createCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'pending',
+      auto_renew: true,
+    })
+    const store = useCertStore()
+
+    await store.loadAll()
+    const saved = await store.createCertificate({
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      dns_provider: 'cloudflare-prod',
+      auto_renew: true,
+    })
+
+    expect(saved.id).toBe('cert-1')
+    expect(store.certificates).toHaveLength(1)
+  })
+
   it('polls issue result until active', async () => {
     vi.useFakeTimers()
     mockedApi.issueCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], status: 'pending' })

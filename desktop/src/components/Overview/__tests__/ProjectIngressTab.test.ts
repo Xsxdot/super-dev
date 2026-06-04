@@ -109,7 +109,7 @@ describe('ProjectIngressTab', () => {
     }))
   })
 
-  it('infers upstream IPs and DNS records, then saves project-scoped ingress from Raw Template', async () => {
+  it('infers upstreams while keeping DNS records driven by proxy nodes', async () => {
     const remote = useRemoteStore()
     remote.hosts = [
       makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
@@ -124,8 +124,8 @@ describe('ProjectIngressTab', () => {
         { host_id: 'app-b', ip: '10.0.0.13', port: '' },
       ],
       dns_records: [
-        { type: 'A', name: 'api.example.com', value: '203.0.113.10', ttl: 300 },
-        { type: 'A', name: 'api.example.com', value: '203.0.113.11', ttl: 300 },
+        { type: 'A', name: 'api.example.com', value: '198.51.100.200', ttl: 300 },
+        { type: 'A', name: 'api.example.com', value: '198.51.100.201', ttl: 300 },
       ],
       requires_port_input: true,
     })
@@ -146,10 +146,17 @@ describe('ProjectIngressTab', () => {
     await wrapper.find('[data-test="source-role"]').setValue('api_targets')
     await wrapper.find('[data-test="proxy-host-edge-a"]').setValue(true)
     await wrapper.find('[data-test="proxy-host-edge-b"]').setValue(true)
+
+    expect(wrapper.find('[data-test="dns-record-node-0"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="dns-record-value-0"]').element as HTMLInputElement).value).toBe('203.0.113.10')
+    expect((wrapper.find('[data-test="dns-record-value-1"]').element as HTMLInputElement).value).toBe('203.0.113.11')
+
     await wrapper.find('[data-test="ingress-infer"]').trigger('click')
     await flush()
 
     expect((wrapper.find('[data-test="upstream-ip-0"]').element as HTMLInputElement).value).toBe('10.0.0.12')
+    expect((wrapper.find('[data-test="upstream-ip-1"]').element as HTMLInputElement).value).toBe('10.0.0.13')
+    expect((wrapper.find('[data-test="dns-record-value-0"]').element as HTMLInputElement).value).toBe('203.0.113.10')
     expect((wrapper.find('[data-test="dns-record-value-1"]').element as HTMLInputElement).value).toBe('203.0.113.11')
 
     await wrapper.find('[data-test="upstream-port-0"]').setValue('8080')
@@ -183,6 +190,78 @@ describe('ProjectIngressTab', () => {
         raw_template: expect.stringContaining('server 10.0.0.12:8080;'),
       }),
     }))
+  })
+
+  it('defaults reverse proxy nodes from public addresses and links DNS record values', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [
+      makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
+      makeHost({ id: 'edge-b', name: 'edge-b', public_ip: '203.0.113.11', private_ip: '10.0.0.11' }),
+      makeHost({ id: 'app-a', name: 'app-a', private_ip: '10.0.0.12' }),
+    ]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+    await wrapper.find('[data-test="ingress-domain"]').setValue('api.example.com')
+    await flush()
+
+    expect((wrapper.find('[data-test="proxy-host-edge-a"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.find('[data-test="proxy-host-edge-b"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.find('[data-test="proxy-host-app-a"]').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.find('[data-test="dns-record-value-0"]').element as HTMLInputElement).value).toBe('203.0.113.10')
+    expect((wrapper.find('[data-test="dns-record-value-1"]').element as HTMLInputElement).value).toBe('203.0.113.11')
+
+    await wrapper.find('[data-test="proxy-host-edge-b"]').setValue(false)
+    await flush()
+
+    expect(wrapper.find('[data-test="dns-record-value-1"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="dns-record-value-0"]').element as HTMLInputElement).value).toBe('203.0.113.10')
+  })
+
+  it('propagates a newly entered upstream port to other empty inferred upstreams', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [
+      makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
+      makeHost({ id: 'app-a', name: 'app-a', private_ip: '10.0.0.12' }),
+      makeHost({ id: 'app-b', name: 'app-b', private_ip: '10.0.0.13' }),
+    ]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+    mockedApi.inferDefaults.mockResolvedValue({
+      upstreams: [
+        { host_id: 'app-a', ip: '10.0.0.12', port: '' },
+        { host_id: 'app-b', ip: '10.0.0.13', port: '' },
+      ],
+      dns_records: [
+        { type: 'A', name: 'api.example.com', value: '203.0.113.10', ttl: 300 },
+      ],
+      requires_port_input: true,
+    })
+
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+    await wrapper.find('[data-test="ingress-domain"]').setValue('api.example.com')
+    await wrapper.find('[data-test="source-env"]').setValue('prod')
+    await wrapper.find('[data-test="source-pipeline"]').setValue('deploy-prod')
+    await wrapper.find('[data-test="source-role"]').setValue('api_targets')
+    await wrapper.find('[data-test="ingress-infer"]').trigger('click')
+    await flush()
+
+    await wrapper.find('[data-test="upstream-port-0"]').setValue('8080')
+    await flush()
+
+    expect((wrapper.find('[data-test="upstream-port-0"]').element as HTMLInputElement).value).toBe('8080')
+    expect((wrapper.find('[data-test="upstream-port-1"]').element as HTMLInputElement).value).toBe('8080')
   })
 
   it('auto-selects matching active certificate when HTTPS is enabled', async () => {

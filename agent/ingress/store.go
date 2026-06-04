@@ -405,7 +405,8 @@ func (s *FileStore) ListCertificates() ([]ManagedCertificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := append([]ManagedCertificate(nil), data.Certificates...)
+	out := make([]ManagedCertificate, len(data.Certificates))
+	copy(out, data.Certificates)
 	for i := range out {
 		redactCertificateMaterial(&out[i])
 	}

@@ -195,7 +195,7 @@ func TestCORSAllowsDesktopRequesterHeaders(t *testing.T) {
 	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/settings", nil)
 	require.NoError(t, err)
 	req.Header.Set("Access-Control-Request-Method", http.MethodPut)
-	req.Header.Set("Access-Control-Request-Headers", "content-type,x-superdev-requester,x-superdev-requester-label")
+	req.Header.Set("Access-Control-Request-Headers", "content-type,x-superdev-requester,x-superdev-requester-label,x-superdev-approval-token")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -206,6 +206,7 @@ func TestCORSAllowsDesktopRequesterHeaders(t *testing.T) {
 	assert.Contains(t, allowedHeaders, "content-type")
 	assert.Contains(t, allowedHeaders, "x-superdev-requester")
 	assert.Contains(t, allowedHeaders, "x-superdev-requester-label")
+	assert.Contains(t, allowedHeaders, "x-superdev-approval-token")
 }
 
 // TestSettingsPutPreservesSampleSeeded 验证桌面端更新设置时不会清掉 agent 内部示例落地标记。
@@ -377,6 +378,7 @@ services:
 	_ = resp.Body.Close()
 	require.Len(t, services, 1)
 	require.Len(t, services[0].Deployments, 1)
+	assert.Equal(t, model.StatusRunning, services[0].Status)
 	assert.Equal(t, model.StatusRunning, services[0].Deployments[0].Status)
 
 	// 停止 deployment

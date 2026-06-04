@@ -70,6 +70,51 @@ describe('operationApproval store', () => {
     expect(store.error).toBe('')
   })
 
+  it('retries execution without approving again after a resume failure', async () => {
+    const approval = {
+      id: 'opa_1',
+      status: 'approved',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_1',
+        kind: 'runtime.start',
+        target: { deployment_id: 'dep-prod' },
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_1',
+      },
+    } as any
+    const approve = vi.spyOn(api, 'approveOperationApproval').mockResolvedValue(approval)
+    vi.spyOn(api, 'getOperationApproval')
+      .mockResolvedValueOnce({ approval, approval_token: 'tok_1' })
+      .mockResolvedValueOnce({ approval, approval_token: 'tok_2' })
+    vi.spyOn(api, 'startDeployment')
+      .mockRejectedValueOnce(new Error('Load failed'))
+      .mockResolvedValueOnce(undefined)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.start',
+      target_summary: 'prod / api',
+    }
+
+    await store.approve('opa_1', 'ok')
+    expect(store.notice?.approval_id).toBe('opa_1')
+    expect(store.error).toBe('Load failed')
+
+    await store.approve('opa_1', 'ok')
+
+    expect(approve).toHaveBeenCalledTimes(1)
+    expect(api.startDeployment).toHaveBeenNthCalledWith(1, 'dep-prod', 'tok_1')
+    expect(api.startDeployment).toHaveBeenNthCalledWith(2, 'dep-prod', 'tok_2')
+    expect(store.notice).toBeNull()
+    expect(store.error).toBe('')
+  })
+
   it('does not issue a token for MCP-requested approvals', async () => {
     vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({
       id: 'opa_1',

@@ -3,7 +3,7 @@
 // 职责：
 //   - 验证 healthy 走 agent
 //   - 验证非 healthy 走 SSH
-//   - 验证 healthy 下 agent 失败不会 fallback
+//   - 验证 healthy 下仅 agent 通道不可用时 fallback
 //
 // 边界：
 //   - 不测试真实 SSH 或 WebSocket
@@ -98,6 +98,35 @@ func TestRoutingRunnerDoesNotFallbackWhenHealthyAgentFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []string{"h1:echo hi"}, agent.runCalls)
 	assert.Empty(t, ssh.runCalls)
+}
+
+func TestRoutingRunnerFallsBackToSSHWhenHealthyAgentUnavailable(t *testing.T) {
+	agent := &recordingRunner{err: AgentUnavailableError("dial remote agent: connection refused")}
+	ssh := &recordingRunner{}
+	runner := NewRoutingRunner(routeHealth{"h1": agenthealth.StatusHealthy}, agent, ssh)
+	var lines []string
+
+	err := runner.RunRemote(context.Background(), Target{HostID: "h1"}, "echo hi", "", func(line, stream string) {
+		lines = append(lines, stream+":"+line)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h1:echo hi"}, agent.runCalls)
+	assert.Equal(t, []string{"h1:echo hi"}, ssh.runCalls)
+	assert.Contains(t, lines, "system:remote route host h1 -> agent")
+	assert.Contains(t, lines, "system:remote route host h1 -> ssh")
+}
+
+func TestRoutingRunnerFallsBackToSSHTransferWhenHealthyAgentUnavailable(t *testing.T) {
+	agent := &recordingRunner{err: AgentUnavailableError("remote agent transfer endpoint unreachable")}
+	ssh := &recordingRunner{}
+	runner := NewRoutingRunner(routeHealth{"h1": agenthealth.StatusHealthy}, agent, ssh)
+
+	err := runner.Transfer(context.Background(), Target{HostID: "h1"}, "a", "/tmp/a", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h1:a->/tmp/a"}, agent.transferCalls)
+	assert.Equal(t, []string{"h1:a->/tmp/a"}, ssh.transferCalls)
 }
 
 func TestRoutingRunnerTransferUsesSameRoutePolicy(t *testing.T) {

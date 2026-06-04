@@ -62,6 +62,38 @@ func TestOperationAPI_PreflightApproveRejectAndAudit(t *testing.T) {
 	assert.GreaterOrEqual(t, len(audit.Events), 2)
 }
 
+func TestOperationAPI_ReissuesTokenForApprovedUnconsumedApproval(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(operationAPIProject(false, false))
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	_ = postJSONForTest[operation.Approval](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"decided_by": "user",
+	}, http.StatusOK)
+
+	first := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+	second := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+
+	require.NotEmpty(t, first.ApprovalToken)
+	require.NotEmpty(t, second.ApprovalToken)
+	assert.NotEqual(t, first.ApprovalToken, second.ApprovalToken)
+	invalid := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, map[string]string{
+		"X-SuperDev-Approval-Token": first.ApprovalToken,
+	}, http.StatusForbidden)
+	assert.Equal(t, "approval_token_invalid", invalid["code"])
+	ok := postJSONWithHeadersForTest[map[string]string](t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, map[string]string{
+		"X-SuperDev-Approval-Token": second.ApprovalToken,
+	}, http.StatusOK)
+	assert.Equal(t, "starting", ok["status"])
+}
+
 func TestOperationAPI_ReadOnlyDeploymentDeniedEvenWithApproval(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)

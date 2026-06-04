@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/superdev/agent/ingress"
 )
@@ -35,11 +36,13 @@ type Config struct {
 
 // Provider 通过 Cloudflare DNS Records API 收敛 DNS 记录。
 type Provider struct {
-	name     string
-	zoneID   string
-	apiToken string
-	baseURL  string
-	client   *http.Client
+	name      string
+	zoneID    string
+	apiToken  string
+	baseURL   string
+	client    *http.Client
+	zoneMu    sync.Mutex
+	zoneCache map[string]string
 }
 
 var _ ingress.DnsProvider = (*Provider)(nil)
@@ -65,11 +68,12 @@ func New(cfg Config) *Provider {
 		name = "cloudflare"
 	}
 	return &Provider{
-		name:     name,
-		zoneID:   cfg.ZoneID,
-		apiToken: cfg.APIToken,
-		baseURL:  baseURL,
-		client:   client,
+		name:      name,
+		zoneID:    cfg.ZoneID,
+		apiToken:  cfg.APIToken,
+		baseURL:   baseURL,
+		client:    client,
+		zoneCache: map[string]string{},
 	}
 }
 
@@ -94,7 +98,11 @@ func (p *Provider) Name() string {
 // 注意：
 //   - 只匹配同 type/name 的记录，避免改动其他业务记录
 func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ingress.RecordResult, error) {
-	records, err := p.ListRecords(ctx, record.Name)
+	zoneID, err := p.zoneIDForRecord(ctx, record.Name)
+	if err != nil {
+		return ingress.RecordResult{}, err
+	}
+	records, err := p.listRecords(ctx, record.Name, zoneID)
 	if err != nil {
 		return ingress.RecordResult{}, err
 	}
@@ -106,7 +114,7 @@ func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ing
 			record.ID = existing.ID
 			return ingress.RecordResult{Record: record, Changed: false}, nil
 		}
-		updated, err := p.writeRecord(ctx, http.MethodPut, "/client/v4/zones/"+url.PathEscape(p.zoneID)+"/dns_records/"+url.PathEscape(existing.ID), record)
+		updated, err := p.writeRecord(ctx, http.MethodPut, "/client/v4/zones/"+url.PathEscape(zoneID)+"/dns_records/"+url.PathEscape(existing.ID), record)
 		if err != nil {
 			return ingress.RecordResult{}, err
 		}
@@ -114,7 +122,7 @@ func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ing
 		return ingress.RecordResult{Record: record, Changed: true}, nil
 	}
 
-	created, err := p.writeRecord(ctx, http.MethodPost, "/client/v4/zones/"+url.PathEscape(p.zoneID)+"/dns_records", record)
+	created, err := p.writeRecord(ctx, http.MethodPost, "/client/v4/zones/"+url.PathEscape(zoneID)+"/dns_records", record)
 	if err != nil {
 		return ingress.RecordResult{}, err
 	}
@@ -132,11 +140,19 @@ func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ing
 //   - Cloudflare 返回的 DNS 记录列表
 //   - 请求或响应解析失败时返回错误
 func (p *Provider) ListRecords(ctx context.Context, domain string) ([]ingress.Record, error) {
+	zoneID, err := p.zoneIDForRecord(ctx, domain)
+	if err != nil {
+		return nil, err
+	}
+	return p.listRecords(ctx, domain, zoneID)
+}
+
+func (p *Provider) listRecords(ctx context.Context, domain string, zoneID string) ([]ingress.Record, error) {
 	query := url.Values{}
 	if strings.TrimSpace(domain) != "" {
 		query.Set("name", domain)
 	}
-	resp, err := cfDo[[]cfRecord](ctx, p, http.MethodGet, "/client/v4/zones/"+url.PathEscape(p.zoneID)+"/dns_records", query, nil)
+	resp, err := cfDo[[]cfRecord](ctx, p, http.MethodGet, "/client/v4/zones/"+url.PathEscape(zoneID)+"/dns_records", query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +175,11 @@ func (p *Provider) RemoveRecord(ctx context.Context, record ingress.Record) erro
 	if strings.TrimSpace(record.ID) == "" {
 		return errors.New("cloudflare record id is required")
 	}
-	_, err := cfDo[cfRecord](ctx, p, http.MethodDelete, "/client/v4/zones/"+url.PathEscape(p.zoneID)+"/dns_records/"+url.PathEscape(record.ID), nil, nil)
+	zoneID, err := p.zoneIDForRecord(ctx, record.Name)
+	if err != nil {
+		return err
+	}
+	_, err = cfDo[cfRecord](ctx, p, http.MethodDelete, "/client/v4/zones/"+url.PathEscape(zoneID)+"/dns_records/"+url.PathEscape(record.ID), nil, nil)
 	return err
 }
 
@@ -183,6 +203,11 @@ type cfRecord struct {
 	TTL     int    `json:"ttl"`
 }
 
+type cfZone struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 func (r cfRecord) toIngress() ingress.Record {
 	return ingress.Record{
 		ID:    r.ID,
@@ -191,6 +216,48 @@ func (r cfRecord) toIngress() ingress.Record {
 		Value: r.Content,
 		TTL:   r.TTL,
 	}
+}
+
+func (p *Provider) zoneIDForRecord(ctx context.Context, recordName string) (string, error) {
+	if strings.TrimSpace(p.zoneID) != "" {
+		return p.zoneID, nil
+	}
+	candidates := zoneCandidates(recordName)
+	for _, candidate := range candidates {
+		p.zoneMu.Lock()
+		cached := p.zoneCache[candidate]
+		p.zoneMu.Unlock()
+		if cached != "" {
+			return cached, nil
+		}
+
+		query := url.Values{}
+		query.Set("name", candidate)
+		zones, err := cfDo[[]cfZone](ctx, p, http.MethodGet, "/client/v4/zones", query, nil)
+		if err != nil {
+			return "", err
+		}
+		if len(zones) == 0 || strings.TrimSpace(zones[0].ID) == "" {
+			continue
+		}
+		p.zoneMu.Lock()
+		p.zoneCache[candidate] = zones[0].ID
+		p.zoneMu.Unlock()
+		return zones[0].ID, nil
+	}
+	return "", fmt.Errorf("cloudflare zone id could not be discovered for %s; ensure the API token has Zone Zone Read permission or configure zone_id", recordName)
+}
+
+func zoneCandidates(recordName string) []string {
+	parts := strings.Split(strings.Trim(strings.ToLower(strings.TrimSpace(recordName)), "."), ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	out := make([]string, 0, len(parts)-1)
+	for i := 0; i < len(parts)-1; i++ {
+		out = append(out, strings.Join(parts[i:], "."))
+	}
+	return out
 }
 
 type cfResponse[T any] struct {

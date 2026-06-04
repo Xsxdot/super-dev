@@ -11,6 +11,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
@@ -18,6 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/superdev/agent/ingress"
 )
+
+func TestIngressCertificateListEmptyArray(t *testing.T) {
+	srv, _ := newTestApp(t)
+	resp, err := http.Get(srv.URL + "/api/ingress/certs")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[]`, string(body))
+}
 
 func TestIngressCertificateCRUDRedactsPrivateKey(t *testing.T) {
 	srv, _ := newTestApp(t)

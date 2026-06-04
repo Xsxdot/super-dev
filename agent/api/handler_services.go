@@ -24,13 +24,14 @@ func (a *App) listServices(w http.ResponseWriter, r *http.Request) {
 	for _, p := range a.projects {
 		mgr, hasMgr := a.managers[p.ID]
 		for _, svc := range p.Services {
+			legacyStatus := model.StatusStopped
 			if hasMgr {
 				st := mgr.Status(svc.ID)
 				// 后台化命令会使 sh 退出、status 为空，但 session 内仍视为已启动
 				if mgr.IsActive(svc.ID) && st != model.StatusStarting && st != model.StatusFailed {
 					st = model.StatusRunning
 				}
-				svc.Status = st
+				legacyStatus = st
 				svc.PID = mgr.PID(svc.ID)
 				// 补全每个 deployment 的运行时状态
 				for j := range svc.Deployments {
@@ -43,10 +44,37 @@ func (a *App) listServices(w http.ResponseWriter, r *http.Request) {
 					svc.Deployments[j].PID = mgr.DeploymentPID(depID)
 				}
 			}
+			if len(svc.Deployments) > 0 {
+				svc.Status = aggregateDeploymentStatus(svc.Deployments)
+			} else {
+				svc.Status = legacyStatus
+			}
 			result = append(result, svc)
 		}
 	}
 	a.mu.RUnlock()
 
 	jsonOK(w, result)
+}
+
+func aggregateDeploymentStatus(deployments []model.Deployment) model.ServiceStatus {
+	hasRunning := false
+	hasStarting := false
+	for _, dep := range deployments {
+		switch dep.Status {
+		case model.StatusFailed:
+			return model.StatusFailed
+		case model.StatusRunning:
+			hasRunning = true
+		case model.StatusStarting:
+			hasStarting = true
+		}
+	}
+	if hasRunning {
+		return model.StatusRunning
+	}
+	if hasStarting {
+		return model.StatusStarting
+	}
+	return model.StatusStopped
 }

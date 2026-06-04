@@ -19,13 +19,15 @@ import { api, isApprovalRequiredError, type OperationApproval } from '@/api/agen
 //   - approval_id: 待处理审批 ID
 //   - kind: operation 类型
 //   - target_summary: 用户可识别的目标摘要
+//   - approved: 审批已通过但续跑尚未成功
 //
 // 注意：
-//   - notice 不包含 approval token，也不代表审批已经通过
+//   - notice 不包含 approval token；approved 只表示用户决策已成功，原操作可能仍需重试
 export interface OperationApprovalNotice {
   approval_id: string
   kind: string
   target_summary: string
+  approved?: boolean
 }
 
 export const useOperationApprovalStore = defineStore('operationApproval', () => {
@@ -61,9 +63,14 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     loading.value = true
     error.value = ''
     try {
-      const approved = await api.approveOperationApproval(id, { decided_by: 'user', note })
-      if (shouldResumeDesktopOperation(approved)) {
-        await resumeApprovedOperation(id, approved)
+      if (isApprovedNotice(id)) {
+        await resumeApprovedOperation(id)
+      } else {
+        const approved = await api.approveOperationApproval(id, { decided_by: 'user', note })
+        if (shouldResumeDesktopOperation(approved)) {
+          markNoticeApproved(id)
+          await resumeApprovedOperation(id, approved)
+        }
       }
       if (notice.value?.approval_id === id) notice.value = null
     } catch (err) {
@@ -114,13 +121,23 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     ].includes(approval.plan.kind)
   }
 
-  async function resumeApprovedOperation(id: string, approved: OperationApproval) {
+  function isApprovedNotice(id: string): boolean {
+    return notice.value?.approval_id === id && notice.value.approved === true
+  }
+
+  function markNoticeApproved(id: string) {
+    if (notice.value?.approval_id !== id) return
+    notice.value = { ...notice.value, approved: true }
+  }
+
+  async function resumeApprovedOperation(id: string, approved?: OperationApproval) {
     const detail = await api.getOperationApproval(id)
     const token = detail.approval_token
     if (!token) {
       throw new Error('approval token missing')
     }
     const approval = detail.approval.id ? detail.approval : approved
+    if (!approval) throw new Error('approval detail missing')
     await executeApprovedRuntimeOperation(approval, token)
   }
 

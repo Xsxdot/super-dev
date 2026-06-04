@@ -6,7 +6,7 @@
 //
 // 边界：
 //   - 不主动探活，只读取注入的健康状态
-//   - 不在 healthy agent 调用失败后自动 fallback
+//   - 仅在 healthy agent 通道不可用时 fallback，远端命令失败不隐藏
 //   - 不感知 pipeline DAG 调度
 package pipeline
 
@@ -56,7 +56,12 @@ func (r *RoutingRunner) RunRemote(ctx context.Context, target Target, cmd string
 		return err
 	}
 	logRoute(target, channel, onLine)
-	return runner.RunRemote(ctx, target, cmd, workDir, onLine)
+	err = runner.RunRemote(ctx, target, cmd, workDir, onLine)
+	if err == nil || channel != "agent" || !IsAgentUnavailable(err) || r.ssh == nil {
+		return err
+	}
+	logRoute(target, "ssh", onLine)
+	return r.ssh.RunRemote(ctx, target, cmd, workDir, onLine)
 }
 
 // Transfer 按 target.HostID 的 agent 健康状态选择传输通道。
@@ -66,7 +71,12 @@ func (r *RoutingRunner) Transfer(ctx context.Context, target Target, source stri
 		return err
 	}
 	logRoute(target, channel, onLine)
-	return runner.Transfer(ctx, target, source, targetPath, onLine)
+	err = runner.Transfer(ctx, target, source, targetPath, onLine)
+	if err == nil || channel != "agent" || !IsAgentUnavailable(err) || r.ssh == nil {
+		return err
+	}
+	logRoute(target, "ssh", onLine)
+	return r.ssh.Transfer(ctx, target, source, targetPath, onLine)
 }
 
 func (r *RoutingRunner) route(target Target) (remoteTransport, string, error) {

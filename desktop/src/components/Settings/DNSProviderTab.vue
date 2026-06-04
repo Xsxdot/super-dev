@@ -20,6 +20,7 @@ const store = useIngressStore()
 const { t } = useI18n()
 
 const formOpen = ref(false)
+const editingProviderID = ref<string | null>(null)
 const saving = ref(false)
 const error = ref('')
 const draft = reactive({
@@ -33,6 +34,13 @@ const draft = reactive({
 })
 
 const providers = computed(() => store.dnsProviders)
+const isEditing = computed(() => editingProviderID.value !== null)
+
+function providerDetail(provider: DNSProviderConfig) {
+  if (provider.type === 'cloudflare') return provider.zone_id || t('settings.dnsProviders.zoneAuto')
+  if (provider.type === 'aliyun') return t('settings.dnsProviders.noZoneRequired')
+  return '-'
+}
 
 onMounted(async () => {
   try {
@@ -43,6 +51,7 @@ onMounted(async () => {
 })
 
 function openCreate() {
+  editingProviderID.value = null
   Object.assign(draft, {
     id: '',
     name: '',
@@ -56,6 +65,36 @@ function openCreate() {
   formOpen.value = true
 }
 
+function openEdit(provider: DNSProviderConfig) {
+  editingProviderID.value = provider.id ?? provider.name
+  Object.assign(draft, {
+    id: provider.id ?? '',
+    name: provider.name,
+    type: provider.type,
+    zone_id: provider.zone_id ?? '',
+    api_token: '',
+    access_key_id: '',
+    access_key_secret: '',
+  })
+  error.value = ''
+  formOpen.value = true
+}
+
+function draftSecrets(): Record<string, string> | undefined {
+  const entries = draft.type === 'cloudflare'
+    ? [['api_token', draft.api_token]]
+    : [
+        ['access_key_id', draft.access_key_id],
+        ['access_key_secret', draft.access_key_secret],
+      ]
+  const secrets = Object.fromEntries(
+    entries
+      .map(([key, value]) => [key, value.trim()] as const)
+      .filter(([, value]) => value),
+  )
+  return Object.keys(secrets).length > 0 ? secrets : undefined
+}
+
 async function submitProvider() {
   if (!draft.name.trim()) {
     error.value = t('settings.dnsProviders.nameRequired')
@@ -64,16 +103,15 @@ async function submitProvider() {
   saving.value = true
   error.value = ''
   try {
-    const secrets: Record<string, string> = draft.type === 'cloudflare'
-      ? { api_token: draft.api_token }
-      : { access_key_id: draft.access_key_id, access_key_secret: draft.access_key_secret }
-    await store.saveDNSProvider({
+    const payload: DNSProviderConfig = {
       id: draft.id.trim() || undefined,
       name: draft.name.trim(),
       type: draft.type,
-      zone_id: draft.zone_id.trim() || undefined,
-      secrets,
-    })
+    }
+    if (draft.type === 'cloudflare' && draft.zone_id.trim()) payload.zone_id = draft.zone_id.trim()
+    const secrets = draftSecrets()
+    if (secrets) payload.secrets = secrets
+    await store.saveDNSProvider(payload)
     formOpen.value = false
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -108,7 +146,7 @@ async function deleteProvider(provider: DNSProviderConfig) {
         <tr>
           <th>{{ t('settings.dnsProviders.name') }}</th>
           <th>{{ t('settings.dnsProviders.type') }}</th>
-          <th>{{ t('settings.dnsProviders.zoneID') }}</th>
+          <th>{{ t('settings.dnsProviders.details') }}</th>
           <th></th>
         </tr>
       </thead>
@@ -122,8 +160,15 @@ async function deleteProvider(provider: DNSProviderConfig) {
         <tr v-for="provider in providers" :key="provider.id || provider.name" data-test="dns-provider-row">
           <td>{{ provider.name }}</td>
           <td>{{ provider.type }}</td>
-          <td class="mono">{{ provider.zone_id || '-' }}</td>
+          <td class="mono">{{ providerDetail(provider) }}</td>
           <td class="actions">
+            <button
+              type="button"
+              :data-test="`dns-provider-edit-${provider.id || provider.name}`"
+              @click="openEdit(provider)"
+            >
+              {{ t('common.edit') }}
+            </button>
             <button type="button" class="danger" @click="deleteProvider(provider)">
               {{ t('common.delete') }}
             </button>
@@ -135,13 +180,13 @@ async function deleteProvider(provider: DNSProviderConfig) {
     <div v-if="formOpen" class="modal-backdrop" @click.self="formOpen = false">
       <section class="modal">
         <header class="modal-header">
-          <h2>{{ t('settings.dnsProviders.add') }}</h2>
+          <h2>{{ isEditing ? t('common.edit') : t('settings.dnsProviders.add') }}</h2>
           <button type="button" class="icon-btn" @click="formOpen = false">×</button>
         </header>
 
         <label>
           <span>{{ t('settings.dnsProviders.id') }}</span>
-          <input v-model="draft.id" data-test="dns-provider-id" placeholder="cloudflare-prod" />
+          <input v-model="draft.id" data-test="dns-provider-id" placeholder="cloudflare-prod" :disabled="isEditing" />
         </label>
         <label>
           <span>{{ t('settings.dnsProviders.name') }}</span>
@@ -154,8 +199,8 @@ async function deleteProvider(provider: DNSProviderConfig) {
             <option value="aliyun">Aliyun</option>
           </select>
         </label>
-        <label>
-          <span>{{ t('settings.dnsProviders.zoneID') }}</span>
+        <label v-if="draft.type === 'cloudflare'">
+          <span>{{ t('settings.dnsProviders.zoneIDOptional') }}</span>
           <input v-model="draft.zone_id" data-test="dns-provider-zone" />
         </label>
         <label v-if="draft.type === 'cloudflare'">

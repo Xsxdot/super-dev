@@ -228,7 +228,7 @@ fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
         }),
     )?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, Some("CmdOrCtrl+Q"))?;
     let app_menu = Submenu::with_items(
         app,
         "SuperDev",
@@ -241,6 +241,20 @@ fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
             &quit,
         ],
     )?;
+    let edit_menu = Submenu::with_items(
+        app,
+        "编辑",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some("撤销"))?,
+            &PredefinedMenuItem::redo(app, Some("重做"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, Some("剪切"))?,
+            &PredefinedMenuItem::copy(app, Some("复制"))?,
+            &PredefinedMenuItem::paste(app, Some("粘贴"))?,
+            &PredefinedMenuItem::select_all(app, Some("全选"))?,
+        ],
+    )?;
     let window_menu = Submenu::with_items(
         app,
         "窗口",
@@ -251,7 +265,7 @@ fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
         ],
     )?;
     let help_menu = Submenu::with_items(app, "帮助", true, &[])?;
-    let menu = Menu::with_items(app, &[&app_menu, &window_menu, &help_menu])?;
+    let menu = Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu, &help_menu])?;
     app.set_menu(menu)?;
     Ok(())
 }
@@ -352,4 +366,55 @@ fn main() {
                 app.state::<AgentProcess>().stop();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    const MAIN_RS: &str = include_str!("main.rs");
+
+    fn install_app_menu_source() -> &'static str {
+        let start = MAIN_RS
+            .find("fn install_app_menu")
+            .expect("main.rs should define install_app_menu");
+        let relative_end = MAIN_RS[start..]
+            .find("\nfn main()")
+            .expect("install_app_menu should appear before main");
+        &MAIN_RS[start..start + relative_end]
+    }
+
+    #[test]
+    fn app_menu_includes_standard_edit_commands_for_webview_text_inputs() {
+        let menu_source = install_app_menu_source();
+        assert!(
+            menu_source.contains("\"编辑\""),
+            "macOS WebView text inputs need an Edit menu so standard shortcuts like Cmd+V work"
+        );
+        for expected in [
+            "PredefinedMenuItem::undo(app, Some(\"撤销\"))",
+            "PredefinedMenuItem::redo(app, Some(\"重做\"))",
+            "PredefinedMenuItem::cut(app, Some(\"剪切\"))",
+            "PredefinedMenuItem::copy(app, Some(\"复制\"))",
+            "PredefinedMenuItem::paste(app, Some(\"粘贴\"))",
+            "PredefinedMenuItem::select_all(app, Some(\"全选\"))",
+        ] {
+            assert!(
+                menu_source.contains(expected),
+                "missing menu item: {expected}"
+            );
+        }
+        assert!(
+            menu_source.contains("&edit_menu"),
+            "the top-level app menu should install the Edit submenu"
+        );
+    }
+
+    #[test]
+    fn app_menu_quit_registers_cmd_q_accelerator() {
+        let menu_source = install_app_menu_source();
+        assert!(
+            menu_source
+                .contains("MenuItem::with_id(app, \"quit\", \"退出 SuperDev\", true, Some(\"CmdOrCtrl+Q\"))"),
+            "the app menu quit item must bind Cmd+Q so macOS can dispatch app quit instead of only supporting mouse clicks"
+        );
+    }
 }

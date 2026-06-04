@@ -76,7 +76,7 @@ func TestApplyTransfersConfigCertAndReloads(t *testing.T) {
 		"transfer:/etc/superdev/ingress/certs/api.example.com/fullchain.pem",
 		"transfer:/etc/superdev/ingress/certs/api.example.com/privkey.pem",
 		"cmd:nginx -t",
-		"cmd:systemctl reload nginx",
+		"cmd:if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi",
 	})
 }
 
@@ -120,8 +120,22 @@ func TestDeployCertificateTransfersCertAndReloads(t *testing.T) {
 		"transfer:/etc/superdev/ingress/certs/api.example.com/fullchain.pem",
 		"transfer:/etc/superdev/ingress/certs/api.example.com/privkey.pem",
 		"cmd:nginx -t",
-		"cmd:systemctl reload nginx",
+		"cmd:if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi",
 	})
+}
+
+func TestDeployCertificateUsesPortableNginxReload(t *testing.T) {
+	transport := &fakeTransport{}
+	provider := New(transport)
+
+	_, err := provider.DeployCertificate(context.Background(), model.Host{ID: "host-a"}, "api.example.com", ingress.Certificate{
+		Domain: "api.example.com", CertPEM: "CERT", KeyPEM: "KEY",
+	})
+
+	if err != nil {
+		t.Fatalf("DeployCertificate() error = %v", err)
+	}
+	assertStringSliceContains(t, transport.commands, "if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi")
 }
 
 func TestDetectReturnsOnlyUndeclaredSuperdevConfigs(t *testing.T) {
@@ -155,7 +169,7 @@ func TestRemoveDeletesConfigAfterConfirmationAndReloads(t *testing.T) {
 	assertStringSliceEqual(t, transport.commands, []string{
 		"rm -f /etc/nginx/conf.d/superdev-old.example.com.conf",
 		"nginx -t",
-		"systemctl reload nginx",
+		"if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi",
 	})
 }
 
@@ -191,7 +205,7 @@ func TestRemoveQuotesManagedConfigPath(t *testing.T) {
 	assertStringSliceEqual(t, transport.commands, []string{
 		"rm -f '/etc/nginx/conf.d/superdev-old'\\''name.conf'",
 		"nginx -t",
-		"systemctl reload nginx",
+		"if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi",
 	})
 }
 
@@ -205,4 +219,14 @@ func assertStringSliceEqual(t *testing.T, got []string, want []string) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}
 	}
+}
+
+func assertStringSliceContains(t *testing.T, got []string, want string) {
+	t.Helper()
+	for _, item := range got {
+		if item == want {
+			return
+		}
+	}
+	t.Fatalf("got %#v, want item %q", got, want)
 }

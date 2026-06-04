@@ -62,6 +62,7 @@ vi.mock('@/api/agent', async () => {
 const certMock = certApi as unknown as Record<string, Mock>
 const ingressMock = ingressApi as unknown as Record<string, Mock>
 const agentMock = api as unknown as Record<string, Mock>
+const LETS_ENCRYPT_PRODUCTION = 'https://acme-v02.api.letsencrypt.org/directory'
 
 describe('CertificateTab', () => {
   beforeEach(() => {
@@ -84,8 +85,41 @@ describe('CertificateTab', () => {
 
     await wrapper.find('[data-test="acme-email"]').setValue('ops@example.com')
     await wrapper.find('[data-test="acme-save"]').trigger('click')
+    await flush()
 
     expect(certMock.saveACMEAccount).toHaveBeenCalledWith(expect.objectContaining({ email: 'ops@example.com' }))
+    expect(wrapper.find('[data-test="acme-save-notice"]').text()).toContain('ACME 账号已保存')
+  })
+
+  it('uses a friendly ACME service selector with production as the default', async () => {
+    certMock.saveACMEAccount.mockResolvedValue({ email: 'ops@example.com', directory_url: LETS_ENCRYPT_PRODUCTION })
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    expect(wrapper.text()).toContain('ACME 服务')
+    expect(wrapper.text()).not.toContain('目录 URL')
+    expect((wrapper.find('[data-test="acme-directory"]').element as HTMLSelectElement).value).toBe(LETS_ENCRYPT_PRODUCTION)
+
+    await wrapper.find('[data-test="acme-email"]').setValue('ops@example.com')
+    await wrapper.find('[data-test="acme-save"]').trigger('click')
+
+    expect(certMock.saveACMEAccount).toHaveBeenCalledWith(expect.objectContaining({
+      directory_url: LETS_ENCRYPT_PRODUCTION,
+    }))
+  })
+
+  it('prompts users to configure DNS providers before creating ACME certificates', async () => {
+    ingressMock.listDNSProviders.mockResolvedValue(null)
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    expect(wrapper.text()).toContain('请先配置 DNS 提供商')
+    expect(wrapper.text()).not.toContain('null is not an object')
+
+    await wrapper.find('[data-test="cert-add"]').trigger('click')
+
+    expect(wrapper.find('[data-test="cert-dns-empty"]').text()).toContain('请先配置 DNS 提供商')
+    expect(wrapper.find('[data-test="cert-submit"]').attributes('disabled')).toBeDefined()
   })
 
   it('creates and issues an ACME certificate', async () => {
@@ -110,6 +144,46 @@ describe('CertificateTab', () => {
       auto_renew: true,
     }))
     expect(certMock.issueCertificate).toHaveBeenCalledWith('cert-1')
+  })
+
+  it('closes the create dialog while ACME issue continues in the background', async () => {
+    certMock.createCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'pending',
+      auto_renew: true,
+    })
+    certMock.issueCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'pending',
+      auto_renew: true,
+    })
+    certMock.getCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'pending',
+      auto_renew: true,
+    })
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+    vi.useFakeTimers()
+
+    await wrapper.find('[data-test="cert-add"]').trigger('click')
+    await wrapper.find('[data-test="cert-domain-0"]').setValue('api.example.com')
+    await wrapper.find('[data-test="cert-submit"]').trigger('click')
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="cert-submit"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="cert-row"]').at(0)?.text()).toContain('申请中')
+    expect(certMock.issueCertificate).toHaveBeenCalledWith('cert-1')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(certMock.getCertificate).toHaveBeenCalledWith('cert-1')
   })
 
   it('deploys selected certificate to selected hosts', async () => {

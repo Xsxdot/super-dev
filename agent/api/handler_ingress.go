@@ -370,6 +370,7 @@ func (a *App) upsertIngressDNSProvider(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	cfg = normalizeIngressDNSProviderConfig(cfg)
 	saved, err := a.ingressStore.UpsertDNSProvider(cfg)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -388,6 +389,14 @@ func (a *App) deleteIngressDNSProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+func normalizeIngressDNSProviderConfig(cfg ingress.DNSProviderConfig) ingress.DNSProviderConfig {
+	cfg.Type = strings.ToLower(strings.TrimSpace(cfg.Type))
+	if cfg.Type == "aliyun" {
+		cfg.ZoneID = ""
+	}
+	return cfg
 }
 
 func validateIngressDNSProviderConfig(cfg ingress.DNSProviderConfig) error {

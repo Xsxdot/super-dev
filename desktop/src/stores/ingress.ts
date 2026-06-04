@@ -22,6 +22,10 @@ import {
   type PreviewResult,
 } from '@/api/ingress'
 
+function normalizeDNSProviders(providers: DNSProviderConfig[] | null | undefined): DNSProviderConfig[] {
+  return Array.isArray(providers) ? providers : []
+}
+
 export const useIngressStore = defineStore('ingress', () => {
   const ingresses = ref<Ingress[]>([])
   const dnsProviders = ref<DNSProviderConfig[]>([])
@@ -40,7 +44,7 @@ export const useIngressStore = defineStore('ingress', () => {
         ingressApi.listDNSProviders(),
       ])
       ingresses.value = nextIngresses
-      dnsProviders.value = nextProviders
+      dnsProviders.value = normalizeDNSProviders(nextProviders)
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err
@@ -58,7 +62,7 @@ export const useIngressStore = defineStore('ingress', () => {
         ingressApi.listDNSProviders(),
       ])
       ingresses.value = nextIngresses
-      dnsProviders.value = nextProviders
+      dnsProviders.value = normalizeDNSProviders(nextProviders)
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err
@@ -71,7 +75,7 @@ export const useIngressStore = defineStore('ingress', () => {
     loading.value = true
     error.value = ''
     try {
-      dnsProviders.value = await ingressApi.listDNSProviders()
+      dnsProviders.value = normalizeDNSProviders(await ingressApi.listDNSProviders())
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err

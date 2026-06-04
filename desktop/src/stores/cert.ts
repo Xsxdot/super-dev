@@ -30,6 +30,10 @@ function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function normalizeCertificates(certs: ManagedCertificate[] | null | undefined): ManagedCertificate[] {
+  return Array.isArray(certs) ? certs : []
+}
+
 export const useCertStore = defineStore('cert', () => {
   const certificates = ref<ManagedCertificate[]>([])
   const acmeAccount = ref<ACMEAccount>({ email: '', directory_url: '' })
@@ -44,7 +48,7 @@ export const useCertStore = defineStore('cert', () => {
         certApi.listCertificates(),
         certApi.getACMEAccount(),
       ])
-      certificates.value = nextCertificates
+      certificates.value = normalizeCertificates(nextCertificates)
       acmeAccount.value = nextAccount
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
@@ -121,6 +125,7 @@ export const useCertStore = defineStore('cert', () => {
   }
 
   function upsertLocal(saved: ManagedCertificate) {
+    certificates.value = normalizeCertificates(certificates.value)
     const index = certificates.value.findIndex(cert => cert.id === saved.id)
     if (index >= 0) certificates.value[index] = saved
     else certificates.value.push(saved)

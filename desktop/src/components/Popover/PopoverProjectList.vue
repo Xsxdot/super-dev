@@ -27,11 +27,16 @@ function filteredServices(project: Project) {
   )
 }
 
+function serviceStatusInProject(project: Project, service: Project['services'][number]): string {
+  const envName = agentStore.devEnvName(project.id)
+  return agentStore.deploymentForServiceInEnv(service.id, envName)?.status ?? ''
+}
+
 function projectStatusColor(project: Project) {
-  const services = project.services
-  if (services.some(s => s.status === 'failed')) return '#f85149'
-  if (services.some(s => s.status === 'running')) return '#3fb950'
-  if (services.some(s => s.status === 'starting')) return '#d29922'
+  const statuses = project.services.map(s => serviceStatusInProject(project, s))
+  if (statuses.some(status => status === 'failed')) return '#f85149'
+  if (statuses.some(status => status === 'running')) return '#3fb950'
+  if (statuses.some(status => status === 'starting')) return '#d29922'
   return '#6e7681'
 }
 
@@ -93,7 +98,7 @@ function onProjectLeave() {
           >
             <span
               class="status-dot"
-              :style="{ background: serviceStatusColor(svc.status) }"
+              :style="{ background: serviceStatusColor(serviceStatusInProject(project, svc)) }"
             />
             <span class="svc-name">{{ svc.name }}</span>
           </div>

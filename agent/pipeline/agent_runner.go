@@ -13,6 +13,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -27,6 +28,35 @@ import (
 )
 
 type wsDialFunc func(ctx context.Context, url string, header http.Header) (*websocket.Conn, *http.Response, error)
+
+// ErrAgentUnavailable 表示远端 agent 通道不可用，可由上层路由器降级到 SSH。
+var ErrAgentUnavailable = errors.New("remote agent unavailable")
+
+// AgentUnavailableError 将底层连接错误归类为远端 agent 不可用。
+//
+// 参数：
+//   - message: 面向日志和 UI 的具体不可用原因
+//
+// 返回：
+//   - 可被 IsAgentUnavailable 识别的错误
+func AgentUnavailableError(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ErrAgentUnavailable
+	}
+	return fmt.Errorf("%w: %s", ErrAgentUnavailable, message)
+}
+
+// IsAgentUnavailable 判断错误是否表示远端 agent 通道不可用。
+//
+// 参数：
+//   - err: 待判断错误
+//
+// 返回：
+//   - true 表示可以尝试 SSH fallback
+func IsAgentUnavailable(err error) bool {
+	return errors.Is(err, ErrAgentUnavailable)
+}
 
 // TunnelResolver 返回指定 hostID 的本地隧道 HTTP baseURL。
 type TunnelResolver interface {
@@ -69,7 +99,7 @@ func (r *AgentRunner) RunRemote(ctx context.Context, target Target, cmd string, 
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return err
+		return AgentUnavailableError("connect remote agent websocket: " + err.Error())
 	}
 	defer conn.Close()
 
@@ -129,13 +159,13 @@ func (r *AgentRunner) Transfer(ctx context.Context, target Target, source string
 	if err != nil {
 		cancelUpload(err)
 		<-errCh
-		return err
+		return AgentUnavailableError("call remote agent transfer endpoint: " + err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		cancelUpload(fmt.Errorf("remote agent rejected transfer"))
 		<-errCh
-		return fmt.Errorf("remote agent /api/transfer returned %d", resp.StatusCode)
+		return AgentUnavailableError(fmt.Sprintf("remote agent /api/transfer returned %d", resp.StatusCode))
 	}
 	writeErr := <-errCh
 	if writeErr != nil {
@@ -212,14 +242,14 @@ func (r *AgentRunner) transferURL(hostID string) (string, error) {
 
 func (r *AgentRunner) baseURL(hostID string) (string, error) {
 	if r.resolver == nil {
-		return "", fmt.Errorf("tunnel resolver is required")
+		return "", AgentUnavailableError("tunnel resolver is required")
 	}
 	base, err := r.resolver.BaseURL(hostID)
 	if err != nil {
-		return "", err
+		return "", AgentUnavailableError(err.Error())
 	}
 	if base == "" {
-		return "", fmt.Errorf("tunnel not connected for host %s", hostID)
+		return "", AgentUnavailableError(fmt.Sprintf("tunnel not connected for host %s", hostID))
 	}
 	return strings.TrimRight(base, "/"), nil
 }

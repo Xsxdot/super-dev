@@ -115,6 +115,43 @@ func TestEnsureRecordKeepsMatchingRecord(t *testing.T) {
 	assertStringSliceEqual(t, methods, []string{"GET /client/v4/zones/zone-1/dns_records"})
 }
 
+func TestEnsureRecordDiscoversZoneIDWhenConfigOmitsIt(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		assertEqual(t, r.Header.Get("Authorization"), "Bearer token-1")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/client/v4/zones" && r.URL.Query().Get("name") == "api.example.com":
+			_, _ = w.Write([]byte(`{"success":true,"result":[]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/client/v4/zones" && r.URL.Query().Get("name") == "example.com":
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"zone-1","name":"example.com"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/client/v4/zones/zone-1/dns_records":
+			_, _ = w.Write([]byte(`{"success":true,"result":[]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/client/v4/zones/zone-1/dns_records":
+			_, _ = w.Write([]byte(`{"success":true,"result":{"id":"rec-1","type":"A","name":"api.example.com","content":"203.0.113.10","ttl":300}}`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	provider := New(Config{Name: "cloudflare-prod", APIToken: "token-1", BaseURL: srv.URL})
+	result, err := provider.EnsureRecord(context.Background(), ingress.Record{
+		Type: ingress.RecordA, Name: "api.example.com", Value: "203.0.113.10", TTL: 300,
+	})
+	if err != nil {
+		t.Fatalf("EnsureRecord() error = %v", err)
+	}
+
+	assertBool(t, result.Changed, true)
+	assertStringSliceEqual(t, methods, []string{
+		"GET /client/v4/zones?name=api.example.com",
+		"GET /client/v4/zones?name=example.com",
+		"GET /client/v4/zones/zone-1/dns_records?name=api.example.com",
+		"POST /client/v4/zones/zone-1/dns_records?",
+	})
+}
+
 func TestRemoveRecordDeletesByRecordID(t *testing.T) {
 	var deletedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

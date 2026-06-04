@@ -74,6 +74,9 @@ func (s *runtimeStatusService) Snapshot(ctx context.Context, project model.Proje
 func (s *runtimeStatusService) localInstance(ctx context.Context, projectID string, svc model.Service, dep model.Deployment) model.InstanceStatus {
 	target := s.sampleTarget(projectID, dep)
 	got, err := s.app.runtimeMetricsSampler.Sample(ctx, target)
+	if got.Health == model.HealthStopped && s.localDeploymentActive(projectID, dep.ID) {
+		got.Health = model.HealthRunning
+	}
 	inst := model.InstanceStatus{
 		ServiceID:    svc.ID,
 		ServiceName:  svc.Name,
@@ -87,6 +90,19 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 		inst.Error = err.Error()
 	}
 	return inst
+}
+
+func (s *runtimeStatusService) localDeploymentActive(projectID, deploymentID string) bool {
+	s.app.mu.RLock()
+	mgr := s.app.managers[projectID]
+	s.app.mu.RUnlock()
+	if mgr == nil {
+		return false
+	}
+	if mgr.DeploymentStatus(deploymentID) == model.StatusFailed {
+		return false
+	}
+	return mgr.IsDeploymentActive(deploymentID)
 }
 
 func (s *runtimeStatusService) remoteInstance(ctx context.Context, projectID string, svc model.Service, dep model.Deployment, hostID string, host model.Host) model.InstanceStatus {

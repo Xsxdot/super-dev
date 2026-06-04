@@ -315,12 +315,13 @@ func (s *ApprovalFileStore) Reject(ctx context.Context, id string, decidedBy str
 //   - id: 审批请求 ID
 //
 // 返回：
-//   - 明文 token；已发放过时返回空字符串
+//   - 明文 token；再次发放会覆盖上一枚尚未消费的 token
 //   - 审批详情
 //   - 错误信息
 //
 // 注意：
-//   - Store 只保存 token hash，明文 token 只在首次发放时返回
+//   - Store 只保存 token hash，避免持久化明文 token
+//   - 重新发放会让上一枚 token 失效，用于恢复前端请求失败后丢失明文 token 的场景
 func (s *ApprovalFileStore) IssueToken(ctx context.Context, id string) (string, Approval, error) {
 	_ = ctx
 	s.mu.Lock()
@@ -338,10 +339,6 @@ func (s *ApprovalFileStore) IssueToken(ctx context.Context, id string) (string, 
 	if err := ensureTokenIssueAllowed(st.Approvals[idx], now); err != nil {
 		return "", Approval{}, err
 	}
-	if st.Approvals[idx].TokenHash != "" {
-		return "", st.Approvals[idx], nil
-	}
-
 	token := newToken()
 	tokenIssuedAt := now
 	tokenExpiresAt := now.Add(DefaultTokenTTL)

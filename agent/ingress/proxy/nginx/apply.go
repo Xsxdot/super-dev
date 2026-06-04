@@ -24,6 +24,8 @@ import (
 
 var _ ingress.ProxyProvider = (*Provider)(nil)
 
+const nginxReloadCommand = "if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi"
+
 // Apply 将 nginx 配置和证书材料落地到单台 host。
 //
 // 参数：
@@ -70,7 +72,7 @@ func (p *Provider) Apply(ctx context.Context, host model.Host, cfg ingress.Rende
 	if err := p.transport.RunRemote(ctx, target, "nginx -t", "", nil); err != nil {
 		return ingress.HostState{}, err
 	}
-	if err := p.transport.RunRemote(ctx, target, "systemctl reload nginx", "", nil); err != nil {
+	if err := p.transport.RunRemote(ctx, target, nginxReloadCommand, "", nil); err != nil {
 		return ingress.HostState{}, err
 	}
 	return state, nil
@@ -104,7 +106,7 @@ func (p *Provider) DeployCertificate(ctx context.Context, host model.Host, domai
 	if err := p.transport.RunRemote(ctx, target, "nginx -t", "", nil); err != nil {
 		return ingress.CertDeployment{}, err
 	}
-	if err := p.transport.RunRemote(ctx, target, "systemctl reload nginx", "", nil); err != nil {
+	if err := p.transport.RunRemote(ctx, target, nginxReloadCommand, "", nil); err != nil {
 		return ingress.CertDeployment{}, err
 	}
 	return ingress.CertDeployment{HostID: host.ID, CertPath: fullchainTarget, KeyPath: privkeyTarget, DeployedAt: time.Now().UTC()}, nil
@@ -183,7 +185,7 @@ func (p *Provider) Remove(ctx context.Context, host model.Host, orphan ingress.O
 	if err := p.transport.RunRemote(ctx, target, "nginx -t", "", nil); err != nil {
 		return err
 	}
-	return p.transport.RunRemote(ctx, target, "systemctl reload nginx", "", nil)
+	return p.transport.RunRemote(ctx, target, nginxReloadCommand, "", nil)
 }
 
 func (p *Provider) transferCertificate(ctx context.Context, target Target, certPath string, cert *ingress.Certificate) (string, string, error) {

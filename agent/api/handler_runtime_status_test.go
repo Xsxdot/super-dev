@@ -119,6 +119,46 @@ services:
 	assert.Equal(t, "web-prod", targets["dep-web-prod"].Container)
 }
 
+func TestRuntimeStatusKeepsManagerActiveDeploymentRunningWhenSamplerReportsStopped(t *testing.T) {
+	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
+		"dep-api-dev": {Health: model.HealthStopped, Base: "command"},
+	}}
+	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	projectID := addRuntimeStatusProject(t, app, `
+id: overview-manager-active
+name: overview-manager-active
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - id: svc-api
+    name: api
+    deployments:
+      - id: dep-api-dev
+        env: dev
+        location: local
+        runtime:
+          type: command
+          command: sleep 60
+`)
+
+	start := httptest.NewRecorder()
+	startReq := httptest.NewRequest(http.MethodPost, "/api/deployments/dep-api-dev/start", nil)
+	app.Handler().ServeHTTP(start, startReq)
+	require.Equal(t, http.StatusOK, start.Code)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got model.RuntimeStatusResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.Len(t, got.Environments, 1)
+	require.Len(t, got.Environments[0].Instances, 1)
+	assert.Equal(t, model.HealthRunning, got.Environments[0].Instances[0].Metrics.Health)
+}
+
 func TestRuntimeStatusIsolatesRemoteHostFailure(t *testing.T) {
 	app := newRuntimeStatusApp(t, &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}}, fakeRemoteRuntimeStatusClient{
 		byHost: map[string]model.RuntimeStatusResponse{

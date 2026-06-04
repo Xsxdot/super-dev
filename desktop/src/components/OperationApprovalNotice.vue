@@ -34,7 +34,9 @@ async function rejectNotice() {
   <aside v-if="store.notice" class="approval-notice" data-test="operation-approval-notice">
     <div class="notice-content">
       <div class="notice-copy">
-        <strong>{{ t('settings.approvals.noticeTitle') }}</strong>
+        <strong>
+          {{ store.notice.approved ? t('settings.approvals.resumeFailedTitle') : t('settings.approvals.noticeTitle') }}
+        </strong>
         <span>{{ store.notice.target_summary || store.notice.kind }}</span>
       </div>
       <div class="notice-actions">
@@ -45,7 +47,7 @@ async function rejectNotice() {
           :disabled="store.loading"
           @click="approveNotice"
         >
-          {{ t('settings.approvals.approve') }}
+          {{ store.notice.approved ? t('settings.approvals.retry') : t('settings.approvals.approve') }}
         </button>
         <button
           type="button"

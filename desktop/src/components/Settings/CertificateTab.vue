@@ -11,7 +11,7 @@ CertificateTab：设置页全局 SSL 证书管理。
   - 不直接验证 DNS provider 凭据
 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCertStore } from '@/stores/cert'
 import { useIngressStore } from '@/stores/ingress'
@@ -20,7 +20,10 @@ import type { CertificateCreatePayload, CertificateIssuer, ManagedCertificate } 
 
 const ISSUE_POLL_INTERVAL_MS = 1000
 const ISSUE_POLL_ATTEMPTS = 90
+const ACCOUNT_NOTICE_RESET_MS = 1800
+const LETS_ENCRYPT_PRODUCTION = 'https://acme-v02.api.letsencrypt.org/directory'
 const LETS_ENCRYPT_STAGING = 'https://acme-staging-v02.api.letsencrypt.org/directory'
+const CUSTOM_ACME_DIRECTORY = '__custom_acme_directory__'
 
 const certStore = useCertStore()
 const ingressStore = useIngressStore()
@@ -32,7 +35,12 @@ const deployOpen = ref(false)
 const selectedCert = ref<ManagedCertificate | null>(null)
 const saving = ref(false)
 const error = ref('')
-const accountDraft = reactive({ email: '', directory_url: '' })
+const accountNotice = ref('')
+const accountDraft = reactive({
+  email: '',
+  directory_option: LETS_ENCRYPT_PRODUCTION,
+  custom_directory_url: '',
+})
 const certDraft = reactive({
   domains: [''],
   issuer: 'acme' as CertificateIssuer,
@@ -44,22 +52,60 @@ const certDraft = reactive({
 const deployHostIDs = ref<string[]>([])
 
 const certificates = computed(() => certStore.certificates)
-const dnsProviders = computed(() => ingressStore.dnsProviders)
+const dnsProviders = computed(() => Array.isArray(ingressStore.dnsProviders) ? ingressStore.dnsProviders : [])
 const hosts = computed(() => remoteStore.hosts)
+const hasDNSProviders = computed(() => dnsProviders.value.length > 0)
+let accountNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(async () => {
   try {
     await Promise.all([certStore.loadAll(), ingressStore.loadDNSProviders(), remoteStore.loadHosts()])
     accountDraft.email = certStore.acmeAccount.email
-    accountDraft.directory_url = certStore.acmeAccount.directory_url ?? ''
+    applyAccountDirectory(certStore.acmeAccount.directory_url)
     certDraft.dns_provider = defaultDNSProviderID()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   }
 })
 
+onBeforeUnmount(() => {
+  clearAccountNoticeTimer()
+})
+
+function clearAccountNoticeTimer() {
+  if (!accountNoticeTimer) return
+  clearTimeout(accountNoticeTimer)
+  accountNoticeTimer = null
+}
+
+function scheduleAccountNoticeReset() {
+  clearAccountNoticeTimer()
+  accountNoticeTimer = setTimeout(() => {
+    accountNotice.value = ''
+    accountNoticeTimer = null
+  }, ACCOUNT_NOTICE_RESET_MS)
+}
+
 function defaultDNSProviderID() {
   return dnsProviders.value[0]?.id ?? ''
+}
+
+function applyAccountDirectory(directoryURL?: string) {
+  const normalized = (directoryURL ?? '').trim() || LETS_ENCRYPT_PRODUCTION
+  if (normalized === LETS_ENCRYPT_PRODUCTION || normalized === LETS_ENCRYPT_STAGING) {
+    accountDraft.directory_option = normalized
+    accountDraft.custom_directory_url = ''
+    return
+  }
+  accountDraft.directory_option = CUSTOM_ACME_DIRECTORY
+  accountDraft.custom_directory_url = normalized
+}
+
+function selectedDirectoryURL() {
+  if (accountDraft.directory_option !== CUSTOM_ACME_DIRECTORY) {
+    return accountDraft.directory_option
+  }
+  return accountDraft.custom_directory_url.trim()
 }
 
 function openCreate() {
@@ -94,11 +140,22 @@ function cleanDomains(): string[] {
 async function saveAccount() {
   saving.value = true
   error.value = ''
+  accountNotice.value = ''
+  clearAccountNoticeTimer()
   try {
+    const directoryURL = selectedDirectoryURL()
+    if (!directoryURL) {
+      error.value = t('settings.certificates.customDirectoryRequired')
+      return
+    }
     await certStore.saveACMEAccount({
       email: accountDraft.email.trim(),
-      directory_url: accountDraft.directory_url.trim(),
+      directory_url: directoryURL,
     })
+    accountDraft.email = certStore.acmeAccount.email
+    applyAccountDirectory(certStore.acmeAccount.directory_url)
+    accountNotice.value = t('settings.certificates.acmeAccountSaved')
+    scheduleAccountNoticeReset()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -110,6 +167,10 @@ async function submitCertificate() {
   const domains = cleanDomains()
   if (domains.length === 0) {
     error.value = t('settings.certificates.domainRequired')
+    return
+  }
+  if (certDraft.issuer === 'acme' && !certDraft.dns_provider) {
+    error.value = t('settings.certificates.dnsProviderRequired')
     return
   }
   saving.value = true
@@ -126,10 +187,7 @@ async function submitCertificate() {
     }
     const created = await certStore.createCertificate(payload)
     if (created.id && payload.issuer === 'acme') {
-      await certStore.issueCertificate(created.id, {
-        intervalMs: ISSUE_POLL_INTERVAL_MS,
-        maxAttempts: ISSUE_POLL_ATTEMPTS,
-      })
+      startIssuePolling(created.id)
     }
     formOpen.value = false
   } catch (err) {
@@ -204,6 +262,25 @@ function deploymentText(cert: ManagedCertificate) {
   const hostIDs = cert.deployments?.map(deployment => deployment.host_id).filter(Boolean) ?? []
   return hostIDs.length > 0 ? hostIDs.join(', ') : '-'
 }
+
+function certStatusText(status: ManagedCertificate['status']) {
+  const keyByStatus: Record<ManagedCertificate['status'], string> = {
+    pending: 'settings.certificates.statusPending',
+    active: 'settings.certificates.statusActive',
+    expiring: 'settings.certificates.statusExpiring',
+    failed: 'settings.certificates.statusFailed',
+  }
+  return t(keyByStatus[status])
+}
+
+function startIssuePolling(certID: string) {
+  void certStore.issueCertificate(certID, {
+    intervalMs: ISSUE_POLL_INTERVAL_MS,
+    maxAttempts: ISSUE_POLL_ATTEMPTS,
+  }).catch((err) => {
+    error.value = err instanceof Error ? err.message : String(err)
+  })
+}
 </script>
 
 <template>
@@ -226,21 +303,34 @@ function deploymentText(cert: ManagedCertificate) {
         </label>
         <label>
           <span>{{ t('settings.certificates.directory') }}</span>
-          <input
-            v-model="accountDraft.directory_url"
-            list="acme-directory-options"
-            :placeholder="t('settings.certificates.leProduction')"
-          />
-          <datalist id="acme-directory-options">
-            <option value="">{{ t('settings.certificates.leProduction') }}</option>
+          <select v-model="accountDraft.directory_option" data-test="acme-directory">
+            <option :value="LETS_ENCRYPT_PRODUCTION">{{ t('settings.certificates.leProduction') }}</option>
             <option :value="LETS_ENCRYPT_STAGING">{{ t('settings.certificates.leStaging') }}</option>
-          </datalist>
+            <option :value="CUSTOM_ACME_DIRECTORY">{{ t('settings.certificates.customDirectory') }}</option>
+          </select>
+        </label>
+        <label v-if="accountDraft.directory_option === CUSTOM_ACME_DIRECTORY">
+          <span>{{ t('settings.certificates.customDirectory') }}</span>
+          <input v-model="accountDraft.custom_directory_url" data-test="acme-custom-directory" />
         </label>
         <button type="button" class="primary-btn save-account" :disabled="saving" data-test="acme-save" @click="saveAccount">
           {{ t('common.save') }}
         </button>
       </div>
+      <p
+        v-if="accountNotice"
+        class="success account-notice"
+        role="status"
+        aria-live="polite"
+        data-test="acme-save-notice"
+      >
+        {{ accountNotice }}
+      </p>
     </section>
+
+    <div v-if="!hasDNSProviders" class="notice" data-test="cert-dns-notice">
+      {{ t('settings.certificates.dnsProviderRequired') }}
+    </div>
 
     <table class="certificate-table">
       <thead>
@@ -260,7 +350,7 @@ function deploymentText(cert: ManagedCertificate) {
           <td>
             <span class="status-cell">
               <span class="status-dot" :class="cert.status" />
-              {{ cert.status }}
+              {{ certStatusText(cert.status) }}
             </span>
           </td>
           <td class="mono">{{ certExpiresAt(cert) }}</td>
@@ -330,7 +420,10 @@ function deploymentText(cert: ManagedCertificate) {
         </div>
 
         <template v-if="certDraft.issuer === 'acme'">
-          <label>
+          <div v-if="!hasDNSProviders" class="notice" data-test="cert-dns-empty">
+            {{ t('settings.certificates.dnsProviderRequired') }}
+          </div>
+          <label v-else>
             <span>{{ t('settings.certificates.dnsProvider') }}</span>
             <select v-model="certDraft.dns_provider" data-test="cert-dns-provider">
               <option v-for="provider in dnsProviders" :key="provider.id || provider.name" :value="provider.id">
@@ -357,7 +450,13 @@ function deploymentText(cert: ManagedCertificate) {
 
         <footer>
           <button type="button" @click="formOpen = false">{{ t('common.cancel') }}</button>
-          <button type="button" class="primary-btn" :disabled="saving" data-test="cert-submit" @click="submitCertificate">
+          <button
+            type="button"
+            class="primary-btn"
+            :disabled="saving || (certDraft.issuer === 'acme' && !hasDNSProviders)"
+            data-test="cert-submit"
+            @click="submitCertificate"
+          >
             {{ t('common.save') }}
           </button>
         </footer>
@@ -477,7 +576,10 @@ h2 {
   background: var(--status-running);
 }
 .status-dot.pending {
-  background: var(--accent);
+  background: transparent;
+  border: 1px solid rgba(47, 129, 247, 0.28);
+  border-top-color: var(--accent);
+  animation: cert-spin 0.8s linear infinite;
 }
 .status-dot.expiring {
   background: #d29922;
@@ -494,6 +596,24 @@ h2 {
   color: var(--status-failed);
   background: rgba(248, 81, 73, 0.1);
   border: 1px solid rgba(248, 81, 73, 0.3);
+  font-size: 11px;
+}
+.success {
+  padding: 6px 10px;
+  color: var(--status-running);
+  background: rgba(63, 185, 80, 0.1);
+  border: 1px solid rgba(63, 185, 80, 0.3);
+  font-size: 11px;
+}
+.account-notice {
+  margin: 8px 0 0;
+}
+.notice {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  color: #d29922;
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px solid rgba(210, 153, 34, 0.3);
   font-size: 11px;
 }
 button {
@@ -598,5 +718,10 @@ footer {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+@keyframes cert-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

@@ -30,7 +30,7 @@ func TestApprovalStoreReusesPendingApprovalForSameFingerprint(t *testing.T) {
 	assert.Equal(t, ApprovalPending, second.Status)
 }
 
-func TestApprovalStoreIssuesTokenOnceAndConsumesIt(t *testing.T) {
+func TestApprovalStoreIssuesAndConsumesToken(t *testing.T) {
 	store := NewApprovalFileStore(t.TempDir() + "/operation-approvals.json")
 	approval, err := store.FindOrCreatePending(context.Background(), storePlan("runtime.restart", "fp-1"), "mcp", "Codex")
 	require.NoError(t, err)
@@ -44,10 +44,6 @@ func TestApprovalStoreIssuesTokenOnceAndConsumesIt(t *testing.T) {
 	assert.NotEmpty(t, token)
 	assert.Equal(t, ApprovalApproved, detail.Status)
 
-	secondToken, _, err := store.IssueToken(context.Background(), approval.ID)
-	require.NoError(t, err)
-	assert.Empty(t, secondToken)
-
 	used, err := store.ConsumeToken(context.Background(), token, detail.Plan.Fingerprint)
 	require.NoError(t, err)
 	assert.Equal(t, approval.ID, used.ID)
@@ -55,6 +51,30 @@ func TestApprovalStoreIssuesTokenOnceAndConsumesIt(t *testing.T) {
 
 	_, err = store.ConsumeToken(context.Background(), token, detail.Plan.Fingerprint)
 	assert.ErrorIs(t, err, ErrApprovalTokenConsumed)
+}
+
+func TestApprovalStoreReissuesUnconsumedToken(t *testing.T) {
+	store := NewApprovalFileStore(t.TempDir() + "/operation-approvals.json")
+	approval, err := store.FindOrCreatePending(context.Background(), storePlan("runtime.restart", "fp-1"), "desktop", "SuperDev Desktop")
+	require.NoError(t, err)
+	_, err = store.Approve(context.Background(), approval.ID, "user", "ok")
+	require.NoError(t, err)
+
+	firstToken, detail, err := store.IssueToken(context.Background(), approval.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstToken)
+
+	secondToken, secondDetail, err := store.IssueToken(context.Background(), approval.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, secondToken)
+	assert.NotEqual(t, firstToken, secondToken)
+	assert.Equal(t, detail.ID, secondDetail.ID)
+
+	_, err = store.ConsumeToken(context.Background(), firstToken, detail.Plan.Fingerprint)
+	assert.ErrorIs(t, err, ErrApprovalTokenInvalid)
+	used, err := store.ConsumeToken(context.Background(), secondToken, detail.Plan.Fingerprint)
+	require.NoError(t, err)
+	assert.Equal(t, ApprovalUsed, used.Status)
 }
 
 func TestApprovalStoreRejectAndTokenMismatch(t *testing.T) {

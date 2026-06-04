@@ -73,6 +73,93 @@ describe('DNSProviderTab', () => {
       secrets: { api_token: 'secret-token' },
     }))
   })
+
+  it('does not render or submit zone id for aliyun providers', async () => {
+    mockedApi.upsertDNSProvider.mockResolvedValue({
+      id: 'aliyun-prod',
+      name: 'Aliyun Prod',
+      type: 'aliyun',
+    })
+    const wrapper = mount(DNSProviderTab, { global: { plugins: [installTestI18n('en-US')] } })
+    await flush()
+
+    await wrapper.find('[data-test="dns-provider-add"]').trigger('click')
+    await wrapper.find('[data-test="dns-provider-id"]').setValue('aliyun-prod')
+    await wrapper.find('[data-test="dns-provider-name"]').setValue('Aliyun Prod')
+    await wrapper.find('[data-test="dns-provider-type"]').setValue('aliyun')
+
+    expect(wrapper.find('[data-test="dns-provider-zone"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="dns-provider-access-key-id"]').setValue('ak')
+    await wrapper.find('[data-test="dns-provider-access-key-secret"]').setValue('sk')
+    await wrapper.find('[data-test="dns-provider-save"]').trigger('click')
+
+    expect(mockedApi.upsertDNSProvider).toHaveBeenCalledWith({
+      id: 'aliyun-prod',
+      name: 'Aliyun Prod',
+      type: 'aliyun',
+      secrets: {
+        access_key_id: 'ak',
+        access_key_secret: 'sk',
+      },
+    })
+  })
+
+  it('allows cloudflare providers to omit zone id', async () => {
+    mockedApi.upsertDNSProvider.mockResolvedValue({
+      id: 'cloudflare-prod',
+      name: 'Cloudflare Prod',
+      type: 'cloudflare',
+    })
+    const wrapper = mount(DNSProviderTab, { global: { plugins: [installTestI18n('en-US')] } })
+    await flush()
+
+    await wrapper.find('[data-test="dns-provider-add"]').trigger('click')
+    await wrapper.find('[data-test="dns-provider-id"]').setValue('cloudflare-prod')
+    await wrapper.find('[data-test="dns-provider-name"]').setValue('Cloudflare Prod')
+    await wrapper.find('[data-test="dns-provider-type"]').setValue('cloudflare')
+    await wrapper.find('[data-test="dns-provider-token"]').setValue('secret-token')
+    await wrapper.find('[data-test="dns-provider-save"]').trigger('click')
+
+    expect(mockedApi.upsertDNSProvider).toHaveBeenCalledWith({
+      id: 'cloudflare-prod',
+      name: 'Cloudflare Prod',
+      type: 'cloudflare',
+      secrets: { api_token: 'secret-token' },
+    })
+  })
+
+  it('opens a saved provider for editing without clearing existing secrets', async () => {
+    mockedApi.listDNSProviders.mockResolvedValue([{
+      id: 'cloudflare-prod',
+      name: 'Cloudflare Prod',
+      type: 'cloudflare',
+      zone_id: 'zone-1',
+    }])
+    mockedApi.upsertDNSProvider.mockResolvedValue({
+      id: 'cloudflare-prod',
+      name: 'Cloudflare Seven',
+      type: 'cloudflare',
+      zone_id: 'cn-hangzhou',
+    })
+    const wrapper = mount(DNSProviderTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    await wrapper.find('[data-test="dns-provider-edit-cloudflare-prod"]').trigger('click')
+    expect((wrapper.find('[data-test="dns-provider-id"]').element as HTMLInputElement).value).toBe('cloudflare-prod')
+
+    await wrapper.find('[data-test="dns-provider-name"]').setValue('Cloudflare Seven')
+    await wrapper.find('[data-test="dns-provider-zone"]').setValue('cn-hangzhou')
+    await wrapper.find('[data-test="dns-provider-save"]').trigger('click')
+
+    expect(mockedApi.upsertDNSProvider).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cloudflare-prod',
+      name: 'Cloudflare Seven',
+      type: 'cloudflare',
+      zone_id: 'cn-hangzhou',
+    }))
+    expect(mockedApi.upsertDNSProvider.mock.calls.at(-1)?.[0]).not.toHaveProperty('secrets')
+  })
 })
 
 function flush() {

@@ -71,4 +71,22 @@ describe('OperationApprovalNotice', () => {
 
     expect(wrapper.text()).toContain('approval failed')
   })
+
+  it('shows retry copy when approval already succeeded but execution failed', () => {
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+      approved: true,
+    }
+    store.error = 'Load failed'
+
+    const wrapper = mount(OperationApprovalNotice, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.text()).toContain('继续执行失败')
+    expect(wrapper.find('[data-test="operation-approval-approve"]').text()).toBe('重试')
+  })
 })
