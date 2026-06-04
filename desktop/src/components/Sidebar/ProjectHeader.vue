@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
 import type { Project } from '@/api/agent'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ project: Project }>()
-const router = useRouter()
+defineEmits<{ 'add-project': [] }>()
+const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
 
 function openOverview() {
-  void router.push(`/project/${encodeURIComponent(props.project.id)}/overview`)
+  workspace.openProjectOverview(props.project.id)
 }
 </script>
 
@@ -23,6 +24,16 @@ function openOverview() {
       :title="t('overview.openOverview')"
       @click="openOverview"
     />
+    <button
+      type="button"
+      class="add-project-btn"
+      data-test="sidebar-add-project"
+      :aria-label="t('shell.sidebar.addProject')"
+      :title="t('shell.sidebar.addProject')"
+      @click="$emit('add-project')"
+    >
+      +
+    </button>
   </div>
 </template>
 
@@ -32,7 +43,7 @@ function openOverview() {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 10px 8px 4px 10px;
+  padding: 10px 10px 6px;
 }
 .project-name {
   min-width: 0;
@@ -54,6 +65,22 @@ function openOverview() {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
+}
+.add-project-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.add-project-btn:hover {
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 .overview-btn::before,
 .overview-btn::after {

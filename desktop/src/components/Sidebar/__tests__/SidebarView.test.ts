@@ -15,6 +15,7 @@ import { open, ask } from '@tauri-apps/plugin-dialog'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
 import { api, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -78,11 +79,93 @@ describe('SidebarView', () => {
       global: { plugins: [installTestI18n()] },
     })
 
-    await wrapper.find('.add-project').trigger('click')
+    await wrapper.find('[data-test="sidebar-add-project"]').trigger('click')
     await flushPromises()
 
     expect(agent.addProject).toHaveBeenCalledWith('/tmp/demo')
     expect(api.getVscodeLaunch).toHaveBeenCalledWith('proj-1')
     expect(wrapper.find('[data-test="config-editor"]').text()).toContain('web · true')
+  })
+
+  it('只渲染运行态入口，不渲染项目模块导航', () => {
+    const agent = useAgentStore()
+    agent.projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [],
+      environments: [],
+    }]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="sidebar-service-search"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sidebar-settings"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sidebar-add-project"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Pipelines')
+    expect(wrapper.text()).not.toContain('Ingress')
+    expect(wrapper.text()).not.toContain('Evidence')
+  })
+
+  it('搜索服务时只保留匹配的 service 行', async () => {
+    const agent = useAgentStore()
+    agent.projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [
+        {
+          id: 'svc-api',
+          project_id: 'proj-1',
+          name: 'sample-api',
+          status: 'running',
+          required: false,
+          order: 1,
+          deployments: [{ id: 'dep-api', env_name: 'dev', location: 'local', status: 'running' }],
+        },
+        {
+          id: 'svc-worker',
+          project_id: 'proj-1',
+          name: 'worker',
+          status: 'running',
+          required: false,
+          order: 2,
+          deployments: [{ id: 'dep-worker', env_name: 'dev', location: 'local', status: 'running' }],
+        },
+      ],
+      environments: [{ id: 'env-dev', name: 'dev', is_dev: true, order: 1 }],
+    }]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n()] },
+    })
+    await wrapper.find('[data-test="sidebar-service-search"]').setValue('worker')
+
+    expect(wrapper.text()).toContain('worker')
+    expect(wrapper.text()).not.toContain('sample-api')
+  })
+
+  it('项目概览按钮打开 workspace overview tab', async () => {
+    const agent = useAgentStore()
+    agent.projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [],
+      environments: [],
+    }]
+    const workspace = useWorkspaceStore()
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n()] },
+    })
+    await wrapper.find('[data-test="project-overview"]').trigger('click')
+
+    const active = workspace.activeTab
+    expect(active?.type).toBe('overview')
+    if (active?.type !== 'overview') throw new Error('expected overview tab')
+    expect(active.projectId).toBe('proj-1')
   })
 })

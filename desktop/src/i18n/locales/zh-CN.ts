@@ -440,6 +440,8 @@ export default {
       unableAddProject: '无法添加项目',
       selectProjectRootTitle: '选择项目根目录',
       configMissingHint: '请确认目录中有 .superdev/config.yaml',
+      searchServices: '搜索服务',
+      dragServiceToSplit: '拖拽服务到面板分栏',
     },
     env: {
       startAll: '启动全部',

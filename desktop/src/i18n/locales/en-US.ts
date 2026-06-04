@@ -440,6 +440,8 @@ export default {
       unableAddProject: 'Unable to add project',
       selectProjectRootTitle: 'Select project root',
       configMissingHint: 'Make sure the directory contains .superdev/config.yaml',
+      searchServices: 'Search services',
+      dragServiceToSplit: 'Drag service to split panel',
     },
     env: {
       startAll: 'Start all',
