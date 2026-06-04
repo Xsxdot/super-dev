@@ -24,6 +24,7 @@ export type WorkspaceTab =
   | ProjectWorkspaceTab
   | SearchWorkspaceTab
   | DeploymentTab
+  | ProjectOverviewWorkspaceTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -32,6 +33,13 @@ export interface ProjectWorkspaceTab {
   title: string
   layoutRoot: PanelNode
   focusedPanelId: string | null
+}
+
+export interface ProjectOverviewWorkspaceTab {
+  id: string
+  type: 'overview'
+  projectId: string
+  title: string
 }
 
 export interface SearchWorkspaceTab {
@@ -78,6 +86,15 @@ function makeProjectTab(projectId: string, title: string): ProjectWorkspaceTab {
     title,
     layoutRoot: createEmptyPanelRoot(),
     focusedPanelId: null,
+  }
+}
+
+function makeProjectOverviewTab(projectId: string): ProjectOverviewWorkspaceTab {
+  return {
+    id: `overview:${projectId}`,
+    type: 'overview',
+    projectId,
+    title: 'Project Overview',
   }
 }
 
@@ -156,6 +173,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (existing) return existing
     const tab = makeProjectTab(projectId, projectName(projectId))
     tabs.value.push(tab)
+    return tab
+  }
+
+  function openProjectOverview(projectId: string): ProjectOverviewWorkspaceTab {
+    saveActiveLogWorkspaceLayout()
+    const id = `overview:${projectId}`
+    const existing = tabs.value.find(
+      (tab): tab is ProjectOverviewWorkspaceTab => tab.type === 'overview' && tab.id === id,
+    )
+    if (existing) {
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab = makeProjectOverviewTab(projectId)
+    tabs.value.unshift(tab)
+    activeTabId.value = tab.id
     return tab
   }
 
@@ -435,6 +468,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activateTab,
     // ensureProjectTab 作为 deployment 多面板容器 tab 的入口保留，供后续在项目 tab 中拖入多个 deployment 分栏使用。
     ensureProjectTab,
+    openProjectOverview,
     openSearch,
     openDeployment,
     searchTab,

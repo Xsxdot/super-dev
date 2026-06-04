@@ -10,9 +10,16 @@
   - 不负责创建标签，创建由侧边栏触发
 -->
 <script setup lang="ts">
-import { useWorkspaceStore } from '@/stores/workspace'
+import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
 
 const workspace = useWorkspaceStore()
+
+function tabKind(tab: WorkspaceTab): string {
+  if (tab.type === 'overview') return '◉'
+  if (tab.type === 'project') return '▣'
+  if (tab.type === 'search') return '⌕'
+  return '●'
+}
 </script>
 
 <template>
@@ -21,10 +28,10 @@ const workspace = useWorkspaceStore()
       v-for="tab in workspace.tabs"
       :key="tab.id"
       class="workspace-tab"
-      :class="{ active: workspace.activeTabId === tab.id, search: tab.type === 'search' }"
+      :class="{ active: workspace.activeTabId === tab.id, search: tab.type === 'search', overview: tab.type === 'overview' }"
       @click="workspace.activateTab(tab.id)"
     >
-      <span class="tab-kind">{{ tab.type === 'project' ? '▣' : '⌕' }}</span>
+      <span class="tab-kind">{{ tabKind(tab) }}</span>
       <span class="tab-title">{{ tab.title }}</span>
       <span class="tab-close" @click.stop="workspace.closeTab(tab.id)">×</span>
     </button>
@@ -65,6 +72,7 @@ const workspace = useWorkspaceStore()
   color: var(--text-primary);
 }
 .workspace-tab.search .tab-kind { color: #58a6ff; }
+.workspace-tab.overview .tab-kind { color: #8b949e; }
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -11,13 +11,22 @@
 -->
 <script setup lang="ts">
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
+import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
+import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import { computed } from 'vue'
 
+const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
+
+const overviewProject = computed(() => {
+  const tab = workspace.activeTab
+  return tab?.type === 'overview' ? agentStore.projectById(tab.projectId) : null
+})
 </script>
 
 <template>
@@ -34,6 +43,14 @@ const { t } = useAppI18n()
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
     />
+    <ProjectOverviewPane
+      v-else-if="workspace.activeTab.type === 'overview' && overviewProject"
+      :project="overviewProject"
+      compact
+    />
+    <div v-else-if="workspace.activeTab.type === 'overview'" class="workspace-empty">
+      <div>{{ t('overview.projectNotFound') }}</div>
+    </div>
   </div>
 </template>
 
