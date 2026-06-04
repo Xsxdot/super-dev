@@ -727,14 +727,23 @@ async function deleteIngress(ingress: Ingress) {
         </div>
 
         <section class="form-section">
-          <h3>{{ t('overview.ingress.proxy') }} / {{ t('overview.ingress.dns') }}</h3>
+          <h3><span class="section-index">1.</span>{{ t('overview.ingress.proxy') }} / {{ t('overview.ingress.dns') }}</h3>
           <div class="proxy-control-grid">
-            <label>
+            <div class="provider-field">
               <span>{{ t('overview.ingress.proxyProvider') }}</span>
-              <select v-model="draft.proxy.provider" data-test="proxy-provider">
-                <option value="nginx">nginx</option>
-              </select>
-            </label>
+              <div class="provider-segments" data-test="proxy-provider-segments">
+                <button
+                  v-for="provider in ['nginx', 'traefik', 'custom']"
+                  :key="provider"
+                  type="button"
+                  :class="{ active: draft.proxy.provider === provider }"
+                  :disabled="provider !== 'nginx'"
+                  @click="draft.proxy.provider = provider"
+                >
+                  {{ provider }}
+                </button>
+              </div>
+            </div>
             <div class="nginx-options inline-nginx-options">
               <div class="tls-option-group">
                 <label class="inline-check">
@@ -746,9 +755,9 @@ async function deleteIngress(ingress: Ingress) {
                   />
                   {{ t('overview.ingress.tls') }}
                 </label>
-                <label v-if="draft.tls.enabled">
+                <label>
                   <span>{{ t('overview.ingress.certificate') }}</span>
-                  <select v-model="draft.tls.cert_id" data-test="ingress-cert-select">
+                  <select v-model="draft.tls.cert_id" data-test="ingress-cert-select" :disabled="!draft.tls.enabled">
                     <option value="">{{ t('overview.ingress.selectCertificate') }}</option>
                     <option v-for="cert in activeCertificates" :key="cert.id" :value="cert.id">
                       {{ certLabel(cert) }}{{ cert.id === matchingCertID ? ` (${t('overview.ingress.autoMatched')})` : '' }}
@@ -767,10 +776,11 @@ async function deleteIngress(ingress: Ingress) {
                     v-model="draft.proxy_options.proxy_timeout"
                     data-test="proxy-timeout"
                     @input="regenerateTemplate"
-                  />
-                </label>
-              </div>
+                />
+              </label>
+              <button type="button" class="template-jump">{{ t('overview.ingress.rawTemplate') }}</button>
             </div>
+          </div>
           </div>
           <div
             v-if="draft.tls.enabled && !draft.tls.cert_id && !matchingCertID && !certMatchLoading"
@@ -815,89 +825,107 @@ async function deleteIngress(ingress: Ingress) {
             </label>
           </div>
 
-          <div class="selector-field">
-            <span class="field-title">{{ t('overview.ingress.proxyHosts') }}</span>
-            <button
-              type="button"
-              class="selector-trigger"
-              data-test="proxy-host-selector"
-              @click="proxySelectorOpen = !proxySelectorOpen"
-            >
-              <span v-if="selectedProxyHosts.length === 0">{{ t('overview.ingress.selectProxyHosts') }}</span>
-              <span v-else>
-                {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
-              </span>
-            </button>
-            <div v-if="proxySelectorOpen" class="selector-menu" data-test="proxy-host-menu">
-              <input
-                v-model="proxyHostQuery"
-                data-test="proxy-host-search"
-                :placeholder="t('overview.ingress.searchHosts')"
-              />
-              <div class="selector-filters">
-                <button type="button" :class="{ active: proxyHostFilter === 'public' }" @click="proxyHostFilter = 'public'">
-                  {{ t('overview.ingress.publicHosts') }}
-                </button>
-                <button type="button" :class="{ active: proxyHostFilter === 'selected' }" @click="proxyHostFilter = 'selected'">
-                  {{ t('overview.ingress.selectedOnly') }}
-                </button>
-                <button type="button" :class="{ active: proxyHostFilter === 'all' }" @click="proxyHostFilter = 'all'">
-                  {{ t('overview.ingress.allHosts') }}
-                </button>
-              </div>
-              <div class="selector-options">
-                <label v-for="host in filteredProxyHosts" :key="host.id" class="selector-option">
-                  <input
-                    type="checkbox"
-                    :data-test="`proxy-host-${host.id}`"
-                    :checked="isProxyHostSelected(host.id)"
-                    @change="toggleProxyHost(host.id, ($event.target as HTMLInputElement).checked)"
-                  />
-                  <span>{{ host.name }}</span>
-                  <small>{{ hostAddress(host) }}</small>
-                </label>
-              </div>
-              <div class="selector-footer" data-test="proxy-selected-count">
-                {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
+          <div class="proxy-dns-layout" data-test="proxy-dns-layout">
+            <div class="selector-field">
+              <span class="field-title">{{ t('overview.ingress.proxyHosts') }}</span>
+              <button
+                type="button"
+                class="selector-trigger"
+                data-test="proxy-host-selector"
+                @click="proxySelectorOpen = !proxySelectorOpen"
+              >
+                <span v-if="selectedProxyHosts.length === 0">{{ t('overview.ingress.selectProxyHosts') }}</span>
+                <span v-else>
+                  {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
+                </span>
+              </button>
+              <div v-if="proxySelectorOpen" class="selector-menu" data-test="proxy-host-menu">
+                <input
+                  v-model="proxyHostQuery"
+                  data-test="proxy-host-search"
+                  :placeholder="t('overview.ingress.searchHosts')"
+                />
+                <div class="selector-filters">
+                  <button type="button" :class="{ active: proxyHostFilter === 'public' }" @click="proxyHostFilter = 'public'">
+                    {{ t('overview.ingress.publicHosts') }}
+                  </button>
+                  <button type="button" :class="{ active: proxyHostFilter === 'selected' }" @click="proxyHostFilter = 'selected'">
+                    {{ t('overview.ingress.selectedOnly') }}
+                  </button>
+                  <button type="button" :class="{ active: proxyHostFilter === 'all' }" @click="proxyHostFilter = 'all'">
+                    {{ t('overview.ingress.allHosts') }}
+                  </button>
+                </div>
+                <div class="selector-options">
+                  <label v-for="host in filteredProxyHosts" :key="host.id" class="selector-option">
+                    <input
+                      type="checkbox"
+                      :data-test="`proxy-host-${host.id}`"
+                      :checked="isProxyHostSelected(host.id)"
+                      @change="toggleProxyHost(host.id, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ host.name }}</span>
+                    <small>{{ hostAddress(host) }}</small>
+                  </label>
+                </div>
+                <div class="selector-footer" data-test="proxy-selected-count">
+                  {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div v-if="draft.dns.records.length === 0" class="empty-inline" data-test="dns-record-empty">
-            {{ t('overview.ingress.dnsRecordsEmpty') }}
-          </div>
-          <div v-else class="rows dns-records">
-            <div v-for="(record, index) in draft.dns.records" :key="index" class="record-row">
-              <input
-                :data-test="`dns-record-value-${index}`"
-                v-model="record.value"
-                :placeholder="t('overview.ingress.recordValue')"
-              />
-              <button type="button" class="danger" @click="removeDNSRecord(index)">{{ t('common.delete') }}</button>
+            <div class="dns-record-panel" data-test="dns-record-panel">
+              <div class="panel-head">
+                <h4>{{ t('overview.ingress.dnsRecordResult') }}</h4>
+                <button type="button" class="secondary" data-test="dns-record-add" @click="addDNSRecord">
+                  + {{ t('overview.ingress.manualRecord') }}
+                </button>
+              </div>
+              <div v-if="draft.dns.records.length === 0" class="empty-inline panel-empty" data-test="dns-record-empty">
+                {{ t('overview.ingress.dnsRecordsEmpty') }}
+              </div>
+              <div v-else class="rows dns-records">
+                <div v-for="(record, index) in draft.dns.records" :key="index" class="record-row">
+                  <input
+                    :data-test="`dns-record-value-${index}`"
+                    v-model="record.value"
+                    :placeholder="t('overview.ingress.recordValue')"
+                  />
+                  <button type="button" class="danger" @click="removeDNSRecord(index)">{{ t('common.delete') }}</button>
+                </div>
+              </div>
             </div>
           </div>
-          <button type="button" class="secondary" data-test="dns-record-add" @click="addDNSRecord">
-            + {{ t('overview.ingress.addRecord') }}
-          </button>
         </section>
 
         <section class="form-section">
-          <h3>{{ t('overview.ingress.upstreams') }}</h3>
-          <div class="upstream-sources">
+          <h3><span class="section-index">2.</span>{{ t('overview.ingress.upstreams') }}</h3>
+          <div class="upstream-sources" data-test="upstream-source-layout">
             <div class="source-panel">
               <h4>{{ t('overview.ingress.selectFromHosts') }}</h4>
-              <input v-model="upstreamHostQuery" :placeholder="t('overview.ingress.searchHosts')" />
-              <div class="compact-host-grid">
-                <label v-for="host in filteredUpstreamHosts" :key="host.id" class="host-card">
-                  <input
-                    type="checkbox"
-                    :checked="isUpstreamHostSelected(host.id)"
-                    @change="toggleUpstreamHost(host.id, ($event.target as HTMLInputElement).checked)"
-                  />
-                  <span>{{ host.name }}</span>
-                  <small>{{ privateAddressForHost(host) }}</small>
-                </label>
+              <div class="upstream-selector">
+                <button type="button" class="selector-trigger wide" @click="upstreamSelectorOpen = !upstreamSelectorOpen">
+                  <span v-if="selectedUpstreamHosts.length === 0">{{ t('overview.ingress.selectUpstreamHosts') }}</span>
+                  <span v-else class="selected-chip-list">
+                    <span v-for="host in selectedUpstreamHosts" :key="host.id" class="selected-chip">{{ host.name }}</span>
+                  </span>
+                </button>
+                <div v-if="upstreamSelectorOpen" class="selector-menu upstream-selector-menu">
+                  <input v-model="upstreamHostQuery" :placeholder="t('overview.ingress.searchHosts')" />
+                  <div class="compact-host-grid">
+                    <label v-for="host in filteredUpstreamHosts" :key="host.id" class="host-card">
+                      <input
+                        type="checkbox"
+                        :checked="isUpstreamHostSelected(host.id)"
+                        @change="toggleUpstreamHost(host.id, ($event.target as HTMLInputElement).checked)"
+                      />
+                      <span>{{ host.name }}</span>
+                      <small>{{ privateAddressForHost(host) }}</small>
+                    </label>
+                  </div>
+                </div>
               </div>
+              <small class="field-hint">{{ t('overview.ingress.selectUpstreamHint') }}</small>
             </div>
             <div class="source-panel import-panel" data-test="upstream-import">
               <h4>{{ t('overview.ingress.importFromPipeline') }}</h4>
@@ -970,8 +998,8 @@ async function deleteIngress(ingress: Ingress) {
           </button>
         </section>
 
-        <section class="form-section">
-          <h3>{{ t('overview.ingress.rawTemplate') }}</h3>
+        <section class="form-section raw-template-section" data-test="raw-template-section">
+          <h3><span class="section-index">3.</span>{{ t('overview.ingress.rawTemplate') }}</h3>
           <label class="raw-template">
             <span>{{ t('overview.ingress.rawTemplate') }}</span>
             <textarea v-model="draft.proxy_options.raw_template" data-test="nginx-raw-template" rows="12" />
@@ -1049,16 +1077,6 @@ h4 {
   margin-top: 10px;
   border-radius: 6px;
 }
-.architecture-hint {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
 .ingress-table {
   width: 100%;
   border-collapse: collapse;
@@ -1110,7 +1128,7 @@ button {
   color: #fff;
 }
 .secondary {
-  margin-top: 8px;
+  background: var(--bg-secondary);
 }
 .danger {
   color: var(--status-failed);
@@ -1130,19 +1148,83 @@ button {
   background: rgba(0, 0, 0, 0.62);
 }
 .modal {
-  width: min(1160px, 100%);
+  width: min(1480px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
-  padding: 18px;
+  padding: 16px;
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
   background: var(--bg-primary);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.4);
 }
+.form-hero {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.1fr);
+  gap: 14px;
+  margin-top: 10px;
+}
+.hero-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.flow-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.flow-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+}
+.flow-dot {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border-secondary);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.flow-step strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.flow-step small,
+.field-hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.flow-arrow {
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
 .form-section {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-secondary);
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.012);
+}
+.form-section > h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.section-index {
+  color: var(--text-primary);
 }
 .form-grid {
   display: grid;
@@ -1155,12 +1237,48 @@ button {
 }
 .proxy-control-grid {
   display: grid;
-  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 12px;
   margin-top: 10px;
 }
+.provider-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.provider-segments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  width: min(100%, 260px);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.provider-segments button {
+  border: 0;
+  border-right: 1px solid var(--border-secondary);
+  border-radius: 0;
+  background: transparent;
+}
+.provider-segments button:last-child {
+  border-right: 0;
+}
+.provider-segments button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.provider-segments button:disabled:not(.active) {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
 .dns-settings {
   margin-top: 12px;
+}
+.form-grid.three.dns-settings {
+  grid-template-columns: minmax(240px, 0.7fr) 130px 160px;
+  align-items: end;
 }
 .import-controls {
   display: grid;
@@ -1188,7 +1306,6 @@ label {
 }
 .selector-field {
   position: relative;
-  margin-top: 12px;
 }
 .selector-trigger {
   display: flex;
@@ -1196,6 +1313,11 @@ label {
   align-items: center;
   justify-content: space-between;
   text-align: left;
+}
+.selector-trigger.wide {
+  width: 100%;
+  min-height: 32px;
+  height: auto;
 }
 .selector-menu {
   position: absolute;
@@ -1209,6 +1331,26 @@ label {
   border-radius: 6px;
   background: var(--bg-primary);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+}
+.upstream-selector {
+  position: relative;
+}
+.upstream-selector-menu {
+  width: min(560px, 100%);
+}
+.selected-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.selected-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: var(--bg-primary);
 }
 .selector-filters {
   display: flex;
@@ -1290,6 +1432,34 @@ textarea {
 .record-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
+.proxy-dns-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.dns-record-panel {
+  display: grid;
+  gap: 10px;
+  min-height: 154px;
+  padding: 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.panel-empty {
+  display: grid;
+  min-height: 88px;
+  place-items: center;
+  border-style: dashed;
+  text-align: center;
+}
 .upstream-sources {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
@@ -1359,6 +1529,9 @@ textarea {
 .raw-template {
   margin-top: 10px;
 }
+.raw-template textarea {
+  min-height: 160px;
+}
 .inline-check {
   display: flex;
   align-items: center;
@@ -1381,7 +1554,10 @@ textarea {
   gap: 10px;
 }
 .runtime-option-group {
-  grid-template-columns: minmax(150px, max-content) minmax(220px, 360px);
+  grid-template-columns: minmax(130px, max-content) minmax(180px, 220px) auto;
+}
+.template-jump {
+  align-self: end;
 }
 .result-panel {
   margin-top: 12px;
@@ -1395,10 +1571,14 @@ textarea {
   .project-ingress {
     padding: 14px;
   }
-	  .form-grid,
-	  .form-grid.three,
+  .form-hero,
+  .hero-fields,
+  .flow-strip,
+  .form-grid,
+  .form-grid.three,
   .proxy-control-grid,
-	  .import-controls,
+  .proxy-dns-layout,
+  .import-controls,
   .nginx-options,
   .tls-option-group,
   .runtime-option-group,
@@ -1407,11 +1587,11 @@ textarea {
   .compact-host-grid,
   .upstream-card-grid,
   .upstream-card-row {
-	    grid-template-columns: 1fr;
-	  }
+    grid-template-columns: 1fr;
+  }
   .selector-menu,
   .selector-trigger {
     width: 100%;
   }
-	}
+}
 </style>
