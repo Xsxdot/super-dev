@@ -1,23 +1,27 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { save } from '@tauri-apps/plugin-dialog'
 import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useFilterStore } from '@/stores/filter'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { AGENT_HOST } from '@/api/agent'
 import type { LogEntry } from '@/api/agent'
+import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 
 const agentHost = AGENT_HOST
-import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const deploymentLogStore = useDeploymentLogStore()
 const filterStore = useFilterStore()
+const operationApprovalStore = useOperationApprovalStore()
+const router = useRouter()
 const { t } = useI18n()
 
 // leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
@@ -211,11 +215,23 @@ const statusColor = (status: string) => {
   if (status === 'failed') return '#f85149'
   return '#6e7681'
 }
+
+const connectionText = computed(() =>
+  agentStore.connected ? t('bottomBar.connected') : t('bottomBar.disconnected'),
+)
+
+function openApprovals() {
+  void router.push({ path: '/settings', query: { tab: 'approvals' } })
+}
+
+onMounted(() => {
+  void operationApprovalStore.loadPending(false)
+})
 </script>
 
 <template>
   <div class="bottom-bar">
-    <span class="label">{{ t('bottomBar.panelServices') }}</span>
+    <span class="label">{{ t('bottomBar.openDeployments') }}</span>
 
     <div class="service-chips">
       <div
@@ -242,30 +258,71 @@ const statusColor = (status: string) => {
 
     <div class="divider" />
 
-    <!-- 同步录制 -->
-    <label class="sync-label">
-      <input type="checkbox" :checked="syncEnabled" @change="toggleSync" style="accent-color:#1f6feb;" />
-      <span>{{ t('bottomBar.syncRecording') }}</span>
-    </label>
-    <button
-      v-if="syncEnabled"
-      class="sync-record-btn"
-      :class="{ recording: syncRecording }"
-      @click="toggleSyncRecord"
-    >
-      {{ syncRecording ? '⏹' : '⏺' }}
-    </button>
-    <template v-if="hasSyncOutput && !syncRecording">
-      <button class="action-btn sync-copy-btn" @click="copySyncBookmarks">{{ t('bottomBar.copy') }}</button>
-      <button class="action-btn sync-export-btn" @click="exportSyncBookmarks">{{ t('bottomBar.export') }}</button>
-    </template>
+    <div class="sync-group">
+      <label class="sync-label">
+        <input
+          data-test="sync-toggle"
+          type="checkbox"
+          :checked="syncEnabled"
+          style="accent-color:#1f6feb;"
+          @change="toggleSync"
+        />
+        <span>{{ t('bottomBar.syncEvidenceCapture') }}</span>
+      </label>
+      <button
+        v-if="syncEnabled"
+        data-test="sync-record"
+        class="sync-record-btn"
+        :class="{ recording: syncRecording }"
+        :title="syncRecording ? t('bottomBar.stopRecord') : t('bottomBar.record')"
+        @click="toggleSyncRecord"
+      >
+        {{ syncRecording ? '⏹' : '⏺' }}
+      </button>
+      <template v-if="syncEnabled && hasSyncOutput && !syncRecording">
+        <button
+          data-test="sync-copy"
+          class="sync-icon-btn sync-copy-btn"
+          :title="t('bottomBar.copy')"
+          @click="copySyncBookmarks"
+        >
+          ⎘
+        </button>
+        <button
+          data-test="sync-export"
+          class="sync-icon-btn sync-export-btn"
+          :title="t('bottomBar.export')"
+          @click="exportSyncBookmarks"
+        >
+          ↑
+        </button>
+      </template>
+    </div>
 
     <div class="flex-1" />
 
-    <!-- Agent 状态 -->
-    <div class="agent-status">
-      <span class="agent-dot" :class="{ connected: agentStore.connected }" />
-      <span>{{ agentHost }}</span>
+    <div class="runtime-status-group">
+      <div data-test="agent-status" class="agent-status" :title="agentHost">
+        <span class="agent-dot" :class="{ connected: agentStore.connected }" />
+        <span>{{ t('bottomBar.agent') }}</span>
+        <span class="status-meta">{{ connectionText }}</span>
+      </div>
+      <div data-test="mcp-status" class="mcp-status">
+        <span class="agent-dot" :class="{ connected: agentStore.connected }" />
+        <span>{{ t('bottomBar.mcp') }}</span>
+      </div>
+      <button
+        type="button"
+        data-test="approvals-entry"
+        class="approvals-entry"
+        :class="{ attention: operationApprovalStore.pendingCount > 0 }"
+        @click="openApprovals"
+      >
+        <span>{{ t('bottomBar.approvals') }}</span>
+        <span v-if="operationApprovalStore.pendingCount > 0" class="approval-count">
+          {{ operationApprovalStore.pendingCount }}
+        </span>
+      </button>
     </div>
   </div>
 </template>
@@ -275,11 +332,11 @@ const statusColor = (status: string) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
+  padding: 3px 10px;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  min-height: 30px;
+  min-height: 34px;
   overflow-x: auto;
 }
 .label {
@@ -316,6 +373,13 @@ const statusColor = (status: string) => {
   color: #f85149;
 }
 
+.sync-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  flex-shrink: 0;
+}
 .sync-label {
   display: flex;
   align-items: center;
@@ -337,7 +401,30 @@ const statusColor = (status: string) => {
   color: #3fb950;
 }
 .sync-record-btn.recording { color: #f85149; }
+.sync-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sync-icon-btn:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
 
+.runtime-status-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .agent-status {
   display: flex;
   align-items: center;
@@ -347,10 +434,54 @@ const statusColor = (status: string) => {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.mcp-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.status-meta {
+  color: var(--text-secondary);
+}
 .agent-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
   background: #6e7681;
 }
 .agent-dot.connected { background: #3fb950; }
+.approvals-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.approvals-entry:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+.approvals-entry.attention {
+  border-color: rgba(210,153,34,0.35);
+  color: #d29922;
+}
+.approval-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(210,153,34,0.16);
+  color: #d29922;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
 </style>
