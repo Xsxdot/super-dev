@@ -495,6 +495,11 @@ export default {
       splitDown: 'Split down',
       close: 'Close panel',
     },
+    state: {
+      live: 'Live',
+      following: 'following',
+      empty: 'Drop a service to view logs',
+    },
     filter: {
       include: 'Include',
       exclude: 'Exclude',

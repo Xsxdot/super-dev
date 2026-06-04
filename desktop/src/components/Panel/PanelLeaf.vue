@@ -57,6 +57,24 @@ const headerTitle = computed(() => {
   return t('panel.emptyTitle')
 })
 
+const deploymentStatus = computed(() =>
+  deploymentInfo.value?.deployment.status ?? '',
+)
+
+const isLiveDeployment = computed(() =>
+  deploymentStatus.value === 'running' || deploymentStatus.value === 'starting',
+)
+
+const statusColor = computed(() => {
+  if (deploymentStatus.value === 'running') return '#3fb950'
+  if (deploymentStatus.value === 'starting') return '#d29922'
+  if (deploymentStatus.value === 'failed') return '#f85149'
+  return '#6e7681'
+})
+
+const serviceName = computed(() => deploymentInfo.value?.service.name ?? headerTitle.value)
+const envName = computed(() => deploymentInfo.value?.envName ?? '')
+
 function onDragOver(e: DragEvent) {
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
@@ -234,8 +252,22 @@ watch(serviceDropRequest, (request) => {
     @drop="onDrop"
   >
     <!-- Panel header -->
-    <div class="panel-header">
-      <span class="panel-title">{{ headerTitle }}</span>
+    <div class="panel-header" data-test="panel-card-header">
+      <div class="panel-identity">
+        <span class="panel-status-dot" :style="{ background: statusColor }" />
+        <div class="panel-title-stack">
+          <div class="panel-title-line">
+            <span class="panel-title" data-test="panel-service-name">{{ serviceName }}</span>
+            <span v-if="envName" class="panel-env" data-test="panel-env-name">· {{ envName }}</span>
+          </div>
+          <div v-if="source" class="panel-live-line" data-test="panel-live-state">
+            <span :class="{ active: isLiveDeployment }">{{ t('panel.state.live') }}</span>
+            <span>·</span>
+            <span>{{ t('panel.state.following') }}</span>
+          </div>
+          <div v-else class="panel-live-line empty">{{ t('panel.state.empty') }}</div>
+        </div>
+      </div>
       <div class="panel-actions">
         <button
           type="button"
@@ -292,49 +324,103 @@ watch(serviceDropRequest, (request) => {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 260px;
+  min-height: 0;
   overflow: hidden;
-  min-width: 200px;
+  border: 1px solid rgba(139, 148, 158, 0.22);
+  border-radius: 8px;
+  background: rgba(9, 20, 28, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+.panel-leaf.focused {
+  border-color: rgba(88, 166, 255, 0.42);
 }
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 3px 8px;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-secondary);
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.18);
+  background: rgba(255, 255, 255, 0.025);
   flex-shrink: 0;
 }
-.panel-title {
+.panel-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   min-width: 0;
-  flex: 1;
-  font-size: 11px;
-  color: var(--text-secondary);
+}
+.panel-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.panel-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.panel-title-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.panel-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.panel-env {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.panel-live-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1;
+}
+.panel-live-line .active {
+  color: #7ce38b;
+}
+.panel-live-line.empty {
+  color: var(--text-tertiary);
+}
 .panel-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
+  gap: 5px;
+  flex-shrink: 0;
 }
 .panel-action-btn {
   position: relative;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   background: transparent;
-  border: none;
-  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
   cursor: pointer;
   line-height: 1;
 }
 .panel-action-btn:hover {
+  border-color: rgba(139, 148, 158, 0.26);
+  background: rgba(255, 255, 255, 0.055);
   color: var(--text-primary);
-  background: var(--bg-overlay);
 }
 .split-icon {
   position: relative;

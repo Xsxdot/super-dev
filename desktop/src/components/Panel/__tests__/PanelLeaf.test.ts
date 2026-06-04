@@ -468,4 +468,31 @@ describe('PanelLeaf', () => {
 
     expect(document.body.classList.contains('service-dragging-no-select')).toBe(false)
   })
+
+  it('渲染 deployment panel card header 状态与环境信息', () => {
+    const panelStore = usePanelStore()
+    const agentStore = useAgentStore()
+    const service = makeService()
+    agentStore.projects = [makeProject(service)]
+    panelStore.replaceScope(panelStore.root.id, DEV_DEPLOYMENT_ID, null)
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: panelStore.root.id,
+        source: { type: 'deployment', deploymentId: DEV_DEPLOYMENT_ID },
+        canClose: false,
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-test="panel-card-header"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-service-name"]').text()).toBe('api')
+    expect(wrapper.find('[data-test="panel-env-name"]').text()).toContain('dev')
+    expect(wrapper.find('[data-test="panel-live-state"]').text()).toContain('Live')
+  })
 })

@@ -526,7 +526,7 @@ const virtualizer = useVirtualizer(
       </button>
     </Transition>
 
-    <div class="status-bar">
+    <div class="status-bar" data-test="log-panel-status">
       <span>
         {{ t('panel.log.liveStats', { total: stats.total }) }}
         <template v-if="stats.folded > 0"> · {{ t('panel.log.folded', { count: stats.folded }) }}</template>
@@ -551,8 +551,8 @@ const virtualizer = useVirtualizer(
 .log-list {
   flex: 1;
   overflow-y: auto;
-  background: var(--bg-primary);
-  padding: 4px 0;
+  background: rgba(7, 15, 22, 0.72);
+  padding: 8px 10px;
   position: relative;
 }
 .selection-add-btn {
@@ -590,15 +590,16 @@ const virtualizer = useVirtualizer(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 10px;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border-secondary);
+  min-height: 28px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border-top: 1px solid rgba(139, 148, 158, 0.16);
   font-size: 10px;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
 .status-badges { display: flex; gap: 8px; }
-.badge { font-size: 9px; padding: 1px 6px; border-radius: 3px; }
+.badge { font-size: 10px; padding: 2px 7px; border-radius: 5px; }
 .badge.error { color: #f85149; background: rgba(248, 81, 73, 0.1); }
 .badge.warn { color: #d29922; background: rgba(210, 153, 34, 0.1); }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }

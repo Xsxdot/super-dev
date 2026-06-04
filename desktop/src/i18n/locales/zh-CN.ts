@@ -495,6 +495,11 @@ export default {
       splitDown: '向下分栏',
       close: '关闭面板',
     },
+    state: {
+      live: 'Live',
+      following: 'following',
+      empty: '拖入服务查看日志',
+    },
     filter: {
       include: '包含',
       exclude: '排除',
