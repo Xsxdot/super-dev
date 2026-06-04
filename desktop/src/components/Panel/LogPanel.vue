@@ -541,6 +541,7 @@ const virtualizer = useVirtualizer(
 
 <style scoped>
 .log-panel {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   flex: 1;

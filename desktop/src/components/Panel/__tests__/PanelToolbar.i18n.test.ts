@@ -12,6 +12,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 import PanelToolbar from '../PanelToolbar.vue'
 import { installTestI18n } from '@/test-utils/i18n'
+import { useFilterStore } from '@/stores/filter'
 
 describe('PanelToolbar i18n', () => {
   beforeEach(() => {
@@ -33,5 +34,24 @@ describe('PanelToolbar i18n', () => {
     expect(wrapper.find('.chip-input').attributes('placeholder')).toBe('Filter keywords, press Enter to add')
     expect(wrapper.find('.rules-btn').attributes('title')).toBe('Manage filter rules')
     expect(wrapper.find('.bookmark-btn.start').attributes('title')).toBe('Start bookmark recording')
+  })
+
+  it('紧凑模式保留过滤、规则和书签核心操作', () => {
+    const filterStore = useFilterStore()
+    filterStore.addChip('panel-1', 'timeout', 'include')
+
+    const wrapper = mount(PanelToolbar, {
+      props: { panelId: 'panel-1', projectId: 'proj-1', source: null, compact: true },
+      global: {
+        plugins: [installTestI18n('en-US')],
+        stubs: { RuleManagerModal: { template: '<div />' } },
+      },
+    })
+
+    expect(wrapper.find('[data-test="panel-toolbar"]').classes()).toContain('compact')
+    expect(wrapper.find('.chip-input').exists()).toBe(true)
+    expect(wrapper.find('.rules-btn').exists()).toBe(true)
+    expect(wrapper.find('.save-rule-btn').attributes('title')).toBe('Save as Rule')
+    expect(wrapper.find('.bookmark-btn.start').exists()).toBe(true)
   })
 })
