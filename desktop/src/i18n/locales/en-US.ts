@@ -468,6 +468,11 @@ export default {
     emptyTitle: 'No selection',
     deploymentFallbackTitle: 'Deploy: {id}',
     maxLeavesAlert: 'Maximum panel columns reached ({count}). Close an existing column before adding another.',
+    actions: {
+      splitRight: 'Split right',
+      splitDown: 'Split down',
+      close: 'Close panel',
+    },
     filter: {
       include: 'Include',
       exclude: 'Exclude',

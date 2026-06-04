@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type StyleValue } from 'vue'
-import { MAX_PANEL_LEAVES, usePanelStore, type PanelSource } from '@/stores/panel'
+import { MAX_PANEL_LEAVES, usePanelStore, type PanelAxis, type PanelSource } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useDragDrop, type DropEdge } from '@/composables/useDragDrop'
 import { useAppI18n } from '@/i18n/useAppI18n'
@@ -123,6 +123,14 @@ function showDropFailure(message: string) {
   window.alert(message)
 }
 
+function splitEmptyPanel(axis: PanelAxis) {
+  if (!panelStore.canAddPanelLeaf()) {
+    showDropFailure(t('panel.maxLeavesAlert', { count: MAX_PANEL_LEAVES }))
+    return
+  }
+  panelStore.splitLeafWithSource(props.panelId, axis, null, 'second')
+}
+
 function applySourceDrop(nextSource: PanelSource, edge: DropEdge) {
   if (edge === 'center') {
     panelStore.replaceSource(props.panelId, nextSource)
@@ -228,7 +236,38 @@ watch(serviceDropRequest, (request) => {
     <!-- Panel header -->
     <div class="panel-header">
       <span class="panel-title">{{ headerTitle }}</span>
-      <button v-if="canClose" class="close-btn" @click.stop="panelStore.removeLeaf(panelId)">✕</button>
+      <div class="panel-actions">
+        <button
+          type="button"
+          class="panel-action-btn"
+          data-test="panel-split-right"
+          :aria-label="t('panel.actions.splitRight')"
+          :title="t('panel.actions.splitRight')"
+          @click.stop="splitEmptyPanel('h')"
+        >
+          <span class="split-icon split-right-icon" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="panel-action-btn"
+          data-test="panel-split-down"
+          :aria-label="t('panel.actions.splitDown')"
+          :title="t('panel.actions.splitDown')"
+          @click.stop="splitEmptyPanel('v')"
+        >
+          <span class="split-icon split-down-icon" aria-hidden="true" />
+        </button>
+        <button
+          v-if="canClose"
+          type="button"
+          class="panel-action-btn close-btn"
+          :aria-label="t('panel.actions.close')"
+          :title="t('panel.actions.close')"
+          @click.stop="panelStore.removeLeaf(panelId)"
+        >
+          ×
+        </button>
+      </div>
     </div>
 
     <!-- Log panel -->
@@ -266,22 +305,64 @@ watch(serviceDropRequest, (request) => {
   flex-shrink: 0;
 }
 .panel-title {
+  min-width: 0;
+  flex: 1;
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.close-btn {
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.panel-action-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   background: transparent;
   border: none;
   color: var(--text-tertiary);
-  font-size: 10px;
   cursor: pointer;
-  padding: 0 2px;
   line-height: 1;
 }
-.close-btn:hover { color: var(--text-primary); }
+.panel-action-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-overlay);
+}
+.split-icon {
+  position: relative;
+  width: 13px;
+  height: 11px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+.split-icon::after {
+  position: absolute;
+  content: '';
+  background: currentColor;
+}
+.split-right-icon::after {
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 1px;
+}
+.split-down-icon::after {
+  right: 0;
+  bottom: 5px;
+  left: 0;
+  height: 1px;
+}
+.close-btn {
+  font-size: 13px;
+}
 
 .drop-overlay {
   position: absolute;

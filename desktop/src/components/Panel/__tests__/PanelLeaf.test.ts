@@ -66,6 +66,10 @@ function stubPanelRect(wrapper: ReturnType<typeof mount>) {
   } as DOMRect)
 }
 
+function makeEmptyLeaf(id: string): PanelNode {
+  return { type: 'leaf', id, serviceId: null, projectId: null, source: null }
+}
+
 describe('PanelLeaf', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -74,6 +78,111 @@ describe('PanelLeaf', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('点击右分栏按钮创建空白右侧面板', async () => {
+    const panelStore = usePanelStore()
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: panelStore.root.id,
+        serviceId: null,
+        projectId: null,
+        canClose: false,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+
+    await wrapper.find('[data-test="panel-split-right"]').trigger('click')
+
+    const split = expectSplitNode(panelStore.root)
+    expect(split.axis).toBe('h')
+    expect(split.second.type).toBe('leaf')
+    if (split.second.type === 'leaf') {
+      expect(split.second.source).toBeNull()
+      expect(split.second.serviceId).toBeNull()
+      expect(split.second.projectId).toBeNull()
+      expect(panelStore.focusedPanelId).toBe(split.second.id)
+    }
+  })
+
+  it('点击下分栏按钮创建空白下方面板', async () => {
+    const panelStore = usePanelStore()
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: panelStore.root.id,
+        serviceId: null,
+        projectId: null,
+        canClose: false,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+
+    await wrapper.find('[data-test="panel-split-down"]').trigger('click')
+
+    const split = expectSplitNode(panelStore.root)
+    expect(split.axis).toBe('v')
+    expect(split.second.type).toBe('leaf')
+    if (split.second.type === 'leaf') {
+      expect(split.second.source).toBeNull()
+      expect(panelStore.focusedPanelId).toBe(split.second.id)
+    }
+  })
+
+  it('达到最大分栏数时点击分栏按钮提示并保持布局不变', async () => {
+    const panelStore = usePanelStore()
+    panelStore.setRoot({
+      type: 'split',
+      id: 'split-root',
+      axis: 'h',
+      ratio: 0.5,
+      first: makeEmptyLeaf('leaf-1'),
+      second: {
+        type: 'split',
+        id: 'split-right',
+        axis: 'v',
+        ratio: 0.5,
+        first: makeEmptyLeaf('leaf-2'),
+        second: {
+          type: 'split',
+          id: 'split-bottom',
+          axis: 'h',
+          ratio: 0.5,
+          first: makeEmptyLeaf('leaf-3'),
+          second: makeEmptyLeaf('leaf-4'),
+        },
+      },
+    }, 'leaf-1')
+    const initialRoot = JSON.stringify(panelStore.root)
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
+
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: 'leaf-1',
+        serviceId: null,
+        projectId: null,
+        canClose: false,
+      },
+      global: {
+        stubs: {
+          LogPanel: { template: '<div class="log-panel-stub" />' },
+        },
+      },
+    })
+
+    await wrapper.find('[data-test="panel-split-right"]').trigger('click')
+
+    expect(alertSpy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(panelStore.root)).toBe(initialRoot)
   })
 
   it('drop 时即使高亮被 dragleave 清空，也按当前右边缘位置创建分栏', async () => {

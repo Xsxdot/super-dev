@@ -468,6 +468,11 @@ export default {
     emptyTitle: '未选择',
     deploymentFallbackTitle: '部署：{id}',
     maxLeavesAlert: '已达到最大分栏数（{count} 个），请先关闭已有分栏后再添加。',
+    actions: {
+      splitRight: '向右分栏',
+      splitDown: '向下分栏',
+      close: '关闭面板',
+    },
     filter: {
       include: '包含',
       exclude: '排除',
