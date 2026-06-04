@@ -589,6 +589,8 @@ export default {
       recordType: '记录类型',
       recordValue: '记录值',
       ttl: 'TTL',
+      https: 'HTTPS',
+      enabled: '启用',
       tls: '启用 HTTPS',
       certificate: '证书',
       selectCertificate: '选择证书',

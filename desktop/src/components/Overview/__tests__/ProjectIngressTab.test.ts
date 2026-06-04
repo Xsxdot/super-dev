@@ -251,14 +251,81 @@ describe('ProjectIngressTab', () => {
     await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
 
     expect(wrapper.find('[data-test="ingress-flow-strip"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="proxy-settings-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="proxy-provider-segments"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="proxy-dns-layout"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="proxy-provider-nginx"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="proxy-provider-traefik"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="proxy-provider-custom"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tls-toggle-field"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="websocket-toggle-field"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="proxy-settings-grid"] [data-test="proxy-host-selector"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="proxy-settings-grid"] .template-jump').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dns-result-row"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="dns-record-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dns-record-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="upstream-source-layout"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="upstream-card-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="raw-template-section"]').exists()).toBe(true)
   })
 
-  it('propagates a newly entered upstream port to other empty inferred upstreams', async () => {
+  it('closes host selectors when clicking outside the dropdowns', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [
+      makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
+      makeHost({ id: 'app-a', name: 'app-a', private_ip: '10.0.0.12' }),
+    ]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+    await wrapper.find('[data-test="proxy-host-selector"]').trigger('click')
+    expect(wrapper.find('[data-test="proxy-host-menu"]').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    await flush()
+
+    expect(wrapper.find('[data-test="proxy-host-menu"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="upstream-host-selector"]').trigger('click')
+    expect(wrapper.find('[data-test="upstream-host-menu"]').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    await flush()
+
+    expect(wrapper.find('[data-test="upstream-host-menu"]').exists()).toBe(false)
+  })
+
+  it('keeps certificate selection usable and enables HTTPS when a certificate is chosen', async () => {
+    const remote = useRemoteStore()
+    remote.hosts = [makeHost({ id: 'edge-a', name: 'edge-a' })]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+    certMock.listCertificates.mockResolvedValue([
+      { id: 'cert-api', domains: ['api.example.com'], issuer: 'acme', status: 'active', auto_renew: true },
+    ])
+
+    const wrapper = mount(ProjectIngressTab, {
+      props: { project: makeProject() },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flush()
+
+    await wrapper.find('[data-test="project-ingress-add"]').trigger('click')
+
+    const certSelect = wrapper.find('[data-test="ingress-cert-select"]')
+    expect((certSelect.element as HTMLSelectElement).disabled).toBe(false)
+
+    await certSelect.setValue('cert-api')
+    await flush()
+
+    expect((wrapper.find('[data-test="ingress-tls-enabled"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('propagates a newly entered upstream port to other empty inferred upstreams after blur', async () => {
     const remote = useRemoteStore()
     remote.hosts = [
       makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
@@ -291,11 +358,17 @@ describe('ProjectIngressTab', () => {
     await wrapper.find('[data-test="ingress-infer"]').trigger('click')
     await flush()
 
-    await wrapper.find('[data-test="upstream-port-0"]').setValue('8080')
+    await wrapper.find('[data-test="upstream-port-0"]').setValue('8000')
     await flush()
 
-    expect((wrapper.find('[data-test="upstream-port-0"]').element as HTMLInputElement).value).toBe('8080')
-    expect((wrapper.find('[data-test="upstream-port-1"]').element as HTMLInputElement).value).toBe('8080')
+    expect((wrapper.find('[data-test="upstream-port-0"]').element as HTMLInputElement).value).toBe('8000')
+    expect((wrapper.find('[data-test="upstream-port-1"]').element as HTMLInputElement).value).toBe('')
+
+    await wrapper.find('[data-test="upstream-port-0"]').trigger('blur')
+    await flush()
+
+    expect((wrapper.find('[data-test="upstream-port-0"]').element as HTMLInputElement).value).toBe('8000')
+    expect((wrapper.find('[data-test="upstream-port-1"]').element as HTMLInputElement).value).toBe('8000')
   })
 
   it('auto-selects matching active certificate when HTTPS is enabled', async () => {

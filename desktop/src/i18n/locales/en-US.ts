@@ -589,6 +589,8 @@ export default {
       recordType: 'Record Type',
       recordValue: 'Record Value',
       ttl: 'TTL',
+      https: 'HTTPS',
+      enabled: 'Enable',
       tls: 'Enable HTTPS',
       certificate: 'Certificate',
       selectCertificate: 'Select certificate',

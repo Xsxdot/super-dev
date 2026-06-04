@@ -22,3 +22,6 @@ docs/MONETIZATION.md
 
 # Generated remote agent install artifacts
 desktop/src-tauri/resources/agent-install/superdev-agent-*
+
+# Local bundled desktop binaries
+desktop/src-tauri/binaries/superdev-*-aarch64-apple-darwin
