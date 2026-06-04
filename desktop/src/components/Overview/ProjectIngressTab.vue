@@ -56,6 +56,7 @@ interface Draft {
   dns: {
     provider: string
     record_type: RecordType
+    ttl: number
     records: DNSRecord[]
   }
 }
@@ -98,6 +99,37 @@ const roleOptions = computed(() => Object.keys(selectedPipeline.value?.roles ?? 
 const selectedProxyHosts = computed(() =>
   sortedHosts.value.filter(host => draft.proxy.host_ids.includes(host.id)),
 )
+const proxySelectorOpen = ref(false)
+const proxyHostQuery = ref('')
+const proxyHostFilter = ref<'public' | 'selected' | 'all'>('public')
+const upstreamHostQuery = ref('')
+const selectedProxyHostIDs = computed(() => new Set(draft.proxy.host_ids))
+const filteredProxyHosts = computed(() => {
+  const query = proxyHostQuery.value.trim().toLowerCase()
+  return sortedHosts.value.filter(host => {
+    if (proxyHostFilter.value === 'public' && !host.public_ip?.trim()) return false
+    if (proxyHostFilter.value === 'selected' && !selectedProxyHostIDs.value.has(host.id)) return false
+    const haystack = [
+      host.name,
+      host.public_ip ?? '',
+      host.private_ip ?? '',
+      host.ssh_host,
+    ].join(' ').toLowerCase()
+    return query === '' || haystack.includes(query)
+  })
+})
+const filteredUpstreamHosts = computed(() => {
+  const query = upstreamHostQuery.value.trim().toLowerCase()
+  return sortedHosts.value.filter(host => {
+    const haystack = [
+      host.name,
+      host.private_ip ?? '',
+      host.public_ip ?? '',
+      host.ssh_host,
+    ].join(' ').toLowerCase()
+    return query === '' || haystack.includes(query)
+  })
+})
 
 onMounted(async () => {
   loading.value = true
@@ -131,7 +163,7 @@ function emptyDraft(): Draft {
       provider: 'nginx',
       host_ids: [],
     },
-    upstreams: [{ ip: '', port: '' }],
+    upstreams: [],
     proxy_options: {
       websocket: false,
       proxy_timeout: '60s',
@@ -144,7 +176,8 @@ function emptyDraft(): Draft {
     dns: {
       provider: 'manual',
       record_type: 'A',
-      records: [{ type: 'A', name: '', value: '', ttl: 300 }],
+      ttl: 300,
+      records: [],
     },
   }
 }
@@ -159,6 +192,7 @@ function resetDraft(next: Draft) {
     tls: { ...next.tls },
     dns: {
       ...next.dns,
+      ttl: next.dns.ttl,
       records: next.dns.records.map(record => ({ ...record })),
     },
   })
@@ -168,8 +202,11 @@ function openCreate() {
   warnings.value = []
   formError.value = ''
   matchingCertID.value = ''
+  proxySelectorOpen.value = false
+  proxyHostQuery.value = ''
+  proxyHostFilter.value = 'public'
+  upstreamHostQuery.value = ''
   resetDraft(emptyDraft())
-  applyDefaultProxyHosts()
   regenerateTemplate()
   formOpen.value = true
 }
@@ -192,7 +229,7 @@ function openEdit(ingress: Ingress) {
       provider: ingress.proxy?.provider ?? 'nginx',
       host_ids: [...(ingress.proxy?.host_ids ?? [])],
     },
-    upstreams: (ingress.upstreams?.length ? ingress.upstreams : [{ ip: '', port: '' as const }]).map(row => ({ ...row })),
+    upstreams: (ingress.upstreams ?? []).map(row => ({ ...row })),
     proxy_options: {
       websocket: ingress.proxy_options?.websocket ?? false,
       proxy_timeout: ingress.proxy_options?.proxy_timeout ?? '60s',
@@ -205,11 +242,15 @@ function openEdit(ingress: Ingress) {
     dns: {
       provider: ingress.dns.provider,
       record_type: firstRecord?.type ?? 'A',
+      ttl: Number(firstRecord?.ttl || 300),
       records: (ingress.dns.records?.length ? ingress.dns.records : firstRecord ? [firstRecord] : [])
         .map(record => ({ ...record })),
     },
   })
-  if (draft.dns.records.length === 0) addDNSRecord()
+  proxySelectorOpen.value = false
+  proxyHostQuery.value = ''
+  proxyHostFilter.value = 'public'
+  upstreamHostQuery.value = ''
   formOpen.value = true
   void refreshCertificateMatch()
 }
@@ -248,19 +289,8 @@ function toggleProxyHost(hostID: string, checked: boolean) {
   syncDNSRecordsFromProxyHosts()
 }
 
-function applyDefaultProxyHosts() {
-  draft.proxy.host_ids = defaultProxyHostIDs()
-  syncDNSRecordsFromProxyHosts(false)
-}
-
-function defaultProxyHostIDs(): string[] {
-  const publicHosts = sortedHosts.value.filter(host => host.public_ip?.trim())
-  if (publicHosts.length > 0) return publicHosts.map(host => host.id)
-  return sortedHosts.value.filter(host => host.is_self).map(host => host.id)
-}
-
 function currentDNSTTL(): number {
-  return Number(draft.dns.records[0]?.ttl || 300)
+  return Number(draft.dns.ttl || 300)
 }
 
 function knownProxyDNSValues(): Set<string> {
@@ -287,17 +317,16 @@ function syncDNSRecordsFromProxyHosts(preserveManual = true) {
     ? draft.dns.records
         .filter(record => {
           const value = record.value.trim()
-          return value !== '' && !selectedValues.has(value) && !knownValues.has(value)
+          return value === '' || (!selectedValues.has(value) && !knownValues.has(value))
         })
         .map(record => ({
           ...record,
           type: draft.dns.record_type,
           name: record.name.trim() || draft.domain,
-          ttl: Number(record.ttl || ttl),
+          ttl,
         }))
     : []
   draft.dns.records = [...hostRecords, ...manualRecords]
-  if (draft.dns.records.length === 0) addDNSRecord()
 }
 
 function addUpstream() {
@@ -307,7 +336,6 @@ function addUpstream() {
 
 function removeUpstream(index: number) {
   draft.upstreams.splice(index, 1)
-  if (draft.upstreams.length === 0) addUpstream()
   regenerateTemplate()
 }
 
@@ -318,20 +346,6 @@ function setUpstreamIP(index: number, value: string) {
     const host = remoteStore.hostById(row.host_id)
     if (host && value.trim() !== privateAddressForHost(host)) delete row.host_id
   }
-  regenerateTemplate()
-}
-
-function setUpstreamHost(index: number, hostID: string) {
-  const row = draft.upstreams[index]
-  if (!hostID) {
-    delete row.host_id
-    regenerateTemplate()
-    return
-  }
-  const host = remoteStore.hostById(hostID)
-  if (!host) return
-  row.host_id = hostID
-  row.ip = privateAddressForHost(host)
   regenerateTemplate()
 }
 
@@ -357,13 +371,12 @@ function addDNSRecord() {
     type: draft.dns.record_type,
     name: draft.domain,
     value: '',
-    ttl: 300,
+    ttl: currentDNSTTL(),
   })
 }
 
 function removeDNSRecord(index: number) {
   draft.dns.records.splice(index, 1)
-  if (draft.dns.records.length === 0) addDNSRecord()
 }
 
 function setRecordType(value: RecordType) {
@@ -373,10 +386,34 @@ function setRecordType(value: RecordType) {
   }
 }
 
+function setDNSTTL(value: string) {
+  draft.dns.ttl = Number(value || 300)
+  for (const record of draft.dns.records) {
+    record.ttl = draft.dns.ttl
+  }
+}
+
 function syncRecordNames() {
   for (const record of draft.dns.records) {
     record.name = draft.domain
   }
+}
+
+function isUpstreamHostSelected(hostID: string): boolean {
+  return draft.upstreams.some(row => row.host_id === hostID)
+}
+
+function toggleUpstreamHost(hostID: string, checked: boolean) {
+  const host = remoteStore.hostById(hostID)
+  if (!host) return
+  if (checked) {
+    if (!isUpstreamHostSelected(hostID)) {
+      draft.upstreams.push({ host_id: hostID, ip: privateAddressForHost(host), port: '' })
+    }
+  } else {
+    draft.upstreams = draft.upstreams.filter(row => row.host_id !== hostID)
+  }
+  regenerateTemplate()
 }
 
 function regenerateTemplate() {
@@ -660,35 +697,63 @@ async function deleteIngress(ingress: Ingress) {
         </div>
 
         <section class="form-section">
-          <h3>{{ t('overview.ingress.proxy') }}</h3>
-          <div class="form-grid proxy-provider-grid">
+          <h3>{{ t('overview.ingress.proxy') }} / {{ t('overview.ingress.dns') }}</h3>
+          <div class="proxy-control-grid">
             <label>
               <span>{{ t('overview.ingress.proxyProvider') }}</span>
               <select v-model="draft.proxy.provider" data-test="proxy-provider">
                 <option value="nginx">nginx</option>
               </select>
             </label>
-          </div>
-          <div class="node-block">
-            <span class="field-title">{{ t('overview.ingress.proxyHosts') }}</span>
-            <div class="host-list">
-              <label v-for="host in sortedHosts" :key="host.id" class="check-row">
-                <input
-                  type="checkbox"
-                  :data-test="`proxy-host-${host.id}`"
-                  :checked="isProxyHostSelected(host.id)"
-                  @change="toggleProxyHost(host.id, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ host.name }}</span>
-                <small>{{ hostAddress(host) }}</small>
-              </label>
+            <div class="nginx-options inline-nginx-options">
+              <div class="tls-option-group">
+                <label class="inline-check">
+                  <input
+                    data-test="ingress-tls-enabled"
+                    type="checkbox"
+                    :checked="draft.tls.enabled"
+                    @change="toggleTLS(($event.target as HTMLInputElement).checked)"
+                  />
+                  {{ t('overview.ingress.tls') }}
+                </label>
+                <label v-if="draft.tls.enabled">
+                  <span>{{ t('overview.ingress.certificate') }}</span>
+                  <select v-model="draft.tls.cert_id" data-test="ingress-cert-select">
+                    <option value="">{{ t('overview.ingress.selectCertificate') }}</option>
+                    <option v-for="cert in activeCertificates" :key="cert.id" :value="cert.id">
+                      {{ certLabel(cert) }}{{ cert.id === matchingCertID ? ` (${t('overview.ingress.autoMatched')})` : '' }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+              <div class="runtime-option-group">
+                <label class="inline-check">
+                  <input v-model="draft.proxy_options.websocket" type="checkbox" @change="regenerateTemplate" />
+                  {{ t('overview.ingress.websocket') }}
+                </label>
+                <label>
+                  <span>{{ t('overview.ingress.timeout') }}</span>
+                  <input
+                    v-model="draft.proxy_options.proxy_timeout"
+                    data-test="proxy-timeout"
+                    @input="regenerateTemplate"
+                  />
+                </label>
+              </div>
             </div>
           </div>
-        </section>
+          <div
+            v-if="draft.tls.enabled && !draft.tls.cert_id && !matchingCertID && !certMatchLoading"
+            class="warning"
+            data-test="ingress-cert-missing"
+          >
+            {{ t('overview.ingress.noMatchingCertificate') }}
+            <button type="button" class="secondary" data-test="ingress-cert-request" @click="openSSLSettings">
+              {{ t('overview.ingress.requestCertificate') }}
+            </button>
+          </div>
 
-        <section class="form-section">
-          <h3>{{ t('overview.ingress.dns') }}</h3>
-          <div class="form-grid three">
+          <div class="form-grid three dns-settings">
             <label>
               <span>{{ t('overview.ingress.dnsProvider') }}</span>
               <select v-model="draft.dns.provider" data-test="ingress-dns-provider">
@@ -714,12 +779,64 @@ async function deleteIngress(ingress: Ingress) {
               <input
                 type="number"
                 min="1"
-                :value="draft.dns.records[0]?.ttl ?? 300"
-                @input="draft.dns.records.forEach(record => { record.ttl = Number(($event.target as HTMLInputElement).value || 300) })"
+                :value="draft.dns.ttl"
+                @input="setDNSTTL(($event.target as HTMLInputElement).value)"
               />
             </label>
           </div>
-          <div class="rows">
+
+          <div class="selector-field">
+            <span class="field-title">{{ t('overview.ingress.proxyHosts') }}</span>
+            <button
+              type="button"
+              class="selector-trigger"
+              data-test="proxy-host-selector"
+              @click="proxySelectorOpen = !proxySelectorOpen"
+            >
+              <span v-if="selectedProxyHosts.length === 0">{{ t('overview.ingress.selectProxyHosts') }}</span>
+              <span v-else>
+                {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
+              </span>
+            </button>
+            <div v-if="proxySelectorOpen" class="selector-menu" data-test="proxy-host-menu">
+              <input
+                v-model="proxyHostQuery"
+                data-test="proxy-host-search"
+                :placeholder="t('overview.ingress.searchHosts')"
+              />
+              <div class="selector-filters">
+                <button type="button" :class="{ active: proxyHostFilter === 'public' }" @click="proxyHostFilter = 'public'">
+                  {{ t('overview.ingress.publicHosts') }}
+                </button>
+                <button type="button" :class="{ active: proxyHostFilter === 'selected' }" @click="proxyHostFilter = 'selected'">
+                  {{ t('overview.ingress.selectedOnly') }}
+                </button>
+                <button type="button" :class="{ active: proxyHostFilter === 'all' }" @click="proxyHostFilter = 'all'">
+                  {{ t('overview.ingress.allHosts') }}
+                </button>
+              </div>
+              <div class="selector-options">
+                <label v-for="host in filteredProxyHosts" :key="host.id" class="selector-option">
+                  <input
+                    type="checkbox"
+                    :data-test="`proxy-host-${host.id}`"
+                    :checked="isProxyHostSelected(host.id)"
+                    @change="toggleProxyHost(host.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ host.name }}</span>
+                  <small>{{ hostAddress(host) }}</small>
+                </label>
+              </div>
+              <div class="selector-footer" data-test="proxy-selected-count">
+                {{ t('overview.ingress.selectedProxyHosts', { count: selectedProxyHosts.length, total: sortedHosts.length }) }}
+              </div>
+            </div>
+          </div>
+
+          <div v-if="draft.dns.records.length === 0" class="empty-inline" data-test="dns-record-empty">
+            {{ t('overview.ingress.dnsRecordsEmpty') }}
+          </div>
+          <div v-else class="rows dns-records">
             <div v-for="(record, index) in draft.dns.records" :key="index" class="record-row">
               <input
                 :data-test="`dns-record-value-${index}`"
@@ -736,66 +853,85 @@ async function deleteIngress(ingress: Ingress) {
 
         <section class="form-section">
           <h3>{{ t('overview.ingress.upstreams') }}</h3>
-          <div class="import-strip" data-test="upstream-import">
-            <span class="import-title">{{ t('overview.ingress.importFromPipeline') }}</span>
-            <div class="import-controls">
-              <label>
-                <span>{{ t('overview.ingress.env') }}</span>
-                <select v-model="draft.source_hint.env_name" data-test="source-env">
-                  <option v-for="env in project.environments ?? []" :key="env.name" :value="env.name">{{ env.name }}</option>
-                </select>
-              </label>
-              <label>
-                <span>{{ t('overview.ingress.pipeline') }}</span>
-                <select v-model="draft.source_hint.pipeline_id" data-test="source-pipeline">
-                  <option v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" :value="pipeline.id">
-                    {{ pipeline.name || pipeline.id }}
-                  </option>
-                </select>
-              </label>
-              <label>
-                <span>{{ t('overview.ingress.role') }}</span>
-                <select v-model="draft.source_hint.role" data-test="source-role">
-                  <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
-                </select>
-              </label>
-              <button type="button" class="secondary import-action" data-test="ingress-infer" @click="inferDefaults">
-                {{ t('overview.ingress.infer') }}
-              </button>
+          <div class="upstream-sources">
+            <div class="source-panel">
+              <h4>{{ t('overview.ingress.selectFromHosts') }}</h4>
+              <input v-model="upstreamHostQuery" :placeholder="t('overview.ingress.searchHosts')" />
+              <div class="compact-host-grid">
+                <label v-for="host in filteredUpstreamHosts" :key="host.id" class="host-card">
+                  <input
+                    type="checkbox"
+                    :checked="isUpstreamHostSelected(host.id)"
+                    @change="toggleUpstreamHost(host.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ host.name }}</span>
+                  <small>{{ privateAddressForHost(host) }}</small>
+                </label>
+              </div>
+            </div>
+            <div class="source-panel import-panel" data-test="upstream-import">
+              <h4>{{ t('overview.ingress.importFromPipeline') }}</h4>
+              <div class="import-controls">
+                <label>
+                  <span>{{ t('overview.ingress.env') }}</span>
+                  <select v-model="draft.source_hint.env_name" data-test="source-env">
+                    <option v-for="env in project.environments ?? []" :key="env.name" :value="env.name">{{ env.name }}</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{{ t('overview.ingress.pipeline') }}</span>
+                  <select v-model="draft.source_hint.pipeline_id" data-test="source-pipeline">
+                    <option v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" :value="pipeline.id">
+                      {{ pipeline.name || pipeline.id }}
+                    </option>
+                  </select>
+                </label>
+                <label>
+                  <span>{{ t('overview.ingress.role') }}</span>
+                  <select v-model="draft.source_hint.role" data-test="source-role">
+                    <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
+                  </select>
+                </label>
+                <button type="button" class="primary import-action" data-test="ingress-infer" @click="inferDefaults">
+                  {{ t('overview.ingress.infer') }}
+                </button>
+              </div>
             </div>
           </div>
           <div v-if="warnings.length > 0" class="warning upstream-warning" data-test="upstream-import-warnings">
             <strong>{{ t('overview.ingress.warnings') }}</strong>
             <div v-for="warning in warnings" :key="warning">{{ warning }}</div>
           </div>
-          <div class="rows">
-            <div v-for="(row, index) in draft.upstreams" :key="index" class="upstream-row">
-              <select
-                :data-test="`upstream-host-${index}`"
-                :value="row.host_id ?? ''"
-                @change="setUpstreamHost(index, ($event.target as HTMLSelectElement).value)"
-              >
-                <option value="">{{ t('overview.ingress.manualUpstream') }}</option>
-                <option v-for="host in sortedHosts" :key="host.id" :value="host.id">
-                  {{ host.name }} · {{ privateAddressForHost(host) }}
-                </option>
-              </select>
-              <input
-                :data-test="`upstream-ip-${index}`"
-                :value="row.ip"
-                :placeholder="t('overview.ingress.ip')"
-                @input="setUpstreamIP(index, ($event.target as HTMLInputElement).value)"
-              />
-              <span class="colon">:</span>
-              <input
-                :data-test="`upstream-port-${index}`"
-                class="port-input"
-                :value="row.port"
-                type="number"
-                min="1"
-                :placeholder="t('overview.ingress.port')"
-                @input="setUpstreamPort(index, ($event.target as HTMLInputElement).value)"
-              />
+          <div v-if="draft.upstreams.length === 0" class="empty-inline">
+            {{ t('overview.ingress.upstreamsEmpty') }}
+          </div>
+          <div v-else class="upstream-card-grid">
+            <div v-for="(row, index) in draft.upstreams" :key="index" class="upstream-card-row">
+              <div class="upstream-node-label">
+                <span>{{ t('overview.ingress.host') }}</span>
+                <strong>{{ row.host_id ? hostLabel(row.host_id) : t('overview.ingress.manualUpstream') }}</strong>
+              </div>
+              <label>
+                <span>{{ t('overview.ingress.ip') }}</span>
+                <input
+                  :data-test="`upstream-ip-${index}`"
+                  :value="row.ip"
+                  :placeholder="t('overview.ingress.ip')"
+                  @input="setUpstreamIP(index, ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+              <label>
+                <span>{{ t('overview.ingress.port') }}</span>
+                <input
+                  :data-test="`upstream-port-${index}`"
+                  class="port-input"
+                  :value="row.port"
+                  type="number"
+                  min="1"
+                  :placeholder="t('overview.ingress.port')"
+                  @input="setUpstreamPort(index, ($event.target as HTMLInputElement).value)"
+                />
+              </label>
               <button type="button" class="danger" @click="removeUpstream(index)">{{ t('common.delete') }}</button>
             </div>
           </div>
@@ -805,53 +941,7 @@ async function deleteIngress(ingress: Ingress) {
         </section>
 
         <section class="form-section">
-          <h3>{{ t('overview.ingress.nginx') }}</h3>
-          <div class="nginx-options">
-            <div class="tls-option-group">
-              <label class="inline-check">
-                <input
-                  data-test="ingress-tls-enabled"
-                  type="checkbox"
-                  :checked="draft.tls.enabled"
-                  @change="toggleTLS(($event.target as HTMLInputElement).checked)"
-                />
-                {{ t('overview.ingress.tls') }}
-              </label>
-              <label v-if="draft.tls.enabled">
-                <span>{{ t('overview.ingress.certificate') }}</span>
-                <select v-model="draft.tls.cert_id" data-test="ingress-cert-select">
-                  <option value="">{{ t('overview.ingress.selectCertificate') }}</option>
-                  <option v-for="cert in activeCertificates" :key="cert.id" :value="cert.id">
-                    {{ certLabel(cert) }}{{ cert.id === matchingCertID ? ` (${t('overview.ingress.autoMatched')})` : '' }}
-                  </option>
-                </select>
-              </label>
-            </div>
-            <div class="runtime-option-group">
-              <label class="inline-check">
-                <input v-model="draft.proxy_options.websocket" type="checkbox" @change="regenerateTemplate" />
-                {{ t('overview.ingress.websocket') }}
-              </label>
-              <label>
-                <span>{{ t('overview.ingress.timeout') }}</span>
-                <input
-                  v-model="draft.proxy_options.proxy_timeout"
-                  data-test="proxy-timeout"
-                  @input="regenerateTemplate"
-                />
-              </label>
-            </div>
-          </div>
-          <div
-            v-if="draft.tls.enabled && !draft.tls.cert_id && !matchingCertID && !certMatchLoading"
-            class="warning"
-            data-test="ingress-cert-missing"
-          >
-            {{ t('overview.ingress.noMatchingCertificate') }}
-            <button type="button" class="secondary" data-test="ingress-cert-request" @click="openSSLSettings">
-              {{ t('overview.ingress.requestCertificate') }}
-            </button>
-          </div>
+          <h3>{{ t('overview.ingress.rawTemplate') }}</h3>
           <label class="raw-template">
             <span>{{ t('overview.ingress.rawTemplate') }}</span>
             <textarea v-model="draft.proxy_options.raw_template" data-test="nginx-raw-template" rows="12" />
@@ -887,7 +977,8 @@ async function deleteIngress(ingress: Ingress) {
   margin-bottom: 14px;
 }
 h2,
-h3 {
+h3,
+h4 {
   margin: 0;
 }
 h2 {
@@ -898,7 +989,13 @@ h3 {
   font-size: 12px;
   font-weight: 700;
 }
+h4 {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
 .empty,
+.empty-inline,
 .error,
 .warning,
 .result-panel {
@@ -917,6 +1014,10 @@ h3 {
   color: var(--text-primary);
   border-color: rgba(230, 162, 60, 0.4);
   background: rgba(230, 162, 60, 0.12);
+}
+.empty-inline {
+  margin-top: 10px;
+  border-radius: 6px;
 }
 .architecture-hint {
   margin-top: 10px;
@@ -1022,25 +1123,14 @@ button {
 .form-grid.three {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.proxy-provider-grid {
-  grid-template-columns: minmax(220px, 360px);
-}
-.node-block {
-  margin-top: 10px;
-}
-.import-strip {
+.proxy-control-grid {
   display: grid;
-  gap: 10px;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: 12px;
   margin-top: 10px;
-  padding: 10px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  background: var(--bg-secondary);
 }
-.import-title {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+.dns-settings {
+  margin-top: 12px;
 }
 .import-controls {
   display: grid;
@@ -1066,6 +1156,72 @@ label {
   color: var(--text-secondary);
   font-size: 12px;
 }
+.selector-field {
+  position: relative;
+  margin-top: 12px;
+}
+.selector-trigger {
+  display: flex;
+  width: min(100%, 420px);
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+}
+.selector-menu {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  width: min(520px, 100%);
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+}
+.selector-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.selector-filters button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.selector-options {
+  display: grid;
+  max-height: 220px;
+  overflow: auto;
+  gap: 4px;
+}
+.selector-option {
+  grid-template-columns: auto minmax(120px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 6px;
+  border-radius: 5px;
+}
+.selector-option:hover {
+  background: var(--bg-secondary);
+}
+.selector-option input,
+.host-card input {
+  width: auto;
+  height: auto;
+}
+.selector-option small,
+.host-card small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selector-footer {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
 input,
 select,
 textarea {
@@ -1087,42 +1243,85 @@ textarea {
   padding: 8px;
   line-height: 1.45;
 }
-.host-list,
-.rows {
+.rows,
+.dns-records {
   display: grid;
   gap: 8px;
 }
-.check-row {
-  grid-template-columns: auto minmax(90px, max-content) 1fr;
-  align-items: center;
-  gap: 8px;
-}
-.check-row input,
 .inline-check input {
   width: auto;
   height: auto;
 }
-.check-row small {
-  overflow: hidden;
-  color: var(--text-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.upstream-row,
 .record-row {
   display: grid;
   align-items: center;
   gap: 8px;
 }
-.upstream-row {
-  grid-template-columns: 210px minmax(0, 1fr) auto 120px auto;
-}
 .record-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
-.colon {
-  color: var(--text-tertiary);
-  font-weight: 700;
+.upstream-sources {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+  gap: 12px;
+  margin-top: 10px;
+}
+.source-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.compact-host-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+.host-card {
+  grid-template-columns: auto minmax(92px, 0.8fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+.upstream-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.upstream-card-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(120px, 1fr) 92px auto;
+  align-items: end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.upstream-node-label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.upstream-node-label strong {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .port-input {
   text-align: right;
@@ -1140,6 +1339,9 @@ textarea {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
   gap: 12px;
   margin-top: 10px;
+}
+.inline-nginx-options {
+  margin-top: 0;
 }
 .tls-option-group,
 .runtime-option-group {
@@ -1163,15 +1365,23 @@ textarea {
   .project-ingress {
     padding: 14px;
   }
-  .form-grid,
-  .form-grid.three,
-  .import-controls,
+	  .form-grid,
+	  .form-grid.three,
+  .proxy-control-grid,
+	  .import-controls,
   .nginx-options,
   .tls-option-group,
   .runtime-option-group,
-  .upstream-row,
-  .record-row {
-    grid-template-columns: 1fr;
+  .record-row,
+  .upstream-sources,
+  .compact-host-grid,
+  .upstream-card-grid,
+  .upstream-card-row {
+	    grid-template-columns: 1fr;
+	  }
+  .selector-menu,
+  .selector-trigger {
+    width: 100%;
   }
-}
+	}
 </style>

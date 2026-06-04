@@ -144,6 +144,7 @@ describe('ProjectIngressTab', () => {
     await wrapper.find('[data-test="source-env"]').setValue('prod')
     await wrapper.find('[data-test="source-pipeline"]').setValue('deploy-prod')
     await wrapper.find('[data-test="source-role"]').setValue('api_targets')
+    await wrapper.find('[data-test="proxy-host-selector"]').trigger('click')
     await wrapper.find('[data-test="proxy-host-edge-a"]').setValue(true)
     await wrapper.find('[data-test="proxy-host-edge-b"]').setValue(true)
 
@@ -192,7 +193,7 @@ describe('ProjectIngressTab', () => {
     }))
   })
 
-  it('defaults reverse proxy nodes from public addresses and links DNS record values', async () => {
+  it('starts with no reverse proxy nodes and generates DNS records from selected proxy nodes', async () => {
     const remote = useRemoteStore()
     remote.hosts = [
       makeHost({ id: 'edge-a', name: 'edge-a', public_ip: '203.0.113.10', private_ip: '10.0.0.10' }),
@@ -211,9 +212,18 @@ describe('ProjectIngressTab', () => {
     await wrapper.find('[data-test="ingress-domain"]').setValue('api.example.com')
     await flush()
 
-    expect((wrapper.find('[data-test="proxy-host-edge-a"]').element as HTMLInputElement).checked).toBe(true)
-    expect((wrapper.find('[data-test="proxy-host-edge-b"]').element as HTMLInputElement).checked).toBe(true)
-    expect((wrapper.find('[data-test="proxy-host-app-a"]').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-test="dns-record-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dns-record-value-0"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="proxy-host-selector"]').trigger('click')
+    expect((wrapper.find('[data-test="proxy-host-edge-a"]').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.find('[data-test="proxy-host-edge-b"]').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-test="proxy-host-app-a"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="proxy-host-edge-a"]').setValue(true)
+    await wrapper.find('[data-test="proxy-host-edge-b"]').setValue(true)
+    await flush()
+
     expect((wrapper.find('[data-test="dns-record-value-0"]').element as HTMLInputElement).value).toBe('203.0.113.10')
     expect((wrapper.find('[data-test="dns-record-value-1"]').element as HTMLInputElement).value).toBe('203.0.113.11')
 
