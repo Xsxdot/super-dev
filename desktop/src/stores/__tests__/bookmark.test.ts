@@ -146,4 +146,40 @@ describe('bookmarkStore', () => {
     expect(done.state).toBe('done')
     expect(done.lockedLogs.map(l => l.message)).toEqual(['sync-visible-log'])
   })
+
+  it('syncStatus follows enabled, recording, and captured states', () => {
+    const store = useBookmarkStore()
+
+    expect(store.syncEnabled).toBe(false)
+    expect(store.syncStatus).toBe('off')
+
+    store.setSyncEnabled(true)
+    expect(store.syncEnabled).toBe(true)
+    expect(store.syncStatus).toBe('ready')
+
+    store.startSyncBookmark([{ panelId: 'p1', serviceId: 'svc-1' }])
+    expect(store.syncStatus).toBe('recording')
+
+    const start = store.getBookmark('p1')!.startTime!
+    vi.advanceTimersByTime(5000)
+    const captured = makeLog('sync output', new Date(start.getTime() + 1000).toISOString())
+    store.endSyncBookmark([{ panelId: 'p1', captureLogs: [captured], capturedIds: new Set([captured.id]) }])
+
+    expect(store.hasSyncOutput).toBe(true)
+    expect(store.syncStatus).toBe('captured')
+  })
+
+  it('disabling sync clears panel selection only when not recording', () => {
+    const store = useBookmarkStore()
+    store.setSyncEnabled(true)
+    store.syncPanelIds.add('p1')
+    store.setSyncEnabled(false)
+    expect([...store.syncPanelIds]).toEqual([])
+
+    store.setSyncEnabled(true)
+    store.startSyncBookmark([{ panelId: 'p2', serviceId: 'svc-2' }])
+    store.setSyncEnabled(false)
+    expect(store.syncRecording).toBe(true)
+    expect(store.syncPanelIds.has('p2')).toBe(true)
+  })
 })

@@ -206,4 +206,17 @@ describe('BottomBar', () => {
 
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
   })
+
+  it('uses bookmark store as the shared sync enabled source', async () => {
+    const { wrapper } = await mountBottomBarWithServices()
+    const bookmarkStore = useBookmarkStore()
+
+    expect(bookmarkStore.syncEnabled).toBe(false)
+
+    await wrapper.find('[data-test="sync-toggle"]').setValue(true)
+    expect(bookmarkStore.syncEnabled).toBe(true)
+
+    await wrapper.find('[data-test="sync-toggle"]').setValue(false)
+    expect(bookmarkStore.syncEnabled).toBe(false)
+  })
 })

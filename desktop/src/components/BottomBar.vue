@@ -91,9 +91,9 @@ async function stopChecked() {
 }
 
 // 同步录制
-const syncEnabled = ref(false)
+const syncEnabled = computed(() => bookmarkStore.syncEnabled)
 const syncRecording = computed(() => bookmarkStore.syncRecording)
-const hasSyncOutput = computed(() => bookmarkStore.formatSyncBookmarks().trim().length > 0)
+const hasSyncOutput = computed(() => bookmarkStore.hasSyncOutput)
 
 function syncPanels(): SyncBookmarkPanel[] {
   return panelStore.allLeaves
@@ -110,18 +110,17 @@ function refreshSyncPanelIds() {
 }
 
 function toggleSync() {
-  syncEnabled.value = !syncEnabled.value
-  if (syncEnabled.value) {
+  const nextEnabled = !bookmarkStore.syncEnabled
+  bookmarkStore.setSyncEnabled(nextEnabled)
+  if (nextEnabled) {
     refreshSyncPanelIds()
-  } else if (!syncRecording.value) {
-    bookmarkStore.syncPanelIds = new Set()
   }
 }
 
 watch(
   () => panelStore.allLeaves.map(leaf => `${leaf.id}:${JSON.stringify(leaf.source)}`).join('|'),
   () => {
-    if (syncEnabled.value && !syncRecording.value) refreshSyncPanelIds()
+    if (bookmarkStore.syncEnabled && !syncRecording.value) refreshSyncPanelIds()
   },
 )
 
@@ -165,7 +164,7 @@ function toggleSyncRecord() {
       return
     }
     bookmarkStore.startSyncBookmark(panels)
-    syncEnabled.value = true
+    bookmarkStore.setSyncEnabled(true)
   }
 }
 
