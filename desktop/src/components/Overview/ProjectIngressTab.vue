@@ -102,6 +102,7 @@ const selectedProxyHosts = computed(() =>
 const proxySelectorOpen = ref(false)
 const proxyHostQuery = ref('')
 const proxyHostFilter = ref<'public' | 'selected' | 'all'>('public')
+const upstreamSelectorOpen = ref(false)
 const upstreamHostQuery = ref('')
 const selectedProxyHostIDs = computed(() => new Set(draft.proxy.host_ids))
 const filteredProxyHosts = computed(() => {
@@ -130,6 +131,9 @@ const filteredUpstreamHosts = computed(() => {
     return query === '' || haystack.includes(query)
   })
 })
+const selectedUpstreamHosts = computed(() =>
+  sortedHosts.value.filter(host => isUpstreamHostSelected(host.id)),
+)
 
 onMounted(async () => {
   loading.value = true
@@ -205,6 +209,7 @@ function openCreate() {
   proxySelectorOpen.value = false
   proxyHostQuery.value = ''
   proxyHostFilter.value = 'public'
+  upstreamSelectorOpen.value = false
   upstreamHostQuery.value = ''
   resetDraft(emptyDraft())
   regenerateTemplate()
@@ -250,6 +255,7 @@ function openEdit(ingress: Ingress) {
   proxySelectorOpen.value = false
   proxyHostQuery.value = ''
   proxyHostFilter.value = 'public'
+  upstreamSelectorOpen.value = false
   upstreamHostQuery.value = ''
   formOpen.value = true
   void refreshCertificateMatch()
@@ -676,24 +682,48 @@ async function deleteIngress(ingress: Ingress) {
         </header>
 
         <div v-if="formError" class="error">{{ formError }}</div>
-        <div class="architecture-hint" data-test="ingress-architecture-hint">
-          {{ t('overview.ingress.architectureHint') }}
-        </div>
 
-        <div class="form-grid">
-          <label>
-            <span>{{ t('overview.ingress.name') }}</span>
-            <input v-model="draft.name" data-test="ingress-name" />
-          </label>
-          <label>
-            <span>{{ t('overview.ingress.domain') }}</span>
-            <input
-              :value="draft.domain"
-              data-test="ingress-domain"
-              placeholder="api.example.com"
-              @input="draft.domain = ($event.target as HTMLInputElement).value; syncRecordNames(); regenerateTemplate(); void refreshCertificateMatch()"
-            />
-          </label>
+        <div class="form-hero">
+          <div class="hero-fields">
+            <label>
+              <span>{{ t('overview.ingress.name') }}</span>
+              <input v-model="draft.name" data-test="ingress-name" placeholder="例如：api-ingress" />
+            </label>
+            <label>
+              <span>{{ t('overview.ingress.domain') }}</span>
+              <input
+                :value="draft.domain"
+                data-test="ingress-domain"
+                placeholder="api.example.com"
+                @input="draft.domain = ($event.target as HTMLInputElement).value; syncRecordNames(); regenerateTemplate(); void refreshCertificateMatch()"
+              />
+            </label>
+          </div>
+          <div class="flow-strip" data-test="ingress-flow-strip">
+            <div class="flow-step">
+              <span class="flow-dot">1</span>
+              <div>
+                <strong>{{ t('overview.ingress.flowPublic') }}</strong>
+                <small>{{ t('overview.ingress.flowPublicHint') }}</small>
+              </div>
+            </div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-step">
+              <span class="flow-dot">2</span>
+              <div>
+                <strong>{{ t('overview.ingress.flowProxy') }}</strong>
+                <small>{{ t('overview.ingress.flowProxyHint') }}</small>
+              </div>
+            </div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-step">
+              <span class="flow-dot">3</span>
+              <div>
+                <strong>{{ t('overview.ingress.flowUpstream') }}</strong>
+                <small>{{ t('overview.ingress.flowUpstreamHint') }}</small>
+              </div>
+            </div>
+          </div>
         </div>
 
         <section class="form-section">
