@@ -256,19 +256,11 @@ func NewSSHDialer() *SSHDialer { return &SSHDialer{} }
 
 // Dial 按 host 凭据建立 SSH 隧道,返回 Conn 包装。
 func (d *SSHDialer) Dial(host model.Host) (*Conn, error) {
-	var key []byte
-	if host.SSHKeyPath != "" {
-		k, err := ReadPrivateKey(host.SSHKeyPath)
-		if err != nil {
-			return nil, err
-		}
-		key = k
+	creds, err := CredentialsFromHost(host)
+	if err != nil {
+		return nil, err
 	}
-	cfg, err := BuildClientConfig(Credentials{
-		User:       host.SSHUser,
-		Password:   host.SSHPassword,
-		PrivateKey: key,
-	})
+	cfg, err := BuildClientConfig(creds)
 	if err != nil {
 		return nil, err
 	}

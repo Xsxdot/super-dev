@@ -129,12 +129,13 @@ describe('DNSProviderTab', () => {
     })
   })
 
-  it('opens a saved provider for editing without clearing existing secrets', async () => {
+  it('opens a saved provider for editing with existing secrets filled in', async () => {
     mockedApi.listDNSProviders.mockResolvedValue([{
       id: 'cloudflare-prod',
       name: 'Cloudflare Prod',
       type: 'cloudflare',
       zone_id: 'zone-1',
+      secrets: { api_token: 'secret-token' },
     }])
     mockedApi.upsertDNSProvider.mockResolvedValue({
       id: 'cloudflare-prod',
@@ -147,6 +148,7 @@ describe('DNSProviderTab', () => {
 
     await wrapper.find('[data-test="dns-provider-edit-cloudflare-prod"]').trigger('click')
     expect((wrapper.find('[data-test="dns-provider-id"]').element as HTMLInputElement).value).toBe('cloudflare-prod')
+    expect((wrapper.find('[data-test="dns-provider-token"]').element as HTMLInputElement).value).toBe('secret-token')
 
     await wrapper.find('[data-test="dns-provider-name"]').setValue('Cloudflare Seven')
     await wrapper.find('[data-test="dns-provider-zone"]').setValue('cn-hangzhou')
@@ -157,8 +159,8 @@ describe('DNSProviderTab', () => {
       name: 'Cloudflare Seven',
       type: 'cloudflare',
       zone_id: 'cn-hangzhou',
+      secrets: { api_token: 'secret-token' },
     }))
-    expect(mockedApi.upsertDNSProvider.mock.calls.at(-1)?.[0]).not.toHaveProperty('secrets')
   })
 })
 

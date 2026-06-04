@@ -44,3 +44,20 @@ func TestValidateTemplateRequiresIDNameVersionAndStep(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id is required")
 }
+
+func TestValidateTemplateRejectsUnknownCategory(t *testing.T) {
+	err := pipelinetemplate.Validate(pipelinetemplate.Template{
+		ID:       "custom",
+		Name:     "Custom",
+		Category: "unknown",
+		Version:  "1.0.0",
+		Steps: []pipelinetemplate.Step{{
+			Name: "Run",
+			Type: "local_command",
+			With: map[string]interface{}{"cmd": "echo ok"},
+		}},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "category must be one of")
+}

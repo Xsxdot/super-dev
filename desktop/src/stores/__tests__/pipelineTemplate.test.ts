@@ -22,7 +22,7 @@ describe('pipelineTemplate store', () => {
 
   it('loads templates', async () => {
     vi.spyOn(api, 'listPipelineTemplates').mockResolvedValue({
-      items: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' }],
+      items: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', category: 'build', version: '1.0.0', digest: 'sha256:x' }],
     })
 
     const store = usePipelineTemplateStore()
@@ -37,11 +37,12 @@ describe('pipelineTemplate store', () => {
       source: 'user',
       id: 'custom-deploy',
       name: 'Custom Deploy',
+      category: 'deploy',
       version: '1.0.0',
       digest: 'sha256:y',
     })
     vi.spyOn(api, 'listPipelineTemplates').mockResolvedValue({
-      items: [{ source: 'user', id: 'custom-deploy', name: 'Custom Deploy', version: '1.0.0', digest: 'sha256:y' }],
+      items: [{ source: 'user', id: 'custom-deploy', name: 'Custom Deploy', category: 'deploy', version: '1.0.0', digest: 'sha256:y' }],
     })
 
     const store = usePipelineTemplateStore()

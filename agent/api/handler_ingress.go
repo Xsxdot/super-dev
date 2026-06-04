@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不在 handler 内编排 DNS、证书或 proxy 收敛逻辑
-//   - 不向响应返回 DNS provider secrets
+//   - UI 展示层负责脱敏，不在本机 API 层清空编辑所需 secrets
 package api
 
 import (
@@ -380,7 +380,7 @@ func (a *App) upsertIngressDNSProvider(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	jsonOK(w, redactDNSProviderConfig(saved))
+	jsonOK(w, saved)
 }
 
 func (a *App) deleteIngressDNSProvider(w http.ResponseWriter, r *http.Request) {
@@ -408,11 +408,6 @@ func validateIngressDNSProviderConfig(cfg ingress.DNSProviderConfig) error {
 	default:
 		return errors.New("unsupported DNS provider type")
 	}
-}
-
-func redactDNSProviderConfig(cfg ingress.DNSProviderConfig) ingress.DNSProviderConfig {
-	cfg.Secrets = nil
-	return cfg
 }
 
 func ingressErrorStatus(err error) int {

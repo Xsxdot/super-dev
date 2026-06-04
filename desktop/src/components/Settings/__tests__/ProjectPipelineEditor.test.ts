@@ -113,7 +113,7 @@ describe('ProjectPipelineEditor', () => {
     const wrapper = mount(ProjectPipelineEditor, {
       props: {
         project: project(),
-        pipelineTemplates: [{ source: 'builtin', id: 'systemd', name: 'Systemd', version: '1.0.0', digest: 'sha256:systemd' }],
+        pipelineTemplates: [{ source: 'builtin', id: 'systemd', name: 'Systemd', category: 'deploy', version: '1.0.0', digest: 'sha256:systemd' }],
         initialMode: 'template',
       },
       global: { plugins: [installTestI18n()] },

@@ -1,34 +1,35 @@
 id: vue-standard-build
-name: Vue Standard Build
-description: Install dependencies, build a Vue project, and optionally package explicit files into a tar.gz artifact.
+name: Vue 标准构建 / Vue Standard Build
+description: 安装依赖，构建 Vue 项目，并可选地将指定文件打包为 tar.gz 产物。/ Install dependencies, build a Vue project, and optionally package explicit files into a tar.gz artifact.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local Vue project directory where dependency install and build commands run.
+    description: 执行依赖安装和构建命令的本地 Vue 项目目录。/ Local Vue project directory where dependency install and build commands run.
   build_cmd:
-    label: Build command
+    label: 构建命令 / Build command
     type: string
     required: true
     default: pnpm install && pnpm build -- --outDir ${output}/dist
-    description: Shell command that builds the Vue app. The default writes dist output under the standard output root.
+    description: 构建 Vue 应用的 Shell 命令；默认会把 dist 写到标准输出根目录下。/ Shell command that builds the Vue app. The default writes dist output under the standard output root.
   dist_dir:
-    label: Dist directory
+    label: Dist 目录 / Dist directory
     type: path
     required: true
     default: ${output}/dist
-    description: Built static files directory under the standard output root.
+    description: 标准输出根目录下的构建后静态文件目录。/ Built static files directory under the standard output root.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
-    description: Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
+    description: 可选的最终 tar.gz 产物路径；留空会跳过打包，交给后续打包模板生成产物。/ Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
-    description: Files or directories to package when artifact is set, usually the dist directory plus any deployment config.
+    description: 设置 artifact 时要打包的文件或目录，通常是 dist 目录和部署配置。/ Files or directories to package when artifact is set, usually the dist directory plus any deployment config.
 steps:
   - name: Build
     type: local_command

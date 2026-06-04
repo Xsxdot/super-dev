@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -111,6 +112,45 @@ func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
 	assert.Equal(t, "ssh.example.com", hosts[1].SSHHost)
 	assert.Equal(t, "203.0.113.10", hosts[1].PublicIP)
 	assert.Equal(t, "10.0.0.10", hosts[1].PrivateIP)
+}
+
+func TestHostCredentialMaterialReturnedForLocalEditing(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	keyFile := t.TempDir() + "/id_ed25519"
+	keyMaterial := "-----BEGIN OPENSSH PRIVATE KEY-----\nlocal-test-key\n-----END OPENSSH PRIVATE KEY-----\n"
+	require.NoError(t, os.WriteFile(keyFile, []byte(keyMaterial), 0o600))
+
+	body, _ := json.Marshal(model.Host{
+		Name:        "edge",
+		SSHHost:     "ssh.example.com",
+		SSHPort:     22,
+		SSHUser:     "deploy",
+		SSHPassword: "secret-password",
+		SSHKeyPath:  keyFile,
+	})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Host
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.Equal(t, "secret-password", created.SSHPassword)
+	assert.Equal(t, keyMaterial, created.SSHPrivateKey)
+	assert.Empty(t, created.SSHKeyPath)
+
+	listResp, err := http.Get(srv.URL + "/api/hosts")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	require.Equal(t, http.StatusOK, listResp.StatusCode)
+
+	var hosts []hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&hosts))
+	require.Len(t, hosts, 2)
+	assert.Equal(t, "secret-password", hosts[1].SSHPassword)
+	assert.Equal(t, keyMaterial, hosts[1].SSHPrivateKey)
+	assert.Empty(t, hosts[1].SSHKeyPath)
 }
 
 func TestDetectSshKeys(t *testing.T) {
@@ -256,6 +296,9 @@ type hostDTOWithSelf struct {
 	SSHHost         string   `json:"ssh_host"`
 	SSHPort         int      `json:"ssh_port"`
 	SSHUser         string   `json:"ssh_user"`
+	SSHPassword     string   `json:"ssh_password"`
+	SSHKeyPath      string   `json:"ssh_key_path"`
+	SSHPrivateKey   string   `json:"ssh_private_key"`
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
 	PublicIP        string   `json:"public_ip,omitempty"`

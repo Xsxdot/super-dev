@@ -39,13 +39,9 @@ type sshRemote struct {
 //   - 可执行远端命令和上传文件的 Remote
 //   - 凭据解析或 SSH 连接失败错误
 func NewSSHRemote(host model.Host) (Remote, error) {
-	creds := tunnel.Credentials{User: host.SSHUser, Password: host.SSHPassword}
-	if host.SSHKeyPath != "" {
-		key, err := tunnel.ReadPrivateKey(host.SSHKeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("read private key: %w", err)
-		}
-		creds.PrivateKey = key
+	creds, err := tunnel.CredentialsFromHost(host)
+	if err != nil {
+		return nil, fmt.Errorf("read private key: %w", err)
 	}
 	cfg, err := tunnel.BuildClientConfig(creds)
 	if err != nil {

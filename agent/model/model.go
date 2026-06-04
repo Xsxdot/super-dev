@@ -147,6 +147,7 @@ func (t LogSourceType) IsValid() bool {
 // 持久化字段会写入 ~/.superdev/hosts.json（权限 0600）。
 // LocalTunnelPort 在首次连接时分配并写回，复用同端口便于前端 URL 稳定。
 // PublicIP 和 PrivateIP 仅作为入口配置推断元数据，不参与 SSH 连接。
+// SSHPrivateKey 保存导入后的私钥内容，SSHKeyPath 仅兼容旧配置和导入入口。
 type Host struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
@@ -155,6 +156,7 @@ type Host struct {
 	SSHUser         string   `json:"ssh_user"`
 	SSHPassword     string   `json:"ssh_password"`
 	SSHKeyPath      string   `json:"ssh_key_path"`
+	SSHPrivateKey   string   `json:"ssh_private_key,omitempty"`
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
 	PublicIP        string   `json:"public_ip,omitempty"`

@@ -1,25 +1,26 @@
 id: archive-package
-name: Archive Package
-description: Package an explicit files list into one tar.gz artifact.
+name: 归档打包 / Archive Package
+description: 将明确的文件清单打包成一个 tar.gz 产物。/ Package an explicit files list into one tar.gz artifact.
+category: build
 version: 1.0.0
 inputs:
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
-    description: Final local tar.gz artifact path, for example ${artifacts}/api-${version}.tar.gz.
+    description: 最终本地 tar.gz 产物路径，例如 ${artifacts}/api-${version}.tar.gz。/ Final local tar.gz artifact path, for example ${artifacts}/api-${version}.tar.gz.
   files:
-    label: Files
+    label: 文件清单 / Files
     type: file_list
     required: true
-    description: Files or directories to include in the artifact. Each item must provide from and to.
+    description: 需要写入产物的文件或目录，每一项都要提供 from 和 to。/ Files or directories to include in the artifact. Each item must provide from and to.
   format:
-    label: Format
+    label: 格式 / Format
     type: select
     required: true
     default: tar.gz
     options: [tar.gz]
-    description: Archive format. Only tar.gz is currently supported.
+    description: 归档格式，目前仅支持 tar.gz。/ Archive format. Only tar.gz is currently supported.
 steps:
   - name: Package
     type: archive_package

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/superdev/agent/model"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -34,6 +35,35 @@ type Credentials struct {
 	User       string
 	Password   string
 	PrivateKey []byte // PEM 编码的私钥内容;为空表示不使用密钥
+}
+
+// CredentialsFromHost 从 Host 模型提取 SSH 凭据。
+//
+// 参数：
+//   - host: 已保存的远程主机配置
+//
+// 返回：
+//   - 可直接传给 BuildClientConfig 的凭据
+//   - 读取兼容旧配置的 SSHKeyPath 失败时返回错误
+//
+// 注意：
+//   - SSHPrivateKey 是当前优先格式，避免配置同步后依赖本机文件路径
+//   - SSHKeyPath 仅作为旧配置兼容和导入入口
+func CredentialsFromHost(host model.Host) (Credentials, error) {
+	creds := Credentials{User: host.SSHUser, Password: host.SSHPassword}
+	if strings.TrimSpace(host.SSHPrivateKey) != "" {
+		creds.PrivateKey = []byte(host.SSHPrivateKey)
+		return creds, nil
+	}
+	if strings.TrimSpace(host.SSHKeyPath) == "" {
+		return creds, nil
+	}
+	key, err := ReadPrivateKey(host.SSHKeyPath)
+	if err != nil {
+		return Credentials{}, err
+	}
+	creds.PrivateKey = key
+	return creds, nil
 }
 
 // BuildClientConfig 根据凭据构造 ssh.ClientConfig。

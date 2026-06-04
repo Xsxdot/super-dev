@@ -14,7 +14,15 @@ PipelineTemplateWizard：模板化流水线组合编辑器。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { Pipeline, PipelinePhase, PipelinePreviewResponse, PipelineTemplateSummary, TemplateFileItem, TemplateInput } from '@/api/agent'
+import type {
+  Pipeline,
+  PipelinePhase,
+  PipelinePreviewResponse,
+  PipelineTemplateCategory,
+  PipelineTemplateSummary,
+  TemplateFileItem,
+  TemplateInput,
+} from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import PipelinePreview from './PipelinePreview.vue'
 
@@ -41,6 +49,11 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
 const phases: PipelinePhase[] = ['build', 'deploy', 'finally']
+const phaseCategory: Record<PipelinePhase, PipelineTemplateCategory> = {
+  build: 'build',
+  deploy: 'deploy',
+  finally: 'cleanup',
+}
 const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const nextBlockId = ref(0)
@@ -63,6 +76,24 @@ function templateKey(template: PipelineTemplateSummary) {
 
 function selectedFor(block: TemplateBlock) {
   return props.templates.find(t => templateKey(t) === block.selectedKey)
+}
+
+function templateCategory(template: PipelineTemplateSummary): PipelineTemplateCategory {
+  return template.category ?? 'general'
+}
+
+function templateFitsPhase(template: PipelineTemplateSummary, phase: PipelinePhase) {
+  const category = templateCategory(template)
+  return category === 'general' || category === phaseCategory[phase]
+}
+
+function templatesForBlock(block: TemplateBlock) {
+  const options = props.templates.filter(template => templateFitsPhase(template, block.phase))
+  const selected = selectedFor(block)
+  if (selected && !options.some(template => templateKey(template) === templateKey(selected))) {
+    return [selected, ...options]
+  }
+  return options
 }
 
 function inputEntries(block: TemplateBlock): [string, TemplateInput][] {
@@ -322,7 +353,7 @@ function saveTemplate() {
                 @change="resetBlockInputs(block)"
               >
                 <option value="" disabled>{{ t('settings.pipeline.selectTemplate') }}</option>
-                <option v-for="template in templates" :key="templateKey(template)" :value="templateKey(template)">
+                <option v-for="template in templatesForBlock(block)" :key="templateKey(template)" :value="templateKey(template)">
                   {{ template.name }} · {{ template.source }} · {{ template.version }}
                 </option>
               </select>
@@ -346,7 +377,7 @@ function saveTemplate() {
               <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
               <div class="field-help">{{ t('settings.pipeline.machineHelp') }}</div>
               <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
-              <div v-else class="target-list">
+              <div v-else class="target-list target-grid" :data-test="`block-${block.id}-runner-targets`">
                 <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
                   <input
                     type="checkbox"
@@ -365,7 +396,7 @@ function saveTemplate() {
                 <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${block.id}-help-${name}`">?</span>
               </label>
 
-              <div v-if="input.type === 'target_role'" class="target-list">
+              <div v-if="input.type === 'target_role'" class="target-list target-grid" :data-test="`block-${block.id}-${name}-targets`">
                 <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
                   <input
                     type="checkbox"
@@ -564,11 +595,16 @@ function saveTemplate() {
   font-size: 10px;
 }
 .target-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 12px;
+  align-items: center;
 }
 .target-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-secondary);
 }

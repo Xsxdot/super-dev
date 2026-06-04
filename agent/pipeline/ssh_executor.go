@@ -50,13 +50,9 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 		return nil, fmt.Errorf("unknown host %q", target.HostID)
 	}
 
-	creds := tunnel.Credentials{User: host.SSHUser, Password: host.SSHPassword}
-	if host.SSHKeyPath != "" {
-		key, err := tunnel.ReadPrivateKey(host.SSHKeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("read private key: %w", err)
-		}
-		creds.PrivateKey = key
+	creds, err := tunnel.CredentialsFromHost(host)
+	if err != nil {
+		return nil, fmt.Errorf("read private key: %w", err)
 	}
 	cfg, err := tunnel.BuildClientConfig(creds)
 	if err != nil {

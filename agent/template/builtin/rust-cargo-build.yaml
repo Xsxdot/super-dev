@@ -1,31 +1,32 @@
 id: rust-cargo-build
-name: Rust Cargo Build
-description: Build a Rust release binary and package it for deployment.
+name: Rust Cargo 构建 / Rust Cargo Build
+description: 构建 Rust release 二进制，并打包用于部署。/ Build a Rust release binary and package it for deployment.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local Cargo project directory.
+    description: 本地 Cargo 项目目录。/ Local Cargo project directory.
   build_cmd:
-    label: Build command
+    label: 构建命令 / Build command
     type: string
     required: true
     default: cargo build --release
-    description: Cargo command that creates the release binary.
+    description: 生成 release 二进制的 Cargo 命令。/ Cargo command that creates the release binary.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: Built binary and supporting files to include in the artifact.
+    description: 需要写入产物的构建后二进制和配套文件。/ Built binary and supporting files to include in the artifact.
 steps:
   - name: Build
     type: local_command

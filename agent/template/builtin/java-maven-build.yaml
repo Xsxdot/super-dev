@@ -1,31 +1,32 @@
 id: java-maven-build
-name: Java Maven Build
-description: Build a Maven service jar and package it for deployment.
+name: Java Maven 构建 / Java Maven Build
+description: 构建 Maven 服务 jar，并打包用于部署。/ Build a Maven service jar and package it for deployment.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local Maven project directory.
+    description: 本地 Maven 项目目录。/ Local Maven project directory.
   build_cmd:
-    label: Build command
+    label: 构建命令 / Build command
     type: string
     required: true
     default: mvn -q -DskipTests package
-    description: Maven command that creates the deployable jar.
+    description: 生成可部署 jar 的 Maven 命令。/ Maven command that creates the deployable jar.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: Built jar and supporting files to include in the artifact.
+    description: 需要写入产物的构建后 jar 和配套文件。/ Built jar and supporting files to include in the artifact.
 steps:
   - name: Build
     type: local_command

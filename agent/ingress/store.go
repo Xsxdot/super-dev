@@ -3,7 +3,7 @@
 // 职责：
 //   - 在 agent DataDir 下读写 ingress JSON 文件
 //   - 为声明分配稳定 ID
-//   - 列表接口隐藏 DNS provider 密文字段
+//   - 列表接口返回本地完整 DNS provider 配置，供编辑表单回填
 //
 // 边界：
 //   - 不校验 provider 凭据是否可用
@@ -38,7 +38,7 @@ type Store interface {
 	GetState(ingressID string) (AppliedState, bool, error)
 	// ListStates 返回所有入口落地状态。
 	ListStates() ([]AppliedState, error)
-	// ListDNSProviders 返回已脱敏的 DNS provider 列表。
+	// ListDNSProviders 返回 DNS provider 列表。
 	ListDNSProviders() ([]DNSProviderConfig, error)
 	// GetDNSProvider 读取包含 secrets 的 DNS provider 完整配置。
 	GetDNSProvider(id string) (DNSProviderConfig, bool, error)
@@ -292,10 +292,10 @@ func (s *FileStore) ListStates() ([]AppliedState, error) {
 	return append([]AppliedState(nil), data.States...), nil
 }
 
-// ListDNSProviders 返回所有 DNS provider 元数据，并隐藏密文字段。
+// ListDNSProviders 返回所有 DNS provider 配置。
 //
 // 返回：
-//   - 脱敏后的 DNS provider 配置列表
+//   - DNS provider 配置列表，包含本机保存的 secrets
 //   - 读取或解析失败时返回错误
 func (s *FileStore) ListDNSProviders() ([]DNSProviderConfig, error) {
 	s.mu.Lock()
@@ -304,11 +304,7 @@ func (s *FileStore) ListDNSProviders() ([]DNSProviderConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := append([]DNSProviderConfig(nil), data.DNSProviders...)
-	for i := range out {
-		out[i].Secrets = nil
-	}
-	return out, nil
+	return append([]DNSProviderConfig(nil), data.DNSProviders...), nil
 }
 
 // GetDNSProvider 按 ID 读取 DNS provider 完整配置。

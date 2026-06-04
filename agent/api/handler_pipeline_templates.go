@@ -20,6 +20,7 @@ type pipelineTemplateSummary struct {
 	Source      string                            `json:"source"`
 	ID          string                            `json:"id"`
 	Name        string                            `json:"name"`
+	Category    string                            `json:"category"`
 	Version     string                            `json:"version"`
 	Digest      string                            `json:"digest"`
 	Description string                            `json:"description,omitempty"`
@@ -67,6 +68,7 @@ func (a *App) listPipelineTemplates(w http.ResponseWriter, r *http.Request) {
 			Source:      item.Source,
 			ID:          item.Template.ID,
 			Name:        item.Template.Name,
+			Category:    pipelinetemplate.CategoryOrDefault(item.Template.Category),
 			Version:     item.Template.Version,
 			Digest:      item.Digest,
 			Description: item.Template.Description,
@@ -119,6 +121,7 @@ func (a *App) importPipelineTemplate(w http.ResponseWriter, r *http.Request) {
 		Source:      imported.Source,
 		ID:          imported.Template.ID,
 		Name:        imported.Template.Name,
+		Category:    pipelinetemplate.CategoryOrDefault(imported.Template.Category),
 		Version:     imported.Template.Version,
 		Digest:      imported.Digest,
 		Description: imported.Template.Description,
@@ -143,13 +146,15 @@ func (a *App) getPipelineTemplate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "template not found: "+err.Error())
 		return
 	}
+	tpl := resolved.Template
+	tpl.Category = pipelinetemplate.CategoryOrDefault(tpl.Category)
 	jsonOK(w, pipelineTemplateDetail{
 		Source:   resolved.Source,
 		ID:       resolved.Template.ID,
 		Version:  resolved.Template.Version,
 		Digest:   resolved.Digest,
 		YAML:     yamlText,
-		Template: resolved.Template,
+		Template: tpl,
 	})
 }
 
@@ -162,6 +167,7 @@ func summarizeTemplate(source string, tpl pipelinetemplate.Template) (pipelineTe
 		Source:      source,
 		ID:          tpl.ID,
 		Name:        tpl.Name,
+		Category:    pipelinetemplate.CategoryOrDefault(tpl.Category),
 		Version:     tpl.Version,
 		Digest:      digest,
 		Description: tpl.Description,

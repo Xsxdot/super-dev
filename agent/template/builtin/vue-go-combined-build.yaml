@@ -1,51 +1,52 @@
 id: vue-go-combined-build
-name: Vue Go Combined Build
-description: Build a Vue frontend, build a Go backend, and package both into one artifact.
+name: Vue + Go 组合构建 / Vue Go Combined Build
+description: 构建 Vue 前端和 Go 后端，并将两者打包成一个产物。/ Build a Vue frontend, build a Go backend, and package both into one artifact.
+category: build
 version: 1.0.0
 inputs:
   frontend_dir:
-    label: Frontend directory
+    label: 前端目录 / Frontend directory
     type: path
     required: true
-    description: Local Vue project directory.
+    description: 本地 Vue 项目目录。/ Local Vue project directory.
   backend_dir:
-    label: Backend directory
+    label: 后端目录 / Backend directory
     type: path
     required: true
-    description: Local Go backend directory.
+    description: 本地 Go 后端目录。/ Local Go backend directory.
   frontend_build_cmd:
-    label: Frontend build command
+    label: 前端构建命令 / Frontend build command
     type: string
     required: true
     default: npm install && npm run build
-    description: Command that creates the Vue dist directory.
+    description: 生成 Vue dist 目录的命令。/ Command that creates the Vue dist directory.
   go_package:
-    label: Go package
+    label: Go 包 / Go package
     type: string
     required: true
     default: .
-    description: Go package passed to go build.
+    description: 传给 go build 的 Go 包路径。/ Go package passed to go build.
   binary_output:
-    label: Binary output
+    label: 二进制输出 / Binary output
     type: path
     required: true
     default: ${output}/app
-    description: Local path for the built Go binary.
+    description: 构建后 Go 二进制的本地路径。/ Local path for the built Go binary.
   go_build_env:
-    label: Go build environment
+    label: Go 构建环境变量 / Go build environment
     type: string
-    description: Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
+    description: 可选的 go build 前置环境变量，例如 GOOS=linux GOARCH=amd64 CGO_ENABLED=0。/ Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: Go binary and Vue dist files to include in the artifact.
+    description: 需要写入产物的 Go 二进制和 Vue dist 文件。/ Go binary and Vue dist files to include in the artifact.
 steps:
   - name: Build Frontend
     type: local_command

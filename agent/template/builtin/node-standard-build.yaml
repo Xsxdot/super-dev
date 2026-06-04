@@ -1,37 +1,38 @@
 id: node-standard-build
-name: Node Standard Build
-description: Install Node dependencies, run an optional build command, and package a Node service.
+name: Node 标准构建 / Node Standard Build
+description: 安装 Node 依赖，执行可选构建命令，并打包 Node 服务。/ Install Node dependencies, run an optional build command, and package a Node service.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local Node project directory where install and build commands run.
+    description: 执行安装和构建命令的本地 Node 项目目录。/ Local Node project directory where install and build commands run.
   install_cmd:
-    label: Install command
+    label: 安装命令 / Install command
     type: string
     required: true
     default: npm install
-    description: Command that installs Node dependencies.
+    description: 安装 Node 依赖的命令。/ Command that installs Node dependencies.
   build_cmd:
-    label: Build command
+    label: 构建命令 / Build command
     type: string
     required: true
     default: npm run build --if-present
-    description: Command that prepares the service before packaging.
+    description: 打包前准备服务的命令。/ Command that prepares the service before packaging.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: Files and directories to include in the Node service artifact.
+    description: 需要写入 Node 服务产物的文件和目录。/ Files and directories to include in the Node service artifact.
 steps:
   - name: Build
     type: local_command

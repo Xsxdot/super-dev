@@ -1,33 +1,34 @@
 id: nginx-static-deploy
-name: Nginx Static Deploy
-description: Upload a static artifact, switch the current directory, and reload Nginx.
+name: Nginx 静态部署 / Nginx Static Deploy
+description: 上传静态产物，切换当前目录，并重载 Nginx。/ Upload a static artifact, switch the current directory, and reload Nginx.
+category: deploy
 version: 1.0.0
 inputs:
   role:
-    label: Target machines
+    label: 目标机器 / Target machines
     type: target_role
     required: true
-    description: Nginx machines that receive the static artifact and reload Nginx.
+    description: 接收静态产物并重载 Nginx 的机器。/ Nginx machines that receive the static artifact and reload Nginx.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
-    description: Final local tar.gz artifact path produced by a build or package template and uploaded to each target machine.
+    description: 由构建或打包模板生成并上传到目标机器的最终本地 tar.gz 产物路径。/ Final local tar.gz artifact path produced by a build or package template and uploaded to each target machine.
   release_dir:
-    label: Release directory
+    label: 发布目录 / Release directory
     type: path
     required: true
-    description: Remote directory that stores extracted static release contents and upload staging files.
+    description: 用于存放解压后静态发布内容和上传暂存文件的远端目录。/ Remote directory that stores extracted static release contents and upload staging files.
   current_dir:
-    label: Current symlink
+    label: 当前软链接 / Current symlink
     type: path
     required: true
-    description: Remote symlink path that points Nginx at the active static release.
+    description: 指向当前生效静态发布目录的远端软链接路径。/ Remote symlink path that points Nginx at the active static release.
   app_name:
-    label: App name
+    label: 应用名 / App name
     type: string
     required: true
-    description: Application name used for remote release folder and uploaded archive name.
+    description: 用于远端发布目录和上传归档文件名的应用名称。/ Application name used for remote release folder and uploaded archive name.
 steps:
   - name: Prepare
     type: remote_command

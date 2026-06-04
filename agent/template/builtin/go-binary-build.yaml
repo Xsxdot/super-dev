@@ -1,38 +1,39 @@
 id: go-binary-build
-name: Go Binary Build
-description: Build a Go binary and optionally package explicit files into a tar.gz artifact.
+name: Go 二进制构建 / Go Binary Build
+description: 构建 Go 二进制文件，并可选地将指定文件打包为 tar.gz 产物。/ Build a Go binary and optionally package explicit files into a tar.gz artifact.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local directory where the Go build command runs, usually the project root or backend module directory.
+    description: 执行 Go 构建命令的本地目录，通常是项目根目录或后端模块目录。/ Local directory where the Go build command runs, usually the project root or backend module directory.
   package:
-    label: Go package
+    label: Go 包 / Go package
     type: string
     required: true
     default: ./...
-    description: Go package pattern passed to go build, for example ./cmd/server or ./...
+    description: 传给 go build 的 Go 包路径，例如 ./cmd/server 或 ./...。/ Go package pattern passed to go build, for example ./cmd/server or ./...
   output:
-    label: Binary output
+    label: 二进制输出 / Binary output
     type: path
     required: true
     default: ${output}/app
-    description: Final local binary output path under the standard output root.
+    description: 标准输出根目录下的最终本地二进制输出路径。/ Final local binary output path under the standard output root.
   build_env:
-    label: Build environment
+    label: 构建环境变量 / Build environment
     type: string
-    description: Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
+    description: 可选的 go build 前置环境变量，例如 GOOS=linux GOARCH=amd64 CGO_ENABLED=0。/ Optional environment assignments prepended to go build, for example GOOS=linux GOARCH=amd64 CGO_ENABLED=0.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
-    description: Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
+    description: 可选的最终 tar.gz 产物路径；留空会跳过打包，交给后续打包模板生成产物。/ Optional final tar.gz artifact path. Leave empty to skip packaging and let a later package template create the artifact.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
-    description: Files to package when artifact is set. Include the built binary and any config or env files that should ship with it.
+    description: 设置 artifact 时要打包的文件，通常包含构建出的二进制和需要随包发布的配置或环境文件。/ Files to package when artifact is set. Include the built binary and any config or env files that should ship with it.
 steps:
   - name: Build
     type: local_command

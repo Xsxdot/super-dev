@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 覆盖入口声明 CRUD、预览、应用校验和孤儿删除接口
-//   - 验证 DNS provider 配置列表不会返回密文字段
+//   - 验证 DNS provider 配置列表会返回本地完整配置供编辑回填
 //
 // 边界：
 //   - 不连接真实 DNS、ACME 或远端 nginx
@@ -97,8 +97,8 @@ func TestIngressApplyRejectsTLSWithoutCertificateID(t *testing.T) {
 	assert.Contains(t, string(body), "tls.cert_id is required")
 }
 
-// TestIngressDNSProviderListRedactsSecrets 验证保存 DNS provider 后列表接口会隐藏 secrets。
-func TestIngressDNSProviderListRedactsSecrets(t *testing.T) {
+// TestIngressDNSProviderListReturnsSecrets 验证保存 DNS provider 后列表接口会返回 secrets。
+func TestIngressDNSProviderListReturnsSecrets(t *testing.T) {
 	srv, _ := newTestApp(t)
 
 	resp := postIngressJSON(t, srv.URL+"/api/ingress/providers/dns", `{
@@ -120,7 +120,7 @@ func TestIngressDNSProviderListRedactsSecrets(t *testing.T) {
 	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&providers))
 	require.Len(t, providers, 1)
 	assert.Equal(t, "cloudflare-prod", providers[0].ID)
-	assert.Empty(t, providers[0].Secrets)
+	assert.Equal(t, "secret-token", providers[0].Secrets["api_token"])
 }
 
 // TestIngressDNSProviderDropsAliyunZoneID 验证 Aliyun provider 保存时会丢弃无效的 zone_id 字段。

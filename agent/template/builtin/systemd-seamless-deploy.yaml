@@ -1,79 +1,80 @@
 id: systemd-seamless-deploy
-name: Systemd Seamless Deploy
-description: Upload an artifact, write a systemd unit, switch the current release, restart the service, and verify HTTP health.
+name: Systemd 无缝部署 / Systemd Seamless Deploy
+description: 上传产物，写入 systemd unit，切换当前版本，重启服务，并验证 HTTP 健康状态。/ Upload an artifact, write a systemd unit, switch the current release, restart the service, and verify HTTP health.
+category: deploy
 version: 1.0.0
 inputs:
   role:
-    label: Target machines
+    label: 目标机器 / Target machines
     type: target_role
     required: true
-    description: Machines that receive the artifact and run systemd deployment commands.
+    description: 接收产物并执行 systemd 部署命令的机器。/ Machines that receive the artifact and run systemd deployment commands.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
-    description: Final local tar.gz artifact path produced by a build or package template and uploaded to each target machine.
+    description: 由构建或打包模板生成并上传到目标机器的最终本地 tar.gz 产物路径。/ Final local tar.gz artifact path produced by a build or package template and uploaded to each target machine.
   release_dir:
-    label: Release directory
+    label: 发布目录 / Release directory
     type: path
     required: true
-    description: Remote directory that stores release contents and upload staging files.
+    description: 用于存放发布内容和上传暂存文件的远端目录。/ Remote directory that stores release contents and upload staging files.
   current_dir:
-    label: Current symlink
+    label: 当前软链接 / Current symlink
     type: path
     required: true
-    description: Remote symlink path that points to the active release directory.
+    description: 指向当前生效发布目录的远端软链接路径。/ Remote symlink path that points to the active release directory.
   app_name:
-    label: App name
+    label: 应用名 / App name
     type: string
     required: true
-    description: Application name used for remote release folder and uploaded archive name.
+    description: 用于远端发布目录和上传归档文件名的应用名称。/ Application name used for remote release folder and uploaded archive name.
   service_name:
-    label: Systemd service
+    label: Systemd 服务 / Systemd service
     type: string
     required: true
-    description: systemd service name to write, enable, and restart after switching the current release.
+    description: 切换当前版本后需要写入、启用并重启的 systemd 服务名。/ systemd service name to write, enable, and restart after switching the current release.
   exec_start:
-    label: ExecStart command
+    label: ExecStart 命令 / ExecStart command
     type: string
     required: true
-    description: Full systemd ExecStart command for the deployed service.
+    description: 已部署服务的完整 systemd ExecStart 命令。/ Full systemd ExecStart command for the deployed service.
   working_dir:
-    label: Working directory
+    label: 工作目录 / Working directory
     type: path
     required: true
-    description: Remote directory used as systemd WorkingDirectory for the service.
+    description: 用作服务 systemd WorkingDirectory 的远端目录。/ Remote directory used as systemd WorkingDirectory for the service.
   port:
-    label: Health port
+    label: 健康检查端口 / Health port
     type: number
     required: true
     default: "8080"
-    description: HTTP port used for the post-restart health check.
+    description: 服务重启后 HTTP 健康检查使用的端口。/ HTTP port used for the post-restart health check.
   health_path:
-    label: Health path
+    label: 健康检查路径 / Health path
     type: string
     required: true
     default: /health
-    description: HTTP path used for the post-restart health check.
+    description: 服务重启后 HTTP 健康检查使用的路径。/ HTTP path used for the post-restart health check.
   user:
-    label: Service user
+    label: 服务用户 / Service user
     type: string
     default: root
-    description: Linux user that systemd should run the service as.
+    description: systemd 运行服务时使用的 Linux 用户。/ Linux user that systemd should run the service as.
   environment:
-    label: Environment lines
+    label: 环境变量行 / Environment lines
     type: string
-    description: Optional systemd Environment= lines written into the service unit.
+    description: 可选的 systemd Environment= 行，会写入服务 unit。/ Optional systemd Environment= lines written into the service unit.
   restart:
-    label: Restart policy
+    label: 重启策略 / Restart policy
     type: string
     default: always
-    description: systemd Restart policy for the deployed service.
+    description: 已部署服务的 systemd Restart 策略。/ systemd Restart policy for the deployed service.
   skip_http_check:
-    label: Skip HTTP check
+    label: 跳过 HTTP 检查 / Skip HTTP check
     type: boolean
     default: "false"
-    description: Set to true when the service should restart without HTTP health verification.
+    description: 不需要 HTTP 健康验证也允许服务重启时设为 true。/ Set to true when the service should restart without HTTP health verification.
 steps:
   - name: Prepare
     type: remote_command

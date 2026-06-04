@@ -45,6 +45,7 @@ type PipelineTemplateSummary struct {
 	Source      string                            `json:"source"`
 	ID          string                            `json:"id"`
 	Name        string                            `json:"name"`
+	Category    string                            `json:"category"`
 	Version     string                            `json:"version"`
 	Digest      string                            `json:"digest"`
 	Description string                            `json:"description,omitempty"`

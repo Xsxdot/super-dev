@@ -45,10 +45,15 @@ func TestBuiltinTemplatesHaveInputDescriptionsAndTargetRoles(t *testing.T) {
 	builtins, err := pipelinetemplate.LoadBuiltins()
 	require.NoError(t, err)
 	for _, tpl := range builtins {
+		assert.Contains(t, []string{"build", "deploy", "cleanup", "general"}, tpl.Category, "%s needs category", tpl.ID)
 		for name, input := range tpl.Inputs {
 			assert.NotEmpty(t, input.Description, "%s input %s needs description", tpl.ID, name)
 		}
 	}
+	assert.Equal(t, "build", builtins["go-binary-build"].Category)
+	assert.Equal(t, "build", builtins["archive-package"].Category)
+	assert.Equal(t, "deploy", builtins["systemd-seamless-deploy"].Category)
+	assert.Equal(t, "deploy", builtins["docker-container-deploy"].Category)
 	assert.Equal(t, "target_role", builtins["systemd-seamless-deploy"].Inputs["role"].Type)
 	assert.Equal(t, "target_role", builtins["nginx-static-deploy"].Inputs["role"].Type)
 	assert.Equal(t, "file_list", builtins["archive-package"].Inputs["files"].Type)

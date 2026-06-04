@@ -50,4 +50,67 @@ describe('HostFormModal', () => {
       private_ip: '10.0.0.10',
     }))
   })
+
+  it('preserves saved password and imported private key material when editing', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        initial: {
+          id: 'host-1',
+          name: 'edge',
+          ssh_host: 'ssh.example.com',
+          ssh_port: 22,
+          ssh_user: 'deploy',
+          ssh_password: 'saved-password',
+          ssh_private_key: 'saved-private-key',
+          ssh_key_path: '',
+          remote_agent_port: 57017,
+          local_tunnel_port: 0,
+          tags: ['prod'],
+        },
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect((wrapper.find('[data-test="host-form-password"]').element as HTMLInputElement).value).toBe('saved-password')
+    expect(wrapper.find('[data-test="host-form-key-stored"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      ssh_password: 'saved-password',
+      ssh_private_key: 'saved-private-key',
+      ssh_key_path: '',
+    }))
+  })
+
+  it('uses a selected key path as an import source instead of resubmitting old key material', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        initial: {
+          id: 'host-1',
+          name: 'edge',
+          ssh_host: 'ssh.example.com',
+          ssh_port: 22,
+          ssh_user: 'deploy',
+          ssh_password: '',
+          ssh_private_key: 'old-private-key',
+          ssh_key_path: '',
+          remote_agent_port: 57017,
+          local_tunnel_port: 0,
+          tags: [],
+        },
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="host-form-key"]').setValue('/Users/me/.ssh/id_ed25519')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      ssh_private_key: '',
+      ssh_key_path: '/Users/me/.ssh/id_ed25519',
+    }))
+  })
 })

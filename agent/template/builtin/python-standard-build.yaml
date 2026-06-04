@@ -1,31 +1,32 @@
 id: python-standard-build
-name: Python Standard Build
-description: Validate a Python service and package explicit source files.
+name: Python 标准构建 / Python Standard Build
+description: 校验 Python 服务，并打包明确的源码文件。/ Validate a Python service and package explicit source files.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local Python project directory where validation runs.
+    description: 执行校验命令的本地 Python 项目目录。/ Local Python project directory where validation runs.
   check_cmd:
-    label: Check command
+    label: 检查命令 / Check command
     type: string
     required: true
     default: python3 -m py_compile app.py
-    description: Command that validates the Python service before packaging.
+    description: 打包前校验 Python 服务的命令。/ Command that validates the Python service before packaging.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: Python files and dependency manifests to include in the artifact.
+    description: 需要写入产物的 Python 文件和依赖清单。/ Python files and dependency manifests to include in the artifact.
 steps:
   - name: Check
     type: local_command

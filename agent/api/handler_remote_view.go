@@ -4,7 +4,7 @@
 // 职责：
 //   - 接受 ?log_source_id 参数,返回指定 LogSource
 //   - 计算 tag 分组("all" + 关联 Host 的 tags 并集)
-//   - 返回关联 Host 列表(不含 SSH 密码等敏感字段)
+//   - 返回关联 Host 列表
 //
 // 边界：
 //   - 不返回日志数据
@@ -18,13 +18,19 @@ import (
 	"github.com/superdev/agent/model"
 )
 
-// hostDTO 是 Host 的对外安全视图,不含 SSH 密码和密钥路径。
+// hostDTO 是 Host 的对外视图。
+//
+// 本应用完全运行在本机，Host 设置页需要完整凭据来回填编辑表单；
+// 具体展示层负责不把密码和私钥明文渲染到列表中。
 type hostDTO struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
 	SSHHost         string   `json:"ssh_host"`
 	SSHPort         int      `json:"ssh_port"`
 	SSHUser         string   `json:"ssh_user"`
+	SSHPassword     string   `json:"ssh_password,omitempty"`
+	SSHKeyPath      string   `json:"ssh_key_path,omitempty"`
+	SSHPrivateKey   string   `json:"ssh_private_key,omitempty"`
 	RemoteAgentPort int      `json:"remote_agent_port"`
 	LocalTunnelPort int      `json:"local_tunnel_port"`
 	PublicIP        string   `json:"public_ip,omitempty"`
@@ -43,6 +49,9 @@ func toHostDTO(h model.Host) hostDTO {
 		SSHHost:         h.SSHHost,
 		SSHPort:         h.SSHPort,
 		SSHUser:         h.SSHUser,
+		SSHPassword:     h.SSHPassword,
+		SSHKeyPath:      h.SSHKeyPath,
+		SSHPrivateKey:   h.SSHPrivateKey,
 		RemoteAgentPort: h.RemoteAgentPort,
 		LocalTunnelPort: h.LocalTunnelPort,
 		PublicIP:        h.PublicIP,

@@ -1,31 +1,32 @@
 id: php-standard-build
-name: PHP Standard Build
-description: Install Composer dependencies when configured and package a PHP service.
+name: PHP 标准构建 / PHP Standard Build
+description: 按配置安装 Composer 依赖，并打包 PHP 服务。/ Install Composer dependencies when configured and package a PHP service.
+category: build
 version: 1.0.0
 inputs:
   work_dir:
-    label: Project directory
+    label: 项目目录 / Project directory
     type: path
     required: true
     default: ${workspace}
-    description: Local PHP project directory.
+    description: 本地 PHP 项目目录。/ Local PHP project directory.
   install_cmd:
-    label: Install command
+    label: 安装命令 / Install command
     type: string
     required: true
     default: if [ -f composer.json ]; then composer install --no-dev --prefer-dist --no-interaction; else true; fi
-    description: Command that prepares PHP dependencies before packaging.
+    description: 打包前准备 PHP 依赖的命令。/ Command that prepares PHP dependencies before packaging.
   artifact:
-    label: Artifact path
+    label: 产物路径 / Artifact path
     type: path
     required: true
     default: ${artifacts}/${app_name}.tar.gz
-    description: Final tar.gz artifact path.
+    description: 最终 tar.gz 产物路径。/ Final tar.gz artifact path.
   files:
-    label: Package files
+    label: 打包文件 / Package files
     type: file_list
     required: true
-    description: PHP files and dependency directories to include in the artifact.
+    description: 需要写入产物的 PHP 文件和依赖目录。/ PHP files and dependency directories to include in the artifact.
 steps:
   - name: Install
     type: local_command

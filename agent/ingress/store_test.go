@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 验证入口声明和落地状态读写
-//   - 验证 DNS provider 凭据密文字段不会从列表接口泄漏
+//   - 验证 DNS provider 凭据可从本地列表接口回填编辑表单
 //   - 验证 provider 文件使用 0600 权限
 //
 // 边界：
@@ -70,7 +70,7 @@ func TestFileStoreAppliedState(t *testing.T) {
 	assert.Equal(t, "203.0.113.10", got.Records[0].Value)
 }
 
-func TestFileStoreProviderSecretsRedactedFromList(t *testing.T) {
+func TestFileStoreProviderSecretsReturnedFromList(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStore(dir)
 	provider, err := store.UpsertDNSProvider(DNSProviderConfig{
@@ -88,7 +88,7 @@ func TestFileStoreProviderSecretsRedactedFromList(t *testing.T) {
 	list, err := store.ListDNSProviders()
 	require.NoError(t, err)
 	require.Len(t, list, 1)
-	assert.Empty(t, list[0].Secrets)
+	assert.Equal(t, "secret-token", list[0].Secrets["api_token"])
 
 	stat, err := os.Stat(filepath.Join(dir, "ingress-providers.json"))
 	require.NoError(t, err)

@@ -1,44 +1,45 @@
 id: docker-container-deploy
-name: Docker Container Deploy
-description: Pull or use a tagged image, recreate one container, and verify HTTP health.
+name: Docker 容器部署 / Docker Container Deploy
+description: 拉取或使用指定镜像，重建一个容器，并验证 HTTP 健康状态。/ Pull or use a tagged image, recreate one container, and verify HTTP health.
+category: deploy
 version: 1.0.0
 inputs:
   role:
-    label: Target machines
+    label: 目标机器 / Target machines
     type: target_role
     required: true
-    description: Docker machines that run the container.
+    description: 运行容器的 Docker 机器。/ Docker machines that run the container.
   container_name:
-    label: Container name
+    label: 容器名 / Container name
     type: string
     required: true
-    description: Container name to replace.
+    description: 需要替换的容器名称。/ Container name to replace.
   full_image:
-    label: Full image
+    label: 完整镜像 / Full image
     type: string
     required: true
-    description: Full Docker image reference, including tag.
+    description: 包含 tag 的完整 Docker 镜像引用。/ Full Docker image reference, including tag.
   port:
-    label: Health port
+    label: 健康检查端口 / Health port
     type: number
     required: true
     default: "8080"
-    description: HTTP port used for the post-start health check.
+    description: 容器启动后 HTTP 健康检查使用的端口。/ HTTP port used for the post-start health check.
   health_path:
-    label: Health path
+    label: 健康检查路径 / Health path
     type: string
     required: true
     default: /health
-    description: HTTP path used for the post-start health check.
+    description: 容器启动后 HTTP 健康检查使用的路径。/ HTTP path used for the post-start health check.
   run_args:
-    label: Docker run args
+    label: Docker 运行参数 / Docker run args
     type: string
-    description: Extra arguments passed to docker run before image name.
+    description: 传给 docker run 且位于镜像名之前的额外参数。/ Extra arguments passed to docker run before image name.
   skip_http_check:
-    label: Skip HTTP check
+    label: 跳过 HTTP 检查 / Skip HTTP check
     type: boolean
     default: "false"
-    description: Set to true when the container should start without HTTP health verification.
+    description: 不需要 HTTP 健康验证也允许容器启动时设为 true。/ Set to true when the container should start without HTTP health verification.
 steps:
   - name: Pull Image
     type: remote_command

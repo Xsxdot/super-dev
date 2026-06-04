@@ -239,6 +239,7 @@ describe('SettingsPage', () => {
       source: 'builtin',
       id: 'systemd',
       name: 'Systemd',
+      category: 'deploy',
       version: '1.0.0',
       digest: 'sha256:summary',
       description: 'Deploy via systemd',

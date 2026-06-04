@@ -72,9 +72,9 @@ function openEdit(provider: DNSProviderConfig) {
     name: provider.name,
     type: provider.type,
     zone_id: provider.zone_id ?? '',
-    api_token: '',
-    access_key_id: '',
-    access_key_secret: '',
+    api_token: provider.secrets?.api_token ?? '',
+    access_key_id: provider.secrets?.access_key_id ?? '',
+    access_key_secret: provider.secrets?.access_key_secret ?? '',
   })
   error.value = ''
   formOpen.value = true

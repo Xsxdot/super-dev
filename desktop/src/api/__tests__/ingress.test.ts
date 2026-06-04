@@ -98,14 +98,21 @@ describe('ingressApi', () => {
     )
   })
 
-  it('listDNSProviders reads redacted provider configs', async () => {
+  it('listDNSProviders reads local provider configs including secrets', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(okJSON([
-      { id: 'cloudflare-prod', name: 'Cloudflare', type: 'cloudflare', zone_id: 'zone-1' },
+      {
+        id: 'cloudflare-prod',
+        name: 'Cloudflare',
+        type: 'cloudflare',
+        zone_id: 'zone-1',
+        secrets: { api_token: 'secret-token' },
+      },
     ]))
 
     const providers = await ingressApi.listDNSProviders()
 
     expect(providers[0].id).toBe('cloudflare-prod')
+    expect(providers[0].secrets?.api_token).toBe('secret-token')
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/ingress/providers/dns'),
       expect.any(Object),

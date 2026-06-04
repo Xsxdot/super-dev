@@ -87,3 +87,17 @@ func TestManagerStatusSubscribe(t *testing.T) {
 		t.Fatal("timed out waiting for status event")
 	}
 }
+
+func TestCredentialsFromHostPrefersStoredPrivateKeyMaterial(t *testing.T) {
+	creds, err := tunnel.CredentialsFromHost(model.Host{
+		SSHUser:       "deploy",
+		SSHPassword:   "pw",
+		SSHKeyPath:    "/path/that/should/not/be/read",
+		SSHPrivateKey: "inline-key",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "deploy", creds.User)
+	assert.Equal(t, "pw", creds.Password)
+	assert.Equal(t, []byte("inline-key"), creds.PrivateKey)
+}

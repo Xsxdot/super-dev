@@ -22,6 +22,7 @@ describe('TemplateManagerTab', () => {
           source: 'builtin',
           id: 'go-binary-build',
           name: 'Go Build',
+          category: 'build',
           version: '1.0.0',
           digest: 'sha256:x',
           description: 'Builds a Go binary',
@@ -31,6 +32,7 @@ describe('TemplateManagerTab', () => {
     })
 
     expect(wrapper.text()).toContain('Go Build')
+    expect(wrapper.text()).toContain('构建')
     expect(wrapper.text()).toContain('builtin')
     expect(wrapper.text()).toContain('Builds a Go binary')
     expect(wrapper.text()).not.toContain('sha256:x')
@@ -39,7 +41,7 @@ describe('TemplateManagerTab', () => {
   it('模板无 description 时显示兜底文案', () => {
     const wrapper = mount(TemplateManagerTab, {
       props: {
-        templates: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' }],
+        templates: [{ source: 'builtin', id: 'go-binary-build', name: 'Go Build', category: 'build', version: '1.0.0', digest: 'sha256:x' }],
       },
       global: { plugins: [installTestI18n()] },
     })
@@ -61,7 +63,7 @@ describe('TemplateManagerTab', () => {
 
   it('点击查看触发 onView', async () => {
     const onView = vi.fn()
-    const template = { source: 'builtin', id: 'go-binary-build', name: 'Go Build', version: '1.0.0', digest: 'sha256:x' } as const
+    const template = { source: 'builtin', id: 'go-binary-build', name: 'Go Build', category: 'build', version: '1.0.0', digest: 'sha256:x' } as const
     const wrapper = mount(TemplateManagerTab, {
       props: { templates: [template], onView },
       global: { plugins: [installTestI18n()] },

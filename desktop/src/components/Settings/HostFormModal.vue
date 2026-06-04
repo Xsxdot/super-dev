@@ -4,7 +4,7 @@ HostFormModal：单 Host 新建与编辑表单。
 职责：
   - 收集 Host 的 SSH、入口地址元数据、远端 agent 端口和 tag 字段
   - ssh_user 新建时默认 root
-  - ssh_key_path 提供浏览和自动检测两种入口
+  - ssh_key_path 提供浏览和自动检测两种私钥导入入口
   - 提供测试连接入口，展示完整错误信息
   - 将表单 payload 交由父组件保存
 
@@ -45,6 +45,7 @@ function emptyForm(): HostCreatePayload {
     ssh_user: 'root',
     ssh_password: '',
     ssh_key_path: '',
+    ssh_private_key: '',
     remote_agent_port: 57017,
     public_ip: '',
     private_ip: '',
@@ -67,6 +68,7 @@ watch(
         ssh_user: initial.ssh_user,
         ssh_password: initial.ssh_password ?? '',
         ssh_key_path: initial.ssh_key_path ?? '',
+        ssh_private_key: initial.ssh_private_key ?? '',
         remote_agent_port: initial.remote_agent_port,
         public_ip: initial.public_ip ?? '',
         private_ip: initial.private_ip ?? '',
@@ -113,6 +115,7 @@ async function testConn() {
       ssh_user: form.value.ssh_user,
       ssh_password: form.value.ssh_password,
       ssh_key_path: form.value.ssh_key_path,
+      ssh_private_key: form.value.ssh_private_key,
     })
     testResult.value = result
   } catch (err) {
@@ -123,7 +126,12 @@ async function testConn() {
 }
 
 function submit() {
-  emit('submit', { ...form.value })
+  const payload = { ...form.value }
+  if (payload.ssh_key_path?.trim()) {
+    // 路径只作为导入源；保存时由后端读取文件内容并清空持久化路径。
+    payload.ssh_private_key = ''
+  }
+  emit('submit', payload)
 }
 </script>
 
@@ -172,9 +180,16 @@ function submit() {
       <div class="field">
         <label>{{ t('settings.hostForm.sshKeyPath') }}</label>
         <div class="row tight">
-          <input v-model="form.ssh_key_path" placeholder="~/.ssh/id_ed25519" data-test="host-form-key" />
+          <input
+            v-model="form.ssh_key_path"
+            :placeholder="form.ssh_private_key ? t('settings.hostForm.keyStoredPlaceholder') : '~/.ssh/id_ed25519'"
+            data-test="host-form-key"
+          />
           <button type="button" @click="browseKey" data-test="host-form-browse">{{ t('common.browse') }}</button>
           <button type="button" @click="detectKeys" data-test="host-form-detect">{{ t('common.detect') }}</button>
+        </div>
+        <div v-if="form.ssh_private_key && !form.ssh_key_path" class="hint" data-test="host-form-key-stored">
+          {{ t('settings.hostForm.keyStoredHint') }}
         </div>
         <div v-if="showKeyDropdown" class="key-dropdown">
           <div
@@ -281,6 +296,11 @@ function submit() {
   cursor: pointer;
 }
 .key-option:hover { background: var(--bg-secondary); }
+.hint {
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
 .warn {
   margin: 12px 0 8px;
   color: var(--status-failed);

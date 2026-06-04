@@ -28,15 +28,24 @@ func TestListPipelineTemplatesIncludesBuiltins(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	var body struct {
 		Items []struct {
-			Source  string `json:"source"`
-			ID      string `json:"id"`
-			Version string `json:"version"`
-			Digest  string `json:"digest"`
+			Source   string `json:"source"`
+			ID       string `json:"id"`
+			Category string `json:"category"`
+			Version  string `json:"version"`
+			Digest   string `json:"digest"`
 		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 	require.NotEmpty(t, body.Items)
 	assert.NotEmpty(t, body.Items[0].Digest)
+	for _, item := range body.Items {
+		if item.ID == "go-binary-build" {
+			assert.Equal(t, "build", item.Category)
+		}
+		if item.ID == "systemd-seamless-deploy" {
+			assert.Equal(t, "deploy", item.Category)
+		}
+	}
 }
 
 func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
@@ -53,7 +62,8 @@ func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
 		Digest   string `json:"digest"`
 		YAML     string `json:"yaml"`
 		Template struct {
-			Name string `json:"name"`
+			Name     string `json:"name"`
+			Category string `json:"category"`
 		} `json:"template"`
 	}
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
@@ -61,7 +71,8 @@ func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
 	assert.Equal(t, "go-binary-build", body.ID)
 	assert.Equal(t, "1.0.0", body.Version)
 	assert.NotEmpty(t, body.Digest)
-	assert.Equal(t, "Go Binary Build", body.Template.Name)
+	assert.Equal(t, "Go 二进制构建 / Go Binary Build", body.Template.Name)
+	assert.Equal(t, "build", body.Template.Category)
 	assert.Contains(t, body.YAML, "id: go-binary-build")
 }
 

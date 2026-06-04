@@ -22,6 +22,10 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+
+function categoryLabel(template: PipelineTemplateSummary) {
+  return t(`settings.templates.categories.${template.category ?? 'general'}`)
+}
 </script>
 
 <template>
@@ -43,6 +47,7 @@ const { t } = useI18n()
     <div v-else class="template-table">
       <div class="template-row table-head">
         <span>{{ t('settings.templates.source') }}</span>
+        <span>{{ t('settings.templates.category') }}</span>
         <span>{{ t('settings.templates.name') }}</span>
         <span>{{ t('settings.templates.version') }}</span>
         <span>{{ t('settings.templates.descriptionColumn') }}</span>
@@ -50,6 +55,7 @@ const { t } = useI18n()
       </div>
       <div v-for="template in templates" :key="`${template.source}:${template.id}:${template.version}`" class="template-row">
         <span class="source">{{ template.source }}</span>
+        <span class="category">{{ categoryLabel(template) }}</span>
         <span class="name">{{ template.name }}</span>
         <span>{{ template.version }}</span>
         <span class="description">{{ template.description || t('settings.templates.noDescription') }}</span>
@@ -102,7 +108,7 @@ const { t } = useI18n()
 }
 .template-row {
   display: grid;
-  grid-template-columns: 90px minmax(160px, 1fr) 80px minmax(220px, 1.4fr) 56px;
+  grid-template-columns: 80px 64px minmax(160px, 1fr) 72px minmax(220px, 1.4fr) 56px;
   gap: 10px;
   align-items: center;
   padding: 7px 10px;
@@ -123,10 +129,14 @@ const { t } = useI18n()
   font-weight: 600;
 }
 .source,
+.category,
 .description {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.category {
+  color: var(--accent);
 }
 .text-btn {
   border: none;

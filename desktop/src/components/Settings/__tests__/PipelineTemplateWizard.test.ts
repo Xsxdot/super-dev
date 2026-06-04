@@ -19,6 +19,7 @@ import type { Pipeline, PipelinePreviewResponse, PipelineTemplateSummary } from 
 const buildTemplate: PipelineTemplateSummary = {
   source: 'builtin',
   id: 'go-binary-build',
+  category: 'build',
   name: 'Go Build',
   version: '1.0.0',
   digest: 'sha256:build',
@@ -30,6 +31,7 @@ const buildTemplate: PipelineTemplateSummary = {
 const deployTemplate: PipelineTemplateSummary = {
   source: 'builtin',
   id: 'systemd-seamless-deploy',
+  category: 'deploy',
   name: 'Systemd Deploy',
   version: '1.0.0',
   digest: 'sha256:deploy',
@@ -42,6 +44,7 @@ const deployTemplate: PipelineTemplateSummary = {
 const packageTemplate: PipelineTemplateSummary = {
   source: 'builtin',
   id: 'archive-package',
+  category: 'general',
   name: 'Archive Package',
   version: '1.0.0',
   digest: 'sha256:package',
@@ -92,6 +95,44 @@ describe('PipelineTemplateWizard', () => {
     expect(pipeline.deploy?.[0].with?.vars).toMatchObject({ role: 'deploy_1_targets', app_name: 'api' })
     expect(pipeline.roles?.deploy_1_targets).toEqual(['h1'])
     expect(pipeline.variables?.app_name).toBe('api')
+  })
+
+  it('按阶段过滤模板并在所有阶段展示通用模板', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, deployTemplate, packageTemplate],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    const buildOptions = wrapper.find('[data-test="block-0-template-select"]').findAll('option').map(option => option.text())
+    expect(buildOptions.join('\n')).toContain('Go Build')
+    expect(buildOptions.join('\n')).toContain('Archive Package')
+    expect(buildOptions.join('\n')).not.toContain('Systemd Deploy')
+
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    const deployOptions = wrapper.find('[data-test="block-1-template-select"]').findAll('option').map(option => option.text())
+    expect(deployOptions.join('\n')).toContain('Systemd Deploy')
+    expect(deployOptions.join('\n')).toContain('Archive Package')
+    expect(deployOptions.join('\n')).not.toContain('Go Build')
+  })
+
+  it('机器选择使用紧凑网格展示', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }, { id: 'h2', name: 'Host 2' }],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+
+    expect(wrapper.find('[data-test="block-0-runner-targets"]').classes()).toContain('target-grid')
+    expect(wrapper.find('[data-test="block-0-role-targets"]').classes()).toContain('target-grid')
   })
 
   it('target_role 未选择机器时禁用保存', async () => {

@@ -60,6 +60,10 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if err := importHostPrivateKey(&h); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	saved, err := a.remoteStore.AddHost(h)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -77,6 +81,10 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.ID = id
+	if err := importHostPrivateKey(&h); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := a.remoteStore.UpdateHost(h); err != nil {
 		if errors.Is(err, remote.ErrNotFound) {
 			jsonError(w, http.StatusNotFound, "host not found")
@@ -139,11 +147,12 @@ func (a *App) installHostAgent(w http.ResponseWriter, r *http.Request) {
 
 // testConnectionRequest 是 POST /api/hosts/test-connection 的请求体。
 type testConnectionRequest struct {
-	SSHHost     string `json:"ssh_host"`
-	SSHPort     int    `json:"ssh_port"`
-	SSHUser     string `json:"ssh_user"`
-	SSHPassword string `json:"ssh_password"`
-	SSHKeyPath  string `json:"ssh_key_path"`
+	SSHHost       string `json:"ssh_host"`
+	SSHPort       int    `json:"ssh_port"`
+	SSHUser       string `json:"ssh_user"`
+	SSHPassword   string `json:"ssh_password"`
+	SSHKeyPath    string `json:"ssh_key_path"`
+	SSHPrivateKey string `json:"ssh_private_key"`
 }
 
 // testConnectionResult 是 POST /api/hosts/test-connection 的响应体。
@@ -176,13 +185,15 @@ func (a *App) testConnection(w http.ResponseWriter, r *http.Request) {
 		User:     req.SSHUser,
 		Password: req.SSHPassword,
 	}
-	if req.SSHKeyPath != "" {
+	if strings.TrimSpace(req.SSHKeyPath) != "" {
 		key, err := tunnel.ReadPrivateKey(expandHome(req.SSHKeyPath))
 		if err != nil {
 			jsonOK(w, testConnectionResult{OK: false, Message: "读取私钥失败: " + err.Error()})
 			return
 		}
 		creds.PrivateKey = key
+	} else if strings.TrimSpace(req.SSHPrivateKey) != "" {
+		creds.PrivateKey = []byte(req.SSHPrivateKey)
 	}
 
 	cfg, err := tunnel.BuildClientConfig(creds)
@@ -252,4 +263,28 @@ func expandHome(path string) string {
 		return path
 	}
 	return filepath.Join(home, path[2:])
+}
+
+// importHostPrivateKey 将表单选择的本机私钥路径导入为可同步的私钥内容。
+//
+// 参数：
+//   - h: 即将持久化的 Host；函数会就地写入 SSHPrivateKey 并清空 SSHKeyPath
+//
+// 返回：
+//   - 读取私钥文件失败时返回错误
+//
+// 注意：
+//   - SSHKeyPath 只作为导入入口，不再作为新保存配置的长期依赖
+//   - 已经有 SSHPrivateKey 且没有 SSHKeyPath 时会原样保留，用于编辑回填
+func importHostPrivateKey(h *model.Host) error {
+	if strings.TrimSpace(h.SSHKeyPath) == "" {
+		return nil
+	}
+	key, err := tunnel.ReadPrivateKey(expandHome(h.SSHKeyPath))
+	if err != nil {
+		return fmt.Errorf("读取私钥失败: %w", err)
+	}
+	h.SSHPrivateKey = string(key)
+	h.SSHKeyPath = ""
+	return nil
 }

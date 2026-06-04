@@ -232,6 +232,8 @@ export interface TemplateFileItem {
   to: string
 }
 
+export type PipelineTemplateCategory = 'build' | 'deploy' | 'cleanup' | 'general'
+
 export interface TemplateInput {
   label: string
   type: 'string' | 'number' | 'bool' | 'select' | 'path' | 'target_role' | 'file_list'
@@ -245,6 +247,7 @@ export interface PipelineTemplateSummary {
   source: 'builtin' | 'user' | 'project'
   id: string
   name: string
+  category: PipelineTemplateCategory
   version: string
   digest: string
   description?: string
@@ -255,6 +258,7 @@ export interface PipelineTemplateModel {
   id: string
   name: string
   description?: string
+  category?: PipelineTemplateCategory
   version: string
   inputs?: Record<string, TemplateInput>
   steps: PipelineStep[]
@@ -558,6 +562,7 @@ export interface Host {
   ssh_user: string
   ssh_password?: string
   ssh_key_path?: string
+  ssh_private_key?: string
   remote_agent_port: number
   local_tunnel_port: number
   public_ip?: string
@@ -763,6 +768,7 @@ export interface HostCreatePayload {
   ssh_user: string
   ssh_password?: string
   ssh_key_path?: string
+  ssh_private_key?: string
   remote_agent_port?: number
   public_ip?: string
   private_ip?: string
@@ -787,6 +793,7 @@ export interface TestConnectionPayload {
   ssh_user: string
   ssh_password?: string
   ssh_key_path?: string
+  ssh_private_key?: string
 }
 
 export interface TestConnectionResult {
