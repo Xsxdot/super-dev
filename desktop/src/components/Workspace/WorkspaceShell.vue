@@ -13,6 +13,7 @@
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
+import RuntimeWorkbenchHeader from './RuntimeWorkbenchHeader.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -27,6 +28,10 @@ const overviewProject = computed(() => {
   const tab = workspace.activeTab
   return tab?.type === 'overview' ? agentStore.projectById(tab.projectId) : null
 })
+
+const isRuntimeTab = computed(() =>
+  workspace.activeTab?.type === 'project' || workspace.activeTab?.type === 'deployment',
+)
 </script>
 
 <template>
@@ -36,9 +41,10 @@ const overviewProject = computed(() => {
       <div>{{ t('shell.emptyWorkspace') }}</div>
     </div>
     <!-- 项目聚合 tab 与 deployment tab 都走 PanelLayout 分栏树（deployment tab 初始为单叶子，可拖入其他 deployment 分栏） -->
-    <PanelLayout
-      v-else-if="workspace.activeTab.type === 'project' || workspace.activeTab.type === 'deployment'"
-    />
+    <template v-else-if="isRuntimeTab">
+      <RuntimeWorkbenchHeader />
+      <PanelLayout />
+    </template>
     <SearchPage
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"

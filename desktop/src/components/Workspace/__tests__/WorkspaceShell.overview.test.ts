@@ -23,6 +23,14 @@ vi.mock('@/components/Overview/ProjectOverviewPane.vue', () => ({
   },
 }))
 
+vi.mock('@/components/Workspace/RuntimeWorkbenchHeader.vue', () => ({
+  default: { template: '<header data-test="runtime-header-stub" />' },
+}))
+
+vi.mock('@/components/Panel/PanelLayout.vue', () => ({
+  default: { template: '<section data-test="panel-layout-stub" />' },
+}))
+
 describe('WorkspaceShell overview tab', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -42,5 +50,44 @@ describe('WorkspaceShell overview tab', () => {
     const wrapper = mount(WorkspaceShell, { global: { plugins: [installTestI18n()] } })
 
     expect(wrapper.find('[data-test="overview-pane"]').text()).toContain('Demo')
+  })
+
+  it('renders runtime header for deployment tabs', () => {
+    useAgentStore().projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [{
+        id: 'svc-1',
+        project_id: 'proj-1',
+        name: 'api',
+        status: 'running',
+        required: false,
+        order: 1,
+        deployments: [{ id: 'dep-1', env_name: 'demo', location: 'local', status: 'running' }],
+      }],
+      environments: [{ id: 'env-demo', name: 'demo', is_dev: true, order: 0 }],
+    }]
+    useWorkspaceStore().openDeployment('dep-1', 'api · demo')
+
+    const wrapper = mount(WorkspaceShell, { global: { plugins: [installTestI18n()] } })
+
+    expect(wrapper.find('[data-test="runtime-header-stub"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-layout-stub"]').exists()).toBe(true)
+  })
+
+  it('does not render runtime header for overview tabs', () => {
+    useAgentStore().projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [],
+      environments: [],
+    }]
+    useWorkspaceStore().openProjectOverview('proj-1')
+
+    const wrapper = mount(WorkspaceShell, { global: { plugins: [installTestI18n()] } })
+
+    expect(wrapper.find('[data-test="runtime-header-stub"]').exists()).toBe(false)
   })
 })
