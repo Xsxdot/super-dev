@@ -24,6 +24,21 @@ type StepPlugin interface {
 	Execute(ctx *RunContext, step model.Step, targets []Target) error
 }
 
+// TargetValidator allows plugins to statically validate resolved targets.
+//
+// 参数：
+//   - step: 待校验步骤
+//   - targets: BuildPlan 根据 roles 解析出的远程目标；本地/global 步骤为空
+//
+// 返回：
+//   - target 形态不满足插件要求时返回错误
+//
+// 注意：
+//   - ValidateTargets 不得执行命令、传输文件或访问远程主机
+type TargetValidator interface {
+	ValidateTargets(step model.Step, targets []Target) error
+}
+
 // RunContextOptions configures a RunContext.
 type RunContextOptions struct {
 	ProjectRoot string
