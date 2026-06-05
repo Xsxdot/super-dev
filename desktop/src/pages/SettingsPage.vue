@@ -154,8 +154,13 @@ const retentionDays = computed({
 
 <template>
   <div class="settings-page">
-    <aside class="settings-sidebar">
-      <button class="back-btn" @click="router.push('/')">← {{ t('common.back') }}</button>
+    <aside class="settings-sidebar" data-test="settings-sidebar">
+      <div
+        class="settings-titlebar-spacer"
+        data-test="settings-titlebar-spacer"
+        data-tauri-drag-region
+      />
+      <button class="back-btn" data-test="settings-back" @click="router.push('/')">← {{ t('common.back') }}</button>
       <button
         data-test="settings-tab-general"
         class="tab-btn"
@@ -437,10 +442,15 @@ const retentionDays = computed({
   width: 160px;
   border-right: 1px solid var(--border-secondary);
   background: var(--bg-elevated);
-  padding: 10px;
+  padding: 0 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.settings-titlebar-spacer {
+  height: 58px;
+  flex-shrink: 0;
+  margin: 0 -10px;
 }
 .back-btn,
 .tab-btn {
