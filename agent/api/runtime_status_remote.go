@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // RuntimeStatusClient 从指定远端 host 读取 runtime-status 快照。

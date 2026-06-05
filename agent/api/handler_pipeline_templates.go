@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"sort"
 
-	pipelinetemplate "github.com/superdev/agent/template"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 type pipelineTemplateSummary struct {

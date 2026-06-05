@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestCertServiceIssueSuccessMarksActive(t *testing.T) {

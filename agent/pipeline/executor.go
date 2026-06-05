@@ -14,7 +14,7 @@ package pipeline
 import (
 	"context"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // StepPlugin is the extension point for concrete step actions.

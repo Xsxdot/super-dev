@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/superdev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
 )
 
 // fakeProber 按 hostID 返回预设的探活结果，供单测注入。

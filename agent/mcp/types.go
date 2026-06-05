@@ -11,8 +11,8 @@ package mcp
 import (
 	"time"
 
-	"github.com/superdev/agent/model"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/model"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 // LogsResponse 是 deployment 日志分页接口响应。

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/superdev/agent/metrics"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/metrics"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type runtimeStatusService struct {

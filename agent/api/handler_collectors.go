@@ -15,8 +15,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // startCollector 处理 POST /api/collectors,body: {name, type}。

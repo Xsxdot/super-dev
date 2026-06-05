@@ -17,8 +17,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 const (

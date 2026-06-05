@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 var errorWindowSearchTerms = []string{"error", "fatal", "panic", "timeout", "refused", "exhausted", "failed"}

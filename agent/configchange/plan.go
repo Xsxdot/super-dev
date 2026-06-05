@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 // Plan 为配置变更生成 agent-enforced safe operation plan。

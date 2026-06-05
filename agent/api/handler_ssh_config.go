@@ -13,7 +13,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/superdev/agent/sshconfig"
+	"github.com/xsxdot/super-dev/agent/sshconfig"
 )
 
 // listSSHConfigHosts 处理 GET /api/ssh-config/hosts。

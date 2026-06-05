@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func (s *Server) createDebugSessionTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {

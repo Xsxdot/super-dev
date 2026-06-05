@@ -21,10 +21,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/configchange"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/operation"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/configchange"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 type operationApprovalDetailResponse struct {

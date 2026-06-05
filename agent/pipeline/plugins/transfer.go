@@ -13,8 +13,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // FileTransfer 是 transfer 插件依赖的远程文件传输能力。

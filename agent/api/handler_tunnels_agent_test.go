@@ -22,10 +22,10 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/agenthealth"
-	"github.com/superdev/agent/installer"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/tunnel"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/installer"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // successTunnelDialer 避免测试建立真实 SSH 隧道。

@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type deploymentLogsResponse struct {

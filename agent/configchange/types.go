@@ -13,8 +13,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 const (

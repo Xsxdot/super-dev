@@ -18,8 +18,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/debugsession"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/debugsession"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestDebugSessionAPI_CreateAppendGetClose(t *testing.T) {

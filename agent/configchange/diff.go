@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Diff 返回 MCP 配置 preview 使用的结构化差异。

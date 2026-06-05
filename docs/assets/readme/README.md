@@ -6,6 +6,7 @@ Expected release screenshots:
 
 | File | Purpose |
 | --- | --- |
+| `superdev-logo-v5-launch.svg` | SuperDev logo used at the top of the README |
 | `screenshot-zh.png` | Clean Chinese SuperDev desktop screenshot for the README hero |
 | `screenshot-en.png` | Clean English SuperDev desktop screenshot for the README hero |
 

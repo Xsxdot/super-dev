@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 // Provider 返回人工 DNS 操作指令，不修改任何外部资源。

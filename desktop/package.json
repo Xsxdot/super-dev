@@ -1,7 +1,14 @@
 {
-  "name": "desktop",
+  "name": "superdev-desktop",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "SuperDev desktop UI and Tauri shell.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xsxdot/super-dev.git",
+    "directory": "desktop"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

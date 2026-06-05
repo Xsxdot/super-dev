@@ -13,7 +13,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestRemoteCertificateDeployerTransfersToRequestedPathsAndRunsPostCommand(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestSystemProbeUnknownType(t *testing.T) {

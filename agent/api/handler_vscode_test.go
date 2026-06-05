@@ -22,9 +22,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/config"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/vscode"
+	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/vscode"
 )
 
 // TestGetVscodeLaunch_ReturnsConfigs 验证存在 .vscode/launch.json 时，

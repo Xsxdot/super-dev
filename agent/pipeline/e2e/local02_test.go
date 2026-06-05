@@ -29,12 +29,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
-	"github.com/superdev/agent/pipeline/plugins"
-	"github.com/superdev/agent/store"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/pipeline/plugins"
+	"github.com/xsxdot/super-dev/agent/store"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 	"gopkg.in/yaml.v3"
 )
 

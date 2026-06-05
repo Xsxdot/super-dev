@@ -11,7 +11,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // listServices 处理 GET /api/services，返回所有项目的所有服务及其运行时状态。

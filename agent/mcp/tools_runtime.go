@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func (s *Server) listProjectsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {

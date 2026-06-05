@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func mergeEntry(host string, ts time.Time, id int64, msg string) api.MergeItem {

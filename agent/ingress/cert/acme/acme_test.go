@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 type recordingDNS struct {

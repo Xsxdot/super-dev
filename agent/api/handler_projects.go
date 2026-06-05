@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/config"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 // jsonOK 将 v 序列化为 JSON 并以 200 状态码响应。

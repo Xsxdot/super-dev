@@ -15,8 +15,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/superdev/agent/ingress"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type fakeTransport struct {

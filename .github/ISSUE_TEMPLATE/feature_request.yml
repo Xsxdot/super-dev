@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a capability or workflow improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What developer or AI collaboration workflow is hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the smallest useful behavior you would like SuperDev to support.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop UI
+        - Local agent
+        - MCP integration
+        - Logs and diagnostics
+        - Pipeline
+        - Ingress
+        - Operation approvals
+        - Onboarding
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workaround or different design did you consider?
+  - type: textarea
+    id: safety
+    attributes:
+      label: Runtime or security considerations
+      description: Note any impact on local services, remote hosts, approvals, audit logs, or secrets.

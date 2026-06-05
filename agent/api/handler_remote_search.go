@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 const (

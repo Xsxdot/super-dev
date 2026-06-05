@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Validate 检查配置 upsert 是否满足本期 MCP 安全边界。

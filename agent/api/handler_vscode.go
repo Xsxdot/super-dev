@@ -13,9 +13,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/superdev/agent/config"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/vscode"
+	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/vscode"
 )
 
 // getVscodeLaunch 处理 GET /api/projects/{id}/vscode-launch。

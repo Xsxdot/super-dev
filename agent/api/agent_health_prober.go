@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/superdev/agent/agenthealth"
-	"github.com/superdev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/remote"
 )
 
 type agentHealthEndpoint struct {

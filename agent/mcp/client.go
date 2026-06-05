@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // AgentClient 描述 MCP 需要的本机 agent 能力。

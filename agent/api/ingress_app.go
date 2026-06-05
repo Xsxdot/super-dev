@@ -17,14 +17,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/ingress"
-	"github.com/superdev/agent/ingress/cert/acme"
-	"github.com/superdev/agent/ingress/dns/aliyun"
-	"github.com/superdev/agent/ingress/dns/cloudflare"
-	"github.com/superdev/agent/ingress/dns/manual"
-	"github.com/superdev/agent/ingress/proxy/nginx"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress/cert/acme"
+	"github.com/xsxdot/super-dev/agent/ingress/dns/aliyun"
+	"github.com/xsxdot/super-dev/agent/ingress/dns/cloudflare"
+	"github.com/xsxdot/super-dev/agent/ingress/dns/manual"
+	"github.com/xsxdot/super-dev/agent/ingress/proxy/nginx"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 type ingressPipelineTransport struct {

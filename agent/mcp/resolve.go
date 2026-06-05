@@ -9,7 +9,7 @@
 //   - 不执行任何写操作
 package mcp
 
-import "github.com/superdev/agent/model"
+import "github.com/xsxdot/super-dev/agent/model"
 
 type targetArgs struct {
 	ProjectID      string `json:"project_id,omitempty"`

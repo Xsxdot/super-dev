@@ -14,7 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // RunLogQuery 定义 pipeline run 日志读取过滤条件。

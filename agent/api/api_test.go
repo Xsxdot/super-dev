@@ -23,10 +23,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 // writeTestConfig 在 dir/.superdev/config.yaml 中写入标准测试配置。

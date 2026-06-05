@@ -14,7 +14,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Apply 将一次配置 upsert 合并到 project 副本，返回合并后的 Project。
