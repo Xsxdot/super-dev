@@ -175,4 +175,23 @@ describe('panelStore', () => {
     ])
     expect(store.focusedPanelId).toBe('leaf-b')
   })
+
+  it('updateSplitRatio：按 split id 更新比例并限制在可用范围内', () => {
+    const store = usePanelStore()
+    const [first] = store.allLeaves
+    store.setRoot({
+      type: 'split',
+      id: 'root-split',
+      axis: 'h',
+      ratio: 0.5,
+      first: { ...first, id: 'leaf-a', serviceId: 'dep-A', projectId: null, source: { type: 'deployment', deploymentId: 'dep-A' } },
+      second: { ...first, id: 'leaf-b', serviceId: 'dep-B', projectId: null, source: { type: 'deployment', deploymentId: 'dep-B' } },
+    })
+
+    store.updateSplitRatio('root-split', 0.8)
+    expect((store.root as PanelSplitNode).ratio).toBeCloseTo(0.8)
+
+    store.updateSplitRatio('root-split', 0.01)
+    expect((store.root as PanelSplitNode).ratio).toBeCloseTo(0.12)
+  })
 })

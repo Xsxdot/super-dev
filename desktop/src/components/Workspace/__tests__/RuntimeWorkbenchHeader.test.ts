@@ -59,8 +59,20 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.find('[data-test="runtime-workbench-header"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="runtime-title"]').text()).toContain('Runtime')
     expect(wrapper.find('[data-test="runtime-title"]').text()).toContain('demo')
-    expect(wrapper.find('[data-test="runtime-deployments"]').text()).toContain('1 deployment')
+    expect(wrapper.find('[data-test="runtime-deployments"]').text()).toContain('1 open deployment')
     expect(wrapper.find('[data-test="runtime-panel-count"]').text()).toContain('1 / 4 panels')
+  })
+
+  it('uses explicit Chinese labels for live tracking, open deployments, and evidence state', () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="runtime-live"]').text()).toContain('实时追踪中')
+    expect(wrapper.find('[data-test="runtime-deployments"]').text()).toContain('已打开 1 个部署')
+    expect(wrapper.find('[data-test="runtime-evidence"]').text()).toContain('录制未同步')
   })
 
   it('renders evidence state from bookmark store', () => {
@@ -71,7 +83,7 @@ describe('RuntimeWorkbenchHeader', () => {
 
     const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
 
-    expect(wrapper.find('[data-test="runtime-evidence"]').text()).toContain('Evidence sync ready')
+    expect(wrapper.find('[data-test="runtime-evidence"]').text()).toContain('Recording ready')
   })
 
   it('balances existing panel splits from the header action', async () => {

@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid'
 export type PanelAxis = 'h' | 'v'
 
 export const MAX_PANEL_LEAVES = 4
+const MIN_SPLIT_RATIO = 0.12
+const MAX_SPLIT_RATIO = 0.88
 
 // PanelSource 现在只有 deployment 单一来源：deployment_id 是全系统唯一的运行/日志单元标识。
 // 历史上的 local-service / local-project 来源已废弃。
@@ -103,6 +105,21 @@ function balanceRatios(node: PanelNode): PanelNode {
     ratio: total > 0 ? firstCount / total : 0.5,
     first,
     second,
+  }
+}
+
+function clampSplitRatio(ratio: number): number {
+  if (Number.isNaN(ratio)) return 0.5
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio))
+}
+
+function updateSplitRatioById(node: PanelNode, splitId: string, ratio: number): PanelNode {
+  if (node.type === 'leaf') return node
+  if (node.id === splitId) return { ...node, ratio: clampSplitRatio(ratio) }
+  return {
+    ...node,
+    first: updateSplitRatioById(node.first, splitId, ratio),
+    second: updateSplitRatioById(node.second, splitId, ratio),
   }
 }
 
@@ -287,6 +304,12 @@ export const usePanelStore = defineStore('panel', () => {
     ensureFocused()
   }
 
+  function updateSplitRatio(splitId: string, ratio: number) {
+    root.value = updateSplitRatioById(root.value, splitId, ratio)
+    save()
+    ensureFocused()
+  }
+
   function setRoot(nextRoot: PanelNode, nextFocusedPanelId: string | null = null) {
     root.value = normalizePanelNode(nextRoot)
     focusedPanelId.value = nextFocusedPanelId
@@ -318,6 +341,7 @@ export const usePanelStore = defineStore('panel', () => {
     removeLeaf,
     balanceSplits,
     arrangeLeavesInColumns,
+    updateSplitRatio,
     setRoot,
     targetPanelId,
   }
