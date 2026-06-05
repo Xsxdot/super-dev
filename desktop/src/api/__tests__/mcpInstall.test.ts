@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  detectCodingAgents,
   getMcpDocs,
   getMcpStatus,
   installMcp,
@@ -27,6 +28,17 @@ afterEach(() => {
 })
 
 describe('mcpInstall API', () => {
+  it('detects supported coding agents', async () => {
+    vi.mocked(invoke).mockResolvedValue([
+      { agent: 'codex', installed: true, detection_path: '/usr/local/bin/codex' },
+    ])
+
+    const result = await detectCodingAgents()
+
+    expect(result[0].agent).toBe('codex')
+    expect(invoke).toHaveBeenCalledWith('detect_coding_agents')
+  })
+
   it('reads MCP status', async () => {
     vi.mocked(invoke).mockResolvedValue([{ agent: 'codex', mcp_configured: true }])
 

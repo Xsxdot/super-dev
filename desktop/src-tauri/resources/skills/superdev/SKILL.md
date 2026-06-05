@@ -13,7 +13,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 ### 读写分离 + 双层安全门
 
-只读工具可放心使用。配置写入必须走 `preview_config_change → apply_config_change`。运行态危险操作必须走 `preview_operation → get_operation_approval → start_service/stop_service/restart_service`，并传入批准后获得的一次性 token。
+只读工具可放心使用。配置写入必须走 `preview_config_change → apply_config_change`。运行态危险操作可以先用 `preview_operation` 解释风险，但实际执行应直接调用 `start_service` / `stop_service` / `restart_service`；如需审批，MCP 会创建 pending approval，默认等待用户在 SuperDev 桌面端批准，并在拿到一次性 token 后自动重试。
 
 ## 第一步：永远先建立全局视野
 
@@ -28,7 +28,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
 | 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再 apply | `references/safe-operations.md` |
-| 启动、停止、重启服务 | `preview_operation → get_operation_approval → runtime tool` | `references/safe-operations.md` |
+| 启动、停止、重启服务 | 可选 `preview_operation`，默认直接调用 runtime tool 并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
 | 记录一次排查过程 | 建立 debug session，过程中追加分析和观察 | `references/debugging-workflow.md` |
 
@@ -36,7 +36,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 1. 没收集证据前不下根因。
 2. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
-3. 运行态危险操作必须 `preview_operation → get_operation_approval`，拿到 one-time token 后才执行。
+3. 运行态危险操作直接调用 runtime tool；需要审批时等待桌面端批准并自动续跑。只有超时或显式关闭等待时，才手动 `get_operation_approval` 拿 one-time token 后重试。
 4. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
 
 ## 工具速查表
@@ -59,7 +59,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 | `close_debug_session` | 关闭本地诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
 | `preview_config_change` | 预览项目、服务、pipeline 配置变更 | 读 | `references/safe-operations.md` |
 | `apply_config_change` | 应用已确认的配置变更 | 写 | `references/safe-operations.md` |
-| `preview_operation` | 为启动、停止、重启等操作生成安全预检 | 读 | `references/safe-operations.md` |
+| `preview_operation` | 为启动、停止、重启等操作生成可解释安全预检；不创建审批 | 读 | `references/safe-operations.md` |
 | `get_operation_approval` | 读取审批并在批准后返回 one-time token | 读 | `references/safe-operations.md` |
 | `start_service` | 启动 deployment | 写，需审批纪律 | `references/safe-operations.md` |
 | `stop_service` | 停止 deployment | 写，需审批纪律 | `references/safe-operations.md` |

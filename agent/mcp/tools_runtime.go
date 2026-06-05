@@ -16,9 +16,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+const (
+	defaultApprovalWaitSeconds = 60
+	approvalPollInterval       = 500 * time.Millisecond
+)
+
+type deploymentControlFunc func(context.Context, string, string) error
 
 func (s *Server) listProjectsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	if err := decodeToolArgs(args, &struct{}{}); err != nil {
@@ -151,7 +159,7 @@ func (s *Server) startServiceTool(ctx context.Context, args json.RawMessage) (Ca
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StartDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+	if err := s.runDeploymentControl(ctx, target, req, s.client.StartDeployment); err != nil {
 		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.start", "start operation failed", err)
 		return clientToolError(err), nil
 	}
@@ -164,7 +172,7 @@ func (s *Server) stopServiceTool(ctx context.Context, args json.RawMessage) (Cal
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.StopDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+	if err := s.runDeploymentControl(ctx, target, req, s.client.StopDeployment); err != nil {
 		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.stop", "stop operation failed", err)
 		return clientToolError(err), nil
 	}
@@ -177,12 +185,106 @@ func (s *Server) restartServiceTool(ctx context.Context, args json.RawMessage) (
 	if result.IsError || err != nil {
 		return result, err
 	}
-	if err := s.client.RestartDeployment(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+	if err := s.runDeploymentControl(ctx, target, req, s.client.RestartDeployment); err != nil {
 		s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.restart", "restart operation failed", err)
 		return clientToolError(err), nil
 	}
 	s.appendOperationToolObservation(ctx, req.DebugSessionID, "runtime.restart", "restart operation requested", nil)
 	return toolSuccess("restart requested", map[string]any{"target": sanitizeTarget(target), "action": "restart"}, nil, nil), nil
+}
+
+func (s *Server) runDeploymentControl(ctx context.Context, target resolvedTarget, req targetArgs, control deploymentControlFunc) error {
+	if err := control(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
+		return s.waitForApprovalAndRetry(ctx, target, req, control, err)
+	}
+	return nil
+}
+
+func (s *Server) waitForApprovalAndRetry(ctx context.Context, target resolvedTarget, req targetArgs, control deploymentControlFunc, originalErr error) error {
+	if strings.TrimSpace(req.ApprovalToken) != "" {
+		return originalErr
+	}
+	agentErr, ok := approvalRequiredAgentError(originalErr)
+	if !ok {
+		return originalErr
+	}
+	wait := approvalWaitDuration(req)
+	if wait <= 0 {
+		return originalErr
+	}
+	token, err := s.waitForApprovalToken(ctx, agentErr.Approval.ID, wait)
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		return originalErr
+	}
+	return control(ctx, target.Deployment.ID, token)
+}
+
+func approvalRequiredAgentError(err error) (AgentError, bool) {
+	var agentErr AgentError
+	if !errors.As(err, &agentErr) {
+		return AgentError{}, false
+	}
+	return agentErr, agentErr.Code == "approval_required" && agentErr.Approval.ID != ""
+}
+
+func approvalWaitDuration(req targetArgs) time.Duration {
+	seconds := defaultApprovalWaitSeconds
+	if req.ApprovalWaitSeconds != nil {
+		seconds = *req.ApprovalWaitSeconds
+	}
+	if seconds <= 0 {
+		return 0
+	}
+	if seconds > 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *Server) waitForApprovalToken(ctx context.Context, approvalID string, wait time.Duration) (string, error) {
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(approvalPollInterval)
+	defer ticker.Stop()
+
+	for {
+		token, err := s.readApprovedToken(ctx, approvalID)
+		if err != nil || token != "" {
+			return token, err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-deadline.C:
+			return "", nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) readApprovedToken(ctx context.Context, approvalID string) (string, error) {
+	detail, err := s.client.GetOperationApproval(ctx, approvalID)
+	if err != nil {
+		return "", err
+	}
+	switch detail.Approval.Status {
+	case "approved":
+		if strings.TrimSpace(detail.ApprovalToken) == "" {
+			return "", AgentError{Code: "approval_token_missing", Message: "approval token missing", Approval: detail.Approval}
+		}
+		return strings.TrimSpace(detail.ApprovalToken), nil
+	case "rejected":
+		return "", AgentError{Code: "approval_rejected", Message: "approval rejected", Approval: detail.Approval}
+	case "expired":
+		return "", AgentError{Code: "approval_expired", Message: "approval expired", Approval: detail.Approval}
+	case "used":
+		return "", AgentError{Code: "approval_token_consumed", Message: "approval token already used", Approval: detail.Approval}
+	default:
+		return "", nil
+	}
 }
 
 func (s *Server) resolveControlTarget(ctx context.Context, args json.RawMessage) (resolvedTarget, targetArgs, CallToolResult, error) {

@@ -30,17 +30,19 @@ probe_project_config 或 get_project_config
 启动、停止、重启 deployment 必须按顺序执行：
 
 ```text
-preview_operation
-  -> 告诉用户去 SuperDev Operation Approvals 批准
-  -> get_operation_approval
-  -> start_service / stop_service / restart_service，传入 approval_token
+可选 preview_operation（只解释风险，不创建审批）
+  -> start_service / stop_service / restart_service（不传 approval_token）
+  -> 如返回 approval_required，MCP 默认等待用户在 SuperDev 桌面端批准，最多 60 秒
+  -> 用户批准后 MCP 自动 get_operation_approval 并带 approval_token 重试原操作
   -> tail_logs 或 diagnose_service 验证结果
 ```
 
 规则：
 
-- `preview_operation` 生成确定性安全预检计划。
-- `get_operation_approval` 只有在用户批准后才返回 one-time token。
+- `preview_operation` 只生成确定性安全预检计划，不会创建 pending approval。
+- 不传 `approval_token` 调用 runtime tool 时，agent 才会在需要审批时创建 pending approval。
+- `start_service` / `stop_service` / `restart_service` 默认 `approval_wait_seconds=60`；传 `approval_wait_seconds=0` 可关闭自动等待，回到手动 token 流程。
+- `get_operation_approval` 只有在用户批准后才返回 one-time token；自动等待路径中由 MCP 内部调用。
 - token 只用于对应目标和操作，不复用。
 - 操作后调用 `list_operation_audit` 可查看审计记录。
 
@@ -55,11 +57,12 @@ preview_operation
 运行态操作需要审批时：
 
 ```text
-这个操作会改变 deployment 运行状态。我已经生成安全预检，请到 SuperDev 的操作审批界面批准；批准后我会读取 one-time token 并继续。
+这个操作会改变 deployment 运行状态。我会直接请求操作；如果需要审批，SuperDev 会弹出操作审批，请批准或拒绝。批准后 MCP 会自动继续执行。
 ```
 
 ## 降级与失败
 
 - preview 失败：向用户展示错误，不继续 apply。
-- approval 未批准：停止，不继续运行态操作。
+- approval 被拒绝：停止，不继续运行态操作。
+- approval 等待 60 秒仍未决策：工具会返回 `approval_required`，告诉用户待审批已留在 SuperDev；用户稍后批准后，可用 `get_operation_approval` 获取 token 再重试。
 - apply 或 runtime 操作失败：用 `diagnose_service`、`tail_logs` 或 `list_operation_audit` 收集失败证据后再解释。

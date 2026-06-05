@@ -501,7 +501,7 @@ export default {
     demoPrompt:
       'Help me try SuperDev: use the SuperDev MCP tools to find the superdev-sample project, then inspect its service status and logs. ' +
       'If the logs are empty, run restart_service on the sample-api demo deployment. ' +
-      'That restart will trigger a safety approval; first tell me to approve it in SuperDev operation approvals, then use get_operation_approval to fetch the approval token and continue. ' +
+      'That restart will trigger a safety approval; tell me to approve it in SuperDev operation approvals, and MCP will continue automatically after approval. ' +
       'After it succeeds, read the logs again, explain what WARN/ERROR mean, and summarize in one or two sentences how SuperDev gates AI actions before they touch a real environment.',
   },
   shell: {

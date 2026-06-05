@@ -13,6 +13,8 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, isApprovalRequiredError, type OperationApproval } from '@/api/agent'
 
+const approvalPollIntervalMs = 2000
+
 // OperationApprovalNotice 描述桌面端需要展示的审批提示。
 //
 // 参数：
@@ -36,11 +38,28 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
   const error = ref('')
   const notice = ref<OperationApprovalNotice | null>(null)
   const pendingCount = computed(() => approvals.value.filter(item => item.status === 'pending').length)
+  const observedApprovalIds = new Set<string>()
+  let notificationBaselineReady = false
+  let pollTimer: ReturnType<typeof setInterval> | null = null
 
   function upsertApproval(approval: OperationApproval) {
     const index = approvals.value.findIndex(item => item.id === approval.id)
     if (index >= 0) approvals.value[index] = approval
     else approvals.value = [approval, ...approvals.value]
+  }
+
+  function noticeFromApproval(approval: OperationApproval): OperationApprovalNotice {
+    return {
+      approval_id: approval.id,
+      kind: approval.plan.kind,
+      target_summary: approval.plan.target_summary || approval.plan.target.deployment_id || approval.plan.target.template_path || '',
+    }
+  }
+
+  function recordObservedApprovals(items: OperationApproval[]) {
+    for (const approval of items) {
+      observedApprovalIds.add(approval.id)
+    }
   }
 
   async function refreshPending() {
@@ -52,11 +71,43 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     if (clearError) error.value = ''
     try {
       await refreshPending()
+      recordObservedApprovals(approvals.value)
+      notificationBaselineReady = true
     } catch (err) {
       if (clearError || !error.value) error.value = err instanceof Error ? err.message : String(err)
     } finally {
       loading.value = false
     }
+  }
+
+  async function syncPendingNotifications() {
+    try {
+      const next = await api.listOperationApprovals({ status: 'pending', limit: 100 })
+      const newApprovals = notificationBaselineReady
+        ? next.filter(item => item.status === 'pending' && !observedApprovalIds.has(item.id))
+        : []
+      approvals.value = next
+      recordObservedApprovals(next)
+      notificationBaselineReady = true
+      if (newApprovals.length > 0) {
+        notice.value = noticeFromApproval(newApprovals[0])
+      }
+    } catch (err) {
+      if (!error.value) error.value = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return
+    pollTimer = setInterval(() => {
+      void syncPendingNotifications()
+    }, approvalPollIntervalMs)
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return
+    clearInterval(pollTimer)
+    pollTimer = null
   }
 
   async function approve(id: string, note = '') {
@@ -98,11 +149,9 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
   async function captureApprovalRequired(err: unknown): Promise<boolean> {
     if (!isApprovalRequiredError(err)) return false
     upsertApproval(err.approval)
-    notice.value = {
-      approval_id: err.approval.id,
-      kind: err.approval.plan.kind,
-      target_summary: err.approval.plan.target_summary || err.approval.plan.target.deployment_id || err.approval.plan.target.template_path || '',
-    }
+    observedApprovalIds.add(err.approval.id)
+    notificationBaselineReady = true
+    notice.value = noticeFromApproval(err.approval)
     await loadPending()
     return true
   }
@@ -165,5 +214,19 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     }
   }
 
-  return { approvals, loading, error, notice, pendingCount, loadPending, approve, reject, captureApprovalRequired, clearNotice }
+  return {
+    approvals,
+    loading,
+    error,
+    notice,
+    pendingCount,
+    loadPending,
+    syncPendingNotifications,
+    startPolling,
+    stopPolling,
+    approve,
+    reject,
+    captureApprovalRequired,
+    clearNotice,
+  }
 })

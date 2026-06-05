@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
@@ -105,7 +106,6 @@ async function stopAll() {
 }
 
 async function openMainWindow() {
-  const { invoke } = await import('@tauri-apps/api/core')
   await invoke('show_main_window')
 }
 </script>

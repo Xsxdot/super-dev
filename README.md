@@ -74,7 +74,7 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 
 - `superdev-mcp` 随桌面端分发，默认连接本机 agent：`http://127.0.0.1:57017`。
 - 内置 SuperDev skill，指导 AI 按“先建立全局视野、再采证、再推理、最后安全执行”的顺序使用工具。
-- 写操作走 `preview_operation -> get_operation_approval -> start/stop/restart`。
+- 运行态写操作直接调用 `start/stop/restart`；需要审批时 MCP 默认等待桌面端批准，并用一次性 token 自动续跑。
 - 审批 token 与具体 operation fingerprint 绑定，短期有效、一次性使用、不可换目标复用。
 - 审批、拒绝、执行和失败都会进入本地审计记录。
 
@@ -92,7 +92,7 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 - 首次打开引导页选择 Claude Code、Codex 或 Cursor。
 - 一键安装 MCP 连接和 SuperDev 使用指南 skill。
 - 自动落地 `superdev-sample` 示例项目。
-- 复制一段提示词给 AI，即可体验“看日志 -> 触发审批 -> 用户批准 -> AI 继续执行”的闭环。
+- 复制一段提示词给 AI，即可体验“看日志 -> 触发审批 -> 用户批准 -> MCP 自动继续执行”的闭环。
 
 ## 快速开始
 
@@ -115,7 +115,7 @@ pnpm tauri dev
 3. 点击安装 MCP 连接。
 4. 复制页面给出的提示词并发给 AI。
 5. 当 AI 请求重启示例服务时，在 SuperDev 的“操作审批”中批准。
-6. AI 获取一次性 approval token 后继续执行，并再次读取日志解释 WARN/ERROR。
+6. MCP 自动获取一次性 approval token 并继续执行；AI 再次读取日志解释 WARN/ERROR。
 
 ## 核心架构
 
@@ -246,7 +246,7 @@ Two things are the core — **shared runtime** and **safe operations**. They are
 
 - `superdev-mcp` ships with the desktop app and connects to the local agent at `http://127.0.0.1:57017` by default.
 - The bundled SuperDev skill teaches AI to build a global view first, collect evidence, reason explicitly, and only then execute safely.
-- Runtime writes follow `preview_operation -> get_operation_approval -> start/stop/restart`.
+- Runtime writes call `start/stop/restart` directly; when approval is required, MCP waits for desktop approval by default and resumes with a one-time token.
 - Approval tokens are bound to an operation fingerprint, expire quickly, are single-use, and cannot be reused for a different target.
 - Approvals, rejections, executions, and failures are recorded locally for audit.
 
@@ -264,7 +264,7 @@ Two things are the core — **shared runtime** and **safe operations**. They are
 - Choose Claude Code, Codex, or Cursor on first launch.
 - Install the MCP connection and the SuperDev guide skill from the desktop app.
 - Seed a local `superdev-sample` project automatically.
-- Copy one prompt to AI and watch the full loop: inspect logs, request approval, continue with a one-time token, and explain the result.
+- Copy one prompt to AI and watch the full loop: inspect logs, request approval, approve in the desktop app, and let MCP continue automatically.
 
 ## Quick Start
 
@@ -287,7 +287,7 @@ pnpm tauri dev
 3. Install the MCP connection.
 4. Copy the generated prompt into your AI coding agent.
 5. When AI asks to restart the sample service, approve it in SuperDev Operation Approvals.
-6. AI fetches the one-time approval token, continues the restart, reads logs again, and explains the WARN/ERROR lines.
+6. MCP fetches the one-time approval token and continues the restart; AI reads logs again and explains the WARN/ERROR lines.
 
 ## Architecture
 

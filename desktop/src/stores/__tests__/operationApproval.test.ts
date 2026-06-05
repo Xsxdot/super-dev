@@ -13,6 +13,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 
+function pendingApproval(id = 'opa_1') {
+  return {
+    id,
+    status: 'pending',
+    requested_by: 'mcp',
+    requester_label: 'Codex',
+    plan: {
+      id: 'op_1',
+      kind: 'runtime.restart',
+      target: { deployment_id: 'dep-prod' },
+      target_summary: 'demo/prod/api',
+      risk_level: 'high',
+      requires_approval: true,
+      denied: false,
+      fingerprint: 'fp_1',
+    },
+  } as any
+}
+
 describe('operationApproval store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -28,6 +47,33 @@ describe('operationApproval store', () => {
     await store.loadPending()
 
     expect(store.pendingCount).toBe(1)
+  })
+
+  it('uses the first pending sync as baseline without showing a notice', async () => {
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([pendingApproval()])
+
+    const store = useOperationApprovalStore()
+    await store.syncPendingNotifications()
+
+    expect(store.pendingCount).toBe(1)
+    expect(store.notice).toBeNull()
+  })
+
+  it('shows a notice when a new MCP approval appears after baseline', async () => {
+    vi.spyOn(api, 'listOperationApprovals')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([pendingApproval()])
+
+    const store = useOperationApprovalStore()
+    await store.syncPendingNotifications()
+    await store.syncPendingNotifications()
+
+    expect(store.pendingCount).toBe(1)
+    expect(store.notice).toEqual({
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'demo/prod/api',
+    })
   })
 
   it('approves and refreshes pending approvals', async () => {

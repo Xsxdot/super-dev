@@ -12,14 +12,15 @@ package mcp
 import "github.com/xsxdot/super-dev/agent/model"
 
 type targetArgs struct {
-	ProjectID      string `json:"project_id,omitempty"`
-	ProjectName    string `json:"project_name,omitempty"`
-	EnvName        string `json:"env_name,omitempty"`
-	ServiceID      string `json:"service_id,omitempty"`
-	ServiceName    string `json:"service_name,omitempty"`
-	DeploymentID   string `json:"deployment_id,omitempty"`
-	ApprovalToken  string `json:"approval_token,omitempty"`
-	DebugSessionID string `json:"debug_session_id,omitempty"`
+	ProjectID           string `json:"project_id,omitempty"`
+	ProjectName         string `json:"project_name,omitempty"`
+	EnvName             string `json:"env_name,omitempty"`
+	ServiceID           string `json:"service_id,omitempty"`
+	ServiceName         string `json:"service_name,omitempty"`
+	DeploymentID        string `json:"deployment_id,omitempty"`
+	ApprovalToken       string `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
+	DebugSessionID      string `json:"debug_session_id,omitempty"`
 }
 
 type resolvedTarget struct {

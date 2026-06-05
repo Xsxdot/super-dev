@@ -81,6 +81,25 @@ function makeLog(deploymentId: string, message: string, timestamp: string): LogE
   }
 }
 
+function makePendingApproval() {
+  return {
+    id: 'opa-1',
+    status: 'pending',
+    requested_by: 'mcp',
+    requester_label: 'Codex',
+    plan: {
+      id: 'op-1',
+      kind: 'runtime.restart',
+      target: { deployment_id: 'dep-api' },
+      target_summary: 'demo/prod/api',
+      risk_level: 'high',
+      requires_approval: true,
+      denied: false,
+      fingerprint: 'fp-1',
+    },
+  } as any
+}
+
 async function mountBottomBarWithServices(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   const panelStore = usePanelStore()
   const agentStore = useAgentStore()
@@ -186,21 +205,7 @@ describe('BottomBar', () => {
 
   it('只渲染一个 agent 状态并通过浮层提供审批入口', async () => {
     vi.mocked(agentApi.listOperationApprovals).mockResolvedValue([
-      {
-        id: 'opa-1',
-        status: 'pending',
-        requested_by: 'mcp',
-        requester_label: 'Codex',
-        plan: {
-          id: 'op-1',
-          kind: 'runtime.restart',
-          target: {},
-          risk_level: 'high',
-          requires_approval: true,
-          denied: false,
-          fingerprint: 'fp-1',
-        },
-      },
+      makePendingApproval(),
     ] as any)
     const { wrapper } = await mountBottomBarWithServices('en-US')
     const approvalStore = useOperationApprovalStore()
@@ -220,6 +225,25 @@ describe('BottomBar', () => {
     await wrapper.find('[data-test="approval-popover-view-all"]').trigger('click')
 
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
+  })
+
+  it('轮询到 MCP 新审批后刷新右下角角标', async () => {
+    vi.mocked(agentApi.listOperationApprovals)
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([makePendingApproval()] as any)
+    const { wrapper } = await mountBottomBarWithServices('zh-CN')
+    const approvalStore = useOperationApprovalStore()
+
+    await flushPromises()
+    expect(approvalStore.pendingCount).toBe(0)
+    expect(wrapper.find('[data-test="approvals-entry"]').text()).not.toContain('1')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(approvalStore.pendingCount).toBe(1)
+    expect(approvalStore.notice?.approval_id).toBe('opa-1')
+    expect(wrapper.find('[data-test="approvals-entry"]').text()).toContain('1')
   })
 
   it('uses bookmark store as the shared sync enabled source', async () => {

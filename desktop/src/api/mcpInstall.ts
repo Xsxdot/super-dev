@@ -11,6 +11,8 @@
  *   - 不渲染引导界面
  *   - 不读写 agent settings
  */
+import { invoke } from '@tauri-apps/api/core'
+
 export type CodingAgent = 'claude-code' | 'codex' | 'cursor'
 
 export interface CodingAgentAvailability {
@@ -96,17 +98,14 @@ export interface McpDocs {
 }
 
 export async function detectCodingAgents(): Promise<CodingAgentAvailability[]> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<CodingAgentAvailability[]>('detect_coding_agents')
 }
 
 export async function installMcp(agent: CodingAgent): Promise<InstallOutcome> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<InstallOutcome>('install_mcp', { agent })
 }
 
 export async function getMcpInstallHint(agent: CodingAgent): Promise<InstallHint> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<InstallHint>('mcp_install_hint', { agent })
 }
 
@@ -120,7 +119,6 @@ export async function getMcpInstallHint(agent: CodingAgent): Promise<InstallHint
  *   - 只调用只读 Tauri command，不修改本地配置
  */
 export async function getMcpStatus(): Promise<McpStatus[]> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<McpStatus[]>('mcp_status')
 }
 
@@ -137,7 +135,6 @@ export async function getMcpStatus(): Promise<McpStatus[]> {
  *   - Tauri command 只删除 superdev MCP server，不删除其他 MCP 配置
  */
 export async function uninstallMcp(agent: CodingAgent): Promise<UninstallOutcome> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<UninstallOutcome>('uninstall_mcp', { agent })
 }
 
@@ -151,6 +148,5 @@ export async function uninstallMcp(agent: CodingAgent): Promise<UninstallOutcome
  *   - 文档来自打包资源，API 层不做渲染或解析
  */
 export async function getMcpDocs(): Promise<McpDocs> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return invoke<McpDocs>('mcp_docs')
 }

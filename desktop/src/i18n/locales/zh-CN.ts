@@ -501,7 +501,7 @@ export default {
     demoPrompt:
       '帮我体验 SuperDev：请使用 SuperDev MCP 工具找到 superdev-sample 示例项目，查看它的服务状态和日志。' +
       '如果日志暂时为空，请对 sample-api 的 demo deployment 执行 restart_service。' +
-      '这个重启动作会触发一次安全审批；请先告诉我去 SuperDev 的操作审批界面批准，批准后用 get_operation_approval 取得 approval token，再继续重启。' +
+      '这个重启动作会触发一次安全审批；请告诉我去 SuperDev 的操作审批界面批准，MCP 会在批准后自动继续执行。' +
       '执行成功后再次读取日志，找出 WARN/ERROR 的含义，并用一两句话总结 SuperDev 如何在 AI 操作真实环境前把关。',
   },
   shell: {

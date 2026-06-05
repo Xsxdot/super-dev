@@ -625,7 +625,10 @@ func assertSafeOperations(ctx context.Context, agentURL string, mcp *mcpClient, 
 	}
 	pass("preview safe operation")
 
-	required, err := mcp.callToolError(ctx, "restart_service", map[string]any{"deployment_id": "approval-prod-check"})
+	required, err := mcp.callToolError(ctx, "restart_service", map[string]any{
+		"deployment_id":         "approval-prod-check",
+		"approval_wait_seconds": 0,
+	})
 	if err != nil {
 		return fmt.Errorf("runtime approval required: %w", err)
 	}

@@ -20,41 +20,45 @@ import (
 )
 
 type fakeAgentClient struct {
-	projects                []model.Project
-	services                []model.Service
-	rules                   []model.LogRule
-	logs                    LogsResponse
-	search                  LogSearchResponse
-	contextResp             LogContextResponse
-	contextQuery            url.Values
-	debugSessions           []DebugSession
-	debugSessionDetail      DebugSessionDetailResponse
-	createdDebugSession     DebugSessionCreateRequest
-	appendedSessionID       string
-	appendedEventRequest    DebugSessionAppendEventRequest
-	closedSessionID         string
-	stopCalled              bool
-	startedDeploymentID     string
-	stoppedDeploymentID     string
-	restartedDeploymentID   string
-	templatePreview         PipelineTemplatePreview
-	importedTemplate        PipelineTemplateSummary
-	importedTemplatePath    string
-	operationPlan           OperationPlan
-	operationApprovals      []OperationApproval
-	operationApprovalDetail OperationApprovalDetail
-	operationAudit          OperationAuditList
-	configProject           model.Project
-	configPreview           ConfigChangePreview
-	configApplyErr          error
-	lastConfigChange        ConfigChangeRequest
-	lastApprovalToken       string
-	pipelineRun             model.Run
-	pipelineRuns            []model.Run
-	pipelineArtifacts       []model.ArtifactRef
-	pipelineLogs            []model.RunLogLine
-	lastPipelineDeploy      PipelineDeployRequest
-	lastPipelineLogQuery    url.Values
+	projects                 []model.Project
+	services                 []model.Service
+	rules                    []model.LogRule
+	logs                     LogsResponse
+	search                   LogSearchResponse
+	contextResp              LogContextResponse
+	contextQuery             url.Values
+	debugSessions            []DebugSession
+	debugSessionDetail       DebugSessionDetailResponse
+	createdDebugSession      DebugSessionCreateRequest
+	appendedSessionID        string
+	appendedEventRequest     DebugSessionAppendEventRequest
+	closedSessionID          string
+	stopCalled               bool
+	startedDeploymentID      string
+	stoppedDeploymentID      string
+	restartedDeploymentID    string
+	restartCallCount         int
+	restartErrors            []error
+	templatePreview          PipelineTemplatePreview
+	importedTemplate         PipelineTemplateSummary
+	importedTemplatePath     string
+	operationPlan            OperationPlan
+	operationApprovals       []OperationApproval
+	operationApprovalDetail  OperationApprovalDetail
+	operationApprovalDetails []OperationApprovalDetail
+	getApprovalCallCount     int
+	operationAudit           OperationAuditList
+	configProject            model.Project
+	configPreview            ConfigChangePreview
+	configApplyErr           error
+	lastConfigChange         ConfigChangeRequest
+	lastApprovalToken        string
+	pipelineRun              model.Run
+	pipelineRuns             []model.Run
+	pipelineArtifacts        []model.ArtifactRef
+	pipelineLogs             []model.RunLogLine
+	lastPipelineDeploy       PipelineDeployRequest
+	lastPipelineLogQuery     url.Values
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -130,6 +134,14 @@ func (f *fakeAgentClient) ListOperationApprovals(context.Context, url.Values) ([
 }
 
 func (f *fakeAgentClient) GetOperationApproval(context.Context, string) (OperationApprovalDetail, error) {
+	f.getApprovalCallCount++
+	if len(f.operationApprovalDetails) > 0 {
+		index := f.getApprovalCallCount - 1
+		if index >= len(f.operationApprovalDetails) {
+			index = len(f.operationApprovalDetails) - 1
+		}
+		return f.operationApprovalDetails[index], nil
+	}
 	return f.operationApprovalDetail, nil
 }
 
@@ -173,6 +185,10 @@ func (f *fakeAgentClient) StopDeployment(_ context.Context, id string, approvalT
 }
 
 func (f *fakeAgentClient) RestartDeployment(_ context.Context, id string, approvalToken string) error {
+	f.restartCallCount++
+	if f.restartCallCount <= len(f.restartErrors) && f.restartErrors[f.restartCallCount-1] != nil {
+		return f.restartErrors[f.restartCallCount-1]
+	}
 	f.restartedDeploymentID = id
 	f.lastApprovalToken = approvalToken
 	return nil
@@ -274,4 +290,79 @@ func TestRestartServiceCallsResolvedDeployment(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Equal(t, "dep-api-prod", client.restartedDeploymentID)
+}
+
+func TestRestartServiceWaitsForApprovalAndRetriesWithToken(t *testing.T) {
+	approval := OperationApproval{
+		ID:     "opa_1",
+		Status: "pending",
+		Plan: OperationPlan{
+			ID:               "op_1",
+			Kind:             "runtime.restart",
+			Target:           OperationTarget{DeploymentID: "dep-api-prod"},
+			RequiresApproval: true,
+			Fingerprint:      "fp_1",
+		},
+	}
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		restartErrors: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     approval.Plan,
+			Approval: approval,
+		}},
+		operationApprovalDetails: []OperationApprovalDetail{{
+			Approval:      OperationApproval{ID: "opa_1", Status: "approved", Plan: approval.Plan},
+			ApprovalToken: "tok_1",
+		}},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "restart_service", `{"deployment_id":"dep-api-prod"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, 2, client.restartCallCount)
+	assert.Equal(t, 1, client.getApprovalCallCount)
+	assert.Equal(t, "dep-api-prod", client.restartedDeploymentID)
+	assert.Equal(t, "tok_1", client.lastApprovalToken)
+}
+
+func TestRestartServiceCanDisableApprovalWait(t *testing.T) {
+	approval := OperationApproval{
+		ID:     "opa_1",
+		Status: "pending",
+		Plan: OperationPlan{
+			ID:               "op_1",
+			Kind:             "runtime.restart",
+			Target:           OperationTarget{DeploymentID: "dep-api-prod"},
+			RequiresApproval: true,
+			Fingerprint:      "fp_1",
+		},
+	}
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		restartErrors: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     approval.Plan,
+			Approval: approval,
+		}},
+		operationApprovalDetail: OperationApprovalDetail{
+			Approval:      OperationApproval{ID: "opa_1", Status: "approved", Plan: approval.Plan},
+			ApprovalToken: "tok_1",
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "restart_service", `{"deployment_id":"dep-api-prod","approval_wait_seconds":0}`)
+
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	payload := result.StructuredContent.(toolErrorPayload)
+	assert.Equal(t, "approval_required", payload.Code)
+	assert.Equal(t, 1, client.restartCallCount)
+	assert.Equal(t, 0, client.getApprovalCallCount)
+	assert.Equal(t, "", client.lastApprovalToken)
 }

@@ -40,14 +40,15 @@ func targetInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"project_id":       map[string]any{"type": "string"},
-			"project_name":     map[string]any{"type": "string"},
-			"env_name":         map[string]any{"type": "string"},
-			"service_id":       map[string]any{"type": "string"},
-			"service_name":     map[string]any{"type": "string"},
-			"deployment_id":    map[string]any{"type": "string"},
-			"approval_token":   map[string]any{"type": "string"},
-			"debug_session_id": map[string]any{"type": "string"},
+			"project_id":            map[string]any{"type": "string"},
+			"project_name":          map[string]any{"type": "string"},
+			"env_name":              map[string]any{"type": "string"},
+			"service_id":            map[string]any{"type": "string"},
+			"service_name":          map[string]any{"type": "string"},
+			"deployment_id":         map[string]any{"type": "string"},
+			"approval_token":        map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 300},
+			"debug_session_id":      map[string]any{"type": "string"},
 		},
 	}
 }
@@ -432,7 +433,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "preview_operation",
 				Title:       "Preview operation",
-				Description: "Create a deterministic safety preflight plan for one write operation.",
+				Description: "Create a deterministic safety preflight plan for one write operation without creating an approval request.",
 				InputSchema: previewOperationInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
@@ -577,7 +578,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "start_service",
 				Title:       "Start service",
-				Description: "Start one resolved deployment through the local SuperDev agent.",
+				Description: "Start one resolved deployment. If approval is required, wait for desktop approval by default and resume with a one-time token.",
 				InputSchema: targetInputSchema(),
 			},
 			Handler: s.startServiceTool,
@@ -586,7 +587,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "stop_service",
 				Title:       "Stop service",
-				Description: "Stop one resolved deployment through the local SuperDev agent.",
+				Description: "Stop one resolved deployment. If approval is required, wait for desktop approval by default and resume with a one-time token.",
 				InputSchema: targetInputSchema(),
 				Annotations: map[string]any{"destructiveHint": true},
 			},
@@ -596,7 +597,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "restart_service",
 				Title:       "Restart service",
-				Description: "Restart one resolved deployment through the local SuperDev agent.",
+				Description: "Restart one resolved deployment. If approval is required, wait for desktop approval by default and resume with a one-time token.",
 				InputSchema: targetInputSchema(),
 				Annotations: map[string]any{"destructiveHint": true},
 			},
