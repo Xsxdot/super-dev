@@ -32,7 +32,7 @@ defineProps<{ tabId: string }>()
 <style scoped>
 .search-board {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 380px minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -42,7 +42,7 @@ defineProps<{ tabId: string }>()
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border-secondary);
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
 }
 .search-right {
   min-width: 0;

@@ -14,6 +14,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import { splitSearchHighlight } from '@/lib/searchHighlight'
 
 const props = defineProps<{ tabId: string }>()
 
@@ -37,6 +38,17 @@ function timeLabel(timestamp: string): string {
 // deploymentId 反查所属 service 名，反查不到时直接显示 id。
 function serviceName(deploymentId: string): string {
   return agentStore.serviceForDeployment(deploymentId)?.service.name ?? deploymentId
+}
+
+function levelClass(level: string): string {
+  if (level === 'ERROR') return 'error'
+  if (level === 'WARN') return 'warn'
+  if (level === 'DEBUG') return 'debug'
+  return 'info'
+}
+
+function messageParts(message: string) {
+  return splitSearchHighlight(message, tab.value?.query ?? '')
 }
 
 function select(entryId: number) {
@@ -72,12 +84,19 @@ watch(
       :key="entry.id"
       class="timeline-row"
       :class="{ selected: tab?.selectedLogId === entry.id }"
+      data-test="search-hit-row"
       :data-entry-id="entry.id"
       @click="select(entry.id)"
     >
       <span class="time">{{ timeLabel(entry.timestamp) }}</span>
-      <span class="service">{{ serviceName(entry.deployment_id) }}</span>
-      <span class="message">{{ entry.message }}</span>
+      <span class="service" data-test="search-hit-service">{{ serviceName(entry.deployment_id) }}</span>
+      <span class="level" :class="levelClass(entry.level)" data-test="search-hit-level">{{ entry.level }}</span>
+      <span class="message">
+        <template v-for="(part, index) in messageParts(entry.message)" :key="index">
+          <mark v-if="part.match" data-test="search-keyword-highlight">{{ part.text }}</mark>
+          <span v-else>{{ part.text }}</span>
+        </template>
+      </span>
     </button>
     <button
       v-if="tab && workspace.canLoadMoreSearchResults(tab.id)"
@@ -95,24 +114,33 @@ watch(
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px;
+  padding: 7px;
 }
 .timeline-row {
   display: grid;
-  grid-template-columns: 78px 72px 1fr;
-  gap: 6px;
+  grid-template-columns: 82px minmax(88px, 118px) 48px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
   width: 100%;
-  border: none;
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  padding: 4px 5px;
+  padding: 5px 6px 5px 5px;
   font-size: 11px;
   text-align: left;
   cursor: pointer;
 }
-.timeline-row:hover { background: var(--bg-overlay); }
-.timeline-row.selected { background: rgba(88, 166, 255, 0.14); }
+.timeline-row:hover {
+  border-color: var(--border-secondary);
+  background: rgba(255, 255, 255, 0.035);
+}
+.timeline-row.selected {
+  border-color: rgba(88, 166, 255, 0.35);
+  border-left-color: #58a6ff;
+  background: rgba(88, 166, 255, 0.14);
+}
 .load-more {
   width: 100%;
   height: 28px;
@@ -131,6 +159,47 @@ watch(
   opacity: 0.65;
 }
 .time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.service { color: #58a6ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service {
+  color: #58a6ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+.level {
+  justify-self: start;
+  min-width: 38px;
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: rgba(88, 166, 255, 0.09);
+  color: #79c0ff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.level.warn {
+  background: rgba(242, 204, 96, 0.12);
+  color: #f2cc60;
+}
+.level.error {
+  background: rgba(248, 81, 73, 0.13);
+  color: #ff7b72;
+}
+.level.debug {
+  background: rgba(139, 148, 158, 0.10);
+  color: var(--text-tertiary);
+}
+.message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+mark {
+  border-radius: 3px;
+  background: rgba(242, 204, 96, 0.26);
+  color: #ffe08a;
+  padding: 0 2px;
+}
 </style>
