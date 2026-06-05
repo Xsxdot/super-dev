@@ -12,6 +12,7 @@ RuntimeWorkbenchHeader：运行态工作区顶部状态栏。
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { MAX_PANEL_LEAVES, usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -22,6 +23,7 @@ const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
+const appWindow = getCurrentWindow()
 
 const openDeploymentIds = computed(() => {
   const ids = new Set<string>()
@@ -74,11 +76,21 @@ function arrangeColumns() {
   panelStore.arrangeLeavesInColumns()
   persistActiveLayout()
 }
+
+function startWindowDrag(event: MouseEvent) {
+  if (event.buttons !== 1) return
+  void appWindow.startDragging().catch(() => undefined)
+}
 </script>
 
 <template>
   <header class="runtime-workbench-header" data-test="runtime-workbench-header">
-    <div class="runtime-context" data-test="runtime-drag-region" data-tauri-drag-region>
+    <div
+      class="runtime-context"
+      data-test="runtime-drag-region"
+      data-tauri-drag-region="deep"
+      @mousedown="startWindowDrag"
+    >
       <h1 data-test="runtime-title" data-tauri-drag-region>
         {{ t('runtimeWorkbench.title') }} <span data-tauri-drag-region>· {{ runtimeLabel }}</span>
       </h1>
@@ -93,9 +105,20 @@ function arrangeColumns() {
         {{ evidenceLabel }}
       </span>
     </div>
-    <div class="runtime-drag-spacer" data-test="runtime-drag-spacer" data-tauri-drag-region aria-hidden="true" />
+    <div
+      class="runtime-drag-spacer"
+      data-test="runtime-drag-spacer"
+      data-tauri-drag-region
+      aria-hidden="true"
+      @mousedown="startWindowDrag"
+    />
     <div class="runtime-layout-actions">
-      <span class="panel-count" data-test="runtime-panel-count" data-tauri-drag-region>
+      <span
+        class="panel-count"
+        data-test="runtime-panel-count"
+        data-tauri-drag-region
+        @mousedown="startWindowDrag"
+      >
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
       <button
