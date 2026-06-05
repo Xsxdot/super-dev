@@ -28,7 +28,18 @@ type certificateCreateRequest struct {
 }
 
 type certificateDeployRequest struct {
-	HostIDs []string `json:"host_ids"`
+	HostIDs           []string                         `json:"host_ids,omitempty"`
+	CertPath          string                           `json:"cert_path,omitempty"`
+	KeyPath           string                           `json:"key_path,omitempty"`
+	PostDeployCommand string                           `json:"post_deploy_command,omitempty"`
+	Deployments       []certificateDeployTargetRequest `json:"deployments,omitempty"`
+}
+
+type certificateDeployTargetRequest struct {
+	HostID            string `json:"host_id"`
+	CertPath          string `json:"cert_path,omitempty"`
+	KeyPath           string `json:"key_path,omitempty"`
+	PostDeployCommand string `json:"post_deploy_command,omitempty"`
 }
 
 func (a *App) listIngressCertificates(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +157,7 @@ func (a *App) deployIngressCertificate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	cert, err := a.ingressCertService.Deploy(r.Context(), r.PathValue("id"), normalizeStringList(req.HostIDs))
+	cert, err := a.ingressCertService.Deploy(r.Context(), r.PathValue("id"), certificateDeploymentRequests(req))
 	if err != nil {
 		jsonError(w, ingressErrorStatus(err), err.Error())
 		return
@@ -205,6 +216,34 @@ func normalizeStringList(items []string) []string {
 		if trimmed != "" {
 			out = append(out, trimmed)
 		}
+	}
+	return out
+}
+
+func certificateDeploymentRequests(req certificateDeployRequest) []ingress.CertificateDeploymentRequest {
+	if len(req.Deployments) > 0 {
+		out := make([]ingress.CertificateDeploymentRequest, 0, len(req.Deployments))
+		for _, deployment := range req.Deployments {
+			out = append(out, ingress.CertificateDeploymentRequest{
+				HostID:            strings.TrimSpace(deployment.HostID),
+				CertPath:          strings.TrimSpace(deployment.CertPath),
+				KeyPath:           strings.TrimSpace(deployment.KeyPath),
+				PostDeployCommand: strings.TrimSpace(deployment.PostDeployCommand),
+				SourceType:        "manual",
+			})
+		}
+		return out
+	}
+	hostIDs := normalizeStringList(req.HostIDs)
+	out := make([]ingress.CertificateDeploymentRequest, 0, len(hostIDs))
+	for _, hostID := range hostIDs {
+		out = append(out, ingress.CertificateDeploymentRequest{
+			HostID:            hostID,
+			CertPath:          strings.TrimSpace(req.CertPath),
+			KeyPath:           strings.TrimSpace(req.KeyPath),
+			PostDeployCommand: strings.TrimSpace(req.PostDeployCommand),
+			SourceType:        "manual",
+		})
 	}
 	return out
 }

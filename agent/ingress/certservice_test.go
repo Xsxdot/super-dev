@@ -67,9 +67,8 @@ func TestCertServiceIssueFailurePersistsFailedStatus(t *testing.T) {
 
 func TestCertServiceDeployRecordsHostPaths(t *testing.T) {
 	store := NewFileStore(t.TempDir())
-	reg := NewRegistry()
 	events := []string{}
-	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
+	deployer := &recordingCertDeployer{events: &events}
 	cert, err := store.UpsertCertificate(ManagedCertificate{
 		Domains: []string{"api.example.com"},
 		Issuer:  CertificateIssuerManual,
@@ -81,41 +80,51 @@ func TestCertServiceDeployRecordsHostPaths(t *testing.T) {
 	requireNoError(t, err)
 	svc := NewCertService(CertServiceConfig{
 		Store:    store,
-		Registry: reg,
+		Deployer: deployer,
 		HostLookup: func(ids []string) ([]model.Host, error) {
 			assertStringSliceEqual(t, ids, []string{"edge-a"})
 			return []model.Host{{ID: "edge-a", Name: "edge-a"}}, nil
 		},
 	})
 
-	got, err := svc.Deploy(context.Background(), cert.ID, []string{"edge-a"})
+	got, err := svc.Deploy(context.Background(), cert.ID, []CertificateDeploymentRequest{{
+		HostID:            "edge-a",
+		CertPath:          "/opt/certs/api/fullchain.pem",
+		KeyPath:           "/opt/certs/api/privkey.pem",
+		PostDeployCommand: "service caddy reload",
+	}})
 	requireNoError(t, err)
 
-	assertStringSliceContains(t, events, "proxy.deploy-cert:edge-a")
+	assertStringSliceContains(t, events, "cert.deploy:edge-a")
 	assertLen(t, got.Deployments, 1)
 	assertEqual(t, got.Deployments[0].HostID, "edge-a")
+	assertEqual(t, got.Deployments[0].CertPath, "/opt/certs/api/fullchain.pem")
+	assertEqual(t, got.Deployments[0].KeyPath, "/opt/certs/api/privkey.pem")
+	assertEqual(t, got.Deployments[0].PostDeployCommand, "service caddy reload")
+	assertEqual(t, deployer.requests[0].PostDeployCommand, "service caddy reload")
 }
 
 func TestCertServiceRenewRedeploysExistingDeployments(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	reg := NewRegistry()
 	events := []string{}
+	deployer := &recordingCertDeployer{events: &events}
 	reg.RegisterDNS(&orderedDNS{name: "cloudflare-prod", events: &events})
 	reg.RegisterCert(&orderedCert{name: ProviderACME, events: &events})
-	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
 	cert, err := store.UpsertCertificate(ManagedCertificate{
 		Domains:     []string{"api.example.com"},
 		Issuer:      CertificateIssuerACME,
 		DNSProvider: "cloudflare-prod",
 		Status:      CertActive,
 		Material:    &Certificate{Domain: "api.example.com", CertPEM: "CERT", KeyPEM: "KEY", Provider: ProviderACME, ExpiresAt: time.Now().Add(10 * 24 * time.Hour)},
-		Deployments: []CertDeployment{{HostID: "edge-a", CertPath: "/cert", KeyPath: "/key"}},
+		Deployments: []CertDeployment{{HostID: "edge-a", CertPath: "/cert", KeyPath: "/key", PostDeployCommand: "service caddy reload"}},
 		AutoRenew:   true,
 	})
 	requireNoError(t, err)
 	svc := NewCertService(CertServiceConfig{
 		Store:    store,
 		Registry: reg,
+		Deployer: deployer,
 		HostLookup: func(ids []string) ([]model.Host, error) {
 			return []model.Host{{ID: "edge-a", Name: "edge-a"}}, nil
 		},
@@ -126,7 +135,10 @@ func TestCertServiceRenewRedeploysExistingDeployments(t *testing.T) {
 
 	assertEqual(t, got.Material.CertPEM, "NEWCERT")
 	assertStringSliceContains(t, events, "cert.renew")
-	assertStringSliceContains(t, events, "proxy.deploy-cert:edge-a")
+	assertStringSliceContains(t, events, "cert.deploy:edge-a")
+	assertEqual(t, deployer.requests[0].CertPath, "/cert")
+	assertEqual(t, deployer.requests[0].KeyPath, "/key")
+	assertEqual(t, deployer.requests[0].PostDeployCommand, "service caddy reload")
 }
 
 func TestCertServiceMatchOnlyReturnsActiveCertificate(t *testing.T) {
@@ -151,4 +163,23 @@ func assertStringSliceContains(t *testing.T, got []string, want string) {
 		}
 	}
 	t.Fatalf("got %#v, want item %q", got, want)
+}
+
+type recordingCertDeployer struct {
+	events   *[]string
+	requests []CertificateDeploymentRequest
+}
+
+func (d *recordingCertDeployer) DeployCertificate(ctx context.Context, host model.Host, cert Certificate, request CertificateDeploymentRequest) (CertDeployment, error) {
+	if d.events != nil {
+		*d.events = append(*d.events, "cert.deploy:"+host.ID)
+	}
+	d.requests = append(d.requests, request)
+	return CertDeployment{
+		HostID:            host.ID,
+		CertPath:          request.CertPath,
+		KeyPath:           request.KeyPath,
+		PostDeployCommand: request.PostDeployCommand,
+		DeployedAt:        time.Now().UTC(),
+	}, nil
 }

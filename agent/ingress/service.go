@@ -239,6 +239,19 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 			deployments[existing.HostID] = existing
 		}
 		for _, hostState := range hostStates {
+			if hostState.CertDeployment != nil {
+				deployment := *hostState.CertDeployment
+				deployment.HostID = hostState.HostID
+				deployment.SourceType = "ingress"
+				deployment.SourceID = in.ID
+				deployment.Status = CertDeploymentSucceeded
+				deployment.LastError = ""
+				if deployment.DeployedAt.IsZero() {
+					deployment.DeployedAt = time.Now().UTC()
+				}
+				deployments[hostState.HostID] = deployment
+				continue
+			}
 			if len(hostState.CertPaths) < 2 {
 				continue
 			}
@@ -246,6 +259,9 @@ func (s *Service) Apply(ctx context.Context, ingressID string, opts ApplyOptions
 				HostID:     hostState.HostID,
 				CertPath:   hostState.CertPaths[0],
 				KeyPath:    hostState.CertPaths[1],
+				SourceType: "ingress",
+				SourceID:   in.ID,
+				Status:     CertDeploymentSucceeded,
 				DeployedAt: time.Now().UTC(),
 			}
 		}

@@ -86,7 +86,7 @@ async function stopChecked() {
   await Promise.all(checkedServiceIds.value.map(id => agentStore.stopDeployment(id)))
 }
 
-// 同步录制
+// 日志录制：底层仍使用同步书签能力，展示层统一为用户可理解的日志录制。
 const syncEnabled = ref(false)
 const syncRecording = computed(() => bookmarkStore.syncRecording)
 const hasSyncOutput = computed(() => bookmarkStore.formatSyncBookmarks().trim().length > 0)
@@ -242,7 +242,7 @@ const statusColor = (status: string) => {
 
     <div class="divider" />
 
-    <!-- 同步录制 -->
+    <!-- 日志录制 -->
     <label class="sync-label">
       <input type="checkbox" :checked="syncEnabled" @change="toggleSync" style="accent-color:#1f6feb;" />
       <span>{{ t('bottomBar.syncRecording') }}</span>

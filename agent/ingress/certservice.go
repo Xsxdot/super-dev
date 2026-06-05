@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/superdev/agent/model"
 )
@@ -25,6 +26,7 @@ type CertServiceConfig struct {
 	Store      Store
 	Registry   *Registry
 	HostLookup HostLookup
+	Deployer   CertificateDeployer
 }
 
 // CertService 编排托管证书申请、续期、部署和匹配。
@@ -32,6 +34,7 @@ type CertService struct {
 	store      Store
 	registry   *Registry
 	hostLookup HostLookup
+	deployer   CertificateDeployer
 }
 
 // NewCertService 创建全局证书服务。
@@ -48,7 +51,7 @@ func NewCertService(cfg CertServiceConfig) *CertService {
 			return nil, errors.New("host lookup is required")
 		}
 	}
-	return &CertService{store: cfg.Store, registry: cfg.Registry, hostLookup: hostLookup}
+	return &CertService{store: cfg.Store, registry: cfg.Registry, hostLookup: hostLookup, deployer: cfg.Deployer}
 }
 
 // Issue 申请托管证书并持久化状态流转。
@@ -154,11 +157,11 @@ func (s *CertService) Renew(ctx context.Context, certID string) (ManagedCertific
 	if len(cert.Deployments) == 0 {
 		return cert, nil
 	}
-	hostIDs := make([]string, 0, len(cert.Deployments))
+	requests := make([]CertificateDeploymentRequest, 0, len(cert.Deployments))
 	for _, deployment := range cert.Deployments {
-		hostIDs = append(hostIDs, deployment.HostID)
+		requests = append(requests, deploymentRequestFromRecord(deployment))
 	}
-	return s.Deploy(ctx, cert.ID, hostIDs)
+	return s.Deploy(ctx, cert.ID, requests)
 }
 
 // Deploy 将证书材料部署到指定 host。
@@ -166,17 +169,17 @@ func (s *CertService) Renew(ctx context.Context, certID string) (ManagedCertific
 // 参数：
 //   - ctx: 上下文，用于取消远端部署调用
 //   - certID: 待部署的托管证书 ID
-//   - hostIDs: 目标 host ID 列表
+//   - requests: 目标 host、证书路径、私钥路径和可选部署后命令
 //
 // 返回：
 //   - 更新部署记录后的托管证书
 //   - 证书未就绪、host 解析或部署失败时返回错误
-func (s *CertService) Deploy(ctx context.Context, certID string, hostIDs []string) (ManagedCertificate, error) {
+func (s *CertService) Deploy(ctx context.Context, certID string, requests []CertificateDeploymentRequest) (ManagedCertificate, error) {
 	if err := s.ensureStore(); err != nil {
 		return ManagedCertificate{}, err
 	}
-	if err := s.ensureRegistry(); err != nil {
-		return ManagedCertificate{}, err
+	if s.deployer == nil {
+		return ManagedCertificate{}, errors.New("certificate deployer is required")
 	}
 	cert, err := s.loadCertificate(certID)
 	if err != nil {
@@ -185,25 +188,42 @@ func (s *CertService) Deploy(ctx context.Context, certID string, hostIDs []strin
 	if cert.Status != CertActive || cert.Material == nil {
 		return ManagedCertificate{}, fmt.Errorf("certificate %s is not active", certID)
 	}
+	requests = normalizedDeploymentRequests(requests, primaryDomain(cert))
+	if len(requests) == 0 {
+		return ManagedCertificate{}, errors.New("certificate deployment targets are required")
+	}
+	hostIDs := make([]string, 0, len(requests))
+	for _, request := range requests {
+		hostIDs = append(hostIDs, request.HostID)
+	}
 	hosts, err := s.hostLookup(hostIDs)
 	if err != nil {
 		return ManagedCertificate{}, err
 	}
-	proxyProvider, err := s.registry.Proxy(ProviderNginx)
-	if err != nil {
-		return ManagedCertificate{}, err
+	hostsByID := map[string]model.Host{}
+	for _, host := range hosts {
+		hostsByID[host.ID] = host
 	}
 	deploymentsByHost := map[string]CertDeployment{}
 	for _, existing := range cert.Deployments {
 		deploymentsByHost[existing.HostID] = existing
 	}
-	domain := primaryDomain(cert)
-	for _, host := range hosts {
-		deployment, err := proxyProvider.DeployCertificate(ctx, host, domain, *cert.Material)
-		if err != nil {
-			return ManagedCertificate{}, err
+	for _, request := range requests {
+		host, ok := hostsByID[request.HostID]
+		if !ok {
+			return ManagedCertificate{}, fmt.Errorf("host %s not found", request.HostID)
 		}
-		deploymentsByHost[host.ID] = deployment
+		deployment, err := s.deployer.DeployCertificate(ctx, host, *cert.Material, request)
+		if err != nil {
+			deploymentsByHost[request.HostID] = failedDeployment(request, err)
+			cert.Deployments = sortedDeployments(deploymentsByHost)
+			saved, saveErr := s.store.UpsertCertificate(cert)
+			if saveErr != nil {
+				return saved, saveErr
+			}
+			return saved, err
+		}
+		deploymentsByHost[host.ID] = normalizeSuccessfulDeployment(host.ID, request, deployment)
 	}
 	cert.Deployments = sortedDeployments(deploymentsByHost)
 	return s.store.UpsertCertificate(cert)
@@ -291,6 +311,53 @@ func primaryDomain(cert ManagedCertificate) string {
 		return strings.TrimSpace(cert.Material.Domain)
 	}
 	return ""
+}
+
+func normalizedDeploymentRequests(requests []CertificateDeploymentRequest, domain string) []CertificateDeploymentRequest {
+	out := make([]CertificateDeploymentRequest, 0, len(requests))
+	seen := map[string]bool{}
+	for _, request := range requests {
+		normalized := normalizeDeploymentRequest(request, domain)
+		if normalized.HostID == "" || seen[normalized.HostID] {
+			continue
+		}
+		seen[normalized.HostID] = true
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func normalizeSuccessfulDeployment(hostID string, request CertificateDeploymentRequest, deployment CertDeployment) CertDeployment {
+	deployment.HostID = hostID
+	if deployment.CertPath == "" {
+		deployment.CertPath = request.CertPath
+	}
+	if deployment.KeyPath == "" {
+		deployment.KeyPath = request.KeyPath
+	}
+	deployment.PostDeployCommand = request.PostDeployCommand
+	deployment.SourceType = request.SourceType
+	deployment.SourceID = request.SourceID
+	deployment.Status = CertDeploymentSucceeded
+	deployment.LastError = ""
+	if deployment.DeployedAt.IsZero() {
+		deployment.DeployedAt = time.Now().UTC()
+	}
+	return deployment
+}
+
+func failedDeployment(request CertificateDeploymentRequest, cause error) CertDeployment {
+	return CertDeployment{
+		HostID:            request.HostID,
+		CertPath:          request.CertPath,
+		KeyPath:           request.KeyPath,
+		PostDeployCommand: request.PostDeployCommand,
+		SourceType:        request.SourceType,
+		SourceID:          request.SourceID,
+		Status:            CertDeploymentFailed,
+		LastError:         cause.Error(),
+		DeployedAt:        time.Now().UTC(),
+	}
 }
 
 func sortedDeployments(items map[string]CertDeployment) []CertDeployment {

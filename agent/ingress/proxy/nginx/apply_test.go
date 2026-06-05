@@ -70,6 +70,10 @@ func TestApplyTransfersConfigCertAndReloads(t *testing.T) {
 		"/etc/superdev/ingress/certs/api.example.com/fullchain.pem",
 		"/etc/superdev/ingress/certs/api.example.com/privkey.pem",
 	})
+	if state.CertDeployment == nil {
+		t.Fatal("CertDeployment = nil, want deployment details for renewal")
+	}
+	assertEqual(t, state.CertDeployment.PostDeployCommand, nginxPostDeployCommand)
 	assertStringSliceEqual(t, transport.events, []string{
 		"cmd:mkdir -p /etc/nginx/conf.d /etc/superdev/ingress/certs/api.example.com",
 		"transfer:/etc/nginx/conf.d/superdev-api.example.com.conf",

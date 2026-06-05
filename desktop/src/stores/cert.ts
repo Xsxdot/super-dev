@@ -15,6 +15,7 @@ import {
   certApi,
   type ACMEAccount,
   type CertificateCreatePayload,
+  type CertificateDeployPayload,
   type ManagedCertificate,
 } from '@/api/cert'
 
@@ -103,8 +104,8 @@ export const useCertStore = defineStore('cert', () => {
     return renewed
   }
 
-  async function deployCertificate(id: string, hostIds: string[] = []) {
-    const deployed = await certApi.deployCertificate(id, hostIds)
+  async function deployCertificate(id: string, payload: CertificateDeployPayload = { host_ids: [] }) {
+    const deployed = await certApi.deployCertificate(id, payload)
     upsertLocal(deployed)
     return deployed
   }

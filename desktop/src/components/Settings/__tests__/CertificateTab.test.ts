@@ -108,6 +108,21 @@ describe('CertificateTab', () => {
     }))
   })
 
+  it('uses shared settings surfaces, table, and modal classes', async () => {
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    expect(wrapper.find('.settings-pane-header').exists()).toBe(true)
+    expect(wrapper.find('.settings-section').exists()).toBe(true)
+    expect(wrapper.find('.settings-table').exists()).toBe(true)
+
+    await wrapper.find('[data-test="cert-add"]').trigger('click')
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal').exists()).toBe(true)
+    expect(wrapper.find('[data-test="cert-submit"]').classes()).toContain('settings-btn-primary')
+  })
+
   it('prompts users to configure DNS providers before creating ACME certificates', async () => {
     ingressMock.listDNSProviders.mockResolvedValue(null)
     const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
@@ -188,15 +203,64 @@ describe('CertificateTab', () => {
 
   it('deploys selected certificate to selected hosts', async () => {
     certMock.listCertificates.mockResolvedValue([{ id: 'cert-1', domains: ['api.example.com'], issuer: 'acme', status: 'active', auto_renew: true, deployments: [] }])
-    certMock.deployCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], issuer: 'acme', status: 'active', auto_renew: true, deployments: [{ host_id: 'edge-a' }] })
+    certMock.deployCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'active',
+      auto_renew: true,
+      deployments: [{
+        host_id: 'edge-a',
+        cert_path: '/opt/certs/api/fullchain.pem',
+        key_path: '/opt/certs/api/privkey.pem',
+        post_deploy_command: 'service caddy reload',
+      }],
+    })
     const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
     await flush()
 
     await wrapper.find('[data-test="cert-deploy-cert-1"]').trigger('click')
     await wrapper.find('[data-test="cert-deploy-host-edge-a"]').setValue(true)
+    await wrapper.find('[data-test="cert-deploy-cert-path"]').setValue('/opt/certs/api/fullchain.pem')
+    await wrapper.find('[data-test="cert-deploy-key-path"]').setValue('/opt/certs/api/privkey.pem')
+    await wrapper.find('[data-test="cert-deploy-command"]').setValue('service caddy reload')
     await wrapper.find('[data-test="cert-deploy-submit"]').trigger('click')
 
-    expect(certMock.deployCertificate).toHaveBeenCalledWith('cert-1', ['edge-a'])
+    expect(certMock.deployCertificate).toHaveBeenCalledWith('cert-1', {
+      deployments: [{
+        host_id: 'edge-a',
+        cert_path: '/opt/certs/api/fullchain.pem',
+        key_path: '/opt/certs/api/privkey.pem',
+        post_deploy_command: 'service caddy reload',
+      }],
+    })
+  })
+
+  it('shows deployed certificate paths and copies them', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    certMock.listCertificates.mockResolvedValue([{
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'active',
+      auto_renew: true,
+      deployments: [{
+        host_id: 'edge-a',
+        cert_path: '/opt/certs/api/fullchain.pem',
+        key_path: '/opt/certs/api/privkey.pem',
+        status: 'succeeded',
+      }],
+    }])
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    expect(wrapper.text()).toContain('/opt/certs/api/fullchain.pem')
+    expect(wrapper.text()).toContain('/opt/certs/api/privkey.pem')
+
+    await wrapper.find('[data-test="cert-copy-cert-edge-a"]').trigger('click')
+
+    expect(writeText).toHaveBeenCalledWith('/opt/certs/api/fullchain.pem')
   })
 })
 

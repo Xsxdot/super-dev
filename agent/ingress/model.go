@@ -221,10 +221,15 @@ const (
 
 // CertDeployment 记录证书材料已经部署到哪个 host 和路径。
 type CertDeployment struct {
-	HostID     string    `json:"host_id"`
-	CertPath   string    `json:"cert_path"`
-	KeyPath    string    `json:"key_path"`
-	DeployedAt time.Time `json:"deployed_at"`
+	HostID            string    `json:"host_id"`
+	CertPath          string    `json:"cert_path"`
+	KeyPath           string    `json:"key_path"`
+	PostDeployCommand string    `json:"post_deploy_command,omitempty"`
+	SourceType        string    `json:"source_type,omitempty"`
+	SourceID          string    `json:"source_id,omitempty"`
+	Status            string    `json:"status,omitempty"`
+	LastError         string    `json:"last_error,omitempty"`
+	DeployedAt        time.Time `json:"deployed_at"`
 }
 
 // ACMEAccount 保存全局唯一 ACME 账号配置。
@@ -252,9 +257,10 @@ type AppliedState struct {
 
 // HostState 记录单个 host 上的 proxy 配置和证书路径。
 type HostState struct {
-	HostID     string   `json:"host_id"`
-	ConfigPath string   `json:"config_path"`
-	CertPaths  []string `json:"cert_paths,omitempty"`
+	HostID         string          `json:"host_id"`
+	ConfigPath     string          `json:"config_path"`
+	CertPaths      []string        `json:"cert_paths,omitempty"`
+	CertDeployment *CertDeployment `json:"cert_deployment,omitempty"`
 }
 
 // OrphanConfig 表示 host 上由 SuperDev 管理但不再属于声明的配置。

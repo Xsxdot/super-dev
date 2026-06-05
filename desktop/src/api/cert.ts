@@ -58,6 +58,11 @@ export interface CertDeployment {
   host_id: string
   cert_path: string
   key_path: string
+  post_deploy_command?: string
+  source_type?: string
+  source_id?: string
+  status?: 'succeeded' | 'failed' | string
+  last_error?: string
   deployed_at: string
 }
 
@@ -83,6 +88,21 @@ export interface CertificateCreatePayload {
   material?: CertificateMaterial
 }
 
+export interface CertificateDeployTargetPayload {
+  host_id: string
+  cert_path?: string
+  key_path?: string
+  post_deploy_command?: string
+}
+
+export interface CertificateDeployPayload {
+  host_ids?: string[]
+  cert_path?: string
+  key_path?: string
+  post_deploy_command?: string
+  deployments?: CertificateDeployTargetPayload[]
+}
+
 export interface ACMEAccount {
   email: string
   directory_url?: string
@@ -101,10 +121,10 @@ export const certApi = {
     request<ManagedCertificate>(`/api/ingress/certs/${encodeURIComponent(id)}/issue`, { method: 'POST', body: '{}' }),
   renewCertificate: (id: string) =>
     request<ManagedCertificate>(`/api/ingress/certs/${encodeURIComponent(id)}/renew`, { method: 'POST', body: '{}' }),
-  deployCertificate: (id: string, hostIds: string[] = []) =>
+  deployCertificate: (id: string, payload: CertificateDeployPayload = { host_ids: [] }) =>
     request<ManagedCertificate>(`/api/ingress/certs/${encodeURIComponent(id)}/deploy`, {
       method: 'POST',
-      body: JSON.stringify({ host_ids: hostIds }),
+      body: JSON.stringify(payload),
     }),
   matchCertificate: async (domain: string) => {
     try {

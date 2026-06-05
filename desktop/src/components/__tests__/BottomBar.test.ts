@@ -3,7 +3,7 @@
  *
  * 职责：
  *   - 验证底部栏面板服务默认选中
- *   - 验证同步录制可开始、停止并产出可复制/导出的同步书签
+ *   - 验证日志录制可开始、停止并产出可复制/导出的同步书签
  *
  * 边界：
  *   - 不测试 Tauri 文件对话框真实行为
@@ -119,7 +119,7 @@ describe('BottomBar', () => {
 
 
 
-  it('同步录制开始时登记面板和服务，停止后显示复制导出入口', async () => {
+  it('日志录制开始时登记面板和服务，停止后显示复制导出入口', async () => {
     const { wrapper, panelStore, apiDep } = await mountBottomBarWithServices()
     const bookmarkStore = useBookmarkStore()
     const deploymentLogStore = useDeploymentLogStore()
@@ -154,12 +154,19 @@ describe('BottomBar', () => {
     expect(wrapper.find('.sync-export-btn').exists()).toBe(true)
   })
 
-  it('英文 locale 下渲染底部栏控制文案', async () => {
-    const { wrapper } = await mountBottomBarWithServices('en-US')
+  it('渲染统一后的日志录制文案', async () => {
+    const { wrapper: zhWrapper } = await mountBottomBarWithServices()
 
-    expect(wrapper.text()).toContain('Panel Services')
-    expect(wrapper.text()).toContain('Sync Recording')
-    expect(wrapper.text()).toContain('Restart')
-    expect(wrapper.text()).toContain('Stop')
+    expect(zhWrapper.text()).toContain('面板服务')
+    expect(zhWrapper.text()).toContain('日志录制')
+    expect(zhWrapper.text()).not.toContain('同步录制')
+
+    const { wrapper: enWrapper } = await mountBottomBarWithServices('en-US')
+
+    expect(enWrapper.text()).toContain('Panel Services')
+    expect(enWrapper.text()).toContain('Log Recording')
+    expect(enWrapper.text()).not.toContain('Sync Recording')
+    expect(enWrapper.text()).toContain('Restart')
+    expect(enWrapper.text()).toContain('Stop')
   })
 })

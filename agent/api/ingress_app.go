@@ -31,6 +31,10 @@ type ingressPipelineTransport struct {
 	runner *pipeline.RoutingRunner
 }
 
+type ingressCertificateTransport struct {
+	runner *pipeline.RoutingRunner
+}
+
 func (t ingressPipelineTransport) RunRemote(ctx context.Context, target nginx.Target, cmd string, workDir string, onLine func(string, string)) error {
 	if t.runner == nil {
 		return errors.New("ingress remote runner is required")
@@ -43,6 +47,20 @@ func (t ingressPipelineTransport) Transfer(ctx context.Context, target nginx.Tar
 		return errors.New("ingress remote runner is required")
 	}
 	return t.runner.Transfer(ctx, pipeline.Target{HostID: target.HostID, HostName: target.HostName}, source, targetPath, onLine)
+}
+
+func (t ingressCertificateTransport) RunRemote(ctx context.Context, host model.Host, cmd string, workDir string, onLine func(string, string)) error {
+	if t.runner == nil {
+		return errors.New("certificate remote runner is required")
+	}
+	return t.runner.RunRemote(ctx, pipeline.Target{HostID: host.ID, HostName: host.Name}, cmd, workDir, onLine)
+}
+
+func (t ingressCertificateTransport) Transfer(ctx context.Context, host model.Host, source string, targetPath string, onLine func(string, string)) error {
+	if t.runner == nil {
+		return errors.New("certificate remote runner is required")
+	}
+	return t.runner.Transfer(ctx, pipeline.Target{HostID: host.ID, HostName: host.Name}, source, targetPath, onLine)
 }
 
 func (a *App) initIngress(ctx context.Context) error {
@@ -67,6 +85,7 @@ func (a *App) initIngress(ctx context.Context) error {
 		Store:      a.ingressStore,
 		Registry:   a.ingressRegistry,
 		HostLookup: a.lookupIngressHosts,
+		Deployer:   ingress.NewRemoteCertificateDeployer(a.newCertificateRemoteTransport()),
 	})
 	a.ingressCertManager = ingress.NewCertManager(ingress.CertManagerConfig{
 		Store:       a.ingressStore,
@@ -96,6 +115,26 @@ func (a *App) newIngressRemoteTransport() nginx.RemoteTransport {
 		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
 	}
 	return ingressPipelineTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
+}
+
+func (a *App) newCertificateRemoteTransport() ingress.CertificateRemoteTransport {
+	sshExecutor := pipeline.NewSSHExecutor(func(hostID string) (model.Host, bool) {
+		hosts, err := a.remoteStore.ListHosts()
+		if err != nil {
+			return model.Host{}, false
+		}
+		for _, host := range hosts {
+			if host.ID == hostID {
+				return host, true
+			}
+		}
+		return model.Host{}, false
+	})
+	agentRunner := a.pipelineAgentRunner
+	if agentRunner == nil {
+		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+	}
+	return ingressCertificateTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
 }
 
 func (a *App) lookupIngressHosts(ids []string) ([]model.Host, error) {

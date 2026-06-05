@@ -174,6 +174,9 @@ func TestServiceApplyUsesReferencedActiveCertificate(t *testing.T) {
 	requireNoError(t, err)
 	assertBool(t, ok, true)
 	assertLen(t, got.Deployments, 1)
+	assertEqual(t, got.Deployments[0].SourceType, "ingress")
+	assertEqual(t, got.Deployments[0].SourceID, saved.ID)
+	assertEqual(t, got.Deployments[0].PostDeployCommand, "nginx -t && reload nginx")
 }
 
 func TestServiceApplyRejectsNonActiveCertificate(t *testing.T) {
@@ -402,6 +405,12 @@ func (p *orderedProxy) Apply(ctx context.Context, host model.Host, cfg RenderedC
 		state.CertPaths = []string{
 			"/etc/superdev/ingress/certs/" + cfg.Domain + "/fullchain.pem",
 			"/etc/superdev/ingress/certs/" + cfg.Domain + "/privkey.pem",
+		}
+		state.CertDeployment = &CertDeployment{
+			HostID:            host.ID,
+			CertPath:          state.CertPaths[0],
+			KeyPath:           state.CertPaths[1],
+			PostDeployCommand: "nginx -t && reload nginx",
 		}
 	}
 	return state, nil

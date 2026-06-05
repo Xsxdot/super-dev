@@ -2,7 +2,7 @@
  * PanelToolbar i18n 测试日志面板工具栏文案。
  *
  * 职责：
- *   - 验证英文 locale 下过滤、规则和书签操作文案来自 i18n
+ *   - 验证英文 locale 下过滤、规则和日志录制操作文案来自 i18n
  *
  * 边界：
  *   - 不测试过滤 store 的持久规则逻辑
@@ -32,6 +32,6 @@ describe('PanelToolbar i18n', () => {
     expect(wrapper.text()).toContain('Exclude')
     expect(wrapper.find('.chip-input').attributes('placeholder')).toBe('Filter keywords, press Enter to add')
     expect(wrapper.find('.rules-btn').attributes('title')).toBe('Manage filter rules')
-    expect(wrapper.find('.bookmark-btn.start').attributes('title')).toBe('Start bookmark recording')
+    expect(wrapper.find('.bookmark-btn.start').attributes('title')).toBe('Start log recording')
   })
 })

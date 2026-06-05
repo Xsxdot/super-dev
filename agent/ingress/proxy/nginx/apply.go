@@ -26,6 +26,8 @@ var _ ingress.ProxyProvider = (*Provider)(nil)
 
 const nginxReloadCommand = "if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx || nginx -s reload; else nginx -s reload; fi"
 
+const nginxPostDeployCommand = "nginx -t && " + nginxReloadCommand
+
 // Apply 将 nginx 配置和证书材料落地到单台 host。
 //
 // 参数：
@@ -67,6 +69,12 @@ func (p *Provider) Apply(ctx context.Context, host model.Host, cfg ingress.Rende
 			return ingress.HostState{}, err
 		}
 		state.CertPaths = []string{fullchainTarget, privkeyTarget}
+		state.CertDeployment = &ingress.CertDeployment{
+			HostID:            host.ID,
+			CertPath:          fullchainTarget,
+			KeyPath:           privkeyTarget,
+			PostDeployCommand: nginxPostDeployCommand,
+		}
 	}
 
 	if err := p.transport.RunRemote(ctx, target, "nginx -t", "", nil); err != nil {

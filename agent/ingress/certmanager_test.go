@@ -21,9 +21,9 @@ func TestCertManagerRenewsManagedCertificateAndRedeploys(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	reg := NewRegistry()
 	events := []string{}
+	deployer := &recordingCertDeployer{events: &events}
 	reg.RegisterDNS(&orderedDNS{name: "cloudflare-prod", events: &events})
 	reg.RegisterCert(&orderedCert{name: ProviderACME, events: &events})
-	reg.RegisterProxy(&orderedProxy{name: ProviderNginx, events: &events})
 	cert, err := store.UpsertCertificate(ManagedCertificate{
 		Domains:     []string{"api.example.com"},
 		Issuer:      CertificateIssuerACME,
@@ -35,7 +35,7 @@ func TestCertManagerRenewsManagedCertificateAndRedeploys(t *testing.T) {
 	})
 	requireNoError(t, err)
 	service := NewCertService(CertServiceConfig{
-		Store: store, Registry: reg,
+		Store: store, Registry: reg, Deployer: deployer,
 		HostLookup: func(ids []string) ([]model.Host, error) {
 			return []model.Host{{ID: "edge-a"}}, nil
 		},
@@ -50,7 +50,7 @@ func TestCertManagerRenewsManagedCertificateAndRedeploys(t *testing.T) {
 	requireNoError(t, err)
 
 	assertStringSliceContains(t, events, "cert.renew")
-	assertStringSliceContains(t, events, "proxy.deploy-cert:edge-a")
+	assertStringSliceContains(t, events, "cert.deploy:edge-a")
 	got, ok, err := store.GetCertificate(cert.ID)
 	requireNoError(t, err)
 	assertBool(t, ok, true)

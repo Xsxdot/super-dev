@@ -16,7 +16,7 @@ import { useI18n } from 'vue-i18n'
 import { useCertStore } from '@/stores/cert'
 import { useIngressStore } from '@/stores/ingress'
 import { useRemoteStore } from '@/stores/remote'
-import type { CertificateCreatePayload, CertificateIssuer, ManagedCertificate } from '@/api/cert'
+import type { CertificateCreatePayload, CertificateDeployPayload, CertificateIssuer, ManagedCertificate } from '@/api/cert'
 
 const ISSUE_POLL_INTERVAL_MS = 1000
 const ISSUE_POLL_ATTEMPTS = 90
@@ -50,6 +50,11 @@ const certDraft = reactive({
   key_pem: '',
 })
 const deployHostIDs = ref<string[]>([])
+const deployDraft = reactive({
+  cert_path: '',
+  key_path: '',
+  post_deploy_command: '',
+})
 
 const certificates = computed(() => certStore.certificates)
 const dnsProviders = computed(() => Array.isArray(ingressStore.dnsProviders) ? ingressStore.dnsProviders : [])
@@ -236,16 +241,32 @@ async function deleteCertificate(cert: ManagedCertificate) {
 function openDeploy(cert: ManagedCertificate) {
   selectedCert.value = cert
   deployHostIDs.value = []
+  const existing = cert.deployments?.[0]
+  deployDraft.cert_path = existing?.cert_path || defaultCertPath(cert)
+  deployDraft.key_path = existing?.key_path || defaultKeyPath(cert)
+  deployDraft.post_deploy_command = existing?.post_deploy_command || ''
   error.value = ''
   deployOpen.value = true
 }
 
 async function submitDeploy() {
   if (!selectedCert.value) return
+  if (deployHostIDs.value.length === 0) {
+    error.value = t('settings.certificates.selectHostRequired')
+    return
+  }
   saving.value = true
   error.value = ''
   try {
-    await certStore.deployCertificate(selectedCert.value.id, deployHostIDs.value)
+    const payload: CertificateDeployPayload = {
+      deployments: deployHostIDs.value.map(hostID => ({
+        host_id: hostID,
+        cert_path: deployDraft.cert_path.trim(),
+        key_path: deployDraft.key_path.trim(),
+        post_deploy_command: deployDraft.post_deploy_command.trim(),
+      })),
+    }
+    await certStore.deployCertificate(selectedCert.value.id, payload)
     deployOpen.value = false
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -258,9 +279,27 @@ function certExpiresAt(cert: ManagedCertificate) {
   return cert.material?.expires_at ?? '-'
 }
 
-function deploymentText(cert: ManagedCertificate) {
-  const hostIDs = cert.deployments?.map(deployment => deployment.host_id).filter(Boolean) ?? []
-  return hostIDs.length > 0 ? hostIDs.join(', ') : '-'
+function primaryDomain(cert: ManagedCertificate) {
+  return cert.domains[0] ?? cert.material?.domain ?? 'certificate'
+}
+
+function defaultCertPath(cert: ManagedCertificate) {
+  return `/etc/superdev/ingress/certs/${primaryDomain(cert)}/fullchain.pem`
+}
+
+function defaultKeyPath(cert: ManagedCertificate) {
+  return `/etc/superdev/ingress/certs/${primaryDomain(cert)}/privkey.pem`
+}
+
+function deploymentStatusText(status?: string) {
+  if (status === 'failed') return t('settings.certificates.deploymentFailed')
+  if (status === 'succeeded') return t('settings.certificates.deploymentSucceeded')
+  return ''
+}
+
+async function copyText(value: string) {
+  if (!value) return
+  await navigator.clipboard?.writeText(value)
 }
 
 function certStatusText(status: ManagedCertificate['status']) {
@@ -285,41 +324,49 @@ function startIssuePolling(certID: string) {
 
 <template>
   <section class="certificate-tab">
-    <header class="pane-header">
-      <h1>{{ t('settings.certificates.title') }}</h1>
-      <button type="button" class="primary-btn" data-test="cert-add" @click="openCreate">
+    <header class="settings-pane-header">
+      <div>
+        <h1 class="settings-pane-title">{{ t('settings.certificates.title') }}</h1>
+      </div>
+      <button type="button" class="settings-btn settings-btn-primary" data-test="cert-add" @click="openCreate">
         + {{ t('settings.certificates.add') }}
       </button>
     </header>
 
-    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
 
-    <section class="account-section">
-      <h2>{{ t('settings.certificates.acmeAccount') }}</h2>
-      <div class="account-grid">
-        <label>
-          <span>{{ t('settings.certificates.email') }}</span>
-          <input v-model="accountDraft.email" data-test="acme-email" />
+    <section class="settings-section account-section">
+      <h2 class="account-title">{{ t('settings.certificates.acmeAccount') }}</h2>
+      <div class="settings-form-grid account-grid">
+        <label class="settings-field">
+          <span class="settings-field-label">{{ t('settings.certificates.email') }}</span>
+          <input v-model="accountDraft.email" class="settings-input" data-test="acme-email" />
         </label>
-        <label>
-          <span>{{ t('settings.certificates.directory') }}</span>
-          <select v-model="accountDraft.directory_option" data-test="acme-directory">
+        <label class="settings-field">
+          <span class="settings-field-label">{{ t('settings.certificates.directory') }}</span>
+          <select v-model="accountDraft.directory_option" class="settings-select" data-test="acme-directory">
             <option :value="LETS_ENCRYPT_PRODUCTION">{{ t('settings.certificates.leProduction') }}</option>
             <option :value="LETS_ENCRYPT_STAGING">{{ t('settings.certificates.leStaging') }}</option>
             <option :value="CUSTOM_ACME_DIRECTORY">{{ t('settings.certificates.customDirectory') }}</option>
           </select>
         </label>
-        <label v-if="accountDraft.directory_option === CUSTOM_ACME_DIRECTORY">
-          <span>{{ t('settings.certificates.customDirectory') }}</span>
-          <input v-model="accountDraft.custom_directory_url" data-test="acme-custom-directory" />
+        <label v-if="accountDraft.directory_option === CUSTOM_ACME_DIRECTORY" class="settings-field">
+          <span class="settings-field-label">{{ t('settings.certificates.customDirectory') }}</span>
+          <input v-model="accountDraft.custom_directory_url" class="settings-input" data-test="acme-custom-directory" />
         </label>
-        <button type="button" class="primary-btn save-account" :disabled="saving" data-test="acme-save" @click="saveAccount">
+        <button
+          type="button"
+          class="settings-btn settings-btn-primary save-account"
+          :disabled="saving"
+          data-test="acme-save"
+          @click="saveAccount"
+        >
           {{ t('common.save') }}
         </button>
       </div>
       <p
         v-if="accountNotice"
-        class="success account-notice"
+        class="settings-alert settings-alert-success account-notice"
         role="status"
         aria-live="polite"
         data-test="acme-save-notice"
@@ -328,131 +375,175 @@ function startIssuePolling(certID: string) {
       </p>
     </section>
 
-    <div v-if="!hasDNSProviders" class="notice" data-test="cert-dns-notice">
+    <div v-if="!hasDNSProviders" class="settings-alert settings-alert-warning" data-test="cert-dns-notice">
       {{ t('settings.certificates.dnsProviderRequired') }}
     </div>
 
-    <table class="certificate-table">
-      <thead>
-        <tr>
-          <th>{{ t('settings.certificates.domains') }}</th>
-          <th>{{ t('settings.certificates.issuer') }}</th>
-          <th>{{ t('settings.certificates.status') }}</th>
-          <th>{{ t('settings.certificates.expires') }}</th>
-          <th>{{ t('settings.certificates.deployments') }}</th>
-          <th>{{ t('settings.certificates.actions') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="cert in certificates" :key="cert.id" data-test="cert-row">
-          <td>{{ cert.domains.join(', ') }}</td>
-          <td>{{ cert.issuer }}</td>
-          <td>
-            <span class="status-cell">
-              <span class="status-dot" :class="cert.status" />
-              {{ certStatusText(cert.status) }}
-            </span>
-          </td>
-          <td class="mono">{{ certExpiresAt(cert) }}</td>
-          <td>{{ deploymentText(cert) }}</td>
-          <td class="actions">
-            <button
-              v-if="cert.status === 'failed'"
-              type="button"
-              class="ghost"
-              :disabled="saving"
-              @click="issueCertificate(cert)"
-            >
-              {{ t('settings.certificates.retry') }}
-            </button>
-            <button
-              v-if="cert.status === 'active' || cert.status === 'expiring'"
-              type="button"
-              class="ghost"
-              :disabled="saving"
-              @click="renewCertificate(cert)"
-            >
-              {{ t('settings.certificates.renew') }}
-            </button>
-            <button
-              type="button"
-              class="ghost"
-              :disabled="cert.status !== 'active'"
-              :data-test="`cert-deploy-${cert.id}`"
-              @click="openDeploy(cert)"
-            >
-              {{ t('settings.certificates.deploy') }}
-            </button>
-            <button type="button" class="danger" @click="deleteCertificate(cert)">
-              {{ t('common.delete') }}
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="settings-surface settings-surface-scroll">
+      <table class="settings-table certificate-table">
+        <thead>
+          <tr>
+            <th>{{ t('settings.certificates.domains') }}</th>
+            <th>{{ t('settings.certificates.issuer') }}</th>
+            <th>{{ t('settings.certificates.status') }}</th>
+            <th>{{ t('settings.certificates.expires') }}</th>
+            <th>{{ t('settings.certificates.deployments') }}</th>
+            <th>{{ t('settings.certificates.actions') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="cert in certificates" :key="cert.id" data-test="cert-row">
+            <td>{{ cert.domains.join(', ') }}</td>
+            <td>{{ cert.issuer }}</td>
+            <td>
+              <span class="status-cell">
+                <span class="status-dot" :class="cert.status" />
+                {{ certStatusText(cert.status) }}
+              </span>
+            </td>
+            <td class="settings-mono">{{ certExpiresAt(cert) }}</td>
+            <td>
+              <div v-if="cert.deployments?.length" class="deployment-list">
+                <div v-for="deployment in cert.deployments" :key="deployment.host_id" class="deployment-item">
+                  <div class="deployment-host">
+                    <span>{{ deployment.host_id }}</span>
+                    <span v-if="deploymentStatusText(deployment.status)" class="deployment-status">
+                      {{ deploymentStatusText(deployment.status) }}
+                    </span>
+                  </div>
+                  <div class="deployment-path">
+                    <span class="settings-mono">{{ deployment.cert_path }}</span>
+                    <button
+                      type="button"
+                      class="settings-btn settings-btn-text copy-btn"
+                      :data-test="`cert-copy-cert-${deployment.host_id}`"
+                      @click="copyText(deployment.cert_path)"
+                    >
+                      {{ t('settings.certificates.copy') }}
+                    </button>
+                  </div>
+                  <div class="deployment-path">
+                    <span class="settings-mono">{{ deployment.key_path }}</span>
+                    <button
+                      type="button"
+                      class="settings-btn settings-btn-text copy-btn"
+                      :data-test="`cert-copy-key-${deployment.host_id}`"
+                      @click="copyText(deployment.key_path)"
+                    >
+                      {{ t('settings.certificates.copy') }}
+                    </button>
+                  </div>
+                  <div v-if="deployment.last_error" class="deployment-error">{{ deployment.last_error }}</div>
+                </div>
+              </div>
+              <span v-else>-</span>
+            </td>
+            <td class="actions">
+              <button
+                v-if="cert.status === 'failed'"
+                type="button"
+                class="settings-btn settings-btn-secondary"
+                :disabled="saving"
+                @click="issueCertificate(cert)"
+              >
+                {{ t('settings.certificates.retry') }}
+              </button>
+              <button
+                v-if="cert.status === 'active' || cert.status === 'expiring'"
+                type="button"
+                class="settings-btn settings-btn-secondary"
+                :disabled="saving"
+                @click="renewCertificate(cert)"
+              >
+                {{ t('settings.certificates.renew') }}
+              </button>
+              <button
+                type="button"
+                class="settings-btn settings-btn-secondary"
+                :disabled="cert.status !== 'active'"
+                :data-test="`cert-deploy-${cert.id}`"
+                @click="openDeploy(cert)"
+              >
+                {{ t('settings.certificates.deploy') }}
+              </button>
+              <button type="button" class="settings-btn settings-btn-danger" @click="deleteCertificate(cert)">
+                {{ t('common.delete') }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
-    <div v-if="formOpen" class="modal-backdrop" @click.self="formOpen = false">
-      <section class="modal">
-        <header class="modal-header">
-          <h2>{{ t('settings.certificates.add') }}</h2>
-          <button type="button" class="icon-btn" @click="formOpen = false">×</button>
+    <div v-if="formOpen" class="settings-modal-backdrop" @click.self="formOpen = false">
+      <section class="settings-modal">
+        <header class="settings-modal-header">
+          <h2 class="settings-modal-title">{{ t('settings.certificates.add') }}</h2>
+          <button type="button" class="settings-btn settings-btn-icon settings-btn-ghost" @click="formOpen = false">×</button>
         </header>
 
-        <label>
-          <span>{{ t('settings.certificates.issuer') }}</span>
-          <select v-model="certDraft.issuer">
-            <option value="acme">ACME</option>
-            <option value="manual">{{ t('settings.certificates.manualCert') }}</option>
-          </select>
-        </label>
-
-        <div class="domain-list">
-          <label v-for="(_, index) in certDraft.domains" :key="index">
-            <span>{{ t('settings.certificates.domains') }}</span>
-            <div class="domain-row">
-              <input v-model="certDraft.domains[index]" :data-test="`cert-domain-${index}`" placeholder="api.example.com" />
-              <button type="button" class="icon-btn" @click="removeDomain(index)">×</button>
-            </div>
-          </label>
-          <button type="button" class="ghost add-domain" @click="addDomain">
-            + {{ t('settings.certificates.addDomain') }}
-          </button>
-        </div>
-
-        <template v-if="certDraft.issuer === 'acme'">
-          <div v-if="!hasDNSProviders" class="notice" data-test="cert-dns-empty">
-            {{ t('settings.certificates.dnsProviderRequired') }}
-          </div>
-          <label v-else>
-            <span>{{ t('settings.certificates.dnsProvider') }}</span>
-            <select v-model="certDraft.dns_provider" data-test="cert-dns-provider">
-              <option v-for="provider in dnsProviders" :key="provider.id || provider.name" :value="provider.id">
-                {{ provider.name }}
-              </option>
+        <div class="settings-modal-body">
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.certificates.issuer') }}</span>
+            <select v-model="certDraft.issuer" class="settings-select">
+              <option value="acme">ACME</option>
+              <option value="manual">{{ t('settings.certificates.manualCert') }}</option>
             </select>
           </label>
-          <label class="inline-check">
-            <input v-model="certDraft.auto_renew" type="checkbox" />
-            {{ t('settings.certificates.autoRenew') }}
-          </label>
-        </template>
 
-        <template v-else>
-          <label>
-            <span>{{ t('settings.certificates.manualCert') }}</span>
-            <textarea v-model="certDraft.cert_pem" rows="5" />
-          </label>
-          <label>
-            <span>{{ t('settings.certificates.privateKey') }}</span>
-            <textarea v-model="certDraft.key_pem" rows="5" />
-          </label>
-        </template>
+          <div class="domain-list">
+            <label v-for="(_, index) in certDraft.domains" :key="index" class="settings-field">
+              <span class="settings-field-label">{{ t('settings.certificates.domains') }}</span>
+              <div class="domain-row">
+                <input
+                  v-model="certDraft.domains[index]"
+                  class="settings-input"
+                  :data-test="`cert-domain-${index}`"
+                  placeholder="api.example.com"
+                />
+                <button type="button" class="settings-btn settings-btn-icon settings-btn-ghost" @click="removeDomain(index)">×</button>
+              </div>
+            </label>
+            <button type="button" class="settings-btn settings-btn-secondary add-domain" @click="addDomain">
+              + {{ t('settings.certificates.addDomain') }}
+            </button>
+          </div>
 
-        <footer>
-          <button type="button" @click="formOpen = false">{{ t('common.cancel') }}</button>
+          <template v-if="certDraft.issuer === 'acme'">
+            <div v-if="!hasDNSProviders" class="settings-alert settings-alert-warning" data-test="cert-dns-empty">
+              {{ t('settings.certificates.dnsProviderRequired') }}
+            </div>
+            <label v-else class="settings-field">
+              <span class="settings-field-label">{{ t('settings.certificates.dnsProvider') }}</span>
+              <select v-model="certDraft.dns_provider" class="settings-select" data-test="cert-dns-provider">
+                <option v-for="provider in dnsProviders" :key="provider.id || provider.name" :value="provider.id">
+                  {{ provider.name }}
+                </option>
+              </select>
+            </label>
+            <label class="settings-field inline-check">
+              <input v-model="certDraft.auto_renew" type="checkbox" />
+              {{ t('settings.certificates.autoRenew') }}
+            </label>
+          </template>
+
+          <template v-else>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.certificates.manualCert') }}</span>
+              <textarea v-model="certDraft.cert_pem" class="settings-textarea" rows="5" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.certificates.privateKey') }}</span>
+              <textarea v-model="certDraft.key_pem" class="settings-textarea" rows="5" />
+            </label>
+          </template>
+        </div>
+
+        <footer class="settings-modal-footer">
+          <button type="button" class="settings-btn" @click="formOpen = false">{{ t('common.cancel') }}</button>
           <button
             type="button"
-            class="primary-btn"
+            class="settings-btn settings-btn-primary"
             :disabled="saving || (certDraft.issuer === 'acme' && !hasDNSProviders)"
             data-test="cert-submit"
             @click="submitCertificate"
@@ -463,28 +554,64 @@ function startIssuePolling(certID: string) {
       </section>
     </div>
 
-    <div v-if="deployOpen" class="modal-backdrop" @click.self="deployOpen = false">
-      <section class="modal">
-        <header class="modal-header">
-          <h2>{{ t('settings.certificates.deployHosts') }}</h2>
-          <button type="button" class="icon-btn" @click="deployOpen = false">×</button>
+    <div v-if="deployOpen" class="settings-modal-backdrop" @click.self="deployOpen = false">
+      <section class="settings-modal">
+        <header class="settings-modal-header">
+          <h2 class="settings-modal-title">{{ t('settings.certificates.deployHosts') }}</h2>
+          <button type="button" class="settings-btn settings-btn-icon settings-btn-ghost" @click="deployOpen = false">×</button>
         </header>
 
-        <div class="host-list">
-          <label v-for="host in hosts" :key="host.id" class="inline-check host-row">
+        <div class="settings-modal-body">
+          <div class="host-list">
+            <label v-for="host in hosts" :key="host.id" class="settings-field inline-check host-row">
+              <input
+                v-model="deployHostIDs"
+                type="checkbox"
+                :value="host.id"
+                :data-test="`cert-deploy-host-${host.id}`"
+              />
+              <span>{{ host.name || host.id }}</span>
+            </label>
+          </div>
+
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.certificates.certPath') }}</span>
             <input
-              v-model="deployHostIDs"
-              type="checkbox"
-              :value="host.id"
-              :data-test="`cert-deploy-host-${host.id}`"
+              v-model="deployDraft.cert_path"
+              class="settings-input settings-mono"
+              data-test="cert-deploy-cert-path"
             />
-            <span>{{ host.name || host.id }}</span>
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.certificates.keyPath') }}</span>
+            <input
+              v-model="deployDraft.key_path"
+              class="settings-input settings-mono"
+              data-test="cert-deploy-key-path"
+            />
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.certificates.postDeployCommand') }}</span>
+            <textarea
+              v-model="deployDraft.post_deploy_command"
+              class="settings-textarea settings-mono"
+              rows="3"
+              data-test="cert-deploy-command"
+            />
           </label>
         </div>
 
-        <footer>
-          <button type="button" @click="deployOpen = false">{{ t('common.cancel') }}</button>
-          <button type="button" class="primary-btn" :disabled="saving" data-test="cert-deploy-submit" @click="submitDeploy">
+        <footer class="settings-modal-footer">
+          <button type="button" class="settings-btn" @click="deployOpen = false">{{ t('common.cancel') }}</button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-primary"
+            :disabled="saving"
+            data-test="cert-deploy-submit"
+            @click="submitDeploy"
+          >
             {{ t('settings.certificates.deploy') }}
           </button>
         </footer>
@@ -497,64 +624,17 @@ function startIssuePolling(certID: string) {
 .certificate-tab {
   width: 100%;
 }
-.pane-header,
-.modal-header,
-footer,
-.account-grid,
-.domain-row,
-.status-cell {
-  display: flex;
-  align-items: center;
-}
-.pane-header,
-.modal-header {
-  justify-content: space-between;
-  gap: 12px;
-}
-.pane-header {
-  margin-bottom: 16px;
-}
-h1,
-h2 {
-  margin: 0;
-  font-size: 18px;
-}
-h2 {
+.account-title {
+  margin: 0 0 12px;
+  color: var(--text-primary);
   font-size: 14px;
-}
-.account-section {
-  padding-bottom: 14px;
-  margin-bottom: 14px;
-  border-bottom: 1px solid var(--border-secondary);
+  font-weight: 650;
 }
 .account-grid {
   align-items: flex-end;
-  gap: 10px;
-  margin-top: 10px;
-}
-.account-grid label {
-  flex: 1;
-  min-width: 0;
 }
 .save-account {
   min-width: 72px;
-}
-.certificate-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.certificate-table th,
-.certificate-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border-secondary);
-  text-align: left;
-  vertical-align: top;
-}
-.certificate-table th {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 400;
 }
 .actions {
   text-align: right;
@@ -564,7 +644,46 @@ h2 {
   margin-left: 6px;
 }
 .status-cell {
+  display: flex;
+  align-items: center;
   gap: 6px;
+}
+.deployment-list {
+  display: grid;
+  gap: 8px;
+  min-width: 240px;
+}
+.deployment-item {
+  display: grid;
+  gap: 3px;
+}
+.deployment-host,
+.deployment-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.deployment-host {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.deployment-status {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.deployment-path .settings-mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deployment-error {
+  color: var(--status-failed);
+}
+.copy-btn {
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 .status-dot {
   width: 7px;
@@ -587,112 +706,31 @@ h2 {
 .status-dot.failed {
   background: var(--status-failed);
 }
-.mono {
-  font-family: var(--font-mono, monospace);
-}
-.error {
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  color: var(--status-failed);
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  font-size: 11px;
-}
-.success {
-  padding: 6px 10px;
-  color: var(--status-running);
-  background: rgba(63, 185, 80, 0.1);
-  border: 1px solid rgba(63, 185, 80, 0.3);
-  font-size: 11px;
-}
 .account-notice {
   margin: 8px 0 0;
-}
-.notice {
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  color: #d29922;
-  background: rgba(210, 153, 34, 0.1);
-  border: 1px solid rgba(210, 153, 34, 0.3);
-  font-size: 11px;
-}
-button {
-  padding: 5px 10px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.primary-btn {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.danger {
-  color: var(--status-failed);
-}
-.ghost {
-  color: var(--text-secondary);
-}
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  padding: 0;
 }
 .add-domain {
   width: fit-content;
   margin-top: 8px;
 }
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-.modal {
-  width: min(520px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  padding: 16px 18px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-input,
-select,
-textarea {
-  padding: 6px 8px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  font-size: 12px;
-}
-textarea {
-  resize: vertical;
-  font-family: var(--font-mono, monospace);
+.settings-modal-body {
+  display: grid;
+  gap: 10px;
 }
 .domain-list {
-  margin-top: 4px;
+  display: grid;
+  gap: 10px;
 }
 .domain-row {
+  display: flex;
+  align-items: center;
   gap: 6px;
 }
 .domain-row input {
   flex: 1;
 }
 .inline-check {
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 6px;
@@ -701,7 +739,7 @@ textarea {
   width: auto;
 }
 .host-list {
-  margin-top: 10px;
+  display: grid;
 }
 .host-row {
   padding: 7px 0;
@@ -709,15 +747,6 @@ textarea {
 }
 .host-row:last-child {
   border-bottom: none;
-}
-footer {
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 @keyframes cert-spin {
   to {
