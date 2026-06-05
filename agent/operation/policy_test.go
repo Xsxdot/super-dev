@@ -50,18 +50,42 @@ func TestPlanRuntimeTreatsEmptyLocationAsLocalForSafety(t *testing.T) {
 	assert.Contains(t, plan.Reasons, "environment is not marked as dev")
 }
 
-func TestPlanRuntimeDeniesReadOnlyAndRemoteDeployment(t *testing.T) {
+func TestPlanRuntimeDeniesReadOnlyDeployment(t *testing.T) {
 	readOnlyProject := operationProject(true, model.LocationLocal, true)
 	readOnlyPlan, err := PlanRuntime(OperationRuntimeStop, readOnlyProject, readOnlyProject.Services[0], readOnlyProject.Services[0].Deployments[0])
 	require.NoError(t, err)
 	assert.True(t, readOnlyPlan.Denied)
+	assert.Equal(t, RiskCritical, readOnlyPlan.RiskLevel)
 	assert.Contains(t, readOnlyPlan.Reasons, "deployment is read-only")
+}
 
+func TestPlanRuntimeRequiresApprovalForRemoteManagedDeployment(t *testing.T) {
 	remoteProject := operationProject(true, model.LocationRemote, false)
 	remotePlan, err := PlanRuntime(OperationRuntimeStop, remoteProject, remoteProject.Services[0], remoteProject.Services[0].Deployments[0])
 	require.NoError(t, err)
-	assert.True(t, remotePlan.Denied)
-	assert.Contains(t, remotePlan.Reasons, "remote deployment control is not supported by MCP safe operations")
+	assert.False(t, remotePlan.Denied)
+	assert.True(t, remotePlan.RequiresApproval)
+	assert.Equal(t, RiskHigh, remotePlan.RiskLevel)
+	assert.Contains(t, remotePlan.Reasons, "remote deployment control requires approval")
+	assert.Contains(t, remotePlan.ExpectedEffects, "stop remote deployment api-dev")
+	assert.NotEmpty(t, remotePlan.Fingerprint)
+}
+
+func TestPlanRuntimeStartSelectedRequiresApprovalForRemoteManagedDeployment(t *testing.T) {
+	project := operationProject(true, model.LocationRemote, false)
+	targets := []RuntimeDeploymentTarget{{
+		Service:    project.Services[0],
+		Deployment: project.Services[0].Deployments[0],
+	}}
+
+	plan, err := PlanRuntimeStartSelected(project, "prod", targets)
+
+	require.NoError(t, err)
+	assert.False(t, plan.Denied)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, RiskHigh, plan.RiskLevel)
+	assert.Contains(t, plan.Reasons, "remote deployment control requires approval")
+	assert.Contains(t, plan.ExpectedEffects, "start remote deployment api-dev")
 }
 
 func TestPlanTemplateImportRequiresApprovalAndBindsDigest(t *testing.T) {

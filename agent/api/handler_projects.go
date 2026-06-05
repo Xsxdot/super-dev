@@ -373,25 +373,14 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 
 	mgr.SetRunID(uuid.NewString())
 
-	var started []model.Deployment
 	for _, target := range toStart {
 		dep := target.Deployment
-		if err := mgr.StartDeployment(dep); err != nil {
-			// 部分失败：先把已启动的 PID 持久化，避免遗漏孤儿进程
-			for _, d := range started {
-				a.pidStore.Set(d.ID, mgr.DeploymentPID(d.ID))
-			}
-			_ = a.pidStore.Flush()
+		if err := a.startDeploymentRuntime(r.Context(), projectID, dep); err != nil {
 			a.appendOperationExecutionFailure(r, plan, approval, "failed to start deployment "+dep.ID+": "+err.Error())
 			jsonError(w, http.StatusInternalServerError, "failed to start deployment "+dep.ID+": "+err.Error())
 			return
 		}
-		started = append(started, dep)
 	}
-	for _, dep := range started {
-		a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
-	}
-	_ = a.pidStore.Flush()
 
 	jsonOK(w, map[string]string{"status": "starting"})
 }
