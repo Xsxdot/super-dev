@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { usePanelStore } from '@/stores/panel'
@@ -25,9 +25,35 @@ const {
 } = useAddProjectFlow()
 
 const serviceQuery = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
+const selectedProjectId = ref<string | null>(null)
+const selectedProject = computed(() =>
+  agentStore.projects.find(project => project.id === selectedProjectId.value)
+  ?? agentStore.projects[0]
+  ?? null,
+)
+
+watch(
+  () => agentStore.projects.map(project => project.id),
+  (projectIds) => {
+    if (projectIds.length === 0) {
+      selectedProjectId.value = null
+      return
+    }
+    if (!selectedProjectId.value || !projectIds.includes(selectedProjectId.value)) {
+      selectedProjectId.value = projectIds[0]
+    }
+  },
+  { immediate: true },
+)
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
   workspace.openDeployment(payload.deploymentId, payload.title)
+}
+
+function selectProject(projectId: string) {
+  selectedProjectId.value = projectId
+  serviceQuery.value = ''
 }
 
 function openProjectSearch(projectId: string) {
@@ -50,6 +76,21 @@ function openDeploymentIdSet(): Set<string> {
   if (!active || (active.type !== 'project' && active.type !== 'deployment')) return new Set()
   return new Set(panelStore.allLeaves.map(l => l.serviceId).filter(Boolean) as string[])
 }
+
+function onGlobalKeydown(event: KeyboardEvent) {
+  if (!(event.metaKey || event.ctrlKey)) return
+  if (event.key.toLowerCase() !== 'k') return
+  event.preventDefault()
+  searchInput.value?.focus()
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onGlobalKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onGlobalKeydown)
+})
 </script>
 
 <template>
@@ -64,15 +105,23 @@ function openDeploymentIdSet(): Set<string> {
       >
         + {{ t('shell.sidebar.addProject') }}
       </button>
-      <template v-for="project in agentStore.projects" :key="project.id">
-        <ProjectHeader :project="project" @add-project="addProject" />
+      <template v-if="selectedProject">
+        <ProjectHeader
+          :project="selectedProject"
+          :projects="agentStore.projects"
+          @select-project="selectProject"
+          @add-project="addProject"
+        />
+        <div class="sidebar-project-shell" data-test="sidebar-project-shell">
         <div class="sidebar-search">
           <span class="search-icon">⌕</span>
           <input
+            ref="searchInput"
             v-model="serviceQuery"
             data-test="sidebar-service-search"
             :placeholder="t('shell.sidebar.searchServices')"
           />
+          <span class="search-shortcut" data-test="sidebar-search-shortcut">⌘K</span>
         </div>
         <div class="drop-hint">
           <span class="drop-icon">▣</span>
@@ -80,16 +129,17 @@ function openDeploymentIdSet(): Set<string> {
         </div>
         <!-- 按环境分组展示有 deployment 的 service 行 -->
         <EnvGroup
-          v-for="env in project.environments ?? []"
+          v-for="env in selectedProject.environments ?? []"
           :key="env.id || env.name"
           :env-name="env.name"
           :is-dev="env.is_dev"
-          :project-id="project.id"
-          :services="servicesForEnv(project.services, env.name)"
+          :project-id="selectedProject.id"
+          :services="servicesForEnv(selectedProject.services, env.name)"
           :selected-service-ids="openDeploymentIdSet()"
           @open-deployment="openDeployment"
-          @search="openProjectSearch(project.id)"
+          @search="openProjectSearch(selectedProject.id)"
         />
+        </div>
       </template>
     </div>
     <button data-test="sidebar-settings" type="button" class="settings-entry" @click="router.push('/settings')">
@@ -107,10 +157,12 @@ function openDeploymentIdSet(): Set<string> {
 
 <style scoped>
 .sidebar {
-  width: 230px;
-  min-width: 210px;
-  max-width: 250px;
-  background: var(--bg-primary);
+  width: 280px;
+  min-width: 280px;
+  max-width: 280px;
+  background:
+    linear-gradient(180deg, rgba(12, 25, 34, 0.98), rgba(8, 13, 20, 0.98)),
+    var(--bg-primary);
   border-right: 1px solid var(--border-secondary);
   display: flex;
   flex-direction: column;
@@ -137,16 +189,21 @@ function openDeploymentIdSet(): Set<string> {
   border-color: var(--border);
   color: var(--text-primary);
 }
+
+.sidebar-project-shell {
+  padding: 0 10px 12px;
+}
+
 .sidebar-search {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  margin: 0 10px 10px;
-  padding: 0 8px;
-  border: 1px solid var(--border-secondary);
+  height: 36px;
+  margin: 0 2px 12px;
+  padding: 0 9px;
+  border: 1px solid rgba(91, 106, 128, 0.42);
   border-radius: 6px;
-  background: var(--bg-elevated);
+  background: rgba(13, 20, 29, 0.78);
 }
 .search-icon {
   color: var(--text-tertiary);
@@ -165,17 +222,28 @@ function openDeploymentIdSet(): Set<string> {
 .sidebar-search input::placeholder {
   color: var(--text-tertiary);
 }
+
+.search-shortcut {
+  padding: 0 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .drop-hint {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  margin: 0 12px 10px;
-  padding: 0 2px;
-  border: 0;
-  border-radius: 0;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  margin: 0 2px 12px;
+  padding: 0 10px;
+  border: 1px dashed rgba(88, 166, 255, 0.34);
+  border-radius: 7px;
+  background: rgba(88, 166, 255, 0.055);
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 .drop-icon {
   color: #58a6ff;
@@ -184,15 +252,15 @@ function openDeploymentIdSet(): Set<string> {
 }
 .settings-entry {
   width: 100%;
-  padding: 8px 12px;
+  padding: 12px 18px;
   border-top: 1px solid var(--border-secondary);
   border-right: 0;
   border-bottom: 0;
   border-left: 0;
   background: transparent;
   text-align: left;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 13px;
   cursor: pointer;
   transition: color 0.12s;
 }

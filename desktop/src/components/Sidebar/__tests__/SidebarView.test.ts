@@ -56,6 +56,24 @@ function createdProject(): Project {
   }
 }
 
+function projectWithService(id: string, name: string, serviceName: string): Project {
+  return {
+    id,
+    name,
+    root_path: `/tmp/${id}`,
+    services: [{
+      id: `svc-${serviceName}`,
+      project_id: id,
+      name: serviceName,
+      status: 'running',
+      required: false,
+      order: 1,
+      deployments: [{ id: `dep-${serviceName}`, env_name: 'dev', location: 'local', status: 'running' }],
+    }],
+    environments: [{ id: `env-${id}`, name: 'dev', is_dev: true, order: 1 }],
+  }
+}
+
 describe('SidebarView', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -107,6 +125,65 @@ describe('SidebarView', () => {
     expect(wrapper.text()).not.toContain('Pipelines')
     expect(wrapper.text()).not.toContain('Ingress')
     expect(wrapper.text()).not.toContain('Evidence')
+  })
+
+  it('侧边栏以项目选择器展示当前项目，切换后只显示该项目服务', async () => {
+    const agent = useAgentStore()
+    agent.projects = [
+      projectWithService('proj-1', 'SuperDev Sample', 'sample-api'),
+      projectWithService('proj-2', 'TK', 'server'),
+    ]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="project-selector"]').text()).toContain('SuperDev Sample')
+    expect(wrapper.text()).toContain('sample-api')
+    expect(wrapper.text()).not.toContain('server')
+
+    await wrapper.find('[data-test="project-selector"]').trigger('click')
+    await wrapper.find('[data-test="project-option-proj-2"]').trigger('click')
+
+    expect(wrapper.find('[data-test="project-selector"]').text()).toContain('TK')
+    expect(wrapper.text()).toContain('server')
+    expect(wrapper.text()).not.toContain('sample-api')
+  })
+
+  it('⌘K 聚焦服务搜索框', async () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      attachTo: document.body,
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="sidebar-search-shortcut"]').text()).toBe('⌘K')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(document.activeElement).toBe(wrapper.find('[data-test="sidebar-service-search"]').element)
+    wrapper.unmount()
+  })
+
+  it('项目选择菜单点击外部后关闭', async () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      attachTo: document.body,
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('[data-test="project-selector"]').trigger('click')
+    expect(wrapper.find('[data-test="project-menu"]').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="project-menu"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('搜索服务时只保留匹配的 service 行', async () => {
@@ -161,6 +238,7 @@ describe('SidebarView', () => {
     const wrapper = mount(SidebarView, {
       global: { plugins: [installTestI18n()] },
     })
+    await wrapper.find('[data-test="project-selector"]').trigger('click')
     await wrapper.find('[data-test="project-overview"]').trigger('click')
 
     const active = workspace.activeTab

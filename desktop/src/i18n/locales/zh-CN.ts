@@ -442,6 +442,8 @@ export default {
       configMissingHint: '请确认目录中有 .superdev/config.yaml',
       searchServices: '搜索服务',
       dragServiceToSplit: '拖拽服务到面板分栏',
+      switchProject: '切换项目',
+      currentProject: '当前',
     },
     env: {
       startAll: '启动全部',

@@ -442,6 +442,8 @@ export default {
       configMissingHint: 'Make sure the directory contains .superdev/config.yaml',
       searchServices: 'Search services',
       dragServiceToSplit: 'Drag service to split panel',
+      switchProject: 'Switch project',
+      currentProject: 'Current',
     },
     env: {
       startAll: 'Start all',

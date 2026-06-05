@@ -201,4 +201,25 @@ describe('EnvGroup', () => {
 
     expect(wrapper.find('[data-test="env-service-row"]').classes()).toContain('selected')
   })
+
+  it('环境标题显示服务数量，服务行使用 deployment card 结构', () => {
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'dev',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [
+          makeService('svc-1', 'web', 'dev', { status: 'running' }),
+          makeService('svc-2', 'worker', 'dev', { status: 'running' }),
+        ],
+        selectedServiceIds: new Set<string>(['dep-svc-1']),
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="env-service-count"]').text()).toBe('2')
+    expect(wrapper.findAll('.deployment-card')).toHaveLength(2)
+    expect(wrapper.find('.deployment-card').classes()).toContain('selected')
+    expect(wrapper.find('[data-test="service-action-rail"]').exists()).toBe(true)
+  })
 })
