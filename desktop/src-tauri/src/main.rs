@@ -3,7 +3,9 @@
 mod agent;
 mod mcp_install;
 use agent::AgentProcess;
-use mcp_install::{detect_coding_agents, install_mcp, mcp_install_hint};
+use mcp_install::{
+    detect_coding_agents, install_mcp, mcp_docs, mcp_install_hint, mcp_status, uninstall_mcp,
+};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -283,7 +285,10 @@ fn main() {
             show_main_window,
             detect_coding_agents,
             install_mcp,
-            mcp_install_hint
+            mcp_install_hint,
+            mcp_status,
+            uninstall_mcp,
+            mcp_docs
         ])
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .setup(|app| {

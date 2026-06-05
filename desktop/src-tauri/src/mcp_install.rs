@@ -72,6 +72,63 @@ pub struct InstallHint {
     pub skill_target_path: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct McpStatus {
+    pub agent: String,
+    pub agent_installed: bool,
+    pub detection_path: Option<String>,
+    pub config_path: String,
+    pub config_exists: bool,
+    pub mcp_configured: bool,
+    pub mcp_command: Option<String>,
+    pub agent_url: Option<String>,
+    pub config_error: Option<String>,
+    pub skill_path: String,
+    pub skill_installed: bool,
+    pub skill_matches_bundled: Option<bool>,
+    pub skill_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UninstallOutcome {
+    pub agent: String,
+    pub config_path: String,
+    pub removed_config: bool,
+    pub config_backup_path: Option<String>,
+    pub skill_path: String,
+    pub removed_skill: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct McpCapabilityTool {
+    pub name: String,
+    pub purpose: String,
+    pub access: String,
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct McpCapabilitySection {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub tools: Vec<McpCapabilityTool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct McpDocument {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct McpDocs {
+    pub summary_sections: Vec<McpCapabilitySection>,
+    pub documents: Vec<McpDocument>,
+}
+
 impl SkillInstallOutcome {
     fn failed(target_path: &Path, error: String) -> Self {
         Self {
@@ -378,6 +435,175 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
     Ok(MergeResult { content, changed })
 }
 
+fn read_config_status(
+    kind: AgentKind,
+    path: &Path,
+) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+    let existing = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (false, false, None, None, None);
+        }
+        Err(err) => {
+            return (
+                path.exists(),
+                false,
+                None,
+                None,
+                Some(format!("读取配置文件失败: {err}")),
+            );
+        }
+    };
+    match kind {
+        AgentKind::ClaudeCode | AgentKind::Cursor => read_json_config_status(&existing),
+        AgentKind::Codex => read_codex_config_status(&existing),
+    }
+}
+
+fn read_json_config_status(
+    content: &str,
+) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+    let root = match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                true,
+                false,
+                None,
+                None,
+                Some(format!("配置文件格式异常(JSON): {err}")),
+            );
+        }
+    };
+    let Some(server) = root
+        .get("mcpServers")
+        .and_then(|servers| servers.get("superdev"))
+        .and_then(|server| server.as_object())
+    else {
+        return (true, false, None, None, None);
+    };
+    let command = server
+        .get("command")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let agent_url = server
+        .get("env")
+        .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    (true, true, command, agent_url, None)
+}
+
+fn read_codex_config_status(
+    content: &str,
+) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+    let root = match toml::from_str::<toml::Value>(content) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                true,
+                false,
+                None,
+                None,
+                Some(format!("配置文件格式异常(TOML): {err}")),
+            );
+        }
+    };
+    let Some(server) = root
+        .get("mcp_servers")
+        .and_then(|servers| servers.get("superdev"))
+        .and_then(|server| server.as_table())
+    else {
+        return (true, false, None, None, None);
+    };
+    let command = server
+        .get("command")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let agent_url = server
+        .get("env")
+        .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    (true, true, command, agent_url, None)
+}
+
+fn remove_json_superdev_config(existing: Option<&str>) -> Result<MergeResult, String> {
+    let mut root = match existing {
+        Some(content) if !content.trim().is_empty() => {
+            serde_json::from_str::<serde_json::Value>(content)
+                .map_err(|err| format!("配置文件格式异常(JSON): {err}"))?
+        }
+        _ => json!({}),
+    };
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| "配置文件格式异常(JSON): 根节点必须是对象".to_string())?;
+    let changed = match obj.get_mut("mcpServers") {
+        Some(servers) => {
+            let servers = servers
+                .as_object_mut()
+                .ok_or_else(|| "配置文件格式异常(JSON): mcpServers 必须是对象".to_string())?;
+            servers.remove("superdev").is_some()
+        }
+        None => false,
+    };
+    let content = if changed {
+        serde_json::to_string_pretty(&root).map_err(|err| format!("序列化配置失败(JSON): {err}"))?
+            + "\n"
+    } else {
+        existing.unwrap_or("").trim_end().to_string() + "\n"
+    };
+    Ok(MergeResult { content, changed })
+}
+
+fn remove_codex_superdev_config(existing: Option<&str>) -> Result<MergeResult, String> {
+    let mut root = match existing {
+        Some(content) if !content.trim().is_empty() => toml::from_str::<toml::Value>(content)
+            .map_err(|err| format!("配置文件格式异常(TOML): {err}"))?,
+        _ => toml::Value::Table(toml::value::Table::new()),
+    };
+    let root_table = root
+        .as_table_mut()
+        .ok_or_else(|| "配置文件格式异常(TOML): 根节点必须是 table".to_string())?;
+    let changed = match root_table.get_mut("mcp_servers") {
+        Some(servers) => {
+            let servers = servers
+                .as_table_mut()
+                .ok_or_else(|| "配置文件格式异常(TOML): mcp_servers 必须是 table".to_string())?;
+            servers.remove("superdev").is_some()
+        }
+        None => false,
+    };
+    let content = if changed {
+        toml::to_string_pretty(&root).map_err(|err| format!("序列化配置失败(TOML): {err}"))?
+    } else {
+        existing.unwrap_or("").trim_end().to_string() + "\n"
+    };
+    Ok(MergeResult { content, changed })
+}
+
+fn uninstall_from_path(
+    path: &Path,
+    remove: fn(Option<&str>) -> Result<MergeResult, String>,
+) -> Result<(bool, Option<String>), String> {
+    let existing = match fs::read_to_string(path) {
+        Ok(content) => Some(content),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok((false, None)),
+        Err(err) => return Err(format!("读取配置文件失败: {err}")),
+    };
+    let removed = remove(existing.as_deref())?;
+    if !removed.changed {
+        return Ok((false, None));
+    }
+    let backup = backup_path(path);
+    fs::copy(path, &backup).map_err(|err| format!("备份配置文件失败: {err}"))?;
+    let tmp = path.with_extension("superdev-tmp");
+    fs::write(&tmp, removed.content).map_err(|err| format!("写入临时配置失败: {err}"))?;
+    fs::rename(&tmp, path).map_err(|err| format!("替换配置文件失败: {err}"))?;
+    Ok((true, Some(backup.to_string_lossy().to_string())))
+}
+
 fn install_json_kind_to_path(
     path: &Path,
     entry: &McpEntry,
@@ -490,6 +716,216 @@ fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome
         backup_path,
         error: None,
     })
+}
+
+fn skill_status_for_target(
+    source: Option<&Path>,
+    source_error: Option<String>,
+    target: &Path,
+) -> (bool, Option<bool>, Option<String>) {
+    if !target.exists() {
+        return (false, Some(false), source_error);
+    }
+    let Some(source) = source else {
+        return (true, None, source_error);
+    };
+    let source_files = match collect_relative_files(source) {
+        Ok(files) => files,
+        Err(err) => {
+            return (
+                true,
+                None,
+                Some(format!("读取 bundled skill 源目录失败: {err}")),
+            );
+        }
+    };
+    match directories_equal(source, target, &source_files) {
+        Ok(equal) => (true, Some(equal), None),
+        Err(err) => (true, None, Some(err)),
+    }
+}
+
+fn remove_skill_dir(target: &Path) -> Result<bool, String> {
+    if !target.exists() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(target).map_err(|err| format!("删除 skill 目录失败: {err}"))?;
+    Ok(true)
+}
+
+fn capability_tool(name: &str, purpose: &str, access: &str, reference: &str) -> McpCapabilityTool {
+    McpCapabilityTool {
+        name: name.to_string(),
+        purpose: purpose.to_string(),
+        access: access.to_string(),
+        reference: reference.to_string(),
+    }
+}
+
+fn default_capability_sections() -> Vec<McpCapabilitySection> {
+    vec![
+        McpCapabilitySection {
+            id: "runtime".to_string(),
+            title: "运行态与全局视野".to_string(),
+            description: "查看本地项目、服务、deployment 和整体运行状态。".to_string(),
+            tools: vec![
+                capability_tool(
+                    "list_projects",
+                    "列出本地 agent 已登记项目",
+                    "读",
+                    "SKILL.md",
+                ),
+                capability_tool("get_project", "按 ID 或名称读取项目详情", "读", "SKILL.md"),
+                capability_tool(
+                    "get_runtime_snapshot",
+                    "获取 SuperDev 全局运行态快照",
+                    "读",
+                    "SKILL.md",
+                ),
+                capability_tool(
+                    "list_services",
+                    "读取项目服务与 deployment 状态",
+                    "读",
+                    "references/debugging-workflow.md",
+                ),
+            ],
+        },
+        McpCapabilitySection {
+            id: "logs".to_string(),
+            title: "日志与诊断".to_string(),
+            description: "读取日志、搜索错误、采集诊断证据和 trace 线索。".to_string(),
+            tools: vec![
+                capability_tool(
+                    "tail_logs",
+                    "查看近期日志或持续跟随某个 deployment",
+                    "读",
+                    "references/log-tools.md",
+                ),
+                capability_tool(
+                    "search_logs",
+                    "按关键词跨项目或 deployment 搜索历史日志",
+                    "读",
+                    "references/log-tools.md",
+                ),
+                capability_tool(
+                    "get_log_context",
+                    "围绕某条日志 ID 获取前后上下文",
+                    "读",
+                    "references/log-tools.md",
+                ),
+                capability_tool(
+                    "diagnose_service",
+                    "采集单个 deployment 的状态和近期日志证据",
+                    "读",
+                    "references/debugging-workflow.md",
+                ),
+                capability_tool(
+                    "analyze_trace_logs",
+                    "采集 trace/request 链路证据",
+                    "读",
+                    "references/debugging-workflow.md",
+                ),
+                capability_tool(
+                    "summarize_error_window",
+                    "聚合某时间窗错误信号",
+                    "读",
+                    "references/debugging-workflow.md",
+                ),
+            ],
+        },
+        McpCapabilitySection {
+            id: "safety".to_string(),
+            title: "配置变更与安全操作".to_string(),
+            description: "配置写入走 preview/apply，服务启停重启走审批 token。".to_string(),
+            tools: vec![
+                capability_tool(
+                    "preview_config_change",
+                    "预览项目、服务、pipeline 配置变更",
+                    "读",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "apply_config_change",
+                    "应用已确认的配置变更",
+                    "写",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "preview_operation",
+                    "为启动、停止、重启等操作生成安全预检",
+                    "读",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "get_operation_approval",
+                    "读取审批并在批准后返回 one-time token",
+                    "读",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "start_service",
+                    "启动 deployment",
+                    "写，需审批纪律",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "stop_service",
+                    "停止 deployment",
+                    "写，需审批纪律",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
+                    "restart_service",
+                    "重启 deployment",
+                    "写，需审批纪律",
+                    "references/safe-operations.md",
+                ),
+            ],
+        },
+        McpCapabilitySection {
+            id: "pipeline".to_string(),
+            title: "Pipeline".to_string(),
+            description: "管理 pipeline 模板、部署/回滚执行、运行日志和产物历史。".to_string(),
+            tools: vec![
+                capability_tool(
+                    "preview_pipeline_template",
+                    "校验 pipeline 模板 YAML",
+                    "读",
+                    "references/pipeline.md",
+                ),
+                capability_tool(
+                    "import_pipeline_template",
+                    "导入 pipeline 模板到本地模板库",
+                    "写",
+                    "references/pipeline.md",
+                ),
+                capability_tool(
+                    "deploy_project_pipeline",
+                    "执行项目级 pipeline deploy 或 rollback",
+                    "写",
+                    "references/pipeline.md",
+                ),
+                capability_tool(
+                    "list_pipeline_runs",
+                    "列出 pipeline 运行历史",
+                    "读",
+                    "references/pipeline.md",
+                ),
+                capability_tool(
+                    "read_pipeline_run_logs",
+                    "读取 pipeline run 日志",
+                    "读",
+                    "references/pipeline.md",
+                ),
+                capability_tool(
+                    "list_pipeline_artifacts",
+                    "查看 pipeline 产物历史",
+                    "读",
+                    "references/pipeline.md",
+                ),
+            ],
+        },
+    ]
 }
 
 fn collect_relative_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
@@ -652,6 +1088,200 @@ pub fn resolve_skill_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
     Err("找不到 SuperDev skill 资源目录，请检查桌面端打包配置".to_string())
+}
+
+/// mcp_status_for_paths 读取每个编程智能体的 SuperDev MCP/skill 安装状态。
+///
+/// 参数：
+///   - home: 用于定位各 Agent 配置和 skill 目录的用户 HOME
+///   - path_value: 用于检测 CLI 是否安装的 PATH 值
+///   - app_dirs: 用于检测桌面应用安装状态的目录列表
+///   - skill_source: bundled superdev skill 源目录
+///   - skill_source_error: skill 源目录不可用时的错误说明
+///
+/// 返回：
+///   - Claude Code、Codex、Cursor 三类 Agent 的 MCP 状态
+///
+/// 注意：
+///   - 该函数只读配置文件和 skill 文件，不写入任何内容
+pub fn mcp_status_for_paths(
+    home: &Path,
+    path_value: Option<&OsStr>,
+    app_dirs: &[PathBuf],
+    skill_source: Option<&Path>,
+    skill_source_error: Option<String>,
+) -> Vec<McpStatus> {
+    let command_dirs = command_search_dirs(home, path_value);
+    let detected = detect_coding_agents_for_search_dirs(&command_dirs, app_dirs);
+    [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor]
+        .into_iter()
+        .map(|kind| {
+            let agent = kind.label().to_string();
+            let availability = detected
+                .iter()
+                .find(|status| status.agent == agent)
+                .expect("known agent availability");
+            let config_path = kind.config_path(home);
+            let skill_path = kind.skill_dir(home);
+            let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
+                read_config_status(kind, &config_path);
+            let (skill_installed, skill_matches_bundled, skill_error) =
+                skill_status_for_target(skill_source, skill_source_error.clone(), &skill_path);
+            McpStatus {
+                agent,
+                agent_installed: availability.installed,
+                detection_path: availability.detection_path.clone(),
+                config_path: config_path.to_string_lossy().to_string(),
+                config_exists,
+                mcp_configured,
+                mcp_command,
+                agent_url,
+                config_error,
+                skill_path: skill_path.to_string_lossy().to_string(),
+                skill_installed,
+                skill_matches_bundled,
+                skill_error,
+            }
+        })
+        .collect()
+}
+
+/// uninstall_mcp_for_paths 移除指定 Agent 的 SuperDev MCP 配置和 superdev skill。
+///
+/// 参数：
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///   - home: 用于定位配置文件和 skill 目录的用户 HOME
+///
+/// 返回：
+///   - 配置项和 skill 目录是否被删除，以及配置备份路径
+///
+/// 注意：
+///   - 只删除 superdev 这一项 MCP server，不删除其他 MCP server
+///   - 配置文件变更前会先备份原文件
+pub fn uninstall_mcp_for_paths(agent: &str, home: &Path) -> Result<UninstallOutcome, String> {
+    let kind = AgentKind::parse(agent)?;
+    let config_path = kind.config_path(home);
+    let (removed_config, config_backup_path) = match kind {
+        AgentKind::ClaudeCode | AgentKind::Cursor => {
+            uninstall_from_path(&config_path, remove_json_superdev_config)?
+        }
+        AgentKind::Codex => uninstall_from_path(&config_path, remove_codex_superdev_config)?,
+    };
+    let skill_path = kind.skill_dir(home);
+    let removed_skill = remove_skill_dir(&skill_path)?;
+    Ok(UninstallOutcome {
+        agent: kind.label().to_string(),
+        config_path: config_path.to_string_lossy().to_string(),
+        removed_config,
+        config_backup_path,
+        skill_path: skill_path.to_string_lossy().to_string(),
+        removed_skill,
+    })
+}
+
+/// mcp_docs_for_skill_source 读取 bundled superdev skill 文档和 MCP 功能摘要。
+///
+/// 参数：
+///   - skill_source: bundled superdev skill 源目录
+///
+/// 返回：
+///   - 结构化 MCP 功能摘要和可查看的 skill/reference 文档
+///
+/// 注意：
+///   - 文档内容来自打包资源目录，前端只负责展示
+pub fn mcp_docs_for_skill_source(skill_source: &Path) -> Result<McpDocs, String> {
+    let mut documents = Vec::new();
+    let main = skill_source.join("SKILL.md");
+    documents.push(McpDocument {
+        id: "skill".to_string(),
+        title: "SKILL.md".to_string(),
+        path: main.to_string_lossy().to_string(),
+        content: fs::read_to_string(&main)
+            .map_err(|err| format!("读取 skill 主文档失败: {err}"))?,
+    });
+    for file in [
+        "debugging-workflow.md",
+        "log-tools.md",
+        "safe-operations.md",
+        "pipeline.md",
+    ] {
+        let path = skill_source.join("references").join(file);
+        documents.push(McpDocument {
+            id: format!("references/{file}"),
+            title: file.to_string(),
+            path: path.to_string_lossy().to_string(),
+            content: fs::read_to_string(&path)
+                .map_err(|err| format!("读取 skill reference {file} 失败: {err}"))?,
+        });
+    }
+    Ok(McpDocs {
+        summary_sections: default_capability_sections(),
+        documents,
+    })
+}
+
+#[tauri::command]
+/// mcp_status 为设置页返回所有支持 Agent 的 MCP/skill 状态。
+///
+/// 参数：
+///   - app: Tauri AppHandle，用于定位打包资源目录
+///
+/// 返回：
+///   - 每个 Agent 的配置文件、MCP server 和 skill 安装状态
+///
+/// 注意：
+///   - 该 command 只读本地配置和打包资源，不修改文件
+pub fn mcp_status(app: AppHandle) -> Result<Vec<McpStatus>, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let path_value = std::env::var_os("PATH");
+    let skill_source = resolve_skill_source_dir(&app);
+    let (skill_source_path, skill_source_error) = match &skill_source {
+        Ok(path) => (Some(path.as_path()), None),
+        Err(err) => (None, Some(err.clone())),
+    };
+    Ok(mcp_status_for_paths(
+        &home,
+        path_value.as_deref(),
+        &coding_agent_app_dirs(&home),
+        skill_source_path,
+        skill_source_error,
+    ))
+}
+
+#[tauri::command]
+/// uninstall_mcp 从指定 Agent 移除 SuperDev MCP 配置和 skill。
+///
+/// 参数：
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///
+/// 返回：
+///   - 配置项和 skill 目录的删除结果
+///
+/// 注意：
+///   - 只删除 superdev 这一项，其他 MCP server 保持不变
+pub fn uninstall_mcp(agent: String) -> Result<UninstallOutcome, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    uninstall_mcp_for_paths(&agent, &home)
+}
+
+#[tauri::command]
+/// mcp_docs 返回设置页展示用的 MCP 能力摘要和 skill 文档内容。
+///
+/// 参数：
+///   - app: Tauri AppHandle，用于定位 bundled superdev skill
+///
+/// 返回：
+///   - 结构化工具说明和 skill/reference 文档列表
+///
+/// 注意：
+///   - 文档读取失败时返回错误给前端展示
+pub fn mcp_docs(app: AppHandle) -> Result<McpDocs, String> {
+    let skill_source = resolve_skill_source_dir(&app)?;
+    mcp_docs_for_skill_source(&skill_source)
 }
 
 #[tauri::command]
@@ -883,6 +1513,124 @@ command = "gh"
             .as_deref()
             .unwrap_or("")
             .contains("读取 skill 源目录失败"));
+    }
+
+    #[test]
+    fn uninstall_json_removes_only_superdev_server() {
+        let existing = r#"{"mcpServers":{"github":{"command":"gh"},"superdev":{"command":"/bin/superdev-mcp","env":{"SUPERDEV_AGENT_URL":"http://127.0.0.1:57017"}}},"theme":"dark"}"#;
+
+        let removed = remove_json_superdev_config(Some(existing)).expect("remove json");
+        let parsed: serde_json::Value = serde_json::from_str(&removed.content).expect("json");
+
+        assert!(removed.changed);
+        assert_eq!(parsed["theme"], "dark");
+        assert_eq!(parsed["mcpServers"]["github"]["command"], "gh");
+        assert!(parsed["mcpServers"].get("superdev").is_none());
+    }
+
+    #[test]
+    fn uninstall_codex_removes_only_superdev_server() {
+        let existing = r#"
+model = "gpt-5"
+
+[mcp_servers.github]
+command = "gh"
+
+[mcp_servers.superdev]
+command = "/bin/superdev-mcp"
+
+[mcp_servers.superdev.env]
+SUPERDEV_AGENT_URL = "http://127.0.0.1:57017"
+"#;
+
+        let removed = remove_codex_superdev_config(Some(existing)).expect("remove toml");
+        let parsed: toml::Value = toml::from_str(&removed.content).expect("toml");
+
+        assert!(removed.changed);
+        assert_eq!(parsed["model"].as_str(), Some("gpt-5"));
+        assert_eq!(
+            parsed["mcp_servers"]["github"]["command"].as_str(),
+            Some("gh")
+        );
+        assert!(parsed["mcp_servers"].get("superdev").is_none());
+    }
+
+    #[test]
+    fn uninstall_config_is_idempotent_without_superdev_entry() {
+        let existing = r#"{"mcpServers":{"github":{"command":"gh"}}}"#;
+
+        let removed = remove_json_superdev_config(Some(existing)).expect("remove json");
+
+        assert!(!removed.changed);
+        assert_eq!(removed.content, format!("{existing}\n"));
+    }
+
+    #[test]
+    fn uninstall_skill_dir_removes_target_and_is_idempotent() {
+        let dir = tempfile_dir();
+        let target = dir.join("skills").join("superdev");
+        fs::create_dir_all(&target).expect("mkdir target");
+        fs::write(target.join("SKILL.md"), "# Local Skill\n").expect("write target");
+
+        assert!(remove_skill_dir(&target).expect("remove first"));
+        assert!(!target.exists());
+        assert!(!remove_skill_dir(&target).expect("remove second"));
+    }
+
+    #[test]
+    fn mcp_status_reports_config_and_skill_state() {
+        let dir = tempfile_dir();
+        let home = dir.join("home");
+        let source = dir.join("source");
+        let target = home.join(".claude").join("skills").join("superdev");
+        seed_skill_source(&source);
+        fs::create_dir_all(home.join(".local").join("bin")).expect("mkdir bin");
+        fs::write(home.join(".local").join("bin").join("claude"), b"bin").expect("write claude");
+        fs::create_dir_all(home.join(".claude")).expect("mkdir claude");
+        fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"superdev":{"command":"/bin/superdev-mcp","env":{"SUPERDEV_AGENT_URL":"http://127.0.0.1:57017"}}}}"#,
+        )
+        .expect("write config");
+        install_skill_dir(&source, &target).expect("install skill");
+
+        let statuses = mcp_status_for_paths(&home, None, &[], Some(&source), None);
+        let claude = statuses
+            .iter()
+            .find(|status| status.agent == "claude-code")
+            .expect("claude status");
+
+        assert!(claude.agent_installed);
+        assert!(claude.config_exists);
+        assert!(claude.mcp_configured);
+        assert_eq!(claude.mcp_command.as_deref(), Some("/bin/superdev-mcp"));
+        assert_eq!(claude.agent_url.as_deref(), Some("http://127.0.0.1:57017"));
+        assert!(claude.skill_installed);
+        assert_eq!(claude.skill_matches_bundled, Some(true));
+        assert_eq!(claude.config_error, None);
+        assert_eq!(claude.skill_error, None);
+    }
+
+    #[test]
+    fn mcp_docs_for_skill_source_reads_main_and_references() {
+        let dir = tempfile_dir();
+        let source = dir.join("source");
+        seed_skill_source(&source);
+
+        let docs = mcp_docs_for_skill_source(&source).expect("docs");
+
+        assert!(docs
+            .summary_sections
+            .iter()
+            .any(|section| section.id == "runtime" && section.title.contains("运行")));
+        assert!(docs.documents.iter().any(|doc| {
+            doc.id == "skill" && doc.title == "SKILL.md" && doc.content.contains("# SuperDev")
+        }));
+        assert!(docs.documents.iter().any(|doc| {
+            doc.id == "references/pipeline.md"
+                && doc.title == "pipeline.md"
+                && doc.content.contains("# Pipeline")
+        }));
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
