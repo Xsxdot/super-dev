@@ -193,10 +193,12 @@ export default {
     },
     approvals: {
       title: 'Operation Approvals',
+      quickTitle: 'Quick Approvals',
       empty: 'No pending operations',
       approve: 'Approve',
       reject: 'Reject',
       refresh: 'Refresh',
+      viewAll: 'View All',
       risk: 'Risk',
       effects: 'Effects',
       reasons: 'Reasons',

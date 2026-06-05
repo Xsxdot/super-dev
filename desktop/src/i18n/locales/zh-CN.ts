@@ -193,10 +193,12 @@ export default {
     },
     approvals: {
       title: '操作审批',
+      quickTitle: '快速审批',
       empty: '暂无待审批操作',
       approve: '批准',
       reject: '拒绝',
       refresh: '刷新',
+      viewAll: '查看全部',
       risk: '风险',
       effects: '影响',
       reasons: '原因',
