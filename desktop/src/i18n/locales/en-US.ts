@@ -153,7 +153,7 @@ export default {
       addProject: 'Add Project',
       editConfig: 'Edit Config',
       editPipeline: 'Edit Pipeline',
-      startSelected: 'Start selected',
+      startSelected: 'Quick launch',
       selectProjectRootTitle: 'Select project root',
       importVscodeTitle: 'Import VS Code launch config',
       importVscodeMessage:
