@@ -11,6 +11,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/xsxdot/super-dev/agent/model"
@@ -34,14 +35,11 @@ func (a *App) startDeployment(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
-	mgr := a.getOrCreateManager(p.ID)
-	if err := mgr.StartDeployment(dep); err != nil {
+	if err := a.startDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
 		a.appendOperationExecutionFailure(r, plan, approval, "failed to start deployment: "+err.Error())
 		jsonError(w, http.StatusInternalServerError, "failed to start deployment: "+err.Error())
 		return
 	}
-	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
-	_ = a.pidStore.Flush()
 	jsonOK(w, map[string]string{"status": "starting"})
 }
 
@@ -58,14 +56,15 @@ func (a *App) stopDeployment(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid operation")
 		return
 	}
-	allowed, _ := a.authorizeOperation(w, r, plan)
+	allowed, approval := a.authorizeOperation(w, r, plan)
 	if !allowed {
 		return
 	}
-	mgr := a.getOrCreateManager(p.ID)
-	mgr.StopDeployment(dep.ID)
-	a.pidStore.Remove(dep.ID)
-	_ = a.pidStore.Flush()
+	if err := a.stopDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
+		a.appendOperationExecutionFailure(r, plan, approval, "failed to stop deployment: "+err.Error())
+		jsonError(w, http.StatusInternalServerError, "failed to stop deployment: "+err.Error())
+		return
+	}
 	jsonOK(w, map[string]string{"status": "stopped"})
 }
 
@@ -86,15 +85,50 @@ func (a *App) restartDeployment(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
-	mgr := a.getOrCreateManager(p.ID)
-	if err := mgr.RestartDeployment(dep); err != nil {
+	if err := a.restartDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
 		a.appendOperationExecutionFailure(r, plan, approval, "failed to restart deployment: "+err.Error())
 		jsonError(w, http.StatusInternalServerError, "failed to restart deployment: "+err.Error())
 		return
 	}
-	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
-	_ = a.pidStore.Flush()
 	jsonOK(w, map[string]string{"status": "starting"})
+}
+
+func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	if dep.Location == model.LocationRemote {
+		return a.newRemoteRuntimeController().Start(ctx, dep)
+	}
+	mgr := a.getOrCreateManager(projectID)
+	if err := mgr.StartDeployment(dep); err != nil {
+		return err
+	}
+	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
+	return a.pidStore.Flush()
+}
+
+func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	if dep.Location == model.LocationRemote {
+		if err := a.newRemoteRuntimeController().Stop(ctx, dep); err != nil {
+			return err
+		}
+		a.pidStore.Remove(dep.ID)
+		return a.pidStore.Flush()
+	}
+	mgr := a.getOrCreateManager(projectID)
+	mgr.StopDeployment(dep.ID)
+	a.pidStore.Remove(dep.ID)
+	return a.pidStore.Flush()
+}
+
+func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	if dep.Location == model.LocationRemote {
+		return a.newRemoteRuntimeController().Restart(ctx, dep)
+	}
+	mgr := a.getOrCreateManager(projectID)
+	if err := mgr.RestartDeployment(dep); err != nil {
+		return err
+	}
+	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
+	return a.pidStore.Flush()
 }
 
 // findDeployment 在所有项目的所有服务中按 deployment ID 查找。

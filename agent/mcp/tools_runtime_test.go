@@ -34,6 +34,8 @@ type fakeAgentClient struct {
 	appendedEventRequest     DebugSessionAppendEventRequest
 	closedSessionID          string
 	stopCalled               bool
+	stopCallCount            int
+	stopErrors               []error
 	startedDeploymentID      string
 	stoppedDeploymentID      string
 	restartedDeploymentID    string
@@ -178,6 +180,10 @@ func (f *fakeAgentClient) StartDeployment(_ context.Context, id string, approval
 }
 
 func (f *fakeAgentClient) StopDeployment(_ context.Context, id string, approvalToken string) error {
+	f.stopCallCount++
+	if f.stopCallCount <= len(f.stopErrors) && f.stopErrors[f.stopCallCount-1] != nil {
+		return f.stopErrors[f.stopCallCount-1]
+	}
 	f.stopCalled = true
 	f.stoppedDeploymentID = id
 	f.lastApprovalToken = approvalToken
@@ -326,6 +332,42 @@ func TestRestartServiceWaitsForApprovalAndRetriesWithToken(t *testing.T) {
 	assert.Equal(t, 2, client.restartCallCount)
 	assert.Equal(t, 1, client.getApprovalCallCount)
 	assert.Equal(t, "dep-api-prod", client.restartedDeploymentID)
+	assert.Equal(t, "tok_1", client.lastApprovalToken)
+}
+
+func TestStopServiceWaitsForApprovalAndRetriesWithToken(t *testing.T) {
+	approval := OperationApproval{
+		ID:     "opa_1",
+		Status: "pending",
+		Plan: OperationPlan{
+			ID:               "op_1",
+			Kind:             "runtime.stop",
+			Target:           OperationTarget{DeploymentID: "dep-api-prod"},
+			RequiresApproval: true,
+			Fingerprint:      "fp_1",
+		},
+	}
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		stopErrors: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     approval.Plan,
+			Approval: approval,
+		}},
+		operationApprovalDetails: []OperationApprovalDetail{{
+			Approval:      OperationApproval{ID: "opa_1", Status: "approved", Plan: approval.Plan},
+			ApprovalToken: "tok_1",
+		}},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "stop_service", `{"deployment_id":"dep-api-prod"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, 2, client.stopCallCount)
+	assert.Equal(t, "dep-api-prod", client.stoppedDeploymentID)
 	assert.Equal(t, "tok_1", client.lastApprovalToken)
 }
 

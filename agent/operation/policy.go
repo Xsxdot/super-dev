@@ -53,6 +53,10 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 	now := time.Now().UTC()
 	env, isDev := findEnvironment(project, dep.EnvName)
 	location := effectiveDeployLocation(dep)
+	effectLocation := "local"
+	if location == model.LocationRemote {
+		effectLocation = "remote"
+	}
 	target := Target{
 		ProjectID:    project.ID,
 		ProjectName:  project.Name,
@@ -70,7 +74,7 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 		CreatedAt:     now,
 		ExpiresAt:     now.Add(DefaultPlanTTL),
 		ExpectedEffects: []string{
-			fmt.Sprintf("%s local deployment %s", runtimeVerb(kind), dep.ID),
+			fmt.Sprintf("%s %s deployment %s", runtimeVerb(kind), effectLocation, dep.ID),
 		},
 		Checks: []Check{
 			{Name: "target_resolved", Status: "passed", Message: "deployment target resolved by agent"},
@@ -87,10 +91,10 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 		plan.RiskLevel = RiskCritical
 		plan.Reasons = append(plan.Reasons, "deployment is read-only")
 	}
-	if location == model.LocationRemote {
-		plan.Denied = true
-		plan.RiskLevel = RiskCritical
-		plan.Reasons = append(plan.Reasons, "remote deployment control is not supported by MCP safe operations")
+	if location == model.LocationRemote && !plan.Denied {
+		plan.RiskLevel = RiskHigh
+		plan.RequiresApproval = true
+		plan.Reasons = append(plan.Reasons, "remote deployment control requires approval")
 	}
 	if location == model.LocationLocal && !isDev && !plan.Denied {
 		plan.RiskLevel = RiskHigh
@@ -155,14 +159,17 @@ func PlanRuntimeStartSelected(project model.Project, envName string, targets []R
 
 	deploymentIDs := make([]string, 0, len(targets))
 	effects := make([]string, 0, len(targets))
+	hasRemoteTarget := false
 	for _, item := range targets {
 		dep := item.Deployment
-		serviceName := item.Service.Name
-		if serviceName == "" {
-			serviceName = item.Service.ID
+		location := effectiveDeployLocation(dep)
+		effectLocation := "local"
+		if location == model.LocationRemote {
+			effectLocation = "remote"
+			hasRemoteTarget = true
 		}
 		deploymentIDs = append(deploymentIDs, dep.ID)
-		effects = append(effects, fmt.Sprintf("start local deployment %s", dep.ID))
+		effects = append(effects, fmt.Sprintf("start %s deployment %s", effectLocation, dep.ID))
 		if dep.EnvName != envName {
 			plan.Denied = true
 			plan.RiskLevel = RiskCritical
@@ -172,11 +179,6 @@ func PlanRuntimeStartSelected(project model.Project, envName string, targets []R
 			plan.Denied = true
 			plan.RiskLevel = RiskCritical
 			plan.Reasons = append(plan.Reasons, fmt.Sprintf("deployment %s is read-only", dep.ID))
-		}
-		if effectiveDeployLocation(dep) == model.LocationRemote {
-			plan.Denied = true
-			plan.RiskLevel = RiskCritical
-			plan.Reasons = append(plan.Reasons, fmt.Sprintf("remote deployment %s/%s is not supported by safe operations", serviceName, dep.ID))
 		}
 	}
 	sort.Strings(deploymentIDs)
@@ -188,12 +190,17 @@ func PlanRuntimeStartSelected(project model.Project, envName string, targets []R
 		plan.RequiresApproval = true
 		plan.Reasons = append(plan.Reasons, "environment definition not found")
 	}
+	if !plan.Denied && hasRemoteTarget {
+		plan.RiskLevel = RiskHigh
+		plan.RequiresApproval = true
+		plan.Reasons = append(plan.Reasons, "remote deployment control requires approval")
+	}
 	if !plan.Denied && !isDev {
 		plan.RiskLevel = RiskHigh
 		plan.RequiresApproval = true
 		plan.Reasons = append(plan.Reasons, "environment is not marked as dev")
 	}
-	if !plan.Denied && isDev {
+	if !plan.Denied && isDev && !hasRemoteTarget {
 		plan.RiskLevel = RiskLow
 		plan.RequiresApproval = false
 	}
