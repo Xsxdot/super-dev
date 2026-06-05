@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Status 是隧道连接状态。

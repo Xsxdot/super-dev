@@ -1,10 +1,10 @@
 [package]
 name = "superdev"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+description = "SuperDev desktop application"
+authors = ["SuperDev contributors"]
+license = "MIT"
+repository = "https://github.com/Xsxdot/super-dev"
 edition = "2021"
 rust-version = "1.77.2"
 

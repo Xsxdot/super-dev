@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/identity"
+	"github.com/xsxdot/super-dev/agent/identity"
 )
 
 func TestLoadOrCreate_CreatesFileOnFirstRun(t *testing.T) {

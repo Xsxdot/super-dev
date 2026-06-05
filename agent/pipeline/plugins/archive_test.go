@@ -17,9 +17,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
-	"github.com/superdev/agent/pipeline/plugins"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/pipeline/plugins"
 )
 
 func TestArchiveRequiresSource(t *testing.T) {

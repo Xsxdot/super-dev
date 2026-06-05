@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // MetricsSampler 采样单个 deployment 实例的运行指标。

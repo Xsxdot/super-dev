@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // RuntimeDeploymentTarget 描述批量运行态操作中的单个 deployment 目标。

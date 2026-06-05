@@ -22,8 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // ArchivePackage creates a tar.gz artifact from an explicit files list.

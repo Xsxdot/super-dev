@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func (s *Sampler) sampleProcess(ctx context.Context, target SampleTarget) (model.InstanceMetrics, error) {

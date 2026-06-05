@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // InferRequest 描述一次入口默认值推断请求。

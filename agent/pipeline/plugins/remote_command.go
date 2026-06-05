@@ -13,8 +13,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // RemoteRunner 是 remote_command 依赖的远程命令执行能力。

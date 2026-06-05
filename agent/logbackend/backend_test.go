@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // TestQueryFilterZeroValue 确认 QueryFilter 零值不引发 panic。

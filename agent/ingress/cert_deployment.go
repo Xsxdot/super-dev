@@ -14,7 +14,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 const defaultCertDeploymentRoot = "/etc/superdev/ingress/certs"

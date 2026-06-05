@@ -21,8 +21,8 @@ import (
 	"path"
 	"strconv"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/tunnel"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 	"golang.org/x/crypto/ssh"
 )
 

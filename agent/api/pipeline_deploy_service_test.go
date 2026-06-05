@@ -7,11 +7,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/agenthealth"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
-	"github.com/superdev/agent/remoteexec"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 func TestExecuteProjectPipelineDeployRegistersArtifactBeforeDeploy(t *testing.T) {

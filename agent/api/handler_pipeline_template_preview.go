@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	pipelinetemplate "github.com/superdev/agent/template"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 // previewPipelineTemplate 处理 POST /api/pipeline/templates/preview。

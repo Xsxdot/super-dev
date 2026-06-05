@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // CertificateRemoteTransport 提供证书部署所需的远端命令和文件传输能力。

@@ -15,10 +15,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/remote"
 )
 
 // staticResolver 把固定 hostID 映射到固定 URL,测试用。

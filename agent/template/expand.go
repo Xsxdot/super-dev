@@ -14,7 +14,7 @@ package template
 import (
 	"fmt"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Resolver resolves a template URI and fixed version/digest into an immutable template.

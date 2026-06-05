@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/superdev/agent/config"
+	"github.com/xsxdot/super-dev/agent/config"
 )
 
 //go:embed assets/superdev-sample/README.md assets/superdev-sample/main.go assets/superdev-sample/.superdev/config.yaml.tmpl

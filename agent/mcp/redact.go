@@ -11,7 +11,7 @@ package mcp
 import (
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 var secretKeyParts = []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "KEY", "AUTH", "COOKIE", "SESSION"}

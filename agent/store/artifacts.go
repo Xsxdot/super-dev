@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // ErrArtifactNotFound 表示指定版本制品不存在。

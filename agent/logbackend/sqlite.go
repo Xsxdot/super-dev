@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/logbuf"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/logbuf"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 // SQLiteBackend 从本地 SQLite 读取历史日志，从 logbuf 接收实时日志。

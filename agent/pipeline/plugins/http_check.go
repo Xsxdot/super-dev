@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // HTTPCheck verifies that an HTTP endpoint returns the expected status.

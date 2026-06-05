@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
-	"github.com/superdev/agent/pipeline/plugins"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/pipeline/plugins"
 )
 
 type projectPipelineDeployRequest struct {

@@ -11,11 +11,11 @@
 package api
 
 import (
-	"github.com/superdev/agent/collector"
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/logbuf"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/logbuf"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 // buildBackend 根据 deployment 配置返回对应的 LogBackend。

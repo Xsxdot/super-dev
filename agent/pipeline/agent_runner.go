@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"github.com/superdev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
 type wsDialFunc func(ctx context.Context, url string, header http.Header) (*websocket.Conn, *http.Response, error)

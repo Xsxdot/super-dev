@@ -1,0 +1,63 @@
+name: Bug report
+description: Report reproducible behavior that looks wrong.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve SuperDev. Please avoid posting secrets, approval tokens, private hostnames, or production logs that have not been redacted.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest sequence of actions that reproduces the issue.
+      placeholder: |
+        1. Start SuperDev
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Paste the app version, release tag, or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop UI
+        - Local agent
+        - MCP integration
+        - Logs and diagnostics
+        - Pipeline
+        - Ingress
+        - Operation approvals
+        - Onboarding
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only redacted logs that help explain the failure.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, architecture, Node/pnpm/Go/Rust versions when relevant.
+      placeholder: macOS 15, Apple Silicon, pnpm 10, Go 1.26

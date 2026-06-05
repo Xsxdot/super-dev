@@ -1,4 +1,4 @@
-module github.com/superdev/agent
+module github.com/xsxdot/super-dev/agent
 
 go 1.26.1
 

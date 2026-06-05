@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 // TestIngressCRUDAndPreview 验证入口声明可以创建并预览 nginx 配置。

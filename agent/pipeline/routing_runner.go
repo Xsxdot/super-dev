@@ -14,7 +14,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/superdev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
 )
 
 // AgentHealthLookup 查询 host 的 agent 健康状态。

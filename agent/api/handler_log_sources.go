@@ -9,8 +9,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/remote"
 )
 
 // listLogSources 处理 GET /api/log-sources。

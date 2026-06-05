@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 const remoteRequestTimeout = 3 * time.Second

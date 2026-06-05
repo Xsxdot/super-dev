@@ -15,9 +15,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 type projectPipelinePreviewRequest struct {

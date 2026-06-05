@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	pipelinetemplate "github.com/superdev/agent/template"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 func TestRenderPipelineVars(t *testing.T) {

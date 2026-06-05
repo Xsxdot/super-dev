@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // ErrProviderNotFound 表示按名称无法找到 provider。

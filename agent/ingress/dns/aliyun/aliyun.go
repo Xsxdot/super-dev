@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 const defaultBaseURL = "https://alidns.aliyuncs.com/"

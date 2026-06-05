@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/superdev/agent/api"
+	"github.com/xsxdot/super-dev/agent/api"
 )
 
 func main() {

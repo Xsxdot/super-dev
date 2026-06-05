@@ -20,8 +20,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // Archive creates a tar.gz file from a local file or directory.

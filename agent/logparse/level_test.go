@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/superdev/agent/logparse"
+	"github.com/xsxdot/super-dev/agent/logparse"
 )
 
 func TestDetectLevel_structuredField(t *testing.T) {

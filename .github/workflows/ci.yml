@@ -1,0 +1,63 @@
+# CI verifies the portable checks that contributors can reproduce locally.
+# Release packaging, code signing, and notarization stay in the documented
+# release process until the repository has the required GitHub secrets.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    name: Go agent
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Run Go tests
+        working-directory: agent
+        run: go test ./...
+
+  desktop:
+    name: Desktop web checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop web bundle
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: pnpm test

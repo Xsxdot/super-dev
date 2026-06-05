@@ -16,7 +16,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // defaultLimit 是 Query/Search 未指定 Limit 时的默认最大返回条数。

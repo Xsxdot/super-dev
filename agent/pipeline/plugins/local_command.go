@@ -16,8 +16,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // LocalCommand runs a shell command on the agent host.

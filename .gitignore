@@ -1,9 +1,25 @@
 .superpowers/
 .worktrees/
 
+# OS metadata
+.DS_Store
+
 # Dependencies
 node_modules/
 .pnpm-store/
+
+# Build and test outputs
+dist/
+coverage/
+artifacts/
+*.profraw
+*.profdata
+desktop/dist/
+desktop/src-tauri/target/
+
+# Local environment files
+.env
+.env.*
 
 # Local tooling
 .claude/
@@ -11,11 +27,11 @@ node_modules/
 
 # Manual UI test captures
 screenshot-*.png
+superdev-product-audit/
 
-# Local design drafts (not product source)
+# Local/internal planning notes (not product source)
 docs/model-redesign.md
-docs/superpowers/plans/*model-redesign*
-docs/superpowers/plans/2026-05-28-deployment-lifecycle.md
+docs/superpowers/
 
 # Private business/strategy docs (not for the open-source repo)
 docs/MONETIZATION.md

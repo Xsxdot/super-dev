@@ -15,7 +15,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/superdev/agent/mcp"
+	"github.com/xsxdot/super-dev/agent/mcp"
 )
 
 func main() {

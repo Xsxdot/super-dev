@@ -13,7 +13,7 @@ package pipeline
 import (
 	"fmt"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // DAGOrder 是阶段内拓扑排序结果。

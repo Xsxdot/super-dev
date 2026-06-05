@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // ErrHostUnreachable 表示无法获得 host 对应的本地隧道 baseURL。

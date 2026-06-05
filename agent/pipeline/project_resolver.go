@@ -14,8 +14,8 @@ package pipeline
 import (
 	"fmt"
 
-	"github.com/superdev/agent/model"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/model"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 // ProjectPipelineRequest 描述一次项目级流水线解析请求。

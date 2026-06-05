@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 const defaultBaseURL = "https://api.cloudflare.com"

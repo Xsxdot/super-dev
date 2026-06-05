@@ -16,7 +16,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 const (

@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/agenthealth"
-	"github.com/superdev/agent/tunnel"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // tunnelStateLabel 将内部 tunnel.Status 映射到前端 TunnelState 枚举。

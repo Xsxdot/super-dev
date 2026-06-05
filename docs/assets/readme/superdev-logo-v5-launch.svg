@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">SuperDev Minimal Launch Mark</title>
+  <desc id="desc">A minimal SuperDev mark using an abstract launch symbol instead of a terminal prompt.</desc>
+  <rect x="64" y="64" width="384" height="384" rx="92" fill="#0B1220"/>
+  <path d="M192 162C192 146 210 136 224 145L350 225C371 238 371 274 350 287L224 367C210 376 192 366 192 350V162Z" fill="#F8FAFC"/>
+  <rect x="138" y="189" width="72" height="34" rx="17" fill="#32D79B"/>
+  <rect x="138" y="239" width="96" height="34" rx="17" fill="#32D79B" fill-opacity="0.72"/>
+  <rect x="138" y="289" width="72" height="34" rx="17" fill="#32D79B" fill-opacity="0.44"/>
+</svg>

@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/superdev/agent/logparse"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/logparse"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // Manager 管理多个服务进程的生命周期。

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./superdev-logo-v5-launch.svg" width="96" alt="SuperDev logo" />
+  <img src="./docs/assets/readme/superdev-logo-v5-launch.svg" width="96" alt="SuperDev logo" />
 </p>
 
 # SuperDev
@@ -19,6 +19,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-agent-00ADD8" />
   <img alt="MCP" src="https://img.shields.io/badge/MCP-ready-7C3AED" />
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16A34A" />
+  <a href="https://github.com/Xsxdot/super-dev/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Xsxdot/super-dev/actions/workflows/ci.yml/badge.svg" /></a>
 </p>
 
 | 中文界面 | English UI |
@@ -169,7 +170,7 @@ SuperDev 正处于第一版开源发布前夜，当前主要面向 macOS 桌面�
 ```bash
 # Desktop
 cd desktop
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 
@@ -179,6 +180,13 @@ go test ./...
 ```
 
 Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制：`superdev-agent`、`superdev-mcp`、`superdev-sample`。
+
+## 开源治理
+
+- 贡献指南：[CONTRIBUTING.md](./CONTRIBUTING.md)
+- 安全报告：[SECURITY.md](./SECURITY.md)
+- 版本与发布：[docs/release.md](./docs/release.md)
+- 变更日志：[CHANGELOG.md](./CHANGELOG.md)
 
 ## 贡献
 
@@ -337,7 +345,7 @@ SuperDev is approaching its first open-source release. The current focus is macO
 ```bash
 # Desktop
 cd desktop
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 
@@ -347,6 +355,13 @@ go test ./...
 ```
 
 Tauri builds package sidecar binaries through `desktop/scripts/build-agent.sh`: `superdev-agent`, `superdev-mcp`, and `superdev-sample`.
+
+## Open Source Governance
+
+- Contribution guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Security reports: [SECURITY.md](./SECURITY.md)
+- Versioning and releases: [docs/release.md](./docs/release.md)
+- Changelog: [CHANGELOG.md](./CHANGELOG.md)
 
 ## Contributing
 

@@ -25,9 +25,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/metrics"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/metrics"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type fakeRuntimeSampler struct {

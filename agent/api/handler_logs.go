@@ -13,8 +13,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 // maxLimit 是单次日志查询允许的最大条数，防止超大查询打满 SQLite。

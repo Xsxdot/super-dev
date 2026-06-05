@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // HostLookup 按 host ID 批量解析 host 模型。

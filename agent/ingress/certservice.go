@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // CertServiceConfig 描述全局证书服务的依赖。

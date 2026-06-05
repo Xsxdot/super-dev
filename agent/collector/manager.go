@@ -16,8 +16,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/process"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/process"
 )
 
 // ErrTargetNotFound 表示远端目标不存在(systemd 单元或 docker 容器未找到)。

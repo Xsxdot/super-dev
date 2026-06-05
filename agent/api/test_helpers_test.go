@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/api"
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/logbuf"
-	"github.com/superdev/agent/store"
+	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/logbuf"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 // newTestAppInstance 创建一个直接返回 *api.App 的测试实例，供需要直接操作 App 的测试使用。

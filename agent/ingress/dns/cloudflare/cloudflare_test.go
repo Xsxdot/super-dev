@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/superdev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
 func TestEnsureRecordCreatesMissingRecord(t *testing.T) {

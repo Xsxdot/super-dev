@@ -14,7 +14,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/superdev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
 // transferFile 处理 POST /api/transfer，把 multipart 文件写到目标路径。

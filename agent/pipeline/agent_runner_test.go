@@ -28,7 +28,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
 type agentRunnerResolver struct {

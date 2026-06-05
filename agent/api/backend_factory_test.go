@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/superdev/agent/logbackend"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/logbackend"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type stubResolver struct{}

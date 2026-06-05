@@ -23,10 +23,10 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/superdev/agent/installer"
-	"github.com/superdev/agent/model"
-	"github.com/superdev/agent/remote"
-	"github.com/superdev/agent/tunnel"
+	"github.com/xsxdot/super-dev/agent/installer"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // listHosts 处理 GET /api/hosts，在列表头部插入本机节点（is_self=true），

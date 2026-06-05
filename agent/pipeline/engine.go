@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/superdev/agent/model"
-	pipelinetemplate "github.com/superdev/agent/template"
+	"github.com/xsxdot/super-dev/agent/model"
+	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
 // EventType 进度事件类型。

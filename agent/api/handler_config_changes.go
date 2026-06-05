@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/superdev/agent/config"
-	"github.com/superdev/agent/configchange"
-	"github.com/superdev/agent/model"
+	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/configchange"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // getProjectConfig 处理 GET /api/projects/{id}/config。
