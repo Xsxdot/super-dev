@@ -154,7 +154,7 @@ export default {
       addProject: '添加项目',
       editConfig: '编辑配置',
       editPipeline: '编辑流水线',
-      startSelected: '启动选中',
+      startSelected: '快捷启动',
       selectProjectRootTitle: '选择项目根目录',
       importVscodeTitle: '导入 VS Code 启动配置',
       importVscodeMessage:

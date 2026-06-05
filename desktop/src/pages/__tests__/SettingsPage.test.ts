@@ -186,6 +186,8 @@ describe('SettingsPage', () => {
 
     expect(wrapper.find('.settings-card-list').exists()).toBe(true)
     expect(wrapper.find('.settings-card').exists()).toBe(true)
+    expect(wrapper.find('.service-row .service-main').exists()).toBe(true)
+    expect(wrapper.find('.service-row .inline-check').text()).toContain('快捷启动')
     expect(wrapper.find('[data-test="setup-project-proj-1"]').classes()).toContain('settings-btn')
     expect(wrapper.find('[data-test="pipeline-project-proj-1"]').classes()).toContain('settings-btn')
     expect(wrapper.find('[data-test="toggle-hidden-svc-worker"]').classes()).toContain('settings-btn')
