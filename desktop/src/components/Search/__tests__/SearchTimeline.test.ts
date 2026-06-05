@@ -38,13 +38,13 @@ function project(services: Service[]): Project {
   }
 }
 
-function log(id: number, deploymentId: string, message: string): LogEntry {
+function log(id: number, deploymentId: string, message: string, level = 'INFO'): LogEntry {
   return {
     id,
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp: '2026-05-20T22:41:32.000Z',
-    level: 'INFO',
+    level,
     message,
     stream: 'stdout',
   }
@@ -101,5 +101,30 @@ describe('SearchTimeline', () => {
     await wrapper.find('.timeline').trigger('scroll')
 
     expect(loadMore).toHaveBeenCalledWith(tab.id)
+  })
+
+  it('多服务命中行显示服务徽标、级别徽标和选中态', () => {
+    const api = service('sample-api-demo', 'sample-api-demo')
+    const worker = service('sample-worker-demo', 'sample-worker-demo')
+    useAgentStore().projects = [project([api, worker])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.results = [
+      log(20, 'sample-api-demo', 'trace-8f21 api published job', 'INFO'),
+      log(30, 'sample-worker-demo', 'trace-8f21 worker retry latency_ms=320', 'WARN'),
+    ]
+    tab.selectedLogId = 30
+
+    const wrapper = mount(SearchTimeline, {
+      props: { tabId: tab.id },
+    })
+
+    const rows = wrapper.findAll('[data-test="search-hit-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].find('[data-test="search-hit-service"]').text()).toBe('sample-api-demo')
+    expect(rows[0].find('[data-test="search-hit-level"]').text()).toBe('INFO')
+    expect(rows[1].find('[data-test="search-hit-service"]').text()).toBe('sample-worker-demo')
+    expect(rows[1].find('[data-test="search-hit-level"]').text()).toBe('WARN')
+    expect(rows[1].classes()).toContain('selected')
   })
 })

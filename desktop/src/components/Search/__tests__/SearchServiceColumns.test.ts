@@ -44,13 +44,14 @@ function log(
   deploymentId: string,
   message: string,
   timestamp = '2026-05-20T22:41:32.000Z',
+  level = 'INFO',
 ): LogEntry {
   return {
     id,
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
-    level: 'INFO',
+    level,
     message,
     stream: 'stdout',
   }
@@ -602,6 +603,47 @@ describe('SearchServiceColumns', () => {
     await wrapper.find('.columns').trigger('scroll')
 
     expect(tab.selectedLogId).toBe(40)
+  })
+
+  it('两服务上下文渲染 trace header、同步列、minimap 和选中详情', () => {
+    const api = service('sample-api-demo', 'sample-api-demo')
+    const worker = service('sample-worker-demo', 'sample-worker-demo')
+    useAgentStore().projects = [project([api, worker])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.query = 'trace-8f21'
+    tab.serviceCounts = { 'sample-api-demo': 43, 'sample-worker-demo': 33 }
+    tab.results = [
+      log(216, 'sample-api-demo', 'trace-8f21 downstream timeout seq=216', '2026-05-20T15:35:18.916Z', 'ERROR'),
+      log(217, 'sample-worker-demo', 'trace-8f21 worker retry latency_ms=320', '2026-05-20T15:35:18.930Z', 'WARN'),
+    ]
+    tab.selectedLogId = 216
+    tab.contextAnchorTime = '2026-05-20T15:35:18.916Z'
+    tab.contextByService = {
+      'sample-api-demo': [
+        log(214, 'sample-api-demo', 'trace-8f21 request received', '2026-05-20T15:35:17.916Z'),
+        log(216, 'sample-api-demo', 'trace-8f21 downstream timeout seq=216', '2026-05-20T15:35:18.916Z', 'ERROR'),
+      ],
+      'sample-worker-demo': [
+        log(215, 'sample-worker-demo', 'trace-8f21 job consumed', '2026-05-20T15:35:18.500Z'),
+        log(217, 'sample-worker-demo', 'trace-8f21 worker retry latency_ms=320', '2026-05-20T15:35:18.930Z', 'WARN'),
+      ],
+    }
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    expect(wrapper.find('[data-test="trace-context-title"]').text()).toContain('trace-8f21')
+    expect(wrapper.findAll('[data-test="context-minimap-tick"]').length).toBeGreaterThan(0)
+    expect(wrapper.findAll('.columns .column-header')).toHaveLength(2)
+    expect(wrapper.findAll('.columns .column-header')[0].text()).toContain('sample-api-demo')
+    expect(wrapper.findAll('.columns .column-header')[1].text()).toContain('sample-worker-demo')
+    expect(wrapper.find('[data-test="selected-hit-service"]').text()).toContain('sample-api-demo')
+    expect(wrapper.find('[data-test="selected-hit-level"]').text()).toContain('ERROR')
+    expect(wrapper.find('[data-test="cross-service-path"]').text()).toContain('API request received')
+    expect(wrapper.find('[data-test="nearby-signals"]').text()).toContain('WARN')
+    expect(wrapper.find('[data-test="nearby-signals"]').text()).toContain('ERROR')
   })
 
 })

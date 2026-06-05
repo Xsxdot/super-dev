@@ -45,4 +45,62 @@ describe('SearchPage i18n', () => {
     )
     expect(wrapper.find('[data-test="search-submit"]').text()).toBe('Search')
   })
+
+  it('结果态渲染多服务搜索命令栏', () => {
+    useAgentStore().projects = [{
+      id: 'proj-1',
+      name: 'Project',
+      root_path: '/tmp/project',
+      services: [],
+      env_selected_service_ids: {},
+    }]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.status = 'results'
+    tab.query = 'trace-8f21'
+    tab.results = [
+      {
+        id: 1,
+        deployment_id: 'sample-api-demo',
+        run_id: 'run-1',
+        timestamp: '2026-05-20T22:41:32.000Z',
+        level: 'INFO',
+        message: 'trace-8f21 api',
+        stream: 'stdout',
+      },
+      {
+        id: 2,
+        deployment_id: 'sample-worker-demo',
+        run_id: 'run-1',
+        timestamp: '2026-05-20T22:41:33.000Z',
+        level: 'ERROR',
+        message: 'trace-8f21 worker',
+        stream: 'stderr',
+      },
+    ]
+    tab.serviceCounts = { 'sample-api-demo': 43, 'sample-worker-demo': 33 }
+
+    const wrapper = mount(SearchPage, {
+      props: { tabId: tab.id },
+      global: {
+        plugins: [installTestI18n('en-US')],
+        stubs: { SearchBoard: { template: '<div />' } },
+      },
+    })
+
+    expect(wrapper.find('[data-test="search-service-count"]').text()).toBe('2 services')
+    expect(wrapper.find('[data-test="search-hit-count"]').text()).toBe('2 / 76 hits')
+    expect(wrapper.find('[data-test="search-prev-hit"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="search-next-hit"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-test="search-filter-chip"]').map(chip => chip.text())).toEqual([
+      'All',
+      'Errors',
+      'Warnings',
+      'API',
+      'Worker',
+      'Time: last 24h',
+      'Regex',
+      'Case',
+    ])
+  })
 })
