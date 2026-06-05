@@ -466,6 +466,7 @@ export default {
     layoutBalanced: '均分面板',
     layoutColumns: '列布局',
     maximize: '最大化工作区',
+    restore: '还原工作区',
   },
   bottomBar: {
     panelServices: '面板服务',

@@ -466,6 +466,7 @@ export default {
     layoutBalanced: 'Balance panels',
     layoutColumns: 'Column layout',
     maximize: 'Maximize workspace',
+    restore: 'Restore workspace',
   },
   bottomBar: {
     panelServices: 'Panel Services',

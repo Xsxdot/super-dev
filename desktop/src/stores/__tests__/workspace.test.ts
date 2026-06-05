@@ -431,6 +431,17 @@ describe('workspaceStore', () => {
       store.activateTab(firstTabId)
       expect(panel.allLeaves).toHaveLength(2)
     })
+
+    it('运行态最大化在切到非日志 tab 时自动还原', () => {
+      const store = useWorkspaceStore()
+      store.openDeployment('dep1', 'Deploy #1')
+      store.setRuntimeWorkspaceMaximized(true)
+      expect(store.isRuntimeWorkspaceMaximized).toBe(true)
+
+      store.openSearch('proj-1')
+
+      expect(store.isRuntimeWorkspaceMaximized).toBe(false)
+    })
   })
 
 })

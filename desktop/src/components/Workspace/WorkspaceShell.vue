@@ -36,7 +36,7 @@ const isRuntimeTab = computed(() =>
 
 <template>
   <div class="workspace-shell">
-    <WorkspaceTabs v-if="workspace.tabs.length" />
+    <WorkspaceTabs v-if="workspace.tabs.length && !workspace.isRuntimeWorkspaceMaximized" />
     <div v-if="!workspace.activeTab" class="workspace-empty">
       <div>{{ t('shell.emptyWorkspace') }}</div>
     </div>

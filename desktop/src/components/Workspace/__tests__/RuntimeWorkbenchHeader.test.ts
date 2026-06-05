@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import RuntimeWorkbenchHeader from '../RuntimeWorkbenchHeader.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
-import { usePanelStore } from '@/stores/panel'
+import { usePanelStore, type PanelSplitNode } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '@/api/agent'
@@ -72,5 +72,63 @@ describe('RuntimeWorkbenchHeader', () => {
     const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
 
     expect(wrapper.find('[data-test="runtime-evidence"]').text()).toContain('Evidence sync ready')
+  })
+
+  it('balances existing panel splits from the header action', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const panelStore = usePanelStore()
+    const [first] = panelStore.allLeaves
+    panelStore.setRoot({
+      type: 'split',
+      id: 'split-root',
+      axis: 'h',
+      ratio: 0.8,
+      first: { ...first, id: 'leaf-a', serviceId: 'dep-api', projectId: null, source: { type: 'deployment', deploymentId: 'dep-api' } },
+      second: { ...first, id: 'leaf-b', serviceId: 'dep-api', projectId: null, source: { type: 'deployment', deploymentId: 'dep-api' } },
+    })
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="layout-balance"]').trigger('click')
+
+    expect((panelStore.root as PanelSplitNode).ratio).toBeCloseTo(0.5)
+  })
+
+  it('rearranges current panels into columns from the header action', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const panelStore = usePanelStore()
+    const [first] = panelStore.allLeaves
+    panelStore.setRoot({
+      type: 'split',
+      id: 'split-root',
+      axis: 'v',
+      ratio: 0.5,
+      first: { ...first, id: 'leaf-a', serviceId: 'dep-api', projectId: null, source: { type: 'deployment', deploymentId: 'dep-api' } },
+      second: { ...first, id: 'leaf-b', serviceId: 'dep-api', projectId: null, source: { type: 'deployment', deploymentId: 'dep-api' } },
+    })
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="layout-columns"]').trigger('click')
+
+    expect((panelStore.root as PanelSplitNode).axis).toBe('h')
+  })
+
+  it('toggles runtime workspace maximized state from the header action', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    const workspace = useWorkspaceStore()
+    workspace.openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="layout-maximize"]').trigger('click')
+
+    expect(workspace.isRuntimeWorkspaceMaximized).toBe(true)
+
+    await wrapper.find('[data-test="layout-maximize"]').trigger('click')
+
+    expect(workspace.isRuntimeWorkspaceMaximized).toBe(false)
   })
 })

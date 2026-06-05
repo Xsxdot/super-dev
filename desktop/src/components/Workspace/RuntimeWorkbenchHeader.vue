@@ -54,6 +54,26 @@ const evidenceLabel = computed(() => {
   if (bookmarkStore.syncStatus === 'ready') return t('runtimeWorkbench.evidenceReady')
   return t('runtimeWorkbench.evidenceOff')
 })
+
+const maximizeLabel = computed(() =>
+  workspace.isRuntimeWorkspaceMaximized
+    ? t('runtimeWorkbench.restore')
+    : t('runtimeWorkbench.maximize'),
+)
+
+function persistActiveLayout() {
+  workspace.saveActiveLogWorkspaceLayout()
+}
+
+function balancePanels() {
+  panelStore.balanceSplits()
+  persistActiveLayout()
+}
+
+function arrangeColumns() {
+  panelStore.arrangeLeavesInColumns()
+  persistActiveLayout()
+}
 </script>
 
 <template>
@@ -77,14 +97,36 @@ const evidenceLabel = computed(() => {
       <span class="panel-count" data-test="runtime-panel-count">
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
-      <button type="button" class="layout-btn" :title="t('runtimeWorkbench.layoutBalanced')" aria-label="Balance panels">
+      <button
+        type="button"
+        class="layout-btn"
+        data-test="layout-balance"
+        :title="t('runtimeWorkbench.layoutBalanced')"
+        :aria-label="t('runtimeWorkbench.layoutBalanced')"
+        @click="balancePanels"
+      >
         ▣
       </button>
-      <button type="button" class="layout-btn" :title="t('runtimeWorkbench.layoutColumns')" aria-label="Column layout">
+      <button
+        type="button"
+        class="layout-btn"
+        data-test="layout-columns"
+        :title="t('runtimeWorkbench.layoutColumns')"
+        :aria-label="t('runtimeWorkbench.layoutColumns')"
+        @click="arrangeColumns"
+      >
         ▥
       </button>
-      <button type="button" class="layout-btn" :title="t('runtimeWorkbench.maximize')" aria-label="Maximize workspace">
-        ↗
+      <button
+        type="button"
+        class="layout-btn"
+        data-test="layout-maximize"
+        :class="{ active: workspace.isRuntimeWorkspaceMaximized }"
+        :title="maximizeLabel"
+        :aria-label="maximizeLabel"
+        @click="workspace.toggleRuntimeWorkspaceMaximized"
+      >
+        {{ workspace.isRuntimeWorkspaceMaximized ? '↙' : '↗' }}
       </button>
     </div>
   </header>
@@ -177,6 +219,12 @@ const evidenceLabel = computed(() => {
 .layout-btn:hover {
   border-color: rgba(88, 166, 255, 0.45);
   color: var(--text-primary);
+}
+
+.layout-btn.active {
+  border-color: rgba(88, 166, 255, 0.45);
+  background: rgba(88, 166, 255, 0.1);
+  color: #58a6ff;
 }
 
 @media (max-width: 980px) {

@@ -12,6 +12,12 @@ const panelStore = usePanelStore()
 const node = computed(() => props.node ?? panelStore.root)
 
 const rootLeafCount = computed(() => panelStore.allLeaves.length)
+
+function paneFlex(ratio: number, side: 'first' | 'second') {
+  const clamped = Math.min(0.95, Math.max(0.05, ratio))
+  const grow = side === 'first' ? clamped : 1 - clamped
+  return { flex: `${grow} 1 0%` }
+}
 </script>
 
 <template>
@@ -33,11 +39,11 @@ const rootLeafCount = computed(() => panelStore.allLeaves.length)
     class="panel-split"
     :class="node.axis === 'h' ? 'split-h' : 'split-v'"
   >
-    <div class="split-first">
+    <div class="split-first" :style="paneFlex(node.ratio, 'first')">
       <PanelLayout :node="node.first" :is-root="false" />
     </div>
     <div class="split-divider" :class="node.axis === 'h' ? 'divider-v' : 'divider-h'" />
-    <div class="split-second">
+    <div class="split-second" :style="paneFlex(node.ratio, 'second')">
       <PanelLayout :node="node.second" :is-root="false" />
     </div>
   </div>

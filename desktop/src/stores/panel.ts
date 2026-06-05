@@ -87,6 +87,41 @@ function getAllLeaves(node: PanelNode): PanelLeafNode[] {
   return [...getAllLeaves(node.first), ...getAllLeaves(node.second)]
 }
 
+function leafCount(node: PanelNode): number {
+  if (node.type === 'leaf') return 1
+  return leafCount(node.first) + leafCount(node.second)
+}
+
+function balanceRatios(node: PanelNode): PanelNode {
+  if (node.type === 'leaf') return node
+  const first = balanceRatios(node.first)
+  const second = balanceRatios(node.second)
+  const firstCount = leafCount(first)
+  const total = firstCount + leafCount(second)
+  return {
+    ...node,
+    ratio: total > 0 ? firstCount / total : 0.5,
+    first,
+    second,
+  }
+}
+
+function buildColumnLayout(leaves: PanelLeafNode[]): PanelNode {
+  if (leaves.length <= 1) return leaves[0] ?? makeLeaf()
+  const midpoint = Math.ceil(leaves.length / 2)
+  const firstLeaves = leaves.slice(0, midpoint)
+  const secondLeaves = leaves.slice(midpoint)
+  return {
+    type: 'split',
+    id: uuidv4(),
+    axis: 'h',
+    // 按叶子数量计算比例，保证 3/4 栏这类嵌套 split 也呈现等宽列。
+    ratio: firstLeaves.length / leaves.length,
+    first: buildColumnLayout(firstLeaves),
+    second: buildColumnLayout(secondLeaves),
+  }
+}
+
 // 在树中找到 id 对应的叶子节点，替换为 split 节点
 function splitLeafById(
   node: PanelNode,
@@ -238,6 +273,20 @@ export const usePanelStore = defineStore('panel', () => {
     ensureFocused()
   }
 
+  function balanceSplits() {
+    root.value = balanceRatios(root.value)
+    save()
+    ensureFocused()
+  }
+
+  function arrangeLeavesInColumns() {
+    const leaves = allLeaves.value
+    if (leaves.length <= 1) return
+    root.value = buildColumnLayout(leaves)
+    save()
+    ensureFocused()
+  }
+
   function setRoot(nextRoot: PanelNode, nextFocusedPanelId: string | null = null) {
     root.value = normalizePanelNode(nextRoot)
     focusedPanelId.value = nextFocusedPanelId
@@ -267,6 +316,8 @@ export const usePanelStore = defineStore('panel', () => {
     replaceScope,
     replaceSource,
     removeLeaf,
+    balanceSplits,
+    arrangeLeavesInColumns,
     setRoot,
     targetPanelId,
   }

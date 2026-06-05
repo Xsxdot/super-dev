@@ -27,6 +27,10 @@ vi.mock('@/components/Workspace/RuntimeWorkbenchHeader.vue', () => ({
   default: { template: '<header data-test="runtime-header-stub" />' },
 }))
 
+vi.mock('@/components/Workspace/WorkspaceTabs.vue', () => ({
+  default: { template: '<nav data-test="workspace-tabs-stub" />' },
+}))
+
 vi.mock('@/components/Panel/PanelLayout.vue', () => ({
   default: { template: '<section data-test="panel-layout-stub" />' },
 }))
@@ -89,5 +93,31 @@ describe('WorkspaceShell overview tab', () => {
     const wrapper = mount(WorkspaceShell, { global: { plugins: [installTestI18n()] } })
 
     expect(wrapper.find('[data-test="runtime-header-stub"]').exists()).toBe(false)
+  })
+
+  it('hides workspace tabs while runtime workspace is maximized', () => {
+    useAgentStore().projects = [{
+      id: 'proj-1',
+      name: 'Demo',
+      root_path: '/tmp/demo',
+      services: [{
+        id: 'svc-1',
+        project_id: 'proj-1',
+        name: 'api',
+        status: 'running',
+        required: false,
+        order: 1,
+        deployments: [{ id: 'dep-1', env_name: 'demo', location: 'local', status: 'running' }],
+      }],
+      environments: [{ id: 'env-demo', name: 'demo', is_dev: true, order: 0 }],
+    }]
+    const workspace = useWorkspaceStore()
+    workspace.openDeployment('dep-1', 'api · demo')
+    workspace.setRuntimeWorkspaceMaximized(true)
+
+    const wrapper = mount(WorkspaceShell, { global: { plugins: [installTestI18n()] } })
+
+    expect(wrapper.find('[data-test="workspace-tabs-stub"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="runtime-header-stub"]').exists()).toBe(true)
   })
 })

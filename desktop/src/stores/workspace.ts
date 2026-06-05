@@ -137,8 +137,12 @@ function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkspaceTab[]>([])
   const activeTabId = ref<string | null>(null)
+  const runtimeWorkspaceMaximized = ref(false)
 
   const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
+  const isRuntimeWorkspaceMaximized = computed(() =>
+    runtimeWorkspaceMaximized.value && isLogWorkspaceTab(activeTab.value),
+  )
 
   function projectName(projectId: string): string {
     return useAgentStore().projectById(projectId)?.name ?? projectId
@@ -161,6 +165,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     saveActiveLogWorkspaceLayout()
     activeTabId.value = tabId
     const tab = activeTab.value
+    if (!isLogWorkspaceTab(tab)) runtimeWorkspaceMaximized.value = false
     if (isLogWorkspaceTab(tab)) {
       usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
     }
@@ -183,11 +188,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       (tab): tab is ProjectOverviewWorkspaceTab => tab.type === 'overview' && tab.id === id,
     )
     if (existing) {
+      runtimeWorkspaceMaximized.value = false
       activeTabId.value = existing.id
       return existing
     }
     const tab = makeProjectOverviewTab(projectId)
     tabs.value.unshift(tab)
+    runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
     return tab
   }
@@ -196,6 +203,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     saveActiveLogWorkspaceLayout()
     const tab = makeSearchTab(projectId, `Search · ${projectName(projectId)}`)
     tabs.value.push(tab)
+    runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
     return tab
   }
@@ -456,14 +464,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (activeTabId.value !== tabId) return
     activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? null
     const tab = activeTab.value
+    if (!isLogWorkspaceTab(tab)) runtimeWorkspaceMaximized.value = false
     if (isLogWorkspaceTab(tab)) {
       usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
     }
   }
 
+  function setRuntimeWorkspaceMaximized(maximized: boolean) {
+    runtimeWorkspaceMaximized.value = maximized && isLogWorkspaceTab(activeTab.value)
+  }
+
+  function toggleRuntimeWorkspaceMaximized() {
+    setRuntimeWorkspaceMaximized(!isRuntimeWorkspaceMaximized.value)
+  }
+
   return {
     tabs,
     activeTabId,
+    runtimeWorkspaceMaximized,
+    isRuntimeWorkspaceMaximized,
     activeTab,
     activateTab,
     // ensureProjectTab 作为 deployment 多面板容器 tab 的入口保留，供后续在项目 tab 中拖入多个 deployment 分栏使用。
@@ -484,5 +503,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadMoreContext,
     closeTab,
     saveActiveLogWorkspaceLayout,
+    setRuntimeWorkspaceMaximized,
+    toggleRuntimeWorkspaceMaximized,
   }
 })
