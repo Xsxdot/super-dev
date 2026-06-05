@@ -136,6 +136,18 @@ describe('log ingestion', () => {
     expect(store.getLogs('dep1')).toHaveLength(1)
   })
 
+  it('timestamp 无效时退回按 id 稳定排序', () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-invalid-time')
+    const ws = MockWebSocket.instances[0]
+
+    ws.onmessage?.({ data: JSON.stringify({ id: 1, timestamp: 'invalid-time', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: 2, timestamp: 'invalid-time', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: 3, timestamp: 'invalid-time', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+
+    expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual([1, 2, 3])
+  })
+
   it('超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-trim')

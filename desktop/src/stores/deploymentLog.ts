@@ -32,8 +32,13 @@ export interface LoadHistoryResult {
 
 // compareLogs 按 timestamp 升序排列，时间相同时按 id 升序。
 function compareLogs(a: DisplayLogEntry, b: DisplayLogEntry): number {
-  const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  if (timeDiff !== 0) return timeDiff
+  const aTime = new Date(a.timestamp).getTime()
+  const bTime = new Date(b.timestamp).getTime()
+  // 日志时间来自外部进程，异常格式不能让比较结果变成 NaN，否则二分插入会退化并破坏顺序。
+  if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+    const timeDiff = aTime - bTime
+    if (timeDiff !== 0) return timeDiff
+  }
   return a.id - b.id
 }
 
