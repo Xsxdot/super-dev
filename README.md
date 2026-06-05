@@ -6,7 +6,10 @@
 
 <p align="center">
   <strong>AI-native 的运行态协作层。</strong><br />
-  让开发者与 AI 共享服务、日志、部署与审批上下文，在同一个真实环境里持续协作。
+  <strong>An AI-native runtime collaboration layer.</strong><br />
+  让开发者与 AI 共享服务、日志、部署与审批上下文，在同一个真实环境里持续协作。<br />
+  Let developers and AI share services, logs, deployments, and approval context in one real environment.<br />
+  <a href="#english-readme">Read the full English README</a>
 </p>
 
 <p align="center">
@@ -18,9 +21,9 @@
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16A34A" />
 </p>
 
-| 中文版 | English |
+| 中文界面 | English UI |
 | --- | --- |
-| **AI-native 的运行态协作层。**<br />让开发者与 AI 共享服务、日志、部署与审批上下文。<br /><br />![SuperDev 中文界面](./docs/assets/readme/screenshot-zh.png)<br /><br />[阅读全文](#为什么是-superdev) | **An AI-native runtime collaboration layer.**<br />Let developers and AI share services, logs, deployments, and approval context.<br /><br />![SuperDev English UI](./docs/assets/readme/screenshot-en.png)<br /><br />[Read full English README](#english-readme) |
+| ![SuperDev 中文界面](./docs/assets/readme/screenshot-zh.png) | ![SuperDev English UI](./docs/assets/readme/screenshot-en.png) |
 
 > 截图路径已固定；发布前请把干净的中英文界面截图放到 `docs/assets/readme/`。
 
@@ -31,6 +34,16 @@ AI 编程工具已经能读代码、改代码、跑命令，但代码协作只�
 如果 AI 看不到这些运行态，它就会另起服务、抢占端口、制造一套影子环境；每次对话都像从零开始，无法持续追踪某一项功能从本地调试、日志变化、部署流水线到线上错误的完整生命线。
 
 SuperDev 把本地服务、远端主机、日志、pipeline、ingress 和审批上下文收敛成一份本地优先的事实源，并通过 MCP 暴露给 Claude Code、Codex、Cursor 等智能体。AI 不再站在代码仓库外猜测，而是和你进入同一个真实开发现场。
+
+### Why SuperDev
+
+AI coding tools can read code, edit code, and run commands. But code collaboration only answers "what is in the repository." Real development depends on the runtime state that exists right now: which services are already running, which ports are occupied, which logs belong to the current feature, which pipeline just shipped, and which remote deployment is failing.
+
+When AI cannot see that runtime state, it starts another service, competes for ports, and creates a shadow environment. Each conversation feels like a restart. AI cannot continuously follow a feature from local debugging, through log changes and pipeline runs, to a production error.
+
+SuperDev brings local services, remote hosts, logs, pipelines, ingress, and approval context into one local-first source of truth, then exposes it to Claude Code, Codex, Cursor, and other coding agents through MCP. AI stops guessing from outside the repository and starts collaborating inside the same real development scene.
+
+[Read the full English README](#english-readme)
 
 ## 第一目标：与 AI 共享运行态
 
