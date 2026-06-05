@@ -248,6 +248,22 @@ func deployProjectPipelineInputSchema() map[string]any {
 	}
 }
 
+func validateProjectPipelineInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":    map[string]any{"type": "string"},
+			"project_name":  map[string]any{"type": "string"},
+			"pipeline_id":   map[string]any{"type": "string"},
+			"env_name":      map[string]any{"type": "string"},
+			"service_names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"variables":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		},
+		"required": []string{"pipeline_id", "env_name"},
+	}
+}
+
 func listPipelineRunsInputSchema() map[string]any {
 	schema := projectInputSchema()
 	properties := schema["properties"].(map[string]any)
@@ -534,6 +550,16 @@ func defaultTools(s *Server) []registeredTool {
 				InputSchema: upsertProjectPipelineInputSchema(),
 			},
 			Handler: s.upsertProjectPipelineTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "validate_project_pipeline",
+				Title:       "Validate project pipeline",
+				Description: "Validate an already saved project-level pipeline without executing it.",
+				InputSchema: validateProjectPipelineInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.validateProjectPipelineTool,
 		},
 		{
 			Tool: Tool{

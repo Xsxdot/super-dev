@@ -20,45 +20,48 @@ import (
 )
 
 type fakeAgentClient struct {
-	projects                 []model.Project
-	services                 []model.Service
-	rules                    []model.LogRule
-	logs                     LogsResponse
-	search                   LogSearchResponse
-	contextResp              LogContextResponse
-	contextQuery             url.Values
-	debugSessions            []DebugSession
-	debugSessionDetail       DebugSessionDetailResponse
-	createdDebugSession      DebugSessionCreateRequest
-	appendedSessionID        string
-	appendedEventRequest     DebugSessionAppendEventRequest
-	closedSessionID          string
-	stopCalled               bool
-	startedDeploymentID      string
-	stoppedDeploymentID      string
-	restartedDeploymentID    string
-	restartCallCount         int
-	restartErrors            []error
-	templatePreview          PipelineTemplatePreview
-	importedTemplate         PipelineTemplateSummary
-	importedTemplatePath     string
-	operationPlan            OperationPlan
-	operationApprovals       []OperationApproval
-	operationApprovalDetail  OperationApprovalDetail
-	operationApprovalDetails []OperationApprovalDetail
-	getApprovalCallCount     int
-	operationAudit           OperationAuditList
-	configProject            model.Project
-	configPreview            ConfigChangePreview
-	configApplyErr           error
-	lastConfigChange         ConfigChangeRequest
-	lastApprovalToken        string
-	pipelineRun              model.Run
-	pipelineRuns             []model.Run
-	pipelineArtifacts        []model.ArtifactRef
-	pipelineLogs             []model.RunLogLine
-	lastPipelineDeploy       PipelineDeployRequest
-	lastPipelineLogQuery     url.Values
+	projects                   []model.Project
+	services                   []model.Service
+	rules                      []model.LogRule
+	logs                       LogsResponse
+	search                     LogSearchResponse
+	contextResp                LogContextResponse
+	contextQuery               url.Values
+	debugSessions              []DebugSession
+	debugSessionDetail         DebugSessionDetailResponse
+	createdDebugSession        DebugSessionCreateRequest
+	appendedSessionID          string
+	appendedEventRequest       DebugSessionAppendEventRequest
+	closedSessionID            string
+	stopCalled                 bool
+	startedDeploymentID        string
+	stoppedDeploymentID        string
+	restartedDeploymentID      string
+	restartCallCount           int
+	restartErrors              []error
+	templatePreview            PipelineTemplatePreview
+	importedTemplate           PipelineTemplateSummary
+	importedTemplatePath       string
+	operationPlan              OperationPlan
+	operationApprovals         []OperationApproval
+	operationApprovalDetail    OperationApprovalDetail
+	operationApprovalDetails   []OperationApprovalDetail
+	getApprovalCallCount       int
+	operationAudit             OperationAuditList
+	configProject              model.Project
+	configPreview              ConfigChangePreview
+	configApplyErr             error
+	lastConfigChange           ConfigChangeRequest
+	lastApprovalToken          string
+	pipelineRun                model.Run
+	pipelineRuns               []model.Run
+	pipelineArtifacts          []model.ArtifactRef
+	pipelineLogs               []model.RunLogLine
+	pipelinePreview            ProjectPipelinePreview
+	pipelinePreviewErr         error
+	lastPipelineDeploy         PipelineDeployRequest
+	lastPipelinePreviewRequest ProjectPipelinePreviewRequest
+	lastPipelineLogQuery       url.Values
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -216,7 +219,14 @@ func (f *fakeAgentClient) DeployProjectPipeline(_ context.Context, _ string, _ s
 	return model.Run{ID: "run-1", ArtifactVersion: version, Status: model.StatusSuccess}, nil
 }
 
-func (f *fakeAgentClient) ValidateProjectPipeline(context.Context, string, string, ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error) {
+func (f *fakeAgentClient) ValidateProjectPipeline(_ context.Context, _ string, _ string, req ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error) {
+	f.lastPipelinePreviewRequest = req
+	if f.pipelinePreviewErr != nil {
+		return ProjectPipelinePreview{}, f.pipelinePreviewErr
+	}
+	if f.pipelinePreview.Run.ID != "" || f.pipelinePreview.Plan.Phases != nil {
+		return f.pipelinePreview, nil
+	}
 	return ProjectPipelinePreview{Run: model.Run{ID: "run-1", Status: model.StatusPending}}, nil
 }
 

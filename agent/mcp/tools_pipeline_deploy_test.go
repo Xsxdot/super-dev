@@ -11,12 +11,95 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
+
+func TestValidateProjectPipelineToolReturnsPreview(t *testing.T) {
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		pipelinePreview: ProjectPipelinePreview{
+			Plan: pipeline.Plan{Phases: map[model.PipelinePhase][]model.Step{
+				model.PhaseBuild: []model.Step{{Name: "Build", Type: "local_command"}},
+			}},
+			Run: model.Run{ID: "run-1", Status: model.StatusPending},
+		},
+	}
+	server := NewServer(client)
+
+	result := callPipelineTool(t, server, "validate_project_pipeline", `{
+		"project_id":"p1",
+		"pipeline_id":"deploy-prod",
+		"env_name":"prod",
+		"variables":{"version":"v1"}
+	}`)
+
+	assert.False(t, result.IsError)
+	payload := result.StructuredContent.(toolPayload)
+	data := payload.Data.(map[string]any)
+	assert.Equal(t, map[string]bool{"ok": true}, data["validation"])
+	assert.Equal(t, "prod", client.lastPipelinePreviewRequest.EnvName)
+	assert.Equal(t, "v1", client.lastPipelinePreviewRequest.Variables["version"])
+	assert.Contains(t, data, "plan")
+	assert.Contains(t, data, "run")
+}
+
+func TestValidateProjectPipelineToolRequiresEnvName(t *testing.T) {
+	server := NewServer(&fakeAgentClient{projects: []model.Project{sampleProject()}})
+
+	result := callPipelineTool(t, server, "validate_project_pipeline", `{
+		"project_id":"p1",
+		"pipeline_id":"deploy-prod"
+	}`)
+
+	assert.True(t, result.IsError)
+	payload := result.StructuredContent.(toolErrorPayload)
+	assert.Equal(t, "invalid_arguments", payload.Code)
+	assert.Equal(t, "env_name is required", payload.Message)
+}
+
+func TestValidateProjectPipelineToolMapsAgentError(t *testing.T) {
+	client := &fakeAgentClient{
+		projects:           []model.Project{sampleProject()},
+		pipelinePreviewErr: errors.New("agent error: pipeline validation failed: remote_command requires targets"),
+	}
+	server := NewServer(client)
+
+	result := callPipelineTool(t, server, "validate_project_pipeline", `{
+		"project_id":"p1",
+		"pipeline_id":"deploy-prod",
+		"env_name":"prod"
+	}`)
+
+	assert.True(t, result.IsError)
+	payload := result.StructuredContent.(toolErrorPayload)
+	assert.Equal(t, "pipeline_validation_failed", payload.Code)
+	assert.Contains(t, payload.Message, "remote_command requires targets")
+}
+
+func TestValidateProjectPipelineToolResolvesProjectName(t *testing.T) {
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		pipelinePreview: ProjectPipelinePreview{
+			Run: model.Run{ID: "run-1", Status: model.StatusPending},
+		},
+	}
+	server := NewServer(client)
+
+	result := callPipelineTool(t, server, "validate_project_pipeline", `{
+		"project_name":"demo",
+		"pipeline_id":"deploy-prod",
+		"env_name":"prod"
+	}`)
+
+	assert.False(t, result.IsError)
+	assert.Equal(t, "prod", client.lastPipelinePreviewRequest.EnvName)
+}
 
 func TestDeployProjectPipelineToolReturnsRun(t *testing.T) {
 	client := &fakeAgentClient{projects: []model.Project{sampleProject()}}

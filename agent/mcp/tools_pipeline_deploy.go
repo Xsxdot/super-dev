@@ -57,6 +57,39 @@ func (s *Server) deployProjectPipelineTool(ctx context.Context, args json.RawMes
 	return toolSuccess("project pipeline executed", map[string]any{"run": run}, nil, nil), nil
 }
 
+func (s *Server) validateProjectPipelineTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
+	var req struct {
+		pipelineReferenceArgs
+		EnvName      string            `json:"env_name"`
+		ServiceNames []string          `json:"service_names"`
+		Variables    map[string]string `json:"variables"`
+	}
+	if err := decodeToolArgs(args, &req); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
+	req.EnvName = strings.TrimSpace(req.EnvName)
+	if req.EnvName == "" {
+		return toolError("invalid_arguments", "env_name is required", nil), nil
+	}
+	ref, result, ok := s.resolvePipelineReference(ctx, req.pipelineReferenceArgs)
+	if !ok {
+		return result, nil
+	}
+	preview, err := s.client.ValidateProjectPipeline(ctx, ref.ProjectID, ref.PipelineID, ProjectPipelinePreviewRequest{
+		EnvName:      req.EnvName,
+		ServiceNames: req.ServiceNames,
+		Variables:    req.Variables,
+	})
+	if err != nil {
+		return toolError("pipeline_validation_failed", err.Error(), nil), nil
+	}
+	return toolSuccess("project pipeline validation succeeded", map[string]any{
+		"validation": map[string]bool{"ok": true},
+		"plan":       preview.Plan,
+		"run":        preview.Run,
+	}, nil, nil), nil
+}
+
 func (s *Server) listPipelineRunsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	ref, result, ok := s.decodePipelineReference(ctx, args)
 	if !ok {
