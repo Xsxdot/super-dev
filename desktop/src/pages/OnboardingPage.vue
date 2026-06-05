@@ -15,6 +15,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { codingAgents, useOnboardingStore } from '@/stores/onboarding'
 import { useSettingsStore } from '@/stores/settings'
 import { useAppI18n } from '@/i18n/useAppI18n'
@@ -31,6 +32,8 @@ const finishAction = ref<'confirm' | 'skip' | null>(null)
 const finishFeedback = ref('')
 const finishFeedbackTone = ref<'muted' | 'error'>('muted')
 const hasSuccessfulInstall = computed(() => onboarding.installOutcomes.length > 0)
+const appWindow = getCurrentWindow()
+const interactiveDragSelector = 'button, input, select, textarea, a, [role="button"], [data-no-window-drag]'
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(() => {
@@ -82,6 +85,15 @@ function changeLocale(event: Event) {
   settings.setLocale((event.target as HTMLSelectElement).value as SupportedLocale)
 }
 
+function isInteractiveDragTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest(interactiveDragSelector))
+}
+
+function startWindowDrag(event: MouseEvent) {
+  if (event.buttons !== 1 || isInteractiveDragTarget(event.target)) return
+  void appWindow.startDragging().catch(() => undefined)
+}
+
 async function copyPrompt() {
   clearCopyFeedbackTimer()
   try {
@@ -118,14 +130,28 @@ async function finish(action: 'confirm' | 'skip') {
 </script>
 
 <template>
-  <main class="onboarding-page">
-    <section class="onboarding-shell">
-      <header class="onboarding-header">
-        <div>
-          <h1>SuperDev</h1>
-          <p>{{ t('onboarding.tagline') }}</p>
+  <main
+    class="onboarding-page"
+    data-test="onboarding-page"
+    data-tauri-drag-region
+    @mousedown.self="startWindowDrag"
+  >
+    <section
+      class="onboarding-shell"
+      data-tauri-drag-region
+      @mousedown.self="startWindowDrag"
+    >
+      <header
+        class="onboarding-header"
+        data-test="onboarding-header"
+        data-tauri-drag-region="deep"
+        @mousedown="startWindowDrag"
+      >
+        <div data-tauri-drag-region>
+          <h1 data-tauri-drag-region>SuperDev</h1>
+          <p data-tauri-drag-region>{{ t('onboarding.tagline') }}</p>
         </div>
-        <label class="locale-control">
+        <label class="locale-control" data-no-window-drag>
           <span>{{ t('onboarding.languageLabel') }}</span>
           <select
             data-test="onboarding-locale-select"

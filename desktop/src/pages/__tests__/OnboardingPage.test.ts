@@ -19,9 +19,16 @@ import { LOCALE_STORAGE_KEY } from '@/i18n'
 import { installTestI18n } from '@/test-utils/i18n'
 
 const push = vi.fn()
+const windowApiMock = vi.hoisted(() => ({
+  startDragging: vi.fn(),
+}))
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push }),
+}))
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => windowApiMock,
 }))
 
 describe('OnboardingPage', () => {
@@ -30,6 +37,8 @@ describe('OnboardingPage', () => {
     vi.restoreAllMocks()
     localStorage.clear()
     push.mockReset()
+    windowApiMock.startDragging.mockReset()
+    windowApiMock.startDragging.mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
   })
 
@@ -50,6 +59,25 @@ describe('OnboardingPage', () => {
     expect(settings.locale).toBe('en-US')
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en-US')
     expect(wrapper.text()).toContain('Choose your coding agents')
+  })
+
+  it('starts native window dragging from onboarding chrome drag areas', async () => {
+    vi.spyOn(useOnboardingStore(), 'detectInstalledAgents').mockResolvedValue(undefined)
+    const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    await wrapper.find('[data-test="onboarding-header"]').trigger('mousedown', { buttons: 1 })
+
+    expect(wrapper.find('[data-test="onboarding-header"]').attributes('data-tauri-drag-region')).toBe('deep')
+    expect(windowApiMock.startDragging).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps onboarding form controls out of native dragging', async () => {
+    vi.spyOn(useOnboardingStore(), 'detectInstalledAgents').mockResolvedValue(undefined)
+    const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    await wrapper.find('[data-test="onboarding-locale-select"]').trigger('mousedown', { buttons: 1 })
+
+    expect(windowApiMock.startDragging).not.toHaveBeenCalled()
   })
 
   it('shows installed agents as selectable and unavailable agents as disabled', async () => {
