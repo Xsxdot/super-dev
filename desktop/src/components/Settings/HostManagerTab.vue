@@ -203,96 +203,101 @@ async function installAgent(host: Host) {
 
 <template>
   <section class="host-manager">
-    <header class="pane-header">
-      <h1>{{ t('settings.hosts.title') }}</h1>
-      <div class="toolbar">
-        <button class="primary" data-test="host-add" @click="openCreate">+ {{ t('settings.hosts.add') }}</button>
+    <header class="settings-pane-header">
+      <div>
+        <h1 class="settings-pane-title">{{ t('settings.hosts.title') }}</h1>
+      </div>
+      <div class="settings-toolbar">
+        <button class="settings-btn settings-btn-primary" data-test="host-add" @click="openCreate">+ {{ t('settings.hosts.add') }}</button>
       </div>
     </header>
 
-    <div v-if="error" class="error">{{ error }}</div>
-    <table v-if="sortedHosts.length > 0" class="host-table">
-      <thead>
-        <tr>
-          <th>{{ t('settings.hosts.name') }}</th>
-          <th>{{ t('settings.hosts.address') }}</th>
-          <th>{{ t('settings.hosts.tags') }}</th>
-          <th>{{ t('settings.hosts.tunnel') }}</th>
-          <th>{{ t('settings.hosts.agent') }}</th>
-          <th>{{ t('settings.hosts.agentMeta') }}</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <template v-for="host in sortedHosts" :key="host.id">
-          <tr data-test="host-row">
-            <td>{{ host.name }}</td>
-            <td>
-              <div class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</div>
-              <div v-if="host.public_ip || host.private_ip" class="address-meta" data-test="host-address-meta">
-                <span v-if="host.public_ip">{{ t('settings.hostForm.publicIP') }} {{ host.public_ip }}</span>
-                <span v-if="host.private_ip">{{ t('settings.hostForm.privateIP') }} {{ host.private_ip }}</span>
-              </div>
-            </td>
-            <td>
-              <span
-                v-for="tag in host.tags"
-                :key="tag"
-                class="tag-chip"
-                :style="{ background: tagColor(tag) }"
-              >
-                {{ tag }}
-              </span>
-            </td>
-            <td
-              class="mono tunnel-cell"
-              :class="{ 'tunnel-failed': hasHostError(host.id) }"
-              @click="hasHostError(host.id) && toggleError(host.id)"
-            >
-              {{ tunnelLabel(host.id) }}
-              <span v-if="hasHostError(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
-            </td>
-            <td class="agent-cell">
-              <span
-                v-if="agentHealthLabel(host.id)"
-                class="agent-health-badge"
-                :class="agentHealthClass(host.id)"
-                data-test="agent-health"
-              >
-                {{ agentHealthLabel(host.id) }}
-              </span>
-              <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
-              <button
-                v-if="!host.is_self"
-                type="button"
-                :disabled="isInstalling(host.id)"
-                :title="t('settings.hosts.agentInstallHelp')"
-                data-test="host-install-agent"
-                @click="installAgent(host)"
-              >
-                {{ isInstalling(host.id) ? t('settings.hosts.installing') : t('settings.hosts.installAction') }}
-              </button>
-              <span v-if="!host.is_self" class="install-help" data-test="host-install-help">
-                {{ t('settings.hosts.agentInstallHelp') }}
-              </span>
-            </td>
-            <td class="agent-meta-cell" data-test="agent-meta">
-              {{ agentMetaLabel(host.id) }}
-            </td>
-            <td class="row-actions">
-              <button @click="openEdit(host)">{{ t('common.edit') }}</button>
-              <button class="danger" @click="handleDelete(host)">{{ t('common.delete') }}</button>
-            </td>
+    <div v-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
+    <div v-if="sortedHosts.length > 0" class="settings-surface settings-surface-scroll">
+      <table class="settings-table host-table">
+        <thead>
+          <tr>
+            <th>{{ t('settings.hosts.name') }}</th>
+            <th>{{ t('settings.hosts.address') }}</th>
+            <th>{{ t('settings.hosts.tags') }}</th>
+            <th>{{ t('settings.hosts.tunnel') }}</th>
+            <th>{{ t('settings.hosts.agent') }}</th>
+            <th>{{ t('settings.hosts.agentMeta') }}</th>
+            <th></th>
           </tr>
-          <tr v-if="hasHostError(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
-            <td colspan="7">
-              <div class="tunnel-error-detail">{{ hostError(host.id) }}</div>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
-    <div v-else class="empty">{{ t('settings.hosts.empty') }}</div>
+        </thead>
+        <tbody>
+          <template v-for="host in sortedHosts" :key="host.id">
+            <tr data-test="host-row">
+              <td>{{ host.name }}</td>
+              <td>
+                <div class="mono">{{ host.ssh_user }}@{{ host.ssh_host }}:{{ host.ssh_port }}</div>
+                <div v-if="host.public_ip || host.private_ip" class="address-meta" data-test="host-address-meta">
+                  <span v-if="host.public_ip">{{ t('settings.hostForm.publicIP') }} {{ host.public_ip }}</span>
+                  <span v-if="host.private_ip">{{ t('settings.hostForm.privateIP') }} {{ host.private_ip }}</span>
+                </div>
+              </td>
+              <td>
+                <span
+                  v-for="tag in host.tags"
+                  :key="tag"
+                  class="tag-chip"
+                  :style="{ background: tagColor(tag) }"
+                >
+                  {{ tag }}
+                </span>
+              </td>
+              <td
+                class="mono tunnel-cell"
+                :class="{ 'tunnel-failed': hasHostError(host.id) }"
+                @click="hasHostError(host.id) && toggleError(host.id)"
+              >
+                {{ tunnelLabel(host.id) }}
+                <span v-if="hasHostError(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
+              </td>
+              <td class="agent-cell">
+                <span
+                  v-if="agentHealthLabel(host.id)"
+                  class="agent-health-badge"
+                  :class="agentHealthClass(host.id)"
+                  data-test="agent-health"
+                >
+                  {{ agentHealthLabel(host.id) }}
+                </span>
+                <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
+                <button
+                  v-if="!host.is_self"
+                  class="settings-btn settings-btn-text"
+                  type="button"
+                  :disabled="isInstalling(host.id)"
+                  :title="t('settings.hosts.agentInstallHelp')"
+                  data-test="host-install-agent"
+                  @click="installAgent(host)"
+                >
+                  {{ isInstalling(host.id) ? t('settings.hosts.installing') : t('settings.hosts.installAction') }}
+                </button>
+                <span v-if="!host.is_self" class="install-help" data-test="host-install-help">
+                  {{ t('settings.hosts.agentInstallHelp') }}
+                </span>
+              </td>
+              <td class="agent-meta-cell" data-test="agent-meta">
+                {{ agentMetaLabel(host.id) }}
+              </td>
+              <td class="row-actions">
+                <button class="settings-btn settings-btn-text" @click="openEdit(host)">{{ t('common.edit') }}</button>
+                <button class="settings-btn settings-btn-text settings-btn-danger" @click="handleDelete(host)">{{ t('common.delete') }}</button>
+              </td>
+            </tr>
+            <tr v-if="hasHostError(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
+              <td colspan="7">
+                <div class="tunnel-error-detail">{{ hostError(host.id) }}</div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div v-else class="settings-empty">{{ t('settings.hosts.empty') }}</div>
 
     <HostFormModal
       :visible="formVisible"
@@ -306,58 +311,6 @@ async function installAgent(host: Host) {
 <style scoped>
 .host-manager {
   width: 100%;
-}
-.pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-h1 {
-  margin: 0;
-  font-size: 18px;
-}
-.toolbar {
-  display: flex;
-  gap: 8px;
-}
-.toolbar button {
-  padding: 5px 9px;
-  color: var(--text-primary);
-  background: var(--bg-overlay);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 11px;
-}
-.toolbar button.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.error {
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  color: var(--status-failed);
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  font-size: 11px;
-}
-.host-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.host-table th,
-.host-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-secondary);
-  text-align: left;
-}
-.host-table th {
-  color: var(--text-tertiary);
-  font-weight: 400;
-  font-size: 11px;
 }
 .mono {
   font-family: var(--font-mono, monospace);
@@ -381,23 +334,6 @@ h1 {
 .row-actions {
   white-space: nowrap;
 }
-.row-actions button {
-  padding: 0 4px;
-  color: var(--accent);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 11px;
-}
-.row-actions button.danger {
-  color: var(--status-failed);
-}
-.empty {
-  padding: 32px;
-  color: var(--text-tertiary);
-  text-align: center;
-  font-size: 12px;
-}
 .tunnel-cell {
   white-space: nowrap;
 }
@@ -407,18 +343,6 @@ h1 {
   gap: 6px;
   white-space: nowrap;
   flex-wrap: wrap;
-}
-.agent-cell button {
-  padding: 0 4px;
-  color: var(--accent);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 11px;
-}
-.agent-cell button:disabled {
-  color: var(--text-tertiary);
-  cursor: default;
 }
 .agent-ok {
   color: var(--status-running);

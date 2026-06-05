@@ -30,25 +30,25 @@ function shortFingerprint(approval: OperationApproval): string {
 
 <template>
   <section data-test="operation-approvals-tab" class="approval-pane">
-    <header class="approval-header">
+    <header class="settings-pane-header approval-header">
       <div>
-        <h1>{{ t('settings.approvals.title') }}</h1>
-        <p>{{ t('settings.approvals.pendingCount', { count: store.pendingCount }) }}</p>
+        <h1 class="settings-pane-title">{{ t('settings.approvals.title') }}</h1>
+        <p class="settings-pane-description">{{ t('settings.approvals.pendingCount', { count: store.pendingCount }) }}</p>
       </div>
-      <button class="ghost-btn" type="button" :disabled="store.loading" @click="() => store.loadPending()">
+      <button class="settings-btn settings-btn-secondary" type="button" :disabled="store.loading" @click="() => store.loadPending()">
         {{ t('settings.approvals.refresh') }}
       </button>
     </header>
 
-    <p v-if="store.error" class="error-text">{{ store.error }}</p>
-    <p v-else-if="store.approvals.length === 0" class="empty-text">{{ t('settings.approvals.empty') }}</p>
+    <p v-if="store.error" class="settings-alert settings-alert-danger">{{ store.error }}</p>
+    <p v-else-if="store.approvals.length === 0" class="settings-empty">{{ t('settings.approvals.empty') }}</p>
 
     <div v-else class="approval-list">
-      <article v-for="approval in store.approvals" :key="approval.id" class="approval-item">
+      <article v-for="approval in store.approvals" :key="approval.id" class="settings-card approval-item">
         <div class="approval-main">
           <div class="approval-title">
             <strong>{{ approval.plan.kind }}</strong>
-            <span class="risk-badge">{{ t('settings.approvals.risk') }} {{ approval.plan.risk_level }}</span>
+            <span class="settings-badge risk-badge">{{ t('settings.approvals.risk') }} {{ approval.plan.risk_level }}</span>
           </div>
           <p>{{ approval.plan.target_summary || approval.plan.target.deployment_id || approval.plan.target.template_path }}</p>
           <p class="fingerprint">{{ shortFingerprint(approval) }}</p>
@@ -71,7 +71,7 @@ function shortFingerprint(approval: OperationApproval): string {
 
         <div class="approval-actions">
           <button
-            class="primary-btn"
+            class="settings-btn settings-btn-primary"
             type="button"
             :data-test="`approval-approve-${approval.id}`"
             @click="store.approve(approval.id, '')"
@@ -79,7 +79,7 @@ function shortFingerprint(approval: OperationApproval): string {
             {{ t('settings.approvals.approve') }}
           </button>
           <button
-            class="danger-btn"
+            class="settings-btn settings-btn-danger"
             type="button"
             :data-test="`approval-reject-${approval.id}`"
             @click="store.reject(approval.id, '')"
@@ -96,24 +96,10 @@ function shortFingerprint(approval: OperationApproval): string {
 .approval-pane {
   width: 100%;
 }
-.approval-header,
 .approval-title,
 .approval-actions {
   display: flex;
   align-items: center;
-}
-.approval-header {
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-h1 {
-  margin: 0;
-  font-size: 18px;
-}
-p {
-  margin: 4px 0 0;
-  color: var(--text-tertiary);
-  font-size: 11px;
 }
 .approval-list {
   display: flex;
@@ -125,9 +111,6 @@ p {
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.4fr) auto;
   gap: 14px;
   align-items: start;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  background: var(--bg-elevated);
   padding: 12px;
 }
 .approval-title {
@@ -137,12 +120,14 @@ p {
 .approval-title strong {
   font-size: 13px;
 }
-.risk-badge {
-  border: 1px solid var(--border-secondary);
-  border-radius: 999px;
-  padding: 2px 7px;
-  color: var(--text-secondary);
+.approval-main p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
   font-size: 11px;
+}
+.approval-pane > .settings-empty,
+.approval-pane > .settings-alert {
+  margin: 0;
 }
 .fingerprint {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -162,38 +147,6 @@ ul {
 }
 .approval-actions {
   gap: 8px;
-}
-.primary-btn,
-.ghost-btn,
-.danger-btn {
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.primary-btn {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.ghost-btn {
-  background: transparent;
-  color: var(--text-secondary);
-}
-.danger-btn {
-  background: transparent;
-  color: var(--danger);
-}
-.empty-text,
-.error-text {
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 12px;
-  background: var(--bg-elevated);
-}
-.error-text {
-  color: var(--danger);
 }
 @media (max-width: 760px) {
   .approval-item {

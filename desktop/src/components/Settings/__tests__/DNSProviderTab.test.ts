@@ -47,6 +47,21 @@ describe('DNSProviderTab', () => {
     expect(wrapper.find('[data-test="dns-provider-delete-manual"]').exists()).toBe(false)
   })
 
+  it('uses shared settings surface and modal classes', async () => {
+    const wrapper = mount(DNSProviderTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    expect(wrapper.find('.settings-pane-header').exists()).toBe(true)
+    expect(wrapper.find('.settings-surface').exists()).toBe(true)
+    expect(wrapper.find('.settings-table').exists()).toBe(true)
+
+    await wrapper.find('[data-test="dns-provider-add"]').trigger('click')
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dns-provider-save"]').classes()).toContain('settings-btn-primary')
+  })
+
   it('saves a cloudflare provider', async () => {
     mockedApi.upsertDNSProvider.mockResolvedValue({
       id: 'cloudflare-prod',

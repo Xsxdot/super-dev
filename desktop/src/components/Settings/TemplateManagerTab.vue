@@ -30,21 +30,21 @@ function categoryLabel(template: PipelineTemplateSummary) {
 
 <template>
   <section class="template-manager">
-    <header class="template-toolbar">
+    <header class="settings-pane-header template-toolbar">
       <div>
-        <h1>{{ t('settings.templates.title') }}</h1>
-        <p>{{ t('settings.templates.description') }}</p>
+        <h1 class="settings-pane-title">{{ t('settings.templates.title') }}</h1>
+        <p class="settings-pane-description">{{ t('settings.templates.description') }}</p>
       </div>
-      <button type="button" class="primary-btn" data-test="template-import" @click="props.onImport?.()">
+      <button type="button" class="settings-btn settings-btn-primary" data-test="template-import" @click="props.onImport?.()">
         {{ t('settings.templates.import') }}
       </button>
     </header>
 
-    <div v-if="templates.length === 0" class="empty">
+    <div v-if="templates.length === 0" class="settings-empty">
       {{ t('settings.templates.empty') }}
     </div>
 
-    <div v-else class="template-table">
+    <div v-else class="settings-surface template-table">
       <div class="template-row table-head">
         <span>{{ t('settings.templates.source') }}</span>
         <span>{{ t('settings.templates.category') }}</span>
@@ -59,7 +59,7 @@ function categoryLabel(template: PipelineTemplateSummary) {
         <span class="name">{{ template.name }}</span>
         <span>{{ template.version }}</span>
         <span class="description">{{ template.description || t('settings.templates.noDescription') }}</span>
-        <button type="button" class="text-btn" :data-test="`template-view-${template.id}`" @click="props.onView?.(template)">
+        <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`template-view-${template.id}`" @click="props.onView?.(template)">
           {{ t('common.view') }}
         </button>
       </div>
@@ -72,38 +72,9 @@ function categoryLabel(template: PipelineTemplateSummary) {
   width: 100%;
 }
 .template-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
   margin-bottom: 14px;
 }
-.template-toolbar h1 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--text-primary);
-}
-.template-toolbar p {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.primary-btn {
-  padding: 5px 12px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-}
-.empty {
-  padding: 12px 0;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
 .template-table {
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
   overflow: hidden;
 }
 .template-row {
@@ -139,12 +110,6 @@ function categoryLabel(template: PipelineTemplateSummary) {
   color: var(--accent);
 }
 .text-btn {
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0;
   text-align: left;
 }
 </style>

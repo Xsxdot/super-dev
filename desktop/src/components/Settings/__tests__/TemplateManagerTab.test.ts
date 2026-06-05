@@ -61,6 +61,28 @@ describe('TemplateManagerTab', () => {
     expect(onImport).toHaveBeenCalled()
   })
 
+  it('uses shared settings surface and action classes', () => {
+    const wrapper = mount(TemplateManagerTab, {
+      props: {
+        templates: [{
+          source: 'builtin',
+          id: 'node',
+          name: 'Node Standard Build',
+          category: 'build',
+          version: '1.0.0',
+          digest: 'sha256:node',
+          description: 'Install dependencies and build Node project',
+        }],
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('.settings-pane-header').exists()).toBe(true)
+    expect(wrapper.find('.settings-surface').exists()).toBe(true)
+    expect(wrapper.find('[data-test="template-import"]').classes()).toContain('settings-btn-primary')
+    expect(wrapper.find('[data-test="template-view-node"]').classes()).toContain('settings-btn-text')
+  })
+
   it('点击查看触发 onView', async () => {
     const onView = vi.fn()
     const template = { source: 'builtin', id: 'go-binary-build', name: 'Go Build', category: 'build', version: '1.0.0', digest: 'sha256:x' } as const

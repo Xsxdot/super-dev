@@ -132,95 +132,102 @@ async function deleteProvider(provider: DNSProviderConfig) {
 
 <template>
   <section class="dns-provider-tab">
-    <header class="pane-header">
-      <h1>{{ t('settings.dnsProviders.title') }}</h1>
-      <button type="button" class="primary-btn" data-test="dns-provider-add" @click="openCreate">
+    <header class="settings-pane-header">
+      <div>
+        <h1 class="settings-pane-title">{{ t('settings.dnsProviders.title') }}</h1>
+      </div>
+      <button type="button" class="settings-btn settings-btn-primary" data-test="dns-provider-add" @click="openCreate">
         + {{ t('settings.dnsProviders.add') }}
       </button>
     </header>
 
-    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
 
-    <table class="provider-table">
-      <thead>
-        <tr>
-          <th>{{ t('settings.dnsProviders.name') }}</th>
-          <th>{{ t('settings.dnsProviders.type') }}</th>
-          <th>{{ t('settings.dnsProviders.details') }}</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr data-test="dns-provider-manual">
-          <td>{{ t('settings.dnsProviders.manual') }}</td>
-          <td>manual</td>
-          <td>-</td>
-          <td class="actions"></td>
-        </tr>
-        <tr v-for="provider in providers" :key="provider.id || provider.name" data-test="dns-provider-row">
-          <td>{{ provider.name }}</td>
-          <td>{{ provider.type }}</td>
-          <td class="mono">{{ providerDetail(provider) }}</td>
-          <td class="actions">
-            <button
-              type="button"
-              :data-test="`dns-provider-edit-${provider.id || provider.name}`"
-              @click="openEdit(provider)"
-            >
-              {{ t('common.edit') }}
-            </button>
-            <button type="button" class="danger" @click="deleteProvider(provider)">
-              {{ t('common.delete') }}
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="settings-surface settings-surface-scroll">
+      <table class="settings-table provider-table">
+        <thead>
+          <tr>
+            <th>{{ t('settings.dnsProviders.name') }}</th>
+            <th>{{ t('settings.dnsProviders.type') }}</th>
+            <th>{{ t('settings.dnsProviders.details') }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-test="dns-provider-manual">
+            <td>{{ t('settings.dnsProviders.manual') }}</td>
+            <td>manual</td>
+            <td>-</td>
+            <td class="actions"></td>
+          </tr>
+          <tr v-for="provider in providers" :key="provider.id || provider.name" data-test="dns-provider-row">
+            <td>{{ provider.name }}</td>
+            <td>{{ provider.type }}</td>
+            <td class="mono">{{ providerDetail(provider) }}</td>
+            <td class="actions">
+              <button
+                type="button"
+                class="settings-btn settings-btn-text"
+                :data-test="`dns-provider-edit-${provider.id || provider.name}`"
+                @click="openEdit(provider)"
+              >
+                {{ t('common.edit') }}
+              </button>
+              <button type="button" class="settings-btn settings-btn-text settings-btn-danger" @click="deleteProvider(provider)">
+                {{ t('common.delete') }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
-    <div v-if="formOpen" class="modal-backdrop" @click.self="formOpen = false">
-      <section class="modal">
-        <header class="modal-header">
-          <h2>{{ isEditing ? t('common.edit') : t('settings.dnsProviders.add') }}</h2>
-          <button type="button" class="icon-btn" @click="formOpen = false">×</button>
+    <div v-if="formOpen" class="settings-modal-backdrop" @click.self="formOpen = false">
+      <section class="settings-modal">
+        <header class="settings-modal-header">
+          <h2 class="settings-modal-title">{{ isEditing ? t('common.edit') : t('settings.dnsProviders.add') }}</h2>
+          <button type="button" class="settings-btn settings-btn-icon settings-btn-ghost" @click="formOpen = false">×</button>
         </header>
 
-        <label>
-          <span>{{ t('settings.dnsProviders.id') }}</span>
-          <input v-model="draft.id" data-test="dns-provider-id" placeholder="cloudflare-prod" :disabled="isEditing" />
-        </label>
-        <label>
-          <span>{{ t('settings.dnsProviders.name') }}</span>
-          <input v-model="draft.name" data-test="dns-provider-name" />
-        </label>
-        <label>
-          <span>{{ t('settings.dnsProviders.type') }}</span>
-          <select v-model="draft.type" data-test="dns-provider-type">
-            <option value="cloudflare">Cloudflare</option>
-            <option value="aliyun">Aliyun</option>
-          </select>
-        </label>
-        <label v-if="draft.type === 'cloudflare'">
-          <span>{{ t('settings.dnsProviders.zoneIDOptional') }}</span>
-          <input v-model="draft.zone_id" data-test="dns-provider-zone" />
-        </label>
-        <label v-if="draft.type === 'cloudflare'">
-          <span>{{ t('settings.dnsProviders.apiToken') }}</span>
-          <input v-model="draft.api_token" type="password" data-test="dns-provider-token" />
-        </label>
-        <template v-else>
-          <label>
-            <span>{{ t('settings.dnsProviders.accessKeyID') }}</span>
-            <input v-model="draft.access_key_id" data-test="dns-provider-access-key-id" />
+        <div class="settings-modal-body">
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.dnsProviders.id') }}</span>
+            <input v-model="draft.id" class="settings-input" data-test="dns-provider-id" placeholder="cloudflare-prod" :disabled="isEditing" />
           </label>
-          <label>
-            <span>{{ t('settings.dnsProviders.accessKeySecret') }}</span>
-            <input v-model="draft.access_key_secret" type="password" data-test="dns-provider-access-key-secret" />
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.dnsProviders.name') }}</span>
+            <input v-model="draft.name" class="settings-input" data-test="dns-provider-name" />
           </label>
-        </template>
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.dnsProviders.type') }}</span>
+            <select v-model="draft.type" class="settings-select" data-test="dns-provider-type">
+              <option value="cloudflare">Cloudflare</option>
+              <option value="aliyun">Aliyun</option>
+            </select>
+          </label>
+          <label v-if="draft.type === 'cloudflare'" class="settings-field">
+            <span class="settings-field-label">{{ t('settings.dnsProviders.zoneIDOptional') }}</span>
+            <input v-model="draft.zone_id" class="settings-input" data-test="dns-provider-zone" />
+          </label>
+          <label v-if="draft.type === 'cloudflare'" class="settings-field">
+            <span class="settings-field-label">{{ t('settings.dnsProviders.apiToken') }}</span>
+            <input v-model="draft.api_token" class="settings-input" type="password" data-test="dns-provider-token" />
+          </label>
+          <template v-else>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.dnsProviders.accessKeyID') }}</span>
+              <input v-model="draft.access_key_id" class="settings-input" data-test="dns-provider-access-key-id" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.dnsProviders.accessKeySecret') }}</span>
+              <input v-model="draft.access_key_secret" class="settings-input" type="password" data-test="dns-provider-access-key-secret" />
+            </label>
+          </template>
+        </div>
 
-        <footer>
-          <button type="button" @click="formOpen = false">{{ t('common.cancel') }}</button>
-          <button type="button" class="primary-btn" :disabled="saving" data-test="dns-provider-save" @click="submitProvider">
+        <footer class="settings-modal-footer">
+          <button type="button" class="settings-btn" @click="formOpen = false">{{ t('common.cancel') }}</button>
+          <button type="button" class="settings-btn settings-btn-primary" :disabled="saving" data-test="dns-provider-save" @click="submitProvider">
             {{ t('common.save') }}
           </button>
         </footer>
@@ -233,113 +240,17 @@ async function deleteProvider(provider: DNSProviderConfig) {
 .dns-provider-tab {
   width: 100%;
 }
-.pane-header,
-.modal-header,
-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.pane-header {
-  margin-bottom: 16px;
-}
-h1,
-h2 {
-  margin: 0;
-  font-size: 18px;
-}
-h2 {
-  font-size: 14px;
-}
-.provider-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.provider-table th,
-.provider-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border-secondary);
-  text-align: left;
-}
-.provider-table th {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 400;
-}
 .mono {
   font-family: var(--font-mono, monospace);
 }
+.settings-modal-body {
+  display: grid;
+  gap: 10px;
+}
 .actions {
-  text-align: right;
-}
-.error {
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  color: var(--status-failed);
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  font-size: 11px;
-}
-button {
-  padding: 5px 10px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  cursor: pointer;
-  font-size: 12px;
-}
-.primary-btn {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.danger {
-  color: var(--status-failed);
-}
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-}
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-.modal {
-  width: min(440px, calc(100vw - 32px));
-  padding: 16px 18px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-input,
-select {
-  padding: 6px 8px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  font-size: 12px;
-}
-footer {
   justify-content: flex-end;
-  margin-top: 16px;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+  gap: 10px;
+  text-align: right;
 }
 </style>

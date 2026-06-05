@@ -90,6 +90,28 @@ describe('HostManagerTab', () => {
     expect(wrapper.find('[data-test="host-form-name"]').exists()).toBe(true)
   })
 
+  it('uses shared settings table and toolbar classes', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const store = useRemoteStore()
+    await new Promise(resolve => setTimeout(resolve))
+    store.hosts = [{
+      id: 'h1',
+      name: 'host-test',
+      ssh_host: '1.1.1.1',
+      ssh_port: 22,
+      ssh_user: 'root',
+      remote_agent_port: 57017,
+      local_tunnel_port: 0,
+      tags: [],
+    }]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.settings-pane-header').exists()).toBe(true)
+    expect(wrapper.find('.settings-toolbar').exists()).toBe(true)
+    expect(wrapper.find('.settings-table').exists()).toBe(true)
+    expect(wrapper.find('[data-test="host-add"]').classes()).toContain('settings-btn-primary')
+  })
+
   it('提交表单调用 store.createHost', async () => {
     const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
     const store = useRemoteStore()
