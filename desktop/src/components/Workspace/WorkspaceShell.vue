@@ -2,11 +2,11 @@
 工作区壳组件
 
 职责：
-  - 在右侧主内容区顶部提供工作区标签栏
   - 根据 active tab 渲染项目日志面板或搜索页
 
 边界：
   - 不直接处理侧边栏点击
+  - 不渲染 workspace 标签栏；MainPage 的 app 顶栏负责标签入口
   - 不实现搜索结果渲染细节
 -->
 <script setup lang="ts">
@@ -14,7 +14,6 @@ import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import RuntimeWorkbenchHeader from './RuntimeWorkbenchHeader.vue'
-import WorkspaceTabs from './WorkspaceTabs.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
@@ -36,7 +35,6 @@ const isRuntimeTab = computed(() =>
 
 <template>
   <div class="workspace-shell">
-    <WorkspaceTabs v-if="workspace.tabs.length && !workspace.isRuntimeWorkspaceMaximized" />
     <div v-if="!workspace.activeTab" class="workspace-empty">
       <div>{{ t('shell.emptyWorkspace') }}</div>
     </div>

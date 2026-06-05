@@ -186,6 +186,36 @@ describe('SidebarView', () => {
     wrapper.unmount()
   })
 
+  it('项目选择菜单不包含项目概览入口', async () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('[data-test="project-selector"]').trigger('click')
+
+    expect(wrapper.find('[data-test="project-overview-menu"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="project-menu"]').text()).not.toContain('Project overview')
+  })
+
+  it('项目概览横栏位于拖拽分栏提示之前', () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+    const shell = wrapper.find('[data-test="sidebar-project-shell"]').element
+    const overview = wrapper.find('[data-test="project-overview"]').element
+    const dropHint = wrapper.find('[data-test="sidebar-drop-hint"]').element
+
+    expect(shell.contains(overview)).toBe(true)
+    expect(shell.contains(dropHint)).toBe(true)
+    expect(overview.compareDocumentPosition(dropHint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('首个非 dev 环境默认展开，服务行可直接拖拽', () => {
     const agent = useAgentStore()
     agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api', 'demo', false)]

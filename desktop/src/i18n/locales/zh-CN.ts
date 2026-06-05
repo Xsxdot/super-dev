@@ -444,6 +444,7 @@ export default {
       dragServiceToSplit: '拖拽服务到面板分栏',
       switchProject: '切换项目',
       currentProject: '当前',
+      projectOverviewHint: '状态 · 流水线 · 入口',
     },
     env: {
       startAll: '启动全部',

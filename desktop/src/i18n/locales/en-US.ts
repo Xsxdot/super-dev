@@ -444,6 +444,7 @@ export default {
       dragServiceToSplit: 'Drag service to split panel',
       switchProject: 'Switch project',
       currentProject: 'Current',
+      projectOverviewHint: 'Status · pipelines · ingress',
     },
     env: {
       startAll: 'Start all',

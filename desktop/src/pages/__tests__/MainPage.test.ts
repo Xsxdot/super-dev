@@ -24,8 +24,20 @@ vi.mock('@/components/Workspace/WorkspaceShell.vue', () => ({
   default: { template: '<main data-test="workspace-stub" />' },
 }))
 
+vi.mock('@/components/Workspace/WorkspaceTabs.vue', () => ({
+  default: { template: '<nav data-test="workspace-tabs-stub" />' },
+}))
+
 vi.mock('@/components/BottomBar.vue', () => ({
   default: { template: '<footer data-test="bottom-bar-stub" />' },
+}))
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    close: vi.fn(),
+    minimize: vi.fn(),
+    toggleMaximize: vi.fn(),
+  }),
 }))
 
 describe('MainPage', () => {
@@ -43,9 +55,28 @@ describe('MainPage', () => {
 
     const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
 
+    expect(wrapper.find('[data-test="app-topbar"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="sidebar-stub"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="workspace-stub"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="bottom-bar-stub"]').exists()).toBe(false)
+  })
+
+  it('renders the app chrome and workspace tabs in one compact top row', () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+    const workspace = useWorkspaceStore()
+    workspace.openDeployment('dep-1', 'api · demo')
+
+    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
+    const layout = wrapper.find('[data-test="main-layout"]').element
+    const topbar = wrapper.find('[data-test="app-topbar"]').element
+    const contentRow = wrapper.find('[data-test="main-content-row"]').element
+    const tabs = wrapper.find('[data-test="workspace-tabs-stub"]').element
+
+    expect(topbar.parentElement).toBe(layout)
+    expect(contentRow.parentElement).toBe(layout)
+    expect(topbar.compareDocumentPosition(contentRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(topbar.contains(tabs)).toBe(true)
+    expect(contentRow.contains(tabs)).toBe(false)
   })
 
   it('renders bottom bar below the sidebar/workspace row so it spans the full app width', () => {

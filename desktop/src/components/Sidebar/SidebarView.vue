@@ -60,6 +60,10 @@ function openProjectSearch(projectId: string) {
   workspace.openSearch(projectId)
 }
 
+function openProjectOverview(projectId: string) {
+  workspace.openProjectOverview(projectId)
+}
+
 function servicesForEnv(services: Service[], envName: string): Service[] {
   const query = serviceQuery.value.trim().toLowerCase()
   return services
@@ -113,33 +117,43 @@ onBeforeUnmount(() => {
           @add-project="addProject"
         />
         <div class="sidebar-project-shell" data-test="sidebar-project-shell">
-        <div class="sidebar-search">
-          <span class="search-icon">⌕</span>
-          <input
-            ref="searchInput"
-            v-model="serviceQuery"
-            data-test="sidebar-service-search"
-            :placeholder="t('shell.sidebar.searchServices')"
+          <div class="sidebar-search">
+            <span class="search-icon">⌕</span>
+            <input
+              ref="searchInput"
+              v-model="serviceQuery"
+              data-test="sidebar-service-search"
+              :placeholder="t('shell.sidebar.searchServices')"
+            />
+            <span class="search-shortcut" data-test="sidebar-search-shortcut">⌘K</span>
+          </div>
+          <button
+            type="button"
+            class="project-overview-strip"
+            data-test="project-overview"
+            @click="openProjectOverview(selectedProject.id)"
+          >
+            <span class="overview-strip-icon" aria-hidden="true"></span>
+            <span class="overview-strip-main">{{ t('overview.openOverview') }}</span>
+            <span class="overview-strip-hint">{{ t('shell.sidebar.projectOverviewHint') }}</span>
+          </button>
+          <div class="drop-hint" data-test="sidebar-drop-hint">
+            <span class="drop-icon">▣</span>
+            <span>{{ t('shell.sidebar.dragServiceToSplit') }}</span>
+          </div>
+          <!-- 按环境分组展示有 deployment 的 service 行 -->
+          <EnvGroup
+            v-for="(env, index) in selectedProject.environments ?? []"
+            :key="env.id || env.name"
+            :env-name="env.name"
+            :is-dev="env.is_dev"
+            :initially-expanded="env.is_dev || index === 0"
+            :project-id="selectedProject.id"
+            :services="servicesForEnv(selectedProject.services, env.name)"
+            :selected-service-ids="openDeploymentIdSet()"
+            @open-deployment="openDeployment"
+            @search="openProjectSearch(selectedProject.id)"
           />
-          <span class="search-shortcut" data-test="sidebar-search-shortcut">⌘K</span>
-        </div>
-        <div class="drop-hint">
-          <span class="drop-icon">▣</span>
-          <span>{{ t('shell.sidebar.dragServiceToSplit') }}</span>
-        </div>
-        <!-- 按环境分组展示有 deployment 的 service 行 -->
-        <EnvGroup
-          v-for="(env, index) in selectedProject.environments ?? []"
-          :key="env.id || env.name"
-          :env-name="env.name"
-          :is-dev="env.is_dev"
-          :initially-expanded="env.is_dev || index === 0"
-          :project-id="selectedProject.id"
-          :services="servicesForEnv(selectedProject.services, env.name)"
-          :selected-service-ids="openDeploymentIdSet()"
-          @open-deployment="openDeployment"
-          @search="openProjectSearch(selectedProject.id)"
-        />
         </div>
       </template>
     </div>
@@ -229,6 +243,55 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.project-overview-strip {
+  display: grid;
+  width: calc(100% - 4px);
+  min-height: 42px;
+  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 10px;
+  padding: 0 11px;
+  border: 1px solid rgba(91, 106, 128, 0.32);
+  border-radius: 7px;
+  background: rgba(15, 24, 34, 0.62);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.project-overview-strip:hover {
+  border-color: rgba(88, 166, 255, 0.42);
+  background: rgba(24, 39, 54, 0.72);
+  color: var(--text-primary);
+}
+
+.overview-strip-icon {
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.92;
+}
+
+.overview-strip-main {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.overview-strip-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
