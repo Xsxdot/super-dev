@@ -60,7 +60,7 @@ function removeTag(tag: string) {
     </span>
     <input
       v-model="input"
-      class="tag-text"
+      class="settings-input tag-text"
       :placeholder="t('common.tagPlaceholder')"
       @keydown="onKeydown"
       @blur="onBlur"
@@ -104,6 +104,7 @@ function removeTag(tag: string) {
 .tag-text {
   flex: 1;
   min-width: 80px;
+  min-height: 22px;
   padding: 0 2px;
   color: var(--text-primary);
   background: transparent;

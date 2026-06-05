@@ -67,6 +67,16 @@ describe('ProjectPipelineEditor', () => {
     vi.clearAllMocks()
   })
 
+  it('uses shared settings wide modal shell', async () => {
+    const wrapper = mountProjectPipelineEditor()
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal-wide').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-save"]').classes()).toContain('settings-btn-primary')
+    expect(wrapper.find('[data-test="pipeline-config-cancel"]').classes()).toContain('settings-btn')
+  })
+
   it('渲染项目流水线编辑弹窗', async () => {
     const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))

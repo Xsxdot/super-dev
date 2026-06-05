@@ -48,12 +48,14 @@ function delRow(i: number) {
 <template>
   <div class="env-editor">
     <div v-for="(row, i) in rows" :key="i" class="env-row" data-test="env-row">
-      <input v-model="row.key" class="env-input" placeholder="KEY" @input="emitRows" />
+      <input v-model="row.key" class="settings-input env-input" placeholder="KEY" @input="emitRows" />
       <span class="env-eq">=</span>
-      <input v-model="row.value" class="env-input" placeholder="VALUE" @input="emitRows" />
-      <button type="button" class="env-del" data-test="env-del" @click="delRow(i)">✕</button>
+      <input v-model="row.value" class="settings-input env-input" placeholder="VALUE" @input="emitRows" />
+      <button type="button" class="settings-btn settings-btn-danger env-del" data-test="env-del" @click="delRow(i)">✕</button>
     </div>
-    <button type="button" class="env-add" data-test="env-add" @click="addRow">{{ t('settings.deployment.addEnvVar') }}</button>
+    <button type="button" class="settings-btn settings-btn-secondary env-add" data-test="env-add" @click="addRow">
+      {{ t('settings.deployment.addEnvVar') }}
+    </button>
   </div>
 </template>
 
@@ -66,30 +68,14 @@ function delRow(i: number) {
 }
 .env-input {
   flex: 1;
-  padding: 3px 6px;
-  font-size: 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  color: var(--text-primary);
-  outline: none;
 }
 .env-eq {
   color: var(--text-tertiary);
 }
 .env-del {
-  padding: 2px 6px;
-  background: transparent;
-  border: 1px solid var(--border-secondary);
-  color: var(--text-tertiary);
-  cursor: pointer;
+  min-width: 28px;
 }
 .env-add {
   margin-top: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-secondary);
-  color: var(--text-secondary);
-  cursor: pointer;
 }
 </style>

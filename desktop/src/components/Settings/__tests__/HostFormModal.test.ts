@@ -31,6 +31,19 @@ vi.mock('@/api/agent', async () => {
 })
 
 describe('HostFormModal', () => {
+  it('uses shared settings modal and field classes', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: { visible: true },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal').exists()).toBe(true)
+    expect(wrapper.findAll('.settings-field').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-test="host-form-name"]').classes()).toContain('settings-input')
+    expect(wrapper.find('[data-test="host-form-test"]').classes()).toContain('settings-btn')
+  })
+
   it('emits public and private IP fields without changing SSH address', async () => {
     const wrapper = mount(HostFormModal, {
       props: { visible: true, initial: null },

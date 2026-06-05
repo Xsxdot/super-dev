@@ -295,10 +295,10 @@ function setEnv(env: Record<string, string>) {
         {{ controlMode === 'monitor' ? t('settings.deployment.monitorDesc') : t('settings.deployment.managedDesc') }}
       </div>
 
-      <div class="dep-field">
-        <label class="dep-label">{{ controlMode === 'monitor' ? t('settings.deployment.monitorTarget') : t('settings.deployment.managedMode') }}</label>
+      <div class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ controlMode === 'monitor' ? t('settings.deployment.monitorTarget') : t('settings.deployment.managedMode') }}</label>
         <select
-          class="dep-input"
+          class="settings-select dep-input"
           data-test="dep-target-type"
           :value="runtime.type"
           @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
@@ -312,18 +312,18 @@ function setEnv(env: Record<string, string>) {
       </div>
 
       <template v-if="runtime.type === 'command'">
-        <div class="dep-field">
-          <label class="dep-label">{{ t('settings.deployment.startCommand') }}</label>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.startCommand') }}</label>
           <input
-            class="dep-input"
+            class="settings-input dep-input"
             data-test="dep-command"
             :placeholder="t('settings.deployment.commandPlaceholder')"
             :value="runtime.command"
             @input="patchRuntime({ type: 'command', command: ($event.target as HTMLInputElement).value })"
           />
         </div>
-        <div class="dep-field">
-          <label class="dep-label">{{ t('settings.deployment.workDir') }}</label>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.workDir') }}</label>
           <WorkDirInput
             v-if="modelValue.location === 'local'"
             data-test="dep-work-dir"
@@ -332,31 +332,31 @@ function setEnv(env: Record<string, string>) {
           />
           <input
             v-else
-            class="dep-input"
+            class="settings-input dep-input"
             data-test="dep-work-dir"
             :placeholder="t('settings.deployment.workDirPlaceholder')"
             :value="runtime.working_dir"
             @input="patchRuntime({ type: 'command', working_dir: ($event.target as HTMLInputElement).value })"
           />
         </div>
-        <div class="dep-field">
-          <label class="dep-label">{{ t('settings.deployment.envFile') }}</label>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.envFile') }}</label>
           <input
-            class="dep-input"
+            class="settings-input dep-input"
             data-test="dep-env-file"
             :placeholder="t('settings.deployment.envFilePlaceholder')"
             :value="runtime.env_file"
             @input="patchRuntime({ type: 'command', env_file: ($event.target as HTMLInputElement).value })"
           />
         </div>
-        <div class="dep-label">{{ t('settings.deployment.envVars') }}</div>
+        <div class="settings-field-label dep-label">{{ t('settings.deployment.envVars') }}</div>
         <EnvKeyValueEditor :model-value="runtime.env_vars ?? {}" @update:model-value="setEnv" />
       </template>
 
-      <div v-else-if="runtime.type === 'systemd'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.serviceName') }}</label>
+      <div v-else-if="runtime.type === 'systemd'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.serviceName') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-service-name"
           :placeholder="t('settings.deployment.serviceNamePlaceholder')"
           :value="runtime.service_name"
@@ -365,20 +365,20 @@ function setEnv(env: Record<string, string>) {
       </div>
 
       <template v-else-if="runtime.type === 'launchd'">
-        <div class="dep-field">
-          <label class="dep-label">{{ t('settings.deployment.launchdLabel') }}</label>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.launchdLabel') }}</label>
           <input
-            class="dep-input"
+            class="settings-input dep-input"
             data-test="dep-launchd-label"
             :placeholder="t('settings.deployment.launchdLabelPlaceholder')"
             :value="runtime.label"
             @input="setLaunchdLabel(($event.target as HTMLInputElement).value)"
           />
         </div>
-        <div class="dep-field">
-          <label class="dep-label">{{ t('settings.deployment.plistPath') }}</label>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.plistPath') }}</label>
           <input
-            class="dep-input"
+            class="settings-input dep-input"
             data-test="dep-launchd-plist"
             :placeholder="t('settings.deployment.plistPathPlaceholder')"
             :value="runtime.plist_path"
@@ -387,10 +387,10 @@ function setEnv(env: Record<string, string>) {
         </div>
       </template>
 
-      <div v-else-if="runtime.type === 'docker'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.containerName') }}</label>
+      <div v-else-if="runtime.type === 'docker'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.containerName') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-container"
           :placeholder="t('settings.deployment.containerPlaceholder')"
           :value="runtime.container"
@@ -398,10 +398,10 @@ function setEnv(env: Record<string, string>) {
         />
       </div>
 
-      <div v-else-if="runtime.type === 'nginx_static'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.siteDomain') }}</label>
+      <div v-else-if="runtime.type === 'nginx_static'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.siteDomain') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-domain"
           :placeholder="t('settings.deployment.domainPlaceholder')"
           :value="runtime.domain"
@@ -412,10 +412,10 @@ function setEnv(env: Record<string, string>) {
 
     <section class="dep-block">
       <div class="dep-heading">{{ t('settings.deployment.logSource') }}</div>
-      <div class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.sourceType') }}</label>
+      <div class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.sourceType') }}</label>
         <select
-          class="dep-input"
+          class="settings-select dep-input"
           data-test="dep-log-type"
           :value="logs.type"
           @change="setLogKind(($event.target as HTMLSelectElement).value as LogKind)"
@@ -430,10 +430,10 @@ function setEnv(env: Record<string, string>) {
         </select>
       </div>
 
-      <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.logTarget') }}</label>
+      <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.logTarget') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-log-target"
           :placeholder="t('settings.deployment.logTargetPlaceholder')"
           :value="logs.target"
@@ -441,10 +441,10 @@ function setEnv(env: Record<string, string>) {
         />
       </div>
 
-      <div v-else-if="logs.type === 'file_tail'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.logFilePath') }}</label>
+      <div v-else-if="logs.type === 'file_tail'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.logFilePath') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-log-path"
           :placeholder="t('settings.deployment.logFilePlaceholder')"
           :value="logs.path"
@@ -452,10 +452,10 @@ function setEnv(env: Record<string, string>) {
         />
       </div>
 
-      <div v-else-if="logs.type === 'command'" class="dep-field">
-        <label class="dep-label">{{ t('settings.deployment.logCommand') }}</label>
+      <div v-else-if="logs.type === 'command'" class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.logCommand') }}</label>
         <input
-          class="dep-input"
+          class="settings-input dep-input"
           data-test="dep-log-command"
           :placeholder="t('settings.deployment.logCommandPlaceholder')"
           :value="logs.command"
@@ -500,24 +500,6 @@ function setEnv(env: Record<string, string>) {
 }
 .dep-field {
   margin-top: 8px;
-}
-.dep-label {
-  display: block;
-  margin: 0 0 4px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-.dep-input {
-  display: block;
-  width: 100%;
-  min-height: 30px;
-  padding: 5px 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--border-secondary);
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 12px;
-  outline: none;
 }
 .dep-help,
 .dep-hint {

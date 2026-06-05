@@ -41,113 +41,77 @@ function inputMeta(input: TemplateInput): string[] {
 </script>
 
 <template>
-  <div v-if="open" class="modal-backdrop">
-    <section class="modal-panel" role="dialog" aria-modal="true">
-      <header class="modal-head">
-        <h2>{{ title }}</h2>
-        <div class="modal-actions">
-          <button
-            v-if="canApply"
-            type="button"
-            class="primary-action"
-            data-test="template-apply"
-            :disabled="applying"
-            @click="$emit('apply')"
-          >
-            {{ t('settings.templates.applyToProject') }}
-          </button>
-          <button type="button" data-test="template-modal-close" @click="$emit('close')">{{ t('common.cancel') }}</button>
-        </div>
+  <div v-if="open" class="settings-modal-backdrop">
+    <section class="settings-modal settings-modal-wide" role="dialog" aria-modal="true">
+      <header class="settings-modal-header">
+        <h2 class="settings-modal-title">{{ title }}</h2>
+        <button
+          type="button"
+          class="settings-btn settings-btn-icon settings-btn-ghost"
+          data-test="template-modal-close"
+          @click="$emit('close')"
+        >
+          ×
+        </button>
       </header>
-      <div v-if="loading" class="modal-state">{{ t('common.loading') }}</div>
-      <div v-else-if="error" class="modal-error">{{ error }}</div>
-      <template v-else>
-        <div v-if="detail" class="template-summary">
-          <div class="summary-line">
-            <span>{{ t('settings.templates.digest') }}</span>
-            <code>{{ detail.digest }}</code>
+
+      <div class="settings-modal-body template-modal-body">
+        <div v-if="loading" class="settings-alert">{{ t('common.loading') }}</div>
+        <div v-else-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
+        <template v-else>
+          <div v-if="detail" class="template-summary">
+            <div class="summary-line">
+              <span>{{ t('settings.templates.digest') }}</span>
+              <code>{{ detail.digest }}</code>
+            </div>
+            <section class="input-summary">
+              <h3>{{ t('settings.templates.inputSummary') }}</h3>
+              <div v-if="inputEntries().length === 0" class="settings-empty">{{ t('settings.templates.noInputs') }}</div>
+              <article v-for="[name, input] in inputEntries()" :key="name" class="input-row">
+                <div class="input-main">
+                  <strong>{{ input.label || name }}</strong>
+                  <span>{{ name }}</span>
+                </div>
+                <div class="input-meta">{{ inputMeta(input).join(' · ') }}</div>
+                <p v-if="input.description">{{ input.description }}</p>
+              </article>
+            </section>
           </div>
-          <section class="input-summary">
-            <h3>{{ t('settings.templates.inputSummary') }}</h3>
-            <div v-if="inputEntries().length === 0" class="modal-state">{{ t('settings.templates.noInputs') }}</div>
-            <article v-for="[name, input] in inputEntries()" :key="name" class="input-row">
-              <div class="input-main">
-                <strong>{{ input.label || name }}</strong>
-                <span>{{ name }}</span>
-              </div>
-              <div class="input-meta">{{ inputMeta(input).join(' · ') }}</div>
-              <p v-if="input.description">{{ input.description }}</p>
-            </article>
-          </section>
-        </div>
-        <slot />
-        <pre class="yaml-view"><code>{{ yaml }}</code></pre>
-      </template>
+          <slot />
+          <pre class="yaml-view"><code>{{ yaml }}</code></pre>
+        </template>
+      </div>
+
+      <footer class="settings-modal-footer">
+        <button type="button" class="settings-btn" @click="$emit('close')">{{ t('common.cancel') }}</button>
+        <button
+          v-if="canApply"
+          type="button"
+          class="settings-btn settings-btn-primary"
+          data-test="template-apply"
+          :disabled="applying"
+          @click="$emit('apply')"
+        >
+          {{ t('settings.templates.applyToProject') }}
+        </button>
+      </footer>
     </section>
   </div>
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-}
-.modal-panel {
-  width: min(860px, calc(100vw - 48px));
-  max-height: min(720px, calc(100vh - 48px));
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  overflow: hidden;
-}
-.modal-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-secondary);
-}
-.modal-head h2 {
-  margin: 0;
-  font-size: 14px;
-}
-.modal-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.modal-actions button {
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  background: var(--bg-overlay);
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px 9px;
-  font-size: 11px;
-}
-.modal-actions .primary-action {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.modal-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+.template-modal-body {
+  display: grid;
+  gap: 12px;
 }
 .template-summary {
-  padding: 12px 12px 0;
+  display: grid;
+  gap: 10px;
 }
 .summary-line {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 10px;
   color: var(--text-tertiary);
   font-size: 12px;
 }
@@ -183,17 +147,11 @@ function inputMeta(input: TemplateInput): string[] {
   margin: 0;
   padding: 12px;
   overflow: auto;
-  max-height: 620px;
+  max-height: 520px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
   font-size: 12px;
   line-height: 1.5;
-}
-.modal-state,
-.modal-error {
-  padding: 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.modal-error {
-  color: var(--status-failed);
 }
 </style>

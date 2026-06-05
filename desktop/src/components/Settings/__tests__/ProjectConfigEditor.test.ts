@@ -46,6 +46,16 @@ describe('ProjectConfigEditor', () => {
     vi.clearAllMocks()
   })
 
+  it('uses shared settings wide modal shell', async () => {
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal-wide').exists()).toBe(true)
+    expect(wrapper.find('[data-test="config-save"]').classes()).toContain('settings-btn-primary')
+    expect(wrapper.find('[data-test="config-cancel"]').classes()).toContain('settings-btn')
+  })
+
   it('渲染 env tab 与服务列表', async () => {
     const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))

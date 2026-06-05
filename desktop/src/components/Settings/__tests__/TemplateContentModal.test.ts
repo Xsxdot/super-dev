@@ -7,6 +7,26 @@ import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue
 import { installTestI18n } from '@/test-utils/i18n'
 
 describe('TemplateContentModal', () => {
+  it('uses shared settings modal shell and footer actions', () => {
+    const wrapper = mount(TemplateContentModal, {
+      props: {
+        open: true,
+        title: 'Node Standard Build',
+        yaml: 'id: node\n',
+        loading: false,
+        error: '',
+        canApply: true,
+        applying: false,
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('.settings-modal-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal').exists()).toBe(true)
+    expect(wrapper.find('.settings-modal-footer').exists()).toBe(true)
+    expect(wrapper.find('[data-test="template-apply"]').classes()).toContain('settings-btn-primary')
+  })
+
   it('renders template yaml and close button', async () => {
     const wrapper = mount(TemplateContentModal, {
       props: {

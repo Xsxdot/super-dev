@@ -136,148 +136,136 @@ function submit() {
 </script>
 
 <template>
-  <div v-if="visible" class="modal-backdrop" @click.self="emit('cancel')">
-    <div class="modal-body">
-      <div class="modal-title">{{ initial ? t('settings.hosts.edit') : t('settings.hosts.add') }}</div>
-
-      <div class="field">
-        <label>{{ t('settings.hosts.name') }} <span class="req">*</span></label>
-        <input v-model="form.name" placeholder="nova-api-prod-01" data-test="host-form-name" />
+  <div v-if="visible" class="settings-modal-backdrop" @click.self="emit('cancel')">
+    <div class="settings-modal">
+      <div class="settings-modal-header">
+        <h2 class="settings-modal-title">{{ initial ? t('settings.hosts.edit') : t('settings.hosts.add') }}</h2>
       </div>
 
-      <div class="row">
-        <div class="field flex">
-          <label>{{ t('settings.hostForm.sshAddress') }} <span class="req">*</span></label>
-          <input v-model="form.ssh_host" placeholder="10.0.0.1" data-test="host-form-host" />
+      <div class="settings-modal-body host-form-body">
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hosts.name') }} <span class="req">*</span></label>
+          <input v-model="form.name" class="settings-input" placeholder="nova-api-prod-01" data-test="host-form-name" />
         </div>
-        <div class="field port">
-          <label>{{ t('settings.hostForm.port') }}</label>
-          <input v-model.number="form.ssh_port" type="number" min="1" data-test="host-form-port" />
+
+        <div class="row">
+          <div class="settings-field flex">
+            <label class="settings-field-label">{{ t('settings.hostForm.sshAddress') }} <span class="req">*</span></label>
+            <input v-model="form.ssh_host" class="settings-input" placeholder="10.0.0.1" data-test="host-form-host" />
+          </div>
+          <div class="settings-field port">
+            <label class="settings-field-label">{{ t('settings.hostForm.port') }}</label>
+            <input v-model.number="form.ssh_port" class="settings-input" type="number" min="1" data-test="host-form-port" />
+          </div>
         </div>
-      </div>
 
-      <div class="row">
-        <div class="field flex">
-          <label>{{ t('settings.hostForm.publicIP') }}</label>
-          <input v-model="form.public_ip" placeholder="203.0.113.10" data-test="host-form-public-ip" />
+        <div class="row">
+          <div class="settings-field flex">
+            <label class="settings-field-label">{{ t('settings.hostForm.publicIP') }}</label>
+            <input v-model="form.public_ip" class="settings-input" placeholder="203.0.113.10" data-test="host-form-public-ip" />
+          </div>
+          <div class="settings-field flex">
+            <label class="settings-field-label">{{ t('settings.hostForm.privateIP') }}</label>
+            <input v-model="form.private_ip" class="settings-input" placeholder="10.0.0.10" data-test="host-form-private-ip" />
+          </div>
         </div>
-        <div class="field flex">
-          <label>{{ t('settings.hostForm.privateIP') }}</label>
-          <input v-model="form.private_ip" placeholder="10.0.0.10" data-test="host-form-private-ip" />
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshUser') }} <span class="req">*</span></label>
+          <input v-model="form.ssh_user" class="settings-input" placeholder="root" data-test="host-form-user" />
         </div>
-      </div>
 
-      <div class="field">
-        <label>{{ t('settings.hostForm.sshUser') }} <span class="req">*</span></label>
-        <input v-model="form.ssh_user" placeholder="root" data-test="host-form-user" />
-      </div>
-
-      <div class="field">
-        <label>{{ t('settings.hostForm.sshPassword') }}</label>
-        <input v-model="form.ssh_password" type="password" :placeholder="t('settings.hostForm.passwordHint')" data-test="host-form-password" />
-      </div>
-
-      <div class="field">
-        <label>{{ t('settings.hostForm.sshKeyPath') }}</label>
-        <div class="row tight">
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshPassword') }}</label>
           <input
-            v-model="form.ssh_key_path"
-            :placeholder="form.ssh_private_key ? t('settings.hostForm.keyStoredPlaceholder') : '~/.ssh/id_ed25519'"
-            data-test="host-form-key"
+            v-model="form.ssh_password"
+            class="settings-input"
+            type="password"
+            :placeholder="t('settings.hostForm.passwordHint')"
+            data-test="host-form-password"
           />
-          <button type="button" @click="browseKey" data-test="host-form-browse">{{ t('common.browse') }}</button>
-          <button type="button" @click="detectKeys" data-test="host-form-detect">{{ t('common.detect') }}</button>
         </div>
-        <div v-if="form.ssh_private_key && !form.ssh_key_path" class="hint" data-test="host-form-key-stored">
-          {{ t('settings.hostForm.keyStoredHint') }}
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshKeyPath') }}</label>
+          <div class="row tight">
+            <input
+              v-model="form.ssh_key_path"
+              class="settings-input"
+              :placeholder="form.ssh_private_key ? t('settings.hostForm.keyStoredPlaceholder') : '~/.ssh/id_ed25519'"
+              data-test="host-form-key"
+            />
+            <button type="button" class="settings-btn settings-btn-secondary" data-test="host-form-browse" @click="browseKey">
+              {{ t('common.browse') }}
+            </button>
+            <button type="button" class="settings-btn settings-btn-secondary" data-test="host-form-detect" @click="detectKeys">
+              {{ t('common.detect') }}
+            </button>
+          </div>
+          <div v-if="form.ssh_private_key && !form.ssh_key_path" class="hint" data-test="host-form-key-stored">
+            {{ t('settings.hostForm.keyStoredHint') }}
+          </div>
+          <div v-if="showKeyDropdown" class="key-dropdown">
+            <div
+              v-for="k in keyOptions"
+              :key="k"
+              class="key-option"
+              @click="selectKey(k)"
+            >{{ k }}</div>
+          </div>
         </div>
-        <div v-if="showKeyDropdown" class="key-dropdown">
-          <div
-            v-for="k in keyOptions"
-            :key="k"
-            class="key-option"
-            @click="selectKey(k)"
-          >{{ k }}</div>
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.remoteAgentPort') }}</label>
+          <input
+            v-model.number="form.remote_agent_port"
+            class="settings-input"
+            type="number"
+            min="1"
+            data-test="host-form-agent-port"
+          />
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hosts.tags') }}</label>
+          <TagInput v-model="form.tags!" data-test="host-form-tags" />
+        </div>
+
+        <div class="settings-alert settings-alert-warning warn">{{ t('settings.hostForm.warning') }}</div>
+
+        <div class="test-conn">
+          <button type="button" class="settings-btn settings-btn-secondary" :disabled="testing" data-test="host-form-test" @click="testConn">
+            {{ testing ? t('common.testing') : t('common.testConnection') }}
+          </button>
+          <span v-if="testResult" :class="testResult.ok ? 'ok' : 'fail'" class="test-msg">
+            {{ testResult.ok
+              ? t('settings.hostForm.connectSuccess', { latency: testResult.latency_ms })
+              : testResult.message }}
+          </span>
         </div>
       </div>
 
-      <div class="field">
-        <label>{{ t('settings.hostForm.remoteAgentPort') }}</label>
-        <input v-model.number="form.remote_agent_port" type="number" min="1" data-test="host-form-agent-port" />
-      </div>
-
-      <div class="field">
-        <label>{{ t('settings.hosts.tags') }}</label>
-        <TagInput v-model="form.tags!" data-test="host-form-tags" />
-      </div>
-
-      <div class="warn">{{ t('settings.hostForm.warning') }}</div>
-
-      <div class="test-conn">
-        <button type="button" :disabled="testing" data-test="host-form-test" @click="testConn">
-          {{ testing ? t('common.testing') : t('common.testConnection') }}
-        </button>
-        <span v-if="testResult" :class="testResult.ok ? 'ok' : 'fail'" class="test-msg">
-          {{ testResult.ok
-            ? t('settings.hostForm.connectSuccess', { latency: testResult.latency_ms })
-            : testResult.message }}
-        </span>
-      </div>
-
-      <div class="actions">
-        <button type="button" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button type="button" class="primary" @click="submit" data-test="host-form-submit">{{ t('common.save') }}</button>
+      <div class="settings-modal-footer">
+        <button type="button" class="settings-btn" data-test="host-form-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+        <button type="button" class="settings-btn settings-btn-primary" data-test="host-form-submit" @click="submit">{{ t('common.save') }}</button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+.host-form-body {
+  display: grid;
+  gap: 10px;
 }
-.modal-body {
-  width: min(480px, calc(100vw - 32px));
-  max-height: 86vh;
-  overflow-y: auto;
-  padding: 16px 18px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-}
-.modal-title {
-  margin-bottom: 12px;
-  font-size: 14px;
-  font-weight: 600;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: 10px;
+.host-form-body .settings-field {
   position: relative;
 }
-.field label {
-  margin-bottom: 4px;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
 .req { color: var(--status-failed); }
-.field input {
-  padding: 5px 8px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  font-size: 12px;
-}
 .row { display: flex; gap: 8px; }
 .row.tight { gap: 4px; }
-.row.tight input, .field.flex { flex: 1; }
-.field.port { width: 86px; }
+.row.tight .settings-input, .settings-field.flex { flex: 1; }
+.settings-field.port { width: 86px; }
 .key-dropdown {
   position: absolute;
   top: 100%;
@@ -302,15 +290,12 @@ function submit() {
   font-size: 11px;
 }
 .warn {
-  margin: 12px 0 8px;
-  color: var(--status-failed);
-  font-size: 11px;
+  margin: 2px 0 0;
 }
 .test-conn {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
 }
 .test-msg {
   font-size: 11px;
@@ -318,23 +303,4 @@ function submit() {
 }
 .test-msg.ok { color: var(--status-ok, #3fb950); }
 .test-msg.fail { color: var(--status-failed); }
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-button {
-  padding: 5px 12px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  cursor: pointer;
-  font-size: 12px;
-}
-button.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-button:disabled { cursor: not-allowed; opacity: 0.5; }
 </style>

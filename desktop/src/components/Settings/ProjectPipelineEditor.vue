@@ -133,28 +133,38 @@ async function save() {
 </script>
 
 <template>
-  <div class="pipeline-editor-backdrop" @click.self="emit('cancel')">
-    <div class="pipeline-editor-body">
-      <div class="pipeline-editor-title">{{ t('settings.projects.editPipeline') }} · {{ project.name }}</div>
+  <div class="settings-modal-backdrop" @click.self="emit('cancel')">
+    <div class="settings-modal settings-modal-wide pipeline-editor-body">
+      <div class="settings-modal-header">
+        <h2 class="settings-modal-title">{{ t('settings.projects.editPipeline') }} · {{ project.name }}</h2>
+      </div>
 
-      <ul v-if="errors.length" class="err-list">
-        <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
-      </ul>
-      <div v-if="saveError" class="err-list">{{ saveError }}</div>
+      <div class="settings-modal-body pipeline-editor-content">
+        <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
+          <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
+        </ul>
+        <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
-      <ProjectPipelinePanel
-        :model-value="draft.pipelines"
-        :services="draft.services"
-        :hosts="hosts"
-        :templates="pipelineTemplates ?? []"
-        :initial-mode="initialMode"
-        :on-view-template="viewTemplate"
-        @update:model-value="updatePipelines"
-      />
+        <ProjectPipelinePanel
+          :model-value="draft.pipelines"
+          :services="draft.services"
+          :hosts="hosts"
+          :templates="pipelineTemplates ?? []"
+          :initial-mode="initialMode"
+          :on-view-template="viewTemplate"
+          @update:model-value="updatePipelines"
+        />
+      </div>
 
-      <div class="pipeline-editor-actions">
-        <button type="button" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button type="button" class="primary" data-test="pipeline-config-save" :disabled="saving" @click="save">
+      <div class="settings-modal-footer pipeline-editor-actions">
+        <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+        <button
+          type="button"
+          class="settings-btn settings-btn-primary"
+          data-test="pipeline-config-save"
+          :disabled="saving"
+          @click="save"
+        >
           {{ saving ? t('common.loading') : t('common.save') }}
         </button>
       </div>
@@ -171,7 +181,7 @@ async function save() {
         @apply="applyViewedTemplate"
         @close="templateModalOpen = false"
       >
-        <div v-if="applyPreviewError" class="err-list">{{ applyPreviewError }}</div>
+        <div v-if="applyPreviewError" class="settings-alert settings-alert-danger err-list">{{ applyPreviewError }}</div>
         <PipelinePreview v-if="applyPreview" :preview="applyPreview" />
       </TemplateContentModal>
     </div>
@@ -179,60 +189,12 @@ async function save() {
 </template>
 
 <style scoped>
-.pipeline-editor-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-.pipeline-editor-body {
-  width: min(820px, calc(100vw - 32px));
-  max-height: 88vh;
-  overflow-y: auto;
-  padding: 20px 22px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-}
-.pipeline-editor-title {
-  margin-bottom: 14px;
-  font-size: 14px;
-  font-weight: 600;
+.pipeline-editor-content {
+  display: grid;
+  gap: 12px;
 }
 .err-list {
-  margin: 0 0 12px;
-  padding: 8px 12px;
+  margin: 0;
   list-style: none;
-  background: var(--bg-secondary);
-  border-left: 2px solid var(--status-failed);
-  color: var(--status-failed);
-  font-size: 12px;
-}
-.pipeline-editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-secondary);
-}
-.pipeline-editor-actions button {
-  padding: 5px 14px;
-  font-size: 12px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  cursor: pointer;
-}
-.pipeline-editor-actions button.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.pipeline-editor-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

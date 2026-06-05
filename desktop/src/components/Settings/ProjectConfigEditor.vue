@@ -155,58 +155,62 @@ async function save() {
 </script>
 
 <template>
-  <div class="editor-backdrop" @click.self="emit('cancel')">
-    <div class="editor-body">
-      <div class="editor-title">{{ t('settings.projects.editConfig') }} · {{ project.name }}</div>
+  <div class="settings-modal-backdrop" @click.self="emit('cancel')">
+    <div class="settings-modal settings-modal-wide editor-body">
+      <div class="settings-modal-header">
+        <h2 class="settings-modal-title">{{ t('settings.projects.editConfig') }} · {{ project.name }}</h2>
+      </div>
 
-      <ul v-if="errors.length" class="err-list">
-        <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
-      </ul>
-      <div v-if="saveError" class="err-list">{{ saveError }}</div>
+      <div class="settings-modal-body editor-content">
+        <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
+          <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
+        </ul>
+        <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
-      <EnvTabBar
-        :environments="draft.environments"
-        :active="activeEnv"
-        :renamingEnv="renamingEnv"
-        @update:active="activeEnv = $event"
-        @add-env="addEnv"
-        @remove-env="removeEnv"
-        @rename-env="renameEnv"
-        @toggle-dev="toggleDev"
-        @start-rename="renamingEnv = $event"
-      />
+        <EnvTabBar
+          :environments="draft.environments"
+          :active="activeEnv"
+          :renamingEnv="renamingEnv"
+          @update:active="activeEnv = $event"
+          @add-env="addEnv"
+          @remove-env="removeEnv"
+          @rename-env="renameEnv"
+          @toggle-dev="toggleDev"
+          @start-rename="renamingEnv = $event"
+        />
 
-      <!-- 双栏：左侧服务列表，右侧当前服务配置 -->
-      <div class="editor-columns">
-        <div class="editor-left">
-          <ServiceRail
-            :services="currentServices"
-            :activeId="activeServiceId"
-            :envName="activeEnv"
-            @select="activeServiceId = $event"
-            @add="addService"
-            @remove="removeService"
-          />
-        </div>
-        <div class="editor-right">
-          <template v-if="activeService">
-            <ServiceCard
-              data-test="service-card"
-              :service="activeService"
-              :env-name="activeEnv"
-              :hosts="hosts"
-              :project-path="project.root_path"
-              @update:service="updateService(activeServiceIndex, $event)"
-              @remove="removeService(activeServiceIndex)"
+        <!-- 双栏：左侧服务列表，右侧当前服务配置 -->
+        <div class="editor-columns">
+          <div class="editor-left">
+            <ServiceRail
+              :services="currentServices"
+              :activeId="activeServiceId"
+              :envName="activeEnv"
+              @select="activeServiceId = $event"
+              @add="addService"
+              @remove="removeService"
             />
-          </template>
-          <div v-else class="editor-empty">{{ t('settings.service.addPrompt') }}</div>
+          </div>
+          <div class="editor-right">
+            <template v-if="activeService">
+              <ServiceCard
+                data-test="service-card"
+                :service="activeService"
+                :env-name="activeEnv"
+                :hosts="hosts"
+                :project-path="project.root_path"
+                @update:service="updateService(activeServiceIndex, $event)"
+                @remove="removeService(activeServiceIndex)"
+              />
+            </template>
+            <div v-else class="editor-empty">{{ t('settings.service.addPrompt') }}</div>
+          </div>
         </div>
       </div>
 
-      <div class="editor-actions">
-        <button type="button" data-test="config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button type="button" class="primary" data-test="config-save" :disabled="saving" @click="save">
+      <div class="settings-modal-footer editor-actions">
+        <button type="button" class="settings-btn" data-test="config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+        <button type="button" class="settings-btn settings-btn-primary" data-test="config-save" :disabled="saving" @click="save">
           {{ saving ? t('common.loading') : t('common.save') }}
         </button>
       </div>
@@ -215,36 +219,13 @@ async function save() {
 </template>
 
 <style scoped>
-.editor-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-.editor-body {
-  width: min(820px, calc(100vw - 32px));
-  max-height: 88vh;
-  overflow-y: auto;
-  padding: 20px 22px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-}
-.editor-title {
-  margin-bottom: 14px;
-  font-size: 14px;
-  font-weight: 600;
+.editor-content {
+  display: grid;
+  gap: 12px;
 }
 .err-list {
-  margin: 0 0 12px;
-  padding: 8px 12px;
+  margin: 0;
   list-style: none;
-  background: var(--bg-secondary);
-  border-left: 2px solid var(--status-failed);
-  color: var(--status-failed);
-  font-size: 12px;
 }
 .editor-columns {
   display: grid;
@@ -265,30 +246,5 @@ async function save() {
   color: var(--text-tertiary);
   font-size: 12px;
   padding: 20px 0;
-}
-.editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-secondary);
-}
-.editor-actions button {
-  padding: 5px 14px;
-  font-size: 12px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  cursor: pointer;
-}
-.editor-actions button.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.editor-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>
