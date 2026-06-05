@@ -16,6 +16,13 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 
+const windowApiMock = vi.hoisted(() => ({
+  close: vi.fn(),
+  minimize: vi.fn(),
+  startDragging: vi.fn(),
+  toggleMaximize: vi.fn(),
+}))
+
 vi.mock('@/components/Sidebar/SidebarView.vue', () => ({
   default: { template: '<aside data-test="sidebar-stub" />' },
 }))
@@ -33,11 +40,7 @@ vi.mock('@/components/BottomBar.vue', () => ({
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({
-    close: vi.fn(),
-    minimize: vi.fn(),
-    toggleMaximize: vi.fn(),
-  }),
+  getCurrentWindow: () => windowApiMock,
 }))
 
 describe('MainPage', () => {
@@ -45,6 +48,7 @@ describe('MainPage', () => {
     localStorage.clear()
     setActivePinia(createPinia())
     vi.restoreAllMocks()
+    windowApiMock.startDragging.mockResolvedValue(undefined)
   })
 
   it('hides sidebar and bottom bar while runtime workspace is maximized', () => {
@@ -71,6 +75,16 @@ describe('MainPage', () => {
     expect(topbar.attributes('data-tauri-drag-region')).toBeDefined()
     expect(wrapper.find('[data-test="app-brand"]').text()).toContain('SuperDev')
     expect(wrapper.find('[data-test="workspace-tabs-stub"]').exists()).toBe(false)
+  })
+
+  it('starts native window dragging from app chrome drag areas', async () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
+
+    await wrapper.find('[data-test="app-brand"]').trigger('mousedown', { buttons: 1 })
+
+    expect(windowApiMock.startDragging).toHaveBeenCalledTimes(1)
   })
 
   it('renders the app chrome and workspace tabs in one compact top row', () => {

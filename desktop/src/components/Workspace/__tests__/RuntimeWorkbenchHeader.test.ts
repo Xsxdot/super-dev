@@ -9,7 +9,7 @@
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RuntimeWorkbenchHeader from '../RuntimeWorkbenchHeader.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -17,6 +17,14 @@ import { usePanelStore, type PanelSplitNode } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '@/api/agent'
+
+const windowApiMock = vi.hoisted(() => ({
+  startDragging: vi.fn(),
+}))
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => windowApiMock,
+}))
 
 function makeService(): Service {
   return {
@@ -46,6 +54,8 @@ describe('RuntimeWorkbenchHeader', () => {
   beforeEach(() => {
     localStorage.clear()
     setActivePinia(createPinia())
+    vi.restoreAllMocks()
+    windowApiMock.startDragging.mockResolvedValue(undefined)
   })
 
   it('renders runtime context, deployment count, and panel count', () => {
@@ -84,6 +94,18 @@ describe('RuntimeWorkbenchHeader', () => {
 
     expect(wrapper.find('[data-test="runtime-drag-region"]').attributes('data-tauri-drag-region')).toBeDefined()
     expect(wrapper.find('[data-test="runtime-drag-spacer"]').attributes('data-tauri-drag-region')).toBeDefined()
+  })
+
+  it('starts native window dragging from runtime chrome drag areas', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    await wrapper.find('[data-test="runtime-drag-region"]').trigger('mousedown', { buttons: 1 })
+
+    expect(windowApiMock.startDragging).toHaveBeenCalledTimes(1)
   })
 
   it('renders evidence state from bookmark store', () => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
@@ -15,6 +16,13 @@ const showAppTopbar = computed(() => !workspace.isRuntimeWorkspaceMaximized)
 const showWorkspaceTabs = computed(() =>
   workspace.tabs.length > 0 && !workspace.isRuntimeWorkspaceMaximized,
 )
+
+const appWindow = getCurrentWindow()
+
+function startWindowDrag(event: MouseEvent) {
+  if (event.buttons !== 1) return
+  void appWindow.startDragging().catch(() => undefined)
+}
 </script>
 
 <template>
@@ -25,12 +33,17 @@ const showWorkspaceTabs = computed(() =>
       data-test="app-topbar"
       data-tauri-drag-region
     >
-      <div class="app-brand" data-test="app-brand" data-tauri-drag-region>
+      <div
+        class="app-brand"
+        data-test="app-brand"
+        data-tauri-drag-region="deep"
+        @mousedown="startWindowDrag"
+      >
         <span class="app-brand-title" data-tauri-drag-region>SuperDev</span>
       </div>
       <div class="app-tabs-region" data-test="app-tabs-region">
         <WorkspaceTabs v-if="showWorkspaceTabs" />
-        <div class="app-drag-fill" data-tauri-drag-region />
+        <div class="app-drag-fill" data-tauri-drag-region @mousedown="startWindowDrag" />
       </div>
     </div>
     <div class="main-content-row" data-test="main-content-row">
