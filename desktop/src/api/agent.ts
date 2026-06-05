@@ -383,6 +383,8 @@ export interface Service {
   name: string
   status: '' | 'starting' | 'running' | 'failed'
   pid?: number
+  version?: string
+  replicas?: number
   required: boolean
   order: number
   deployments?: Deployment[]

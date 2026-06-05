@@ -30,12 +30,12 @@ const levelColor = computed(() => {
 
 const rowBg = computed(() => {
   if (props.highlighted) {
-    if (props.log.level === 'ERROR') return 'rgba(248,81,73,0.18)'
-    if (props.log.level === 'WARN') return 'rgba(210,153,34,0.12)'
-    return 'rgba(30,25,10,0.5)'
+    if (props.log.level === 'ERROR') return 'rgba(248,81,73,0.15)'
+    if (props.log.level === 'WARN') return 'rgba(210,153,34,0.10)'
+    return 'rgba(88,166,255,0.08)'
   }
-  if (props.log.level === 'ERROR') return 'rgba(248,81,73,0.10)'
-  if (props.log.level === 'WARN') return 'rgba(210,153,34,0.07)'
+  if (props.log.level === 'ERROR') return 'rgba(248,81,73,0.085)'
+  if (props.log.level === 'WARN') return 'rgba(210,153,34,0.055)'
   return 'transparent'
 })
 
@@ -64,22 +64,32 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
 
 <style scoped>
 .log-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 1px 8px;
-  border-radius: 2px;
+  display: grid;
+  grid-template-columns: 76px minmax(98px, 150px) 58px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
   font-size: 11px;
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-  line-height: 1.6;
+  line-height: 1.58;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
 }
-.ts { color: var(--text-tertiary); flex-shrink: 0; }
-.svc { flex-shrink: 0; }
-.level { flex-shrink: 0; width: 48px; }
+.ts {
+  color: var(--text-tertiary);
+}
+.svc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.level {
+  width: auto;
+  font-weight: 650;
+}
 .repeat-badge {
-  flex-shrink: 0;
   font-size: 10px;
   color: var(--text-tertiary);
   padding: 0 4px;

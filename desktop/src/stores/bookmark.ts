@@ -1,6 +1,6 @@
 // bookmarkStore 按 panelId 维护书签状态，支持单面板独立录制和多面板同步录制。
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { LogEntry } from '@/api/agent'
 import type { PanelSource } from './panel'
 
@@ -107,7 +107,15 @@ function formatLogLines(l: LogEntry): string[] {
 export const useBookmarkStore = defineStore('bookmark', () => {
   const bookmarks = ref<Record<string, Bookmark>>({})
   const syncPanelIds = ref<Set<string>>(new Set())
+  const syncEnabled = ref(false)
   const syncRecording = ref(false)
+  const hasSyncOutput = computed(() => formatSyncBookmarks().trim().length > 0)
+  const syncStatus = computed<'off' | 'ready' | 'recording' | 'captured'>(() => {
+    if (syncRecording.value) return 'recording'
+    if (hasSyncOutput.value) return 'captured'
+    if (syncEnabled.value) return 'ready'
+    return 'off'
+  })
 
   function getBookmark(panelId: string): Bookmark | null {
     return bookmarks.value[panelId] ?? null
@@ -201,6 +209,13 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     }
   }
 
+  function setSyncEnabled(enabled: boolean) {
+    syncEnabled.value = enabled
+    if (!enabled && !syncRecording.value) {
+      syncPanelIds.value = new Set()
+    }
+  }
+
   function startSyncBookmark(panels?: SyncBookmarkPanel[]) {
     const now = new Date()
     const targets: SyncBookmarkPanel[] = panels ?? [...syncPanelIds.value].map(panelId => ({ panelId, serviceId: null, source: null }))
@@ -216,6 +231,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
         lockedLogs: [],
       }
     }
+    syncEnabled.value = true
     syncRecording.value = true
   }
 
@@ -231,7 +247,10 @@ export const useBookmarkStore = defineStore('bookmark', () => {
   return {
     bookmarks,
     syncPanelIds,
+    syncEnabled,
     syncRecording,
+    hasSyncOutput,
+    syncStatus,
     getBookmark,
     startBookmark,
     endBookmark,
@@ -241,6 +260,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
     formatBookmark,
     formatSyncBookmarks,
     toggleSyncPanel,
+    setSyncEnabled,
     startSyncBookmark,
     endSyncBookmark,
   }

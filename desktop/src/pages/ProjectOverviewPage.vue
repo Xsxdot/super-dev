@@ -11,90 +11,54 @@ ProjectOverviewPage：项目级运维概览页。
   - 不直接执行流水线，操作交给子组件和 API store
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAgentStore } from '@/stores/agent'
-import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
-import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
-import PipelinesTab from '@/components/Overview/PipelinesTab.vue'
-import ProjectIngressTab from '@/components/Overview/ProjectIngressTab.vue'
+import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
-import { useWorkspaceStore } from '@/stores/workspace'
 
 const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
-const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
-const activeTab = ref<'runtime' | 'pipelines' | 'ingress'>('runtime')
 const projectId = computed(() => String(route.params.id ?? ''))
 const project = computed(() => agentStore.projectById(projectId.value))
-
-function openInstanceLogs(deploymentId: string) {
-  const info = agentStore.serviceForDeployment(deploymentId)
-  workspace.openDeployment(deploymentId, info ? `${info.service.name} · ${info.envName}` : deploymentId)
-}
 </script>
 
 <template>
   <main class="overview-page">
     <div v-if="!project" class="overview-missing">{{ t('overview.projectNotFound') }}</div>
     <template v-else>
-      <header class="overview-head">
-        <div class="overview-title-area">
-          <button
-            class="overview-back"
-            data-test="overview-back"
-            type="button"
-            @click="router.push('/')"
-          >
-            <span aria-hidden="true">←</span>
-            {{ t('common.back') }}
-          </button>
-          <div class="overview-title-group">
-            <div class="overview-kicker">{{ t('overview.title') }}</div>
-            <h1>{{ project.name }}</h1>
-          </div>
-        </div>
-        <OverviewTabs v-model="activeTab" />
-      </header>
-      <RuntimeStatusTab
-        v-if="activeTab === 'runtime'"
-        :project-id="project.id"
-        :active="activeTab === 'runtime'"
-        @open-logs="openInstanceLogs"
-      />
-      <PipelinesTab v-else-if="activeTab === 'pipelines'" :project="project" />
-      <ProjectIngressTab v-else :project="project" />
+      <button
+        class="overview-back"
+        data-test="overview-back"
+        type="button"
+        @click="router.push('/')"
+      >
+        <span aria-hidden="true">←</span>
+        {{ t('common.back') }}
+      </button>
+      <ProjectOverviewPane :project="project" />
     </template>
   </main>
 </template>
 
 <style scoped>
 .overview-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
 }
-.overview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 64px;
-  padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--border-secondary);
-}
-.overview-title-area {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
 .overview-back {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  z-index: 2;
   display: inline-flex;
-  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   height: 32px;
@@ -112,23 +76,8 @@ function openInstanceLogs(deploymentId: string) {
   background: var(--bg-overlay);
   color: var(--text-primary);
 }
-.overview-title-group {
-  min-width: 0;
-}
-.overview-kicker {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.overview-head h1 {
-  margin: 2px 0 0;
-  overflow: hidden;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.overview-page :deep(.overview-pane-head) {
+  padding-left: 128px;
 }
 .overview-missing {
   display: grid;
@@ -136,16 +85,5 @@ function openInstanceLogs(deploymentId: string) {
   place-items: center;
   color: var(--text-secondary);
   font-size: 13px;
-}
-@media (max-width: 640px) {
-  .overview-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .overview-title-area {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-  }
 }
 </style>

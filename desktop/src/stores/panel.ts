@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid'
 export type PanelAxis = 'h' | 'v'
 
 export const MAX_PANEL_LEAVES = 4
+const MIN_SPLIT_RATIO = 0.12
+const MAX_SPLIT_RATIO = 0.88
 
 // PanelSource 现在只有 deployment 单一来源：deployment_id 是全系统唯一的运行/日志单元标识。
 // 历史上的 local-service / local-project 来源已废弃。
@@ -85,6 +87,56 @@ export function createDeploymentPanelRoot(deploymentId: string): PanelLeafNode {
 function getAllLeaves(node: PanelNode): PanelLeafNode[] {
   if (node.type === 'leaf') return [node]
   return [...getAllLeaves(node.first), ...getAllLeaves(node.second)]
+}
+
+function leafCount(node: PanelNode): number {
+  if (node.type === 'leaf') return 1
+  return leafCount(node.first) + leafCount(node.second)
+}
+
+function balanceRatios(node: PanelNode): PanelNode {
+  if (node.type === 'leaf') return node
+  const first = balanceRatios(node.first)
+  const second = balanceRatios(node.second)
+  const firstCount = leafCount(first)
+  const total = firstCount + leafCount(second)
+  return {
+    ...node,
+    ratio: total > 0 ? firstCount / total : 0.5,
+    first,
+    second,
+  }
+}
+
+function clampSplitRatio(ratio: number): number {
+  if (Number.isNaN(ratio)) return 0.5
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio))
+}
+
+function updateSplitRatioById(node: PanelNode, splitId: string, ratio: number): PanelNode {
+  if (node.type === 'leaf') return node
+  if (node.id === splitId) return { ...node, ratio: clampSplitRatio(ratio) }
+  return {
+    ...node,
+    first: updateSplitRatioById(node.first, splitId, ratio),
+    second: updateSplitRatioById(node.second, splitId, ratio),
+  }
+}
+
+function buildColumnLayout(leaves: PanelLeafNode[]): PanelNode {
+  if (leaves.length <= 1) return leaves[0] ?? makeLeaf()
+  const midpoint = Math.ceil(leaves.length / 2)
+  const firstLeaves = leaves.slice(0, midpoint)
+  const secondLeaves = leaves.slice(midpoint)
+  return {
+    type: 'split',
+    id: uuidv4(),
+    axis: 'h',
+    // 按叶子数量计算比例，保证 3/4 栏这类嵌套 split 也呈现等宽列。
+    ratio: firstLeaves.length / leaves.length,
+    first: buildColumnLayout(firstLeaves),
+    second: buildColumnLayout(secondLeaves),
+  }
 }
 
 // 在树中找到 id 对应的叶子节点，替换为 split 节点
@@ -238,6 +290,26 @@ export const usePanelStore = defineStore('panel', () => {
     ensureFocused()
   }
 
+  function balanceSplits() {
+    root.value = balanceRatios(root.value)
+    save()
+    ensureFocused()
+  }
+
+  function arrangeLeavesInColumns() {
+    const leaves = allLeaves.value
+    if (leaves.length <= 1) return
+    root.value = buildColumnLayout(leaves)
+    save()
+    ensureFocused()
+  }
+
+  function updateSplitRatio(splitId: string, ratio: number) {
+    root.value = updateSplitRatioById(root.value, splitId, ratio)
+    save()
+    ensureFocused()
+  }
+
   function setRoot(nextRoot: PanelNode, nextFocusedPanelId: string | null = null) {
     root.value = normalizePanelNode(nextRoot)
     focusedPanelId.value = nextFocusedPanelId
@@ -267,6 +339,9 @@ export const usePanelStore = defineStore('panel', () => {
     replaceScope,
     replaceSource,
     removeLeaf,
+    balanceSplits,
+    arrangeLeavesInColumns,
+    updateSplitRatio,
     setRoot,
     targetPanelId,
   }

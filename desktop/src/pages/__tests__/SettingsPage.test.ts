@@ -82,6 +82,22 @@ describe('SettingsPage', () => {
     vi.restoreAllMocks()
   })
 
+  it('为 overlay 标题栏预留侧栏顶部安全区', () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    const sidebar = wrapper.find('[data-test="settings-sidebar"]').element
+    const spacer = wrapper.find('[data-test="settings-titlebar-spacer"]').element
+    const back = wrapper.find('[data-test="settings-back"]').element
+
+    expect(spacer.parentElement).toBe(sidebar)
+    expect(back.parentElement).toBe(sidebar)
+    expect(spacer.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(wrapper.find('[data-test="settings-titlebar-spacer"]').attributes('data-tauri-drag-region')).toBeDefined()
+  })
+
   it('通用页展示日志保留天数并保存', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }

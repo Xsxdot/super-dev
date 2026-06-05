@@ -9,14 +9,16 @@
  *   - 不测试 Tauri 文件对话框真实行为
  *   - 不建立 WebSocket 连接，日志通过 deploymentLogStore 直接注入
  */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import BottomBar from '../BottomBar.vue'
+import { api as agentApi } from '../../api/agent'
 import { useAgentStore } from '../../stores/agent'
 import { useBookmarkStore } from '../../stores/bookmark'
 import { useDeploymentLogStore } from '../../stores/deploymentLog'
+import { useOperationApprovalStore } from '../../stores/operationApproval'
 import { usePanelStore } from '../../stores/panel'
 import { toDisplayEntry } from '../../lib/logEngine'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -25,6 +27,7 @@ import type { LogEntry, Project, Service } from '../../api/agent'
 const tauriMocks = vi.hoisted(() => ({
   save: vi.fn(),
   writeTextFile: vi.fn(),
+  routerPush: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -33,6 +36,10 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   writeTextFile: tauriMocks.writeTextFile,
+}))
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: tauriMocks.routerPush }),
 }))
 
 // service id 'svc-x' 对应 dev 环境的 deployment id 'dep-x'，面板按 deploymentId 订阅。
@@ -77,12 +84,12 @@ function makeLog(deploymentId: string, message: string, timestamp: string): LogE
 async function mountBottomBarWithServices(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   const panelStore = usePanelStore()
   const agentStore = useAgentStore()
-  const api = makeService('svc-api', 'api')
+  const apiService = makeService('svc-api', 'api')
   const worker = makeService('svc-worker', 'worker')
-  agentStore.projects = [makeProject([api, worker])]
+  agentStore.projects = [makeProject([apiService, worker])]
 
   // 面板订阅键为 deploymentId（dep-api / dep-worker）。
-  const apiDep = api.deployments![0].id
+  const apiDep = apiService.deployments![0].id
   const workerDep = worker.deployments![0].id
   const firstPanelId = panelStore.root.id
   panelStore.replaceScope(firstPanelId, apiDep, null)
@@ -92,7 +99,7 @@ async function mountBottomBarWithServices(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
     global: { plugins: [installTestI18n(locale)] },
   })
   await nextTick()
-  return { wrapper, panelStore, api, worker, apiDep, workerDep }
+  return { wrapper, panelStore, apiService, worker, apiDep, workerDep }
 }
 
 describe('BottomBar', () => {
@@ -102,6 +109,7 @@ describe('BottomBar', () => {
     vi.clearAllMocks()
     vi.useFakeTimers()
     tauriMocks.save.mockResolvedValue('/tmp/sync-export')
+    vi.spyOn(agentApi, 'listOperationApprovals').mockResolvedValue([])
     Object.assign(navigator, {
       clipboard: {
         writeText: vi.fn(),
@@ -125,12 +133,14 @@ describe('BottomBar', () => {
     const deploymentLogStore = useDeploymentLogStore()
     const apiPanel = panelStore.allLeaves.find(leaf => leaf.serviceId === apiDep)!
 
-    await wrapper.find('.sync-label input[type="checkbox"]').setValue(true)
-    await wrapper.find('.sync-record-btn').trigger('click')
+    await wrapper.find('[data-test="sync-toggle"]').setValue(true)
+    await wrapper.find('[data-test="sync-record"]').trigger('click')
 
     expect(bookmarkStore.syncPanelIds.has(apiPanel.id)).toBe(true)
     expect(bookmarkStore.getBookmark(apiPanel.id)?.serviceId).toBe(apiDep)
     expect(bookmarkStore.syncRecording).toBe(true)
+    expect(wrapper.find('[data-test="sync-copy"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="sync-export"]').exists()).toBe(false)
 
     const start = bookmarkStore.getBookmark(apiPanel.id)!.startTime!
     const ts = new Date(start.getTime() + 1000).toISOString()
@@ -144,29 +154,87 @@ describe('BottomBar', () => {
     })
     vi.advanceTimersByTime(5000)
 
-    await wrapper.find('.sync-record-btn').trigger('click')
+    await wrapper.find('[data-test="sync-record"]').trigger('click')
 
     expect(bookmarkStore.syncRecording).toBe(false)
     expect(bookmarkStore.getBookmark(apiPanel.id)?.lockedLogs.map(l => l.message)).toEqual([
       'sync captured',
     ])
-    expect(wrapper.find('.sync-copy-btn').exists()).toBe(true)
-    expect(wrapper.find('.sync-export-btn').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sync-copy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sync-export"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sync-copy"]').text()).not.toContain('Copy')
+    expect(wrapper.find('[data-test="sync-export"]').text()).not.toContain('Export')
   })
 
   it('渲染统一后的日志录制文案', async () => {
     const { wrapper: zhWrapper } = await mountBottomBarWithServices()
 
-    expect(zhWrapper.text()).toContain('面板服务')
+    expect(zhWrapper.text()).toContain('打开的部署')
     expect(zhWrapper.text()).toContain('日志录制')
     expect(zhWrapper.text()).not.toContain('同步录制')
+    expect(zhWrapper.text()).not.toContain('同步证据采集')
 
     const { wrapper: enWrapper } = await mountBottomBarWithServices('en-US')
 
-    expect(enWrapper.text()).toContain('Panel Services')
+    expect(enWrapper.text()).toContain('Open Deployments')
     expect(enWrapper.text()).toContain('Log Recording')
     expect(enWrapper.text()).not.toContain('Sync Recording')
+    expect(enWrapper.text()).not.toContain('Sync Evidence Capture')
     expect(enWrapper.text()).toContain('Restart')
     expect(enWrapper.text()).toContain('Stop')
+  })
+
+  it('只渲染一个 agent 状态并提供审批入口', async () => {
+    vi.mocked(agentApi.listOperationApprovals).mockResolvedValue([
+      {
+        id: 'opa-1',
+        status: 'pending',
+        requested_by: 'mcp',
+        requester_label: 'Codex',
+        plan: {
+          id: 'op-1',
+          kind: 'runtime.restart',
+          target: {},
+          risk_level: 'high',
+          requires_approval: true,
+          denied: false,
+          fingerprint: 'fp-1',
+        },
+      },
+    ] as any)
+    const { wrapper } = await mountBottomBarWithServices('en-US')
+    const approvalStore = useOperationApprovalStore()
+
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="agent-status"]')).toHaveLength(1)
+    expect(approvalStore.pendingCount).toBe(1)
+    expect(wrapper.find('[data-test="approvals-entry"]').text()).toContain('1')
+
+    await wrapper.find('[data-test="approvals-entry"]').trigger('click')
+
+    expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
+  })
+
+  it('uses bookmark store as the shared sync enabled source', async () => {
+    const { wrapper } = await mountBottomBarWithServices()
+    const bookmarkStore = useBookmarkStore()
+
+    expect(bookmarkStore.syncEnabled).toBe(false)
+
+    await wrapper.find('[data-test="sync-toggle"]').setValue(true)
+    expect(bookmarkStore.syncEnabled).toBe(true)
+
+    await wrapper.find('[data-test="sync-toggle"]').setValue(false)
+    expect(bookmarkStore.syncEnabled).toBe(false)
+  })
+
+  it('renders bottom bar as grouped runtime action clusters', async () => {
+    const { wrapper } = await mountBottomBarWithServices('en-US')
+
+    expect(wrapper.find('[data-test="bottom-open-deployments"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-deployment-actions"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-evidence"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-runtime-status"]').exists()).toBe(true)
   })
 })

@@ -11,6 +11,7 @@ const props = defineProps<{
   panelId: string
   source?: PanelSource | null
   projectId?: string | null
+  compact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -110,7 +111,7 @@ async function exportBookmark() {
 </script>
 
 <template>
-  <div class="toolbar">
+  <div class="toolbar" data-test="panel-toolbar" :class="{ compact: props.compact }">
     <!-- 过滤区 -->
     <div class="filter-area">
       <svg class="search-icon" width="12" height="12" viewBox="0 0 16 16" fill="none">
@@ -123,11 +124,17 @@ async function exportBookmark() {
         <button
           :class="{ active: panel.nextChipType === 'include' }"
           @click="filterStore.setNextChipType(panelId, 'include')"
-        >{{ t('panel.filter.include') }}</button>
+        >
+          <span class="segmented-full">{{ t('panel.filter.include') }}</span>
+          <span class="segmented-short" aria-hidden="true">+</span>
+        </button>
         <button
           :class="{ active: panel.nextChipType === 'exclude' }"
           @click="filterStore.setNextChipType(panelId, 'exclude')"
-        >{{ t('panel.filter.exclude') }}</button>
+        >
+          <span class="segmented-full">{{ t('panel.filter.exclude') }}</span>
+          <span class="segmented-short" aria-hidden="true">-</span>
+        </button>
       </div>
 
       <!-- 关键词输入 -->
@@ -172,7 +179,7 @@ async function exportBookmark() {
           :title="rule.enabled ? t('panel.filter.disableRule') : t('panel.filter.enableRule')"
         >
           <span class="rule-arrow">{{ rule.type === 'include' ? '↑' : '↓' }}</span>
-          <span :class="{ strikethrough: !rule.enabled }">{{ rule.name || rule.keywords[0] }}</span>
+          <span class="rule-name" :class="{ strikethrough: !rule.enabled }">{{ rule.name || rule.keywords[0] }}</span>
         </button>
       </div>
     </template>
@@ -194,7 +201,8 @@ async function exportBookmark() {
       :title="t('panel.filter.saveAsRule')"
       @click="openRuleManager('current')"
     >
-      {{ t('panel.filter.saveAsRule') }}
+      <span class="save-rule-label">{{ t('panel.filter.saveAsRule') }}</span>
+      <span class="save-rule-icon" aria-hidden="true">+</span>
     </button>
     <RuleManagerModal
       v-if="showRules && projectId"
@@ -263,6 +271,9 @@ async function exportBookmark() {
 .segmented button.active {
   background: rgba(31,111,235,0.2);
   color: #58a6ff;
+}
+.segmented-short {
+  display: none;
 }
 .chip-input {
   flex: 1;
@@ -356,6 +367,9 @@ async function exportBookmark() {
   color: #3fb950;
 }
 .rule-arrow { font-size: 9px; }
+.rule-name {
+  min-width: 0;
+}
 .strikethrough { text-decoration: line-through; opacity: 0.5; }
 
 .divider { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
@@ -407,6 +421,9 @@ async function exportBookmark() {
   color: var(--text-primary);
   border-color: rgba(88, 166, 255, 0.45);
 }
+.save-rule-icon {
+  display: none;
+}
 
 .bookmark-btn {
   background: transparent;
@@ -434,5 +451,133 @@ async function exportBookmark() {
   color: var(--text-secondary);
   font-size: 10px;
   flex-shrink: 0;
+}
+
+.toolbar.compact {
+  gap: 3px;
+  padding: 4px 5px;
+  overflow-x: hidden;
+}
+.toolbar.compact .search-icon,
+.toolbar.compact .rules-label,
+.toolbar.compact .save-rule-label {
+  display: none;
+}
+.toolbar.compact .segmented button {
+  width: 22px;
+  padding: 2px 0;
+}
+.toolbar.compact .segmented-full {
+  display: none;
+}
+.toolbar.compact .segmented-short,
+.toolbar.compact .save-rule-icon {
+  display: inline;
+}
+.toolbar.compact .chip-input {
+  min-width: 56px;
+  max-width: 82px;
+  padding: 2px 5px;
+}
+.toolbar.compact .filter-area {
+  overflow: hidden;
+}
+.toolbar.compact .chip {
+  max-width: 84px;
+  overflow: hidden;
+}
+.toolbar.compact .chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolbar.compact .rules-area {
+  max-width: 120px;
+  overflow: hidden;
+}
+.toolbar.compact .rule-name {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolbar.compact .save-rule-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+}
+.toolbar.compact .record-count,
+.toolbar.compact .done-count {
+  max-width: 58px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 560px) {
+  .toolbar {
+    gap: 3px;
+    padding: 4px 5px;
+    overflow-x: hidden;
+  }
+  .toolbar .search-icon,
+  .toolbar .rules-label,
+  .toolbar .save-rule-label {
+    display: none;
+  }
+  .toolbar .segmented button {
+    width: 22px;
+    padding: 2px 0;
+  }
+  .toolbar .segmented-full {
+    display: none;
+  }
+  .toolbar .segmented-short,
+  .toolbar .save-rule-icon {
+    display: inline;
+  }
+  .toolbar .chip-input {
+    min-width: 56px;
+    max-width: 82px;
+    padding: 2px 5px;
+  }
+  .toolbar .filter-area {
+    overflow: hidden;
+  }
+  .toolbar .chip {
+    max-width: 84px;
+    overflow: hidden;
+  }
+  .toolbar .chip > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .toolbar .rules-area {
+    max-width: 120px;
+    overflow: hidden;
+  }
+  .toolbar .rule-name {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .toolbar .save-rule-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+  }
+  .toolbar .record-count,
+  .toolbar .done-count {
+    max-width: 58px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 </style>

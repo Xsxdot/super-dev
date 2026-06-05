@@ -22,6 +22,7 @@ import type { Service } from '@/api/agent'
 const props = defineProps<{
   envName: string
   isDev: boolean
+  initiallyExpanded?: boolean
   projectId: string
   services: Service[]
   // selectedServiceIds 语义为「已在面板打开的 deploymentId 集合」，用于行高亮。
@@ -49,9 +50,8 @@ async function onCheckChange(svc: Service) {
   await agentStore.putEnvSelected(props.projectId, props.envName, next)
 }
 
-// dev 环境默认展开，其他环境默认折叠
-const expanded = ref(props.isDev)
-const hovered = ref(false)
+// dev 环境和父组件指定的首个环境默认展开，避免没有可拖拽服务行。
+const expanded = ref(props.initiallyExpanded || props.isDev)
 
 function toggleExpanded() {
   expanded.value = !expanded.value
@@ -77,6 +77,26 @@ function isRunningStatus(status: string): boolean {
  */
 function deploymentForService(svc: Service) {
   return svc.deployments?.find(d => d.env_name === props.envName)
+}
+
+function serviceVersionLabel(svc: Service): string | null {
+  const version = svc.version?.trim()
+  if (!version) return null
+  return version.startsWith('v') ? version : `v${version}`
+}
+
+function serviceReplicaLabel(svc: Service): string | null {
+  if (typeof svc.replicas !== 'number' || svc.replicas <= 0) return null
+  return t('shell.env.replicaCount', { count: svc.replicas })
+}
+
+function deploymentMetaLabel(svc: Service): string {
+  const dep = deploymentForService(svc)
+  const parts = [serviceVersionLabel(svc), serviceReplicaLabel(svc)].filter(Boolean)
+  if (parts.length) return parts.join(' · ')
+  if (!dep) return ''
+  const mode = dep.control_mode ?? dep.runtime?.type ?? dep.location
+  return t('shell.env.serviceMetaFallback', { location: dep.location, mode })
 }
 
 // isServiceOpen 判断本 env 下 service 的 deployment 是否已在某面板打开（用于行高亮）。
@@ -229,23 +249,22 @@ onUnmounted(() => {
 
 <template>
   <div class="env-group">
-    <!-- 分组标题行，点击切换折叠/展开，hover 显示操作按钮 -->
+    <!-- 分组标题行负责环境扫描：名称、数量和低干扰批量操作在同一层。 -->
     <div
       class="env-group-header"
       data-test="env-group-header"
-      @mouseenter="hovered = true"
-      @mouseleave="hovered = false"
       @click="toggleExpanded"
     >
-      <span class="expand-arrow">{{ expanded ? '▾' : '▸' }}</span>
-      <span class="env-name">{{ envName }}</span>
-      <Transition name="fade">
-        <div v-if="hovered" class="env-actions" @click.stop>
-          <button title="" class="action-btn start" :aria-label="t('shell.env.startAll')" :disabled="!canStart" @click="startAll">▶</button>
-          <button title="" class="action-btn search" :aria-label="t('shell.env.searchLogs')" :disabled="services.length === 0" @click="emit('search')">⌕</button>
-          <button title="" class="action-btn stop" :aria-label="t('shell.env.stopAll')" @click="stopAll">⏹</button>
-        </div>
-      </Transition>
+      <div class="env-title" data-test="env-title">
+        <span class="expand-arrow">{{ expanded ? '▾' : '▸' }}</span>
+        <span class="env-name">{{ envName }}</span>
+        <span class="env-count" data-test="env-service-count">{{ services.length }}</span>
+      </div>
+      <div class="env-actions" data-test="env-actions" @click.stop>
+        <button title="" class="action-btn start" :aria-label="t('shell.env.startAll')" :disabled="!canStart" @click="startAll">▶</button>
+        <button title="" class="action-btn search" :aria-label="t('shell.env.searchLogs')" :disabled="services.length === 0" @click="emit('search')">⌕</button>
+        <button title="" class="action-btn stop" :aria-label="t('shell.env.stopAll')" @click="stopAll">⏹</button>
+      </div>
     </div>
 
     <!-- 展开后的 service 行列表 -->
@@ -253,7 +272,7 @@ onUnmounted(() => {
       <div
         v-for="svc in services"
         :key="svc.id"
-        class="env-service-row"
+        class="env-service-row deployment-card"
         data-test="env-service-row"
         :class="{ selected: isServiceOpen(svc) }"
         @click="onServiceRowClick(svc)"
@@ -274,11 +293,16 @@ onUnmounted(() => {
             ),
           }"
         />
-        <span class="service-name">{{ svc.name }}</span>
+        <div class="service-main">
+          <div class="service-topline">
+            <span class="service-name">{{ svc.name }}</span>
+          </div>
+          <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}</div>
+        </div>
         <div
           v-if="canControlDeployment(svc)"
           class="row-actions"
-          data-test="row-actions"
+          data-test="service-action-rail"
           @click.stop
           @pointerdown.stop
         >
@@ -314,90 +338,129 @@ onUnmounted(() => {
 
 <style scoped>
 .env-group {
-  margin-bottom: 2px;
+  margin: 0 0 8px;
+  border: 1px solid rgba(91, 106, 128, 0.22);
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(10, 18, 26, 0.38);
 }
 
 .env-group-header {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px 3px 10px;
-  border-radius: 4px;
-  margin: 1px 4px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 8px 0 10px;
+  border-radius: 0;
+  margin: 0;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
 
 .env-group-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.env-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
 }
 
 .expand-arrow {
-  font-size: 10px;
-  color: var(--text-secondary, #6e7681);
+  width: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
 .env-name {
   font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary, #6e7681);
+  font-weight: 700;
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+  flex: 0 1 auto;
+}
+
+.env-count {
+  min-width: 24px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(139, 148, 158, 0.18);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
 }
 
 .env-actions {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   align-items: center;
   flex-shrink: 0;
 }
 
 .action-btn {
   background: transparent;
-  border: none;
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 11px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 5px;
+  padding: 0;
+  font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
-.action-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+.action-btn:hover:not(:disabled) {
+  border-color: rgba(139, 148, 158, 0.34);
+  background: rgba(255,255,255,0.08);
+}
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .action-btn.start { color: #3fb950; }
 .action-btn.search { color: #58a6ff; }
 .action-btn.stop { color: var(--text-secondary, #6e7681); }
 
-.fade-enter-active, .fade-leave-active { transition: opacity 0.12s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
 .env-group-rows {
-  margin: 0 4px 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 8px;
 }
 
 .env-service-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 20px;
-  border-radius: 4px;
+  gap: 9px;
+  min-height: 72px;
+  margin: 0;
+  padding: 10px 12px 10px 14px;
+  border-left: 2px solid transparent;
+  border-top: 1px solid rgba(91, 106, 128, 0.12);
+  border-radius: 0;
+  background: rgba(13, 24, 34, 0.36);
   cursor: pointer;
-  font-size: 12px;
   color: var(--text-primary, #e6edf3);
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
   user-select: none;
 }
 
 .env-service-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(18, 32, 46, 0.72);
 }
 
 .env-service-row.selected {
-  background: rgba(31, 111, 235, 0.12);
+  border-left-color: #1f6feb;
+  background: rgba(31, 111, 235, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(88, 166, 255, 0.1);
 }
 
 .service-checkbox {
@@ -409,14 +472,38 @@ onUnmounted(() => {
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.08);
+}
+
+.service-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.service-topline {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .service-name {
-  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.service-meta {
+  color: var(--text-tertiary);
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -425,30 +512,22 @@ onUnmounted(() => {
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  opacity: 0;
-  transform: translateX(8px);
-  transition: opacity 0.14s ease, transform 0.14s ease;
-  pointer-events: none;
+  gap: 4px;
+  opacity: 0.88;
+  pointer-events: auto;
   flex-shrink: 0;
 }
 
-.env-service-row:hover .row-actions {
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
 .row-action {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   color: var(--text-secondary, #8b949e);
-  font-size: 11px;
+  font-size: 13px;
   cursor: pointer;
-  line-height: 20px;
+  line-height: 24px;
   padding: 0;
 }
 
