@@ -319,14 +319,16 @@ function saveTemplate() {
 
 <template>
   <div class="pipeline-wizard">
-    <button v-if="!enabled" type="button" class="pipeline-enable" data-test="pipeline-enable" @click="enable">
+    <button v-if="!enabled" type="button" class="settings-btn settings-btn-secondary pipeline-enable" data-test="pipeline-enable" @click="enable">
       {{ t('settings.pipeline.configure') }}
     </button>
 
     <template v-else>
       <div class="wizard-head">
         <span>{{ t('settings.pipeline.template') }}</span>
-        <button type="button" class="pipeline-disable" @click="disable">{{ t('settings.pipeline.removeTemplate') }}</button>
+        <button type="button" class="settings-btn settings-btn-danger pipeline-disable" @click="disable">
+          {{ t('settings.pipeline.removeTemplate') }}
+        </button>
       </div>
 
       <div v-if="templates.length === 0" class="pipeline-empty">
@@ -337,7 +339,7 @@ function saveTemplate() {
         <section v-for="phase in phases" :key="phase" class="phase-section">
           <header class="phase-head">
             <span>{{ phaseLabel(phase) }}</span>
-            <button type="button" class="text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
+            <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
               {{ t('settings.pipeline.addTemplate') }}
             </button>
           </header>
@@ -348,7 +350,7 @@ function saveTemplate() {
             <div class="block-row">
               <select
                 v-model="block.selectedKey"
-                class="field-input"
+                class="settings-select field-input"
                 :data-test="`block-${block.id}-template-select`"
                 @change="resetBlockInputs(block)"
               >
@@ -359,14 +361,16 @@ function saveTemplate() {
               </select>
               <button
                 type="button"
-                class="text-btn"
+                class="settings-btn settings-btn-text text-btn"
                 :data-test="`block-${block.id}-view-template`"
                 :disabled="!selectedFor(block)"
                 @click="viewSelected(block)"
               >
                 {{ t('settings.pipeline.viewTemplate') }}
               </button>
-              <button type="button" class="danger-btn" @click="removeBlock(block)">{{ t('common.remove') }}</button>
+              <button type="button" class="settings-btn settings-btn-danger danger-btn" @click="removeBlock(block)">
+                {{ t('common.remove') }}
+              </button>
             </div>
 
             <div v-if="selectedFor(block)?.description" class="template-description">
@@ -413,7 +417,7 @@ function saveTemplate() {
                 v-else-if="input.type === 'select'"
                 :id="`template-input-${block.id}-${name}`"
                 :value="stringVar(block, name)"
-                class="field-input"
+                class="settings-select field-input"
                 :data-test="`block-${block.id}-input-${name}`"
                 @change="setStringVar(block, name, ($event.target as HTMLSelectElement).value)"
               >
@@ -423,7 +427,7 @@ function saveTemplate() {
               <div v-else-if="input.type === 'file_list'" class="file-list">
                 <div v-for="(file, index) in fileItems(block, name)" :key="index" class="file-row">
                   <input
-                    class="field-input file-input"
+                    class="settings-input field-input file-input"
                     type="text"
                     placeholder="from"
                     :data-test="`block-${block.id}-file-from-${index}`"
@@ -431,7 +435,7 @@ function saveTemplate() {
                     @input="updateFileItem(block, name, index, 'from', ($event.target as HTMLInputElement).value)"
                   />
                   <input
-                    class="field-input file-input"
+                    class="settings-input field-input file-input"
                     type="text"
                     placeholder="to"
                     :data-test="`block-${block.id}-file-to-${index}`"
@@ -440,14 +444,14 @@ function saveTemplate() {
                   />
                   <button
                     type="button"
-                    class="danger-btn file-remove"
+                    class="settings-btn settings-btn-danger danger-btn file-remove"
                     :data-test="`block-${block.id}-remove-file-${index}`"
                     @click="removeFileItem(block, name, index)"
                   >
                     {{ t('common.remove') }}
                   </button>
                 </div>
-                <button type="button" class="text-btn" :data-test="`block-${block.id}-add-file`" @click="addFileItem(block, name)">
+                <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`block-${block.id}-add-file`" @click="addFileItem(block, name)">
                   {{ t('settings.pipeline.addFile') }}
                 </button>
               </div>
@@ -456,7 +460,7 @@ function saveTemplate() {
                 v-else
                 :id="`template-input-${block.id}-${name}`"
                 :value="stringVar(block, name)"
-                class="field-input"
+                class="settings-input field-input"
                 :type="input.type === 'number' ? 'number' : 'text'"
                 :data-test="`block-${block.id}-input-${name}`"
                 @input="setStringVar(block, name, ($event.target as HTMLInputElement).value)"
@@ -465,7 +469,13 @@ function saveTemplate() {
           </div>
         </section>
 
-        <button type="button" class="pipeline-save" data-test="pipeline-save-template" :disabled="!canSave" @click="saveTemplate">
+        <button
+          type="button"
+          class="settings-btn settings-btn-primary pipeline-save"
+          data-test="pipeline-save-template"
+          :disabled="!canSave"
+          @click="saveTemplate"
+        >
           {{ t('settings.pipeline.saveTemplate') }}
         </button>
 
@@ -477,22 +487,11 @@ function saveTemplate() {
 </template>
 
 <style scoped>
-.pipeline-enable,
-.pipeline-save {
-  padding: 3px 8px;
+.pipeline-enable {
   font-size: 11px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-secondary);
-  color: var(--text-secondary);
-  cursor: pointer;
 }
 .pipeline-save {
   margin-top: 8px;
-}
-.pipeline-save:disabled,
-.text-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 .wizard-head,
 .phase-head,
@@ -515,20 +514,9 @@ function saveTemplate() {
   margin-top: 8px;
 }
 .pipeline-disable,
-.danger-btn {
-  background: transparent;
-  border: none;
-  color: var(--status-failed);
-  cursor: pointer;
-  font-size: 11px;
-}
+.danger-btn,
 .text-btn {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
   font-size: 11px;
-  padding: 0;
 }
 .pipeline-empty,
 .phase-empty,
@@ -560,17 +548,6 @@ function saveTemplate() {
   color: var(--text-secondary);
   margin: 6px 0 2px;
   font-weight: 600;
-}
-.field-input {
-  display: block;
-  width: 100%;
-  padding: 4px 8px;
-  font-size: 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
-  color: var(--text-primary);
-  outline: none;
-  box-sizing: border-box;
 }
 .template-input-row {
   margin-bottom: 6px;

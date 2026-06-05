@@ -9,14 +9,16 @@
  *   - Does not perform visual rendering checks
  *   - Does not assert exact color values except alias presence
  */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error Vitest runs this contract in Node, while app tsconfig intentionally omits Node types.
+import { readFileSync } from 'node:fs'
 
-const stylePath = resolve(__dirname, '../style.css')
+declare const process: { cwd: () => string }
+
+const stylePath = `${process.cwd()}/src/style.css`
 
 function css() {
-  return readFileSync(stylePath, 'utf8')
+  return readFileSync(stylePath, 'utf8') as string
 }
 
 describe('settings style contract', () => {

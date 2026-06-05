@@ -60,14 +60,16 @@ onMounted(() => {
   <section class="project-pipelines">
     <div class="section-head">
       <div class="section-title">{{ t('settings.pipeline.title') }}</div>
-      <button type="button" class="add-btn" data-test="add-project-pipeline" @click="addPipeline()">{{ t('settings.pipeline.add') }}</button>
+      <button type="button" class="settings-btn settings-btn-primary add-btn" data-test="add-project-pipeline" @click="addPipeline()">
+        {{ t('settings.pipeline.add') }}
+      </button>
     </div>
 
     <div v-if="modelValue.length === 0" class="pipeline-empty">{{ t('settings.pipeline.empty') }}</div>
 
     <div v-for="(item, index) in modelValue" :key="item.id || index" class="pipeline-item">
       <input
-        class="pipeline-name"
+        class="settings-input pipeline-name"
         data-test="project-pipeline-name"
         :value="item.name"
         @input="patch(index, { name: ($event.target as HTMLInputElement).value })"
@@ -100,13 +102,15 @@ onMounted(() => {
       <div class="pipeline-actions">
         <button
           type="button"
-          class="text-btn"
+          class="settings-btn settings-btn-text text-btn"
           data-test="project-pipeline-save-template"
           @click="patch(index, { pipeline: item.pipeline })"
         >
           {{ t('settings.pipeline.saveDraft') }}
         </button>
-        <button type="button" class="danger-btn" @click="removePipeline(index)">{{ t('settings.pipeline.delete') }}</button>
+        <button type="button" class="settings-btn settings-btn-danger danger-btn" @click="removePipeline(index)">
+          {{ t('settings.pipeline.delete') }}
+        </button>
       </div>
     </div>
   </section>
@@ -129,12 +133,7 @@ onMounted(() => {
   color: var(--text-secondary);
 }
 .add-btn {
-  padding: 3px 9px;
   font-size: 11px;
-  color: #fff;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  cursor: pointer;
 }
 .pipeline-empty {
   margin-top: 8px;
@@ -146,15 +145,6 @@ onMounted(() => {
   border-radius: 6px;
   padding: 8px;
   margin-top: 8px;
-}
-.pipeline-name {
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-secondary);
-  padding: 4px 8px;
-  font-size: 12px;
 }
 .service-list {
   display: flex;
@@ -173,16 +163,6 @@ onMounted(() => {
 }
 .text-btn,
 .danger-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
   font-size: 11px;
-  padding: 0;
-}
-.text-btn {
-  color: var(--accent);
-}
-.danger-btn {
-  color: var(--status-failed);
 }
 </style>
