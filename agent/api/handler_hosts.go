@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -110,19 +111,10 @@ func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
 // 通过本机 agent 使用 Host 的 SSH 凭据安装或重装远端 SuperDev agent。
 func (a *App) installHostAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	hosts, err := a.remoteStore.ListHosts()
+	host, found, err := a.remoteHostByID(id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	var host model.Host
-	found := false
-	for _, h := range hosts {
-		if h.ID == id {
-			host = h
-			found = true
-			break
-		}
 	}
 	if !found {
 		jsonError(w, http.StatusNotFound, "host not found")
@@ -143,6 +135,114 @@ func (a *App) installHostAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, result)
+}
+
+// checkHostAgent 处理 POST /api/hosts/{id}/agent/check。
+//
+// 通过 Host 的 SSH 凭据确保隧道可用，然后对远端 agent 主动探活一次。
+func (a *App) checkHostAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	port, tunnelErr := a.tunnels.EnsureConnected(host)
+	if tunnelErr == nil && host.LocalTunnelPort == 0 && port != 0 {
+		host.LocalTunnelPort = port
+		_ = a.remoteStore.UpdateHost(host)
+	}
+	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
+	agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(info)
+	dto := tunnelStatusDTO{
+		HostID:         host.ID,
+		State:          tunnelStateLabel(a.tunnels.Status(host.ID)),
+		LocalPort:      a.tunnels.LocalPort(host.ID),
+		Error:          a.tunnels.ErrorOf(host.ID),
+		Agent:          agentStatus,
+		AgentVersion:   agentVersion,
+		AgentCheckedAt: agentCheckedAt,
+	}
+	if tunnelErr != nil {
+		dto.Error = tunnelErr.Error()
+	}
+	jsonOK(w, dto)
+}
+
+type uninstallHostAgentRequest struct {
+	RemoveData bool `json:"remove_data"`
+}
+
+type uninstallHostAgentResponse struct {
+	Result installer.UninstallResult `json:"result"`
+	Tunnel tunnelStatusDTO           `json:"tunnel"`
+}
+
+// uninstallHostAgent 处理 POST /api/hosts/{id}/agent/uninstall。
+//
+// 卸载远端 SuperDev agent，并由请求体决定是否同时清理远端数据目录。
+func (a *App) uninstallHostAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	var req uninstallHostAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	result, err := a.hostAgentInstaller.Uninstall(r.Context(), host, req.RemoveData)
+	if err != nil {
+		var installErr *installer.InstallError
+		if errors.As(err, &installErr) {
+			jsonWrite(w, http.StatusBadGateway, map[string]string{
+				"error": installErr.Error(),
+				"stage": installErr.Stage,
+			})
+			return
+		}
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.tunnels.Disconnect(host.ID)
+	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
+	agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(info)
+	jsonOK(w, uninstallHostAgentResponse{
+		Result: result,
+		Tunnel: tunnelStatusDTO{
+			HostID:         host.ID,
+			State:          tunnelStateLabel(a.tunnels.Status(host.ID)),
+			LocalPort:      a.tunnels.LocalPort(host.ID),
+			Error:          a.tunnels.ErrorOf(host.ID),
+			Agent:          agentStatus,
+			AgentVersion:   agentVersion,
+			AgentCheckedAt: agentCheckedAt,
+		},
+	})
+}
+
+func (a *App) remoteHostByID(id string) (model.Host, bool, error) {
+	hosts, err := a.remoteStore.ListHosts()
+	if err != nil {
+		return model.Host{}, false, err
+	}
+	for _, h := range hosts {
+		if h.ID == id {
+			return h, true, nil
+		}
+	}
+	return model.Host{}, false, nil
 }
 
 // testConnectionRequest 是 POST /api/hosts/test-connection 的请求体。

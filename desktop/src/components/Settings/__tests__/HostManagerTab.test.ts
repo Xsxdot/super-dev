@@ -9,12 +9,13 @@
  *   - 不访问真实 agent HTTP 或 WebSocket 接口
  *   - 不调起真实 Tauri 文件对话框
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
+import { api, type Host, type TunnelStatus } from '@/api/agent'
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
@@ -37,11 +38,50 @@ vi.mock('@/api/agent', async () => {
         platform: 'linux/amd64',
         message: 'Agent installed and started',
       }),
+      checkHostAgent: vi.fn().mockResolvedValue({
+        host_id: 'h1',
+        state: 'open',
+        local_port: 57100,
+        agent: 'healthy',
+        agent_version: '0.1.0',
+        agent_checked_at: '2026-06-05T10:00:00Z',
+      }),
+      uninstallHostAgent: vi.fn().mockResolvedValue({
+        result: { ok: true, host_id: 'h1', removed_data: false, message: 'Agent uninstalled' },
+        tunnel: {
+          host_id: 'h1',
+          state: 'idle',
+          agent: 'unreachable',
+          agent_checked_at: '2026-06-05T10:00:00Z',
+        },
+      }),
       detectSshKeys: vi.fn().mockResolvedValue([]),
       testConnection: vi.fn().mockResolvedValue({ ok: true, message: '连接成功', latency_ms: 10 }),
     },
   }
 })
+
+const mockedApi = api as unknown as Record<string, Mock>
+
+function host(overrides: Partial<Host> = {}): Host {
+  return {
+    id: 'h1',
+    name: 'host-test',
+    ssh_host: '1.1.1.1',
+    ssh_port: 22,
+    ssh_user: 'root',
+    remote_agent_port: 57017,
+    local_tunnel_port: 0,
+    tags: [],
+    ...overrides,
+  }
+}
+
+async function flushMountedAsync() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise(resolve => setTimeout(resolve))
+}
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
@@ -68,6 +108,8 @@ describe('HostManagerTab', () => {
     MockWebSocket.instances = []
     vi.stubGlobal('WebSocket', MockWebSocket)
     localStorage.clear()
+    mockedApi.listHosts.mockResolvedValue([])
+    mockedApi.listTunnels.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -177,6 +219,118 @@ describe('HostManagerTab', () => {
     await wrapper.find('[data-test="host-install-agent"]').trigger('click')
 
     expect(spy).toHaveBeenCalledWith('h1')
+  })
+
+  it('进入页面后自动检测远端 Agent 状态', async () => {
+    mockedApi.listHosts.mockResolvedValue([host()])
+    mockedApi.checkHostAgent.mockResolvedValue({
+      host_id: 'h1',
+      state: 'open',
+      local_port: 57100,
+      agent: 'healthy',
+      agent_version: '0.1.0',
+      agent_checked_at: '2026-06-05T10:00:00Z',
+    } satisfies TunnelStatus)
+
+    mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    await flushMountedAsync()
+
+    expect(mockedApi.checkHostAgent).toHaveBeenCalledWith('h1')
+  })
+
+  it('点击 Agent 刷新 icon 重新检测全部远端主机', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await flushMountedAsync()
+    store.hosts = [host()]
+    const spy = vi.spyOn(store, 'checkHostAgent').mockResolvedValue({
+      host_id: 'h1',
+      state: 'open',
+      agent: 'healthy',
+    })
+
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-refresh-all"]').trigger('click')
+
+    expect(spy).toHaveBeenCalledWith('h1')
+  })
+
+  it('每行 Agent 刷新 icon 只检测当前主机', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await flushMountedAsync()
+    store.hosts = [host({ id: 'h1', name: 'alpha' }), host({ id: 'h2', name: 'beta' })]
+    const spy = vi.spyOn(store, 'checkHostAgent').mockResolvedValue({
+      host_id: 'h2',
+      state: 'open',
+      agent: 'healthy',
+    })
+
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="host-refresh-agent-h2"]').trigger('click')
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('h2')
+  })
+
+  it('根据 Agent 检测结果显示安装或重装', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const store = useRemoteStore()
+    await flushMountedAsync()
+    store.hosts = [host()]
+
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="host-install-agent"]').text()).toBe('安装')
+
+    store.applyTunnelUpdate({
+      host_id: 'h1',
+      state: 'open',
+      agent: 'healthy',
+      agent_version: '0.1.0',
+      agent_checked_at: '2026-06-05T10:00:00Z',
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="host-install-agent"]').text()).toBe('重装')
+  })
+
+  it('卸载 Agent 默认保留数据，可勾选同时删除数据', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await flushMountedAsync()
+    store.hosts = [host()]
+    const spy = vi.spyOn(store, 'uninstallHostAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      removed_data: true,
+      message: 'Agent uninstalled',
+    })
+
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="host-uninstall-agent"]').trigger('click')
+    expect(wrapper.find('[data-test="agent-uninstall-modal"]').exists()).toBe(true)
+    const removeData = wrapper.find('[data-test="agent-uninstall-remove-data"]')
+    expect((removeData.element as HTMLInputElement).checked).toBe(false)
+
+    await removeData.setValue(true)
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+
+    expect(spy).toHaveBeenCalledWith('h1', true)
+  })
+
+  it('Agent 操作说明固定在下一行，编辑和删除保持间距', async () => {
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n()] } })
+    const store = useRemoteStore()
+    await flushMountedAsync()
+    store.hosts = [host()]
+
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="host-agent-actions"]').classes()).toContain('agent-action-row')
+    expect(wrapper.find('[data-test="host-install-help"]').classes()).toContain('install-help-row')
+    expect(wrapper.find('[data-test="host-row-actions"]').classes()).toContain('row-actions')
+    expect(wrapper.find('[data-test="host-edit"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="host-delete"]').exists()).toBe(true)
   })
 
   it('安装 Agent 失败时展示错误详情', async () => {

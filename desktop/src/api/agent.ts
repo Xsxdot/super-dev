@@ -581,6 +581,22 @@ export interface InstallHostAgentResult {
   message: string
 }
 
+export interface UninstallHostAgentResult {
+  ok: boolean
+  host_id: string
+  removed_data: boolean
+  message: string
+}
+
+export interface UninstallHostAgentPayload {
+  remove_data: boolean
+}
+
+export interface UninstallHostAgentResponse {
+  result: UninstallHostAgentResult
+  tunnel: TunnelStatus
+}
+
 export type LogSourceType = 'journalctl' | 'docker' | 'file_tail' | 'command'
 
 export interface LogSource {
@@ -964,6 +980,13 @@ export const api = {
     request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
   installHostAgent: (id: string) =>
     request<InstallHostAgentResult>(`/api/hosts/${id}/agent/install`, { method: 'POST' }),
+  checkHostAgent: (id: string) =>
+    request<TunnelStatus>(`/api/hosts/${id}/agent/check`, { method: 'POST' }),
+  uninstallHostAgent: (id: string, payload: UninstallHostAgentPayload) =>
+    request<UninstallHostAgentResponse>(`/api/hosts/${id}/agent/uninstall`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // 远程监听：SSH config 导入
   listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),

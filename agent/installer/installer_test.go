@@ -124,6 +124,55 @@ func TestInstallerInstallsMacOSAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57020/api/hosts >/dev/null")
 }
 
+func TestInstallerUninstallsLinuxAgentKeepingData(t *testing.T) {
+	remote := &fakeRemote{outputs: []string{"Linux\n"}}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Uninstall(context.Background(), model.Host{ID: "h1"}, false)
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "h1", result.HostID)
+	assert.False(t, result.RemovedData)
+	assert.Contains(t, remote.commands, "sudo -n systemctl stop superdev-agent.service || true")
+	assert.Contains(t, remote.commands, "sudo -n systemctl disable superdev-agent.service || true")
+	assert.Contains(t, remote.commands, "sudo -n rm -f /etc/systemd/system/superdev-agent.service /usr/local/bin/superdev-agent")
+	assert.Contains(t, remote.commands, "sudo -n systemctl daemon-reload")
+	assert.NotContains(t, remote.commands, "sudo -n rm -rf /var/lib/superdev-agent")
+}
+
+func TestInstallerUninstallsLinuxAgentAndDeletesData(t *testing.T) {
+	remote := &fakeRemote{outputs: []string{"Linux\n"}}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Uninstall(context.Background(), model.Host{ID: "h1"}, true)
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.True(t, result.RemovedData)
+	assert.Contains(t, remote.commands, "sudo -n rm -rf /var/lib/superdev-agent")
+}
+
+func TestInstallerUninstallsMacOSAgentAndDeletesData(t *testing.T) {
+	remote := &fakeRemote{outputs: []string{"Darwin\n"}}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Uninstall(context.Background(), model.Host{ID: "mac1"}, true)
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.True(t, result.RemovedData)
+	assert.Contains(t, remote.commands, "sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true")
+	assert.Contains(t, remote.commands, "sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent")
+	assert.Contains(t, remote.commands, "sudo -n rm -rf '/Library/Application Support/SuperDev/Agent'")
+}
+
 func TestInstallerWrapsStageOnMissingBinary(t *testing.T) {
 	remote := &fakeRemote{outputs: []string{"Linux\n", "x86_64\n"}}
 	inst := NewWithRemoteFactory(Options{BinaryDir: t.TempDir()}, func(host model.Host) (Remote, error) {

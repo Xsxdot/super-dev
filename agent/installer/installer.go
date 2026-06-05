@@ -35,6 +35,14 @@ type Result struct {
 	Message  string `json:"message"`
 }
 
+// UninstallResult 描述一次远端 agent 卸载结果。
+type UninstallResult struct {
+	OK          bool   `json:"ok"`
+	HostID      string `json:"host_id"`
+	RemovedData bool   `json:"removed_data"`
+	Message     string `json:"message"`
+}
+
 // InstallError 带有失败阶段，方便 API 和 UI 展示具体原因。
 type InstallError struct {
 	Stage string
@@ -165,6 +173,38 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 	}, nil
 }
 
+// Uninstall removes the remote agent service and binary from host.
+//
+// 参数：
+//   - ctx: 上下文，用于取消 SSH 命令
+//   - host: 远端主机配置，包含 SSH 凭据
+//   - removeData: 是否同时删除远端 agent 数据目录和日志
+//
+// 返回：
+//   - 卸载成功结果，包含是否删除数据
+//   - 分阶段错误，便于上层定位失败原因
+func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData bool) (UninstallResult, error) {
+	remote, err := i.factory(host)
+	if err != nil {
+		return UninstallResult{}, stageErr("connect", err)
+	}
+	defer remote.Close() //nolint:errcheck
+
+	osName, err := remote.Run(ctx, "uname -s")
+	if err != nil {
+		return UninstallResult{}, stageErr("detect_os", err)
+	}
+	if err := uninstallCommands(ctx, remote, strings.ToLower(trimOutput(osName)), removeData); err != nil {
+		return UninstallResult{}, err
+	}
+	return UninstallResult{
+		OK:          true,
+		HostID:      host.ID,
+		RemovedData: removeData,
+		Message:     "Agent uninstalled",
+	}, nil
+}
+
 func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, port int) error {
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
 		return stageErr("install_binary", err)
@@ -201,6 +241,42 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		}
 	default:
 		return stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
+	}
+	return nil
+}
+
+func uninstallCommands(ctx context.Context, remote Remote, osName string, removeData bool) error {
+	switch osName {
+	case "linux":
+		commands := []string{
+			"sudo -n systemctl stop superdev-agent.service || true",
+			"sudo -n systemctl disable superdev-agent.service || true",
+			"sudo -n rm -f /etc/systemd/system/superdev-agent.service /usr/local/bin/superdev-agent",
+			"sudo -n systemctl daemon-reload",
+		}
+		if removeData {
+			commands = append(commands, "sudo -n rm -rf /var/lib/superdev-agent")
+		}
+		for _, cmd := range commands {
+			if _, err := remote.Run(ctx, cmd); err != nil {
+				return stageErr("uninstall_systemd", err)
+			}
+		}
+	case "darwin":
+		commands := []string{
+			"sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true",
+			"sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent",
+		}
+		if removeData {
+			commands = append(commands, "sudo -n rm -rf '/Library/Application Support/SuperDev/Agent'")
+		}
+		for _, cmd := range commands {
+			if _, err := remote.Run(ctx, cmd); err != nil {
+				return stageErr("uninstall_launchd", err)
+			}
+		}
+	default:
+		return stageErr("uninstall_service", fmt.Errorf("unsupported os %q", osName))
 	}
 	return nil
 }

@@ -52,6 +52,29 @@ func TestProbeOnceRecordsVersionAndCheckedAt(t *testing.T) {
 	assert.WithinDuration(t, before, info.CheckedAt, time.Second)
 }
 
+func TestProbeOnceReturnsInfoAndEmitsUpdate(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {AllEndpointsOK: true, Version: "0.1.0"},
+	}}
+	m := agenthealth.NewMonitor(prober)
+	sub := m.Subscribe("manual-check")
+	defer m.Unsubscribe("manual-check")
+
+	info := m.ProbeOnce(context.Background(), "h1")
+
+	assert.Equal(t, agenthealth.StatusHealthy, info.Status)
+	assert.Equal(t, "0.1.0", info.Version)
+	select {
+	case ev := <-sub:
+		assert.Equal(t, "h1", ev.HostID)
+		assert.Equal(t, agenthealth.StatusHealthy, ev.Status)
+		assert.Equal(t, "0.1.0", ev.Version)
+		assert.NotEmpty(t, ev.CheckedAt)
+	case <-time.After(time.Second):
+		t.Fatal("expected manual probe to emit an agent health update")
+	}
+}
+
 func TestProbeOnceMapsVersionMismatch(t *testing.T) {
 	// 探得到但接口不全（某关键 endpoint 404）→ version-mismatch
 	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{

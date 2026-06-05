@@ -20,6 +20,7 @@ import {
   type LogSourceCreatePayload,
   type LogSourceUpdatePayload,
   type TunnelStatus,
+  type UninstallHostAgentResult,
 } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 
@@ -64,6 +65,18 @@ export const useRemoteStore = defineStore('remote', () => {
 
   async function installHostAgent(id: string): Promise<InstallHostAgentResult> {
     return api.installHostAgent(id)
+  }
+
+  async function checkHostAgent(id: string): Promise<TunnelStatus> {
+    const status = await api.checkHostAgent(id)
+    applyTunnelUpdate(status)
+    return status
+  }
+
+  async function uninstallHostAgent(id: string, removeData: boolean): Promise<UninstallHostAgentResult> {
+    const response = await api.uninstallHostAgent(id, { remove_data: removeData })
+    applyTunnelUpdate(response.tunnel)
+    return response.result
   }
 
   function hostById(id: string): Host | undefined {
@@ -200,6 +213,8 @@ export const useRemoteStore = defineStore('remote', () => {
     updateHost,
     deleteHost,
     installHostAgent,
+    checkHostAgent,
+    uninstallHostAgent,
     hostById,
     loadLogSources,
     createLogSource,
