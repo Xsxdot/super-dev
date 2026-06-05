@@ -46,6 +46,10 @@ vi.mock('@/components/Settings/CertificateTab.vue', () => ({
   default: { template: '<section data-test="certificate-tab">SSL 证书</section>' },
 }))
 
+vi.mock('@/components/Settings/McpManagerTab.vue', () => ({
+  default: { template: '<section data-test="mcp-manager-tab">MCP 管理</section>' },
+}))
+
 function service(id: string, name: string, required = false): Service {
   return {
     id,
@@ -259,6 +263,31 @@ describe('SettingsPage', () => {
     await wrapper.find('[data-test="settings-tab-approvals"]').trigger('click')
 
     expect(wrapper.find('[data-test="operation-approvals-tab"]').exists()).toBe(true)
+  })
+
+  it('支持打开 MCP 管理 tab', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await wrapper.find('[data-test="settings-tab-mcp"]').trigger('click')
+
+    expect(wrapper.find('[data-test="mcp-manager-tab"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('MCP 管理')
+  })
+
+  it('支持从 query 直达 MCP 管理 tab', async () => {
+    routeState.query = { tab: 'mcp' }
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="settings-tab-mcp"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="mcp-manager-tab"]').exists()).toBe(true)
   })
 
   it('导入模板时打开 YAML 文件选择器并刷新模板 store', async () => {

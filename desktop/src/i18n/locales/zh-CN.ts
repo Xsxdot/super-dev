@@ -76,6 +76,7 @@ export default {
       sslCertificates: 'SSL 证书',
       templates: '模板',
       approvals: '操作审批',
+      mcp: 'MCP',
     },
     dnsProviders: {
       title: 'DNS 提供商',

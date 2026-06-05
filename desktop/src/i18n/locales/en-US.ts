@@ -76,6 +76,7 @@ export default {
       sslCertificates: 'SSL Certificates',
       templates: 'Templates',
       approvals: 'Approvals',
+      mcp: 'MCP',
     },
     dnsProviders: {
       title: 'DNS Provider',

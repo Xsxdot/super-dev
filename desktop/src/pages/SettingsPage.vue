@@ -6,7 +6,7 @@
   - 管理项目列表中的本地展示偏好和启动选择
 
 边界：
-  - 不处理 MCP 配置
+  - 不直接读写 MCP 配置文件，MCP 管理由专用 Tauri command 完成
   - 不直接启动或停止服务
 -->
 <script setup lang="ts">
@@ -22,6 +22,7 @@ import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
 import CertificateTab from '@/components/Settings/CertificateTab.vue'
+import McpManagerTab from '@/components/Settings/McpManagerTab.vue'
 import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
@@ -30,7 +31,7 @@ import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.v
 import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'ssl' | 'templates' | 'approvals'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'mcp'
 
 const route = useRoute()
 const router = useRouter()
@@ -50,7 +51,9 @@ const selectedTab = ref<SettingsTab>(
           ? 'templates'
           : route.query.tab === 'approvals'
             ? 'approvals'
-            : 'general',
+            : route.query.tab === 'mcp'
+              ? 'mcp'
+              : 'general',
 )
 
 onMounted(() => {
@@ -248,6 +251,18 @@ const retentionDays = computed({
         {{ t('settings.tabs.approvals') }}
         <span v-if="operationApprovalStore.pendingCount > 0" class="tab-count">{{ operationApprovalStore.pendingCount }}</span>
       </button>
+      <button
+        data-test="settings-tab-mcp"
+        class="settings-nav-item"
+        :class="{ active: selectedTab === 'mcp' }"
+        @click="selectedTab = 'mcp'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <path d="M3 4.5h10v7H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M5 7h2M9 7h2M5 9.5h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+        {{ t('settings.tabs.mcp') }}
+      </button>
     </aside>
 
     <main class="settings-main">
@@ -406,8 +421,12 @@ const retentionDays = computed({
         />
       </section>
 
-      <section v-else class="settings-pane">
+      <section v-else-if="selectedTab === 'approvals'" class="settings-pane">
         <OperationApprovalsTab />
+      </section>
+
+      <section v-else class="settings-pane">
+        <McpManagerTab />
       </section>
     </main>
 
