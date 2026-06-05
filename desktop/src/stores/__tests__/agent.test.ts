@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAgentStore } from '../agent'
 import { useLogLifecycleStore } from '../logLifecycle'
 import { useOperationApprovalStore } from '../operationApproval'
-import { AgentAPIError, api } from '@/api/agent'
+import { AgentAPIError, api, type Project, type Service } from '@/api/agent'
 
 vi.mock('@/api/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/agent')>()
@@ -23,10 +23,32 @@ vi.mock('@/api/agent', async (importOriginal) => {
       startDeployment: vi.fn().mockResolvedValue(undefined),
       stopDeployment: vi.fn().mockResolvedValue(undefined),
       restartDeployment: vi.fn().mockResolvedValue(undefined),
+      listProjects: vi.fn().mockResolvedValue([]),
+      listServices: vi.fn().mockResolvedValue([]),
       listOperationApprovals: vi.fn().mockResolvedValue([]),
     },
   }
 })
+
+function service(id: string, name: string, projectId: string): Service {
+  return {
+    id,
+    project_id: projectId,
+    name,
+    status: '',
+    required: false,
+    order: 1,
+  }
+}
+
+function project(id: string, name: string, services: Service[] = []): Project {
+  return {
+    id,
+    name,
+    root_path: `/tmp/${name}`,
+    services,
+  }
+}
 
 describe('agent deployment lifecycle markers', () => {
   beforeEach(() => {
@@ -89,5 +111,31 @@ describe('agent deployment lifecycle markers', () => {
     expect(approvals.pendingCount).toBe(1)
     expect(approvals.notice?.approval_id).toBe('opa_1')
     expect(lifecycle.getMarkers('dep-prod')).toEqual([])
+  })
+
+  it('轮询完整项目快照以同步 MCP 新建项目', async () => {
+    vi.useFakeTimers()
+    const agent = useAgentStore()
+    const initial = project('proj-ui', 'ui', [service('svc-ui', 'ui', 'proj-ui')])
+    const createdByMcp = project('proj-mcp', 'mcp-created', [service('svc-api', 'api', 'proj-mcp')])
+    vi.mocked(api.listProjects)
+      .mockResolvedValueOnce([initial])
+      .mockResolvedValueOnce([initial, createdByMcp])
+    vi.mocked(api.listServices).mockResolvedValue([initial.services[0], createdByMcp.services[0]])
+
+    try {
+      agent.startPolling()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(agent.projects.map(p => p.id)).toEqual(['proj-ui'])
+
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(agent.projects.map(p => p.id)).toEqual(['proj-ui', 'proj-mcp'])
+      expect(agent.projectById('proj-mcp')?.services.map(s => s.name)).toEqual(['api'])
+    } finally {
+      agent.stopPolling()
+      vi.useRealTimers()
+    }
   })
 })

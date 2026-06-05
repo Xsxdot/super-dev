@@ -21,17 +21,25 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  async function refreshServices() {
+  async function refreshProjectSnapshot() {
     if (!connected.value) return
     try {
-      const services = await api.listServices()
-      // 用最新状态更新 projects 里的 services，保留其他字段
-      for (const project of projects.value) {
-        const updated = services.filter(s => s.project_id === project.id)
-        if (updated.length > 0) {
-          project.services = updated
-        }
+      // MCP 等外部入口会修改项目集合；先拉完整项目快照，再叠加服务运行态。
+      const [nextProjects, services] = await Promise.all([
+        api.listProjects(),
+        api.listServices(),
+      ])
+      const servicesByProject = new Map<string, Service[]>()
+      for (const service of services) {
+        const projectServices = servicesByProject.get(service.project_id) ?? []
+        projectServices.push(service)
+        servicesByProject.set(service.project_id, projectServices)
       }
+      projects.value = nextProjects.map(project => {
+        const updatedServices = servicesByProject.get(project.id)
+        return updatedServices ? { ...project, services: updatedServices } : project
+      })
+      connected.value = true
     } catch {
       connected.value = false
     }
@@ -41,7 +49,7 @@ export const useAgentStore = defineStore('agent', () => {
     void connectWithRetry()
     pollTimer = setInterval(() => {
       if (!connected.value) void fetchProjects()
-      else void refreshServices()
+      else void refreshProjectSnapshot()
     }, 2000)
   }
 
