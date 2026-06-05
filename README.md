@@ -18,9 +18,9 @@
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16A34A" />
 </p>
 
-| 中文界面 | English UI |
+| 中文版 | English |
 | --- | --- |
-| ![SuperDev 中文界面](./docs/assets/readme/screenshot-zh.png) | ![SuperDev English UI](./docs/assets/readme/screenshot-en.png) |
+| **AI-native 的运行态协作层。**<br />让开发者与 AI 共享服务、日志、部署与审批上下文。<br /><br />![SuperDev 中文界面](./docs/assets/readme/screenshot-zh.png)<br /><br />[阅读全文](#为什么是-superdev) | **An AI-native runtime collaboration layer.**<br />Let developers and AI share services, logs, deployments, and approval context.<br /><br />![SuperDev English UI](./docs/assets/readme/screenshot-en.png)<br /><br />[Read full English README](#english-readme) |
 
 > 截图路径已固定；发布前请把干净的中英文界面截图放到 `docs/assets/readme/`。
 
@@ -176,6 +176,8 @@ Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制�
 查看 [LICENSE](./LICENSE)。
 
 ---
+
+<a id="english-readme"></a>
 
 # SuperDev
 
