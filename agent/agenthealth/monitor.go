@@ -121,21 +121,29 @@ func (m *Monitor) Info(hostID string) Info {
 	return Info{Status: StatusUnknown}
 }
 
-// ProbeOnce 对 host 探活一次并更新其健康状态。
+// ProbeOnce 对 host 探活一次，更新其健康状态，并在状态元信息变化时广播事件。
 //
 // 参数：
 //   - ctx: 上下文，用于取消探活
 //   - hostID: 目标 host
 //
+// 返回：
+//   - 本次探活后的可展示元信息
+//
 // 注意：
 //   - 探活报错映射为 StatusUnreachable
 //   - 接口不全映射为 StatusVersionMismatch
 //   - 该方法只改 agent 状态，不触碰隧道
-func (m *Monitor) ProbeOnce(ctx context.Context, hostID string) {
+func (m *Monitor) ProbeOnce(ctx context.Context, hostID string) Info {
 	next := m.classify(ctx, hostID)
 	m.mu.Lock()
+	changed := m.status[hostID] != next
 	m.status[hostID] = next
 	m.mu.Unlock()
+	if changed {
+		m.emit(eventFromInfo(hostID, next))
+	}
+	return next
 }
 
 // Run 消费隧道信号循环，按 host 启停轮询，直到 ctx 取消。

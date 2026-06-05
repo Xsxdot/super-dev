@@ -338,11 +338,11 @@ function startIssuePolling(certID: string) {
     <section class="settings-section account-section">
       <h2 class="account-title">{{ t('settings.certificates.acmeAccount') }}</h2>
       <div class="settings-form-grid account-grid">
-        <label class="settings-field">
+        <label class="settings-field account-email">
           <span class="settings-field-label">{{ t('settings.certificates.email') }}</span>
           <input v-model="accountDraft.email" class="settings-input" data-test="acme-email" />
         </label>
-        <label class="settings-field">
+        <label class="settings-field account-directory">
           <span class="settings-field-label">{{ t('settings.certificates.directory') }}</span>
           <select v-model="accountDraft.directory_option" class="settings-select" data-test="acme-directory">
             <option :value="LETS_ENCRYPT_PRODUCTION">{{ t('settings.certificates.leProduction') }}</option>
@@ -350,7 +350,7 @@ function startIssuePolling(certID: string) {
             <option :value="CUSTOM_ACME_DIRECTORY">{{ t('settings.certificates.customDirectory') }}</option>
           </select>
         </label>
-        <label v-if="accountDraft.directory_option === CUSTOM_ACME_DIRECTORY" class="settings-field">
+        <label v-if="accountDraft.directory_option === CUSTOM_ACME_DIRECTORY" class="settings-field account-custom-directory">
           <span class="settings-field-label">{{ t('settings.certificates.customDirectory') }}</span>
           <input v-model="accountDraft.custom_directory_url" class="settings-input" data-test="acme-custom-directory" />
         </label>
@@ -632,8 +632,20 @@ function startIssuePolling(certID: string) {
 }
 .account-grid {
   align-items: flex-end;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-areas: "email directory save";
+}
+.account-email {
+  grid-area: email;
+}
+.account-directory {
+  grid-area: directory;
+}
+.account-custom-directory {
+  grid-column: 1 / -1;
 }
 .save-account {
+  grid-area: save;
   min-width: 72px;
 }
 .actions {
@@ -751,6 +763,23 @@ function startIssuePolling(certID: string) {
 @keyframes cert-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@media (max-width: 760px) {
+  .account-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+  .account-email,
+  .account-directory,
+  .account-custom-directory,
+  .save-account {
+    grid-area: auto;
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .save-account {
+    width: 100%;
   }
 }
 </style>

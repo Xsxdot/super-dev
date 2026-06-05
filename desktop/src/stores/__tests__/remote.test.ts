@@ -33,6 +33,8 @@ vi.mock('@/api/agent', async () => {
       updateHost: vi.fn(),
       deleteHost: vi.fn(),
       installHostAgent: vi.fn(),
+      checkHostAgent: vi.fn(),
+      uninstallHostAgent: vi.fn(),
       listLogSources: vi.fn(),
       createLogSource: vi.fn(),
       updateLogSource: vi.fn(),
@@ -147,6 +149,51 @@ describe('useRemoteStore', () => {
       await expect(store.installHostAgent('h1')).resolves.toEqual(result)
 
       expect(mockedApi.installHostAgent).toHaveBeenCalledWith('h1')
+    })
+
+    it('checkHostAgent 调用 agent API 并合并 tunnel 状态', async () => {
+      const status: TunnelStatus = {
+        host_id: 'h1',
+        state: 'open',
+        local_port: 57100,
+        agent: 'healthy',
+        agent_version: '0.1.0',
+        agent_checked_at: '2026-06-05T10:00:00Z',
+      }
+      mockedApi.checkHostAgent.mockResolvedValue(status)
+      const store = useRemoteStore()
+
+      await expect(store.checkHostAgent('h1')).resolves.toEqual(status)
+
+      expect(mockedApi.checkHostAgent).toHaveBeenCalledWith('h1')
+      expect(store.tunnelOf('h1')).toMatchObject({
+        state: 'open',
+        local_port: 57100,
+        agent: 'healthy',
+        agent_version: '0.1.0',
+      })
+    })
+
+    it('uninstallHostAgent 传递是否删除数据并合并返回 tunnel 状态', async () => {
+      const response = {
+        result: { ok: true, host_id: 'h1', removed_data: true, message: 'Agent uninstalled' },
+        tunnel: {
+          host_id: 'h1',
+          state: 'idle',
+          agent: 'unreachable',
+          agent_checked_at: '2026-06-05T10:00:00Z',
+        } satisfies TunnelStatus,
+      }
+      mockedApi.uninstallHostAgent.mockResolvedValue(response)
+      const store = useRemoteStore()
+
+      await expect(store.uninstallHostAgent('h1', true)).resolves.toEqual(response.result)
+
+      expect(mockedApi.uninstallHostAgent).toHaveBeenCalledWith('h1', { remove_data: true })
+      expect(store.tunnelOf('h1')).toMatchObject({
+        state: 'idle',
+        agent: 'unreachable',
+      })
     })
   })
 

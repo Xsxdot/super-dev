@@ -76,7 +76,8 @@
   }
 
   .settings-pane {
-    width: min(960px, calc(100vw - 208px));
+    width: min(1200px, calc(100% - 48px));
+    margin: 0 auto;
     padding: 22px 24px 36px;
   }
 

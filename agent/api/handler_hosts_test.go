@@ -224,6 +224,10 @@ func (f *fakeHostAgentInstaller) Install(ctx context.Context, host model.Host) (
 	return f.result, nil
 }
 
+func (f *fakeHostAgentInstaller) Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error) {
+	return installer.UninstallResult{OK: true, HostID: host.ID, RemovedData: removeData, Message: "uninstalled"}, nil
+}
+
 func TestInstallHostAgent(t *testing.T) {
 	fake := &fakeHostAgentInstaller{
 		result: installer.Result{OK: true, HostID: "h1", Platform: "linux/amd64", Message: "Agent installed and started"},

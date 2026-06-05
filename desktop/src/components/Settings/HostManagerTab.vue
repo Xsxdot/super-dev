@@ -13,6 +13,7 @@ HostManagerTab：设置页主机管理标签页。
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Icon } from '@iconify/vue'
 import { useRemoteStore } from '@/stores/remote'
 import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
@@ -28,14 +29,23 @@ const editing = ref<Host | null>(null)
 const error = ref<string | null>(null)
 const expandedErrors = ref<Set<string>>(new Set())
 const installingHostIds = ref<Set<string>>(new Set())
+const checkingHostIds = ref<Set<string>>(new Set())
+const uninstallingHostIds = ref<Set<string>>(new Set())
 const installMessages = ref<Map<string, string>>(new Map())
 const installErrors = ref<Map<string, string>>(new Map())
+const refreshingAgents = ref(false)
+const uninstallTarget = ref<Host | null>(null)
+const uninstallRemoveData = ref(false)
 
 const sortedHosts = computed(() =>
   [...store.hosts].sort((a, b) => a.name.localeCompare(b.name)),
 )
 
+const remoteHosts = computed(() => sortedHosts.value.filter(host => !host.is_self))
+
 let tunnelWs: WebSocket | null = null
+let agentCheckTimer: ReturnType<typeof setInterval> | null = null
+const agentCheckIntervalMs = 60_000
 
 function connectTunnelWs() {
   tunnelWs = new WebSocket(`${WS_BASE}/ws/tunnels`)
@@ -57,9 +67,17 @@ onMounted(async () => {
     error.value = err instanceof Error ? err.message : t('settings.hosts.loadFailed')
   }
   connectTunnelWs()
+  await refreshAllAgents()
+  agentCheckTimer = setInterval(() => {
+    void refreshAllAgents()
+  }, agentCheckIntervalMs)
 })
 
 onUnmounted(() => {
+  if (agentCheckTimer) {
+    clearInterval(agentCheckTimer)
+    agentCheckTimer = null
+  }
   tunnelWs?.close()
 })
 
@@ -140,6 +158,15 @@ function agentMetaLabel(hostId: string): string {
   return parts.length > 0 ? parts.join(' · ') : t('settings.hosts.agentMetaEmpty')
 }
 
+function hasDetectedAgent(hostId: string): boolean {
+  const status = store.tunnelOf(hostId)
+  return Boolean(
+    status?.agent_version?.trim()
+    || status?.agent === 'healthy'
+    || status?.agent === 'version-mismatch',
+  )
+}
+
 function toggleError(hostId: string) {
   const next = new Set(expandedErrors.value)
   if (next.has(hostId)) next.delete(hostId)
@@ -159,6 +186,19 @@ function isInstalling(hostId: string): boolean {
   return installingHostIds.value.has(hostId)
 }
 
+function isChecking(hostId: string): boolean {
+  return checkingHostIds.value.has(hostId)
+}
+
+function isUninstalling(hostId: string): boolean {
+  return uninstallingHostIds.value.has(hostId)
+}
+
+function installActionLabel(hostId: string): string {
+  if (isInstalling(hostId)) return t('settings.hosts.installing')
+  return hasDetectedAgent(hostId) ? t('settings.hosts.reinstallAction') : t('settings.hosts.installAction')
+}
+
 function installMessage(hostId: string): string {
   return installMessages.value.get(hostId) || ''
 }
@@ -171,32 +211,100 @@ function hasHostError(hostId: string): boolean {
   return installErrors.value.has(hostId) || isFailed(hostId)
 }
 
+function deleteHostError(hostId: string) {
+  const next = new Map(installErrors.value)
+  next.delete(hostId)
+  installErrors.value = next
+}
+
+function setHostError(hostId: string, message: string) {
+  const next = new Map(installErrors.value)
+  next.set(hostId, message)
+  installErrors.value = next
+  const expanded = new Set(expandedErrors.value)
+  expanded.add(hostId)
+  expandedErrors.value = expanded
+}
+
+async function checkAgent(host: Host) {
+  if (host.is_self) return
+  const checking = new Set(checkingHostIds.value)
+  checking.add(host.id)
+  checkingHostIds.value = checking
+  try {
+    await store.checkHostAgent(host.id)
+    deleteHostError(host.id)
+  } catch (err) {
+    setHostError(host.id, err instanceof Error ? err.message : t('settings.hosts.agentCheckFailed'))
+  } finally {
+    const next = new Set(checkingHostIds.value)
+    next.delete(host.id)
+    checkingHostIds.value = next
+  }
+}
+
+async function refreshAllAgents() {
+  if (refreshingAgents.value) return
+  refreshingAgents.value = true
+  try {
+    await Promise.all(remoteHosts.value.map(host => checkAgent(host)))
+  } finally {
+    refreshingAgents.value = false
+  }
+}
+
 async function installAgent(host: Host) {
   const installing = new Set(installingHostIds.value)
   installing.add(host.id)
   installingHostIds.value = installing
 
-  const errors = new Map(installErrors.value)
-  errors.delete(host.id)
-  installErrors.value = errors
+  deleteHostError(host.id)
 
   try {
     const result = await store.installHostAgent(host.id)
     const messages = new Map(installMessages.value)
     messages.set(host.id, t('settings.hosts.installed', { platform: result.platform }))
     installMessages.value = messages
-    await store.loadTunnels()
+    await store.checkHostAgent(host.id)
   } catch (err) {
-    const next = new Map(installErrors.value)
-    next.set(host.id, err instanceof Error ? err.message : t('settings.hosts.installFailed'))
-    installErrors.value = next
-    const expanded = new Set(expandedErrors.value)
-    expanded.add(host.id)
-    expandedErrors.value = expanded
+    setHostError(host.id, err instanceof Error ? err.message : t('settings.hosts.installFailed'))
   } finally {
     const next = new Set(installingHostIds.value)
     next.delete(host.id)
     installingHostIds.value = next
+  }
+}
+
+function openUninstall(host: Host) {
+  uninstallTarget.value = host
+  uninstallRemoveData.value = false
+}
+
+function closeUninstall() {
+  uninstallTarget.value = null
+  uninstallRemoveData.value = false
+}
+
+async function confirmUninstall() {
+  const host = uninstallTarget.value
+  if (!host) return
+  const uninstalling = new Set(uninstallingHostIds.value)
+  uninstalling.add(host.id)
+  uninstallingHostIds.value = uninstalling
+  deleteHostError(host.id)
+
+  try {
+    const result = await store.uninstallHostAgent(host.id, uninstallRemoveData.value)
+    const messages = new Map(installMessages.value)
+    messages.set(host.id, result.removed_data ? t('settings.hosts.uninstalledWithData') : t('settings.hosts.uninstalledKeepData'))
+    installMessages.value = messages
+    closeUninstall()
+  } catch (err) {
+    setHostError(host.id, err instanceof Error ? err.message : t('settings.hosts.uninstallFailed'))
+  } finally {
+    const next = new Set(uninstallingHostIds.value)
+    next.delete(host.id)
+    uninstallingHostIds.value = next
   }
 }
 </script>
@@ -222,7 +330,22 @@ async function installAgent(host: Host) {
             <th>{{ t('settings.hosts.tags') }}</th>
             <th>{{ t('settings.hosts.tunnel') }}</th>
             <th>{{ t('settings.hosts.agent') }}</th>
-            <th>{{ t('settings.hosts.agentMeta') }}</th>
+            <th class="agent-meta-heading">
+              <div class="agent-meta-header">
+                <span>{{ t('settings.hosts.agentMeta') }}</span>
+                <button
+                  class="settings-btn settings-btn-icon settings-btn-ghost agent-refresh-button"
+                  type="button"
+                  :disabled="refreshingAgents"
+                  :title="t('settings.hosts.agentRefreshTitle')"
+                  :aria-label="t('settings.hosts.agentRefreshTitle')"
+                  data-test="agent-refresh-all"
+                  @click="refreshAllAgents"
+                >
+                  <Icon icon="lucide:refresh-cw" aria-hidden="true" />
+                </button>
+              </div>
+            </th>
             <th></th>
           </tr>
         </thead>
@@ -256,36 +379,65 @@ async function installAgent(host: Host) {
                 <span v-if="hasHostError(host.id)" class="expand-icon">{{ expandedErrors.has(host.id) ? '▴' : '▾' }}</span>
               </td>
               <td class="agent-cell">
-                <span
-                  v-if="agentHealthLabel(host.id)"
-                  class="agent-health-badge"
-                  :class="agentHealthClass(host.id)"
-                  data-test="agent-health"
-                >
-                  {{ agentHealthLabel(host.id) }}
-                </span>
-                <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
-                <button
-                  v-if="!host.is_self"
-                  class="settings-btn settings-btn-text"
-                  type="button"
-                  :disabled="isInstalling(host.id)"
-                  :title="t('settings.hosts.agentInstallHelp')"
-                  data-test="host-install-agent"
-                  @click="installAgent(host)"
-                >
-                  {{ isInstalling(host.id) ? t('settings.hosts.installing') : t('settings.hosts.installAction') }}
-                </button>
-                <span v-if="!host.is_self" class="install-help" data-test="host-install-help">
-                  {{ t('settings.hosts.agentInstallHelp') }}
-                </span>
+                <div class="agent-stack">
+                  <div class="agent-action-row" data-test="host-agent-actions">
+                    <span
+                      v-if="agentHealthLabel(host.id)"
+                      class="agent-health-badge"
+                      :class="agentHealthClass(host.id)"
+                      data-test="agent-health"
+                    >
+                      {{ agentHealthLabel(host.id) }}
+                    </span>
+                    <span v-if="installMessage(host.id)" class="agent-ok">{{ installMessage(host.id) }}</span>
+                    <button
+                      v-if="!host.is_self"
+                      class="settings-btn settings-btn-text"
+                      type="button"
+                      :disabled="isInstalling(host.id) || isChecking(host.id)"
+                      :title="t('settings.hosts.agentInstallHelp')"
+                      data-test="host-install-agent"
+                      @click="installAgent(host)"
+                    >
+                      {{ installActionLabel(host.id) }}
+                    </button>
+                    <button
+                      v-if="!host.is_self"
+                      class="settings-btn settings-btn-text settings-btn-danger"
+                      type="button"
+                      :disabled="isUninstalling(host.id)"
+                      :title="t('settings.hosts.uninstallAction')"
+                      data-test="host-uninstall-agent"
+                      @click="openUninstall(host)"
+                    >
+                      {{ isUninstalling(host.id) ? t('settings.hosts.uninstalling') : t('settings.hosts.uninstallAction') }}
+                    </button>
+                  </div>
+                  <span v-if="!host.is_self" class="install-help install-help-row" data-test="host-install-help">
+                    {{ t('settings.hosts.agentInstallHelp') }}
+                  </span>
+                </div>
               </td>
               <td class="agent-meta-cell" data-test="agent-meta">
-                {{ agentMetaLabel(host.id) }}
+                <div class="agent-meta-row">
+                  <span class="agent-meta-text">{{ agentMetaLabel(host.id) }}</span>
+                  <button
+                    v-if="!host.is_self"
+                    class="settings-btn settings-btn-icon settings-btn-ghost agent-refresh-button"
+                    type="button"
+                    :disabled="isChecking(host.id)"
+                    :title="t('settings.hosts.agentRefreshTitle')"
+                    :aria-label="t('settings.hosts.agentRefreshTitle')"
+                    :data-test="`host-refresh-agent-${host.id}`"
+                    @click="checkAgent(host)"
+                  >
+                    <Icon icon="lucide:refresh-cw" aria-hidden="true" />
+                  </button>
+                </div>
               </td>
-              <td class="row-actions">
-                <button class="settings-btn settings-btn-text" @click="openEdit(host)">{{ t('common.edit') }}</button>
-                <button class="settings-btn settings-btn-text settings-btn-danger" @click="handleDelete(host)">{{ t('common.delete') }}</button>
+              <td class="row-actions" data-test="host-row-actions">
+                <button class="settings-btn settings-btn-text" data-test="host-edit" @click="openEdit(host)">{{ t('common.edit') }}</button>
+                <button class="settings-btn settings-btn-text settings-btn-danger" data-test="host-delete" @click="handleDelete(host)">{{ t('common.delete') }}</button>
               </td>
             </tr>
             <tr v-if="hasHostError(host.id) && expandedErrors.has(host.id)" class="error-row" data-test="host-error-row">
@@ -305,6 +457,35 @@ async function installAgent(host: Host) {
       @submit="handleSubmit"
       @cancel="formVisible = false"
     />
+
+    <div v-if="uninstallTarget" class="settings-modal-backdrop" data-test="agent-uninstall-modal" @click.self="closeUninstall">
+      <section class="settings-modal">
+        <header class="settings-modal-header">
+          <h2 class="settings-modal-title">{{ t('settings.hosts.uninstallTitle', { name: uninstallTarget.name }) }}</h2>
+          <button type="button" class="settings-btn settings-btn-icon settings-btn-ghost" @click="closeUninstall">×</button>
+        </header>
+        <div class="settings-modal-body uninstall-body">
+          <p>{{ t('settings.hosts.uninstallBody') }}</p>
+          <label class="uninstall-data-option">
+            <input v-model="uninstallRemoveData" type="checkbox" data-test="agent-uninstall-remove-data" />
+            <span>{{ t('settings.hosts.uninstallRemoveData') }}</span>
+          </label>
+          <p class="uninstall-note">{{ t('settings.hosts.uninstallKeepData') }}</p>
+        </div>
+        <footer class="settings-modal-footer">
+          <button type="button" class="settings-btn settings-btn-secondary" @click="closeUninstall">{{ t('common.cancel') }}</button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-danger"
+            :disabled="isUninstalling(uninstallTarget.id)"
+            data-test="agent-uninstall-confirm"
+            @click="confirmUninstall"
+          >
+            {{ isUninstalling(uninstallTarget.id) ? t('settings.hosts.uninstalling') : t('settings.hosts.uninstallConfirm') }}
+          </button>
+        </footer>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -332,17 +513,29 @@ async function installAgent(host: Host) {
   font-size: 10px;
 }
 .row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
   white-space: nowrap;
 }
 .tunnel-cell {
   white-space: nowrap;
 }
 .agent-cell {
+  min-width: 420px;
+}
+.agent-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.agent-action-row {
   display: flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
-  flex-wrap: wrap;
 }
 .agent-ok {
   color: var(--status-running);
@@ -361,11 +554,52 @@ async function installAgent(host: Host) {
   color: var(--text-tertiary);
   white-space: nowrap;
 }
+.host-table th.agent-meta-heading {
+  vertical-align: middle;
+}
+.agent-meta-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.agent-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+.agent-meta-text {
+  min-width: 0;
+}
+.agent-refresh-button {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  line-height: 1;
+  vertical-align: middle;
+}
+.agent-refresh-button :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
 .install-help {
   max-width: 300px;
   color: var(--text-tertiary);
   font-size: 11px;
   white-space: normal;
+}
+.install-help-row {
+  display: block;
+  max-width: 420px;
+  line-height: 1.35;
 }
 .tunnel-failed {
   color: var(--status-failed);
@@ -388,5 +622,23 @@ async function installAgent(host: Host) {
   font-size: 11px;
   word-break: break-all;
   white-space: pre-wrap;
+}
+.uninstall-body {
+  display: grid;
+  gap: 10px;
+}
+.uninstall-body p {
+  margin: 0;
+}
+.uninstall-data-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.uninstall-note {
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 </style>

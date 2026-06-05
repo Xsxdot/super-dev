@@ -70,6 +70,7 @@ type AppConfig struct {
 // HostAgentInstaller 安装或重装远端 SuperDev agent。
 type HostAgentInstaller interface {
 	Install(ctx context.Context, host model.Host) (installer.Result, error)
+	Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -392,6 +393,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
+	mux.HandleFunc("POST /api/hosts/{id}/agent/check", a.checkHostAgent)
+	mux.HandleFunc("POST /api/hosts/{id}/agent/uninstall", a.uninstallHostAgent)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
 	// 远程日志源管理
