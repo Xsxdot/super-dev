@@ -153,12 +153,12 @@ const retentionDays = computed({
 </script>
 
 <template>
-  <div class="settings-page">
-    <aside class="settings-sidebar">
-      <button class="back-btn" @click="router.push('/')">← {{ t('common.back') }}</button>
+  <div class="settings-shell">
+    <aside class="settings-sidebar settings-nav">
+      <button class="settings-nav-back" @click="router.push('/')">← {{ t('common.back') }}</button>
       <button
         data-test="settings-tab-general"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'general' }"
         @click="selectedTab = 'general'"
       >
@@ -170,7 +170,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-projects"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'projects' }"
         @click="selectedTab = 'projects'"
       >
@@ -182,7 +182,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-hosts"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'hosts' }"
         @click="selectedTab = 'hosts'"
       >
@@ -196,7 +196,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-dns"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'dns' }"
         @click="selectedTab = 'dns'"
       >
@@ -208,7 +208,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-ssl"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'ssl' }"
         @click="selectedTab = 'ssl'"
       >
@@ -220,7 +220,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-templates"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'templates' }"
         @click="selectedTab = 'templates'"
       >
@@ -232,7 +232,7 @@ const retentionDays = computed({
       </button>
       <button
         data-test="settings-tab-approvals"
-        class="tab-btn"
+        class="settings-nav-item"
         :class="{ active: selectedTab === 'approvals' }"
         @click="selectedTab = 'approvals'"
       >
@@ -246,83 +246,89 @@ const retentionDays = computed({
     </aside>
 
     <main class="settings-main">
-      <section v-if="selectedTab === 'general'" class="pane">
-        <header class="pane-header">
-          <h1>{{ t('settings.general.title') }}</h1>
+      <section v-if="selectedTab === 'general'" class="settings-pane">
+        <header class="settings-pane-header">
+          <div>
+            <h1 class="settings-pane-title">{{ t('settings.general.title') }}</h1>
+          </div>
         </header>
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">{{ t('settings.general.logRetentionTitle') }}</div>
-            <div class="setting-desc">{{ t('settings.general.logRetentionDesc') }}</div>
-          </div>
-          <input
-            data-test="retention-days"
-            class="number-input"
-            type="number"
-            min="1"
-            max="90"
-            :value="retentionDays"
-            @change="retentionDays = Number(($event.target as HTMLInputElement).value)"
-          />
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">{{ t('settings.general.languageTitle') }}</div>
-            <div class="setting-desc">{{ t('settings.general.languageDesc') }}</div>
-          </div>
-          <select
-            data-test="locale-select"
-            class="select-input"
-            :value="settingsStore.locale"
-            @change="settingsStore.setLocale(($event.target as HTMLSelectElement).value as SupportedLocale)"
-          >
-            <option
-              v-for="option in settingsStore.supportedLocaleOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">{{ t('settings.general.autostartTitle') }}</div>
-            <div class="setting-desc">{{ t('settings.general.autostartDesc') }}</div>
-          </div>
-          <label class="switch">
+        <div class="settings-surface">
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.logRetentionTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.logRetentionDesc') }}</div>
+            </div>
             <input
-              type="checkbox"
-              :checked="settingsStore.autostartEnabled"
-              @change="settingsStore.setAutostart(($event.target as HTMLInputElement).checked)"
+              data-test="retention-days"
+              class="settings-input retention-input"
+              type="number"
+              min="1"
+              max="90"
+              :value="retentionDays"
+              @change="retentionDays = Number(($event.target as HTMLInputElement).value)"
             />
-            <span />
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">{{ t('settings.general.onboardingTitle') }}</div>
-            <div class="setting-desc">{{ t('settings.general.onboardingDesc') }}</div>
           </div>
-          <button
-            class="secondary-btn"
-            data-test="rerun-onboarding"
-            type="button"
-            @click="router.push('/onboarding')"
-          >
-            {{ t('settings.general.onboardingAction') }}
-          </button>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.languageTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.languageDesc') }}</div>
+            </div>
+            <select
+              data-test="locale-select"
+              class="settings-select locale-select"
+              :value="settingsStore.locale"
+              @change="settingsStore.setLocale(($event.target as HTMLSelectElement).value as SupportedLocale)"
+            >
+              <option
+                v-for="option in settingsStore.supportedLocaleOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.autostartTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.autostartDesc') }}</div>
+            </div>
+            <label class="settings-switch">
+              <input
+                type="checkbox"
+                :checked="settingsStore.autostartEnabled"
+                @change="settingsStore.setAutostart(($event.target as HTMLInputElement).checked)"
+              />
+              <span />
+            </label>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.onboardingTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.onboardingDesc') }}</div>
+            </div>
+            <button
+              class="settings-btn settings-btn-secondary"
+              data-test="rerun-onboarding"
+              type="button"
+              @click="router.push('/onboarding')"
+            >
+              {{ t('settings.general.onboardingAction') }}
+            </button>
+          </div>
         </div>
       </section>
 
-      <section v-else-if="selectedTab === 'projects'" class="pane">
-        <header class="pane-header">
-          <h1>{{ t('settings.projects.title') }}</h1>
-          <button class="primary-btn" @click="addProject">+ {{ t('settings.projects.addProject') }}</button>
+      <section v-else-if="selectedTab === 'projects'" class="settings-pane">
+        <header class="settings-pane-header">
+          <div>
+            <h1 class="settings-pane-title">{{ t('settings.projects.title') }}</h1>
+          </div>
+          <button class="settings-btn settings-btn-primary" @click="addProject">+ {{ t('settings.projects.addProject') }}</button>
         </header>
-        <div class="project-list">
-          <article v-for="project in agentStore.projects" :key="project.id" class="project-card">
-            <header class="project-header">
+        <div class="settings-card-list">
+          <article v-for="project in agentStore.projects" :key="project.id" class="settings-card project-card">
+            <header class="settings-card-header project-header">
               <div>
                 <h2>{{ project.name }}</h2>
                 <p>{{ project.root_path }}</p>
@@ -330,23 +336,23 @@ const retentionDays = computed({
               <div class="project-actions">
                 <span>{{ t('common.serviceCount', { count: project.services.length }) }}</span>
                 <button
-                  class="ghost-btn"
+                  class="settings-btn settings-btn-secondary"
                   :data-test="`setup-project-${project.id}`"
                   @click="openExistingProjectEditor(project)"
                 >
                   {{ t('settings.projects.editConfig') }}
                 </button>
                 <button
-                  class="ghost-btn"
+                  class="settings-btn settings-btn-secondary"
                   :data-test="`pipeline-project-${project.id}`"
                   @click="openPipelineEditor(project)"
                 >
                   {{ t('settings.projects.editPipeline') }}
                 </button>
-                <button class="danger-btn" @click="deleteProject(project)">{{ t('common.delete') }}</button>
+                <button class="settings-btn settings-btn-danger" @click="deleteProject(project)">{{ t('common.delete') }}</button>
               </div>
             </header>
-            <div class="service-table">
+            <div class="service-table settings-surface">
               <div v-for="service in project.services" :key="service.id" class="service-row">
                 <div>
                   <span class="service-name">{{ service.name }}</span>
@@ -364,7 +370,7 @@ const retentionDays = computed({
                 </label>
                 <button
                   :data-test="`toggle-hidden-${service.id}`"
-                  class="ghost-btn"
+                  class="settings-btn settings-btn-secondary"
                   @click="settingsStore.toggleServiceHidden(service.id)"
                 >
                   {{ settingsStore.isServiceHidden(service.id) ? t('common.hidden') : t('common.display') }}
@@ -375,19 +381,19 @@ const retentionDays = computed({
         </div>
       </section>
 
-      <section v-else-if="selectedTab === 'hosts'" class="pane">
+      <section v-else-if="selectedTab === 'hosts'" class="settings-pane">
         <HostManagerTab />
       </section>
 
-      <section v-else-if="selectedTab === 'dns'" class="pane">
+      <section v-else-if="selectedTab === 'dns'" class="settings-pane">
         <DNSProviderTab />
       </section>
 
-      <section v-else-if="selectedTab === 'ssl'" class="pane">
+      <section v-else-if="selectedTab === 'ssl'" class="settings-pane">
         <CertificateTab />
       </section>
 
-      <section v-else-if="selectedTab === 'templates'" class="pane">
+      <section v-else-if="selectedTab === 'templates'" class="settings-pane">
         <TemplateManagerTab
           :templates="pipelineTemplateStore.templates"
           :on-import="importPipelineTemplate"
@@ -395,7 +401,7 @@ const retentionDays = computed({
         />
       </section>
 
-      <section v-else class="pane">
+      <section v-else class="settings-pane">
         <OperationApprovalsTab />
       </section>
     </main>
@@ -427,37 +433,32 @@ const retentionDays = computed({
 </template>
 
 <style scoped>
-.settings-page {
-  display: flex;
-  height: 100vh;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-.settings-sidebar {
-  width: 160px;
-  border-right: 1px solid var(--border-secondary);
-  background: var(--bg-elevated);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.back-btn,
-.tab-btn {
+.settings-nav-back,
+.settings-nav-item {
   display: flex;
   align-items: center;
+  width: 100%;
   text-align: left;
-  border: none;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   padding: 8px 10px;
   cursor: pointer;
+  font-size: 12px;
 }
-.tab-btn.active {
+
+.settings-nav-back:hover,
+.settings-nav-item:hover {
+  background: var(--control-hover);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
   background: var(--bg-overlay);
   color: var(--text-primary);
 }
+
 .tab-count {
   margin-left: auto;
   min-width: 18px;
@@ -469,80 +470,20 @@ const retentionDays = computed({
   line-height: 18px;
   text-align: center;
 }
-.settings-main {
-  flex: 1;
-  overflow-y: auto;
-}
-.pane {
-  max-width: 860px;
-  padding: 22px;
-}
-.pane-header,
-.project-header,
-.setting-row,
-.service-row,
-.project-actions {
-  display: flex;
-  align-items: center;
-}
-.pane-header,
-.project-header,
-.setting-row {
-  justify-content: space-between;
-}
-h1 {
-  margin: 0 0 16px;
-  font-size: 18px;
-}
-h2 {
-  margin: 0;
-  font-size: 14px;
-}
-p {
-  margin: 4px 0 0;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.setting-row,
-.project-card {
-  border: 1px solid var(--border-secondary);
-  background: var(--bg-elevated);
-  border-radius: 8px;
-}
-.setting-row {
-  padding: 14px 16px;
-  margin-bottom: 10px;
-}
-.setting-title {
-  font-size: 13px;
-  font-weight: 600;
-}
-.setting-desc {
-  margin-top: 3px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.number-input {
+
+.retention-input {
   width: 72px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text-primary);
-  padding: 5px 7px;
 }
-.select-input {
-  min-width: 132px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text-primary);
-  padding: 5px 7px;
-  font-size: 12px;
+
+.locale-select {
+  min-width: 156px;
 }
-.switch input {
+
+.settings-switch input {
   display: none;
 }
-.switch span {
+
+.settings-switch span {
   width: 34px;
   height: 18px;
   border-radius: 999px;
@@ -550,7 +491,8 @@ p {
   display: block;
   position: relative;
 }
-.switch span::after {
+
+.settings-switch span::after {
   content: '';
   position: absolute;
   width: 14px;
@@ -561,71 +503,71 @@ p {
   background: var(--text-secondary);
   transition: transform 0.12s;
 }
-.switch input:checked + span {
+
+.settings-switch input:checked + span {
   background: var(--accent);
 }
-.switch input:checked + span::after {
+
+.settings-switch input:checked + span::after {
   transform: translateX(16px);
   background: #fff;
 }
-.primary-btn,
-.danger-btn,
-.ghost-btn {
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  padding: 5px 9px;
-  cursor: pointer;
-  font-size: 11px;
+
+.project-card h2 {
+  margin: 0;
+  font-size: 14px;
 }
-.primary-btn {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.danger-btn {
-  background: transparent;
-  color: var(--status-failed);
-}
-.ghost-btn {
-  background: var(--bg-overlay);
-  color: var(--text-secondary);
-}
-.project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.project-card {
-  overflow: hidden;
-}
-.project-header {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-secondary);
-}
-.project-actions {
-  gap: 10px;
+
+.project-card p {
+  margin: 4px 0 0;
   color: var(--text-tertiary);
   font-size: 11px;
 }
+
+.project-header {
+  align-items: center;
+}
+
+.project-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .service-table {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   padding: 6px 10px 10px;
 }
+
 .service-row {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  min-height: 32px;
+  gap: 10px;
+  min-height: 34px;
   border-bottom: 1px solid var(--border-secondary);
 }
+
 .service-row:last-child {
   border-bottom: none;
 }
+
 .service-name {
   font-size: 12px;
 }
+
 .required-badge {
   margin-left: 6px;
   color: var(--accent);
   font-size: 10px;
 }
+
 .inline-check {
   display: flex;
   align-items: center;

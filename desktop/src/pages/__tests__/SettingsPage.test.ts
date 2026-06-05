@@ -98,6 +98,24 @@ describe('SettingsPage', () => {
     expect(settings.saveLogRetentionDays).toHaveBeenCalledWith(14)
   })
 
+  it('renders the settings workbench shell and general rows with shared classes', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    expect(wrapper.find('.settings-shell').exists()).toBe(true)
+    expect(wrapper.find('.settings-sidebar').exists()).toBe(true)
+    expect(wrapper.find('.settings-main').exists()).toBe(true)
+    expect(wrapper.find('.settings-pane').exists()).toBe(true)
+    expect(wrapper.findAll('.settings-row')).toHaveLength(4)
+    expect(wrapper.find('[data-test="retention-days"]').classes()).toContain('settings-input')
+    expect(wrapper.find('[data-test="locale-select"]').classes()).toContain('settings-select')
+  })
+
   it('项目页可切换服务隐藏状态和启动选择', async () => {
     const api = service('svc-api', 'api', true)
     const worker = service('svc-worker', 'worker')
@@ -134,6 +152,23 @@ describe('SettingsPage', () => {
 
     await button.trigger('click')
     expect(wrapper.text()).toContain('编辑流水线 · Project')
+  })
+
+  it('renders projects as shared settings cards without changing actions', async () => {
+    const agent = useAgentStore()
+    agent.projects = [project([service('svc-api', 'api', true), service('svc-worker', 'worker')])]
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await wrapper.find('[data-test="settings-tab-projects"]').trigger('click')
+
+    expect(wrapper.find('.settings-card-list').exists()).toBe(true)
+    expect(wrapper.find('.settings-card').exists()).toBe(true)
+    expect(wrapper.find('[data-test="setup-project-proj-1"]').classes()).toContain('settings-btn')
+    expect(wrapper.find('[data-test="pipeline-project-proj-1"]').classes()).toContain('settings-btn')
+    expect(wrapper.find('[data-test="toggle-hidden-svc-worker"]').classes()).toContain('settings-btn')
   })
 
   it('支持从 query 直达主机管理 tab', async () => {
