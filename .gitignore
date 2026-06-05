@@ -27,6 +27,7 @@ desktop/src-tauri/target/
 
 # Manual UI test captures
 screenshot-*.png
+!docs/assets/readme/screenshot-*.png
 superdev-product-audit/
 
 # Local/internal planning notes (not product source)
