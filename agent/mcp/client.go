@@ -77,6 +77,8 @@ type AgentClient interface {
 	ImportPipelineTemplate(context.Context, string, string) (PipelineTemplateSummary, error)
 	// DeployProjectPipeline 通过项目级 pipeline 触发部署或回滚。
 	DeployProjectPipeline(context.Context, string, string, PipelineDeployRequest) (model.Run, error)
+	// ValidateProjectPipeline 预览并校验已保存的项目级 pipeline。
+	ValidateProjectPipeline(context.Context, string, string, ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error)
 	// ListPipelineRuns 查询项目级 pipeline 执行历史。
 	ListPipelineRuns(context.Context, string, string) ([]model.Run, error)
 	// ListPipelineArtifacts 查询项目级 pipeline 制品历史。
@@ -485,6 +487,23 @@ func (c *HTTPAgentClient) ImportPipelineTemplate(ctx context.Context, path strin
 func (c *HTTPAgentClient) DeployProjectPipeline(ctx context.Context, projectID, pipelineID string, req PipelineDeployRequest) (model.Run, error) {
 	var out model.Run
 	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/deploy"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// ValidateProjectPipeline 预览并校验已保存的项目级 pipeline。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - pipelineID: 项目级 pipeline ID
+//   - req: env、变量和服务选择
+//
+// 返回：
+//   - agent 返回的 preview plan/run
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) ValidateProjectPipeline(ctx context.Context, projectID, pipelineID string, req ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error) {
+	var out ProjectPipelinePreview
+	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/preview"
 	return out, c.post(ctx, path, req, &out)
 }
 

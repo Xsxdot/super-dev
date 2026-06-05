@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
@@ -65,6 +66,19 @@ type PipelineDeployRequest struct {
 	ArtifactVersion string            `json:"artifact_version,omitempty"`
 	Variables       map[string]string `json:"variables,omitempty"`
 	DebugSessionID  string            `json:"debug_session_id,omitempty"`
+}
+
+// ProjectPipelinePreviewRequest 描述项目级 pipeline 校验请求。
+type ProjectPipelinePreviewRequest struct {
+	EnvName      string            `json:"env_name"`
+	ServiceNames []string          `json:"service_names,omitempty"`
+	Variables    map[string]string `json:"variables,omitempty"`
+}
+
+// ProjectPipelinePreview 是 agent 项目级 pipeline preview 响应。
+type ProjectPipelinePreview struct {
+	Plan pipeline.Plan `json:"plan"`
+	Run  model.Run     `json:"run"`
 }
 
 // OperationRequest 描述 MCP 请求 agent 生成 operation plan 的参数。

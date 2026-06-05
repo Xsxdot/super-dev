@@ -184,6 +184,33 @@ func TestHTTPAgentClientConfigChangeLifecycle(t *testing.T) {
 	assert.True(t, applied.Validation.OK)
 }
 
+func TestHTTPAgentClientValidateProjectPipeline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/p1/pipelines/deploy-dev/preview":
+			var req ProjectPipelinePreviewRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			assert.Equal(t, "prod", req.EnvName)
+			assert.Equal(t, "v1", req.Variables["version"])
+			jsonOKForMCPClientTest(w, ProjectPipelinePreview{
+				Run: model.Run{ID: "run-1", Status: model.StatusPending},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	preview, err := client.ValidateProjectPipeline(context.Background(), "p1", "deploy-dev", ProjectPipelinePreviewRequest{
+		EnvName:   "prod",
+		Variables: map[string]string{"version": "v1"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "run-1", preview.Run.ID)
+}
+
 func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

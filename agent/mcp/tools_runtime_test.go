@@ -216,6 +216,10 @@ func (f *fakeAgentClient) DeployProjectPipeline(_ context.Context, _ string, _ s
 	return model.Run{ID: "run-1", ArtifactVersion: version, Status: model.StatusSuccess}, nil
 }
 
+func (f *fakeAgentClient) ValidateProjectPipeline(context.Context, string, string, ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error) {
+	return ProjectPipelinePreview{Run: model.Run{ID: "run-1", Status: model.StatusPending}}, nil
+}
+
 func (f *fakeAgentClient) ListPipelineRuns(context.Context, string, string) ([]model.Run, error) {
 	if f.pipelineRuns != nil {
 		return f.pipelineRuns, nil
