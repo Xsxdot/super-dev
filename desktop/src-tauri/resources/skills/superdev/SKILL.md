@@ -65,6 +65,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 | `stop_service` | 停止 deployment | 写，需审批纪律 | `references/safe-operations.md` |
 | `restart_service` | 重启 deployment | 写，需审批纪律 | `references/safe-operations.md` |
 | `preview_pipeline_template` | 校验 pipeline 模板 YAML | 读 | `references/pipeline.md` |
+| `validate_project_pipeline` | 校验已保存的项目级 pipeline，不执行任何步骤 | 读 | `references/pipeline.md` |
 | `import_pipeline_template` | 导入 pipeline 模板到本地模板库 | 写 | `references/pipeline.md` |
 | `deploy_project_pipeline` | 执行项目级 pipeline deploy 或 rollback | 写 | `references/pipeline.md` |
 | `list_pipeline_runs` | 列出 pipeline 运行历史 | 读 | `references/pipeline.md` |

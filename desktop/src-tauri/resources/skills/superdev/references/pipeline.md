@@ -5,6 +5,7 @@
 ```text
 模板准备
   -> 配置 pipeline
+  -> 校验已保存 pipeline
   -> 执行 deploy 或 rollback
   -> 观测 run、日志、artifact
 ```
@@ -26,15 +27,18 @@ preview_pipeline_template
 
 ## 配置 project pipeline
 
-Pipeline 配置属于项目配置写入，走安全配置流程：
+Pipeline 配置属于项目配置写入，走安全配置流程。保存后必须先校验已保存配置，再执行部署：
 
 ```text
 get_project_config
   -> preview_config_change(kind="config.pipeline.upsert")
   -> apply_config_change
+  -> validate_project_pipeline
 ```
 
 不要直接调用 `upsert_project_pipeline`，除非用户明确要求绕过 preview/apply 流程。
+
+`validate_project_pipeline` 是只读工具，用于校验已保存的 pipeline。它会展开 include 模板、解析变量、校验 DAG、解析角色/主机，并执行插件静态参数校验，但不会执行命令、传输文件、写配置或创建 run。
 
 ## 执行 deploy 或 rollback
 
@@ -46,6 +50,8 @@ get_project_config
 - deploy 时的 `variables`
 - rollback 时的 `artifact_version`
 - 需要指定机器时的 `host_ids`
+
+执行前必须已经跑过 `validate_project_pipeline`，并确认返回成功。
 
 执行前说明影响面：项目、环境、pipeline、目标主机、变量、artifact version。
 
@@ -69,5 +75,6 @@ list_pipeline_runs
 
 - 没有校验 YAML 就导入模板。
 - 配置 pipeline 时跳过 `preview_config_change`。
+- 保存 project pipeline 后没有运行 `validate_project_pipeline` 就部署。
 - deploy 后不读 run logs 就说成功。
 - rollback 时没有确认 `artifact_version`。
