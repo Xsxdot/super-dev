@@ -37,6 +37,14 @@ func TestTransferRequiresTarget(t *testing.T) {
 	require.ErrorContains(t, err, "with.target")
 }
 
+func TestTransferValidateTargetsRequiresTargets(t *testing.T) {
+	plugin := plugins.NewTransfer(nil)
+
+	err := plugin.ValidateTargets(model.Step{Name: "Upload", Type: "transfer"}, nil)
+
+	require.ErrorContains(t, err, "transfer requires targets")
+}
+
 func TestTransferExecutesTargets(t *testing.T) {
 	transfer := &fakeFileTransfer{}
 	p := plugins.NewTransfer(transfer)

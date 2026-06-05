@@ -61,6 +61,24 @@ func (p *Transfer) Validate(step model.Step) error {
 	return nil
 }
 
+// ValidateTargets checks transfer resolved target requirements.
+//
+// 参数：
+//   - step: 待校验步骤，当前仅用于满足 pipeline.TargetValidator 接口
+//   - targets: 已解析出的远程目标列表
+//
+// 返回：
+//   - targets 为空时返回错误
+//
+// 注意：
+//   - 不检查 transfer 能力，因为 transfer 是运行时依赖，不属于 pipeline 配置
+func (p *Transfer) ValidateTargets(_ model.Step, targets []pipeline.Target) error {
+	if len(targets) == 0 {
+		return errors.New("transfer requires targets")
+	}
+	return nil
+}
+
 // Execute transfers the configured file to all targets.
 //
 // 参数：
@@ -74,8 +92,8 @@ func (p *Transfer) Execute(ctx *pipeline.RunContext, step model.Step, targets []
 	if err := p.Validate(step); err != nil {
 		return err
 	}
-	if len(targets) == 0 {
-		return errors.New("transfer requires targets")
+	if err := p.ValidateTargets(step, targets); err != nil {
+		return err
 	}
 	if p.transfer == nil {
 		return errors.New("file transfer is required")

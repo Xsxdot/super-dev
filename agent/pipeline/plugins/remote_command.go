@@ -58,6 +58,24 @@ func (p *RemoteCommand) Validate(step model.Step) error {
 	return nil
 }
 
+// ValidateTargets checks remote_command resolved target requirements.
+//
+// 参数：
+//   - step: 待校验步骤，当前仅用于满足 pipeline.TargetValidator 接口
+//   - targets: 已解析出的远程目标列表
+//
+// 返回：
+//   - targets 为空时返回错误
+//
+// 注意：
+//   - 不检查 runner，因为 runner 是运行时依赖，不属于 pipeline 配置
+func (p *RemoteCommand) ValidateTargets(_ model.Step, targets []pipeline.Target) error {
+	if len(targets) == 0 {
+		return errors.New("remote_command requires targets")
+	}
+	return nil
+}
+
 // Execute runs the configured command on all targets.
 //
 // 参数：
@@ -71,8 +89,8 @@ func (p *RemoteCommand) Execute(ctx *pipeline.RunContext, step model.Step, targe
 	if err := p.Validate(step); err != nil {
 		return err
 	}
-	if len(targets) == 0 {
-		return errors.New("remote_command requires targets")
+	if err := p.ValidateTargets(step, targets); err != nil {
+		return err
 	}
 	if p.runner == nil {
 		return errors.New("remote_command runner is required")

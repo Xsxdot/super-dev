@@ -35,6 +35,14 @@ func TestRemoteCommandRequiresCommand(t *testing.T) {
 	require.ErrorContains(t, err, "with.cmd")
 }
 
+func TestRemoteCommandValidateTargetsRequiresTargets(t *testing.T) {
+	plugin := plugins.NewRemoteCommand(nil)
+
+	err := plugin.ValidateTargets(model.Step{Name: "Restart", Type: "remote_command"}, nil)
+
+	require.ErrorContains(t, err, "remote_command requires targets")
+}
+
 func TestRemoteCommandExecutesTargets(t *testing.T) {
 	runner := &fakeRemoteRunner{}
 	p := plugins.NewRemoteCommand(runner)
