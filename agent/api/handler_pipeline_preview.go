@@ -69,6 +69,10 @@ func (a *App) previewProjectPipeline(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "failed to build pipeline plan: "+err.Error())
 		return
 	}
+	if err := a.newPipelineEngine().ValidatePlan(plan, run); err != nil {
+		jsonError(w, http.StatusBadRequest, "pipeline validation failed: "+err.Error())
+		return
+	}
 	jsonOK(w, map[string]interface{}{"plan": plan, "run": run})
 }
 
