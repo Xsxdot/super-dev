@@ -61,6 +61,18 @@ describe('MainPage', () => {
     expect(wrapper.find('[data-test="bottom-bar-stub"]').exists()).toBe(false)
   })
 
+  it('keeps app chrome visible before any workspace tab is opened', () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
+    const topbar = wrapper.find('[data-test="app-topbar"]')
+
+    expect(topbar.exists()).toBe(true)
+    expect(topbar.attributes('data-tauri-drag-region')).toBeDefined()
+    expect(wrapper.find('[data-test="app-brand"]').text()).toContain('SuperDev')
+    expect(wrapper.find('[data-test="workspace-tabs-stub"]').exists()).toBe(false)
+  })
+
   it('renders the app chrome and workspace tabs in one compact top row', () => {
     vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
     const workspace = useWorkspaceStore()
@@ -69,12 +81,17 @@ describe('MainPage', () => {
     const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
     const layout = wrapper.find('[data-test="main-layout"]').element
     const topbar = wrapper.find('[data-test="app-topbar"]').element
+    const brand = wrapper.find('[data-test="app-brand"]').element
+    const tabsRegion = wrapper.find('[data-test="app-tabs-region"]').element
     const contentRow = wrapper.find('[data-test="main-content-row"]').element
     const tabs = wrapper.find('[data-test="workspace-tabs-stub"]').element
 
     expect(topbar.parentElement).toBe(layout)
     expect(contentRow.parentElement).toBe(layout)
     expect(topbar.compareDocumentPosition(contentRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(topbar.contains(brand)).toBe(true)
+    expect(topbar.contains(tabsRegion)).toBe(true)
+    expect(tabsRegion.contains(tabs)).toBe(true)
     expect(topbar.contains(tabs)).toBe(true)
     expect(contentRow.contains(tabs)).toBe(false)
   })
