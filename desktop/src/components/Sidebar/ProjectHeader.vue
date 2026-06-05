@@ -62,7 +62,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="project-menu-item overview"
-          data-test="project-overview"
+          data-test="project-overview-menu"
           @click="openOverview"
         >
           <span class="menu-item-icon overview-icon" aria-hidden="true"></span>
@@ -84,6 +84,16 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+    <button
+      type="button"
+      class="overview-btn"
+      data-test="project-overview"
+      :aria-label="t('overview.openOverviewForProject', { name: project.name })"
+      :title="t('overview.openOverview')"
+      @click="openOverview"
+    >
+      <span class="overview-btn-icon" aria-hidden="true"></span>
+    </button>
     <button
       type="button"
       class="add-project-btn"
@@ -238,6 +248,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
 }
 
+.overview-btn,
 .add-project-btn {
   width: 38px;
   height: 38px;
@@ -247,9 +258,39 @@ onBeforeUnmount(() => {
   background: rgba(22, 31, 42, 0.86);
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+.overview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overview-btn-icon {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border: 1.6px solid currentColor;
+  border-radius: 50%;
+}
+
+.overview-btn-icon::after {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 4px;
+  height: 4px;
+  content: '';
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.add-project-btn {
   font-size: 22px;
   line-height: 1;
 }
+
+.overview-btn:hover,
 .add-project-btn:hover {
   border-color: rgba(88, 166, 255, 0.58);
   color: var(--text-primary);

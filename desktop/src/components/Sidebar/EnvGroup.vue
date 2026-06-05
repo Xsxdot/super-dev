@@ -22,6 +22,7 @@ import type { Service } from '@/api/agent'
 const props = defineProps<{
   envName: string
   isDev: boolean
+  initiallyExpanded?: boolean
   projectId: string
   services: Service[]
   // selectedServiceIds 语义为「已在面板打开的 deploymentId 集合」，用于行高亮。
@@ -49,8 +50,8 @@ async function onCheckChange(svc: Service) {
   await agentStore.putEnvSelected(props.projectId, props.envName, next)
 }
 
-// dev 环境默认展开，其他环境默认折叠
-const expanded = ref(props.isDev)
+// dev 环境和父组件指定的首个环境默认展开，避免没有可拖拽服务行。
+const expanded = ref(props.initiallyExpanded || props.isDev)
 
 function toggleExpanded() {
   expanded.value = !expanded.value
@@ -254,10 +255,12 @@ onUnmounted(() => {
       data-test="env-group-header"
       @click="toggleExpanded"
     >
-      <span class="expand-arrow">{{ expanded ? '▾' : '▸' }}</span>
-      <span class="env-name">{{ envName }}</span>
-      <span class="env-count" data-test="env-service-count">{{ services.length }}</span>
-      <div class="env-actions" @click.stop>
+      <div class="env-title" data-test="env-title">
+        <span class="expand-arrow">{{ expanded ? '▾' : '▸' }}</span>
+        <span class="env-name">{{ envName }}</span>
+        <span class="env-count" data-test="env-service-count">{{ services.length }}</span>
+      </div>
+      <div class="env-actions" data-test="env-actions" @click.stop>
         <button title="" class="action-btn start" :aria-label="t('shell.env.startAll')" :disabled="!canStart" @click="startAll">▶</button>
         <button title="" class="action-btn search" :aria-label="t('shell.env.searchLogs')" :disabled="services.length === 0" @click="emit('search')">⌕</button>
         <button title="" class="action-btn stop" :aria-label="t('shell.env.stopAll')" @click="stopAll">⏹</button>
@@ -346,8 +349,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 10px;
+  min-height: 44px;
+  padding: 0 8px 0 10px;
   border-radius: 0;
   margin: 0;
   cursor: pointer;
@@ -356,6 +359,14 @@ onUnmounted(() => {
 
 .env-group-header:hover {
   background: rgba(255, 255, 255, 0.035);
+}
+
+.env-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
 }
 
 .expand-arrow {
@@ -374,11 +385,11 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+  flex: 0 1 auto;
 }
 
 .env-count {
-  min-width: 22px;
+  min-width: 24px;
   height: 20px;
   padding: 0 7px;
   border-radius: 999px;
@@ -392,28 +403,26 @@ onUnmounted(() => {
 
 .env-actions {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   align-items: center;
   flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-
-.env-group-header:hover .env-actions,
-.env-actions:focus-within {
-  opacity: 1;
 }
 
 .action-btn {
   background: transparent;
-  border: none;
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 11px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 5px;
+  padding: 0;
+  font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
-.action-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+.action-btn:hover:not(:disabled) {
+  border-color: rgba(139, 148, 158, 0.34);
+  background: rgba(255,255,255,0.08);
+}
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .action-btn.start { color: #3fb950; }
 .action-btn.search { color: #58a6ff; }

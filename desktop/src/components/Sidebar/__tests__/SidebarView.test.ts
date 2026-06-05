@@ -56,7 +56,7 @@ function createdProject(): Project {
   }
 }
 
-function projectWithService(id: string, name: string, serviceName: string): Project {
+function projectWithService(id: string, name: string, serviceName: string, envName = 'dev', isDev = true): Project {
   return {
     id,
     name,
@@ -68,9 +68,9 @@ function projectWithService(id: string, name: string, serviceName: string): Proj
       status: 'running',
       required: false,
       order: 1,
-      deployments: [{ id: `dep-${serviceName}`, env_name: 'dev', location: 'local', status: 'running' }],
+      deployments: [{ id: `dep-${serviceName}`, env_name: envName, location: 'local', status: 'running' }],
     }],
-    environments: [{ id: `env-${id}`, name: 'dev', is_dev: true, order: 1 }],
+    environments: [{ id: `env-${id}`, name: envName, is_dev: isDev, order: 1 }],
   }
 }
 
@@ -186,6 +186,18 @@ describe('SidebarView', () => {
     wrapper.unmount()
   })
 
+  it('首个非 dev 环境默认展开，服务行可直接拖拽', () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api', 'demo', false)]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="env-service-row"]').text()).toContain('sample-api')
+  })
+
   it('搜索服务时只保留匹配的 service 行', async () => {
     const agent = useAgentStore()
     agent.projects = [{
@@ -238,7 +250,6 @@ describe('SidebarView', () => {
     const wrapper = mount(SidebarView, {
       global: { plugins: [installTestI18n()] },
     })
-    await wrapper.find('[data-test="project-selector"]').trigger('click')
     await wrapper.find('[data-test="project-overview"]').trigger('click')
 
     const active = workspace.activeTab

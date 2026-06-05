@@ -47,4 +47,17 @@ describe('MainPage', () => {
     expect(wrapper.find('[data-test="workspace-stub"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="bottom-bar-stub"]').exists()).toBe(false)
   })
+
+  it('renders bottom bar below the sidebar/workspace row so it spans the full app width', () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
+    const layout = wrapper.find('[data-test="main-layout"]').element
+    const contentRow = wrapper.find('[data-test="main-content-row"]').element
+    const bottomBar = wrapper.find('[data-test="bottom-bar-stub"]').element
+
+    expect(contentRow.parentElement).toBe(layout)
+    expect(bottomBar.parentElement).toBe(layout)
+    expect(contentRow.contains(bottomBar)).toBe(false)
+  })
 })

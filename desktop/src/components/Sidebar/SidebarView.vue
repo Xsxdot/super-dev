@@ -129,10 +129,11 @@ onBeforeUnmount(() => {
         </div>
         <!-- 按环境分组展示有 deployment 的 service 行 -->
         <EnvGroup
-          v-for="env in selectedProject.environments ?? []"
+          v-for="(env, index) in selectedProject.environments ?? []"
           :key="env.id || env.name"
           :env-name="env.name"
           :is-dev="env.is_dev"
+          :initially-expanded="env.is_dev || index === 0"
           :project-id="selectedProject.id"
           :services="servicesForEnv(selectedProject.services, env.name)"
           :selected-service-ids="openDeploymentIdSet()"

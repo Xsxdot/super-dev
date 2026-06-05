@@ -218,6 +218,9 @@ describe('EnvGroup', () => {
     })
 
     expect(wrapper.find('[data-test="env-service-count"]').text()).toBe('2')
+    expect(wrapper.find('[data-test="env-title"]').text()).toContain('dev')
+    expect(wrapper.find('[data-test="env-title"]').text()).toContain('2')
+    expect(wrapper.find('[data-test="env-actions"]').exists()).toBe(true)
     expect(wrapper.findAll('.deployment-card')).toHaveLength(2)
     expect(wrapper.find('.deployment-card').classes()).toContain('selected')
     expect(wrapper.find('[data-test="service-action-rail"]').exists()).toBe(true)
