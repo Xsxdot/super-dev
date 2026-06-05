@@ -9,6 +9,7 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useFilterStore } from '@/stores/filter'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import OperationApprovalPopover from '@/components/OperationApprovalPopover.vue'
 import { AGENT_HOST } from '@/api/agent'
 import type { LogEntry } from '@/api/agent'
 import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
@@ -23,6 +24,7 @@ const filterStore = useFilterStore()
 const operationApprovalStore = useOperationApprovalStore()
 const router = useRouter()
 const { t } = useI18n()
+const approvalsPopoverOpen = ref(false)
 
 // leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
 function leafDeploymentId(leaf: PanelLeafNode): string | null {
@@ -219,7 +221,13 @@ const connectionText = computed(() =>
   agentStore.connected ? t('bottomBar.connected') : t('bottomBar.disconnected'),
 )
 
+async function toggleApprovalsPopover() {
+  approvalsPopoverOpen.value = !approvalsPopoverOpen.value
+  if (approvalsPopoverOpen.value) await operationApprovalStore.loadPending(false)
+}
+
 function openApprovals() {
+  approvalsPopoverOpen.value = false
   void router.push({ path: '/settings', query: { tab: 'approvals' } })
 }
 
@@ -311,13 +319,18 @@ onMounted(() => {
         data-test="approvals-entry"
         class="approvals-entry"
         :class="{ attention: operationApprovalStore.pendingCount > 0 }"
-        @click="openApprovals"
+        :aria-expanded="approvalsPopoverOpen"
+        @click="toggleApprovalsPopover"
       >
         <span>{{ t('bottomBar.approvals') }}</span>
         <span v-if="operationApprovalStore.pendingCount > 0" class="approval-count">
           {{ operationApprovalStore.pendingCount }}
         </span>
       </button>
+      <OperationApprovalPopover
+        v-if="approvalsPopoverOpen"
+        @view-all="openApprovals"
+      />
     </section>
   </div>
 </template>
@@ -481,6 +494,7 @@ onMounted(() => {
 
 .runtime-group {
   gap: 10px;
+  position: relative;
 }
 
 .agent-status,

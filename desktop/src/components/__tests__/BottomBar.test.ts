@@ -184,7 +184,7 @@ describe('BottomBar', () => {
     expect(enWrapper.text()).toContain('Stop')
   })
 
-  it('只渲染一个 agent 状态并提供审批入口', async () => {
+  it('只渲染一个 agent 状态并通过浮层提供审批入口', async () => {
     vi.mocked(agentApi.listOperationApprovals).mockResolvedValue([
       {
         id: 'opa-1',
@@ -212,6 +212,12 @@ describe('BottomBar', () => {
     expect(wrapper.find('[data-test="approvals-entry"]').text()).toContain('1')
 
     await wrapper.find('[data-test="approvals-entry"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="operation-approval-popover"]').exists()).toBe(true)
+    expect(tauriMocks.routerPush).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-test="approval-popover-view-all"]').trigger('click')
 
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
   })
