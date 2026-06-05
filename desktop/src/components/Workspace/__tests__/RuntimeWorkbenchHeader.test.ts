@@ -75,6 +75,17 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.find('[data-test="runtime-evidence"]').text()).toContain('录制未同步')
   })
 
+  it('keeps a Tauri drag region in runtime chrome when the app topbar is hidden', () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    expect(wrapper.find('[data-test="runtime-drag-region"]').attributes('data-tauri-drag-region')).toBeDefined()
+    expect(wrapper.find('[data-test="runtime-drag-spacer"]').attributes('data-tauri-drag-region')).toBeDefined()
+  })
+
   it('renders evidence state from bookmark store', () => {
     const service = makeService()
     useAgentStore().projects = [makeProject(service)]

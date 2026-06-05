@@ -78,23 +78,24 @@ function arrangeColumns() {
 
 <template>
   <header class="runtime-workbench-header" data-test="runtime-workbench-header">
-    <div class="runtime-context">
-      <h1 data-test="runtime-title">
-        {{ t('runtimeWorkbench.title') }} <span>· {{ runtimeLabel }}</span>
+    <div class="runtime-context" data-test="runtime-drag-region" data-tauri-drag-region>
+      <h1 data-test="runtime-title" data-tauri-drag-region>
+        {{ t('runtimeWorkbench.title') }} <span data-tauri-drag-region>· {{ runtimeLabel }}</span>
       </h1>
-      <span class="status-chip live" data-test="runtime-live">
-        <span class="dot" />
+      <span class="status-chip live" data-test="runtime-live" data-tauri-drag-region>
+        <span class="dot" data-tauri-drag-region />
         {{ t('runtimeWorkbench.live') }}
       </span>
-      <span class="status-chip" data-test="runtime-deployments">
+      <span class="status-chip" data-test="runtime-deployments" data-tauri-drag-region>
         {{ t('runtimeWorkbench.deploymentCount', { count: openDeploymentIds.length }) }}
       </span>
-      <span class="status-chip evidence" data-test="runtime-evidence">
+      <span class="status-chip evidence" data-test="runtime-evidence" data-tauri-drag-region>
         {{ evidenceLabel }}
       </span>
     </div>
+    <div class="runtime-drag-spacer" data-test="runtime-drag-spacer" data-tauri-drag-region aria-hidden="true" />
     <div class="runtime-layout-actions">
-      <span class="panel-count" data-test="runtime-panel-count">
+      <span class="panel-count" data-test="runtime-panel-count" data-tauri-drag-region>
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
       <button
@@ -136,7 +137,6 @@ function arrangeColumns() {
 .runtime-workbench-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-height: 48px;
   padding: 10px 14px;
@@ -151,6 +151,20 @@ function arrangeColumns() {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.runtime-context {
+  flex: 0 1 auto;
+}
+
+.runtime-drag-spacer {
+  align-self: stretch;
+  min-width: 24px;
+  flex: 1 1 24px;
+}
+
+.runtime-layout-actions {
+  flex-shrink: 0;
 }
 
 .runtime-context h1 {
