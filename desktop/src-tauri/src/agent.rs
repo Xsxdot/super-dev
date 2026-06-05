@@ -11,13 +11,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
-const REQUIRED_AGENT_ENDPOINTS: [&str; 5] = [
-    "/api/hosts",
-    "/api/tunnels",
-    "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-    "/api/projects/__compat_probe__/ingress",
-    "/api/ingress/certs",
-];
+const AGENT_HEALTH_ENDPOINT: &str = "/api/exec/health";
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const AGENT_PORT_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -38,7 +32,6 @@ enum EndpointProbe {
 
 #[derive(Debug, PartialEq, Eq)]
 enum AgentPortState {
-    ReuseExisting,
     StartSidecar,
 }
 
@@ -91,18 +84,18 @@ impl AgentProcess {
         AgentProcess(Mutex::new(None))
     }
 
-    /// start 启动或复用本地 agent。
+    /// start 启动本地 agent sidecar。
     ///
     /// 参数：
     ///   - app: Tauri AppHandle，用于解析并启动 sidecar。
     ///
     /// 返回：
-    ///   - Ok 表示目标端口上的 agent 已兼容当前前端所需接口
-    ///   - Err 表示 sidecar 缺失、启动失败，或端口被旧版 agent 占用
+    ///   - Ok 表示当前桌面端自带的 agent 已启动并就绪
+    ///   - Err 表示 sidecar 缺失、启动失败，或端口被其他进程占用
     ///
     /// 注意：
     ///   - dev 模式使用 57018，正式构建使用 57017
-    ///   - 若端口已有兼容 agent，会直接复用，不接管其生命周期
+    ///   - 端口上已有 superdev-agent 时先停止旧进程，避免复用后退出时无法清理
     pub fn start(&self, app: &AppHandle) -> Result<(), String> {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_some() {
@@ -123,12 +116,8 @@ impl AgentProcess {
             addr,
             AGENT_PROBE_TIMEOUT,
             AGENT_PORT_RECOVERY_TIMEOUT,
-            stop_incompatible_superdev_agent,
+            stop_existing_superdev_agent,
         )? {
-            AgentPortState::ReuseExisting => {
-                println!("[SuperDev] reuse existing agent on {addr}");
-                return Ok(());
-            }
             AgentPortState::StartSidecar => {}
         }
 
@@ -171,7 +160,7 @@ impl AgentProcess {
     ///
     /// 返回：无。
     ///
-    /// 注意：复用已有兼容 agent 时不会保存 child 句柄，因此不会误杀外部进程。
+    /// 注意：start 不复用端口上的旧 agent，因此退出时只清理自己启动的 child。
     pub fn stop(&self) {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(child) = guard.take() {
@@ -184,7 +173,7 @@ impl AgentProcess {
 fn wait_for_compatible_agent(addr: &str, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
-        match probe_required_endpoints(addr, AGENT_PROBE_TIMEOUT) {
+        match probe_agent_health(addr, AGENT_PROBE_TIMEOUT) {
             ProbeOutcome::Compatible => return Ok(()),
             ProbeOutcome::Unreachable => {
                 if Instant::now() >= deadline {
@@ -201,29 +190,27 @@ fn prepare_agent_port<F>(
     addr: &str,
     probe_timeout: Duration,
     recovery_timeout: Duration,
-    mut recover_incompatible_agent: F,
+    mut stop_existing_agent: F,
 ) -> Result<AgentPortState, String>
 where
     F: FnMut(&str, &ProbeOutcome) -> Result<bool, String>,
 {
-    match probe_required_endpoints(addr, probe_timeout) {
-        ProbeOutcome::Compatible => Ok(AgentPortState::ReuseExisting),
+    match probe_agent_health(addr, probe_timeout) {
         ProbeOutcome::Unreachable => Ok(AgentPortState::StartSidecar),
         outcome => {
-            let error = format_probe_error(addr, &outcome);
-            if !recover_incompatible_agent(addr, &outcome)? {
+            let error = format_existing_agent_error(addr, &outcome);
+            if !stop_existing_agent(addr, &outcome)? {
                 return Err(error);
             }
-            wait_for_recovered_agent_port(addr, recovery_timeout)
+            wait_for_released_agent_port(addr, recovery_timeout)
         }
     }
 }
 
-fn wait_for_recovered_agent_port(addr: &str, timeout: Duration) -> Result<AgentPortState, String> {
+fn wait_for_released_agent_port(addr: &str, timeout: Duration) -> Result<AgentPortState, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        match probe_required_endpoints(addr, AGENT_PROBE_TIMEOUT) {
-            ProbeOutcome::Compatible => return Ok(AgentPortState::ReuseExisting),
+        match probe_agent_health(addr, AGENT_PROBE_TIMEOUT) {
             ProbeOutcome::Unreachable => return Ok(AgentPortState::StartSidecar),
             outcome => {
                 if Instant::now() >= deadline {
@@ -239,11 +226,15 @@ fn wait_for_recovered_agent_port(addr: &str, timeout: Duration) -> Result<AgentP
     }
 }
 
-fn stop_incompatible_superdev_agent(addr: &str, outcome: &ProbeOutcome) -> Result<bool, String> {
-    eprintln!(
-        "[SuperDev] found incompatible agent on {addr}: {}",
-        format_probe_error(addr, outcome)
-    );
+fn stop_existing_superdev_agent(addr: &str, outcome: &ProbeOutcome) -> Result<bool, String> {
+    if outcome == &ProbeOutcome::Compatible {
+        eprintln!("[SuperDev] found existing agent on {addr}; taking sidecar ownership");
+    } else {
+        eprintln!(
+            "[SuperDev] found incompatible agent on {addr}: {}",
+            format_probe_error(addr, outcome)
+        );
+    }
     stop_superdev_agent_on_port(addr)
 }
 
@@ -301,7 +292,7 @@ fn is_superdev_agent_process(pid: &str) -> Result<bool, String> {
 
 fn format_probe_error(addr: &str, outcome: &ProbeOutcome) -> String {
     match outcome {
-        ProbeOutcome::Compatible => String::new(),
+        ProbeOutcome::Compatible => format!("agent 已监听且接口兼容：{addr}"),
         ProbeOutcome::Unreachable => format!("agent 未监听：{addr}"),
         ProbeOutcome::InvalidResponse { endpoint } => format!(
             "agent 兼容性检查失败：{addr}{endpoint} 返回了无法解析的响应，请确认端口没有被其他进程占用"
@@ -312,18 +303,27 @@ fn format_probe_error(addr: &str, outcome: &ProbeOutcome) -> String {
     }
 }
 
-fn probe_required_endpoints(addr: &str, timeout: Duration) -> ProbeOutcome {
-    for endpoint in REQUIRED_AGENT_ENDPOINTS {
-        match probe_endpoint(addr, endpoint, timeout) {
-            EndpointProbe::Status(200) => {}
-            EndpointProbe::Status(status) => {
-                return ProbeOutcome::Incompatible { endpoint, status }
-            }
-            EndpointProbe::Unreachable => return ProbeOutcome::Unreachable,
-            EndpointProbe::Invalid => return ProbeOutcome::InvalidResponse { endpoint },
-        }
+fn format_existing_agent_error(addr: &str, outcome: &ProbeOutcome) -> String {
+    if outcome == &ProbeOutcome::Compatible {
+        return format!(
+            "agent 端口已被已有进程占用：{addr}；SuperDev 需要启动当前桌面端自带的 agent，请退出占用该端口的旧 SuperDev 或 agent 后重启"
+        );
     }
-    ProbeOutcome::Compatible
+    format_probe_error(addr, outcome)
+}
+
+fn probe_agent_health(addr: &str, timeout: Duration) -> ProbeOutcome {
+    match probe_endpoint(addr, AGENT_HEALTH_ENDPOINT, timeout) {
+        EndpointProbe::Status(200) => ProbeOutcome::Compatible,
+        EndpointProbe::Status(status) => ProbeOutcome::Incompatible {
+            endpoint: AGENT_HEALTH_ENDPOINT,
+            status,
+        },
+        EndpointProbe::Unreachable => ProbeOutcome::Unreachable,
+        EndpointProbe::Invalid => ProbeOutcome::InvalidResponse {
+            endpoint: AGENT_HEALTH_ENDPOINT,
+        },
+    }
 }
 
 fn probe_endpoint(addr: &str, endpoint: &'static str, timeout: Duration) -> EndpointProbe {
@@ -400,102 +400,24 @@ mod tests {
     }
 
     #[test]
-    fn probe_reports_compatible_when_required_remote_endpoints_exist() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                200,
-            ),
-            ("/api/projects/__compat_probe__/ingress", 200),
-            ("/api/ingress/certs", 200),
-        ]);
+    fn probe_reports_compatible_when_agent_health_exists() {
+        let addr = serve_statuses(vec![("/api/exec/health", 200)]);
 
-        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
+        let outcome = probe_agent_health(&addr, Duration::from_secs(1));
 
         assert_eq!(outcome, ProbeOutcome::Compatible);
     }
 
     #[test]
-    fn probe_reports_incompatible_when_existing_agent_lacks_remote_endpoints() {
-        let addr = serve_statuses(vec![("/api/hosts", 404)]);
+    fn probe_reports_incompatible_when_agent_health_is_missing() {
+        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
 
-        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
-
-        assert_eq!(
-            outcome,
-            ProbeOutcome::Incompatible {
-                endpoint: "/api/hosts",
-                status: 404,
-            }
-        );
-    }
-
-    #[test]
-    fn probe_reports_incompatible_when_existing_agent_lacks_template_detail_endpoint() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                404,
-            ),
-        ]);
-
-        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
+        let outcome = probe_agent_health(&addr, Duration::from_secs(1));
 
         assert_eq!(
             outcome,
             ProbeOutcome::Incompatible {
-                endpoint: "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                status: 404,
-            }
-        );
-    }
-
-    #[test]
-    fn probe_reports_incompatible_when_existing_agent_lacks_project_ingress_endpoint() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                200,
-            ),
-            ("/api/projects/__compat_probe__/ingress", 404),
-        ]);
-
-        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
-
-        assert_eq!(
-            outcome,
-            ProbeOutcome::Incompatible {
-                endpoint: "/api/projects/__compat_probe__/ingress",
-                status: 404,
-            }
-        );
-    }
-
-    #[test]
-    fn probe_reports_incompatible_when_existing_agent_lacks_ingress_certs_endpoint() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                200,
-            ),
-            ("/api/projects/__compat_probe__/ingress", 200),
-            ("/api/ingress/certs", 404),
-        ]);
-
-        let outcome = probe_required_endpoints(&addr, Duration::from_secs(1));
-
-        assert_eq!(
-            outcome,
-            ProbeOutcome::Incompatible {
-                endpoint: "/api/ingress/certs",
+                endpoint: "/api/exec/health",
                 status: 404,
             }
         );
@@ -503,15 +425,7 @@ mod tests {
 
     #[test]
     fn prepare_agent_port_recovers_incompatible_agent_before_starting_sidecar() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                200,
-            ),
-            ("/api/projects/__compat_probe__/ingress", 404),
-        ]);
+        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
         let mut recovery_calls = 0;
 
         let state = prepare_agent_port(
@@ -523,7 +437,7 @@ mod tests {
                 assert_eq!(
                     outcome,
                     &ProbeOutcome::Incompatible {
-                        endpoint: "/api/projects/__compat_probe__/ingress",
+                        endpoint: "/api/exec/health",
                         status: 404,
                     }
                 );
@@ -537,16 +451,29 @@ mod tests {
     }
 
     #[test]
+    fn prepare_agent_port_stops_existing_compatible_agent_before_starting_sidecar() {
+        let addr = serve_statuses(vec![("/api/exec/health", 200)]);
+        let mut recovery_calls = 0;
+
+        let state = prepare_agent_port(
+            &addr,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            |_, outcome| {
+                recovery_calls += 1;
+                assert_eq!(outcome, &ProbeOutcome::Compatible);
+                Ok(true)
+            },
+        )
+        .expect("recover stale compatible agent");
+
+        assert_eq!(state, AgentPortState::StartSidecar);
+        assert_eq!(recovery_calls, 1);
+    }
+
+    #[test]
     fn prepare_agent_port_reports_incompatible_agent_when_recovery_is_not_safe() {
-        let addr = serve_statuses(vec![
-            ("/api/hosts", 200),
-            ("/api/tunnels", 200),
-            (
-                "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0",
-                200,
-            ),
-            ("/api/projects/__compat_probe__/ingress", 404),
-        ]);
+        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
 
         let err = prepare_agent_port(
             &addr,
@@ -556,6 +483,6 @@ mod tests {
         )
         .expect_err("unsafe recovery should keep compatibility error");
 
-        assert!(err.contains("/api/projects/__compat_probe__/ingress 返回 404"));
+        assert!(err.contains("/api/exec/health 返回 404"));
     }
 }

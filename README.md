@@ -2,14 +2,25 @@
   <img src="./docs/assets/readme/superdev-logo-v5-launch.svg" width="96" alt="SuperDev logo" />
 </p>
 
-# SuperDev
+<h1 align="center">SuperDev</h1>
 
 <p align="center">
-  <strong>AI-native 的运行态协作层。</strong><br />
-  <strong>An AI-native runtime collaboration layer.</strong><br />
-  让开发者与 AI 共享服务、日志、部署与审批上下文，在同一个真实环境里持续协作。<br />
-  Let developers and AI share services, logs, deployments, and approval context in one real environment.<br />
-  <a href="#english-readme">Read the full English README</a>
+  <strong>让 AI 和你共享同一份运行态：服务、日志、部署、审批。</strong><br />
+  <strong>Give AI the same runtime you see: services, logs, deployments, approvals.</strong>
+</p>
+
+<p align="center">
+  <a href="https://gosuper.dev/"><strong>官网 gosuper.dev</strong></a> ·
+  <a href="#为什么是-superdev">为什么</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#核心架构">架构</a> ·
+  <a href="#english-readme">English</a>
+</p>
+
+<p align="center">
+  <a href="https://gosuper.dev/">
+    <img alt="SuperDev runtime console" src="./docs/assets/readme/screenshot-zh.png" width="760" />
+  </a>
 </p>
 
 <p align="center">
@@ -21,12 +32,6 @@
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16A34A" />
   <a href="https://github.com/Xsxdot/super-dev/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Xsxdot/super-dev/actions/workflows/ci.yml/badge.svg" /></a>
 </p>
-
-| 中文界面 | English UI |
-| --- | --- |
-| ![SuperDev 中文界面](./docs/assets/readme/screenshot-zh.png) | ![SuperDev English UI](./docs/assets/readme/screenshot-en.png) |
-
-> 截图路径已固定；发布前请把干净的中英文界面截图放到 `docs/assets/readme/`。
 
 ## 为什么是 SuperDev
 
@@ -56,14 +61,16 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 
 ## 高光功能
 
-### 共享运行态，不抢占用户服务
+两件核心的事——**共享运行态**和**安全操作**——是 SuperDev 区别于代码层工具的根本；其余能力都围绕它们展开。
+
+### 🤝 共享运行态，不抢占用户服务
 
 - AI 先观察已有服务、端口、日志和部署状态，再决定是否需要请求操作。
 - 避免 AI 另起一套 shadow environment，减少端口竞争、重复进程和状态分叉。
 - 同一项功能可以从本地运行、日志变化、pipeline run、远端 deployment 到 ingress 持续追踪。
 - 线上错误不再只是贴给 AI 的一段文本，而是能被放回服务、部署、日志和入口上下文里共同处理。
 
-### AI 安全操作真实环境
+### 🔒 AI 安全操作真实环境
 
 - `superdev-mcp` 随桌面端分发，默认连接本机 agent：`http://127.0.0.1:57017`。
 - 内置 SuperDev skill，指导 AI 按“先建立全局视野、再采证、再推理、最后安全执行”的顺序使用工具。
@@ -71,29 +78,14 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 - 审批 token 与具体 operation fingerprint 绑定，短期有效、一次性使用、不可换目标复用。
 - 审批、拒绝、执行和失败都会进入本地审计记录。
 
-### 多服务运行态控制台
+### 围绕这两点的能力
 
-- 统一查看本地进程、Launchd、systemd、Docker、远程主机上的 service / deployment。
-- 支持 managed control 与 monitor-only 两种模式：该接管的接管，只该观察的只观察。
-- 项目、环境、服务、deployment 共享一套运行态模型，桌面端和 MCP 看到的是同一份事实。
-
-### 日志聚合与诊断
-
-- 实时日志、历史日志、跨服务搜索、上下文查看和规则过滤。
-- 支持面板分栏、同步录制、书签区间和折叠重复日志。
-- 诊断工具只给确定性证据，根因判断留给 AI 明确推理，避免黑盒式“工具说了算”。
-
-### 生产级 pipeline 底座
-
-- DAG pipeline、模板组合、变量系统、artifact、run history 和 run log replay。
-- 内置 Go、Node、Python、Java、Rust、PHP、Vue + Go 等示例模板。
-- systemd 部署模板采用 release/current 结构，回滚复用同一条部署路径。
-
-### Ingress 声明式入口配置
-
-- pipeline 管“反复投递产物”，Ingress 管“长期存在的入口状态”。
-- 声明域名、DNS、反向代理、HTTPS 和证书托管。
-- 支持 nginx、manual DNS、Cloudflare、Aliyun、ACME DNS-01 和 orphan detection。
+| 能力 | 说明 |
+| --- | --- |
+| **多服务运行态控制台** | 统一查看本地进程、Launchd、systemd、Docker、远程主机上的 service / deployment；支持 managed control 与 monitor-only 两种模式；桌面端与 MCP 共享同一份运行态模型。 |
+| **日志聚合与诊断** | 实时 / 历史日志、跨服务搜索、上下文查看、规则过滤、面板分栏、同步录制、书签区间、折叠重复日志。诊断只给确定性证据，根因推理留给 AI。 |
+| **生产级 pipeline 底座** | DAG pipeline、模板组合、变量系统、artifact、run history、run log replay；内置 Go / Node / Python / Java / Rust / PHP / Vue+Go 模板；systemd 采用 release/current 结构，回滚复用同一条路径。 |
+| **Ingress 声明式入口** | pipeline 管“反复投递产物”，Ingress 管“长期存在的入口状态”：域名、DNS、反向代理、HTTPS、证书托管。支持 nginx、manual DNS、Cloudflare、Aliyun、ACME DNS-01 与 orphan detection。 |
 
 ### 零操作 onboarding
 
@@ -171,13 +163,16 @@ SuperDev 正处于第一版开源发布前夜，当前主要面向 macOS 桌面�
 # Desktop
 cd desktop
 pnpm install --frozen-lockfile
-pnpm build
-pnpm test
+pnpm build          # 前端类型检查 + vite 构建（不打包桌面端）
+pnpm test           # 前端单元测试（vitest）
+pnpm tauri build    # 打包 macOS 桌面应用（产出安装包，不会启动应用）
 
 # Agent
 cd agent
 go test ./...
 ```
+
+> `pnpm build` 只构建前端资源；要打包完整的 macOS 桌面应用用 `pnpm tauri build`，想直接运行起来看效果用 `pnpm tauri dev`。
 
 Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制：`superdev-agent`、`superdev-mcp`、`superdev-sample`。
 
@@ -207,11 +202,18 @@ Tauri 构建会通过 `desktop/scripts/build-agent.sh` 打包 sidecar 二进制�
   Let developers and AI share services, logs, deployments, and approval context in one real environment.
 </p>
 
-| Chinese UI | English UI |
-| --- | --- |
-| ![SuperDev Chinese UI](./docs/assets/readme/screenshot-zh.png) | ![SuperDev English UI](./docs/assets/readme/screenshot-en.png) |
+<p align="center">
+  <a href="https://gosuper.dev/"><strong>gosuper.dev</strong></a> ·
+  <a href="#why-superdev">Why</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#architecture">Architecture</a>
+</p>
 
-> Screenshot paths are fixed for the first public README. Add clean Chinese and English screenshots under `docs/assets/readme/` before tagging the release.
+<p align="center">
+  <a href="https://gosuper.dev/">
+    <img alt="SuperDev runtime console" src="./docs/assets/readme/screenshot-en.png" width="760" />
+  </a>
+</p>
 
 ## Why SuperDev
 
@@ -231,14 +233,16 @@ When AI and humans share runtime state, collaboration becomes continuous. A feat
 
 ## Highlights
 
-### Shared runtime, no competing services
+Two things are the core — **shared runtime** and **safe operations**. They are what set SuperDev apart from code-layer tools; everything else exists to serve them.
+
+### 🤝 Shared runtime, no competing services
 
 - AI observes existing services, ports, logs, and deployments before deciding whether it needs to request an action.
 - Avoid shadow environments, port contention, duplicate processes, and split runtime state.
 - Follow one feature across local services, log changes, pipeline runs, remote deployments, and ingress.
 - Treat production errors as shared runtime context, not pasted text detached from the system that produced it.
 
-### Safe AI operations
+### 🔒 Safe AI operations
 
 - `superdev-mcp` ships with the desktop app and connects to the local agent at `http://127.0.0.1:57017` by default.
 - The bundled SuperDev skill teaches AI to build a global view first, collect evidence, reason explicitly, and only then execute safely.
@@ -246,29 +250,14 @@ When AI and humans share runtime state, collaboration becomes continuous. A feat
 - Approval tokens are bound to an operation fingerprint, expire quickly, are single-use, and cannot be reused for a different target.
 - Approvals, rejections, executions, and failures are recorded locally for audit.
 
-### Unified runtime console
+### Capabilities built around those two
 
-- See local processes, Launchd jobs, systemd services, Docker containers, and remote-host deployments in one model.
-- Choose between managed control and monitor-only mode.
-- Projects, environments, services, and deployments share the same source of truth across the desktop UI and MCP tools.
-
-### Logs and diagnostics that preserve evidence
-
-- Live logs, historical logs, cross-service search, context lookup, and reusable filter rules.
-- Split panels, synchronized recording, bookmark ranges, and repeated-log folding.
-- Diagnostic tools collect deterministic evidence; AI remains responsible for explaining its root-cause reasoning.
-
-### Production-minded pipelines
-
-- DAG pipelines, reusable templates, variables, artifacts, run history, and replayable run logs.
-- Built-in examples for Go, Node, Python, Java, Rust, PHP, and Vue + Go.
-- systemd deployment templates use a release/current layout, and rollback reuses the same deployment path with an older artifact.
-
-### Declarative ingress
-
-- Pipelines repeatedly deliver artifacts. Ingress converges long-lived edge state.
-- Declare domains, DNS records, reverse proxy config, HTTPS, and managed certificates.
-- Supports nginx, manual DNS, Cloudflare, Aliyun, ACME DNS-01, and orphan detection.
+| Capability | What it does |
+| --- | --- |
+| **Unified runtime console** | See local processes, Launchd jobs, systemd services, Docker containers, and remote-host deployments in one model; choose managed control or monitor-only; desktop UI and MCP share one source of truth. |
+| **Logs & diagnostics** | Live / historical logs, cross-service search, context lookup, filter rules, split panels, synchronized recording, bookmark ranges, repeated-log folding. Diagnostics give deterministic evidence; AI owns the root-cause reasoning. |
+| **Production-minded pipelines** | DAG pipelines, reusable templates, variables, artifacts, run history, replayable run logs; built-in Go / Node / Python / Java / Rust / PHP / Vue+Go templates; systemd uses a release/current layout, rollback reuses the same path. |
+| **Declarative ingress** | Pipelines deliver artifacts repeatedly; Ingress converges long-lived edge state: domains, DNS, reverse proxy, HTTPS, managed certs. Supports nginx, manual DNS, Cloudflare, Aliyun, ACME DNS-01, and orphan detection. |
 
 ### Zero-touch onboarding
 
@@ -346,13 +335,16 @@ SuperDev is approaching its first open-source release. The current focus is macO
 # Desktop
 cd desktop
 pnpm install --frozen-lockfile
-pnpm build
-pnpm test
+pnpm build          # Frontend type-check + vite build (does not package the desktop app)
+pnpm test           # Frontend unit tests (vitest)
+pnpm tauri build    # Package the macOS desktop app (produces an installer, does not launch it)
 
 # Agent
 cd agent
 go test ./...
 ```
+
+> `pnpm build` only builds frontend assets. To package the full macOS desktop app use `pnpm tauri build`; to just run it and see it live use `pnpm tauri dev`.
 
 Tauri builds package sidecar binaries through `desktop/scripts/build-agent.sh`: `superdev-agent`, `superdev-mcp`, and `superdev-sample`.
 
