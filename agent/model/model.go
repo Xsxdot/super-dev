@@ -216,6 +216,7 @@ type TunnelParams struct {
 // DirectParams 是直连传输的预留参数。
 type DirectParams struct {
 	Address string `json:"address,omitempty"`
+	TLS     bool   `json:"tls,omitempty"`
 }
 
 // AgentRuntime 是不持久化的运行时快照。
