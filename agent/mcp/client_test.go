@@ -37,6 +37,26 @@ func TestHTTPAgentClientListProjects(t *testing.T) {
 	assert.Equal(t, "demo", projects[0].Name)
 }
 
+func TestHTTPAgentClientListHosts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/hosts", r.URL.Path)
+		_ = json.NewEncoder(w).Encode([]HostReference{
+			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
+			{ID: "host-uuid-1", Name: "prod-a", SSHHost: "10.0.0.1", Tags: []string{"prod"}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+	hosts, err := client.ListHosts(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, hosts, 2)
+	assert.True(t, hosts[0].IsSelf)
+	assert.Equal(t, "host-uuid-1", hosts[1].ID)
+	assert.Equal(t, "prod-a", hosts[1].Name)
+}
+
 func TestHTTPAgentClientMapsAgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

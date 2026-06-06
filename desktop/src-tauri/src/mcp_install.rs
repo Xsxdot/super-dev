@@ -777,6 +777,12 @@ fn default_capability_sections() -> Vec<McpCapabilitySection> {
                 ),
                 capability_tool("get_project", "按 ID 或名称读取项目详情", "读", "SKILL.md"),
                 capability_tool(
+                    "list_hosts",
+                    "列出可选择主机；配置 host_ids 时只使用非本机 hosts[].id",
+                    "读",
+                    "references/safe-operations.md",
+                ),
+                capability_tool(
                     "get_runtime_snapshot",
                     "获取 SuperDev 全局运行态快照",
                     "读",
@@ -1711,6 +1717,9 @@ mod path_tests {
             "references/log-tools.md",
             "references/safe-operations.md",
             "references/pipeline.md",
+            "list_hosts",
+            "hosts[].id",
+            "is_self=false",
             "preview_operation → get_operation_approval",
             "deploy_project_pipeline",
         ] {

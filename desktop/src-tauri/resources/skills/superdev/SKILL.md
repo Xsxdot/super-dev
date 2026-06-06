@@ -21,6 +21,8 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 不要一上来就调用具体写操作，也不要在没有证据时猜测根因。
 
+配置远程主机前必须先调用 `list_hosts`。`host_ids` 只能填写 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`），不能填写 `hosts[].name`、SSH Host、机器名或用户口头描述。
+
 ## 总决策树
 
 | 用户意图 | 先做什么 | 继续阅读 |
@@ -39,12 +41,15 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 3. 运行态危险操作直接调用 runtime tool；需要审批时等待桌面端批准并自动续跑。只有超时或显式关闭等待时，才手动 `get_operation_approval` 拿 one-time token 后重试。
 4. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
 
+危险运行态操作的手动审批链路可概括为：`preview_operation → get_operation_approval`，但默认优先让 runtime tool 自动等待审批并续跑。
+
 ## 工具速查表
 
 | 工具 | 用途 | 读/写 | 详见 |
 | --- | --- | --- | --- |
 | `list_projects` | 列出本地 agent 已登记项目 | 读 | 本页 |
 | `get_project` | 按 ID 或名称读取项目详情 | 读 | 本页 |
+| `list_hosts` | 列出可选择主机；配置 `host_ids` 时只使用非本机 `hosts[].id` | 读 | `references/safe-operations.md` |
 | `get_runtime_snapshot` | 获取 SuperDev 全局运行态快照 | 读 | 本页 |
 | `list_services` | 读取项目服务与 deployment 状态 | 读 | `references/debugging-workflow.md` |
 | `tail_logs` | 看近期日志或盯一个 deployment | 读 | `references/log-tools.md` |

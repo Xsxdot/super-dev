@@ -36,6 +36,18 @@ func TestPreviewConfigChangeToolReturnsDiffAndPlan(t *testing.T) {
 	assert.Equal(t, "op_cfg", payload.Data.(map[string]any)["preview"].(ConfigChangePreview).Plan.ID)
 }
 
+func TestConfigChangeSchemaDocumentsCanonicalHostIDs(t *testing.T) {
+	server := NewServer(&fakeAgentClient{})
+	schema := server.tools["preview_config_change"].Tool.InputSchema
+	properties := schema["properties"].(map[string]any)
+
+	service := properties["service"].(map[string]any)
+
+	assert.Contains(t, service["description"], "list_hosts")
+	assert.Contains(t, service["description"], "Host.id")
+	assert.Contains(t, service["description"], "not host name")
+}
+
 func TestUpsertProjectPipelinePassesApprovalToken(t *testing.T) {
 	client := &fakeAgentClient{configPreview: ConfigChangePreview{Kind: "config.pipeline.upsert", Validation: ConfigChangeValidation{OK: true}}}
 	server := NewServer(client)

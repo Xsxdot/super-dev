@@ -29,6 +29,8 @@ import (
 type AgentClient interface {
 	// ListProjects 拉取 agent 当前注册的项目列表。
 	ListProjects(context.Context) ([]model.Project, error)
+	// ListHosts 拉取 agent 当前可选择的主机安全视图。
+	ListHosts(context.Context) ([]HostReference, error)
 	// ListServices 拉取所有服务及其 deployment 运行态。
 	ListServices(context.Context) ([]model.Service, error)
 	// ProjectRules 拉取项目日志过滤规则。
@@ -135,6 +137,19 @@ func NewHTTPAgentClient(baseURL string, httpClient *http.Client) *HTTPAgentClien
 func (c *HTTPAgentClient) ListProjects(ctx context.Context) ([]model.Project, error) {
 	var out []model.Project
 	return out, c.get(ctx, "/api/projects", &out)
+}
+
+// ListHosts 拉取 agent 当前可选择的主机安全视图。
+//
+// 参数：
+//   - ctx: 请求上下文
+//
+// 返回：
+//   - 主机安全视图列表，包含本机节点和远程主机
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListHosts(ctx context.Context) ([]HostReference, error) {
+	var out []HostReference
+	return out, c.get(ctx, "/api/hosts", &out)
 }
 
 // ListServices 拉取所有服务及其 deployment 运行态。

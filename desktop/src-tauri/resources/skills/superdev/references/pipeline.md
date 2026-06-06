@@ -49,7 +49,7 @@ get_project_config
 - `env_name`
 - deploy 时的 `variables`
 - rollback 时的 `artifact_version`
-- 需要指定机器时的 `host_ids`
+- 需要指定机器时的 `host_ids`。这些值必须来自 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`），不能使用主机展示名。
 
 执行前必须已经跑过 `validate_project_pipeline`，并确认返回成功。
 
@@ -78,3 +78,4 @@ list_pipeline_runs
 - 保存 project pipeline 后没有运行 `validate_project_pipeline` 就部署。
 - deploy 后不读 run logs 就说成功。
 - rollback 时没有确认 `artifact_version`。
+- 把主机 name 写进 `host_ids`，而不是先 `list_hosts` 后使用 `hosts[].id`。

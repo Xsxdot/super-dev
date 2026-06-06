@@ -198,8 +198,14 @@ func configChangeInputSchema() map[string]any {
 			"approval_token":   map[string]any{"type": "string"},
 			"debug_session_id": map[string]any{"type": "string"},
 			"project":          map[string]any{"type": "object"},
-			"service":          map[string]any{"type": "object"},
-			"pipeline":         map[string]any{"type": "object"},
+			"service": map[string]any{
+				"type":        "object",
+				"description": "Service config. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
+			},
+			"pipeline": map[string]any{
+				"type":        "object",
+				"description": "Project pipeline config. Any host_ids or task host_id values must use canonical non-self Host.id values returned by list_hosts, not host names.",
+			},
 		},
 		"required": []string{"kind"},
 	}
@@ -235,11 +241,15 @@ func deployProjectPipelineInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"project_id":       map[string]any{"type": "string"},
-			"project_name":     map[string]any{"type": "string"},
-			"pipeline_id":      map[string]any{"type": "string"},
-			"env_name":         map[string]any{"type": "string"},
-			"host_ids":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"pipeline_id":  map[string]any{"type": "string"},
+			"env_name":     map[string]any{"type": "string"},
+			"host_ids": map[string]any{
+				"type":        "array",
+				"description": "Canonical non-self Host.id values returned by list_hosts; do not pass host names.",
+				"items":       map[string]any{"type": "string"},
+			},
 			"artifact_version": map[string]any{"type": "string"},
 			"variables":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 			"debug_session_id": map[string]any{"type": "string"},
@@ -424,6 +434,16 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.getProjectTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_hosts",
+				Title:       "List hosts",
+				Description: "Return host selection records. Use non-self host id fields as canonical remote host_ids values; name is display-only.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listHostsTool,
 		},
 		{
 			Tool: Tool{

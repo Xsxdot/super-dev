@@ -2,7 +2,7 @@
 
 ## 读写分离
 
-只读工具不会改变运行态或配置：`list_projects`、`get_project`、`get_runtime_snapshot`、`list_services`、`tail_logs`、`search_logs`、`get_log_context`、`diagnose_service`、`analyze_trace_logs`、`summarize_error_window`、`preview_config_change`、`preview_operation`、`list_operation_approvals`、`list_operation_audit`。
+只读工具不会改变运行态或配置：`list_projects`、`get_project`、`list_hosts`、`get_runtime_snapshot`、`list_services`、`tail_logs`、`search_logs`、`get_log_context`、`diagnose_service`、`analyze_trace_logs`、`summarize_error_window`、`preview_config_change`、`preview_operation`、`list_operation_approvals`、`list_operation_audit`。
 
 写工具会改变配置、本地记录、运行态或模板库：`apply_config_change`、`upsert_project_config`、`upsert_service`、`upsert_project_pipeline`、`start_service`、`stop_service`、`restart_service`、`import_pipeline_template`、`deploy_project_pipeline`。
 
@@ -12,6 +12,7 @@
 
 ```text
 probe_project_config 或 get_project_config
+  -> 如涉及远程主机，list_hosts
   -> preview_config_change
   -> 向用户解释 diff 和影响面
   -> apply_config_change
@@ -21,6 +22,8 @@ probe_project_config 或 get_project_config
 
 - 新项目或未知目录先 `probe_project_config`。
 - 已登记项目先 `get_project_config`。
+- 任何远程 `host_ids` 都必须来自 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`）。`hosts[].name` 只是展示名，禁止写入 `host_ids`。
+- 如果用户只提供主机名，先用 `list_hosts` 建立 `name -> id` 对照；找不到唯一匹配时停下来询问，不要编造 ID。
 - 只用 `preview_config_change` 展示将写入的 YAML diff，不落盘。
 - 用户确认后才调用 `apply_config_change`。
 - 不直接调用底层 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`，除非用户明确要求绕过安全流程并理解风险。

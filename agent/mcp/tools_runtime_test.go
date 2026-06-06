@@ -21,6 +21,7 @@ import (
 
 type fakeAgentClient struct {
 	projects                   []model.Project
+	hosts                      []HostReference
 	services                   []model.Service
 	rules                      []model.LogRule
 	logs                       LogsResponse
@@ -68,6 +69,10 @@ type fakeAgentClient struct {
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
 	return f.projects, nil
+}
+
+func (f *fakeAgentClient) ListHosts(context.Context) ([]HostReference, error) {
+	return f.hosts, nil
 }
 
 func (f *fakeAgentClient) ListServices(context.Context) ([]model.Service, error) {
@@ -288,6 +293,34 @@ func TestRuntimeSnapshotSummarizesProjectsAndServices(t *testing.T) {
 	assert.False(t, result.IsError)
 	body := result.StructuredContent.(toolPayload)
 	assert.Contains(t, body.Summary, "1 project")
+}
+
+func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
+	client := &fakeAgentClient{
+		hosts: []HostReference{
+			{ID: "host-uuid-1", Name: "prod-a", SSHHost: "10.0.0.1", Tags: []string{"prod"}},
+			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "list_hosts", `{}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	payload := result.StructuredContent.(toolPayload)
+	data := payload.Data.(map[string]any)
+	hosts := data["hosts"].([]HostReference)
+	remoteHosts := data["remote_hosts"].([]HostReference)
+	require.Len(t, hosts, 2)
+	require.Len(t, remoteHosts, 1)
+	assert.Equal(t, "host-uuid-1", hosts[0].ID)
+	assert.Equal(t, "prod-a", hosts[0].Name)
+	assert.Equal(t, "host-uuid-1", remoteHosts[0].ID)
+	assert.Equal(t, 1, data["remote_count"])
+	assert.Contains(t, data["host_id_contract"], "hosts[].id")
+	assert.Contains(t, data["host_id_contract"], "is_self=false")
+	assert.Contains(t, data["host_id_contract"], "never use hosts[].name")
 }
 
 func TestStopServiceDoesNotRunWhenTargetIsAmbiguous(t *testing.T) {
