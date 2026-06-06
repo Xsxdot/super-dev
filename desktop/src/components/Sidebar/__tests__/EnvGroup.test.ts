@@ -1,10 +1,25 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import EnvGroup from '@/components/Sidebar/EnvGroup.vue'
+import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Deployment, Service } from '@/api/agent'
+
+vi.mock('@/api/agent', async () => {
+  const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listHosts: vi.fn(),
+      getHostManagedDeploymentStatus: vi.fn(),
+    },
+  }
+})
+
+const mockedApi = api as unknown as Record<string, Mock>
 
 const makeService = (
   id: string,
@@ -27,6 +42,15 @@ describe('EnvGroup', () => {
   beforeEach(() => {
     localStorage.clear()
     setActivePinia(createPinia())
+    vi.clearAllMocks()
+    mockedApi.listHosts.mockResolvedValue([])
+    mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
+      host_id: 'h1',
+      desired_deployment_count: 0,
+      desired_collector_count: 0,
+      tunnel_connected: true,
+      remote: { deployment_count: 0, collector_count: 0, collectors: [] },
+    })
   })
   it('is_dev=true 时初始展开，显示 service 行', () => {
     const wrapper = mount(EnvGroup, {
@@ -224,5 +248,56 @@ describe('EnvGroup', () => {
     expect(wrapper.findAll('.deployment-card')).toHaveLength(2)
     expect(wrapper.find('.deployment-card').classes()).toContain('selected')
     expect(wrapper.find('[data-test="service-action-rail"]').exists()).toBe(true)
+  })
+
+  it('远端多节点 service 显示聚合状态并可展开节点叶子', async () => {
+    mockedApi.listHosts.mockResolvedValue([
+      { id: 'h1', name: 'ali-01', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'h2', name: 'jp', ssh_host: '10.0.0.2', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+    ])
+    mockedApi.getHostManagedDeploymentStatus.mockImplementation(async (hostId: string) => ({
+      host_id: hostId,
+      host_name: hostId,
+      desired_deployment_count: 1,
+      desired_collector_count: 1,
+      tunnel_connected: true,
+      remote: {
+        deployment_count: 1,
+        collector_count: 1,
+        collectors: [{
+          deployment_id: 'dep-svc-1',
+          desired: true,
+          running: hostId === 'h1',
+          status: hostId === 'h1' ? 'running' : 'stopped',
+        }],
+      },
+    }))
+
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'prod',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'api', 'prod', {
+          location: 'remote',
+          status: 'running',
+          host_ids: ['h1', 'h2'],
+          logs: { type: 'file_tail', path: '/var/log/api.log' },
+        })],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="service-meta"]').text()).toContain('节点 1/2')
+    expect(wrapper.find('[data-test="service-meta"]').text()).toContain('Collector 1/2')
+
+    await wrapper.find('[data-test="service-node-toggle"]').trigger('click')
+
+    expect(wrapper.findAll('[data-test="env-node-leaf-row"]')).toHaveLength(2)
+    expect(wrapper.find('[data-test="env-node-leaf-list"]').text()).toContain('ali-01')
+    expect(wrapper.find('[data-test="env-node-leaf-list"]').text()).toContain('collector 未运行')
   })
 })

@@ -694,6 +694,42 @@ export interface TunnelStatus {
   agent_checked_at?: string
 }
 
+export interface ManagedCollectorStatus {
+  deployment_id: string
+  service_name?: string
+  env_name?: string
+  name?: string
+  type?: LogSourceType | string
+  collector_id?: string
+  desired: boolean
+  running: boolean
+  status?: Health | string
+  error?: string
+}
+
+export interface ManagedDeploymentStatus {
+  deployment_count: number
+  collector_count: number
+  collectors: ManagedCollectorStatus[]
+  last_result?: {
+    deployment_count: number
+    collector_count: number
+    failed_collectors?: Array<{ name: string; type: string; error: string }>
+    persisted: boolean
+    error?: string
+  }
+}
+
+export interface HostManagedDeploymentStatus {
+  host_id: string
+  host_name?: string
+  desired_deployment_count: number
+  desired_collector_count: number
+  tunnel_connected: boolean
+  remote?: ManagedDeploymentStatus
+  error?: string
+}
+
 export interface RemoteLogEntry extends LogEntry {
   host_id: string
   host_name?: string
@@ -995,6 +1031,8 @@ export const api = {
     request<InstallHostAgentResult>(`/api/hosts/${id}/agent/install`, { method: 'POST' }),
   checkHostAgent: (id: string) =>
     request<TunnelStatus>(`/api/hosts/${id}/agent/check`, { method: 'POST' }),
+  getHostManagedDeploymentStatus: (id: string) =>
+    request<HostManagedDeploymentStatus>(`/api/hosts/${id}/managed-deployments/status`),
   uninstallHostAgent: (id: string, payload: UninstallHostAgentPayload) =>
     request<UninstallHostAgentResponse>(`/api/hosts/${id}/agent/uninstall`, {
       method: 'POST',

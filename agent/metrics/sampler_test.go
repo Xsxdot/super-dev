@@ -12,6 +12,8 @@ package metrics
 import (
 	"context"
 	"errors"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -106,6 +108,32 @@ func TestProcessSamplerSumsRootProcessAndChildren(t *testing.T) {
 	assert.Equal(t, int64(3072000), *got.MemBytes)
 	assert.Equal(t, int64(60), *got.UptimeSec)
 	assert.Equal(t, model.HealthRunning, got.Health)
+}
+
+func TestLaunchdSamplerUsesLaunchctlPIDWhenManagerPIDMissing(t *testing.T) {
+	label := "com.example.worker"
+	target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + label
+	cmd := &fakeCommand{
+		outputs: map[string]string{
+			"launchctl print " + target:            "state = running\npid = 200\nruns = 3\nlast exit code = 0\n",
+			"ps -axo pid=,ppid=,%cpu=,rss=,etime=": "200 1 1.5 4000 02:00\n201 200 0.5 1000 01:00\n",
+		},
+		errs: map[string]error{},
+	}
+	sampler := NewSampler(cmd)
+
+	got, err := sampler.Sample(context.Background(), SampleTarget{DeploymentID: "dep-worker", Base: "launchd", Label: label})
+	require.NoError(t, err)
+	require.NotNil(t, got.CPUPercent)
+	require.NotNil(t, got.MemBytes)
+	require.NotNil(t, got.UptimeSec)
+	require.NotNil(t, got.Restarts)
+	assert.InDelta(t, 2.0, *got.CPUPercent, 0.01)
+	assert.Equal(t, int64(5120000), *got.MemBytes)
+	assert.Equal(t, int64(120), *got.UptimeSec)
+	assert.Equal(t, 2, *got.Restarts)
+	assert.Equal(t, model.HealthRunning, got.Health)
+	assert.Equal(t, "launchd", got.Base)
 }
 
 func TestSamplerStoppedFallbackWhenPIDMissing(t *testing.T) {

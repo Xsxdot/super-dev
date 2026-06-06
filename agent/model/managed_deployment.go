@@ -53,3 +53,36 @@ type ManagedDeploymentReconcileResult struct {
 	Persisted         bool                      `json:"persisted"`
 	Error             string                    `json:"error,omitempty"`
 }
+
+// ManagedCollectorStatus 描述远端某个 managed deployment 对应 collector 的当前状态。
+type ManagedCollectorStatus struct {
+	DeploymentID string        `json:"deployment_id"`
+	ServiceName  string        `json:"service_name,omitempty"`
+	EnvName      string        `json:"env_name,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	Type         LogSourceType `json:"type,omitempty"`
+	CollectorID  string        `json:"collector_id,omitempty"`
+	Desired      bool          `json:"desired"`
+	Running      bool          `json:"running"`
+	Status       ServiceStatus `json:"status,omitempty"`
+	Error        string        `json:"error,omitempty"`
+}
+
+// ManagedDeploymentStatus 是远端 agent 当前 managed 编排视图的只读诊断状态。
+type ManagedDeploymentStatus struct {
+	DeploymentCount int                              `json:"deployment_count"`
+	CollectorCount  int                              `json:"collector_count"`
+	LastResult      ManagedDeploymentReconcileResult `json:"last_result"`
+	Collectors      []ManagedCollectorStatus         `json:"collectors"`
+}
+
+// HostManagedDeploymentStatus 是桌面端按 host 聚合后的远端编排诊断状态。
+type HostManagedDeploymentStatus struct {
+	HostID                 string                   `json:"host_id"`
+	HostName               string                   `json:"host_name,omitempty"`
+	DesiredDeploymentCount int                      `json:"desired_deployment_count"`
+	DesiredCollectorCount  int                      `json:"desired_collector_count"`
+	TunnelConnected        bool                     `json:"tunnel_connected"`
+	Remote                 *ManagedDeploymentStatus `json:"remote,omitempty"`
+	Error                  string                   `json:"error,omitempty"`
+}

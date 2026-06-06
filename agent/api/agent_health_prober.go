@@ -36,6 +36,7 @@ var agentHealthRequiredEndpoints = []agentHealthEndpoint{
 	{Method: http.MethodGet, Path: "/api/tunnels", Acceptable: []int{http.StatusOK}},
 	{Method: http.MethodGet, Path: "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0", Acceptable: []int{http.StatusOK}},
 	{Method: http.MethodGet, Path: "/api/exec/health", Acceptable: []int{http.StatusOK, http.StatusNoContent}},
+	{Method: http.MethodGet, Path: "/api/managed-deployments/status", Acceptable: []int{http.StatusOK}},
 	// /api/transfer exists when an empty POST reaches the handler and fails validation.
 	{Method: http.MethodPost, Path: "/api/transfer", Acceptable: []int{http.StatusBadRequest}},
 }

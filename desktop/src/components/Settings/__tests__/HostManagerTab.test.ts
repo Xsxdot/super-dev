@@ -46,6 +46,14 @@ vi.mock('@/api/agent', async () => {
         agent_version: '0.1.0',
         agent_checked_at: '2026-06-05T10:00:00Z',
       }),
+      getHostManagedDeploymentStatus: vi.fn().mockResolvedValue({
+        host_id: 'h1',
+        host_name: 'host-test',
+        desired_deployment_count: 0,
+        desired_collector_count: 0,
+        tunnel_connected: true,
+        remote: { deployment_count: 0, collector_count: 0, collectors: [] },
+      }),
       uninstallHostAgent: vi.fn().mockResolvedValue({
         result: { ok: true, host_id: 'h1', removed_data: false, message: 'Agent uninstalled' },
         tunnel: {
@@ -110,6 +118,14 @@ describe('HostManagerTab', () => {
     localStorage.clear()
     mockedApi.listHosts.mockResolvedValue([])
     mockedApi.listTunnels.mockResolvedValue([])
+    mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
+      host_id: 'h1',
+      host_name: 'host-test',
+      desired_deployment_count: 0,
+      desired_collector_count: 0,
+      tunnel_connected: true,
+      remote: { deployment_count: 0, collector_count: 0, collectors: [] },
+    })
   })
 
   afterEach(() => {
@@ -414,5 +430,36 @@ describe('HostManagerTab', () => {
     const install = wrapper.find('[data-test="host-install-agent"]')
     expect(install.attributes('title')).toContain('通过 SSH 上传 agent 二进制')
     expect(wrapper.find('[data-test="host-install-help"]').text()).toContain('不影响业务进程')
+  })
+
+  it('渲染远端编排和 collector 异常状态', async () => {
+    mockedApi.listHosts.mockResolvedValue([host({ name: 'mac-02' })])
+    mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
+      host_id: 'h1',
+      host_name: 'mac-02',
+      desired_deployment_count: 1,
+      desired_collector_count: 1,
+      tunnel_connected: true,
+      remote: {
+        deployment_count: 1,
+        collector_count: 1,
+        collectors: [{
+          deployment_id: 'local-browser-worker-prod',
+          service_name: 'local-browser-worker',
+          env_name: 'prod',
+          name: '~/Library/Logs/local-browser-worker/worker.log',
+          type: 'file_tail',
+          desired: true,
+          running: false,
+          error: 'invalid path',
+        }],
+      },
+    })
+
+    const wrapper = mount(HostManagerTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushMountedAsync()
+
+    expect(wrapper.find('[data-test="host-managed-status"]').text()).toContain('编排 1/1 · Collector 0/1')
+    expect(wrapper.find('[data-test="host-managed-issue"]').text()).toContain('local-browser-worker：invalid path')
   })
 })

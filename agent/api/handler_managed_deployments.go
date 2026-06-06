@@ -30,10 +30,23 @@ func (a *App) putManagedDeployments(w http.ResponseWriter, r *http.Request) {
 		if err := a.managedStore.Save(normalizeManagedDeployments(desired)); err != nil {
 			result.Persisted = false
 			result.Error = err.Error()
+			a.updateManagedDeploymentLastResult(result)
 			jsonWrite(w, http.StatusInternalServerError, result)
 			return
 		}
 	}
 	result.Persisted = true
+	a.updateManagedDeploymentLastResult(result)
 	jsonOK(w, result)
+}
+
+// getManagedDeploymentsStatus 处理 GET /api/managed-deployments/status。
+func (a *App) getManagedDeploymentsStatus(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	status := a.managedStatus
+	a.mu.RUnlock()
+	if status.Collectors == nil {
+		status.Collectors = []model.ManagedCollectorStatus{}
+	}
+	jsonOK(w, status)
 }

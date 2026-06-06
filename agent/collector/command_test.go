@@ -2,6 +2,8 @@
 package collector_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,9 +75,30 @@ func TestBuildCommandSupportsFileTailAndCustomCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tail", "-F", "/var/log/nova-api/app.log"}, args)
 
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	args, err = collector.BuildCommand(model.LogSourceTypeFileTail, "~/Library/Logs/nova-api/app.log", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tail", "-F", filepath.Join(home, "Library/Logs/nova-api/app.log")}, args)
+
 	args, err = collector.BuildCommand(model.LogSourceTypeCommand, "tail -F /var/log/nova-api/app.log", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sh", "-lc", "tail -F /var/log/nova-api/app.log"}, args)
+}
+
+func TestNormalizeFileTailPathRejectsUnsafePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	_, err := collector.NormalizeFileTailPath("relative/app.log")
+	require.ErrorIs(t, err, collector.ErrInvalidPath)
+
+	_, err = collector.NormalizeFileTailPath("~/Library/Logs/app.log; rm -rf /")
+	require.ErrorIs(t, err, collector.ErrInvalidPath)
+
+	got, err := collector.NormalizeFileTailPath("~")
+	require.NoError(t, err)
+	assert.Equal(t, os.Getenv("HOME"), got)
 }
 
 func TestBuildCommandExtraArgs(t *testing.T) {

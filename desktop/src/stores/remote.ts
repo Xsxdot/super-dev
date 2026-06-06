@@ -4,6 +4,7 @@
 //   - 拉取并缓存 Host / LogSource 列表
 //   - 对 LogSource 按其关联 Host 的 tag 计算分组
 //   - 缓存隧道状态，供设置页和远程日志面板展示
+//   - 缓存远端 managed deployment 状态，供侧边栏、底部栏、日志面板共享
 //
 // 边界：
 //   - 不直接发起 WebSocket 连接，实时日志由 log store 负责
@@ -14,6 +15,7 @@ import {
   api,
   type Host,
   type HostCreatePayload,
+  type HostManagedDeploymentStatus,
   type HostUpdatePayload,
   type InstallHostAgentResult,
   type LogSource,
@@ -40,6 +42,7 @@ export const useRemoteStore = defineStore('remote', () => {
   const hosts = ref<Host[]>([])
   const logSources = ref<LogSource[]>([])
   const tunnels = ref<Map<string, TunnelStatus>>(new Map())
+  const managedStatuses = ref<Map<string, HostManagedDeploymentStatus>>(new Map())
 
   async function loadHosts() {
     hosts.value = await api.listHosts()
@@ -61,6 +64,9 @@ export const useRemoteStore = defineStore('remote', () => {
   async function deleteHost(id: string) {
     await api.deleteHost(id)
     hosts.value = hosts.value.filter(host => host.id !== id)
+    const nextStatuses = new Map(managedStatuses.value)
+    nextStatuses.delete(id)
+    managedStatuses.value = nextStatuses
   }
 
   async function installHostAgent(id: string): Promise<InstallHostAgentResult> {
@@ -71,6 +77,27 @@ export const useRemoteStore = defineStore('remote', () => {
     const status = await api.checkHostAgent(id)
     applyTunnelUpdate(status)
     return status
+  }
+
+  async function getHostManagedDeploymentStatus(id: string): Promise<HostManagedDeploymentStatus> {
+    const status = await api.getHostManagedDeploymentStatus(id)
+    applyManagedStatus(status)
+    return status
+  }
+
+  async function refreshManagedStatuses(ids: string[]): Promise<HostManagedDeploymentStatus[]> {
+    const uniqueIds = [...new Set(ids.filter(id => id.trim().length > 0))]
+    return Promise.all(uniqueIds.map(id => getHostManagedDeploymentStatus(id)))
+  }
+
+  function applyManagedStatus(status: HostManagedDeploymentStatus) {
+    const next = new Map(managedStatuses.value)
+    next.set(status.host_id, status)
+    managedStatuses.value = next
+  }
+
+  function managedStatusOf(hostId: string): HostManagedDeploymentStatus | undefined {
+    return managedStatuses.value.get(hostId)
   }
 
   async function uninstallHostAgent(id: string, removeData: boolean): Promise<UninstallHostAgentResult> {
@@ -207,6 +234,7 @@ export const useRemoteStore = defineStore('remote', () => {
     hosts,
     logSources,
     tunnels,
+    managedStatuses,
     tagsAcrossHosts,
     loadHosts,
     createHost,
@@ -214,6 +242,10 @@ export const useRemoteStore = defineStore('remote', () => {
     deleteHost,
     installHostAgent,
     checkHostAgent,
+    getHostManagedDeploymentStatus,
+    refreshManagedStatuses,
+    applyManagedStatus,
+    managedStatusOf,
     uninstallHostAgent,
     hostById,
     loadLogSources,

@@ -13,11 +13,18 @@ EnvGroup：侧边栏 Environment 分组。
 -->
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
+import { useRemoteStore } from '@/stores/remote'
 import { useDragDrop } from '@/composables/useDragDrop'
-import type { Service } from '@/api/agent'
+import {
+  buildDeploymentNodeStatus,
+  type DeploymentAggregateNodeStatus,
+  type DeploymentNodeIssueKind,
+  type DeploymentNodeState,
+} from '@/lib/deploymentNodeStatus'
+import type { Deployment, Service } from '@/api/agent'
 
 const props = defineProps<{
   envName: string
@@ -35,6 +42,7 @@ const emit = defineEmits<{
 }>()
 
 const agentStore = useAgentStore()
+const remoteStore = useRemoteStore()
 const { t } = useI18n()
 const { startServiceDrag, moveServiceDrag, endServiceDrag, finishServiceDrag } = useDragDrop()
 
@@ -52,6 +60,7 @@ async function onCheckChange(svc: Service) {
 
 // dev 环境和父组件指定的首个环境默认展开，避免没有可拖拽服务行。
 const expanded = ref(props.initiallyExpanded || props.isDev)
+const expandedDeploymentNodes = ref<Set<string>>(new Set())
 
 function toggleExpanded() {
   expanded.value = !expanded.value
@@ -67,6 +76,13 @@ function statusColor(status: string): string {
   return '#6e7681'
 }
 
+function nodeHealthColor(health: string): string {
+  if (health === 'healthy') return '#3fb950'
+  if (health === 'warning') return '#d29922'
+  if (health === 'failed') return '#f85149'
+  return '#6e7681'
+}
+
 function isRunningStatus(status: string): boolean {
   return status === 'running' || status === 'starting'
 }
@@ -77,6 +93,90 @@ function isRunningStatus(status: string): boolean {
  */
 function deploymentForService(svc: Service) {
   return svc.deployments?.find(d => d.env_name === props.envName)
+}
+
+const remoteHostIds = computed(() => {
+  const ids = props.services
+    .map(svc => deploymentForService(svc))
+    .filter((dep): dep is Deployment => !!dep && dep.location === 'remote')
+    .flatMap(dep => dep.host_ids ?? [])
+  return [...new Set(ids)]
+})
+
+async function refreshRemoteNodeContext(hostIds: string[]) {
+  if (hostIds.length === 0) return
+  try {
+    if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    await remoteStore.refreshManagedStatuses(hostIds)
+  } catch (err) {
+    console.warn('[SuperDev] refresh sidebar remote node status failed:', err)
+  }
+}
+
+watch(
+  remoteHostIds,
+  hostIds => void refreshRemoteNodeContext(hostIds),
+  { immediate: true },
+)
+
+function deploymentNodeStatusForService(svc: Service): DeploymentAggregateNodeStatus | null {
+  const dep = deploymentForService(svc)
+  if (!dep) return null
+  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteStore.managedStatuses)
+}
+
+function deploymentNodeSummary(status: DeploymentAggregateNodeStatus): string {
+  if (status.total === 0) return t('shell.env.remoteNodeEmpty')
+  if (status.collectorExpected > 0) {
+    return t('shell.env.remoteNodeSummary', {
+      ready: status.ready,
+      total: status.total,
+      collectors: status.collectorReady,
+      desiredCollectors: status.collectorExpected,
+    })
+  }
+  return t('shell.env.remoteNodeSummaryNoCollector', { ready: status.ready, total: status.total })
+}
+
+function serviceStatusColor(svc: Service): string {
+  const dep = deploymentForService(svc)
+  if (!dep) return statusColor('')
+  if (dep.location === 'remote') {
+    return nodeHealthColor(deploymentNodeStatusForService(svc)?.health ?? 'unknown')
+  }
+  return statusColor(dep.status)
+}
+
+function issueLabel(kind: DeploymentNodeIssueKind, detail?: string): string {
+  if (kind === 'host-error') return detail || t('shell.env.nodeHostError')
+  if (kind === 'collector-error') return detail || t('shell.env.nodeCollectorError')
+  return t(`shell.env.nodeIssues.${kind}`)
+}
+
+function nodeIssueLabel(node: DeploymentNodeState): string {
+  if (!node.issue) return t('shell.env.nodeHealthy')
+  return issueLabel(node.issue.kind, node.issue.detail)
+}
+
+function shouldShowNodeLeaves(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  const status = deploymentNodeStatusForService(svc)
+  if (!dep || dep.location !== 'remote' || !status) return false
+  return status.total > 1 || status.health === 'failed' || status.health === 'warning'
+}
+
+function isNodeExpanded(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  return !!dep && expandedDeploymentNodes.value.has(dep.id)
+}
+
+function toggleNodeExpanded(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep) return
+  const next = new Set(expandedDeploymentNodes.value)
+  if (next.has(dep.id)) next.delete(dep.id)
+  else next.add(dep.id)
+  expandedDeploymentNodes.value = next
 }
 
 function serviceVersionLabel(svc: Service): string | null {
@@ -95,6 +195,10 @@ function deploymentMetaLabel(svc: Service): string {
   const parts = [serviceVersionLabel(svc), serviceReplicaLabel(svc)].filter(Boolean)
   if (parts.length) return parts.join(' · ')
   if (!dep) return ''
+  if (dep.location === 'remote') {
+    const status = deploymentNodeStatusForService(svc)
+    if (status) return deploymentNodeSummary(status)
+  }
   const mode = dep.control_mode ?? dep.runtime?.type ?? dep.location
   return t('shell.env.serviceMetaFallback', { location: dep.location, mode })
 }
@@ -269,69 +373,93 @@ onUnmounted(() => {
 
     <!-- 展开后的 service 行列表 -->
     <div v-if="expanded" class="env-group-rows" data-test="env-group-rows">
-      <div
-        v-for="svc in services"
-        :key="svc.id"
-        class="env-service-row deployment-card"
-        data-test="env-service-row"
-        :class="{ selected: isServiceOpen(svc) }"
-        @click="onServiceRowClick(svc)"
-        @pointerdown="onServiceRowPointerDown(svc, $event)"
-      >
-        <input
-          type="checkbox"
-          class="service-checkbox"
-          :checked="agentStore.isServiceEnvSelected(projectId, envName, svc.name)"
-          :disabled="svc.required"
-          @click.stop="onCheckChange(svc)"
-        />
-        <span
-          class="status-dot"
-          :style="{
-            background: statusColor(
-              svc.deployments?.find(d => d.env_name === envName)?.status ?? ''
-            ),
-          }"
-        />
-        <div class="service-main">
-          <div class="service-topline">
-            <span class="service-name">{{ svc.name }}</span>
+      <template v-for="svc in services" :key="svc.id">
+        <div
+          class="env-service-row deployment-card"
+          data-test="env-service-row"
+          :class="{ selected: isServiceOpen(svc) }"
+          @click="onServiceRowClick(svc)"
+          @pointerdown="onServiceRowPointerDown(svc, $event)"
+        >
+          <input
+            type="checkbox"
+            class="service-checkbox"
+            :checked="agentStore.isServiceEnvSelected(projectId, envName, svc.name)"
+            :disabled="svc.required"
+            @click.stop="onCheckChange(svc)"
+          />
+          <span
+            class="status-dot"
+            :style="{ background: serviceStatusColor(svc) }"
+          />
+          <div class="service-main">
+            <div class="service-topline">
+              <span class="service-name">{{ svc.name }}</span>
+            </div>
+            <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}</div>
           </div>
-          <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}</div>
+          <button
+            v-if="shouldShowNodeLeaves(svc)"
+            type="button"
+            class="node-toggle"
+            data-test="service-node-toggle"
+            :title="t('shell.env.toggleNodes')"
+            @click.stop="toggleNodeExpanded(svc)"
+            @pointerdown.stop
+          >{{ isNodeExpanded(svc) ? '▾' : '▸' }}</button>
+          <div
+            v-if="canControlDeployment(svc)"
+            class="row-actions"
+            data-test="service-action-rail"
+            @click.stop
+            @pointerdown.stop
+          >
+            <button
+              v-if="!isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              type="button"
+              class="row-action start"
+              data-test="row-start"
+              :title="t('shell.env.start')"
+              @click="startOne(svc)"
+            >▶</button>
+            <button
+              v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              type="button"
+              class="row-action restart"
+              data-test="row-restart"
+              :title="t('shell.env.restart')"
+              @click="restartOne(svc)"
+            >↻</button>
+            <button
+              v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              type="button"
+              class="row-action stop"
+              data-test="row-stop"
+              :title="t('shell.env.stop')"
+              @click="stopOne(svc)"
+            >⏹</button>
+          </div>
         </div>
         <div
-          v-if="canControlDeployment(svc)"
-          class="row-actions"
-          data-test="service-action-rail"
-          @click.stop
-          @pointerdown.stop
+          v-if="isNodeExpanded(svc)"
+          class="node-leaf-list"
+          data-test="env-node-leaf-list"
         >
           <button
-            v-if="!isRunningStatus(deploymentForService(svc)?.status ?? '')"
+            v-for="node in deploymentNodeStatusForService(svc)?.nodes ?? []"
+            :key="node.hostId"
             type="button"
-            class="row-action start"
-            data-test="row-start"
-            :title="t('shell.env.start')"
-            @click="startOne(svc)"
-          >▶</button>
-          <button
-            v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
-            type="button"
-            class="row-action restart"
-            data-test="row-restart"
-            :title="t('shell.env.restart')"
-            @click="restartOne(svc)"
-          >↻</button>
-          <button
-            v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
-            type="button"
-            class="row-action stop"
-            data-test="row-stop"
-            :title="t('shell.env.stop')"
-            @click="stopOne(svc)"
-          >⏹</button>
+            class="node-leaf-row"
+            data-test="env-node-leaf-row"
+            :title="nodeIssueLabel(node)"
+            @click="onServiceRowClick(svc)"
+          >
+            <span class="node-dot" :style="{ background: nodeHealthColor(node.health) }" />
+            <span class="node-name">{{ node.hostName }}</span>
+            <span class="node-issue">{{ nodeIssueLabel(node) }}</span>
+          </button>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>
@@ -437,7 +565,7 @@ onUnmounted(() => {
 
 .env-service-row {
   display: grid;
-  grid-template-columns: 14px 10px minmax(0, 1fr) auto;
+  grid-template-columns: 14px 10px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 9px;
   min-height: 72px;
@@ -516,6 +644,71 @@ onUnmounted(() => {
   opacity: 0.88;
   pointer-events: auto;
   flex-shrink: 0;
+}
+
+.node-toggle {
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.node-toggle:hover {
+  border-color: rgba(139, 148, 158, 0.36);
+  color: var(--text-primary);
+}
+
+.node-leaf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 8px 4px 44px;
+  border-top: 1px solid rgba(91, 106, 128, 0.08);
+  background: rgba(7, 15, 22, 0.24);
+}
+
+.node-leaf-row {
+  display: grid;
+  grid-template-columns: 8px minmax(52px, 88px) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.node-leaf-row:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+}
+
+.node-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.node-name,
+.node-issue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.node-issue {
+  color: var(--text-tertiary);
 }
 
 .row-action {

@@ -15,7 +15,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
@@ -77,6 +80,28 @@ func ValidatePath(path string) error {
 	return nil
 }
 
+// NormalizeFileTailPath 将 file_tail 路径规范化为可直接传给 tail 的绝对路径。
+//
+// 支持 ~/ 前缀，按远端 agent 运行用户的 home 展开；不支持 ~user 形式。
+func NormalizeFileTailPath(path string) (string, error) {
+	normalized := path
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return "", ErrInvalidPath
+		}
+		if path == "~" {
+			normalized = home
+		} else {
+			normalized = filepath.Join(home, path[2:])
+		}
+	}
+	if err := ValidatePath(normalized); err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
 // ValidateCommand 校验自定义日志命令是否适合交给 sh -lc 执行。
 //
 // 参数：
@@ -131,10 +156,11 @@ func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]str
 		}
 		base = []string{"docker", "logs", "-f", name}
 	case model.LogSourceTypeFileTail:
-		if err := ValidatePath(name); err != nil {
+		path, err := NormalizeFileTailPath(name)
+		if err != nil {
 			return nil, err
 		}
-		base = []string{"tail", "-F", name}
+		base = []string{"tail", "-F", path}
 	case model.LogSourceTypeCommand:
 		if err := ValidateCommand(name); err != nil {
 			return nil, err

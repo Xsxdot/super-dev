@@ -149,9 +149,11 @@ func (s *runtimeStatusService) sampleTarget(projectID string, dep model.Deployme
 			target.Unit = dep.Runtime.ServiceName
 		case model.RuntimeTypeDocker:
 			target.Container = dep.Runtime.Container
+		case model.RuntimeTypeLaunchd:
+			target.Label = dep.Runtime.Label
 		}
 	}
-	if target.Base == string(model.RuntimeTypeCommand) || target.Base == string(model.RuntimeTypeLaunchd) || target.Base == "process" {
+	if target.Base == string(model.RuntimeTypeCommand) || target.Base == "process" {
 		s.app.mu.RLock()
 		mgr := s.app.managers[projectID]
 		s.app.mu.RUnlock()

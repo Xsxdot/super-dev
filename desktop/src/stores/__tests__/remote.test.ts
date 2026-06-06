@@ -34,6 +34,7 @@ vi.mock('@/api/agent', async () => {
       deleteHost: vi.fn(),
       installHostAgent: vi.fn(),
       checkHostAgent: vi.fn(),
+      getHostManagedDeploymentStatus: vi.fn(),
       uninstallHostAgent: vi.fn(),
       listLogSources: vi.fn(),
       createLogSource: vi.fn(),
@@ -172,6 +173,23 @@ describe('useRemoteStore', () => {
         agent: 'healthy',
         agent_version: '0.1.0',
       })
+    })
+
+    it('getHostManagedDeploymentStatus 拉取后写入共享 managed status 缓存', async () => {
+      mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
+        host_id: 'h1',
+        host_name: 'host-01',
+        desired_deployment_count: 1,
+        desired_collector_count: 1,
+        tunnel_connected: true,
+        remote: { deployment_count: 1, collector_count: 1, collectors: [] },
+      })
+      const store = useRemoteStore()
+
+      await store.getHostManagedDeploymentStatus('h1')
+
+      expect(store.managedStatusOf('h1')?.desired_deployment_count).toBe(1)
+      expect(store.managedStatuses.get('h1')?.host_name).toBe('host-01')
     })
 
     it('uninstallHostAgent 传递是否删除数据并合并返回 tunnel 状态', async () => {
