@@ -10,7 +10,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -23,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
-	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
@@ -46,21 +44,6 @@ func (s staticAgentHealthProber) Probe(ctx context.Context, hostID string) (agen
 		return agenthealth.ProbeResult{}, s.err
 	}
 	return s.result, nil
-}
-
-type recordingHostAgentInstaller struct {
-	uninstallHostID     string
-	uninstallRemoveData bool
-}
-
-func (r *recordingHostAgentInstaller) Install(ctx context.Context, host model.Host) (installer.Result, error) {
-	return installer.Result{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "installed"}, nil
-}
-
-func (r *recordingHostAgentInstaller) Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error) {
-	r.uninstallHostID = host.ID
-	r.uninstallRemoveData = removeData
-	return installer.UninstallResult{OK: true, HostID: host.ID, RemovedData: removeData, Message: "uninstalled"}, nil
 }
 
 func TestListTunnelsIncludesAgentStatus(t *testing.T) {
@@ -93,12 +76,11 @@ func TestListTunnelsIncludesAgentStatus(t *testing.T) {
 	assert.NotEmpty(t, got[0].AgentCheckedAt)
 }
 
-func TestCheckHostAgentEnsuresTunnelAndReturnsAgentMeta(t *testing.T) {
+func TestCheckAgentReturnsAgentDTOWithRuntime(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	defer app.Close()
 
-	app.tunnels = tunnel.NewManager(successTunnelDialer{})
 	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
 		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
@@ -107,48 +89,17 @@ func TestCheckHostAgentEnsuresTunnelAndReturnsAgentMeta(t *testing.T) {
 
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/api/hosts/"+host.ID+"/agent/check", "application/json", nil)
+	resp, err := http.Post(srv.URL+"/api/agents/"+host.ID+"/check", "application/json", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var got tunnelStatusDTO
+	var got agentDTO
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	assert.Equal(t, "h1", got.HostID)
-	assert.Equal(t, "open", got.State)
-	assert.Equal(t, 57100, got.LocalPort)
-	assert.Equal(t, "healthy", got.Agent)
-	assert.Equal(t, "0.1.0", got.AgentVersion)
-	assert.NotEmpty(t, got.AgentCheckedAt)
-}
-
-func TestUninstallHostAgentPassesRemoveDataChoice(t *testing.T) {
-	recorder := &recordingHostAgentInstaller{}
-	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: recorder})
-	require.NoError(t, err)
-	defer app.Close()
-
-	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
-	require.NoError(t, err)
-
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
-	body := bytes.NewBufferString(`{"remove_data":true}`)
-	resp, err := http.Post(srv.URL+"/api/hosts/"+host.ID+"/agent/uninstall", "application/json", body)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var got uninstallHostAgentResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
-	assert.True(t, got.Result.OK)
-	assert.True(t, got.Result.RemovedData)
-	assert.Equal(t, "h1", got.Tunnel.HostID)
-	assert.Equal(t, "idle", got.Tunnel.State)
-	assert.Equal(t, "unreachable", got.Tunnel.Agent)
-	assert.NotEmpty(t, got.Tunnel.AgentCheckedAt)
-	assert.Equal(t, "h1", recorder.uninstallHostID)
-	assert.True(t, recorder.uninstallRemoveData)
+	assert.Equal(t, model.AgentHealthHealthy, got.Runtime.Health)
+	assert.Equal(t, "0.1.0", got.Runtime.Version)
+	assert.True(t, got.Runtime.Reachable)
 }
 
 func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {

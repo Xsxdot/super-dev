@@ -14,7 +14,7 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api, type AgentDTO, type AgentRuntime, type AgentUpdatePayload } from '@/api/agent'
+import type { AgentDTO, AgentRuntime, AgentUpdatePayload } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
 import { useNodeStore } from '@/stores/node'
 import { tagColor } from '@/lib/tagColor'
@@ -29,8 +29,7 @@ const { t } = useI18n()
 const configTarget = ref<AgentDTO | null>(null)
 const installTarget = ref<AgentDTO | null>(null)
 const checking = ref<Set<string>>(new Set())
-const installing = ref<Set<string>>(new Set())
-const uninstalling = ref<Set<string>>(new Set())
+const removing = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
 
 const sortedAgents = computed(() =>
@@ -88,7 +87,7 @@ async function checkAgent(agent: AgentDTO) {
   next.add(agent.host_id)
   checking.value = next
   try {
-    agentsStore.upsert(await api.checkAgent(agent.host_id))
+    await agentsStore.checkAgent(agent.host_id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settings.agents.checkFailed')
   } finally {
@@ -98,36 +97,19 @@ async function checkAgent(agent: AgentDTO) {
   }
 }
 
-async function installAgent(agent: AgentDTO) {
-  const next = new Set(installing.value)
+async function removeAgent(agent: AgentDTO) {
+  if (!confirm(t('settings.agents.removeConfigConfirm', { name: agent.host_name }))) return
+  const next = new Set(removing.value)
   next.add(agent.host_id)
-  installing.value = next
+  removing.value = next
   try {
-    await api.installHostAgent(agent.host_id)
-    await checkAgent(agent)
+    await agentsStore.deleteAgent(agent.host_id)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('settings.agents.installFailed')
+    error.value = err instanceof Error ? err.message : t('settings.agents.removeConfigFailed')
   } finally {
-    const done = new Set(installing.value)
+    const done = new Set(removing.value)
     done.delete(agent.host_id)
-    installing.value = done
-  }
-}
-
-async function uninstallAgent(agent: AgentDTO) {
-  if (!confirm(t('settings.agents.uninstallConfirm', { name: agent.host_name }))) return
-  const next = new Set(uninstalling.value)
-  next.add(agent.host_id)
-  uninstalling.value = next
-  try {
-    await api.uninstallHostAgent(agent.host_id, { remove_data: false })
-    await agentsStore.loadAgents()
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('settings.agents.uninstallFailed')
-  } finally {
-    const done = new Set(uninstalling.value)
-    done.delete(agent.host_id)
-    uninstalling.value = done
+    removing.value = done
   }
 }
 </script>
@@ -184,7 +166,7 @@ async function uninstallAgent(agent: AgentDTO) {
               <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-edit-${agent.host_id}`" @click="configTarget = agent">
                 {{ t('settings.agents.editConnection') }}
               </button>
-              <button class="settings-btn settings-btn-text" type="button" :disabled="installing.has(agent.host_id)" :data-test="`agent-install-${agent.host_id}`" @click="installAgent(agent)">
+              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-install-${agent.host_id}`" @click="installTarget = agent">
                 {{ t('settings.agents.install') }}
               </button>
               <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-generate-command-${agent.host_id}`" @click="installTarget = agent">
@@ -193,8 +175,8 @@ async function uninstallAgent(agent: AgentDTO) {
               <button class="settings-btn settings-btn-text" type="button" :disabled="checking.has(agent.host_id)" @click="checkAgent(agent)">
                 {{ t('settings.agents.check') }}
               </button>
-              <button class="settings-btn settings-btn-text settings-btn-danger" type="button" :disabled="uninstalling.has(agent.host_id)" @click="uninstallAgent(agent)">
-                {{ t('settings.agents.uninstall') }}
+              <button class="settings-btn settings-btn-text settings-btn-danger" type="button" :disabled="removing.has(agent.host_id)" @click="removeAgent(agent)">
+                {{ t('settings.agents.removeConfig') }}
               </button>
             </td>
           </tr>

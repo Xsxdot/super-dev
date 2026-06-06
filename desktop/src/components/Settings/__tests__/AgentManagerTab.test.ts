@@ -19,6 +19,7 @@ import { installTestI18n } from '@/test-utils/i18n'
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  vi.clearAllMocks()
 })
 
 describe('AgentManagerTab', () => {
@@ -50,5 +51,26 @@ describe('AgentManagerTab', () => {
     expect(wrapper.text()).toContain('direct')
     expect(wrapper.text()).toContain('healthy')
     expect(wrapper.find('[data-test="agent-generate-command-h1"]').exists()).toBe(true)
+  })
+
+  it('opens install command modal from install action', async () => {
+    const agents = useAgentsStore()
+    vi.spyOn(agents, 'loadAgents').mockResolvedValue(undefined)
+    agents.agents = [{
+      host_id: 'h1',
+      host_name: 'ali-01',
+      tags: ['prod'],
+      transport: { type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } },
+      runtime: { installed: false, health: 'unknown', reachable: false },
+    }]
+    const nodes = useNodeStore()
+    vi.spyOn(nodes, 'start').mockResolvedValue(undefined)
+
+    const wrapper = mount(AgentManagerTab, { global: { plugins: [installTestI18n()] } })
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-install-h1"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="agent-install-generate"]').exists()).toBe(true)
   })
 })

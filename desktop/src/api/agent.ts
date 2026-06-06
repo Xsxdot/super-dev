@@ -603,37 +603,6 @@ export interface Host {
   tags: string[]
   is_self?: boolean
   node_id?: string
-  ssh_host?: string
-  ssh_port?: number
-  ssh_user?: string
-  ssh_password?: string
-  ssh_key_path?: string
-  ssh_private_key?: string
-  remote_agent_port?: number
-  local_tunnel_port?: number
-}
-
-export interface InstallHostAgentResult {
-  ok: boolean
-  host_id: string
-  platform: string
-  message: string
-}
-
-export interface UninstallHostAgentResult {
-  ok: boolean
-  host_id: string
-  removed_data: boolean
-  message: string
-}
-
-export interface UninstallHostAgentPayload {
-  remove_data: boolean
-}
-
-export interface UninstallHostAgentResponse {
-  result: UninstallHostAgentResult
-  tunnel: TunnelStatus
 }
 
 export type LogSourceType = 'journalctl' | 'docker' | 'file_tail' | 'command'
@@ -1113,17 +1082,8 @@ export const api = {
     request<Host>(`/api/hosts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteHost: (id: string) =>
     request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
-  installHostAgent: (id: string) =>
-    request<InstallHostAgentResult>(`/api/hosts/${id}/agent/install`, { method: 'POST' }),
-  checkHostAgent: (id: string) =>
-    request<TunnelStatus>(`/api/hosts/${id}/agent/check`, { method: 'POST' }),
   getHostManagedDeploymentStatus: (id: string) =>
     request<HostManagedDeploymentStatus>(`/api/hosts/${id}/managed-deployments/status`),
-  uninstallHostAgent: (id: string, payload: UninstallHostAgentPayload) =>
-    request<UninstallHostAgentResponse>(`/api/hosts/${id}/agent/uninstall`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
 
   // 远程监听：SSH config 导入
   listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),

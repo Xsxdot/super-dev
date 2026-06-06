@@ -86,6 +86,32 @@ func TestListAgentsIncludesNodeRuntimeSnapshot(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), `"health":"healthy"`)
 }
 
+func TestLegacyHostAgentRoutesAreNotRegistered(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
+	require.Equal(t, http.StatusOK, hostResp.Code)
+	hostID := decodeHostID(t, hostResp.Body.Bytes())
+
+	cases := []struct {
+		name string
+		path string
+		body io.Reader
+	}{
+		{name: "install", path: "/api/hosts/" + hostID + "/agent/install"},
+		{name: "check", path: "/api/hosts/" + hostID + "/agent/check"},
+		{name: "uninstall", path: "/api/hosts/" + hostID + "/agent/uninstall", body: bytes.NewBufferString(`{"remove_data":false}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := httptestDo(t, app, http.MethodPost, tc.path, tc.body)
+			require.Equal(t, http.StatusNotFound, resp.Code)
+		})
+	}
+}
+
 func httptestDo(t *testing.T, app *App, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)

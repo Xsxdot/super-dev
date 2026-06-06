@@ -1,13 +1,13 @@
-// remote store 集中管理远程监听域的 Host、LogSource 与 Tunnel 内存状态。
+// remote store 集中管理远程监听域的 Host、LogSource 与 managed deployment 内存状态。
 //
 // 职责：
 //   - 拉取并缓存 Host / LogSource 列表
 //   - 对 LogSource 按其关联 Host 的 tag 计算分组
-//   - 缓存隧道状态，供设置页和远程日志面板展示
 //   - 缓存远端 managed deployment 状态，供侧边栏、底部栏、日志面板共享
 //
 // 边界：
 //   - 不直接发起 WebSocket 连接，实时日志由 log store 负责
+//   - 不管理 Agent 连接配置或安装动作，统一由 agents store 负责
 //   - 不渲染任何 UI，组件只通过 actions 和 getters 访问
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -17,12 +17,9 @@ import {
   type HostCreatePayload,
   type HostManagedDeploymentStatus,
   type HostUpdatePayload,
-  type InstallHostAgentResult,
   type LogSource,
   type LogSourceCreatePayload,
   type LogSourceUpdatePayload,
-  type TunnelStatus,
-  type UninstallHostAgentResult,
 } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 
@@ -41,7 +38,6 @@ export interface RemoteServiceGroup {
 export const useRemoteStore = defineStore('remote', () => {
   const hosts = ref<Host[]>([])
   const logSources = ref<LogSource[]>([])
-  const tunnels = ref<Map<string, TunnelStatus>>(new Map())
   const managedStatuses = ref<Map<string, HostManagedDeploymentStatus>>(new Map())
 
   async function loadHosts() {
@@ -69,16 +65,6 @@ export const useRemoteStore = defineStore('remote', () => {
     managedStatuses.value = nextStatuses
   }
 
-  async function installHostAgent(id: string): Promise<InstallHostAgentResult> {
-    return api.installHostAgent(id)
-  }
-
-  async function checkHostAgent(id: string): Promise<TunnelStatus> {
-    const status = await api.checkHostAgent(id)
-    applyTunnelUpdate(status)
-    return status
-  }
-
   async function getHostManagedDeploymentStatus(id: string): Promise<HostManagedDeploymentStatus> {
     const status = await api.getHostManagedDeploymentStatus(id)
     applyManagedStatus(status)
@@ -98,12 +84,6 @@ export const useRemoteStore = defineStore('remote', () => {
 
   function managedStatusOf(hostId: string): HostManagedDeploymentStatus | undefined {
     return managedStatuses.value.get(hostId)
-  }
-
-  async function uninstallHostAgent(id: string, removeData: boolean): Promise<UninstallHostAgentResult> {
-    const response = await api.uninstallHostAgent(id, { remove_data: removeData })
-    applyTunnelUpdate(response.tunnel)
-    return response.result
   }
 
   function hostById(id: string): Host | undefined {
@@ -206,22 +186,6 @@ export const useRemoteStore = defineStore('remote', () => {
     })
   }
 
-  async function loadTunnels() {
-    const list = await api.listTunnels()
-    tunnels.value = new Map(list.map(status => [status.host_id, status]))
-  }
-
-  function applyTunnelUpdate(status: TunnelStatus) {
-    const next = new Map(tunnels.value)
-    const previous = next.get(status.host_id)
-    next.set(status.host_id, { ...previous, ...status })
-    tunnels.value = next
-  }
-
-  function tunnelOf(hostId: string): TunnelStatus | undefined {
-    return tunnels.value.get(hostId)
-  }
-
   const tagsAcrossHosts = computed(() => {
     const tags = new Set<string>()
     for (const host of hosts.value) {
@@ -233,20 +197,16 @@ export const useRemoteStore = defineStore('remote', () => {
   return {
     hosts,
     logSources,
-    tunnels,
     managedStatuses,
     tagsAcrossHosts,
     loadHosts,
     createHost,
     updateHost,
     deleteHost,
-    installHostAgent,
-    checkHostAgent,
     getHostManagedDeploymentStatus,
     refreshManagedStatuses,
     applyManagedStatus,
     managedStatusOf,
-    uninstallHostAgent,
     hostById,
     loadLogSources,
     createLogSource,
@@ -255,8 +215,5 @@ export const useRemoteStore = defineStore('remote', () => {
     logSourceById,
     groupsOf,
     remoteServiceGroupsOf,
-    loadTunnels,
-    applyTunnelUpdate,
-    tunnelOf,
   }
 })

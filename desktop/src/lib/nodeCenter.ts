@@ -101,7 +101,7 @@ function buildNodeFromHost(
     return {
       hostId: host.id,
       name: host.name || host.id,
-      address: host.public_ip || host.private_ip || host.ssh_host,
+      address: host.public_ip || host.private_ip || host.id,
       reachable: false,
       muted: true,
       agent: { ...unknownAgent },
@@ -113,7 +113,7 @@ function buildNodeFromHost(
   return {
     hostId: host.id,
     name: node.name || host.name || host.id,
-    address: host.public_ip || host.private_ip || host.ssh_host,
+    address: host.public_ip || host.private_ip || host.id,
     reachable: node.reachable,
     muted: !node.reachable,
     agent: node.agent,

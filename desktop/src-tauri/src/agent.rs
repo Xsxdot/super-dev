@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread::sleep;
@@ -36,41 +35,6 @@ enum AgentPortState {
 }
 
 pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
-
-fn install_binaries_dir(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let bundled = resource_dir.join("agent-install");
-        if has_install_binaries(&bundled) {
-            return Some(bundled);
-        }
-    }
-    if cfg!(debug_assertions) {
-        let workspace = std::env::current_dir()
-            .ok()?
-            .join("src-tauri")
-            .join("resources")
-            .join("agent-install");
-        if has_install_binaries(&workspace) {
-            return Some(workspace);
-        }
-    }
-    None
-}
-
-fn has_install_binaries(dir: &PathBuf) -> bool {
-    if !dir.is_dir() {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    entries.filter_map(Result::ok).any(|entry| {
-        entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with("superdev-agent-"))
-    })
-}
 
 impl AgentProcess {
     /// new 创建 AgentProcess 容器。
@@ -127,10 +91,6 @@ impl AgentProcess {
             "--data".to_string(),
             data_dir,
         ];
-        if let Some(dir) = install_binaries_dir(app) {
-            args.push("--install-binaries".to_string());
-            args.push(dir.to_string_lossy().to_string());
-        }
         if let Ok(sample) = resolve_sidecar_binary(app, "superdev-sample") {
             args.push("--sample-binary".to_string());
             args.push(sample.to_string_lossy().to_string());

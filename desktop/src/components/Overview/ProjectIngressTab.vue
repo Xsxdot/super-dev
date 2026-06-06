@@ -116,7 +116,7 @@ const filteredProxyHosts = computed(() => {
       host.name,
       host.public_ip ?? '',
       host.private_ip ?? '',
-      host.ssh_host,
+      host.id,
     ].join(' ').toLowerCase()
     return query === '' || haystack.includes(query)
   })
@@ -128,7 +128,7 @@ const filteredUpstreamHosts = computed(() => {
       host.name,
       host.private_ip ?? '',
       host.public_ip ?? '',
-      host.ssh_host,
+      host.id,
     ].join(' ').toLowerCase()
     return query === '' || haystack.includes(query)
   })
@@ -274,17 +274,17 @@ function hostLabel(hostID: string): string {
 }
 
 function publicAddressForHost(host: Host): string {
-  return host.public_ip?.trim() || host.ssh_host.trim()
+  return host.public_ip?.trim() || host.private_ip?.trim() || host.id
 }
 
 function privateAddressForHost(host: Host): string {
-  return host.private_ip?.trim() || host.ssh_host.trim()
+  return host.private_ip?.trim() || host.public_ip?.trim() || host.id
 }
 
 function hostAddress(host: Host): string {
   const publicPart = host.public_ip ? `public ${host.public_ip}` : ''
   const privatePart = host.private_ip ? `private ${host.private_ip}` : ''
-  return [publicPart, privatePart].filter(Boolean).join(' · ') || host.ssh_host
+  return [publicPart, privatePart].filter(Boolean).join(' · ') || host.id
 }
 
 function certLabel(cert: ManagedCertificate): string {

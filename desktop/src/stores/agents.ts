@@ -45,6 +45,17 @@ export const useAgentsStore = defineStore('agents', () => {
     return updated
   }
 
+  async function checkAgent(hostId: string) {
+    const checked = await api.checkAgent(hostId)
+    upsert(checked)
+    return checked
+  }
+
+  async function deleteAgent(hostId: string) {
+    await api.deleteAgent(hostId)
+    agents.value = agents.value.filter(agent => agent.host_id !== hostId)
+  }
+
   async function generateInstallCommand(hostId: string, payload: AgentInstallCommandPayload) {
     return api.generateAgentInstallCommand(hostId, payload)
   }
@@ -66,6 +77,8 @@ export const useAgentsStore = defineStore('agents', () => {
     agentsByHost,
     loadAgents,
     updateAgent,
+    checkAgent,
+    deleteAgent,
     generateInstallCommand,
     upsert,
     agentOf,

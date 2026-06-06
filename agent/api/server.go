@@ -28,7 +28,6 @@ import (
 	"github.com/xsxdot/super-dev/agent/debugsession"
 	"github.com/xsxdot/super-dev/agent/identity"
 	"github.com/xsxdot/super-dev/agent/ingress"
-	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/metrics"
@@ -54,12 +53,8 @@ type AppConfig struct {
 	NodeTransportOverride nodetransport.NodeTransport
 	// NodeRegistryOverride 注入自定义节点状态中心，仅用于测试。
 	NodeRegistryOverride *noderegistry.Registry
-	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
-	InstallBinaryDir string
 	// SampleBinaryPath 是随桌面端打包的 onboarding 示例服务二进制；为空时跳过示例落地。
 	SampleBinaryPath string
-	// InstallerOverride 注入自定义远端 agent 安装器，仅用于测试。
-	InstallerOverride HostAgentInstaller
 	// RuntimeMetricsSampler 注入进程级指标采样器；nil 时使用 metrics.NewSampler。
 	RuntimeMetricsSampler metrics.MetricsSampler
 	// RuntimeStatusClient 注入远端 runtime-status client；nil 时通过 SSH 隧道调用远端 agent。
@@ -70,12 +65,6 @@ type AppConfig struct {
 	ExecutionAuthorizer remoteexec.Authorizer
 	// ManagedDeploymentReconcileInterval 控制桌面端推送 remote deployment 期望状态的周期；0 时使用 30 秒。
 	ManagedDeploymentReconcileInterval time.Duration
-}
-
-// HostAgentInstaller 安装或重装远端 SuperDev agent。
-type HostAgentInstaller interface {
-	Install(ctx context.Context, host model.Host) (installer.Result, error)
-	Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -117,7 +106,6 @@ type App struct {
 	backends                    map[string]logbackend.LogBackend
 	identity                    identity.Identity
 	pidStore                    *process.PIDStore
-	hostAgentInstaller          HostAgentInstaller
 	runtimeMetricsSampler       metrics.MetricsSampler
 	runtimeStatusClient         RuntimeStatusClient
 	runtimeStatusRequestTimeout time.Duration
@@ -265,10 +253,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if runtimeTimeout == 0 {
 		runtimeTimeout = 3 * time.Second
 	}
-	hostAgentInstaller := cfg.InstallerOverride
-	if hostAgentInstaller == nil {
-		hostAgentInstaller = installer.New(installer.Options{BinaryDir: cfg.InstallBinaryDir})
-	}
 	executionAuthorizer := cfg.ExecutionAuthorizer
 	if executionAuthorizer == nil {
 		executionAuthorizer = remoteexec.AllowAll{}
@@ -298,7 +282,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 		backends:                    map[string]logbackend.LogBackend{},
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
-		hostAgentInstaller:          hostAgentInstaller,
 		runtimeMetricsSampler:       runtimeSampler,
 		runtimeStatusClient:         runtimeClient,
 		runtimeStatusRequestTimeout: runtimeTimeout,
@@ -451,9 +434,6 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
-	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
-	mux.HandleFunc("POST /api/hosts/{id}/agent/check", a.checkHostAgent)
-	mux.HandleFunc("POST /api/hosts/{id}/agent/uninstall", a.uninstallHostAgent)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 

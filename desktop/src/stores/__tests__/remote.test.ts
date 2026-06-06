@@ -4,7 +4,7 @@
  * 职责：
  *   - 验证 Host / LogSource CRUD action 会同步本地 state
  *   - 验证 LogSource 按 Host tag 计算分组
- *   - 验证 Tunnel 状态按 host_id 索引和合并
+ *   - 验证 managed deployment 状态按 host_id 缓存
  *
  * 边界：
  *   - 不建立真实 HTTP 连接，API 通过 mock 隔离
@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useRemoteStore } from '@/stores/remote'
-import { api, type Host, type LogSource, type TunnelStatus } from '@/api/agent'
+import { api, type Host, type LogSource } from '@/api/agent'
 
 vi.mock('@/stores/agent', () => ({
   useAgentStore: vi.fn(() => ({
@@ -32,15 +32,11 @@ vi.mock('@/api/agent', async () => {
       createHost: vi.fn(),
       updateHost: vi.fn(),
       deleteHost: vi.fn(),
-      installHostAgent: vi.fn(),
-      checkHostAgent: vi.fn(),
       getHostManagedDeploymentStatus: vi.fn(),
-      uninstallHostAgent: vi.fn(),
       listLogSources: vi.fn(),
       createLogSource: vi.fn(),
       updateLogSource: vi.fn(),
       deleteLogSource: vi.fn(),
-      listTunnels: vi.fn(),
     },
   }
 })
@@ -51,11 +47,8 @@ function makeHost(overrides: Partial<Host> = {}): Host {
   return {
     id: 'h1',
     name: 'host-01',
-    ssh_host: '10.0.0.1',
-    ssh_port: 22,
-    ssh_user: 'root',
-    remote_agent_port: 57017,
-    local_tunnel_port: 0,
+    public_ip: '203.0.113.10',
+    private_ip: '10.0.0.1',
     tags: ['prod'],
     ...overrides,
   }
@@ -97,8 +90,8 @@ describe('useRemoteStore', () => {
 
       await store.createHost({
         name: 'host-02',
-        ssh_host: '10.0.0.2',
-        ssh_user: 'root',
+        public_ip: '203.0.113.11',
+        tags: ['prod'],
       })
 
       expect(store.hosts.some(h => h.id === 'h2')).toBe(true)
@@ -137,44 +130,6 @@ describe('useRemoteStore', () => {
       expect(store.hostById('missing')).toBeUndefined()
     })
 
-    it('installHostAgent 调用 agent API 并返回结果', async () => {
-      const result = {
-        ok: true,
-        host_id: 'h1',
-        platform: 'linux/amd64',
-        message: 'Agent installed and started',
-      }
-      mockedApi.installHostAgent.mockResolvedValue(result)
-
-      const store = useRemoteStore()
-      await expect(store.installHostAgent('h1')).resolves.toEqual(result)
-
-      expect(mockedApi.installHostAgent).toHaveBeenCalledWith('h1')
-    })
-
-    it('checkHostAgent 调用 agent API 并合并 tunnel 状态', async () => {
-      const status: TunnelStatus = {
-        host_id: 'h1',
-        state: 'open',
-        local_port: 57100,
-        agent: 'healthy',
-        agent_version: '0.1.0',
-        agent_checked_at: '2026-06-05T10:00:00Z',
-      }
-      mockedApi.checkHostAgent.mockResolvedValue(status)
-      const store = useRemoteStore()
-
-      await expect(store.checkHostAgent('h1')).resolves.toEqual(status)
-
-      expect(mockedApi.checkHostAgent).toHaveBeenCalledWith('h1')
-      expect(store.tunnelOf('h1')).toMatchObject({
-        state: 'open',
-        local_port: 57100,
-        agent: 'healthy',
-        agent_version: '0.1.0',
-      })
-    })
-
     it('getHostManagedDeploymentStatus 拉取后写入共享 managed status 缓存', async () => {
       mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
         host_id: 'h1',
@@ -190,28 +145,6 @@ describe('useRemoteStore', () => {
 
       expect(store.managedStatusOf('h1')?.desired_deployment_count).toBe(1)
       expect(store.managedStatuses.get('h1')?.host_name).toBe('host-01')
-    })
-
-    it('uninstallHostAgent 传递是否删除数据并合并返回 tunnel 状态', async () => {
-      const response = {
-        result: { ok: true, host_id: 'h1', removed_data: true, message: 'Agent uninstalled' },
-        tunnel: {
-          host_id: 'h1',
-          state: 'idle',
-          agent: 'unreachable',
-          agent_checked_at: '2026-06-05T10:00:00Z',
-        } satisfies TunnelStatus,
-      }
-      mockedApi.uninstallHostAgent.mockResolvedValue(response)
-      const store = useRemoteStore()
-
-      await expect(store.uninstallHostAgent('h1', true)).resolves.toEqual(response.result)
-
-      expect(mockedApi.uninstallHostAgent).toHaveBeenCalledWith('h1', { remove_data: true })
-      expect(store.tunnelOf('h1')).toMatchObject({
-        state: 'idle',
-        agent: 'unreachable',
-      })
     })
   })
 
@@ -299,56 +232,6 @@ describe('useRemoteStore', () => {
         makeLogSource({ id: 'ls-a', host_ids: ['h1'], project_id: 'proj-other', service_id: 'svc-server' }),
       ]
       expect(store.remoteServiceGroupsOf('proj-1')).toEqual([])
-    })
-  })
-
-  describe('tunnels', () => {
-    it('loadTunnels 拉取并按 host_id 索引', async () => {
-      const status: TunnelStatus = {
-        host_id: 'h1',
-        state: 'open',
-        local_port: 57100,
-      }
-      mockedApi.listTunnels.mockResolvedValue([status])
-      const store = useRemoteStore()
-
-      await store.loadTunnels()
-
-      expect(store.tunnelOf('h1')?.state).toBe('open')
-      expect(store.tunnelOf('h1')?.local_port).toBe(57100)
-    })
-
-    it('applyTunnelUpdate 单条更新合并到 map', () => {
-      const store = useRemoteStore()
-
-      store.applyTunnelUpdate({ host_id: 'h1', state: 'connecting' })
-      expect(store.tunnelOf('h1')?.state).toBe('connecting')
-
-      store.applyTunnelUpdate({ host_id: 'h1', state: 'open', local_port: 57100 })
-      expect(store.tunnelOf('h1')?.state).toBe('open')
-      expect(store.tunnelOf('h1')?.local_port).toBe(57100)
-    })
-
-    it('applyTunnelUpdate 部分更新保留已有字段（隧道与 agent 正交）', () => {
-      const store = useRemoteStore()
-      // 先收到隧道 open
-      store.applyTunnelUpdate({ host_id: 'h1', state: 'open', local_port: 57100 })
-      // 再收到 agent 部分更新（只带 agent，不带 state）
-      store.applyTunnelUpdate({ host_id: 'h1', agent: 'healthy' })
-
-      expect(store.tunnelOf('h1')?.state).toBe('open')
-      expect(store.tunnelOf('h1')?.local_port).toBe(57100)
-      expect(store.tunnelOf('h1')?.agent).toBe('healthy')
-
-      // agent 变 unreachable 不影响隧道 state
-      store.applyTunnelUpdate({ host_id: 'h1', agent: 'unreachable' })
-      expect(store.tunnelOf('h1')?.state).toBe('open')
-      expect(store.tunnelOf('h1')?.agent).toBe('unreachable')
-
-      store.applyTunnelUpdate({ host_id: 'h1', agent: 'healthy', agent_version: '0.1.0', agent_checked_at: '2026-06-03T10:00:00Z' })
-      expect(store.tunnelOf('h1')?.state).toBe('open')
-      expect(store.tunnelOf('h1')?.agent_version).toBe('0.1.0')
-      expect(store.tunnelOf('h1')?.agent_checked_at).toBe('2026-06-03T10:00:00Z')
     })
   })
 })

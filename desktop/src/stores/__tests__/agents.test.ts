@@ -23,6 +23,8 @@ vi.mock('@/api/agent', async () => {
       ...actual.api,
       listAgents: vi.fn(),
       updateAgent: vi.fn(),
+      deleteAgent: vi.fn(),
+      checkAgent: vi.fn(),
       generateAgentInstallCommand: vi.fn(),
     },
   }
@@ -64,5 +66,27 @@ describe('agents store', () => {
     expect(api.updateAgent).toHaveBeenCalledWith('h1', expect.objectContaining({
       transport: expect.objectContaining({ type: 'direct' }),
     }))
+  })
+
+  it('checks runtime through first-class agent api', async () => {
+    vi.mocked(api.checkAgent).mockResolvedValue(agent('h1'))
+    const store = useAgentsStore()
+
+    await expect(store.checkAgent('h1')).resolves.toMatchObject({ host_id: 'h1' })
+
+    expect(api.checkAgent).toHaveBeenCalledWith('h1')
+    expect(store.agentOf('h1')?.runtime.health).toBe('healthy')
+  })
+
+  it('deletes agent config through first-class agent api', async () => {
+    vi.mocked(api.deleteAgent).mockResolvedValue(undefined)
+    const store = useAgentsStore()
+    store.agents = [agent('h1'), agent('h2')]
+
+    await store.deleteAgent('h1')
+
+    expect(api.deleteAgent).toHaveBeenCalledWith('h1')
+    expect(store.agentOf('h1')).toBeUndefined()
+    expect(store.agentOf('h2')?.host_id).toBe('h2')
   })
 })
