@@ -66,6 +66,7 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 		return err
 	}
 	cmdText := withString(step.With, "cmd", "command")
+	ctx.LogLine(cmdText, model.StreamCommand)
 	workDir := withString(step.With, "workDir", "work_dir", "workdir")
 	cmd := exec.CommandContext(ctx.Context, "sh", "-c", cmdText)
 	cmd.Dir = workDir

@@ -96,6 +96,7 @@ func (p *RemoteCommand) Execute(ctx *pipeline.RunContext, step model.Step, targe
 		return errors.New("remote_command runner is required")
 	}
 	cmd := withString(step.With, "cmd", "command")
+	ctx.LogLine(cmd, model.StreamCommand)
 	workDir := withString(step.With, "workDir", "work_dir", "workdir")
 	for _, target := range targets {
 		if err := p.runner.RunRemote(ctx.Context, target, cmd, workDir, ctx.LogLine); err != nil {

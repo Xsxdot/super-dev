@@ -41,6 +41,23 @@ func TestLocalCommandExecutesAndLogs(t *testing.T) {
 	assert.Contains(t, logs, "stdout:ok")
 }
 
+func TestLocalCommandEmitsCommandBeforeOutput(t *testing.T) {
+	p := plugins.NewLocalCommand()
+	var logs []string
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		LogLine: func(line, stream string) { logs = append(logs, stream+":"+line) },
+	})
+	step := model.Step{Name: "Build", Type: "local_command", With: map[string]interface{}{"cmd": "printf ok"}}
+
+	err := p.Execute(ctx, step, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		model.StreamCommand + ":printf ok",
+		model.StreamStdout + ":ok",
+	}, logs)
+}
+
 func TestLocalCommandFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

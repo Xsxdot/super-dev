@@ -100,6 +100,7 @@ func (p *Transfer) Execute(ctx *pipeline.RunContext, step model.Step, targets []
 	}
 	source := withString(step.With, "source", "from", "src")
 	targetPath := withString(step.With, "target", "to", "dest")
+	ctx.LogLine("transfer: "+source+" -> "+targetPath, model.StreamCommand)
 	for _, target := range targets {
 		if err := p.transfer.Transfer(ctx.Context, target, source, targetPath, ctx.LogLine); err != nil {
 			return err

@@ -60,6 +60,28 @@ func TestTransferExecutesTargets(t *testing.T) {
 	assert.Contains(t, logs, "stdout:sent")
 }
 
+func TestTransferEmitsCommandBeforeTransferOutput(t *testing.T) {
+	transfer := &fakeFileTransfer{}
+	p := plugins.NewTransfer(transfer)
+	var logs []string
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		LogLine: func(line, stream string) { logs = append(logs, stream+":"+line) },
+	})
+	step := model.Step{
+		Name: "Upload",
+		Type: "transfer",
+		With: map[string]interface{}{"source": "a.tar.gz", "target": "/opt/api/a.tar.gz"},
+	}
+
+	err := p.Execute(ctx, step, []pipeline.Target{{HostID: "h1", HostName: "box1"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		model.StreamCommand + ":transfer: a.tar.gz -> /opt/api/a.tar.gz",
+		model.StreamStdout + ":sent",
+	}, logs)
+}
+
 func TestTransferAllowsDirectorySource(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644))

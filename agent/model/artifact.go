@@ -28,6 +28,17 @@ type ArtifactRef struct {
 	CreatedAt int64             `json:"created_at"`
 }
 
+const (
+	// StreamStdout 表示普通标准输出。
+	StreamStdout = "stdout"
+	// StreamStderr 表示错误输出。
+	StreamStderr = "stderr"
+	// StreamSystem 表示系统路由或执行元信息。
+	StreamSystem = "system"
+	// StreamCommand 表示即将执行的真实命令文本。
+	StreamCommand = "command"
+)
+
 // RunLogLine 是 pipeline run 日志的持久化视图。
 type RunLogLine struct {
 	ID       int64  `json:"id"`

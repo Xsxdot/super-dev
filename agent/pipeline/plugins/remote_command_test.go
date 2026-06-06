@@ -57,3 +57,25 @@ func TestRemoteCommandExecutesTargets(t *testing.T) {
 	assert.Equal(t, []string{"h1:systemctl restart api:/opt/api"}, runner.calls)
 	assert.Contains(t, logs, "stdout:ok")
 }
+
+func TestRemoteCommandEmitsCommandBeforeRunnerOutput(t *testing.T) {
+	runner := &fakeRemoteRunner{}
+	p := plugins.NewRemoteCommand(runner)
+	var logs []string
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		LogLine: func(line, stream string) { logs = append(logs, stream+":"+line) },
+	})
+	step := model.Step{
+		Name: "Restart",
+		Type: "remote_command",
+		With: map[string]interface{}{"cmd": "systemctl restart api", "workDir": "/opt/api"},
+	}
+
+	err := p.Execute(ctx, step, []pipeline.Target{{HostID: "h1", HostName: "box1"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		model.StreamCommand + ":systemctl restart api",
+		model.StreamStdout + ":ok",
+	}, logs)
+}
