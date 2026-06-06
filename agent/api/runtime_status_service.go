@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -48,7 +48,7 @@ func (s *runtimeStatusService) Snapshot(ctx context.Context, project model.Proje
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						inst := s.remoteInstance(ctx, project.ID, service, deployment, hostID, host)
+						inst := s.remoteInstance(service, deployment, hostID, host)
 						mu.Lock()
 						sections[envName] = append(sections[envName], inst)
 						mu.Unlock()
@@ -105,26 +105,35 @@ func (s *runtimeStatusService) localDeploymentActive(projectID, deploymentID str
 	return mgr.IsDeploymentActive(deploymentID)
 }
 
-func (s *runtimeStatusService) remoteInstance(ctx context.Context, projectID string, svc model.Service, dep model.Deployment, hostID string, host model.Host) model.InstanceStatus {
-	resp, err := s.app.runtimeStatusClient.Fetch(ctx, hostID, projectID)
-	if err != nil {
-		return unknownInstance(svc, dep, hostID, runtimeHostName(hostID, host), false, err)
+func (s *runtimeStatusService) remoteInstance(svc model.Service, dep model.Deployment, hostID string, host model.Host) model.InstanceStatus {
+	hostName := runtimeHostName(hostID, host)
+	if s.app.nodeRegistry == nil {
+		return unknownInstance(svc, dep, hostID, hostName, false, errors.New("node registry unavailable"))
 	}
-	for _, env := range resp.Environments {
-		for _, inst := range env.Instances {
-			if inst.DeploymentID != dep.ID {
-				continue
-			}
-			inst.ServiceID = svc.ID
-			inst.ServiceName = svc.Name
-			inst.DeploymentID = dep.ID
-			inst.NodeID = hostID
-			inst.NodeName = runtimeHostName(hostID, host)
-			inst.IsLocal = false
-			return inst
+	node, ok := s.app.nodeRegistry.SnapshotOf(hostID)
+	if !ok {
+		return unknownInstance(svc, dep, hostID, hostName, false, errors.New("node not reported"))
+	}
+	if !node.Reachable {
+		errText := node.Error
+		if errText == "" {
+			errText = "node unreachable"
 		}
+		return unknownInstance(svc, dep, hostID, hostName, false, errors.New(errText))
 	}
-	return unknownInstance(svc, dep, hostID, runtimeHostName(hostID, host), false, fmt.Errorf("remote runtime-status missing deployment %s", dep.ID))
+	for _, inst := range node.Deployments {
+		if inst.DeploymentID != dep.ID {
+			continue
+		}
+		inst.ServiceID = svc.ID
+		inst.ServiceName = svc.Name
+		inst.DeploymentID = dep.ID
+		inst.NodeID = hostID
+		inst.NodeName = hostName
+		inst.IsLocal = false
+		return inst
+	}
+	return unknownInstance(svc, dep, hostID, hostName, false, errors.New("deployment_not_reported"))
 }
 
 func (s *runtimeStatusService) hostsByID() map[string]model.Host {

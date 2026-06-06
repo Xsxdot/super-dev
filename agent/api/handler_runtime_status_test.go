@@ -28,6 +28,8 @@ import (
 	"github.com/xsxdot/super-dev/agent/api"
 	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/noderegistry"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 type fakeRuntimeSampler struct {
@@ -193,19 +195,15 @@ services:
 }
 
 func TestRuntimeStatusIsolatesRemoteHostFailure(t *testing.T) {
-	app := newRuntimeStatusApp(t, &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}}, fakeRemoteRuntimeStatusClient{
-		byHost: map[string]model.RuntimeStatusResponse{
-			"host-ok": {Environments: []model.EnvStatus{{
-				EnvName: "prod",
-				Instances: []model.InstanceStatus{{
-					ServiceID: "svc-api", ServiceName: "api", DeploymentID: "dep-api-prod",
-					NodeID: "host-ok", NodeName: "ok-node", IsLocal: false,
-					Metrics: runningMetrics(7, 3000, "systemd"),
-				}},
-			}}},
-		},
-		errs: map[string]error{"host-bad": errors.New("tunnel timeout")},
+	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
+	app, err := api.NewApp(api.AppConfig{
+		DataDir:                     t.TempDir(),
+		RuntimeMetricsSampler:       &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}},
+		RuntimeStatusRequestTimeout: 200 * time.Millisecond,
+		NodeRegistryOverride:        reg,
 	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
 	projectID := addRuntimeStatusProject(t, app, `
 id: overview-remote
 name: overview-remote
@@ -226,6 +224,28 @@ services:
 
 	createHost(t, app, "host-ok", "ok-node")
 	createHost(t, app, "host-bad", "bad-node")
+	reg.ApplyForTest([]nodetransport.NodeStatus{
+		{
+			HostID:    "host-ok",
+			Name:      "ok-node",
+			Reachable: true,
+			Agent:     model.AgentRuntime{Health: model.AgentHealthHealthy, Reachable: true},
+			Deployments: []model.InstanceStatus{{
+				ServiceID: "svc-api", ServiceName: "api", DeploymentID: "dep-api-prod",
+				NodeID: "host-ok", NodeName: "ok-node", IsLocal: false,
+				Metrics: runningMetrics(7, 3000, "systemd"),
+			}},
+			UpdatedAt: time.Now().UTC(),
+		},
+		{
+			HostID:    "host-bad",
+			Name:      "bad-node",
+			Reachable: false,
+			Agent:     model.AgentRuntime{Health: model.AgentHealthUnreachable, Reachable: false},
+			Error:     "tunnel timeout",
+			UpdatedAt: time.Now().UTC(),
+		},
+	})
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
@@ -243,6 +263,61 @@ services:
 	assert.Equal(t, model.HealthRunning, byNode["host-ok"].Metrics.Health)
 	assert.Equal(t, model.HealthUnknown, byNode["host-bad"].Metrics.Health)
 	assert.Contains(t, byNode["host-bad"].Error, "tunnel timeout")
+}
+
+func TestRuntimeStatusUsesNodeRegistryForRemoteDeployments(t *testing.T) {
+	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
+	app, err := api.NewApp(api.AppConfig{
+		DataDir:                     t.TempDir(),
+		RuntimeMetricsSampler:       &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}},
+		RuntimeStatusRequestTimeout: 200 * time.Millisecond,
+		NodeRegistryOverride:        reg,
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	projectID := addRuntimeStatusProject(t, app, `
+id: overview-node-registry
+name: overview-node-registry
+environments:
+  - name: prod
+services:
+  - id: svc-api
+    name: api
+    deployments:
+      - id: dep-api
+        env: prod
+        location: remote
+        hosts: [h1]
+`)
+	createHost(t, app, "h1", "ali-01")
+	reg.ApplyForTest([]nodetransport.NodeStatus{{
+		HostID:    "h1",
+		Name:      "ali-01",
+		Reachable: true,
+		Agent:     model.AgentRuntime{Health: model.AgentHealthHealthy, Reachable: true},
+		Deployments: []model.InstanceStatus{{
+			DeploymentID: "dep-api",
+			NodeID:       "h1",
+			NodeName:     "ali-01",
+			Metrics:      model.InstanceMetrics{Health: model.HealthRunning, Base: "systemd"},
+		}},
+		UpdatedAt: time.Now().UTC(),
+	}})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got model.RuntimeStatusResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.Len(t, got.Environments, 1)
+	require.Len(t, got.Environments[0].Instances, 1)
+	inst := got.Environments[0].Instances[0]
+	assert.Equal(t, "dep-api", inst.DeploymentID)
+	assert.Equal(t, model.HealthRunning, inst.Metrics.Health)
+	assert.Empty(t, inst.Error)
 }
 
 func runningMetrics(cpu float64, mem int64, base string) model.InstanceMetrics {

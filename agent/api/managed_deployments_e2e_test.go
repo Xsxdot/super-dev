@@ -27,6 +27,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 type e2eRuntimeSampler struct{}
@@ -101,6 +102,9 @@ services:
 		}
 		return len(projects) == 1
 	}, 2*time.Second, 20*time.Millisecond)
+	desktopApp.nodeRegistry.ApplyForTest([]nodetransport.NodeStatus{
+		remoteApp.nodeStatusSnapshot(context.Background(), "h1", "local-01"),
+	})
 
 	statusResp, err := http.Get(desktopSrv.URL + "/api/projects/proj-e2e/runtime-status")
 	require.NoError(t, err)
@@ -113,7 +117,7 @@ services:
 	inst := status.Environments[0].Instances[0]
 	assert.Equal(t, "dep-api-prod", inst.DeploymentID)
 	assert.Equal(t, "h1", inst.NodeID)
-	// 远端 agent 自身返回 IsLocal=true；桌面端 remoteInstance 会按桌面视角改写为 false。
+	// desktop runtime-status 必须保持远端节点视角，不能把 agent 上报的实例误标成本机。
 	assert.False(t, inst.IsLocal)
 	assert.Equal(t, model.HealthRunning, inst.Metrics.Health)
 
