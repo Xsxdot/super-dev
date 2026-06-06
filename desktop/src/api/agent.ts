@@ -686,6 +686,25 @@ export type TunnelState = 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
 
 export type AgentHealth = 'unknown' | 'healthy' | 'unreachable' | 'version-mismatch'
 
+export interface AgentRuntime {
+  installed: boolean
+  version?: string
+  health: AgentHealth
+  reachable: boolean
+  local_port?: number
+}
+
+export interface NodeStatus {
+  host_id: string
+  name?: string
+  reachable: boolean
+  agent: AgentRuntime
+  deployments: RuntimeInstanceStatus[]
+  managed?: ManagedDeploymentStatus
+  updated_at: string
+  error?: string
+}
+
 export interface TunnelStatus {
   host_id: string
   state?: TunnelState
@@ -895,6 +914,7 @@ export const api = {
     }),
   getRuntimeStatus: (projectId: string) =>
     request<RuntimeStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/runtime-status`),
+  listNodes: () => request<NodeStatus[]>('/api/nodes'),
 
   // 设置
   getSettings: () => request<AgentSettings>('/api/settings'),
@@ -1118,6 +1138,11 @@ export const api = {
 /** deploymentWsUrl 返回指定 deployment 的 WebSocket 日志流 URL。 */
 export function deploymentWsUrl(deploymentId: string): string {
   return `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
+}
+
+/** nodesWsUrl 返回 NodeRegistry 快照 WebSocket URL。 */
+export function nodesWsUrl(): string {
+  return `${WS_BASE}/ws/nodes`
 }
 
 /** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL。 */
