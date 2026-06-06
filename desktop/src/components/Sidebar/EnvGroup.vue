@@ -17,6 +17,7 @@ import { ref, computed, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
+import { useNodeStore } from '@/stores/node'
 import { useDragDrop } from '@/composables/useDragDrop'
 import {
   buildDeploymentNodeStatus,
@@ -43,8 +44,12 @@ const emit = defineEmits<{
 
 const agentStore = useAgentStore()
 const remoteStore = useRemoteStore()
+const nodeStore = useNodeStore()
 const { t } = useI18n()
 const { startServiceDrag, moveServiceDrag, endServiceDrag, finishServiceDrag } = useDragDrop()
+const remoteManagedStatuses = computed(() =>
+  nodeStore.managedStatuses.size > 0 ? nodeStore.managedStatuses : remoteStore.managedStatuses,
+)
 
 async function onCheckChange(svc: Service) {
   if (svc.required) return
@@ -107,6 +112,7 @@ async function refreshRemoteNodeContext(hostIds: string[]) {
   if (hostIds.length === 0) return
   try {
     if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    if (nodeStore.managedStatuses.size > 0) return
     await remoteStore.refreshManagedStatuses(hostIds)
   } catch (err) {
     console.warn('[SuperDev] refresh sidebar remote node status failed:', err)
@@ -122,7 +128,7 @@ watch(
 function deploymentNodeStatusForService(svc: Service): DeploymentAggregateNodeStatus | null {
   const dep = deploymentForService(svc)
   if (!dep) return null
-  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteStore.managedStatuses)
+  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteManagedStatuses.value)
 }
 
 function deploymentNodeSummary(status: DeploymentAggregateNodeStatus): string {

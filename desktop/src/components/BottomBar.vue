@@ -12,6 +12,7 @@ import { useFilterStore } from '@/stores/filter'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import OperationApprovalPopover from '@/components/OperationApprovalPopover.vue'
 import { useRemoteStore } from '@/stores/remote'
+import { useNodeStore } from '@/stores/node'
 import {
   buildDeploymentNodeStatus,
   type DeploymentAggregateNodeStatus,
@@ -32,12 +33,16 @@ const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const filterStore = useFilterStore()
 const operationApprovalStore = useOperationApprovalStore()
 const remoteStore = useRemoteStore()
+const nodeStore = useNodeStore()
 const router = useRouter()
 const { t } = useI18n()
 const approvalsPopoverOpen = ref(false)
 const logDisplayOpen = ref(false)
 const logDisplaySelectRef = ref<HTMLElement | null>(null)
 const logDisplayMenuStyle = ref<Record<string, string>>({})
+const remoteManagedStatuses = computed(() =>
+  nodeStore.managedStatuses.size > 0 ? nodeStore.managedStatuses : remoteStore.managedStatuses,
+)
 
 // leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
 function leafDeploymentId(leaf: PanelLeafNode): string | null {
@@ -66,7 +71,7 @@ const panelServices = computed(() => {
           name: `${info.service.name} · ${info.envName}`,
           status: info.deployment.status,
           deployment: info.deployment,
-          aggregate: buildDeploymentNodeStatus(info.deployment, remoteStore.hosts, remoteStore.managedStatuses),
+          aggregate: buildDeploymentNodeStatus(info.deployment, remoteStore.hosts, remoteManagedStatuses.value),
         })
       }
     }
@@ -89,6 +94,7 @@ async function refreshRemoteNodeContext(hostIds: string[]) {
   if (hostIds.length === 0) return
   try {
     if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    if (nodeStore.managedStatuses.size > 0) return
     await remoteStore.refreshManagedStatuses(hostIds)
   } catch (err) {
     console.warn('[SuperDev] refresh bottom remote node status failed:', err)

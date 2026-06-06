@@ -9,6 +9,7 @@ import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
 import { useRemoteStore } from '@/stores/remote'
+import { useNodeStore } from '@/stores/node'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
@@ -48,6 +49,7 @@ const deploymentLogStore = useDeploymentLogStore()
 const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const logLifecycleStore = useLogLifecycleStore()
 const remoteStore = useRemoteStore()
+const nodeStore = useNodeStore()
 const { t } = useI18n()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
@@ -69,6 +71,9 @@ const cachedDisplay = ref<{ items: LogDisplayItem[]; stats: DisplayStats }>({
   items: [],
   stats: { total: 0, folded: 0, errors: 0, warns: 0 },
 })
+const remoteManagedStatuses = computed(() =>
+  nodeStore.managedStatuses.size > 0 ? nodeStore.managedStatuses : remoteStore.managedStatuses,
+)
 
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
@@ -87,7 +92,7 @@ const currentDeploymentInfo = computed(() => {
 const currentNodeStatus = computed(() => {
   const dep = currentDeploymentInfo.value?.deployment
   if (!dep || dep.location !== 'remote') return null
-  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteStore.managedStatuses)
+  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteManagedStatuses.value)
 })
 
 const currentRemoteNodes = computed(() => currentNodeStatus.value?.nodes ?? [])
@@ -101,6 +106,7 @@ async function refreshRemoteNodeContext(hostIds: string[]) {
   if (hostIds.length === 0) return
   try {
     if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    if (nodeStore.managedStatuses.size > 0) return
     await remoteStore.refreshManagedStatuses(hostIds)
   } catch (err) {
     console.warn('[SuperDev] refresh log panel remote node status failed:', err)

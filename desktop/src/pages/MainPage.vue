@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAgentStore } from '@/stores/agent'
+import { useNodeStore } from '@/stores/node'
 import { useWorkspaceStore } from '@/stores/workspace'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
 import WorkspaceShell from '@/components/Workspace/WorkspaceShell.vue'
@@ -9,8 +10,10 @@ import WorkspaceTabs from '@/components/Workspace/WorkspaceTabs.vue'
 import BottomBar from '@/components/BottomBar.vue'
 
 const agentStore = useAgentStore()
+const nodeStore = useNodeStore()
 const workspace = useWorkspaceStore()
 agentStore.startPolling()
+void nodeStore.start()
 
 const showAppTopbar = computed(() => !workspace.isRuntimeWorkspaceMaximized)
 const showWorkspaceTabs = computed(() =>

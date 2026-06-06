@@ -1,15 +1,23 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAgentStore } from '@/stores/agent'
+import { useNodeStore } from '@/stores/node'
 import type { Project } from '@/api/agent'
 import PopoverProjectList from '@/components/Popover/PopoverProjectList.vue'
 import PopoverServicePanel from '@/components/Popover/PopoverServicePanel.vue'
 
 const agentStore = useAgentStore()
+const nodeStore = useNodeStore()
 const hoveredProject = ref<Project | null>(null)
 
-onMounted(() => agentStore.startPolling())
-onUnmounted(() => agentStore.stopPolling())
+onMounted(() => {
+  agentStore.startPolling()
+  void nodeStore.start()
+})
+onUnmounted(() => {
+  agentStore.stopPolling()
+  nodeStore.stop()
+})
 
 function onProjectHover(project: Project | null) {
   if (project !== null) {
