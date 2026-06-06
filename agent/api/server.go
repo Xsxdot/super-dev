@@ -111,6 +111,8 @@ type App struct {
 	executionAuthorizer remoteexec.Authorizer
 	// pipelineAgentRunner 仅供包内测试替换 pipeline agent 通道；nil 时使用真实 tunnel runner。
 	pipelineAgentRunner pipelineRemoteTransport
+	// runHub 广播 pipeline run 的实时日志与状态事件，供运行控制台 WebSocket 订阅。
+	runHub *RunHub
 	// ingressStore 持久化入口声明、落地状态和 DNS provider 配置。
 	ingressStore ingress.Store
 	// ingressRegistry 持有入口子系统的 proxy、DNS 和证书 provider。
@@ -266,6 +268,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		agentHealth:                 agentHealthMonitor,
 		agentHealthCancel:           agentHealthCancel,
 		executionAuthorizer:         executionAuthorizer,
+		runHub:                      NewRunHub(),
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
 		ingressRegistry:             ingress.NewRegistry(),
 	}
@@ -432,6 +435,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}", a.getProjectPipelineRun)
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/runs/{runId}/logs", a.readProjectPipelineRunLogs)
 	mux.HandleFunc("GET /api/projects/{id}/pipelines/{pipelineId}/artifacts", a.listProjectArtifactsForPipeline)
+	mux.HandleFunc("GET /ws/runs/{runId}/logs", a.wsRunLogs)
 
 	// Deployment 进程控制
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
