@@ -59,6 +59,17 @@ func (p *contextCapturePlugin) Execute(ctx *pipeline.RunContext, step model.Step
 	return nil
 }
 
+type stepCapturePlugin struct {
+	step model.Step
+}
+
+func (p *stepCapturePlugin) Name() string              { return "capture_step" }
+func (p *stepCapturePlugin) Validate(model.Step) error { return nil }
+func (p *stepCapturePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	p.step = step
+	return nil
+}
+
 type recordingPlugin struct {
 	mu       sync.Mutex
 	started  []string
@@ -184,6 +195,36 @@ func TestEngineCreatesRunTempDirAndVars(t *testing.T) {
 	assert.Equal(t, "1.2.3", plugin.vars["version"])
 	_, statErr := os.Stat(plugin.tempDir)
 	assert.True(t, os.IsNotExist(statErr), "run temp dir removed after run")
+}
+
+func TestEngineRendersRuntimeVarsInsideNestedStepWithLists(t *testing.T) {
+	plugin := &stepCapturePlugin{}
+	eng := pipeline.NewEngine()
+	eng.Register(plugin)
+	plan, run, err := pipeline.BuildPlan("dep-1", model.Pipeline{
+		Variables: map[string]string{"env": "prod", "version": "1.2.3"},
+		Build: []model.Step{{
+			Name: "Package",
+			Type: "capture_step",
+			With: map[string]interface{}{
+				"files": []interface{}{
+					map[string]interface{}{"from": "${output}/app", "to": "app"},
+				},
+			},
+		}},
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = eng.Run(context.Background(), plan, run, nil)
+	require.NoError(t, err)
+	files, ok := plugin.step.With["files"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, files, 1)
+	first, ok := files[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotEqual(t, "${output}/app", first["from"])
+	assert.True(t, filepath.IsAbs(first["from"].(string)))
+	assert.Contains(t, first["from"], string(filepath.Separator)+"output"+string(filepath.Separator)+"app")
 }
 
 func TestEngineSerialStopsAfterFirstHostFailure(t *testing.T) {

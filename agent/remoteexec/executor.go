@@ -20,6 +20,8 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+
+	"github.com/xsxdot/super-dev/agent/execenv"
 )
 
 const (
@@ -91,7 +93,7 @@ func (e *Executor) Execute(ctx context.Context, req CommandRequest, emit func(Me
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
 	cmd.Dir = req.WorkDir
-	cmd.Env = os.Environ()
+	cmd.Env = execenv.Build(execenv.Options{WorkDir: req.WorkDir})
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

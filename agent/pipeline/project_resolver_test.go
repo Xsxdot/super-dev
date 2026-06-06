@@ -129,6 +129,49 @@ func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
 	assert.Equal(t, "batch:2", resolved.Pipeline.Deploy[0].Concurrency)
 }
 
+func TestResolveProjectPipelineInjectsWorkspaceForRuntimeWithoutPreview(t *testing.T) {
+	project := model.Project{
+		ID:       "p1",
+		RootPath: "/repo/demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:        "deploy-prod",
+			Name:      "Deploy Prod",
+			Variables: map[string]string{"artifact": "${artifacts}/api-${version}.tar.gz"},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Build",
+					Type: "include",
+					With: map[string]interface{}{
+						"template": "builtin://fake-build",
+						"vars": map[string]interface{}{
+							"frontend_dir":  "${workspace}/admin",
+							"binary_output": "${output}/api",
+						},
+					},
+				}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:      project,
+		PipelineID:   "deploy-prod",
+		EnvName:      "prod",
+		RunVariables: map[string]string{"version": "v1"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/repo/demo", resolved.Pipeline.Variables["workspace"])
+	assert.NotContains(t, resolved.Pipeline.Variables, "output")
+	assert.NotContains(t, resolved.Pipeline.Variables, "artifacts")
+	assert.Equal(t, "${artifacts}/api-v1.tar.gz", resolved.Pipeline.Variables["artifact"])
+	require.Len(t, resolved.Pipeline.Build, 1)
+	vars, ok := resolved.Pipeline.Build[0].With["vars"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "/repo/demo/admin", vars["frontend_dir"])
+	assert.Equal(t, "${output}/api", vars["binary_output"])
+}
+
 func TestResolveProjectPipelineRejectsReservedVariables(t *testing.T) {
 	project := projectForResolve()
 	project.Variables = map[string]string{"workspace": "/bad"}

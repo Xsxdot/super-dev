@@ -41,6 +41,29 @@ func TestLocalCommandExecutesAndLogs(t *testing.T) {
 	assert.Contains(t, logs, "stdout:ok")
 }
 
+func TestLocalCommandFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	binDir := filepath.Join(home, ".nvm", "versions", "node", "v22.14.0", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	toolPath := filepath.Join(binDir, "superdev-nvm-tool")
+	require.NoError(t, os.WriteFile(toolPath, []byte("#!/bin/sh\nprintf nvm-tool\n"), 0o755))
+
+	var logs []string
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		LogLine: func(line, stream string) { logs = append(logs, stream+":"+line) },
+	})
+	step := model.Step{
+		Name: "Build",
+		Type: "local_command",
+		With: map[string]interface{}{"cmd": "superdev-nvm-tool"},
+	}
+
+	require.NoError(t, plugins.NewLocalCommand().Execute(ctx, step, nil))
+	assert.Contains(t, logs, "stdout:nvm-tool")
+}
+
 func TestLocalCommandInjectsRunTempDirEnv(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.txt")

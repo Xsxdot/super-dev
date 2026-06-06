@@ -13,6 +13,8 @@ package remoteexec
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,6 +47,30 @@ func TestExecutorStreamsOutputAndExit(t *testing.T) {
 	assert.Equal(t, []string{"printf 'hello\\n'; printf 'warn\\n' >&2"}, auth.commands)
 	assert.Contains(t, messages, Message{Type: MessageOutput, Stream: "stdout", Line: "hello"})
 	assert.Contains(t, messages, Message{Type: MessageOutput, Stream: "stderr", Line: "warn"})
+	assert.Contains(t, messages, Message{Type: MessageExit, ExitCode: 0})
+}
+
+func TestExecutorFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	binDir := filepath.Join(home, ".nvm", "versions", "node", "v22.14.0", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	toolPath := filepath.Join(binDir, "superdev-nvm-tool")
+	require.NoError(t, os.WriteFile(toolPath, []byte("#!/bin/sh\nprintf nvm-tool\n"), 0o755))
+
+	exec := NewExecutor(AllowAll{})
+	var messages []Message
+
+	err := exec.Execute(context.Background(), CommandRequest{
+		Command: "superdev-nvm-tool",
+	}, func(msg Message) error {
+		messages = append(messages, msg)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, messages, Message{Type: MessageOutput, Stream: "stdout", Line: "nvm-tool"})
 	assert.Contains(t, messages, Message{Type: MessageExit, ExitCode: 0})
 }
 

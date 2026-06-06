@@ -81,8 +81,10 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	runtimeVersion := req.RunVariables["version"]
 	vars = mergeStringMaps(vars, req.RunVariables)
 	vars = MergeVariables(vars, map[string]string{
-		"env":     req.EnvName,
-		"version": runtimeVersion,
+		// workspace 不依赖本次运行的临时目录，真实运行也需要先参与 include vars 渲染。
+		"workspace": req.Project.RootPath,
+		"env":       req.EnvName,
+		"version":   runtimeVersion,
 	})
 	if req.Preview {
 		vars = MergeVariables(vars, PreviewReservedVars(ReservedVarOptions{
@@ -211,24 +213,51 @@ func renderInterfaceMap(in map[string]interface{}, vars map[string]string) map[s
 	}
 	out := make(map[string]interface{}, len(in))
 	for k, v := range in {
-		switch value := v.(type) {
-		case string:
-			out[k] = pipelinetemplate.RenderPipelineVars(value, vars)
-		case map[string]interface{}:
-			out[k] = renderInterfaceMap(value, vars)
-		case []interface{}:
-			arr := make([]interface{}, len(value))
-			for i, item := range value {
-				if s, ok := item.(string); ok {
-					arr[i] = pipelinetemplate.RenderPipelineVars(s, vars)
-				} else {
-					arr[i] = item
-				}
-			}
-			out[k] = arr
-		default:
-			out[k] = v
-		}
+		out[k] = renderInterfaceValue(v, vars)
 	}
 	return out
+}
+
+func renderInterfaceValue(value interface{}, vars map[string]string) interface{} {
+	switch v := value.(type) {
+	case string:
+		return pipelinetemplate.RenderPipelineVars(v, vars)
+	case map[string]interface{}:
+		return renderInterfaceMap(v, vars)
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, item := range v {
+			out[key] = pipelinetemplate.RenderPipelineVars(item, vars)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = renderInterfaceValue(item, vars)
+		}
+		return out
+	case []string:
+		out := make([]string, len(v))
+		for i, item := range v {
+			out[i] = pipelinetemplate.RenderPipelineVars(item, vars)
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, len(v))
+		for i, item := range v {
+			out[i] = renderInterfaceMap(item, vars)
+		}
+		return out
+	case []map[string]string:
+		out := make([]map[string]string, len(v))
+		for i, item := range v {
+			out[i] = make(map[string]string, len(item))
+			for key, value := range item {
+				out[i][key] = pipelinetemplate.RenderPipelineVars(value, vars)
+			}
+		}
+		return out
+	default:
+		return value
+	}
 }

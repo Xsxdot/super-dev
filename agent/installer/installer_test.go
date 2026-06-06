@@ -124,6 +124,39 @@ func TestInstallerInstallsMacOSAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57020/api/hosts >/dev/null")
 }
 
+func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-darwin-arm64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{
+		outputs: []string{"Darwin\n", "arm64\n", "/Users/sycm", "501\n"},
+		failCommands: map[string][]error{
+			"sudo -n install -m 0755 /tmp/superdev-agent-darwin-arm64 /usr/local/bin/superdev-agent": {
+				errors.New("sudo: a password is required"),
+			},
+		},
+	}
+
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Install(context.Background(), model.Host{
+		ID: "mac1", SSHHost: "10.0.0.2", SSHPort: 22, SSHUser: "sycm", RemoteAgentPort: 57020,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "darwin/arm64", result.Platform)
+	assert.Equal(t, "Agent installed and started in user LaunchAgent mode", result.Message)
+	assert.Contains(t, remote.commands, "printf %s \"$HOME\"")
+	assert.Contains(t, remote.commands, "id -u")
+	assert.Contains(t, remote.commands, "mkdir -p '/Users/sycm/Library/Application Support/SuperDev/Agent/bin' '/Users/sycm/Library/Application Support/SuperDev/Agent/data' '/Users/sycm/Library/LaunchAgents' '/Users/sycm/Library/Logs'")
+	assert.Contains(t, remote.commands, "install -m 0755 /tmp/superdev-agent-darwin-arm64 '/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent'")
+	assert.Contains(t, remote.commands, "launchctl bootstrap user/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist'")
+	assert.NotContains(t, remote.commands, "sudo -n launchctl bootstrap system /Library/LaunchDaemons/dev.superdev.agent.plist")
+	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57020/api/hosts >/dev/null")
+}
+
 func TestInstallerUninstallsLinuxAgentKeepingData(t *testing.T) {
 	remote := &fakeRemote{outputs: []string{"Linux\n"}}
 	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
@@ -171,6 +204,31 @@ func TestInstallerUninstallsMacOSAgentAndDeletesData(t *testing.T) {
 	assert.Contains(t, remote.commands, "sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true")
 	assert.Contains(t, remote.commands, "sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent")
 	assert.Contains(t, remote.commands, "sudo -n rm -rf '/Library/Application Support/SuperDev/Agent'")
+}
+
+func TestInstallerDowngradesMacOSUninstallToUserLaunchAgentWhenSudoNeedsPassword(t *testing.T) {
+	remote := &fakeRemote{
+		outputs: []string{"Darwin\n", "", "/Users/sycm", "501\n"},
+		failCommands: map[string][]error{
+			"sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent": {
+				errors.New("sudo: a password is required"),
+			},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Uninstall(context.Background(), model.Host{ID: "mac1"}, true)
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.True(t, result.RemovedData)
+	assert.Contains(t, remote.commands, "printf %s \"$HOME\"")
+	assert.Contains(t, remote.commands, "id -u")
+	assert.Contains(t, remote.commands, "launchctl bootout user/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' || true")
+	assert.Contains(t, remote.commands, "rm -f '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' '/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent'")
+	assert.Contains(t, remote.commands, "rm -rf '/Users/sycm/Library/Application Support/SuperDev/Agent'")
 }
 
 func TestInstallerWrapsStageOnMissingBinary(t *testing.T) {

@@ -1,0 +1,87 @@
+// Package execenv 验证 agent 子进程环境变量构造逻辑。
+//
+// 职责：
+//   - 验证 PATH 兜底不会覆盖已有优先级
+//   - 验证 nvm 实际版本目录会进入 PATH
+//
+// 边界：
+//   - 不启动真实子进程
+//   - 不依赖用户机器上的真实 nvm 安装
+package execenv
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBuildFromAppendsInstalledNVMVersionsNewestFirst(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	v16 := filepath.Join(home, ".nvm", "versions", "node", "v16.20.2", "bin")
+	v22 := filepath.Join(home, ".nvm", "versions", "node", "v22.14.0", "bin")
+	require.NoError(t, os.MkdirAll(v16, 0o755))
+	require.NoError(t, os.MkdirAll(v22, 0o755))
+
+	env := BuildFrom([]string{"PATH=/usr/bin:/bin"}, Options{})
+	pathValue := envValue(env, "PATH")
+
+	assert.True(t, strings.HasPrefix(pathValue, "/usr/bin:/bin"))
+	assert.Contains(t, pathValue, v22)
+	assert.Contains(t, pathValue, v16)
+	assert.Less(t, strings.Index(pathValue, v22), strings.Index(pathValue, v16))
+}
+
+func TestBuildFromPrefersNVMRCVersionWithinNVMPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workDir := filepath.Join(home, "workspace", "app")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".nvmrc"), []byte("16.20.2\n"), 0o644))
+	v16 := filepath.Join(home, ".nvm", "versions", "node", "v16.20.2", "bin")
+	v22 := filepath.Join(home, ".nvm", "versions", "node", "v22.14.0", "bin")
+	require.NoError(t, os.MkdirAll(v16, 0o755))
+	require.NoError(t, os.MkdirAll(v22, 0o755))
+
+	env := BuildFrom([]string{"PATH=/usr/bin:/bin"}, Options{WorkDir: workDir})
+	pathValue := envValue(env, "PATH")
+
+	assert.Contains(t, pathValue, v16)
+	assert.Contains(t, pathValue, v22)
+	assert.Less(t, strings.Index(pathValue, v16), strings.Index(pathValue, v22))
+}
+
+func TestBuildFromAppliesOverridesWithoutDuplicatingKeys(t *testing.T) {
+	env := BuildFrom([]string{"PATH=/usr/bin:/bin", "FOO=old"}, Options{
+		Overrides: map[string]string{"FOO": "new", "BAR": "added"},
+	})
+
+	assert.Equal(t, "new", envValue(env, "FOO"))
+	assert.Equal(t, "added", envValue(env, "BAR"))
+	assert.Equal(t, 1, envKeyCount(env, "FOO"))
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
+}
+
+func envKeyCount(env []string, key string) int {
+	prefix := key + "="
+	count := 0
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			count++
+		}
+	}
+	return count
+}

@@ -14,6 +14,7 @@ package installer
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -42,6 +43,13 @@ type UninstallResult struct {
 	RemovedData bool   `json:"removed_data"`
 	Message     string `json:"message"`
 }
+
+type installMode string
+
+const (
+	installModeSystem          installMode = "system"
+	installModeUserLaunchAgent installMode = "user_launch_agent"
+)
 
 // InstallError 带有失败阶段，方便 API 和 UI 展示具体原因。
 type InstallError struct {
@@ -159,8 +167,13 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 	if err := remote.Upload(ctx, localBinary, remoteTmp); err != nil {
 		return Result{}, stageErr("upload", err)
 	}
-	if err := installCommands(ctx, remote, platform, remoteTmp, port); err != nil {
+	mode, err := installCommands(ctx, remote, platform, remoteTmp, port)
+	if err != nil {
 		return Result{}, err
+	}
+	message := "Agent installed and started"
+	if mode == installModeUserLaunchAgent {
+		message = "Agent installed and started in user LaunchAgent mode"
 	}
 	if err := verifyAgentReady(ctx, remote, port, i.verifyAttempts(), i.verifyDelay()); err != nil {
 		return Result{}, stageErr("verify", err)
@@ -169,7 +182,7 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 		OK:       true,
 		HostID:   host.ID,
 		Platform: platform.String(),
-		Message:  "Agent installed and started",
+		Message:  message,
 	}, nil
 }
 
@@ -205,9 +218,15 @@ func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData b
 	}, nil
 }
 
-func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, port int) error {
+func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, port int) (installMode, error) {
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
-		return stageErr("install_binary", err)
+		if platform.OS == "darwin" && shouldUseMacOSUserLaunchAgent(err) {
+			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, port); err != nil {
+				return "", err
+			}
+			return installModeUserLaunchAgent, nil
+		}
+		return "", stageErr("install_binary", err)
 	}
 	switch platform.OS {
 	case "linux":
@@ -221,7 +240,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		}
 		for _, cmd := range commands {
 			if _, err := remote.Run(ctx, cmd); err != nil {
-				return stageErr("install_systemd", err)
+				return "", stageErr("install_systemd", err)
 			}
 		}
 	case "darwin":
@@ -236,13 +255,13 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		}
 		for _, cmd := range commands {
 			if _, err := remote.Run(ctx, cmd); err != nil {
-				return stageErr("install_launchd", err)
+				return "", stageErr("install_launchd", err)
 			}
 		}
 	default:
-		return stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
+		return "", stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
 	}
-	return nil
+	return installModeSystem, nil
 }
 
 func uninstallCommands(ctx context.Context, remote Remote, osName string, removeData bool) error {
@@ -272,6 +291,9 @@ func uninstallCommands(ctx context.Context, remote Remote, osName string, remove
 		}
 		for _, cmd := range commands {
 			if _, err := remote.Run(ctx, cmd); err != nil {
+				if shouldUseMacOSUserLaunchAgent(err) {
+					return uninstallMacOSUserLaunchAgent(ctx, remote, removeData)
+				}
 				return stageErr("uninstall_launchd", err)
 			}
 		}
@@ -279,6 +301,117 @@ func uninstallCommands(ctx context.Context, remote Remote, osName string, remove
 		return stageErr("uninstall_service", fmt.Errorf("unsupported os %q", osName))
 	}
 	return nil
+}
+
+func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp string, port int) error {
+	home, uid, err := macOSUserContext(ctx, remote)
+	if err != nil {
+		return stageErr("install_user_launchd", err)
+	}
+	paths := macOSUserAgentPaths(home)
+	plist := MacOSUserLaunchAgentPlist(port, paths.binary, paths.dataDir, paths.stdoutLog, paths.stderrLog)
+	commands := []string{
+		"mkdir -p " + shellQuote(paths.binDir) + " " + shellQuote(paths.dataDir) + " " + shellQuote(paths.launchAgentsDir) + " " + shellQuote(paths.logsDir),
+		"install -m 0755 " + remoteTmp + " " + shellQuote(paths.binary),
+		"cat > " + shellQuote(paths.plist) + " <<'EOF'\n" + plist + "EOF",
+		"chmod 0644 " + shellQuote(paths.plist),
+		"launchctl bootout user/" + uid + " " + shellQuote(paths.plist) + " || true",
+		"launchctl bootstrap user/" + uid + " " + shellQuote(paths.plist),
+		"launchctl kickstart -k user/" + uid + "/dev.superdev.agent",
+	}
+	for _, cmd := range commands {
+		if _, err := remote.Run(ctx, cmd); err != nil {
+			return stageErr("install_user_launchd", err)
+		}
+	}
+	return nil
+}
+
+func uninstallMacOSUserLaunchAgent(ctx context.Context, remote Remote, removeData bool) error {
+	home, uid, err := macOSUserContext(ctx, remote)
+	if err != nil {
+		return stageErr("uninstall_user_launchd", err)
+	}
+	paths := macOSUserAgentPaths(home)
+	commands := []string{
+		"launchctl bootout user/" + uid + " " + shellQuote(paths.plist) + " || true",
+		"rm -f " + shellQuote(paths.plist) + " " + shellQuote(paths.binary),
+	}
+	if removeData {
+		commands = append(commands, "rm -rf "+shellQuote(paths.rootDir))
+	}
+	for _, cmd := range commands {
+		if _, err := remote.Run(ctx, cmd); err != nil {
+			return stageErr("uninstall_user_launchd", err)
+		}
+	}
+	return nil
+}
+
+func macOSUserContext(ctx context.Context, remote Remote) (string, string, error) {
+	home, err := remote.Run(ctx, "printf %s \"$HOME\"")
+	if err != nil {
+		return "", "", err
+	}
+	uid, err := remote.Run(ctx, "id -u")
+	if err != nil {
+		return "", "", err
+	}
+	home = trimOutput(home)
+	uid = trimOutput(uid)
+	if home == "" {
+		return "", "", fmt.Errorf("empty remote home")
+	}
+	if uid == "" {
+		return "", "", fmt.Errorf("empty remote uid")
+	}
+	return home, uid, nil
+}
+
+type macOSUserAgentPathSet struct {
+	rootDir         string
+	binDir          string
+	dataDir         string
+	launchAgentsDir string
+	logsDir         string
+	binary          string
+	plist           string
+	stdoutLog       string
+	stderrLog       string
+}
+
+func macOSUserAgentPaths(home string) macOSUserAgentPathSet {
+	rootDir := path.Join(home, "Library", "Application Support", "SuperDev", "Agent")
+	binDir := path.Join(rootDir, "bin")
+	dataDir := path.Join(rootDir, "data")
+	launchAgentsDir := path.Join(home, "Library", "LaunchAgents")
+	logsDir := path.Join(home, "Library", "Logs")
+	return macOSUserAgentPathSet{
+		rootDir:         rootDir,
+		binDir:          binDir,
+		dataDir:         dataDir,
+		launchAgentsDir: launchAgentsDir,
+		logsDir:         logsDir,
+		binary:          path.Join(binDir, "superdev-agent"),
+		plist:           path.Join(launchAgentsDir, "dev.superdev.agent.plist"),
+		stdoutLog:       path.Join(logsDir, "superdev-agent.log"),
+		stderrLog:       path.Join(logsDir, "superdev-agent.err.log"),
+	}
+}
+
+func shouldUseMacOSUserLaunchAgent(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sudo") &&
+		(strings.Contains(msg, "password is required") ||
+			strings.Contains(msg, "not in the sudoers") ||
+			strings.Contains(msg, "not allowed to execute"))
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func (i *Installer) verifyAttempts() int {

@@ -13,9 +13,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 
+	"github.com/xsxdot/super-dev/agent/execenv"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/pipeline"
 )
@@ -69,11 +69,7 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	workDir := withString(step.With, "workDir", "work_dir", "workdir")
 	cmd := exec.CommandContext(ctx.Context, "sh", "-c", cmdText)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
-	if ctx.RunTempDir != "" {
-		cmd.Env = append(cmd.Env, "RUN_TEMP_DIR="+ctx.RunTempDir)
-	}
-	cmd.Env = appendReservedEnv(cmd.Env, ctx.Vars)
+	cmd.Env = execenv.Build(execenv.Options{WorkDir: workDir, Overrides: reservedEnv(ctx)})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -102,7 +98,11 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	return nil
 }
 
-func appendReservedEnv(env []string, vars map[string]string) []string {
+func reservedEnv(ctx *pipeline.RunContext) map[string]string {
+	env := map[string]string{}
+	if ctx.RunTempDir != "" {
+		env["RUN_TEMP_DIR"] = ctx.RunTempDir
+	}
 	for _, item := range []struct {
 		key  string
 		name string
@@ -116,8 +116,8 @@ func appendReservedEnv(env []string, vars map[string]string) []string {
 		{key: "time", name: "TIME"},
 		{key: "run_temp_dir", name: "RUN_TEMP_DIR"},
 	} {
-		if value := vars[item.key]; value != "" {
-			env = append(env, item.name+"="+value)
+		if value := ctx.Vars[item.key]; value != "" {
+			env[item.name] = value
 		}
 	}
 	return env

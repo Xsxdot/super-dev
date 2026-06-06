@@ -31,3 +31,21 @@ func TestMacOSLaunchDaemonPlist(t *testing.T) {
 	assert.Contains(t, plist, "<string>/Library/Application Support/SuperDev/Agent</string>")
 	assert.Contains(t, plist, "<key>KeepAlive</key>")
 }
+
+func TestMacOSUserLaunchAgentPlist(t *testing.T) {
+	plist := MacOSUserLaunchAgentPlist(
+		57020,
+		"/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent",
+		"/Users/sycm/Library/Application Support/SuperDev/Agent/data",
+		"/Users/sycm/Library/Logs/superdev-agent.log",
+		"/Users/sycm/Library/Logs/superdev-agent.err.log",
+	)
+
+	assert.Contains(t, plist, "<string>dev.superdev.agent</string>")
+	assert.Contains(t, plist, "<string>/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent</string>")
+	assert.Contains(t, plist, "<string>127.0.0.1:57020</string>")
+	assert.Contains(t, plist, "<string>/Users/sycm/Library/Application Support/SuperDev/Agent/data</string>")
+	assert.Contains(t, plist, "<string>/Users/sycm/Library/Logs/superdev-agent.log</string>")
+	assert.NotContains(t, plist, "~")
+	assert.Contains(t, plist, "<key>KeepAlive</key>")
+}
