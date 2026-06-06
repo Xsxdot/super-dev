@@ -18,11 +18,7 @@ function host(partial: Partial<Host> = {}): Host {
   return {
     id: 'host-1',
     name: 'ali-01',
-    ssh_host: '10.0.0.8',
-    ssh_port: 22,
-    ssh_user: 'root',
-    remote_agent_port: 5718,
-    local_tunnel_port: 15718,
+    private_ip: '10.0.0.8',
     tags: [],
     ...partial,
   }

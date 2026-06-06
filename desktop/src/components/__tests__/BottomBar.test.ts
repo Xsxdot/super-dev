@@ -295,8 +295,8 @@ describe('BottomBar', () => {
 
   it('远端节点放在日志显示下拉多选中并支持取消勾选', async () => {
     vi.spyOn(agentApi, 'listHosts').mockResolvedValue([
-      { id: 'h1', name: 'ali-01', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
-      { id: 'h2', name: 'jp', ssh_host: '10.0.0.2', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'h1', name: 'ali-01', private_ip: '10.0.0.1', tags: [] },
+      { id: 'h2', name: 'jp', private_ip: '10.0.0.2', tags: [] },
     ])
     vi.spyOn(agentApi, 'getHostManagedDeploymentStatus').mockImplementation(async (hostId: string) => ({
       host_id: hostId,
@@ -342,9 +342,9 @@ describe('BottomBar', () => {
 
   it('一个日志显示下拉内按服务分组展示节点并独立勾选', async () => {
     vi.spyOn(agentApi, 'listHosts').mockResolvedValue([
-      { id: 'h1', name: 'ali-01', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
-      { id: 'h2', name: 'jp', ssh_host: '10.0.0.2', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
-      { id: 'h3', name: 'us-01', ssh_host: '10.0.0.3', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'h1', name: 'ali-01', private_ip: '10.0.0.1', tags: [] },
+      { id: 'h2', name: 'jp', private_ip: '10.0.0.2', tags: [] },
+      { id: 'h3', name: 'us-01', private_ip: '10.0.0.3', tags: [] },
     ])
     vi.spyOn(agentApi, 'getHostManagedDeploymentStatus').mockImplementation(async (hostId: string) => ({
       host_id: hostId,

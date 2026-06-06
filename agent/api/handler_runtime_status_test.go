@@ -58,24 +58,12 @@ func (f *fakeRuntimeSampler) targetsByDeployment() map[string]metrics.SampleTarg
 	return out
 }
 
-type fakeRemoteRuntimeStatusClient struct {
-	byHost map[string]model.RuntimeStatusResponse
-	errs   map[string]error
-}
-
-func (f fakeRemoteRuntimeStatusClient) Fetch(ctx context.Context, hostID, projectID string) (model.RuntimeStatusResponse, error) {
-	if err := f.errs[hostID]; err != nil {
-		return model.RuntimeStatusResponse{}, err
-	}
-	return f.byHost[hostID], nil
-}
-
 func TestRuntimeStatusAggregatesLocalDeploymentsByEnvironment(t *testing.T) {
 	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
 		"dep-api-dev":  runningMetrics(12.5, 1000, "process"),
 		"dep-web-prod": runningMetrics(1.5, 2000, "docker"),
 	}}
-	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	app := newRuntimeStatusApp(t, sampler)
 	projectID := addRuntimeStatusProject(t, app, `
 id: overview-local
 name: overview-local
@@ -125,7 +113,7 @@ func TestRuntimeStatusKeepsManagerActiveDeploymentRunningWhenSamplerReportsStopp
 	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
 		"dep-api-dev": {Health: model.HealthStopped, Base: "command"},
 	}}
-	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	app := newRuntimeStatusApp(t, sampler)
 	projectID := addRuntimeStatusProject(t, app, `
 id: overview-manager-active
 name: overview-manager-active
@@ -165,7 +153,7 @@ func TestRuntimeStatusPassesLaunchdLabelToSampler(t *testing.T) {
 	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
 		"dep-worker-prod": runningMetrics(1, 2048, "launchd"),
 	}}
-	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	app := newRuntimeStatusApp(t, sampler)
 	projectID := addRuntimeStatusProject(t, app, `
 id: overview-launchd
 name: overview-launchd
@@ -333,12 +321,11 @@ func runningMetrics(cpu float64, mem int64, base string) model.InstanceMetrics {
 	}
 }
 
-func newRuntimeStatusApp(t *testing.T, sampler metrics.MetricsSampler, remoteClient api.RuntimeStatusClient) *api.App {
+func newRuntimeStatusApp(t *testing.T, sampler metrics.MetricsSampler) *api.App {
 	t.Helper()
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:                     t.TempDir(),
 		RuntimeMetricsSampler:       sampler,
-		RuntimeStatusClient:         remoteClient,
 		RuntimeStatusRequestTimeout: 200 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -364,7 +351,7 @@ func addRuntimeStatusProject(t *testing.T, app *api.App, yaml string) string {
 
 func createHost(t *testing.T, app *api.App, id, name string) {
 	t.Helper()
-	body := strings.NewReader(`{"id":"` + id + `","name":"` + name + `","ssh_host":"127.0.0.1","ssh_user":"me"}`)
+	body := strings.NewReader(`{"id":"` + id + `","name":"` + name + `","private_ip":"127.0.0.1"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/hosts", body)
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)

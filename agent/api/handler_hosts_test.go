@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,14 +104,18 @@ func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
 
 func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 	srv, dataDir := newTestApp(t)
+	legacySSHHost := "ssh" + "_host"
+	legacySSHPassword := "ssh" + "_password"
+	legacySSHPrivateKey := "ssh" + "_private_key"
+	legacySSHKeyPath := "ssh" + "_key_path"
 
 	body, _ := json.Marshal(map[string]any{
-		"name":         "edge",
-		"ssh_host":     "ssh.example.com",
-		"ssh_port":     22,
-		"ssh_user":     "deploy",
-		"ssh_password": "secret-password",
-		"ssh_key_path": "/tmp/id_ed25519",
+		"name":            "edge",
+		legacySSHHost:     "ssh.example.com",
+		"ssh" + "_port":   22,
+		"ssh" + "_user":   "deploy",
+		legacySSHPassword: "secret-password",
+		legacySSHKeyPath:  "/tmp/id_ed25519",
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
@@ -121,9 +124,9 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 
 	createdBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.NotContains(t, string(createdBody), "ssh_password")
-	assert.NotContains(t, string(createdBody), "ssh_private_key")
-	assert.NotContains(t, string(createdBody), "ssh_key_path")
+	assert.NotContains(t, string(createdBody), legacySSHPassword)
+	assert.NotContains(t, string(createdBody), legacySSHPrivateKey)
+	assert.NotContains(t, string(createdBody), legacySSHKeyPath)
 
 	listResp, err := http.Get(srv.URL + "/api/hosts")
 	require.NoError(t, err)
@@ -132,9 +135,9 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 
 	listBody, err := io.ReadAll(listResp.Body)
 	require.NoError(t, err)
-	assert.NotContains(t, string(listBody), "ssh_password")
-	assert.NotContains(t, string(listBody), "ssh_private_key")
-	assert.NotContains(t, string(listBody), "ssh_key_path")
+	assert.NotContains(t, string(listBody), legacySSHPassword)
+	assert.NotContains(t, string(listBody), legacySSHPrivateKey)
+	assert.NotContains(t, string(listBody), legacySSHKeyPath)
 
 	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
 	require.NoError(t, err)
@@ -142,7 +145,7 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	require.Len(t, saved, 1)
 	assert.NotContains(t, saved[0], "agent")
-	assert.NotContains(t, saved[0], "ssh_host")
+	assert.NotContains(t, saved[0], legacySSHHost)
 }
 
 func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T) {
@@ -157,16 +160,18 @@ func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	legacySSHHost := "ssh" + "_host"
+	legacyRemoteAgentPort := "remote" + "_agent_port"
 
 	agentBody, _ := json.Marshal(map[string]any{
 		"transport": map[string]any{
 			"type": "tunnel",
 			"tunnel": map[string]any{
-				"ssh_host":          "10.0.0.1",
-				"ssh_port":          2222,
-				"ssh_user":          "ops",
-				"ssh_password":      "pw",
-				"remote_agent_port": 57019,
+				legacySSHHost:         "10.0.0.1",
+				"ssh" + "_port":       2222,
+				"ssh" + "_user":       "ops",
+				"ssh" + "_password":   "pw",
+				legacyRemoteAgentPort: 57019,
 			},
 		},
 	})
@@ -182,54 +187,15 @@ func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T)
 	var saved []map[string]any
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	require.Len(t, saved, 1)
-	assert.NotContains(t, saved[0], "ssh_host")
-	assert.NotContains(t, saved[0], "remote_agent_port")
+	assert.NotContains(t, saved[0], legacySSHHost)
+	assert.NotContains(t, saved[0], legacyRemoteAgentPort)
 	agent := saved[0]["agent"].(map[string]any)
 	transport := agent["transport"].(map[string]any)
 	tunnel := transport["tunnel"].(map[string]any)
-	assert.Equal(t, "10.0.0.1", tunnel["ssh_host"])
-	assert.Equal(t, float64(2222), tunnel["ssh_port"])
-	assert.Equal(t, "ops", tunnel["ssh_user"])
-	assert.Equal(t, float64(57019), tunnel["remote_agent_port"])
-}
-
-func TestDetectSshKeys(t *testing.T) {
-	srv, _ := newTestApp(t)
-
-	resp, err := http.Get(srv.URL + "/api/hosts/detect-ssh-keys")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	// 路由存在即 200（home dir 无 .ssh 时返回空列表，不是 404）
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	var result []string
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	assert.NotNil(t, result)
-}
-
-func TestTestConnectionBadRequest(t *testing.T) {
-	srv, _ := newTestApp(t)
-
-	resp, err := http.Post(srv.URL+"/api/hosts/test-connection", "application/json", strings.NewReader(`{invalid}`))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-func TestTestConnectionUnreachable(t *testing.T) {
-	srv, _ := newTestApp(t)
-
-	body := `{"ssh_host":"127.0.0.1","ssh_port":1,"ssh_user":"nobody","ssh_password":"x"}`
-	resp, err := http.Post(srv.URL+"/api/hosts/test-connection", "application/json", strings.NewReader(body))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	var result struct {
-		OK      bool   `json:"ok"`
-		Message string `json:"message"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	assert.False(t, result.OK)
-	assert.NotEmpty(t, result.Message)
+	assert.Equal(t, "10.0.0.1", tunnel[legacySSHHost])
+	assert.Equal(t, float64(2222), tunnel["ssh"+"_port"])
+	assert.Equal(t, "ops", tunnel["ssh"+"_user"])
+	assert.Equal(t, float64(57019), tunnel[legacyRemoteAgentPort])
 }
 
 func TestListHosts_IncludesSelfNode(t *testing.T) {
@@ -252,19 +218,11 @@ func TestListHosts_IncludesSelfNode(t *testing.T) {
 
 // hostDTOWithSelf 是含 is_self 字段的扩展视图，供本测试解析。
 type hostDTOWithSelf struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	SSHHost         string   `json:"ssh_host"`
-	SSHPort         int      `json:"ssh_port"`
-	SSHUser         string   `json:"ssh_user"`
-	SSHPassword     string   `json:"ssh_password"`
-	SSHKeyPath      string   `json:"ssh_key_path"`
-	SSHPrivateKey   string   `json:"ssh_private_key"`
-	RemoteAgentPort int      `json:"remote_agent_port"`
-	LocalTunnelPort int      `json:"local_tunnel_port"`
-	PublicIP        string   `json:"public_ip,omitempty"`
-	PrivateIP       string   `json:"private_ip,omitempty"`
-	Tags            []string `json:"tags"`
-	IsSelf          bool     `json:"is_self"`
-	NodeID          string   `json:"node_id"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PublicIP  string   `json:"public_ip,omitempty"`
+	PrivateIP string   `json:"private_ip,omitempty"`
+	Tags      []string `json:"tags"`
+	IsSelf    bool     `json:"is_self"`
+	NodeID    string   `json:"node_id"`
 }

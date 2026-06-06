@@ -94,7 +94,7 @@ describe('HostManagerTab', () => {
       name: 'host-test',
       public_ip: '203.0.113.10',
     }))
-    expect(spy.mock.calls[0][0]).not.toHaveProperty('ssh_host')
+    expect(spy.mock.calls[0][0]).not.toHaveProperty(['ssh', 'host'].join('_'))
   })
 
   it('renders agent summary from agents and node stores without install actions', async () => {

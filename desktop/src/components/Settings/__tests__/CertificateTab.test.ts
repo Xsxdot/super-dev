@@ -71,7 +71,7 @@ describe('CertificateTab', () => {
     certMock.listCertificates.mockResolvedValue([])
     certMock.getACMEAccount.mockResolvedValue({ email: '', directory_url: '' })
     ingressMock.listDNSProviders.mockResolvedValue([{ id: 'cloudflare-prod', name: 'Cloudflare Prod', type: 'cloudflare' }])
-    agentMock.listHosts.mockResolvedValue([{ id: 'edge-a', name: 'edge-a', ssh_host: 'edge', ssh_port: 22, ssh_user: 'root', tags: [] }])
+    agentMock.listHosts.mockResolvedValue([{ id: 'edge-a', name: 'edge-a', public_ip: 'edge', tags: [] }])
   })
 
   afterEach(() => {

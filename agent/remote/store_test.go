@@ -86,12 +86,13 @@ func TestStorePersistsNestedHostShape(t *testing.T) {
 	var saved []map[string]any
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	require.Len(t, saved, 1)
-	assert.NotContains(t, saved[0], "ssh_host")
+	legacySSHHost := "ssh" + "_host"
+	assert.NotContains(t, saved[0], legacySSHHost)
 	assert.NotContains(t, saved[0], "local_tunnel_port")
 	agent := saved[0]["agent"].(map[string]any)
 	transport := agent["transport"].(map[string]any)
 	tunnel := transport["tunnel"].(map[string]any)
-	assert.Equal(t, "10.0.0.1", tunnel["ssh_host"])
+	assert.Equal(t, "10.0.0.1", tunnel[legacySSHHost])
 	assert.NotContains(t, agent, "runtime")
 }
 

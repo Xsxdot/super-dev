@@ -99,7 +99,9 @@ func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
 
 func TestHostRefsResolveHostNameToCanonicalID(t *testing.T) {
 	app := newTestAppForPackage(t)
-	_, err := app.remoteStore.AddHost(testTunnelHost("host-uuid", "local-01", "127.0.0.1", "root"))
+	host := testTunnelHost("host-uuid", "local-01", "127.0.0.1", "root")
+	host.PrivateIP = "127.0.0.1"
+	_, err := app.remoteStore.AddHost(host)
 	require.NoError(t, err)
 
 	refs, err := app.hostRefs([]string{"local-01"})

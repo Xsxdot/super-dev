@@ -90,7 +90,7 @@ func TestInferDefaultsFromServiceDeployment(t *testing.T) {
 	assert.Equal(t, []Upstream{{HostID: "app-a", IP: "10.0.0.12"}}, got.Upstreams)
 }
 
-func TestInferDefaultsFallsBackToSSHHostWithWarning(t *testing.T) {
+func TestInferDefaultsWarnsWhenIdentityAddressMissing(t *testing.T) {
 	project := model.Project{
 		ID: "proj-1",
 		Pipelines: []model.ProjectPipeline{{
@@ -114,8 +114,8 @@ func TestInferDefaultsFallsBackToSSHHostWithWarning(t *testing.T) {
 		RecordType:   RecordA,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "10.0.0.12", got.Upstreams[0].IP)
-	assert.Equal(t, "203.0.113.10", got.DNSRecords[0].Value)
-	assert.Contains(t, got.Warnings, "host edge-a has no public_ip; used ssh_host")
-	assert.Contains(t, got.Warnings, "host app-a has no private_ip; used ssh_host")
+	assert.Empty(t, got.Upstreams[0].IP)
+	assert.Empty(t, got.DNSRecords[0].Value)
+	assert.Contains(t, got.Warnings, "host edge-a has no public_ip")
+	assert.Contains(t, got.Warnings, "host app-a has no private_ip")
 }

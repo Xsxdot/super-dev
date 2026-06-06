@@ -172,8 +172,8 @@ describe('ProjectConfigEditor', () => {
   it('远程主机候选不包含本机节点', async () => {
     const { api } = await import('@/api/agent')
     vi.mocked(api.listHosts).mockResolvedValueOnce([
-      { id: 'self-node', name: 'Local Machine', ssh_host: '', ssh_port: 0, ssh_user: '', remote_agent_port: 0, local_tunnel_port: 0, tags: [], is_self: true },
-      { id: 'h1', name: 'prod-box', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'ops', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'self-node', name: 'Local Machine', tags: [], is_self: true },
+      { id: 'h1', name: 'prod-box', private_ip: '10.0.0.1', tags: [] },
     ])
     const p = project()
     p.services[0].deployments = [{

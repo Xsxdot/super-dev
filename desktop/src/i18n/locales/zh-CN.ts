@@ -26,7 +26,6 @@ export default {
     browse: '浏览',
     detect: '检测',
     testing: '测试中...',
-    testConnection: '测试连接',
     remove: '移除',
     unnamed: '未命名',
     local: '本地',

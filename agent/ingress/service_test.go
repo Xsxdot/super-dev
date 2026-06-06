@@ -124,7 +124,7 @@ func TestServiceApplyRequiresConfirmedDNSValueForInferredHostIP(t *testing.T) {
 		Store:    store,
 		Registry: reg,
 		HostLookup: func(ids []string) ([]model.Host, error) {
-			return []model.Host{testTunnelHost("host-a", "203.0.113.10")}, nil
+			return []model.Host{{ID: "host-a", PublicIP: "203.0.113.10"}}, nil
 		},
 	})
 	in := validAutomaticIngress()
@@ -216,7 +216,7 @@ func TestServicePreviewHasNoSideEffects(t *testing.T) {
 		Store:    store,
 		Registry: reg,
 		HostLookup: func(ids []string) ([]model.Host, error) {
-			return []model.Host{testTunnelHost("host-a", "203.0.113.10")}, nil
+			return []model.Host{{ID: "host-a", PublicIP: "203.0.113.10"}}, nil
 		},
 	})
 	in := validManualIngress()

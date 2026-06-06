@@ -26,7 +26,6 @@ export default {
     browse: 'Browse',
     detect: 'Detect',
     testing: 'Testing...',
-    testConnection: 'Test Connection',
     remove: 'Remove',
     unnamed: 'Untitled',
     local: 'Local',

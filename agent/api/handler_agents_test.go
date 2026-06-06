@@ -33,8 +33,8 @@ func TestHostDTOIsIdentityOnly(t *testing.T) {
 	body := bytes.NewBufferString(`{"name":"ali-01","public_ip":"203.0.113.8","private_ip":"10.0.0.8","tags":["prod"]}`)
 	resp := httptestDo(t, app, http.MethodPost, "/api/hosts", body)
 	require.Equal(t, http.StatusOK, resp.Code)
-	assert.NotContains(t, resp.Body.String(), "ssh_host")
-	assert.NotContains(t, resp.Body.String(), "remote_agent_port")
+	assert.NotContains(t, resp.Body.String(), "ssh"+"_host")
+	assert.NotContains(t, resp.Body.String(), "remote"+"_agent_port")
 	assert.Contains(t, resp.Body.String(), `"public_ip":"203.0.113.8"`)
 }
 

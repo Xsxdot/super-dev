@@ -57,8 +57,6 @@ type AppConfig struct {
 	SampleBinaryPath string
 	// RuntimeMetricsSampler 注入进程级指标采样器；nil 时使用 metrics.NewSampler。
 	RuntimeMetricsSampler metrics.MetricsSampler
-	// RuntimeStatusClient 注入远端 runtime-status client；nil 时通过 SSH 隧道调用远端 agent。
-	RuntimeStatusClient RuntimeStatusClient
 	// RuntimeStatusRequestTimeout 是一次聚合的整体超时；0 时使用 3 秒。
 	RuntimeStatusRequestTimeout time.Duration
 	// ExecutionAuthorizer 注入 /ws/exec 命令授权器；nil 时使用 remoteexec.AllowAll。
@@ -107,7 +105,6 @@ type App struct {
 	identity                    identity.Identity
 	pidStore                    *process.PIDStore
 	runtimeMetricsSampler       metrics.MetricsSampler
-	runtimeStatusClient         RuntimeStatusClient
 	runtimeStatusRequestTimeout time.Duration
 	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
 	agentHealth       *agenthealth.Monitor
@@ -245,10 +242,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if runtimeSampler == nil {
 		runtimeSampler = metrics.NewSampler(metrics.ExecCommandExecutor{})
 	}
-	runtimeClient := cfg.RuntimeStatusClient
-	if runtimeClient == nil {
-		runtimeClient = newTransportRuntimeStatusClient(nodeTransport)
-	}
 	runtimeTimeout := cfg.RuntimeStatusRequestTimeout
 	if runtimeTimeout == 0 {
 		runtimeTimeout = 3 * time.Second
@@ -283,7 +276,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
 		runtimeMetricsSampler:       runtimeSampler,
-		runtimeStatusClient:         runtimeClient,
 		runtimeStatusRequestTimeout: runtimeTimeout,
 		agentHealth:                 agentHealthMonitor,
 		agentHealthCancel:           agentHealthCancel,
@@ -423,8 +415,6 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/managed-deployments/status", a.getManagedDeploymentsStatus)
 
 	// 远程主机管理
-	mux.HandleFunc("GET /api/hosts/detect-ssh-keys", a.detectSshKeys)
-	mux.HandleFunc("POST /api/hosts/test-connection", a.testConnection)
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)

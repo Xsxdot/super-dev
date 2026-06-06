@@ -6,7 +6,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::mcp_install::resolve_sidecar_binary;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 

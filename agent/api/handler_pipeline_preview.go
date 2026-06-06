@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/pipeline"
@@ -142,9 +143,9 @@ func (a *App) hostRefs(hostIDs []string) ([]model.HostRef, error) {
 		if name == "" {
 			name = host.ID
 		}
-		address := ""
-		if tunnelParams, ok := host.TunnelParams(); ok {
-			address = tunnelParams.SSHHost
+		address := strings.TrimSpace(host.PublicIP)
+		if address == "" {
+			address = strings.TrimSpace(host.PrivateIP)
 		}
 		refs = append(refs, model.HostRef{ID: host.ID, Name: name, Address: address})
 	}

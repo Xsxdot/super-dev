@@ -194,7 +194,7 @@ func TestResolveDNSRecordValueRequiresExplicitValueForMultipleHosts(t *testing.T
 
 func TestResolveDNSRecordValueInfersSinglePublicIPForPreview(t *testing.T) {
 	in := Ingress{Domain: "api.example.com", Proxy: ProxyConfig{HostIDs: []string{"host-a"}}}
-	decision := ResolveDNSRecordValue(in, []model.Host{testTunnelHost("host-a", "203.0.113.10")})
+	decision := ResolveDNSRecordValue(in, []model.Host{{ID: "host-a", PublicIP: "203.0.113.10"}})
 	assert.True(t, decision.OK)
 	assert.True(t, decision.RequiresConfirmation)
 	assert.Equal(t, "203.0.113.10", decision.Value)

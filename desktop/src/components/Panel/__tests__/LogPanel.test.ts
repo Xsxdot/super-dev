@@ -299,8 +299,8 @@ describe('LogPanel', () => {
 
   it('远端 deployment 日志 tab 展示节点筛选条并同步节点选择', async () => {
     vi.spyOn(api, 'listHosts').mockResolvedValue([
-      { id: 'h1', name: 'ali-01', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
-      { id: 'h2', name: 'jp', ssh_host: '10.0.0.2', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'h1', name: 'ali-01', private_ip: '10.0.0.1', tags: [] },
+      { id: 'h2', name: 'jp', private_ip: '10.0.0.2', tags: [] },
     ])
     vi.spyOn(api, 'getHostManagedDeploymentStatus').mockImplementation(async (hostId: string) => ({
       host_id: hostId,

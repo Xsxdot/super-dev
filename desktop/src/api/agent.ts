@@ -891,21 +891,6 @@ export interface LogSourceCreatePayload {
   service_id?: string
 }
 
-export interface TestConnectionPayload {
-  ssh_host: string
-  ssh_port: number
-  ssh_user: string
-  ssh_password?: string
-  ssh_key_path?: string
-  ssh_private_key?: string
-}
-
-export interface TestConnectionResult {
-  ok: boolean
-  message: string
-  latency_ms?: number
-}
-
 export type LogSourceUpdatePayload = Partial<LogSourceCreatePayload>
 
 export const api = {
@@ -1065,14 +1050,6 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit))
     return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
   },
-
-  // 远程监听：Host 辅助操作
-  detectSshKeys: () => request<string[]>('/api/hosts/detect-ssh-keys'),
-  testConnection: (payload: TestConnectionPayload) =>
-    request<TestConnectionResult>('/api/hosts/test-connection', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
 
   // 远程监听：Host CRUD
   listHosts: () => request<Host[]>('/api/hosts'),

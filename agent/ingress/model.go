@@ -359,9 +359,6 @@ func ResolveDNSRecordValue(in Ingress, hosts []model.Host) DNSValueDecision {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required because host was not found"}
 	}
 	address := strings.TrimSpace(host.PublicIP)
-	if address == "" {
-		address = tunnelSSHHost(host)
-	}
 	ip := net.ParseIP(address)
 	if ip == nil || !isPublicIP(ip) {
 		return DNSValueDecision{RequiresInput: true, Message: "dns.record.value is required because host address is not a public IP"}

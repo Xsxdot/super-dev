@@ -48,18 +48,13 @@ type LogContextResponse struct {
 //   - Name 仅用于展示和人工识别，不允许写入 host_ids
 //   - 不包含 SSH 密码、私钥等敏感字段
 type HostReference struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	SSHHost         string   `json:"ssh_host,omitempty"`
-	SSHPort         int      `json:"ssh_port,omitempty"`
-	SSHUser         string   `json:"ssh_user,omitempty"`
-	RemoteAgentPort int      `json:"remote_agent_port,omitempty"`
-	LocalTunnelPort int      `json:"local_tunnel_port,omitempty"`
-	PublicIP        string   `json:"public_ip,omitempty"`
-	PrivateIP       string   `json:"private_ip,omitempty"`
-	Tags            []string `json:"tags"`
-	IsSelf          bool     `json:"is_self"`
-	NodeID          string   `json:"node_id,omitempty"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PublicIP  string   `json:"public_ip,omitempty"`
+	PrivateIP string   `json:"private_ip,omitempty"`
+	Tags      []string `json:"tags"`
+	IsSelf    bool     `json:"is_self"`
+	NodeID    string   `json:"node_id,omitempty"`
 }
 
 // PipelineTemplateSummary 是模板导入接口返回的模板摘要。

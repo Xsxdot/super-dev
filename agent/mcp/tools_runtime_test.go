@@ -298,7 +298,7 @@ func TestRuntimeSnapshotSummarizesProjectsAndServices(t *testing.T) {
 func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
 	client := &fakeAgentClient{
 		hosts: []HostReference{
-			{ID: "host-uuid-1", Name: "prod-a", SSHHost: "10.0.0.1", Tags: []string{"prod"}},
+			{ID: "host-uuid-1", Name: "prod-a", PrivateIP: "10.0.0.1", Tags: []string{"prod"}},
 			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
 		},
 	}
