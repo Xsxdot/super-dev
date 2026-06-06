@@ -1,5 +1,5 @@
 import { setActivePinia, createPinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type RuntimeStatusResponse } from '@/api/agent'
 import { useRuntimeStatusStore } from '../runtimeStatus'
 
@@ -41,44 +41,44 @@ function response(serviceName: string): RuntimeStatusResponse {
 describe('runtimeStatus store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    vi.useFakeTimers()
     vi.clearAllMocks()
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('refreshes immediately and then polls on interval', async () => {
-    vi.mocked(api.getRuntimeStatus)
-      .mockResolvedValueOnce(response('api'))
-      .mockResolvedValueOnce(response('web'))
+  it('refreshes a project on demand', async () => {
+    vi.mocked(api.getRuntimeStatus).mockResolvedValueOnce(response('api'))
     const store = useRuntimeStatusStore()
 
-    store.start('p1', 5000)
-    await Promise.resolve()
-    expect(store.statusByProject.p1.environments[0].instances[0].service_name).toBe('api')
+    await store.refresh('p1')
 
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(store.statusByProject.p1.environments[0].instances[0].service_name).toBe('web')
-    expect(api.getRuntimeStatus).toHaveBeenCalledTimes(2)
+    expect(store.statusByProject.p1.environments[0].instances[0].service_name).toBe('api')
+    expect(store.errorByProject.p1).toBeNull()
   })
 
-  it('stops polling and keeps the last successful data on transient error', async () => {
+  it('keeps last successful data on transient error', async () => {
     vi.mocked(api.getRuntimeStatus)
       .mockResolvedValueOnce(response('api'))
       .mockRejectedValueOnce(new Error('network down'))
     const store = useRuntimeStatusStore()
 
-    store.start('p1', 1000)
-    await Promise.resolve()
-    await vi.advanceTimersByTimeAsync(1000)
+    await store.refresh('p1')
+    await store.refresh('p1')
 
     expect(store.statusByProject.p1.environments[0].instances[0].service_name).toBe('api')
     expect(store.errorByProject.p1).toBe('network down')
+  })
 
-    store.stop('p1')
-    await vi.advanceTimersByTimeAsync(3000)
-    expect(api.getRuntimeStatus).toHaveBeenCalledTimes(2)
+  it('deduplicates overlapping refreshes', async () => {
+    let release!: (value: RuntimeStatusResponse) => void
+    vi.mocked(api.getRuntimeStatus).mockImplementationOnce(() => new Promise(resolve => {
+      release = resolve
+    }))
+    const store = useRuntimeStatusStore()
+
+    const first = store.refresh('p1')
+    const second = store.refresh('p1')
+    release(response('api'))
+    await Promise.all([first, second])
+
+    expect(api.getRuntimeStatus).toHaveBeenCalledTimes(1)
   })
 })

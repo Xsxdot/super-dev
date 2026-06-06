@@ -2,7 +2,8 @@
 RuntimeStatusTab：项目概览页的运行状态视图。
 
 职责：
-  - 管理 runtime-status 轮询生命周期
+  - 从 project 配置与 NodeRegistry 快照投影远端运行态
+  - 对本地 deployment 保留 runtime-status 显式刷新 fallback
   - 按环境分段渲染实例卡
   - 网络抖动时显示更新失败角标但保留旧数据
 
@@ -11,37 +12,118 @@ RuntimeStatusTab：项目概览页的运行状态视图。
   - 不展示主机整机负载
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
+import { useNodeStore } from '@/stores/node'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import type { Deployment, RuntimeInstanceStatus, RuntimeStatusResponse, Service, Project } from '@/api/agent'
 import InstanceCard from './InstanceCard.vue'
 
-const props = defineProps<{ projectId: string; active: boolean }>()
+const props = defineProps<{ project: Project; active: boolean }>()
 const emit = defineEmits<{ 'open-logs': [deploymentId: string, nodeId: string] }>()
 const store = useRuntimeStatusStore()
+const nodeStore = useNodeStore()
 const { t } = useAppI18n()
 
-const status = computed(() => store.statusByProject[props.projectId])
-const error = computed(() => store.errorByProject[props.projectId])
+const status = computed(() => projectRuntimeStatus(props.project, store.statusByProject[props.project.id]))
+const error = computed(() => store.errorByProject[props.project.id])
 
 function abnormalCount(instances: Array<{ metrics: { health: string } }>) {
   return instances.filter(i => ['failed', 'unknown', 'restarting', 'stopped'].includes(i.metrics.health)).length
 }
 
-function startIfActive() {
-  if (props.active) store.start(props.projectId, 5000)
+function refreshIfActive() {
+  if (props.active) void store.refresh(props.project.id)
 }
 
-onMounted(startIfActive)
-onUnmounted(() => store.stop(props.projectId))
+onMounted(refreshIfActive)
 watch(() => props.active, active => {
-  if (active) store.start(props.projectId, 5000)
-  else store.stop(props.projectId)
+  if (active) void store.refresh(props.project.id)
 })
-watch(() => props.projectId, (projectId, oldProjectId) => {
-  if (oldProjectId) store.stop(oldProjectId)
-  if (props.active) store.start(projectId, 5000)
+watch(() => props.project.id, () => {
+  refreshIfActive()
 })
+
+function projectRuntimeStatus(project: Project, fallback?: RuntimeStatusResponse): RuntimeStatusResponse {
+  const sections = new Map<string, RuntimeInstanceStatus[]>()
+  for (const service of [...project.services].sort((a, b) => a.order - b.order)) {
+    for (const deployment of service.deployments ?? []) {
+      const envName = deployment.env_name || 'default'
+      if (!sections.has(envName)) sections.set(envName, [])
+      if (deployment.location === 'remote') {
+        for (const hostId of deployment.host_ids ?? []) {
+          sections.get(envName)!.push(remoteInstance(service, deployment, hostId))
+        }
+        continue
+      }
+      sections.get(envName)!.push(localInstance(service, deployment, fallback))
+    }
+  }
+  const envOrder = new Map((project.environments ?? []).map((env, idx) => [env.name, env.order || idx + 1]))
+  return {
+    environments: [...sections.entries()]
+      .sort(([left], [right]) => (envOrder.get(left) ?? 9999) - (envOrder.get(right) ?? 9999) || left.localeCompare(right))
+      .map(([env_name, instances]) => ({ env_name, instances })),
+  }
+}
+
+function localInstance(service: Service, deployment: Deployment, fallback?: RuntimeStatusResponse): RuntimeInstanceStatus {
+  const found = findFallbackInstance(fallback, deployment.id)
+  if (found) {
+    return { ...found, service_id: service.id, service_name: service.name, deployment_id: deployment.id, is_local: true }
+  }
+  return unknownInstance(service, deployment, 'local', 'local', true, 'runtime not reported')
+}
+
+function remoteInstance(service: Service, deployment: Deployment, hostId: string): RuntimeInstanceStatus {
+  const node = nodeStore.nodeOf(hostId)
+  const nodeName = node?.name || hostId
+  if (!node) return unknownInstance(service, deployment, hostId, nodeName, false, 'node not reported')
+  if (!node.reachable) {
+    return unknownInstance(service, deployment, hostId, nodeName, false, nodeStore.nodeErrorOf(hostId) ?? 'node unreachable')
+  }
+  const found = Array.isArray(node.deployments)
+    ? node.deployments.find(instance => instance.deployment_id === deployment.id)
+    : undefined
+  if (!found) return unknownInstance(service, deployment, hostId, nodeName, false, 'deployment_not_reported')
+  return {
+    ...found,
+    service_id: service.id,
+    service_name: service.name,
+    deployment_id: deployment.id,
+    node_id: hostId,
+    node_name: nodeName,
+    is_local: false,
+  }
+}
+
+function findFallbackInstance(fallback: RuntimeStatusResponse | undefined, deploymentId: string): RuntimeInstanceStatus | undefined {
+  for (const env of fallback?.environments ?? []) {
+    const found = env.instances.find(instance => instance.deployment_id === deploymentId)
+    if (found) return found
+  }
+  return undefined
+}
+
+function unknownInstance(service: Service, deployment: Deployment, nodeId: string, nodeName: string, isLocal: boolean, error: string): RuntimeInstanceStatus {
+  return {
+    service_id: service.id,
+    service_name: service.name,
+    deployment_id: deployment.id,
+    node_id: nodeId,
+    node_name: nodeName,
+    is_local: isLocal,
+    error,
+    metrics: {
+      cpu_percent: null,
+      mem_bytes: null,
+      uptime_sec: null,
+      restarts: null,
+      health: 'unknown',
+      base: deployment.runtime?.type ?? 'unknown',
+    },
+  }
+}
 </script>
 
 <template>

@@ -49,7 +49,7 @@ function openInstanceLogs(deploymentId: string) {
     </header>
     <RuntimeStatusTab
       v-if="activeTab === 'runtime'"
-      :project-id="project.id"
+      :project="project"
       :active="activeTab === 'runtime'"
       @open-logs="openInstanceLogs"
     />
