@@ -43,7 +43,10 @@ watch(() => [props.projectId, props.pipelineId, props.runId, props.mode] as cons
         <div class="overview-kicker">{{ mode }}</div>
         <h1>{{ state.currentRun?.artifact_version || runId }}</h1>
       </div>
-      <span class="run-status">{{ state.currentRun?.status }}</span>
+      <span class="run-status" :class="state.currentRun?.status">
+        <span v-if="state.currentRun?.status === 'running'" class="status-spinner" />
+        {{ state.currentRun?.status || mode }}
+      </span>
     </header>
     <div v-if="state.error" class="run-console-error">{{ state.error }}</div>
     <div class="run-console-body">
@@ -99,9 +102,32 @@ watch(() => [props.projectId, props.pipelineId, props.runId, props.mode] as cons
   white-space: nowrap;
 }
 .run-status {
-  color: var(--status-running);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 700;
+}
+.run-status.running {
+  color: var(--accent);
+}
+.run-status.success {
+  color: var(--status-running);
+}
+.run-status.failed {
+  color: var(--status-failed);
+}
+.status-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 .run-console-error {
   padding: 8px 16px;
