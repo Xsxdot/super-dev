@@ -85,7 +85,7 @@ export function buildNodeCenterNodes(
   const snapshotOnlyNodes = nodeSnapshots
     .filter(node => node.host_id && !hostIds.has(node.host_id))
     .filter(node => node.host_id !== 'local')
-    .filter(node => node.deployments.some(instance => !instance.is_local) || node.agent.reachable)
+    .filter(node => nodeDeployments(node).some(instance => !instance.is_local) || node.agent.reachable)
     .map(node => buildNodeFromSnapshot(node, envByDeployment))
 
   return [...configuredNodes, ...snapshotOnlyNodes].sort(compareNodes)
@@ -96,6 +96,7 @@ function buildNodeFromHost(
   node: NodeStatus | undefined,
   envByDeployment: Map<string, string>,
 ): NodeCenterNode {
+  const deployments = node ? nodeDeployments(node) : []
   if (!node) {
     return {
       hostId: host.id,
@@ -116,8 +117,8 @@ function buildNodeFromHost(
     reachable: node.reachable,
     muted: !node.reachable,
     agent: node.agent,
-    deployments: sortDeployments(node.deployments, envByDeployment),
-    serviceCount: node.deployments.length,
+    deployments: sortDeployments(deployments, envByDeployment),
+    serviceCount: deployments.length,
     updatedAt: node.updated_at,
     error: node.error,
     configured: true,
@@ -128,6 +129,7 @@ function buildNodeFromSnapshot(
   node: NodeStatus,
   envByDeployment: Map<string, string>,
 ): NodeCenterNode {
+  const deployments = nodeDeployments(node)
   return {
     hostId: node.host_id,
     name: node.name || node.host_id,
@@ -135,12 +137,17 @@ function buildNodeFromSnapshot(
     reachable: node.reachable,
     muted: !node.reachable,
     agent: node.agent,
-    deployments: sortDeployments(node.deployments, envByDeployment),
-    serviceCount: node.deployments.length,
+    deployments: sortDeployments(deployments, envByDeployment),
+    serviceCount: deployments.length,
     updatedAt: node.updated_at,
     error: node.error,
     configured: false,
   }
+}
+
+function nodeDeployments(node: NodeStatus): RuntimeInstanceStatus[] {
+  // 旧版/不可达节点可能从 Go nil slice 序列化出 deployments:null；视图层按空数组降级，避免状态线中断。
+  return Array.isArray(node.deployments) ? node.deployments : []
 }
 
 function sortDeployments(

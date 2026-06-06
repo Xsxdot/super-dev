@@ -13,6 +13,7 @@ package nodetransport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -58,6 +59,44 @@ type NodeStatus struct {
 	Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
 	Error       string                         `json:"error,omitempty"`
+}
+
+// MarshalJSON 输出 NodeStatus 的稳定桌面端协议形状。
+//
+// 参数：
+//   - 无，序列化当前 NodeStatus 值
+//
+// 返回：
+//   - JSON 字节
+//   - 序列化错误
+//
+// 注意：
+//   - deployments 即使为空也必须是 []，不能是 null；前端按数组协议渲染节点状态线。
+func (s NodeStatus) MarshalJSON() ([]byte, error) {
+	deployments := s.Deployments
+	if deployments == nil {
+		deployments = []model.InstanceStatus{}
+	}
+	type nodeStatusJSON struct {
+		HostID      string                         `json:"host_id"`
+		Name        string                         `json:"name,omitempty"`
+		Reachable   bool                           `json:"reachable"`
+		Agent       model.AgentRuntime             `json:"agent"`
+		Deployments []model.InstanceStatus         `json:"deployments"`
+		Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
+		UpdatedAt   time.Time                      `json:"updated_at"`
+		Error       string                         `json:"error,omitempty"`
+	}
+	return json.Marshal(nodeStatusJSON{
+		HostID:      s.HostID,
+		Name:        s.Name,
+		Reachable:   s.Reachable,
+		Agent:       s.Agent,
+		Deployments: deployments,
+		Managed:     s.Managed,
+		UpdatedAt:   s.UpdatedAt,
+		Error:       s.Error,
+	})
 }
 
 // NodeTransport 抽象“与某个节点通信”。

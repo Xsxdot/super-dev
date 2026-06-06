@@ -118,6 +118,24 @@ describe('nodeCenter view model', () => {
     expect(nodes.find(item => item.hostId === 'host-2')?.configured).toBe(false)
   })
 
+  it('treats null deployments from unreachable node snapshots as an empty list', () => {
+    const nodes = buildNodeCenterNodes(
+      [host()],
+      [node({
+        reachable: false,
+        agent: { installed: false, health: 'unreachable', reachable: false },
+        deployments: null as unknown as RuntimeInstanceStatus[],
+        error: 'node unreachable',
+      })],
+      [],
+    )
+
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].deployments).toEqual([])
+    expect(nodes[0].serviceCount).toBe(0)
+    expect(nodes[0].error).toBe('node unreachable')
+  })
+
   it('adds env labels by deployment id and omits missing labels', () => {
     const nodes = buildNodeCenterNodes(
       [host()],

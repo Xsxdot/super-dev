@@ -162,6 +162,26 @@ func TestNodeStatusJSONShape(t *testing.T) {
 	assert.NotContains(t, string(data), `"HostID"`)
 }
 
+func TestUnreachableNodeStatusJSONKeepsDeploymentsArray(t *testing.T) {
+	status := nodetransport.NodeStatus{
+		HostID:    "h1",
+		Name:      "ali-01",
+		Reachable: false,
+		Agent: model.AgentRuntime{
+			Health:    model.AgentHealthUnreachable,
+			Reachable: false,
+		},
+		UpdatedAt: time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC),
+		Error:     "node unreachable",
+	}
+
+	data, err := json.Marshal(status)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), `"deployments":[]`)
+	assert.NotContains(t, string(data), `"deployments":null`)
+}
+
 func TestTunnelTransportSubscribeNodesStreamsConnectedHosts(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

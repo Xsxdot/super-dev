@@ -122,6 +122,19 @@ describe('nodeStore', () => {
     expect(h2?.error).toContain('node status stream closed')
   })
 
+  it('converts null deployments from unreachable node snapshots as zero desired deployments', async () => {
+    const store = useNodeStore()
+    await store.start()
+
+    FakeWebSocket.instances[0].emit([{
+      ...status('h2', false),
+      deployments: null as unknown as NodeStatus['deployments'],
+    }])
+    await nextTick()
+
+    expect(store.managedStatuses.get('h2')?.desired_deployment_count).toBe(0)
+  })
+
   it('keeps websocket open until all callers stop', async () => {
     const store = useNodeStore()
     await store.start()

@@ -118,13 +118,19 @@ export const useNodeStore = defineStore('node', () => {
 })
 
 function nodeToManagedStatus(node: NodeStatus): HostManagedDeploymentStatus {
+  const deployments = nodeDeployments(node)
   return {
     host_id: node.host_id,
     host_name: node.name,
-    desired_deployment_count: node.managed?.deployment_count ?? node.deployments.length,
+    desired_deployment_count: node.managed?.deployment_count ?? deployments.length,
     desired_collector_count: node.managed?.collector_count ?? 0,
     tunnel_connected: node.reachable,
     remote: node.reachable ? node.managed : undefined,
     error: node.error || (node.reachable ? undefined : 'node unreachable'),
   }
+}
+
+function nodeDeployments(node: NodeStatus): NodeStatus['deployments'] {
+  // 兼容后端历史帧里的 deployments:null；这里按空数组派生，避免一个不可达节点拖垮共享 computed。
+  return Array.isArray(node.deployments) ? node.deployments : []
 }
