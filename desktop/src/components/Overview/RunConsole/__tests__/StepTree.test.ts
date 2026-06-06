@@ -9,7 +9,7 @@
  *   - 不加载 run 详情或日志
  */
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StepRun } from '@/api/agent'
 import StepTree from '../StepTree.vue'
 
@@ -23,6 +23,10 @@ const steps: StepRun[] = [{
     { host_id: 'host-2', host_name: 'two', status: 'running' },
   ],
 }]
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('StepTree', () => {
   it('renders step and host children and emits selection', async () => {
@@ -42,5 +46,44 @@ describe('StepTree', () => {
 
     expect(wrapper.find('.status-icon.running').exists()).toBe(true)
     expect(wrapper.find('.status-icon.success').exists()).toBe(true)
+  })
+
+  it('renders finished step and host durations', () => {
+    const timedSteps: StepRun[] = [{
+      step_name: 'Deploy',
+      type: 'remote_command',
+      phase: 'deploy',
+      status: 'success',
+      tasks: [
+        { host_id: 'host-1', host_name: 'one', status: 'success', started_at: 1_000, finished_at: 3_500 },
+        { host_id: 'host-2', host_name: 'two', status: 'success', started_at: 2_000, finished_at: 6_500 },
+      ],
+    }]
+
+    const wrapper = mount(StepTree, { props: { steps: timedSteps, selectedStep: '', selectedHost: '' } })
+
+    expect(wrapper.find('[data-test="step-duration"]').text()).toBe('5s')
+    expect(wrapper.findAll('[data-test="host-duration"]').map(item => item.text())).toEqual(['2s', '4s'])
+  })
+
+  it('updates running durations from the current clock', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const runningSteps: StepRun[] = [{
+      step_name: 'Deploy',
+      type: 'remote_command',
+      phase: 'deploy',
+      status: 'running',
+      tasks: [
+        { host_id: 'host-1', host_name: 'one', status: 'running', started_at: 8_000 },
+      ],
+    }]
+
+    const wrapper = mount(StepTree, { props: { steps: runningSteps, selectedStep: '', selectedHost: '' } })
+
+    expect(wrapper.find('[data-test="host-duration"]').text()).toBe('2s')
+    vi.setSystemTime(11_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(wrapper.find('[data-test="host-duration"]').text()).toBe('4s')
   })
 })

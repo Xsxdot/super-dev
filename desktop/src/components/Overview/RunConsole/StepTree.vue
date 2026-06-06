@@ -11,10 +11,25 @@ StepTree：运行控制台左侧步骤和主机导航。
   - 不渲染日志正文
 -->
 <script setup lang="ts">
-import type { RunStatus, StepRun } from '@/api/agent'
+import { onMounted, onUnmounted, ref } from 'vue'
+import type { RunStatus, RunTask, StepRun } from '@/api/agent'
+import { formatDuration } from '@/lib/timeDisplay'
 
 defineProps<{ steps: StepRun[]; selectedStep: string; selectedHost: string }>()
 const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: string, host: string] }>()
+
+const nowMs = ref(Date.now())
+let timer: ReturnType<typeof window.setInterval> | undefined
+
+onMounted(() => {
+  timer = window.setInterval(() => {
+    nowMs.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timer) window.clearInterval(timer)
+})
 
 function statusSymbol(status: RunStatus) {
   if (status === 'running') return ''
@@ -22,6 +37,32 @@ function statusSymbol(status: RunStatus) {
   if (status === 'failed') return '×'
   if (status === 'skipped') return '−'
   return '•'
+}
+
+function elapsedMs(startedAt?: number, finishedAt?: number, status?: RunStatus): number | null {
+  if (!startedAt) return null
+  const end = finishedAt || (status === 'running' ? nowMs.value : 0)
+  if (!end) return null
+  return Math.max(0, end - startedAt)
+}
+
+function taskDuration(task: RunTask): string {
+  return formatDuration(elapsedMs(task.started_at, task.finished_at, task.status))
+}
+
+function stepDuration(step: StepRun): string {
+  const started = step.tasks
+    .map(task => task.started_at)
+    .filter((value): value is number => !!value)
+  if (started.length === 0) return ''
+  const start = Math.min(...started)
+  const running = step.tasks.some(task => task.status === 'running')
+  const finished = step.tasks
+    .map(task => task.finished_at)
+    .filter((value): value is number => !!value)
+  const end = running ? nowMs.value : Math.max(...finished, 0)
+  if (!end) return ''
+  return formatDuration(Math.max(0, end - start))
 }
 </script>
 
@@ -37,6 +78,7 @@ function statusSymbol(status: RunStatus) {
       >
         <span class="status-icon" :class="step.status" :aria-label="step.status">{{ statusSymbol(step.status) }}</span>
         <span class="step-name">{{ step.step_name }}</span>
+        <span v-if="stepDuration(step)" data-test="step-duration" class="duration-chip">{{ stepDuration(step) }}</span>
       </button>
       <button
         v-for="task in step.tasks"
@@ -49,6 +91,7 @@ function statusSymbol(status: RunStatus) {
       >
         <span class="status-icon" :class="task.status" :aria-label="task.status">{{ statusSymbol(task.status) }}</span>
         <span class="host-name">{{ task.host_name || task.host_id || 'local' }}</span>
+        <span v-if="taskDuration(task)" data-test="host-duration" class="duration-chip">{{ taskDuration(task) }}</span>
       </button>
     </div>
   </nav>
@@ -68,7 +111,7 @@ function statusSymbol(status: RunStatus) {
 .step-item,
 .host-item {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -127,5 +170,10 @@ function statusSymbol(status: RunStatus) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.duration-chip {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 </style>
