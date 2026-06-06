@@ -216,14 +216,23 @@ func (s *Store) saveLogSources(list []model.LogSource) error {
 }
 
 func applyHostDefaults(h *model.Host) {
+	if h.Tags == nil {
+		h.Tags = []string{}
+	}
+	if h.Agent == nil {
+		return
+	}
+	if h.Agent.Transport.Type == "" {
+		h.Agent.Transport.Type = model.TransportTypeTunnel
+	}
+	if h.Agent.Transport.Type != model.TransportTypeTunnel {
+		return
+	}
 	tunnelParams := h.EnsureTunnelAgent()
 	if tunnelParams.SSHPort == 0 {
 		tunnelParams.SSHPort = defaultSSHPort
 	}
 	if tunnelParams.RemoteAgentPort == 0 {
 		tunnelParams.RemoteAgentPort = defaultRemoteAgentPort
-	}
-	if h.Tags == nil {
-		h.Tags = []string{}
 	}
 }

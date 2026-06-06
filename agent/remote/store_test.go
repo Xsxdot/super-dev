@@ -41,6 +41,19 @@ func TestStoreAddHostAppliesTunnelDefaults(t *testing.T) {
 	saved, err := s.AddHost(model.Host{Name: "c01"})
 	require.NoError(t, err)
 
+	require.Nil(t, saved.Agent)
+}
+
+func TestStoreAddHostAppliesTunnelDefaultsForConfiguredAgent(t *testing.T) {
+	s := newStore(t)
+	saved, err := s.AddHost(model.Host{
+		Name: "c01",
+		Agent: &model.Agent{
+			Transport: model.TransportConfig{Type: model.TransportTypeTunnel},
+		},
+	})
+	require.NoError(t, err)
+
 	require.NotNil(t, saved.Agent)
 	assert.Equal(t, model.TransportTypeTunnel, saved.Agent.Transport.Type)
 	require.NotNil(t, saved.Agent.Transport.Tunnel)

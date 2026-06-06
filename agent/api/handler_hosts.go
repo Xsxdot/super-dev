@@ -49,14 +49,12 @@ func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	out := make([]hostDTO, 0, len(hosts)+1)
 	out = append(out, selfNode)
 	for _, h := range hosts {
-		dto := toHostDTO(h)
-		dto.LocalTunnelPort = a.tunnels.LocalPort(h.ID)
-		out = append(out, dto)
+		out = append(out, toHostDTO(h))
 	}
 	jsonOK(w, out)
 }
 
-// createHost 处理 POST /api/hosts,body 为 model.Host。
+// createHost 处理 POST /api/hosts,body 为 Host 身份字段。
 func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 	var dto hostDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -64,11 +62,6 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := hostFromDTO(dto)
-	tunnelParams := h.EnsureTunnelAgent()
-	if err := importTunnelPrivateKey(tunnelParams); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	saved, err := a.remoteStore.AddHost(h)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -87,11 +80,6 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	dto.ID = id
 	h := hostFromDTO(dto)
-	tunnelParams := h.EnsureTunnelAgent()
-	if err := importTunnelPrivateKey(tunnelParams); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	if err := a.remoteStore.UpdateHost(h); err != nil {
 		if errors.Is(err, remote.ErrNotFound) {
 			jsonError(w, http.StatusNotFound, "host not found")

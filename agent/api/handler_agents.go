@@ -1,0 +1,158 @@
+// handler_agents.go 实现 Agent 独立管理 API。
+//
+// 职责：
+//   - 列出 Host 上已配置的 Agent
+//   - 读取、更新、删除单个 Host 的 Agent 连接配置
+//   - 触发一次 Agent 探活并返回运行态快照
+//
+// 边界：
+//   - 不执行安装动作，安装命令与直推安装由独立 handler 承载
+//   - 不直接管理 SSH 隧道，探活通过 NodeTransport/agenthealth 完成
+//   - 不持久化运行态，Runtime 来自内存探活或 NodeRegistry 快照
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/remote"
+)
+
+// listAgents 处理 GET /api/agents。
+func (a *App) listAgents(w http.ResponseWriter, r *http.Request) {
+	hosts, err := a.remoteStore.ListHosts()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]agentDTO, 0, len(hosts))
+	for _, h := range hosts {
+		if h.Agent == nil {
+			continue
+		}
+		out = append(out, toAgentDTO(h, a.nodeSnapshotOf(h.ID)))
+	}
+	jsonOK(w, out)
+}
+
+// getAgent 处理 GET /api/agents/{host_id}。
+func (a *App) getAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	if host.Agent == nil {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	jsonOK(w, toAgentDTO(host, a.nodeSnapshotOf(host.ID)))
+}
+
+// updateAgent 处理 PUT /api/agents/{host_id}。
+func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	var dto agentUpdateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !validAgentTransport(dto.Transport) {
+		jsonError(w, http.StatusBadRequest, "invalid agent transport")
+		return
+	}
+	host.Agent = &model.Agent{Transport: dto.Transport}
+	if err := a.remoteStore.UpdateHost(host); err != nil {
+		if errors.Is(err, remote.ErrNotFound) {
+			jsonError(w, http.StatusNotFound, "host not found")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	saved, _, err := a.remoteHostByID(host.ID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, toAgentDTO(saved, a.nodeSnapshotOf(saved.ID)))
+}
+
+// deleteAgent 处理 DELETE /api/agents/{host_id}。
+func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	host.Agent = nil
+	if err := a.remoteStore.UpdateHost(host); err != nil {
+		if errors.Is(err, remote.ErrNotFound) {
+			jsonError(w, http.StatusNotFound, "host not found")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// checkAgent 处理 POST /api/agents/{host_id}/check。
+func (a *App) checkAgent(w http.ResponseWriter, r *http.Request) {
+	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	if host.Agent == nil {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
+	host.Agent.Runtime = agentRuntimeFromInfo(info)
+	jsonOK(w, toAgentDTO(host, a.nodeSnapshotOf(host.ID)))
+}
+
+func (a *App) nodeSnapshotOf(hostID string) *nodetransport.NodeStatus {
+	if a.nodeRegistry == nil {
+		return nil
+	}
+	status, ok := a.nodeRegistry.SnapshotOf(hostID)
+	if !ok {
+		return nil
+	}
+	return &status
+}
+
+func validAgentTransport(cfg model.TransportConfig) bool {
+	switch cfg.Type {
+	case model.TransportTypeTunnel, model.TransportTypeDirect, model.TransportTypeMQ, model.TransportTypeBridge:
+		return true
+	default:
+		return false
+	}
+}
