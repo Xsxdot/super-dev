@@ -1,98 +1,227 @@
 /**
- * runConsoleStore 管理单次 pipeline run 的控制台状态。
+ * runConsoleStore 管理 pipeline run 控制台状态。
  *
  * 职责：
- *   - 加载 run 详情和回放日志
- *   - 管理步骤/主机选择
- *   - 在 live 模式下接入可用的 run WebSocket 日志
+ *   - 按 runId 隔离 run 详情、日志、选择状态和 WebSocket
+ *   - 加载 replay 数据并接入 live RunEvent 信封
+ *   - 对日志按 id 去重，对 step/host 状态做增量更新
  *
  * 边界：
  *   - 不执行或回滚流水线
- *   - 不替代 pipeline run 持久化
+ *   - 不管理 workspace tab 生命周期，只暴露 disposeRun 给 workspace 调用
  */
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
-import { api, runLogsWsUrl, type Run, type RunLogLine } from '@/api/agent'
+import { ref } from 'vue'
+import {
+  api,
+  runLogsWsUrl,
+  type Run,
+  type RunEvent,
+  type RunLogLine,
+  type RunStatusPatch,
+  type StepRun,
+} from '@/api/agent'
+
+export interface RunConsoleState {
+  currentRun: Run | null
+  logs: RunLogLine[]
+  selectedStep: string
+  selectedHost: string
+  loading: boolean
+  error: string | null
+  ws: WebSocket | null
+  liveDone: boolean
+  reconnectAttempted: boolean
+}
+
+function createRunState(): RunConsoleState {
+  return {
+    currentRun: null,
+    logs: [],
+    selectedStep: '',
+    selectedHost: '',
+    loading: false,
+    error: null,
+    ws: null,
+    liveDone: false,
+    reconnectAttempted: false,
+  }
+}
+
+function compareRunLogs(a: RunLogLine, b: RunLogLine): number {
+  return a.id - b.id
+}
+
+function aggregateStepStatus(step: StepRun): StepRun['status'] {
+  if (step.tasks.length === 0) return step.status
+  if (step.tasks.some(task => task.status === 'failed')) return 'failed'
+  if (step.tasks.some(task => task.status === 'running')) return 'running'
+  if (step.tasks.every(task => task.status === 'success')) return 'success'
+  if (step.tasks.every(task => task.status === 'skipped')) return 'skipped'
+  return step.status === 'running' ? 'running' : 'pending'
+}
+
+function mergeDoneRun(existing: Run | null, incoming: Run): Run {
+  if (!existing) return incoming
+  const currentSteps = new Map(existing.step_runs.map(step => [step.step_name, step]))
+  const stepRuns = incoming.step_runs.map(step => {
+    const currentStep = currentSteps.get(step.step_name)
+    if (!currentStep) return step
+    const currentTasks = new Map(
+      currentStep.tasks.map(task => [task.host_id || '', task]),
+    )
+    const tasks = step.tasks.map(task => {
+      const currentTask = currentTasks.get(task.host_id || '')
+      if (!currentTask || task.status !== 'pending') return task
+      // done 事件理论上携带最终 Run；这里仅兜底兼容旧/不完整快照，避免覆盖刚收到的增量状态。
+      return { ...task, status: currentTask.status, exit_code: currentTask.exit_code ?? task.exit_code }
+    })
+    if (step.status !== 'pending') return { ...step, tasks }
+    return { ...step, status: currentStep.status, tasks }
+  })
+  return { ...incoming, step_runs: stepRuns }
+}
 
 export const useRunConsoleStore = defineStore('runConsole', () => {
-  const currentRun = ref<Run | null>(null)
-  const logs = ref<RunLogLine[]>([])
-  const selectedStep = ref('')
-  const selectedHost = ref('')
-  const loading = ref(false)
-  const error = ref<string | null>(null)
-  let ws: WebSocket | null = null
+  const runs = ref(new Map<string, RunConsoleState>())
 
-  const visibleLogs = computed(() => logs.value.filter(line => {
-    if (selectedStep.value && line.step_name !== selectedStep.value) return false
-    if (selectedHost.value && line.host_id !== selectedHost.value) return false
-    return true
-  }))
+  function stateFor(runId: string): RunConsoleState {
+    const existing = runs.value.get(runId)
+    if (existing) return existing
+    const created = createRunState()
+    runs.value.set(runId, created)
+    return created
+  }
 
-  function select(step: string, host = '') {
-    selectedStep.value = step
-    selectedHost.value = host
+  function hasRunState(runId: string): boolean {
+    return runs.value.has(runId)
+  }
+
+  function mergeRunLogs(runId: string, incoming: RunLogLine[]) {
+    const state = stateFor(runId)
+    const byID = new Map<number, RunLogLine>()
+    for (const line of state.logs) byID.set(line.id, line)
+    for (const line of incoming) byID.set(line.id, line)
+    state.logs = [...byID.values()].sort(compareRunLogs)
+  }
+
+  function visibleLogs(runId: string): RunLogLine[] {
+    const state = stateFor(runId)
+    return state.logs.filter(line => {
+      if (state.selectedStep && line.step_name !== state.selectedStep) return false
+      if (state.selectedHost && line.host_id !== state.selectedHost) return false
+      return true
+    })
+  }
+
+  function select(runId: string, step: string, host = '') {
+    const state = stateFor(runId)
+    state.selectedStep = step
+    state.selectedHost = host
   }
 
   async function loadReplay(projectId: string, pipelineId: string, runId: string) {
-    loading.value = true
-    error.value = null
+    const state = stateFor(runId)
+    closeLive(runId)
+    state.loading = true
+    state.error = null
     try {
-      currentRun.value = await api.getProjectPipelineRun(projectId, pipelineId, runId)
-      logs.value = (await api.readProjectPipelineRunLogs(projectId, pipelineId, runId, { limit: 1000 })).items
+      state.currentRun = await api.getProjectPipelineRun(projectId, pipelineId, runId)
+      state.logs = (await api.readProjectPipelineRunLogs(projectId, pipelineId, runId, { limit: 1000 })).items
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to load run'
+      state.error = e instanceof Error ? e.message : 'Failed to load run'
     } finally {
-      loading.value = false
+      state.loading = false
     }
   }
 
-  // 后端当前没有 /ws/runs/{runId}/logs 路由；live 模式先加载一次回放，WS 失败时保持已加载内容。
-  // 这不是实时刷新实现，真正实时能力需要后端新增 run logs WS 路由后再开启。
   async function loadLive(projectId: string, pipelineId: string, runId: string) {
-    await loadReplay(projectId, pipelineId, runId)
-    closeLive()
+    const state = stateFor(runId)
+    closeLive(runId)
+    state.loading = true
+    state.error = null
+    state.liveDone = false
+    state.reconnectAttempted = false
     try {
-      ws = new WebSocket(runLogsWsUrl(runId))
-      ws.onmessage = event => {
-        const line = JSON.parse(event.data) as RunLogLine
-        logs.value = [...logs.value, line].sort((a, b) => a.id - b.id)
-      }
-      ws.onerror = () => {
-        closeLive()
-      }
-    } catch {
-      closeLive()
+      state.currentRun = await api.getProjectPipelineRun(projectId, pipelineId, runId)
+      state.logs = []
+      connectLive(projectId, pipelineId, runId)
+    } catch (e) {
+      state.error = e instanceof Error ? e.message : 'Failed to load run'
+    } finally {
+      state.loading = false
     }
   }
 
-  function closeLive() {
-    ws?.close()
-    ws = null
+  function connectLive(projectId: string, pipelineId: string, runId: string) {
+    const state = stateFor(runId)
+    const ws = new WebSocket(runLogsWsUrl(runId))
+    state.ws = ws
+    ws.onmessage = event => handleRunEvent(runId, JSON.parse(event.data) as RunEvent)
+    ws.onerror = () => {
+      ws.close()
+    }
+    ws.onclose = () => {
+      if (state.liveDone || state.ws !== ws) return
+      state.ws = null
+      if (state.reconnectAttempted) return
+      state.reconnectAttempted = true
+      void loadReplay(projectId, pipelineId, runId).then(() => connectLive(projectId, pipelineId, runId))
+    }
   }
 
-  function reset() {
-    closeLive()
-    currentRun.value = null
-    logs.value = []
-    selectedStep.value = ''
-    selectedHost.value = ''
-    loading.value = false
-    error.value = null
+  function handleRunEvent(runId: string, event: RunEvent) {
+    const state = stateFor(runId)
+    if (event.kind === 'log') {
+      mergeRunLogs(runId, [event.log])
+      return
+    }
+    if (event.kind === 'status') {
+      applyStatusPatch(state, event.status)
+      return
+    }
+    state.currentRun = mergeDoneRun(state.currentRun, event.run)
+    state.liveDone = true
+    closeLive(runId)
+  }
+
+  function applyStatusPatch(state: RunConsoleState, patch: RunStatusPatch) {
+    if (!state.currentRun || !patch.step_name) return
+    const step = state.currentRun.step_runs.find(item => item.step_name === patch.step_name)
+    if (!step) return
+    if (!patch.host_id) {
+      step.status = patch.status
+      return
+    }
+    const task = step.tasks.find(item => (item.host_id || '') === patch.host_id)
+    if (!task) return
+    task.status = patch.status
+    if (patch.exit_code != null) task.exit_code = patch.exit_code
+    step.status = aggregateStepStatus(step)
+  }
+
+  function closeLive(runId: string) {
+    const state = stateFor(runId)
+    const ws = state.ws
+    state.ws = null
+    ws?.close()
+  }
+
+  function disposeRun(runId: string) {
+    closeLive(runId)
+    runs.value.delete(runId)
   }
 
   return {
-    currentRun,
-    logs,
-    selectedStep,
-    selectedHost,
+    runs,
+    stateFor,
+    hasRunState,
     visibleLogs,
-    loading,
-    error,
     select,
+    mergeRunLogs,
     loadReplay,
     loadLive,
     closeLive,
-    reset,
+    disposeRun,
   }
 })
