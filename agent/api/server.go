@@ -121,6 +121,9 @@ type App struct {
 	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
 	agentHealth       *agenthealth.Monitor
 	agentHealthCancel context.CancelFunc
+	// agentInstallTokens 保存 generated-command 的短期安装 token hash。
+	agentInstallTokenMu sync.Mutex
+	agentInstallTokens  map[string]agentInstallTokenRecord
 	// executionAuthorizer 在 /ws/exec 每次命令执行前进行授权。
 	executionAuthorizer remoteexec.Authorizer
 	// pipelineAgentRunner 仅供包内测试替换 pipeline agent 通道；nil 时使用真实 tunnel runner。
@@ -292,6 +295,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		runtimeStatusRequestTimeout: runtimeTimeout,
 		agentHealth:                 agentHealthMonitor,
 		agentHealthCancel:           agentHealthCancel,
+		agentInstallTokens:          map[string]agentInstallTokenRecord{},
 		executionAuthorizer:         executionAuthorizer,
 		runHub:                      NewRunHub(),
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
@@ -437,6 +441,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/agents/{host_id}", a.updateAgent)
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
+	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/check", a.checkHostAgent)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/uninstall", a.uninstallHostAgent)
