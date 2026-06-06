@@ -88,6 +88,7 @@ func (a *App) updateManagedDeploymentLastResult(result model.ManagedDeploymentRe
 	a.mu.Lock()
 	a.managedStatus.LastResult = result
 	a.mu.Unlock()
+	a.signalNodeStatusPublishers()
 }
 
 func (a *App) clearManagedProjectBackendsLocked(project model.Project) {

@@ -83,6 +83,52 @@ func TestWsNodeStatusReportsManagedRuntimeAndCollectors(t *testing.T) {
 	assert.False(t, status.Deployments[0].IsLocal)
 }
 
+func TestWsNodeStatusPushesManagedDeploymentChanges(t *testing.T) {
+	app, err := NewApp(AppConfig{
+		DataDir:               t.TempDir(),
+		RuntimeMetricsSampler: nodeStatusSampler{},
+	})
+	require.NoError(t, err)
+	defer app.Close()
+
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/node-status?host_id=h1&host_name=ali-01"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	var initial []nodetransport.NodeStatus
+	require.NoError(t, conn.ReadJSON(&initial))
+	require.Len(t, initial, 1)
+	require.Empty(t, initial[0].Deployments)
+
+	desired := []model.ManagedDeployment{{
+		DeploymentID: "dep-2",
+		ServiceID:    "svc-2",
+		ServiceName:  "worker",
+		ProjectID:    "proj-2",
+		EnvName:      "prod",
+		Runtime:      &model.RuntimeConfig{Type: model.RuntimeTypeSystemd, ServiceName: "worker.service"},
+		Location:     model.LocationLocal,
+	}}
+	body, err := json.Marshal(desired)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/managed-deployments", bytes.NewReader(body))
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	var pushed []nodetransport.NodeStatus
+	require.NoError(t, conn.ReadJSON(&pushed))
+	require.Len(t, pushed, 1)
+	require.Len(t, pushed[0].Deployments, 1)
+	assert.Equal(t, "dep-2", pushed[0].Deployments[0].DeploymentID)
+}
+
 func TestNodeEndpointsExposeRegistrySnapshot(t *testing.T) {
 	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
 	app, err := NewApp(AppConfig{

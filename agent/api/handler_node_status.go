@@ -105,24 +105,13 @@ func (a *App) wsNodeStatus(w http.ResponseWriter, r *http.Request) {
 		hostName = hostID
 	}
 
-	send := func() error {
-		status := a.nodeStatusSnapshot(r.Context(), hostID, hostName)
-		return conn.WriteJSON([]nodetransport.NodeStatus{status})
-	}
-	if err := send(); err != nil {
-		return
-	}
-
-	ticker := time.NewTicker(nodeStatusReportInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
+	publisher := newNodeStatusPublisher(a, hostID, hostName, nodeStatusReportInterval)
+	unregister := a.registerNodeStatusPublisher(publisher)
+	defer unregister()
+	ch := publisher.Subscribe(r.Context())
+	for batch := range ch {
+		if err := conn.WriteJSON(batch); err != nil {
 			return
-		case <-ticker.C:
-			if err := send(); err != nil {
-				return
-			}
 		}
 	}
 }

@@ -95,8 +95,11 @@ type App struct {
 	managedStatus          model.ManagedDeploymentStatus
 	managedReconciler      *HostDeploymentReconciler
 	managedReconcileCancel context.CancelFunc
-	remoteStore            *remote.Store
-	tunnels                *tunnel.Manager
+	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
+	nodeStatusPublisherMu sync.Mutex
+	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
+	remoteStore           *remote.Store
+	tunnels               *tunnel.Manager
 	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
 	debugSessions debugsession.Store
 	// operationApprovals 持久化 MCP 写操作审批请求和一次性 token 状态。
@@ -283,6 +286,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		collector:                   colMgr,
 		managedStore:                managedStore,
 		managedProjectIDs:           map[string]struct{}{},
+		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
 		tunnels:                     tunnels,
 		debugSessions:               debugSessions,
