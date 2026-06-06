@@ -27,6 +27,12 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
 const { t } = useAppI18n()
 
+interface HostOption {
+  id: string
+  name: string
+  missing?: boolean
+}
+
 function patch(partial: Partial<Deployment>) {
   emit('update:modelValue', { ...props.modelValue, ...partial })
 }
@@ -88,6 +94,23 @@ function inferLogs(): LogConfig {
 }
 
 const logs = computed(() => inferLogs())
+const hostOptions = computed<HostOption[]>(() => {
+  const seen = new Set<string>()
+  const options: HostOption[] = props.hosts.map((host) => {
+    seen.add(host.id)
+    return { ...host }
+  })
+  for (const hostID of props.modelValue.host_ids ?? []) {
+    if (seen.has(hostID)) continue
+    seen.add(hostID)
+    options.push({
+      id: hostID,
+      name: t('settings.deployment.missingHost', { id: hostID }),
+      missing: true,
+    })
+  }
+  return options
+})
 
 function legacyLogType(kind?: LogKind) {
   if (kind === 'journalctl' || kind === 'docker') return kind
@@ -260,8 +283,8 @@ function setEnv(env: Record<string, string>) {
         </label>
       </div>
       <div v-if="modelValue.location === 'remote'" class="dep-hosts">
-        <div v-if="hosts.length === 0" class="dep-hint">{{ t('settings.deployment.noHosts') }}</div>
-        <label v-for="h in hosts" v-else :key="h.id" class="dep-host">
+        <div v-if="hostOptions.length === 0" class="dep-hint">{{ t('settings.deployment.noHosts') }}</div>
+        <label v-for="h in hostOptions" v-else :key="h.id" class="dep-host" :class="{ 'dep-host-missing': h.missing }">
           <input
             type="checkbox"
             :checked="(modelValue.host_ids ?? []).includes(h.id)"
@@ -497,6 +520,9 @@ function setEnv(env: Record<string, string>) {
   gap: 6px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.dep-host-missing {
+  color: var(--warning);
 }
 .dep-field {
   margin-top: 8px;

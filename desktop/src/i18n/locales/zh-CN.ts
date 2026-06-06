@@ -362,6 +362,7 @@ export default {
       local: '本机',
       remoteHost: '远程主机',
       noHosts: '还没有主机，请先在「主机管理」添加',
+      missingHost: '未注册主机：{id}',
       serviceControl: '服务控制',
       monitor: '监控',
       managed: '接管启停',

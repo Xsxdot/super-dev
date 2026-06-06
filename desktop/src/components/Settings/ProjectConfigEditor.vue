@@ -44,7 +44,7 @@ onMounted(async () => {
   activeServiceId.value = first?.id || (draft.value.services.length > 0 ? '0' : '')
   try {
     const list = await api.listHosts()
-    hosts.value = list.map(h => ({ id: h.id, name: h.name }))
+    hosts.value = list.filter(h => !h.is_self).map(h => ({ id: h.id, name: h.name }))
   } catch {
     hosts.value = []
   }

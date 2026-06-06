@@ -55,6 +55,36 @@ func TestConfigChangePreviewDoesNotWriteConfig(t *testing.T) {
 	assert.Equal(t, string(before), string(after))
 }
 
+func TestConfigChangePreviewRejectsUnknownRemoteHost(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	root := writeConfigChangeProject(t)
+	project := addProjectFromRootForConfigChange(t, app, root)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	preview := postJSONForTest[configchange.PreviewResult](t, srv.URL+"/api/config-changes/preview", map[string]any{
+		"kind":       configchange.KindServiceUpsert,
+		"project_id": project.ID,
+		"service": map[string]any{
+			"name": "worker",
+			"deployments": []map[string]any{{
+				"env_name":     "dev",
+				"location":     "remote",
+				"control_mode": "managed",
+				"host_ids":     []string{"ghost"},
+				"runtime":      map[string]any{"type": "systemd", "service_name": "worker"},
+				"logs":         map[string]any{"type": "journalctl", "target": "worker.service"},
+			}},
+		},
+	}, http.StatusOK)
+
+	assert.False(t, preview.Validation.OK)
+	assert.Contains(t, preview.Validation.Errors, "service worker deployment dev references unknown remote host ghost")
+	assert.True(t, preview.Plan.Denied)
+}
+
 func TestConfigChangeApplyRequiresApprovalThenSaves(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)

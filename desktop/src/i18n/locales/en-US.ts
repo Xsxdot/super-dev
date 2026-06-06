@@ -362,6 +362,7 @@ export default {
       local: 'Local',
       remoteHost: 'Remote Host',
       noHosts: 'No hosts yet. Add one in Hosts first.',
+      missingHost: 'Unregistered host: {id}',
       serviceControl: 'Service Control',
       monitor: 'Monitor',
       managed: 'Managed Start/Stop',

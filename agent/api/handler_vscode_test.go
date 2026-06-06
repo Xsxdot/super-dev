@@ -244,6 +244,53 @@ func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
 	assert.Len(t, projects[0].Environments, 1)
 }
 
+func TestPutProjectSetupRejectsUnknownRemoteHost(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "myapp")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	require.Len(t, created.Services, 1)
+
+	setupBody, err := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services": []map[string]any{{
+			"id":       created.Services[0].ID,
+			"name":     "web",
+			"required": false,
+			"order":    0,
+			"deployments": []map[string]any{{
+				"env_name":     "dev",
+				"location":     "remote",
+				"control_mode": "managed",
+				"host_ids":     []string{"ghost"},
+				"runtime":      map[string]any{"type": "systemd", "service_name": "web"},
+				"logs":         map[string]any{"type": "journalctl", "target": "web.service"},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, putResp.StatusCode)
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&body))
+	assert.Contains(t, body["error"], "unknown remote host ghost")
+}
+
 func TestPutProjectSetupPreservesProjectVariablesAndPipelines(t *testing.T) {
 	srv, _ := newTestApp(t)
 	dir := t.TempDir()
