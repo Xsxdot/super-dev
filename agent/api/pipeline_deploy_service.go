@@ -37,15 +37,23 @@ type pipelineRemoteTransport interface {
 	Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error
 }
 
-func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID string, req projectPipelineDeployRequest) (model.Run, error) {
+type preparedProjectPipelineRun struct {
+	Run             model.Run
+	Plan            pipeline.Plan
+	Rollback        bool
+	RollbackVersion string
+	ArtifactKind    model.ArtifactKind
+}
+
+func (a *App) prepareProjectPipelineRun(ctx context.Context, projectID, pipelineID string, req projectPipelineDeployRequest) (preparedProjectPipelineRun, error) {
 	if req.EnvName == "" {
-		return model.Run{}, errors.New("env_name is required")
+		return preparedProjectPipelineRun{}, errors.New("env_name is required")
 	}
 	a.mu.RLock()
 	project, ok := a.findProject(projectID)
 	a.mu.RUnlock()
 	if !ok {
-		return model.Run{}, errors.New("project not found")
+		return preparedProjectPipelineRun{}, errors.New("project not found")
 	}
 
 	vars := copyDeployVariables(req.Variables)
@@ -63,15 +71,15 @@ func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID 
 		RunVariables: vars,
 	})
 	if err != nil {
-		return model.Run{}, err
+		return preparedProjectPipelineRun{}, err
 	}
 	hosts, err := a.hostRefs(pipelineHostIDs(req.HostIDs, expanded.Roles))
 	if err != nil {
-		return model.Run{}, err
+		return preparedProjectPipelineRun{}, err
 	}
 	plan, run, err := pipeline.BuildPlan(resolved.RunID, expanded, hosts)
 	if err != nil {
-		return model.Run{}, err
+		return preparedProjectPipelineRun{}, err
 	}
 	artifactKind := resolved.ProjectPipeline.ArtifactKind
 	if artifactKind == "" {
@@ -82,9 +90,49 @@ func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID 
 	run.PipelineID = pipelineID
 	run.EnvName = req.EnvName
 	run.ArtifactVersion = vars["version"]
+	run.Status = model.RunStatusRunning
+	run.StartedAt = time.Now().UnixMilli()
 	if err := a.store.SaveRun(run); err != nil {
+		return preparedProjectPipelineRun{}, err
+	}
+
+	return preparedProjectPipelineRun{
+		Run:             run,
+		Plan:            plan,
+		Rollback:        rollback,
+		RollbackVersion: req.ArtifactVersion,
+		ArtifactKind:    artifactKind,
+	}, nil
+}
+
+func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID string, req projectPipelineDeployRequest) (model.Run, error) {
+	prepared, err := a.prepareProjectPipelineRun(ctx, projectID, pipelineID, req)
+	if err != nil {
 		return model.Run{}, err
 	}
+	return a.runPreparedProjectPipeline(ctx, prepared)
+}
+
+func (a *App) runProjectPipeline(ctx context.Context, prepared preparedProjectPipelineRun) {
+	_, _ = a.runPreparedProjectPipeline(ctx, prepared)
+}
+
+func (a *App) runPreparedProjectPipeline(ctx context.Context, prepared preparedProjectPipelineRun) (final model.Run, err error) {
+	run := prepared.Run
+	final = run
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			final = markPreparedRunFailed(run)
+			recordErr := a.store.SaveRun(final)
+			if recordErr != nil {
+				err = recordErr
+			} else {
+				err = errors.New("pipeline run panic")
+			}
+			a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindDone, Run: &final})
+			a.runHub.Close(run.ID)
+		}
+	}()
 
 	var logMu sync.Mutex
 	var logErr error
@@ -99,28 +147,42 @@ func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID 
 		}
 	}
 	emit := func(event pipeline.Event) {
-		if event.Type == pipeline.EventTaskLog {
-			recordLogErr(a.store.AppendRunLog(run.ID, event.StepName, event.HostID, event.Stream, event.Line, event.At))
+		switch event.Type {
+		case pipeline.EventTaskLog:
+			line, appendErr := a.store.AppendRunLogLine(run.ID, event.StepName, event.HostID, event.Stream, event.Line, event.At)
+			recordLogErr(appendErr)
+			if appendErr == nil {
+				a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindLog, Log: &line})
+			}
+		case pipeline.EventTaskStarted:
+			a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindStatus, Status: &RunStatusPatch{
+				StepName: event.StepName,
+				HostID:   event.HostID,
+				Status:   model.RunStatusRunning,
+				At:       event.At,
+			}})
+		case pipeline.EventTaskFinished:
+			a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindStatus, Status: &RunStatusPatch{
+				StepName: event.StepName,
+				HostID:   event.HostID,
+				Status:   event.Status,
+				ExitCode: event.ExitCode,
+				At:       event.At,
+			}})
 		}
 	}
 	saveUpdate := func(next model.Run) {
-		next.ID = run.ID
-		next.ProjectID = run.ProjectID
-		next.PipelineID = run.PipelineID
-		next.EnvName = run.EnvName
-		next.ArtifactVersion = run.ArtifactVersion
+		next = hydratePreparedRunIdentity(next, run)
 		run = next
 		recordLogErr(a.store.SaveRun(run))
+		a.broadcastRunStatusSnapshot(run)
 	}
 
-	engine := a.newPipelineEngine()
-	opts := pipeline.RunOptions{
-		OnRunUpdate: saveUpdate,
-	}
-	if rollback {
+	opts := pipeline.RunOptions{OnRunUpdate: saveUpdate}
+	if prepared.Rollback {
 		opts.SkipBuild = true
 		opts.BeforeDeploy = func(current model.Run, vars map[string]string) (model.Run, error) {
-			ref, err := a.store.GetArtifact(ctx, projectID, pipelineID, req.ArtifactVersion)
+			ref, err := a.store.GetArtifact(ctx, run.ProjectID, run.PipelineID, prepared.RollbackVersion)
 			if err != nil {
 				return current, err
 			}
@@ -135,14 +197,16 @@ func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID 
 		opts.AfterBuild = func(current model.Run, vars map[string]string) (model.Run, error) {
 			current.ArtifactVersion = vars["version"]
 			run.ArtifactVersion = vars["version"]
-			if err := a.registerPipelineArtifact(ctx, projectID, pipelineID, artifactKind, vars["version"], vars["artifact"]); err != nil {
+			if err := a.registerPipelineArtifact(ctx, run.ProjectID, run.PipelineID, prepared.ArtifactKind, vars["version"], vars["artifact"]); err != nil {
 				return current, err
 			}
 			return current, nil
 		}
 	}
 
-	final, err := engine.RunWithOptions(ctx, plan, run, emit, opts)
+	engine := a.newPipelineEngine()
+	final, err = engine.RunWithOptions(ctx, prepared.Plan, run, emit, opts)
+	final = hydratePreparedRunIdentity(final, run)
 	if saveErr := a.store.SaveRun(final); saveErr != nil && err == nil {
 		err = saveErr
 	}
@@ -152,7 +216,47 @@ func (a *App) executeProjectPipeline(ctx context.Context, projectID, pipelineID 
 	if err == nil && firstLogErr != nil {
 		err = firstLogErr
 	}
+	a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindDone, Run: &final})
+	a.runHub.Close(run.ID)
 	return final, err
+}
+
+func hydratePreparedRunIdentity(next model.Run, base model.Run) model.Run {
+	next.ID = base.ID
+	next.ProjectID = base.ProjectID
+	next.PipelineID = base.PipelineID
+	next.EnvName = base.EnvName
+	next.ArtifactVersion = base.ArtifactVersion
+	return next
+}
+
+func markPreparedRunFailed(run model.Run) model.Run {
+	run.Status = model.RunStatusFailed
+	if run.StartedAt == 0 {
+		run.StartedAt = time.Now().UnixMilli()
+	}
+	run.FinishedAt = time.Now().UnixMilli()
+	return run
+}
+
+func (a *App) broadcastRunStatusSnapshot(run model.Run) {
+	now := time.Now().UnixMilli()
+	for _, step := range run.StepRuns {
+		a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindStatus, Status: &RunStatusPatch{
+			StepName: step.StepName,
+			Status:   step.Status,
+			At:       now,
+		}})
+		for _, task := range step.Tasks {
+			a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindStatus, Status: &RunStatusPatch{
+				StepName: step.StepName,
+				HostID:   task.HostID,
+				Status:   task.Status,
+				ExitCode: task.ExitCode,
+				At:       now,
+			}})
+		}
+	}
 }
 
 func (a *App) newPipelineEngine() *pipeline.Engine {

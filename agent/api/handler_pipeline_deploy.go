@@ -11,6 +11,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,12 +43,13 @@ func (a *App) deployProjectPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := a.executeProjectPipeline(r.Context(), projectID, pipelineID, req)
+	prepared, err := a.prepareProjectPipelineRun(r.Context(), projectID, pipelineID, req)
 	if err != nil {
 		writeProjectPipelineDeployError(w, err)
 		return
 	}
-	jsonOK(w, run)
+	jsonOK(w, prepared.Run)
+	go a.runProjectPipeline(context.Background(), prepared)
 }
 
 // listProjectPipelineRuns 处理 GET /api/projects/{id}/pipelines/{pipelineId}/runs。
