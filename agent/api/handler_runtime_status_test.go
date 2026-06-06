@@ -159,6 +159,39 @@ services:
 	assert.Equal(t, model.HealthRunning, got.Environments[0].Instances[0].Metrics.Health)
 }
 
+func TestRuntimeStatusPassesLaunchdLabelToSampler(t *testing.T) {
+	sampler := &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{
+		"dep-worker-prod": runningMetrics(1, 2048, "launchd"),
+	}}
+	app := newRuntimeStatusApp(t, sampler, fakeRemoteRuntimeStatusClient{})
+	projectID := addRuntimeStatusProject(t, app, `
+id: overview-launchd
+name: overview-launchd
+environments:
+  - name: prod
+services:
+  - id: svc-worker
+    name: worker
+    deployments:
+      - id: dep-worker-prod
+        env: prod
+        location: local
+        runtime:
+          type: launchd
+          label: com.example.worker
+`)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	targets := sampler.targetsByDeployment()
+	assert.Equal(t, "launchd", targets["dep-worker-prod"].Base)
+	assert.Equal(t, "com.example.worker", targets["dep-worker-prod"].Label)
+	assert.Zero(t, targets["dep-worker-prod"].PID)
+}
+
 func TestRuntimeStatusIsolatesRemoteHostFailure(t *testing.T) {
 	app := newRuntimeStatusApp(t, &fakeRuntimeSampler{byDeployment: map[string]model.InstanceMetrics{}}, fakeRemoteRuntimeStatusClient{
 		byHost: map[string]model.RuntimeStatusResponse{

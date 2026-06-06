@@ -7,11 +7,19 @@ import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
 import { useFilterStore } from '@/stores/filter'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import OperationApprovalPopover from '@/components/OperationApprovalPopover.vue'
+import { useRemoteStore } from '@/stores/remote'
+import {
+  buildDeploymentNodeStatus,
+  type DeploymentAggregateNodeStatus,
+  type DeploymentNodeIssueKind,
+  type DeploymentNodeState,
+} from '@/lib/deploymentNodeStatus'
 import { AGENT_HOST } from '@/api/agent'
-import type { LogEntry } from '@/api/agent'
+import type { Deployment, LogEntry } from '@/api/agent'
 import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
 
 const agentHost = AGENT_HOST
@@ -20,8 +28,10 @@ const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const deploymentLogStore = useDeploymentLogStore()
+const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const filterStore = useFilterStore()
 const operationApprovalStore = useOperationApprovalStore()
+const remoteStore = useRemoteStore()
 const router = useRouter()
 const { t } = useI18n()
 const approvalsPopoverOpen = ref(false)
@@ -35,7 +45,13 @@ function leafDeploymentId(leaf: PanelLeafNode): string | null {
 // checkedIds 内部仍以 deploymentId 为键（命名沿用历史的 service 概念）。
 const panelServices = computed(() => {
   const seen = new Set<string>()
-  const result: Array<{ id: string; name: string; status: string }> = []
+  const result: Array<{
+    id: string
+    name: string
+    status: string
+    deployment: Deployment
+    aggregate: DeploymentAggregateNodeStatus
+  }> = []
   for (const leaf of panelStore.allLeaves) {
     const deploymentId = leafDeploymentId(leaf)
     if (deploymentId && !seen.has(deploymentId)) {
@@ -46,12 +62,41 @@ const panelServices = computed(() => {
           id: deploymentId,
           name: `${info.service.name} · ${info.envName}`,
           status: info.deployment.status,
+          deployment: info.deployment,
+          aggregate: buildDeploymentNodeStatus(info.deployment, remoteStore.hosts, remoteStore.managedStatuses),
         })
       }
     }
   }
   return result
 })
+
+const remoteHostIds = computed(() => {
+  const ids: string[] = []
+  for (const leaf of panelStore.allLeaves) {
+    const deploymentId = leafDeploymentId(leaf)
+    if (!deploymentId) continue
+    const info = agentStore.serviceForDeployment(deploymentId)
+    if (info?.deployment.location === 'remote') ids.push(...(info.deployment.host_ids ?? []))
+  }
+  return [...new Set(ids)]
+})
+
+async function refreshRemoteNodeContext(hostIds: string[]) {
+  if (hostIds.length === 0) return
+  try {
+    if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    await remoteStore.refreshManagedStatuses(hostIds)
+  } catch (err) {
+    console.warn('[SuperDev] refresh bottom remote node status failed:', err)
+  }
+}
+
+watch(
+  remoteHostIds,
+  hostIds => void refreshRemoteNodeContext(hostIds),
+  { immediate: true },
+)
 
 // 底部栏勾选状态（独立于侧边栏 env_selected_service_ids 的启动选中）
 const checkedIds = ref<Set<string>>(new Set())
@@ -67,6 +112,12 @@ watch(
     const next = new Set([...checkedIds.value].filter(id => visibleIds.has(id)))
     for (const svc of services) {
       if (!manuallyTouchedIds.value.has(svc.id)) next.add(svc.id)
+      if (svc.deployment.location === 'remote') {
+        deploymentNodeSelectionStore.ensureDeploymentNodes(
+          svc.id,
+          svc.aggregate.nodes.map(node => node.hostId),
+        )
+      }
     }
     checkedIds.value = next
   },
@@ -217,6 +268,44 @@ const statusColor = (status: string) => {
   return '#6e7681'
 }
 
+const nodeHealthColor = (health: string) => {
+  if (health === 'healthy') return '#3fb950'
+  if (health === 'warning') return '#d29922'
+  if (health === 'failed') return '#f85149'
+  return '#6e7681'
+}
+
+function deploymentDotColor(svc: { deployment: Deployment; status: string; aggregate: DeploymentAggregateNodeStatus }) {
+  return svc.deployment.location === 'remote' ? nodeHealthColor(svc.aggregate.health) : statusColor(svc.status)
+}
+
+function issueLabel(kind: DeploymentNodeIssueKind, detail?: string): string {
+  if (kind === 'host-error') return detail || t('bottomBar.nodeHostError')
+  if (kind === 'collector-error') return detail || t('bottomBar.nodeCollectorError')
+  return t(`bottomBar.nodeIssues.${kind}`)
+}
+
+function nodeIssueLabel(node: DeploymentNodeState): string {
+  if (!node.issue) return t('bottomBar.nodeHealthy')
+  return issueLabel(node.issue.kind, node.issue.detail)
+}
+
+function remoteNodesOf(svc: { deployment: Deployment; aggregate: DeploymentAggregateNodeStatus }) {
+  return svc.deployment.location === 'remote' ? svc.aggregate.nodes : []
+}
+
+function selectedNodeIds(deploymentId: string): string[] {
+  return deploymentNodeSelectionStore.selectedHostIds(deploymentId)
+}
+
+function isNodeSelected(deploymentId: string, hostId: string): boolean {
+  return deploymentNodeSelectionStore.isNodeSelected(deploymentId, hostId)
+}
+
+function toggleNode(deploymentId: string, hostId: string) {
+  deploymentNodeSelectionStore.toggleNode(deploymentId, hostId)
+}
+
 const connectionText = computed(() =>
   agentStore.connected ? t('bottomBar.connected') : t('bottomBar.disconnected'),
 )
@@ -249,15 +338,43 @@ onBeforeUnmount(() => {
         <div
           v-for="svc in panelServices"
           :key="svc.id"
-          class="service-chip"
+          class="deployment-node-group"
+          data-test="bottom-deployment-node-group"
         >
-          <input
-            type="checkbox"
-            :checked="checkedIds.has(svc.id)"
-            @change="toggleCheck(svc.id)"
-          />
-          <span class="dot" :style="{ background: statusColor(svc.status) }" />
-          <span class="svc-name">{{ svc.name }}</span>
+          <label class="service-chip">
+            <input
+              type="checkbox"
+              :checked="checkedIds.has(svc.id)"
+              @change="toggleCheck(svc.id)"
+            />
+            <span class="dot" :style="{ background: deploymentDotColor(svc) }" />
+            <span class="svc-name">{{ svc.name }}</span>
+          </label>
+          <div
+            v-if="remoteNodesOf(svc).length > 0"
+            class="node-chip-list"
+            data-test="bottom-node-chip-list"
+          >
+            <span class="node-scope">
+              {{ t('bottomBar.nodeScope', { selected: selectedNodeIds(svc.id).length, total: remoteNodesOf(svc).length }) }}
+            </span>
+            <label
+              v-for="node in remoteNodesOf(svc)"
+              :key="node.hostId"
+              class="node-chip"
+              :class="{ selected: isNodeSelected(svc.id, node.hostId) }"
+              :title="nodeIssueLabel(node)"
+              data-test="bottom-node-chip"
+            >
+              <input
+                type="checkbox"
+                :checked="isNodeSelected(svc.id, node.hostId)"
+                @change="toggleNode(svc.id, node.hostId)"
+              />
+              <span class="dot" :style="{ background: nodeHealthColor(node.health) }" />
+              <span class="node-name">{{ node.hostName }}</span>
+            </label>
+          </div>
         </div>
       </div>
     </section>
@@ -383,7 +500,15 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.deployment-node-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .service-chip,
+.node-chip,
 .action-btn,
 .sync-label,
 .sync-record-btn,
@@ -402,9 +527,11 @@ onBeforeUnmount(() => {
   padding: 0 10px;
   border: 1px solid rgba(139, 148, 158, 0.22);
   background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
 }
 
 .service-chip input,
+.node-chip input,
 .sync-label input {
   accent-color: #1f6feb;
   width: 13px;
@@ -422,6 +549,45 @@ onBeforeUnmount(() => {
 .svc-name {
   color: var(--text-primary);
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.node-chip-list {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 360px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.node-scope {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.node-chip {
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid rgba(139, 148, 158, 0.18);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.node-chip.selected {
+  border-color: rgba(88, 166, 255, 0.34);
+  background: rgba(31, 111, 235, 0.1);
+  color: var(--text-primary);
+}
+
+.node-name {
+  max-width: 92px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

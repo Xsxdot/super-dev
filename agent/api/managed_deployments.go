@@ -77,7 +77,17 @@ func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.Mana
 			Error: failure.Error,
 		})
 	}
+	status := a.buildManagedDeploymentStatus(normalized, desiredCollectors, result)
+	a.mu.Lock()
+	a.managedStatus = status
+	a.mu.Unlock()
 	return result
+}
+
+func (a *App) updateManagedDeploymentLastResult(result model.ManagedDeploymentReconcileResult) {
+	a.mu.Lock()
+	a.managedStatus.LastResult = result
+	a.mu.Unlock()
 }
 
 func (a *App) clearManagedProjectBackendsLocked(project model.Project) {
@@ -188,6 +198,57 @@ func managedCollectorsFromDeployments(list []model.ManagedDeployment) []collecto
 		out = append(out, collector.DesiredCollector{Name: name, Type: t, ExtraArgs: extraArgs})
 	}
 	return out
+}
+
+func (a *App) buildManagedDeploymentStatus(
+	list []model.ManagedDeployment,
+	desiredCollectors []collector.DesiredCollector,
+	result model.ManagedDeploymentReconcileResult,
+) model.ManagedDeploymentStatus {
+	failureByKey := map[string]string{}
+	for _, failure := range result.FailedCollectors {
+		failureByKey[collector.CollectorID(failure.Name, failure.Type)] = failure.Error
+	}
+
+	collectorStatuses := make([]model.ManagedCollectorStatus, 0, len(list))
+	for _, item := range list {
+		if item.Logs == nil {
+			continue
+		}
+		dep := model.Deployment{Logs: item.Logs}
+		name, t, _, ok := managedCollectorTarget(dep)
+		status := model.ManagedCollectorStatus{
+			DeploymentID: item.DeploymentID,
+			ServiceName:  item.ServiceName,
+			EnvName:      item.EnvName,
+			Name:         deploymentCollectorName(dep),
+			Type:         model.LogSourceType(item.Logs.Type),
+			Desired:      true,
+		}
+		if !ok {
+			status.Error = "unsupported collector type or empty target"
+			collectorStatuses = append(collectorStatuses, status)
+			continue
+		}
+		status.Name = name
+		status.Type = t
+		status.CollectorID = collector.CollectorID(name, t)
+		if col, exists := a.collector.Get(status.CollectorID); exists {
+			status.Running = true
+			status.Status = col.Status
+		}
+		if errText := failureByKey[status.CollectorID]; errText != "" {
+			status.Error = errText
+		}
+		collectorStatuses = append(collectorStatuses, status)
+	}
+
+	return model.ManagedDeploymentStatus{
+		DeploymentCount: len(list),
+		CollectorCount:  len(desiredCollectors),
+		LastResult:      result,
+		Collectors:      collectorStatuses,
+	}
 }
 
 func managedDeploymentCollectorID(dep model.Deployment) string {

@@ -175,3 +175,55 @@ func TestReconcileProjectsAsyncPushesAffectedHost(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(requests) == 1 }, time.Second, 10*time.Millisecond)
 }
+
+func TestGetHostManagedDeploymentsStatusProxiesRemoteState(t *testing.T) {
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/api/managed-deployments/status", r.URL.Path)
+		jsonOK(w, model.ManagedDeploymentStatus{
+			DeploymentCount: 1,
+			CollectorCount:  1,
+			Collectors: []model.ManagedCollectorStatus{{
+				DeploymentID: "dep-remote",
+				ServiceName:  "api",
+				Name:         "api.service",
+				Type:         model.LogSourceTypeJournalctl,
+				Desired:      true,
+				Running:      true,
+			}},
+		})
+	}))
+	t.Cleanup(remoteSrv.Close)
+
+	app := newTestAppForPackage(t)
+	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "prod-a"})
+	require.NoError(t, err)
+	resolver := reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}
+	app.tunnelResolver = resolver
+	app.managedReconciler = NewHostDeploymentReconciler(app, resolver, time.Hour)
+	app.mu.Lock()
+	app.appendProjectLocked(model.Project{
+		ID: "proj", Name: "proj",
+		Services: []model.Service{{
+			ID: "svc-api", ProjectID: "proj", Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1"},
+				Logs: &model.LogConfig{Type: model.LogKindJournalctl, Target: "api.service"},
+			}},
+		}},
+	})
+	app.mu.Unlock()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/hosts/h1/managed-deployments/status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got model.HostManagedDeploymentStatus
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	assert.True(t, got.TunnelConnected)
+	assert.Equal(t, 1, got.DesiredDeploymentCount)
+	assert.Equal(t, 1, got.DesiredCollectorCount)
+	require.NotNil(t, got.Remote)
+	assert.Equal(t, 1, got.Remote.CollectorCount)
+}

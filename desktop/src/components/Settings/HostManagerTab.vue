@@ -19,7 +19,7 @@ import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
 import { WS_BASE, type TunnelStatus } from '@/api/agent'
 import HostFormModal from './HostFormModal.vue'
-import type { Host, HostCreatePayload } from '@/api/agent'
+import type { Host, HostCreatePayload, HostManagedDeploymentStatus, ManagedCollectorStatus } from '@/api/agent'
 
 const store = useRemoteStore()
 const { t } = useI18n()
@@ -31,6 +31,8 @@ const expandedErrors = ref<Set<string>>(new Set())
 const installingHostIds = ref<Set<string>>(new Set())
 const checkingHostIds = ref<Set<string>>(new Set())
 const uninstallingHostIds = ref<Set<string>>(new Set())
+const checkingManagedHostIds = ref<Set<string>>(new Set())
+const managedStatuses = ref<Map<string, HostManagedDeploymentStatus>>(new Map())
 const installMessages = ref<Map<string, string>>(new Map())
 const installErrors = ref<Map<string, string>>(new Map())
 const refreshingAgents = ref(false)
@@ -158,6 +160,60 @@ function agentMetaLabel(hostId: string): string {
   return parts.length > 0 ? parts.join(' · ') : t('settings.hosts.agentMetaEmpty')
 }
 
+function managedStatusOf(hostId: string): HostManagedDeploymentStatus | undefined {
+  return managedStatuses.value.get(hostId)
+}
+
+function shortError(message: string): string {
+  return message.length > 52 ? message.slice(0, 52) + '...' : message
+}
+
+function runningCollectorCount(status: HostManagedDeploymentStatus): number {
+  return status.remote?.collectors?.filter(item => item.running && item.status !== 'failed').length ?? 0
+}
+
+function managedStatusLabel(hostId: string): string {
+  const status = managedStatusOf(hostId)
+  if (!status) return t('settings.hosts.orchestrationUnchecked')
+  if (!status.tunnel_connected) {
+    return t('settings.hosts.orchestrationDisconnected', { count: status.desired_deployment_count })
+  }
+  if (status.error && !status.remote) {
+    return t('settings.hosts.orchestrationError', { message: shortError(status.error) })
+  }
+  const remote = status.remote
+  if (!remote) return t('settings.hosts.orchestrationChecking')
+  return t('settings.hosts.orchestrationSummary', {
+    deployments: remote.deployment_count,
+    desired: status.desired_deployment_count,
+    collectors: runningCollectorCount(status),
+    desiredCollectors: status.desired_collector_count,
+  })
+}
+
+function collectorIssue(item: ManagedCollectorStatus): string {
+  if (item.error) return item.error
+  if (!item.running) return t('settings.hosts.collectorNotRunning')
+  if (item.status === 'failed') return 'failed'
+  return ''
+}
+
+function managedIssueLabel(hostId: string): string {
+  const status = managedStatusOf(hostId)
+  if (!status) return ''
+  if (status.error && status.tunnel_connected) {
+    return t('settings.hosts.orchestrationIssue', { target: status.host_name || status.host_id, detail: shortError(status.error) })
+  }
+  const issue = status.remote?.collectors?.find(item => collectorIssue(item))
+  if (!issue) return ''
+  const target = issue.service_name || issue.deployment_id
+  return t('settings.hosts.orchestrationIssue', { target, detail: shortError(collectorIssue(issue)) })
+}
+
+function hasManagedIssue(hostId: string): boolean {
+  return managedIssueLabel(hostId) !== ''
+}
+
 function hasDetectedAgent(hostId: string): boolean {
   const status = store.tunnelOf(hostId)
   return Boolean(
@@ -192,6 +248,10 @@ function isChecking(hostId: string): boolean {
 
 function isUninstalling(hostId: string): boolean {
   return uninstallingHostIds.value.has(hostId)
+}
+
+function isCheckingManaged(hostId: string): boolean {
+  return checkingManagedHostIds.value.has(hostId)
 }
 
 function installActionLabel(hostId: string): string {
@@ -233,6 +293,7 @@ async function checkAgent(host: Host) {
   checkingHostIds.value = checking
   try {
     await store.checkHostAgent(host.id)
+    await refreshManagedStatus(host)
     deleteHostError(host.id)
   } catch (err) {
     setHostError(host.id, err instanceof Error ? err.message : t('settings.hosts.agentCheckFailed'))
@@ -240,6 +301,34 @@ async function checkAgent(host: Host) {
     const next = new Set(checkingHostIds.value)
     next.delete(host.id)
     checkingHostIds.value = next
+  }
+}
+
+async function refreshManagedStatus(host: Host) {
+  if (host.is_self || isCheckingManaged(host.id)) return
+  const checking = new Set(checkingManagedHostIds.value)
+  checking.add(host.id)
+  checkingManagedHostIds.value = checking
+  try {
+    const status = await store.getHostManagedDeploymentStatus(host.id)
+    const next = new Map(managedStatuses.value)
+    next.set(host.id, status)
+    managedStatuses.value = next
+  } catch (err) {
+    const next = new Map(managedStatuses.value)
+    next.set(host.id, {
+      host_id: host.id,
+      host_name: host.name,
+      desired_deployment_count: 0,
+      desired_collector_count: 0,
+      tunnel_connected: false,
+      error: err instanceof Error ? err.message : t('settings.hosts.orchestrationCheckFailed'),
+    })
+    managedStatuses.value = next
+  } finally {
+    const next = new Set(checkingManagedHostIds.value)
+    next.delete(host.id)
+    checkingManagedHostIds.value = next
   }
 }
 
@@ -415,6 +504,21 @@ async function confirmUninstall() {
                   </div>
                   <span v-if="!host.is_self" class="install-help install-help-row" data-test="host-install-help">
                     {{ t('settings.hosts.agentInstallHelp') }}
+                  </span>
+                  <span
+                    v-if="!host.is_self"
+                    class="orchestration-line"
+                    :class="{ 'orchestration-line-bad': hasManagedIssue(host.id) }"
+                    data-test="host-managed-status"
+                  >
+                    {{ managedStatusLabel(host.id) }}
+                  </span>
+                  <span
+                    v-if="managedIssueLabel(host.id)"
+                    class="orchestration-issue"
+                    data-test="host-managed-issue"
+                  >
+                    {{ managedIssueLabel(host.id) }}
                   </span>
                 </div>
               </td>
@@ -600,6 +704,24 @@ async function confirmUninstall() {
   display: block;
   max-width: 420px;
   line-height: 1.35;
+}
+.orchestration-line {
+  display: block;
+  max-width: 420px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.orchestration-line-bad,
+.orchestration-issue {
+  color: var(--status-failed);
+}
+.orchestration-issue {
+  display: block;
+  max-width: 420px;
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
 }
 .tunnel-failed {
   color: var(--status-failed);

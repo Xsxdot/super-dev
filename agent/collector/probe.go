@@ -62,7 +62,8 @@ func (p *SystemProbe) Exists(t model.LogSourceType, name string) error {
 	case model.LogSourceTypeMacOSLog:
 		return ValidateName(name)
 	case model.LogSourceTypeFileTail:
-		return ValidatePath(name)
+		_, err := NormalizeFileTailPath(name)
+		return err
 	case model.LogSourceTypeCommand:
 		return ValidateCommand(name)
 	default:

@@ -13,9 +13,13 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick, ref } from 'vue'
 import LogPanel from '../LogPanel.vue'
+import { api } from '@/api/agent'
+import { useAgentStore } from '@/stores/agent'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { DisplayLogEntry } from '@/lib/logEngine'
+import type { Project } from '@/api/agent'
 
 const virtualizerMock = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
@@ -291,5 +295,90 @@ describe('LogPanel', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('Live · showing 0')
+  })
+
+  it('远端 deployment 日志 tab 展示节点筛选条并同步节点选择', async () => {
+    vi.spyOn(api, 'listHosts').mockResolvedValue([
+      { id: 'h1', name: 'ali-01', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+      { id: 'h2', name: 'jp', ssh_host: '10.0.0.2', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+    ])
+    vi.spyOn(api, 'getHostManagedDeploymentStatus').mockImplementation(async (hostId: string) => ({
+      host_id: hostId,
+      host_name: hostId,
+      desired_deployment_count: 1,
+      desired_collector_count: 1,
+      tunnel_connected: true,
+      remote: {
+        deployment_count: 1,
+        collector_count: 1,
+        collectors: [{
+          deployment_id: 'dep-api',
+          desired: true,
+          running: true,
+          status: 'running',
+        }],
+      },
+    }))
+    vi.spyOn(api, 'getProjectRules').mockResolvedValue([])
+    const agentStore = useAgentStore()
+    const deploymentLogStore = useDeploymentLogStore()
+    const nodeSelectionStore = useDeploymentNodeSelectionStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    const project: Project = {
+      id: 'proj-1',
+      name: 'Project',
+      root_path: '/tmp/project',
+      env_selected_service_ids: {},
+      environments: [{ id: 'env-prod', name: 'prod', is_dev: false, order: 0 }],
+      services: [{
+        id: 'svc-api',
+        project_id: 'proj-1',
+        name: 'api',
+        status: 'running',
+        required: false,
+        order: 1,
+        deployments: [{
+          id: 'dep-api',
+          env_name: 'prod',
+          location: 'remote',
+          status: 'running',
+          host_ids: ['h1', 'h2'],
+          logs: { type: 'file_tail', path: '/var/log/api.log' },
+        }],
+      }],
+    }
+    agentStore.projects = [project]
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-remote',
+        projectId: 'proj-1',
+        source: { type: 'deployment', deploymentId: 'dep-api' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.findAll('[data-test="log-node-filter-chip"]')).toHaveLength(2)
+    expect(wrapper.find('[data-test="log-node-filter-strip"]').text()).toContain('节点 2/2')
+
+    await wrapper.findAll('[data-test="log-node-filter-chip"]')[1].trigger('click')
+
+    expect(nodeSelectionStore.selectedHostIds('dep-api')).toEqual(['h1'])
+    expect(wrapper.find('[data-test="log-node-filter-strip"]').text()).toContain('节点 1/2')
   })
 })

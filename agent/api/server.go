@@ -89,6 +89,7 @@ type App struct {
 	collector              *collector.Manager
 	managedStore           *ManagedStore
 	managedProjectIDs      map[string]struct{}
+	managedStatus          model.ManagedDeploymentStatus
 	managedReconciler      *HostDeploymentReconciler
 	managedReconcileCancel context.CancelFunc
 	remoteStore            *remote.Store
@@ -402,6 +403,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/collectors/{id}", a.stopCollector)
 	mux.HandleFunc("GET /api/collectors", a.listCollectors)
 	mux.HandleFunc("PUT /api/managed-deployments", a.putManagedDeployments)
+	mux.HandleFunc("GET /api/managed-deployments/status", a.getManagedDeploymentsStatus)
 
 	// 远程主机管理
 	mux.HandleFunc("GET /api/hosts/detect-ssh-keys", a.detectSshKeys)
@@ -412,6 +414,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts/{id}/agent/install", a.installHostAgent)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/check", a.checkHostAgent)
 	mux.HandleFunc("POST /api/hosts/{id}/agent/uninstall", a.uninstallHostAgent)
+	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 
 	// 远程日志源管理

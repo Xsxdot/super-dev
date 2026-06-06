@@ -115,3 +115,36 @@ func TestLoadManagedDeploymentsRestoresRemoteAgentState(t *testing.T) {
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 }
+
+func TestManagedDeploymentsStatusReportsCollectorFailure(t *testing.T) {
+	app := newManagedDeploymentTestApp(t, t.TempDir())
+	body, err := json.Marshal([]model.ManagedDeployment{{
+		DeploymentID: "dep-file-prod",
+		ServiceID:    "svc-file",
+		ServiceName:  "files",
+		ProjectID:    "proj-prod",
+		EnvName:      "prod",
+		Location:     model.LocationRemote,
+		Logs:         &model.LogConfig{Type: model.LogKindFileTail, Path: "relative/app.log"},
+	}})
+	require.NoError(t, err)
+
+	put := httptest.NewRecorder()
+	putReq := httptest.NewRequest(http.MethodPut, "/api/managed-deployments", bytes.NewReader(body))
+	app.Handler().ServeHTTP(put, putReq)
+	require.Equal(t, http.StatusOK, put.Code)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/managed-deployments/status", nil)
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var status model.ManagedDeploymentStatus
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&status))
+	assert.Equal(t, 1, status.DeploymentCount)
+	assert.Equal(t, 1, status.CollectorCount)
+	require.Len(t, status.Collectors, 1)
+	assert.Equal(t, "dep-file-prod", status.Collectors[0].DeploymentID)
+	assert.False(t, status.Collectors[0].Running)
+	assert.Contains(t, status.Collectors[0].Error, "invalid path")
+}

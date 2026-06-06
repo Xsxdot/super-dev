@@ -46,6 +46,8 @@ func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 			return agentHealthProbeResponse(http.StatusOK), nil
 		case r.Method == http.MethodGet && r.URL.Path == "/api/exec/health":
 			return agentHealthProbeJSONResponse(http.StatusOK, `{"version":"0.1.0"}`), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/api/managed-deployments/status":
+			return agentHealthProbeJSONResponse(http.StatusOK, `{"deployment_count":0,"collector_count":0,"collectors":[]}`), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/transfer":
 			return agentHealthProbeResponse(http.StatusBadRequest), nil
 		default:
@@ -156,6 +158,8 @@ func statusForKnownAgentHealthEndpoint(r *http.Request) int {
 		return http.StatusOK
 	case r.Method == http.MethodGet && r.URL.Path == "/api/exec/health":
 		return http.StatusNoContent
+	case r.Method == http.MethodGet && r.URL.Path == "/api/managed-deployments/status":
+		return http.StatusOK
 	case r.Method == http.MethodPost && r.URL.Path == "/api/transfer":
 		return http.StatusBadRequest
 	default:

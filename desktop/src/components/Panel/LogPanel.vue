@@ -6,12 +6,20 @@ import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useAgentStore } from '@/stores/agent'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
+import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
+import { useRemoteStore } from '@/stores/remote'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import LogLifecycleSeparatorRow from './LogLifecycleSeparatorRow.vue'
+import {
+  buildDeploymentNodeStatus,
+  logMatchesSelectedNodes,
+  type DeploymentNodeIssueKind,
+  type DeploymentNodeState,
+} from '@/lib/deploymentNodeStatus'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { PanelSource } from '@/stores/panel'
 import {
@@ -37,7 +45,9 @@ const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
 const agentStore = useAgentStore()
 const deploymentLogStore = useDeploymentLogStore()
+const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const logLifecycleStore = useLogLifecycleStore()
+const remoteStore = useRemoteStore()
 const { t } = useI18n()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
@@ -68,6 +78,50 @@ let historyLoadToken = 0
 function deploymentIdFromSource(source: PanelSource | null | undefined): string | null {
   return source?.type === 'deployment' ? source.deploymentId : null
 }
+
+const currentDeploymentInfo = computed(() => {
+  const deploymentId = deploymentIdFromSource(props.source)
+  return deploymentId ? agentStore.serviceForDeployment(deploymentId) : undefined
+})
+
+const currentNodeStatus = computed(() => {
+  const dep = currentDeploymentInfo.value?.deployment
+  if (!dep || dep.location !== 'remote') return null
+  return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteStore.managedStatuses)
+})
+
+const currentRemoteNodes = computed(() => currentNodeStatus.value?.nodes ?? [])
+
+const currentRemoteHostIds = computed(() => {
+  const dep = currentDeploymentInfo.value?.deployment
+  return dep?.location === 'remote' ? [...new Set(dep.host_ids ?? [])] : []
+})
+
+async function refreshRemoteNodeContext(hostIds: string[]) {
+  if (hostIds.length === 0) return
+  try {
+    if (remoteStore.hosts.length === 0) await remoteStore.loadHosts()
+    await remoteStore.refreshManagedStatuses(hostIds)
+  } catch (err) {
+    console.warn('[SuperDev] refresh log panel remote node status failed:', err)
+  }
+}
+
+watch(
+  currentRemoteHostIds,
+  hostIds => void refreshRemoteNodeContext(hostIds),
+  { immediate: true },
+)
+
+watch(
+  () => `${deploymentIdFromSource(props.source) ?? ''}:${currentRemoteHostIds.value.join('|')}`,
+  () => {
+    const deploymentId = deploymentIdFromSource(props.source)
+    if (!deploymentId || currentRemoteHostIds.value.length === 0) return
+    deploymentNodeSelectionStore.ensureDeploymentNodes(deploymentId, currentRemoteHostIds.value)
+  },
+  { immediate: true },
+)
 
 async function subscribeDeployment(deploymentId: string) {
   deploymentLogStore.subscribe(deploymentId)
@@ -127,8 +181,25 @@ const rawLogs = computed<DisplayLogEntry[]>(() => {
   return []
 })
 
-const filteredLogs = computed(() =>
+const ruleFilteredLogs = computed(() =>
   filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value),
+)
+
+const selectedRemoteHostIds = computed(() => {
+  const deploymentId = deploymentIdFromSource(props.source)
+  return deploymentId ? deploymentNodeSelectionStore.selectedHostIds(deploymentId) : []
+})
+
+const filteredLogs = computed(() => {
+  const nodes = currentRemoteNodes.value
+  if (nodes.length === 0) return ruleFilteredLogs.value
+  return ruleFilteredLogs.value.filter(log =>
+    logMatchesSelectedNodes(log, nodes, selectedRemoteHostIds.value),
+  )
+})
+
+const nodeFilterSignature = computed(() =>
+  `${deploymentIdFromSource(props.source) ?? ''}:${selectedRemoteHostIds.value.join(',')}:${currentRemoteNodes.value.map(node => node.sourceIds.join('/')).join('|')}`,
 )
 
 const historyBoundary = computed(() => initialHistoryBoundary.value)
@@ -274,6 +345,11 @@ watch(
   () => filterStore.getPanel(props.panelId).chips,
   () => refreshDisplayImmediately(),
   { deep: true },
+)
+
+watch(
+  nodeFilterSignature,
+  () => refreshDisplayImmediately(),
 )
 
 watch(
@@ -456,6 +532,52 @@ const virtualizer = useVirtualizer(
     overscan: LOG_VIRTUAL_OVERSCAN,
   }))
 )
+
+function nodeHealthColor(health: string): string {
+  if (health === 'healthy') return '#3fb950'
+  if (health === 'warning') return '#d29922'
+  if (health === 'failed') return '#f85149'
+  return '#6e7681'
+}
+
+function issueLabel(kind: DeploymentNodeIssueKind, detail?: string): string {
+  if (kind === 'host-error') return detail || t('panel.log.nodeHostError')
+  if (kind === 'collector-error') return detail || t('panel.log.nodeCollectorError')
+  return t(`panel.log.nodeIssues.${kind}`)
+}
+
+function nodeIssueLabel(node: DeploymentNodeState): string {
+  if (!node.issue) return t('panel.log.nodeHealthy')
+  return issueLabel(node.issue.kind, node.issue.detail)
+}
+
+function nodeSummaryLabel(): string {
+  const status = currentNodeStatus.value
+  if (!status) return ''
+  if (status.collectorExpected > 0) {
+    return t('panel.log.nodeSummary', {
+      selected: selectedRemoteHostIds.value.length,
+      total: status.total,
+      collectors: status.collectorReady,
+      desiredCollectors: status.collectorExpected,
+    })
+  }
+  return t('panel.log.nodeSummaryNoCollector', {
+    selected: selectedRemoteHostIds.value.length,
+    total: status.total,
+  })
+}
+
+function isNodeSelected(hostId: string): boolean {
+  const deploymentId = deploymentIdFromSource(props.source)
+  return !!deploymentId && deploymentNodeSelectionStore.isNodeSelected(deploymentId, hostId)
+}
+
+function toggleNode(hostId: string) {
+  const deploymentId = deploymentIdFromSource(props.source)
+  if (!deploymentId) return
+  deploymentNodeSelectionStore.toggleNode(deploymentId, hostId)
+}
 </script>
 
 <template>
@@ -467,6 +589,27 @@ const virtualizer = useVirtualizer(
       :project-id="projectId"
       @end-bookmark="onEndBookmark"
     />
+    <div
+      v-if="currentRemoteNodes.length > 0"
+      class="node-filter-strip"
+      data-test="log-node-filter-strip"
+    >
+      <span class="node-summary">{{ nodeSummaryLabel() }}</span>
+      <button
+        v-for="node in currentRemoteNodes"
+        :key="node.hostId"
+        type="button"
+        class="node-filter-chip"
+        :class="{ selected: isNodeSelected(node.hostId) }"
+        :title="nodeIssueLabel(node)"
+        data-test="log-node-filter-chip"
+        @mousedown.prevent
+        @click="toggleNode(node.hostId)"
+      >
+        <span class="node-dot" :style="{ background: nodeHealthColor(node.health) }" />
+        <span class="node-name">{{ node.hostName }}</span>
+      </button>
+    </div>
     <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
       <div v-if="source?.type === 'deployment' && isLoadingHistory" class="history-loading">{{ t('panel.log.historyLoading') }}</div>
       <div v-else-if="source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId)" class="history-end">{{ t('panel.log.historyEnd') }}</div>
@@ -548,6 +691,64 @@ const virtualizer = useVirtualizer(
   overflow: hidden;
   position: relative;
 }
+
+.node-filter-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 10px;
+  border-top: 1px solid rgba(139, 148, 158, 0.12);
+  border-bottom: 1px solid rgba(139, 148, 158, 0.12);
+  background: rgba(13, 24, 34, 0.62);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.node-summary {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.node-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.node-filter-chip.selected {
+  border-color: rgba(88, 166, 255, 0.34);
+  background: rgba(31, 111, 235, 0.12);
+  color: var(--text-primary);
+}
+
+.node-filter-chip:hover {
+  color: var(--text-primary);
+}
+
+.node-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.node-name {
+  max-width: 104px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
 .log-list {
   flex: 1;
   overflow-y: auto;
