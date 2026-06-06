@@ -82,6 +82,14 @@ func nodeStatus(hostID, name string, reachable bool) nodetransport.NodeStatus {
 	}
 }
 
+func snapshotByHost(snapshot []nodetransport.NodeStatus) map[string]nodetransport.NodeStatus {
+	out := map[string]nodetransport.NodeStatus{}
+	for _, status := range snapshot {
+		out[status.HostID] = status
+	}
+	return out
+}
+
 func TestRegistrySnapshotAndSubscribe(t *testing.T) {
 	tr := newFakeTransport("h1", "h2")
 	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{
@@ -93,13 +101,19 @@ func TestRegistrySnapshotAndSubscribe(t *testing.T) {
 
 	snapCh, unsubscribe := reg.Subscribe()
 	defer unsubscribe()
-	require.Empty(t, <-snapCh)
+	initial := <-snapCh
+	require.Len(t, initial, 2)
+	assert.False(t, initial[0].Reachable)
+	assert.False(t, initial[1].Reachable)
+	assert.Equal(t, model.AgentHealthUnknown, initial[0].Agent.Health)
+	assert.Equal(t, model.AgentHealthUnknown, initial[1].Agent.Health)
 
 	tr.ch <- []nodetransport.NodeStatus{nodeStatus("h2", "jp", true)}
 	got := <-snapCh
-	require.Len(t, got, 1)
-	assert.Equal(t, "h2", got[0].HostID)
-	assert.True(t, got[0].Reachable)
+	require.Len(t, got, 2)
+	h2, ok := snapshotByHost(got)["h2"]
+	require.True(t, ok)
+	assert.True(t, h2.Reachable)
 
 	tr.ch <- []nodetransport.NodeStatus{nodeStatus("h1", "ali", true)}
 	require.Eventually(t, func() bool {
@@ -169,4 +183,33 @@ func TestRegistryMarksStaleNodesUnreachableWithoutBlockingFreshNodes(t *testing.
 		h2, ok2 := reg.SnapshotOf("h2")
 		return ok1 && ok2 && !h1.Reachable && h2.Reachable
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRegistryPreseedsCoveredNodesAsUnknown(t *testing.T) {
+	tr := newFakeTransport("h1", "h2")
+	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{StaleAfter: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		snap := reg.Snapshot()
+		return len(snap) == 2 && !snap[0].Reachable && !snap[1].Reachable &&
+			snap[0].Agent.Health == model.AgentHealthUnknown &&
+			snap[1].Agent.Health == model.AgentHealthUnknown
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRegistryIgnoresFramesOutsideTransportCovers(t *testing.T) {
+	tr := newFakeTransport("h1")
+	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{StaleAfter: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg.Start(ctx)
+
+	tr.ch <- []nodetransport.NodeStatus{nodeStatus("h2", "foreign", true)}
+	require.Never(t, func() bool {
+		_, ok := reg.SnapshotOf("h2")
+		return ok
+	}, 100*time.Millisecond, 10*time.Millisecond)
 }

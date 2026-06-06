@@ -56,7 +56,7 @@ type Registry struct {
 	mu       sync.Mutex
 	nodes    map[string]nodetransport.NodeStatus
 	lastSeen map[string]time.Time
-	bySource map[int]map[string]struct{}
+	covers   map[int]map[string]struct{}
 	subs     map[string]chan []nodetransport.NodeStatus
 	started  bool
 }
@@ -87,7 +87,7 @@ func New(transports []nodetransport.NodeTransport, opts Options) *Registry {
 		checkEvery: checkEvery,
 		nodes:      map[string]nodetransport.NodeStatus{},
 		lastSeen:   map[string]time.Time{},
-		bySource:   map[int]map[string]struct{}{},
+		covers:     map[int]map[string]struct{}{},
 		subs:       map[string]chan []nodetransport.NodeStatus{},
 	}
 }
@@ -101,12 +101,25 @@ func New(transports []nodetransport.NodeTransport, opts Options) *Registry {
 //   - 重复调用是幂等的
 //   - ctx 取消后，Registry 停止消费新状态，但保留最后一次内存快照
 func (r *Registry) Start(ctx context.Context) {
+	coverage := make(map[int]map[string]struct{}, len(r.transports))
+	for idx, transport := range r.transports {
+		coverage[idx] = idsToSet(transport.Covers())
+	}
+	now := time.Now().UTC()
+
 	r.mu.Lock()
 	if r.started {
 		r.mu.Unlock()
 		return
 	}
 	r.started = true
+	for idx, ids := range coverage {
+		r.covers[idx] = ids
+	}
+	changed := r.preseedCoveredNodesLocked(now)
+	if changed {
+		r.broadcastLocked(sortedSnapshot(r.nodes))
+	}
 	r.mu.Unlock()
 
 	for idx, transport := range r.transports {
@@ -207,12 +220,12 @@ func (r *Registry) applyBatch(source int, batch []nodetransport.NodeStatus, now 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.bySource[source] == nil {
-		r.bySource[source] = map[string]struct{}{}
-	}
 	changed := false
 	for _, status := range batch {
 		if status.HostID == "" {
+			continue
+		}
+		if !r.sourceCoversLocked(source, status.HostID) {
 			continue
 		}
 		if status.UpdatedAt.IsZero() {
@@ -220,7 +233,6 @@ func (r *Registry) applyBatch(source int, batch []nodetransport.NodeStatus, now 
 		}
 		r.nodes[status.HostID] = status
 		r.lastSeen[status.HostID] = now
-		r.bySource[source][status.HostID] = struct{}{}
 		changed = true
 	}
 	if changed {
@@ -232,7 +244,7 @@ func (r *Registry) markSourceUnreachable(source int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	ids := r.bySource[source]
+	ids := r.covers[source]
 	if len(ids) == 0 {
 		return
 	}
@@ -241,6 +253,54 @@ func (r *Registry) markSourceUnreachable(source int) {
 		r.nodes[hostID] = unreachableStatus(r.nodes[hostID], now, "node status stream closed")
 	}
 	r.broadcastLocked(sortedSnapshot(r.nodes))
+}
+
+func (r *Registry) preseedCoveredNodesLocked(now time.Time) bool {
+	changed := false
+	for _, ids := range r.covers {
+		for hostID := range ids {
+			if hostID == "" {
+				continue
+			}
+			if _, exists := r.nodes[hostID]; exists {
+				continue
+			}
+			r.nodes[hostID] = nodetransport.NodeStatus{
+				HostID:    hostID,
+				Reachable: false,
+				Agent: model.AgentRuntime{
+					Health:    model.AgentHealthUnknown,
+					Reachable: false,
+				},
+				UpdatedAt: now,
+			}
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (r *Registry) sourceCoversLocked(source int, hostID string) bool {
+	if source < 0 {
+		return true
+	}
+	ids := r.covers[source]
+	if len(ids) == 0 {
+		return false
+	}
+	_, ok := ids[hostID]
+	return ok
+}
+
+func idsToSet(ids []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 func (r *Registry) staleLoop(ctx context.Context) {
