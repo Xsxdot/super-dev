@@ -206,7 +206,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
-	nodeTransport := nodetransport.NodeTransport(nodetransport.NewTunnelTransport(tunnels, remoteStore.ListHosts))
+	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, remoteStore.ListHosts)
+	directTransport := nodetransport.NewDirectTransport(remoteStore.ListHosts)
+	nodeTransport := nodetransport.NodeTransport(nodetransport.NewDispatcher(remoteStore.ListHosts, map[model.TransportType]nodetransport.NodeTransport{
+		model.TransportTypeTunnel: tunnelTransport,
+		model.TransportTypeDirect: directTransport,
+	}))
 	if cfg.NodeTransportOverride != nil {
 		nodeTransport = cfg.NodeTransportOverride
 	}
