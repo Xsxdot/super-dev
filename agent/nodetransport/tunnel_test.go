@@ -161,3 +161,97 @@ func TestNodeStatusJSONShape(t *testing.T) {
 	assert.Contains(t, string(data), `"managed"`)
 	assert.NotContains(t, string(data), `"HostID"`)
 }
+
+func TestTunnelTransportSubscribeNodesStreamsConnectedHosts(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/ws/node-status", r.URL.Path)
+		require.Equal(t, "h1", r.URL.Query().Get("host_id"))
+		require.Equal(t, "ali-01", r.URL.Query().Get("host_name"))
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.WriteJSON([]nodetransport.NodeStatus{{
+			HostID:    r.URL.Query().Get("host_id"),
+			Name:      r.URL.Query().Get("host_name"),
+			Reachable: true,
+			Agent:     model.AgentRuntime{Health: model.AgentHealthHealthy, Reachable: true},
+			UpdatedAt: time.Now().UTC(),
+		}}))
+	}))
+	defer srv.Close()
+
+	host := model.Host{ID: "h1", Name: "ali-01"}
+	host.EnsureTunnelAgent()
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	_, err := mgr.EnsureConnected(host)
+	require.NoError(t, err)
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) {
+		return []model.Host{host}, nil
+	})
+	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := tr.SubscribeNodes(ctx)
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].HostID == "h1" && batch[0].Reachable
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestTunnelTransportSubscribeNodesEmitsUnreachableWithoutBlockingOtherHosts(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.WriteJSON([]nodetransport.NodeStatus{{
+			HostID:    r.URL.Query().Get("host_id"),
+			Name:      r.URL.Query().Get("host_name"),
+			Reachable: true,
+			Agent:     model.AgentRuntime{Health: model.AgentHealthHealthy, Reachable: true},
+			UpdatedAt: time.Now().UTC(),
+		}}))
+	}))
+	defer srv.Close()
+
+	connected := model.Host{ID: "h1", Name: "connected"}
+	connected.EnsureTunnelAgent()
+	missing := model.Host{ID: "h2", Name: "missing"}
+	missing.EnsureTunnelAgent()
+
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	_, err := mgr.EnsureConnected(connected)
+	require.NoError(t, err)
+
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) {
+		return []model.Host{connected, missing}, nil
+	})
+	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := tr.SubscribeNodes(ctx)
+	defer stop()
+
+	seen := map[string]bool{}
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			for _, status := range batch {
+				seen[status.HostID+":"+strconv.FormatBool(status.Reachable)] = true
+			}
+		default:
+		}
+		return seen["h1:true"] && seen["h2:false"]
+	}, time.Second, 10*time.Millisecond)
+}
