@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func newTestAppForPackage(t *testing.T) *App {
@@ -29,4 +30,14 @@ func newHTTPServerForPackage(t *testing.T, app *App) *httptest.Server {
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func testTunnelHost(id, name, sshHost, user string) model.Host {
+	host := model.Host{ID: id, Name: name, Tags: []string{}}
+	tunnelParams := host.EnsureTunnelAgent()
+	tunnelParams.SSHHost = sshHost
+	tunnelParams.SSHPort = 22
+	tunnelParams.SSHUser = user
+	tunnelParams.RemoteAgentPort = 57017
+	return host
 }

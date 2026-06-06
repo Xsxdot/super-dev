@@ -142,7 +142,11 @@ func (a *App) hostRefs(hostIDs []string) ([]model.HostRef, error) {
 		if name == "" {
 			name = host.ID
 		}
-		refs = append(refs, model.HostRef{ID: host.ID, Name: name, Address: host.SSHHost})
+		address := ""
+		if tunnelParams, ok := host.TunnelParams(); ok {
+			address = tunnelParams.SSHHost
+		}
+		refs = append(refs, model.HostRef{ID: host.ID, Name: name, Address: address})
 	}
 	return refs, nil
 }

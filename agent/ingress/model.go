@@ -360,7 +360,7 @@ func ResolveDNSRecordValue(in Ingress, hosts []model.Host) DNSValueDecision {
 	}
 	address := strings.TrimSpace(host.PublicIP)
 	if address == "" {
-		address = strings.TrimSpace(host.SSHHost)
+		address = tunnelSSHHost(host)
 	}
 	ip := net.ParseIP(address)
 	if ip == nil || !isPublicIP(ip) {

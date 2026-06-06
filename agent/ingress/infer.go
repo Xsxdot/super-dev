@@ -110,12 +110,20 @@ func publicAddress(host model.Host) (string, string) {
 	if strings.TrimSpace(host.PublicIP) != "" {
 		return strings.TrimSpace(host.PublicIP), ""
 	}
-	return strings.TrimSpace(host.SSHHost), fmt.Sprintf("host %s has no public_ip; used ssh_host", host.ID)
+	return tunnelSSHHost(host), fmt.Sprintf("host %s has no public_ip; used ssh_host", host.ID)
 }
 
 func privateAddress(host model.Host) (string, string) {
 	if strings.TrimSpace(host.PrivateIP) != "" {
 		return strings.TrimSpace(host.PrivateIP), ""
 	}
-	return strings.TrimSpace(host.SSHHost), fmt.Sprintf("host %s has no private_ip; used ssh_host", host.ID)
+	return tunnelSSHHost(host), fmt.Sprintf("host %s has no private_ip; used ssh_host", host.ID)
+}
+
+func tunnelSSHHost(host model.Host) string {
+	tunnelParams, ok := host.TunnelParams()
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(tunnelParams.SSHHost)
 }

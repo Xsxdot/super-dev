@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,16 +30,16 @@ func TestHostCRUD(t *testing.T) {
 	require.Len(t, initial, 1, "初始列表只有本机节点")
 	assert.True(t, initial[0].IsSelf, "首条是本机节点")
 
-	body, _ := json.Marshal(model.Host{
-		Name:        "c01",
-		SSHHost:     "10.0.0.1",
-		SSHUser:     "ops",
-		SSHPassword: "pw",
-		Tags:        []string{"prod"},
+	body, _ := json.Marshal(map[string]any{
+		"name":         "c01",
+		"ssh_host":     "10.0.0.1",
+		"ssh_user":     "ops",
+		"ssh_password": "pw",
+		"tags":         []string{"prod"},
 	})
 	resp, err = http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
-	var created model.Host
+	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
 	_ = resp.Body.Close()
 	assert.NotEmpty(t, created.ID)
@@ -81,21 +82,21 @@ func TestHostCRUD(t *testing.T) {
 func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
 	srv, _ := newTestApp(t)
 
-	body, _ := json.Marshal(model.Host{
-		ID:        "edge-1",
-		Name:      "edge",
-		SSHHost:   "ssh.example.com",
-		SSHPort:   22,
-		SSHUser:   "deploy",
-		PublicIP:  "203.0.113.10",
-		PrivateIP: "10.0.0.10",
+	body, _ := json.Marshal(map[string]any{
+		"id":         "edge-1",
+		"name":       "edge",
+		"ssh_host":   "ssh.example.com",
+		"ssh_port":   22,
+		"ssh_user":   "deploy",
+		"public_ip":  "203.0.113.10",
+		"private_ip": "10.0.0.10",
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var created model.Host
+	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
 	assert.Equal(t, "ssh.example.com", created.SSHHost)
 	assert.Equal(t, "203.0.113.10", created.PublicIP)
@@ -121,20 +122,20 @@ func TestHostCredentialMaterialReturnedForLocalEditing(t *testing.T) {
 	keyMaterial := "-----BEGIN OPENSSH PRIVATE KEY-----\nlocal-test-key\n-----END OPENSSH PRIVATE KEY-----\n"
 	require.NoError(t, os.WriteFile(keyFile, []byte(keyMaterial), 0o600))
 
-	body, _ := json.Marshal(model.Host{
-		Name:        "edge",
-		SSHHost:     "ssh.example.com",
-		SSHPort:     22,
-		SSHUser:     "deploy",
-		SSHPassword: "secret-password",
-		SSHKeyPath:  keyFile,
+	body, _ := json.Marshal(map[string]any{
+		"name":         "edge",
+		"ssh_host":     "ssh.example.com",
+		"ssh_port":     22,
+		"ssh_user":     "deploy",
+		"ssh_password": "secret-password",
+		"ssh_key_path": keyFile,
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var created model.Host
+	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
 	assert.Equal(t, "secret-password", created.SSHPassword)
 	assert.Equal(t, keyMaterial, created.SSHPrivateKey)
@@ -151,6 +152,43 @@ func TestHostCredentialMaterialReturnedForLocalEditing(t *testing.T) {
 	assert.Equal(t, "secret-password", hosts[1].SSHPassword)
 	assert.Equal(t, keyMaterial, hosts[1].SSHPrivateKey)
 	assert.Empty(t, hosts[1].SSHKeyPath)
+}
+
+func TestCreateHostPersistsNestedAgentTransportWhileReturningFlatDTO(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+	body, _ := json.Marshal(map[string]any{
+		"name":              "c01",
+		"ssh_host":          "10.0.0.1",
+		"ssh_port":          2222,
+		"ssh_user":          "ops",
+		"ssh_password":      "pw",
+		"remote_agent_port": 57019,
+	})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var created hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.Equal(t, "10.0.0.1", created.SSHHost)
+	assert.Equal(t, 2222, created.SSHPort)
+	assert.Equal(t, "ops", created.SSHUser)
+	assert.Equal(t, 57019, created.RemoteAgentPort)
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
+	require.NoError(t, err)
+	var saved []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.Len(t, saved, 1)
+	assert.NotContains(t, saved[0], "ssh_host")
+	agent := saved[0]["agent"].(map[string]any)
+	transport := agent["transport"].(map[string]any)
+	tunnel := transport["tunnel"].(map[string]any)
+	assert.Equal(t, "10.0.0.1", tunnel["ssh_host"])
+	assert.Equal(t, float64(2222), tunnel["ssh_port"])
+	assert.Equal(t, "ops", tunnel["ssh_user"])
+	assert.Equal(t, float64(57019), tunnel["remote_agent_port"])
 }
 
 func TestDetectSshKeys(t *testing.T) {
@@ -237,10 +275,15 @@ func TestInstallHostAgent(t *testing.T) {
 		InstallerOverride: fake,
 	})
 
-	body, _ := json.Marshal(model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHUser: "ops", SSHPassword: "pw"})
+	body, _ := json.Marshal(map[string]any{
+		"name":         "c01",
+		"ssh_host":     "10.0.0.1",
+		"ssh_user":     "ops",
+		"ssh_password": "pw",
+	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
-	var created model.Host
+	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
 	_ = resp.Body.Close()
 	fake.result.HostID = created.ID
@@ -273,10 +316,15 @@ func TestInstallHostAgentFailureIncludesStage(t *testing.T) {
 		InstallerOverride: fake,
 	})
 
-	body, _ := json.Marshal(model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHUser: "ops", SSHPassword: "pw"})
+	body, _ := json.Marshal(map[string]any{
+		"name":         "c01",
+		"ssh_host":     "10.0.0.1",
+		"ssh_user":     "ops",
+		"ssh_password": "pw",
+	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
-	var created model.Host
+	var created hostDTOWithSelf
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
 	_ = resp.Body.Close()
 

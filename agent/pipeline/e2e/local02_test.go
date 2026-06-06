@@ -161,7 +161,15 @@ func local02Config(t *testing.T) model.Host {
 		keyPath = firstExistingSSHKey()
 	}
 	require.True(t, keyPath != "" || password != "", "set SUPERDEV_E2E_LOCAL02_KEY or SUPERDEV_E2E_LOCAL02_PASSWORD")
-	return model.Host{ID: "local-02", Name: host, SSHHost: host, SSHPort: port, SSHUser: user, SSHPassword: password, SSHKeyPath: keyPath}
+	cfg := model.Host{ID: "local-02", Name: host}
+	tunnelParams := cfg.EnsureTunnelAgent()
+	tunnelParams.SSHHost = host
+	tunnelParams.SSHPort = port
+	tunnelParams.SSHUser = user
+	tunnelParams.SSHPassword = password
+	tunnelParams.SSHKeyPath = keyPath
+	tunnelParams.RemoteAgentPort = 57017
+	return cfg
 }
 
 func prepareLocalBuildToolchains(ctx context.Context, t *testing.T) error {
@@ -339,7 +347,11 @@ func runExamplePipeline(ctx context.Context, t *testing.T, root string, runTempD
 	if err != nil {
 		return err
 	}
-	plan, run, err := pipeline.BuildPlan(tc.Name, p, []model.HostRef{{ID: "local-02", Name: host.SSHHost}})
+	hostName := host.Name
+	if hostName == "" {
+		hostName = "local-02"
+	}
+	plan, run, err := pipeline.BuildPlan(tc.Name, p, []model.HostRef{{ID: "local-02", Name: hostName}})
 	if err != nil {
 		return err
 	}

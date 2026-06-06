@@ -6,9 +6,8 @@
 //   - 提供状态变更订阅(Subscribe/Unsubscribe),通过 channel 推送
 //
 // 边界：
-//   - 不持久化 LocalTunnelPort 的"复用"逻辑:Manager 不知道上次用了什么端口
-//     由调用方(api 层)在 EnsureConnected 时传入 host.LocalTunnelPort
-//     连接成功后由调用方写回 hosts.json
+//   - 不持久化本地端口的"复用"逻辑:Manager 不知道上次用了什么端口
+//     由调用方在 EnsureConnected 时传入 host.Agent.Runtime.LocalPort
 //   - 空闲超时暂不做(YAGNI),需要时再加 ticker;UI 关闭面板时显式 Disconnect
 package tunnel
 
@@ -93,10 +92,10 @@ func NewManager(dialer Dialer) *Manager {
 // EnsureConnected 若 host 未连接则建立隧道,已连接则直接返回端口。
 //
 // 参数：
-//   - host: 完整 Host 配置(凭据 + remote_agent_port + local_tunnel_port)
+//   - host: 完整 Host 配置(Agent.Transport.Tunnel + Agent.Runtime.LocalPort)
 //
 // 返回：
-//   - 本地端口(可写回 host.LocalTunnelPort 用于持久化复用)
+//   - 本地端口(可写入 host.Agent.Runtime.LocalPort 用于运行期复用)
 //   - 失败时返回错误,状态置为 StatusFailed
 func (m *Manager) EnsureConnected(host model.Host) (int, error) {
 	m.mu.Lock()
@@ -264,9 +263,21 @@ func (d *SSHDialer) Dial(host model.Host) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	sshAddr := net.JoinHostPort(host.SSHHost, strconv.Itoa(host.SSHPort))
-	remoteAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(host.RemoteAgentPort))
-	tun, actualPort, err := Dial(sshAddr, cfg, host.LocalTunnelPort, remoteAddr)
+	tunnelParams, ok := host.TunnelParams()
+	if !ok {
+		return nil, fmt.Errorf("host %s has no tunnel transport", host.ID)
+	}
+	sshPort := tunnelParams.SSHPort
+	if sshPort == 0 {
+		sshPort = 22
+	}
+	remoteAgentPort := tunnelParams.RemoteAgentPort
+	if remoteAgentPort == 0 {
+		remoteAgentPort = 57017
+	}
+	sshAddr := net.JoinHostPort(tunnelParams.SSHHost, strconv.Itoa(sshPort))
+	remoteAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(remoteAgentPort))
+	tun, actualPort, err := Dial(sshAddr, cfg, host.RuntimeLocalPort(), remoteAddr)
 	if err != nil {
 		return nil, err
 	}

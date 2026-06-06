@@ -7,7 +7,7 @@
 //   - GET /ws/tunnels:订阅状态变化事件流
 //
 // 边界：
-//   - 不修改 Host 凭据等元数据;仅在首次随机端口成功后写回 LocalTunnelPort 便于复用
+//   - 不修改 Host 凭据等元数据;本地端口属于运行时状态,不写回 hosts.json
 //   - 隧道空闲超时暂未实现;断开依赖前端 disconnect 或 agent 退出
 package api
 
@@ -97,9 +97,8 @@ func (a *App) connectTunnel(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		if h.LocalTunnelPort == 0 && port != 0 {
-			h.LocalTunnelPort = port
-			_ = a.remoteStore.UpdateHost(h)
+		if port != 0 {
+			h.SetRuntimeLocalPort(port)
 		}
 		jsonOK(w, tunnelStatusDTO{HostID: hostID, State: "open", LocalPort: port})
 		return

@@ -50,15 +50,19 @@ type Credentials struct {
 //   - SSHPrivateKey 是当前优先格式，避免配置同步后依赖本机文件路径
 //   - SSHKeyPath 仅作为旧配置兼容和导入入口
 func CredentialsFromHost(host model.Host) (Credentials, error) {
-	creds := Credentials{User: host.SSHUser, Password: host.SSHPassword}
-	if strings.TrimSpace(host.SSHPrivateKey) != "" {
-		creds.PrivateKey = []byte(host.SSHPrivateKey)
+	tunnelParams, ok := host.TunnelParams()
+	if !ok {
+		return Credentials{}, fmt.Errorf("host %s has no tunnel transport", host.ID)
+	}
+	creds := Credentials{User: tunnelParams.SSHUser, Password: tunnelParams.SSHPassword}
+	if strings.TrimSpace(tunnelParams.SSHPrivateKey) != "" {
+		creds.PrivateKey = []byte(tunnelParams.SSHPrivateKey)
 		return creds, nil
 	}
-	if strings.TrimSpace(host.SSHKeyPath) == "" {
+	if strings.TrimSpace(tunnelParams.SSHKeyPath) == "" {
 		return creds, nil
 	}
-	key, err := ReadPrivateKey(host.SSHKeyPath)
+	key, err := ReadPrivateKey(tunnelParams.SSHKeyPath)
 	if err != nil {
 		return Credentials{}, err
 	}

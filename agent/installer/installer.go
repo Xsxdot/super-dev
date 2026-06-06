@@ -135,10 +135,9 @@ func NewWithRemoteFactory(opts Options, factory RemoteFactory) *Installer {
 //   - 安装成功结果，包含 host ID 和平台
 //   - 分阶段错误，便于上层定位失败原因
 func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error) {
-	port := host.RemoteAgentPort
-	if port == 0 {
-		// 远端 Host 可能来自旧数据，缺省时沿用正式 agent 默认端口。
-		port = 57017
+	port := 57017
+	if tunnelParams, ok := host.TunnelParams(); ok && tunnelParams.RemoteAgentPort != 0 {
+		port = tunnelParams.RemoteAgentPort
 	}
 	remote, err := i.factory(host)
 	if err != nil {

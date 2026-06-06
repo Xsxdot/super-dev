@@ -89,12 +89,13 @@ func TestManagerStatusSubscribe(t *testing.T) {
 }
 
 func TestCredentialsFromHostPrefersStoredPrivateKeyMaterial(t *testing.T) {
-	creds, err := tunnel.CredentialsFromHost(model.Host{
-		SSHUser:       "deploy",
-		SSHPassword:   "pw",
-		SSHKeyPath:    "/path/that/should/not/be/read",
-		SSHPrivateKey: "inline-key",
-	})
+	host := model.Host{}
+	tunnelParams := host.EnsureTunnelAgent()
+	tunnelParams.SSHUser = "deploy"
+	tunnelParams.SSHPassword = "pw"
+	tunnelParams.SSHKeyPath = "/path/that/should/not/be/read"
+	tunnelParams.SSHPrivateKey = "inline-key"
+	creds, err := tunnel.CredentialsFromHost(host)
 
 	require.NoError(t, err)
 	assert.Equal(t, "deploy", creds.User)
