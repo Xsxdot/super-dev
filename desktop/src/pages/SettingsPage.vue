@@ -20,6 +20,7 @@ import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
+import AgentManagerTab from '@/components/Settings/AgentManagerTab.vue'
 import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
 import CertificateTab from '@/components/Settings/CertificateTab.vue'
 import McpManagerTab from '@/components/Settings/McpManagerTab.vue'
@@ -31,7 +32,7 @@ import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.v
 import type { SupportedLocale } from '@/i18n'
 import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'mcp'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'mcp'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,17 +44,19 @@ const { t } = useI18n()
 const selectedTab = ref<SettingsTab>(
   route.query.tab === 'hosts'
     ? 'hosts'
-    : route.query.tab === 'dns' || route.query.tab === 'ingress'
-      ? 'dns'
-      : route.query.tab === 'ssl'
-        ? 'ssl'
-        : route.query.tab === 'templates'
-          ? 'templates'
-          : route.query.tab === 'approvals'
-            ? 'approvals'
-            : route.query.tab === 'mcp'
-              ? 'mcp'
-              : 'general',
+    : route.query.tab === 'agents'
+      ? 'agents'
+      : route.query.tab === 'dns' || route.query.tab === 'ingress'
+        ? 'dns'
+        : route.query.tab === 'ssl'
+          ? 'ssl'
+          : route.query.tab === 'templates'
+            ? 'templates'
+            : route.query.tab === 'approvals'
+              ? 'approvals'
+              : route.query.tab === 'mcp'
+                ? 'mcp'
+                : 'general',
 )
 
 onMounted(() => {
@@ -201,6 +204,19 @@ const retentionDays = computed({
           <circle cx="4" cy="11.5" r="0.6" fill="currentColor"/>
         </svg>
         {{ t('settings.tabs.hosts') }}
+      </button>
+      <button
+        data-test="settings-tab-agents"
+        class="settings-nav-item"
+        :class="{ active: selectedTab === 'agents' }"
+        @click="selectedTab = 'agents'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <path d="M3 4h10v8H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M5 6.5h6M5 9.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          <circle cx="12" cy="11.5" r="1.3" fill="currentColor"/>
+        </svg>
+        {{ t('settings.tabs.agents') }}
       </button>
       <button
         data-test="settings-tab-dns"
@@ -403,6 +419,10 @@ const retentionDays = computed({
 
       <section v-else-if="selectedTab === 'hosts'" class="settings-pane">
         <HostManagerTab />
+      </section>
+
+      <section v-else-if="selectedTab === 'agents'" class="settings-pane">
+        <AgentManagerTab />
       </section>
 
       <section v-else-if="selectedTab === 'dns'" class="settings-pane">

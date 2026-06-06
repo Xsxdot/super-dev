@@ -38,6 +38,10 @@ vi.mock('@/components/Settings/HostManagerTab.vue', () => ({
   default: { template: '<section>主机管理</section>' },
 }))
 
+vi.mock('@/components/Settings/AgentManagerTab.vue', () => ({
+  default: { template: '<section data-test="agent-manager-tab">Agent 管理</section>' },
+}))
+
 vi.mock('@/components/Settings/DNSProviderTab.vue', () => ({
   default: { template: '<section data-test="dns-provider-tab">DNS 提供商</section>' },
 }))
@@ -204,6 +208,19 @@ describe('SettingsPage', () => {
 
     expect(wrapper.find('[data-test="settings-tab-hosts"]').classes()).toContain('active')
     expect(wrapper.text()).toContain('主机管理')
+  })
+
+  it('支持从 query 直达 Agent 管理 tab', async () => {
+    routeState.query = { tab: 'agents' }
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="settings-tab-agents"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="agent-manager-tab"]').exists()).toBe(true)
   })
 
   it('设置页只在 DNS Provider tab 管理全局 DNS 提供商', async () => {
