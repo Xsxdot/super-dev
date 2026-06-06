@@ -87,6 +87,19 @@ describe('workspaceStore', () => {
     expect(workspace.activeTab?.type).toBe('search')
   })
 
+  it('openNodesTab creates and reuses the singleton global nodes tab', () => {
+    const workspace = useWorkspaceStore()
+
+    const first = workspace.openNodesTab()
+    const second = workspace.openNodesTab()
+
+    expect(first.id).toBe('nodes')
+    expect(second.id).toBe(first.id)
+    expect(workspace.tabs.filter(tab => tab.type === 'nodes')).toHaveLength(1)
+    expect(workspace.activeTabId).toBe('nodes')
+    expect(workspace.isRuntimeWorkspaceMaximized).toBe(false)
+  })
+
   it('项目标签切换时恢复各自的 panel root', () => {
     const api = service('svc-api', 'api', 'proj-1')
     const admin = service('svc-admin', 'admin', 'proj-2')

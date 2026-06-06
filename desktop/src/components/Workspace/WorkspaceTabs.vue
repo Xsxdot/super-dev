@@ -15,6 +15,7 @@ import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
 const workspace = useWorkspaceStore()
 
 function tabKind(tab: WorkspaceTab): string {
+  if (tab.type === 'nodes') return '◎'
   if (tab.type === 'overview') return '◉'
   if (tab.type === 'project') return '▣'
   if (tab.type === 'search') return '⌕'
@@ -28,7 +29,12 @@ function tabKind(tab: WorkspaceTab): string {
       v-for="tab in workspace.tabs"
       :key="tab.id"
       class="workspace-tab"
-      :class="{ active: workspace.activeTabId === tab.id, search: tab.type === 'search', overview: tab.type === 'overview' }"
+      :class="{
+        active: workspace.activeTabId === tab.id,
+        search: tab.type === 'search',
+        overview: tab.type === 'overview',
+        nodes: tab.type === 'nodes',
+      }"
       @click="workspace.activateTab(tab.id)"
     >
       <span class="tab-kind">{{ tabKind(tab) }}</span>
@@ -73,6 +79,7 @@ function tabKind(tab: WorkspaceTab): string {
 }
 .workspace-tab.search .tab-kind { color: #58a6ff; }
 .workspace-tab.overview .tab-kind { color: #8b949e; }
+.workspace-tab.nodes .tab-kind { color: #3fb950; }
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;

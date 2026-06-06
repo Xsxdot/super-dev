@@ -14,6 +14,7 @@ import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
 import RunConsolePage from '@/components/Overview/RunConsole/RunConsolePage.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
+import NodeCenterView from '@/components/NodeCenter/NodeCenterView.vue'
 import RuntimeWorkbenchHeader from './RuntimeWorkbenchHeader.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -54,6 +55,9 @@ const isRuntimeTab = computed(() =>
       :pipeline-id="workspace.activeTab.pipelineId"
       :run-id="workspace.activeTab.runId"
       :mode="workspace.activeTab.mode"
+    />
+    <NodeCenterView
+      v-else-if="workspace.activeTab.type === 'nodes'"
     />
     <ProjectOverviewPane
       v-else-if="workspace.activeTab.type === 'overview' && overviewProject"

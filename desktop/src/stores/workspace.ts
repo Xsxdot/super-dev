@@ -27,6 +27,7 @@ export type WorkspaceTab =
   | DeploymentTab
   | ProjectOverviewWorkspaceTab
   | RunConsoleWorkspaceTab
+  | NodesWorkspaceTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -41,6 +42,12 @@ export interface ProjectOverviewWorkspaceTab {
   id: string
   type: 'overview'
   projectId: string
+  title: string
+}
+
+export interface NodesWorkspaceTab {
+  id: 'nodes'
+  type: 'nodes'
   title: string
 }
 
@@ -107,6 +114,14 @@ function makeProjectOverviewTab(projectId: string): ProjectOverviewWorkspaceTab 
     type: 'overview',
     projectId,
     title: 'Project Overview',
+  }
+}
+
+function makeNodesTab(): NodesWorkspaceTab {
+  return {
+    id: 'nodes',
+    type: 'nodes',
+    title: 'Node Center',
   }
 }
 
@@ -205,6 +220,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return existing
     }
     const tab = makeProjectOverviewTab(projectId)
+    tabs.value.unshift(tab)
+    runtimeWorkspaceMaximized.value = false
+    activeTabId.value = tab.id
+    return tab
+  }
+
+  function openNodesTab(): NodesWorkspaceTab {
+    saveActiveLogWorkspaceLayout()
+    const existing = tabs.value.find((tab): tab is NodesWorkspaceTab => tab.type === 'nodes')
+    if (existing) {
+      runtimeWorkspaceMaximized.value = false
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab = makeNodesTab()
     tabs.value.unshift(tab)
     runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
@@ -538,6 +568,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     // ensureProjectTab 作为 deployment 多面板容器 tab 的入口保留，供后续在项目 tab 中拖入多个 deployment 分栏使用。
     ensureProjectTab,
     openProjectOverview,
+    openNodesTab,
     openSearch,
     openDeployment,
     openRunConsole,
