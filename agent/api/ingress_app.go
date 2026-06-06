@@ -112,7 +112,7 @@ func (a *App) newIngressRemoteTransport() nginx.RemoteTransport {
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	return ingressPipelineTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
 }
@@ -132,7 +132,7 @@ func (a *App) newCertificateRemoteTransport() ingress.CertificateRemoteTransport
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	return ingressCertificateTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
 }
@@ -154,11 +154,7 @@ func (a *App) lookupIngressHosts(ids []string) ([]model.Host, error) {
 			continue
 		}
 		if id == "self" || id == a.identity.NodeID {
-			hosts = append(hosts, model.Host{
-				ID:      id,
-				Name:    a.identity.DisplayName,
-				SSHHost: "127.0.0.1",
-			})
+			hosts = append(hosts, ingressSelfHost(id, a.identity.DisplayName))
 			continue
 		}
 		host, ok := remoteByID[id]
@@ -168,6 +164,15 @@ func (a *App) lookupIngressHosts(ids []string) ([]model.Host, error) {
 		hosts = append(hosts, host)
 	}
 	return hosts, nil
+}
+
+func ingressSelfHost(id, name string) model.Host {
+	host := model.Host{ID: id, Name: name}
+	tunnelParams := host.EnsureTunnelAgent()
+	tunnelParams.SSHHost = "127.0.0.1"
+	tunnelParams.SSHPort = 22
+	tunnelParams.RemoteAgentPort = 57017
+	return host
 }
 
 func (a *App) registerStoredIngressDNSProviders() error {

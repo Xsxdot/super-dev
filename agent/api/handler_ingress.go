@@ -344,11 +344,7 @@ func (a *App) ingressInferenceHosts() ([]model.Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]model.Host{{
-		ID:      a.identity.NodeID,
-		Name:    a.identity.DisplayName,
-		SSHHost: "127.0.0.1",
-	}}, hosts...), nil
+	return append([]model.Host{ingressSelfHost(a.identity.NodeID, a.identity.DisplayName)}, hosts...), nil
 }
 
 func (a *App) listIngressDNSProviders(w http.ResponseWriter, r *http.Request) {

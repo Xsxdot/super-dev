@@ -58,7 +58,15 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	addr := net.JoinHostPort(host.SSHHost, strconv.Itoa(host.SSHPort))
+	tunnelParams, ok := host.TunnelParams()
+	if !ok {
+		return nil, fmt.Errorf("host %q has no tunnel transport", target.HostID)
+	}
+	port := tunnelParams.SSHPort
+	if port == 0 {
+		port = 22
+	}
+	addr := net.JoinHostPort(tunnelParams.SSHHost, strconv.Itoa(port))
 	return ssh.Dial("tcp", addr, cfg)
 }
 

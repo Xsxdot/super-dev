@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 // RuntimeStatusClient 从指定远端 host 读取 runtime-status 快照。
@@ -17,34 +17,22 @@ type RuntimeStatusClient interface {
 	Fetch(ctx context.Context, hostID, projectID string) (model.RuntimeStatusResponse, error)
 }
 
-type tunnelRuntimeStatusClient struct {
-	resolver logbackend.TunnelResolver
+type transportRuntimeStatusClient struct {
+	transport nodetransport.NodeTransport
 }
 
-func newTunnelRuntimeStatusClient(resolver logbackend.TunnelResolver) *tunnelRuntimeStatusClient {
-	return &tunnelRuntimeStatusClient{resolver: resolver}
+func newTransportRuntimeStatusClient(transport nodetransport.NodeTransport) *transportRuntimeStatusClient {
+	return &transportRuntimeStatusClient{transport: transport}
 }
 
-// Fetch 通过已建立的 SSH 隧道请求远端 agent 的 runtime-status 接口。
-func (c *tunnelRuntimeStatusClient) Fetch(ctx context.Context, hostID, projectID string) (model.RuntimeStatusResponse, error) {
-	base, err := c.resolver.BaseURL(hostID)
-	if err != nil {
-		return model.RuntimeStatusResponse{}, err
-	}
-	if base == "" {
-		return model.RuntimeStatusResponse{}, fmt.Errorf("tunnel not connected for host %s", hostID)
-	}
-	u, err := url.Parse(base + "/api/projects/" + url.PathEscape(projectID) + "/runtime-status")
-	if err != nil {
-		return model.RuntimeStatusResponse{}, err
-	}
+// Fetch 通过节点传输请求远端 agent 的 runtime-status 接口。
+func (c *transportRuntimeStatusClient) Fetch(ctx context.Context, hostID, projectID string) (model.RuntimeStatusResponse, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return model.RuntimeStatusResponse{}, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.transport.Do(reqCtx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/projects/" + url.PathEscape(projectID) + "/runtime-status",
+	})
 	if err != nil {
 		return model.RuntimeStatusResponse{}, err
 	}

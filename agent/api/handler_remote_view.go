@@ -43,21 +43,44 @@ type hostDTO struct {
 }
 
 func toHostDTO(h model.Host) hostDTO {
-	return hostDTO{
-		ID:              h.ID,
-		Name:            h.Name,
-		SSHHost:         h.SSHHost,
-		SSHPort:         h.SSHPort,
-		SSHUser:         h.SSHUser,
-		SSHPassword:     h.SSHPassword,
-		SSHKeyPath:      h.SSHKeyPath,
-		SSHPrivateKey:   h.SSHPrivateKey,
-		RemoteAgentPort: h.RemoteAgentPort,
-		LocalTunnelPort: h.LocalTunnelPort,
-		PublicIP:        h.PublicIP,
-		PrivateIP:       h.PrivateIP,
-		Tags:            h.Tags,
+	dto := hostDTO{
+		ID:        h.ID,
+		Name:      h.Name,
+		PublicIP:  h.PublicIP,
+		PrivateIP: h.PrivateIP,
+		Tags:      h.Tags,
 	}
+	if tunnelParams, ok := h.TunnelParams(); ok {
+		dto.SSHHost = tunnelParams.SSHHost
+		dto.SSHPort = tunnelParams.SSHPort
+		dto.SSHUser = tunnelParams.SSHUser
+		dto.SSHPassword = tunnelParams.SSHPassword
+		dto.SSHKeyPath = tunnelParams.SSHKeyPath
+		dto.SSHPrivateKey = tunnelParams.SSHPrivateKey
+		dto.RemoteAgentPort = tunnelParams.RemoteAgentPort
+	}
+	dto.LocalTunnelPort = h.RuntimeLocalPort()
+	return dto
+}
+
+func hostFromDTO(dto hostDTO) model.Host {
+	h := model.Host{
+		ID:        dto.ID,
+		Name:      dto.Name,
+		PublicIP:  dto.PublicIP,
+		PrivateIP: dto.PrivateIP,
+		Tags:      dto.Tags,
+	}
+	tunnelParams := h.EnsureTunnelAgent()
+	tunnelParams.SSHHost = dto.SSHHost
+	tunnelParams.SSHPort = dto.SSHPort
+	tunnelParams.SSHUser = dto.SSHUser
+	tunnelParams.SSHPassword = dto.SSHPassword
+	tunnelParams.SSHKeyPath = dto.SSHKeyPath
+	tunnelParams.SSHPrivateKey = dto.SSHPrivateKey
+	tunnelParams.RemoteAgentPort = dto.RemoteAgentPort
+	h.SetRuntimeLocalPort(dto.LocalTunnelPort)
+	return h
 }
 
 type remoteViewGroup struct {

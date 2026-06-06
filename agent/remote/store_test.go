@@ -2,6 +2,8 @@
 package remote_test
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -19,7 +21,11 @@ func newStore(t *testing.T) *remote.Store {
 
 func TestStoreAddListHost(t *testing.T) {
 	s := newStore(t)
-	h := model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops"}
+	h := model.Host{Name: "c01"}
+	tunnelParams := h.EnsureTunnelAgent()
+	tunnelParams.SSHHost = "10.0.0.1"
+	tunnelParams.SSHPort = 22
+	tunnelParams.SSHUser = "ops"
 	saved, err := s.AddHost(h)
 	require.NoError(t, err)
 	assert.NotEmpty(t, saved.ID)
@@ -28,6 +34,52 @@ func TestStoreAddListHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 1)
 	assert.Equal(t, "c01", list[0].Name)
+}
+
+func TestStoreAddHostAppliesTunnelDefaults(t *testing.T) {
+	s := newStore(t)
+	saved, err := s.AddHost(model.Host{Name: "c01"})
+	require.NoError(t, err)
+
+	require.NotNil(t, saved.Agent)
+	assert.Equal(t, model.TransportTypeTunnel, saved.Agent.Transport.Type)
+	require.NotNil(t, saved.Agent.Transport.Tunnel)
+	assert.Equal(t, 22, saved.Agent.Transport.Tunnel.SSHPort)
+	assert.Equal(t, 57017, saved.Agent.Transport.Tunnel.RemoteAgentPort)
+}
+
+func TestStorePersistsNestedHostShape(t *testing.T) {
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts.json")
+	s := remote.NewStore(hostsPath, filepath.Join(dir, "log_sources.json"))
+
+	_, err := s.AddHost(model.Host{
+		Name: "c01",
+		Agent: &model.Agent{
+			Transport: model.TransportConfig{
+				Type: model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{
+					SSHHost: "10.0.0.1",
+					SSHUser: "ops",
+				},
+			},
+			Runtime: model.AgentRuntime{LocalPort: 12345},
+		},
+	})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(hostsPath)
+	require.NoError(t, err)
+	var saved []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.Len(t, saved, 1)
+	assert.NotContains(t, saved[0], "ssh_host")
+	assert.NotContains(t, saved[0], "local_tunnel_port")
+	agent := saved[0]["agent"].(map[string]any)
+	transport := agent["transport"].(map[string]any)
+	tunnel := transport["tunnel"].(map[string]any)
+	assert.Equal(t, "10.0.0.1", tunnel["ssh_host"])
+	assert.NotContains(t, agent, "runtime")
 }
 
 func TestStoreUpdateHost(t *testing.T) {

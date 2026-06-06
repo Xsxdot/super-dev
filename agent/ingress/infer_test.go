@@ -101,8 +101,8 @@ func TestInferDefaultsFallsBackToSSHHostWithWarning(t *testing.T) {
 		}},
 	}
 	hosts := []model.Host{
-		{ID: "edge-a", SSHHost: "203.0.113.10"},
-		{ID: "app-a", SSHHost: "10.0.0.12"},
+		testTunnelHost("edge-a", "203.0.113.10"),
+		testTunnelHost("app-a", "10.0.0.12"),
 	}
 
 	got, err := InferDefaults(project, hosts, InferRequest{

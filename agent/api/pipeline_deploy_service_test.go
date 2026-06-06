@@ -67,7 +67,7 @@ func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
 	app := newTestAppForPackage(t)
 	project := projectWithAgentRemotePipeline(t, "p-agent", "deploy-agent")
 	app.projects = []model.Project{project}
-	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "agent-host", SSHHost: "127.0.0.1", SSHUser: "ops"})
+	_, err := app.remoteStore.AddHost(testTunnelHost("h1", "agent-host", "127.0.0.1", "ops"))
 	require.NoError(t, err)
 
 	agentRunner := &recordingPipelineAgentRunner{}
@@ -99,7 +99,7 @@ func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
 
 func TestHostRefsResolveHostNameToCanonicalID(t *testing.T) {
 	app := newTestAppForPackage(t)
-	_, err := app.remoteStore.AddHost(model.Host{ID: "host-uuid", Name: "local-01", SSHHost: "127.0.0.1", SSHUser: "root"})
+	_, err := app.remoteStore.AddHost(testTunnelHost("host-uuid", "local-01", "127.0.0.1", "root"))
 	require.NoError(t, err)
 
 	refs, err := app.hostRefs([]string{"local-01"})
@@ -115,7 +115,7 @@ func TestRunPreparedProjectPipelineRecoversPanicAsFailedRun(t *testing.T) {
 	app := newTestAppForPackage(t)
 	project := projectWithAgentRemotePipeline(t, "p-panic", "deploy-agent")
 	app.projects = []model.Project{project}
-	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "agent-host", SSHHost: "127.0.0.1", SSHUser: "ops"})
+	_, err := app.remoteStore.AddHost(testTunnelHost("h1", "agent-host", "127.0.0.1", "ops"))
 	require.NoError(t, err)
 	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
 		result: agenthealth.ProbeResult{AllEndpointsOK: true},

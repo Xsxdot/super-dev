@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
-	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 const hostManagedStatusTimeout = 3 * time.Second
@@ -39,9 +39,14 @@ func (a *App) getHostManagedDeploymentsStatus(w http.ResponseWriter, r *http.Req
 		DesiredCollectorCount:  countDesiredManagedCollectors(desired),
 	}
 
-	base, err := a.tunnelResolver.BaseURL(hostID)
-	if err != nil || base == "" {
-		if err == nil || errors.Is(err, remote.ErrHostUnreachable) {
+	ctx, cancel := context.WithTimeout(r.Context(), hostManagedStatusTimeout)
+	defer cancel()
+	resp, err := a.nodeTransport.Do(ctx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/managed-deployments/status",
+	})
+	if err != nil {
+		if errors.Is(err, nodetransport.ErrHostUnreachable) {
 			status.Error = "tunnel not connected"
 			jsonOK(w, status)
 			return
@@ -50,24 +55,8 @@ func (a *App) getHostManagedDeploymentsStatus(w http.ResponseWriter, r *http.Req
 		jsonOK(w, status)
 		return
 	}
-	status.TunnelConnected = true
-
-	ctx, cancel := context.WithTimeout(r.Context(), hostManagedStatusTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/managed-deployments/status", nil)
-	if err != nil {
-		status.Error = err.Error()
-		jsonOK(w, status)
-		return
-	}
-	client := &http.Client{Timeout: hostManagedStatusTimeout, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Do(req)
-	if err != nil {
-		status.Error = err.Error()
-		jsonOK(w, status)
-		return
-	}
 	defer resp.Body.Close()
+	status.TunnelConnected = true
 	if resp.StatusCode/100 != 2 {
 		status.Error = fmt.Sprintf("remote managed status returned %d", resp.StatusCode)
 		jsonOK(w, status)

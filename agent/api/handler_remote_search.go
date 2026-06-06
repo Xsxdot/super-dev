@@ -4,7 +4,7 @@
 // 职责：
 //   - 解析参数:log_source_id, group, q/query, limit, cursor, from, to
 //   - 根据 LogSource + group 选出 Host 子集
-//   - 并发为每个 Host 通过隧道 BaseURL 调 /api/log-search
+//   - 并发为每个 Host 通过 NodeTransport 调 /api/log-search
 //   - 单 host 3 秒超时或错误时加入 hosts_failed,不中断其他 Host
 //   - 用 MergeStreams 归并,返回 entries + next_cursor + hosts_failed
 //
@@ -27,6 +27,7 @@ import (
 
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 const (
@@ -312,36 +313,27 @@ func buildNextMergeCursor(hosts []model.Host, oldCursors map[string]HostCursor, 
 //   - 该 Host 对当前查询的 total
 //   - 无隧道、HTTP 失败或解析失败时返回错误
 func (a *App) fetchOneHost(ctx context.Context, hostID, serviceID, query string, limit int, hc HostCursor, from, to string) ([]model.LogEntry, int, error) {
-	base, err := a.tunnelResolver.BaseURL(hostID)
-	if err != nil {
-		return nil, 0, err
-	}
-	u, err := url.Parse(base + "/api/log-search")
-	if err != nil {
-		return nil, 0, err
-	}
-	q := u.Query()
-	q.Set("deployment", serviceID)
-	q.Set("q", query)
-	q.Set("query", query)
-	q.Set("limit", strconv.Itoa(limit))
+	queryValues := url.Values{}
+	queryValues.Set("deployment", serviceID)
+	queryValues.Set("q", query)
+	queryValues.Set("query", query)
+	queryValues.Set("limit", strconv.Itoa(limit))
 	if !hc.CursorTime.IsZero() {
-		q.Set("cursor_time", hc.CursorTime.Format(time.RFC3339Nano))
-		q.Set("cursor_id", strconv.FormatInt(hc.CursorID, 10))
+		queryValues.Set("cursor_time", hc.CursorTime.Format(time.RFC3339Nano))
+		queryValues.Set("cursor_id", strconv.FormatInt(hc.CursorID, 10))
 	}
 	if from != "" {
-		q.Set("from", from)
+		queryValues.Set("from", from)
 	}
 	if to != "" {
-		q.Set("to", to)
+		queryValues.Set("to", to)
 	}
-	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.nodeTransport.Do(ctx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/log-search",
+		Query:  queryValues,
+	})
 	if err != nil {
 		return nil, 0, err
 	}

@@ -49,19 +49,23 @@ func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	out := make([]hostDTO, 0, len(hosts)+1)
 	out = append(out, selfNode)
 	for _, h := range hosts {
-		out = append(out, toHostDTO(h))
+		dto := toHostDTO(h)
+		dto.LocalTunnelPort = a.tunnels.LocalPort(h.ID)
+		out = append(out, dto)
 	}
 	jsonOK(w, out)
 }
 
 // createHost 处理 POST /api/hosts,body 为 model.Host。
 func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
-	var h model.Host
-	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+	var dto hostDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := importHostPrivateKey(&h); err != nil {
+	h := hostFromDTO(dto)
+	tunnelParams := h.EnsureTunnelAgent()
+	if err := importTunnelPrivateKey(tunnelParams); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -70,19 +74,21 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, saved)
+	jsonOK(w, toHostDTO(saved))
 }
 
 // updateHost 处理 PUT /api/hosts/{id}。
 func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var h model.Host
-	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+	var dto hostDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	h.ID = id
-	if err := importHostPrivateKey(&h); err != nil {
+	dto.ID = id
+	h := hostFromDTO(dto)
+	tunnelParams := h.EnsureTunnelAgent()
+	if err := importTunnelPrivateKey(tunnelParams); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -94,7 +100,7 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, h)
+	jsonOK(w, toHostDTO(h))
 }
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
@@ -152,9 +158,8 @@ func (a *App) checkHostAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	port, tunnelErr := a.tunnels.EnsureConnected(host)
-	if tunnelErr == nil && host.LocalTunnelPort == 0 && port != 0 {
-		host.LocalTunnelPort = port
-		_ = a.remoteStore.UpdateHost(host)
+	if tunnelErr == nil && port != 0 {
+		host.SetRuntimeLocalPort(port)
 	}
 	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
 	agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(info)
@@ -365,10 +370,10 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// importHostPrivateKey 将表单选择的本机私钥路径导入为可同步的私钥内容。
+// importTunnelPrivateKey 将表单选择的本机私钥路径导入为可同步的私钥内容。
 //
 // 参数：
-//   - h: 即将持久化的 Host；函数会就地写入 SSHPrivateKey 并清空 SSHKeyPath
+//   - tunnelParams: 即将持久化的 tunnel 参数；函数会就地写入 SSHPrivateKey 并清空 SSHKeyPath
 //
 // 返回：
 //   - 读取私钥文件失败时返回错误
@@ -376,15 +381,18 @@ func expandHome(path string) string {
 // 注意：
 //   - SSHKeyPath 只作为导入入口，不再作为新保存配置的长期依赖
 //   - 已经有 SSHPrivateKey 且没有 SSHKeyPath 时会原样保留，用于编辑回填
-func importHostPrivateKey(h *model.Host) error {
-	if strings.TrimSpace(h.SSHKeyPath) == "" {
+func importTunnelPrivateKey(tunnelParams *model.TunnelParams) error {
+	if tunnelParams == nil {
 		return nil
 	}
-	key, err := tunnel.ReadPrivateKey(expandHome(h.SSHKeyPath))
+	if strings.TrimSpace(tunnelParams.SSHKeyPath) == "" {
+		return nil
+	}
+	key, err := tunnel.ReadPrivateKey(expandHome(tunnelParams.SSHKeyPath))
 	if err != nil {
 		return fmt.Errorf("读取私钥失败: %w", err)
 	}
-	h.SSHPrivateKey = string(key)
-	h.SSHKeyPath = ""
+	tunnelParams.SSHPrivateKey = string(key)
+	tunnelParams.SSHKeyPath = ""
 	return nil
 }

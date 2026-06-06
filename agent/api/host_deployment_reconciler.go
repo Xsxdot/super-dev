@@ -2,11 +2,11 @@
 //
 // 职责：
 //   - 为单个 host 计算 []model.ManagedDeployment
-//   - 经已连接隧道 PUT 完整期望清单
+//   - 经 NodeTransport PUT 完整期望清单
 //   - 响应隧道 connected 事件并定期 reconcile
 //
 // 边界：
-//   - 不管理 SSH 隧道生命周期
+//   - 不管理传输生命周期
 //   - 不执行远端 collector 或 runtime 采样
 package api
 
@@ -18,12 +18,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"sort"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
-	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
@@ -31,30 +30,28 @@ const defaultManagedDeploymentReconcileInterval = 30 * time.Second
 
 // HostDeploymentReconciler 将桌面端配置推送到远端 host agent。
 type HostDeploymentReconciler struct {
-	app      *App
-	resolver remote.TunnelResolver
-	client   *http.Client
-	interval time.Duration
+	app       *App
+	transport nodetransport.NodeTransport
+	interval  time.Duration
 }
 
 // NewHostDeploymentReconciler 创建 HostDeploymentReconciler。
 //
 // 参数：
 //   - app: 桌面端 App，作为 projects 的单一事实来源
-//   - resolver: 将 hostID 解析成已连接隧道 baseURL 的解析器
+//   - transport: 按 hostID 访问远端 agent 的节点传输
 //   - interval: 周期对账间隔，0 时使用默认 30 秒
 //
 // 返回：
 //   - 可用于手动或后台运行 reconcile 的推送器
-func NewHostDeploymentReconciler(app *App, resolver remote.TunnelResolver, interval time.Duration) *HostDeploymentReconciler {
+func NewHostDeploymentReconciler(app *App, transport nodetransport.NodeTransport, interval time.Duration) *HostDeploymentReconciler {
 	if interval == 0 {
 		interval = defaultManagedDeploymentReconcileInterval
 	}
 	return &HostDeploymentReconciler{
-		app:      app,
-		resolver: resolver,
-		client:   &http.Client{Timeout: 3 * time.Second},
-		interval: interval,
+		app:       app,
+		transport: transport,
+		interval:  interval,
 	}
 }
 
@@ -83,29 +80,22 @@ func (r *HostDeploymentReconciler) DesiredForHost(hostID string) []model.Managed
 //   - host 未连接时返回 nil
 //   - URL 构造、序列化、HTTP 请求或远端非 2xx 响应失败时返回错误
 func (r *HostDeploymentReconciler) Reconcile(ctx context.Context, hostID string) error {
-	base, err := r.resolver.BaseURL(hostID)
-	if err != nil || base == "" {
-		if errors.Is(err, remote.ErrHostUnreachable) || base == "" {
-			return nil
-		}
-		return err
-	}
-	u, err := url.JoinPath(base, "/api/managed-deployments")
-	if err != nil {
-		return err
-	}
 	body, err := json.Marshal(r.DesiredForHost(hostID))
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(body))
+	resp, err := r.transport.Do(ctx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodPut,
+		Path:   "/api/managed-deployments",
+		Headers: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: bytes.NewReader(body),
+	})
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := r.client.Do(req)
-	if err != nil {
+		if errors.Is(err, nodetransport.ErrHostUnreachable) {
+			return nil
+		}
 		return err
 	}
 	defer resp.Body.Close()

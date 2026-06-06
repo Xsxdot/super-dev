@@ -142,26 +142,131 @@ func (t LogSourceType) IsValid() bool {
 		t == LogSourceTypeCommand
 }
 
-// Host 表示一台被监听的远程主机。
+// TransportType 表示某台 Host 的 agent 通信方式。
+type TransportType string
+
+const (
+	// TransportTypeTunnel 表示通过本机 SSH 隧道访问远端 agent。
+	TransportTypeTunnel TransportType = "tunnel"
+	// TransportTypeDirect 表示通过直连地址访问远端 agent，本阶段只保留数据槽位。
+	TransportTypeDirect TransportType = "direct"
+	// TransportTypeMQ 表示通过消息队列访问远端 agent，本阶段只保留数据槽位。
+	TransportTypeMQ TransportType = "mq"
+	// TransportTypeBridge 表示通过桥接服务访问远端 agent，本阶段只保留数据槽位。
+	TransportTypeBridge TransportType = "bridge"
+)
+
+// AgentHealth 表示远端 agent 的运行健康状态快照。
+type AgentHealth string
+
+const (
+	// AgentHealthUnknown 表示尚未探活或状态未知。
+	AgentHealthUnknown AgentHealth = "unknown"
+	// AgentHealthHealthy 表示 agent 可达且接口齐全。
+	AgentHealthHealthy AgentHealth = "healthy"
+	// AgentHealthUnreachable 表示 agent 不可达。
+	AgentHealthUnreachable AgentHealth = "unreachable"
+	// AgentHealthVersionMismatch 表示 agent 可达但接口版本不匹配。
+	AgentHealthVersionMismatch AgentHealth = "version-mismatch"
+)
+
+// Host 表示一台被管理的远程主机身份。
 //
-// 持久化字段会写入 ~/.superdev/hosts.json（权限 0600）。
-// LocalTunnelPort 在首次连接时分配并写回，复用同端口便于前端 URL 稳定。
-// PublicIP 和 PrivateIP 仅作为入口配置推断元数据，不参与 SSH 连接。
-// SSHPrivateKey 保存导入后的私钥内容，SSHKeyPath 仅兼容旧配置和导入入口。
+// 职责：
+//   - 保存节点身份、展示名、地址元数据和标签
+//   - 可选挂载 Agent，表达这台主机是否安装并可连接远端 agent
+//
+// 边界：
+//   - 不直接承载 SSH 凭据、agent 端口或本地隧道端口
+//   - 连接方式统一通过 Agent.Transport 表达
+//   - Agent.Runtime 是运行时快照，不写入 hosts.json
 type Host struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	SSHHost         string   `json:"ssh_host"`
-	SSHPort         int      `json:"ssh_port"`
-	SSHUser         string   `json:"ssh_user"`
-	SSHPassword     string   `json:"ssh_password"`
-	SSHKeyPath      string   `json:"ssh_key_path"`
-	SSHPrivateKey   string   `json:"ssh_private_key,omitempty"`
-	RemoteAgentPort int      `json:"remote_agent_port"`
-	LocalTunnelPort int      `json:"local_tunnel_port"`
-	PublicIP        string   `json:"public_ip,omitempty"`
-	PrivateIP       string   `json:"private_ip,omitempty"`
-	Tags            []string `json:"tags"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PublicIP  string   `json:"public_ip,omitempty"`
+	PrivateIP string   `json:"private_ip,omitempty"`
+	Tags      []string `json:"tags"`
+	Agent     *Agent   `json:"agent,omitempty"`
+}
+
+// Agent 是 Host 下的一等公民，描述这台主机怎么连接以及当前运行态。
+type Agent struct {
+	Transport TransportConfig `json:"transport"`
+	Runtime   AgentRuntime    `json:"-"`
+}
+
+// TransportConfig 表达 agent 的传输类型及其参数。
+type TransportConfig struct {
+	Type   TransportType `json:"type"`
+	Tunnel *TunnelParams `json:"tunnel,omitempty"`
+	Direct *DirectParams `json:"direct,omitempty"`
+}
+
+// TunnelParams 是 SSH 隧道传输所需的持久化参数。
+type TunnelParams struct {
+	SSHHost         string `json:"ssh_host"`
+	SSHPort         int    `json:"ssh_port"`
+	SSHUser         string `json:"ssh_user"`
+	SSHPassword     string `json:"ssh_password,omitempty"`
+	SSHKeyPath      string `json:"ssh_key_path,omitempty"`
+	SSHPrivateKey   string `json:"ssh_private_key,omitempty"`
+	RemoteAgentPort int    `json:"remote_agent_port"`
+}
+
+// DirectParams 是直连传输的预留参数。
+type DirectParams struct {
+	Address string `json:"address,omitempty"`
+}
+
+// AgentRuntime 是不持久化的运行时快照。
+type AgentRuntime struct {
+	Installed bool        `json:"installed"`
+	Version   string      `json:"version,omitempty"`
+	Health    AgentHealth `json:"health"`
+	Reachable bool        `json:"reachable"`
+	LocalPort int         `json:"local_port,omitempty"`
+}
+
+// TunnelParams 返回 Host 当前的 tunnel 传输参数。
+func (h Host) TunnelParams() (*TunnelParams, bool) {
+	if h.Agent == nil {
+		return nil, false
+	}
+	if h.Agent.Transport.Type != TransportTypeTunnel {
+		return nil, false
+	}
+	if h.Agent.Transport.Tunnel == nil {
+		return nil, false
+	}
+	return h.Agent.Transport.Tunnel, true
+}
+
+// EnsureTunnelAgent 确保 Host 挂载 tunnel agent，并返回可修改的 tunnel 参数。
+func (h *Host) EnsureTunnelAgent() *TunnelParams {
+	if h.Agent == nil {
+		h.Agent = &Agent{}
+	}
+	h.Agent.Transport.Type = TransportTypeTunnel
+	if h.Agent.Transport.Tunnel == nil {
+		h.Agent.Transport.Tunnel = &TunnelParams{}
+	}
+	return h.Agent.Transport.Tunnel
+}
+
+// RuntimeLocalPort 返回当前运行期本地隧道端口。
+func (h Host) RuntimeLocalPort() int {
+	if h.Agent == nil {
+		return 0
+	}
+	return h.Agent.Runtime.LocalPort
+}
+
+// SetRuntimeLocalPort 写入当前运行期本地隧道端口。
+func (h *Host) SetRuntimeLocalPort(port int) {
+	if h.Agent == nil {
+		h.Agent = &Agent{}
+	}
+	h.Agent.Runtime.LocalPort = port
 }
 
 // LogSource 表示一个监听任务：在哪些 Host 上以何种 type 采集哪个 name。

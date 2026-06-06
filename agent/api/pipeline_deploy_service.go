@@ -275,7 +275,7 @@ func (a *App) newPipelineEngine() *pipeline.Engine {
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	remoteRunner := pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)
 	engine.Register(plugins.NewLocalCommand())

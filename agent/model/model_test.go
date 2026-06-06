@@ -29,17 +29,47 @@ func TestLogRuleTypes(t *testing.T) {
 
 func TestHostJSON(t *testing.T) {
 	h := model.Host{
-		ID: "h-1", Name: "compute-01",
-		SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops",
-		SSHPassword: "pw", SSHKeyPath: "/key",
-		RemoteAgentPort: 57017, LocalTunnelPort: 12345,
-		Tags: []string{"prod", "temp"},
+		ID:        "h-1",
+		Name:      "compute-01",
+		PublicIP:  "203.0.113.10",
+		PrivateIP: "10.0.0.1",
+		Tags:      []string{"prod", "temp"},
+		Agent: &model.Agent{
+			Transport: model.TransportConfig{
+				Type: model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{
+					SSHHost:         "10.0.0.1",
+					SSHPort:         22,
+					SSHUser:         "ops",
+					SSHPassword:     "pw",
+					SSHKeyPath:      "/key",
+					RemoteAgentPort: 57017,
+				},
+			},
+			Runtime: model.AgentRuntime{
+				Installed: true,
+				Version:   "1.2.3",
+				Health:    model.AgentHealthHealthy,
+				Reachable: true,
+				LocalPort: 12345,
+			},
+		},
 	}
 	data, err := json.Marshal(h)
 	require.NoError(t, err)
+	assert.NotContains(t, string(data), "runtime")
+	assert.NotContains(t, string(data), "local_port")
+	assert.Contains(t, string(data), `"agent"`)
+	assert.Contains(t, string(data), `"transport"`)
+	assert.Contains(t, string(data), `"tunnel"`)
+
 	var got model.Host
 	require.NoError(t, json.Unmarshal(data, &got))
-	require.Equal(t, h, got)
+	require.NotNil(t, got.Agent)
+	assert.Equal(t, model.TransportTypeTunnel, got.Agent.Transport.Type)
+	require.NotNil(t, got.Agent.Transport.Tunnel)
+	assert.Equal(t, "10.0.0.1", got.Agent.Transport.Tunnel.SSHHost)
+	assert.Equal(t, 0, got.Agent.Runtime.LocalPort)
 }
 
 func TestLogSourceJSON(t *testing.T) {

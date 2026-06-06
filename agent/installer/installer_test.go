@@ -54,6 +54,16 @@ func (f *fakeRemote) Upload(ctx context.Context, localPath string, remotePath st
 
 func (f *fakeRemote) Close() error { return nil }
 
+func installerTestHost(id, sshHost, sshUser string, sshPort, remoteAgentPort int) model.Host {
+	host := model.Host{ID: id}
+	tunnelParams := host.EnsureTunnelAgent()
+	tunnelParams.SSHHost = sshHost
+	tunnelParams.SSHPort = sshPort
+	tunnelParams.SSHUser = sshUser
+	tunnelParams.RemoteAgentPort = remoteAgentPort
+	return host
+}
+
 func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
@@ -64,9 +74,7 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 		return remote, nil
 	})
 
-	result, err := inst.Install(context.Background(), model.Host{
-		ID: "h1", SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57019,
-	})
+	result, err := inst.Install(context.Background(), installerTestHost("h1", "10.0.0.1", "root", 22, 57019))
 	require.NoError(t, err)
 	assert.True(t, result.OK)
 	assert.Equal(t, "h1", result.HostID)
@@ -95,9 +103,7 @@ func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testin
 		return remote, nil
 	})
 
-	result, err := inst.Install(context.Background(), model.Host{
-		ID: "h1", SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57019,
-	})
+	result, err := inst.Install(context.Background(), installerTestHost("h1", "10.0.0.1", "root", 22, 57019))
 	require.NoError(t, err)
 	assert.True(t, result.OK)
 	assert.Equal(t, 2, countCommand(remote.commands, verifyCmd))
@@ -113,9 +119,7 @@ func TestInstallerInstallsMacOSAgent(t *testing.T) {
 		return remote, nil
 	})
 
-	result, err := inst.Install(context.Background(), model.Host{
-		ID: "mac1", SSHHost: "10.0.0.2", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57020,
-	})
+	result, err := inst.Install(context.Background(), installerTestHost("mac1", "10.0.0.2", "root", 22, 57020))
 	require.NoError(t, err)
 	assert.Equal(t, "darwin/arm64", result.Platform)
 	assert.Equal(t, []string{binary + "->/tmp/superdev-agent-darwin-arm64"}, remote.uploads)
@@ -141,9 +145,7 @@ func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *
 		return remote, nil
 	})
 
-	result, err := inst.Install(context.Background(), model.Host{
-		ID: "mac1", SSHHost: "10.0.0.2", SSHPort: 22, SSHUser: "sycm", RemoteAgentPort: 57020,
-	})
+	result, err := inst.Install(context.Background(), installerTestHost("mac1", "10.0.0.2", "sycm", 22, 57020))
 
 	require.NoError(t, err)
 	assert.Equal(t, "darwin/arm64", result.Platform)
@@ -239,7 +241,7 @@ func TestInstallerWrapsStageOnMissingBinary(t *testing.T) {
 		return remote, nil
 	})
 
-	_, err := inst.Install(context.Background(), model.Host{ID: "h1", RemoteAgentPort: 57017})
+	_, err := inst.Install(context.Background(), model.Host{ID: "h1"})
 	require.Error(t, err)
 	var installErr *InstallError
 	require.ErrorAs(t, err, &installErr)

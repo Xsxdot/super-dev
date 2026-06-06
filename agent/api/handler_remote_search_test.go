@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,20 +19,66 @@ import (
 	"github.com/xsxdot/super-dev/agent/api"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/model"
-	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// staticResolver 把固定 hostID 映射到固定 URL,测试用。
-type staticResolver struct {
+// staticNodeTransport 把固定 hostID 映射到固定 URL,测试用。
+type staticNodeTransport struct {
 	table map[string]string
 }
 
-// BaseURL 返回 hostID 对应的测试远端 URL。
-func (s *staticResolver) BaseURL(hostID string) (string, error) {
-	if u, ok := s.table[hostID]; ok {
-		return u, nil
+func (s *staticNodeTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	base, ok := s.table[hostID]
+	if !ok {
+		return nodetransport.NodeResponse{}, nodetransport.ErrHostUnreachable
 	}
-	return "", remote.ErrHostUnreachable
+	u, err := url.Parse(base + req.Path)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	q := u.Query()
+	for key, values := range req.Query {
+		for _, value := range values {
+			q.Add(key, value)
+		}
+	}
+	u.RawQuery = q.Encode()
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, u.String(), req.Body)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+}
+
+func (s *staticNodeTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (s *staticNodeTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (s *staticNodeTransport) Covers() []string {
+	out := make([]string, 0, len(s.table))
+	for hostID := range s.table {
+		out = append(out, hostID)
+	}
+	return out
 }
 
 func fakeRemoteWithSearch(t *testing.T, items map[string][]model.LogEntry) *httptest.Server {
@@ -86,14 +133,14 @@ func TestRemoteLogSearchMergesAcrossHosts(t *testing.T) {
 		},
 	})
 
-	resolver := &staticResolver{table: map[string]string{
+	resolver := &staticNodeTransport{table: map[string]string{
 		"h1": srvH1.URL,
 		"h2": srvH2.URL,
 	}}
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: resolver,
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: resolver,
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -150,9 +197,9 @@ func TestRemoteLogSearchAcceptsSpecQueryParam(t *testing.T) {
 		colID: {{ID: 1, DeploymentID: colID, Timestamp: now, Message: "from query param"}},
 	})
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -192,9 +239,9 @@ func TestRemoteLogSearchAcceptsSpecQueryParam(t *testing.T) {
 
 func TestRemoteLogSearchHandlesUnreachable(t *testing.T) {
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -310,9 +357,9 @@ func TestRemoteLogSearch_ProjectModeResolvesAllVisibleTargets(t *testing.T) {
 		},
 	})
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL, "h2": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL, "h2": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -410,9 +457,9 @@ func TestRemoteLogSearch_ProjectModeAppliesServiceAndHostFilters(t *testing.T) {
 	defer remoteSrv.Close()
 
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL, "h2": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL, "h2": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -465,9 +512,9 @@ func TestRemoteLogSearch_ProjectModePartialFailureAndAllFailureStatuses(t *testi
 		apiCollector: {{ID: 1, DeploymentID: apiCollector, Timestamp: now, Message: "api survives failure"}},
 	})
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -567,9 +614,9 @@ func TestRemoteLogSearch_ProjectModeUsesCursorForNextPage(t *testing.T) {
 	defer remoteSrv.Close()
 
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -665,9 +712,9 @@ func TestRemoteLogSearch_ProjectModeCursorDoesNotRepeatReturnedMultiTargetEntrie
 	defer workerSrv.Close()
 
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": apiSrv.URL, "h2": workerSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": apiSrv.URL, "h2": workerSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()
@@ -740,9 +787,9 @@ func TestRemoteLogSearch_ProjectModeClassifiesTimeout(t *testing.T) {
 	defer remoteSrv.Close()
 
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"h1": remoteSrv.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()

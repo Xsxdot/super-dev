@@ -73,13 +73,7 @@ func TestListTunnelsIncludesAgentStatus(t *testing.T) {
 		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
 
-	host, err := app.remoteStore.AddHost(model.Host{
-		ID:      "h1",
-		Name:    "srv",
-		SSHHost: "127.0.0.1",
-		SSHUser: "root",
-		Tags:    []string{},
-	})
+	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
 	require.NoError(t, err)
 	_, err = app.tunnels.EnsureConnected(host)
 	require.NoError(t, err)
@@ -108,13 +102,7 @@ func TestCheckHostAgentEnsuresTunnelAndReturnsAgentMeta(t *testing.T) {
 	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
 		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
-	host, err := app.remoteStore.AddHost(model.Host{
-		ID:      "h1",
-		Name:    "srv",
-		SSHHost: "127.0.0.1",
-		SSHUser: "root",
-		Tags:    []string{},
-	})
+	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(app.Handler())
@@ -140,13 +128,7 @@ func TestUninstallHostAgentPassesRemoveDataChoice(t *testing.T) {
 	require.NoError(t, err)
 	defer app.Close()
 
-	host, err := app.remoteStore.AddHost(model.Host{
-		ID:      "h1",
-		Name:    "srv",
-		SSHHost: "127.0.0.1",
-		SSHUser: "root",
-		Tags:    []string{},
-	})
+	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(app.Handler())

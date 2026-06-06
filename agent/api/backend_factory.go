@@ -15,6 +15,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/store"
 )
 
@@ -25,8 +26,8 @@ import (
 //   - localDeploymentID: 本地 deployment ID（仅 local deployment 使用，用于 SQLiteBackend 过滤）
 //   - s: 本地 SQLite store（local deployment 使用）
 //   - buf: 本地 logbuf（local deployment 使用）
-//   - resolver: 隧道地址解析器（remote deployment 使用）
-func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store, buf *logbuf.Buffer, resolver logbackend.TunnelResolver) logbackend.LogBackend {
+//   - transport: 节点传输（remote deployment 使用）
+func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store, buf *logbuf.Buffer, transport nodetransport.NodeTransport) logbackend.LogBackend {
 	if dep.Location == model.LocationLocal {
 		return logbackend.NewSQLiteBackend(s, buf)
 	}
@@ -34,13 +35,13 @@ func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store
 	// remote deployment：按 host 数量决定单节点还是联邦
 	if len(dep.HostIDs) == 1 {
 		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
-		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteDeploymentID, resolver)
+		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteDeploymentID, transport)
 	}
 
 	children := make([]logbackend.LogBackend, 0, len(dep.HostIDs))
 	for _, hostID := range dep.HostIDs {
 		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
-		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteDeploymentID, resolver))
+		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteDeploymentID, transport))
 	}
 	return logbackend.NewFederatedBackend(children)
 }

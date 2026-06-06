@@ -26,7 +26,12 @@ type sshFileTransfer interface {
 func TestSSHExecutorConstruct(t *testing.T) {
 	// 仅验证构造与能力接口实现，不连真机
 	ex := NewSSHExecutor(func(hostID string) (model.Host, bool) {
-		return model.Host{ID: hostID, SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops"}, true
+		host := model.Host{ID: hostID}
+		tunnelParams := host.EnsureTunnelAgent()
+		tunnelParams.SSHHost = "10.0.0.1"
+		tunnelParams.SSHPort = 22
+		tunnelParams.SSHUser = "ops"
+		return host, true
 	})
 	var _ sshRemoteRunner = ex
 	var _ sshFileTransfer = ex

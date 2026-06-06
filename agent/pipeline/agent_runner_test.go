@@ -28,25 +28,42 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
-type agentRunnerResolver struct {
-	base string
-	err  error
+type agentRunnerTransport struct {
+	do     func(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeResponse, error)
+	stream func(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeStream, error)
 }
 
-func (r agentRunnerResolver) BaseURL(hostID string) (string, error) {
-	if r.err != nil {
-		return "", r.err
+func (t agentRunnerTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	if t.do == nil {
+		return nodetransport.NodeResponse{}, nodetransport.ErrHostUnreachable
 	}
-	return r.base, nil
+	return t.do(ctx, hostID, req)
+}
+
+func (t agentRunnerTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	if t.stream == nil {
+		return nil, nodetransport.ErrHostUnreachable
+	}
+	return t.stream(ctx, hostID, req)
+}
+
+func (t agentRunnerTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (t agentRunnerTransport) Covers() []string {
+	return []string{"h1"}
 }
 
 func TestAgentRunnerRunRemoteStreamsLinesAndExit(t *testing.T) {
 	var gotReq remoteexec.CommandRequest
-	runner := NewAgentRunner(agentRunnerResolver{base: "http://agent.local"})
-	runner.dialWS = pipeAgentWebSocketDialer(t, "/ws/exec", func(conn *websocket.Conn) error {
+	dialWS := pipeAgentWebSocketDialer(t, "/ws/exec", func(conn *websocket.Conn) error {
 		if err := conn.ReadJSON(&gotReq); err != nil {
 			return err
 		}
@@ -58,6 +75,11 @@ func TestAgentRunnerRunRemoteStreamsLinesAndExit(t *testing.T) {
 		}
 		return conn.WriteJSON(remoteexec.Message{Type: remoteexec.MessageExit, ExitCode: 0})
 	})
+	runner := NewAgentRunner(agentRunnerTransport{stream: func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+		require.Equal(t, "/ws/exec", req.Path)
+		conn, _, err := dialWS(ctx, "ws://agent.local"+req.Path, req.Headers)
+		return conn, err
+	}})
 
 	var lines []string
 	err := runner.RunRemote(context.Background(), Target{HostID: "h1"}, "printf hi", "/srv/app", func(line, stream string) {
@@ -70,14 +92,18 @@ func TestAgentRunnerRunRemoteStreamsLinesAndExit(t *testing.T) {
 }
 
 func TestAgentRunnerRunRemoteMapsNonZeroExit(t *testing.T) {
-	runner := NewAgentRunner(agentRunnerResolver{base: "http://agent.local"})
-	runner.dialWS = pipeAgentWebSocketDialer(t, "/ws/exec", func(conn *websocket.Conn) error {
+	dialWS := pipeAgentWebSocketDialer(t, "/ws/exec", func(conn *websocket.Conn) error {
 		var req remoteexec.CommandRequest
 		if err := conn.ReadJSON(&req); err != nil {
 			return err
 		}
 		return conn.WriteJSON(remoteexec.Message{Type: remoteexec.MessageExit, ExitCode: 9})
 	})
+	runner := NewAgentRunner(agentRunnerTransport{stream: func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+		require.Equal(t, "/ws/exec", req.Path)
+		conn, _, err := dialWS(ctx, "ws://agent.local"+req.Path, req.Headers)
+		return conn, err
+	}})
 
 	err := runner.RunRemote(context.Background(), Target{HostID: "h1"}, "exit 9", "", nil)
 
@@ -95,8 +121,9 @@ func TestAgentRunnerTransferUploadsMultipartFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(source, []byte("payload"), 0o644))
 	var gotTarget string
 	var gotBody []byte
-	runner := NewAgentRunner(agentRunnerResolver{base: "http://agent.local"})
-	runner.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	runner := NewAgentRunner(agentRunnerTransport{do: func(ctx context.Context, hostID string, nodeReq nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+		require.Equal(t, "/api/transfer", nodeReq.Path)
+		req := nodeHTTPRequest(t, ctx, nodeReq)
 		require.Equal(t, "/api/transfer", req.URL.Path)
 		require.NoError(t, req.ParseMultipartForm(32<<20))
 		gotTarget = req.FormValue("target")
@@ -105,8 +132,9 @@ func TestAgentRunnerTransferUploadsMultipartFile(t *testing.T) {
 		defer file.Close()
 		gotBody, err = io.ReadAll(file)
 		require.NoError(t, err)
-		return transferTestResponse(http.StatusNoContent), nil
-	})}
+		resp := transferTestResponse(http.StatusNoContent)
+		return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+	}})
 
 	err := runner.Transfer(context.Background(), Target{HostID: "h1"}, source, "/srv/app/artifact.txt", nil)
 
@@ -119,16 +147,17 @@ func TestAgentRunnerTransferPackagesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644))
 	var uploaded []byte
-	runner := NewAgentRunner(agentRunnerResolver{base: "http://agent.local"})
-	runner.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	runner := NewAgentRunner(agentRunnerTransport{do: func(ctx context.Context, hostID string, nodeReq nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+		req := nodeHTTPRequest(t, ctx, nodeReq)
 		require.NoError(t, req.ParseMultipartForm(32<<20))
 		file, _, err := req.FormFile("file")
 		require.NoError(t, err)
 		defer file.Close()
 		uploaded, err = io.ReadAll(file)
 		require.NoError(t, err)
-		return transferTestResponse(http.StatusNoContent), nil
-	})}
+		resp := transferTestResponse(http.StatusNoContent)
+		return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+	}})
 
 	err := runner.Transfer(context.Background(), Target{HostID: "h1"}, dir, "/srv/app/site.tar.gz", nil)
 
@@ -139,15 +168,27 @@ func TestAgentRunnerTransferPackagesDirectory(t *testing.T) {
 func TestAgentRunnerTransferReturnsHTTPError(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "artifact.txt")
 	require.NoError(t, os.WriteFile(source, []byte("payload"), 0o644))
-	runner := NewAgentRunner(agentRunnerResolver{base: "http://agent.local"})
-	runner.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return transferTestResponse(http.StatusBadGateway), nil
-	})}
+	runner := NewAgentRunner(agentRunnerTransport{do: func(ctx context.Context, hostID string, nodeReq nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+		resp := transferTestResponse(http.StatusBadGateway)
+		return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+	}})
 
 	err := runner.Transfer(context.Background(), Target{HostID: "h1"}, source, "/srv/app/artifact.txt", nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remote agent /api/transfer returned 502")
+}
+
+func nodeHTTPRequest(t *testing.T, ctx context.Context, req nodetransport.NodeRequest) *http.Request {
+	t.Helper()
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, "http://agent.local"+req.Path, req.Body)
+	require.NoError(t, err)
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+	return httpReq
 }
 
 func tarBytesContain(t *testing.T, data []byte, name string) bool {

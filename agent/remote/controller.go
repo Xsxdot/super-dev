@@ -1,56 +1,44 @@
-// controller.go 实现通过隧道控制远端 collector 的能力。
+// controller.go 实现通过节点传输控制远端 collector 的能力。
 //
 // 职责：
-//   - 根据 hostID 通过 TunnelResolver 获取本地隧道 baseURL
 //   - 调用远端 /api/collectors 启停采集任务
 //   - 解析响应,返回稳定 collector ID
 //
 // 边界：
-//   - 不管理隧道生命周期,由 tunnel.Manager 负责
+//   - 不管理传输生命周期,由 NodeTransport 负责
 //   - 不持久化"本机视角的 collector 映射",每次 EnsureCollector 都调远端
 //     (远端通过 hash(name+type) 保证 ID 稳定 → 幂等)
 package remote
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// ErrHostUnreachable 表示无法获得 host 对应的本地隧道 baseURL。
-var ErrHostUnreachable = errors.New("host unreachable")
-
-// TunnelResolver 把 hostID 解析为本地隧道 baseURL(如 "http://127.0.0.1:12345")。
-//
-// 生产实现由 api 层适配 tunnel.Manager,测试用 fakeTunnel 注入。
-type TunnelResolver interface {
-	BaseURL(hostID string) (string, error)
-}
+// ErrHostUnreachable 表示无法到达指定 host。
+var ErrHostUnreachable = nodetransport.ErrHostUnreachable
 
 // Controller 提供本机端的远端 collector 控制能力。
 type Controller struct {
-	store   *Store
-	tunnels TunnelResolver
-	httpDo  *http.Client
+	store     *Store
+	transport nodetransport.NodeTransport
 }
 
 // NewController 创建 Controller。
 //
 // 参数：
 //   - store: 用于查询 Host/LogSource(校验 host 属于 LogSource.HostIDs)
-//   - tunnels: 隧道解析器(生产用 api 层 adapter,测试用 fakeTunnel)
-//   - httpDo: HTTP 客户端,通常 http.DefaultClient;测试可注入自定义超时
-func NewController(store *Store, tunnels TunnelResolver, httpDo *http.Client) *Controller {
-	if httpDo == nil {
-		httpDo = http.DefaultClient
-	}
-	return &Controller{store: store, tunnels: tunnels, httpDo: httpDo}
+//   - transport: 节点传输(生产用 tunnel-backed transport,测试用 fake transport)
+//   - httpDo: 兼容旧测试签名，已不再使用
+func NewController(store *Store, transport nodetransport.NodeTransport, httpDo *http.Client) *Controller {
+	return &Controller{store: store, transport: transport}
 }
 
 // EnsureCollector 在 hostID 上启动 logSourceID 对应的远端采集任务。
@@ -67,15 +55,18 @@ func (c *Controller) EnsureCollector(hostID, logSourceID string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	base, err := c.tunnels.BaseURL(hostID)
-	if err != nil {
-		return "", err
-	}
 	body, err := json.Marshal(map[string]string{"name": ls.Name, "type": string(ls.Type)})
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.httpDo.Post(joinURL(base, "/api/collectors"), "application/json", bytes.NewReader(body))
+	resp, err := c.transport.Do(context.Background(), hostID, nodetransport.NodeRequest{
+		Method: http.MethodPost,
+		Path:   "/api/collectors",
+		Headers: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: bytes.NewReader(body),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -97,22 +88,17 @@ func (c *Controller) StopCollector(hostID, logSourceID string) error {
 	if err != nil {
 		return err
 	}
-	base, err := c.tunnels.BaseURL(hostID)
-	if err != nil {
-		return err
-	}
-	id, err := c.findRemoteCollectorID(base, ls.Name, ls.Type)
+	id, err := c.findRemoteCollectorID(hostID, ls.Name, ls.Type)
 	if err != nil {
 		return err
 	}
 	if id == "" {
 		return nil
 	}
-	req, err := http.NewRequest(http.MethodDelete, joinURL(base, "/api/collectors/"+id), nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.httpDo.Do(req)
+	resp, err := c.transport.Do(context.Background(), hostID, nodetransport.NodeRequest{
+		Method: http.MethodDelete,
+		Path:   "/api/collectors/" + id,
+	})
 	if err != nil {
 		return err
 	}
@@ -128,11 +114,10 @@ func (c *Controller) StopCollector(hostID, logSourceID string) error {
 //
 // 主要用途:本机重连后对账,或 UI 调试。
 func (c *Controller) ListRemoteCollectors(hostID string) ([]model.Collector, error) {
-	base, err := c.tunnels.BaseURL(hostID)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.httpDo.Get(joinURL(base, "/api/collectors"))
+	resp, err := c.transport.Do(context.Background(), hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/collectors",
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +172,11 @@ func (c *Controller) findHost(id string) (model.Host, error) {
 }
 
 // findRemoteCollectorID 在远端 List 中找到 (name, type) 对应的 collector_id。
-func (c *Controller) findRemoteCollectorID(base, name string, t model.LogSourceType) (string, error) {
-	resp, err := c.httpDo.Get(joinURL(base, "/api/collectors"))
+func (c *Controller) findRemoteCollectorID(hostID, name string, t model.LogSourceType) (string, error) {
+	resp, err := c.transport.Do(context.Background(), hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/collectors",
+	})
 	if err != nil {
 		return "", err
 	}
@@ -207,8 +195,4 @@ func (c *Controller) findRemoteCollectorID(base, name string, t model.LogSourceT
 		}
 	}
 	return "", nil
-}
-
-func joinURL(base, path string) string {
-	return strings.TrimRight(base, "/") + path
 }
