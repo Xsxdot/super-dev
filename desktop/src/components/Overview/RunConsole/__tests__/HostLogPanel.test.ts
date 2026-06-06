@@ -59,4 +59,33 @@ describe('HostLogPanel', () => {
 
     expect(wrapper.find('.run-log-row.stderr').exists()).toBe(true)
   })
+
+  it('uses host_name as the visible source label when present', () => {
+    const wrapper = mount(HostLogPanel, {
+      props: {
+        logs: [{ id: 4, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-uuid', host_name: 'local-01', stream: 'stdout', line: 'ready', at: 1003 }],
+        selectedStep: '',
+        selectedHost: '',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.text()).toContain('[local-01]')
+    expect(wrapper.text()).not.toContain('[host-uuid]')
+  })
+
+  it('renders command stream as a highlighted command card', () => {
+    const wrapper = mount(HostLogPanel, {
+      props: {
+        logs: [{ id: 5, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-uuid', host_name: 'local-01', stream: 'command', line: 'systemctl restart api', at: 1004 }],
+        selectedStep: '',
+        selectedHost: '',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('.run-log-row.command').exists()).toBe(true)
+    expect(wrapper.find('.command-card').text()).toContain('systemctl restart api')
+    expect(wrapper.text()).toContain('[local-01]')
+  })
 })

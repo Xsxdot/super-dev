@@ -334,12 +334,15 @@ export interface ProjectPipelineDeployRequest {
   variables?: Record<string, string>
 }
 
+export type RunLogStream = 'stdout' | 'stderr' | 'system' | 'command'
+
 export interface RunLogLine {
   id: number
   run_id: string
   step_name: string
   host_id?: string
-  stream: string
+  host_name?: string
+  stream: RunLogStream
   line: string
   at: number
 }

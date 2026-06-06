@@ -30,6 +30,10 @@ const listEl = ref<HTMLElement | null>(null)
 const pinnedToBottom = ref(true)
 const fallbackRenderLimit = 200
 
+function sourceLabel(line: RunLogLine): string {
+  return line.host_name || line.host_id || 'local'
+}
+
 function runLogToLogEntry(line: RunLogLine): LogEntry {
   return {
     id: line.id,
@@ -39,7 +43,7 @@ function runLogToLogEntry(line: RunLogLine): LogEntry {
     level: line.stream === 'stderr' ? 'ERROR' : 'INFO',
     message: line.line,
     stream: line.stream,
-    source_id: line.host_id,
+    source_id: sourceLabel(line),
   }
 }
 
@@ -113,7 +117,10 @@ watch(() => props.logs.length, async () => {
           :style="{ position: 'absolute', top: vRow.start + 'px', width: '100%' }"
         >
           <span class="source-chip">[{{ visible[vRow.index]?.display.source_id || 'local' }}]</span>
-          <span class="log-message">{{ visible[vRow.index]?.display.message }}</span>
+          <code v-if="visible[vRow.index]?.raw.stream === 'command'" class="command-card">
+            {{ visible[vRow.index]?.display.message }}
+          </code>
+          <span v-else class="log-message">{{ visible[vRow.index]?.display.message }}</span>
         </div>
       </div>
       <button
@@ -171,6 +178,11 @@ watch(() => props.logs.length, async () => {
 .run-log-row.stderr .log-message {
   color: var(--status-failed);
 }
+.run-log-row.command {
+  grid-template-columns: 120px minmax(0, 1fr);
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
 .source-chip {
   overflow: hidden;
   color: var(--text-tertiary);
@@ -179,6 +191,18 @@ watch(() => props.logs.length, async () => {
 }
 .log-message {
   min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.command-card {
+  display: block;
+  min-width: 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-overlay));
+  color: var(--text-primary);
+  font: inherit;
   white-space: pre-wrap;
   word-break: break-word;
 }
