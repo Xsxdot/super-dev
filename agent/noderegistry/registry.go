@@ -172,6 +172,17 @@ func (r *Registry) Subscribe() (<-chan []nodetransport.NodeStatus, func()) {
 	}
 }
 
+// ApplyForTest 注入一批节点状态，供 API 测试绕过 transport 状态流。
+//
+// 参数：
+//   - batch: 要写入 Registry 的完整或部分节点快照
+//
+// 注意：
+//   - 生产代码不调用此方法；它仍走同一 applyBatch 路径，避免测试专用状态分支
+func (r *Registry) ApplyForTest(batch []nodetransport.NodeStatus) {
+	r.applyBatch(-1, batch, time.Now().UTC())
+}
+
 func (r *Registry) consumeTransport(ctx context.Context, idx int, transport nodetransport.NodeTransport) {
 	ch, cancel := transport.SubscribeNodes(ctx)
 	defer cancel()

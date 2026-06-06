@@ -33,6 +33,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/noderegistry"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/onboarding"
 	"github.com/xsxdot/super-dev/agent/operation"
@@ -51,6 +52,8 @@ type AppConfig struct {
 	ProbeOverride collector.Probe
 	// NodeTransportOverride 注入自定义节点传输,仅用于测试。
 	NodeTransportOverride nodetransport.NodeTransport
+	// NodeRegistryOverride 注入自定义节点状态中心，仅用于测试。
+	NodeRegistryOverride *noderegistry.Registry
 	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
 	InstallBinaryDir string
 	// SampleBinaryPath 是随桌面端打包的 onboarding 示例服务二进制；为空时跳过示例落地。
@@ -102,6 +105,10 @@ type App struct {
 	operationAudit operation.AuditStore
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
 	nodeTransport nodetransport.NodeTransport
+	// nodeRegistry 持有所有远端节点的最新状态快照。
+	nodeRegistry *noderegistry.Registry
+	// nodeRegistryCancel 停止节点状态流订阅。
+	nodeRegistryCancel context.CancelFunc
 	// backends 按 deployment ID 索引对应的 LogBackend。
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
 	backends                    map[string]logbackend.LogBackend
@@ -200,6 +207,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if cfg.NodeTransportOverride != nil {
 		nodeTransport = cfg.NodeTransportOverride
 	}
+	nodeRegistry := cfg.NodeRegistryOverride
+	if nodeRegistry == nil {
+		nodeRegistry = noderegistry.New([]nodetransport.NodeTransport{nodeTransport}, noderegistry.Options{})
+	}
+	nodeRegistryCtx, nodeRegistryCancel := context.WithCancel(context.Background())
+	nodeRegistry.Start(nodeRegistryCtx)
 	agentHealthCtx, agentHealthCancel := context.WithCancel(context.Background())
 	agentHealthMonitor := agenthealth.NewMonitor(newAgentHealthProber(nodeTransport))
 	// 订阅隧道事件，桥接为 agenthealth 信号；桥接与 Run 都绑定 App 生命周期。
@@ -268,6 +281,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
 		nodeTransport:               nodeTransport,
+		nodeRegistry:                nodeRegistry,
+		nodeRegistryCancel:          nodeRegistryCancel,
 		backends:                    map[string]logbackend.LogBackend{},
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
@@ -294,6 +309,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 //
 // 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
 func (a *App) Close() {
+	if a.nodeRegistryCancel != nil {
+		a.nodeRegistryCancel()
+	}
 	if a.agentHealthCancel != nil {
 		a.agentHealthCancel()
 	}
@@ -331,6 +349,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
+	mux.HandleFunc("GET /api/nodes", a.listNodes)
+	mux.HandleFunc("GET /ws/nodes", a.wsNodes)
+	mux.HandleFunc("GET /ws/node-status", a.wsNodeStatus)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
 
