@@ -677,6 +677,9 @@ export default {
     waitingOutput: 'Waiting for output...',
     noLogs: 'No logs',
     backToBottom: 'Back to bottom',
+    failureTitle: 'Failed step',
+    failureDetail: '{step} · {host} · exit {code}',
+    viewLogs: 'View logs',
   },
   overview: {
     title: 'Project Overview',

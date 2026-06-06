@@ -15,6 +15,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRunConsoleStore } from '@/stores/runConsole'
 import StepTree from './StepTree.vue'
 import HostLogPanel from './HostLogPanel.vue'
+import FailureBanner from './FailureBanner.vue'
 
 const props = defineProps<{
   projectId: string
@@ -30,6 +31,10 @@ const visibleLogs = computed(() => store.visibleLogs(props.runId))
 function loadRun() {
   if (props.mode === 'live') void store.loadLive(props.projectId, props.pipelineId, props.runId)
   else void store.loadReplay(props.projectId, props.pipelineId, props.runId)
+}
+
+function selectFailureLogs(step: string, host: string) {
+  store.select(props.runId, step, host)
 }
 
 onMounted(loadRun)
@@ -49,6 +54,10 @@ watch(() => [props.projectId, props.pipelineId, props.runId, props.mode] as cons
       </span>
     </header>
     <div v-if="state.error" class="run-console-error">{{ state.error }}</div>
+    <FailureBanner
+      :run="state.currentRun"
+      @view-logs="selectFailureLogs"
+    />
     <div class="run-console-body">
       <StepTree
         :steps="state.currentRun?.step_runs ?? []"

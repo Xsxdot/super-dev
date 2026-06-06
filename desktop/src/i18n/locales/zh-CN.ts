@@ -677,6 +677,9 @@ export default {
     waitingOutput: '等待输出...',
     noLogs: '暂无日志',
     backToBottom: '回到底部',
+    failureTitle: '步骤失败',
+    failureDetail: '{step} · {host} · exit {code}',
+    viewLogs: '查看日志',
   },
   overview: {
     title: '项目概览',

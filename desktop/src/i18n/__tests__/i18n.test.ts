@@ -72,8 +72,12 @@ describe('i18n', () => {
   it('contains run console labels in both locales', () => {
     expect(zhCN.runConsole.waitingOutput).toBeTruthy()
     expect(zhCN.runConsole.backToBottom).toBeTruthy()
+    expect(zhCN.runConsole.failureTitle).toBeTruthy()
+    expect(zhCN.runConsole.viewLogs).toBeTruthy()
     expect(enUS.runConsole.waitingOutput).toBeTruthy()
     expect(enUS.runConsole.backToBottom).toBeTruthy()
+    expect(enUS.runConsole.failureTitle).toBeTruthy()
+    expect(enUS.runConsole.viewLogs).toBeTruthy()
     expect(zhCN.overview.pipeline.running).toBeTruthy()
     expect(enUS.overview.pipeline.running).toBeTruthy()
   })
