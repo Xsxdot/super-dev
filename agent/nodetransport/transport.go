@@ -50,12 +50,14 @@ type NodeStream interface {
 
 // NodeStatus 是 NodeRegistry 状态线的传输无关协议体。
 type NodeStatus struct {
-	HostID      string
-	Name        string
-	Reachable   bool
-	Agent       model.AgentRuntime
-	Deployments []model.InstanceStatus
-	UpdatedAt   time.Time
+	HostID      string                         `json:"host_id"`
+	Name        string                         `json:"name,omitempty"`
+	Reachable   bool                           `json:"reachable"`
+	Agent       model.AgentRuntime             `json:"agent"`
+	Deployments []model.InstanceStatus         `json:"deployments"`
+	Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
+	UpdatedAt   time.Time                      `json:"updated_at"`
+	Error       string                         `json:"error,omitempty"`
 }
 
 // NodeTransport 抽象“与某个节点通信”。

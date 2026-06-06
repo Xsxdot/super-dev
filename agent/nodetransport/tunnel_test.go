@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -113,4 +114,50 @@ func TestTunnelTransportCoversOnlyTunnelHosts(t *testing.T) {
 	})
 
 	assert.Equal(t, []string{"h-tunnel"}, tr.Covers())
+}
+
+func TestNodeStatusJSONShape(t *testing.T) {
+	now := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	status := nodetransport.NodeStatus{
+		HostID:    "h1",
+		Name:      "ali-01",
+		Reachable: true,
+		Agent: model.AgentRuntime{
+			Installed: true,
+			Version:   "0.1.0",
+			Health:    model.AgentHealthHealthy,
+			Reachable: true,
+			LocalPort: 57100,
+		},
+		Deployments: []model.InstanceStatus{{
+			ServiceID:    "svc-1",
+			ServiceName:  "api",
+			DeploymentID: "dep-1",
+			NodeID:       "h1",
+			NodeName:     "ali-01",
+			IsLocal:      false,
+			Metrics: model.InstanceMetrics{
+				Health: model.HealthRunning,
+				Base:   "systemd",
+			},
+		}},
+		Managed: &model.ManagedDeploymentStatus{
+			DeploymentCount: 1,
+			CollectorCount:  1,
+			Collectors: []model.ManagedCollectorStatus{{
+				DeploymentID: "dep-1",
+				ServiceName:  "api",
+				Desired:      true,
+				Running:      true,
+			}},
+		},
+		UpdatedAt: now,
+	}
+
+	data, err := json.Marshal(status)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"host_id":"h1"`)
+	assert.Contains(t, string(data), `"updated_at":"2026-06-06T10:00:00Z"`)
+	assert.Contains(t, string(data), `"managed"`)
+	assert.NotContains(t, string(data), `"HostID"`)
 }
