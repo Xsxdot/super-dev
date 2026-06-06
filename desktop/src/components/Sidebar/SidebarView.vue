@@ -64,6 +64,10 @@ function openProjectOverview(projectId: string) {
   workspace.openProjectOverview(projectId)
 }
 
+function openNodeCenter() {
+  workspace.openNodesTab()
+}
+
 function servicesForEnv(services: Service[], envName: string): Service[] {
   const query = serviceQuery.value.trim().toLowerCase()
   return services
@@ -100,6 +104,16 @@ onBeforeUnmount(() => {
 <template>
   <div class="sidebar">
     <div class="sidebar-scroll">
+      <button
+        type="button"
+        class="node-center-strip"
+        data-test="sidebar-node-center"
+        @click="openNodeCenter"
+      >
+        <span class="node-center-icon" aria-hidden="true"></span>
+        <span class="node-center-main">{{ t('shell.sidebar.nodeCenter') }}</span>
+        <span class="node-center-hint">{{ t('shell.sidebar.nodeCenterHint') }}</span>
+      </button>
       <button
         v-if="agentStore.projects.length === 0"
         type="button"
@@ -203,6 +217,55 @@ onBeforeUnmount(() => {
 .empty-add-project:hover {
   border-color: var(--border);
   color: var(--text-primary);
+}
+
+.node-center-strip {
+  display: grid;
+  width: calc(100% - 20px);
+  min-height: 42px;
+  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 10px 10px 8px;
+  padding: 0 11px;
+  border: 1px solid rgba(91, 106, 128, 0.32);
+  border-radius: 7px;
+  background: rgba(15, 24, 34, 0.72);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.node-center-strip:hover {
+  border-color: rgba(63, 185, 80, 0.42);
+  background: rgba(24, 39, 54, 0.78);
+  color: var(--text-primary);
+}
+
+.node-center-icon {
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.92;
+}
+
+.node-center-main {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.node-center-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-project-shell {

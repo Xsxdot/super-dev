@@ -526,6 +526,8 @@ export default {
       dragServiceToSplit: 'Drag service to split panel',
       switchProject: 'Switch project',
       currentProject: 'Current',
+      nodeCenter: 'Node Center',
+      nodeCenterHint: 'All remote nodes',
       projectOverviewHint: 'Status · pipelines · ingress',
     },
     env: {

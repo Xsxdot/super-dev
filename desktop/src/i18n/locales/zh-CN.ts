@@ -526,6 +526,8 @@ export default {
       dragServiceToSplit: '拖拽服务到面板分栏',
       switchProject: '切换项目',
       currentProject: '当前',
+      nodeCenter: '节点中心',
+      nodeCenterHint: '所有远端节点',
       projectOverviewHint: '状态 · 流水线 · 入口',
     },
     env: {

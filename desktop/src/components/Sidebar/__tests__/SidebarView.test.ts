@@ -287,4 +287,18 @@ describe('SidebarView', () => {
     if (active?.type !== 'overview') throw new Error('expected overview tab')
     expect(active.projectId).toBe('proj-1')
   })
+
+  it('节点中心按钮打开全局 nodes workspace tab', async () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+    const workspace = useWorkspaceStore()
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await wrapper.find('[data-test="sidebar-node-center"]').trigger('click')
+
+    expect(workspace.activeTab?.type).toBe('nodes')
+    expect(workspace.tabs.filter(tab => tab.type === 'nodes')).toHaveLength(1)
+  })
 })
