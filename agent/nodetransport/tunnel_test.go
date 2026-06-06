@@ -275,3 +275,96 @@ func TestTunnelTransportSubscribeNodesEmitsUnreachableWithoutBlockingOtherHosts(
 		return seen["h1:true"] && seen["h2:false"]
 	}, time.Second, 10*time.Millisecond)
 }
+
+func TestTunnelTransportDoEnsuresTunnelBeforeRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/exec/health", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	host := model.Host{ID: "h1", Name: "ali-01"}
+	host.EnsureTunnelAgent()
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestTunnelTransportSubscribeNodesEnsuresTunnel(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.WriteJSON([]nodetransport.NodeStatus{{
+			HostID:    "h1",
+			Name:      "ali-01",
+			Reachable: true,
+			Agent:     model.AgentRuntime{Health: model.AgentHealthHealthy, Reachable: true},
+			UpdatedAt: time.Now().UTC(),
+		}}))
+	}))
+	defer srv.Close()
+
+	host := model.Host{ID: "h1", Name: "ali-01"}
+	host.EnsureTunnelAgent()
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := tr.SubscribeNodes(ctx)
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].Reachable
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestTunnelTransportSubscribeNodesReportsVersionMismatchForOldAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws/node-status" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path == "/api/exec/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	host := model.Host{ID: "h1", Name: "old-agent"}
+	host.EnsureTunnelAgent()
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := tr.SubscribeNodes(ctx)
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].Agent.Health == model.AgentHealthVersionMismatch
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}

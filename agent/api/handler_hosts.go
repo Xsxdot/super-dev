@@ -23,6 +23,7 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/remote"
@@ -209,7 +210,7 @@ func (a *App) uninstallHostAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.tunnels.Disconnect(host.ID)
-	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
+	info := agenthealth.Info{Status: agenthealth.StatusUnreachable, CheckedAt: time.Now().UTC()}
 	agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(info)
 	jsonOK(w, uninstallHostAgentResponse{
 		Result: result,

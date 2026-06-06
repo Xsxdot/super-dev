@@ -3,6 +3,7 @@ package nodetransport
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -52,7 +53,7 @@ func (t *TunnelTransport) SetStatusReconnectIntervalForTest(interval time.Durati
 
 // Do 对 hostID 发起一次 HTTP 请求。
 func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest) (NodeResponse, error) {
-	u, err := t.urlFor(hostID, req, false)
+	u, err := t.ensureURLFor(hostID, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -78,16 +79,31 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 
 // Stream 对 hostID 建立 WebSocket 流。
 func (t *TunnelTransport) Stream(ctx context.Context, hostID string, req NodeRequest) (NodeStream, error) {
-	u, err := t.urlFor(hostID, req, true)
+	u, err := t.ensureURLFor(hostID, req, true)
 	if err != nil {
 		return nil, err
 	}
 	conn, resp, err := t.wsDialer.DialContext(ctx, u, req.Headers)
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return nil, err
+		code := CodeTransportUnreachable
+		if statusCode == http.StatusNotFound {
+			code = CodeAgentAPIMissing
+		}
+		return nil, &NodeError{
+			Code:          code,
+			HostID:        hostID,
+			TransportType: model.TransportTypeTunnel,
+			Operation:     "stream",
+			Message:       err.Error(),
+			Cause:         err,
+		}
 	}
 	return conn, nil
 }
@@ -210,6 +226,14 @@ func (t *TunnelTransport) tunnelHosts() []model.Host {
 }
 
 func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, out chan<- []NodeStatus) {
+	if t.mgr == nil {
+		t.emitUnreachable(ctx, out, host, ErrHostUnreachable)
+		return
+	}
+	if _, err := t.mgr.EnsureConnected(host); err != nil {
+		t.emitUnreachable(ctx, out, host, err)
+		return
+	}
 	stream, err := t.Stream(ctx, host.ID, NodeRequest{
 		Path: "/ws/node-status",
 		Query: url.Values{
@@ -219,7 +243,7 @@ func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 	})
 	if err != nil {
 		if ctx.Err() == nil {
-			t.emitUnreachable(ctx, out, host, err)
+			t.emitNodeStatusFailure(ctx, out, host, err)
 		}
 		return
 	}
@@ -245,13 +269,26 @@ func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 }
 
 func (t *TunnelTransport) emitUnreachable(ctx context.Context, out chan<- []NodeStatus, host model.Host, err error) {
+	t.emitStatus(ctx, out, host, model.AgentHealthUnreachable, false, err)
+}
+
+func (t *TunnelTransport) emitNodeStatusFailure(ctx context.Context, out chan<- []NodeStatus, host model.Host, err error) {
+	if t.execHealthReachable(ctx, host.ID) {
+		t.emitStatus(ctx, out, host, model.AgentHealthVersionMismatch, true, err)
+		return
+	}
+	t.emitUnreachable(ctx, out, host, err)
+}
+
+func (t *TunnelTransport) emitStatus(ctx context.Context, out chan<- []NodeStatus, host model.Host, health model.AgentHealth, reachable bool, err error) {
 	status := NodeStatus{
 		HostID:    host.ID,
 		Name:      host.Name,
-		Reachable: false,
+		Reachable: reachable,
 		Agent: model.AgentRuntime{
-			Health:    model.AgentHealthUnreachable,
-			Reachable: false,
+			Installed: reachable,
+			Health:    health,
+			Reachable: reachable,
 		},
 		UpdatedAt: time.Now().UTC(),
 		Error:     err.Error(),
@@ -260,6 +297,50 @@ func (t *TunnelTransport) emitUnreachable(ctx context.Context, out chan<- []Node
 	case out <- []NodeStatus{status}:
 	case <-ctx.Done():
 	}
+}
+
+func (t *TunnelTransport) execHealthReachable(ctx context.Context, hostID string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resp, err := t.Do(probeCtx, hostID, NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode/100 == 2
+}
+
+func (t *TunnelTransport) ensureURLFor(hostID string, req NodeRequest, stream bool) (string, error) {
+	if t.mgr == nil {
+		return "", ErrHostUnreachable
+	}
+	if t.mgr.LocalPort(hostID) == 0 {
+		host, ok := t.hostByID(hostID)
+		if !ok {
+			return "", ErrHostUnreachable
+		}
+		if _, err := t.mgr.EnsureConnected(host); err != nil {
+			return "", &NodeError{
+				Code:          CodeTransportUnreachable,
+				HostID:        hostID,
+				TransportType: model.TransportTypeTunnel,
+				Operation:     "connect",
+				Message:       err.Error(),
+				Cause:         err,
+			}
+		}
+	}
+	return t.urlFor(hostID, req, stream)
+}
+
+func (t *TunnelTransport) hostByID(hostID string) (model.Host, bool) {
+	for _, host := range t.tunnelHosts() {
+		if host.ID == hostID {
+			return host, true
+		}
+	}
+	return model.Host{}, false
 }
 
 func (t *TunnelTransport) urlFor(hostID string, req NodeRequest, stream bool) (string, error) {
