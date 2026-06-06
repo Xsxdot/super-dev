@@ -754,6 +754,7 @@ export default {
     pipeline: {
       add: '新增',
       run: '运行',
+      running: '运行中',
       edit: '编辑',
       rollback: '回滚',
       confirm: '确认',

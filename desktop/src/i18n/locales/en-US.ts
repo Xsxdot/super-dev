@@ -754,6 +754,7 @@ export default {
     pipeline: {
       add: 'Add',
       run: 'Run',
+      running: 'Running',
       edit: 'Edit',
       rollback: 'Rollback',
       confirm: 'Confirm',
