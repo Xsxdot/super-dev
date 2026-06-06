@@ -315,9 +315,9 @@ func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp s
 		"install -m 0755 " + remoteTmp + " " + shellQuote(paths.binary),
 		"cat > " + shellQuote(paths.plist) + " <<'EOF'\n" + plist + "EOF",
 		"chmod 0644 " + shellQuote(paths.plist),
-		"launchctl bootout user/" + uid + " " + shellQuote(paths.plist) + " || true",
-		"launchctl bootstrap user/" + uid + " " + shellQuote(paths.plist),
-		"launchctl kickstart -k user/" + uid + "/dev.superdev.agent",
+		"launchctl bootout gui/" + uid + " " + shellQuote(paths.plist) + " || true",
+		"launchctl bootstrap gui/" + uid + " " + shellQuote(paths.plist),
+		"launchctl kickstart -k gui/" + uid + "/dev.superdev.agent",
 	}
 	for _, cmd := range commands {
 		if _, err := remote.Run(ctx, cmd); err != nil {
@@ -334,7 +334,7 @@ func uninstallMacOSUserLaunchAgent(ctx context.Context, remote Remote, removeDat
 	}
 	paths := macOSUserAgentPaths(home)
 	commands := []string{
-		"launchctl bootout user/" + uid + " " + shellQuote(paths.plist) + " || true",
+		"launchctl bootout gui/" + uid + " " + shellQuote(paths.plist) + " || true",
 		"rm -f " + shellQuote(paths.plist) + " " + shellQuote(paths.binary),
 	}
 	if removeData {

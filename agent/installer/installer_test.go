@@ -152,7 +152,9 @@ func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *
 	assert.Contains(t, remote.commands, "id -u")
 	assert.Contains(t, remote.commands, "mkdir -p '/Users/sycm/Library/Application Support/SuperDev/Agent/bin' '/Users/sycm/Library/Application Support/SuperDev/Agent/data' '/Users/sycm/Library/LaunchAgents' '/Users/sycm/Library/Logs'")
 	assert.Contains(t, remote.commands, "install -m 0755 /tmp/superdev-agent-darwin-arm64 '/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent'")
-	assert.Contains(t, remote.commands, "launchctl bootstrap user/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist'")
+	assert.Contains(t, remote.commands, "launchctl bootout gui/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' || true")
+	assert.Contains(t, remote.commands, "launchctl bootstrap gui/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist'")
+	assert.Contains(t, remote.commands, "launchctl kickstart -k gui/501/dev.superdev.agent")
 	assert.NotContains(t, remote.commands, "sudo -n launchctl bootstrap system /Library/LaunchDaemons/dev.superdev.agent.plist")
 	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57020/api/hosts >/dev/null")
 }
@@ -226,7 +228,7 @@ func TestInstallerDowngradesMacOSUninstallToUserLaunchAgentWhenSudoNeedsPassword
 	assert.True(t, result.RemovedData)
 	assert.Contains(t, remote.commands, "printf %s \"$HOME\"")
 	assert.Contains(t, remote.commands, "id -u")
-	assert.Contains(t, remote.commands, "launchctl bootout user/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' || true")
+	assert.Contains(t, remote.commands, "launchctl bootout gui/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' || true")
 	assert.Contains(t, remote.commands, "rm -f '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' '/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent'")
 	assert.Contains(t, remote.commands, "rm -rf '/Users/sycm/Library/Application Support/SuperDev/Agent'")
 }
