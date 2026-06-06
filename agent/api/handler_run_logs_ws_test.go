@@ -32,7 +32,7 @@ func TestWsRunLogsReplaysStreamsAndClosesOnDone(t *testing.T) {
 		StartedAt:  100,
 	}
 	require.NoError(t, app.store.SaveRun(run))
-	replay, err := app.store.AppendRunLogLine("run-1", "Build", "", "stdout", "replay", 101)
+	replay, err := app.store.AppendRunLogLineWithHostName("run-1", "Build", "h1", "local-01", model.StreamStdout, "replay", 101)
 	require.NoError(t, err)
 
 	conn := dialAppWebSocket(t, app, "/ws/runs/run-1/logs")
@@ -43,8 +43,9 @@ func TestWsRunLogsReplaysStreamsAndClosesOnDone(t *testing.T) {
 	assert.Equal(t, RunEventKindLog, first.Kind)
 	assert.Equal(t, replay.ID, first.Log.ID)
 	assert.Equal(t, "replay", first.Log.Line)
+	assert.Equal(t, "local-01", first.Log.HostName)
 
-	live := model.RunLogLine{ID: replay.ID + 1, RunID: "run-1", StepName: "Deploy", Stream: "stdout", Line: "live", At: 102}
+	live := model.RunLogLine{ID: replay.ID + 1, RunID: "run-1", StepName: "Deploy", HostID: "h1", HostName: "local-01", Stream: model.StreamStdout, Line: "live", At: 102}
 	app.runHub.Broadcast("run-1", RunEvent{Kind: RunEventKindLog, Log: &live})
 
 	var second RunEvent

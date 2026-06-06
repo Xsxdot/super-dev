@@ -93,18 +93,24 @@ func (s *Store) ListRuns(projectID, pipelineID string) ([]model.Run, error) {
 
 // AppendRunLogLine 追加一条 step/host 维度的日志，并返回带数据库自增 ID 的日志行。
 func (s *Store) AppendRunLogLine(runID, stepName, hostID, stream, line string, at int64) (model.RunLogLine, error) {
+	return s.AppendRunLogLineWithHostName(runID, stepName, hostID, "", stream, line, at)
+}
+
+// AppendRunLogLineWithHostName 追加一条带主机别名的 step/host 日志，并返回带数据库自增 ID 的日志行。
+func (s *Store) AppendRunLogLineWithHostName(runID, stepName, hostID, hostName, stream, line string, at int64) (model.RunLogLine, error) {
 	entry := model.RunLogLine{
 		RunID:    runID,
 		StepName: stepName,
 		HostID:   hostID,
+		HostName: hostName,
 		Stream:   stream,
 		Line:     line,
 		At:       at,
 	}
 	result, err := s.db.Exec(`
-		INSERT INTO pipeline_run_logs (run_id, step_name, host_id, stream, line, at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, runID, stepName, hostID, stream, line, at)
+		INSERT INTO pipeline_run_logs (run_id, step_name, host_id, host_name, stream, line, at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, runID, stepName, hostID, hostName, stream, line, at)
 	if err != nil {
 		return model.RunLogLine{}, err
 	}
@@ -128,7 +134,7 @@ func (s *Store) ReadRunLogs(q RunLogQuery) ([]model.RunLogLine, error) {
 		q.Limit = 1000
 	}
 	query := `
-		SELECT id, run_id, step_name, host_id, stream, line, at
+		SELECT id, run_id, step_name, host_id, host_name, stream, line, at
 		FROM pipeline_run_logs
 		WHERE run_id = ?
 	`
@@ -165,7 +171,7 @@ func (s *Store) ReadRunLogs(q RunLogQuery) ([]model.RunLogLine, error) {
 	var lines []model.RunLogLine
 	for rows.Next() {
 		var line model.RunLogLine
-		if err := rows.Scan(&line.ID, &line.RunID, &line.StepName, &line.HostID, &line.Stream, &line.Line, &line.At); err != nil {
+		if err := rows.Scan(&line.ID, &line.RunID, &line.StepName, &line.HostID, &line.HostName, &line.Stream, &line.Line, &line.At); err != nil {
 			return nil, err
 		}
 		lines = append(lines, line)

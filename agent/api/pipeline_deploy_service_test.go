@@ -91,6 +91,10 @@ func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, runLogLines(lines), "remote route host h1 -> agent")
 	assert.Contains(t, runLogLines(lines), "agent ran")
+	require.NotEmpty(t, lines)
+	for _, line := range lines {
+		assert.Equal(t, "agent-host", line.HostName)
+	}
 }
 
 func TestHostRefsResolveHostNameToCanonicalID(t *testing.T) {

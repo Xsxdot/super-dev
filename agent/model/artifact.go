@@ -45,6 +45,7 @@ type RunLogLine struct {
 	RunID    string `json:"run_id"`
 	StepName string `json:"step_name"`
 	HostID   string `json:"host_id,omitempty"`
+	HostName string `json:"host_name,omitempty"`
 	Stream   string `json:"stream"`
 	Line     string `json:"line"`
 	At       int64  `json:"at"`

@@ -149,7 +149,7 @@ func (a *App) runPreparedProjectPipeline(ctx context.Context, prepared preparedP
 	emit := func(event pipeline.Event) {
 		switch event.Type {
 		case pipeline.EventTaskLog:
-			line, appendErr := a.store.AppendRunLogLine(run.ID, event.StepName, event.HostID, event.Stream, event.Line, event.At)
+			line, appendErr := a.store.AppendRunLogLineWithHostName(run.ID, event.StepName, event.HostID, event.HostName, event.Stream, event.Line, event.At)
 			recordLogErr(appendErr)
 			if appendErr == nil {
 				a.runHub.Broadcast(run.ID, RunEvent{Kind: RunEventKindLog, Log: &line})

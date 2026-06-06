@@ -2,12 +2,14 @@
 package store_test
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/store"
+	_ "modernc.org/sqlite"
 )
 
 func TestRunStoreSaveGetListAndLogs(t *testing.T) {
@@ -80,4 +82,46 @@ func TestRunStoreAppendRunLogLineReturnsIDAndSupportsAscendingReplay(t *testing.
 	require.Len(t, lines, 2)
 	assert.Equal(t, []string{"two", "three"}, []string{lines[0].Line, lines[1].Line})
 	assert.Equal(t, []int64{second.ID, third.ID}, []int64{lines[0].ID, lines[1].ID})
+}
+
+func TestRunStorePersistsRunLogHostName(t *testing.T) {
+	s, err := store.New(t.TempDir() + "/logs.db")
+	require.NoError(t, err)
+	defer s.Close()
+
+	line, err := s.AppendRunLogLineWithHostName("run-1", "Deploy", "h1", "local-01", model.StreamStdout, "ready", 100)
+	require.NoError(t, err)
+	assert.Equal(t, "local-01", line.HostName)
+
+	lines, err := s.ReadRunLogs(store.RunLogQuery{RunID: "run-1", StepName: "Deploy", HostID: "h1"})
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	assert.Equal(t, "local-01", lines[0].HostName)
+}
+
+func TestRunStoreMigratesExistingRunLogTableWithHostName(t *testing.T) {
+	path := t.TempDir() + "/logs.db"
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE pipeline_run_logs (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id    TEXT NOT NULL,
+			step_name TEXT NOT NULL,
+			host_id   TEXT NOT NULL,
+			stream    TEXT NOT NULL,
+			line      TEXT NOT NULL,
+			at        INTEGER NOT NULL
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	line, err := s.AppendRunLogLineWithHostName("run-1", "Deploy", "h1", "local-01", model.StreamStdout, "ready", 100)
+	require.NoError(t, err)
+	assert.Equal(t, "local-01", line.HostName)
 }

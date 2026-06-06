@@ -191,6 +191,7 @@ func migrate(db *sql.DB) error {
 			run_id    TEXT NOT NULL,
 			step_name TEXT NOT NULL,
 			host_id   TEXT NOT NULL,
+			host_name TEXT NOT NULL DEFAULT '',
 			stream    TEXT NOT NULL,
 			line      TEXT NOT NULL,
 			at        INTEGER NOT NULL
@@ -198,6 +199,37 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_pipeline_run_logs_filter
 			ON pipeline_run_logs(run_id, step_name, host_id, id);
 	`)
+	if err != nil {
+		return err
+	}
+	return ensurePipelineRunLogsHostNameColumn(db)
+}
+
+func ensurePipelineRunLogsHostNameColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(pipeline_run_logs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "host_name" {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE pipeline_run_logs ADD COLUMN host_name TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
