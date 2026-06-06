@@ -112,7 +112,7 @@ func (a *App) newIngressRemoteTransport() nginx.RemoteTransport {
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	return ingressPipelineTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
 }
@@ -132,7 +132,7 @@ func (a *App) newCertificateRemoteTransport() ingress.CertificateRemoteTransport
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	return ingressCertificateTransport{runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)}
 }

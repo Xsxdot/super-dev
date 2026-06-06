@@ -41,9 +41,9 @@ func TestEndToEndRemoteSearch(t *testing.T) {
 	})
 
 	app, err := api.NewApp(api.AppConfig{
-		DataDir:        t.TempDir(),
-		ProbeOverride:  collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
-		TunnelOverride: &staticResolver{table: map[string]string{"hA": srvA.URL, "hB": srvB.URL}},
+		DataDir:               t.TempDir(),
+		ProbeOverride:         collector.ProbeFunc(func(model.LogSourceType, string) error { return nil }),
+		NodeTransportOverride: &staticNodeTransport{table: map[string]string{"hA": srvA.URL, "hB": srvB.URL}},
 	})
 	require.NoError(t, err)
 	defer app.Close()

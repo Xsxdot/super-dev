@@ -1,17 +1,33 @@
 package api
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-type stubResolver struct{}
+type stubNodeTransport struct{}
 
-func (s *stubResolver) BaseURL(hostID string) (string, error) { return "http://127.0.0.1:9999", nil }
+func (s *stubNodeTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	return nodetransport.NodeResponse{}, nil
+}
+
+func (s *stubNodeTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (s *stubNodeTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (s *stubNodeTransport) Covers() []string { return []string{} }
 
 func TestBuildBackend_LocalReturnsSQLiteBackend(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
@@ -23,7 +39,7 @@ func TestBuildBackend_LocalReturnsSQLiteBackend(t *testing.T) {
 		Location: model.LocationLocal,
 		Command:  "go run .",
 	}
-	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubResolver{})
+	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubNodeTransport{})
 	assert.NotNil(t, b)
 	_, isSQLite := b.(*logbackend.SQLiteBackend)
 	assert.True(t, isSQLite, "local deployment should return SQLiteBackend")
@@ -41,7 +57,7 @@ func TestBuildBackend_RemoteSingleHostReturnsRemoteBackend(t *testing.T) {
 		LogType:   model.LogSourceTypeJournalctl,
 		LogTarget: "api-server.service",
 	}
-	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubResolver{})
+	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubNodeTransport{})
 	assert.NotNil(t, b)
 	_, isRemote := b.(*logbackend.RemoteAgentBackend)
 	assert.True(t, isRemote, "single-host remote deployment should return RemoteAgentBackend")
@@ -59,7 +75,7 @@ func TestBuildBackend_RemoteMultiHostReturnsFederated(t *testing.T) {
 		LogType:   model.LogSourceTypeDocker,
 		LogTarget: "api-server",
 	}
-	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubResolver{})
+	b := buildBackend(dep, "svc-1", app.store, app.buf, &stubNodeTransport{})
 	assert.NotNil(t, b)
 	_, isFed := b.(*logbackend.FederatedBackend)
 	assert.True(t, isFed, "multi-host remote deployment should return FederatedBackend")

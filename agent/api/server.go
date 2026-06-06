@@ -18,7 +18,6 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -34,6 +33,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/onboarding"
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/process"
@@ -49,8 +49,8 @@ type AppConfig struct {
 	DataDir string
 	// ProbeOverride 仅用于测试,生产环境为 nil 时使用 SystemProbe。
 	ProbeOverride collector.Probe
-	// TunnelOverride 注入自定义隧道解析器,仅用于测试。
-	TunnelOverride remote.TunnelResolver
+	// NodeTransportOverride 注入自定义节点传输,仅用于测试。
+	NodeTransportOverride nodetransport.NodeTransport
 	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
 	InstallBinaryDir string
 	// SampleBinaryPath 是随桌面端打包的 onboarding 示例服务二进制；为空时跳过示例落地。
@@ -100,8 +100,8 @@ type App struct {
 	operationApprovals operation.ApprovalStore
 	// operationAudit 持久化 MCP 写操作安全链路审计事件。
 	operationAudit operation.AuditStore
-	// tunnelResolver 把 Host 解析为已连接隧道的 HTTP baseURL。
-	tunnelResolver remote.TunnelResolver
+	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
+	nodeTransport nodetransport.NodeTransport
 	// backends 按 deployment ID 索引对应的 LogBackend。
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
 	backends                    map[string]logbackend.LogBackend
@@ -196,12 +196,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
-	var resolver remote.TunnelResolver = newTunnelResolverAdapter(tunnels)
-	if cfg.TunnelOverride != nil {
-		resolver = cfg.TunnelOverride
+	nodeTransport := nodetransport.NodeTransport(nodetransport.NewTunnelTransport(tunnels, remoteStore.ListHosts))
+	if cfg.NodeTransportOverride != nil {
+		nodeTransport = cfg.NodeTransportOverride
 	}
 	agentHealthCtx, agentHealthCancel := context.WithCancel(context.Background())
-	agentHealthMonitor := agenthealth.NewMonitor(newAgentHealthProber(resolver))
+	agentHealthMonitor := agenthealth.NewMonitor(newAgentHealthProber(nodeTransport))
 	// 订阅隧道事件，桥接为 agenthealth 信号；桥接与 Run 都绑定 App 生命周期。
 	tunnelEvents := tunnels.Subscribe("agent-health-monitor")
 	signals := make(chan agenthealth.TunnelSignal, 64)
@@ -235,7 +235,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 	runtimeClient := cfg.RuntimeStatusClient
 	if runtimeClient == nil {
-		runtimeClient = newTunnelRuntimeStatusClient(resolver)
+		runtimeClient = newTransportRuntimeStatusClient(nodeTransport)
 	}
 	runtimeTimeout := cfg.RuntimeStatusRequestTimeout
 	if runtimeTimeout == 0 {
@@ -267,7 +267,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		debugSessions:               debugSessions,
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
-		tunnelResolver:              resolver,
+		nodeTransport:               nodeTransport,
 		backends:                    map[string]logbackend.LogBackend{},
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
@@ -286,7 +286,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		app.Close()
 		return nil, err
 	}
-	app.managedReconciler = NewHostDeploymentReconciler(app, resolver, cfg.ManagedDeploymentReconcileInterval)
+	app.managedReconciler = NewHostDeploymentReconciler(app, nodeTransport, cfg.ManagedDeploymentReconcileInterval)
 	return app, nil
 }
 
@@ -544,7 +544,7 @@ func (a *App) registerProjectBackendsLocked(p model.Project) {
 		for _, dep := range svc.Deployments {
 			// 新增项目和启动时加载项目必须共享同一套 backend 构建逻辑，
 			// 否则运行期注册项目后 deployment 日志接口会短暂或永久 404。
-			b := buildBackend(dep, svc.ID, a.store, a.buf, a.tunnelResolver)
+			b := buildBackend(dep, svc.ID, a.store, a.buf, a.nodeTransport)
 			a.backends[dep.ID] = b
 		}
 	}
@@ -606,23 +606,6 @@ func assignIDs(p *model.Project) {
 			}
 		}
 	}
-}
-
-type tunnelResolverAdapter struct {
-	mgr *tunnel.Manager
-}
-
-func newTunnelResolverAdapter(m *tunnel.Manager) *tunnelResolverAdapter {
-	return &tunnelResolverAdapter{mgr: m}
-}
-
-// BaseURL 返回 host 当前隧道的本机 HTTP baseURL。
-func (a *tunnelResolverAdapter) BaseURL(hostID string) (string, error) {
-	port := a.mgr.LocalPort(hostID)
-	if port == 0 {
-		return "", remote.ErrHostUnreachable
-	}
-	return "http://127.0.0.1:" + strconv.Itoa(port), nil
 }
 
 // WriteTestLog 供测试注入日志条目。生产代码不调用此方法。

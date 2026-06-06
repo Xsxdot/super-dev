@@ -18,16 +18,13 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
 
-	"github.com/gorilla/websocket"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
-
-type wsDialFunc func(ctx context.Context, url string, header http.Header) (*websocket.Conn, *http.Response, error)
 
 // ErrAgentUnavailable 表示远端 agent 通道不可用，可由上层路由器降级到 SSH。
 var ErrAgentUnavailable = errors.New("remote agent unavailable")
@@ -58,31 +55,20 @@ func IsAgentUnavailable(err error) bool {
 	return errors.Is(err, ErrAgentUnavailable)
 }
 
-// TunnelResolver 返回指定 hostID 的本地隧道 HTTP baseURL。
-type TunnelResolver interface {
-	BaseURL(hostID string) (string, error)
-}
-
-// AgentRunner 通过隧道调用远端 agent 执行命令和传输文件。
+// AgentRunner 通过节点传输调用远端 agent 执行命令和传输文件。
 type AgentRunner struct {
-	resolver   TunnelResolver
-	httpClient *http.Client
-	dialWS     wsDialFunc
+	transport nodetransport.NodeTransport
 }
 
-// NewAgentRunner 创建通过隧道访问远端 agent 的 runner。
+// NewAgentRunner 创建通过节点传输访问远端 agent 的 runner。
 //
 // 参数：
-//   - resolver: hostID 到本地隧道 baseURL 的解析器
+//   - transport: 按 hostID 访问远端 agent 的节点传输
 //
 // 返回：
 //   - 可分别满足 plugins.RemoteRunner 和 plugins.FileTransfer 的 AgentRunner
-func NewAgentRunner(resolver TunnelResolver) *AgentRunner {
-	return &AgentRunner{
-		resolver:   resolver,
-		httpClient: http.DefaultClient,
-		dialWS:     websocket.DefaultDialer.DialContext,
-	}
+func NewAgentRunner(transport nodetransport.NodeTransport) *AgentRunner {
+	return &AgentRunner{transport: transport}
 }
 
 // RunRemote 通过远端 agent 的 /ws/exec 执行命令。
@@ -90,25 +76,21 @@ func (r *AgentRunner) RunRemote(ctx context.Context, target Target, cmd string, 
 	if cmd == "" {
 		return fmt.Errorf("remote_command cmd is required")
 	}
-	wsURL, err := r.execURL(target.HostID)
-	if err != nil {
-		return err
+	if r.transport == nil {
+		return AgentUnavailableError("node transport is required")
 	}
-	conn, resp, err := r.dialWS(ctx, wsURL, nil)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	stream, err := r.transport.Stream(ctx, target.HostID, nodetransport.NodeRequest{Path: "/ws/exec"})
 	if err != nil {
 		return AgentUnavailableError("connect remote agent websocket: " + err.Error())
 	}
-	defer conn.Close()
+	defer stream.Close()
 
-	if err := conn.WriteJSON(remoteexec.CommandRequest{Command: cmd, WorkDir: workDir}); err != nil {
+	if err := stream.WriteJSON(remoteexec.CommandRequest{Command: cmd, WorkDir: workDir}); err != nil {
 		return err
 	}
 	for {
 		var msg remoteexec.Message
-		if err := conn.ReadJSON(&msg); err != nil {
+		if err := stream.ReadJSON(&msg); err != nil {
 			return err
 		}
 		switch msg.Type {
@@ -143,19 +125,18 @@ func (r *AgentRunner) Transfer(ctx context.Context, target Target, source string
 	}
 	defer cleanup()
 
-	transferURL, err := r.transferURL(target.HostID)
-	if err != nil {
-		return err
+	if r.transport == nil {
+		return AgentUnavailableError("node transport is required")
 	}
 	body, writer, errCh, cancelUpload := multipartUpload(prepared, targetPath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, transferURL, body)
-	if err != nil {
-		cancelUpload(err)
-		<-errCh
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.transport.Do(ctx, target.HostID, nodetransport.NodeRequest{
+		Method: http.MethodPost,
+		Path:   "/api/transfer",
+		Headers: http.Header{
+			"Content-Type": []string{writer.FormDataContentType()},
+		},
+		Body: body,
+	})
 	if err != nil {
 		cancelUpload(err)
 		<-errCh
@@ -218,54 +199,4 @@ func writeMultipartUpload(source, targetPath string, writer *multipart.Writer) e
 	defer file.Close()
 	_, err = io.Copy(part, file)
 	return err
-}
-
-func (r *AgentRunner) execURL(hostID string) (string, error) {
-	base, err := r.baseURL(hostID)
-	if err != nil {
-		return "", err
-	}
-	wsBase, err := httpBaseToWS(base)
-	if err != nil {
-		return "", err
-	}
-	return wsBase + "/ws/exec", nil
-}
-
-func (r *AgentRunner) transferURL(hostID string) (string, error) {
-	base, err := r.baseURL(hostID)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimRight(base, "/") + "/api/transfer", nil
-}
-
-func (r *AgentRunner) baseURL(hostID string) (string, error) {
-	if r.resolver == nil {
-		return "", AgentUnavailableError("tunnel resolver is required")
-	}
-	base, err := r.resolver.BaseURL(hostID)
-	if err != nil {
-		return "", AgentUnavailableError(err.Error())
-	}
-	if base == "" {
-		return "", AgentUnavailableError(fmt.Sprintf("tunnel not connected for host %s", hostID))
-	}
-	return strings.TrimRight(base, "/"), nil
-}
-
-func httpBaseToWS(base string) (string, error) {
-	u, err := url.Parse(base)
-	if err != nil {
-		return "", err
-	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	default:
-		return "", fmt.Errorf("unsupported scheme in tunnel base URL: %s", base)
-	}
-	return strings.TrimRight(u.String(), "/"), nil
 }

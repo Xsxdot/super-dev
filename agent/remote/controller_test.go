@@ -1,15 +1,18 @@
 package remote_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/remote"
 )
 
@@ -49,21 +52,53 @@ type fakeRemoteState struct {
 	collectors map[string]model.Collector
 }
 
-type fakeTunnel struct {
+type fakeTransport struct {
 	baseURLs map[string]string
 }
 
-func (f *fakeTunnel) BaseURL(hostID string) (string, error) {
-	if url, ok := f.baseURLs[hostID]; ok {
-		return url, nil
+func (f *fakeTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	base, ok := f.baseURLs[hostID]
+	if !ok {
+		return nodetransport.NodeResponse{}, remote.ErrHostUnreachable
 	}
-	return "", remote.ErrHostUnreachable
+	u, err := url.Parse(base + req.Path)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), req.Body)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+}
+
+func (f *fakeTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (f *fakeTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (f *fakeTransport) Covers() []string {
+	return []string{}
 }
 
 func newController(t *testing.T, remotes map[string]string) (*remote.Controller, *remote.Store) {
 	dir := t.TempDir()
 	store := remote.NewStore(filepath.Join(dir, "hosts.json"), filepath.Join(dir, "log_sources.json"))
-	ctrl := remote.NewController(store, &fakeTunnel{baseURLs: remotes}, http.DefaultClient)
+	ctrl := remote.NewController(store, &fakeTransport{baseURLs: remotes}, http.DefaultClient)
 	return ctrl, store
 }
 

@@ -43,7 +43,7 @@ func (a *App) newRemoteRuntimeController() *remoteRuntimeController {
 	})
 	agentRunner := a.pipelineAgentRunner
 	if agentRunner == nil {
-		agentRunner = pipeline.NewAgentRunner(a.tunnelResolver)
+		agentRunner = pipeline.NewAgentRunner(a.nodeTransport)
 	}
 	return &remoteRuntimeController{
 		runner: pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor),

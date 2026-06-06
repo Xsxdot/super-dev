@@ -19,19 +19,41 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// staticResolver 让 prober 指向一个本地 httptest server。
-type staticResolver struct {
-	base string
-	err  error
+type agentHealthTestTransport struct {
+	roundTrip apiRoundTripFunc
+	err       error
 }
 
-func (s staticResolver) BaseURL(hostID string) (string, error) {
-	if s.err != nil {
-		return "", s.err
+func (t agentHealthTestTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	if t.err != nil {
+		return nodetransport.NodeResponse{}, t.err
 	}
-	return s.base, nil
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, "http://agent.local"+req.Path, req.Body)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	resp, err := t.roundTrip(httpReq)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+}
+
+func (t agentHealthTestTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (t agentHealthTestTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (t agentHealthTestTransport) Covers() []string {
+	return []string{"h1"}
 }
 
 func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
@@ -115,8 +137,8 @@ func TestAgentHealthProberAcceptsOldNoContentExecHealth(t *testing.T) {
 	assert.Empty(t, res.Version)
 }
 
-func TestAgentHealthProberUnreachableWhenNoBaseURL(t *testing.T) {
-	p := newAgentHealthProber(staticResolver{err: errors.New("no tunnel")})
+func TestAgentHealthProberUnreachableWhenTransportCannotReachHost(t *testing.T) {
+	p := newAgentHealthProber(agentHealthTestTransport{err: errors.New("no tunnel")})
 	_, err := p.Probe(context.Background(), "h1")
 	assert.Error(t, err)
 }
@@ -128,9 +150,7 @@ func (f apiRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func agentHealthProberWithRoundTrip(fn apiRoundTripFunc) *agentHealthProber {
-	p := newAgentHealthProber(staticResolver{base: "http://agent.local"})
-	p.client = &http.Client{Transport: fn}
-	return p
+	return newAgentHealthProber(agentHealthTestTransport{roundTrip: fn})
 }
 
 func agentHealthProbeResponse(status int) *http.Response {

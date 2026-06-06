@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -14,15 +15,62 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// mockTunnelResolver 实现 logbackend.TunnelResolver 接口，返回固定 baseURL。
-type mockTunnelResolver struct {
+type mockNodeTransport struct {
 	baseURL string
+	wsURL   string
+	err     error
 }
 
-func (m *mockTunnelResolver) BaseURL(hostID string) (string, error) {
-	return m.baseURL, nil
+func (m *mockNodeTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	if m.err != nil {
+		return nodetransport.NodeResponse{}, m.err
+	}
+	u, err := url.Parse(m.baseURL + req.Path)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	q := u.Query()
+	for key, values := range req.Query {
+		for _, value := range values {
+			q.Add(key, value)
+		}
+	}
+	u.RawQuery = q.Encode()
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), req.Body)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nodetransport.NodeResponse{}, err
+	}
+	return nodetransport.NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
+}
+
+func (m *mockNodeTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, m.wsURL+req.Path+"?"+req.Query.Encode(), req.Headers)
+	return conn, err
+}
+
+func (m *mockNodeTransport) SubscribeNodes(ctx context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (m *mockNodeTransport) Covers() []string {
+	return []string{"host-1"}
 }
 
 func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
@@ -39,7 +87,7 @@ func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockTunnelResolver{baseURL: srv.URL})
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{baseURL: srv.URL})
 	got, next, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -66,7 +114,7 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockTunnelResolver{baseURL: srv.URL})
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{baseURL: srv.URL})
 	got, _, hasMore, err := b.Search(context.Background(), logbackend.SearchQuery{
 		DeploymentIDs: []string{"svc-1"},
 		Text:          "error",
@@ -101,7 +149,7 @@ func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 
 	// httptest.Server 是 http://，WebSocket 需要 ws://
 	wsURL := "ws" + srv.URL[4:]
-	b := logbackend.NewRemoteAgentBackendWithWSURL("host-1", "svc-1", &mockTunnelResolver{baseURL: srv.URL}, wsURL)
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{wsURL: wsURL})
 
 	stream := b.Subscribe(context.Background(), "svc-1")
 	defer stream.Cancel()
@@ -115,9 +163,7 @@ func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 }
 
 func TestRemoteAgentBackend_QueryTunnelError(t *testing.T) {
-	resolver := &mockTunnelResolver{baseURL: ""}
-	// baseURL 为空，HTTP 请求必然失败
-	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", resolver)
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{err: nodetransport.ErrHostUnreachable})
 	_, _, err := b.Query(context.Background(), logbackend.QueryFilter{})
 	assert.Error(t, err)
 }

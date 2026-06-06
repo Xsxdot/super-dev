@@ -21,20 +21,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
-	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
-
-type reconcilerResolver struct {
-	table map[string]string
-}
-
-func (r reconcilerResolver) BaseURL(hostID string) (string, error) {
-	if u, ok := r.table[hostID]; ok {
-		return u, nil
-	}
-	return "", remote.ErrHostUnreachable
-}
 
 func TestHostDeploymentReconcilerDesiredForHostRewritesLocationAndFilters(t *testing.T) {
 	app := newTestAppForPackage(t)
@@ -54,7 +42,7 @@ func TestHostDeploymentReconcilerDesiredForHostRewritesLocationAndFilters(t *tes
 		}},
 	})
 	app.mu.Unlock()
-	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{}, time.Second)
+	reconciler := NewHostDeploymentReconciler(app, testNodeTransport{}, time.Second)
 
 	got := reconciler.DesiredForHost("h1")
 
@@ -70,7 +58,7 @@ func TestHostDeploymentReconcilerDesiredForHostRewritesLocationAndFilters(t *tes
 
 func TestHostDeploymentReconcilerReconcileSkipsDisconnectedTunnel(t *testing.T) {
 	app := newTestAppForPackage(t)
-	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{}}, time.Second)
+	reconciler := NewHostDeploymentReconciler(app, testNodeTransport{table: map[string]string{}}, time.Second)
 
 	err := reconciler.Reconcile(context.Background(), "missing")
 
@@ -100,7 +88,7 @@ func TestHostDeploymentReconcilerReconcilePutsFullDesiredBody(t *testing.T) {
 		}},
 	})
 	app.mu.Unlock()
-	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Second)
+	reconciler := NewHostDeploymentReconciler(app, testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}}, time.Second)
 
 	err := reconciler.Reconcile(context.Background(), "h1")
 
@@ -132,7 +120,7 @@ func TestHostDeploymentReconcilerRunHandlesConnectedEventAndTick(t *testing.T) {
 		}},
 	})
 	app.mu.Unlock()
-	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
+	reconciler := NewHostDeploymentReconciler(app, testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := make(chan tunnel.Event, 1)
@@ -156,7 +144,7 @@ func TestReconcileProjectsAsyncPushesAffectedHost(t *testing.T) {
 	t.Cleanup(remoteSrv.Close)
 
 	app := newTestAppForPackage(t)
-	app.managedReconciler = NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
+	app.managedReconciler = NewHostDeploymentReconciler(app, testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
 	project := model.Project{
 		ID: "proj", Name: "proj",
 		Services: []model.Service{{
@@ -198,9 +186,9 @@ func TestGetHostManagedDeploymentsStatusProxiesRemoteState(t *testing.T) {
 	app := newTestAppForPackage(t)
 	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "prod-a"})
 	require.NoError(t, err)
-	resolver := reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}
-	app.tunnelResolver = resolver
-	app.managedReconciler = NewHostDeploymentReconciler(app, resolver, time.Hour)
+	transport := testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}}
+	app.nodeTransport = transport
+	app.managedReconciler = NewHostDeploymentReconciler(app, transport, time.Hour)
 	app.mu.Lock()
 	app.appendProjectLocked(model.Project{
 		ID: "proj", Name: "proj",

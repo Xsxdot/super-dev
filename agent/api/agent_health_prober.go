@@ -1,7 +1,7 @@
-// agent_health_prober.go 实现 agenthealth.Prober：通过隧道 baseURL 探活远端 agent 必需接口。
+// agent_health_prober.go 实现 agenthealth.Prober：通过 NodeTransport 探活远端 agent 必需接口。
 //
 // 职责：
-//   - 用 TunnelResolver 解析 host 的本机隧道 baseURL
+//   - 用 NodeTransport 请求 host 的远端 agent 必需 endpoint
 //   - 请求一组必需 endpoint，全部返回可接受状态视为接口齐全
 //
 // 边界：
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/agenthealth"
-	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 type agentHealthEndpoint struct {
@@ -43,44 +43,34 @@ var agentHealthRequiredEndpoints = []agentHealthEndpoint{
 
 const agentHealthProbeTimeout = 3 * time.Second
 
-// agentHealthProber 通过隧道 baseURL 探活远端 agent。
+// agentHealthProber 通过节点传输探活远端 agent。
 type agentHealthProber struct {
-	resolver remote.TunnelResolver
-	client   *http.Client
+	transport nodetransport.NodeTransport
 }
 
 // newAgentHealthProber 创建探活器。
 //
 // 参数：
-//   - resolver: 把 hostID 解析为本机隧道 baseURL
+//   - transport: 按 hostID 请求远端 agent 的节点传输
 //
 // 返回：
 //   - 可注入 agenthealth.Monitor 的 Prober
-func newAgentHealthProber(resolver remote.TunnelResolver) *agentHealthProber {
-	return &agentHealthProber{
-		resolver: resolver,
-		client:   &http.Client{Timeout: agentHealthProbeTimeout},
-	}
+func newAgentHealthProber(transport nodetransport.NodeTransport) *agentHealthProber {
+	return &agentHealthProber{transport: transport}
 }
 
-// Probe 对 host 探活：baseURL 拿不到或请求失败返回 error；
+// Probe 对 host 探活：NodeTransport 到不了或请求失败返回 error；
 // 任一必需 endpoint 返回不可接受状态时 AllEndpointsOK 为 false。
 func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agenthealth.ProbeResult, error) {
-	base, err := p.resolver.BaseURL(hostID)
-	if err != nil {
-		return agenthealth.ProbeResult{}, err
-	}
-	if base == "" {
-		return agenthealth.ProbeResult{}, remote.ErrHostUnreachable
-	}
 	version := ""
 	for _, ep := range agentHealthRequiredEndpoints {
-		req, err := http.NewRequestWithContext(ctx, ep.Method, base+ep.Path, nil)
+		reqCtx, cancel := context.WithTimeout(ctx, agentHealthProbeTimeout)
+		resp, err := p.transport.Do(reqCtx, hostID, nodetransport.NodeRequest{
+			Method: ep.Method,
+			Path:   ep.Path,
+		})
 		if err != nil {
-			return agenthealth.ProbeResult{}, err
-		}
-		resp, err := p.client.Do(req)
-		if err != nil {
+			cancel()
 			return agenthealth.ProbeResult{}, err
 		}
 		status := resp.StatusCode
@@ -91,6 +81,7 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 			}
 		}
 		resp.Body.Close()
+		cancel()
 		if !endpointStatusOK(status, ep.Acceptable) {
 			// 探得到但接口不全：交给 Monitor 归类为 version-mismatch。
 			return agenthealth.ProbeResult{AllEndpointsOK: false, Version: version}, nil

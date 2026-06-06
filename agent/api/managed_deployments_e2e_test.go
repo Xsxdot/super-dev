@@ -37,14 +37,6 @@ func (e2eRuntimeSampler) Sample(ctx context.Context, target metrics.SampleTarget
 	return model.InstanceMetrics{CPUPercent: &cpu, MemBytes: &mem, Health: model.HealthRunning, Base: target.Base}, nil
 }
 
-type e2eResolver struct {
-	url string
-}
-
-func (r e2eResolver) BaseURL(hostID string) (string, error) {
-	return r.url, nil
-}
-
 func TestManagedDeploymentReconcileRestoresRemoteLogsAndRuntimeStatus(t *testing.T) {
 	remoteApp, err := NewApp(AppConfig{
 		DataDir: t.TempDir(),
@@ -59,8 +51,8 @@ func TestManagedDeploymentReconcileRestoresRemoteLogsAndRuntimeStatus(t *testing
 	t.Cleanup(remoteSrv.Close)
 
 	desktopApp, err := NewApp(AppConfig{
-		DataDir:        t.TempDir(),
-		TunnelOverride: e2eResolver{url: remoteSrv.URL},
+		DataDir:               t.TempDir(),
+		NodeTransportOverride: testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(desktopApp.Close)
