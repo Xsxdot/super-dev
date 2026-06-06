@@ -53,3 +53,31 @@ func TestRunStoreSaveGetListAndLogs(t *testing.T) {
 	assert.Equal(t, "uploaded", lines[0].Line)
 	assert.Equal(t, "h1", lines[0].HostID)
 }
+
+func TestRunStoreAppendRunLogLineReturnsIDAndSupportsAscendingReplay(t *testing.T) {
+	s, err := store.New(t.TempDir() + "/logs.db")
+	require.NoError(t, err)
+	defer s.Close()
+
+	first, err := s.AppendRunLogLine("run-1", "Build", "", "stdout", "one", 100)
+	require.NoError(t, err)
+	second, err := s.AppendRunLogLine("run-1", "Build", "", "stderr", "two", 101)
+	require.NoError(t, err)
+	third, err := s.AppendRunLogLine("run-1", "Deploy", "h1", "stdout", "three", 102)
+	require.NoError(t, err)
+
+	assert.Positive(t, first.ID)
+	assert.Equal(t, first.ID+1, second.ID)
+	assert.Equal(t, second.ID+1, third.ID)
+
+	lines, err := s.ReadRunLogs(store.RunLogQuery{
+		RunID:     "run-1",
+		Limit:     2,
+		AfterID:   first.ID,
+		Ascending: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, lines, 2)
+	assert.Equal(t, []string{"two", "three"}, []string{lines[0].Line, lines[1].Line})
+	assert.Equal(t, []int64{second.ID, third.ID}, []int64{lines[0].ID, lines[1].ID})
+}
