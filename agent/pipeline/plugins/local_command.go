@@ -94,6 +94,10 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	<-done
 	<-done
 	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return pipeline.CommandExitError{Command: cmdText, Code: exitErr.ExitCode(), Label: "local command"}
+		}
 		return fmt.Errorf("local command failed: %w", err)
 	}
 	return nil

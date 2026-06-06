@@ -45,6 +45,9 @@ func TestRemoteCommandExitErrorIncludesCommand(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nginx -t")
 	assert.Contains(t, err.Error(), "code 127")
+	var coded interface{ ExitCode() int }
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, 127, coded.ExitCode())
 }
 
 func TestPrepareTransferSourcePackagesDirectory(t *testing.T) {

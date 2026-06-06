@@ -101,6 +101,15 @@ func (p *recordingPlugin) Execute(ctx *pipeline.RunContext, step model.Step, tar
 	return nil
 }
 
+type exitCodePlugin struct{}
+
+func (p *exitCodePlugin) Name() string                   { return "exit_code" }
+func (p *exitCodePlugin) Validate(step model.Step) error { return nil }
+func (p *exitCodePlugin) Execute(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	ctx.LogLine("attempted", model.StreamStdout)
+	return pipeline.CommandExitError{Command: "deploy-api", Code: 42, Label: "remote command"}
+}
+
 func TestEngineRunsBuildDeployFinally(t *testing.T) {
 	plugin := &fakePlugin{name: "local_command", failOn: map[string]bool{}}
 	eng := pipeline.NewEngine()
@@ -173,6 +182,44 @@ func TestEngineFailsStepWhenRunIfInvalid(t *testing.T) {
 	assert.Empty(t, plugin.calls)
 	require.Len(t, final.StepRuns, 1)
 	assert.Equal(t, model.RunStatusFailed, final.StepRuns[0].Status)
+}
+
+func TestEngineEmitsHostNameAndPersistsExitCodeOnFailure(t *testing.T) {
+	eng := pipeline.NewEngine()
+	eng.Register(&exitCodePlugin{})
+	plan, run, err := pipeline.BuildPlan("dep-1", model.Pipeline{
+		Roles: map[string][]string{"web": []string{"h1"}},
+		Deploy: []model.Step{{
+			Name:  "Deploy API",
+			Type:  "exit_code",
+			Roles: []string{"web"},
+		}},
+	}, []model.HostRef{{ID: "h1", Name: "local-01", Address: "127.0.0.1"}})
+	require.NoError(t, err)
+
+	var events []pipeline.Event
+	final, err := eng.Run(context.Background(), plan, run, func(event pipeline.Event) {
+		events = append(events, event)
+	})
+
+	require.Error(t, err)
+	require.Equal(t, model.RunStatusFailed, final.Status)
+	require.Len(t, final.StepRuns[0].Tasks, 1)
+	assert.Equal(t, 42, final.StepRuns[0].Tasks[0].ExitCode)
+
+	var logEvent pipeline.Event
+	var finishEvent pipeline.Event
+	for _, event := range events {
+		if event.Type == pipeline.EventTaskLog {
+			logEvent = event
+		}
+		if event.Type == pipeline.EventTaskFinished {
+			finishEvent = event
+		}
+	}
+	assert.Equal(t, "local-01", logEvent.HostName)
+	assert.Equal(t, "local-01", finishEvent.HostName)
+	assert.Equal(t, 42, finishEvent.ExitCode)
 }
 
 func TestEngineCreatesRunTempDirAndVars(t *testing.T) {

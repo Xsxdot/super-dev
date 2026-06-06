@@ -13,6 +13,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
@@ -22,6 +23,30 @@ type StepPlugin interface {
 	Name() string
 	Validate(step model.Step) error
 	Execute(ctx *RunContext, step model.Step, targets []Target) error
+}
+
+// CommandExitError 保留命令非零退出码，供 Engine 写入 Task.ExitCode。
+type CommandExitError struct {
+	Command string
+	Code    int
+	Label   string
+}
+
+// Error 返回可读的命令失败信息。
+func (e CommandExitError) Error() string {
+	label := e.Label
+	if label == "" {
+		label = "command"
+	}
+	if e.Command == "" {
+		return fmt.Sprintf("%s exited with code %d", label, e.Code)
+	}
+	return fmt.Sprintf("%s %q exited with code %d", label, e.Command, e.Code)
+}
+
+// ExitCode 返回命令退出码。
+func (e CommandExitError) ExitCode() int {
+	return e.Code
 }
 
 // TargetValidator allows plugins to statically validate resolved targets.

@@ -58,6 +58,19 @@ func TestLocalCommandEmitsCommandBeforeOutput(t *testing.T) {
 	}, logs)
 }
 
+func TestLocalCommandReturnsExitCodeError(t *testing.T) {
+	p := plugins.NewLocalCommand()
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{})
+	step := model.Step{Name: "Build", Type: "local_command", With: map[string]interface{}{"cmd": "exit 7"}}
+
+	err := p.Execute(ctx, step, nil)
+
+	require.Error(t, err)
+	var coded interface{ ExitCode() int }
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, 7, coded.ExitCode())
+}
+
 func TestLocalCommandFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -3,6 +3,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -29,6 +30,7 @@ type Event struct {
 	Type     EventType
 	StepName string
 	HostID   string
+	HostName string
 	Line     string          // EventTaskLog 时有效
 	Stream   string          // EventTaskLog 时有效："stdout"/"stderr"
 	Status   model.RunStatus // EventTaskFinished/EventRunFinished 时有效
@@ -346,7 +348,15 @@ func (e *Engine) executeOneTask(ctx context.Context, plugin StepPlugin, step mod
 		Target:     target,
 		LogLine: func(line, stream string) {
 			if emit != nil {
-				emit(Event{Type: EventTaskLog, StepName: step.Name, HostID: target.HostID, Line: line, Stream: stream, At: time.Now().UnixMilli()})
+				emit(Event{
+					Type:     EventTaskLog,
+					StepName: step.Name,
+					HostID:   target.HostID,
+					HostName: target.HostName,
+					Line:     line,
+					Stream:   stream,
+					At:       time.Now().UnixMilli(),
+				})
 			}
 		},
 	})
@@ -354,6 +364,7 @@ func (e *Engine) executeOneTask(ctx context.Context, plugin StepPlugin, step mod
 		return plugin.Execute(runCtx, step, targets)
 	})
 	if err != nil {
+		sr.Tasks[taskIndex].ExitCode = exitCodeFromError(err)
 		finishTask(sr, taskIndex, model.RunStatusFailed, emit)
 		return err
 	}
@@ -478,7 +489,13 @@ func startTask(sr *model.StepRun, index int, emit func(Event)) {
 	sr.Tasks[index].Status = model.RunStatusRunning
 	sr.Tasks[index].StartedAt = now
 	if emit != nil {
-		emit(Event{Type: EventTaskStarted, StepName: sr.StepName, HostID: sr.Tasks[index].HostID, At: now})
+		emit(Event{
+			Type:     EventTaskStarted,
+			StepName: sr.StepName,
+			HostID:   sr.Tasks[index].HostID,
+			HostName: sr.Tasks[index].HostName,
+			At:       now,
+		})
 	}
 }
 
@@ -487,8 +504,28 @@ func finishTask(sr *model.StepRun, index int, status model.RunStatus, emit func(
 	sr.Tasks[index].Status = status
 	sr.Tasks[index].FinishedAt = now
 	if emit != nil {
-		emit(Event{Type: EventTaskFinished, StepName: sr.StepName, HostID: sr.Tasks[index].HostID, Status: status, ExitCode: sr.Tasks[index].ExitCode, At: now})
+		emit(Event{
+			Type:     EventTaskFinished,
+			StepName: sr.StepName,
+			HostID:   sr.Tasks[index].HostID,
+			HostName: sr.Tasks[index].HostName,
+			Status:   status,
+			ExitCode: sr.Tasks[index].ExitCode,
+			At:       now,
+		})
 	}
+}
+
+type exitCodeCarrier interface {
+	ExitCode() int
+}
+
+func exitCodeFromError(err error) int {
+	var carrier exitCodeCarrier
+	if errors.As(err, &carrier) {
+		return carrier.ExitCode()
+	}
+	return 0
 }
 
 func markStepFailed(sr *model.StepRun) {

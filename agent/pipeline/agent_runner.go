@@ -118,7 +118,7 @@ func (r *AgentRunner) RunRemote(ctx context.Context, target Target, cmd string, 
 			}
 		case remoteexec.MessageExit:
 			if msg.ExitCode != 0 {
-				return fmt.Errorf("remote agent command exited with code %d", msg.ExitCode)
+				return CommandExitError{Command: cmd, Code: msg.ExitCode, Label: "remote agent command"}
 			}
 			return nil
 		case remoteexec.MessageError:

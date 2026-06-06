@@ -82,7 +82,12 @@ func TestAgentRunnerRunRemoteMapsNonZeroExit(t *testing.T) {
 	err := runner.RunRemote(context.Background(), Target{HostID: "h1"}, "exit 9", "", nil)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "remote agent command exited with code 9")
+	assert.Contains(t, err.Error(), "remote agent command")
+	assert.Contains(t, err.Error(), "exit 9")
+	assert.Contains(t, err.Error(), "code 9")
+	var coded interface{ ExitCode() int }
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, 9, coded.ExitCode())
 }
 
 func TestAgentRunnerTransferUploadsMultipartFile(t *testing.T) {
