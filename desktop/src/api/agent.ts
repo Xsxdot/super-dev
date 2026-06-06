@@ -572,9 +572,9 @@ export interface FetchLogContextPageParams {
 
 // ===== 远程监听相关类型 =====
 
-export interface Host {
-  id: string
-  name: string
+export type TransportType = 'tunnel' | 'direct' | 'mq' | 'bridge'
+
+export interface TunnelParams {
   ssh_host: string
   ssh_port: number
   ssh_user: string
@@ -582,12 +582,35 @@ export interface Host {
   ssh_key_path?: string
   ssh_private_key?: string
   remote_agent_port: number
-  local_tunnel_port: number
+}
+
+export interface DirectParams {
+  address?: string
+  tls?: boolean
+}
+
+export interface TransportConfig {
+  type: TransportType
+  tunnel?: TunnelParams
+  direct?: DirectParams
+}
+
+export interface Host {
+  id: string
+  name: string
   public_ip?: string
   private_ip?: string
   tags: string[]
   is_self?: boolean
   node_id?: string
+  ssh_host?: string
+  ssh_port?: number
+  ssh_user?: string
+  ssh_password?: string
+  ssh_key_path?: string
+  ssh_private_key?: string
+  remote_agent_port?: number
+  local_tunnel_port?: number
 }
 
 export interface InstallHostAgentResult {
@@ -703,6 +726,36 @@ export interface NodeStatus {
   managed?: ManagedDeploymentStatus
   updated_at: string
   error?: string
+}
+
+export interface AgentDTO {
+  host_id: string
+  host_name: string
+  tags: string[]
+  transport: TransportConfig
+  runtime: AgentRuntime
+  node?: NodeStatus
+  last_error?: string
+  updated_at?: string
+}
+
+export interface AgentUpdatePayload {
+  transport: TransportConfig
+}
+
+export interface AgentInstallCommandPayload {
+  method?: 'generated_command'
+  controller_url: string
+  bind_address?: string
+  remote_agent_port?: number
+  transport_type?: TransportType
+  token_ttl_minutes?: number
+}
+
+export interface AgentInstallCommandResponse {
+  command: string
+  expires_at: string
+  token_id: string
 }
 
 export interface TunnelStatus {
@@ -852,13 +905,6 @@ export interface DeploymentSearchResponse {
 
 export interface HostCreatePayload {
   name: string
-  ssh_host: string
-  ssh_port?: number
-  ssh_user: string
-  ssh_password?: string
-  ssh_key_path?: string
-  ssh_private_key?: string
-  remote_agent_port?: number
   public_ip?: string
   private_ip?: string
   tags?: string[]
@@ -915,6 +961,23 @@ export const api = {
   getRuntimeStatus: (projectId: string) =>
     request<RuntimeStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/runtime-status`),
   listNodes: () => request<NodeStatus[]>('/api/nodes'),
+  listAgents: () => request<AgentDTO[]>('/api/agents'),
+  getAgent: (hostId: string) =>
+    request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}`),
+  updateAgent: (hostId: string, payload: AgentUpdatePayload) =>
+    request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteAgent: (hostId: string) =>
+    request<void>(`/api/agents/${encodeURIComponent(hostId)}`, { method: 'DELETE' }),
+  checkAgent: (hostId: string) =>
+    request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/check`, { method: 'POST' }),
+  generateAgentInstallCommand: (hostId: string, payload: AgentInstallCommandPayload) =>
+    request<AgentInstallCommandResponse>(`/api/agents/${encodeURIComponent(hostId)}/install-command`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // 设置
   getSettings: () => request<AgentSettings>('/api/settings'),

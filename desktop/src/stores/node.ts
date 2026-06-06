@@ -15,12 +15,17 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, nodesWsUrl, type HostManagedDeploymentStatus, type NodeStatus } from '@/api/agent'
 
+const reconnectInitialDelayMs = 250
+const reconnectMaxDelayMs = 5_000
+
 export const useNodeStore = defineStore('node', () => {
   const nodes = ref<Map<string, NodeStatus>>(new Map())
   const connected = ref(false)
   const error = ref<string | null>(null)
   let ws: WebSocket | null = null
   let starting: Promise<void> | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelayMs = reconnectInitialDelayMs
   let activeConsumers = 0
 
   const nodesList = computed(() =>
@@ -64,6 +69,7 @@ export const useNodeStore = defineStore('node', () => {
   }
 
   async function startInner() {
+    clearReconnectTimer()
     try {
       await loadSnapshot()
       error.value = null
@@ -75,6 +81,7 @@ export const useNodeStore = defineStore('node', () => {
     ws.onopen = () => {
       connected.value = true
       error.value = null
+      reconnectDelayMs = reconnectInitialDelayMs
     }
     ws.onmessage = event => {
       try {
@@ -89,12 +96,14 @@ export const useNodeStore = defineStore('node', () => {
     ws.onclose = () => {
       connected.value = false
       ws = null
+      scheduleReconnect()
     }
   }
 
   function stop() {
     if (activeConsumers > 0) activeConsumers -= 1
     if (activeConsumers > 0) return
+    clearReconnectTimer()
     ws?.close()
     ws = null
     connected.value = false
@@ -102,6 +111,35 @@ export const useNodeStore = defineStore('node', () => {
 
   function nodeOf(hostId: string): NodeStatus | undefined {
     return nodes.value.get(hostId)
+  }
+
+  function agentRuntimeOf(hostId: string) {
+    return nodeOf(hostId)?.agent
+  }
+
+  function nodeErrorOf(hostId: string): string | undefined {
+    const node = nodeOf(hostId)
+    if (!node) return undefined
+    return node.error || (node.reachable ? undefined : 'node unreachable')
+  }
+
+  function scheduleReconnect() {
+    if (activeConsumers <= 0 || ws || starting || reconnectTimer) return
+    const delay = reconnectDelayMs
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, reconnectMaxDelayMs)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      if (activeConsumers <= 0 || ws || starting) return
+      starting = startInner().finally(() => {
+        starting = null
+      })
+    }, delay)
+  }
+
+  function clearReconnectTimer() {
+    if (!reconnectTimer) return
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
 
   return {
@@ -114,6 +152,8 @@ export const useNodeStore = defineStore('node', () => {
     stop,
     applySnapshot,
     nodeOf,
+    agentRuntimeOf,
+    nodeErrorOf,
   }
 })
 

@@ -11,7 +11,7 @@
  *   - Does not render UI
  *   - Does not connect to a real Go agent
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { api, type NodeStatus } from '@/api/agent'
@@ -51,6 +51,10 @@ class FakeWebSocket {
   emit(data: unknown) {
     this.onmessage?.({ data: JSON.stringify(data) })
   }
+
+  serverClose() {
+    this.onclose?.()
+  }
 }
 
 function status(hostId: string, reachable = true): NodeStatus {
@@ -80,9 +84,14 @@ function status(hostId: string, reachable = true): NodeStatus {
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  vi.clearAllMocks()
   FakeWebSocket.instances = []
   vi.stubGlobal('WebSocket', FakeWebSocket)
   vi.mocked(api.listNodes).mockResolvedValue([])
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('nodeStore', () => {
@@ -156,5 +165,31 @@ describe('nodeStore', () => {
     store.stop()
     expect(FakeWebSocket.instances[0].closed).toBe(true)
     expect(store.connected).toBe(false)
+  })
+
+  it('reconnects after stream closes while consumers are active', async () => {
+    vi.useFakeTimers()
+    const store = useNodeStore()
+    await store.start()
+    FakeWebSocket.instances[0].onopen?.()
+
+    FakeWebSocket.instances[0].serverClose()
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(api.listNodes).toHaveBeenCalledTimes(2)
+  })
+
+  it('exposes agent runtime and node errors by host id', async () => {
+    const store = useNodeStore()
+    await store.start()
+
+    FakeWebSocket.instances[0].emit([status('h1'), status('h2', false)])
+    await nextTick()
+
+    expect(store.agentRuntimeOf('h1')?.health).toBe('healthy')
+    expect(store.agentRuntimeOf('h2')?.reachable).toBe(false)
+    expect(store.nodeErrorOf('h1')).toBeUndefined()
+    expect(store.nodeErrorOf('h2')).toContain('node status stream closed')
   })
 })
