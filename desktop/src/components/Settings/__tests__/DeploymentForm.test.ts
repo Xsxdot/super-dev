@@ -76,6 +76,25 @@ describe('DeploymentForm', () => {
     expect(last.host_ids).toContain('h1')
   })
 
+  it('remote 已选但未注册的 host_id 会显示并允许移除', async () => {
+    const dep = { id: 'd1', env_name: 'dev', location: 'remote' as const, host_ids: ['h1', 'ghost'] as string[], status: '' as const }
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: dep, hosts: [{ id: 'h1', name: 'box1' }] },
+    })
+
+    expect(wrapper.text()).toContain('未注册主机：ghost')
+    const missing = wrapper.findAll('label.dep-host').find(label => label.text().includes('ghost'))
+    expect(missing).toBeTruthy()
+    const input = missing!.find('input')
+    expect((input.element as HTMLInputElement).checked).toBe(true)
+
+    await input.setValue(false)
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as { host_ids?: string[] }
+    expect(last.host_ids).toEqual(['h1'])
+  })
+
   it('用监控/接管启停单选表达控制模式，不再展示只读、外部托管和自定义启停命令', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },

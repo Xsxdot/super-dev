@@ -90,7 +90,13 @@ func (a *App) previewConfigChangeRequest(req configchange.ChangeRequest) (config
 	}
 	assignIDs(&after)
 
+	knownHosts, err := a.knownRemoteHostIDs()
+	if err != nil {
+		return configchange.PreviewResult{}, http.StatusInternalServerError, "failed to load hosts: " + err.Error()
+	}
 	validation := configchange.Validate(after, req)
+	validation.Errors = append(validation.Errors, remoteHostReferenceErrors(after, knownHosts)...)
+	validation.OK = len(validation.Errors) == 0
 	diff := configchange.Diff(before, after)
 	plan := configchange.Plan(before, after, req, diff, validation)
 	return configchange.PreviewResult{

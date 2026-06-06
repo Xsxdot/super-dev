@@ -12,6 +12,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -90,6 +91,11 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	if req.Environments == nil {
 		req.Environments = []model.Environment{}
 	}
+	knownHosts, err := a.knownRemoteHostIDs()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to load hosts: "+err.Error())
+		return
+	}
 
 	a.mu.Lock()
 
@@ -125,21 +131,21 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 替换 environments
-	a.projects[idx].Variables = req.Variables
-	if a.projects[idx].Variables == nil {
-		a.projects[idx].Variables = map[string]string{}
+	candidate := a.projects[idx]
+	candidate.Variables = req.Variables
+	if candidate.Variables == nil {
+		candidate.Variables = map[string]string{}
 	}
-	a.projects[idx].Environments = req.Environments
-	a.projects[idx].Pipelines = req.Pipelines
-	if a.projects[idx].Pipelines == nil {
-		a.projects[idx].Pipelines = []model.ProjectPipeline{}
+	candidate.Environments = req.Environments
+	candidate.Pipelines = req.Pipelines
+	if candidate.Pipelines == nil {
+		candidate.Pipelines = []model.ProjectPipeline{}
 	}
 
 	// 按请求重建 services：ID 命中现有则保留运行时无关字段并更新；ID 为空则新增。
 	// 请求中不出现的现有 service 将被丢弃（删除）。
 	existing := map[string]model.Service{}
-	for _, s := range a.projects[idx].Services {
+	for _, s := range candidate.Services {
 		existing[s.ID] = s
 	}
 
@@ -157,13 +163,19 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		svc.Deployments = deps
 		newServices = append(newServices, svc)
 	}
-	a.projects[idx].Services = newServices
+	candidate.Services = newServices
 
 	// 填充空 ID（environment ID、deployment ID 等）
-	assignIDs(&a.projects[idx])
+	assignIDs(&candidate)
+	if errs := remoteHostReferenceErrors(candidate, knownHosts); len(errs) > 0 {
+		a.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, strings.Join(errs, "; "))
+		return
+	}
 
 	// 复制项目用于持久化，避免在锁外引用内存数据竞争
-	project := a.projects[idx]
+	a.projects[idx] = candidate
+	project := candidate
 	a.mu.Unlock()
 
 	loader := config.NewLoader(project.RootPath)

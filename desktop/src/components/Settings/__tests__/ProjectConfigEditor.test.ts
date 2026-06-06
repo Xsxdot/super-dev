@@ -169,6 +169,30 @@ describe('ProjectConfigEditor', () => {
     }))
   })
 
+  it('远程主机候选不包含本机节点', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.listHosts).mockResolvedValueOnce([
+      { id: 'self-node', name: 'Local Machine', ssh_host: '', ssh_port: 0, ssh_user: '', remote_agent_port: 0, local_tunnel_port: 0, tags: [], is_self: true },
+      { id: 'h1', name: 'prod-box', ssh_host: '10.0.0.1', ssh_port: 22, ssh_user: 'ops', remote_agent_port: 57017, local_tunnel_port: 0, tags: [] },
+    ])
+    const p = project()
+    p.services[0].deployments = [{
+      id: 'd1',
+      env_name: 'dev',
+      location: 'remote',
+      host_ids: [],
+      runtime: { type: 'systemd', service_name: 'web' },
+      logs: { type: 'journalctl', target: 'web.service' },
+      status: '',
+    }]
+
+    const wrapper = mountProjectConfigEditor(p)
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.text()).toContain('prod-box')
+    expect(wrapper.text()).not.toContain('Local Machine')
+  })
+
   it('英文 locale 下渲染保存和取消按钮', async () => {
     const wrapper = mountProjectConfigEditor(project(), 'en-US')
     await new Promise(r => setTimeout(r))
