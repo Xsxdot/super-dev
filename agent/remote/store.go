@@ -216,10 +216,14 @@ func (s *Store) saveLogSources(list []model.LogSource) error {
 }
 
 func applyHostDefaults(h *model.Host) {
-	if h.SSHPort == 0 {
-		h.SSHPort = defaultSSHPort
+	tunnelParams := h.EnsureTunnelAgent()
+	if tunnelParams.SSHPort == 0 {
+		tunnelParams.SSHPort = defaultSSHPort
 	}
-	if h.RemoteAgentPort == 0 {
-		h.RemoteAgentPort = defaultRemoteAgentPort
+	if tunnelParams.RemoteAgentPort == 0 {
+		tunnelParams.RemoteAgentPort = defaultRemoteAgentPort
+	}
+	if h.Tags == nil {
+		h.Tags = []string{}
 	}
 }
