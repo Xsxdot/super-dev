@@ -68,4 +68,13 @@ describe('i18n', () => {
   it('zh-CN and en-US message keys stay aligned', () => {
     expect(flattenKeys(enUS).sort()).toEqual(flattenKeys(zhCN).sort())
   })
+
+  it('contains run console labels in both locales', () => {
+    expect(zhCN.runConsole.waitingOutput).toBeTruthy()
+    expect(zhCN.runConsole.backToBottom).toBeTruthy()
+    expect(enUS.runConsole.waitingOutput).toBeTruthy()
+    expect(enUS.runConsole.backToBottom).toBeTruthy()
+    expect(zhCN.overview.pipeline.running).toBeTruthy()
+    expect(enUS.overview.pipeline.running).toBeTruthy()
+  })
 })
