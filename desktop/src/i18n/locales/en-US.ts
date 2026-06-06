@@ -670,6 +670,13 @@ export default {
     pin: 'Pin',
     selectHitForContext: 'Select a hit on the left to view cross-service context',
   },
+  runConsole: {
+    allSteps: 'All steps',
+    allHosts: 'All hosts',
+    waitingOutput: 'Waiting for output...',
+    noLogs: 'No logs',
+    backToBottom: 'Back to bottom',
+  },
   overview: {
     title: 'Project Overview',
     openOverview: 'Project overview',
@@ -754,6 +761,7 @@ export default {
     pipeline: {
       add: 'Add',
       run: 'Run',
+      running: 'Running',
       edit: 'Edit',
       rollback: 'Rollback',
       confirm: 'Confirm',

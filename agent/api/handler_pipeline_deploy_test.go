@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-func TestDeployProjectPipelineReturnsPersistedRun(t *testing.T) {
+func TestDeployProjectPipelineReturnsRunningThenPersistsTerminalRun(t *testing.T) {
 	app := newTestAppInstance(t)
 	projectID := addProjectWithArtifactPipeline(t, app)
 
@@ -35,8 +36,26 @@ func TestDeployProjectPipelineReturnsPersistedRun(t *testing.T) {
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Contains(t, rr.Body.String(), `"artifact_version":"v1"`)
-	assert.Contains(t, rr.Body.String(), `"status":"success"`)
+	var started model.Run
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&started))
+	assert.Equal(t, model.RunStatusRunning, started.Status)
+	assert.NotEmpty(t, started.ID)
+	assert.Equal(t, "v1", started.ArtifactVersion)
+
+	require.Eventually(t, func() bool {
+		runReq := httptest.NewRequest(http.MethodGet,
+			"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+started.ID, nil)
+		runRR := httptest.NewRecorder()
+		app.Handler().ServeHTTP(runRR, runReq)
+		if runRR.Code != http.StatusOK {
+			return false
+		}
+		var current model.Run
+		if err := json.NewDecoder(runRR.Body).Decode(&current); err != nil {
+			return false
+		}
+		return current.Status == model.StatusSuccess
+	}, 3*time.Second, 20*time.Millisecond)
 }
 
 func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
@@ -132,5 +151,21 @@ func addProjectWithCompletedRun(t *testing.T, app *api.App) string {
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
+	var started model.Run
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&started))
+	require.Eventually(t, func() bool {
+		runReq := httptest.NewRequest(http.MethodGet,
+			"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+started.ID, nil)
+		runRR := httptest.NewRecorder()
+		app.Handler().ServeHTTP(runRR, runReq)
+		if runRR.Code != http.StatusOK {
+			return false
+		}
+		var current model.Run
+		if err := json.NewDecoder(runRR.Body).Decode(&current); err != nil {
+			return false
+		}
+		return current.Status == model.StatusSuccess
+	}, 3*time.Second, 20*time.Millisecond)
 	return projectID
 }

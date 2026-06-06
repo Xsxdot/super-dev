@@ -19,11 +19,13 @@ import (
 
 // RunLogQuery 定义 pipeline run 日志读取过滤条件。
 type RunLogQuery struct {
-	RunID    string
-	StepName string
-	HostID   string
-	Limit    int
-	BeforeID int64
+	RunID     string
+	StepName  string
+	HostID    string
+	Limit     int
+	BeforeID  int64
+	AfterID   int64
+	Ascending bool
 }
 
 // SaveRun 插入或更新一次 pipeline run 快照。
@@ -89,12 +91,34 @@ func (s *Store) ListRuns(projectID, pipelineID string) ([]model.Run, error) {
 	return runs, nil
 }
 
-// AppendRunLog 追加一条 step/host 维度的日志。
-func (s *Store) AppendRunLog(runID, stepName, hostID, stream, line string, at int64) error {
-	_, err := s.db.Exec(`
+// AppendRunLogLine 追加一条 step/host 维度的日志，并返回带数据库自增 ID 的日志行。
+func (s *Store) AppendRunLogLine(runID, stepName, hostID, stream, line string, at int64) (model.RunLogLine, error) {
+	entry := model.RunLogLine{
+		RunID:    runID,
+		StepName: stepName,
+		HostID:   hostID,
+		Stream:   stream,
+		Line:     line,
+		At:       at,
+	}
+	result, err := s.db.Exec(`
 		INSERT INTO pipeline_run_logs (run_id, step_name, host_id, stream, line, at)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, runID, stepName, hostID, stream, line, at)
+	if err != nil {
+		return model.RunLogLine{}, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return model.RunLogLine{}, err
+	}
+	entry.ID = id
+	return entry, nil
+}
+
+// AppendRunLog 追加一条 step/host 维度的日志。
+func (s *Store) AppendRunLog(runID, stepName, hostID, stream, line string, at int64) error {
+	_, err := s.AppendRunLogLine(runID, stepName, hostID, stream, line, at)
 	return err
 }
 
@@ -121,7 +145,15 @@ func (s *Store) ReadRunLogs(q RunLogQuery) ([]model.RunLogLine, error) {
 		query += " AND id < ?"
 		args = append(args, q.BeforeID)
 	}
-	query += " ORDER BY id DESC LIMIT ?"
+	if q.AfterID > 0 {
+		query += " AND id > ?"
+		args = append(args, q.AfterID)
+	}
+	order := "DESC"
+	if q.Ascending {
+		order = "ASC"
+	}
+	query += " ORDER BY id " + order + " LIMIT ?"
 	args = append(args, q.Limit)
 
 	rows, err := s.db.Query(query, args...)
@@ -141,8 +173,10 @@ func (s *Store) ReadRunLogs(q RunLogQuery) ([]model.RunLogLine, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-		lines[i], lines[j] = lines[j], lines[i]
+	if !q.Ascending {
+		for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+			lines[i], lines[j] = lines[j], lines[i]
+		}
 	}
 	return lines, nil
 }

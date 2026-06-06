@@ -13,8 +13,8 @@ PipelineRow：项目概览页的一条流水线行。
 import type { ProjectPipeline } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
-defineProps<{ pipeline: ProjectPipeline; expanded: boolean }>()
-const emit = defineEmits<{ run: []; edit: []; toggle: [] }>()
+defineProps<{ pipeline: ProjectPipeline; expanded: boolean; runningRun?: { id: string } | null }>()
+const emit = defineEmits<{ run: []; edit: []; toggle: []; 'open-running': [] }>()
 const { t } = useAppI18n()
 </script>
 
@@ -27,6 +27,15 @@ const { t } = useAppI18n()
       <div class="pipeline-name">{{ pipeline.name }}</div>
       <div class="pipeline-meta">{{ pipeline.artifact_kind || 'file' }}</div>
     </div>
+    <button
+      v-if="runningRun"
+      type="button"
+      data-test="pipeline-running"
+      class="running-badge"
+      @click="emit('open-running')"
+    >
+      {{ t('overview.pipeline.running') }}
+    </button>
     <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">{{ t('overview.pipeline.run') }}</button>
     <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">{{ t('overview.pipeline.edit') }}</button>
   </div>
@@ -35,7 +44,7 @@ const { t } = useAppI18n()
 <style scoped>
 .pipeline-row {
   display: grid;
-  grid-template-columns: 28px minmax(160px, 1fr) 76px 76px;
+  grid-template-columns: 28px minmax(160px, 1fr) minmax(72px, auto) 76px 76px;
   align-items: center;
   gap: 10px;
   min-height: 52px;
@@ -66,6 +75,16 @@ const { t } = useAppI18n()
 }
 .text-action {
   background: transparent;
+}
+.running-badge {
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
 }
 .pipeline-main {
   min-width: 0;

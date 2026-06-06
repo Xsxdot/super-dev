@@ -32,7 +32,14 @@ function duration(run: Run) {
       <span>{{ run.env_name || '--' }}</span>
       <span>{{ duration(run) }}</span>
       <button type="button" data-test="run-detail" @click="emit('detail', run)">{{ t('overview.pipeline.detail') }}</button>
-      <button type="button" data-test="run-rollback" @click="emit('rollback', run)">{{ t('overview.pipeline.rollback') }}</button>
+      <button
+        type="button"
+        data-test="run-rollback"
+        :disabled="run.status === 'running'"
+        @click="emit('rollback', run)"
+      >
+        {{ t('overview.pipeline.rollback') }}
+      </button>
     </div>
   </div>
 </template>
@@ -70,5 +77,9 @@ function duration(run: Run) {
   color: var(--text-primary);
   cursor: pointer;
   font-size: 11px;
+}
+.run-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 </style>

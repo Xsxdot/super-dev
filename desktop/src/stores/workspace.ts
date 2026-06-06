@@ -19,12 +19,14 @@ import {
   usePanelStore,
   type PanelNode,
 } from './panel'
+import { useRunConsoleStore } from './runConsole'
 
 export type WorkspaceTab =
   | ProjectWorkspaceTab
   | SearchWorkspaceTab
   | DeploymentTab
   | ProjectOverviewWorkspaceTab
+  | RunConsoleWorkspaceTab
 
 export interface ProjectWorkspaceTab {
   id: string
@@ -73,6 +75,16 @@ export interface DeploymentTab {
   // 初始为单个 deployment 叶子，从侧边栏拖入其他 deployment 即可分栏并排看日志。
   layoutRoot: PanelNode
   focusedPanelId: string | null
+}
+
+export interface RunConsoleWorkspaceTab {
+  id: string
+  type: 'run'
+  projectId: string
+  pipelineId: string
+  runId: string
+  mode: 'live' | 'replay'
+  title: string
 }
 
 const SEARCH_PAGE_LIMIT = 1000
@@ -230,6 +242,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabs.value.push(tab)
     activeTabId.value = tab.id
     usePanelStore().setRoot(tab.layoutRoot, tab.focusedPanelId)
+    return tab
+  }
+
+  function openRunConsole(params: {
+    projectId: string
+    pipelineId: string
+    runId: string
+    mode: 'live' | 'replay'
+    title: string
+  }): RunConsoleWorkspaceTab {
+    saveActiveLogWorkspaceLayout()
+    const id = `run:${params.runId}`
+    const existing = tabs.value.find(
+      (tab): tab is RunConsoleWorkspaceTab => tab.type === 'run' && tab.id === id,
+    )
+    if (existing) {
+      existing.mode = params.mode
+      existing.title = params.title
+      runtimeWorkspaceMaximized.value = false
+      activeTabId.value = existing.id
+      return existing
+    }
+    const tab: RunConsoleWorkspaceTab = {
+      id,
+      type: 'run',
+      projectId: params.projectId,
+      pipelineId: params.pipelineId,
+      runId: params.runId,
+      mode: params.mode,
+      title: params.title,
+    }
+    tabs.value.push(tab)
+    runtimeWorkspaceMaximized.value = false
+    activeTabId.value = tab.id
     return tab
   }
 
@@ -460,6 +506,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function closeTab(tabId: string) {
     const idx = tabs.value.findIndex(t => t.id === tabId)
     if (idx < 0) return
+    const closing = tabs.value[idx]
+    if (closing?.type === 'run') {
+      useRunConsoleStore().disposeRun(closing.runId)
+    }
     tabs.value.splice(idx, 1)
     if (activeTabId.value !== tabId) return
     activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? null
@@ -490,6 +540,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openProjectOverview,
     openSearch,
     openDeployment,
+    openRunConsole,
     searchTab,
     hideService,
     showService,

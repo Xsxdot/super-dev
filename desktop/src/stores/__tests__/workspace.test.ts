@@ -444,4 +444,30 @@ describe('workspaceStore', () => {
     })
   })
 
+  it('openRunConsole de-duplicates run tabs by runId', () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+
+    const first = workspace.openRunConsole({
+      projectId: 'proj-1',
+      pipelineId: 'deploy',
+      runId: 'run-1',
+      mode: 'live',
+      title: 'Deploy · run-1',
+    })
+    const second = workspace.openRunConsole({
+      projectId: 'proj-1',
+      pipelineId: 'deploy',
+      runId: 'run-1',
+      mode: 'replay',
+      title: 'Deploy · run-1 again',
+    })
+
+    expect(first.id).toBe(second.id)
+    expect(workspace.tabs.filter(t => t.type === 'run')).toHaveLength(1)
+    expect(workspace.activeTabId).toBe(first.id)
+    expect(workspace.isRuntimeWorkspaceMaximized).toBe(false)
+  })
+
 })

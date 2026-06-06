@@ -36,4 +36,11 @@ describe('StepTree', () => {
     expect(wrapper.emitted('select-step')?.[0]).toEqual(['Deploy'])
     expect(wrapper.emitted('select-host')?.[0]).toEqual(['Deploy', 'host-1'])
   })
+
+  it('renders stable status icon classes', () => {
+    const wrapper = mount(StepTree, { props: { steps, selectedStep: '', selectedHost: '' } })
+
+    expect(wrapper.find('.status-icon.running').exists()).toBe(true)
+    expect(wrapper.find('.status-icon.success').exists()).toBe(true)
+  })
 })

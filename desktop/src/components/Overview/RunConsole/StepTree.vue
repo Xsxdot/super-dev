@@ -11,10 +11,18 @@ StepTree：运行控制台左侧步骤和主机导航。
   - 不渲染日志正文
 -->
 <script setup lang="ts">
-import type { StepRun } from '@/api/agent'
+import type { RunStatus, StepRun } from '@/api/agent'
 
 defineProps<{ steps: StepRun[]; selectedStep: string; selectedHost: string }>()
 const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: string, host: string] }>()
+
+function statusSymbol(status: RunStatus) {
+  if (status === 'running') return ''
+  if (status === 'success') return '✓'
+  if (status === 'failed') return '×'
+  if (status === 'skipped') return '−'
+  return '•'
+}
 </script>
 
 <template>
@@ -27,7 +35,7 @@ const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: 
         :class="{ selected: selectedStep === step.step_name && !selectedHost }"
         @click="emit('select-step', step.step_name)"
       >
-        <span class="step-status">{{ step.status }}</span>
+        <span class="status-icon" :class="step.status" :aria-label="step.status">{{ statusSymbol(step.status) }}</span>
         <span class="step-name">{{ step.step_name }}</span>
       </button>
       <button
@@ -39,7 +47,7 @@ const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: 
         :data-test="`host-select-${task.host_id || 'local'}`"
         @click="emit('select-host', step.step_name, task.host_id || '')"
       >
-        <span class="host-status">{{ task.status }}</span>
+        <span class="status-icon" :class="task.status" :aria-label="task.status">{{ statusSymbol(task.status) }}</span>
         <span class="host-name">{{ task.host_name || task.host_id || 'local' }}</span>
       </button>
     </div>
@@ -60,7 +68,7 @@ const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: 
 .step-item,
 .host-item {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -87,13 +95,32 @@ const emit = defineEmits<{ 'select-step': [step: string]; 'select-host': [step: 
   background: var(--bg-overlay);
   color: var(--text-primary);
 }
-.step-status,
-.host-status {
-  overflow: hidden;
+.status-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
   color: var(--text-tertiary);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 14px;
+  text-align: center;
+}
+.status-icon.running {
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.status-icon.success {
+  color: var(--status-running);
+}
+.status-icon.failed {
+  color: var(--status-failed);
+}
+.status-icon.skipped,
+.status-icon.pending {
+  color: var(--text-tertiary);
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 .step-name,
 .host-name {

@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import PanelLayout from '@/components/Panel/PanelLayout.vue'
 import ProjectOverviewPane from '@/components/Overview/ProjectOverviewPane.vue'
+import RunConsolePage from '@/components/Overview/RunConsole/RunConsolePage.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import RuntimeWorkbenchHeader from './RuntimeWorkbenchHeader.vue'
 import { useAgentStore } from '@/stores/agent'
@@ -46,6 +47,13 @@ const isRuntimeTab = computed(() =>
     <SearchPage
       v-else-if="workspace.activeTab.type === 'search'"
       :tab-id="workspace.activeTab.id"
+    />
+    <RunConsolePage
+      v-else-if="workspace.activeTab.type === 'run'"
+      :project-id="workspace.activeTab.projectId"
+      :pipeline-id="workspace.activeTab.pipelineId"
+      :run-id="workspace.activeTab.runId"
+      :mode="workspace.activeTab.mode"
     />
     <ProjectOverviewPane
       v-else-if="workspace.activeTab.type === 'overview' && overviewProject"

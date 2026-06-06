@@ -4,13 +4,8 @@ import { setActivePinia, createPinia } from 'pinia'
 import PipelinesTab from '../PipelinesTab.vue'
 import type { Project, Run } from '@/api/agent'
 import { api } from '@/api/agent'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
-
-const push = vi.fn()
-
-vi.mock('vue-router', () => ({
-  useRouter: () => ({ push }),
-}))
 
 vi.mock('@/api/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/agent')>()
@@ -91,7 +86,22 @@ describe('PipelinesTab', () => {
     await new Promise(r => setTimeout(r))
 
     expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-dev', expect.objectContaining({ env_name: 'dev' }))
-    expect(push).toHaveBeenCalledWith('/project/p1/pipelines/deploy-dev/runs/run-live?mode=live')
+    const workspace = useWorkspaceStore()
+    expect(workspace.activeTab?.type).toBe('run')
+    expect(workspace.activeTab?.id).toBe('run:run-live')
+  })
+
+  it('shows running run and re-enters live console from the row', async () => {
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({ items: [run({ id: 'run-live', status: 'running' })] })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="pipeline-running"]').exists()).toBe(true)
+    await wrapper.find('[data-test="pipeline-running"]').trigger('click')
+
+    const workspace = useWorkspaceStore()
+    expect(workspace.activeTab?.type).toBe('run')
+    expect(workspace.activeTab?.id).toBe('run:run-live')
   })
 
   it('rolls back by reusing deploy path with artifact version', async () => {

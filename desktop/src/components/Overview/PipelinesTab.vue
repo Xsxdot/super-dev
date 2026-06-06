@@ -12,16 +12,16 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
 -->
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
+import { useWorkspaceStore } from '@/stores/workspace'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import PipelineRow from './PipelineRow.vue'
 import RunHistoryList from './RunHistoryList.vue'
 
 const props = defineProps<{ project: Project }>()
-const router = useRouter()
+const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
 const templateStore = usePipelineTemplateStore()
 const expanded = ref<string | null>(null)
@@ -35,17 +35,43 @@ const hasPipelines = computed(() => (props.project.pipelines ?? []).length > 0)
 
 onMounted(() => {
   void templateStore.loadTemplates().catch(() => undefined)
+  for (const pipeline of props.project.pipelines ?? []) {
+    void loadRunsForPipeline(pipeline).catch(() => undefined)
+  }
 })
 
-async function toggleHistory(pipeline: ProjectPipeline) {
-  expanded.value = expanded.value === pipeline.id ? null : pipeline.id
-  if (expanded.value !== pipeline.id || runsByPipeline[pipeline.id]) return
+function runTitle(pipeline: ProjectPipeline, run: Run) {
+  const version = run.artifact_version ? `#${run.artifact_version}` : run.id.slice(0, 8)
+  return `${pipeline.name} · ${version}`
+}
+
+function runningRun(pipeline: ProjectPipeline): Run | null {
+  return (runsByPipeline[pipeline.id] ?? []).find(run => run.status === 'running') ?? null
+}
+
+async function loadRunsForPipeline(pipeline: ProjectPipeline) {
   loadingRuns[pipeline.id] = true
   try {
     runsByPipeline[pipeline.id] = (await api.listProjectPipelineRuns(props.project.id, pipeline.id)).items
   } finally {
     loadingRuns[pipeline.id] = false
   }
+}
+
+function openRunConsole(pipeline: ProjectPipeline, run: Run, mode: 'live' | 'replay') {
+  workspace.openRunConsole({
+    projectId: props.project.id,
+    pipelineId: pipeline.id,
+    runId: run.id,
+    mode,
+    title: runTitle(pipeline, run),
+  })
+}
+
+async function toggleHistory(pipeline: ProjectPipeline) {
+  expanded.value = expanded.value === pipeline.id ? null : pipeline.id
+  if (expanded.value !== pipeline.id || runsByPipeline[pipeline.id]) return
+  await loadRunsForPipeline(pipeline)
 }
 
 function defaultEnvName() {
@@ -75,15 +101,16 @@ async function confirmDeploy() {
       env_name: rollbackRun?.env_name || defaultEnvName(),
       artifact_version: rollbackRun?.artifact_version,
     })
+    runsByPipeline[pipeline.id] = [run, ...(runsByPipeline[pipeline.id] ?? []).filter(item => item.id !== run.id)]
     pending.value = null
-    await router.push(`/project/${props.project.id}/pipelines/${pipeline.id}/runs/${run.id}?mode=live`)
+    openRunConsole(pipeline, run, 'live')
   } catch (e) {
     deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
   }
 }
 
 function openDetail(pipeline: ProjectPipeline, run: Run) {
-  void router.push(`/project/${props.project.id}/pipelines/${pipeline.id}/runs/${run.id}?mode=replay`)
+  openRunConsole(pipeline, run, run.status === 'running' ? 'live' : 'replay')
 }
 </script>
 
@@ -108,9 +135,11 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
       <PipelineRow
         :pipeline="pipeline"
         :expanded="expanded === pipeline.id"
+        :running-run="runningRun(pipeline)"
         @toggle="toggleHistory(pipeline)"
         @run="requestRun(pipeline)"
         @edit="openEditor('blank')"
+        @open-running="() => { const run = runningRun(pipeline); if (run) openRunConsole(pipeline, run, 'live') }"
       />
       <RunHistoryList
         v-if="expanded === pipeline.id"

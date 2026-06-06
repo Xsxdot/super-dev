@@ -107,6 +107,44 @@ func TestHostRefsResolveHostNameToCanonicalID(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", refs[0].Address)
 }
 
+func TestRunPreparedProjectPipelineRecoversPanicAsFailedRun(t *testing.T) {
+	app := newTestAppForPackage(t)
+	project := projectWithAgentRemotePipeline(t, "p-panic", "deploy-agent")
+	app.projects = []model.Project{project}
+	_, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "agent-host", SSHHost: "127.0.0.1", SSHUser: "ops"})
+	require.NoError(t, err)
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+	app.agentHealth.ProbeOnce(context.Background(), "h1")
+
+	prepared, err := app.prepareProjectPipelineRun(context.Background(), project.ID, "deploy-agent", projectPipelineDeployRequest{
+		EnvName:   "prod",
+		Variables: map[string]string{"version": "v1"},
+	})
+	require.NoError(t, err)
+
+	app.pipelineAgentRunner = panicPipelineAgentRunner{}
+	final, err := app.runPreparedProjectPipeline(context.Background(), prepared)
+
+	require.Error(t, err)
+	assert.Equal(t, model.RunStatusFailed, final.Status)
+	got, ok, getErr := app.store.GetRun(prepared.Run.ID)
+	require.NoError(t, getErr)
+	require.True(t, ok)
+	assert.Equal(t, model.RunStatusFailed, got.Status)
+}
+
+type panicPipelineAgentRunner struct{}
+
+func (panicPipelineAgentRunner) RunRemote(ctx context.Context, target pipeline.Target, cmd string, workDir string, onLine func(string, string)) error {
+	panic("forced panic")
+}
+
+func (panicPipelineAgentRunner) Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error {
+	panic("forced panic")
+}
+
 func projectWithArtifactPipeline(t *testing.T, projectID, pipelineID string) model.Project {
 	t.Helper()
 	root := t.TempDir()

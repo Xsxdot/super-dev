@@ -670,6 +670,13 @@ export default {
     pin: '固定',
     selectHitForContext: '点击左侧命中日志查看跨服务上下文',
   },
+  runConsole: {
+    allSteps: '全部步骤',
+    allHosts: '全部主机',
+    waitingOutput: '等待输出...',
+    noLogs: '暂无日志',
+    backToBottom: '回到底部',
+  },
   overview: {
     title: '项目概览',
     openOverview: '项目概览',
@@ -754,6 +761,7 @@ export default {
     pipeline: {
       add: '新增',
       run: '运行',
+      running: '运行中',
       edit: '编辑',
       rollback: '回滚',
       confirm: '确认',

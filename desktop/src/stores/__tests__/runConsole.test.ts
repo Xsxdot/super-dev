@@ -1,10 +1,10 @@
 /**
- * runConsole store 测试覆盖单次 pipeline run 控制台状态。
+ * runConsole store 测试覆盖多 run 控制台状态。
  *
  * 职责：
- *   - 验证 run 详情和回放日志加载
- *   - 验证 step/host 选择过滤
- *   - 验证 live WS 失败不会清空回放日志
+ *   - 验证 runId 分桶隔离
+ *   - 验证 WebSocket 信封事件分发
+ *   - 验证日志按 id 去重、状态 patch、done 和 dispose
  *
  * 边界：
  *   - 不验证真实 WebSocket 后端路由
@@ -23,7 +23,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
       getProjectPipelineRun: vi.fn(),
       readProjectPipelineRunLogs: vi.fn(),
     },
-    runLogsWsUrl: vi.fn(() => 'ws://example/runs/run-1/logs'),
+    runLogsWsUrl: vi.fn((runId: string) => `ws://example/runs/${runId}/logs`),
   }
 })
 
@@ -32,6 +32,7 @@ class FakeWebSocket {
   url: string
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
+  onclose: (() => void) | null = null
   closed = false
 
   constructor(url: string) {
@@ -44,23 +45,24 @@ class FakeWebSocket {
   }
 }
 
-function run(): Run {
+function run(partial: Partial<Run> = {}): Run {
   return {
-    id: 'run-1',
+    id: partial.id ?? 'run-1',
     project_id: 'p1',
     pipeline_id: 'deploy',
     env_name: 'dev',
     deployment_id: '',
     artifact_version: 'v1',
-    status: 'success',
+    status: partial.status ?? 'running',
     started_at: 1,
     step_runs: [{
       step_name: 'Deploy',
       type: 'local_command',
       phase: 'deploy',
-      status: 'success',
-      tasks: [{ host_id: 'host-1', host_name: 'host-1', status: 'success' }],
+      status: 'pending',
+      tasks: [{ host_id: 'host-1', host_name: 'host-1', status: 'pending' }],
     }],
+    ...partial,
   }
 }
 
@@ -76,58 +78,70 @@ describe('runConsole store', () => {
     vi.unstubAllGlobals()
   })
 
-  it('loads run detail and replay logs', async () => {
-    vi.mocked(api.getProjectPipelineRun).mockResolvedValue(run())
+  it('loads replay state into the requested run bucket', async () => {
+    vi.mocked(api.getProjectPipelineRun).mockResolvedValue(run({ id: 'run-1', status: 'success' }))
     vi.mocked(api.readProjectPipelineRunLogs).mockResolvedValue({
-      items: [{ id: 1, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'deployed', at: 10 }],
+      items: [{ id: 1, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'replay', at: 10 }],
     })
     const store = useRunConsoleStore()
 
     await store.loadReplay('p1', 'deploy', 'run-1')
 
-    expect(store.currentRun?.id).toBe('run-1')
-    expect(store.logs).toHaveLength(1)
-    expect(store.logs[0].line).toBe('deployed')
+    expect(store.stateFor('run-1').currentRun?.status).toBe('success')
+    expect(store.visibleLogs('run-1').map(l => l.line)).toEqual(['replay'])
   })
 
-  it('filters visible logs by selected step and host', () => {
+  it('isolates selection and logs by run id', () => {
     const store = useRunConsoleStore()
-    store.logs = [
-      { id: 1, run_id: 'run-1', step_name: 'Build', host_id: 'host-1', stream: 'stdout', line: 'built', at: 1 },
-      { id: 2, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'deployed', at: 2 },
-      { id: 3, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-2', stream: 'stdout', line: 'other', at: 3 },
-    ]
-    store.select('Deploy', 'host-1')
+    store.mergeRunLogs('run-1', [{ id: 1, run_id: 'run-1', step_name: 'Build', stream: 'stdout', line: 'one', at: 1 }])
+    store.mergeRunLogs('run-2', [{ id: 2, run_id: 'run-2', step_name: 'Deploy', host_id: 'h1', stream: 'stdout', line: 'two', at: 2 }])
+    store.select('run-2', 'Deploy', 'h1')
 
-    expect(store.visibleLogs.map(l => l.line)).toEqual(['deployed'])
+    expect(store.visibleLogs('run-1').map(l => l.line)).toEqual(['one'])
+    expect(store.visibleLogs('run-2').map(l => l.line)).toEqual(['two'])
   })
 
-  it('keeps replay logs when live WebSocket fails', async () => {
+  it('ingests log, status, and done websocket events', async () => {
     vi.mocked(api.getProjectPipelineRun).mockResolvedValue(run())
-    vi.mocked(api.readProjectPipelineRunLogs).mockResolvedValue({
-      items: [{ id: 1, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'replay', at: 10 }],
-    })
-    const store = useRunConsoleStore()
-
-    await store.loadLive('p1', 'deploy', 'run-1')
-    FakeWebSocket.instances[0].onerror?.()
-
-    expect(store.logs.map(l => l.line)).toEqual(['replay'])
-    expect(FakeWebSocket.instances[0].closed).toBe(true)
-  })
-
-  it('ingests live WebSocket log messages after replay data', async () => {
-    vi.mocked(api.getProjectPipelineRun).mockResolvedValue(run())
-    vi.mocked(api.readProjectPipelineRunLogs).mockResolvedValue({
-      items: [{ id: 1, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'replay', at: 10 }],
-    })
+    vi.mocked(api.readProjectPipelineRunLogs).mockResolvedValue({ items: [] })
     const store = useRunConsoleStore()
 
     await store.loadLive('p1', 'deploy', 'run-1')
     FakeWebSocket.instances[0].onmessage?.({
-      data: JSON.stringify({ id: 2, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'live', at: 11 }),
+      data: JSON.stringify({ kind: 'log', log: { id: 1, run_id: 'run-1', step_name: 'Deploy', host_id: 'host-1', stream: 'stdout', line: 'live', at: 10 } }),
+    })
+    FakeWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({ kind: 'status', status: { step_name: 'Deploy', host_id: 'host-1', status: 'running' } }),
+    })
+    FakeWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({ kind: 'done', run: run({ id: 'run-1', status: 'success', finished_at: 20 }) }),
     })
 
-    expect(store.logs.map(l => l.line)).toEqual(['replay', 'live'])
+    const state = store.stateFor('run-1')
+    expect(state.logs.map(l => l.line)).toEqual(['live'])
+    expect(state.currentRun?.step_runs[0].tasks[0].status).toBe('running')
+    expect(state.currentRun?.status).toBe('success')
+    expect(state.ws).toBeNull()
+  })
+
+  it('deduplicates logs by id', () => {
+    const store = useRunConsoleStore()
+    store.mergeRunLogs('run-1', [{ id: 1, run_id: 'run-1', step_name: 'Deploy', stream: 'stdout', line: 'old', at: 10 }])
+    store.mergeRunLogs('run-1', [{ id: 1, run_id: 'run-1', step_name: 'Deploy', stream: 'stdout', line: 'new', at: 11 }])
+
+    expect(store.stateFor('run-1').logs).toHaveLength(1)
+    expect(store.stateFor('run-1').logs[0].line).toBe('new')
+  })
+
+  it('disposes run state and closes websocket', async () => {
+    vi.mocked(api.getProjectPipelineRun).mockResolvedValue(run())
+    vi.mocked(api.readProjectPipelineRunLogs).mockResolvedValue({ items: [] })
+    const store = useRunConsoleStore()
+
+    await store.loadLive('p1', 'deploy', 'run-1')
+    store.disposeRun('run-1')
+
+    expect(FakeWebSocket.instances[0].closed).toBe(true)
+    expect(store.hasRunState('run-1')).toBe(false)
   })
 })

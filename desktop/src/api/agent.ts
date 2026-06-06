@@ -344,6 +344,19 @@ export interface RunLogLine {
   at: number
 }
 
+export interface RunStatusPatch {
+  step_name?: string
+  host_id?: string
+  status: RunStatus
+  exit_code?: number
+  at?: number
+}
+
+export type RunEvent =
+  | { kind: 'log'; log: RunLogLine }
+  | { kind: 'status'; status: RunStatusPatch }
+  | { kind: 'done'; run: Run }
+
 export interface ProjectPipelineRunLogsResponse {
   items: RunLogLine[]
 }
