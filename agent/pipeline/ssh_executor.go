@@ -120,14 +120,23 @@ func (s *SSHExecutor) runRemoteExit(ctx context.Context, target Target, cmd stri
 	if err != nil {
 		return -1, err
 	}
-	go streamLines(stdout, "stdout", onLine)
-	go streamLines(stderr, "stderr", onLine)
+	streamsDone := make(chan struct{}, 2)
+	go func() {
+		streamLines(stdout, "stdout", onLine)
+		streamsDone <- struct{}{}
+	}()
+	go func() {
+		streamLines(stderr, "stderr", onLine)
+		streamsDone <- struct{}{}
+	}()
 
 	if workDir != "" {
 		// 通过 cd 前置保证命令在指定目录下运行，与本地 shell 插件行为对齐。
 		cmd = fmt.Sprintf("cd %s && %s", workDir, cmd)
 	}
 	err = session.Run(cmd)
+	<-streamsDone
+	<-streamsDone
 	if err == nil {
 		return 0, nil
 	}
