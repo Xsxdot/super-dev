@@ -112,6 +112,7 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	before := a.projects[idx]
 
 	// 删除运行中 service 守卫：被删除（不在请求中）且正在运行的 service 拒绝删除。
 	// 守卫必须在任何状态修改之前执行，确保 409 返回时内存状态保持不变。
@@ -175,7 +176,9 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 
 	// 复制项目用于持久化，避免在锁外引用内存数据竞争
 	a.projects[idx] = candidate
-	project := candidate
+	a.clearProjectBackendsLocked(before)
+	a.registerProjectBackendsLocked(a.projects[idx])
+	project := a.projects[idx]
 	a.mu.Unlock()
 
 	loader := config.NewLoader(project.RootPath)
@@ -183,6 +186,7 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
+	a.reconcileProjectsAsync(before, project)
 
 	jsonOK(w, project)
 }

@@ -161,16 +161,22 @@ func (a *App) saveConfigChangeProject(project model.Project) error {
 		return err
 	}
 
+	var affected []model.Project
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	for i, existing := range a.projects {
 		if existing.ID == project.ID {
 			a.projects[i] = project
 			a.clearProjectBackendsLocked(existing)
 			a.registerProjectBackendsLocked(project)
+			affected = unionProjectsForReconcile(existing, project)
+			a.mu.Unlock()
+			a.reconcileProjectsAsync(affected...)
 			return nil
 		}
 	}
 	a.appendProjectLocked(project)
+	affected = []model.Project{project}
+	a.mu.Unlock()
+	a.reconcileProjectsAsync(affected...)
 	return nil
 }

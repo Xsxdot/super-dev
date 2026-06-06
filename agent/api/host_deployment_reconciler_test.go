@@ -1,0 +1,177 @@
+// host_deployment_reconciler_test.go 验证桌面端 managed deployment 推送器。
+//
+// 职责：
+//   - 覆盖按 host 投影 remote deployment 的规则
+//   - 覆盖通过隧道 PUT 完整 desired 清单
+//   - 覆盖隧道 connected 事件和周期 tick 触发 reconcile
+//
+// 边界：
+//   - 不建立真实 SSH 隧道
+//   - 不测试远端 agent apply 逻辑
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/tunnel"
+)
+
+type reconcilerResolver struct {
+	table map[string]string
+}
+
+func (r reconcilerResolver) BaseURL(hostID string) (string, error) {
+	if u, ok := r.table[hostID]; ok {
+		return u, nil
+	}
+	return "", remote.ErrHostUnreachable
+}
+
+func TestHostDeploymentReconcilerDesiredForHostRewritesLocationAndFilters(t *testing.T) {
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(model.Project{
+		ID: "proj", Name: "proj",
+		Services: []model.Service{{
+			ID: "svc-api", ProjectID: "proj", Name: "api",
+			Deployments: []model.Deployment{
+				{
+					ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1", "h2"},
+					Runtime: &model.RuntimeConfig{Type: model.RuntimeTypeSystemd, ServiceName: "api.service"},
+					Logs:    &model.LogConfig{Type: model.LogKindJournalctl, Target: "api.service"},
+				},
+				{ID: "dep-local", EnvName: "dev", Location: model.LocationLocal},
+			},
+		}},
+	})
+	app.mu.Unlock()
+	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{}, time.Second)
+
+	got := reconciler.DesiredForHost("h1")
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "dep-remote", got[0].DeploymentID)
+	assert.Equal(t, "svc-api", got[0].ServiceID)
+	assert.Equal(t, "api", got[0].ServiceName)
+	assert.Equal(t, "proj", got[0].ProjectID)
+	assert.Equal(t, model.LocationLocal, got[0].Location)
+	assert.Equal(t, model.RuntimeTypeSystemd, got[0].Runtime.Type)
+	assert.Equal(t, model.LogKindJournalctl, got[0].Logs.Type)
+}
+
+func TestHostDeploymentReconcilerReconcileSkipsDisconnectedTunnel(t *testing.T) {
+	app := newTestAppForPackage(t)
+	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{}}, time.Second)
+
+	err := reconciler.Reconcile(context.Background(), "missing")
+
+	require.NoError(t, err)
+}
+
+func TestHostDeploymentReconcilerReconcilePutsFullDesiredBody(t *testing.T) {
+	var received []model.ManagedDeployment
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		require.Equal(t, "/api/managed-deployments", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&received))
+		jsonOK(w, model.ManagedDeploymentReconcileResult{Persisted: true})
+	}))
+	t.Cleanup(remoteSrv.Close)
+
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(model.Project{
+		ID: "proj", Name: "proj",
+		Services: []model.Service{{
+			ID: "svc-api", ProjectID: "proj", Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1"},
+				Logs: &model.LogConfig{Type: model.LogKindCommand, Command: "printf log"},
+			}},
+		}},
+	})
+	app.mu.Unlock()
+	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Second)
+
+	err := reconciler.Reconcile(context.Background(), "h1")
+
+	require.NoError(t, err)
+	require.Len(t, received, 1)
+	assert.Equal(t, model.LocationLocal, received[0].Location)
+	assert.Equal(t, "dep-remote", received[0].DeploymentID)
+	assert.Equal(t, model.LogKindCommand, received[0].Logs.Type)
+}
+
+func TestHostDeploymentReconcilerRunHandlesConnectedEventAndTick(t *testing.T) {
+	requests := make(chan string, 4)
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.Path
+		jsonOK(w, model.ManagedDeploymentReconcileResult{Persisted: true})
+	}))
+	t.Cleanup(remoteSrv.Close)
+
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(model.Project{
+		ID: "proj", Name: "proj",
+		Services: []model.Service{{
+			ID: "svc-api", ProjectID: "proj", Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1"},
+				Logs: &model.LogConfig{Type: model.LogKindCommand, Command: "printf log"},
+			}},
+		}},
+	})
+	app.mu.Unlock()
+	reconciler := NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan tunnel.Event, 1)
+	ticks := make(chan time.Time, 1)
+	go reconciler.run(ctx, events, ticks)
+
+	events <- tunnel.Event{HostID: "h1", Status: tunnel.StatusConnected}
+	require.Eventually(t, func() bool { return len(requests) >= 1 }, time.Second, 10*time.Millisecond)
+	ticks <- time.Now()
+	require.Eventually(t, func() bool { return len(requests) >= 2 }, time.Second, 10*time.Millisecond)
+}
+
+func TestReconcileProjectsAsyncPushesAffectedHost(t *testing.T) {
+	requests := make(chan []model.ManagedDeployment, 1)
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body []model.ManagedDeployment
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		requests <- body
+		jsonOK(w, model.ManagedDeploymentReconcileResult{Persisted: true})
+	}))
+	t.Cleanup(remoteSrv.Close)
+
+	app := newTestAppForPackage(t)
+	app.managedReconciler = NewHostDeploymentReconciler(app, reconcilerResolver{table: map[string]string{"h1": remoteSrv.URL}}, time.Hour)
+	project := model.Project{
+		ID: "proj", Name: "proj",
+		Services: []model.Service{{
+			ID: "svc-api", ProjectID: "proj", Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1"},
+				Logs: &model.LogConfig{Type: model.LogKindCommand, Command: "printf log"},
+			}},
+		}},
+	}
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	app.reconcileProjectsAsync(project)
+
+	require.Eventually(t, func() bool { return len(requests) == 1 }, time.Second, 10*time.Millisecond)
+}

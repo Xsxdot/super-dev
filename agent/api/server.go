@@ -65,6 +65,8 @@ type AppConfig struct {
 	RuntimeStatusRequestTimeout time.Duration
 	// ExecutionAuthorizer 注入 /ws/exec 命令授权器；nil 时使用 remoteexec.AllowAll。
 	ExecutionAuthorizer remoteexec.Authorizer
+	// ManagedDeploymentReconcileInterval 控制桌面端推送 remote deployment 期望状态的周期；0 时使用 30 秒。
+	ManagedDeploymentReconcileInterval time.Duration
 }
 
 // HostAgentInstaller 安装或重装远端 SuperDev agent。
@@ -75,18 +77,22 @@ type HostAgentInstaller interface {
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg         AppConfig
-	mu          sync.RWMutex
-	projects    []model.Project
-	managers    map[string]*process.Manager // projectID → manager
-	buf         *logbuf.Buffer
-	store       *store.Store
-	registry    *config.Registry
-	settings    *config.SettingsStore
-	procMgr     *process.Manager // 远端 collector 复用的进程管理器
-	collector   *collector.Manager
-	remoteStore *remote.Store
-	tunnels     *tunnel.Manager
+	cfg                    AppConfig
+	mu                     sync.RWMutex
+	projects               []model.Project
+	managers               map[string]*process.Manager // projectID → manager
+	buf                    *logbuf.Buffer
+	store                  *store.Store
+	registry               *config.Registry
+	settings               *config.SettingsStore
+	procMgr                *process.Manager // 远端 collector 复用的进程管理器
+	collector              *collector.Manager
+	managedStore           *ManagedStore
+	managedProjectIDs      map[string]struct{}
+	managedReconciler      *HostDeploymentReconciler
+	managedReconcileCancel context.CancelFunc
+	remoteStore            *remote.Store
+	tunnels                *tunnel.Manager
 	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
 	debugSessions debugsession.Store
 	// operationApprovals 持久化 MCP 写操作审批请求和一次性 token 状态。
@@ -184,6 +190,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	managedStore := NewManagedStore(cfg.DataDir)
 	debugSessions := debugsession.NewFileStore(filepath.Join(cfg.DataDir, "debug-sessions.json"))
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
@@ -252,6 +259,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		settings:                    settingsStore,
 		procMgr:                     procMgr,
 		collector:                   colMgr,
+		managedStore:                managedStore,
+		managedProjectIDs:           map[string]struct{}{},
 		remoteStore:                 remoteStore,
 		tunnels:                     tunnels,
 		debugSessions:               debugSessions,
@@ -276,6 +285,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		app.Close()
 		return nil, err
 	}
+	app.managedReconciler = NewHostDeploymentReconciler(app, resolver, cfg.ManagedDeploymentReconcileInterval)
 	return app, nil
 }
 
@@ -285,6 +295,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 func (a *App) Close() {
 	if a.agentHealthCancel != nil {
 		a.agentHealthCancel()
+	}
+	if a.managedReconcileCancel != nil {
+		a.managedReconcileCancel()
 	}
 	if a.procMgr != nil {
 		a.procMgr.StopAll()
@@ -388,6 +401,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/collectors", a.startCollector)
 	mux.HandleFunc("DELETE /api/collectors/{id}", a.stopCollector)
 	mux.HandleFunc("GET /api/collectors", a.listCollectors)
+	mux.HandleFunc("PUT /api/managed-deployments", a.putManagedDeployments)
 
 	// 远程主机管理
 	mux.HandleFunc("GET /api/hosts/detect-ssh-keys", a.detectSshKeys)
@@ -454,7 +468,23 @@ func (a *App) Handler() http.Handler {
 //   - ListenAndServe 返回的错误
 func (a *App) Start(addr string) error {
 	a.loadRegisteredProjects()
+	a.loadManagedDeployments()
+	a.startManagedDeploymentReconciler()
 	return http.ListenAndServe(addr, a.Handler())
+}
+
+func (a *App) startManagedDeploymentReconciler() {
+	if a.managedReconciler == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.managedReconcileCancel = cancel
+	a.managedReconciler.Start(ctx)
+	go func() {
+		if err := a.managedReconciler.ReconcileAll(ctx); err != nil {
+			log.Printf("[SuperDev] initial managed deployment reconcile failed: %v", err)
+		}
+	}()
 }
 
 // loadRegisteredProjects 从注册表读取所有项目路径并加载到内存。
@@ -483,6 +513,27 @@ func (a *App) loadRegisteredProjects() {
 func (a *App) appendProjectLocked(p model.Project) {
 	a.projects = append(a.projects, p)
 	a.registerProjectBackendsLocked(p)
+}
+
+func (a *App) reconcileProjectsAsync(projects ...model.Project) {
+	if a.managedReconciler == nil {
+		return
+	}
+	// projects 只用于计算受影响 host，真正下发的 desired 清单会在 goroutine 中
+	// 重新读取当前 a.projects。删除项目后必须依赖这个时序，才能推送“已删除后”的空缺清单。
+	hostIDs := remoteDeploymentHostIDs(projects)
+	for _, hostID := range hostIDs {
+		hostID := hostID
+		go func() {
+			if err := a.managedReconciler.Reconcile(context.Background(), hostID); err != nil {
+				log.Printf("[SuperDev] managed deployment reconcile failed for host %s: %v", hostID, err)
+			}
+		}()
+	}
+}
+
+func unionProjectsForReconcile(before, after model.Project) []model.Project {
+	return []model.Project{before, after}
 }
 
 func (a *App) registerProjectBackendsLocked(p model.Project) {

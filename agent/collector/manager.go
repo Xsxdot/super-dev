@@ -43,6 +43,7 @@ type Manager struct {
 	procMgr *process.Manager
 	probe   Probe
 	items   map[string]model.Collector
+	managed map[string]struct{}
 }
 
 // NewManager 创建新的 collector.Manager。
@@ -55,6 +56,7 @@ func NewManager(procMgr *process.Manager, probe Probe) *Manager {
 		procMgr: procMgr,
 		probe:   probe,
 		items:   map[string]model.Collector{},
+		managed: map[string]struct{}{},
 	}
 }
 
@@ -71,10 +73,23 @@ func NewManager(procMgr *process.Manager, probe Probe) *Manager {
 //
 // 注意：同一 (name, type) 重复调用幂等,返回同一 ID。
 func (m *Manager) Start(name string, t model.LogSourceType) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", err
-	}
-	argv, err := BuildCommand(t, name, nil)
+	return m.StartWithOptions(name, t, nil)
+}
+
+// StartWithOptions 启动 (name, type, extraArgs) 对应的采集任务。
+//
+// 参数：
+//   - name: 服务名、容器名、文件路径或日志命令
+//   - t: 采集类型
+//   - extraArgs: 追加给采集命令的安全参数
+//
+// 返回：
+//   - 采集任务的稳定 ID
+//   - 参数非法、目标不存在或启动失败时返回错误
+//
+// 注意：同一 (name, type) 重复调用幂等；extraArgs 只在首次启动时生效。
+func (m *Manager) StartWithOptions(name string, t model.LogSourceType, extraArgs []string) (string, error) {
+	argv, err := BuildCommand(t, name, extraArgs)
 	if err != nil {
 		return "", err
 	}

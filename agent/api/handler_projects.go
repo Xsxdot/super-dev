@@ -103,6 +103,7 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.appendProjectLocked(p)
 	a.mu.Unlock()
+	a.reconcileProjectsAsync(p)
 
 	jsonOK(w, p)
 }
@@ -172,10 +173,14 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 	// 持久化成功后，再修改内存状态并清理 manager
 	a.mu.Lock()
 	newProjects := make([]model.Project, 0, len(a.projects))
+	var removedProject model.Project
 	for _, p := range a.projects {
-		if p.ID != id {
-			newProjects = append(newProjects, p)
+		if p.ID == id {
+			removedProject = p
+			a.clearProjectBackendsLocked(p)
+			continue
 		}
+		newProjects = append(newProjects, p)
 	}
 	a.projects = newProjects
 	mgr, hasMgr := a.managers[id]
@@ -188,6 +193,7 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if hasMgr {
 		mgr.StopAll()
 	}
+	a.reconcileProjectsAsync(removedProject)
 
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
