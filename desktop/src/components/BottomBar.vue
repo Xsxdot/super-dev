@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { save } from '@tauri-apps/plugin-dialog'
@@ -35,6 +35,9 @@ const remoteStore = useRemoteStore()
 const router = useRouter()
 const { t } = useI18n()
 const approvalsPopoverOpen = ref(false)
+const logDisplayOpen = ref(false)
+const logDisplaySelectRef = ref<HTMLElement | null>(null)
+const logDisplayMenuStyle = ref<Record<string, string>>({})
 
 // leafDeploymentId 取叶子节点订阅的 deploymentId（leaf.serviceId 语义即 deploymentId）。
 function leafDeploymentId(leaf: PanelLeafNode): string | null {
@@ -294,6 +297,39 @@ function remoteNodesOf(svc: { deployment: Deployment; aggregate: DeploymentAggre
   return svc.deployment.location === 'remote' ? svc.aggregate.nodes : []
 }
 
+const logDisplayServices = computed(() =>
+  panelServices.value.filter(svc => svc.deployment.location === 'remote' && remoteNodesOf(svc).length > 0),
+)
+
+const logDisplayTotalNodes = computed(() =>
+  logDisplayServices.value.reduce((sum, svc) => sum + remoteNodesOf(svc).length, 0),
+)
+
+const selectedLogDisplayNodeCount = computed(() =>
+  logDisplayServices.value.reduce((sum, svc) => sum + selectedNodeIds(svc.id).length, 0),
+)
+
+const logDisplayHealth = computed(() => {
+  const services = logDisplayServices.value
+  if (services.some(svc => svc.aggregate.health === 'failed')) return 'failed'
+  if (services.some(svc => svc.aggregate.health === 'warning')) return 'warning'
+  if (services.length > 0 && services.every(svc => svc.aggregate.health === 'healthy')) return 'healthy'
+  return 'unknown'
+})
+
+const logDisplaySummary = computed(() => {
+  const total = logDisplayTotalNodes.value
+  if (total === 0) return ''
+  if (logDisplayServices.value.length > 1) {
+    return t('bottomBar.logDisplayServiceScope', {
+      services: logDisplayServices.value.length,
+      selected: selectedLogDisplayNodeCount.value,
+      total,
+    })
+  }
+  return t('bottomBar.nodeScope', { selected: selectedLogDisplayNodeCount.value, total })
+})
+
 function selectedNodeIds(deploymentId: string): string[] {
   return deploymentNodeSelectionStore.selectedHostIds(deploymentId)
 }
@@ -304,6 +340,36 @@ function isNodeSelected(deploymentId: string, hostId: string): boolean {
 
 function toggleNode(deploymentId: string, hostId: string) {
   deploymentNodeSelectionStore.toggleNode(deploymentId, hostId)
+}
+
+function updateLogDisplayMenuPosition() {
+  const el = logDisplaySelectRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const width = 320
+  const viewportPadding = 8
+  const left = Math.min(
+    Math.max(viewportPadding, rect.left),
+    Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+  )
+  logDisplayMenuStyle.value = {
+    left: `${left}px`,
+    bottom: `${Math.max(viewportPadding, window.innerHeight - rect.top + 8)}px`,
+    width: `${width}px`,
+  }
+}
+
+async function toggleLogDisplay() {
+  if (logDisplayTotalNodes.value === 0) return
+  logDisplayOpen.value = !logDisplayOpen.value
+  if (logDisplayOpen.value) {
+    await nextTick()
+    updateLogDisplayMenuPosition()
+  }
+}
+
+function toggleLogDisplayNode(deploymentId: string, hostId: string) {
+  toggleNode(deploymentId, hostId)
 }
 
 const connectionText = computed(() =>
@@ -323,10 +389,12 @@ function openApprovals() {
 onMounted(() => {
   void operationApprovalStore.loadPending(false)
   operationApprovalStore.startPolling()
+  window.addEventListener('resize', updateLogDisplayMenuPosition)
 })
 
 onBeforeUnmount(() => {
   operationApprovalStore.stopPolling()
+  window.removeEventListener('resize', updateLogDisplayMenuPosition)
 })
 </script>
 
@@ -350,31 +418,6 @@ onBeforeUnmount(() => {
             <span class="dot" :style="{ background: deploymentDotColor(svc) }" />
             <span class="svc-name">{{ svc.name }}</span>
           </label>
-          <div
-            v-if="remoteNodesOf(svc).length > 0"
-            class="node-chip-list"
-            data-test="bottom-node-chip-list"
-          >
-            <span class="node-scope">
-              {{ t('bottomBar.nodeScope', { selected: selectedNodeIds(svc.id).length, total: remoteNodesOf(svc).length }) }}
-            </span>
-            <label
-              v-for="node in remoteNodesOf(svc)"
-              :key="node.hostId"
-              class="node-chip"
-              :class="{ selected: isNodeSelected(svc.id, node.hostId) }"
-              :title="nodeIssueLabel(node)"
-              data-test="bottom-node-chip"
-            >
-              <input
-                type="checkbox"
-                :checked="isNodeSelected(svc.id, node.hostId)"
-                @change="toggleNode(svc.id, node.hostId)"
-              />
-              <span class="dot" :style="{ background: nodeHealthColor(node.health) }" />
-              <span class="node-name">{{ node.hostName }}</span>
-            </label>
-          </div>
         </div>
       </div>
     </section>
@@ -423,6 +466,70 @@ onBeforeUnmount(() => {
           ↑
         </button>
       </template>
+    </section>
+
+    <section
+      v-if="logDisplayServices.length > 0"
+      class="bottom-group log-display-group"
+      data-test="bottom-log-display"
+      @click.stop
+    >
+      <span class="group-label">{{ t('bottomBar.logDisplay') }}</span>
+      <div ref="logDisplaySelectRef" class="log-display-select">
+        <button
+          type="button"
+          class="log-display-toggle"
+          data-test="bottom-log-display-toggle"
+          :aria-expanded="logDisplayOpen"
+          @click="toggleLogDisplay"
+        >
+          <span
+            class="dot"
+            :style="{ background: nodeHealthColor(logDisplayHealth) }"
+          />
+          <span>{{ logDisplaySummary }}</span>
+          <span class="select-caret">▾</span>
+        </button>
+        <div
+          v-if="logDisplayOpen"
+          class="log-display-menu"
+          data-test="bottom-log-display-menu"
+          :style="logDisplayMenuStyle"
+        >
+          <div
+            v-for="svc in logDisplayServices"
+            :key="svc.id"
+            class="log-display-service"
+          >
+            <div
+              class="log-display-service-head"
+              data-test="bottom-log-display-service"
+            >
+              <span class="dot" :style="{ background: nodeHealthColor(svc.aggregate.health) }" />
+              <span class="log-display-service-name">{{ svc.name }}</span>
+              <span class="log-display-service-count">
+                {{ selectedNodeIds(svc.id).length }}/{{ remoteNodesOf(svc).length }}
+              </span>
+            </div>
+            <label
+              v-for="node in remoteNodesOf(svc)"
+              :key="`${svc.id}:${node.hostId}`"
+              class="log-display-option"
+              data-test="bottom-log-display-option"
+              :title="nodeIssueLabel(node)"
+            >
+              <input
+                type="checkbox"
+                :checked="isNodeSelected(svc.id, node.hostId)"
+                @change="toggleLogDisplayNode(svc.id, node.hostId)"
+              />
+              <span class="dot" :style="{ background: nodeHealthColor(node.health) }" />
+              <span class="node-name">{{ node.hostName }}</span>
+              <span class="node-issue">{{ nodeIssueLabel(node) }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="bottom-group runtime-group" data-test="bottom-runtime-status">
@@ -661,6 +768,116 @@ onBeforeUnmount(() => {
 .sync-icon-btn:hover {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
+}
+
+.log-display-group {
+  position: relative;
+}
+
+.log-display-select {
+  position: relative;
+}
+
+.log-display-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.log-display-toggle:hover {
+  border-color: rgba(88, 166, 255, 0.34);
+  background: rgba(31, 111, 235, 0.08);
+}
+
+.select-caret {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.log-display-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 300px;
+  max-width: 380px;
+  padding: 6px;
+  border: 1px solid rgba(88, 166, 255, 0.34);
+  border-radius: 7px;
+  background: rgba(13, 24, 34, 0.98);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42);
+}
+
+.log-display-service + .log-display-service {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(139, 148, 158, 0.13);
+}
+
+.log-display-service-head {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 0 7px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.log-display-service-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-display-service-count {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.log-display-option {
+  display: grid;
+  grid-template-columns: 16px 7px minmax(72px, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 7px 0 18px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.log-display-option:hover {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-primary);
+}
+
+.log-display-option input {
+  accent-color: #1f6feb;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.node-issue {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .runtime-group {

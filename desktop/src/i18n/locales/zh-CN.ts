@@ -587,6 +587,8 @@ export default {
     connected: '已连接',
     disconnected: '未连接',
     approvals: '审批',
+    logDisplay: '日志显示',
+    logDisplayServiceScope: '服务 {services} · 节点 {selected}/{total}',
     nodeScope: '节点 {selected}/{total}',
     nodeHealthy: '正常',
     nodeHostError: '主机状态异常',

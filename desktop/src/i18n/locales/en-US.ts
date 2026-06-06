@@ -587,6 +587,8 @@ export default {
     connected: 'Connected',
     disconnected: 'Disconnected',
     approvals: 'Approvals',
+    logDisplay: 'Log Display',
+    logDisplayServiceScope: '{services} services · Nodes {selected}/{total}',
     nodeScope: 'Nodes {selected}/{total}',
     nodeHealthy: 'Healthy',
     nodeHostError: 'Host status error',
