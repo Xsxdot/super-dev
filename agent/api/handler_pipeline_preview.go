@@ -121,12 +121,19 @@ func (a *App) hostRefs(hostIDs []string) ([]model.HostRef, error) {
 		return nil, err
 	}
 	hostByID := map[string]model.Host{}
+	hostByName := map[string]model.Host{}
 	for _, host := range hosts {
 		hostByID[host.ID] = host
+		if host.Name != "" {
+			hostByName[host.Name] = host
+		}
 	}
 	refs := make([]model.HostRef, 0, len(hostIDs))
 	for _, id := range hostIDs {
 		host, ok := hostByID[id]
+		if !ok {
+			host, ok = hostByName[id]
+		}
 		if !ok {
 			refs = append(refs, model.HostRef{ID: id, Name: id})
 			continue
@@ -135,7 +142,7 @@ func (a *App) hostRefs(hostIDs []string) ([]model.HostRef, error) {
 		if name == "" {
 			name = host.ID
 		}
-		refs = append(refs, model.HostRef{ID: host.ID, Name: name})
+		refs = append(refs, model.HostRef{ID: host.ID, Name: name, Address: host.SSHHost})
 	}
 	return refs, nil
 }

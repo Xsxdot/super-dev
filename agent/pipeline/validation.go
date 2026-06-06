@@ -71,7 +71,7 @@ func targetsFromStepRun(sr *model.StepRun) []Target {
 		if task.HostID == "" {
 			continue
 		}
-		targets = append(targets, Target{HostID: task.HostID, HostName: task.HostName})
+		targets = append(targets, Target{HostID: task.HostID, HostName: task.HostName, HostAddress: task.HostAddress})
 	}
 	return targets
 }

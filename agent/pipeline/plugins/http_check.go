@@ -67,7 +67,7 @@ func (p *HTTPCheck) Validate(step model.Step) error {
 // 参数：
 //   - ctx: 插件运行上下文
 //   - step: http_check 步骤
-//   - targets: 可选目标列表；存在时用 HostName 替换 URL 中的 `${host}`
+//   - targets: 可选目标列表；存在时优先用 HostAddress 替换 URL 中的 `${host}`
 //
 // 返回：
 //   - 请求失败或状态码不匹配时返回错误
@@ -89,7 +89,10 @@ func (p *HTTPCheck) Execute(ctx *pipeline.RunContext, step model.Step, targets [
 		return p.checkMaybePolling(ctx.Context, url, expected, timeout, interval, hasTimeout)
 	}
 	for _, target := range targets {
-		host := target.HostName
+		host := target.HostAddress
+		if host == "" {
+			host = target.HostName
+		}
 		if host == "" {
 			host = target.HostID
 		}

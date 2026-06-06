@@ -458,7 +458,7 @@ func skipPhase(phase model.PipelinePhase, steps []model.Step, runs stepRunIndex)
 }
 
 func taskTarget(task model.Task) Target {
-	return Target{HostID: task.HostID, HostName: task.HostName}
+	return Target{HostID: task.HostID, HostName: task.HostName, HostAddress: task.HostAddress}
 }
 
 func taskIndexes(tasks []model.Task) []int {

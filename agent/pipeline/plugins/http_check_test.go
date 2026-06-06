@@ -59,3 +59,33 @@ func TestHTTPCheckPollsUntilReady(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, hits, 3)
 }
+
+func TestHTTPCheckUsesTargetAddressForHostPlaceholder(t *testing.T) {
+	var gotHost string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotHost = req.URL.Host
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       http.NoBody,
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	check := plugins.NewHTTPCheck(client)
+	step := model.Step{Type: "http_check", With: map[string]interface{}{
+		"url": "http://${host}:9100/health",
+	}}
+
+	err := check.Execute(pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{}), step, []pipeline.Target{{
+		HostID: "host-uuid", HostName: "local-01", HostAddress: "127.0.0.1",
+	}})
+
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:9100", gotHost)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

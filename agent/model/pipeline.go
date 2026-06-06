@@ -88,16 +88,18 @@ type StepRun struct {
 
 // Task 是某个 StepRun 在某个目标上的执行单元。
 type Task struct {
-	HostID     string    `json:"host_id,omitempty"`
-	HostName   string    `json:"host_name,omitempty"`
-	Status     RunStatus `json:"status"`
-	ExitCode   int       `json:"exit_code,omitempty"`
-	StartedAt  int64     `json:"started_at,omitempty"`
-	FinishedAt int64     `json:"finished_at,omitempty"`
+	HostID      string    `json:"host_id,omitempty"`
+	HostName    string    `json:"host_name,omitempty"`
+	HostAddress string    `json:"host_address,omitempty"`
+	Status      RunStatus `json:"status"`
+	ExitCode    int       `json:"exit_code,omitempty"`
+	StartedAt   int64     `json:"started_at,omitempty"`
+	FinishedAt  int64     `json:"finished_at,omitempty"`
 }
 
 // HostRef 是展开 roles 时所需的目标主机最小信息。
 type HostRef struct {
-	ID   string
-	Name string
+	ID      string
+	Name    string
+	Address string
 }

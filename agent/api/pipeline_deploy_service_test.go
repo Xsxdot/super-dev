@@ -93,6 +93,20 @@ func TestExecuteProjectPipelineRoutesHealthyRemoteStepViaAgent(t *testing.T) {
 	assert.Contains(t, runLogLines(lines), "agent ran")
 }
 
+func TestHostRefsResolveHostNameToCanonicalID(t *testing.T) {
+	app := newTestAppForPackage(t)
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-uuid", Name: "local-01", SSHHost: "127.0.0.1", SSHUser: "root"})
+	require.NoError(t, err)
+
+	refs, err := app.hostRefs([]string{"local-01"})
+
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	assert.Equal(t, "host-uuid", refs[0].ID)
+	assert.Equal(t, "local-01", refs[0].Name)
+	assert.Equal(t, "127.0.0.1", refs[0].Address)
+}
+
 func projectWithArtifactPipeline(t *testing.T, projectID, pipelineID string) model.Project {
 	t.Helper()
 	root := t.TempDir()

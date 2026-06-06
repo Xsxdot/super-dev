@@ -35,3 +35,22 @@ func TestBuildRunSkeletonExpandsRolesToTasks(t *testing.T) {
 	assert.Equal(t, "h1", run.StepRuns[0].Tasks[0].HostID)
 	assert.Equal(t, "box1", run.StepRuns[0].Tasks[0].HostName)
 }
+
+func TestBuildRunSkeletonResolvesRoleHostNameToCanonicalID(t *testing.T) {
+	p := model.Pipeline{
+		Roles: map[string][]string{"compute": {"local-01"}},
+		Deploy: []model.Step{{
+			Name: "Prepare", Type: "remote_command", Roles: []string{"compute"},
+		}},
+	}
+	hosts := []model.HostRef{{ID: "host-uuid", Name: "local-01", Address: "127.0.0.1"}}
+
+	_, run, err := pipeline.BuildPlan("dep-1", p, hosts)
+
+	require.NoError(t, err)
+	require.Len(t, run.StepRuns, 1)
+	require.Len(t, run.StepRuns[0].Tasks, 1)
+	assert.Equal(t, "host-uuid", run.StepRuns[0].Tasks[0].HostID)
+	assert.Equal(t, "local-01", run.StepRuns[0].Tasks[0].HostName)
+	assert.Equal(t, "127.0.0.1", run.StepRuns[0].Tasks[0].HostAddress)
+}

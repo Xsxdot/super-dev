@@ -25,8 +25,9 @@ type Plan struct {
 
 // Target is where a plugin task executes. Empty HostID means local/global.
 type Target struct {
-	HostID   string
-	HostName string
+	HostID      string
+	HostName    string
+	HostAddress string
 }
 
 // IsLocal 报告该目标是否为本机。
@@ -78,7 +79,7 @@ func BuildPlan(deploymentID string, p model.Pipeline, hosts []model.HostRef) (Pl
 				sr.Tasks = []model.Task{{Status: model.StatusPending}}
 			} else {
 				for _, t := range targets {
-					sr.Tasks = append(sr.Tasks, model.Task{HostID: t.HostID, HostName: t.HostName, Status: model.StatusPending})
+					sr.Tasks = append(sr.Tasks, model.Task{HostID: t.HostID, HostName: t.HostName, HostAddress: t.HostAddress, Status: model.StatusPending})
 				}
 			}
 			run.StepRuns = append(run.StepRuns, sr)
@@ -99,7 +100,7 @@ func copyStringMap(in map[string]string) map[string]string {
 //
 // 参数：
 //   - step: 待解析目标的步骤
-//   - roles: pipeline roles，role 名到 host ID 列表
+//   - roles: pipeline roles，role 名到 host ID 或 host name 列表
 //   - hosts: 可选目标主机最小信息
 //
 // 返回：
@@ -113,8 +114,12 @@ func ResolveStepTargets(step model.Step, roles map[string][]string, hosts []mode
 		return nil, nil
 	}
 	hostByID := map[string]model.HostRef{}
+	hostByName := map[string]model.HostRef{}
 	for _, h := range hosts {
 		hostByID[h.ID] = h
+		if h.Name != "" {
+			hostByName[h.Name] = h
+		}
 	}
 	seen := map[string]bool{}
 	var out []Target
@@ -124,15 +129,18 @@ func ResolveStepTargets(step model.Step, roles map[string][]string, hosts []mode
 			return nil, fmt.Errorf("role %q not found", role)
 		}
 		for _, id := range hostIDs {
-			if seen[id] {
-				continue
-			}
 			h, ok := hostByID[id]
+			if !ok {
+				h, ok = hostByName[id]
+			}
 			if !ok {
 				return nil, fmt.Errorf("host %q not found for role %q", id, role)
 			}
-			seen[id] = true
-			out = append(out, Target{HostID: h.ID, HostName: h.Name})
+			if seen[h.ID] {
+				continue
+			}
+			seen[h.ID] = true
+			out = append(out, Target{HostID: h.ID, HostName: h.Name, HostAddress: h.Address})
 		}
 	}
 	return out, nil
