@@ -70,20 +70,8 @@ func TestDispatcherReturnsUnsupportedTransport(t *testing.T) {
 }
 
 func TestDispatcherSubscribeNodesAggregatesProviders(t *testing.T) {
-	tunnel := &recordingTransport{
-		name:   "tunnel",
-		covers: []string{"h1"},
-		batches: [][]nodetransport.NodeStatus{{
-			{HostID: "h1", Agent: model.AgentRuntime{Health: model.AgentHealthHealthy}},
-		}},
-	}
-	direct := &recordingTransport{
-		name:   "direct",
-		covers: []string{"h2"},
-		batches: [][]nodetransport.NodeStatus{{
-			{HostID: "h2", Agent: model.AgentRuntime{Health: model.AgentHealthHealthy}},
-		}},
-	}
+	tunnel := newStatusRecordingTransport("tunnel")
+	direct := newStatusRecordingTransport("direct")
 	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) {
 		return []model.Host{
 			hostWithTransport("h1", model.TransportTypeTunnel),
@@ -99,11 +87,17 @@ func TestDispatcherSubscribeNodesAggregatesProviders(t *testing.T) {
 	ch, stop := dispatcher.SubscribeNodes(ctx)
 	defer stop()
 
+	tunnel.emit("h1", model.AgentHealthHealthy)
+	direct.emit("h2", model.AgentHealthHealthy)
+
 	seen := map[string]bool{}
 	require.Eventually(t, func() bool {
 		select {
 		case batch := <-ch:
 			for _, status := range batch {
+				if status.Route != nil {
+					assert.False(t, status.Route.Degraded)
+				}
 				seen[status.HostID] = true
 			}
 		default:
@@ -155,6 +149,52 @@ func TestDispatcherRecoversChainHeadOnProbe(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 0, route.SelectedIndex)
 	assert.False(t, route.Degraded)
+}
+
+func TestDispatcherSubscribeNodesSwitchesWhenRouteChanges(t *testing.T) {
+	direct := newStatusRecordingTransport("direct")
+	tunnel := newStatusRecordingTransport("tunnel")
+	direct.err = nodetransport.ErrHostUnreachable
+	hosts := []model.Host{hostWithChain("h1",
+		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+	)}
+	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+		model.TransportTypeDirect: direct,
+		model.TransportTypeTunnel: tunnel,
+	})
+	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := dispatcher.SubscribeNodes(ctx)
+	defer stop()
+
+	_, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	tunnel.emit("h1", model.AgentHealthHealthy)
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].Route != nil && batch[0].Route.SelectedType == model.TransportTypeTunnel
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	direct.err = nil
+	dispatcher.RecoverChainHeadsForTest(context.Background())
+	direct.emit("h1", model.AgentHealthHealthy)
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].Route != nil && batch[0].Route.SelectedType == model.TransportTypeDirect
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 type recordingTransport struct {
@@ -226,6 +266,52 @@ func (a *authFailedProbeTransport) SubscribeNodes(context.Context) (<-chan []nod
 }
 
 func (a *authFailedProbeTransport) Covers() []string { return []string{"h1"} }
+
+type statusRecordingTransport struct {
+	*recordingTransport
+	status chan []nodetransport.NodeStatus
+}
+
+func newStatusRecordingTransport(name string) *statusRecordingTransport {
+	return &statusRecordingTransport{
+		recordingTransport: &recordingTransport{name: name},
+		status:             make(chan []nodetransport.NodeStatus, 16),
+	}
+}
+
+func (s *statusRecordingTransport) SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []nodetransport.NodeStatus, func()) {
+	out := make(chan []nodetransport.NodeStatus, 16)
+	runCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case batch := <-s.status:
+				select {
+				case out <- batch:
+				case <-runCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, cancel
+}
+
+func (s *statusRecordingTransport) emit(hostID string, health model.AgentHealth) {
+	s.status <- []nodetransport.NodeStatus{{
+		HostID:    hostID,
+		Reachable: health == model.AgentHealthHealthy,
+		Agent: model.AgentRuntime{
+			Installed: health == model.AgentHealthHealthy,
+			Health:    health,
+			Reachable: health == model.AgentHealthHealthy,
+		},
+		UpdatedAt: time.Now().UTC(),
+	}}
+}
 
 func hostWithTransport(id string, typ model.TransportType) model.Host {
 	return hostWithChain(id, model.TransportEntry{Type: typ})

@@ -109,3 +109,8 @@ type NodeTransport interface {
 	SubscribeNodes(ctx context.Context) (<-chan []NodeStatus, func())
 	Covers() []string
 }
+
+// HostNodeSubscriber 允许 Dispatcher 按选中的单个 host/transport 启动状态流。
+type HostNodeSubscriber interface {
+	SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []NodeStatus, func())
+}

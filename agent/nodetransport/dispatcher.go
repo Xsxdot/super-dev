@@ -166,14 +166,46 @@ func (d *Dispatcher) Covers() []string {
 }
 
 func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStatus) {
+	recoveryCtx, recoveryCancel := context.WithCancel(ctx)
+	defer recoveryCancel()
+	go d.recoveryLoop(recoveryCtx)
+
+	interval := 5 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	type watcher struct {
+		index  int
+		cancel context.CancelFunc
+	}
+	type doneEvent struct {
+		hostID string
+		index  int
+	}
 	var wg sync.WaitGroup
-	stops := []func(){}
-	for _, provider := range d.sortedProviders() {
-		ch, stop := provider.SubscribeNodes(ctx)
-		stops = append(stops, stop)
+	done := make(chan doneEvent, 128)
+	watchers := map[string]watcher{}
+
+	defer func() {
+		for _, w := range watchers {
+			w.cancel()
+		}
+		wg.Wait()
+		close(out)
+	}()
+
+	startWatcher := func(host model.Host, idx int, sub HostNodeSubscriber) {
+		ch, stop := sub.SubscribeHostNodes(ctx, host)
+		watchers[host.ID] = watcher{index: idx, cancel: stop}
 		wg.Add(1)
-		go func(ch <-chan []NodeStatus) {
+		go func() {
 			defer wg.Done()
+			defer func() {
+				stop()
+				select {
+				case done <- doneEvent{hostID: host.ID, index: idx}:
+				default:
+				}
+			}()
 			for {
 				select {
 				case <-ctx.Done():
@@ -182,21 +214,77 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 					if !ok {
 						return
 					}
+					if routeIdx, ok := d.routeIndex(host.ID); ok && routeIdx != idx {
+						continue
+					}
 					select {
-					case out <- batch:
+					case out <- d.attachRoute(batch):
 					case <-ctx.Done():
 						return
 					}
 				}
 			}
-		}(ch)
+		}()
 	}
-	<-ctx.Done()
-	for _, stop := range stops {
-		stop()
+
+	reconcile := func() {
+		if d.hosts == nil {
+			return
+		}
+		hosts, err := d.hosts()
+		if err != nil {
+			return
+		}
+		seen := map[string]struct{}{}
+		for _, host := range hosts {
+			if host.ID == "" || host.Agent == nil || len(host.Agent.Transport.Chain) == 0 {
+				continue
+			}
+			seen[host.ID] = struct{}{}
+			idx := d.selectedIndex(host)
+			entry := host.Agent.Transport.Chain[idx]
+			provider := d.providers[entry.Type]
+			sub, ok := provider.(HostNodeSubscriber)
+			if !ok {
+				if w, running := watchers[host.ID]; running {
+					w.cancel()
+					delete(watchers, host.ID)
+				}
+				continue
+			}
+			if w, running := watchers[host.ID]; running {
+				if w.index == idx {
+					continue
+				}
+				w.cancel()
+				delete(watchers, host.ID)
+			}
+			startWatcher(host, idx, sub)
+		}
+		for hostID, w := range watchers {
+			if _, ok := seen[hostID]; ok {
+				continue
+			}
+			w.cancel()
+			delete(watchers, hostID)
+		}
 	}
-	wg.Wait()
-	close(out)
+
+	reconcile()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-done:
+			if w, ok := watchers[ev.hostID]; ok && w.index == ev.index {
+				delete(watchers, ev.hostID)
+			}
+		case <-ticker.C:
+			reconcile()
+		case <-d.routeChanged:
+			reconcile()
+		}
+	}
 }
 
 func (d *Dispatcher) sortedProviders() []NodeTransport {
@@ -275,6 +363,31 @@ func (d *Dispatcher) routeSnapshot(hostID string) (RouteStatus, bool) {
 	entry := host.Agent.Transport.Chain[route.selectedIndex]
 	status.SelectedType = entry.Type
 	return status, true
+}
+
+func (d *Dispatcher) routeIndex(hostID string) (int, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	route, ok := d.routes[hostID]
+	if !ok {
+		return 0, false
+	}
+	return route.selectedIndex, true
+}
+
+func (d *Dispatcher) attachRoute(batch []NodeStatus) []NodeStatus {
+	if len(batch) == 0 {
+		return batch
+	}
+	out := make([]NodeStatus, len(batch))
+	copy(out, batch)
+	for i := range out {
+		if route, ok := d.routeSnapshot(out[i].HostID); ok {
+			route := route
+			out[i].Route = &route
+		}
+	}
+	return out
 }
 
 func (d *Dispatcher) setRoute(hostID string, next hostRoute) {

@@ -151,6 +151,17 @@ func (t *DirectTransport) SubscribeNodes(ctx context.Context) (<-chan []NodeStat
 	return out, cancel
 }
 
+// SubscribeHostNodes 订阅单个 direct host 的状态流，供 Dispatcher 选路后调用。
+func (t *DirectTransport) SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []NodeStatus, func()) {
+	runCtx, cancel := context.WithCancel(ctx)
+	out := make(chan []NodeStatus, 16)
+	go func() {
+		defer close(out)
+		t.watchNodeStatus(runCtx, host, out)
+	}()
+	return out, cancel
+}
+
 // Covers 返回当前 direct transport 覆盖的 hostID。
 func (t *DirectTransport) Covers() []string {
 	hosts := t.directHosts()
@@ -186,19 +197,33 @@ func (t *DirectTransport) runNodeStatusSubscription(ctx context.Context, out cha
 	}()
 
 	startWatcher := func(host model.Host) {
-		hostCtx, cancel := context.WithCancel(ctx)
-		running[host.ID] = cancel
+		ch, stop := t.SubscribeHostNodes(ctx, host)
+		running[host.ID] = stop
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
-				cancel()
+				stop()
 				select {
 				case done <- host.ID:
 				default:
 				}
 			}()
-			t.watchNodeStatus(hostCtx, host, out)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case batch, ok := <-ch:
+					if !ok {
+						return
+					}
+					select {
+					case out <- batch:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
 		}()
 	}
 
