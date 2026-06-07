@@ -323,7 +323,8 @@ func (t *DirectTransport) directParamsFor(hostID string) (model.Host, *model.Dir
 		if host.ID != hostID {
 			continue
 		}
-		return host, host.Agent.Transport.Direct, nil
+		params, _ := host.DirectParams()
+		return host, params, nil
 	}
 	return model.Host{}, nil, &NodeError{
 		Code:          CodeAgentNotConfigured,
@@ -348,10 +349,7 @@ func (t *DirectTransport) directHosts() []model.Host {
 		if host.Agent == nil {
 			continue
 		}
-		if host.Agent.Transport.Type != model.TransportTypeDirect {
-			continue
-		}
-		if host.Agent.Transport.Direct == nil {
+		if _, ok := host.DirectParams(); !ok {
 			continue
 		}
 		out = append(out, host)

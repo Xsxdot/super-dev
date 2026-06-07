@@ -138,7 +138,7 @@ func (d *Dispatcher) providerFor(hostID, operation string) (NodeTransport, error
 	if err != nil {
 		return nil, err
 	}
-	if !found || host.Agent == nil || host.Agent.Transport.Type == "" {
+	if !found || host.Agent == nil || len(host.Agent.Transport.Chain) == 0 || host.Agent.Transport.Chain[0].Type == "" {
 		return nil, &NodeError{
 			Code:      CodeAgentNotConfigured,
 			HostID:    hostID,
@@ -147,14 +147,15 @@ func (d *Dispatcher) providerFor(hostID, operation string) (NodeTransport, error
 			Cause:     ErrHostUnreachable,
 		}
 	}
-	provider := d.providers[host.Agent.Transport.Type]
+	typ := host.Agent.Transport.Chain[0].Type
+	provider := d.providers[typ]
 	if provider == nil {
 		return nil, &NodeError{
 			Code:          CodeUnsupportedTransport,
 			HostID:        hostID,
-			TransportType: host.Agent.Transport.Type,
+			TransportType: typ,
 			Operation:     operation,
-			Message:       fmt.Sprintf("transport %s is not supported for host %s", host.Agent.Transport.Type, hostID),
+			Message:       fmt.Sprintf("transport %s is not supported for host %s", typ, hostID),
 			Cause:         ErrHostUnreachable,
 		}
 	}

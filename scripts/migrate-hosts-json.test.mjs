@@ -47,12 +47,43 @@ test('migrates legacy flat host into Host Agent Transport shape', () => {
   assert.equal(existsSync(result.backup), true);
 
   const migrated = JSON.parse(readFileSync(source, 'utf8'));
-  assert.equal(migrated[0].agent.transport.type, 'tunnel');
-  assert.equal(migrated[0].agent.transport.tunnel.ssh_host, '1.2.3.4');
-  assert.equal(migrated[0].agent.transport.tunnel.ssh_port, 22);
-  assert.equal(migrated[0].agent.transport.tunnel.remote_agent_port, 57017);
+  assert.equal(migrated[0].agent.transport.chain[0].type, 'tunnel');
+  assert.equal(migrated[0].agent.transport.chain[0].tunnel.ssh_host, '1.2.3.4');
+  assert.equal(migrated[0].agent.transport.chain[0].tunnel.ssh_port, 22);
+  assert.equal(migrated[0].agent.transport.chain[0].tunnel.remote_agent_port, 57017);
+  assert.equal(Object.hasOwn(migrated[0].agent.transport, 'type'), false);
   assert.equal(Object.hasOwn(migrated[0], 'ssh_host'), false);
   assert.equal(statSync(source).mode & 0o777, 0o600);
+});
+
+test('migrates nested single direct transport into chain and preserves CA', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'superdev-hosts-'));
+  const source = join(dir, 'hosts.json');
+  writeFileSync(
+    source,
+    JSON.stringify([
+      {
+        id: 'h1',
+        name: 'direct',
+        tags: [],
+        agent: {
+          token: 'tok',
+          transport: {
+            type: 'direct',
+            direct: { address: '100.64.0.8:57017', tls: true, ca_cert: 'PEM' },
+          },
+        },
+      },
+    ]),
+  );
+
+  migrateHostsFile({ source, target: source, apply: true, now: () => '20260607-120000' });
+
+  const migrated = JSON.parse(readFileSync(source, 'utf8'));
+  assert.equal(migrated[0].agent.token, 'tok');
+  assert.equal(migrated[0].agent.transport.chain[0].type, 'direct');
+  assert.equal(migrated[0].agent.transport.chain[0].direct.address, '100.64.0.8:57017');
+  assert.equal(migrated[0].agent.transport.chain[0].direct.ca_cert, 'PEM');
 });
 
 test('dry run does not rewrite the file', () => {

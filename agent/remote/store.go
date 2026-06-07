@@ -173,6 +173,9 @@ func (s *Store) loadHosts() ([]model.Host, error) {
 	if err := json.Unmarshal(data, &hosts); err != nil {
 		return nil, err
 	}
+	for i := range hosts {
+		applyHostDefaults(&hosts[i])
+	}
 	return hosts, nil
 }
 
@@ -222,13 +225,31 @@ func applyHostDefaults(h *model.Host) {
 	if h.Agent == nil {
 		return
 	}
-	if h.Agent.Transport.Type == "" {
-		h.Agent.Transport.Type = model.TransportTypeTunnel
+	if h.Agent.Transport.Chain == nil {
+		h.Agent.Transport.Chain = []model.TransportEntry{}
 	}
-	if h.Agent.Transport.Type != model.TransportTypeTunnel {
+	for i := range h.Agent.Transport.Chain {
+		entry := &h.Agent.Transport.Chain[i]
+		switch entry.Type {
+		case "":
+			entry.Type = model.TransportTypeTunnel
+			if entry.Tunnel == nil {
+				entry.Tunnel = &model.TunnelParams{}
+			}
+			applyTunnelDefaults(entry.Tunnel)
+		case model.TransportTypeTunnel:
+			if entry.Tunnel == nil {
+				entry.Tunnel = &model.TunnelParams{}
+			}
+			applyTunnelDefaults(entry.Tunnel)
+		}
+	}
+}
+
+func applyTunnelDefaults(tunnelParams *model.TunnelParams) {
+	if tunnelParams == nil {
 		return
 	}
-	tunnelParams := h.EnsureTunnelAgent()
 	if tunnelParams.SSHPort == 0 {
 		tunnelParams.SSHPort = defaultSSHPort
 	}
