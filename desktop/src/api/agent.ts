@@ -587,12 +587,17 @@ export interface TunnelParams {
 export interface DirectParams {
   address?: string
   tls?: boolean
+  ca_cert?: string
 }
 
-export interface TransportConfig {
+export interface TransportEntry {
   type: TransportType
   tunnel?: TunnelParams
   direct?: DirectParams
+}
+
+export interface TransportConfig {
+  chain: TransportEntry[]
 }
 
 export interface Host {
@@ -676,7 +681,8 @@ export interface SshConfigEntry {
 
 export type TunnelState = 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
 
-export type AgentHealth = 'unknown' | 'healthy' | 'unreachable' | 'version-mismatch'
+export type AgentHealth = 'unknown' | 'healthy' | 'unreachable' | 'version-mismatch' | 'auth-failed' | 'pending-bootstrap'
+export type ProbeStatus = 'reachable' | 'unreachable' | 'version-mismatch' | 'auth-failed' | 'pending-bootstrap'
 
 export interface AgentRuntime {
   installed: boolean
@@ -693,8 +699,32 @@ export interface NodeStatus {
   agent: AgentRuntime
   deployments: RuntimeInstanceStatus[]
   managed?: ManagedDeploymentStatus
+  route?: RouteStatus
   updated_at: string
   error?: string
+}
+
+export interface ProbeResult {
+  index: number
+  transport_type: TransportType
+  status: ProbeStatus
+  reachable: boolean
+  version?: string
+  error?: string
+  latency_ms?: number
+  checked_at: string
+}
+
+export interface RouteStatus {
+  selected_index: number
+  selected_type?: TransportType
+  degraded: boolean
+  last_results?: ProbeResult[]
+}
+
+export interface AgentSecurity {
+  token_configured: boolean
+  provision_state: 'not-configured' | 'pending-bootstrap' | 'provisioned' | string
 }
 
 export interface AgentDTO {
@@ -703,6 +733,7 @@ export interface AgentDTO {
   tags: string[]
   transport: TransportConfig
   runtime: AgentRuntime
+  security: AgentSecurity
   node?: NodeStatus
   last_error?: string
   updated_at?: string
@@ -725,6 +756,20 @@ export interface AgentInstallCommandResponse {
   command: string
   expires_at: string
   token_id: string
+}
+
+export interface AgentTransportTestPayload {
+  index: number
+}
+
+export interface AgentProvisionPayload {
+  index: number
+  tls_mode: 'off' | 'auto' | 'manual'
+}
+
+export interface AgentProvisionResponse {
+  status: 'provisioned'
+  restart_required?: boolean
 }
 
 export interface TunnelStatus {
@@ -929,6 +974,16 @@ export const api = {
     request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/check`, { method: 'POST' }),
   generateAgentInstallCommand: (hostId: string, payload: AgentInstallCommandPayload) =>
     request<AgentInstallCommandResponse>(`/api/agents/${encodeURIComponent(hostId)}/install-command`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  testAgentTransport: (hostId: string, payload: AgentTransportTestPayload) =>
+    request<ProbeResult>(`/api/agents/${encodeURIComponent(hostId)}/transports/test`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  provisionAgent: (hostId: string, payload: AgentProvisionPayload) =>
+    request<AgentProvisionResponse>(`/api/agents/${encodeURIComponent(hostId)}/provision`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

@@ -26,6 +26,8 @@ vi.mock('@/api/agent', async () => {
       deleteAgent: vi.fn(),
       checkAgent: vi.fn(),
       generateAgentInstallCommand: vi.fn(),
+      testAgentTransport: vi.fn(),
+      provisionAgent: vi.fn(),
     },
   }
 })
@@ -35,8 +37,9 @@ function agent(hostId = 'h1'): AgentDTO {
     host_id: hostId,
     host_name: 'ali-01',
     tags: ['prod'],
-    transport: { type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } },
+    transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } }] },
     runtime: { installed: true, health: 'healthy', reachable: true, version: '0.1.0' },
+    security: { token_configured: false, provision_state: 'not-configured' },
   }
 }
 
@@ -60,11 +63,11 @@ describe('agents store', () => {
     const store = useAgentsStore()
 
     await store.updateAgent('h1', {
-      transport: { type: 'direct', direct: { address: '100.64.0.9:57017', tls: false } },
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.9:57017', tls: false } }] },
     })
 
     expect(api.updateAgent).toHaveBeenCalledWith('h1', expect.objectContaining({
-      transport: expect.objectContaining({ type: 'direct' }),
+      transport: expect.objectContaining({ chain: expect.any(Array) }),
     }))
   })
 
@@ -88,5 +91,24 @@ describe('agents store', () => {
     expect(api.deleteAgent).toHaveBeenCalledWith('h1')
     expect(store.agentOf('h1')).toBeUndefined()
     expect(store.agentOf('h2')?.host_id).toBe('h2')
+  })
+
+  it('tests and provisions agent transports through the api', async () => {
+    const store = useAgentsStore()
+    vi.mocked(api.testAgentTransport).mockResolvedValue({
+      index: 0,
+      transport_type: 'direct',
+      status: 'reachable',
+      reachable: true,
+      checked_at: '2026-06-07T10:00:00Z',
+    })
+    vi.mocked(api.provisionAgent).mockResolvedValue({ status: 'provisioned' })
+    vi.mocked(api.listAgents).mockResolvedValue([])
+
+    await expect(store.testTransport('h1', 0)).resolves.toMatchObject({ status: 'reachable' })
+    await expect(store.provisionAgent('h1', { index: 0, tls_mode: 'off' })).resolves.toMatchObject({ status: 'provisioned' })
+
+    expect(api.testAgentTransport).toHaveBeenCalledWith('h1', { index: 0 })
+    expect(api.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'off' })
   })
 })

@@ -17,6 +17,7 @@ import {
   api,
   type AgentDTO,
   type AgentInstallCommandPayload,
+  type AgentProvisionPayload,
   type AgentUpdatePayload,
 } from '@/api/agent'
 
@@ -60,6 +61,16 @@ export const useAgentsStore = defineStore('agents', () => {
     return api.generateAgentInstallCommand(hostId, payload)
   }
 
+  async function testTransport(hostId: string, index: number) {
+    return api.testAgentTransport(hostId, { index })
+  }
+
+  async function provisionAgent(hostId: string, payload: AgentProvisionPayload) {
+    const result = await api.provisionAgent(hostId, payload)
+    await loadAgents()
+    return result
+  }
+
   function upsert(agent: AgentDTO) {
     const idx = agents.value.findIndex(item => item.host_id === agent.host_id)
     if (idx >= 0) agents.value[idx] = agent
@@ -80,6 +91,8 @@ export const useAgentsStore = defineStore('agents', () => {
     checkAgent,
     deleteAgent,
     generateInstallCommand,
+    testTransport,
+    provisionAgent,
     upsert,
     agentOf,
   }
