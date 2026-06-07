@@ -65,11 +65,7 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
-		}
-	}
+	t.applyTunnelHeaders(httpReq.Header, hostID, req.Headers)
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return NodeResponse{}, err
@@ -83,7 +79,9 @@ func (t *TunnelTransport) Stream(ctx context.Context, hostID string, req NodeReq
 	if err != nil {
 		return nil, err
 	}
-	conn, resp, err := t.wsDialer.DialContext(ctx, u, req.Headers)
+	headers := http.Header{}
+	t.applyTunnelHeaders(headers, hostID, req.Headers)
+	conn, resp, err := t.wsDialer.DialContext(ctx, u, headers)
 	statusCode := 0
 	if resp != nil {
 		statusCode = resp.StatusCode
@@ -378,4 +376,16 @@ func (t *TunnelTransport) urlFor(hostID string, req NodeRequest, stream bool) (s
 		}
 	}
 	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func (t *TunnelTransport) applyTunnelHeaders(dst http.Header, hostID string, overrides http.Header) {
+	if host, ok := t.hostByID(hostID); ok && host.Agent != nil && strings.TrimSpace(host.Agent.Token) != "" {
+		dst.Set("Authorization", "Bearer "+strings.TrimSpace(host.Agent.Token))
+	}
+	for key, values := range overrides {
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
 }

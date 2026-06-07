@@ -64,6 +64,26 @@ func TestTunnelTransportDoRoutesToConnectedLocalPort(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+func TestTunnelTransportInjectsAgentToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer tunnel-token", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	host := model.Host{ID: "h1", Name: "ali-01"}
+	host.EnsureTunnelAgent()
+	host.Agent.Token = "tunnel-token"
+	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
+	defer mgr.Close()
+	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
 func TestTunnelTransportDoReturnsUnreachableWhenNoLocalPort(t *testing.T) {
 	mgr := tunnel.NewManager(fakeDialer{port: 0})
 	defer mgr.Close()
