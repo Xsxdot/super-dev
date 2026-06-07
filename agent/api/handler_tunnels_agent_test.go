@@ -23,13 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // successTunnelDialer 避免测试建立真实 SSH 隧道。
 type successTunnelDialer struct{}
 
-func (successTunnelDialer) Dial(host model.Host) (*tunnel.Conn, error) {
+func (successTunnelDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	return tunnel.NewFakeConn(57100), nil
 }
 
@@ -58,7 +59,12 @@ func TestListTunnelsIncludesAgentStatus(t *testing.T) {
 
 	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
 	require.NoError(t, err)
-	_, err = app.tunnels.EnsureConnected(host)
+	agent, err := app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+		Type:   model.TransportTypeTunnel,
+		Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+	}}}})
+	require.NoError(t, err)
+	_, err = app.tunnels.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(nodetransport.NodeTarget{Host: host, Agent: agent}))
 	require.NoError(t, err)
 	app.agentHealth.ProbeOnce(context.Background(), host.ID)
 
@@ -85,6 +91,11 @@ func TestCheckAgentReturnsAgentDTOWithRuntime(t *testing.T) {
 		result: agenthealth.ProbeResult{AllEndpointsOK: true, Version: "0.1.0"},
 	})
 	host, err := app.remoteStore.AddHost(testTunnelHost("h1", "srv", "127.0.0.1", "root"))
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+		Type:   model.TransportTypeTunnel,
+		Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+	}}}})
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(app.Handler())

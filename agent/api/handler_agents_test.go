@@ -16,6 +16,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,69 +27,86 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-func TestHostDTOIsIdentityOnly(t *testing.T) {
+func TestHostDTOIncludesSSHFieldsButNoAgent(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	defer app.Close()
 
-	body := bytes.NewBufferString(`{"name":"ali-01","public_ip":"203.0.113.8","private_ip":"10.0.0.8","tags":["prod"]}`)
+	body := bytes.NewBufferString(`{
+	  "name":"ali-01",
+	  "ssh_host":"10.0.0.8",
+	  "ssh_port":22,
+	  "ssh_user":"root",
+	  "ssh_private_key":"KEY",
+	  "tags":[]
+	}`)
 	resp := httptestDo(t, app, http.MethodPost, "/api/hosts", body)
 	require.Equal(t, http.StatusOK, resp.Code)
-	assert.NotContains(t, resp.Body.String(), "ssh"+"_host")
-	assert.NotContains(t, resp.Body.String(), "remote"+"_agent_port")
-	assert.Contains(t, resp.Body.String(), `"public_ip":"203.0.113.8"`)
+	assert.Contains(t, resp.Body.String(), `"ssh_private_key":"KEY"`)
+	assert.NotContains(t, resp.Body.String(), `"agent"`)
 }
 
-func TestAgentAPIUpdatesTransportForHost(t *testing.T) {
-	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+func TestCreateAgentForHostPersistsAgentsJSONAndLeavesHostClean(t *testing.T) {
+	dataDir := t.TempDir()
+	app, err := NewApp(AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
 	defer app.Close()
 
-	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
-	require.Equal(t, http.StatusOK, hostResp.Code)
-	var host hostDTO
-	require.NoError(t, json.Unmarshal(hostResp.Body.Bytes(), &host))
-	require.NotEmpty(t, host.ID)
-
-	payload := `{"transport":{"chain":[{"type":"direct","direct":{"address":"100.64.0.8:57017","tls":false}}]}}`
-	agentResp := httptestDo(t, app, http.MethodPut, "/api/agents/"+host.ID, bytes.NewBufferString(payload))
-	require.Equal(t, http.StatusOK, agentResp.Code)
-	assert.Contains(t, agentResp.Body.String(), `"type":"direct"`)
-	assert.Contains(t, agentResp.Body.String(), `"address":"100.64.0.8:57017"`)
-}
-
-func TestUpdateAgentAcceptsChainAndPreservesToken(t *testing.T) {
-	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
-	require.NoError(t, err)
-	defer app.Close()
-
-	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
+	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{
+	  "name":"ali-01",
+	  "ssh_host":"10.0.0.8",
+	  "ssh_port":22,
+	  "ssh_user":"root",
+	  "ssh_private_key":"KEY",
+	  "tags":[]
+	}`))
 	require.Equal(t, http.StatusOK, hostResp.Code)
 	hostID := decodeHostID(t, hostResp.Body.Bytes())
 
-	host, found, err := app.remoteHostByID(hostID)
-	require.NoError(t, err)
-	require.True(t, found)
-	host.Agent = &model.Agent{Token: "secret-token", Transport: model.TransportConfig{Chain: []model.TransportEntry{
-		{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHUser: "root", SSHPort: 22, RemoteAgentPort: 57017}},
-	}}}
-	require.NoError(t, app.remoteStore.UpdateHost(host))
+	body := bytes.NewBufferString(`{
+	  "host_id":"` + hostID + `",
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57017}}]},
+	  "config":{"listen_address":"0.0.0.0","listen_port":57017},
+	  "security":{"tls":{"mode":"auto"}}
+	}`)
+	agentResp := httptestDo(t, app, http.MethodPost, "/api/agents", body)
+	require.Equal(t, http.StatusOK, agentResp.Code)
+	assert.Contains(t, agentResp.Body.String(), `"host_id":"`+hostID+`"`)
+	assert.Contains(t, agentResp.Body.String(), `"mode":"auto"`)
+	assert.NotContains(t, agentResp.Body.String(), "KEY")
 
-	payload := `{"transport":{"chain":[
-	  {"type":"direct","direct":{"address":"100.64.0.8:57017","tls":true,"ca_cert":"PEM"}},
-	  {"type":"tunnel","tunnel":{"ssh_host":"10.0.0.8","ssh_port":22,"ssh_user":"root","remote_agent_port":57017}}
-	]}}`
-	resp := httptestDo(t, app, http.MethodPut, "/api/agents/"+hostID, bytes.NewBufferString(payload))
+	rawHosts, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(rawHosts), `"agent"`)
+
+	rawAgents, err := os.ReadFile(filepath.Join(dataDir, "agents.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(rawAgents), `"host_id": "`+hostID+`"`)
+}
+
+func TestUpdateAgentTransportDoesNotOverwriteUnifiedConfigOrSecret(t *testing.T) {
+	dataDir := t.TempDir()
+	app, err := NewApp(AppConfig{DataDir: dataDir})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID:   host.ID,
+		Config:   model.AgentConfig{ListenAddress: "0.0.0.0", ListenPort: 57017},
+		Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeManual, CACert: "PEM"}},
+		Secret:   model.AgentSecret{Token: "secret-token"},
+	})
+	require.NoError(t, err)
+
+	resp := httptestDo(t, app, http.MethodPut, "/api/agents/"+host.ID+"/transport", bytes.NewBufferString(`{
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.64.0.8:57017"}}]}
+	}`))
 	require.Equal(t, http.StatusOK, resp.Code)
-	assert.Contains(t, resp.Body.String(), `"chain"`)
 	assert.Contains(t, resp.Body.String(), `"token_configured":true`)
+	assert.Contains(t, resp.Body.String(), `"mode":"manual"`)
 	assert.NotContains(t, resp.Body.String(), "secret-token")
-
-	saved, _, err := app.remoteHostByID(hostID)
-	require.NoError(t, err)
-	require.NotNil(t, saved.Agent)
-	assert.Equal(t, "secret-token", saved.Agent.Token)
-	require.Len(t, saved.Agent.Transport.Chain, 2)
 }
 
 func TestUpdateAgentRejectsDuplicateTransportTypes(t *testing.T) {
@@ -97,12 +116,16 @@ func TestUpdateAgentRejectsDuplicateTransportTypes(t *testing.T) {
 
 	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
 	hostID := decodeHostID(t, hostResp.Body.Bytes())
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: hostID, Transport: model.TransportConfig{Chain: []model.TransportEntry{
+		{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+	}}})
+	require.NoError(t, err)
 	payload := `{"transport":{"chain":[
 	  {"type":"direct","direct":{"address":"100.64.0.8:57017"}},
 	  {"type":"direct","direct":{"address":"100.64.0.9:57017"}}
 	]}}`
 
-	resp := httptestDo(t, app, http.MethodPut, "/api/agents/"+hostID, bytes.NewBufferString(payload))
+	resp := httptestDo(t, app, http.MethodPut, "/api/agents/"+hostID+"/transport", bytes.NewBufferString(payload))
 
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 	assert.Contains(t, resp.Body.String(), "duplicate transport")
@@ -118,8 +141,8 @@ func TestListAgentsIncludesNodeRuntimeSnapshot(t *testing.T) {
 	require.Equal(t, http.StatusOK, hostResp.Code)
 	hostID := decodeHostID(t, hostResp.Body.Bytes())
 
-	payload := `{"transport":{"chain":[{"type":"direct","direct":{"address":"100.64.0.8:57017","tls":false}}]}}`
-	agentResp := httptestDo(t, app, http.MethodPut, "/api/agents/"+hostID, bytes.NewBufferString(payload))
+	payload := `{"host_id":"` + hostID + `","transport":{"chain":[{"type":"direct","direct":{"address":"100.64.0.8:57017"}}]},"security":{"tls":{"mode":"off"}}}`
+	agentResp := httptestDo(t, app, http.MethodPost, "/api/agents", bytes.NewBufferString(payload))
 	require.Equal(t, http.StatusOK, agentResp.Code)
 	reg.ApplyForTest([]nodetransport.NodeStatus{{
 		HostID:    hostID,

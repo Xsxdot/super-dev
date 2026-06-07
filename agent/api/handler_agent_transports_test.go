@@ -28,9 +28,11 @@ func TestTestAgentTransportReturnsProbeResult(t *testing.T) {
 	require.NoError(t, err)
 	defer app.Close()
 
-	host, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "ali", Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{
+	host, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{
 		{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-	}}}})
+	}}})
 	require.NoError(t, err)
 
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/transports/test", bytes.NewBufferString(`{"index":0}`))
@@ -51,10 +53,12 @@ func TestTestAgentTransportUsesRequestedEntryProvider(t *testing.T) {
 		model.TransportTypeTunnel: tunnel,
 	}
 
-	host, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "ali", Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{
+	host, err := app.remoteStore.AddHost(model.Host{ID: "h1", Name: "ali", SSHHost: "10.0.0.8", SSHUser: "root"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{
 		{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-		{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHUser: "root", RemoteAgentPort: 57017}},
-	}}}})
+		{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+	}}})
 	require.NoError(t, err)
 
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/transports/test", bytes.NewBufferString(`{"index":0}`))
@@ -71,9 +75,11 @@ func TestProvisionAgentPersistsGeneratedTokenBeforeRemoteCall(t *testing.T) {
 	require.NoError(t, err)
 	defer app.Close()
 
-	host, err := app.remoteStore.AddHost(model.Host{Name: "ali", Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{
 		{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-	}}}})
+	}}})
 	require.NoError(t, err)
 	result, err := generateAgentInstallCommand(host.ID, agentInstallCommandRequest{ControllerURL: "http://127.0.0.1:57017", TransportType: model.TransportTypeDirect}, time.Now().UTC())
 	require.NoError(t, err)
@@ -82,11 +88,10 @@ func TestProvisionAgentPersistsGeneratedTokenBeforeRemoteCall(t *testing.T) {
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"off"}`))
 	require.Equal(t, http.StatusOK, resp.Code)
 
-	saved, found, err := app.remoteHostByID(host.ID)
+	saved, found, err := app.agentStore.AgentByHostID(host.ID)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.NotNil(t, saved.Agent)
-	assert.NotEmpty(t, saved.Agent.Token)
+	assert.NotEmpty(t, saved.Secret.Token)
 	assert.Equal(t, "Bearer "+result.Token.BootstrapToken, tr.authorization)
 }
 
@@ -96,12 +101,15 @@ func TestProvisionAgentReusesSavedTokenAndSendsDirectHostForAutoTLS(t *testing.T
 	require.NoError(t, err)
 	defer app.Close()
 
-	host, err := app.remoteStore.AddHost(model.Host{Name: "ali", Agent: &model.Agent{
-		Token: "saved-long-token",
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Secret: model.AgentSecret{Token: "saved-long-token"},
 		Transport: model.TransportConfig{Chain: []model.TransportEntry{
 			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "https://100.64.0.8:57019"}},
 		}},
-	}})
+	})
 	require.NoError(t, err)
 	result, err := generateAgentInstallCommand(host.ID, agentInstallCommandRequest{ControllerURL: "http://127.0.0.1:57017", TransportType: model.TransportTypeDirect}, time.Now().UTC())
 	require.NoError(t, err)

@@ -57,6 +57,10 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := hostFromDTO(dto)
+	if err := importHostPrivateKey(&h, dto.SSHKeyPath); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	saved, err := a.remoteStore.AddHost(h)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -75,6 +79,10 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	dto.ID = id
 	h := hostFromDTO(dto)
+	if err := importHostPrivateKey(&h, dto.SSHKeyPath); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := a.remoteStore.UpdateHost(h); err != nil {
 		if errors.Is(err, remote.ErrNotFound) {
 			jsonError(w, http.StatusNotFound, "host not found")
@@ -120,29 +128,26 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// importTunnelPrivateKey 将表单选择的本机私钥路径导入为可同步的私钥内容。
+// importHostPrivateKey 将表单选择的本机私钥路径导入为可同步的私钥内容。
 //
 // 参数：
-//   - tunnelParams: 即将持久化的 tunnel 参数；函数会就地写入 SSHPrivateKey 并清空 SSHKeyPath
+//   - host: 即将持久化的 Host；函数会就地写入 SSHPrivateKey
+//   - keyPath: 一次性导入路径，不会进入持久化模型
 //
 // 返回：
 //   - 读取私钥文件失败时返回错误
 //
 // 注意：
 //   - SSHKeyPath 只作为导入入口，不再作为新保存配置的长期依赖
-//   - 已经有 SSHPrivateKey 且没有 SSHKeyPath 时会原样保留，用于编辑回填
-func importTunnelPrivateKey(tunnelParams *model.TunnelParams) error {
-	if tunnelParams == nil {
+//   - 已经有 SSHPrivateKey 且没有 keyPath 时会原样保留，用于编辑回填
+func importHostPrivateKey(host *model.Host, keyPath string) error {
+	if host == nil || strings.TrimSpace(keyPath) == "" {
 		return nil
 	}
-	if strings.TrimSpace(tunnelParams.SSHKeyPath) == "" {
-		return nil
-	}
-	key, err := tunnel.ReadPrivateKey(expandHome(tunnelParams.SSHKeyPath))
+	key, err := tunnel.ReadPrivateKey(expandHome(keyPath))
 	if err != nil {
 		return fmt.Errorf("读取私钥失败: %w", err)
 	}
-	tunnelParams.SSHPrivateKey = string(key)
-	tunnelParams.SSHKeyPath = ""
+	host.SSHPrivateKey = string(key)
 	return nil
 }

@@ -97,6 +97,7 @@ type App struct {
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
 	remoteStore           *remote.Store
+	agentStore            *remote.AgentStore
 	tunnels               *tunnel.Manager
 	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
 	debugSessions debugsession.Store
@@ -212,19 +213,25 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	agentStore := remote.NewAgentStore(filepath.Join(cfg.DataDir, "agents.json"), remoteStore)
+	if err := agentStore.MigrateLegacyHostAgents(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	managedStore := NewManagedStore(cfg.DataDir)
 	debugSessions := debugsession.NewFileStore(filepath.Join(cfg.DataDir, "debug-sessions.json"))
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
-	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, remoteStore.ListHosts)
-	directTransport := nodetransport.NewDirectTransport(remoteStore.ListHosts)
+	targetSource := agentTargetSource(remoteStore, agentStore)
+	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, targetSource)
+	directTransport := nodetransport.NewDirectTransport(targetSource)
 	nodeTransportProviders := map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeTunnel: tunnelTransport,
 		model.TransportTypeDirect: directTransport,
 	}
 	appNodeTransportProviders := nodeTransportProviders
-	nodeTransport := nodetransport.NodeTransport(nodetransport.NewDispatcher(remoteStore.ListHosts, nodeTransportProviders))
+	nodeTransport := nodetransport.NodeTransport(nodetransport.NewDispatcher(targetSource, nodeTransportProviders))
 	if cfg.NodeTransportOverride != nil {
 		nodeTransport = cfg.NodeTransportOverride
 		appNodeTransportProviders = map[model.TransportType]nodetransport.NodeTransport{}
@@ -291,6 +298,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		managedProjectIDs:           map[string]struct{}{},
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
+		agentStore:                  agentStore,
 		tunnels:                     tunnels,
 		debugSessions:               debugSessions,
 		operationApprovals:          operationApprovals,
@@ -319,6 +327,34 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 	app.managedReconciler = NewHostDeploymentReconciler(app, nodeTransport, cfg.ManagedDeploymentReconcileInterval)
 	return app, nil
+}
+
+func agentTargetSource(hostStore *remote.Store, agentStore *remote.AgentStore) nodetransport.TargetSource {
+	return func() ([]nodetransport.NodeTarget, error) {
+		hosts, err := hostStore.ListHosts()
+		if err != nil {
+			return nil, err
+		}
+		agents, err := agentStore.ListAgents()
+		if err != nil {
+			return nil, err
+		}
+		hostsByID := make(map[string]model.Host, len(hosts))
+		for _, host := range hosts {
+			model.ApplyHostDefaults(&host)
+			hostsByID[host.ID] = host
+		}
+		targets := make([]nodetransport.NodeTarget, 0, len(agents))
+		for _, agent := range agents {
+			host, ok := hostsByID[agent.HostID]
+			if !ok {
+				continue
+			}
+			model.ApplyAgentDefaults(&agent)
+			targets = append(targets, nodetransport.NodeTarget{Host: host, Agent: agent})
+		}
+		return targets, nil
+	}
 }
 
 // Close 停止 Buffer 的 flush goroutine 并关闭 Store 数据库连接，释放所有资源。
@@ -449,8 +485,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
 	mux.HandleFunc("GET /api/agents", a.listAgents)
+	mux.HandleFunc("POST /api/agents", a.createAgent)
 	mux.HandleFunc("GET /api/agents/{host_id}", a.getAgent)
 	mux.HandleFunc("PUT /api/agents/{host_id}", a.updateAgent)
+	mux.HandleFunc("PUT /api/agents/{host_id}/transport", a.updateAgentTransport)
+	mux.HandleFunc("PUT /api/agents/{host_id}/config", a.updateAgentConfig)
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)

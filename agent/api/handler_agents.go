@@ -13,12 +13,11 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
-	"github.com/xsxdot/super-dev/agent/remote"
 )
 
 // listAgents 处理 GET /api/agents。
@@ -28,37 +27,48 @@ func (a *App) listAgents(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]agentDTO, 0, len(hosts))
-	for _, h := range hosts {
-		if h.Agent == nil {
+	agents, err := a.agentStore.ListAgents()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	hostsByID := make(map[string]model.Host, len(hosts))
+	for _, host := range hosts {
+		hostsByID[host.ID] = host
+	}
+	out := make([]agentDTO, 0, len(agents))
+	for _, agent := range agents {
+		host, ok := hostsByID[agent.HostID]
+		if !ok {
 			continue
 		}
-		out = append(out, toAgentDTO(h, a.nodeSnapshotOf(h.ID)))
+		out = append(out, toAgentDTO(host, agent, a.nodeSnapshotOf(host.ID)))
 	}
 	jsonOK(w, out)
 }
 
 // getAgent 处理 GET /api/agents/{host_id}。
 func (a *App) getAgent(w http.ResponseWriter, r *http.Request) {
-	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !found {
-		jsonError(w, http.StatusNotFound, "host not found")
-		return
-	}
-	if host.Agent == nil {
 		jsonError(w, http.StatusNotFound, "agent not configured")
 		return
 	}
-	jsonOK(w, toAgentDTO(host, a.nodeSnapshotOf(host.ID)))
+	jsonOK(w, toAgentDTO(host, agent, a.nodeSnapshotOf(host.ID)))
 }
 
-// updateAgent 处理 PUT /api/agents/{host_id}。
-func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
-	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+// createAgent 处理 POST /api/agents。
+func (a *App) createAgent(w http.ResponseWriter, r *http.Request) {
+	var dto agentCreateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	host, found, err := a.remoteHostByID(dto.HostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,8 +77,48 @@ func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "host not found")
 		return
 	}
+	if _, exists, err := a.agentStore.AgentByHostID(host.ID); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if exists {
+		jsonError(w, http.StatusConflict, "agent already exists")
+		return
+	}
+	if !validAgentTransport(dto.Transport) {
+		jsonError(w, http.StatusBadRequest, "invalid agent transport: empty chain, unsupported type, missing params, or duplicate transport")
+		return
+	}
+	agent := model.Agent{
+		HostID:    host.ID,
+		Transport: dto.Transport,
+		Config:    dto.Config,
+		Security:  dto.Security,
+	}
+	saved, err := a.agentStore.UpsertAgent(agent)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, toAgentDTO(host, saved, a.nodeSnapshotOf(host.ID)))
+}
 
-	var dto agentUpdateDTO
+// updateAgent 处理旧版 PUT /api/agents/{host_id}，兼容为更新 transport。
+func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
+	a.updateAgentTransport(w, r)
+}
+
+// updateAgentTransport 处理 PUT /api/agents/{host_id}/transport。
+func (a *App) updateAgentTransport(w http.ResponseWriter, r *http.Request) {
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	var dto agentTransportUpdateDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -77,44 +127,54 @@ func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid agent transport: empty chain, unsupported type, missing params, or duplicate transport")
 		return
 	}
-	token := ""
-	if host.Agent != nil {
-		token = host.Agent.Token
-	}
-	host.Agent = &model.Agent{Transport: dto.Transport, Token: token}
-	if err := a.remoteStore.UpdateHost(host); err != nil {
-		if errors.Is(err, remote.ErrNotFound) {
-			jsonError(w, http.StatusNotFound, "host not found")
-			return
-		}
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	saved, _, err := a.remoteHostByID(host.ID)
+	agent.Transport = dto.Transport
+	saved, err := a.agentStore.UpsertAgent(agent)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, toAgentDTO(saved, a.nodeSnapshotOf(saved.ID)))
+	jsonOK(w, toAgentDTO(host, saved, a.nodeSnapshotOf(host.ID)))
 }
 
-// deleteAgent 处理 DELETE /api/agents/{host_id}。
-func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+// updateAgentConfig 处理 PUT /api/agents/{host_id}/config。
+func (a *App) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !found {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	var dto agentConfigUpdateDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	secret := agent.Secret
+	agent.Config = dto.Config
+	agent.Security = dto.Security
+	agent.Secret = secret
+	saved, err := a.agentStore.UpsertAgent(agent)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, toAgentDTO(host, saved, a.nodeSnapshotOf(host.ID)))
+}
+
+// deleteAgent 处理 DELETE /api/agents/{host_id}。
+func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("host_id")
+	if _, found, err := a.remoteHostByID(hostID); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if !found {
 		jsonError(w, http.StatusNotFound, "host not found")
 		return
 	}
-	host.Agent = nil
-	if err := a.remoteStore.UpdateHost(host); err != nil {
-		if errors.Is(err, remote.ErrNotFound) {
-			jsonError(w, http.StatusNotFound, "host not found")
-			return
-		}
+	if err := a.agentStore.RemoveAgent(hostID); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -123,22 +183,36 @@ func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
 
 // checkAgent 处理 POST /api/agents/{host_id}/check。
 func (a *App) checkAgent(w http.ResponseWriter, r *http.Request) {
-	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !found {
-		jsonError(w, http.StatusNotFound, "host not found")
-		return
-	}
-	if host.Agent == nil {
 		jsonError(w, http.StatusNotFound, "agent not configured")
 		return
 	}
 	info := a.agentHealth.ProbeOnce(r.Context(), host.ID)
-	host.Agent.Runtime = agentRuntimeFromInfo(info)
-	jsonOK(w, toAgentDTO(host, a.nodeSnapshotOf(host.ID)))
+	agent.Runtime = agentRuntimeFromInfo(info)
+	jsonOK(w, toAgentDTO(host, agent, a.nodeSnapshotOf(host.ID)))
+}
+
+func (a *App) agentByHostID(hostID string) (model.Host, model.Agent, bool, error) {
+	host, found, err := a.remoteHostByID(hostID)
+	if err != nil {
+		return model.Host{}, model.Agent{}, false, err
+	}
+	if !found {
+		return model.Host{}, model.Agent{}, false, nil
+	}
+	agent, ok, err := a.agentStore.AgentByHostID(host.ID)
+	if err != nil {
+		return model.Host{}, model.Agent{}, false, err
+	}
+	if !ok {
+		return model.Host{}, model.Agent{}, false, nil
+	}
+	return host, agent, true, nil
 }
 
 func (a *App) nodeSnapshotOf(hostID string) *nodetransport.NodeStatus {
@@ -176,7 +250,7 @@ func validAgentTransport(cfg model.TransportConfig) bool {
 				return false
 			}
 		case model.TransportTypeDirect:
-			if entry.Direct == nil {
+			if entry.Direct == nil || strings.TrimSpace(entry.Direct.Address) == "" {
 				return false
 			}
 		}

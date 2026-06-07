@@ -115,19 +115,24 @@ func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, 
 
 // generateAgentInstallCommand 处理 POST /api/agents/{host_id}/install-command。
 func (a *App) generateAgentInstallCommand(w http.ResponseWriter, r *http.Request) {
-	host, found, err := a.remoteHostByID(r.PathValue("host_id"))
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !found {
-		jsonError(w, http.StatusNotFound, "host not found")
+		jsonError(w, http.StatusNotFound, "agent not configured")
 		return
 	}
 
 	var req agentInstallCommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	applyAgentInstallDefaultsFromAgent(&req, agent)
+	if !agentHasTransport(agent, req.TransportType) {
+		jsonError(w, http.StatusBadRequest, "transport_type is not configured for agent")
 		return
 	}
 	result, err := generateAgentInstallCommand(host.ID, req, time.Now().UTC())
@@ -137,6 +142,39 @@ func (a *App) generateAgentInstallCommand(w http.ResponseWriter, r *http.Request
 	}
 	a.rememberAgentInstallToken(result.Token)
 	jsonOK(w, result.Response)
+}
+
+func applyAgentInstallDefaultsFromAgent(req *agentInstallCommandRequest, agent model.Agent) {
+	model.ApplyAgentDefaults(&agent)
+	if req.TransportType == "" && len(agent.Transport.Chain) > 0 {
+		req.TransportType = agent.Transport.Chain[0].Type
+	}
+	if strings.TrimSpace(req.BindAddress) == "" && strings.TrimSpace(agent.Config.ListenAddress) != "" {
+		req.BindAddress = agent.Config.ListenAddress
+	}
+	if req.RemoteAgentPort <= 0 {
+		if req.TransportType == model.TransportTypeTunnel {
+			if params, ok := agent.TunnelParams(); ok && params.RemoteAgentPort > 0 {
+				req.RemoteAgentPort = params.RemoteAgentPort
+				return
+			}
+		}
+		if agent.Config.ListenPort > 0 {
+			req.RemoteAgentPort = agent.Config.ListenPort
+		}
+	}
+}
+
+func agentHasTransport(agent model.Agent, typ model.TransportType) bool {
+	if typ == "" {
+		return false
+	}
+	for _, entry := range agent.Transport.Chain {
+		if entry.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) serveAgentInstallScript(w http.ResponseWriter, r *http.Request) {

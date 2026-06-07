@@ -102,7 +102,7 @@ func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
 	assert.Equal(t, "10.0.0.10", hosts[1].PrivateIP)
 }
 
-func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
+func TestHostCRUDPersistsSSHCredentialFieldsWithoutAgent(t *testing.T) {
 	srv, dataDir := newTestApp(t)
 	legacySSHHost := "ssh" + "_host"
 	legacySSHPassword := "ssh" + "_password"
@@ -110,12 +110,12 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 	legacySSHKeyPath := "ssh" + "_key_path"
 
 	body, _ := json.Marshal(map[string]any{
-		"name":            "edge",
-		legacySSHHost:     "ssh.example.com",
-		"ssh" + "_port":   22,
-		"ssh" + "_user":   "deploy",
-		legacySSHPassword: "secret-password",
-		legacySSHKeyPath:  "/tmp/id_ed25519",
+		"name":              "edge",
+		legacySSHHost:       "ssh.example.com",
+		"ssh" + "_port":     22,
+		"ssh" + "_user":     "deploy",
+		legacySSHPassword:   "secret-password",
+		legacySSHPrivateKey: "PRIVATE-KEY",
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
@@ -124,8 +124,9 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 
 	createdBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.NotContains(t, string(createdBody), legacySSHPassword)
-	assert.NotContains(t, string(createdBody), legacySSHPrivateKey)
+	assert.Contains(t, string(createdBody), legacySSHHost)
+	assert.Contains(t, string(createdBody), legacySSHPassword)
+	assert.Contains(t, string(createdBody), legacySSHPrivateKey)
 	assert.NotContains(t, string(createdBody), legacySSHKeyPath)
 
 	listResp, err := http.Get(srv.URL + "/api/hosts")
@@ -135,8 +136,9 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 
 	listBody, err := io.ReadAll(listResp.Body)
 	require.NoError(t, err)
-	assert.NotContains(t, string(listBody), legacySSHPassword)
-	assert.NotContains(t, string(listBody), legacySSHPrivateKey)
+	assert.Contains(t, string(listBody), legacySSHHost)
+	assert.Contains(t, string(listBody), legacySSHPassword)
+	assert.Contains(t, string(listBody), legacySSHPrivateKey)
 	assert.NotContains(t, string(listBody), legacySSHKeyPath)
 
 	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
@@ -145,13 +147,17 @@ func TestHostCRUDIgnoresLegacyCredentialFields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	require.Len(t, saved, 1)
 	assert.NotContains(t, saved[0], "agent")
-	assert.NotContains(t, saved[0], legacySSHHost)
+	assert.Equal(t, "ssh.example.com", saved[0][legacySSHHost])
+	assert.Equal(t, "PRIVATE-KEY", saved[0][legacySSHPrivateKey])
 }
 
-func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T) {
+func TestAgentAPIPersistsAgentsJSONWhileHostStaysMachineOnly(t *testing.T) {
 	srv, dataDir := newTestApp(t)
 	body, _ := json.Marshal(map[string]any{
-		"name": "c01",
+		"name":          "c01",
+		"ssh" + "_host": "10.0.0.1",
+		"ssh" + "_port": 2222,
+		"ssh" + "_user": "ops",
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
@@ -164,38 +170,39 @@ func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T)
 	legacyRemoteAgentPort := "remote" + "_agent_port"
 
 	agentBody, _ := json.Marshal(map[string]any{
+		"host_id": created.ID,
 		"transport": map[string]any{
-			"type": "tunnel",
-			"tunnel": map[string]any{
-				legacySSHHost:         "10.0.0.1",
-				"ssh" + "_port":       2222,
-				"ssh" + "_user":       "ops",
-				"ssh" + "_password":   "pw",
-				legacyRemoteAgentPort: 57019,
-			},
+			"chain": []map[string]any{{
+				"type":   "tunnel",
+				"tunnel": map[string]any{legacyRemoteAgentPort: 57019},
+			}},
 		},
+		"security": map[string]any{"tls": map[string]any{"mode": "off"}},
 	})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/agents/"+created.ID, bytes.NewReader(agentBody))
-	req.Header.Set("Content-Type", "application/json")
-	agentResp, err := http.DefaultClient.Do(req)
+	agentResp, err := http.Post(srv.URL+"/api/agents", "application/json", bytes.NewReader(agentBody))
 	require.NoError(t, err)
 	defer agentResp.Body.Close()
 	require.Equal(t, http.StatusOK, agentResp.StatusCode)
 
-	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
+	rawHosts, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
 	require.NoError(t, err)
 	var saved []map[string]any
-	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.NoError(t, json.Unmarshal(rawHosts, &saved))
 	require.Len(t, saved, 1)
-	assert.NotContains(t, saved[0], legacySSHHost)
+	assert.Equal(t, "10.0.0.1", saved[0][legacySSHHost])
 	assert.NotContains(t, saved[0], legacyRemoteAgentPort)
-	agent := saved[0]["agent"].(map[string]any)
+	assert.NotContains(t, saved[0], "agent")
+
+	rawAgents, err := os.ReadFile(filepath.Join(dataDir, "agents.json"))
+	require.NoError(t, err)
+	var agents []map[string]any
+	require.NoError(t, json.Unmarshal(rawAgents, &agents))
+	require.Len(t, agents, 1)
+	agent := agents[0]
 	transport := agent["transport"].(map[string]any)
 	chain := transport["chain"].([]any)
 	tunnel := chain[0].(map[string]any)["tunnel"].(map[string]any)
-	assert.Equal(t, "10.0.0.1", tunnel[legacySSHHost])
-	assert.Equal(t, float64(2222), tunnel["ssh"+"_port"])
-	assert.Equal(t, "ops", tunnel["ssh"+"_user"])
+	assert.NotContains(t, tunnel, legacySSHHost)
 	assert.Equal(t, float64(57019), tunnel[legacyRemoteAgentPort])
 	assert.NotContains(t, transport, "type")
 }

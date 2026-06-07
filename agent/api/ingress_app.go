@@ -167,12 +167,7 @@ func (a *App) lookupIngressHosts(ids []string) ([]model.Host, error) {
 }
 
 func ingressSelfHost(id, name string) model.Host {
-	host := model.Host{ID: id, Name: name}
-	tunnelParams := host.EnsureTunnelAgent()
-	tunnelParams.SSHHost = "127.0.0.1"
-	tunnelParams.SSHPort = 22
-	tunnelParams.RemoteAgentPort = 57017
-	return host
+	return model.Host{ID: id, Name: name, SSHHost: "127.0.0.1", SSHPort: model.DefaultSSHPort}
 }
 
 func (a *App) registerStoredIngressDNSProviders() error {

@@ -30,8 +30,18 @@ func TestGenerateAgentInstallCommandBindsHostAndParameters(t *testing.T) {
 	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
 	require.Equal(t, http.StatusOK, hostResp.Code)
 	hostID := decodeHostID(t, hostResp.Body.Bytes())
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: hostID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeTunnel,
+			Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+		}}},
+		Config:   model.AgentConfig{ListenAddress: "127.0.0.1", ListenPort: 57017},
+		Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}},
+	})
+	require.NoError(t, err)
 
-	body := `{"method":"generated_command","controller_url":"http://100.64.0.10:57017","bind_address":"127.0.0.1","remote_agent_port":57017,"transport_type":"tunnel","token_ttl_minutes":30}`
+	body := `{"method":"generated_command","controller_url":"http://100.64.0.10:57017","transport_type":"tunnel","token_ttl_minutes":30}`
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install-command", bytes.NewBufferString(body))
 
 	require.Equal(t, http.StatusOK, resp.Code)

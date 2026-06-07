@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
@@ -83,27 +84,21 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 // connectTunnel 处理 POST /api/tunnels/{host_id}。
 func (a *App) connectTunnel(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
-	hosts, err := a.remoteStore.ListHosts()
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, h := range hosts {
-		if h.ID != hostID {
-			continue
-		}
-		port, err := a.tunnels.EnsureConnected(h)
-		if err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		if port != 0 {
-			h.SetRuntimeLocalPort(port)
-		}
-		jsonOK(w, tunnelStatusDTO{HostID: hostID, State: "open", LocalPort: port})
+	if !found {
+		jsonError(w, http.StatusNotFound, "agent not configured")
 		return
 	}
-	jsonError(w, http.StatusNotFound, "host not found")
+	port, err := a.tunnels.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(nodetransport.NodeTarget{Host: host, Agent: agent}))
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	jsonOK(w, tunnelStatusDTO{HostID: hostID, State: "open", LocalPort: port})
 }
 
 // disconnectTunnel 处理 DELETE /api/tunnels/{host_id}。

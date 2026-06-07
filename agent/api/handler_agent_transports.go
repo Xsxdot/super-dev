@@ -3,7 +3,7 @@
 // 职责：
 //   - 对单个 chain entry 执行短探活并返回分类结果
 //   - 使用 generated-command 保存的 bootstrap token 下发长期 token
-//   - 把本地长期 token 和自动 TLS CA 写回 Host.Agent
+//   - 把本地长期 token 和 TLS 状态写回 AgentStore
 //
 // 边界：
 //   - 不执行远端安装
@@ -41,12 +41,12 @@ func (a *App) testAgentTransport(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	host, entry, ok := a.agentTransportEntryByIndex(w, r.PathValue("host_id"), req.Index)
+	target, entry, ok := a.agentTransportEntryByIndex(w, r.PathValue("host_id"), req.Index)
 	if !ok {
 		return
 	}
 	provider := a.nodeTransportProvider(entry.Type)
-	jsonOK(w, nodetransport.ProbeEntry(r.Context(), provider, host, req.Index, *entry, 800*time.Millisecond))
+	jsonOK(w, nodetransport.ProbeEntry(r.Context(), provider, target, req.Index, *entry, 800*time.Millisecond))
 }
 
 func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
@@ -55,19 +55,17 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	host, entry, ok := a.agentTransportEntryByIndex(w, r.PathValue("host_id"), req.Index)
+	target, entry, ok := a.agentTransportEntryByIndex(w, r.PathValue("host_id"), req.Index)
 	if !ok {
 		return
 	}
-	record, found := a.latestInstallTokenForHost(host.ID)
+	record, found := a.latestInstallTokenForHost(target.Host.ID)
 	if !found || record.BootstrapToken == "" {
 		jsonError(w, http.StatusConflict, "bootstrap token unavailable; regenerate install command and reinstall agent")
 		return
 	}
-	if host.Agent == nil {
-		host.Agent = &model.Agent{}
-	}
-	longToken := strings.TrimSpace(host.Agent.Token)
+	agent := target.Agent
+	longToken := strings.TrimSpace(agent.Secret.Token)
 	if longToken == "" {
 		var err error
 		longToken, err = security.GenerateToken()
@@ -76,18 +74,13 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	host.Agent.Token = longToken
-	if err := a.remoteStore.UpdateHost(host); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	body, _ := json.Marshal(security.ProvisionRequest{
 		Token:   longToken,
 		TLSMode: req.TLSMode,
 		Hosts:   directProvisionHosts(entry),
 	})
 	headers := http.Header{"Authorization": []string{"Bearer " + record.BootstrapToken}}
-	resp, err := a.nodeTransportProvider(entry.Type).Do(r.Context(), host.ID, nodetransport.NodeRequest{
+	resp, err := a.nodeTransportProvider(entry.Type).Do(r.Context(), target.Host.ID, nodetransport.NodeRequest{
 		Method:  http.MethodPost,
 		Path:    "/api/security/provision",
 		Headers: headers,
@@ -104,33 +97,41 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var provisionResp security.ProvisionResponse
 	_ = json.NewDecoder(resp.Body).Decode(&provisionResp)
-	if provisionResp.CACert != "" && entry.Direct != nil {
-		entry.Direct.CACert = provisionResp.CACert
-		entry.Direct.TLS = true
-		host.Agent.Transport.Chain[req.Index] = *entry
-		if err := a.remoteStore.UpdateHost(host); err != nil {
-			jsonError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	agent.Secret.Token = longToken
+	agent.Security.TokenConfigured = true
+	agent.Security.ProvisionState = model.AgentProvisionStateProvisioned
+	tlsMode := provisionResp.TLSMode
+	if strings.TrimSpace(tlsMode) == "" {
+		tlsMode = req.TLSMode
+	}
+	agent.Security.TLS.Mode = model.AgentTLSMode(tlsMode)
+	agent.Security.TLS.CACert = provisionResp.CACert
+	if agent.Security.TLS.Mode == "" {
+		agent.Security.TLS.Mode = model.AgentTLSModeOff
+	}
+	if _, err := a.agentStore.UpsertAgent(agent); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	jsonOK(w, map[string]any{"status": "provisioned", "restart_required": provisionResp.RestartRequired})
 }
 
-func (a *App) agentTransportEntryByIndex(w http.ResponseWriter, hostID string, index int) (model.Host, *model.TransportEntry, bool) {
-	host, found, err := a.remoteHostByID(hostID)
+func (a *App) agentTransportEntryByIndex(w http.ResponseWriter, hostID string, index int) (nodetransport.NodeTarget, *model.TransportEntry, bool) {
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
-		return model.Host{}, nil, false
+		return nodetransport.NodeTarget{}, nil, false
 	}
-	if !found || host.Agent == nil {
+	if !found {
 		jsonError(w, http.StatusNotFound, "agent not configured")
-		return model.Host{}, nil, false
+		return nodetransport.NodeTarget{}, nil, false
 	}
-	if index < 0 || index >= len(host.Agent.Transport.Chain) {
+	if index < 0 || index >= len(agent.Transport.Chain) {
 		jsonError(w, http.StatusBadRequest, "transport index out of range")
-		return model.Host{}, nil, false
+		return nodetransport.NodeTarget{}, nil, false
 	}
-	return host, &host.Agent.Transport.Chain[index], true
+	target := nodetransport.NodeTarget{Host: host, Agent: agent}
+	return target, &target.Agent.Transport.Chain[index], true
 }
 
 func (a *App) nodeTransportProvider(typ model.TransportType) nodetransport.NodeTransport {
