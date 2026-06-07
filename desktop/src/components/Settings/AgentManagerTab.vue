@@ -2,9 +2,9 @@
 AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 
 职责：
-  - 列出 Host Agent 的连接方式和运行态
-  - 提供连接方式编辑、安装命令生成、探活与移除入口
-  - 复用 NodeRegistry 前端缓存展示最新 runtime
+  - 列出 Host Agent 的生命周期阶段、连接配置态和实时路由态
+  - 提供阶段主按钮、更多动作菜单和统一配置面板入口
+  - 复用 NodeRegistry 前端缓存展示最新 runtime/route
 
 边界：
   - 不编辑 Host 身份字段
@@ -14,16 +14,16 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AgentCreatePayload, AgentDTO, AgentRuntime, AgentTransportUpdatePayload } from '@/api/agent'
+import type { AgentCreatePayload, AgentDTO, AgentHealth, AgentRuntime } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
 import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
+import { agentStage, agentStageView, runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
+import { agentRouteRows, agentRouteSummary, type AgentRouteRowStatus } from '@/lib/agentRoute'
 import AgentCreateModal from './AgentCreateModal.vue'
-import AgentConfigModal from './AgentConfigModal.vue'
-import AgentSecurityPanel from './AgentSecurityPanel.vue'
-import AgentInstallModal from './AgentInstallModal.vue'
+import AgentConfigPanel from './AgentConfigPanel.vue'
 
 const agentsStore = useAgentsStore()
 const remoteStore = useRemoteStore()
@@ -31,12 +31,28 @@ const nodeStore = useNodeStore()
 const { t } = useI18n()
 
 const createVisible = ref(false)
-const configTarget = ref<AgentDTO | null>(null)
-const securityTarget = ref<AgentDTO | null>(null)
-const installTarget = ref<AgentDTO | null>(null)
+const panelTarget = ref<AgentDTO | null>(null)
+const panelInitialTab = ref<AgentPanelTab>('security')
+const expandedRoutes = ref<Set<string>>(new Set())
+const openMenuHostId = ref<string | null>(null)
 const checking = ref<Set<string>>(new Set())
 const removing = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
+
+const routeStatusKeys: Record<AgentRouteRowStatus, string> = {
+  reachable: 'settings.agents.routeStatusReachable',
+  failed: 'settings.agents.routeStatusFailed',
+  untested: 'settings.agents.routeStatusUntested',
+}
+
+const healthLabelKeys: Record<AgentHealth, string> = {
+  unknown: 'settings.agents.healthUnknown',
+  healthy: 'settings.agents.healthHealthy',
+  unreachable: 'settings.agents.healthUnreachable',
+  'version-mismatch': 'settings.agents.healthVersionMismatch',
+  'auth-failed': 'settings.agents.healthAuthFailed',
+  'pending-bootstrap': 'settings.agents.healthPendingBootstrap',
+}
 
 const sortedAgents = computed(() =>
   [...agentsStore.agents].sort((a, b) => a.host_name.localeCompare(b.host_name) || a.host_id.localeCompare(b.host_id)),
@@ -48,6 +64,7 @@ const availableHosts = computed(() => {
 })
 
 onMounted(async () => {
+  document.addEventListener('click', closeMenuOnOutsideClick)
   try {
     await Promise.all([remoteStore.loadHosts(), agentsStore.loadAgents(), nodeStore.start()])
   } catch (err) {
@@ -56,25 +73,60 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', closeMenuOnOutsideClick)
   nodeStore.stop()
 })
 
-function runtimeOf(agent: AgentDTO): AgentRuntime {
-  return nodeStore.agentRuntimeOf(agent.host_id) ?? agent.runtime
+function nodeOf(agent: AgentDTO) {
+  return nodeStore.nodeOf(agent.host_id)
 }
 
-function transportLabel(agent: AgentDTO): string {
-  const primary = agent.transport.chain[0]
-  const suffix = agent.transport.chain.length > 1 ? ` +${agent.transport.chain.length - 1}` : ''
-  if (!primary) return t('settings.hosts.agentConfiguredUnknown')
-  if (primary.type === 'direct') {
-    return primary.direct?.address ? `direct · ${primary.direct.address}${suffix}` : `direct${suffix}`
-  }
-  if (primary.type === 'tunnel') {
-    const tunnel = primary.tunnel
-    return tunnel ? `tunnel · :${tunnel.remote_agent_port}${suffix}` : `tunnel${suffix}`
-  }
-  return `${primary.type}${suffix}`
+function runtimeOf(agent: AgentDTO): AgentRuntime {
+  return runtimeFor(agent, nodeOf(agent))
+}
+
+function stageViewFor(agent: AgentDTO) {
+  return agentStageView(agentStage(agent, nodeOf(agent)))
+}
+
+function routeSummaryFor(agent: AgentDTO) {
+  return agentRouteSummary(agent, nodeOf(agent))
+}
+
+function routeRowsFor(agent: AgentDTO) {
+  return agentRouteRows(agent, nodeOf(agent))
+}
+
+function routeStatusKey(status: AgentRouteRowStatus) {
+  return routeStatusKeys[status]
+}
+
+function healthLabelKey(health: AgentHealth) {
+  return healthLabelKeys[health]
+}
+
+function openPanel(agent: AgentDTO, tab: AgentPanelTab) {
+  panelTarget.value = agent
+  panelInitialTab.value = tab
+  openMenuHostId.value = null
+}
+
+function toggleRoute(hostId: string) {
+  const next = new Set(expandedRoutes.value)
+  if (next.has(hostId)) next.delete(hostId)
+  else next.add(hostId)
+  expandedRoutes.value = next
+}
+
+function toggleMenu(hostId: string) {
+  openMenuHostId.value = openMenuHostId.value === hostId ? null : hostId
+}
+
+function closeMenuOnOutsideClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (target.closest('.agent-more')) return
+  openMenuHostId.value = null
 }
 
 function updatedLabel(agent: AgentDTO): string {
@@ -99,17 +151,17 @@ async function refresh() {
   await Promise.all([remoteStore.loadHosts(), agentsStore.loadAgents()])
 }
 
-async function saveConfig(payload: AgentTransportUpdatePayload) {
-  if (!configTarget.value) return
-  try {
-    await agentsStore.updateAgentTransport(configTarget.value.host_id, payload)
-    configTarget.value = null
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('settings.agents.saveFailed')
+async function runPrimaryAction(agent: AgentDTO) {
+  const view = stageViewFor(agent)
+  if (view.opensPanel && view.panelTab) {
+    openPanel(agent, view.panelTab)
+    return
   }
+  await checkAgent(agent)
 }
 
 async function checkAgent(agent: AgentDTO) {
+  openMenuHostId.value = null
   const next = new Set(checking.value)
   next.add(agent.host_id)
   checking.value = next
@@ -125,6 +177,7 @@ async function checkAgent(agent: AgentDTO) {
 }
 
 async function removeAgent(agent: AgentDTO) {
+  openMenuHostId.value = null
   if (!confirm(t('settings.agents.removeConfigConfirm', { name: agent.host_name }))) return
   const next = new Set(removing.value)
   next.add(agent.host_id)
@@ -163,54 +216,81 @@ async function removeAgent(agent: AgentDTO) {
         <thead>
           <tr>
             <th>{{ t('settings.agents.host') }}</th>
-            <th>{{ t('settings.hosts.tags') }}</th>
-            <th>{{ t('settings.agents.transport') }}</th>
-            <th>{{ t('settings.agents.health') }}</th>
-            <th>{{ t('settings.agents.updated') }}</th>
-            <th></th>
+            <th>{{ t('settings.agents.connectionStatus') }}</th>
+            <th>{{ t('settings.agents.nextAction') }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="agent in sortedAgents" :key="agent.host_id" data-test="agent-row">
-            <td>
-              <div>{{ agent.host_name }}</div>
+            <td class="agent-host-cell">
+              <div class="agent-host-name">{{ agent.host_name }}</div>
               <div class="muted mono">{{ agent.host_id }}</div>
+              <div class="agent-tags">
+                <span v-for="tag in agent.tags" :key="tag" class="tag-chip" :style="{ background: tagColor(tag) }">
+                  {{ tag }}
+                </span>
+              </div>
             </td>
-            <td>
-              <span
-                v-for="tag in agent.tags"
-                :key="tag"
-                class="tag-chip"
-                :style="{ background: tagColor(tag) }"
-              >
-                {{ tag }}
-              </span>
+            <td class="agent-route-cell">
+              <div class="route-summary">
+                <span class="status-dot" :class="`tone-${stageViewFor(agent).tone}`" aria-hidden="true"></span>
+                <span class="route-stage">{{ t(stageViewFor(agent).labelKey) }}</span>
+                <span v-if="agentStage(agent, nodeOf(agent)) === 'healthy' || agentStage(agent, nodeOf(agent)) === 'degraded'" class="mono route-address">
+                  {{ routeSummaryFor(agent).address }}
+                </span>
+                <span v-if="agentStage(agent, nodeOf(agent)) === 'degraded'" class="degraded-badge">
+                  {{ t('settings.agents.stageDegraded') }}
+                </span>
+              </div>
+              <button type="button" class="settings-btn settings-btn-text route-toggle" :data-test="`agent-route-toggle-${agent.host_id}`" @click="toggleRoute(agent.host_id)">
+                {{ t('settings.agents.routeCount', { count: routeSummaryFor(agent).count }) }} {{ expandedRoutes.has(agent.host_id) ? '▴' : '▾' }}
+              </button>
+              <div v-if="expandedRoutes.has(agent.host_id)" class="route-details">
+                <div
+                  v-for="row in routeRowsFor(agent)"
+                  :key="row.index"
+                  class="route-detail-row"
+                  :data-test="`agent-route-row-${agent.host_id}-${row.index}`"
+                >
+                  <span class="mono">{{ row.index + 1 }}</span>
+                  <span class="route-dot" :class="`route-${row.status}`" aria-hidden="true"></span>
+                  <span class="mono route-entry">{{ row.type }} · {{ row.address }}</span>
+                  <span>{{ row.current ? t('settings.agents.routeCurrent') : t(routeStatusKey(row.status)) }}</span>
+                  <span>{{ row.role === 'primary' ? t('settings.agents.primaryTransport') : t('settings.agents.fallbackTransport') }}</span>
+                  <span v-if="row.error" class="route-error">{{ row.error }}</span>
+                </div>
+              </div>
             </td>
-            <td class="mono">{{ transportLabel(agent) }}</td>
-            <td>
-              <span class="health" :class="`health-${runtimeOf(agent).health}`">{{ runtimeOf(agent).health }}</span>
-              <span v-if="runtimeOf(agent).version" class="muted"> · v{{ runtimeOf(agent).version?.replace(/^v/, '') }}</span>
-            </td>
-            <td class="muted">{{ updatedLabel(agent) }}</td>
-            <td class="row-actions">
-              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-edit-${agent.host_id}`" @click="configTarget = agent">
-                {{ t('settings.agents.editConnection') }}
-              </button>
-              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-security-${agent.host_id}`" @click="securityTarget = agent">
-                {{ t('settings.agents.securityConfig') }}
-              </button>
-              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-install-${agent.host_id}`" @click="installTarget = agent">
-                {{ t('settings.agents.install') }}
-              </button>
-              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-generate-command-${agent.host_id}`" @click="installTarget = agent">
-                {{ t('settings.agents.generateCommand') }}
-              </button>
-              <button class="settings-btn settings-btn-text" type="button" :disabled="checking.has(agent.host_id)" @click="checkAgent(agent)">
-                {{ t('settings.agents.check') }}
-              </button>
-              <button class="settings-btn settings-btn-text settings-btn-danger" type="button" :disabled="removing.has(agent.host_id)" @click="removeAgent(agent)">
-                {{ t('settings.agents.removeConfig') }}
-              </button>
+            <td class="agent-action-cell">
+              <div class="agent-runtime">
+                <span class="health" :class="`health-${runtimeOf(agent).health}`">{{ t(healthLabelKey(runtimeOf(agent).health)) }}</span>
+                <span v-if="runtimeOf(agent).version" class="muted"> · v{{ runtimeOf(agent).version?.replace(/^v/, '') }}</span>
+                <span class="muted"> · {{ updatedLabel(agent) }}</span>
+              </div>
+              <div class="agent-actions">
+                <button
+                  class="settings-btn"
+                  :class="stageViewFor(agent).primary ? 'settings-btn-primary' : 'settings-btn-secondary'"
+                  type="button"
+                  :disabled="checking.has(agent.host_id)"
+                  :data-test="`agent-primary-${agent.host_id}`"
+                  @click="runPrimaryAction(agent)"
+                >
+                  {{ checking.has(agent.host_id) ? t('common.loading') : t(stageViewFor(agent).primaryActionKey) }}
+                </button>
+                <div class="agent-more">
+                  <button class="settings-btn settings-btn-icon" type="button" :data-test="`agent-more-${agent.host_id}`" @click="toggleMenu(agent.host_id)">⋯</button>
+                  <div v-if="openMenuHostId === agent.host_id" class="agent-action-menu" :data-test="`agent-menu-${agent.host_id}`">
+                    <button type="button" :data-test="`agent-menu-transport-${agent.host_id}`" @click="openPanel(agent, 'transport')">{{ t('settings.agents.editConnection') }}</button>
+                    <button type="button" :data-test="`agent-menu-security-${agent.host_id}`" @click="openPanel(agent, 'security')">{{ t('settings.agents.securityConfig') }}</button>
+                    <button type="button" :data-test="`agent-menu-install-${agent.host_id}`" @click="openPanel(agent, 'install')">{{ t('settings.agents.generateCommand') }}</button>
+                    <button type="button" :data-test="`agent-menu-check-${agent.host_id}`" @click="checkAgent(agent)">{{ t('settings.agents.recheck') }}</button>
+                    <button type="button" class="danger" :disabled="removing.has(agent.host_id)" :data-test="`agent-menu-remove-${agent.host_id}`" @click="removeAgent(agent)">
+                      {{ t('settings.agents.removeConfig') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -224,21 +304,12 @@ async function removeAgent(agent: AgentDTO) {
       @submit="createAgent"
       @cancel="createVisible = false"
     />
-    <AgentConfigModal
-      :visible="Boolean(configTarget)"
-      :agent="configTarget"
-      @submit="saveConfig"
-      @cancel="configTarget = null"
-    />
-    <AgentSecurityPanel
-      :visible="Boolean(securityTarget)"
-      :agent="securityTarget"
-      @cancel="securityTarget = null"
-    />
-    <AgentInstallModal
-      :visible="Boolean(installTarget)"
-      :agent="installTarget"
-      @cancel="installTarget = null"
+    <AgentConfigPanel
+      :visible="Boolean(panelTarget)"
+      :agent="panelTarget"
+      :node="panelTarget ? nodeOf(panelTarget) : undefined"
+      :initial-tab="panelInitialTab"
+      @cancel="panelTarget = null"
     />
   </section>
 </template>
@@ -262,17 +333,148 @@ async function removeAgent(agent: AgentDTO) {
   border-radius: 2px;
   font-size: 10px;
 }
-.row-actions {
+.agent-table {
+  min-width: 820px;
+}
+.agent-host-cell,
+.agent-route-cell,
+.agent-action-cell {
+  min-width: 0;
+}
+.agent-host-name {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.agent-tags {
+  margin-top: 5px;
+}
+.route-summary,
+.agent-actions,
+.agent-runtime {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
+}
+.route-summary {
+  min-width: 0;
+}
+.status-dot,
+.route-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+.tone-success,
+.route-reachable {
+  background: var(--status-running);
+}
+.tone-warning {
+  background: var(--status-warning);
+}
+.tone-danger,
+.route-failed {
+  background: var(--status-failed);
+}
+.route-untested {
+  background: var(--text-tertiary);
+}
+.route-stage {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.route-address,
+.route-entry {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.degraded-badge {
+  color: var(--status-warning);
+  font-size: 11px;
+}
+.route-toggle {
+  margin-top: 4px;
+}
+.route-details {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+.route-detail-row {
+  display: grid;
+  grid-template-columns: 20px 10px minmax(150px, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.route-error {
+  grid-column: 3 / -1;
+  color: var(--status-failed);
+}
+.agent-action-cell {
+  width: 260px;
+}
+.agent-action-cell,
+.agent-actions {
+  position: relative;
+}
+.agent-runtime {
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+.agent-actions {
+  justify-content: flex-end;
+}
+.agent-more {
+  position: relative;
+}
+.agent-action-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  display: grid;
+  min-width: 150px;
+  padding: 6px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-modal);
+}
+.agent-action-menu button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.agent-action-menu button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text-primary);
+}
+.agent-action-menu button.danger {
+  color: var(--danger);
 }
 .health-healthy {
   color: var(--status-running);
 }
-.health-unreachable,
-.health-version-mismatch {
+.health-unreachable {
   color: var(--status-failed);
+}
+.health-auth-failed,
+.health-version-mismatch,
+.health-pending-bootstrap {
+  color: var(--status-warning);
 }
 </style>
