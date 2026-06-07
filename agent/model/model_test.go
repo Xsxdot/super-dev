@@ -29,136 +29,165 @@ func TestLogRuleTypes(t *testing.T) {
 
 func TestHostJSON(t *testing.T) {
 	h := model.Host{
-		ID:        "h-1",
-		Name:      "compute-01",
-		PublicIP:  "203.0.113.10",
-		PrivateIP: "10.0.0.1",
-		Tags:      []string{"prod", "temp"},
-		Agent: &model.Agent{
-			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
-				Type: model.TransportTypeTunnel,
-				Tunnel: &model.TunnelParams{
-					SSHHost:         "10.0.0.1",
-					SSHPort:         22,
-					SSHUser:         "ops",
-					SSHPassword:     "pw",
-					SSHKeyPath:      "/key",
-					RemoteAgentPort: 57017,
-				},
-			}}},
-			Runtime: model.AgentRuntime{
-				Installed: true,
-				Version:   "1.2.3",
-				Health:    model.AgentHealthHealthy,
-				Reachable: true,
-				LocalPort: 12345,
-			},
-		},
+		ID:            "h-1",
+		Name:          "compute-01",
+		PublicIP:      "203.0.113.10",
+		PrivateIP:     "10.0.0.1",
+		Tags:          []string{"prod", "temp"},
+		SSHHost:       "10.0.0.1",
+		SSHPort:       22,
+		SSHUser:       "ops",
+		SSHPassword:   "pw",
+		SSHPrivateKey: "inline-key",
 	}
 	data, err := json.Marshal(h)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "runtime")
 	assert.NotContains(t, string(data), "local_port")
-	assert.Contains(t, string(data), `"agent"`)
-	assert.Contains(t, string(data), `"transport"`)
-	assert.Contains(t, string(data), `"tunnel"`)
+	assert.NotContains(t, string(data), `"agent"`)
+	assert.NotContains(t, string(data), `"transport"`)
+	assert.Contains(t, string(data), `"ssh_private_key"`)
 
 	var got model.Host
 	require.NoError(t, json.Unmarshal(data, &got))
-	require.NotNil(t, got.Agent)
-	require.Len(t, got.Agent.Transport.Chain, 1)
-	assert.Equal(t, model.TransportTypeTunnel, got.Agent.Transport.Chain[0].Type)
-	require.NotNil(t, got.Agent.Transport.Chain[0].Tunnel)
-	assert.Equal(t, "10.0.0.1", got.Agent.Transport.Chain[0].Tunnel.SSHHost)
-	assert.Equal(t, 0, got.Agent.Runtime.LocalPort)
+	assert.Equal(t, "10.0.0.1", got.SSHHost)
+	assert.Equal(t, "inline-key", got.SSHPrivateKey)
+}
+
+func TestHostJSONDoesNotContainAgentAndStoresPrivateKeyContent(t *testing.T) {
+	host := model.Host{
+		ID:            "h1",
+		Name:          "ali",
+		PublicIP:      "203.0.113.8",
+		PrivateIP:     "10.0.0.8",
+		Tags:          []string{"prod"},
+		SSHHost:       "10.0.0.8",
+		SSHPort:       22,
+		SSHUser:       "root",
+		SSHPrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----",
+	}
+
+	data, err := json.Marshal(host)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"ssh_private_key"`)
+	assert.NotContains(t, string(data), `"ssh_key_path"`)
+	assert.NotContains(t, string(data), `"agent"`)
+}
+
+func TestAgentJSONShapePersistsSecretForLocalStore(t *testing.T) {
+	agent := model.Agent{
+		HostID: "h1",
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeDirect,
+			Direct: &model.DirectParams{Address: "100.64.0.8:57017"},
+		}}},
+		Config: model.AgentConfig{ListenAddress: "0.0.0.0", ListenPort: 57017},
+		Security: model.AgentSecurity{
+			ProvisionState:  model.AgentProvisionStatePendingBootstrap,
+			TokenConfigured: true,
+			TLS: model.AgentTLSSpec{
+				Mode:       model.AgentTLSModeAuto,
+				ServerName: "100.64.0.8",
+			},
+		},
+		Secret: model.AgentSecret{Token: "secret-token"},
+	}
+
+	data, err := json.Marshal(agent)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"host_id":"h1"`)
+	assert.Contains(t, string(data), `"listen_port":57017`)
+	assert.Contains(t, string(data), `"mode":"auto"`)
+	assert.Contains(t, string(data), `"token":"secret-token"`)
+}
+
+func TestTransportEntriesOnlyContainTransportSpecificConfig(t *testing.T) {
+	agent := model.Agent{
+		HostID: "h1",
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+			{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+		}},
+	}
+
+	data, err := json.Marshal(agent.Transport)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "ssh_host")
+	assert.NotContains(t, string(data), "ssh_user")
+	assert.NotContains(t, string(data), "tls")
+	assert.NotContains(t, string(data), "ca_cert")
 }
 
 func TestAgentTransportChainJSONShape(t *testing.T) {
-	h := model.Host{
-		ID:   "h-chain",
-		Name: "chain-host",
-		Agent: &model.Agent{
+	agent := model.Agent{
+		HostID: "h-chain",
+		Secret: model.AgentSecret{
 			Token: "agent-token",
-			Transport: model.TransportConfig{Chain: []model.TransportEntry{
-				{
-					Type: model.TransportTypeDirect,
-					Direct: &model.DirectParams{
-						Address: "100.64.0.8:57017",
-						TLS:     true,
-						CACert:  "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n",
-					},
-				},
-				{
-					Type: model.TransportTypeTunnel,
-					Tunnel: &model.TunnelParams{
-						SSHHost:         "10.0.0.8",
-						SSHPort:         22,
-						SSHUser:         "root",
-						RemoteAgentPort: 57017,
-					},
-				},
-			}},
-			Runtime: model.AgentRuntime{LocalPort: 12345},
 		},
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{
+				Type: model.TransportTypeDirect,
+				Direct: &model.DirectParams{
+					Address: "100.64.0.8:57017",
+				},
+			},
+			{
+				Type: model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{
+					RemoteAgentPort: 57017,
+				},
+			},
+		}},
+		Runtime: model.AgentRuntime{LocalPort: 12345},
 	}
 
-	data, err := json.Marshal(h)
+	data, err := json.Marshal(agent)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"chain"`)
 	assert.Contains(t, string(data), `"token":"agent-token"`)
-	assert.Contains(t, string(data), `"ca_cert"`)
+	assert.NotContains(t, string(data), `"ca_cert"`)
 	assert.NotContains(t, string(data), `"transport":{"type"`)
 	assert.NotContains(t, string(data), `"runtime"`)
 
-	var got model.Host
+	var got model.Agent
 	require.NoError(t, json.Unmarshal(data, &got))
-	require.NotNil(t, got.Agent)
-	require.Len(t, got.Agent.Transport.Chain, 2)
-	assert.Equal(t, model.TransportTypeDirect, got.Agent.Transport.Chain[0].Type)
-	assert.Equal(t, "agent-token", got.Agent.Token)
-	assert.Equal(t, 0, got.Agent.Runtime.LocalPort)
+	require.Len(t, got.Transport.Chain, 2)
+	assert.Equal(t, model.TransportTypeDirect, got.Transport.Chain[0].Type)
+	assert.Equal(t, "agent-token", got.Secret.Token)
+	assert.Equal(t, 0, got.Runtime.LocalPort)
 }
 
 func TestTransportConfigUnmarshalMigratesLegacySingleTransport(t *testing.T) {
 	raw := []byte(`{
-		"id":"h1",
-		"name":"legacy",
-		"agent":{
-			"transport":{
-				"type":"direct",
-				"direct":{"address":"100.64.0.8:57017","tls":true}
-			}
-		}
+		"type":"direct",
+		"direct":{"address":"100.64.0.8:57017","tls":true}
 	}`)
 
-	var got model.Host
+	var got model.TransportConfig
 	require.NoError(t, json.Unmarshal(raw, &got))
-	require.NotNil(t, got.Agent)
-	require.Len(t, got.Agent.Transport.Chain, 1)
-	assert.Equal(t, model.TransportTypeDirect, got.Agent.Transport.Chain[0].Type)
-	require.NotNil(t, got.Agent.Transport.Chain[0].Direct)
-	assert.Equal(t, "100.64.0.8:57017", got.Agent.Transport.Chain[0].Direct.Address)
-	assert.True(t, got.Agent.Transport.Chain[0].Direct.TLS)
+	require.Len(t, got.Chain, 1)
+	assert.Equal(t, model.TransportTypeDirect, got.Chain[0].Type)
+	require.NotNil(t, got.Chain[0].Direct)
+	assert.Equal(t, "100.64.0.8:57017", got.Chain[0].Direct.Address)
 }
 
-func TestHostTransportHelpersReadAndCreateChainEntries(t *testing.T) {
-	h := model.Host{ID: "h1"}
+func TestAgentTransportHelpersReadAndCreateChainEntries(t *testing.T) {
+	agent := model.Agent{HostID: "h1"}
 
-	tunnelParams := h.EnsureTunnelAgent()
-	tunnelParams.SSHHost = "10.0.0.8"
-	directParams := h.EnsureDirectAgent()
+	tunnelParams := agent.EnsureTunnelTransport()
+	tunnelParams.RemoteAgentPort = 57017
+	directParams := agent.EnsureDirectTransport()
 	directParams.Address = "100.64.0.8:57017"
 
-	require.NotNil(t, h.Agent)
-	require.Len(t, h.Agent.Transport.Chain, 2)
-	gotTunnel, ok := h.TunnelParams()
+	require.Len(t, agent.Transport.Chain, 2)
+	gotTunnel, ok := agent.TunnelParams()
 	require.True(t, ok)
-	assert.Equal(t, "10.0.0.8", gotTunnel.SSHHost)
-	gotDirect, ok := h.DirectParams()
+	assert.Equal(t, 57017, gotTunnel.RemoteAgentPort)
+	gotDirect, ok := agent.DirectParams()
 	require.True(t, ok)
 	assert.Equal(t, "100.64.0.8:57017", gotDirect.Address)
-	assert.Equal(t, model.TransportTypeTunnel, h.Agent.Transport.Chain[0].Type)
-	assert.Equal(t, model.TransportTypeDirect, h.Agent.Transport.Chain[1].Type)
+	assert.Equal(t, model.TransportTypeTunnel, agent.Transport.Chain[0].Type)
+	assert.Equal(t, model.TransportTypeDirect, agent.Transport.Chain[1].Type)
 }
 
 func TestLogSourceJSON(t *testing.T) {

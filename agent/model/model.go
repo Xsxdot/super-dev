@@ -177,30 +177,98 @@ const (
 	AgentHealthPendingBootstrap AgentHealth = "pending-bootstrap"
 )
 
+// AgentProvisionState 表示本地记录的远端 agent 安全配置下发状态。
+type AgentProvisionState string
+
+const (
+	// AgentProvisionStateNotConfigured 表示尚未配置 token 或 TLS。
+	AgentProvisionStateNotConfigured AgentProvisionState = "not-configured"
+	// AgentProvisionStatePendingBootstrap 表示等待安装命令或 bootstrap token 完成首次下发。
+	AgentProvisionStatePendingBootstrap AgentProvisionState = "pending-bootstrap"
+	// AgentProvisionStateProvisioned 表示长期 token 和 TLS 配置已经下发。
+	AgentProvisionStateProvisioned AgentProvisionState = "provisioned"
+)
+
+// AgentTLSMode 表示 agent HTTP 服务的 TLS 策略。
+type AgentTLSMode string
+
+const (
+	// AgentTLSModeOff 表示 agent 以明文 HTTP 暴露。
+	AgentTLSModeOff AgentTLSMode = "off"
+	// AgentTLSModeAuto 表示由本机生成/下发自动 TLS 配置。
+	AgentTLSModeAuto AgentTLSMode = "auto"
+	// AgentTLSModeManual 表示使用用户提供的 CA 和服务名校验远端证书。
+	AgentTLSModeManual AgentTLSMode = "manual"
+)
+
+const (
+	// DefaultSSHPort 是 Host SSH 登录的默认端口。
+	DefaultSSHPort = 22
+	// DefaultRemoteAgentPort 是远端 agent 默认监听端口。
+	DefaultRemoteAgentPort = 57017
+	// DefaultAgentListenPort 是 agent 配置的默认监听端口。
+	DefaultAgentListenPort = 57017
+)
+
 // Host 表示一台被管理的远程主机身份。
 //
 // 职责：
-//   - 保存节点身份、展示名、地址元数据和标签
-//   - 可选挂载 Agent，表达这台主机是否安装并可连接远端 agent
+//   - 保存机器身份、展示名、地址元数据和标签
+//   - 保存这台机器的 SSH 登录信息，供安装、隧道和远程执行复用
 //
 // 边界：
-//   - 不直接承载 SSH 凭据、agent 端口或本地隧道端口
-//   - 连接方式统一通过 Agent.Transport 表达
-//   - Agent.Runtime 是运行时快照，不写入 hosts.json
+//   - 不感知是否安装 Agent
+//   - 不保存 agent token、TLS 或 transport chain
+//   - SSHPrivateKey 保存密钥内容，SSHKeyPath 仅可作为 API 导入入口
 type Host struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	PublicIP  string   `json:"public_ip,omitempty"`
-	PrivateIP string   `json:"private_ip,omitempty"`
-	Tags      []string `json:"tags"`
-	Agent     *Agent   `json:"agent,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	PublicIP      string   `json:"public_ip,omitempty"`
+	PrivateIP     string   `json:"private_ip,omitempty"`
+	Tags          []string `json:"tags"`
+	SSHHost       string   `json:"ssh_host,omitempty"`
+	SSHPort       int      `json:"ssh_port,omitempty"`
+	SSHUser       string   `json:"ssh_user,omitempty"`
+	SSHPassword   string   `json:"ssh_password,omitempty"`
+	SSHPrivateKey string   `json:"ssh_private_key,omitempty"`
 }
 
-// Agent 是 Host 下的一等公民，描述这台主机怎么连接以及当前运行态。
+// Agent 表示安装在某台 Host 上的 SuperDev agent 配置。
+//
+// HostID 是 Agent 与 Host 的唯一关联；Transport 只保存各传输方式自己的
+// 参数，统一监听、安全和私密 token 分别落在 Config、Security 和 Secret。
 type Agent struct {
+	HostID    string          `json:"host_id"`
 	Transport TransportConfig `json:"transport"`
-	Token     string          `json:"token,omitempty"`
+	Config    AgentConfig     `json:"config"`
+	Security  AgentSecurity   `json:"security"`
+	Secret    AgentSecret     `json:"secret,omitempty"`
 	Runtime   AgentRuntime    `json:"-"`
+}
+
+// AgentConfig 表示 agent 进程统一监听配置。
+type AgentConfig struct {
+	ListenAddress string `json:"listen_address,omitempty"`
+	ListenPort    int    `json:"listen_port,omitempty"`
+}
+
+// AgentSecurity 表示 agent 统一安全配置。
+type AgentSecurity struct {
+	ProvisionState  AgentProvisionState `json:"provision_state"`
+	TokenConfigured bool                `json:"token_configured"`
+	TLS             AgentTLSSpec        `json:"tls"`
+}
+
+// AgentSecret 表示仅保存在本机 agents.json 的敏感字段。
+type AgentSecret struct {
+	Token string `json:"token,omitempty"`
+}
+
+// AgentTLSSpec 表示 agent HTTP 服务的 TLS 校验配置。
+type AgentTLSSpec struct {
+	Mode       AgentTLSMode `json:"mode"`
+	CACert     string       `json:"ca_cert,omitempty"`
+	ServerName string       `json:"server_name,omitempty"`
 }
 
 // TransportConfig 持有一台 host 的有序传输链。
@@ -215,8 +283,24 @@ type TransportEntry struct {
 	Direct *DirectParams `json:"direct,omitempty"`
 }
 
-// TunnelParams 是 SSH 隧道传输所需的持久化参数。
+// TunnelParams 是 SSH 隧道传输自己的持久化参数。
 type TunnelParams struct {
+	RemoteAgentPort int `json:"remote_agent_port"`
+}
+
+// DirectParams 是直连传输自己的持久化参数。token 和 TLS 属于 Agent 统一配置。
+type DirectParams struct {
+	Address string `json:"address,omitempty"`
+}
+
+type transportConfigJSON struct {
+	Chain  []TransportEntry    `json:"chain,omitempty"`
+	Type   TransportType       `json:"type,omitempty"`
+	Tunnel *legacyTunnelParams `json:"tunnel,omitempty"`
+	Direct *legacyDirectParams `json:"direct,omitempty"`
+}
+
+type legacyTunnelParams struct {
 	SSHHost         string `json:"ssh_host"`
 	SSHPort         int    `json:"ssh_port"`
 	SSHUser         string `json:"ssh_user"`
@@ -226,18 +310,10 @@ type TunnelParams struct {
 	RemoteAgentPort int    `json:"remote_agent_port"`
 }
 
-// DirectParams 是直连传输参数。token 属于 Agent，不在这里保存。
-type DirectParams struct {
+type legacyDirectParams struct {
 	Address string `json:"address,omitempty"`
 	TLS     bool   `json:"tls,omitempty"`
 	CACert  string `json:"ca_cert,omitempty"`
-}
-
-type transportConfigJSON struct {
-	Chain  []TransportEntry `json:"chain,omitempty"`
-	Type   TransportType    `json:"type,omitempty"`
-	Tunnel *TunnelParams    `json:"tunnel,omitempty"`
-	Direct *DirectParams    `json:"direct,omitempty"`
 }
 
 // MarshalJSON 始终写出新的 chain 形状，避免 hosts.json 继续扩散旧单选格式。
@@ -268,10 +344,24 @@ func (c *TransportConfig) UnmarshalJSON(data []byte) error {
 	}
 	c.Chain = []TransportEntry{{
 		Type:   raw.Type,
-		Tunnel: raw.Tunnel,
-		Direct: raw.Direct,
+		Tunnel: tunnelParamsFromLegacy(raw.Tunnel),
+		Direct: directParamsFromLegacy(raw.Direct),
 	}}
 	return nil
+}
+
+func tunnelParamsFromLegacy(params *legacyTunnelParams) *TunnelParams {
+	if params == nil {
+		return nil
+	}
+	return &TunnelParams{RemoteAgentPort: params.RemoteAgentPort}
+}
+
+func directParamsFromLegacy(params *legacyDirectParams) *DirectParams {
+	if params == nil {
+		return nil
+	}
+	return &DirectParams{Address: params.Address}
 }
 
 // AgentRuntime 是不持久化的运行时快照。
@@ -284,81 +374,112 @@ type AgentRuntime struct {
 }
 
 // TransportEntry 返回指定类型的链项。
-func (h Host) TransportEntry(typ TransportType) (*TransportEntry, bool) {
-	if h.Agent == nil {
-		return nil, false
-	}
-	for i := range h.Agent.Transport.Chain {
-		if h.Agent.Transport.Chain[i].Type == typ {
-			return &h.Agent.Transport.Chain[i], true
+func (a Agent) TransportEntry(typ TransportType) (*TransportEntry, bool) {
+	for i := range a.Transport.Chain {
+		if a.Transport.Chain[i].Type == typ {
+			return &a.Transport.Chain[i], true
 		}
 	}
 	return nil, false
 }
 
-// TunnelParams 返回 Host 当前 chain 中的 tunnel 参数。
-func (h Host) TunnelParams() (*TunnelParams, bool) {
-	entry, ok := h.TransportEntry(TransportTypeTunnel)
+// TunnelParams 返回 Agent 当前 chain 中的 tunnel 参数。
+func (a Agent) TunnelParams() (*TunnelParams, bool) {
+	entry, ok := a.TransportEntry(TransportTypeTunnel)
 	if !ok || entry.Tunnel == nil {
 		return nil, false
 	}
 	return entry.Tunnel, true
 }
 
-// DirectParams 返回 Host 当前 chain 中的 direct 参数。
-func (h Host) DirectParams() (*DirectParams, bool) {
-	entry, ok := h.TransportEntry(TransportTypeDirect)
+// DirectParams 返回 Agent 当前 chain 中的 direct 参数。
+func (a Agent) DirectParams() (*DirectParams, bool) {
+	entry, ok := a.TransportEntry(TransportTypeDirect)
 	if !ok || entry.Direct == nil {
 		return nil, false
 	}
 	return entry.Direct, true
 }
 
-// EnsureTunnelAgent 确保 Host 挂载 tunnel agent，并返回可修改的 tunnel 参数。
-func (h *Host) EnsureTunnelAgent() *TunnelParams {
-	entry := h.ensureTransportEntry(TransportTypeTunnel)
+// EnsureTunnelTransport 确保 Agent 拥有 tunnel 链项，并返回可修改的 tunnel 参数。
+func (a *Agent) EnsureTunnelTransport() *TunnelParams {
+	entry := a.ensureTransportEntry(TransportTypeTunnel)
 	if entry.Tunnel == nil {
 		entry.Tunnel = &TunnelParams{}
 	}
 	return entry.Tunnel
 }
 
-// EnsureDirectAgent 确保 Host 挂载 direct agent，并返回可修改的 direct 参数。
-func (h *Host) EnsureDirectAgent() *DirectParams {
-	entry := h.ensureTransportEntry(TransportTypeDirect)
+// EnsureDirectTransport 确保 Agent 拥有 direct 链项，并返回可修改的 direct 参数。
+func (a *Agent) EnsureDirectTransport() *DirectParams {
+	entry := a.ensureTransportEntry(TransportTypeDirect)
 	if entry.Direct == nil {
 		entry.Direct = &DirectParams{}
 	}
 	return entry.Direct
 }
 
-func (h *Host) ensureTransportEntry(typ TransportType) *TransportEntry {
-	if h.Agent == nil {
-		h.Agent = &Agent{}
-	}
-	for i := range h.Agent.Transport.Chain {
-		if h.Agent.Transport.Chain[i].Type == typ {
-			return &h.Agent.Transport.Chain[i]
+func (a *Agent) ensureTransportEntry(typ TransportType) *TransportEntry {
+	for i := range a.Transport.Chain {
+		if a.Transport.Chain[i].Type == typ {
+			return &a.Transport.Chain[i]
 		}
 	}
-	h.Agent.Transport.Chain = append(h.Agent.Transport.Chain, TransportEntry{Type: typ})
-	return &h.Agent.Transport.Chain[len(h.Agent.Transport.Chain)-1]
+	a.Transport.Chain = append(a.Transport.Chain, TransportEntry{Type: typ})
+	return &a.Transport.Chain[len(a.Transport.Chain)-1]
 }
 
-// RuntimeLocalPort 返回当前运行期本地隧道端口。
-func (h Host) RuntimeLocalPort() int {
-	if h.Agent == nil {
-		return 0
+// ApplyHostDefaults 填充 Host 的展示和 SSH 默认值。
+func ApplyHostDefaults(h *Host) {
+	if h.Tags == nil {
+		h.Tags = []string{}
 	}
-	return h.Agent.Runtime.LocalPort
+	if h.SSHPort == 0 {
+		h.SSHPort = DefaultSSHPort
+	}
 }
 
-// SetRuntimeLocalPort 写入当前运行期本地隧道端口。
-func (h *Host) SetRuntimeLocalPort(port int) {
-	if h.Agent == nil {
-		h.Agent = &Agent{}
+// ApplyAgentDefaults 填充 Agent 监听、安全和 transport 默认值。
+func ApplyAgentDefaults(a *Agent) {
+	if a.Transport.Chain == nil {
+		a.Transport.Chain = []TransportEntry{}
 	}
-	h.Agent.Runtime.LocalPort = port
+	if a.Config.ListenPort == 0 {
+		a.Config.ListenPort = DefaultAgentListenPort
+	}
+	if a.Security.ProvisionState == "" {
+		if a.Secret.Token != "" {
+			a.Security.ProvisionState = AgentProvisionStateProvisioned
+			a.Security.TokenConfigured = true
+		} else {
+			a.Security.ProvisionState = AgentProvisionStatePendingBootstrap
+		}
+	}
+	if a.Security.TLS.Mode == "" {
+		a.Security.TLS.Mode = AgentTLSModeAuto
+	}
+	for i := range a.Transport.Chain {
+		entry := &a.Transport.Chain[i]
+		if entry.Type != TransportTypeTunnel {
+			continue
+		}
+		if entry.Tunnel == nil {
+			entry.Tunnel = &TunnelParams{}
+		}
+		if entry.Tunnel.RemoteAgentPort == 0 {
+			entry.Tunnel.RemoteAgentPort = DefaultRemoteAgentPort
+		}
+	}
+}
+
+// RuntimeLocalPort 返回 Agent 当前运行期本地隧道端口。
+func (a Agent) RuntimeLocalPort() int {
+	return a.Runtime.LocalPort
+}
+
+// SetRuntimeLocalPort 写入 Agent 当前运行期本地隧道端口。
+func (a *Agent) SetRuntimeLocalPort(port int) {
+	a.Runtime.LocalPort = port
 }
 
 // LogSource 表示一个监听任务：在哪些 Host 上以何种 type 采集哪个 name。
