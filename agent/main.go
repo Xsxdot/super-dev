@@ -23,6 +23,8 @@ func main() {
 	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
 	sampleBinary := flag.String("sample-binary", "", "Path to bundled onboarding sample service binary")
+	bootstrapToken := flag.String("bootstrap-token", "", "One-time bootstrap token for first security provision")
+	requireAuth := flag.Bool("require-auth", false, "Require bearer token authentication for agent API")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
@@ -32,6 +34,8 @@ func main() {
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:          *dataDir,
 		SampleBinaryPath: *sampleBinary,
+		BootstrapToken:   *bootstrapToken,
+		RequireAuth:      *requireAuth,
 	})
 	if err != nil {
 		log.Fatal("create app:", err)

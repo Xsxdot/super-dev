@@ -39,6 +39,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/process"
 	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/security"
 	"github.com/xsxdot/super-dev/agent/store"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
@@ -63,6 +64,10 @@ type AppConfig struct {
 	ExecutionAuthorizer remoteexec.Authorizer
 	// ManagedDeploymentReconcileInterval 控制桌面端推送 remote deployment 期望状态的周期；0 时使用 30 秒。
 	ManagedDeploymentReconcileInterval time.Duration
+	// BootstrapToken 是远端 agent 首次安全自举的一次性 token。
+	BootstrapToken string
+	// RequireAuth 控制 agent API 是否必须完成安全自举后才允许访问。
+	RequireAuth bool
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -93,6 +98,8 @@ type App struct {
 	operationApprovals operation.ApprovalStore
 	// operationAudit 持久化 MCP 写操作安全链路审计事件。
 	operationAudit operation.AuditStore
+	// securityStore 持久化 agent 安全自举与长期 token 状态。
+	securityStore *security.Store
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
 	nodeTransport nodetransport.NodeTransport
 	// nodeRegistry 持有所有远端节点的最新状态快照。
@@ -161,6 +168,14 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 
 	id, err := identity.LoadOrCreate(cfg.DataDir)
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	securityStore, err := security.NewStore(filepath.Join(cfg.DataDir, "security.json"), security.Options{
+		BootstrapToken: cfg.BootstrapToken,
+		RequireAuth:    cfg.RequireAuth,
+	})
 	if err != nil {
 		_ = s.Close()
 		return nil, err
@@ -269,6 +284,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		debugSessions:               debugSessions,
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
+		securityStore:               securityStore,
 		nodeTransport:               nodeTransport,
 		nodeRegistry:                nodeRegistry,
 		nodeRegistryCancel:          nodeRegistryCancel,
@@ -405,6 +421,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /ws/logs", a.wsLogs)
 	mux.HandleFunc("GET /ws/exec", a.wsExec)
 	mux.HandleFunc("GET /api/exec/health", a.execHealth)
+	mux.HandleFunc("GET /api/security/health", a.securityHealth)
+	mux.HandleFunc("POST /api/security/provision", a.provisionSecurity)
 	mux.HandleFunc("POST /api/transfer", a.transferFile)
 
 	// Collector 控制(远端 agent 接收本机隧道请求)
@@ -469,7 +487,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/deployments/{id}/stop", a.stopDeployment)
 	mux.HandleFunc("POST /api/deployments/{id}/restart", a.restartDeployment)
 
-	return cors(mux)
+	return cors(a.withSecurity(mux))
 }
 
 // Start 加载注册表中的已有项目，然后监听 addr 地址。

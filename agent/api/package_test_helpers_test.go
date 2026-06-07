@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -34,6 +35,19 @@ func newHTTPServerForPackage(t *testing.T, app *App) *httptest.Server {
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func httptestDoWithHeader(t *testing.T, app *App, method, path string, body io.Reader, headers http.Header) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, body)
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	return rr
 }
 
 func testTunnelHost(id, name, sshHost, user string) model.Host {

@@ -19,7 +19,8 @@ import (
 )
 
 type execHealthResponse struct {
-	Version string `json:"version"`
+	Version        string `json:"version"`
+	ProvisionState string `json:"provision_state,omitempty"`
 }
 
 const agentAPIVersion = "0.1.0"
@@ -56,5 +57,9 @@ func (a *App) wsExec(w http.ResponseWriter, r *http.Request) {
 
 // execHealth 处理 GET /api/exec/health，用于 agent 版本兼容探测。
 func (a *App) execHealth(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, execHealthResponse{Version: agentAPIVersion})
+	state := ""
+	if a.securityStore != nil {
+		state = a.securityStore.State().ProvisionState
+	}
+	jsonOK(w, execHealthResponse{Version: agentAPIVersion, ProvisionState: state})
 }
