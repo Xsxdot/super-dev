@@ -442,6 +442,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
+	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
+	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 

@@ -51,6 +51,7 @@ type agentInstallCommandResponse struct {
 type agentInstallTokenRecord struct {
 	TokenID         string
 	TokenHash       string
+	BootstrapToken  string
 	HostID          string
 	TransportType   model.TransportType
 	BindAddress     string
@@ -71,6 +72,7 @@ func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, 
 	}
 	tokenID := uuid.NewString()
 	token := uuid.NewString()
+	bootstrapToken := uuid.NewString()
 	expiresAt := now.Add(time.Duration(normalized.TokenTTLMinutes) * time.Minute).UTC()
 	scriptURL := fmt.Sprintf(
 		"%s/api/agents/install.sh?token=%s",
@@ -78,12 +80,13 @@ func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, 
 		url.QueryEscape(token),
 	)
 	command := fmt.Sprintf(
-		"curl -fsSL %s | bash -s -- --host-id %s --transport %s --bind-address %s --port %d",
+		"curl -fsSL %s | bash -s -- --host-id %s --transport %s --bind-address %s --port %d --bootstrap-token %s --require-auth",
 		shellQuote(scriptURL),
 		shellArg(hostID),
 		shellArg(string(normalized.TransportType)),
 		shellArg(normalized.BindAddress),
 		normalized.RemoteAgentPort,
+		shellArg(bootstrapToken),
 	)
 	return agentInstallCommandResult{
 		Response: agentInstallCommandResponse{
@@ -94,6 +97,7 @@ func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, 
 		Token: agentInstallTokenRecord{
 			TokenID:         tokenID,
 			TokenHash:       hashAgentInstallToken(token),
+			BootstrapToken:  bootstrapToken,
 			HostID:          hostID,
 			TransportType:   normalized.TransportType,
 			BindAddress:     normalized.BindAddress,

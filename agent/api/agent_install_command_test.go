@@ -39,9 +39,12 @@ func TestGenerateAgentInstallCommandBindsHostAndParameters(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "--host-id "+hostID)
 	assert.Contains(t, resp.Body.String(), "--bind-address 127.0.0.1")
 	assert.Contains(t, resp.Body.String(), "--port 57017")
+	assert.Contains(t, resp.Body.String(), "--bootstrap-token")
+	assert.Contains(t, resp.Body.String(), "--require-auth")
 	assert.Contains(t, resp.Body.String(), `"token_id"`)
 	assert.Contains(t, resp.Body.String(), `"expires_at"`)
 	assert.NotContains(t, resp.Body.String(), `"token":"`)
+	assert.NotContains(t, resp.Body.String(), `"bootstrap_token"`)
 }
 
 func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
@@ -59,6 +62,8 @@ func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", result.Token.BindAddress)
 	assert.Equal(t, 57017, result.Token.RemoteAgentPort)
 	assert.Equal(t, now.Add(30*time.Minute), result.Token.ExpiresAt)
+	assert.NotEmpty(t, result.Token.BootstrapToken)
+	assert.NotContains(t, result.Response.Command, result.Token.TokenHash)
 
 	token := extractInstallToken(t, result.Response.Command)
 	assert.NotEmpty(t, token)
