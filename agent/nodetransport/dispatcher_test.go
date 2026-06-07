@@ -24,24 +24,29 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-func TestDispatcherRoutesByHostTransportType(t *testing.T) {
+func TestDispatcherFallsBackToTunnelWhenDirectUnavailable(t *testing.T) {
+	direct := &recordingTransport{name: "direct", err: nodetransport.ErrHostUnreachable}
 	tunnel := &recordingTransport{name: "tunnel", covers: []string{"h1"}}
-	direct := &recordingTransport{name: "direct", covers: []string{"h2"}}
-	hosts := []model.Host{
-		hostWithTransport("h1", model.TransportTypeTunnel),
-		hostWithTransport("h2", model.TransportTypeDirect),
-	}
+	hosts := []model.Host{hostWithChain("h1",
+		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+	)}
 	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
-		model.TransportTypeTunnel: tunnel,
 		model.TransportTypeDirect: direct,
+		model.TransportTypeTunnel: tunnel,
 	})
+	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
 
-	resp, err := dispatcher.Do(context.Background(), "h2", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	resp, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, []string{"h2"}, direct.doHosts)
-	assert.Empty(t, tunnel.doHosts)
+	assert.Equal(t, []string{"h1", "h1"}, direct.doHosts)
+	assert.Equal(t, []string{"h1", "h1", "h1"}, tunnel.doHosts)
+	route, ok := dispatcher.RouteSnapshotForTest("h1")
+	require.True(t, ok)
+	assert.Equal(t, 1, route.SelectedIndex)
+	assert.True(t, route.Degraded)
 }
 
 func TestDispatcherReturnsAgentNotConfigured(t *testing.T) {
@@ -108,16 +113,65 @@ func TestDispatcherSubscribeNodesAggregatesProviders(t *testing.T) {
 	assert.ElementsMatch(t, []string{"h1", "h2"}, dispatcher.Covers())
 }
 
+func TestDispatcherProbeMarksAuthFailedAfterProvisionedHealth(t *testing.T) {
+	direct := &authFailedProbeTransport{}
+	hosts := []model.Host{hostWithChain("h1",
+		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+	)}
+	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+		model.TransportTypeDirect: direct,
+	})
+	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
+
+	_, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: nodetransport.SecurityAuthCheckPath})
+
+	require.Error(t, err)
+	route, ok := dispatcher.RouteSnapshotForTest("h1")
+	require.True(t, ok)
+	require.Len(t, route.LastResults, 1)
+	assert.Equal(t, nodetransport.ProbeStatusAuthFailed, route.LastResults[0].Status)
+	assert.Equal(t, []string{nodetransport.SecurityAuthCheckPath, nodetransport.SecurityHealthPath, nodetransport.SecurityAuthCheckPath}, direct.paths)
+}
+
+func TestDispatcherRecoversChainHeadOnProbe(t *testing.T) {
+	direct := &recordingTransport{name: "direct", err: nodetransport.ErrHostUnreachable}
+	tunnel := &recordingTransport{name: "tunnel"}
+	hosts := []model.Host{hostWithChain("h1",
+		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+	)}
+	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+		model.TransportTypeDirect: direct,
+		model.TransportTypeTunnel: tunnel,
+	})
+	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
+
+	_, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	direct.err = nil
+	dispatcher.RecoverChainHeadsForTest(context.Background())
+
+	route, ok := dispatcher.RouteSnapshotForTest("h1")
+	require.True(t, ok)
+	assert.Equal(t, 0, route.SelectedIndex)
+	assert.False(t, route.Degraded)
+}
+
 type recordingTransport struct {
 	name    string
 	covers  []string
 	doHosts []string
 	batches [][]nodetransport.NodeStatus
+	err     error
 }
 
 func (r *recordingTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
 	r.doHosts = append(r.doHosts, hostID)
-	return nodetransport.NodeResponse{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader(""))}, nil
+	if r.err != nil {
+		return nodetransport.NodeResponse{}, r.err
+	}
+	body := `{"version":"0.1.0","provision_state":"provisioned"}`
+	return nodetransport.NodeResponse{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
 }
 
 func (r *recordingTransport) Stream(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
@@ -145,9 +199,43 @@ func (r *recordingTransport) Covers() []string {
 	return append([]string(nil), r.covers...)
 }
 
+type authFailedProbeTransport struct {
+	paths []string
+}
+
+func (a *authFailedProbeTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	a.paths = append(a.paths, req.Path)
+	if len(a.paths) == 1 {
+		return nodetransport.NodeResponse{}, nodetransport.ErrHostUnreachable
+	}
+	if req.Path == nodetransport.SecurityHealthPath {
+		body := `{"version":"0.1.0","provision_state":"provisioned"}`
+		return nodetransport.NodeResponse{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	return nodetransport.NodeResponse{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
+func (a *authFailedProbeTransport) Stream(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (a *authFailedProbeTransport) SubscribeNodes(context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (a *authFailedProbeTransport) Covers() []string { return []string{"h1"} }
+
 func hostWithTransport(id string, typ model.TransportType) model.Host {
+	return hostWithChain(id, model.TransportEntry{Type: typ})
+}
+
+func hostWithChain(id string, entries ...model.TransportEntry) model.Host {
 	return model.Host{
-		ID:    id,
-		Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{{Type: typ}}}},
+		ID: id,
+		Agent: &model.Agent{Transport: model.TransportConfig{
+			Chain: entries,
+		}},
 	}
 }
