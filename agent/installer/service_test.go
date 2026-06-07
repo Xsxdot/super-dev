@@ -16,25 +16,38 @@ import (
 )
 
 func TestLinuxSystemdUnit(t *testing.T) {
-	unit := LinuxSystemdUnit(57019)
+	unit := LinuxSystemdUnit(ServiceOptions{
+		BindAddress:    "0.0.0.0",
+		Port:           57019,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+	})
 	assert.Contains(t, unit, "Description=SuperDev Agent")
-	assert.Contains(t, unit, "ExecStart=/usr/local/bin/superdev-agent --addr 127.0.0.1:57019 --data /var/lib/superdev-agent")
+	assert.Contains(t, unit, "ExecStart=/usr/local/bin/superdev-agent --addr 0.0.0.0:57019 --require-auth --bootstrap-token bootstrap --data /var/lib/superdev-agent")
 	assert.Contains(t, unit, "Restart=always")
 	assert.Contains(t, unit, "WantedBy=multi-user.target")
 }
 
 func TestMacOSLaunchDaemonPlist(t *testing.T) {
-	plist := MacOSLaunchDaemonPlist(57020)
+	plist := MacOSLaunchDaemonPlist(ServiceOptions{
+		BindAddress:    "100.64.0.8",
+		Port:           57020,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+	})
 	assert.Contains(t, plist, "<string>dev.superdev.agent</string>")
 	assert.Contains(t, plist, "<string>/usr/local/bin/superdev-agent</string>")
-	assert.Contains(t, plist, "<string>127.0.0.1:57020</string>")
+	assert.Contains(t, plist, "<string>100.64.0.8:57020</string>")
+	assert.Contains(t, plist, "<string>--require-auth</string>")
+	assert.Contains(t, plist, "<string>--bootstrap-token</string>")
+	assert.Contains(t, plist, "<string>bootstrap</string>")
 	assert.Contains(t, plist, "<string>/Library/Application Support/SuperDev/Agent</string>")
 	assert.Contains(t, plist, "<key>KeepAlive</key>")
 }
 
 func TestMacOSUserLaunchAgentPlist(t *testing.T) {
 	plist := MacOSUserLaunchAgentPlist(
-		57020,
+		ServiceOptions{Port: 57020},
 		"/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent",
 		"/Users/sycm/Library/Application Support/SuperDev/Agent/data",
 		"/Users/sycm/Library/Logs/superdev-agent.log",

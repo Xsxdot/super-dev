@@ -14,6 +14,8 @@ package installer
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -26,6 +28,7 @@ type Options struct {
 	BinaryDir      string
 	VerifyAttempts int
 	VerifyDelay    time.Duration
+	BootstrapToken string
 }
 
 // Result 描述一次安装结果。
@@ -135,10 +138,7 @@ func NewWithRemoteFactory(opts Options, factory RemoteFactory) *Installer {
 //   - 安装成功结果，包含 host ID 和平台
 //   - 分阶段错误，便于上层定位失败原因
 func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error) {
-	port := 57017
-	if tunnelParams, ok := host.TunnelParams(); ok && tunnelParams.RemoteAgentPort != 0 {
-		port = tunnelParams.RemoteAgentPort
-	}
+	serviceOpts := serviceOptionsForHost(host, i.opts.BootstrapToken)
 	remote, err := i.factory(host)
 	if err != nil {
 		return Result{}, stageErr("connect", err)
@@ -166,7 +166,7 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 	if err := remote.Upload(ctx, localBinary, remoteTmp); err != nil {
 		return Result{}, stageErr("upload", err)
 	}
-	mode, err := installCommands(ctx, remote, platform, remoteTmp, port)
+	mode, err := installCommands(ctx, remote, platform, remoteTmp, serviceOpts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -174,7 +174,7 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 	if mode == installModeUserLaunchAgent {
 		message = "Agent installed and started in user LaunchAgent mode"
 	}
-	if err := verifyAgentReady(ctx, remote, port, i.verifyAttempts(), i.verifyDelay()); err != nil {
+	if err := verifyAgentReady(ctx, remote, serviceOpts.Port, i.verifyAttempts(), i.verifyDelay()); err != nil {
 		return Result{}, stageErr("verify", err)
 	}
 	return Result{
@@ -217,10 +217,40 @@ func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData b
 	}, nil
 }
 
-func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, port int) (installMode, error) {
+func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOptions {
+	opts := ServiceOptions{
+		BindAddress:    "127.0.0.1",
+		Port:           57017,
+		RequireAuth:    strings.TrimSpace(bootstrapToken) != "",
+		BootstrapToken: bootstrapToken,
+	}
+	if tunnelParams, ok := host.TunnelParams(); ok && tunnelParams.RemoteAgentPort != 0 {
+		opts.Port = tunnelParams.RemoteAgentPort
+	}
+	if directParams, ok := host.DirectParams(); ok && strings.TrimSpace(directParams.Address) != "" {
+		opts.BindAddress = bindHostFromDirectAddress(directParams.Address)
+	}
+	return opts
+}
+
+func bindHostFromDirectAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if strings.Contains(address, "://") {
+		if u, err := url.Parse(address); err == nil {
+			return u.Hostname()
+		}
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		return host
+	}
+	return address
+}
+
+func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, opts ServiceOptions) (installMode, error) {
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
 		if platform.OS == "darwin" && shouldUseMacOSUserLaunchAgent(err) {
-			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, port); err != nil {
+			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, opts); err != nil {
 				return "", err
 			}
 			return installModeUserLaunchAgent, nil
@@ -231,7 +261,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "linux":
 		commands := []string{
 			"sudo -n mkdir -p /var/lib/superdev-agent",
-			"cat > /tmp/superdev-agent.service <<'EOF'\n" + LinuxSystemdUnit(port) + "EOF",
+			"cat > /tmp/superdev-agent.service <<'EOF'\n" + LinuxSystemdUnit(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/superdev-agent.service /etc/systemd/system/superdev-agent.service",
 			"sudo -n systemctl daemon-reload",
 			"sudo -n systemctl enable superdev-agent.service",
@@ -245,7 +275,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "darwin":
 		commands := []string{
 			"sudo -n mkdir -p '/Library/Application Support/SuperDev/Agent'",
-			"cat > /tmp/dev.superdev.agent.plist <<'EOF'\n" + MacOSLaunchDaemonPlist(port) + "EOF",
+			"cat > /tmp/dev.superdev.agent.plist <<'EOF'\n" + MacOSLaunchDaemonPlist(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/dev.superdev.agent.plist /Library/LaunchDaemons/dev.superdev.agent.plist",
 			"sudo -n chown root:wheel /Library/LaunchDaemons/dev.superdev.agent.plist",
 			"sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true",
@@ -302,13 +332,13 @@ func uninstallCommands(ctx context.Context, remote Remote, osName string, remove
 	return nil
 }
 
-func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp string, port int) error {
+func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp string, opts ServiceOptions) error {
 	home, uid, err := macOSUserContext(ctx, remote)
 	if err != nil {
 		return stageErr("install_user_launchd", err)
 	}
 	paths := macOSUserAgentPaths(home)
-	plist := MacOSUserLaunchAgentPlist(port, paths.binary, paths.dataDir, paths.stdoutLog, paths.stderrLog)
+	plist := MacOSUserLaunchAgentPlist(opts, paths.binary, paths.dataDir, paths.stdoutLog, paths.stderrLog)
 	commands := []string{
 		"mkdir -p " + shellQuote(paths.binDir) + " " + shellQuote(paths.dataDir) + " " + shellQuote(paths.launchAgentsDir) + " " + shellQuote(paths.logsDir),
 		"install -m 0755 " + remoteTmp + " " + shellQuote(paths.binary),
