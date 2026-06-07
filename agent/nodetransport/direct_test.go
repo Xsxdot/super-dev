@@ -13,6 +13,7 @@ package nodetransport_test
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,6 +105,57 @@ func TestDirectTransportSubscribeNodesReportsVersionMismatch(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestDirectTransportInjectsAgentToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer agent-token", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	host := directHost("h1", "direct", srv.URL)
+	host.Agent.Token = "agent-token"
+	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+func TestDirectTransportUsesCustomCACert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+	host := directHost("h1", "direct", strings.TrimPrefix(srv.URL, "https://"))
+	host.Agent.Transport.Chain[0].Direct.TLS = true
+	host.Agent.Transport.Chain[0].Direct.CACert = caPEM
+	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+func TestDirectTransportRequestTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	host := directHost("h1", "direct", srv.URL)
+	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr.SetTimeoutsForTest(10*time.Millisecond, 10*time.Millisecond)
+
+	_, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.Error(t, err)
+	assert.Equal(t, nodetransport.CodeRequestTimeout, nodetransport.ErrorCode(err))
 }
 
 func directHost(id, name, address string) model.Host {

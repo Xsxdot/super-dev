@@ -13,8 +13,12 @@ package nodetransport
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -26,23 +30,27 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-const defaultDirectStatusReconnectInterval = 5 * time.Second
+const (
+	defaultDirectStatusReconnectInterval = 5 * time.Second
+	defaultDirectConnectTimeout          = 3 * time.Second
+	defaultDirectRequestTimeout          = 30 * time.Second
+)
 
 // DirectTransport 通过直接可达地址访问远端 agent。
 type DirectTransport struct {
 	hosts                   HostSource
-	client                  *http.Client
-	wsDialer                *websocket.Dialer
 	statusReconnectInterval time.Duration
+	connectTimeout          time.Duration
+	requestTimeout          time.Duration
 }
 
 // NewDirectTransport 创建直连传输实现。
 func NewDirectTransport(hosts HostSource) *DirectTransport {
 	return &DirectTransport{
 		hosts:                   hosts,
-		client:                  http.DefaultClient,
-		wsDialer:                websocket.DefaultDialer,
 		statusReconnectInterval: defaultDirectStatusReconnectInterval,
+		connectTimeout:          defaultDirectConnectTimeout,
+		requestTimeout:          defaultDirectRequestTimeout,
 	}
 }
 
@@ -51,9 +59,19 @@ func (t *DirectTransport) SetStatusReconnectIntervalForTest(interval time.Durati
 	t.statusReconnectInterval = interval
 }
 
+// SetTimeoutsForTest 缩短 direct 网络超时，供单元测试验证失败路径。
+func (t *DirectTransport) SetTimeoutsForTest(connectTimeout, requestTimeout time.Duration) {
+	t.connectTimeout = connectTimeout
+	t.requestTimeout = requestTimeout
+}
+
 // Do 对 hostID 发起一次 HTTP 请求。
 func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest) (NodeResponse, error) {
-	u, err := t.urlFor(hostID, req, false)
+	host, params, err := t.directParamsFor(hostID)
+	if err != nil {
+		return NodeResponse{}, err
+	}
+	u, err := t.urlForParams(host.ID, params, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -65,15 +83,19 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
-		}
-	}
-	resp, err := t.client.Do(httpReq)
+	applyDirectHeaders(httpReq.Header, host, req.Headers)
+	client, err := t.httpClientFor(params)
 	if err != nil {
+		return NodeResponse{}, directConfigError(hostID, "http", err)
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		code := CodeTransportUnreachable
+		if isTimeoutError(ctx, err) {
+			code = CodeRequestTimeout
+		}
 		return NodeResponse{}, &NodeError{
-			Code:          CodeTransportUnreachable,
+			Code:          code,
 			HostID:        hostID,
 			TransportType: model.TransportTypeDirect,
 			Operation:     "http",
@@ -86,17 +108,31 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 
 // Stream 对 hostID 建立 WebSocket 流。
 func (t *DirectTransport) Stream(ctx context.Context, hostID string, req NodeRequest) (NodeStream, error) {
-	u, err := t.urlFor(hostID, req, true)
+	host, params, err := t.directParamsFor(hostID)
 	if err != nil {
 		return nil, err
 	}
-	conn, resp, err := t.wsDialer.DialContext(ctx, u, req.Headers)
+	u, err := t.urlForParams(host.ID, params, req, true)
+	if err != nil {
+		return nil, err
+	}
+	dialer, err := t.wsDialerFor(params)
+	if err != nil {
+		return nil, directConfigError(hostID, "stream", err)
+	}
+	headers := http.Header{}
+	applyDirectHeaders(headers, host, req.Headers)
+	conn, resp, err := dialer.DialContext(ctx, u, headers)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
+		code := CodeTransportUnreachable
+		if isTimeoutError(ctx, err) {
+			code = CodeRequestTimeout
+		}
 		return nil, &NodeError{
-			Code:          CodeTransportUnreachable,
+			Code:          code,
 			HostID:        hostID,
 			TransportType: model.TransportTypeDirect,
 			Operation:     "stream",
@@ -278,11 +314,15 @@ func (t *DirectTransport) urlFor(hostID string, req NodeRequest, stream bool) (s
 	if err != nil {
 		return "", err
 	}
+	return t.urlForParams(host.ID, params, req, stream)
+}
+
+func (t *DirectTransport) urlForParams(hostID string, params *model.DirectParams, req NodeRequest, stream bool) (string, error) {
 	base, err := directBaseURL(params)
 	if err != nil {
 		return "", &NodeError{
 			Code:          CodeAgentNotConfigured,
-			HostID:        host.ID,
+			HostID:        hostID,
 			TransportType: model.TransportTypeDirect,
 			Operation:     "resolve",
 			Message:       err.Error(),
@@ -315,6 +355,101 @@ func (t *DirectTransport) urlFor(hostID string, req NodeRequest, stream bool) (s
 		}
 	}
 	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func (t *DirectTransport) httpClientFor(params *model.DirectParams) (*http.Client, error) {
+	tlsConfig, err := tlsConfigForDirect(params)
+	if err != nil {
+		return nil, err
+	}
+	connectTimeout := t.connectTimeout
+	if connectTimeout == 0 {
+		connectTimeout = defaultDirectConnectTimeout
+	}
+	requestTimeout := t.requestTimeout
+	if requestTimeout == 0 {
+		requestTimeout = defaultDirectRequestTimeout
+	}
+	return &http.Client{
+		Timeout: requestTimeout,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   connectTimeout,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout: connectTimeout,
+			TLSClientConfig:     tlsConfig,
+		},
+	}, nil
+}
+
+func (t *DirectTransport) wsDialerFor(params *model.DirectParams) (*websocket.Dialer, error) {
+	tlsConfig, err := tlsConfigForDirect(params)
+	if err != nil {
+		return nil, err
+	}
+	connectTimeout := t.connectTimeout
+	if connectTimeout == 0 {
+		connectTimeout = defaultDirectConnectTimeout
+	}
+	return &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: connectTimeout,
+		TLSClientConfig:  tlsConfig,
+		NetDialContext: (&net.Dialer{
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}, nil
+}
+
+func tlsConfigForDirect(params *model.DirectParams) (*tls.Config, error) {
+	if params == nil || !params.TLS {
+		return nil, nil
+	}
+	if strings.TrimSpace(params.CACert) == "" {
+		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(params.CACert)) {
+		return nil, fmt.Errorf("invalid direct CA certificate")
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
+}
+
+func applyDirectHeaders(dst http.Header, host model.Host, overrides http.Header) {
+	if host.Agent != nil && strings.TrimSpace(host.Agent.Token) != "" {
+		dst.Set("Authorization", "Bearer "+strings.TrimSpace(host.Agent.Token))
+	}
+	for key, values := range overrides {
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func isTimeoutError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) ||
+		strings.Contains(strings.ToLower(err.Error()), "timeout")
+}
+
+func directConfigError(hostID string, operation string, err error) error {
+	return &NodeError{
+		Code:          CodeAgentNotConfigured,
+		HostID:        hostID,
+		TransportType: model.TransportTypeDirect,
+		Operation:     operation,
+		Message:       err.Error(),
+		Cause:         err,
+	}
 }
 
 func (t *DirectTransport) directParamsFor(hostID string) (model.Host, *model.DirectParams, error) {
