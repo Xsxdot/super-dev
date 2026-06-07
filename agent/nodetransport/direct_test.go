@@ -110,9 +110,9 @@ func directHost(id, name, address string) model.Host {
 	return model.Host{
 		ID:   id,
 		Name: name,
-		Agent: &model.Agent{Transport: model.TransportConfig{
+		Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{{
 			Type:   model.TransportTypeDirect,
 			Direct: &model.DirectParams{Address: address, TLS: false},
-		}},
+		}}}},
 	}
 }

@@ -57,6 +57,7 @@ type NodeStatus struct {
 	Agent       model.AgentRuntime             `json:"agent"`
 	Deployments []model.InstanceStatus         `json:"deployments"`
 	Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
+	Route       *RouteStatus                   `json:"route,omitempty"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
 	Error       string                         `json:"error,omitempty"`
 }
@@ -84,6 +85,7 @@ func (s NodeStatus) MarshalJSON() ([]byte, error) {
 		Agent       model.AgentRuntime             `json:"agent"`
 		Deployments []model.InstanceStatus         `json:"deployments"`
 		Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
+		Route       *RouteStatus                   `json:"route,omitempty"`
 		UpdatedAt   time.Time                      `json:"updated_at"`
 		Error       string                         `json:"error,omitempty"`
 	}
@@ -94,6 +96,7 @@ func (s NodeStatus) MarshalJSON() ([]byte, error) {
 		Agent:       s.Agent,
 		Deployments: deployments,
 		Managed:     s.Managed,
+		Route:       s.Route,
 		UpdatedAt:   s.UpdatedAt,
 		Error:       s.Error,
 	})

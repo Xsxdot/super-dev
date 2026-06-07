@@ -107,7 +107,7 @@ func TestTunnelTransportCoversOnlyTunnelHosts(t *testing.T) {
 	tunnelHost := model.Host{ID: "h-tunnel"}
 	tunnelHost.EnsureTunnelAgent()
 	directHost := model.Host{ID: "h-direct", Agent: &model.Agent{
-		Transport: model.TransportConfig{Type: model.TransportTypeDirect},
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{Type: model.TransportTypeDirect}}},
 	}}
 	tr := nodetransport.NewTunnelTransport(tunnel.NewManager(fakeDialer{}), func() ([]model.Host, error) {
 		return []model.Host{tunnelHost, directHost}, nil

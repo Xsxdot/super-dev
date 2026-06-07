@@ -147,9 +147,7 @@ func (r *recordingTransport) Covers() []string {
 
 func hostWithTransport(id string, typ model.TransportType) model.Host {
 	return model.Host{
-		ID: id,
-		Agent: &model.Agent{Transport: model.TransportConfig{
-			Type: typ,
-		}},
+		ID:    id,
+		Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{{Type: typ}}}},
 	}
 }
