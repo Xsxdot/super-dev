@@ -887,6 +887,7 @@ export default {
     streamDisconnected: 'Live stream disconnected',
     emptyTitle: 'No remote hosts configured',
     emptyDescription: 'Add remote hosts in Settings to see node health and remote services here.',
+    degraded: 'degraded',
   },
   popover: {
     serviceSearchPlaceholder: 'Search services...',

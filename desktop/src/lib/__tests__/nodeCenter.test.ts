@@ -169,4 +169,14 @@ describe('nodeCenter view model', () => {
     expect(envIndex.get('dep-api')).toBe('prod')
     expect(envIndex.get('missing')).toBeUndefined()
   })
+
+  it('keeps current route status from node snapshots', () => {
+    const nodes = buildNodeCenterNodes(
+      [host()],
+      [node({ route: { selected_index: 1, selected_type: 'tunnel', degraded: true } })],
+      [],
+    )
+
+    expect(nodes[0].route).toEqual({ selectedIndex: 1, selectedType: 'tunnel', degraded: true })
+  })
 })

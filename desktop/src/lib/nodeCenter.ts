@@ -40,6 +40,11 @@ export interface NodeCenterNode {
   updatedAt?: string
   error?: string
   configured: boolean
+  route?: {
+    selectedType?: string
+    selectedIndex: number
+    degraded: boolean
+  }
 }
 
 const unknownAgent: AgentRuntime = {
@@ -122,6 +127,7 @@ function buildNodeFromHost(
     updatedAt: node.updated_at,
     error: node.error,
     configured: true,
+    route: routeFromNode(node),
   }
 }
 
@@ -142,7 +148,18 @@ function buildNodeFromSnapshot(
     updatedAt: node.updated_at,
     error: node.error,
     configured: false,
+    route: routeFromNode(node),
   }
+}
+
+function routeFromNode(node: NodeStatus) {
+  return node.route
+    ? {
+        selectedType: node.route.selected_type,
+        selectedIndex: node.route.selected_index,
+        degraded: node.route.degraded,
+      }
+    : undefined
 }
 
 function nodeDeployments(node: NodeStatus): RuntimeInstanceStatus[] {

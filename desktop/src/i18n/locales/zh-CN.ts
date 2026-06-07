@@ -887,6 +887,7 @@ export default {
     streamDisconnected: '实时状态未连接',
     emptyTitle: '还没有配置远端主机',
     emptyDescription: '在设置中添加远端主机后，可以在这里查看节点健康与远端服务状态。',
+    degraded: '已降级',
   },
   popover: {
     serviceSearchPlaceholder: '搜索服务...',

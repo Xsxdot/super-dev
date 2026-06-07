@@ -165,4 +165,13 @@ describe('NodeCard', () => {
 
     expect(wrapper.emitted('open-logs')?.[0]).toEqual(['dep-api', 'host-1'])
   })
+
+  it('renders current route and degraded marker', () => {
+    const wrapper = mount(NodeCard, {
+      props: { node: card({ route: { selectedIndex: 1, selectedType: 'tunnel', degraded: true } }) },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.text()).toContain('via tunnel (degraded)')
+  })
 })

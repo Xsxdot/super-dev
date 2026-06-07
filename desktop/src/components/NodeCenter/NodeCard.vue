@@ -39,6 +39,12 @@ function agentSummary(): string {
   return `${t('common.remote')} · ${version} · ${props.node.agent.health} · ${serviceSummary(props.node.serviceCount)}`
 }
 
+function routeSummary(): string {
+  if (!props.node.route?.selectedType) return ''
+  const via = `via ${props.node.route.selectedType}`
+  return props.node.route.degraded ? `${via} (${t('nodeCenter.degraded')})` : via
+}
+
 function openLogs(deploymentId: string, nodeId: string) {
   emit('open-logs', deploymentId, nodeId)
 }
@@ -56,6 +62,7 @@ function openLogs(deploymentId: string, nodeId: string) {
         <div class="node-title-text">
           <h2>{{ node.name }}</h2>
           <p>{{ agentSummary() }}</p>
+          <p v-if="routeSummary()" class="node-route">{{ routeSummary() }}</p>
         </div>
       </div>
       <span class="node-health-badge">{{ node.reachable ? node.agent.health : t('nodeCenter.disconnected') }}</span>
@@ -167,6 +174,9 @@ function openLogs(deploymentId: string, nodeId: string) {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.node-title-text .node-route {
+  color: var(--status-warning);
 }
 .node-health-badge {
   flex-shrink: 0;

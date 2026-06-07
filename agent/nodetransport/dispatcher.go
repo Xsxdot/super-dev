@@ -206,6 +206,7 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 				default:
 				}
 			}()
+			recoveredOnThisWatcher := false
 			for {
 				select {
 				case <-ctx.Done():
@@ -213,6 +214,9 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 				case batch, ok := <-ch:
 					if !ok {
 						return
+					}
+					if !recoveredOnThisWatcher && d.recoverChainHeadOnStatus(ctx, host, batch) {
+						recoveredOnThisWatcher = true
 					}
 					if routeIdx, ok := d.routeIndex(host.ID); ok && routeIdx != idx {
 						continue
@@ -285,6 +289,28 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 			reconcile()
 		}
 	}
+}
+
+func (d *Dispatcher) recoverChainHeadOnStatus(ctx context.Context, host model.Host, batch []NodeStatus) bool {
+	if !batchHasReachableHost(host.ID, batch) {
+		return false
+	}
+	d.mu.Lock()
+	route := d.routes[host.ID]
+	d.mu.Unlock()
+	if route.selectedIndex <= 0 {
+		return false
+	}
+	return d.recoverChainHead(ctx, host)
+}
+
+func batchHasReachableHost(hostID string, batch []NodeStatus) bool {
+	for _, status := range batch {
+		if status.HostID == hostID && status.Reachable {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Dispatcher) sortedProviders() []NodeTransport {
