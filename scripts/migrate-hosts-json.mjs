@@ -3,9 +3,9 @@
  * Formal hosts.json migration entrypoint.
  *
  * Responsibilities:
- *   - Convert legacy flat Host records into Host -> Agent -> Transport shape.
- *   - Support dry-run and apply modes for production ~/.superdev/hosts.json.
- *   - Back up the target file before applying changes.
+ *   - Split legacy hosts.json records into Host records plus agents.json records.
+ *   - Support dry-run and apply modes for production ~/.superdev data.
+ *   - Back up target files before applying changes.
  *
  * Boundaries:
  *   - Does not copy full SuperDev data directories.
@@ -20,119 +20,338 @@ import { pathToFileURL } from 'node:url';
 const DEFAULT_HOSTS_PATH = join(homedir(), '.superdev', 'hosts.json');
 const DEFAULT_SSH_PORT = 22;
 const DEFAULT_REMOTE_AGENT_PORT = 57017;
+const DEFAULT_AGENT_LISTEN_PORT = 57017;
 
-export function migrateHostsFile({ source, target = source, apply = false, now = timestamp }) {
+export function migrateHostsFile({
+  source,
+  target = source,
+  agentsSource = '',
+  agentsTarget = '',
+  apply = false,
+  now = timestamp,
+}) {
   const sourcePath = resolve(expandHome(source));
   const targetPath = resolve(expandHome(target));
-  const hosts = JSON.parse(readFileSync(sourcePath, 'utf8'));
-  if (!Array.isArray(hosts)) {
-    throw new Error('hosts.json must be a JSON array');
-  }
+  const sourceAgentsPath = agentsSource
+    ? resolve(expandHome(agentsSource))
+    : join(dirname(sourcePath), 'agents.json');
+  const targetAgentsPath = agentsTarget
+    ? resolve(expandHome(agentsTarget))
+    : join(dirname(targetPath), 'agents.json');
 
-  const summary = summarize(hosts);
+  const hosts = readHosts(sourcePath);
+  const existingAgents = readAgentsIfPresent(sourceAgentsPath);
+  const summary = summarizeHosts(hosts, existingAgents);
   if (!apply) {
-    return { ...summary, source: sourcePath, target: targetPath, backup: '' };
+    return {
+      ...summary,
+      source: sourcePath,
+      target: targetPath,
+      agentsSource: sourceAgentsPath,
+      agentsTarget: targetAgentsPath,
+      backup: '',
+      agentsBackup: '',
+    };
   }
 
   mkdirSync(dirname(targetPath), { recursive: true });
-  const backup = existsSync(targetPath) ? `${targetPath}.bak-${now()}` : '';
-  if (backup) {
-    copyFileSync(targetPath, backup);
-  }
-  const migrated = hosts.map(migrateHost);
-  writeFileSync(targetPath, `${JSON.stringify(migrated, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(targetPath, 0o600);
-  return { ...summary, source: sourcePath, target: targetPath, backup };
-}
-
-function migrateHost(host) {
-  const out = {
-    id: stringValue(host.id),
-    name: stringValue(host.name),
-    tags: Array.isArray(host.tags) ? host.tags : [],
+  mkdirSync(dirname(targetAgentsPath), { recursive: true });
+  const backup = backupFileIfPresent(targetPath, now);
+  const agentsBackup = backupFileIfPresent(targetAgentsPath, now);
+  const migrated = splitHostsAndAgents(hosts, { existingAgents });
+  writeJSON(targetPath, migrated.hosts, 0o600);
+  writeJSON(targetAgentsPath, migrated.agents, 0o600);
+  return {
+    ...summary,
+    source: sourcePath,
+    target: targetPath,
+    agentsSource: sourceAgentsPath,
+    agentsTarget: targetAgentsPath,
+    backup,
+    agentsBackup,
   };
-  setIfNonEmpty(out, 'public_ip', host.public_ip);
-  setIfNonEmpty(out, 'private_ip', host.private_ip);
-  if (isNestedHost(host)) {
-    out.agent = normalizeAgent(host.agent);
-    return out;
+}
+
+export function splitHostsAndAgents(hosts, { existingAgents = [] } = {}) {
+  const migratedHosts = [];
+  const migratedAgents = [];
+  const existingByHostID = new Map();
+  for (const agent of existingAgents) {
+    const normalized = normalizeExistingAgent(agent);
+    if (normalized.host_id) {
+      existingByHostID.set(normalized.host_id, normalized);
+    }
   }
-  out.agent = {
-    transport: {
-      chain: [{
-        type: 'tunnel',
-        tunnel: normalizeTunnel(host),
-      }],
-    },
-  };
-  return out;
-}
 
-function isNestedHost(host) {
-  return Boolean(host?.agent?.transport?.type || host?.agent?.transport?.chain);
-}
+  for (const host of hosts) {
+    const hostID = stringValue(host?.id);
+    const hostRecord = normalizeHost(host);
+    migratedHosts.push(hostRecord);
 
-function normalizeAgent(agent) {
-  const transport = agent?.transport ?? {};
-  const chain = Array.isArray(transport.chain) && transport.chain.length > 0
-    ? transport.chain.map(normalizeTransportEntry).filter(Boolean)
-    : [normalizeTransportEntry({
-      type: stringValue(transport.type || 'tunnel'),
-      tunnel: transport.tunnel,
-      direct: transport.direct,
-    })].filter(Boolean);
-  const out = {
-    transport: { chain },
-  };
-  setIfNonEmpty(out, 'token', agent?.token);
-  return out;
-}
+    if (isNestedHost(host)) {
+      migratedAgents.push(normalizeLegacyAgent(host, hostID));
+      continue;
+    }
 
-function normalizeTransportEntry(entry) {
-  const type = stringValue(entry?.type || 'tunnel');
-  if (type === 'tunnel') {
-    return { type, tunnel: normalizeTunnel(entry?.tunnel ?? entry ?? {}) };
+    const existingAgent = existingByHostID.get(hostID);
+    if (existingAgent) {
+      migratedAgents.push(existingAgent);
+      continue;
+    }
+
+    migratedAgents.push(normalizeLegacyAgent(host, hostID));
   }
-  if (type === 'direct') {
-    return { type, direct: normalizeDirect(entry?.direct ?? {}) };
-  }
-  return { type };
+
+  return { hosts: migratedHosts, agents: migratedAgents };
 }
 
-function normalizeTunnel(tunnel) {
-  const out = {
-    ssh_host: stringValue(tunnel.ssh_host),
-    ssh_port: numberValue(tunnel.ssh_port, DEFAULT_SSH_PORT),
-    ssh_user: stringValue(tunnel.ssh_user),
-    remote_agent_port: numberValue(tunnel.remote_agent_port, DEFAULT_REMOTE_AGENT_PORT),
-  };
-  setIfNonEmpty(out, 'ssh_password', tunnel.ssh_password);
-  setIfNonEmpty(out, 'ssh_key_path', tunnel.ssh_key_path);
-  setIfNonEmpty(out, 'ssh_private_key', tunnel.ssh_private_key);
-  return out;
+export function splitHostAndAgent(host) {
+  const split = splitHostsAndAgents([host]);
+  return { host: split.hosts[0], agent: split.agents[0] };
 }
 
-function normalizeDirect(direct) {
-  const out = {};
-  setIfNonEmpty(out, 'address', direct.address);
-  setIfNonEmpty(out, 'ca_cert', direct.ca_cert);
-  if (typeof direct.tls === 'boolean') {
-    out.tls = direct.tls;
-  }
-  return out;
-}
-
-function summarize(hosts) {
+export function summarizeHosts(hosts, existingAgents = []) {
   let legacy = 0;
   let nested = 0;
   for (const host of hosts) {
     if (isNestedHost(host)) {
       nested += 1;
-    } else {
+      continue;
+    }
+    if (existingAgents.length === 0) {
       legacy += 1;
     }
   }
   return { total: hosts.length, legacy, nested };
+}
+
+export function isNestedHost(host) {
+  return Boolean(host?.agent?.transport?.type || host?.agent?.transport?.chain);
+}
+
+function readHosts(hostsPath) {
+  const hosts = JSON.parse(readFileSync(hostsPath, 'utf8'));
+  if (!Array.isArray(hosts)) {
+    throw new Error('hosts.json must be a JSON array');
+  }
+  return hosts;
+}
+
+function readAgentsIfPresent(agentsPath) {
+  if (!existsSync(agentsPath)) {
+    return [];
+  }
+  const agents = JSON.parse(readFileSync(agentsPath, 'utf8'));
+  if (!Array.isArray(agents)) {
+    throw new Error(`agents.json must be a JSON array: ${agentsPath}`);
+  }
+  return agents;
+}
+
+function backupFileIfPresent(path, now) {
+  if (!existsSync(path)) {
+    return '';
+  }
+  const backup = `${path}.bak-${now()}`;
+  copyFileSync(path, backup);
+  return backup;
+}
+
+function normalizeHost(host) {
+  const tunnel = firstTunnelSource(host);
+  const out = {
+    id: stringValue(host?.id),
+    name: stringValue(host?.name),
+    tags: Array.isArray(host?.tags) ? host.tags : [],
+  };
+  setIfNonEmpty(out, 'public_ip', host?.public_ip);
+  setIfNonEmpty(out, 'private_ip', host?.private_ip);
+  setIfNonEmpty(out, 'ssh_host', firstNonEmpty(host?.ssh_host, tunnel?.ssh_host));
+  setIfNonEmpty(out, 'ssh_user', firstNonEmpty(host?.ssh_user, tunnel?.ssh_user));
+  setIfNonEmpty(out, 'ssh_password', firstNonEmpty(host?.ssh_password, tunnel?.ssh_password));
+
+  const port = firstPositiveInteger(host?.ssh_port, tunnel?.ssh_port);
+  const hasSSHIdentity = out.ssh_host || out.ssh_user || out.ssh_password || host?.ssh_private_key || tunnel?.ssh_private_key;
+  if (port > 0) {
+    out.ssh_port = port;
+  } else if (hasSSHIdentity) {
+    out.ssh_port = DEFAULT_SSH_PORT;
+  }
+
+  const keyContent = firstNonEmpty(
+    host?.ssh_private_key,
+    tunnel?.ssh_private_key,
+    readPrivateKeyContent(firstNonEmpty(host?.ssh_key_path, tunnel?.ssh_key_path)),
+  );
+  setIfNonEmpty(out, 'ssh_private_key', keyContent);
+  return out;
+}
+
+function normalizeLegacyAgent(host, hostID) {
+  const rawEntries = legacyTransportEntries(host);
+  const chain = rawEntries.map(normalizeTransportEntry).filter(Boolean);
+  const normalizedChain = chain.length > 0 ? chain : [normalizeTransportEntry({ type: 'tunnel', tunnel: host })];
+  const token = firstNonEmpty(host?.agent?.secret?.token, host?.agent?.token);
+  const agent = {
+    host_id: hostID,
+    transport: { chain: normalizedChain },
+    config: normalizeAgentConfig(host?.agent?.config, normalizedChain),
+    security: normalizeAgentSecurity(host?.agent, rawEntries, token),
+  };
+  if (token) {
+    agent.secret = { token };
+  }
+  return agent;
+}
+
+function normalizeExistingAgent(agent) {
+  const rawEntries = agentTransportEntries(agent);
+  const chain = rawEntries.map(normalizeTransportEntry).filter(Boolean);
+  const normalizedChain = chain.length > 0 ? chain : [{ type: 'tunnel', tunnel: { remote_agent_port: DEFAULT_REMOTE_AGENT_PORT } }];
+  const token = firstNonEmpty(agent?.secret?.token, agent?.token);
+  const out = {
+    host_id: stringValue(agent?.host_id),
+    transport: { chain: normalizedChain },
+    config: normalizeAgentConfig(agent?.config, normalizedChain),
+    security: normalizeAgentSecurity(agent, rawEntries, token),
+  };
+  if (token) {
+    out.secret = { token };
+  }
+  return out;
+}
+
+function normalizeAgentConfig(config, chain) {
+  const out = {};
+  setIfNonEmpty(out, 'listen_address', config?.listen_address);
+  const listenPort = firstPositiveInteger(config?.listen_port, firstTunnelPort(chain), DEFAULT_AGENT_LISTEN_PORT);
+  if (listenPort > 0) {
+    out.listen_port = listenPort;
+  }
+  return out;
+}
+
+function normalizeAgentSecurity(agent, rawEntries, token) {
+  const existingState = stringValue(agent?.security?.provision_state);
+  const out = {
+    provision_state: existingState || (token ? 'provisioned' : 'pending-bootstrap'),
+    token_configured: Boolean(agent?.security?.token_configured || token),
+    tls: normalizeTLSSpec(agent?.security?.tls, rawEntries),
+  };
+  return out;
+}
+
+function normalizeTLSSpec(existingTLS, rawEntries) {
+  if (isTLSMode(existingTLS?.mode)) {
+    const out = { mode: existingTLS.mode };
+    setIfNonEmpty(out, 'ca_cert', existingTLS?.ca_cert);
+    setIfNonEmpty(out, 'server_name', existingTLS?.server_name);
+    return out;
+  }
+
+  const direct = firstDirectSource(rawEntries);
+  const out = { mode: 'auto' };
+  if (!direct) {
+    return out;
+  }
+  if (direct.tls === false) {
+    out.mode = 'off';
+  } else if (stringValue(direct.ca_cert)) {
+    out.mode = 'manual';
+    out.ca_cert = stringValue(direct.ca_cert);
+  } else if (direct.tls === true) {
+    out.mode = 'auto';
+  }
+  setIfNonEmpty(out, 'server_name', direct.server_name);
+  return out;
+}
+
+function normalizeTransportEntry(entry) {
+  const type = stringValue(entry?.type || 'tunnel');
+  if (type === 'direct') {
+    const direct = entry?.direct ?? entry ?? {};
+    return { type, direct: normalizeDirect(direct) };
+  }
+  if (type === 'tunnel') {
+    const tunnel = entry?.tunnel ?? entry ?? {};
+    return { type, tunnel: normalizeTunnel(tunnel) };
+  }
+  return { type };
+}
+
+function normalizeTunnel(tunnel) {
+  return {
+    remote_agent_port: firstPositiveInteger(tunnel?.remote_agent_port, DEFAULT_REMOTE_AGENT_PORT),
+  };
+}
+
+function normalizeDirect(direct) {
+  const out = {};
+  setIfNonEmpty(out, 'address', direct?.address);
+  return out;
+}
+
+function legacyTransportEntries(host) {
+  if (!isNestedHost(host)) {
+    return [{ type: 'tunnel', tunnel: host }];
+  }
+  return agentTransportEntries(host?.agent);
+}
+
+function agentTransportEntries(agent) {
+  const transport = agent?.transport ?? {};
+  if (Array.isArray(transport.chain) && transport.chain.length > 0) {
+    return transport.chain;
+  }
+  return [{
+    type: stringValue(transport.type || 'tunnel'),
+    tunnel: transport.tunnel,
+    direct: transport.direct,
+  }];
+}
+
+function firstTunnelSource(host) {
+  if (!isNestedHost(host)) {
+    return host;
+  }
+  for (const entry of legacyTransportEntries(host)) {
+    const type = stringValue(entry?.type || 'tunnel');
+    if (type === 'tunnel') {
+      return entry?.tunnel ?? entry ?? {};
+    }
+  }
+  return {};
+}
+
+function firstDirectSource(rawEntries) {
+  for (const entry of rawEntries) {
+    const type = stringValue(entry?.type || '');
+    if (type === 'direct') {
+      return entry?.direct ?? entry ?? {};
+    }
+  }
+  return null;
+}
+
+function firstTunnelPort(chain) {
+  for (const entry of chain) {
+    if (entry?.type === 'tunnel' && Number.isInteger(entry?.tunnel?.remote_agent_port)) {
+      return entry.tunnel.remote_agent_port;
+    }
+  }
+  return 0;
+}
+
+function readPrivateKeyContent(keyPath) {
+  const normalized = stringValue(keyPath);
+  if (!normalized) {
+    return '';
+  }
+  const path = resolve(expandHome(normalized));
+  if (!existsSync(path)) {
+    return '';
+  }
+  return readFileSync(path, 'utf8');
 }
 
 function setIfNonEmpty(target, key, value) {
@@ -142,12 +361,36 @@ function setIfNonEmpty(target, key, value) {
   }
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const normalized = stringValue(value);
+    if (normalized !== '') {
+      return normalized;
+    }
+  }
+  return '';
+}
+
+function firstPositiveInteger(...values) {
+  for (const value of values) {
+    if (Number.isInteger(value) && value > 0) {
+      return value;
+    }
+  }
+  return 0;
+}
+
 function stringValue(value) {
   return typeof value === 'string' ? value : '';
 }
 
-function numberValue(value, fallback) {
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+function isTLSMode(value) {
+  return value === 'off' || value === 'auto' || value === 'manual';
+}
+
+function writeJSON(path, value, mode) {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode });
+  chmodSync(path, mode);
 }
 
 function expandHome(path) {
@@ -179,6 +422,7 @@ function parseArgs(argv) {
     apply: false,
     source: DEFAULT_HOSTS_PATH,
     target: '',
+    agentsTarget: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -191,6 +435,9 @@ function parseArgs(argv) {
         break;
       case '--target':
         opts.target = requireValue(argv, ++i, arg);
+        break;
+      case '--agents-target':
+        opts.agentsTarget = requireValue(argv, ++i, arg);
         break;
       case '--help':
       case '-h':
@@ -217,31 +464,36 @@ function requireValue(argv, index, flag) {
 
 function usage() {
   console.log(`Usage:
-  node scripts/migrate-hosts-json.mjs [--apply] [--source <hosts.json>] [--target <hosts.json>]
+  node scripts/migrate-hosts-json.mjs [--apply] [--source <hosts.json>] [--target <hosts.json>] [--agents-target <agents.json>]
 
 Defaults:
   --source ${DEFAULT_HOSTS_PATH}
   --target <same as --source>
+  --agents-target <target directory>/agents.json
 
-By default this is a dry-run. Add --apply to back up and rewrite hosts.json.`);
+By default this is a dry-run. Add --apply to back up and rewrite hosts.json plus agents.json.`);
 }
 
 function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
   const result = migrateHostsFile(opts);
-  console.log(`Source: ${result.source}`);
-  console.log(`Target: ${result.target}`);
-  console.log(`Mode:   ${opts.apply ? 'apply' : 'dry-run'}`);
+  console.log(`Source:       ${result.source}`);
+  console.log(`Target hosts: ${result.target}`);
+  console.log(`Target agents:${result.agentsTarget}`);
+  console.log(`Mode:         ${opts.apply ? 'apply' : 'dry-run'}`);
   console.log(
-    `hosts.json: ${result.total} host(s), ${result.legacy} legacy flat, ${result.nested} already nested`,
+    `hosts.json: ${result.total} host(s), ${result.legacy} legacy flat, ${result.nested} nested agent`,
   );
   if (opts.apply) {
     if (result.backup) {
-      console.log(`Backup: ${result.backup}`);
+      console.log(`Hosts backup:  ${result.backup}`);
+    }
+    if (result.agentsBackup) {
+      console.log(`Agents backup: ${result.agentsBackup}`);
     }
     console.log('Migration applied.');
   } else {
-    console.log('Dry-run only. Re-run with --apply to rewrite hosts.json.');
+    console.log('Dry-run only. Re-run with --apply to rewrite hosts.json and agents.json.');
   }
 }
 

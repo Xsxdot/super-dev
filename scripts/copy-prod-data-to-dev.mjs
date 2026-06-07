@@ -12,24 +12,14 @@
  *   - Does not start or stop SuperDev agents.
  *   - Does not validate SSH credentials or connect to remote hosts.
  */
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { splitHostAndAgent, splitHostsAndAgents, summarizeHosts } from './migrate-hosts-json.mjs';
 
 const DEFAULT_SOURCE_DIR = join(homedir(), '.superdev');
 const DEFAULT_TARGET_DIR = join(homedir(), '.superdev-dev');
-const DEFAULT_SSH_PORT = 22;
-const DEFAULT_REMOTE_AGENT_PORT = 57017;
 
 function usage() {
   console.log(`Usage:
@@ -97,8 +87,12 @@ export function main() {
   validateDirs(opts);
 
   const sourceHostsPath = join(opts.sourceDir, 'hosts.json');
+  const sourceAgentsPath = join(opts.sourceDir, 'agents.json');
   const sourceHosts = readHosts(sourceHostsPath);
-  const summary = summarizeHosts(sourceHosts);
+  const sourceAgents = readAgents(sourceAgentsPath);
+  const summary = sourceHosts
+    ? { ...summarizeHosts(sourceHosts, sourceAgents), missing: false }
+    : { total: 0, legacy: 0, nested: 0, missing: true };
 
   printPlan(opts, summary);
   if (!opts.apply) {
@@ -110,9 +104,11 @@ export function main() {
   copyDataDir(opts.sourceDir, opts.targetDir);
   const targetHostsPath = join(opts.targetDir, 'hosts.json');
   if (sourceHosts) {
-    const migrated = sourceHosts.map(migrateHostForDevCopy);
-    writeJSON(targetHostsPath, migrated, 0o600);
-    console.log(`Converted hosts.json: ${migrated.length} host(s)`);
+    const migrated = splitHostsAndAgents(sourceHosts, { existingAgents: sourceAgents });
+    writeJSON(targetHostsPath, migrated.hosts, 0o600);
+    writeJSON(join(opts.targetDir, 'agents.json'), migrated.agents, 0o600);
+    console.log(`Converted hosts.json: ${migrated.hosts.length} host(s)`);
+    console.log(`Converted agents.json: ${migrated.agents.length} agent(s)`);
   } else {
     console.log('No hosts.json found in source; copied data without host conversion.');
   }
@@ -145,20 +141,15 @@ function readHosts(hostsPath) {
   return parsed;
 }
 
-function summarizeHosts(hosts) {
-  if (!hosts) {
-    return { total: 0, legacy: 0, nested: 0, missing: true };
+function readAgents(agentsPath) {
+  if (!existsSync(agentsPath)) {
+    return [];
   }
-  let legacy = 0;
-  let nested = 0;
-  for (const host of hosts) {
-    if (isNestedHost(host)) {
-      nested += 1;
-    } else {
-      legacy += 1;
-    }
+  const parsed = JSON.parse(readFileSync(agentsPath, 'utf8'));
+  if (!Array.isArray(parsed)) {
+    throw new Error(`agents.json must be a JSON array: ${agentsPath}`);
   }
-  return { total: hosts.length, legacy, nested, missing: false };
+  return parsed;
 }
 
 function printPlan(opts, summary) {
@@ -195,102 +186,7 @@ function copyDataDir(sourceDir, targetDir) {
 }
 
 export function migrateHostForDevCopy(host) {
-  const out = {
-    id: stringValue(host.id),
-    name: stringValue(host.name),
-    tags: Array.isArray(host.tags) ? host.tags : [],
-  };
-  setIfNonEmpty(out, 'public_ip', host.public_ip);
-  setIfNonEmpty(out, 'private_ip', host.private_ip);
-
-  if (isNestedHost(host)) {
-    out.agent = normalizeAgent(host.agent);
-    return out;
-  }
-
-  out.agent = {
-    transport: {
-      chain: [{
-        type: 'tunnel',
-        tunnel: normalizeTunnel({
-          ssh_host: host.ssh_host,
-          ssh_port: host.ssh_port,
-          ssh_user: host.ssh_user,
-          ssh_password: host.ssh_password,
-          ssh_key_path: host.ssh_key_path,
-          ssh_private_key: host.ssh_private_key,
-          remote_agent_port: host.remote_agent_port,
-        }),
-      }],
-    },
-  };
-  return out;
-}
-
-function isNestedHost(host) {
-  return Boolean(host?.agent?.transport?.type || host?.agent?.transport?.chain);
-}
-
-function normalizeAgent(agent) {
-  const transport = agent.transport ?? {};
-  const chain = Array.isArray(transport.chain) && transport.chain.length > 0
-    ? transport.chain.map(normalizeTransportEntry).filter(Boolean)
-    : [normalizeTransportEntry({
-        type: stringValue(transport.type || 'tunnel'),
-        tunnel: transport.tunnel,
-        direct: transport.direct,
-      })].filter(Boolean);
-  const out = {
-    transport: { chain },
-  };
-  setIfNonEmpty(out, 'token', agent?.token);
-  return out;
-}
-
-function normalizeTransportEntry(entry) {
-  const type = stringValue(entry?.type || 'tunnel');
-  if (type === 'direct') {
-    return { type, direct: normalizeDirect(entry?.direct ?? {}) };
-  }
-  return { type: 'tunnel', tunnel: normalizeTunnel(entry?.tunnel ?? {}) };
-}
-
-function normalizeTunnel(tunnel) {
-  const out = {
-    ssh_host: stringValue(tunnel.ssh_host),
-    ssh_port: numberValue(tunnel.ssh_port, DEFAULT_SSH_PORT),
-    ssh_user: stringValue(tunnel.ssh_user),
-    remote_agent_port: numberValue(tunnel.remote_agent_port, DEFAULT_REMOTE_AGENT_PORT),
-  };
-  setIfNonEmpty(out, 'ssh_password', tunnel.ssh_password);
-  setIfNonEmpty(out, 'ssh_key_path', tunnel.ssh_key_path);
-  setIfNonEmpty(out, 'ssh_private_key', tunnel.ssh_private_key);
-  return out;
-}
-
-function normalizeDirect(direct) {
-  const out = {};
-  setIfNonEmpty(out, 'address', direct.address);
-  if (typeof direct.tls === 'boolean') {
-    out.tls = direct.tls;
-  }
-  setIfNonEmpty(out, 'ca_cert', direct.ca_cert);
-  return out;
-}
-
-function setIfNonEmpty(target, key, value) {
-  const normalized = stringValue(value);
-  if (normalized !== '') {
-    target[key] = normalized;
-  }
-}
-
-function stringValue(value) {
-  return typeof value === 'string' ? value : '';
-}
-
-function numberValue(value, fallback) {
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+  return splitHostAndAgent(host);
 }
 
 function writeJSON(path, value, mode) {
