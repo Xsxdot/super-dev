@@ -14,19 +14,25 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AgentDTO, AgentRuntime, AgentUpdatePayload } from '@/api/agent'
+import type { AgentCreatePayload, AgentDTO, AgentRuntime, AgentTransportUpdatePayload } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
+import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
 import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
+import AgentCreateModal from './AgentCreateModal.vue'
 import AgentConfigModal from './AgentConfigModal.vue'
+import AgentSecurityPanel from './AgentSecurityPanel.vue'
 import AgentInstallModal from './AgentInstallModal.vue'
 
 const agentsStore = useAgentsStore()
+const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
 const { t } = useI18n()
 
+const createVisible = ref(false)
 const configTarget = ref<AgentDTO | null>(null)
+const securityTarget = ref<AgentDTO | null>(null)
 const installTarget = ref<AgentDTO | null>(null)
 const checking = ref<Set<string>>(new Set())
 const removing = ref<Set<string>>(new Set())
@@ -36,9 +42,14 @@ const sortedAgents = computed(() =>
   [...agentsStore.agents].sort((a, b) => a.host_name.localeCompare(b.host_name) || a.host_id.localeCompare(b.host_id)),
 )
 
+const availableHosts = computed(() => {
+  const configured = new Set(agentsStore.agents.map(agent => agent.host_id))
+  return remoteStore.hosts.filter(host => !configured.has(host.id)).sort((a, b) => a.name.localeCompare(b.name))
+})
+
 onMounted(async () => {
   try {
-    await Promise.all([agentsStore.loadAgents(), nodeStore.start()])
+    await Promise.all([remoteStore.loadHosts(), agentsStore.loadAgents(), nodeStore.start()])
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settings.agents.loadFailed')
   }
@@ -61,7 +72,7 @@ function transportLabel(agent: AgentDTO): string {
   }
   if (primary.type === 'tunnel') {
     const tunnel = primary.tunnel
-    return tunnel ? `tunnel · ${tunnel.ssh_user}@${tunnel.ssh_host}:${tunnel.ssh_port}${suffix}` : `tunnel${suffix}`
+    return tunnel ? `tunnel · :${tunnel.remote_agent_port}${suffix}` : `tunnel${suffix}`
   }
   return `${primary.type}${suffix}`
 }
@@ -75,10 +86,23 @@ function updatedLabel(agent: AgentDTO): string {
   ) || '-'
 }
 
-async function saveConfig(payload: AgentUpdatePayload) {
+async function createAgent(payload: AgentCreatePayload) {
+  try {
+    await agentsStore.createAgent(payload)
+    createVisible.value = false
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('settings.agents.saveFailed')
+  }
+}
+
+async function refresh() {
+  await Promise.all([remoteStore.loadHosts(), agentsStore.loadAgents()])
+}
+
+async function saveConfig(payload: AgentTransportUpdatePayload) {
   if (!configTarget.value) return
   try {
-    await agentsStore.updateAgent(configTarget.value.host_id, payload)
+    await agentsStore.updateAgentTransport(configTarget.value.host_id, payload)
     configTarget.value = null
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settings.agents.saveFailed')
@@ -124,7 +148,10 @@ async function removeAgent(agent: AgentDTO) {
         <h1 class="settings-pane-title">{{ t('settings.agents.title') }}</h1>
       </div>
       <div class="settings-toolbar">
-        <button class="settings-btn settings-btn-secondary" type="button" :disabled="agentsStore.loading" @click="agentsStore.loadAgents()">
+        <button class="settings-btn settings-btn-primary" type="button" data-test="agent-create" :disabled="availableHosts.length === 0" @click="createVisible = true">
+          + {{ t('settings.agents.create') }}
+        </button>
+        <button class="settings-btn settings-btn-secondary" type="button" :disabled="agentsStore.loading" @click="refresh">
           {{ t('settings.agents.refresh') }}
         </button>
       </div>
@@ -169,6 +196,9 @@ async function removeAgent(agent: AgentDTO) {
               <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-edit-${agent.host_id}`" @click="configTarget = agent">
                 {{ t('settings.agents.editConnection') }}
               </button>
+              <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-security-${agent.host_id}`" @click="securityTarget = agent">
+                {{ t('settings.agents.securityConfig') }}
+              </button>
               <button class="settings-btn settings-btn-text" type="button" :data-test="`agent-install-${agent.host_id}`" @click="installTarget = agent">
                 {{ t('settings.agents.install') }}
               </button>
@@ -188,11 +218,22 @@ async function removeAgent(agent: AgentDTO) {
     </div>
     <div v-else class="settings-empty">{{ t('settings.agents.empty') }}</div>
 
+    <AgentCreateModal
+      :visible="createVisible"
+      :hosts="availableHosts"
+      @submit="createAgent"
+      @cancel="createVisible = false"
+    />
     <AgentConfigModal
       :visible="Boolean(configTarget)"
       :agent="configTarget"
       @submit="saveConfig"
       @cancel="configTarget = null"
+    />
+    <AgentSecurityPanel
+      :visible="Boolean(securityTarget)"
+      :agent="securityTarget"
+      @cancel="securityTarget = null"
     />
     <AgentInstallModal
       :visible="Boolean(installTarget)"

@@ -6,7 +6,7 @@
 //   - 在远端 agent 安全态下保护 /api/* 与 /ws/*
 //
 // 边界：
-//   - 不生成 Host.Agent.Token
+//   - 不生成桌面侧 Agent secret
 //   - 不直接更新 desktop hosts.json
 //   - 不执行服务重启
 package api

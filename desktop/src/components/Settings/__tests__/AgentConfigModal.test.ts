@@ -4,7 +4,8 @@
  * Responsibilities:
  *   - Verify ordered transport entries can be added, removed, and moved
  *   - Verify submit emits TransportConfig.chain
- *   - Verify per-entry test/provision actions call the agents store
+ *   - Verify transport editor does not expose Agent security or Host SSH fields
+ *   - Verify per-entry test action calls the agents store
  *
  * Boundaries:
  *   - Does not call the real backend
@@ -25,12 +26,13 @@ function agent(): AgentDTO {
     tags: [],
     transport: {
       chain: [
-        { type: 'direct', direct: { address: '100.64.0.8:57017', tls: true, ca_cert: 'PEM' } },
-        { type: 'tunnel', tunnel: { ssh_host: '10.0.0.8', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017 } },
+        { type: 'direct', direct: { address: '100.64.0.8:57017' } },
+        { type: 'tunnel', tunnel: { remote_agent_port: 57017 } },
       ],
     },
     runtime: { installed: false, health: 'unknown', reachable: false },
-    security: { token_configured: false, provision_state: 'pending-bootstrap' },
+    config: { listen_port: 57017 },
+    security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: 'manual', ca_cert: 'PEM' } },
   }
 }
 
@@ -65,7 +67,20 @@ describe('AgentConfigModal', () => {
     expect(wrapper.findAll('[data-test^="transport-entry-"]')).toHaveLength(2)
   })
 
-  it('calls test and provision actions for one entry', async () => {
+  it('only exposes transport-specific fields', async () => {
+    const wrapper = mount(AgentConfigModal, {
+      props: { visible: true, agent: agent() },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="direct-tls-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="direct-ca-cert-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tunnel-ssh-host-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tunnel-remote-agent-port-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="transport-provision-0"]').exists()).toBe(false)
+  })
+
+  it('calls test action for one entry', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'testTransport').mockResolvedValue({
       index: 0,
@@ -74,7 +89,6 @@ describe('AgentConfigModal', () => {
       reachable: true,
       checked_at: '2026-06-07T10:00:00Z',
     })
-    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
     const wrapper = mount(AgentConfigModal, {
       props: { visible: true, agent: agent() },
       global: { plugins: [installTestI18n('en-US')] },
@@ -83,22 +97,5 @@ describe('AgentConfigModal', () => {
     await wrapper.find('[data-test="transport-test-0"]').trigger('click')
     expect(store.testTransport).toHaveBeenCalledWith('h1', 0)
     expect(wrapper.text()).toContain('pending-bootstrap')
-
-    await wrapper.find('[data-test="transport-provision-0"]').trigger('click')
-    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'manual' })
-  })
-
-  it('sends off TLS mode when direct TLS is disabled before provision', async () => {
-    const store = useAgentsStore()
-    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
-    const wrapper = mount(AgentConfigModal, {
-      props: { visible: true, agent: agent() },
-      global: { plugins: [installTestI18n('en-US')] },
-    })
-
-    await wrapper.find('[data-test="direct-tls-0"]').setValue(false)
-    await wrapper.find('[data-test="transport-provision-0"]').trigger('click')
-
-    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'off' })
   })
 })

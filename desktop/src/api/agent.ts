@@ -575,19 +575,11 @@ export interface FetchLogContextPageParams {
 export type TransportType = 'tunnel' | 'direct' | 'mq' | 'bridge'
 
 export interface TunnelParams {
-  ssh_host: string
-  ssh_port: number
-  ssh_user: string
-  ssh_password?: string
-  ssh_key_path?: string
-  ssh_private_key?: string
   remote_agent_port: number
 }
 
 export interface DirectParams {
   address?: string
-  tls?: boolean
-  ca_cert?: string
 }
 
 export interface TransportEntry {
@@ -606,6 +598,12 @@ export interface Host {
   public_ip?: string
   private_ip?: string
   tags: string[]
+  ssh_host?: string
+  ssh_port?: number
+  ssh_user?: string
+  ssh_password?: string
+  ssh_private_key?: string
+  ssh_key_path?: string
   is_self?: boolean
   node_id?: string
 }
@@ -722,9 +720,23 @@ export interface RouteStatus {
   last_results?: ProbeResult[]
 }
 
+export type AgentTLSMode = 'off' | 'auto' | 'manual'
+
+export interface AgentTLSSpec {
+  mode: AgentTLSMode | string
+  ca_cert?: string
+  server_name?: string
+}
+
+export interface AgentConfig {
+  listen_address?: string
+  listen_port?: number
+}
+
 export interface AgentSecurity {
   token_configured: boolean
   provision_state: 'not-configured' | 'pending-bootstrap' | 'provisioned' | string
+  tls: AgentTLSSpec
 }
 
 export interface AgentDTO {
@@ -732,6 +744,7 @@ export interface AgentDTO {
   host_name: string
   tags: string[]
   transport: TransportConfig
+  config: AgentConfig
   runtime: AgentRuntime
   security: AgentSecurity
   node?: NodeStatus
@@ -739,8 +752,22 @@ export interface AgentDTO {
   updated_at?: string
 }
 
-export interface AgentUpdatePayload {
+export interface AgentCreatePayload {
+  host_id: string
   transport: TransportConfig
+  config: AgentConfig
+  security: AgentSecurity
+}
+
+export interface AgentTransportUpdatePayload {
+  transport: TransportConfig
+}
+
+export type AgentUpdatePayload = AgentTransportUpdatePayload
+
+export interface AgentConfigUpdatePayload {
+  config: AgentConfig
+  security: AgentSecurity
 }
 
 export interface AgentInstallCommandPayload {
@@ -922,6 +949,12 @@ export interface HostCreatePayload {
   public_ip?: string
   private_ip?: string
   tags?: string[]
+  ssh_host?: string
+  ssh_port?: number
+  ssh_user?: string
+  ssh_password?: string
+  ssh_private_key?: string
+  ssh_key_path?: string
 }
 
 export type HostUpdatePayload = Partial<HostCreatePayload>
@@ -961,10 +994,22 @@ export const api = {
     request<RuntimeStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/runtime-status`),
   listNodes: () => request<NodeStatus[]>('/api/nodes'),
   listAgents: () => request<AgentDTO[]>('/api/agents'),
+  createAgent: (payload: AgentCreatePayload) =>
+    request<AgentDTO>('/api/agents', { method: 'POST', body: JSON.stringify(payload) }),
   getAgent: (hostId: string) =>
     request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}`),
   updateAgent: (hostId: string, payload: AgentUpdatePayload) =>
     request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateAgentTransport: (hostId: string, payload: AgentTransportUpdatePayload) =>
+    request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/transport`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  updateAgentConfig: (hostId: string, payload: AgentConfigUpdatePayload) =>
+    request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/config`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),

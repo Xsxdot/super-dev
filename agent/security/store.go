@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不注册 HTTP 路由
-//   - 不决定 Host.Agent.Token 如何下发
+//   - 不决定桌面侧 Agent secret 如何下发
 //   - 不启动或重启服务进程
 package security
 

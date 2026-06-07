@@ -15,10 +15,12 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   api,
+  type AgentConfigUpdatePayload,
+  type AgentCreatePayload,
   type AgentDTO,
   type AgentInstallCommandPayload,
   type AgentProvisionPayload,
-  type AgentUpdatePayload,
+  type AgentTransportUpdatePayload,
 } from '@/api/agent'
 
 export const useAgentsStore = defineStore('agents', () => {
@@ -40,8 +42,24 @@ export const useAgentsStore = defineStore('agents', () => {
     }
   }
 
-  async function updateAgent(hostId: string, payload: AgentUpdatePayload) {
-    const updated = await api.updateAgent(hostId, payload)
+  async function createAgent(payload: AgentCreatePayload) {
+    const created = await api.createAgent(payload)
+    upsert(created)
+    return created
+  }
+
+  async function updateAgentTransport(hostId: string, payload: AgentTransportUpdatePayload) {
+    const updated = await api.updateAgentTransport(hostId, payload)
+    upsert(updated)
+    return updated
+  }
+
+  async function updateAgent(hostId: string, payload: AgentTransportUpdatePayload) {
+    return updateAgentTransport(hostId, payload)
+  }
+
+  async function updateAgentConfig(hostId: string, payload: AgentConfigUpdatePayload) {
+    const updated = await api.updateAgentConfig(hostId, payload)
     upsert(updated)
     return updated
   }
@@ -87,7 +105,10 @@ export const useAgentsStore = defineStore('agents', () => {
     error,
     agentsByHost,
     loadAgents,
+    createAgent,
     updateAgent,
+    updateAgentTransport,
+    updateAgentConfig,
     checkAgent,
     deleteAgent,
     generateInstallCommand,

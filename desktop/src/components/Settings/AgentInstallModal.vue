@@ -41,6 +41,10 @@ const form = reactive({
 })
 
 const title = computed(() => t('settings.agents.installTitle', { name: props.agent?.host_name ?? '' }))
+const transportOptions = computed(() => {
+  const configured = props.agent?.transport.chain.map(entry => entry.type).filter(type => type === 'direct' || type === 'tunnel') ?? []
+  return [...new Set(configured)]
+})
 
 watch(
   () => props.visible,
@@ -113,10 +117,7 @@ async function copyCommand() {
             <div class="settings-field flex">
               <label class="settings-field-label">{{ t('settings.agents.transport') }}</label>
               <select v-model="form.transportType" class="settings-select">
-                <option value="tunnel">tunnel</option>
-                <option value="direct">direct</option>
-                <option value="mq">mq</option>
-                <option value="bridge">bridge</option>
+                <option v-for="type in transportOptions" :key="type" :value="type">{{ type }}</option>
               </select>
             </div>
             <div class="settings-field port">

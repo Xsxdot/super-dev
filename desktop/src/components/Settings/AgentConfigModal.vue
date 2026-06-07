@@ -3,11 +3,12 @@ AgentConfigModal：编辑 Host Agent 的有序连接链。
 
 职责：
   - 收集 direct/tunnel transport chain 参数
-  - 提供链路增删、排序、探测和安全下发入口
-  - 生成 AgentUpdatePayload 交由父组件保存
+  - 提供链路增删、排序和探测入口
+  - 生成 AgentTransportUpdatePayload 交由父组件保存
 
 边界：
   - 不保存 Host 身份字段
+  - 不编辑 TLS/token 等 Agent 统一安全配置
   - 不执行安装命令生成
   - 不直接调用底层 HTTP API，通过 agents store 处理动作
 -->
@@ -15,7 +16,7 @@ AgentConfigModal：编辑 Host Agent 的有序连接链。
 import { reactive, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { useAgentsStore } from '@/stores/agents'
-import type { AgentDTO, AgentUpdatePayload, ProbeResult, TransportEntry, TransportType } from '@/api/agent'
+import type { AgentDTO, AgentTransportUpdatePayload, ProbeResult, TransportEntry, TransportType } from '@/api/agent'
 
 const props = defineProps<{
   visible: boolean
@@ -23,7 +24,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [payload: AgentUpdatePayload]
+  submit: [payload: AgentTransportUpdatePayload]
   cancel: []
 }>()
 
@@ -35,18 +36,24 @@ const actionError = ref<string | null>(null)
 
 function defaultEntry(type: TransportType): TransportEntry {
   if (type === 'tunnel') {
-    return { type, tunnel: { ssh_host: '', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017 } }
+    return { type, tunnel: { remote_agent_port: 57017 } }
   }
-  return { type: 'direct', direct: { address: '', tls: true, ca_cert: '' } }
+  return { type: 'direct', direct: { address: '' } }
+}
+
+function normalizeEntry(entry: TransportEntry): TransportEntry {
+  if (entry.type === 'tunnel') {
+    return { type: 'tunnel', tunnel: { remote_agent_port: entry.tunnel?.remote_agent_port || 57017 } }
+  }
+  if (entry.type === 'direct') {
+    return { type: 'direct', direct: { address: entry.direct?.address ?? '' } }
+  }
+  return { type: entry.type }
 }
 
 function cloneChain(agent?: AgentDTO | null): TransportEntry[] {
   const source = agent?.transport?.chain?.length ? agent.transport.chain : [defaultEntry('direct')]
-  return source.map(entry => ({
-    type: entry.type,
-    direct: entry.direct ? { ...entry.direct } : undefined,
-    tunnel: entry.tunnel ? { ...entry.tunnel } : undefined,
-  }))
+  return source.map(normalizeEntry)
 }
 
 function addEntry(type: TransportType) {
@@ -77,26 +84,8 @@ async function testEntry(index: number) {
   }
 }
 
-async function provisionEntry(index: number) {
-  if (!props.agent) return
-  actionError.value = null
-  try {
-    await agentsStore.provisionAgent(props.agent.host_id, { index, tls_mode: provisionTLSMode(index) })
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
-  }
-}
-
-function provisionTLSMode(index: number): 'off' | 'auto' | 'manual' {
-  const entry = chain.value[index]
-  if (entry?.type !== 'direct' || !entry.direct?.tls) {
-    return 'off'
-  }
-  return entry.direct.ca_cert?.trim() ? 'manual' : 'auto'
-}
-
 function submit() {
-  emit('submit', { transport: { chain: chain.value } } satisfies AgentUpdatePayload)
+  emit('submit', { transport: { chain: chain.value.map(normalizeEntry) } } satisfies AgentTransportUpdatePayload)
 }
 
 watch(
@@ -144,49 +133,18 @@ watch(
               <label class="settings-field-label">{{ t('settings.agents.directAddress') }}</label>
               <input v-model="entry.direct.address" class="settings-input" placeholder="100.64.0.8:57017" />
             </div>
-            <label class="inline-check">
-              <input v-model="entry.direct.tls" type="checkbox" :data-test="`direct-tls-${index}`" />
-              {{ t('settings.agents.useTLS') }}
-            </label>
-            <div class="settings-field">
-              <label class="settings-field-label">{{ t('settings.agents.caCert') }}</label>
-              <textarea v-model="entry.direct.ca_cert" class="settings-input cert-box" />
-            </div>
           </template>
 
           <template v-if="entry.type === 'tunnel' && entry.tunnel">
-            <div class="row">
-              <div class="settings-field flex">
-                <label class="settings-field-label">{{ t('settings.hostForm.sshAddress') }}</label>
-                <input v-model="entry.tunnel.ssh_host" class="settings-input" />
-              </div>
-              <div class="settings-field port">
-                <label class="settings-field-label">{{ t('settings.hostForm.port') }}</label>
-                <input v-model.number="entry.tunnel.ssh_port" class="settings-input" type="number" min="1" />
-              </div>
-            </div>
-            <div class="settings-field">
-              <label class="settings-field-label">{{ t('settings.hostForm.sshUser') }}</label>
-              <input v-model="entry.tunnel.ssh_user" class="settings-input" />
-            </div>
             <div class="settings-field">
               <label class="settings-field-label">{{ t('settings.hostForm.remoteAgentPort') }}</label>
-              <input v-model.number="entry.tunnel.remote_agent_port" class="settings-input" type="number" min="1" />
+              <input v-model.number="entry.tunnel.remote_agent_port" class="settings-input" type="number" min="1" :data-test="`tunnel-remote-agent-port-${index}`" />
             </div>
           </template>
 
           <footer class="transport-entry-actions">
             <button type="button" class="settings-btn" :data-test="`transport-test-${index}`" @click="testEntry(index)">
               {{ t('settings.agents.testTransport') }}
-            </button>
-            <button
-              v-if="props.agent?.security.provision_state === 'pending-bootstrap'"
-              type="button"
-              class="settings-btn settings-btn-secondary"
-              :data-test="`transport-provision-${index}`"
-              @click="provisionEntry(index)"
-            >
-              {{ t('settings.agents.provisionSecurity') }}
             </button>
             <span v-if="probeResults[index]" class="probe-result">{{ probeResults[index]?.status }}</span>
           </footer>

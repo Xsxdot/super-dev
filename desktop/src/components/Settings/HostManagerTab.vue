@@ -4,7 +4,7 @@ HostManagerTab：设置页 Host 身份管理标签页。
 职责：
   - 列出远程 Host 的身份、地址元数据和 tag
   - 提供 Host 新建、编辑、删除入口
-  - 展示该 Host 的 Agent 配置与 NodeRegistry 运行态摘要
+  - 展示 SSH 登录方式摘要
 
 边界：
   - 不编辑 Agent 连接方式，Agent 配置由 AgentManagerTab 负责
@@ -12,18 +12,14 @@ HostManagerTab：设置页 Host 身份管理标签页。
   - 不执行 Agent 安装、卸载或探活
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRemoteStore } from '@/stores/remote'
-import { useAgentsStore } from '@/stores/agents'
-import { useNodeStore } from '@/stores/node'
 import { tagColor } from '@/lib/tagColor'
 import HostFormModal from './HostFormModal.vue'
-import type { AgentRuntime, Host, HostCreatePayload } from '@/api/agent'
+import type { Host, HostCreatePayload } from '@/api/agent'
 
 const store = useRemoteStore()
-const agentsStore = useAgentsStore()
-const nodeStore = useNodeStore()
 const { t } = useI18n()
 
 const formVisible = ref(false)
@@ -36,14 +32,10 @@ const sortedHosts = computed(() =>
 
 onMounted(async () => {
   try {
-    await Promise.all([store.loadHosts(), agentsStore.loadAgents(), nodeStore.start()])
+    await store.loadHosts()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settings.hosts.loadFailed')
   }
-})
-
-onUnmounted(() => {
-  nodeStore.stop()
 })
 
 function openCreate() {
@@ -83,20 +75,11 @@ function addressLabel(host: Host): string {
   return parts.length > 0 ? parts.join(' / ') : '-'
 }
 
-function agentRuntime(host: Host): AgentRuntime | undefined {
-  return nodeStore.agentRuntimeOf(host.id) ?? agentsStore.agentOf(host.id)?.runtime
-}
-
-function agentSummary(host: Host): string {
-  const configured = agentsStore.agentOf(host.id)
-  const runtime = agentRuntime(host)
-  if (!configured && !runtime) return t('settings.hosts.agentNotConfigured')
-  const parts = [
-    configured?.transport.chain[0]?.type ?? t('settings.hosts.agentConfiguredUnknown'),
-    runtime?.health,
-    runtime?.version ? `v${runtime.version.replace(/^v/, '')}` : '',
-  ].filter(Boolean)
-  return parts.join(' · ')
+function sshLabel(host: Host): string {
+  if (!host.ssh_host && !host.ssh_user) return '-'
+  const user = host.ssh_user ? `${host.ssh_user}@` : ''
+  const port = host.ssh_port ? `:${host.ssh_port}` : ''
+  return `${user}${host.ssh_host || '-'}${port}`
 }
 </script>
 
@@ -118,8 +101,8 @@ function agentSummary(host: Host): string {
           <tr>
             <th>{{ t('settings.hosts.name') }}</th>
             <th>{{ t('settings.hosts.address') }}</th>
+            <th>{{ t('settings.hostForm.sshAddress') }}</th>
             <th>{{ t('settings.hosts.tags') }}</th>
-            <th>{{ t('settings.hosts.agent') }}</th>
             <th></th>
           </tr>
         </thead>
@@ -128,6 +111,9 @@ function agentSummary(host: Host): string {
             <td>{{ host.name }}</td>
             <td>
               <div class="address-meta" data-test="host-address-meta">{{ addressLabel(host) }}</div>
+            </td>
+            <td>
+              <div class="address-meta mono" data-test="host-ssh-meta">{{ sshLabel(host) }}</div>
             </td>
             <td>
               <span
@@ -139,7 +125,6 @@ function agentSummary(host: Host): string {
                 {{ tag }}
               </span>
             </td>
-            <td data-test="host-agent-summary">{{ agentSummary(host) }}</td>
             <td class="row-actions" data-test="host-row-actions">
               <button class="settings-btn settings-btn-text" data-test="host-edit" @click="openEdit(host)">{{ t('common.edit') }}</button>
               <button class="settings-btn settings-btn-text settings-btn-danger" data-test="host-delete" @click="handleDelete(host)">{{ t('common.delete') }}</button>
@@ -166,6 +151,9 @@ function agentSummary(host: Host): string {
 .address-meta {
   color: var(--text-secondary);
   font-size: 12px;
+}
+.mono {
+  font-family: var(--font-mono, monospace);
 }
 .tag-chip {
   display: inline-block;

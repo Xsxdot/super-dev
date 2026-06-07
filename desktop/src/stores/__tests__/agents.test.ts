@@ -22,7 +22,9 @@ vi.mock('@/api/agent', async () => {
     api: {
       ...actual.api,
       listAgents: vi.fn(),
-      updateAgent: vi.fn(),
+      createAgent: vi.fn(),
+      updateAgentTransport: vi.fn(),
+      updateAgentConfig: vi.fn(),
       deleteAgent: vi.fn(),
       checkAgent: vi.fn(),
       generateAgentInstallCommand: vi.fn(),
@@ -37,9 +39,10 @@ function agent(hostId = 'h1'): AgentDTO {
     host_id: hostId,
     host_name: 'ali-01',
     tags: ['prod'],
-    transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } }] },
+    transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017' } }] },
+    config: { listen_port: 57017 },
     runtime: { installed: true, health: 'healthy', reachable: true, version: '0.1.0' },
-    security: { token_configured: false, provision_state: 'not-configured' },
+    security: { token_configured: false, provision_state: 'not-configured', tls: { mode: 'auto' } },
   }
 }
 
@@ -58,16 +61,46 @@ describe('agents store', () => {
     expect(store.agentOf('h1')?.host_name).toBe('ali-01')
   })
 
-  it('updates transport config through agent api', async () => {
-    vi.mocked(api.updateAgent).mockResolvedValue(agent('h1'))
+  it('creates an agent through first-class agent api', async () => {
+    vi.mocked(api.createAgent).mockResolvedValue(agent('h1'))
     const store = useAgentsStore()
 
-    await store.updateAgent('h1', {
-      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.9:57017', tls: false } }] },
+    await store.createAgent({
+      host_id: 'h1',
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.9:57017' } }] },
+      config: { listen_port: 57017 },
+      security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: 'auto' } },
     })
 
-    expect(api.updateAgent).toHaveBeenCalledWith('h1', expect.objectContaining({
+    expect(api.createAgent).toHaveBeenCalledWith(expect.objectContaining({ host_id: 'h1' }))
+    expect(store.agentOf('h1')).toBeDefined()
+  })
+
+  it('updates transport config through agent transport api', async () => {
+    vi.mocked(api.updateAgentTransport).mockResolvedValue(agent('h1'))
+    const store = useAgentsStore()
+
+    await store.updateAgentTransport('h1', {
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.9:57017' } }] },
+    })
+
+    expect(api.updateAgentTransport).toHaveBeenCalledWith('h1', expect.objectContaining({
       transport: expect.objectContaining({ chain: expect.any(Array) }),
+    }))
+  })
+
+  it('updates unified config and security through agent config api', async () => {
+    vi.mocked(api.updateAgentConfig).mockResolvedValue(agent('h1'))
+    const store = useAgentsStore()
+
+    await store.updateAgentConfig('h1', {
+      config: { listen_port: 57018 },
+      security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: 'manual', ca_cert: 'PEM' } },
+    })
+
+    expect(api.updateAgentConfig).toHaveBeenCalledWith('h1', expect.objectContaining({
+      config: expect.objectContaining({ listen_port: 57018 }),
+      security: expect.objectContaining({ tls: expect.objectContaining({ mode: 'manual' }) }),
     }))
   })
 

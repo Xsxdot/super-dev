@@ -2,11 +2,11 @@
 HostFormModal：单 Host 身份信息新建与编辑表单。
 
 职责：
-  - 收集 Host 展示名、入口地址元数据和 tag 字段
-  - 将 identity-only payload 交由父组件保存
+  - 收集 Host 展示名、入口地址元数据、SSH 登录信息和 tag 字段
+  - 将 Host payload 交由父组件保存
 
 边界：
-  - 不收集 SSH 凭据、agent 端口或连接方式
+  - 不收集 Agent 端口或 transport chain
   - 不直接调用远程 API
   - 不负责 Agent 安装或连接测试
 -->
@@ -34,6 +34,11 @@ function emptyForm(): HostCreatePayload {
     name: '',
     public_ip: '',
     private_ip: '',
+    ssh_host: '',
+    ssh_port: 22,
+    ssh_user: 'root',
+    ssh_password: '',
+    ssh_private_key: '',
     tags: [],
   }
 }
@@ -47,6 +52,11 @@ watch(
         name: initial.name,
         public_ip: initial.public_ip ?? '',
         private_ip: initial.private_ip ?? '',
+        ssh_host: initial.ssh_host ?? '',
+        ssh_port: initial.ssh_port || 22,
+        ssh_user: initial.ssh_user ?? 'root',
+        ssh_password: initial.ssh_password ?? '',
+        ssh_private_key: initial.ssh_private_key ?? '',
         tags: [...initial.tags],
       }
       return
@@ -61,6 +71,11 @@ function submit() {
     name: form.value.name,
     public_ip: form.value.public_ip,
     private_ip: form.value.private_ip,
+    ssh_host: form.value.ssh_host,
+    ssh_port: Number(form.value.ssh_port) || 22,
+    ssh_user: form.value.ssh_user,
+    ssh_password: form.value.ssh_password,
+    ssh_private_key: form.value.ssh_private_key,
     tags: form.value.tags ?? [],
   })
 }
@@ -94,6 +109,32 @@ function submit() {
           <label class="settings-field-label">{{ t('settings.hosts.tags') }}</label>
           <TagInput v-model="form.tags!" data-test="host-form-tags" />
         </div>
+
+        <div class="row">
+          <div class="settings-field flex">
+            <label class="settings-field-label">{{ t('settings.hostForm.sshAddress') }}</label>
+            <input v-model="form.ssh_host" class="settings-input" placeholder="10.0.0.10" data-test="host-form-ssh-host" />
+          </div>
+          <div class="settings-field port">
+            <label class="settings-field-label">{{ t('settings.hostForm.port') }}</label>
+            <input v-model.number="form.ssh_port" class="settings-input" type="number" min="1" data-test="host-form-ssh-port" />
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshUser') }}</label>
+          <input v-model="form.ssh_user" class="settings-input" placeholder="root" data-test="host-form-ssh-user" />
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshPassword') }}</label>
+          <input v-model="form.ssh_password" class="settings-input" type="password" :placeholder="t('settings.hostForm.passwordHint')" data-test="host-form-ssh-password" />
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.sshPrivateKey') }}</label>
+          <textarea v-model="form.ssh_private_key" class="settings-input key-box" data-test="host-form-ssh-private-key" />
+        </div>
       </div>
 
       <div class="settings-modal-footer">
@@ -112,4 +153,10 @@ function submit() {
 .req { color: var(--status-failed); }
 .row { display: flex; gap: 8px; }
 .settings-field.flex { flex: 1; }
+.port { width: 96px; }
+.key-box {
+  min-height: 112px;
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+}
 </style>
