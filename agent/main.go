@@ -25,6 +25,8 @@ func main() {
 	sampleBinary := flag.String("sample-binary", "", "Path to bundled onboarding sample service binary")
 	bootstrapToken := flag.String("bootstrap-token", "", "One-time bootstrap token for first security provision")
 	requireAuth := flag.Bool("require-auth", false, "Require bearer token authentication for agent API")
+	tlsCertFile := flag.String("tls-cert-file", "", "HTTPS certificate file for manually managed TLS")
+	tlsKeyFile := flag.String("tls-key-file", "", "HTTPS private key file for manually managed TLS")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
@@ -36,6 +38,8 @@ func main() {
 		SampleBinaryPath: *sampleBinary,
 		BootstrapToken:   *bootstrapToken,
 		RequireAuth:      *requireAuth,
+		TLSCertFile:      *tlsCertFile,
+		TLSKeyFile:       *tlsKeyFile,
 	})
 	if err != nil {
 		log.Fatal("create app:", err)

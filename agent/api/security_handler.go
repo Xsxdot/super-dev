@@ -76,7 +76,10 @@ func (a *App) withSecurity(next http.Handler) http.Handler {
 }
 
 func securityBypassPath(path string) bool {
-	return path == "/api/security/health" || path == "/api/security/provision"
+	return path == "/api/security/health" ||
+		path == "/api/security/provision" ||
+		path == "/api/agents/install.sh" ||
+		path == "/api/agents/install-binary"
 }
 
 func bearerToken(r *http.Request) string {

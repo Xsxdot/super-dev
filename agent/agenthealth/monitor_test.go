@@ -87,6 +87,18 @@ func TestProbeOnceMapsVersionMismatch(t *testing.T) {
 	assert.Equal(t, agenthealth.StatusVersionMismatch, m.Status("h1"))
 }
 
+func TestProbeOnceUsesExplicitProbeStatus(t *testing.T) {
+	prober := &fakeProber{results: map[string]agenthealth.ProbeResult{
+		"h1": {Status: agenthealth.StatusAuthFailed},
+	}}
+	m := agenthealth.NewMonitor(prober)
+
+	info := m.ProbeOnce(context.Background(), "h1")
+
+	assert.Equal(t, agenthealth.StatusAuthFailed, info.Status)
+	assert.Equal(t, agenthealth.StatusAuthFailed, m.Status("h1"))
+}
+
 func TestProbeOnceMapsUnreachable(t *testing.T) {
 	// 探活报错（超时/连接失败）→ unreachable
 	prober := &fakeProber{errs: map[string]error{"h1": errors.New("dial timeout")}}

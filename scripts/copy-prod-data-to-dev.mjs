@@ -24,6 +24,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 const DEFAULT_SOURCE_DIR = join(homedir(), '.superdev');
 const DEFAULT_TARGET_DIR = join(homedir(), '.superdev-dev');
@@ -91,7 +92,7 @@ function expandHome(path) {
   return path;
 }
 
-function main() {
+export function main() {
   const opts = parseArgs(process.argv.slice(2));
   validateDirs(opts);
 
@@ -109,7 +110,7 @@ function main() {
   copyDataDir(opts.sourceDir, opts.targetDir);
   const targetHostsPath = join(opts.targetDir, 'hosts.json');
   if (sourceHosts) {
-    const migrated = sourceHosts.map(migrateHost);
+    const migrated = sourceHosts.map(migrateHostForDevCopy);
     writeJSON(targetHostsPath, migrated, 0o600);
     console.log(`Converted hosts.json: ${migrated.length} host(s)`);
   } else {
@@ -193,7 +194,7 @@ function copyDataDir(sourceDir, targetDir) {
   });
 }
 
-function migrateHost(host) {
+export function migrateHostForDevCopy(host) {
   const out = {
     id: stringValue(host.id),
     name: stringValue(host.name),
@@ -242,6 +243,7 @@ function normalizeAgent(agent) {
   const out = {
     transport: { chain },
   };
+  setIfNonEmpty(out, 'token', agent?.token);
   return out;
 }
 
@@ -310,9 +312,11 @@ function timestamp() {
   ].join('');
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

@@ -84,6 +84,49 @@ func TestGenerateAgentInstallCommandAcceptsTransportTypeAfterChainValidation(t *
 	assert.Contains(t, result.Response.Command, "--host-id h1")
 }
 
+func TestAgentInstallScriptRouteValidatesInstallToken(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), RequireAuth: true})
+	require.NoError(t, err)
+	defer app.Close()
+	result, err := generateAgentInstallCommand("h1", agentInstallCommandRequest{
+		ControllerURL: "http://100.64.0.10:57017",
+		TransportType: model.TransportTypeDirect,
+	}, time.Now().UTC())
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(result.Token)
+	token := extractInstallToken(t, result.Response.Command)
+
+	okResp := httptestDo(t, app, http.MethodGet, "/api/agents/install.sh?token="+url.QueryEscape(token), nil)
+	require.Equal(t, http.StatusOK, okResp.Code)
+	assert.Contains(t, okResp.Body.String(), "--require-auth")
+	assert.Contains(t, okResp.Body.String(), "--bootstrap-token")
+	assert.Contains(t, okResp.Body.String(), "/api/agents/install-binary?token=")
+
+	badResp := httptestDo(t, app, http.MethodGet, "/api/agents/install.sh?token=wrong", nil)
+	assert.Equal(t, http.StatusUnauthorized, badResp.Code)
+}
+
+func TestAgentInstallBinaryRouteValidatesInstallToken(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), RequireAuth: true})
+	require.NoError(t, err)
+	defer app.Close()
+	result, err := generateAgentInstallCommand("h1", agentInstallCommandRequest{
+		ControllerURL: "http://100.64.0.10:57017",
+		TransportType: model.TransportTypeDirect,
+	}, time.Now().UTC())
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(result.Token)
+	token := extractInstallToken(t, result.Response.Command)
+
+	okResp := httptestDo(t, app, http.MethodGet, "/api/agents/install-binary?token="+url.QueryEscape(token), nil)
+	require.Equal(t, http.StatusOK, okResp.Code)
+	assert.Equal(t, "application/octet-stream", okResp.Header().Get("Content-Type"))
+	assert.NotEmpty(t, okResp.Body.Bytes())
+
+	badResp := httptestDo(t, app, http.MethodGet, "/api/agents/install-binary?token=wrong", nil)
+	assert.Equal(t, http.StatusUnauthorized, badResp.Code)
+}
+
 func extractInstallToken(t *testing.T, command string) string {
 	t.Helper()
 	const marker = "install.sh?token="

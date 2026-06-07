@@ -17,6 +17,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
@@ -43,74 +45,8 @@ func (a *App) testAgentTransport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result := nodetransport.ProbeResult{
-		Index:         req.Index,
-		TransportType: entry.Type,
-		CheckedAt:     time.Now().UTC(),
-	}
-	start := time.Now()
-	resp, err := a.nodeTransport.Do(r.Context(), host.ID, nodetransport.NodeRequest{Method: http.MethodGet, Path: nodetransport.SecurityHealthPath})
-	result.LatencyMS = time.Since(start).Milliseconds()
-	if err != nil {
-		result.Status = nodetransport.ProbeStatusUnreachable
-		result.Error = err.Error()
-		jsonOK(w, result)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized {
-		result.Status = nodetransport.ProbeStatusAuthFailed
-		result.Error = "token rejected"
-		jsonOK(w, result)
-		return
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		result.Status = nodetransport.ProbeStatusVersionMismatch
-		result.Error = "security health endpoint missing"
-		jsonOK(w, result)
-		return
-	}
-	if resp.StatusCode/100 != 2 {
-		result.Status = nodetransport.ProbeStatusUnreachable
-		result.Reachable = false
-		result.Error = "security health failed"
-		jsonOK(w, result)
-		return
-	}
-	result.Reachable = true
-	var health nodetransport.SecurityHealthResponse
-	_ = json.NewDecoder(resp.Body).Decode(&health)
-	result.Version = health.Version
-	if health.ProvisionState == "pending-bootstrap" {
-		result.Status = nodetransport.ProbeStatusPendingBootstrap
-		jsonOK(w, result)
-		return
-	}
-	authResp, err := a.nodeTransport.Do(r.Context(), host.ID, nodetransport.NodeRequest{Method: http.MethodGet, Path: nodetransport.SecurityAuthCheckPath})
-	if err != nil {
-		result.Status = nodetransport.ProbeStatusUnreachable
-		result.Reachable = false
-		result.Error = err.Error()
-		jsonOK(w, result)
-		return
-	}
-	defer authResp.Body.Close()
-	if authResp.StatusCode == http.StatusUnauthorized {
-		result.Status = nodetransport.ProbeStatusAuthFailed
-		result.Reachable = false
-		result.Error = "token rejected"
-		jsonOK(w, result)
-		return
-	}
-	if authResp.StatusCode/100 != 2 {
-		result.Status = nodetransport.ProbeStatusUnreachable
-		result.Reachable = false
-		result.Error = "auth check failed"
-		jsonOK(w, result)
-		return
-	}
-	result.Status = nodetransport.ProbeStatusReachable
-	jsonOK(w, result)
+	provider := a.nodeTransportProvider(entry.Type)
+	jsonOK(w, nodetransport.ProbeEntry(r.Context(), provider, host, req.Index, *entry, 800*time.Millisecond))
 }
 
 func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
@@ -128,22 +64,30 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusConflict, "bootstrap token unavailable; regenerate install command and reinstall agent")
 		return
 	}
-	longToken, err := security.GenerateToken()
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	if host.Agent == nil {
 		host.Agent = &model.Agent{}
+	}
+	longToken := strings.TrimSpace(host.Agent.Token)
+	if longToken == "" {
+		var err error
+		longToken, err = security.GenerateToken()
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	host.Agent.Token = longToken
 	if err := a.remoteStore.UpdateHost(host); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	body, _ := json.Marshal(security.ProvisionRequest{Token: longToken, TLSMode: req.TLSMode})
+	body, _ := json.Marshal(security.ProvisionRequest{
+		Token:   longToken,
+		TLSMode: req.TLSMode,
+		Hosts:   directProvisionHosts(entry),
+	})
 	headers := http.Header{"Authorization": []string{"Bearer " + record.BootstrapToken}}
-	resp, err := a.nodeTransport.Do(r.Context(), host.ID, nodetransport.NodeRequest{
+	resp, err := a.nodeTransportProvider(entry.Type).Do(r.Context(), host.ID, nodetransport.NodeRequest{
 		Method:  http.MethodPost,
 		Path:    "/api/security/provision",
 		Headers: headers,
@@ -187,6 +131,34 @@ func (a *App) agentTransportEntryByIndex(w http.ResponseWriter, hostID string, i
 		return model.Host{}, nil, false
 	}
 	return host, &host.Agent.Transport.Chain[index], true
+}
+
+func (a *App) nodeTransportProvider(typ model.TransportType) nodetransport.NodeTransport {
+	if a.nodeTransportProviders != nil {
+		if provider := a.nodeTransportProviders[typ]; provider != nil {
+			return provider
+		}
+	}
+	return a.nodeTransport
+}
+
+func directProvisionHosts(entry *model.TransportEntry) []string {
+	if entry == nil || entry.Direct == nil || strings.TrimSpace(entry.Direct.Address) == "" {
+		return nil
+	}
+	address := strings.TrimSpace(entry.Direct.Address)
+	if !strings.Contains(address, "://") {
+		address = "http://" + address
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return nil
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return nil
+	}
+	return []string{host}
 }
 
 func (a *App) latestInstallTokenForHost(hostID string) (agentInstallTokenRecord, bool) {

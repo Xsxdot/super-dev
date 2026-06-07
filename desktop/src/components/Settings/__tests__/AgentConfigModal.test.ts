@@ -85,6 +85,20 @@ describe('AgentConfigModal', () => {
     expect(wrapper.text()).toContain('pending-bootstrap')
 
     await wrapper.find('[data-test="transport-provision-0"]').trigger('click')
-    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'manual' })
+  })
+
+  it('sends off TLS mode when direct TLS is disabled before provision', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
+    const wrapper = mount(AgentConfigModal, {
+      props: { visible: true, agent: agent() },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('[data-test="direct-tls-0"]').setValue(false)
+    await wrapper.find('[data-test="transport-provision-0"]').trigger('click')
+
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'off' })
   })
 })

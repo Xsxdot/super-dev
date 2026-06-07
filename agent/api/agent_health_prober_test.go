@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
@@ -59,6 +60,8 @@ func (t agentHealthTestTransport) Covers() []string {
 func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == nodetransport.SecurityHealthPath:
+			return agentHealthProbeJSONResponse(http.StatusOK, `{"version":"0.1.0","provision_state":"provisioned"}`), nil
 		case r.Method == http.MethodGet && r.URL.Path == "/api/hosts":
 			return agentHealthProbeResponse(http.StatusOK), nil
 		case r.Method == http.MethodGet && r.URL.Path == "/api/tunnels":
@@ -81,6 +84,36 @@ func TestAgentHealthProberAllEndpointsOK(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.AllEndpointsOK)
 	assert.Equal(t, "0.1.0", res.Version)
+}
+
+func TestAgentHealthProberReturnsPendingBootstrapFromSecurityHealth(t *testing.T) {
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && r.URL.Path == nodetransport.SecurityHealthPath {
+			return agentHealthProbeJSONResponse(http.StatusOK, `{"version":"0.1.0","provision_state":"pending-bootstrap"}`), nil
+		}
+		return agentHealthProbeResponse(http.StatusOK), nil
+	})
+
+	res, err := p.Probe(context.Background(), "h1")
+
+	require.NoError(t, err)
+	assert.Equal(t, agenthealth.StatusPendingBootstrap, res.Status)
+	assert.False(t, res.AllEndpointsOK)
+}
+
+func TestAgentHealthProberReturnsAuthFailedOnProtectedEndpoint401(t *testing.T) {
+	p := agentHealthProberWithRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && r.URL.Path == nodetransport.SecurityHealthPath {
+			return agentHealthProbeJSONResponse(http.StatusOK, `{"version":"0.1.0","provision_state":"provisioned"}`), nil
+		}
+		return agentHealthProbeResponse(http.StatusUnauthorized), nil
+	})
+
+	res, err := p.Probe(context.Background(), "h1")
+
+	require.NoError(t, err)
+	assert.Equal(t, agenthealth.StatusAuthFailed, res.Status)
+	assert.False(t, res.AllEndpointsOK)
 }
 
 func TestAgentHealthProberMissingEndpoint(t *testing.T) {

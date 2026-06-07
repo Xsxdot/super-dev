@@ -81,10 +81,18 @@ async function provisionEntry(index: number) {
   if (!props.agent) return
   actionError.value = null
   try {
-    await agentsStore.provisionAgent(props.agent.host_id, { index, tls_mode: 'auto' })
+    await agentsStore.provisionAgent(props.agent.host_id, { index, tls_mode: provisionTLSMode(index) })
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   }
+}
+
+function provisionTLSMode(index: number): 'off' | 'auto' | 'manual' {
+  const entry = chain.value[index]
+  if (entry?.type !== 'direct' || !entry.direct?.tls) {
+    return 'off'
+  }
+  return entry.direct.ca_cert?.trim() ? 'manual' : 'auto'
 }
 
 function submit() {
@@ -137,7 +145,7 @@ watch(
               <input v-model="entry.direct.address" class="settings-input" placeholder="100.64.0.8:57017" />
             </div>
             <label class="inline-check">
-              <input v-model="entry.direct.tls" type="checkbox" />
+              <input v-model="entry.direct.tls" type="checkbox" :data-test="`direct-tls-${index}`" />
               {{ t('settings.agents.useTLS') }}
             </label>
             <div class="settings-field">

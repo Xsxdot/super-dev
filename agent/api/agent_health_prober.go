@@ -63,6 +63,19 @@ func newAgentHealthProber(transport nodetransport.NodeTransport) *agentHealthPro
 // 任一必需 endpoint 返回不可接受状态时 AllEndpointsOK 为 false。
 func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agenthealth.ProbeResult, error) {
 	version := ""
+	securityState, err := p.probeSecurityHealth(ctx, hostID)
+	if err != nil {
+		return agenthealth.ProbeResult{}, err
+	}
+	if securityState.ProvisionState == "pending-bootstrap" {
+		return agenthealth.ProbeResult{
+			Status:  agenthealth.StatusPendingBootstrap,
+			Version: securityState.Version,
+		}, nil
+	}
+	if securityState.ProvisionState != "" {
+		version = securityState.Version
+	}
 	for _, ep := range agentHealthRequiredEndpoints {
 		reqCtx, cancel := context.WithTimeout(ctx, agentHealthProbeTimeout)
 		resp, err := p.transport.Do(reqCtx, hostID, nodetransport.NodeRequest{
@@ -74,6 +87,11 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 			return agenthealth.ProbeResult{}, err
 		}
 		status := resp.StatusCode
+		if status == http.StatusUnauthorized {
+			resp.Body.Close()
+			cancel()
+			return agenthealth.ProbeResult{Status: agenthealth.StatusAuthFailed, Version: version}, nil
+		}
 		if ep.Method == http.MethodGet && ep.Path == "/api/exec/health" && status == http.StatusOK {
 			var body agentExecHealthResponse
 			if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
@@ -88,6 +106,31 @@ func (p *agentHealthProber) Probe(ctx context.Context, hostID string) (agentheal
 		}
 	}
 	return agenthealth.ProbeResult{AllEndpointsOK: true, Version: version}, nil
+}
+
+func (p *agentHealthProber) probeSecurityHealth(ctx context.Context, hostID string) (nodetransport.SecurityHealthResponse, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, agentHealthProbeTimeout)
+	defer cancel()
+	resp, err := p.transport.Do(reqCtx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   nodetransport.SecurityHealthPath,
+	})
+	if err != nil {
+		return nodetransport.SecurityHealthResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nodetransport.SecurityHealthResponse{}, nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nodetransport.SecurityHealthResponse{}, nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return nodetransport.SecurityHealthResponse{}, nil
+	}
+	var body nodetransport.SecurityHealthResponse
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return body, nil
 }
 
 func endpointStatusOK(status int, acceptable []int) bool {

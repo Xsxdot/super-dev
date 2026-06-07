@@ -15,6 +15,8 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -68,6 +70,10 @@ type AppConfig struct {
 	BootstrapToken string
 	// RequireAuth 控制 agent API 是否必须完成安全自举后才允许访问。
 	RequireAuth bool
+	// TLSCertFile 是用户手动配置的 HTTPS 服务端证书路径；必须与 TLSKeyFile 同时提供。
+	TLSCertFile string
+	// TLSKeyFile 是用户手动配置的 HTTPS 服务端私钥路径；必须与 TLSCertFile 同时提供。
+	TLSKeyFile string
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -102,6 +108,8 @@ type App struct {
 	securityStore *security.Store
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
 	nodeTransport nodetransport.NodeTransport
+	// nodeTransportProviders 按 transport type 保存具体 provider，供 per-entry probe/provision 精确选路。
+	nodeTransportProviders map[model.TransportType]nodetransport.NodeTransport
 	// nodeRegistry 持有所有远端节点的最新状态快照。
 	nodeRegistry *noderegistry.Registry
 	// nodeRegistryCancel 停止节点状态流订阅。
@@ -211,12 +219,15 @@ func NewApp(cfg AppConfig) (*App, error) {
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, remoteStore.ListHosts)
 	directTransport := nodetransport.NewDirectTransport(remoteStore.ListHosts)
-	nodeTransport := nodetransport.NodeTransport(nodetransport.NewDispatcher(remoteStore.ListHosts, map[model.TransportType]nodetransport.NodeTransport{
+	nodeTransportProviders := map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeTunnel: tunnelTransport,
 		model.TransportTypeDirect: directTransport,
-	}))
+	}
+	appNodeTransportProviders := nodeTransportProviders
+	nodeTransport := nodetransport.NodeTransport(nodetransport.NewDispatcher(remoteStore.ListHosts, nodeTransportProviders))
 	if cfg.NodeTransportOverride != nil {
 		nodeTransport = cfg.NodeTransportOverride
+		appNodeTransportProviders = map[model.TransportType]nodetransport.NodeTransport{}
 	}
 	nodeRegistry := cfg.NodeRegistryOverride
 	if nodeRegistry == nil {
@@ -286,6 +297,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		operationAudit:              operationAudit,
 		securityStore:               securityStore,
 		nodeTransport:               nodeTransport,
+		nodeTransportProviders:      appNodeTransportProviders,
 		nodeRegistry:                nodeRegistry,
 		nodeRegistryCancel:          nodeRegistryCancel,
 		backends:                    map[string]logbackend.LogBackend{},
@@ -442,6 +454,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
+	mux.HandleFunc("GET /api/agents/install.sh", a.serveAgentInstallScript)
+	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)
 	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
 	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
@@ -503,7 +517,41 @@ func (a *App) Start(addr string) error {
 	a.loadRegisteredProjects()
 	a.loadManagedDeployments()
 	a.startManagedDeploymentReconciler()
-	return http.ListenAndServe(addr, a.Handler())
+	server := &http.Server{Addr: addr, Handler: a.Handler()}
+	tlsConfig, enabled, err := a.tlsConfigForListen()
+	if err != nil {
+		return err
+	}
+	if enabled {
+		server.TLSConfig = tlsConfig
+		return server.ListenAndServeTLS("", "")
+	}
+	return server.ListenAndServe()
+}
+
+func (a *App) tlsConfigForListen() (*tls.Config, bool, error) {
+	if a.cfg.TLSCertFile != "" || a.cfg.TLSKeyFile != "" {
+		if a.cfg.TLSCertFile == "" || a.cfg.TLSKeyFile == "" {
+			return nil, false, errors.New("tls cert file and key file must be configured together")
+		}
+		cert, err := tls.LoadX509KeyPair(a.cfg.TLSCertFile, a.cfg.TLSKeyFile)
+		if err != nil {
+			return nil, false, err
+		}
+		return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, true, nil
+	}
+	if a.securityStore == nil {
+		return nil, false, nil
+	}
+	state := a.securityStore.State()
+	if state.TLSMode != security.TLSModeAuto || state.ServerCert == "" || state.ServerKey == "" {
+		return nil, false, nil
+	}
+	cert, err := tls.X509KeyPair([]byte(state.ServerCert), []byte(state.ServerKey))
+	if err != nil {
+		return nil, false, err
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, true, nil
 }
 
 func (a *App) startManagedDeploymentReconciler() {

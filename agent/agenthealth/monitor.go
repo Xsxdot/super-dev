@@ -30,6 +30,10 @@ const (
 	StatusUnreachable Status = "unreachable"
 	// StatusVersionMismatch 表示探得到但接口不全/版本旧。
 	StatusVersionMismatch Status = "version-mismatch"
+	// StatusAuthFailed 表示 agent 可达但长期 token 被拒绝。
+	StatusAuthFailed Status = "auth-failed"
+	// StatusPendingBootstrap 表示 agent 可达但仍等待 bootstrap provision。
+	StatusPendingBootstrap Status = "pending-bootstrap"
 )
 
 // ProbeResult 是一次探活的结果。
@@ -37,6 +41,7 @@ const (
 type ProbeResult struct {
 	AllEndpointsOK bool
 	Version        string
+	Status         Status
 }
 
 // Prober 抽象“对某个 host 的远端 agent 探活一次”。生产实现见 api 层（通过隧道 baseURL 请求必需 endpoint）。
@@ -200,6 +205,9 @@ func (m *Monitor) classify(ctx context.Context, hostID string) Info {
 	res, err := m.prober.Probe(ctx, hostID)
 	if err != nil {
 		return Info{Status: StatusUnreachable, CheckedAt: now}
+	}
+	if res.Status != "" {
+		return Info{Status: res.Status, Version: res.Version, CheckedAt: now}
 	}
 	if res.AllEndpointsOK {
 		return Info{Status: StatusHealthy, Version: res.Version, CheckedAt: now}

@@ -20,6 +20,8 @@ type ServiceOptions struct {
 	Port           int
 	RequireAuth    bool
 	BootstrapToken string
+	TLSCertFile    string
+	TLSKeyFile     string
 }
 
 func (o ServiceOptions) listenAddr() string {
@@ -41,6 +43,9 @@ func (o ServiceOptions) commandArgs() []string {
 	}
 	if strings.TrimSpace(o.BootstrapToken) != "" {
 		args = append(args, "--bootstrap-token", o.BootstrapToken)
+	}
+	if strings.TrimSpace(o.TLSCertFile) != "" && strings.TrimSpace(o.TLSKeyFile) != "" {
+		args = append(args, "--tls-cert-file", o.TLSCertFile, "--tls-key-file", o.TLSKeyFile)
 	}
 	return args
 }
