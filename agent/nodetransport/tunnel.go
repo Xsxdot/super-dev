@@ -17,23 +17,20 @@ import (
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
-// HostSource 返回当前已配置的远端 Host 列表。
-type HostSource func() ([]model.Host, error)
-
 // TunnelTransport 通过已建立的 SSH 隧道访问远端 agent。
 type TunnelTransport struct {
 	mgr                     *tunnel.Manager
-	hosts                   HostSource
+	targets                 TargetSource
 	client                  *http.Client
 	wsDialer                *websocket.Dialer
 	statusReconnectInterval time.Duration
 }
 
 // NewTunnelTransport 创建 SSH 隧道传输实现。
-func NewTunnelTransport(mgr *tunnel.Manager, hosts HostSource) *TunnelTransport {
+func NewTunnelTransport(mgr *tunnel.Manager, targets TargetSource) *TunnelTransport {
 	return &TunnelTransport{
 		mgr:                     mgr,
-		hosts:                   hosts,
+		targets:                 targets,
 		client:                  http.DefaultClient,
 		wsDialer:                websocket.DefaultDialer,
 		statusReconnectInterval: 5 * time.Second,
@@ -53,7 +50,11 @@ func (t *TunnelTransport) SetStatusReconnectIntervalForTest(interval time.Durati
 
 // Do 对 hostID 发起一次 HTTP 请求。
 func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest) (NodeResponse, error) {
-	u, err := t.ensureURLFor(hostID, req, false)
+	target, err := t.ensureTargetFor(hostID)
+	if err != nil {
+		return NodeResponse{}, err
+	}
+	u, err := t.urlForTarget(target, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -65,8 +66,12 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	t.applyTunnelHeaders(httpReq.Header, hostID, req.Headers)
-	resp, err := t.client.Do(httpReq)
+	applyAgentHeaders(httpReq.Header, target.Agent, req.Headers)
+	client, err := t.httpClientFor(target)
+	if err != nil {
+		return NodeResponse{}, directConfigError(hostID, "http", err)
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -75,13 +80,21 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 
 // Stream 对 hostID 建立 WebSocket 流。
 func (t *TunnelTransport) Stream(ctx context.Context, hostID string, req NodeRequest) (NodeStream, error) {
-	u, err := t.ensureURLFor(hostID, req, true)
+	target, err := t.ensureTargetFor(hostID)
+	if err != nil {
+		return nil, err
+	}
+	u, err := t.urlForTarget(target, req, true)
 	if err != nil {
 		return nil, err
 	}
 	headers := http.Header{}
-	t.applyTunnelHeaders(headers, hostID, req.Headers)
-	conn, resp, err := t.wsDialer.DialContext(ctx, u, headers)
+	applyAgentHeaders(headers, target.Agent, req.Headers)
+	dialer, err := t.wsDialerFor(target)
+	if err != nil {
+		return nil, directConfigError(hostID, "stream", err)
+	}
+	conn, resp, err := dialer.DialContext(ctx, u, headers)
 	statusCode := 0
 	if resp != nil {
 		statusCode = resp.StatusCode
@@ -114,23 +127,23 @@ func (t *TunnelTransport) SubscribeNodes(ctx context.Context) (<-chan []NodeStat
 	return out, cancel
 }
 
-// SubscribeHostNodes 订阅单个 tunnel host 的状态流，供 Dispatcher 选路后调用。
-func (t *TunnelTransport) SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []NodeStatus, func()) {
+// SubscribeHostNodes 订阅单个 tunnel target 的状态流，供 Dispatcher 选路后调用。
+func (t *TunnelTransport) SubscribeHostNodes(ctx context.Context, target NodeTarget) (<-chan []NodeStatus, func()) {
 	runCtx, cancel := context.WithCancel(ctx)
 	out := make(chan []NodeStatus, 16)
 	go func() {
 		defer close(out)
-		t.watchNodeStatus(runCtx, host, out)
+		t.watchNodeStatus(runCtx, target, out)
 	}()
 	return out, cancel
 }
 
 // Covers 返回当前 tunnel transport 覆盖的 hostID。
 func (t *TunnelTransport) Covers() []string {
-	hosts := t.tunnelHosts()
-	out := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		out = append(out, host.ID)
+	targets := t.tunnelTargets()
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, target.Host.ID)
 	}
 	sort.Strings(out)
 	return out
@@ -159,16 +172,16 @@ func (t *TunnelTransport) runNodeStatusSubscription(ctx context.Context, out cha
 		close(out)
 	}()
 
-	startWatcher := func(host model.Host) {
-		ch, stop := t.SubscribeHostNodes(ctx, host)
-		running[host.ID] = stop
+	startWatcher := func(target NodeTarget) {
+		ch, stop := t.SubscribeHostNodes(ctx, target)
+		running[target.Host.ID] = stop
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
 				stop()
 				select {
-				case done <- host.ID:
+				case done <- target.Host.ID:
 				default:
 				}
 			}()
@@ -191,17 +204,17 @@ func (t *TunnelTransport) runNodeStatusSubscription(ctx context.Context, out cha
 	}
 
 	reconcile := func() {
-		hosts := t.tunnelHosts()
+		targets := t.tunnelTargets()
 		seen := map[string]struct{}{}
-		for _, host := range hosts {
-			if host.ID == "" {
+		for _, target := range targets {
+			if target.Host.ID == "" {
 				continue
 			}
-			seen[host.ID] = struct{}{}
-			if _, ok := running[host.ID]; ok {
+			seen[target.Host.ID] = struct{}{}
+			if _, ok := running[target.Host.ID]; ok {
 				continue
 			}
-			startWatcher(host)
+			startWatcher(target)
 		}
 		for hostID, cancel := range running {
 			if _, ok := seen[hostID]; ok {
@@ -225,48 +238,48 @@ func (t *TunnelTransport) runNodeStatusSubscription(ctx context.Context, out cha
 	}
 }
 
-func (t *TunnelTransport) tunnelHosts() []model.Host {
-	if t.hosts == nil {
-		return []model.Host{}
+func (t *TunnelTransport) tunnelTargets() []NodeTarget {
+	if t.targets == nil {
+		return []NodeTarget{}
 	}
-	hosts, err := t.hosts()
+	targets, err := t.targets()
 	if err != nil {
-		return []model.Host{}
+		return []NodeTarget{}
 	}
-	out := make([]model.Host, 0, len(hosts))
-	for _, host := range hosts {
-		if _, ok := host.TunnelParams(); ok {
-			out = append(out, host)
+	out := make([]NodeTarget, 0, len(targets))
+	for _, target := range targets {
+		if _, ok := target.Agent.TunnelParams(); ok {
+			out = append(out, target)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+		if out[i].Host.Name != out[j].Host.Name {
+			return out[i].Host.Name < out[j].Host.Name
 		}
-		return out[i].ID < out[j].ID
+		return out[i].Host.ID < out[j].Host.ID
 	})
 	return out
 }
 
-func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, out chan<- []NodeStatus) {
+func (t *TunnelTransport) watchNodeStatus(ctx context.Context, target NodeTarget, out chan<- []NodeStatus) {
 	if t.mgr == nil {
-		t.emitUnreachable(ctx, out, host, ErrHostUnreachable)
+		t.emitUnreachable(ctx, out, target, ErrHostUnreachable)
 		return
 	}
-	if _, err := t.mgr.EnsureConnected(host); err != nil {
-		t.emitUnreachable(ctx, out, host, err)
+	if _, err := t.mgr.EnsureConnected(TunnelTargetFromNodeTarget(target)); err != nil {
+		t.emitUnreachable(ctx, out, target, err)
 		return
 	}
-	stream, err := t.Stream(ctx, host.ID, NodeRequest{
+	stream, err := t.Stream(ctx, target.Host.ID, NodeRequest{
 		Path: "/ws/node-status",
 		Query: url.Values{
-			"host_id":   []string{host.ID},
-			"host_name": []string{host.Name},
+			"host_id":   []string{target.Host.ID},
+			"host_name": []string{target.Host.Name},
 		},
 	})
 	if err != nil {
 		if ctx.Err() == nil {
-			t.emitNodeStatusFailure(ctx, out, host, err)
+			t.emitNodeStatusFailure(ctx, out, target, err)
 		}
 		return
 	}
@@ -276,7 +289,7 @@ func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 		var batch []NodeStatus
 		if err := stream.ReadJSON(&batch); err != nil {
 			if ctx.Err() == nil {
-				t.emitUnreachable(ctx, out, host, err)
+				t.emitUnreachable(ctx, out, target, err)
 			}
 			return
 		}
@@ -291,22 +304,22 @@ func (t *TunnelTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 	}
 }
 
-func (t *TunnelTransport) emitUnreachable(ctx context.Context, out chan<- []NodeStatus, host model.Host, err error) {
-	t.emitStatus(ctx, out, host, model.AgentHealthUnreachable, false, err)
+func (t *TunnelTransport) emitUnreachable(ctx context.Context, out chan<- []NodeStatus, target NodeTarget, err error) {
+	t.emitStatus(ctx, out, target, model.AgentHealthUnreachable, false, err)
 }
 
-func (t *TunnelTransport) emitNodeStatusFailure(ctx context.Context, out chan<- []NodeStatus, host model.Host, err error) {
-	if t.execHealthReachable(ctx, host.ID) {
-		t.emitStatus(ctx, out, host, model.AgentHealthVersionMismatch, true, err)
+func (t *TunnelTransport) emitNodeStatusFailure(ctx context.Context, out chan<- []NodeStatus, target NodeTarget, err error) {
+	if t.execHealthReachable(ctx, target.Host.ID) {
+		t.emitStatus(ctx, out, target, model.AgentHealthVersionMismatch, true, err)
 		return
 	}
-	t.emitUnreachable(ctx, out, host, err)
+	t.emitUnreachable(ctx, out, target, err)
 }
 
-func (t *TunnelTransport) emitStatus(ctx context.Context, out chan<- []NodeStatus, host model.Host, health model.AgentHealth, reachable bool, err error) {
+func (t *TunnelTransport) emitStatus(ctx context.Context, out chan<- []NodeStatus, target NodeTarget, health model.AgentHealth, reachable bool, err error) {
 	status := NodeStatus{
-		HostID:    host.ID,
-		Name:      host.Name,
+		HostID:    target.Host.ID,
+		Name:      target.Host.Name,
 		Reachable: reachable,
 		Agent: model.AgentRuntime{
 			Installed: reachable,
@@ -334,17 +347,17 @@ func (t *TunnelTransport) execHealthReachable(ctx context.Context, hostID string
 	return resp.StatusCode/100 == 2
 }
 
-func (t *TunnelTransport) ensureURLFor(hostID string, req NodeRequest, stream bool) (string, error) {
+func (t *TunnelTransport) ensureTargetFor(hostID string) (NodeTarget, error) {
 	if t.mgr == nil {
-		return "", ErrHostUnreachable
+		return NodeTarget{}, ErrHostUnreachable
+	}
+	target, ok := t.targetByHostID(hostID)
+	if !ok {
+		return NodeTarget{}, ErrHostUnreachable
 	}
 	if t.mgr.LocalPort(hostID) == 0 {
-		host, ok := t.hostByID(hostID)
-		if !ok {
-			return "", ErrHostUnreachable
-		}
-		if _, err := t.mgr.EnsureConnected(host); err != nil {
-			return "", &NodeError{
+		if _, err := t.mgr.EnsureConnected(TunnelTargetFromNodeTarget(target)); err != nil {
+			return NodeTarget{}, &NodeError{
 				Code:          CodeTransportUnreachable,
 				HostID:        hostID,
 				TransportType: model.TransportTypeTunnel,
@@ -354,27 +367,32 @@ func (t *TunnelTransport) ensureURLFor(hostID string, req NodeRequest, stream bo
 			}
 		}
 	}
-	return t.urlFor(hostID, req, stream)
+	return target, nil
 }
 
-func (t *TunnelTransport) hostByID(hostID string) (model.Host, bool) {
-	for _, host := range t.tunnelHosts() {
-		if host.ID == hostID {
-			return host, true
+func (t *TunnelTransport) targetByHostID(hostID string) (NodeTarget, bool) {
+	for _, target := range t.tunnelTargets() {
+		if target.Host.ID == hostID {
+			return target, true
 		}
 	}
-	return model.Host{}, false
+	return NodeTarget{}, false
 }
 
-func (t *TunnelTransport) urlFor(hostID string, req NodeRequest, stream bool) (string, error) {
+func (t *TunnelTransport) urlForTarget(target NodeTarget, req NodeRequest, stream bool) (string, error) {
 	if t.mgr == nil {
 		return "", ErrHostUnreachable
 	}
+	hostID := target.Host.ID
 	port := t.mgr.LocalPort(hostID)
 	if port == 0 {
 		return "", ErrHostUnreachable
 	}
-	base := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(port)}
+	scheme := "http"
+	if agentTLSEnabled(target.Agent.Security.TLS) {
+		scheme = "https"
+	}
+	base := &url.URL{Scheme: scheme, Host: "127.0.0.1:" + strconv.Itoa(port)}
 	rel, err := url.Parse(req.Path)
 	if err != nil {
 		return "", err
@@ -403,9 +421,46 @@ func (t *TunnelTransport) urlFor(hostID string, req NodeRequest, stream bool) (s
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func (t *TunnelTransport) applyTunnelHeaders(dst http.Header, hostID string, overrides http.Header) {
-	if host, ok := t.hostByID(hostID); ok && host.Agent != nil && strings.TrimSpace(host.Agent.Token) != "" {
-		dst.Set("Authorization", "Bearer "+strings.TrimSpace(host.Agent.Token))
+func (t *TunnelTransport) httpClientFor(target NodeTarget) (*http.Client, error) {
+	if !agentTLSEnabled(target.Agent.Security.TLS) {
+		return t.client, nil
+	}
+	return httpClientForAgentTLS(target.Agent.Security.TLS, defaultDirectConnectTimeout, defaultDirectRequestTimeout)
+}
+
+func (t *TunnelTransport) wsDialerFor(target NodeTarget) (*websocket.Dialer, error) {
+	if !agentTLSEnabled(target.Agent.Security.TLS) {
+		return t.wsDialer, nil
+	}
+	return wsDialerForAgentTLS(target.Agent.Security.TLS, defaultDirectConnectTimeout)
+}
+
+// TunnelTargetFromNodeTarget 将 Host SSH 与 Agent tunnel 配置合成为 tunnel.Manager 目标。
+func TunnelTargetFromNodeTarget(target NodeTarget) tunnel.Target {
+	params, _ := target.Agent.TunnelParams()
+	remotePort := model.DefaultRemoteAgentPort
+	if params != nil && params.RemoteAgentPort != 0 {
+		remotePort = params.RemoteAgentPort
+	}
+	sshPort := target.Host.SSHPort
+	if sshPort == 0 {
+		sshPort = model.DefaultSSHPort
+	}
+	return tunnel.Target{
+		HostID:          target.Host.ID,
+		SSHHost:         target.Host.SSHHost,
+		SSHPort:         sshPort,
+		SSHUser:         target.Host.SSHUser,
+		SSHPassword:     target.Host.SSHPassword,
+		SSHPrivateKey:   target.Host.SSHPrivateKey,
+		RemoteAgentPort: remotePort,
+		LocalPort:       target.Agent.Runtime.LocalPort,
+	}
+}
+
+func applyAgentHeaders(dst http.Header, agent model.Agent, overrides http.Header) {
+	if strings.TrimSpace(agent.Secret.Token) != "" {
+		dst.Set("Authorization", "Bearer "+strings.TrimSpace(agent.Secret.Token))
 	}
 	for key, values := range overrides {
 		dst.Del(key)

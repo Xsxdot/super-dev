@@ -19,11 +19,6 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-const (
-	defaultSSHPort         = 22
-	defaultRemoteAgentPort = 57017
-)
-
 // ErrNotFound 表示按 ID 查找的资源不存在。
 var ErrNotFound = errors.New("not found")
 
@@ -162,6 +157,17 @@ func (s *Store) RemoveLogSource(id string) error {
 }
 
 func (s *Store) loadHosts() ([]model.Host, error) {
+	hosts, err := s.loadHostsRaw()
+	if err != nil {
+		return nil, err
+	}
+	for i := range hosts {
+		applyHostDefaults(&hosts[i])
+	}
+	return hosts, nil
+}
+
+func (s *Store) loadHostsRaw() ([]model.Host, error) {
 	data, err := os.ReadFile(s.hostsPath)
 	if os.IsNotExist(err) {
 		return []model.Host{}, nil
@@ -172,9 +178,6 @@ func (s *Store) loadHosts() ([]model.Host, error) {
 	var hosts []model.Host
 	if err := json.Unmarshal(data, &hosts); err != nil {
 		return nil, err
-	}
-	for i := range hosts {
-		applyHostDefaults(&hosts[i])
 	}
 	return hosts, nil
 }
@@ -219,41 +222,5 @@ func (s *Store) saveLogSources(list []model.LogSource) error {
 }
 
 func applyHostDefaults(h *model.Host) {
-	if h.Tags == nil {
-		h.Tags = []string{}
-	}
-	if h.Agent == nil {
-		return
-	}
-	if h.Agent.Transport.Chain == nil {
-		h.Agent.Transport.Chain = []model.TransportEntry{}
-	}
-	for i := range h.Agent.Transport.Chain {
-		entry := &h.Agent.Transport.Chain[i]
-		switch entry.Type {
-		case "":
-			entry.Type = model.TransportTypeTunnel
-			if entry.Tunnel == nil {
-				entry.Tunnel = &model.TunnelParams{}
-			}
-			applyTunnelDefaults(entry.Tunnel)
-		case model.TransportTypeTunnel:
-			if entry.Tunnel == nil {
-				entry.Tunnel = &model.TunnelParams{}
-			}
-			applyTunnelDefaults(entry.Tunnel)
-		}
-	}
-}
-
-func applyTunnelDefaults(tunnelParams *model.TunnelParams) {
-	if tunnelParams == nil {
-		return
-	}
-	if tunnelParams.SSHPort == 0 {
-		tunnelParams.SSHPort = defaultSSHPort
-	}
-	if tunnelParams.RemoteAgentPort == 0 {
-		tunnelParams.RemoteAgentPort = defaultRemoteAgentPort
-	}
+	model.ApplyHostDefaults(h)
 }

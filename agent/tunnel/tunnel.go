@@ -44,30 +44,26 @@ type Credentials struct {
 //
 // 返回：
 //   - 可直接传给 BuildClientConfig 的凭据
-//   - 读取兼容旧配置的 SSHKeyPath 失败时返回错误
+//   - 当前实现不会读取外部文件，保留 error 返回以兼容调用方
 //
 // 注意：
-//   - SSHPrivateKey 是当前优先格式，避免配置同步后依赖本机文件路径
-//   - SSHKeyPath 仅作为旧配置兼容和导入入口
+//   - SSHPrivateKey 保存的是密钥内容，避免配置同步后依赖本机文件路径
+//   - SSHKeyPath 只允许在 API 导入入口读取，不进入 Host 持久化模型
 func CredentialsFromHost(host model.Host) (Credentials, error) {
-	tunnelParams, ok := host.TunnelParams()
-	if !ok {
-		return Credentials{}, fmt.Errorf("host %s has no tunnel transport", host.ID)
+	return Credentials{
+		User:       host.SSHUser,
+		Password:   host.SSHPassword,
+		PrivateKey: []byte(strings.TrimSpace(host.SSHPrivateKey)),
+	}, nil
+}
+
+// CredentialsFromTarget 从解析后的 tunnel target 提取 SSH 凭据。
+func CredentialsFromTarget(target Target) Credentials {
+	return Credentials{
+		User:       target.SSHUser,
+		Password:   target.SSHPassword,
+		PrivateKey: []byte(strings.TrimSpace(target.SSHPrivateKey)),
 	}
-	creds := Credentials{User: tunnelParams.SSHUser, Password: tunnelParams.SSHPassword}
-	if strings.TrimSpace(tunnelParams.SSHPrivateKey) != "" {
-		creds.PrivateKey = []byte(tunnelParams.SSHPrivateKey)
-		return creds, nil
-	}
-	if strings.TrimSpace(tunnelParams.SSHKeyPath) == "" {
-		return creds, nil
-	}
-	key, err := ReadPrivateKey(tunnelParams.SSHKeyPath)
-	if err != nil {
-		return Credentials{}, err
-	}
-	creds.PrivateKey = key
-	return creds, nil
 }
 
 // BuildClientConfig 根据凭据构造 ssh.ClientConfig。

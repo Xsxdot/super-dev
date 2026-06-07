@@ -47,15 +47,14 @@ func NewSSHRemote(host model.Host) (Remote, error) {
 	if err != nil {
 		return nil, err
 	}
-	tunnelParams, ok := host.TunnelParams()
-	if !ok {
-		return nil, fmt.Errorf("host %s has no tunnel transport", host.ID)
+	if host.SSHHost == "" {
+		return nil, fmt.Errorf("host %s ssh host is required", host.ID)
 	}
-	port := tunnelParams.SSHPort
+	port := host.SSHPort
 	if port == 0 {
-		port = 22
+		port = model.DefaultSSHPort
 	}
-	client, err := ssh.Dial("tcp", net.JoinHostPort(tunnelParams.SSHHost, strconv.Itoa(port)), cfg)
+	client, err := ssh.Dial("tcp", net.JoinHostPort(host.SSHHost, strconv.Itoa(port)), cfg)
 	if err != nil {
 		return nil, err
 	}

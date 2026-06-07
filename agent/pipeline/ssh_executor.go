@@ -58,15 +58,14 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	tunnelParams, ok := host.TunnelParams()
-	if !ok {
-		return nil, fmt.Errorf("host %q has no tunnel transport", target.HostID)
+	if host.SSHHost == "" {
+		return nil, fmt.Errorf("host %q ssh host is required", target.HostID)
 	}
-	port := tunnelParams.SSHPort
+	port := host.SSHPort
 	if port == 0 {
-		port = 22
+		port = model.DefaultSSHPort
 	}
-	addr := net.JoinHostPort(tunnelParams.SSHHost, strconv.Itoa(port))
+	addr := net.JoinHostPort(host.SSHHost, strconv.Itoa(port))
 	return ssh.Dial("tcp", addr, cfg)
 }
 

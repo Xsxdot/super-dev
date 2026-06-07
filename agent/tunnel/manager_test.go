@@ -17,9 +17,9 @@ type fakeDialer struct {
 	calls  int
 }
 
-func (f *fakeDialer) Dial(host model.Host) (*tunnel.Conn, error) {
+func (f *fakeDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	f.calls++
-	if err, ok := f.failOn[host.ID]; ok {
+	if err, ok := f.failOn[target.HostID]; ok {
 		return nil, err
 	}
 	return tunnel.NewFakeConn(f.port), nil
@@ -30,7 +30,7 @@ func TestManagerEnsureConnectedIsIdempotent(t *testing.T) {
 	mgr := tunnel.NewManager(dialer)
 	defer mgr.Close()
 
-	h := model.Host{ID: "h-1", Name: "c01"}
+	h := tunnel.Target{HostID: "h-1"}
 	port1, err := mgr.EnsureConnected(h)
 	require.NoError(t, err)
 	assert.Equal(t, 12345, port1)
@@ -47,7 +47,7 @@ func TestManagerDialFailureMarkedFailed(t *testing.T) {
 	mgr := tunnel.NewManager(dialer)
 	defer mgr.Close()
 
-	_, err := mgr.EnsureConnected(model.Host{ID: "h-1"})
+	_, err := mgr.EnsureConnected(tunnel.Target{HostID: "h-1"})
 	require.Error(t, err)
 	assert.Equal(t, tunnel.StatusFailed, mgr.Status("h-1"))
 }
@@ -57,7 +57,7 @@ func TestManagerDisconnect(t *testing.T) {
 	mgr := tunnel.NewManager(dialer)
 	defer mgr.Close()
 
-	_, err := mgr.EnsureConnected(model.Host{ID: "h-1"})
+	_, err := mgr.EnsureConnected(tunnel.Target{HostID: "h-1"})
 	require.NoError(t, err)
 
 	mgr.Disconnect("h-1")
@@ -73,7 +73,7 @@ func TestManagerStatusSubscribe(t *testing.T) {
 	defer mgr.Unsubscribe("sub-1")
 
 	go func() {
-		_, _ = mgr.EnsureConnected(model.Host{ID: "h-x"})
+		_, _ = mgr.EnsureConnected(tunnel.Target{HostID: "h-x"})
 	}()
 
 	select {
@@ -89,12 +89,7 @@ func TestManagerStatusSubscribe(t *testing.T) {
 }
 
 func TestCredentialsFromHostPrefersStoredPrivateKeyMaterial(t *testing.T) {
-	host := model.Host{}
-	tunnelParams := host.EnsureTunnelAgent()
-	tunnelParams.SSHUser = "deploy"
-	tunnelParams.SSHPassword = "pw"
-	tunnelParams.SSHKeyPath = "/path/that/should/not/be/read"
-	tunnelParams.SSHPrivateKey = "inline-key"
+	host := model.Host{SSHUser: "deploy", SSHPassword: "pw", SSHPrivateKey: "inline-key"}
 	creds, err := tunnel.CredentialsFromHost(host)
 
 	require.NoError(t, err)

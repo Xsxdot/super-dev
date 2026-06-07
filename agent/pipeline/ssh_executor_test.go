@@ -33,12 +33,7 @@ type sshFileTransfer interface {
 func TestSSHExecutorConstruct(t *testing.T) {
 	// 仅验证构造与能力接口实现，不连真机
 	ex := NewSSHExecutor(func(hostID string) (model.Host, bool) {
-		host := model.Host{ID: hostID}
-		tunnelParams := host.EnsureTunnelAgent()
-		tunnelParams.SSHHost = "10.0.0.1"
-		tunnelParams.SSHPort = 22
-		tunnelParams.SSHUser = "ops"
-		return host, true
+		return model.Host{ID: hostID, SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops"}, true
 	})
 	var _ sshRemoteRunner = ex
 	var _ sshFileTransfer = ex
@@ -69,13 +64,7 @@ func TestSSHExecutorRunRemoteDrainsStdoutAndStderrBeforeReturn(t *testing.T) {
 	port, err := strconv.Atoi(portText)
 	require.NoError(t, err)
 	ex := NewSSHExecutor(func(hostID string) (model.Host, bool) {
-		testHost := model.Host{ID: hostID}
-		tunnelParams := testHost.EnsureTunnelAgent()
-		tunnelParams.SSHHost = host
-		tunnelParams.SSHPort = port
-		tunnelParams.SSHUser = "ops"
-		tunnelParams.SSHPassword = "pw"
-		return testHost, true
+		return model.Host{ID: hostID, SSHHost: host, SSHPort: port, SSHUser: "ops", SSHPassword: "pw"}, true
 	})
 
 	var mu sync.Mutex

@@ -220,15 +220,9 @@ func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData b
 func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOptions {
 	opts := ServiceOptions{
 		BindAddress:    "127.0.0.1",
-		Port:           57017,
+		Port:           model.DefaultAgentListenPort,
 		RequireAuth:    strings.TrimSpace(bootstrapToken) != "",
 		BootstrapToken: bootstrapToken,
-	}
-	if tunnelParams, ok := host.TunnelParams(); ok && tunnelParams.RemoteAgentPort != 0 {
-		opts.Port = tunnelParams.RemoteAgentPort
-	}
-	if directParams, ok := host.DirectParams(); ok && strings.TrimSpace(directParams.Address) != "" {
-		opts.BindAddress = bindHostFromDirectAddress(directParams.Address)
 	}
 	return opts
 }

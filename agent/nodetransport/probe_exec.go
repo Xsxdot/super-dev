@@ -28,7 +28,7 @@ const defaultProbeTimeout = 800 * time.Millisecond
 // 参数：
 //   - ctx: 探活上下文
 //   - provider: entry 对应的具体 transport provider
-//   - host: 被探测的 Host，provider 会从中读取对应 transport 参数与 token
+//   - target: 被探测的目标，provider 会从中读取对应 transport 参数与 token
 //   - idx: entry 在 chain 中的下标
 //   - entry: 被探测的 chain entry
 //   - timeout: 单次探活整体超时；0 时使用默认 800ms
@@ -38,7 +38,7 @@ const defaultProbeTimeout = 800 * time.Millisecond
 //
 // 注意：
 //   - health 端点只用于读取版本/自举态；已 provision 后还会访问受保护业务端点区分 token 401。
-func ProbeEntry(ctx context.Context, provider NodeTransport, host model.Host, idx int, entry model.TransportEntry, timeout time.Duration) ProbeResult {
+func ProbeEntry(ctx context.Context, provider NodeTransport, target NodeTarget, idx int, entry model.TransportEntry, timeout time.Duration) ProbeResult {
 	start := time.Now()
 	result := ProbeResult{Index: idx, TransportType: entry.Type, CheckedAt: start.UTC()}
 	if provider == nil {
@@ -51,7 +51,7 @@ func ProbeEntry(ctx context.Context, provider NodeTransport, host model.Host, id
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	resp, err := provider.Do(probeCtx, host.ID, NodeRequest{Method: http.MethodGet, Path: SecurityHealthPath})
+	resp, err := provider.Do(probeCtx, target.Host.ID, NodeRequest{Method: http.MethodGet, Path: SecurityHealthPath})
 	result.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
 		result.Status = ProbeStatusUnreachable
@@ -85,7 +85,7 @@ func ProbeEntry(ctx context.Context, provider NodeTransport, host model.Host, id
 		result.Reachable = true
 		return result
 	}
-	authResp, err := provider.Do(probeCtx, host.ID, NodeRequest{Method: http.MethodGet, Path: SecurityAuthCheckPath})
+	authResp, err := provider.Do(probeCtx, target.Host.ID, NodeRequest{Method: http.MethodGet, Path: SecurityAuthCheckPath})
 	if err != nil {
 		result.Status = ProbeStatusUnreachable
 		result.Reachable = false

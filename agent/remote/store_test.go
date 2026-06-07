@@ -2,8 +2,6 @@
 package remote_test
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -21,11 +19,7 @@ func newStore(t *testing.T) *remote.Store {
 
 func TestStoreAddListHost(t *testing.T) {
 	s := newStore(t)
-	h := model.Host{Name: "c01"}
-	tunnelParams := h.EnsureTunnelAgent()
-	tunnelParams.SSHHost = "10.0.0.1"
-	tunnelParams.SSHPort = 22
-	tunnelParams.SSHUser = "ops"
+	h := model.Host{Name: "c01", SSHHost: "10.0.0.1", SSHPort: 22, SSHUser: "ops"}
 	saved, err := s.AddHost(h)
 	require.NoError(t, err)
 	assert.NotEmpty(t, saved.ID)
@@ -34,112 +28,16 @@ func TestStoreAddListHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 1)
 	assert.Equal(t, "c01", list[0].Name)
+	assert.Equal(t, "10.0.0.1", list[0].SSHHost)
 }
 
-func TestStoreAddHostAppliesTunnelDefaults(t *testing.T) {
+func TestStoreAddHostAppliesHostDefaults(t *testing.T) {
 	s := newStore(t)
 	saved, err := s.AddHost(model.Host{Name: "c01"})
 	require.NoError(t, err)
 
-	require.Nil(t, saved.Agent)
-}
-
-func TestStoreAddHostAppliesTunnelDefaultsForConfiguredAgent(t *testing.T) {
-	s := newStore(t)
-	saved, err := s.AddHost(model.Host{
-		Name: "c01",
-		Agent: &model.Agent{
-			Transport: model.TransportConfig{Chain: []model.TransportEntry{{Type: model.TransportTypeTunnel}}},
-		},
-	})
-	require.NoError(t, err)
-
-	require.NotNil(t, saved.Agent)
-	require.Len(t, saved.Agent.Transport.Chain, 1)
-	assert.Equal(t, model.TransportTypeTunnel, saved.Agent.Transport.Chain[0].Type)
-	require.NotNil(t, saved.Agent.Transport.Chain[0].Tunnel)
-	assert.Equal(t, 22, saved.Agent.Transport.Chain[0].Tunnel.SSHPort)
-	assert.Equal(t, 57017, saved.Agent.Transport.Chain[0].Tunnel.RemoteAgentPort)
-}
-
-func TestStorePersistsNestedHostShape(t *testing.T) {
-	dir := t.TempDir()
-	hostsPath := filepath.Join(dir, "hosts.json")
-	s := remote.NewStore(hostsPath, filepath.Join(dir, "log_sources.json"))
-
-	_, err := s.AddHost(model.Host{
-		Name: "c01",
-		Agent: &model.Agent{
-			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
-				Type: model.TransportTypeTunnel,
-				Tunnel: &model.TunnelParams{
-					SSHHost: "10.0.0.1",
-					SSHUser: "ops",
-				},
-			}}},
-			Runtime: model.AgentRuntime{LocalPort: 12345},
-		},
-	})
-	require.NoError(t, err)
-
-	raw, err := os.ReadFile(hostsPath)
-	require.NoError(t, err)
-	var saved []map[string]any
-	require.NoError(t, json.Unmarshal(raw, &saved))
-	require.Len(t, saved, 1)
-	legacySSHHost := "ssh" + "_host"
-	assert.NotContains(t, saved[0], legacySSHHost)
-	assert.NotContains(t, saved[0], "local_tunnel_port")
-	agent := saved[0]["agent"].(map[string]any)
-	transport := agent["transport"].(map[string]any)
-	chain := transport["chain"].([]any)
-	tunnel := chain[0].(map[string]any)["tunnel"].(map[string]any)
-	assert.Equal(t, "10.0.0.1", tunnel[legacySSHHost])
-	assert.NotContains(t, transport, "type")
-	assert.NotContains(t, agent, "runtime")
-}
-
-func TestStoreSavesTransportChainShape(t *testing.T) {
-	dir := t.TempDir()
-	hostsPath := filepath.Join(dir, "hosts.json")
-	s := remote.NewStore(hostsPath, filepath.Join(dir, "log_sources.json"))
-
-	host := model.Host{Name: "chain"}
-	host.EnsureDirectAgent().Address = "100.64.0.8:57017"
-	host.Agent.Token = "tok"
-	saved, err := s.AddHost(host)
-	require.NoError(t, err)
-	assert.NotEmpty(t, saved.ID)
-
-	raw, err := os.ReadFile(hostsPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"chain"`)
-	assert.Contains(t, string(raw), `"token": "tok"`)
-
-	var persisted []map[string]any
-	require.NoError(t, json.Unmarshal(raw, &persisted))
-	agent := persisted[0]["agent"].(map[string]any)
-	transport := agent["transport"].(map[string]any)
-	assert.NotContains(t, transport, "type")
-}
-
-func TestStoreMigratesLegacySingleTransportOnLoad(t *testing.T) {
-	dir := t.TempDir()
-	hostsPath := filepath.Join(dir, "hosts.json")
-	require.NoError(t, os.WriteFile(hostsPath, []byte(`[
-	  {"id":"h1","name":"legacy","tags":[],"agent":{"transport":{"type":"tunnel","tunnel":{"ssh_host":"10.0.0.8","ssh_user":"root"}}}}
-	]`), 0o600))
-	s := remote.NewStore(hostsPath, filepath.Join(dir, "log_sources.json"))
-
-	list, err := s.ListHosts()
-	require.NoError(t, err)
-	require.Len(t, list, 1)
-	require.NotNil(t, list[0].Agent)
-	require.Len(t, list[0].Agent.Transport.Chain, 1)
-	assert.Equal(t, model.TransportTypeTunnel, list[0].Agent.Transport.Chain[0].Type)
-	require.NotNil(t, list[0].Agent.Transport.Chain[0].Tunnel)
-	assert.Equal(t, 22, list[0].Agent.Transport.Chain[0].Tunnel.SSHPort)
-	assert.Equal(t, 57017, list[0].Agent.Transport.Chain[0].Tunnel.RemoteAgentPort)
+	assert.Equal(t, []string{}, saved.Tags)
+	assert.Equal(t, model.DefaultSSHPort, saved.SSHPort)
 }
 
 func TestStoreUpdateHost(t *testing.T) {

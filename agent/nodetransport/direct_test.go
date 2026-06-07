@@ -1,7 +1,7 @@
 // direct_test.go 验证直连 NodeTransport 行为。
 //
 // 职责：
-//   - 证明 direct transport 能按 Host.Agent.Transport.Direct 地址发起 HTTP/WS 请求
+//   - 证明 direct transport 能按 Agent.Transport.Direct 地址发起 HTTP/WS 请求
 //   - 证明 direct host 覆盖范围与状态订阅行为正确
 //   - 证明旧 agent 缺少 /ws/node-status 时被归类为 version-mismatch
 //
@@ -34,8 +34,8 @@ func TestDirectTransportDoUsesConfiguredAddress(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := directHost("h1", "direct", strings.TrimPrefix(srv.URL, "http://"))
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "direct", strings.TrimPrefix(srv.URL, "http://"))
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -53,8 +53,8 @@ func TestDirectTransportStreamUsesWebSocketScheme(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := directHost("h1", "direct", srv.URL)
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "direct", srv.URL)
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 	stream, err := tr.Stream(context.Background(), "h1", nodetransport.NodeRequest{Path: "/ws/logs"})
 	require.NoError(t, err)
 	defer stream.Close()
@@ -64,11 +64,16 @@ func TestDirectTransportStreamUsesWebSocketScheme(t *testing.T) {
 }
 
 func TestDirectTransportCoversOnlyDirectHosts(t *testing.T) {
-	direct := directHost("h-direct", "direct", "100.64.0.8:57017")
-	tunnelHost := model.Host{ID: "h-tunnel"}
-	tunnelHost.EnsureTunnelAgent()
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) {
-		return []model.Host{tunnelHost, direct}, nil
+	direct := directTarget("h-direct", "direct", "100.64.0.8:57017")
+	tunnelTarget := nodetransport.NodeTarget{
+		Host: model.Host{ID: "h-tunnel"},
+		Agent: model.Agent{HostID: "h-tunnel", Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeTunnel,
+			Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+		}}}},
+	}
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) {
+		return []nodetransport.NodeTarget{tunnelTarget, direct}, nil
 	})
 
 	assert.Equal(t, []string{"h-direct"}, tr.Covers())
@@ -88,8 +93,8 @@ func TestDirectTransportSubscribeNodesReportsVersionMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := directHost("h1", "old", srv.URL)
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "old", srv.URL)
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,9 +119,9 @@ func TestDirectTransportInjectsAgentToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := directHost("h1", "direct", srv.URL)
-	host.Agent.Token = "agent-token"
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "direct", srv.URL)
+	target.Agent.Secret.Token = "agent-token"
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 	require.NoError(t, err)
@@ -131,10 +136,9 @@ func TestDirectTransportUsesCustomCACert(t *testing.T) {
 	defer srv.Close()
 
 	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
-	host := directHost("h1", "direct", strings.TrimPrefix(srv.URL, "https://"))
-	host.Agent.Transport.Chain[0].Direct.TLS = true
-	host.Agent.Transport.Chain[0].Direct.CACert = caPEM
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "direct", strings.TrimPrefix(srv.URL, "https://"))
+	target.Agent.Security.TLS = model.AgentTLSSpec{Mode: model.AgentTLSModeManual, CACert: caPEM}
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 	require.NoError(t, err)
@@ -149,8 +153,8 @@ func TestDirectTransportRequestTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := directHost("h1", "direct", srv.URL)
-	tr := nodetransport.NewDirectTransport(func() ([]model.Host, error) { return []model.Host{host}, nil })
+	target := directTarget("h1", "direct", srv.URL)
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
 	tr.SetTimeoutsForTest(10*time.Millisecond, 10*time.Millisecond)
 
 	_, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
@@ -158,13 +162,47 @@ func TestDirectTransportRequestTimeout(t *testing.T) {
 	assert.Equal(t, nodetransport.CodeRequestTimeout, nodetransport.ErrorCode(err))
 }
 
-func directHost(id, name, address string) model.Host {
-	return model.Host{
-		ID:   id,
-		Name: name,
-		Agent: &model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+func TestDirectTransportUsesUnifiedTLSAndTokenFromAgent(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) {
+		return []nodetransport.NodeTarget{{
+			Host: model.Host{ID: "h1", Name: "ali"},
+			Agent: model.Agent{
+				HostID: "h1",
+				Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+					Type:   model.TransportTypeDirect,
+					Direct: &model.DirectParams{Address: address},
+				}}},
+				Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}},
+				Secret:   model.AgentSecret{Token: "tok"},
+			},
+		}}, nil
+	})
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "Bearer tok", gotAuth)
+}
+
+func directTarget(id, name, address string) nodetransport.NodeTarget {
+	return nodetransport.NodeTarget{
+		Host: model.Host{
+			ID:   id,
+			Name: name,
+		},
+		Agent: model.Agent{HostID: id, Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}}, Transport: model.TransportConfig{Chain: []model.TransportEntry{{
 			Type:   model.TransportTypeDirect,
-			Direct: &model.DirectParams{Address: address, TLS: false},
+			Direct: &model.DirectParams{Address: address},
 		}}}},
 	}
 }

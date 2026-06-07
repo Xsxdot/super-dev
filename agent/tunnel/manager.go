@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不持久化本地端口的"复用"逻辑:Manager 不知道上次用了什么端口
-//     由调用方在 EnsureConnected 时传入 host.Agent.Runtime.LocalPort
+//     由调用方在 EnsureConnected 时传入 Target.LocalPort
 //   - 空闲超时暂不做(YAGNI),需要时再加 ticker;UI 关闭面板时显式 Disconnect
 package tunnel
 
@@ -58,9 +58,21 @@ type Event struct {
 	Err    string `json:"error,omitempty"`
 }
 
+// Target 是建立 SSH 隧道所需的解析后参数。
+type Target struct {
+	HostID          string
+	SSHHost         string
+	SSHPort         int
+	SSHUser         string
+	SSHPassword     string
+	SSHPrivateKey   string
+	RemoteAgentPort int
+	LocalPort       int
+}
+
 // Dialer 抽象建立隧道的过程,生产实现见 SSHDialer,测试注入 fakeDialer。
 type Dialer interface {
-	Dial(host model.Host) (*Conn, error)
+	Dial(target Target) (*Conn, error)
 }
 
 // Manager 管理多个 Host 的隧道。
@@ -89,61 +101,61 @@ func NewManager(dialer Dialer) *Manager {
 	}
 }
 
-// EnsureConnected 若 host 未连接则建立隧道,已连接则直接返回端口。
+// EnsureConnected 若目标未连接则建立隧道,已连接则直接返回端口。
 //
 // 参数：
-//   - host: 完整 Host 配置(Agent.Transport.Tunnel + Agent.Runtime.LocalPort)
+//   - target: 完整 SSH 与远端 agent 端口参数
 //
 // 返回：
-//   - 本地端口(可写入 host.Agent.Runtime.LocalPort 用于运行期复用)
+//   - 本地端口(可写入 Agent.Runtime.LocalPort 用于运行期复用)
 //   - 失败时返回错误,状态置为 StatusFailed
-func (m *Manager) EnsureConnected(host model.Host) (int, error) {
+func (m *Manager) EnsureConnected(target Target) (int, error) {
 	m.mu.Lock()
 	// 已连接：直接复用。
-	if c, ok := m.conns[host.ID]; ok {
+	if c, ok := m.conns[target.HostID]; ok {
 		m.mu.Unlock()
 		return c.LocalPort(), nil
 	}
 	// 正在连接：等待先到者完成后再读 conn，避免建立两条隧道。
-	if ch, ok := m.connecting[host.ID]; ok {
+	if ch, ok := m.connecting[target.HostID]; ok {
 		m.mu.Unlock()
 		<-ch
 		m.mu.Lock()
-		c, ok := m.conns[host.ID]
+		c, ok := m.conns[target.HostID]
 		m.mu.Unlock()
 		if ok {
 			return c.LocalPort(), nil
 		}
 		// 先到者拨号失败，此处同样返回失败（状态已由先到者设置）。
-		return 0, fmt.Errorf("tunnel dial failed for host %s", host.ID)
+		return 0, fmt.Errorf("tunnel dial failed for host %s", target.HostID)
 	}
 	// 首个调用者：占位 channel，其他并发调用者等待。
 	ch := make(chan struct{})
-	m.connecting[host.ID] = ch
-	m.status[host.ID] = StatusConnecting
+	m.connecting[target.HostID] = ch
+	m.status[target.HostID] = StatusConnecting
 	m.mu.Unlock()
-	m.emit(host.ID, StatusConnecting, "")
+	m.emit(target.HostID, StatusConnecting, "")
 
-	conn, err := m.dialer.Dial(host)
+	conn, err := m.dialer.Dial(target)
 
 	m.mu.Lock()
-	delete(m.connecting, host.ID)
+	delete(m.connecting, target.HostID)
 	if err != nil {
-		m.status[host.ID] = StatusFailed
-		m.errors[host.ID] = err.Error()
+		m.status[target.HostID] = StatusFailed
+		m.errors[target.HostID] = err.Error()
 	} else {
-		m.conns[host.ID] = conn
-		m.status[host.ID] = StatusConnected
-		delete(m.errors, host.ID)
+		m.conns[target.HostID] = conn
+		m.status[target.HostID] = StatusConnected
+		delete(m.errors, target.HostID)
 	}
 	m.mu.Unlock()
 	close(ch) // 唤醒所有等待者。
 
 	if err != nil {
-		m.emit(host.ID, StatusFailed, err.Error())
+		m.emit(target.HostID, StatusFailed, err.Error())
 		return 0, err
 	}
-	m.emit(host.ID, StatusConnected, "")
+	m.emit(target.HostID, StatusConnected, "")
 	return conn.LocalPort(), nil
 }
 
@@ -253,31 +265,30 @@ type SSHDialer struct{}
 // NewSSHDialer 创建一个 SSHDialer。
 func NewSSHDialer() *SSHDialer { return &SSHDialer{} }
 
-// Dial 按 host 凭据建立 SSH 隧道,返回 Conn 包装。
-func (d *SSHDialer) Dial(host model.Host) (*Conn, error) {
-	creds, err := CredentialsFromHost(host)
-	if err != nil {
-		return nil, err
+// Dial 按 target 凭据建立 SSH 隧道,返回 Conn 包装。
+func (d *SSHDialer) Dial(target Target) (*Conn, error) {
+	creds := CredentialsFromTarget(target)
+	if target.HostID == "" {
+		return nil, fmt.Errorf("host id is required")
+	}
+	if target.SSHHost == "" {
+		return nil, fmt.Errorf("host %s ssh host is required", target.HostID)
 	}
 	cfg, err := BuildClientConfig(creds)
 	if err != nil {
 		return nil, err
 	}
-	tunnelParams, ok := host.TunnelParams()
-	if !ok {
-		return nil, fmt.Errorf("host %s has no tunnel transport", host.ID)
-	}
-	sshPort := tunnelParams.SSHPort
+	sshPort := target.SSHPort
 	if sshPort == 0 {
-		sshPort = 22
+		sshPort = model.DefaultSSHPort
 	}
-	remoteAgentPort := tunnelParams.RemoteAgentPort
+	remoteAgentPort := target.RemoteAgentPort
 	if remoteAgentPort == 0 {
-		remoteAgentPort = 57017
+		remoteAgentPort = model.DefaultRemoteAgentPort
 	}
-	sshAddr := net.JoinHostPort(tunnelParams.SSHHost, strconv.Itoa(sshPort))
+	sshAddr := net.JoinHostPort(target.SSHHost, strconv.Itoa(sshPort))
 	remoteAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(remoteAgentPort))
-	tun, actualPort, err := Dial(sshAddr, cfg, host.RuntimeLocalPort(), remoteAddr)
+	tun, actualPort, err := Dial(sshAddr, cfg, target.LocalPort, remoteAddr)
 	if err != nil {
 		return nil, err
 	}

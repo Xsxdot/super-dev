@@ -21,8 +21,73 @@ import (
 
 type fakeDialer struct{ port int }
 
-func (f fakeDialer) Dial(host model.Host) (*tunnel.Conn, error) {
+func (f fakeDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	return tunnel.NewFakeConn(f.port), nil
+}
+
+type recordingDialer struct {
+	port   int
+	target tunnel.Target
+}
+
+func (d *recordingDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
+	d.target = target
+	return tunnel.NewFakeConn(d.port), nil
+}
+
+func tunnelNode(id, name string) nodetransport.NodeTarget {
+	return nodetransport.NodeTarget{
+		Host: model.Host{ID: id, Name: name, SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root"},
+		Agent: model.Agent{
+			HostID: id,
+			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+				Type:   model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+			}}},
+			Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}},
+		},
+	}
+}
+
+func TestTunnelTransportUsesHostSSHAndAgentRemotePort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	dialer := &recordingDialer{port: serverPort(t, server.URL)}
+	mgr := tunnel.NewManager(dialer)
+	defer mgr.Close()
+	target := nodetransport.NodeTarget{
+		Host: model.Host{ID: "h1", Name: "ali", SSHHost: "10.0.0.8", SSHPort: 2222, SSHUser: "root", SSHPrivateKey: "KEY"},
+		Agent: model.Agent{
+			HostID: "h1",
+			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+				Type:   model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{RemoteAgentPort: 57018},
+			}}},
+			Secret:   model.AgentSecret{Token: "tok"},
+			Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}},
+		},
+	}
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
+
+	covers := tr.Covers()
+	require.Equal(t, []string{"h1"}, covers)
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, "h1", dialer.target.HostID)
+	assert.Equal(t, "10.0.0.8", dialer.target.SSHHost)
+	assert.Equal(t, 2222, dialer.target.SSHPort)
+	assert.Equal(t, "root", dialer.target.SSHUser)
+	assert.Equal(t, "KEY", dialer.target.SSHPrivateKey)
+	assert.Equal(t, 57018, dialer.target.RemoteAgentPort)
+}
+
+func tunnelSource(targets ...nodetransport.NodeTarget) nodetransport.TargetSource {
+	return func() ([]nodetransport.NodeTarget, error) {
+		return targets, nil
+	}
 }
 
 func serverPort(t *testing.T, rawURL string) int {
@@ -46,14 +111,11 @@ func TestTunnelTransportDoRoutesToConnectedLocalPort(t *testing.T) {
 
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	_, err := mgr.EnsureConnected(model.Host{ID: "h1"})
+	target := tunnelNode("h1", "ali-01")
+	_, err := mgr.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(target))
 	require.NoError(t, err)
 
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) {
-		h := model.Host{ID: "h1"}
-		h.EnsureTunnelAgent()
-		return []model.Host{h}, nil
-	})
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{
 		Method: http.MethodGet,
 		Path:   "/api/logs",
@@ -71,12 +133,11 @@ func TestTunnelTransportInjectsAgentToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := model.Host{ID: "h1", Name: "ali-01"}
-	host.EnsureTunnelAgent()
-	host.Agent.Token = "tunnel-token"
+	target := tunnelNode("h1", "ali-01")
+	target.Agent.Secret.Token = "tunnel-token"
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 	require.NoError(t, err)
@@ -88,7 +149,7 @@ func TestTunnelTransportDoReturnsUnreachableWhenNoLocalPort(t *testing.T) {
 	mgr := tunnel.NewManager(fakeDialer{port: 0})
 	defer mgr.Close()
 
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return nil, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource())
 	_, err := tr.Do(context.Background(), "missing", nodetransport.NodeRequest{
 		Method: http.MethodGet,
 		Path:   "/api/logs",
@@ -109,10 +170,11 @@ func TestTunnelTransportStreamUsesWebSocketScheme(t *testing.T) {
 
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	_, err := mgr.EnsureConnected(model.Host{ID: "h1"})
+	target := tunnelNode("h1", "ali-01")
+	_, err := mgr.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(target))
 	require.NoError(t, err)
 
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return nil, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 	stream, err := tr.Stream(context.Background(), "h1", nodetransport.NodeRequest{
 		Path: "/ws/logs",
 	})
@@ -124,14 +186,9 @@ func TestTunnelTransportStreamUsesWebSocketScheme(t *testing.T) {
 }
 
 func TestTunnelTransportCoversOnlyTunnelHosts(t *testing.T) {
-	tunnelHost := model.Host{ID: "h-tunnel"}
-	tunnelHost.EnsureTunnelAgent()
-	directHost := model.Host{ID: "h-direct", Agent: &model.Agent{
-		Transport: model.TransportConfig{Chain: []model.TransportEntry{{Type: model.TransportTypeDirect}}},
-	}}
-	tr := nodetransport.NewTunnelTransport(tunnel.NewManager(fakeDialer{}), func() ([]model.Host, error) {
-		return []model.Host{tunnelHost, directHost}, nil
-	})
+	tunnelTarget := tunnelNode("h-tunnel", "tunnel")
+	directTarget := directTarget("h-direct", "direct", "100.64.0.8:57017")
+	tr := nodetransport.NewTunnelTransport(tunnel.NewManager(fakeDialer{}), tunnelSource(tunnelTarget, directTarget))
 
 	assert.Equal(t, []string{"h-tunnel"}, tr.Covers())
 }
@@ -221,15 +278,12 @@ func TestTunnelTransportSubscribeNodesStreamsConnectedHosts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := model.Host{ID: "h1", Name: "ali-01"}
-	host.EnsureTunnelAgent()
+	target := tunnelNode("h1", "ali-01")
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	_, err := mgr.EnsureConnected(host)
+	_, err := mgr.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(target))
 	require.NoError(t, err)
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) {
-		return []model.Host{host}, nil
-	})
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -263,19 +317,15 @@ func TestTunnelTransportSubscribeNodesEmitsUnreachableWithoutBlockingOtherHosts(
 	}))
 	defer srv.Close()
 
-	connected := model.Host{ID: "h1", Name: "connected"}
-	connected.EnsureTunnelAgent()
-	missing := model.Host{ID: "h2", Name: "missing"}
-	missing.EnsureTunnelAgent()
+	connected := tunnelNode("h1", "connected")
+	missing := tunnelNode("h2", "missing")
 
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	_, err := mgr.EnsureConnected(connected)
+	_, err := mgr.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(connected))
 	require.NoError(t, err)
 
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) {
-		return []model.Host{connected, missing}, nil
-	})
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(connected, missing))
 	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -303,11 +353,10 @@ func TestTunnelTransportDoEnsuresTunnelBeforeRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := model.Host{ID: "h1", Name: "ali-01"}
-	host.EnsureTunnelAgent()
+	target := tunnelNode("h1", "ali-01")
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 
 	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
 	require.NoError(t, err)
@@ -331,11 +380,10 @@ func TestTunnelTransportSubscribeNodesEnsuresTunnel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	host := model.Host{ID: "h1", Name: "ali-01"}
-	host.EnsureTunnelAgent()
+	target := tunnelNode("h1", "ali-01")
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -367,11 +415,10 @@ func TestTunnelTransportSubscribeNodesReportsVersionMismatchForOldAgent(t *testi
 	}))
 	defer srv.Close()
 
-	host := model.Host{ID: "h1", Name: "old-agent"}
-	host.EnsureTunnelAgent()
+	target := tunnelNode("h1", "old-agent")
 	mgr := tunnel.NewManager(fakeDialer{port: serverPort(t, srv.URL)})
 	defer mgr.Close()
-	tr := nodetransport.NewTunnelTransport(mgr, func() ([]model.Host, error) { return []model.Host{host}, nil })
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
 	tr.SetStatusReconnectIntervalForTest(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())

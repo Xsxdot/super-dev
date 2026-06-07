@@ -1,7 +1,7 @@
-// dispatcher.go 按 Host.Agent.Transport.Chain 分派节点通信请求。
+// dispatcher.go 按 Agent.Transport.Chain 分派节点通信请求。
 //
 // 职责：
-//   - 根据 host 的 Agent transport chain 选择具体 NodeTransport provider
+//   - 根据 NodeTarget.Agent transport chain 选择具体 NodeTransport provider
 //   - 在链头不可达时串行探测并降级到后续 transport
 //   - 聚合多个 provider 的节点状态订阅
 //   - 在缺 Agent 或缺 provider 时返回结构化 NodeError
@@ -32,9 +32,9 @@ type hostRoute struct {
 	lastResults   []ProbeResult
 }
 
-// Dispatcher 根据 Host.Agent.Transport.Chain 路由请求。
+// Dispatcher 根据 Agent.Transport.Chain 路由请求。
 type Dispatcher struct {
-	hosts            HostSource
+	targets          TargetSource
 	providers        map[model.TransportType]NodeTransport
 	mu               sync.Mutex
 	routes           map[string]hostRoute
@@ -44,7 +44,7 @@ type Dispatcher struct {
 }
 
 // NewDispatcher 创建 dispatcher，并拷贝 providers 避免调用方后续修改映射。
-func NewDispatcher(hosts HostSource, providers map[model.TransportType]NodeTransport) *Dispatcher {
+func NewDispatcher(targets TargetSource, providers map[model.TransportType]NodeTransport) *Dispatcher {
 	copied := map[model.TransportType]NodeTransport{}
 	for typ, provider := range providers {
 		if provider == nil {
@@ -53,7 +53,7 @@ func NewDispatcher(hosts HostSource, providers map[model.TransportType]NodeTrans
 		copied[typ] = provider
 	}
 	return &Dispatcher{
-		hosts:            hosts,
+		targets:          targets,
 		providers:        copied,
 		routes:           map[string]hostRoute{},
 		routeChanged:     make(chan struct{}, 1),
@@ -84,11 +84,11 @@ func (d *Dispatcher) RecoverChainHeadsForTest(ctx context.Context) {
 
 // Do 按 host transport chain 分派 HTTP 请求。
 func (d *Dispatcher) Do(ctx context.Context, hostID string, req NodeRequest) (NodeResponse, error) {
-	host, err := d.requireHost(hostID, "http")
+	target, err := d.requireTarget(hostID, "http")
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	idx, provider, err := d.selectedProvider(host, "http")
+	idx, provider, err := d.selectedProvider(target, "http")
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -99,10 +99,10 @@ func (d *Dispatcher) Do(ctx context.Context, hostID string, req NodeRequest) (No
 	if !isTransportFailure(err) {
 		return NodeResponse{}, err
 	}
-	if probeErr := d.reselect(ctx, host); probeErr != nil {
+	if probeErr := d.reselect(ctx, target); probeErr != nil {
 		return NodeResponse{}, err
 	}
-	newIdx, newProvider, selectErr := d.selectedProvider(host, "http")
+	newIdx, newProvider, selectErr := d.selectedProvider(target, "http")
 	if selectErr != nil || newIdx == idx {
 		return NodeResponse{}, err
 	}
@@ -111,11 +111,11 @@ func (d *Dispatcher) Do(ctx context.Context, hostID string, req NodeRequest) (No
 
 // Stream 按 host transport chain 分派 WebSocket 请求。
 func (d *Dispatcher) Stream(ctx context.Context, hostID string, req NodeRequest) (NodeStream, error) {
-	host, err := d.requireHost(hostID, "stream")
+	target, err := d.requireTarget(hostID, "stream")
 	if err != nil {
 		return nil, err
 	}
-	idx, provider, err := d.selectedProvider(host, "stream")
+	idx, provider, err := d.selectedProvider(target, "stream")
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +126,10 @@ func (d *Dispatcher) Stream(ctx context.Context, hostID string, req NodeRequest)
 	if !isTransportFailure(err) {
 		return nil, err
 	}
-	if probeErr := d.reselect(ctx, host); probeErr != nil {
+	if probeErr := d.reselect(ctx, target); probeErr != nil {
 		return nil, err
 	}
-	newIdx, newProvider, selectErr := d.selectedProvider(host, "stream")
+	newIdx, newProvider, selectErr := d.selectedProvider(target, "stream")
 	if selectErr != nil || newIdx == idx {
 		return nil, err
 	}
@@ -146,16 +146,16 @@ func (d *Dispatcher) SubscribeNodes(ctx context.Context) (<-chan []NodeStatus, f
 
 // Covers 返回配置了 transport chain 的 hostID 列表。
 func (d *Dispatcher) Covers() []string {
-	hosts, err := d.hosts()
+	targets, err := d.targets()
 	if err != nil {
 		return []string{}
 	}
 	out := []string{}
-	for _, host := range hosts {
-		if host.ID == "" || host.Agent == nil || len(host.Agent.Transport.Chain) == 0 {
+	for _, target := range targets {
+		if target.Host.ID == "" || len(target.Agent.Transport.Chain) == 0 {
 			continue
 		}
-		out = append(out, host.ID)
+		out = append(out, target.Host.ID)
 	}
 	sort.Strings(out)
 	return out
@@ -189,16 +189,16 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 		close(out)
 	}()
 
-	startWatcher := func(host model.Host, idx int, sub HostNodeSubscriber) {
-		ch, stop := sub.SubscribeHostNodes(ctx, host)
-		watchers[host.ID] = watcher{index: idx, cancel: stop}
+	startWatcher := func(target NodeTarget, idx int, sub HostNodeSubscriber) {
+		ch, stop := sub.SubscribeHostNodes(ctx, target)
+		watchers[target.Host.ID] = watcher{index: idx, cancel: stop}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
 				stop()
 				select {
-				case done <- doneEvent{hostID: host.ID, index: idx}:
+				case done <- doneEvent{hostID: target.Host.ID, index: idx}:
 				default:
 				}
 			}()
@@ -211,10 +211,10 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 					if !ok {
 						return
 					}
-					if !recoveredOnThisWatcher && d.recoverChainHeadOnStatus(ctx, host, batch) {
+					if !recoveredOnThisWatcher && d.recoverChainHeadOnStatus(ctx, target, batch) {
 						recoveredOnThisWatcher = true
 					}
-					if routeIdx, ok := d.routeIndex(host.ID); ok && routeIdx != idx {
+					if routeIdx, ok := d.routeIndex(target.Host.ID); ok && routeIdx != idx {
 						continue
 					}
 					select {
@@ -228,38 +228,38 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 	}
 
 	reconcile := func() {
-		if d.hosts == nil {
+		if d.targets == nil {
 			return
 		}
-		hosts, err := d.hosts()
+		targets, err := d.targets()
 		if err != nil {
 			return
 		}
 		seen := map[string]struct{}{}
-		for _, host := range hosts {
-			if host.ID == "" || host.Agent == nil || len(host.Agent.Transport.Chain) == 0 {
+		for _, target := range targets {
+			if target.Host.ID == "" || len(target.Agent.Transport.Chain) == 0 {
 				continue
 			}
-			seen[host.ID] = struct{}{}
-			idx := d.selectedIndex(host)
-			entry := host.Agent.Transport.Chain[idx]
+			seen[target.Host.ID] = struct{}{}
+			idx := d.selectedIndex(target)
+			entry := target.Agent.Transport.Chain[idx]
 			provider := d.providers[entry.Type]
 			sub, ok := provider.(HostNodeSubscriber)
 			if !ok {
-				if w, running := watchers[host.ID]; running {
+				if w, running := watchers[target.Host.ID]; running {
 					w.cancel()
-					delete(watchers, host.ID)
+					delete(watchers, target.Host.ID)
 				}
 				continue
 			}
-			if w, running := watchers[host.ID]; running {
+			if w, running := watchers[target.Host.ID]; running {
 				if w.index == idx {
 					continue
 				}
 				w.cancel()
-				delete(watchers, host.ID)
+				delete(watchers, target.Host.ID)
 			}
-			startWatcher(host, idx, sub)
+			startWatcher(target, idx, sub)
 		}
 		for hostID, w := range watchers {
 			if _, ok := seen[hostID]; ok {
@@ -287,17 +287,17 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 	}
 }
 
-func (d *Dispatcher) recoverChainHeadOnStatus(ctx context.Context, host model.Host, batch []NodeStatus) bool {
-	if !batchHasReachableHost(host.ID, batch) {
+func (d *Dispatcher) recoverChainHeadOnStatus(ctx context.Context, target NodeTarget, batch []NodeStatus) bool {
+	if !batchHasReachableHost(target.Host.ID, batch) {
 		return false
 	}
 	d.mu.Lock()
-	route := d.routes[host.ID]
+	route := d.routes[target.Host.ID]
 	d.mu.Unlock()
 	if route.selectedIndex <= 0 {
 		return false
 	}
-	return d.recoverChainHead(ctx, host)
+	return d.recoverChainHead(ctx, target)
 }
 
 func batchHasReachableHost(hostID string, batch []NodeStatus) bool {
@@ -325,41 +325,41 @@ func (d *Dispatcher) sortedProviders() []NodeTransport {
 	return out
 }
 
-func (d *Dispatcher) requireHost(hostID, operation string) (model.Host, error) {
-	host, found, err := d.hostByID(hostID)
+func (d *Dispatcher) requireTarget(hostID, operation string) (NodeTarget, error) {
+	target, found, err := d.targetByHostID(hostID)
 	if err != nil {
-		return model.Host{}, err
+		return NodeTarget{}, err
 	}
 	if !found {
-		return model.Host{}, agentNotConfigured(hostID, operation)
+		return NodeTarget{}, agentNotConfigured(hostID, operation)
 	}
-	return host, nil
+	return target, nil
 }
 
-func (d *Dispatcher) selectedProvider(host model.Host, operation string) (int, NodeTransport, error) {
-	if host.Agent == nil || len(host.Agent.Transport.Chain) == 0 {
-		return -1, nil, agentNotConfigured(host.ID, operation)
+func (d *Dispatcher) selectedProvider(target NodeTarget, operation string) (int, NodeTransport, error) {
+	if len(target.Agent.Transport.Chain) == 0 {
+		return -1, nil, agentNotConfigured(target.Host.ID, operation)
 	}
-	idx := d.selectedIndex(host)
-	entry := host.Agent.Transport.Chain[idx]
+	idx := d.selectedIndex(target)
+	entry := target.Agent.Transport.Chain[idx]
 	if entry.Type == "" {
-		return -1, nil, agentNotConfigured(host.ID, operation)
+		return -1, nil, agentNotConfigured(target.Host.ID, operation)
 	}
 	provider := d.providers[entry.Type]
 	if provider == nil {
-		return -1, nil, unsupportedTransport(host.ID, entry.Type, operation)
+		return -1, nil, unsupportedTransport(target.Host.ID, entry.Type, operation)
 	}
 	return idx, provider, nil
 }
 
-func (d *Dispatcher) selectedIndex(host model.Host) int {
+func (d *Dispatcher) selectedIndex(target NodeTarget) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	route := d.routes[host.ID]
-	if route.selectedIndex < 0 || route.selectedIndex >= len(host.Agent.Transport.Chain) {
+	route := d.routes[target.Host.ID]
+	if route.selectedIndex < 0 || route.selectedIndex >= len(target.Agent.Transport.Chain) {
 		route.selectedIndex = 0
 	}
-	d.routes[host.ID] = route
+	d.routes[target.Host.ID] = route
 	return route.selectedIndex
 }
 
@@ -370,8 +370,8 @@ func (d *Dispatcher) routeSnapshot(hostID string) (RouteStatus, bool) {
 	if !ok {
 		return RouteStatus{}, false
 	}
-	host, found, _ := d.hostByID(hostID)
-	if !found || host.Agent == nil {
+	target, found, _ := d.targetByHostID(hostID)
+	if !found {
 		return RouteStatus{}, false
 	}
 	status := RouteStatus{
@@ -379,10 +379,10 @@ func (d *Dispatcher) routeSnapshot(hostID string) (RouteStatus, bool) {
 		Degraded:      route.selectedIndex > 0,
 		LastResults:   append([]ProbeResult(nil), route.lastResults...),
 	}
-	if route.selectedIndex < 0 || route.selectedIndex >= len(host.Agent.Transport.Chain) {
+	if route.selectedIndex < 0 || route.selectedIndex >= len(target.Agent.Transport.Chain) {
 		return status, true
 	}
-	entry := host.Agent.Transport.Chain[route.selectedIndex]
+	entry := target.Agent.Transport.Chain[route.selectedIndex]
 	status.SelectedType = entry.Type
 	return status, true
 }
@@ -430,23 +430,23 @@ func (d *Dispatcher) notifyRouteChanged() {
 	}
 }
 
-func (d *Dispatcher) reselect(ctx context.Context, host model.Host) error {
+func (d *Dispatcher) reselect(ctx context.Context, target NodeTarget) error {
 	results := []ProbeResult{}
-	for idx, entry := range host.Agent.Transport.Chain {
-		result := d.probeEntry(ctx, host, idx, entry)
+	for idx, entry := range target.Agent.Transport.Chain {
+		result := d.probeEntry(ctx, target, idx, entry)
 		results = append(results, result)
 		if result.Status == ProbeStatusReachable {
-			d.setRoute(host.ID, hostRoute{selectedIndex: idx, probedAt: time.Now().UTC(), lastResults: results})
+			d.setRoute(target.Host.ID, hostRoute{selectedIndex: idx, probedAt: time.Now().UTC(), lastResults: results})
 			return nil
 		}
 	}
-	d.setRoute(host.ID, hostRoute{selectedIndex: -1, probedAt: time.Now().UTC(), lastResults: results})
+	d.setRoute(target.Host.ID, hostRoute{selectedIndex: -1, probedAt: time.Now().UTC(), lastResults: results})
 	return ErrHostUnreachable
 }
 
-func (d *Dispatcher) probeEntry(ctx context.Context, host model.Host, idx int, entry model.TransportEntry) ProbeResult {
+func (d *Dispatcher) probeEntry(ctx context.Context, target NodeTarget, idx int, entry model.TransportEntry) ProbeResult {
 	provider := d.providers[entry.Type]
-	return ProbeEntry(ctx, provider, host, idx, entry, d.probeTimeout)
+	return ProbeEntry(ctx, provider, target, idx, entry, d.probeTimeout)
 }
 
 func (d *Dispatcher) recoveryLoop(ctx context.Context) {
@@ -467,39 +467,39 @@ func (d *Dispatcher) recoveryLoop(ctx context.Context) {
 }
 
 func (d *Dispatcher) recoverChainHeads(ctx context.Context) {
-	if d.hosts == nil {
+	if d.targets == nil {
 		return
 	}
-	hosts, err := d.hosts()
+	targets, err := d.targets()
 	if err != nil {
 		return
 	}
-	for _, host := range hosts {
-		if host.Agent == nil || len(host.Agent.Transport.Chain) < 2 {
+	for _, target := range targets {
+		if len(target.Agent.Transport.Chain) < 2 {
 			continue
 		}
-		d.recoverChainHead(ctx, host)
+		d.recoverChainHead(ctx, target)
 	}
 }
 
-func (d *Dispatcher) recoverChainHead(ctx context.Context, host model.Host) bool {
-	if host.Agent == nil || len(host.Agent.Transport.Chain) < 2 {
+func (d *Dispatcher) recoverChainHead(ctx context.Context, target NodeTarget) bool {
+	if len(target.Agent.Transport.Chain) < 2 {
 		return false
 	}
 	d.mu.Lock()
-	route := d.routes[host.ID]
+	route := d.routes[target.Host.ID]
 	d.mu.Unlock()
 	if route.selectedIndex <= 0 {
 		return false
 	}
-	result := d.probeEntry(ctx, host, 0, host.Agent.Transport.Chain[0])
+	result := d.probeEntry(ctx, target, 0, target.Agent.Transport.Chain[0])
 	if result.Status != ProbeStatusReachable {
 		return false
 	}
 	route.selectedIndex = 0
 	route.probedAt = time.Now().UTC()
 	route.lastResults = []ProbeResult{result}
-	d.setRoute(host.ID, route)
+	d.setRoute(target.Host.ID, route)
 	return true
 }
 
@@ -535,13 +535,13 @@ func unsupportedTransport(hostID string, typ model.TransportType, operation stri
 	}
 }
 
-func (d *Dispatcher) hostByID(hostID string) (model.Host, bool, error) {
-	if d.hosts == nil {
-		return model.Host{}, false, nil
+func (d *Dispatcher) targetByHostID(hostID string) (NodeTarget, bool, error) {
+	if d.targets == nil {
+		return NodeTarget{}, false, nil
 	}
-	hosts, err := d.hosts()
+	targets, err := d.targets()
 	if err != nil {
-		return model.Host{}, false, &NodeError{
+		return NodeTarget{}, false, &NodeError{
 			Code:      CodeTransportUnreachable,
 			HostID:    hostID,
 			Operation: "resolve",
@@ -549,10 +549,10 @@ func (d *Dispatcher) hostByID(hostID string) (model.Host, bool, error) {
 			Cause:     err,
 		}
 	}
-	for _, host := range hosts {
-		if host.ID == hostID {
-			return host, true, nil
+	for _, target := range targets {
+		if target.Host.ID == hostID {
+			return target, true, nil
 		}
 	}
-	return model.Host{}, false, nil
+	return NodeTarget{}, false, nil
 }

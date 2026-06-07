@@ -62,6 +62,17 @@ type NodeStatus struct {
 	Error       string                         `json:"error,omitempty"`
 }
 
+// NodeTarget 是一次节点通信所需的完整目标信息。
+//
+// Host 保存机器身份和 SSH 登录字段；Agent 保存 transport chain、统一安全配置和本机 secret。
+type NodeTarget struct {
+	Host  model.Host
+	Agent model.Agent
+}
+
+// TargetSource 返回当前已配置 Agent 的完整通信目标列表。
+type TargetSource func() ([]NodeTarget, error)
+
 // MarshalJSON 输出 NodeStatus 的稳定桌面端协议形状。
 //
 // 参数：
@@ -112,5 +123,5 @@ type NodeTransport interface {
 
 // HostNodeSubscriber 允许 Dispatcher 按选中的单个 host/transport 启动状态流。
 type HostNodeSubscriber interface {
-	SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []NodeStatus, func())
+	SubscribeHostNodes(ctx context.Context, target NodeTarget) (<-chan []NodeStatus, func())
 }

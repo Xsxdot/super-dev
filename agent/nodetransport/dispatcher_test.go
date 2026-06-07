@@ -1,7 +1,7 @@
 // dispatcher_test.go 验证 NodeTransport dispatcher 的路由行为。
 //
 // 职责：
-//   - 证明请求按 Host.Agent.Transport.Chain 分派到对应 provider
+//   - 证明请求按 Agent.Transport.Chain 分派到对应 provider
 //   - 证明缺 Agent 或缺 provider 时返回结构化错误 code
 //   - 证明节点状态订阅会聚合所有 provider
 //
@@ -27,11 +27,11 @@ import (
 func TestDispatcherFallsBackToTunnelWhenDirectUnavailable(t *testing.T) {
 	direct := &recordingTransport{name: "direct", err: nodetransport.ErrHostUnreachable}
 	tunnel := &recordingTransport{name: "tunnel", covers: []string{"h1"}}
-	hosts := []model.Host{hostWithChain("h1",
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
 		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
 	)}
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeDirect: direct,
 		model.TransportTypeTunnel: tunnel,
 	})
@@ -50,9 +50,7 @@ func TestDispatcherFallsBackToTunnelWhenDirectUnavailable(t *testing.T) {
 }
 
 func TestDispatcherReturnsAgentNotConfigured(t *testing.T) {
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) {
-		return []model.Host{{ID: "h1", Name: "no-agent"}}, nil
-	}, nil)
+	dispatcher := nodetransport.NewDispatcher(targetSource(), nil)
 
 	_, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 
@@ -60,9 +58,7 @@ func TestDispatcherReturnsAgentNotConfigured(t *testing.T) {
 }
 
 func TestDispatcherReturnsUnsupportedTransport(t *testing.T) {
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) {
-		return []model.Host{hostWithTransport("h1", model.TransportTypeBridge)}, nil
-	}, map[model.TransportType]nodetransport.NodeTransport{})
+	dispatcher := nodetransport.NewDispatcher(targetSource(targetWithTransport("h1", model.TransportTypeBridge)), map[model.TransportType]nodetransport.NodeTransport{})
 
 	_, err := dispatcher.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
 
@@ -72,12 +68,10 @@ func TestDispatcherReturnsUnsupportedTransport(t *testing.T) {
 func TestDispatcherSubscribeNodesAggregatesProviders(t *testing.T) {
 	tunnel := newStatusRecordingTransport("tunnel")
 	direct := newStatusRecordingTransport("direct")
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) {
-		return []model.Host{
-			hostWithTransport("h1", model.TransportTypeTunnel),
-			hostWithTransport("h2", model.TransportTypeDirect),
-		}, nil
-	}, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(
+		targetWithTransport("h1", model.TransportTypeTunnel),
+		targetWithTransport("h2", model.TransportTypeDirect),
+	), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeTunnel: tunnel,
 		model.TransportTypeDirect: direct,
 	})
@@ -109,10 +103,10 @@ func TestDispatcherSubscribeNodesAggregatesProviders(t *testing.T) {
 
 func TestDispatcherProbeMarksAuthFailedAfterProvisionedHealth(t *testing.T) {
 	direct := &authFailedProbeTransport{}
-	hosts := []model.Host{hostWithChain("h1",
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
 		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
 	)}
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeDirect: direct,
 	})
 	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
@@ -130,11 +124,11 @@ func TestDispatcherProbeMarksAuthFailedAfterProvisionedHealth(t *testing.T) {
 func TestDispatcherRecoversChainHeadOnProbe(t *testing.T) {
 	direct := &recordingTransport{name: "direct", err: nodetransport.ErrHostUnreachable}
 	tunnel := &recordingTransport{name: "tunnel"}
-	hosts := []model.Host{hostWithChain("h1",
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
 		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
 	)}
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeDirect: direct,
 		model.TransportTypeTunnel: tunnel,
 	})
@@ -155,11 +149,11 @@ func TestDispatcherSubscribeNodesSwitchesWhenRouteChanges(t *testing.T) {
 	direct := newStatusRecordingTransport("direct")
 	tunnel := newStatusRecordingTransport("tunnel")
 	direct.err = nodetransport.ErrHostUnreachable
-	hosts := []model.Host{hostWithChain("h1",
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
 		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
 	)}
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeDirect: direct,
 		model.TransportTypeTunnel: tunnel,
 	})
@@ -201,11 +195,11 @@ func TestDispatcherSubscribeNodesRecoversChainHeadOnReachableStatus(t *testing.T
 	direct := newStatusRecordingTransport("direct")
 	tunnel := newStatusRecordingTransport("tunnel")
 	direct.err = nodetransport.ErrHostUnreachable
-	hosts := []model.Host{hostWithChain("h1",
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
 		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
-		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root", RemoteAgentPort: 57017}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
 	)}
-	dispatcher := nodetransport.NewDispatcher(func() ([]model.Host, error) { return hosts, nil }, map[model.TransportType]nodetransport.NodeTransport{
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
 		model.TransportTypeDirect: direct,
 		model.TransportTypeTunnel: tunnel,
 	})
@@ -320,7 +314,7 @@ func newStatusRecordingTransport(name string) *statusRecordingTransport {
 	}
 }
 
-func (s *statusRecordingTransport) SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []nodetransport.NodeStatus, func()) {
+func (s *statusRecordingTransport) SubscribeHostNodes(ctx context.Context, target nodetransport.NodeTarget) (<-chan []nodetransport.NodeStatus, func()) {
 	out := make(chan []nodetransport.NodeStatus, 16)
 	runCtx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -354,14 +348,20 @@ func (s *statusRecordingTransport) emit(hostID string, health model.AgentHealth)
 	}}
 }
 
-func hostWithTransport(id string, typ model.TransportType) model.Host {
-	return hostWithChain(id, model.TransportEntry{Type: typ})
+func targetSource(targets ...nodetransport.NodeTarget) nodetransport.TargetSource {
+	return func() ([]nodetransport.NodeTarget, error) {
+		return targets, nil
+	}
 }
 
-func hostWithChain(id string, entries ...model.TransportEntry) model.Host {
-	return model.Host{
-		ID: id,
-		Agent: &model.Agent{Transport: model.TransportConfig{
+func targetWithTransport(id string, typ model.TransportType) nodetransport.NodeTarget {
+	return targetWithChain(id, model.TransportEntry{Type: typ})
+}
+
+func targetWithChain(id string, entries ...model.TransportEntry) nodetransport.NodeTarget {
+	return nodetransport.NodeTarget{
+		Host: model.Host{ID: id, Name: id, SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root"},
+		Agent: model.Agent{HostID: id, Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeOff}}, Transport: model.TransportConfig{
 			Chain: entries,
 		}},
 	}

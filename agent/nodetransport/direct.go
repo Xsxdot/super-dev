@@ -1,7 +1,7 @@
 // direct.go 实现按地址直连远端 agent 的 NodeTransport。
 //
 // 职责：
-//   - 使用 Host.Agent.Transport.Direct.Address 发起 HTTP 和 WebSocket 请求
+//   - 使用 Agent.Transport.Direct.Address 发起 HTTP 和 WebSocket 请求
 //   - 为 NodeRegistry 订阅直连 agent 的 /ws/node-status
 //   - 将旧 agent 缺少状态流接口的情况归类为 version-mismatch
 //
@@ -13,8 +13,6 @@ package nodetransport
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -38,16 +36,16 @@ const (
 
 // DirectTransport 通过直接可达地址访问远端 agent。
 type DirectTransport struct {
-	hosts                   HostSource
+	targets                 TargetSource
 	statusReconnectInterval time.Duration
 	connectTimeout          time.Duration
 	requestTimeout          time.Duration
 }
 
 // NewDirectTransport 创建直连传输实现。
-func NewDirectTransport(hosts HostSource) *DirectTransport {
+func NewDirectTransport(targets TargetSource) *DirectTransport {
 	return &DirectTransport{
-		hosts:                   hosts,
+		targets:                 targets,
 		statusReconnectInterval: defaultDirectStatusReconnectInterval,
 		connectTimeout:          defaultDirectConnectTimeout,
 		requestTimeout:          defaultDirectRequestTimeout,
@@ -67,11 +65,11 @@ func (t *DirectTransport) SetTimeoutsForTest(connectTimeout, requestTimeout time
 
 // Do 对 hostID 发起一次 HTTP 请求。
 func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest) (NodeResponse, error) {
-	host, params, err := t.directParamsFor(hostID)
+	target, params, err := t.directParamsFor(hostID)
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	u, err := t.urlForParams(host.ID, params, req, false)
+	u, err := t.urlForParams(target.Host.ID, target.Agent.Security.TLS, params, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -83,8 +81,8 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	applyDirectHeaders(httpReq.Header, host, req.Headers)
-	client, err := t.httpClientFor(params)
+	applyAgentHeaders(httpReq.Header, target.Agent, req.Headers)
+	client, err := t.httpClientFor(target)
 	if err != nil {
 		return NodeResponse{}, directConfigError(hostID, "http", err)
 	}
@@ -108,20 +106,20 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 
 // Stream 对 hostID 建立 WebSocket 流。
 func (t *DirectTransport) Stream(ctx context.Context, hostID string, req NodeRequest) (NodeStream, error) {
-	host, params, err := t.directParamsFor(hostID)
+	target, params, err := t.directParamsFor(hostID)
 	if err != nil {
 		return nil, err
 	}
-	u, err := t.urlForParams(host.ID, params, req, true)
+	u, err := t.urlForParams(target.Host.ID, target.Agent.Security.TLS, params, req, true)
 	if err != nil {
 		return nil, err
 	}
-	dialer, err := t.wsDialerFor(params)
+	dialer, err := t.wsDialerFor(target)
 	if err != nil {
 		return nil, directConfigError(hostID, "stream", err)
 	}
 	headers := http.Header{}
-	applyDirectHeaders(headers, host, req.Headers)
+	applyAgentHeaders(headers, target.Agent, req.Headers)
 	conn, resp, err := dialer.DialContext(ctx, u, headers)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -151,23 +149,23 @@ func (t *DirectTransport) SubscribeNodes(ctx context.Context) (<-chan []NodeStat
 	return out, cancel
 }
 
-// SubscribeHostNodes 订阅单个 direct host 的状态流，供 Dispatcher 选路后调用。
-func (t *DirectTransport) SubscribeHostNodes(ctx context.Context, host model.Host) (<-chan []NodeStatus, func()) {
+// SubscribeHostNodes 订阅单个 direct target 的状态流，供 Dispatcher 选路后调用。
+func (t *DirectTransport) SubscribeHostNodes(ctx context.Context, target NodeTarget) (<-chan []NodeStatus, func()) {
 	runCtx, cancel := context.WithCancel(ctx)
 	out := make(chan []NodeStatus, 16)
 	go func() {
 		defer close(out)
-		t.watchNodeStatus(runCtx, host, out)
+		t.watchNodeStatus(runCtx, target, out)
 	}()
 	return out, cancel
 }
 
 // Covers 返回当前 direct transport 覆盖的 hostID。
 func (t *DirectTransport) Covers() []string {
-	hosts := t.directHosts()
-	out := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		out = append(out, host.ID)
+	targets := t.directTargets()
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, target.Host.ID)
 	}
 	sort.Strings(out)
 	return out
@@ -196,16 +194,16 @@ func (t *DirectTransport) runNodeStatusSubscription(ctx context.Context, out cha
 		close(out)
 	}()
 
-	startWatcher := func(host model.Host) {
-		ch, stop := t.SubscribeHostNodes(ctx, host)
-		running[host.ID] = stop
+	startWatcher := func(target NodeTarget) {
+		ch, stop := t.SubscribeHostNodes(ctx, target)
+		running[target.Host.ID] = stop
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
 				stop()
 				select {
-				case done <- host.ID:
+				case done <- target.Host.ID:
 				default:
 				}
 			}()
@@ -228,17 +226,17 @@ func (t *DirectTransport) runNodeStatusSubscription(ctx context.Context, out cha
 	}
 
 	reconcile := func() {
-		hosts := t.directHosts()
+		targets := t.directTargets()
 		seen := map[string]struct{}{}
-		for _, host := range hosts {
-			if host.ID == "" {
+		for _, target := range targets {
+			if target.Host.ID == "" {
 				continue
 			}
-			seen[host.ID] = struct{}{}
-			if _, ok := running[host.ID]; ok {
+			seen[target.Host.ID] = struct{}{}
+			if _, ok := running[target.Host.ID]; ok {
 				continue
 			}
-			startWatcher(host)
+			startWatcher(target)
 		}
 		for hostID, cancel := range running {
 			if _, ok := seen[hostID]; ok {
@@ -262,17 +260,17 @@ func (t *DirectTransport) runNodeStatusSubscription(ctx context.Context, out cha
 	}
 }
 
-func (t *DirectTransport) watchNodeStatus(ctx context.Context, host model.Host, out chan<- []NodeStatus) {
-	stream, err := t.Stream(ctx, host.ID, NodeRequest{
+func (t *DirectTransport) watchNodeStatus(ctx context.Context, target NodeTarget, out chan<- []NodeStatus) {
+	stream, err := t.Stream(ctx, target.Host.ID, NodeRequest{
 		Path: "/ws/node-status",
 		Query: url.Values{
-			"host_id":   []string{host.ID},
-			"host_name": []string{host.Name},
+			"host_id":   []string{target.Host.ID},
+			"host_name": []string{target.Host.Name},
 		},
 	})
 	if err != nil {
 		if ctx.Err() == nil {
-			t.emitDirectFailure(ctx, out, host, err)
+			t.emitDirectFailure(ctx, out, target, err)
 		}
 		return
 	}
@@ -282,7 +280,7 @@ func (t *DirectTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 		var batch []NodeStatus
 		if err := stream.ReadJSON(&batch); err != nil {
 			if ctx.Err() == nil {
-				t.emitDirectFailure(ctx, out, host, err)
+				t.emitDirectFailure(ctx, out, target, err)
 			}
 			return
 		}
@@ -297,16 +295,16 @@ func (t *DirectTransport) watchNodeStatus(ctx context.Context, host model.Host, 
 	}
 }
 
-func (t *DirectTransport) emitDirectFailure(ctx context.Context, out chan<- []NodeStatus, host model.Host, err error) {
+func (t *DirectTransport) emitDirectFailure(ctx context.Context, out chan<- []NodeStatus, target NodeTarget, err error) {
 	health := model.AgentHealthUnreachable
 	reachable := false
-	if t.execHealthReachable(ctx, host.ID) {
+	if t.execHealthReachable(ctx, target.Host.ID) {
 		health = model.AgentHealthVersionMismatch
 		reachable = true
 	}
 	status := NodeStatus{
-		HostID:    host.ID,
-		Name:      host.Name,
+		HostID:    target.Host.ID,
+		Name:      target.Host.Name,
 		Reachable: reachable,
 		Agent: model.AgentRuntime{
 			Installed: reachable,
@@ -335,15 +333,15 @@ func (t *DirectTransport) execHealthReachable(ctx context.Context, hostID string
 }
 
 func (t *DirectTransport) urlFor(hostID string, req NodeRequest, stream bool) (string, error) {
-	host, params, err := t.directParamsFor(hostID)
+	target, params, err := t.directParamsFor(hostID)
 	if err != nil {
 		return "", err
 	}
-	return t.urlForParams(host.ID, params, req, stream)
+	return t.urlForParams(target.Host.ID, target.Agent.Security.TLS, params, req, stream)
 }
 
-func (t *DirectTransport) urlForParams(hostID string, params *model.DirectParams, req NodeRequest, stream bool) (string, error) {
-	base, err := directBaseURL(params)
+func (t *DirectTransport) urlForParams(hostID string, tlsSpec model.AgentTLSSpec, params *model.DirectParams, req NodeRequest, stream bool) (string, error) {
+	base, err := directBaseURL(params, tlsSpec)
 	if err != nil {
 		return "", &NodeError{
 			Code:          CodeAgentNotConfigured,
@@ -382,11 +380,7 @@ func (t *DirectTransport) urlForParams(hostID string, params *model.DirectParams
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func (t *DirectTransport) httpClientFor(params *model.DirectParams) (*http.Client, error) {
-	tlsConfig, err := tlsConfigForDirect(params)
-	if err != nil {
-		return nil, err
-	}
+func (t *DirectTransport) httpClientFor(target NodeTarget) (*http.Client, error) {
 	connectTimeout := t.connectTimeout
 	if connectTimeout == 0 {
 		connectTimeout = defaultDirectConnectTimeout
@@ -395,64 +389,15 @@ func (t *DirectTransport) httpClientFor(params *model.DirectParams) (*http.Clien
 	if requestTimeout == 0 {
 		requestTimeout = defaultDirectRequestTimeout
 	}
-	return &http.Client{
-		Timeout: requestTimeout,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   connectTimeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout: connectTimeout,
-			TLSClientConfig:     tlsConfig,
-		},
-	}, nil
+	return httpClientForAgentTLS(target.Agent.Security.TLS, connectTimeout, requestTimeout)
 }
 
-func (t *DirectTransport) wsDialerFor(params *model.DirectParams) (*websocket.Dialer, error) {
-	tlsConfig, err := tlsConfigForDirect(params)
-	if err != nil {
-		return nil, err
-	}
+func (t *DirectTransport) wsDialerFor(target NodeTarget) (*websocket.Dialer, error) {
 	connectTimeout := t.connectTimeout
 	if connectTimeout == 0 {
 		connectTimeout = defaultDirectConnectTimeout
 	}
-	return &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: connectTimeout,
-		TLSClientConfig:  tlsConfig,
-		NetDialContext: (&net.Dialer{
-			Timeout:   connectTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-	}, nil
-}
-
-func tlsConfigForDirect(params *model.DirectParams) (*tls.Config, error) {
-	if params == nil || !params.TLS {
-		return nil, nil
-	}
-	if strings.TrimSpace(params.CACert) == "" {
-		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM([]byte(params.CACert)) {
-		return nil, fmt.Errorf("invalid direct CA certificate")
-	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
-}
-
-func applyDirectHeaders(dst http.Header, host model.Host, overrides http.Header) {
-	if host.Agent != nil && strings.TrimSpace(host.Agent.Token) != "" {
-		dst.Set("Authorization", "Bearer "+strings.TrimSpace(host.Agent.Token))
-	}
-	for key, values := range overrides {
-		dst.Del(key)
-		for _, value := range values {
-			dst.Add(key, value)
-		}
-	}
+	return wsDialerForAgentTLS(target.Agent.Security.TLS, connectTimeout)
 }
 
 func isTimeoutError(ctx context.Context, err error) bool {
@@ -477,16 +422,16 @@ func directConfigError(hostID string, operation string, err error) error {
 	}
 }
 
-func (t *DirectTransport) directParamsFor(hostID string) (model.Host, *model.DirectParams, error) {
-	hosts := t.directHosts()
-	for _, host := range hosts {
-		if host.ID != hostID {
+func (t *DirectTransport) directParamsFor(hostID string) (NodeTarget, *model.DirectParams, error) {
+	targets := t.directTargets()
+	for _, target := range targets {
+		if target.Host.ID != hostID {
 			continue
 		}
-		params, _ := host.DirectParams()
-		return host, params, nil
+		params, _ := target.Agent.DirectParams()
+		return target, params, nil
 	}
-	return model.Host{}, nil, &NodeError{
+	return NodeTarget{}, nil, &NodeError{
 		Code:          CodeAgentNotConfigured,
 		HostID:        hostID,
 		TransportType: model.TransportTypeDirect,
@@ -496,41 +441,38 @@ func (t *DirectTransport) directParamsFor(hostID string) (model.Host, *model.Dir
 	}
 }
 
-func (t *DirectTransport) directHosts() []model.Host {
-	if t.hosts == nil {
-		return []model.Host{}
+func (t *DirectTransport) directTargets() []NodeTarget {
+	if t.targets == nil {
+		return []NodeTarget{}
 	}
-	hosts, err := t.hosts()
+	targets, err := t.targets()
 	if err != nil {
-		return []model.Host{}
+		return []NodeTarget{}
 	}
-	out := make([]model.Host, 0, len(hosts))
-	for _, host := range hosts {
-		if host.Agent == nil {
+	out := make([]NodeTarget, 0, len(targets))
+	for _, target := range targets {
+		if _, ok := target.Agent.DirectParams(); !ok {
 			continue
 		}
-		if _, ok := host.DirectParams(); !ok {
-			continue
-		}
-		out = append(out, host)
+		out = append(out, target)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+		if out[i].Host.Name != out[j].Host.Name {
+			return out[i].Host.Name < out[j].Host.Name
 		}
-		return out[i].ID < out[j].ID
+		return out[i].Host.ID < out[j].Host.ID
 	})
 	return out
 }
 
-func directBaseURL(params *model.DirectParams) (*url.URL, error) {
+func directBaseURL(params *model.DirectParams, tlsSpec model.AgentTLSSpec) (*url.URL, error) {
 	address := strings.TrimSpace(params.Address)
 	if address == "" {
 		return nil, fmt.Errorf("direct address is required")
 	}
 	if !strings.Contains(address, "://") {
 		scheme := "http"
-		if params.TLS {
+		if agentTLSEnabled(tlsSpec) {
 			scheme = "https"
 		}
 		address = scheme + "://" + address
