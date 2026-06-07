@@ -10,7 +10,10 @@
 //   - 运行时字段（Status、PID）不参与 YAML 序列化
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ServiceStatus 表示服务的运行状态。
 type ServiceStatus string
@@ -168,6 +171,10 @@ const (
 	AgentHealthUnreachable AgentHealth = "unreachable"
 	// AgentHealthVersionMismatch 表示 agent 可达但接口版本不匹配。
 	AgentHealthVersionMismatch AgentHealth = "version-mismatch"
+	// AgentHealthAuthFailed 表示 agent 可达但 token 认证失败。
+	AgentHealthAuthFailed AgentHealth = "auth-failed"
+	// AgentHealthPendingBootstrap 表示 agent 可达但仍处于待自举状态。
+	AgentHealthPendingBootstrap AgentHealth = "pending-bootstrap"
 )
 
 // Host 表示一台被管理的远程主机身份。
@@ -192,11 +199,17 @@ type Host struct {
 // Agent 是 Host 下的一等公民，描述这台主机怎么连接以及当前运行态。
 type Agent struct {
 	Transport TransportConfig `json:"transport"`
+	Token     string          `json:"token,omitempty"`
 	Runtime   AgentRuntime    `json:"-"`
 }
 
-// TransportConfig 表达 agent 的传输类型及其参数。
+// TransportConfig 持有一台 host 的有序传输链。
 type TransportConfig struct {
+	Chain []TransportEntry `json:"chain"`
+}
+
+// TransportEntry 是链上的一种传输方式及其参数。
+type TransportEntry struct {
 	Type   TransportType `json:"type"`
 	Tunnel *TunnelParams `json:"tunnel,omitempty"`
 	Direct *DirectParams `json:"direct,omitempty"`
@@ -213,10 +226,52 @@ type TunnelParams struct {
 	RemoteAgentPort int    `json:"remote_agent_port"`
 }
 
-// DirectParams 是直连传输的预留参数。
+// DirectParams 是直连传输参数。token 属于 Agent，不在这里保存。
 type DirectParams struct {
 	Address string `json:"address,omitempty"`
 	TLS     bool   `json:"tls,omitempty"`
+	CACert  string `json:"ca_cert,omitempty"`
+}
+
+type transportConfigJSON struct {
+	Chain  []TransportEntry `json:"chain,omitempty"`
+	Type   TransportType    `json:"type,omitempty"`
+	Tunnel *TunnelParams    `json:"tunnel,omitempty"`
+	Direct *DirectParams    `json:"direct,omitempty"`
+}
+
+// MarshalJSON 始终写出新的 chain 形状，避免 hosts.json 继续扩散旧单选格式。
+func (c TransportConfig) MarshalJSON() ([]byte, error) {
+	type chainOnly struct {
+		Chain []TransportEntry `json:"chain"`
+	}
+	chain := c.Chain
+	if chain == nil {
+		chain = []TransportEntry{}
+	}
+	return json.Marshal(chainOnly{Chain: chain})
+}
+
+// UnmarshalJSON 只为一次性迁移读取旧单选格式；后续保存会统一写回 chain。
+func (c *TransportConfig) UnmarshalJSON(data []byte) error {
+	var raw transportConfigJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Chain) > 0 {
+		c.Chain = raw.Chain
+		return nil
+	}
+	if raw.Type == "" {
+		c.Chain = []TransportEntry{}
+		return nil
+	}
+	c.Chain = []TransportEntry{{
+		Type:   raw.Type,
+		Tunnel: raw.Tunnel,
+		Direct: raw.Direct,
+	}}
+	return nil
 }
 
 // AgentRuntime 是不持久化的运行时快照。
@@ -228,30 +283,66 @@ type AgentRuntime struct {
 	LocalPort int         `json:"local_port,omitempty"`
 }
 
-// TunnelParams 返回 Host 当前的 tunnel 传输参数。
-func (h Host) TunnelParams() (*TunnelParams, bool) {
+// TransportEntry 返回指定类型的链项。
+func (h Host) TransportEntry(typ TransportType) (*TransportEntry, bool) {
 	if h.Agent == nil {
 		return nil, false
 	}
-	if h.Agent.Transport.Type != TransportTypeTunnel {
+	for i := range h.Agent.Transport.Chain {
+		if h.Agent.Transport.Chain[i].Type == typ {
+			return &h.Agent.Transport.Chain[i], true
+		}
+	}
+	return nil, false
+}
+
+// TunnelParams 返回 Host 当前 chain 中的 tunnel 参数。
+func (h Host) TunnelParams() (*TunnelParams, bool) {
+	entry, ok := h.TransportEntry(TransportTypeTunnel)
+	if !ok || entry.Tunnel == nil {
 		return nil, false
 	}
-	if h.Agent.Transport.Tunnel == nil {
+	return entry.Tunnel, true
+}
+
+// DirectParams 返回 Host 当前 chain 中的 direct 参数。
+func (h Host) DirectParams() (*DirectParams, bool) {
+	entry, ok := h.TransportEntry(TransportTypeDirect)
+	if !ok || entry.Direct == nil {
 		return nil, false
 	}
-	return h.Agent.Transport.Tunnel, true
+	return entry.Direct, true
 }
 
 // EnsureTunnelAgent 确保 Host 挂载 tunnel agent，并返回可修改的 tunnel 参数。
 func (h *Host) EnsureTunnelAgent() *TunnelParams {
+	entry := h.ensureTransportEntry(TransportTypeTunnel)
+	if entry.Tunnel == nil {
+		entry.Tunnel = &TunnelParams{}
+	}
+	return entry.Tunnel
+}
+
+// EnsureDirectAgent 确保 Host 挂载 direct agent，并返回可修改的 direct 参数。
+func (h *Host) EnsureDirectAgent() *DirectParams {
+	entry := h.ensureTransportEntry(TransportTypeDirect)
+	if entry.Direct == nil {
+		entry.Direct = &DirectParams{}
+	}
+	return entry.Direct
+}
+
+func (h *Host) ensureTransportEntry(typ TransportType) *TransportEntry {
 	if h.Agent == nil {
 		h.Agent = &Agent{}
 	}
-	h.Agent.Transport.Type = TransportTypeTunnel
-	if h.Agent.Transport.Tunnel == nil {
-		h.Agent.Transport.Tunnel = &TunnelParams{}
+	for i := range h.Agent.Transport.Chain {
+		if h.Agent.Transport.Chain[i].Type == typ {
+			return &h.Agent.Transport.Chain[i]
+		}
 	}
-	return h.Agent.Transport.Tunnel
+	h.Agent.Transport.Chain = append(h.Agent.Transport.Chain, TransportEntry{Type: typ})
+	return &h.Agent.Transport.Chain[len(h.Agent.Transport.Chain)-1]
 }
 
 // RuntimeLocalPort 返回当前运行期本地隧道端口。

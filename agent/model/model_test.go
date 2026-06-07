@@ -35,7 +35,7 @@ func TestHostJSON(t *testing.T) {
 		PrivateIP: "10.0.0.1",
 		Tags:      []string{"prod", "temp"},
 		Agent: &model.Agent{
-			Transport: model.TransportConfig{
+			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
 				Type: model.TransportTypeTunnel,
 				Tunnel: &model.TunnelParams{
 					SSHHost:         "10.0.0.1",
@@ -45,7 +45,7 @@ func TestHostJSON(t *testing.T) {
 					SSHKeyPath:      "/key",
 					RemoteAgentPort: 57017,
 				},
-			},
+			}}},
 			Runtime: model.AgentRuntime{
 				Installed: true,
 				Version:   "1.2.3",
@@ -66,10 +66,99 @@ func TestHostJSON(t *testing.T) {
 	var got model.Host
 	require.NoError(t, json.Unmarshal(data, &got))
 	require.NotNil(t, got.Agent)
-	assert.Equal(t, model.TransportTypeTunnel, got.Agent.Transport.Type)
-	require.NotNil(t, got.Agent.Transport.Tunnel)
-	assert.Equal(t, "10.0.0.1", got.Agent.Transport.Tunnel.SSHHost)
+	require.Len(t, got.Agent.Transport.Chain, 1)
+	assert.Equal(t, model.TransportTypeTunnel, got.Agent.Transport.Chain[0].Type)
+	require.NotNil(t, got.Agent.Transport.Chain[0].Tunnel)
+	assert.Equal(t, "10.0.0.1", got.Agent.Transport.Chain[0].Tunnel.SSHHost)
 	assert.Equal(t, 0, got.Agent.Runtime.LocalPort)
+}
+
+func TestAgentTransportChainJSONShape(t *testing.T) {
+	h := model.Host{
+		ID:   "h-chain",
+		Name: "chain-host",
+		Agent: &model.Agent{
+			Token: "agent-token",
+			Transport: model.TransportConfig{Chain: []model.TransportEntry{
+				{
+					Type: model.TransportTypeDirect,
+					Direct: &model.DirectParams{
+						Address: "100.64.0.8:57017",
+						TLS:     true,
+						CACert:  "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n",
+					},
+				},
+				{
+					Type: model.TransportTypeTunnel,
+					Tunnel: &model.TunnelParams{
+						SSHHost:         "10.0.0.8",
+						SSHPort:         22,
+						SSHUser:         "root",
+						RemoteAgentPort: 57017,
+					},
+				},
+			}},
+			Runtime: model.AgentRuntime{LocalPort: 12345},
+		},
+	}
+
+	data, err := json.Marshal(h)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"chain"`)
+	assert.Contains(t, string(data), `"token":"agent-token"`)
+	assert.Contains(t, string(data), `"ca_cert"`)
+	assert.NotContains(t, string(data), `"transport":{"type"`)
+	assert.NotContains(t, string(data), `"runtime"`)
+
+	var got model.Host
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.NotNil(t, got.Agent)
+	require.Len(t, got.Agent.Transport.Chain, 2)
+	assert.Equal(t, model.TransportTypeDirect, got.Agent.Transport.Chain[0].Type)
+	assert.Equal(t, "agent-token", got.Agent.Token)
+	assert.Equal(t, 0, got.Agent.Runtime.LocalPort)
+}
+
+func TestTransportConfigUnmarshalMigratesLegacySingleTransport(t *testing.T) {
+	raw := []byte(`{
+		"id":"h1",
+		"name":"legacy",
+		"agent":{
+			"transport":{
+				"type":"direct",
+				"direct":{"address":"100.64.0.8:57017","tls":true}
+			}
+		}
+	}`)
+
+	var got model.Host
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NotNil(t, got.Agent)
+	require.Len(t, got.Agent.Transport.Chain, 1)
+	assert.Equal(t, model.TransportTypeDirect, got.Agent.Transport.Chain[0].Type)
+	require.NotNil(t, got.Agent.Transport.Chain[0].Direct)
+	assert.Equal(t, "100.64.0.8:57017", got.Agent.Transport.Chain[0].Direct.Address)
+	assert.True(t, got.Agent.Transport.Chain[0].Direct.TLS)
+}
+
+func TestHostTransportHelpersReadAndCreateChainEntries(t *testing.T) {
+	h := model.Host{ID: "h1"}
+
+	tunnelParams := h.EnsureTunnelAgent()
+	tunnelParams.SSHHost = "10.0.0.8"
+	directParams := h.EnsureDirectAgent()
+	directParams.Address = "100.64.0.8:57017"
+
+	require.NotNil(t, h.Agent)
+	require.Len(t, h.Agent.Transport.Chain, 2)
+	gotTunnel, ok := h.TunnelParams()
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.8", gotTunnel.SSHHost)
+	gotDirect, ok := h.DirectParams()
+	require.True(t, ok)
+	assert.Equal(t, "100.64.0.8:57017", gotDirect.Address)
+	assert.Equal(t, model.TransportTypeTunnel, h.Agent.Transport.Chain[0].Type)
+	assert.Equal(t, model.TransportTypeDirect, h.Agent.Transport.Chain[1].Type)
 }
 
 func TestLogSourceJSON(t *testing.T) {
