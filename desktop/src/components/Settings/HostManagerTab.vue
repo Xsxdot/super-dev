@@ -92,7 +92,7 @@ function agentSummary(host: Host): string {
   const runtime = agentRuntime(host)
   if (!configured && !runtime) return t('settings.hosts.agentNotConfigured')
   const parts = [
-    configured?.transport.type ?? t('settings.hosts.agentConfiguredUnknown'),
+    configured?.transport.chain[0]?.type ?? t('settings.hosts.agentConfiguredUnknown'),
     runtime?.health,
     runtime?.version ? `v${runtime.version.replace(/^v/, '')}` : '',
   ].filter(Boolean)

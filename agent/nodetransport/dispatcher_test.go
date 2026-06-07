@@ -1,7 +1,7 @@
 // dispatcher_test.go 验证 NodeTransport dispatcher 的路由行为。
 //
 // 职责：
-//   - 证明请求按 Host.Agent.Transport.Type 分派到对应 provider
+//   - 证明请求按 Host.Agent.Transport.Chain 分派到对应 provider
 //   - 证明缺 Agent 或缺 provider 时返回结构化错误 code
 //   - 证明节点状态订阅会聚合所有 provider
 //

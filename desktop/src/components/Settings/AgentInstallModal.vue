@@ -49,7 +49,7 @@ watch(
     mode.value = 'generated_command'
     error.value = null
     result.value = null
-    form.transportType = props.agent?.transport.type ?? 'tunnel'
+    form.transportType = props.agent?.transport.chain[0]?.type ?? 'tunnel'
   },
 )
 

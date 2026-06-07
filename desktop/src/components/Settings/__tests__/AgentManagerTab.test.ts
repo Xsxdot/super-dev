@@ -30,8 +30,9 @@ describe('AgentManagerTab', () => {
       host_id: 'h1',
       host_name: 'ali-01',
       tags: ['prod'],
-      transport: { type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } },
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } }] },
       runtime: { installed: false, health: 'unknown', reachable: false },
+      security: { token_configured: false, provision_state: 'not-configured' },
     }]
     const nodes = useNodeStore()
     vi.spyOn(nodes, 'start').mockResolvedValue(undefined)
@@ -60,8 +61,9 @@ describe('AgentManagerTab', () => {
       host_id: 'h1',
       host_name: 'ali-01',
       tags: ['prod'],
-      transport: { type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } },
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017', tls: false } }] },
       runtime: { installed: false, health: 'unknown', reachable: false },
+      security: { token_configured: false, provision_state: 'not-configured' },
     }]
     const nodes = useNodeStore()
     vi.spyOn(nodes, 'start').mockResolvedValue(undefined)

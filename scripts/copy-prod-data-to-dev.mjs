@@ -209,39 +209,48 @@ function migrateHost(host) {
 
   out.agent = {
     transport: {
-      type: 'tunnel',
-      tunnel: normalizeTunnel({
-        ssh_host: host.ssh_host,
-        ssh_port: host.ssh_port,
-        ssh_user: host.ssh_user,
-        ssh_password: host.ssh_password,
-        ssh_key_path: host.ssh_key_path,
-        ssh_private_key: host.ssh_private_key,
-        remote_agent_port: host.remote_agent_port,
-      }),
+      chain: [{
+        type: 'tunnel',
+        tunnel: normalizeTunnel({
+          ssh_host: host.ssh_host,
+          ssh_port: host.ssh_port,
+          ssh_user: host.ssh_user,
+          ssh_password: host.ssh_password,
+          ssh_key_path: host.ssh_key_path,
+          ssh_private_key: host.ssh_private_key,
+          remote_agent_port: host.remote_agent_port,
+        }),
+      }],
     },
   };
   return out;
 }
 
 function isNestedHost(host) {
-  return Boolean(host?.agent?.transport?.type);
+  return Boolean(host?.agent?.transport?.type || host?.agent?.transport?.chain);
 }
 
 function normalizeAgent(agent) {
   const transport = agent.transport ?? {};
+  const chain = Array.isArray(transport.chain) && transport.chain.length > 0
+    ? transport.chain.map(normalizeTransportEntry).filter(Boolean)
+    : [normalizeTransportEntry({
+        type: stringValue(transport.type || 'tunnel'),
+        tunnel: transport.tunnel,
+        direct: transport.direct,
+      })].filter(Boolean);
   const out = {
-    transport: {
-      type: stringValue(transport.type || 'tunnel'),
-    },
+    transport: { chain },
   };
-  if (transport.tunnel || out.transport.type === 'tunnel') {
-    out.transport.tunnel = normalizeTunnel(transport.tunnel ?? {});
-  }
-  if (transport.direct) {
-    out.transport.direct = normalizeDirect(transport.direct);
-  }
   return out;
+}
+
+function normalizeTransportEntry(entry) {
+  const type = stringValue(entry?.type || 'tunnel');
+  if (type === 'direct') {
+    return { type, direct: normalizeDirect(entry?.direct ?? {}) };
+  }
+  return { type: 'tunnel', tunnel: normalizeTunnel(entry?.tunnel ?? {}) };
 }
 
 function normalizeTunnel(tunnel) {
@@ -260,6 +269,10 @@ function normalizeTunnel(tunnel) {
 function normalizeDirect(direct) {
   const out = {};
   setIfNonEmpty(out, 'address', direct.address);
+  if (typeof direct.tls === 'boolean') {
+    out.tls = direct.tls;
+  }
+  setIfNonEmpty(out, 'ca_cert', direct.ca_cert);
   return out;
 }
 

@@ -107,8 +107,9 @@ describe('HostManagerTab', () => {
       host_id: 'h1',
       host_name: 'host-test',
       tags: ['prod'],
-      transport: { type: 'direct', direct: { address: '100.64.0.8:57017' } },
+      transport: { chain: [{ type: 'direct', direct: { address: '100.64.0.8:57017' } }] },
       runtime: { installed: false, health: 'unknown', reachable: false },
+      security: { token_configured: false, provision_state: 'not-configured' },
     }]
     nodes.applySnapshot([{
       host_id: 'h1',

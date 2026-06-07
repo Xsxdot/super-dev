@@ -53,14 +53,17 @@ function runtimeOf(agent: AgentDTO): AgentRuntime {
 }
 
 function transportLabel(agent: AgentDTO): string {
-  if (agent.transport.type === 'direct') {
-    return agent.transport.direct?.address ? `direct · ${agent.transport.direct.address}` : 'direct'
+  const primary = agent.transport.chain[0]
+  const suffix = agent.transport.chain.length > 1 ? ` +${agent.transport.chain.length - 1}` : ''
+  if (!primary) return t('settings.hosts.agentConfiguredUnknown')
+  if (primary.type === 'direct') {
+    return primary.direct?.address ? `direct · ${primary.direct.address}${suffix}` : `direct${suffix}`
   }
-  if (agent.transport.type === 'tunnel') {
-    const tunnel = agent.transport.tunnel
-    return tunnel ? `tunnel · ${tunnel.ssh_user}@${tunnel.ssh_host}:${tunnel.ssh_port}` : 'tunnel'
+  if (primary.type === 'tunnel') {
+    const tunnel = primary.tunnel
+    return tunnel ? `tunnel · ${tunnel.ssh_user}@${tunnel.ssh_host}:${tunnel.ssh_port}${suffix}` : `tunnel${suffix}`
   }
-  return agent.transport.type
+  return `${primary.type}${suffix}`
 }
 
 function updatedLabel(agent: AgentDTO): string {
