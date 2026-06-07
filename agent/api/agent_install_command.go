@@ -155,7 +155,7 @@ func normalizeAgentInstallCommandRequest(req agentInstallCommandRequest) (agentI
 	if req.TransportType == "" {
 		req.TransportType = model.TransportTypeTunnel
 	}
-	if !validAgentTransport(model.TransportConfig{Type: req.TransportType}) {
+	if !validAgentTransportType(req.TransportType) {
 		return agentInstallCommandRequest{}, errors.New("invalid transport_type")
 	}
 	if req.TokenTTLMinutes <= 0 {

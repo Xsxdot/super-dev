@@ -66,6 +66,19 @@ func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
 	assert.NotEqual(t, token, result.Token.TokenHash)
 }
 
+func TestGenerateAgentInstallCommandAcceptsTransportTypeAfterChainValidation(t *testing.T) {
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+
+	result, err := generateAgentInstallCommand("h1", agentInstallCommandRequest{
+		ControllerURL: "http://100.64.0.10:57017",
+		TransportType: model.TransportTypeDirect,
+	}, now)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.TransportTypeDirect, result.Token.TransportType)
+	assert.Contains(t, result.Response.Command, "--host-id h1")
+}
+
 func extractInstallToken(t *testing.T, command string) string {
 	t.Helper()
 	const marker = "install.sh?token="

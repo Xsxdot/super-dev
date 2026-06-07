@@ -191,11 +191,13 @@ func TestAgentAPIPersistsNestedTransportWhileHostStaysIdentityOnly(t *testing.T)
 	assert.NotContains(t, saved[0], legacyRemoteAgentPort)
 	agent := saved[0]["agent"].(map[string]any)
 	transport := agent["transport"].(map[string]any)
-	tunnel := transport["tunnel"].(map[string]any)
+	chain := transport["chain"].([]any)
+	tunnel := chain[0].(map[string]any)["tunnel"].(map[string]any)
 	assert.Equal(t, "10.0.0.1", tunnel[legacySSHHost])
 	assert.Equal(t, float64(2222), tunnel["ssh"+"_port"])
 	assert.Equal(t, "ops", tunnel["ssh"+"_user"])
 	assert.Equal(t, float64(57019), tunnel[legacyRemoteAgentPort])
+	assert.NotContains(t, transport, "type")
 }
 
 func TestListHosts_IncludesSelfNode(t *testing.T) {

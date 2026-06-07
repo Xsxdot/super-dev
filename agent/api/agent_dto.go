@@ -35,9 +35,15 @@ type agentDTO struct {
 	Tags      []string                  `json:"tags"`
 	Transport model.TransportConfig     `json:"transport"`
 	Runtime   model.AgentRuntime        `json:"runtime"`
+	Security  agentSecurityDTO          `json:"security"`
 	Node      *nodetransport.NodeStatus `json:"node,omitempty"`
 	LastError string                    `json:"last_error,omitempty"`
 	UpdatedAt *time.Time                `json:"updated_at,omitempty"`
+}
+
+type agentSecurityDTO struct {
+	TokenConfigured bool   `json:"token_configured"`
+	ProvisionState  string `json:"provision_state"`
 }
 
 type agentUpdateDTO struct {
@@ -80,6 +86,10 @@ func toAgentDTO(h model.Host, node *nodetransport.NodeStatus) agentDTO {
 	if h.Agent != nil {
 		dto.Transport = h.Agent.Transport
 		dto.Runtime = h.Agent.Runtime
+		dto.Security = agentSecurityDTO{
+			TokenConfigured: h.Agent.Token != "",
+			ProvisionState:  provisionStateForAgent(h.Agent),
+		}
 	}
 	if node != nil {
 		nodeCopy := *node
@@ -92,6 +102,16 @@ func toAgentDTO(h model.Host, node *nodetransport.NodeStatus) agentDTO {
 		}
 	}
 	return dto
+}
+
+func provisionStateForAgent(agent *model.Agent) string {
+	if agent == nil {
+		return "not-configured"
+	}
+	if agent.Token != "" {
+		return "provisioned"
+	}
+	return "pending-bootstrap"
 }
 
 func agentRuntimeFromInfo(info agenthealth.Info) model.AgentRuntime {

@@ -74,10 +74,14 @@ func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validAgentTransport(dto.Transport) {
-		jsonError(w, http.StatusBadRequest, "invalid agent transport")
+		jsonError(w, http.StatusBadRequest, "invalid agent transport: empty chain, unsupported type, missing params, or duplicate transport")
 		return
 	}
-	host.Agent = &model.Agent{Transport: dto.Transport}
+	token := ""
+	if host.Agent != nil {
+		token = host.Agent.Token
+	}
+	host.Agent = &model.Agent{Transport: dto.Transport, Token: token}
 	if err := a.remoteStore.UpdateHost(host); err != nil {
 		if errors.Is(err, remote.ErrNotFound) {
 			jsonError(w, http.StatusNotFound, "host not found")
@@ -148,11 +152,38 @@ func (a *App) nodeSnapshotOf(hostID string) *nodetransport.NodeStatus {
 	return &status
 }
 
-func validAgentTransport(cfg model.TransportConfig) bool {
-	switch cfg.Type {
-	case model.TransportTypeTunnel, model.TransportTypeDirect, model.TransportTypeMQ, model.TransportTypeBridge:
+func validAgentTransportType(typ model.TransportType) bool {
+	switch typ {
+	case model.TransportTypeTunnel, model.TransportTypeDirect:
 		return true
 	default:
 		return false
 	}
+}
+
+func validAgentTransport(cfg model.TransportConfig) bool {
+	if len(cfg.Chain) == 0 {
+		return false
+	}
+	seen := map[model.TransportType]struct{}{}
+	for _, entry := range cfg.Chain {
+		if !validAgentTransportType(entry.Type) {
+			return false
+		}
+		switch entry.Type {
+		case model.TransportTypeTunnel:
+			if entry.Tunnel == nil {
+				return false
+			}
+		case model.TransportTypeDirect:
+			if entry.Direct == nil {
+				return false
+			}
+		}
+		if _, exists := seen[entry.Type]; exists {
+			return false
+		}
+		seen[entry.Type] = struct{}{}
+	}
+	return true
 }
