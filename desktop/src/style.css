@@ -16,6 +16,7 @@
     --status-running: #3fb950;
     --status-starting: #d29922;
     --status-failed: #f85149;
+    --status-warning: var(--status-starting);
     --danger: var(--status-failed);
     --warning: var(--status-starting);
     --success: var(--status-running);
@@ -413,6 +414,61 @@
 
   .settings-mono {
     font-family: var(--font-mono);
+  }
+
+  .chain-toolbar,
+  .transport-entry-actions,
+  .transport-entry-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .chain-toolbar {
+    justify-content: flex-end;
+  }
+
+  .transport-entry {
+    display: grid;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border-secondary);
+    border-radius: 7px;
+    background: var(--bg-primary);
+  }
+
+  .transport-entry-head {
+    justify-content: space-between;
+  }
+
+  .priority-badge,
+  .probe-result {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .priority-badge.degraded {
+    color: var(--status-warning);
+  }
+
+  .icon-btn {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--border-secondary);
+    border-radius: 5px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  .icon-btn.danger {
+    color: var(--status-failed);
+  }
+
+  .cert-box {
+    min-height: 76px;
+    resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
 
   @media (max-width: 760px) {

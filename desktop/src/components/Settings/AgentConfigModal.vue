@@ -1,20 +1,21 @@
 <!--
-AgentConfigModal：编辑 Host Agent 的连接方式。
+AgentConfigModal：编辑 Host Agent 的有序连接链。
 
 职责：
-  - 收集 tunnel/direct transport 参数
+  - 收集 direct/tunnel transport chain 参数
+  - 提供链路增删、排序、探测和安全下发入口
   - 生成 AgentUpdatePayload 交由父组件保存
-  - 展示 mq/bridge 预留但不可选的连接类型
 
 边界：
   - 不保存 Host 身份字段
   - 不执行安装命令生成
-  - 不直接调用 Agent API
+  - 不直接调用底层 HTTP API，通过 agents store 处理动作
 -->
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
-import type { AgentDTO, AgentUpdatePayload, TransportType } from '@/api/agent'
+import { useAgentsStore } from '@/stores/agents'
+import type { AgentDTO, AgentUpdatePayload, ProbeResult, TransportEntry, TransportType } from '@/api/agent'
 
 const props = defineProps<{
   visible: boolean
@@ -27,66 +28,79 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useAppI18n()
-const form = reactive({
-  type: 'direct' as TransportType,
-  directAddress: '',
-  directTLS: false,
-  sshHost: '',
-  sshPort: 22,
-  sshUser: 'root',
-  sshPassword: '',
-  sshKeyPath: '',
-  sshPrivateKey: '',
-  remoteAgentPort: 57017,
-})
+const agentsStore = useAgentsStore()
+const chain = ref<TransportEntry[]>([])
+const probeResults = reactive<Record<number, ProbeResult | null>>({})
+const actionError = ref<string | null>(null)
+
+function defaultEntry(type: TransportType): TransportEntry {
+  if (type === 'tunnel') {
+    return { type, tunnel: { ssh_host: '', ssh_port: 22, ssh_user: 'root', remote_agent_port: 57017 } }
+  }
+  return { type: 'direct', direct: { address: '', tls: true, ca_cert: '' } }
+}
+
+function cloneChain(agent?: AgentDTO | null): TransportEntry[] {
+  const source = agent?.transport?.chain?.length ? agent.transport.chain : [defaultEntry('direct')]
+  return source.map(entry => ({
+    type: entry.type,
+    direct: entry.direct ? { ...entry.direct } : undefined,
+    tunnel: entry.tunnel ? { ...entry.tunnel } : undefined,
+  }))
+}
+
+function addEntry(type: TransportType) {
+  chain.value = [...chain.value, defaultEntry(type)]
+}
+
+function removeEntry(index: number) {
+  if (chain.value.length <= 1) return
+  chain.value = chain.value.filter((_, i) => i !== index)
+}
+
+function moveEntry(index: number, direction: -1 | 1) {
+  const next = [...chain.value]
+  const target = index + direction
+  if (target < 0 || target >= next.length) return
+  const [item] = next.splice(index, 1)
+  next.splice(target, 0, item)
+  chain.value = next
+}
+
+async function testEntry(index: number) {
+  if (!props.agent) return
+  actionError.value = null
+  try {
+    probeResults[index] = await agentsStore.testTransport(props.agent.host_id, index)
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+  }
+}
+
+async function provisionEntry(index: number) {
+  if (!props.agent) return
+  actionError.value = null
+  try {
+    await agentsStore.provisionAgent(props.agent.host_id, { index, tls_mode: 'auto' })
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+  }
+}
+
+function submit() {
+  emit('submit', { transport: { chain: chain.value } } satisfies AgentUpdatePayload)
+}
 
 watch(
   () => [props.visible, props.agent] as const,
   ([visible, agent]) => {
     if (!visible) return
-    const transport = agent?.transport
-    form.type = transport?.type === 'tunnel' ? 'tunnel' : transport?.type === 'direct' ? 'direct' : 'direct'
-    form.directAddress = transport?.direct?.address ?? ''
-    form.directTLS = transport?.direct?.tls ?? false
-    form.sshHost = transport?.tunnel?.ssh_host ?? ''
-    form.sshPort = transport?.tunnel?.ssh_port ?? 22
-    form.sshUser = transport?.tunnel?.ssh_user ?? 'root'
-    form.sshPassword = transport?.tunnel?.ssh_password ?? ''
-    form.sshKeyPath = transport?.tunnel?.ssh_key_path ?? ''
-    form.sshPrivateKey = transport?.tunnel?.ssh_private_key ?? ''
-    form.remoteAgentPort = transport?.tunnel?.remote_agent_port ?? 57017
+    chain.value = cloneChain(agent)
+    actionError.value = null
+    Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
   },
   { immediate: true },
 )
-
-function submit() {
-  if (form.type === 'tunnel') {
-    emit('submit', {
-      transport: {
-        type: 'tunnel',
-        tunnel: {
-          ssh_host: form.sshHost,
-          ssh_port: Number(form.sshPort) || 22,
-          ssh_user: form.sshUser,
-          ssh_password: form.sshPassword,
-          ssh_key_path: form.sshKeyPath,
-          ssh_private_key: form.sshPrivateKey,
-          remote_agent_port: Number(form.remoteAgentPort) || 57017,
-        },
-      },
-    })
-    return
-  }
-  emit('submit', {
-    transport: {
-      type: 'direct',
-      direct: {
-        address: form.directAddress,
-        tls: form.directTLS,
-      },
-    },
-  })
-}
 </script>
 
 <template>
@@ -96,55 +110,79 @@ function submit() {
         <h2 class="settings-modal-title">{{ t('settings.agents.editConnection') }}</h2>
       </header>
       <div class="settings-modal-body agent-config-body">
-        <div class="settings-field">
-          <label class="settings-field-label">{{ t('settings.agents.transport') }}</label>
-          <div class="segmented">
-            <label><input v-model="form.type" type="radio" value="direct" /> direct</label>
-            <label><input v-model="form.type" type="radio" value="tunnel" /> tunnel</label>
-            <label class="disabled"><input type="radio" disabled /> mq</label>
-            <label class="disabled"><input type="radio" disabled /> bridge</label>
-          </div>
+        <div class="chain-toolbar">
+          <button type="button" class="settings-btn" data-test="transport-add-direct" @click="addEntry('direct')">direct</button>
+          <button type="button" class="settings-btn" data-test="transport-add-tunnel" @click="addEntry('tunnel')">tunnel</button>
         </div>
+        <div v-if="actionError" class="settings-alert settings-alert-danger">{{ actionError }}</div>
 
-        <template v-if="form.type === 'direct'">
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.agents.directAddress') }}</label>
-            <input v-model="form.directAddress" class="settings-input" placeholder="100.64.0.8:57017" data-test="agent-direct-address" />
-          </div>
-          <label class="inline-check">
-            <input v-model="form.directTLS" type="checkbox" data-test="agent-direct-tls" />
-            {{ t('settings.agents.useTLS') }}
-          </label>
-        </template>
+        <section
+          v-for="(entry, index) in chain"
+          :key="`${entry.type}-${index}`"
+          class="transport-entry"
+          :data-test="`transport-entry-${index}`"
+        >
+          <header class="transport-entry-head">
+            <strong>{{ index + 1 }}. {{ entry.type }}</strong>
+            <span v-if="index === 0" class="priority-badge">{{ t('settings.agents.primaryTransport') }}</span>
+            <span v-else class="priority-badge degraded">{{ t('settings.agents.fallbackTransport') }}</span>
+            <button type="button" class="icon-btn" :data-test="`transport-move-up-${index}`" @click="moveEntry(index, -1)">↑</button>
+            <button type="button" class="icon-btn" :data-test="`transport-move-down-${index}`" @click="moveEntry(index, 1)">↓</button>
+            <button type="button" class="icon-btn danger" :data-test="`transport-remove-${index}`" @click="removeEntry(index)">×</button>
+          </header>
 
-        <template v-else>
-          <div class="row">
-            <div class="settings-field flex">
-              <label class="settings-field-label">{{ t('settings.hostForm.sshAddress') }}</label>
-              <input v-model="form.sshHost" class="settings-input" data-test="agent-tunnel-host" />
+          <template v-if="entry.type === 'direct' && entry.direct">
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.agents.directAddress') }}</label>
+              <input v-model="entry.direct.address" class="settings-input" placeholder="100.64.0.8:57017" />
             </div>
-            <div class="settings-field port">
-              <label class="settings-field-label">{{ t('settings.hostForm.port') }}</label>
-              <input v-model.number="form.sshPort" class="settings-input" type="number" min="1" />
+            <label class="inline-check">
+              <input v-model="entry.direct.tls" type="checkbox" />
+              {{ t('settings.agents.useTLS') }}
+            </label>
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.agents.caCert') }}</label>
+              <textarea v-model="entry.direct.ca_cert" class="settings-input cert-box" />
             </div>
-          </div>
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.hostForm.sshUser') }}</label>
-            <input v-model="form.sshUser" class="settings-input" />
-          </div>
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.hostForm.sshPassword') }}</label>
-            <input v-model="form.sshPassword" class="settings-input" type="password" />
-          </div>
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.hostForm.sshKeyPath') }}</label>
-            <input v-model="form.sshKeyPath" class="settings-input" placeholder="~/.ssh/id_ed25519" />
-          </div>
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.hostForm.remoteAgentPort') }}</label>
-            <input v-model.number="form.remoteAgentPort" class="settings-input" type="number" min="1" />
-          </div>
-        </template>
+          </template>
+
+          <template v-if="entry.type === 'tunnel' && entry.tunnel">
+            <div class="row">
+              <div class="settings-field flex">
+                <label class="settings-field-label">{{ t('settings.hostForm.sshAddress') }}</label>
+                <input v-model="entry.tunnel.ssh_host" class="settings-input" />
+              </div>
+              <div class="settings-field port">
+                <label class="settings-field-label">{{ t('settings.hostForm.port') }}</label>
+                <input v-model.number="entry.tunnel.ssh_port" class="settings-input" type="number" min="1" />
+              </div>
+            </div>
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.hostForm.sshUser') }}</label>
+              <input v-model="entry.tunnel.ssh_user" class="settings-input" />
+            </div>
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.hostForm.remoteAgentPort') }}</label>
+              <input v-model.number="entry.tunnel.remote_agent_port" class="settings-input" type="number" min="1" />
+            </div>
+          </template>
+
+          <footer class="transport-entry-actions">
+            <button type="button" class="settings-btn" :data-test="`transport-test-${index}`" @click="testEntry(index)">
+              {{ t('settings.agents.testTransport') }}
+            </button>
+            <button
+              v-if="props.agent?.security.provision_state === 'pending-bootstrap'"
+              type="button"
+              class="settings-btn settings-btn-secondary"
+              :data-test="`transport-provision-${index}`"
+              @click="provisionEntry(index)"
+            >
+              {{ t('settings.agents.provisionSecurity') }}
+            </button>
+            <span v-if="probeResults[index]" class="probe-result">{{ probeResults[index]?.status }}</span>
+          </footer>
+        </section>
       </div>
       <footer class="settings-modal-footer">
         <button type="button" class="settings-btn" @click="emit('cancel')">{{ t('common.cancel') }}</button>
@@ -158,22 +196,6 @@ function submit() {
 .agent-config-body {
   display: grid;
   gap: 10px;
-}
-.segmented {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.segmented label,
-.inline-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.segmented .disabled {
-  color: var(--text-tertiary);
 }
 .row {
   display: flex;

@@ -326,6 +326,11 @@ export default {
       tokenTTL: 'Token TTL',
       directAddress: 'Direct address',
       useTLS: 'Use TLS',
+      primaryTransport: 'Primary',
+      fallbackTransport: 'Fallback',
+      caCert: 'CA certificate',
+      testTransport: 'Test',
+      provisionSecurity: 'Provision security',
     },
     hostForm: {
       keyFileTitle: 'Select SSH private key file',

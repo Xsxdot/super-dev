@@ -326,6 +326,11 @@ export default {
       tokenTTL: 'Token TTL',
       directAddress: '直连地址',
       useTLS: '启用 TLS',
+      primaryTransport: '优先',
+      fallbackTransport: '降级',
+      caCert: 'CA 证书',
+      testTransport: '测试',
+      provisionSecurity: '下发安全配置',
     },
     hostForm: {
       keyFileTitle: '选择 SSH 私钥文件',
