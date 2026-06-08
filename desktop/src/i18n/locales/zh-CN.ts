@@ -152,6 +152,8 @@ export default {
       autostartDesc: '登录系统后自动启动 SuperDev 桌面应用',
       languageTitle: '语言',
       languageDesc: '切换 SuperDev 桌面端界面语言',
+      overviewGroupingTitle: '默认概览分组',
+      overviewGroupingDesc: '运行状态页的一级/二级分组维度',
       onboardingTitle: '首次引导',
       onboardingDesc: '重新安装 MCP 连接、使用指南 skill 并复制 AI 演示提示词',
       onboardingAction: '重新运行引导',
@@ -974,6 +976,8 @@ export default {
     runtimeStatus: {
       updateFailed: '更新失败',
       instancesSummary: '{count} 个实例 · {abnormal} 个异常',
+      groupBy: '分组',
+      dimension: { service: '服务', env: '环境', node: '节点' },
     },
   },
   nodeCenter: {

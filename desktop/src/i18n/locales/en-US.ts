@@ -152,6 +152,8 @@ export default {
       autostartDesc: 'Start the SuperDev desktop app after system login',
       languageTitle: 'Language',
       languageDesc: 'Switch the SuperDev desktop interface language',
+      overviewGroupingTitle: 'Default overview grouping',
+      overviewGroupingDesc: 'Primary / secondary grouping dimensions on the runtime status view',
       onboardingTitle: 'Onboarding',
       onboardingDesc: 'Install the MCP connection and guide skill again, then copy the AI demo prompt',
       onboardingAction: 'Run onboarding again',
@@ -974,6 +976,8 @@ export default {
     runtimeStatus: {
       updateFailed: 'Update failed',
       instancesSummary: '{count} instances · {abnormal} abnormal',
+      groupBy: 'Group by',
+      dimension: { service: 'Service', env: 'Environment', node: 'Node' },
     },
   },
   nodeCenter: {
