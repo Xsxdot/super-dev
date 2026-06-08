@@ -51,6 +51,9 @@ func TestGenerateAgentInstallCommandBindsHostAndParameters(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "--port 57017")
 	assert.Contains(t, resp.Body.String(), "--bootstrap-token")
 	assert.Contains(t, resp.Body.String(), "--require-auth")
+	assert.Contains(t, resp.Body.String(), `"restart_command"`)
+	assert.Contains(t, resp.Body.String(), "systemctl restart superdev-agent.service")
+	assert.Contains(t, resp.Body.String(), "launchctl kickstart -k")
 	assert.Contains(t, resp.Body.String(), `"token_id"`)
 	assert.Contains(t, resp.Body.String(), `"expires_at"`)
 	assert.NotContains(t, resp.Body.String(), `"token":"`)
@@ -135,6 +138,9 @@ func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
 	assert.NotEmpty(t, token)
 	assert.Equal(t, hashAgentInstallToken(token), result.Token.TokenHash)
 	assert.NotEqual(t, token, result.Token.TokenHash)
+	assert.NotEmpty(t, result.Response.RestartCommand)
+	assert.NotContains(t, result.Response.RestartCommand, token)
+	assert.NotContains(t, result.Response.RestartCommand, result.Token.BootstrapToken)
 }
 
 func TestNewAgentInstallSessionDerivesDirectBindAndToken(t *testing.T) {

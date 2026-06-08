@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -77,14 +78,15 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(security.ProvisionRequest{
 		Token:   longToken,
 		TLSMode: req.TLSMode,
-		Hosts:   directProvisionHosts(entry),
+		Hosts:   provisionHostsForChain(agent.Transport.Chain),
 	})
 	headers := http.Header{"Authorization": []string{"Bearer " + record.BootstrapToken}}
 	resp, err := a.nodeTransportProvider(entry.Type).Do(r.Context(), target.Host.ID, nodetransport.NodeRequest{
-		Method:  http.MethodPost,
-		Path:    "/api/security/provision",
-		Headers: headers,
-		Body:    bytes.NewReader(body),
+		Method:      http.MethodPost,
+		Path:        "/api/security/provision",
+		TLSOverride: bootstrapProvisionTLSOverride(agent),
+		Headers:     headers,
+		Body:        bytes.NewReader(body),
 	})
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
@@ -92,7 +94,7 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		jsonError(w, http.StatusBadGateway, "remote provision failed")
+		jsonError(w, http.StatusBadGateway, remoteProvisionErrorMessage(resp.StatusCode, resp.Body))
 		return
 	}
 	var provisionResp security.ProvisionResponse
@@ -143,6 +145,43 @@ func (a *App) nodeTransportProvider(typ model.TransportType) nodetransport.NodeT
 	return a.nodeTransport
 }
 
+func provisionHosts(entry *model.TransportEntry) []string {
+	if entry == nil {
+		return nil
+	}
+	switch entry.Type {
+	case model.TransportTypeTunnel:
+		// tunnel 客户端固定访问本机转发端口，auto TLS 证书必须覆盖该校验名。
+		return []string{"127.0.0.1"}
+	case model.TransportTypeDirect:
+		return directProvisionHosts(entry)
+	default:
+		return nil
+	}
+}
+
+func provisionHostsForChain(chain []model.TransportEntry) []string {
+	if len(chain) == 0 {
+		return nil
+	}
+	hosts := make([]string, 0, len(chain))
+	seen := make(map[string]struct{}, len(chain))
+	for i := range chain {
+		for _, host := range provisionHosts(&chain[i]) {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				continue
+			}
+			if _, ok := seen[host]; ok {
+				continue
+			}
+			seen[host] = struct{}{}
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
 func directProvisionHosts(entry *model.TransportEntry) []string {
 	if entry == nil || entry.Direct == nil || strings.TrimSpace(entry.Direct.Address) == "" {
 		return nil
@@ -160,6 +199,28 @@ func directProvisionHosts(entry *model.TransportEntry) []string {
 		return nil
 	}
 	return []string{host}
+}
+
+func bootstrapProvisionTLSOverride(agent model.Agent) *model.AgentTLSSpec {
+	if agent.Security.ProvisionState == model.AgentProvisionStateProvisioned {
+		return nil
+	}
+	return &model.AgentTLSSpec{Mode: model.AgentTLSModeOff}
+}
+
+func remoteProvisionErrorMessage(status int, body io.Reader) string {
+	data, _ := io.ReadAll(body)
+	detail := strings.TrimSpace(string(data))
+	if detail != "" {
+		var parsed struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &parsed) == nil && strings.TrimSpace(parsed.Error) != "" {
+			detail = strings.TrimSpace(parsed.Error)
+		}
+		return fmt.Sprintf("remote provision failed (%d): %s", status, detail)
+	}
+	return fmt.Sprintf("remote provision failed (%d)", status)
 }
 
 func (a *App) latestInstallTokenForHost(hostID string) (agentInstallTokenRecord, bool) {

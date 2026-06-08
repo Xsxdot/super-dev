@@ -69,7 +69,8 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	u, err := t.urlForParams(target.Host.ID, target.Agent.Security.TLS, params, req, false)
+	tlsSpec := tlsSpecForRequest(target.Agent, req)
+	u, err := t.urlForParams(target.Host.ID, tlsSpec, params, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -82,7 +83,7 @@ func (t *DirectTransport) Do(ctx context.Context, hostID string, req NodeRequest
 		return NodeResponse{}, err
 	}
 	applyAgentHeaders(httpReq.Header, target.Agent, req.Headers)
-	client, err := t.httpClientFor(target)
+	client, err := t.httpClientFor(tlsSpec)
 	if err != nil {
 		return NodeResponse{}, directConfigError(hostID, "http", err)
 	}
@@ -110,11 +111,12 @@ func (t *DirectTransport) Stream(ctx context.Context, hostID string, req NodeReq
 	if err != nil {
 		return nil, err
 	}
-	u, err := t.urlForParams(target.Host.ID, target.Agent.Security.TLS, params, req, true)
+	tlsSpec := tlsSpecForRequest(target.Agent, req)
+	u, err := t.urlForParams(target.Host.ID, tlsSpec, params, req, true)
 	if err != nil {
 		return nil, err
 	}
-	dialer, err := t.wsDialerFor(target)
+	dialer, err := t.wsDialerFor(tlsSpec)
 	if err != nil {
 		return nil, directConfigError(hostID, "stream", err)
 	}
@@ -380,7 +382,7 @@ func (t *DirectTransport) urlForParams(hostID string, tlsSpec model.AgentTLSSpec
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func (t *DirectTransport) httpClientFor(target NodeTarget) (*http.Client, error) {
+func (t *DirectTransport) httpClientFor(tlsSpec model.AgentTLSSpec) (*http.Client, error) {
 	connectTimeout := t.connectTimeout
 	if connectTimeout == 0 {
 		connectTimeout = defaultDirectConnectTimeout
@@ -389,15 +391,15 @@ func (t *DirectTransport) httpClientFor(target NodeTarget) (*http.Client, error)
 	if requestTimeout == 0 {
 		requestTimeout = defaultDirectRequestTimeout
 	}
-	return httpClientForAgentTLS(target.Agent.Security.TLS, connectTimeout, requestTimeout)
+	return httpClientForAgentTLS(tlsSpec, connectTimeout, requestTimeout)
 }
 
-func (t *DirectTransport) wsDialerFor(target NodeTarget) (*websocket.Dialer, error) {
+func (t *DirectTransport) wsDialerFor(tlsSpec model.AgentTLSSpec) (*websocket.Dialer, error) {
 	connectTimeout := t.connectTimeout
 	if connectTimeout == 0 {
 		connectTimeout = defaultDirectConnectTimeout
 	}
-	return wsDialerForAgentTLS(target.Agent.Security.TLS, connectTimeout)
+	return wsDialerForAgentTLS(tlsSpec, connectTimeout)
 }
 
 func isTimeoutError(ctx context.Context, err error) bool {

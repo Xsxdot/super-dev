@@ -122,6 +122,134 @@ func TestProvisionAgentReusesSavedTokenAndSendsDirectHostForAutoTLS(t *testing.T
 	assert.Equal(t, []string{"100.64.0.8"}, tr.provisionHosts)
 }
 
+func TestProvisionAgentSendsLoopbackHostForTunnelAutoTLS(t *testing.T) {
+	tr := &provisionRecorderTransport{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali", SSHHost: "10.0.0.8", SSHUser: "root"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+		}},
+	})
+	require.NoError(t, err)
+	result, err := generateAgentInstallCommand(host.ID, agentInstallCommandRequest{ControllerURL: "http://127.0.0.1:57017", TransportType: model.TransportTypeTunnel}, time.Now().UTC())
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(result.Token)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, []string{"127.0.0.1"}, tr.provisionHosts)
+}
+
+func TestProvisionAgentSendsAllChainHostsForAutoTLS(t *testing.T) {
+	tr := &provisionRecorderTransport{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali", SSHHost: "10.0.0.8", SSHUser: "root"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "https://100.90.99.61:57017"}},
+			{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+		}},
+	})
+	require.NoError(t, err)
+	result, err := generateAgentInstallCommand(host.ID, agentInstallCommandRequest{ControllerURL: "http://127.0.0.1:57017", TransportType: model.TransportTypeDirect}, time.Now().UTC())
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(result.Token)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, []string{"100.90.99.61", "127.0.0.1"}, tr.provisionHosts)
+}
+
+func TestProvisionAgentUsesPlainHTTPBeforeAutoTLSIsProvisioned(t *testing.T) {
+	var provisionCalled bool
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/security/provision" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		provisionCalled = true
+		assert.Equal(t, "Bearer bootstrap", r.Header.Get("Authorization"))
+		var body struct {
+			TLSMode string `json:"tls_mode"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "auto", body.TLSMode)
+		jsonOK(w, map[string]any{
+			"provision_state":  "provisioned",
+			"tls_mode":         "auto",
+			"ca_cert":          "PEM",
+			"restart_required": true,
+		})
+	}))
+	defer remote.Close()
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: strings.TrimPrefix(remote.URL, "http://")}},
+		}},
+		Security: model.AgentSecurity{
+			ProvisionState: model.AgentProvisionStatePendingBootstrap,
+			TLS:            model.AgentTLSSpec{Mode: model.AgentTLSModeAuto},
+		},
+	})
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(agentInstallTokenRecord{
+		HostID:         host.ID,
+		BootstrapToken: "bootstrap",
+		ExpiresAt:      time.Now().Add(time.Minute),
+	})
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.True(t, provisionCalled)
+	assert.Contains(t, resp.Body.String(), `"restart_required":true`)
+}
+
+func TestProvisionAgentIncludesRemoteProvisionErrorBody(t *testing.T) {
+	tr := &provisionFailureTransport{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "ali"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{HostID: host.ID, Transport: model.TransportConfig{Chain: []model.TransportEntry{
+		{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+	}}})
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(agentInstallTokenRecord{
+		HostID:         host.ID,
+		BootstrapToken: "bootstrap",
+		ExpiresAt:      time.Now().Add(time.Minute),
+	})
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+
+	require.Equal(t, http.StatusBadGateway, resp.Code)
+	assert.Contains(t, resp.Body.String(), "remote provision failed (401): bootstrap token rejected")
+}
+
 type namedProbeTransport struct {
 	healthState string
 	calls       int
@@ -191,3 +319,24 @@ func (p *provisionRecorderTransport) SubscribeNodes(context.Context) (<-chan []n
 }
 
 func (p *provisionRecorderTransport) Covers() []string { return []string{"h1"} }
+
+type provisionFailureTransport struct{}
+
+func (p *provisionFailureTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	return nodetransport.NodeResponse{
+		StatusCode: http.StatusUnauthorized,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"bootstrap token rejected"}`)),
+	}, nil
+}
+
+func (p *provisionFailureTransport) Stream(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (p *provisionFailureTransport) SubscribeNodes(context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (p *provisionFailureTransport) Covers() []string { return []string{"h1"} }

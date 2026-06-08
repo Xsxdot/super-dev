@@ -68,6 +68,7 @@ const hosts: Host[] = [
 ]
 
 beforeEach(() => {
+  vi.useRealTimers()
   setActivePinia(createPinia())
   vi.restoreAllMocks()
 })
@@ -251,6 +252,176 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('locked')
   })
 
+  it('auto-restarts SSH push installs when auto TLS provision requires restart', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'installAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'installed',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned', restart_required: true })
+    vi.spyOn(store, 'restartAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux',
+      message: 'restarted',
+    })
+    const checkAgent = vi.spyOn(store, 'checkAgent').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+    await flushPromises()
+
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
+    expect(store.restartAgent).toHaveBeenCalledWith('h1')
+    expect(checkAgent).toHaveBeenCalledWith('h1')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('locked')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+  })
+
+  it('polls connection checks after SSH push restart until the Agent is reachable', async () => {
+    vi.useFakeTimers()
+    const store = useAgentsStore()
+    vi.spyOn(store, 'installAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'installed',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned', restart_required: true })
+    vi.spyOn(store, 'restartAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux',
+      message: 'restarted',
+    })
+    const checkAgent = vi.spyOn(store, 'checkAgent')
+      .mockResolvedValueOnce(agent({ runtime: { installed: false, health: 'unreachable', reachable: false } }))
+      .mockResolvedValueOnce(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    const run = wrapper.find('[data-test="agent-install-push"]').trigger('click')
+    await flushPromises()
+
+    expect(checkAgent).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('1/12')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await run
+    await flushPromises()
+
+    expect(checkAgent).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+  })
+
+  it('stops restart polling after the panel is closed', async () => {
+    vi.useFakeTimers()
+    const store = useAgentsStore()
+    vi.spyOn(store, 'installAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'darwin/arm64',
+      message: 'installed',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned', restart_required: true })
+    vi.spyOn(store, 'restartAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'darwin',
+      message: 'restarted',
+    })
+    const checkAgent = vi.spyOn(store, 'checkAgent')
+      .mockResolvedValueOnce(agent({ runtime: { installed: false, health: 'unreachable', reachable: false } }))
+      .mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    const run = wrapper.find('[data-test="agent-install-push"]').trigger('click')
+    await flushPromises()
+
+    expect(checkAgent).toHaveBeenCalledTimes(1)
+    await wrapper.find('.settings-btn-ghost').trigger('click')
+    expect(wrapper.emitted('cancel')).toBeTruthy()
+    await wrapper.setProps({ visible: false })
+    await vi.advanceTimersByTimeAsync(2000)
+    await run
+    await flushPromises()
+
+    expect(checkAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a manual retry button when restart polling exhausts and refreshes the connection', async () => {
+    vi.useFakeTimers()
+    const store = useAgentsStore()
+    vi.spyOn(store, 'installAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'installed',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned', restart_required: true })
+    vi.spyOn(store, 'restartAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux',
+      message: 'restarted',
+    })
+    const checkAgent = vi.spyOn(store, 'checkAgent')
+    for (let i = 0; i < 12; i += 1) {
+      checkAgent.mockResolvedValueOnce(agent({ runtime: { installed: false, health: 'unreachable', reachable: false } }))
+    }
+    checkAgent.mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    const run = wrapper.find('[data-test="agent-install-push"]').trigger('click')
+    await flushPromises()
+    for (let i = 1; i < 12; i += 1) {
+      await vi.advanceTimersByTimeAsync(2000)
+    }
+    await run
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="agent-install-security-retry"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="agent-install-security-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(checkAgent).toHaveBeenCalledTimes(13)
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+  })
+
   it('waits for generated command execution before provisioning and connecting', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({
@@ -283,6 +454,44 @@ describe('AgentConfigPanel', () => {
     expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
     expect(wrapper.find('[data-test="install-phase-start"]').text()).toContain('已启动')
     expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('已连接')
+  })
+
+  it('shows generated restart command and unlocks probe after manual restart check', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({
+      command: 'curl install',
+      restart_command: 'sudo -n systemctl restart superdev-agent.service',
+      expires_at: '2026-06-08T10:30:00Z',
+      token_id: 'tok_1',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned', restart_required: true })
+    vi.spyOn(store, 'checkAgent')
+      .mockResolvedValueOnce(agent({ runtime: { installed: true, health: 'pending-bootstrap', reachable: true } }))
+      .mockResolvedValueOnce(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="agent-install-command-executed"]').trigger('click')
+    await flushPromises()
+
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
+    expect(wrapper.find('[data-test="agent-restart-command"]').text()).toContain('systemctl restart superdev-agent.service')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('active')
+
+    await wrapper.find('[data-test="agent-restart-command-executed"]').trigger('click')
+    await flushPromises()
+
+    expect(store.checkAgent).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('locked')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
   })
 
   it('saves ordered transport chain and tests one entry', async () => {

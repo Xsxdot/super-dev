@@ -12,7 +12,7 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
   - 不修改后端 DTO 结构
 -->
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { useAgentsStore } from '@/stores/agents'
 import { agentRouteRows } from '@/lib/agentRoute'
@@ -74,11 +74,14 @@ const installSecurityStatus = ref<'idle' | 'waiting' | 'running' | 'success' | '
 const installStartMessage = ref('')
 const installSecurityMessage = ref('')
 const checkingGeneratedInstall = ref(false)
+const checkingRestart = ref(false)
+const restartRequired = ref(false)
 const chain = ref<TransportEntry[]>([])
 const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
 const hostID = ref('')
 const localAgent = ref<AgentDTO | null>(null)
+let panelRunID = 0
 
 const securityForm = reactive({
   listenPort: 57017,
@@ -91,6 +94,9 @@ const installForm = reactive({
   controllerURL: 'http://127.0.0.1:57017',
   tokenTTLMinutes: 30,
 })
+
+const connectCheckRetryAttempts = 12
+const connectCheckRetryDelayMS = 2000
 
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
@@ -130,6 +136,16 @@ const currentRows = computed(() => panelAgent.value
   ? agentRouteRows({ ...panelAgent.value, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
   : [])
 const needsCreateBeforeNextStep = computed(() => isCreateMode.value && !persistedAgent.value)
+const pendingManualRestart = computed(() => (
+  restartRequired.value &&
+  installMode.value === 'generated_command' &&
+  installSecurityStatus.value === 'waiting'
+))
+const canRetryInstallSecurityCheck = computed(() => (
+  installSecurityStatus.value === 'error' &&
+  installStartStatus.value === 'success' &&
+  Boolean(persistedAgent.value)
+))
 
 const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean; done: boolean }>>(() => [
   { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(persistedAgent.value?.config?.listen_port) },
@@ -167,6 +183,32 @@ function clearProbeResults() {
   Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
 }
 
+function invalidatePanelRun() {
+  panelRunID += 1
+}
+
+function isPanelRunActive(runID: number) {
+  return props.visible && panelRunID === runID
+}
+
+function clearBusyState() {
+  savingSecurity.value = false
+  creatingAgent.value = false
+  provisioning.value = false
+  savingTransport.value = false
+  generatingInstall.value = false
+  installingPush.value = false
+  probingAll.value = false
+  checkingGeneratedInstall.value = false
+  checkingRestart.value = false
+}
+
+function requestClose() {
+  invalidatePanelRun()
+  clearBusyState()
+  emit('cancel')
+}
+
 function syncDefaultCreateTunnelPort() {
   if (!needsCreateBeforeNextStep.value || transportDirty.value) return
   const normalizedChain = chain.value.map(normalizeEntry)
@@ -177,6 +219,8 @@ function syncDefaultCreateTunnelPort() {
 }
 
 function reset(agent?: AgentDTO | null) {
+  invalidatePanelRun()
+  clearBusyState()
   localAgent.value = agent ?? null
   activeTab.value = props.initialTab ?? 'security'
   actionError.value = null
@@ -309,6 +353,11 @@ async function copyCommand() {
   await navigator.clipboard?.writeText(installResult.value.command)
 }
 
+async function copyRestartCommand() {
+  if (!installResult.value?.restart_command) return
+  await navigator.clipboard?.writeText(installResult.value.restart_command)
+}
+
 function addEntry(type: TransportType) {
   chain.value = [...chain.value, defaultEntry(type)]
 }
@@ -385,27 +434,108 @@ function resetInstallPhases() {
   installStartMessage.value = ''
   installSecurityMessage.value = ''
   checkingGeneratedInstall.value = false
+  checkingRestart.value = false
+  restartRequired.value = false
 }
 
 function firstProvisionIndex(): number {
   return 0
 }
 
-async function provisionAndConnect() {
+async function provisionAndConnect(runID = panelRunID) {
   const agent = persistedAgent.value
   if (!agent) return
+  restartRequired.value = false
   installSecurityStatus.value = 'running'
   installSecurityMessage.value = t('settings.agents.installSecurityRunning')
-  await agentsStore.provisionAgent(agent.host_id, { index: firstProvisionIndex(), tls_mode: securityForm.tlsMode })
-  const checked = await agentsStore.checkAgent(agent.host_id)
-  localAgent.value = checked
-  installSecurityStatus.value = 'success'
-  installSecurityMessage.value = t('settings.agents.installConnected')
+  const provision = await agentsStore.provisionAgent(agent.host_id, { index: firstProvisionIndex(), tls_mode: securityForm.tlsMode })
+  if (!isPanelRunActive(runID)) return
+  if (provision.restart_required) {
+    restartRequired.value = true
+    localAgent.value = agentsStore.agentOf(agent.host_id) ?? localAgent.value
+    if (installMode.value === 'push_over_ssh') {
+      await restartAndConnect(agent.host_id, runID)
+      return
+    }
+    installSecurityStatus.value = 'waiting'
+    installSecurityMessage.value = t('settings.agents.installSecurityRestartRequired')
+    return
+  }
+  await checkConnectedAgent(agent.host_id, false, 'settings.agents.installStartCheckFailed', false, runID)
+}
+
+async function restartAndConnect(hostId: string, runID = panelRunID) {
+  installSecurityStatus.value = 'running'
+  installSecurityMessage.value = t('settings.agents.installSecurityRestarting')
+  await agentsStore.restartAgent(hostId)
+  if (!isPanelRunActive(runID)) return
+  await checkConnectedAgent(hostId, true, 'settings.agents.installRestartCheckFailed', true, runID)
+}
+
+async function sleep(ms: number) {
+  await new Promise(resolve => globalThis.setTimeout(resolve, ms))
+}
+
+async function checkConnectedAgent(hostId: string, goProbe: boolean, notInstalledMessageKey: string, retry = false, runID = panelRunID) {
+  const total = retry ? connectCheckRetryAttempts : 1
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= total; attempt += 1) {
+    if (!isPanelRunActive(runID)) return
+    if (retry) {
+      installSecurityMessage.value = t('settings.agents.installSecurityRetrying', { attempt, total })
+    }
+    try {
+      const checked = await agentsStore.checkAgent(hostId)
+      if (!isPanelRunActive(runID)) return
+      localAgent.value = checked
+      if (checked.runtime.installed) {
+        installSecurityStatus.value = 'success'
+        installSecurityMessage.value = t('settings.agents.installConnected')
+        restartRequired.value = false
+        if (goProbe) activeTab.value = 'probe'
+        return
+      }
+      lastError = new Error(t(notInstalledMessageKey))
+    } catch (err) {
+      lastError = err
+    }
+    if (attempt < total) {
+      // systemd/launchd 返回已重启时，TLS listener 和隧道状态仍可能需要几秒收敛。
+      await sleep(connectCheckRetryDelayMS)
+      if (!isPanelRunActive(runID)) return
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(t(notInstalledMessageKey))
+}
+
+async function confirmAgentRestarted() {
+  await retryInstallSecurityCheck()
+}
+
+async function retryInstallSecurityCheck() {
+  const agent = persistedAgent.value
+  if (!agent) return
+  const runID = panelRunID
+  checkingRestart.value = true
+  actionError.value = null
+  installSecurityStatus.value = 'running'
+  installSecurityMessage.value = t('settings.agents.installSecurityCheckingAfterRestart')
+  try {
+    await checkConnectedAgent(agent.host_id, true, 'settings.agents.installRestartCheckFailed', true, runID)
+  } catch (err) {
+    if (!isPanelRunActive(runID)) return
+    installSecurityStatus.value = 'error'
+    installSecurityMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+  } finally {
+    if (isPanelRunActive(runID)) checkingRestart.value = false
+  }
 }
 
 async function confirmGeneratedInstallExecuted() {
   const agent = persistedAgent.value
   if (!agent) return
+  const runID = panelRunID
   checkingGeneratedInstall.value = true
   actionError.value = null
   installStartStatus.value = 'running'
@@ -414,14 +544,16 @@ async function confirmGeneratedInstallExecuted() {
   installSecurityMessage.value = t('settings.agents.installSecurityWaitingForStart')
   try {
     const checked = await agentsStore.checkAgent(agent.host_id)
+    if (!isPanelRunActive(runID)) return
     localAgent.value = checked
     if (!checked.runtime.installed) {
       throw new Error(t('settings.agents.installStartCheckFailed'))
     }
     installStartStatus.value = 'success'
     installStartMessage.value = t('settings.agents.installStarted')
-    await provisionAndConnect()
+    await provisionAndConnect(runID)
   } catch (err) {
+    if (!isPanelRunActive(runID)) return
     if (installStartStatus.value !== 'success') {
       installStartStatus.value = 'error'
       installStartMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
@@ -431,13 +563,14 @@ async function confirmGeneratedInstallExecuted() {
     }
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
-    checkingGeneratedInstall.value = false
+    if (isPanelRunActive(runID)) checkingGeneratedInstall.value = false
   }
 }
 
 async function pushInstall() {
   const agent = persistedAgent.value
   if (!agent) return
+  const runID = panelRunID
   installingPush.value = true
   actionError.value = null
   pushInstallResult.value = null
@@ -448,10 +581,12 @@ async function pushInstall() {
   installSecurityMessage.value = t('settings.agents.installSecurityWaitingForStart')
   try {
     pushInstallResult.value = await agentsStore.installAgent(agent.host_id, { method: 'push_over_ssh' })
+    if (!isPanelRunActive(runID)) return
     installStartStatus.value = 'success'
     installStartMessage.value = t('settings.agents.installStarted')
-    await provisionAndConnect()
+    await provisionAndConnect(runID)
   } catch (err) {
+    if (!isPanelRunActive(runID)) return
     if (installStartStatus.value !== 'success') {
       installStartStatus.value = 'error'
       installStartMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
@@ -461,7 +596,7 @@ async function pushInstall() {
     }
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
-    installingPush.value = false
+    if (isPanelRunActive(runID)) installingPush.value = false
   }
 }
 
@@ -494,6 +629,10 @@ watch(
   () => [props.visible, props.agent, props.initialTab] as const,
   ([visible, agent]) => {
     if (visible) reset(agent)
+    else {
+      invalidatePanelRun()
+      clearBusyState()
+    }
   },
   { immediate: true },
 )
@@ -505,14 +644,19 @@ watch(
   },
   { deep: true },
 )
+
+onBeforeUnmount(() => {
+  invalidatePanelRun()
+  clearBusyState()
+})
 </script>
 
 <template>
-  <div v-if="visible && (persistedAgent || isCreateMode)" class="settings-modal-backdrop" @click.self="emit('cancel')">
+  <div v-if="visible && (persistedAgent || isCreateMode)" class="settings-modal-backdrop" @click.self="requestClose">
     <section class="settings-modal settings-modal-wide agent-config-panel" data-test="agent-panel">
       <header class="settings-modal-header">
         <h2 class="settings-modal-title">{{ title }}</h2>
-        <button type="button" class="settings-btn settings-btn-ghost" @click="emit('cancel')">{{ t('common.close') }}</button>
+        <button type="button" class="settings-btn settings-btn-ghost" @click="requestClose">{{ t('common.close') }}</button>
       </header>
 
       <div class="panel-layout">
@@ -667,6 +811,21 @@ watch(
                     </span>
                   </header>
                   <p class="step-note">{{ t('settings.agents.installSecurityHint') }}</p>
+                  <div v-if="pendingManualRestart && installResult?.restart_command" class="manual-restart">
+                    <p class="step-note">{{ t('settings.agents.installRestartCommandHint') }}</p>
+                    <pre class="command-block" data-test="agent-restart-command">{{ installResult.restart_command }}</pre>
+                    <div class="step-actions step-actions-left">
+                      <button class="settings-btn settings-btn-secondary" type="button" @click="copyRestartCommand">{{ t('common.copy') }}</button>
+                      <button class="settings-btn settings-btn-primary" type="button" :disabled="checkingRestart" data-test="agent-restart-command-executed" @click="confirmAgentRestarted">
+                        {{ checkingRestart ? t('common.loading') : t('settings.agents.installRestartCommandExecuted') }}
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="canRetryInstallSecurityCheck" class="step-actions step-actions-left">
+                    <button class="settings-btn settings-btn-secondary" type="button" data-test="agent-install-security-retry" @click="retryInstallSecurityCheck">
+                      {{ t('settings.agents.installSecurityRetryCheck') }}
+                    </button>
+                  </div>
                 </section>
               </div>
             </template>
@@ -858,6 +1017,10 @@ watch(
 .install-phases {
   display: grid;
   gap: 12px;
+}
+.manual-restart {
+  display: grid;
+  gap: 8px;
 }
 .install-phase {
   display: grid;

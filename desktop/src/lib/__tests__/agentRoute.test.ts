@@ -119,4 +119,23 @@ describe('agentRouteRows', () => {
       { index: 2, address: '10.0.0.8:57017', current: false, status: 'untested', role: 'fallback', error: undefined },
     ])
   })
+
+  it('treats the current route as reachable when overall agent runtime is healthy', () => {
+    const dto = agent([
+      { type: 'tunnel', tunnel: { remote_agent_port: 57017 } },
+    ])
+
+    const rows = agentRouteRows(dto, node({
+      selected_index: 0,
+      selected_type: 'tunnel',
+      degraded: false,
+    }))
+
+    expect(rows.map(row => ({
+      current: row.current,
+      status: row.status,
+    }))).toEqual([
+      { current: true, status: 'reachable' },
+    ])
+  })
 })

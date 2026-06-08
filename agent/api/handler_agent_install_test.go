@@ -22,9 +22,11 @@ import (
 )
 
 type fakeAgentInstaller struct {
-	host  model.Host
-	opts  installer.ServiceOptions
-	calls int
+	host         model.Host
+	restartHost  model.Host
+	opts         installer.ServiceOptions
+	calls        int
+	restartCalls int
 }
 
 func (f *fakeAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
@@ -32,6 +34,12 @@ func (f *fakeAgentInstaller) Install(ctx context.Context, host model.Host, opts 
 	f.host = host
 	f.opts = opts
 	return installer.Result{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "installed"}, nil
+}
+
+func (f *fakeAgentInstaller) Restart(ctx context.Context, host model.Host) (installer.RestartResult, error) {
+	f.restartCalls++
+	f.restartHost = host
+	return installer.RestartResult{OK: true, HostID: host.ID, Platform: "linux", Message: "restarted"}, nil
 }
 
 func createInstallTestHost(t *testing.T, app *App) string {
@@ -116,4 +124,50 @@ func TestInstallAgentPushesOverSSHWithPublicBindForDirectChainAndSessionToken(t 
 	assert.Equal(t, model.TransportTypeDirect, record.TransportType)
 	assert.Equal(t, model.PublicBindAddress, record.BindAddress)
 	assert.Equal(t, 57019, record.RemoteAgentPort)
+}
+
+func TestInstallAgentResetsLocalSecurityForFreshBootstrap(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"0.0.0.0","listen_port":57019},
+	  "security":{"token_configured":true,"provision_state":"provisioned","tls":{"mode":"auto","ca_cert":"PEM"}}
+	`)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	saved, found, err := app.agentStore.AgentByHostID(hostID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, model.AgentProvisionStatePendingBootstrap, saved.Security.ProvisionState)
+	assert.False(t, saved.Security.TokenConfigured)
+	assert.Empty(t, saved.Secret.Token)
+	assert.Equal(t, model.AgentTLSModeAuto, saved.Security.TLS.Mode)
+	assert.Empty(t, saved.Security.TLS.CACert)
+}
+
+func TestRestartAgentUsesHostSSHCredentials(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"0.0.0.0","listen_port":57019},
+	  "security":{"token_configured":true,"provision_state":"provisioned","tls":{"mode":"auto","ca_cert":"PEM"}}
+	`)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/restart", bytes.NewBufferString(`{}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"ok":true`)
+	assert.Equal(t, 1, fake.restartCalls)
+	assert.Equal(t, hostID, fake.restartHost.ID)
+	assert.Equal(t, "10.0.0.8", fake.restartHost.SSHHost)
 }

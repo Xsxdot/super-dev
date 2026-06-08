@@ -75,6 +75,10 @@ export const useAgentsStore = defineStore('agents', () => {
     return api.installAgent(hostId, payload)
   }
 
+  async function restartAgent(hostId: string) {
+    return api.restartAgent(hostId)
+  }
+
   async function deleteAgent(hostId: string) {
     await api.deleteAgent(hostId)
     agents.value = agents.value.filter(agent => agent.host_id !== hostId)
@@ -116,6 +120,7 @@ export const useAgentsStore = defineStore('agents', () => {
     updateAgentConfig,
     checkAgent,
     installAgent,
+    restartAgent,
     deleteAgent,
     generateInstallCommand,
     testTransport,

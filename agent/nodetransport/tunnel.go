@@ -28,11 +28,13 @@ type TunnelTransport struct {
 
 // NewTunnelTransport 创建 SSH 隧道传输实现。
 func NewTunnelTransport(mgr *tunnel.Manager, targets TargetSource) *TunnelTransport {
+	client, _ := httpClientForAgentTLS(model.AgentTLSSpec{Mode: model.AgentTLSModeOff}, defaultDirectConnectTimeout, defaultDirectRequestTimeout)
+	dialer, _ := wsDialerForAgentTLS(model.AgentTLSSpec{Mode: model.AgentTLSModeOff}, defaultDirectConnectTimeout)
 	return &TunnelTransport{
 		mgr:                     mgr,
 		targets:                 targets,
-		client:                  http.DefaultClient,
-		wsDialer:                websocket.DefaultDialer,
+		client:                  client,
+		wsDialer:                dialer,
 		statusReconnectInterval: 5 * time.Second,
 	}
 }
@@ -54,7 +56,8 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	if err != nil {
 		return NodeResponse{}, err
 	}
-	u, err := t.urlForTarget(target, req, false)
+	tlsSpec := tlsSpecForRequest(target.Agent, req)
+	u, err := t.urlForTarget(target, tlsSpec, req, false)
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -67,7 +70,7 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 		return NodeResponse{}, err
 	}
 	applyAgentHeaders(httpReq.Header, target.Agent, req.Headers)
-	client, err := t.httpClientFor(target)
+	client, err := t.httpClientFor(tlsSpec)
 	if err != nil {
 		return NodeResponse{}, directConfigError(hostID, "http", err)
 	}
@@ -84,13 +87,14 @@ func (t *TunnelTransport) Stream(ctx context.Context, hostID string, req NodeReq
 	if err != nil {
 		return nil, err
 	}
-	u, err := t.urlForTarget(target, req, true)
+	tlsSpec := tlsSpecForRequest(target.Agent, req)
+	u, err := t.urlForTarget(target, tlsSpec, req, true)
 	if err != nil {
 		return nil, err
 	}
 	headers := http.Header{}
 	applyAgentHeaders(headers, target.Agent, req.Headers)
-	dialer, err := t.wsDialerFor(target)
+	dialer, err := t.wsDialerFor(tlsSpec)
 	if err != nil {
 		return nil, directConfigError(hostID, "stream", err)
 	}
@@ -379,7 +383,7 @@ func (t *TunnelTransport) targetByHostID(hostID string) (NodeTarget, bool) {
 	return NodeTarget{}, false
 }
 
-func (t *TunnelTransport) urlForTarget(target NodeTarget, req NodeRequest, stream bool) (string, error) {
+func (t *TunnelTransport) urlForTarget(target NodeTarget, tlsSpec model.AgentTLSSpec, req NodeRequest, stream bool) (string, error) {
 	if t.mgr == nil {
 		return "", ErrHostUnreachable
 	}
@@ -389,7 +393,7 @@ func (t *TunnelTransport) urlForTarget(target NodeTarget, req NodeRequest, strea
 		return "", ErrHostUnreachable
 	}
 	scheme := "http"
-	if agentTLSEnabled(target.Agent.Security.TLS) {
+	if agentTLSEnabled(tlsSpec) {
 		scheme = "https"
 	}
 	base := &url.URL{Scheme: scheme, Host: "127.0.0.1:" + strconv.Itoa(port)}
@@ -421,18 +425,18 @@ func (t *TunnelTransport) urlForTarget(target NodeTarget, req NodeRequest, strea
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func (t *TunnelTransport) httpClientFor(target NodeTarget) (*http.Client, error) {
-	if !agentTLSEnabled(target.Agent.Security.TLS) {
+func (t *TunnelTransport) httpClientFor(tlsSpec model.AgentTLSSpec) (*http.Client, error) {
+	if !agentTLSEnabled(tlsSpec) {
 		return t.client, nil
 	}
-	return httpClientForAgentTLS(target.Agent.Security.TLS, defaultDirectConnectTimeout, defaultDirectRequestTimeout)
+	return httpClientForAgentTLS(tlsSpec, defaultDirectConnectTimeout, defaultDirectRequestTimeout)
 }
 
-func (t *TunnelTransport) wsDialerFor(target NodeTarget) (*websocket.Dialer, error) {
-	if !agentTLSEnabled(target.Agent.Security.TLS) {
+func (t *TunnelTransport) wsDialerFor(tlsSpec model.AgentTLSSpec) (*websocket.Dialer, error) {
+	if !agentTLSEnabled(tlsSpec) {
 		return t.wsDialer, nil
 	}
-	return wsDialerForAgentTLS(target.Agent.Security.TLS, defaultDirectConnectTimeout)
+	return wsDialerForAgentTLS(tlsSpec, defaultDirectConnectTimeout)
 }
 
 // TunnelTargetFromNodeTarget 将 Host SSH 与 Agent tunnel 配置合成为 tunnel.Manager 目标。

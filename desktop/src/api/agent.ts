@@ -785,11 +785,19 @@ export interface AgentInstallPayload {
 
 export interface AgentInstallCommandResponse {
   command: string
+  restart_command?: string
   expires_at: string
   token_id: string
 }
 
 export interface AgentInstallResponse {
+  ok: boolean
+  host_id: string
+  platform: string
+  message: string
+}
+
+export interface AgentRestartResponse {
   ok: boolean
   host_id: string
   platform: string
@@ -1033,6 +1041,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  restartAgent: (hostId: string) =>
+    request<AgentRestartResponse>(`/api/agents/${encodeURIComponent(hostId)}/restart`, { method: 'POST' }),
   generateAgentInstallCommand: (hostId: string, payload: AgentInstallCommandPayload) =>
     request<AgentInstallCommandResponse>(`/api/agents/${encodeURIComponent(hostId)}/install-command`, {
       method: 'POST',

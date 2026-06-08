@@ -86,6 +86,26 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
+func TestInstallerResetsSecurityStateWhenBootstrappingLinuxAgent(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{outputs: []string{"Linux\n", "x86_64\n"}}
+
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), model.Host{ID: "h1"}, ServiceOptions{
+		Port:           57017,
+		RequireAuth:    true,
+		BootstrapToken: "fresh-bootstrap",
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, remote.commands, "sudo -n rm -f '/var/lib/superdev-agent/security.json'")
+}
+
 func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
@@ -106,6 +126,47 @@ func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testin
 	require.NoError(t, err)
 	assert.True(t, result.OK)
 	assert.Equal(t, 2, countCommand(remote.commands, verifyCmd))
+}
+
+func TestInstallerRestartsLinuxAgent(t *testing.T) {
+	remote := &fakeRemote{outputs: []string{"Linux\n"}}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Restart(context.Background(), model.Host{ID: "h1"})
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "h1", result.HostID)
+	assert.Equal(t, "linux", result.Platform)
+	assert.Equal(t, "Agent restarted", result.Message)
+	assert.Contains(t, remote.commands, "uname -s")
+	assert.Contains(t, remote.commands, "sudo -n systemctl restart superdev-agent.service")
+}
+
+func TestInstallerRestartsMacOSUserLaunchAgentWhenSudoNeedsPassword(t *testing.T) {
+	remote := &fakeRemote{
+		outputs: []string{"Darwin\n", "/Users/sycm", "501\n"},
+		failCommands: map[string][]error{
+			"sudo -n launchctl kickstart -k system/dev.superdev.agent": {
+				errors.New("sudo: a password is required"),
+			},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.Restart(context.Background(), model.Host{ID: "mac1"})
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "darwin", result.Platform)
+	assert.Equal(t, "Agent restarted in user LaunchAgent mode", result.Message)
+	assert.Contains(t, remote.commands, "printf %s \"$HOME\"")
+	assert.Contains(t, remote.commands, "id -u")
+	assert.Contains(t, remote.commands, "launchctl kickstart -k gui/501/dev.superdev.agent")
 }
 
 func TestInstallerInstallsMacOSAgent(t *testing.T) {

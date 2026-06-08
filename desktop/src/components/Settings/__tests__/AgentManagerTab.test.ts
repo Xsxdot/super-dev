@@ -165,15 +165,17 @@ describe('AgentManagerTab', () => {
     expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).not.toContain('当前走通')
   })
 
-  it('shows untested current route as untested plus current, not as reachable', async () => {
-    const { wrapper } = await mountPage([agent()])
+  it('shows the current route as reachable when the agent is healthy', async () => {
+    const { wrapper } = await mountPage([agent({
+      runtime: { installed: true, health: 'healthy', reachable: true },
+    })])
 
     await wrapper.find('[data-test="agent-route-toggle-h1"]').trigger('click')
 
     const firstRow = wrapper.find('[data-test="agent-route-row-h1-0"]')
-    expect(firstRow.text()).toContain('未测')
+    expect(firstRow.text()).toContain('探活成功')
     expect(firstRow.text()).toContain('当前')
-    expect(firstRow.text()).not.toContain('当前走通')
+    expect(firstRow.text()).not.toContain('未测')
   })
 
   it('shows one primary action plus a more menu instead of duplicated row links', async () => {

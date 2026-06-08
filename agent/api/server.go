@@ -85,6 +85,8 @@ type AppConfig struct {
 type HostAgentInstaller interface {
 	// Install 使用 Host SSH 凭据和 Agent 服务参数执行安装。
 	Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error)
+	// Restart 使用 Host SSH 凭据重启远端 Agent 服务。
+	Restart(ctx context.Context, host model.Host) (installer.RestartResult, error)
 }
 
 type productionHostAgentInstaller struct {
@@ -93,6 +95,10 @@ type productionHostAgentInstaller struct {
 
 func (p productionHostAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
 	return p.installer.InstallWithOptions(ctx, host, opts)
+}
+
+func (p productionHostAgentInstaller) Restart(ctx context.Context, host model.Host) (installer.RestartResult, error) {
+	return p.installer.Restart(ctx, host)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -518,6 +524,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install", a.installAgent)
+	mux.HandleFunc("POST /api/agents/{host_id}/restart", a.restartAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
 	mux.HandleFunc("GET /api/agents/install.sh", a.serveAgentInstallScript)
 	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)

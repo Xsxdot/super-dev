@@ -47,6 +47,14 @@ type UninstallResult struct {
 	Message     string `json:"message"`
 }
 
+// RestartResult 描述一次远端 agent 重启结果。
+type RestartResult struct {
+	OK       bool   `json:"ok"`
+	HostID   string `json:"host_id"`
+	Platform string `json:"platform"`
+	Message  string `json:"message"`
+}
+
 type installMode string
 
 const (
@@ -233,6 +241,46 @@ func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData b
 	}, nil
 }
 
+// Restart restarts the remote agent service on host.
+//
+// 参数：
+//   - ctx: 上下文，用于取消 SSH 命令
+//   - host: 远端主机配置，包含 SSH 凭据
+//
+// 返回：
+//   - 重启成功结果，包含 host ID 和平台
+//   - 分阶段错误，便于上层定位失败原因
+//
+// 注意：
+//   - TLS auto provision 后监听会从 HTTP 切到 HTTPS，因此这里不做 HTTP 探活
+func (i *Installer) Restart(ctx context.Context, host model.Host) (RestartResult, error) {
+	remote, err := i.factory(host)
+	if err != nil {
+		return RestartResult{}, stageErr("connect", err)
+	}
+	defer remote.Close() //nolint:errcheck
+
+	osName, err := remote.Run(ctx, "uname -s")
+	if err != nil {
+		return RestartResult{}, stageErr("detect_os", err)
+	}
+	normalizedOS := strings.ToLower(trimOutput(osName))
+	mode, err := restartCommands(ctx, remote, normalizedOS)
+	if err != nil {
+		return RestartResult{}, err
+	}
+	message := "Agent restarted"
+	if mode == installModeUserLaunchAgent {
+		message = "Agent restarted in user LaunchAgent mode"
+	}
+	return RestartResult{
+		OK:       true,
+		HostID:   host.ID,
+		Platform: normalizedOS,
+		Message:  message,
+	}, nil
+}
+
 func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOptions {
 	opts := ServiceOptions{
 		BindAddress:    "127.0.0.1",
@@ -271,6 +319,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "linux":
 		commands := []string{
 			"sudo -n mkdir -p /var/lib/superdev-agent",
+			resetSecurityStateCommand("sudo -n ", "/var/lib/superdev-agent/security.json", opts),
 			"cat > /tmp/superdev-agent.service <<'EOF'\n" + LinuxSystemdUnit(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/superdev-agent.service /etc/systemd/system/superdev-agent.service",
 			"sudo -n systemctl daemon-reload",
@@ -278,6 +327,9 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 			"sudo -n systemctl restart superdev-agent.service",
 		}
 		for _, cmd := range commands {
+			if strings.TrimSpace(cmd) == "" {
+				continue
+			}
 			if _, err := remote.Run(ctx, cmd); err != nil {
 				return "", stageErr("install_systemd", err)
 			}
@@ -285,6 +337,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "darwin":
 		commands := []string{
 			"sudo -n mkdir -p '/Library/Application Support/SuperDev/Agent'",
+			resetSecurityStateCommand("sudo -n ", "/Library/Application Support/SuperDev/Agent/security.json", opts),
 			"cat > /tmp/dev.superdev.agent.plist <<'EOF'\n" + MacOSLaunchDaemonPlist(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/dev.superdev.agent.plist /Library/LaunchDaemons/dev.superdev.agent.plist",
 			"sudo -n chown root:wheel /Library/LaunchDaemons/dev.superdev.agent.plist",
@@ -293,6 +346,9 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 			"sudo -n launchctl kickstart -k system/dev.superdev.agent",
 		}
 		for _, cmd := range commands {
+			if strings.TrimSpace(cmd) == "" {
+				continue
+			}
 			if _, err := remote.Run(ctx, cmd); err != nil {
 				return "", stageErr("install_launchd", err)
 			}
@@ -301,6 +357,13 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		return "", stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
 	}
 	return installModeSystem, nil
+}
+
+func resetSecurityStateCommand(prefix string, securityPath string, opts ServiceOptions) string {
+	if strings.TrimSpace(opts.BootstrapToken) == "" {
+		return ""
+	}
+	return prefix + "rm -f " + shellQuote(securityPath)
 }
 
 func uninstallCommands(ctx context.Context, remote Remote, osName string, removeData bool) error {
@@ -342,6 +405,28 @@ func uninstallCommands(ctx context.Context, remote Remote, osName string, remove
 	return nil
 }
 
+func restartCommands(ctx context.Context, remote Remote, osName string) (installMode, error) {
+	switch osName {
+	case "linux":
+		if _, err := remote.Run(ctx, "sudo -n systemctl restart superdev-agent.service"); err != nil {
+			return "", stageErr("restart_systemd", err)
+		}
+	case "darwin":
+		if _, err := remote.Run(ctx, "sudo -n launchctl kickstart -k system/dev.superdev.agent"); err != nil {
+			if shouldUseMacOSUserLaunchAgent(err) {
+				if err := restartMacOSUserLaunchAgent(ctx, remote); err != nil {
+					return "", err
+				}
+				return installModeUserLaunchAgent, nil
+			}
+			return "", stageErr("restart_launchd", err)
+		}
+	default:
+		return "", stageErr("restart_service", fmt.Errorf("unsupported os %q", osName))
+	}
+	return installModeSystem, nil
+}
+
 func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp string, opts ServiceOptions) error {
 	home, uid, err := macOSUserContext(ctx, remote)
 	if err != nil {
@@ -351,6 +436,7 @@ func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp s
 	plist := MacOSUserLaunchAgentPlist(opts, paths.binary, paths.dataDir, paths.stdoutLog, paths.stderrLog)
 	commands := []string{
 		"mkdir -p " + shellQuote(paths.binDir) + " " + shellQuote(paths.dataDir) + " " + shellQuote(paths.launchAgentsDir) + " " + shellQuote(paths.logsDir),
+		resetSecurityStateCommand("", path.Join(paths.dataDir, "security.json"), opts),
 		"install -m 0755 " + remoteTmp + " " + shellQuote(paths.binary),
 		"cat > " + shellQuote(paths.plist) + " <<'EOF'\n" + plist + "EOF",
 		"chmod 0644 " + shellQuote(paths.plist),
@@ -359,9 +445,23 @@ func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp s
 		"launchctl kickstart -k gui/" + uid + "/dev.superdev.agent",
 	}
 	for _, cmd := range commands {
+		if strings.TrimSpace(cmd) == "" {
+			continue
+		}
 		if _, err := remote.Run(ctx, cmd); err != nil {
 			return stageErr("install_user_launchd", err)
 		}
+	}
+	return nil
+}
+
+func restartMacOSUserLaunchAgent(ctx context.Context, remote Remote) error {
+	_, uid, err := macOSUserContext(ctx, remote)
+	if err != nil {
+		return stageErr("restart_user_launchd", err)
+	}
+	if _, err := remote.Run(ctx, "launchctl kickstart -k gui/"+uid+"/dev.superdev.agent"); err != nil {
+		return stageErr("restart_user_launchd", err)
 	}
 	return nil
 }

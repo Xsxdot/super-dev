@@ -47,9 +47,10 @@ type agentInstallCommandRequest struct {
 }
 
 type agentInstallCommandResponse struct {
-	Command   string `json:"command"`
-	ExpiresAt string `json:"expires_at"`
-	TokenID   string `json:"token_id"`
+	Command        string `json:"command"`
+	RestartCommand string `json:"restart_command"`
+	ExpiresAt      string `json:"expires_at"`
+	TokenID        string `json:"token_id"`
 }
 
 type agentInstallTokenRecord struct {
@@ -136,12 +137,17 @@ func agentInstallCommandResultFromSession(hostID string, session agentInstallSes
 	)
 	return agentInstallCommandResult{
 		Response: agentInstallCommandResponse{
-			Command:   command,
-			ExpiresAt: session.Token.ExpiresAt.Format(time.RFC3339),
-			TokenID:   session.Token.TokenID,
+			Command:        command,
+			RestartCommand: agentRestartCommand(),
+			ExpiresAt:      session.Token.ExpiresAt.Format(time.RFC3339),
+			TokenID:        session.Token.TokenID,
 		},
 		Token: session.Token,
 	}
+}
+
+func agentRestartCommand() string {
+	return "if command -v systemctl >/dev/null 2>&1; then sudo -n systemctl restart superdev-agent.service; elif command -v launchctl >/dev/null 2>&1; then sudo -n launchctl kickstart -k system/dev.superdev.agent || launchctl kickstart -k gui/$(id -u)/dev.superdev.agent; else echo 'unsupported service manager for superdev-agent restart' >&2; exit 64; fi"
 }
 
 // generateAgentInstallCommand 生成安装命令和仅供服务端保存的 token 记录。

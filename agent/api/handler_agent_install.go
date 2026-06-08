@@ -83,6 +83,38 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	agent = resetAgentSecurityForBootstrap(agent)
+	if _, err := a.agentStore.UpsertAgent(agent); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, result)
+}
+
+// restartAgent 处理 POST /api/agents/{host_id}/restart。
+func (a *App) restartAgent(w http.ResponseWriter, r *http.Request) {
+	host, _, found, err := a.agentByHostID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	result, err := a.hostAgentInstaller.Restart(r.Context(), host)
+	if err != nil {
+		var installErr *installer.InstallError
+		if errors.As(err, &installErr) {
+			jsonWrite(w, http.StatusBadGateway, map[string]string{
+				"error": installErr.Error(),
+				"stage": installErr.Stage,
+			})
+			return
+		}
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
 	jsonOK(w, result)
 }
 
@@ -93,6 +125,24 @@ func agentServiceOptionsFromSession(session agentInstallSession) installer.Servi
 		RequireAuth:    session.Token.BootstrapToken != "",
 		BootstrapToken: session.Token.BootstrapToken,
 	}
+}
+
+func resetAgentSecurityForBootstrap(agent model.Agent) model.Agent {
+	mode := agent.Security.TLS.Mode
+	if mode == "" {
+		mode = model.AgentTLSModeAuto
+	}
+	serverName := agent.Security.TLS.ServerName
+	agent.Secret.Token = ""
+	agent.Security = model.AgentSecurity{
+		ProvisionState:  model.AgentProvisionStatePendingBootstrap,
+		TokenConfigured: false,
+		TLS: model.AgentTLSSpec{
+			Mode:       mode,
+			ServerName: serverName,
+		},
+	}
+	return agent
 }
 
 func firstAgentTransportType(agent model.Agent) model.TransportType {

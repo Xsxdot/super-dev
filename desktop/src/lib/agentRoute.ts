@@ -44,35 +44,38 @@ export function transportAddress(entry?: TransportEntry): string {
 }
 
 export function agentRouteSummary(agent: AgentDTO, node?: NodeStatus): AgentRouteSummary {
+  const effectiveNode = node ?? agent.node
   const chain = agent.transport.chain
   const count = chain.length
-  const boundedIndex = selectedIndex(agent, node)
+  const boundedIndex = selectedIndex(agent, effectiveNode)
   const entry = chain[boundedIndex]
   return {
     selectedIndex: boundedIndex,
-    selectedType: node?.route?.selected_type ?? entry?.type,
+    selectedType: effectiveNode?.route?.selected_type ?? entry?.type,
     address: transportAddress(entry),
     count,
-    degraded: Boolean(node?.route?.degraded || boundedIndex > 0),
+    degraded: Boolean(effectiveNode?.route?.degraded || boundedIndex > 0),
   }
 }
 
 export function agentRouteRows(agent: AgentDTO, node?: NodeStatus): AgentRouteRow[] {
-  const selected = selectedIndex(agent, node)
+  const effectiveNode = node ?? agent.node
+  const selected = selectedIndex(agent, effectiveNode)
   const results = new Map<number, ProbeResult>()
-  for (const result of node?.route?.last_results ?? []) {
+  for (const result of effectiveNode?.route?.last_results ?? []) {
     results.set(result.index, result)
   }
 
   return agent.transport.chain.map((entry, index) => {
     const probe = results.get(index)
-    const status: AgentRouteRowStatus = probe ? (probe.reachable ? 'reachable' : 'failed') : 'untested'
+    const current = index === selected
+    const status = routeRowStatus(agent, effectiveNode, current, probe)
     return {
       index,
       entry,
       type: entry.type,
       address: transportAddress(entry),
-      current: index === selected,
+      current,
       role: index === 0 ? 'primary' : 'fallback',
       status,
       probe,
@@ -80,6 +83,26 @@ export function agentRouteRows(agent: AgentDTO, node?: NodeStatus): AgentRouteRo
       error: probe?.error,
     }
   })
+}
+
+function routeRowStatus(agent: AgentDTO, node: NodeStatus | undefined, current: boolean, probe: ProbeResult | undefined): AgentRouteRowStatus {
+  if (probe) return probe.reachable ? 'reachable' : 'failed'
+  // last_results 只记录逐链路探测；整体 Agent 健康探活也经由当前路由发出，
+  // 缺少逐项结果时只补齐当前行，避免展示成“健康但当前未测”。
+  if (current && currentRouteReachable(agent, node)) return 'reachable'
+  return 'untested'
+}
+
+function currentRouteReachable(agent: AgentDTO, node?: NodeStatus): boolean {
+  const runtime = node?.agent ?? agent.runtime
+  return Boolean(
+    node?.reachable ||
+    runtime.reachable ||
+    runtime.health === 'healthy' ||
+    runtime.health === 'version-mismatch' ||
+    runtime.health === 'auth-failed' ||
+    runtime.health === 'pending-bootstrap',
+  )
 }
 
 function selectedIndex(agent: AgentDTO, node?: NodeStatus): number {

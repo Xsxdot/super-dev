@@ -28,11 +28,13 @@ var ErrHostUnreachable = errors.New("host unreachable")
 
 // NodeRequest 描述一次发往远端节点的 HTTP 或 WebSocket 请求。
 type NodeRequest struct {
-	Method  string
-	Path    string
-	Query   url.Values
-	Headers http.Header
-	Body    io.Reader
+	Method string
+	Path   string
+	Query  url.Values
+	// TLSOverride 只改变当前请求的客户端 TLS 解释；nil 时使用 Agent.Security.TLS。
+	TLSOverride *model.AgentTLSSpec
+	Headers     http.Header
+	Body        io.Reader
 }
 
 // NodeResponse 是 NodeTransport.Do 返回的响应。

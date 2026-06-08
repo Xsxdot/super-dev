@@ -30,7 +30,6 @@ func httpClientForAgentTLS(spec model.AgentTLSSpec, connectTimeout, requestTimeo
 	return &http.Client{
 		Timeout: requestTimeout,
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				Timeout:   connectTimeout,
 				KeepAlive: 30 * time.Second,
@@ -47,7 +46,6 @@ func wsDialerForAgentTLS(spec model.AgentTLSSpec, connectTimeout time.Duration) 
 		return nil, err
 	}
 	return &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
 		HandshakeTimeout: connectTimeout,
 		TLSClientConfig:  tlsConfig,
 		NetDialContext: (&net.Dialer{
@@ -78,4 +76,11 @@ func tlsConfigForAgentTLS(spec model.AgentTLSSpec) (*tls.Config, error) {
 
 func agentTLSEnabled(spec model.AgentTLSSpec) bool {
 	return spec.Mode != model.AgentTLSModeOff
+}
+
+func tlsSpecForRequest(agent model.Agent, req NodeRequest) model.AgentTLSSpec {
+	if req.TLSOverride != nil {
+		return *req.TLSOverride
+	}
+	return agent.Security.TLS
 }
