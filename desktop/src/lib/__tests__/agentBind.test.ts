@@ -56,9 +56,9 @@ describe('directAddressOptions', () => {
   })
 
   it('recommends public IP first, then private IP, then SSH host', () => {
-    expect(recommendedDirectAddress({ id: 'h1', name: 'a', public_ip: '203.0.113.10', private_ip: '10.0.0.8', tags: [] }, 57017)).toBe('203.0.113.10:57017')
-    expect(recommendedDirectAddress({ id: 'h1', name: 'a', private_ip: '10.0.0.8', ssh_host: 'ssh.internal', tags: [] }, 57017)).toBe('10.0.0.8:57017')
-    expect(recommendedDirectAddress({ id: 'h1', name: 'a', ssh_host: 'ssh.internal', tags: [] }, 57017)).toBe('ssh.internal:57017')
+    expect(recommendedDirectAddress({ public_ip: '203.0.113.10', private_ip: '10.0.0.8' }, 57017)).toBe('203.0.113.10:57017')
+    expect(recommendedDirectAddress({ private_ip: '10.0.0.8', ssh_host: 'ssh.internal' }, 57017)).toBe('10.0.0.8:57017')
+    expect(recommendedDirectAddress({ ssh_host: 'ssh.internal' }, 57017)).toBe('ssh.internal:57017')
     expect(recommendedDirectAddress(undefined, 57017)).toBe('')
   })
 
