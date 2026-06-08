@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RuntimeStatusTab from '../RuntimeStatusTab.vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useNodeStore } from '@/stores/node'
-import { useSettingsStore } from '@/stores/settings'
 import { setLocale } from '@/i18n'
 import type { Project } from '@/api/agent'
 
@@ -95,7 +94,7 @@ describe('RuntimeStatusTab', () => {
     expect(refresh).toHaveBeenCalledWith('proj-1')
   })
 
-  it('renders environment summary and instances from fallback plus node store', async () => {
+  it('renders production service matrix while keeping local dev out of primary critical count', async () => {
     const store = useRuntimeStatusStore()
     vi.spyOn(store, 'refresh').mockResolvedValue(undefined)
     store.statusByProject['proj-1'] = {
@@ -109,7 +108,7 @@ describe('RuntimeStatusTab', () => {
           node_id: 'local',
           node_name: 'local',
           is_local: true,
-          metrics: { cpu_percent: 1, mem_bytes: 1024, uptime_sec: 1, restarts: 0, health: 'running', base: 'process' },
+          metrics: { cpu_percent: null, mem_bytes: null, uptime_sec: null, restarts: null, health: 'stopped', base: 'process' },
         }],
       }],
     }
@@ -135,10 +134,14 @@ describe('RuntimeStatusTab', () => {
     const wrapper = mount(RuntimeStatusTab, { props: { project: projectWithDeployments(), active: true } })
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.text()).toContain('dev')
-    expect(wrapper.text()).toContain('prod')
+    expect(wrapper.text()).toContain('Service Matrix')
+    expect(wrapper.find('[data-test="matrix-env-prod"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="matrix-env-dev"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="runtime-kpi-critical"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="runtime-kpi-local-dev"]').text()).toContain('0/1')
     expect(wrapper.text()).toContain('ali-01')
-    expect(wrapper.text()).toContain('1 abnormal')
+    expect(wrapper.text()).toContain('Local Dev')
+    expect(wrapper.text()).toContain('local')
   })
 
   it('renders remote instances from nodeStore without starting runtime polling', async () => {
@@ -170,30 +173,80 @@ describe('RuntimeStatusTab', () => {
     expect(refreshSpy).toHaveBeenCalledWith('proj-1')
   })
 
-  it('默认按 env -> service 渲染一级环境分组', async () => {
+  it('renders service matrix and selected service node detail', async () => {
     const runtime = useRuntimeStatusStore()
     vi.spyOn(runtime, 'refresh').mockResolvedValue(undefined)
+    runtime.statusByProject['proj-pivot'] = {
+      environments: [
+        {
+          env_name: 'dev',
+          instances: [{
+            service_id: 'svc-server',
+            service_name: 'server',
+            env_name: 'dev',
+            deployment_id: 'dep-server-dev',
+            node_id: 'local',
+            node_name: 'MacBook-Pro.local',
+            is_local: true,
+            metrics: { cpu_percent: null, mem_bytes: null, uptime_sec: null, restarts: null, health: 'stopped', base: 'command' },
+          }],
+        },
+        {
+          env_name: 'prod',
+          instances: [{
+            service_id: 'svc-server',
+            service_name: 'server',
+            env_name: 'prod',
+            deployment_id: 'dep-server-prod',
+            node_id: 'local',
+            node_name: 'local',
+            is_local: true,
+            metrics: { cpu_percent: 3.5, mem_bytes: 132 * 1024 * 1024, uptime_sec: 3600, restarts: 0, health: 'running', base: 'systemd' },
+          }],
+        },
+      ],
+    }
 
     const wrapper = mount(RuntimeStatusTab, { props: { project: pivotProject(), active: false } })
     await wrapper.vm.$nextTick()
 
-    const sections = wrapper.findAll('.env-section')
-    expect(sections).toHaveLength(2)
-    expect(sections.map(section => section.find('.env-head h2').text())).toEqual(['prod', 'dev'])
-    expect(sections[0].findAll('.sub-label').map(label => label.text())).toEqual(['server', 'audio'])
+    expect(wrapper.text()).toContain('Service Matrix')
+    expect(wrapper.find('[data-test="matrix-env-prod"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="matrix-env-dev"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('server')
+    expect(wrapper.text()).toContain('Running')
+
+    await wrapper.find('[data-test="service-row-svc-server"]').trigger('click')
+
+    expect(wrapper.text()).toContain('Local Dev')
+    expect(wrapper.text()).toContain('MacBook-Pro.local')
   })
 
-  it('切换为 service -> env 后以服务作为一级分组', async () => {
+  it('selects a service row and opens logs from its node detail row', async () => {
     const runtime = useRuntimeStatusStore()
     vi.spyOn(runtime, 'refresh').mockResolvedValue(undefined)
-    const settings = useSettingsStore()
+    runtime.statusByProject['proj-pivot'] = {
+      environments: [{
+        env_name: 'prod',
+        instances: [{
+          service_id: 'svc-audio',
+          service_name: 'audio',
+          env_name: 'prod',
+          deployment_id: 'dep-audio-prod',
+          node_id: 'local',
+          node_name: 'local',
+          is_local: true,
+          metrics: { cpu_percent: 1.2, mem_bytes: 64 * 1024 * 1024, uptime_sec: 60, restarts: 0, health: 'running', base: 'systemd' },
+        }],
+      }],
+    }
 
     const wrapper = mount(RuntimeStatusTab, { props: { project: pivotProject(), active: false } })
-    settings.setOverviewGrouping('service', 'env')
     await wrapper.vm.$nextTick()
 
-    const sections = wrapper.findAll('.env-section')
-    expect(sections.map(section => section.find('.env-head h2').text())).toEqual(['server', 'audio'])
-    expect(sections[0].findAll('.sub-label').map(label => label.text())).toEqual(['prod', 'dev'])
+    await wrapper.find('[data-test="service-row-svc-audio"]').trigger('click')
+    await wrapper.find('[data-test="node-row-dep-audio-prod-local"]').trigger('click')
+
+    expect(wrapper.emitted('open-logs')?.[0]).toEqual(['dep-audio-prod', 'local'])
   })
 })

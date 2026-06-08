@@ -96,30 +96,11 @@ describe('settingsStore', () => {
     expect(document.documentElement.lang).toBe('en-US')
   })
 
-  it('overviewGrouping 默认 env -> service', () => {
+  it('不再暴露运行状态分组偏好,避免设置项暗示已移除的 Pivot 视图', () => {
+    localStorage.setItem('superdev.overview_grouping.v1', '{"primary":"service","secondary":"env"}')
     const store = useSettingsStore()
-    expect(store.overviewGrouping).toEqual({ primary: 'env', secondary: 'service' })
-  })
 
-  it('setOverviewGrouping 持久化到 localStorage', () => {
-    const store = useSettingsStore()
-    store.setOverviewGrouping('service', 'env')
-    expect(store.overviewGrouping).toEqual({ primary: 'service', secondary: 'env' })
-    expect(JSON.parse(localStorage.getItem('superdev.overview_grouping.v1') ?? '{}'))
-      .toEqual({ primary: 'service', secondary: 'env' })
-  })
-
-  it('setOverviewGrouping 在 primary 撞上 secondary 时自动顺移 secondary', () => {
-    const store = useSettingsStore()
-    store.setOverviewGrouping('env', 'service')
-    store.setOverviewGrouping('service', 'service')
-    expect(store.overviewGrouping.primary).toBe('service')
-    expect(store.overviewGrouping.secondary).not.toBe('service')
-  })
-
-  it('加载非法持久化值时回落默认', () => {
-    localStorage.setItem('superdev.overview_grouping.v1', '{"primary":"x","secondary":"y"}')
-    const store = useSettingsStore()
-    expect(store.overviewGrouping).toEqual({ primary: 'env', secondary: 'service' })
+    expect('overviewGrouping' in store).toBe(false)
+    expect('setOverviewGrouping' in store).toBe(false)
   })
 })

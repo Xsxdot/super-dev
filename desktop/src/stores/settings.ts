@@ -4,7 +4,6 @@
 //   - 读写 agent 级通用设置
 //   - 读写 Tauri 开机自启状态
 //   - 持久化服务显示/隐藏偏好
-//   - 持久化概览页运行状态分组偏好
 //   - 同步桌面端界面语言偏好
 //
 // 边界：
@@ -19,14 +18,8 @@ import {
   setLocale as applyLocale,
   type SupportedLocale,
 } from '@/i18n'
-import type { Dimension } from '@/lib/runtimePivot'
 
 const HIDDEN_SERVICE_IDS_KEY = 'superdev.hidden_service_ids.v1'
-const OVERVIEW_GROUPING_KEY = 'superdev.overview_grouping.v1'
-const DIMENSIONS: Dimension[] = ['service', 'env', 'node']
-const DEFAULT_GROUPING: OverviewGrouping = { primary: 'env', secondary: 'service' }
-
-type OverviewGrouping = { primary: Dimension; secondary: Dimension }
 
 function loadHiddenServiceIds(): string[] {
   try {
@@ -42,28 +35,6 @@ function saveHiddenServiceIds(ids: string[]) {
   localStorage.setItem(HIDDEN_SERVICE_IDS_KEY, JSON.stringify(ids))
 }
 
-function isDimension(value: unknown): value is Dimension {
-  return typeof value === 'string' && (DIMENSIONS as string[]).includes(value)
-}
-
-function loadGrouping(): OverviewGrouping {
-  try {
-    const raw = localStorage.getItem(OVERVIEW_GROUPING_KEY)
-    if (!raw) return { ...DEFAULT_GROUPING }
-    const parsed = JSON.parse(raw)
-    if (isDimension(parsed?.primary) && isDimension(parsed?.secondary) && parsed.primary !== parsed.secondary) {
-      return { primary: parsed.primary, secondary: parsed.secondary }
-    }
-  } catch {
-    // 持久化值可能来自旧版本或被手动修改，回落默认保证设置页可继续打开。
-  }
-  return { ...DEFAULT_GROUPING }
-}
-
-function saveGrouping(value: OverviewGrouping) {
-  localStorage.setItem(OVERVIEW_GROUPING_KEY, JSON.stringify(value))
-}
-
 export const useSettingsStore = defineStore('settings', () => {
   const agentSettings = ref<AgentSettings>({
     log_retention_days: 7,
@@ -71,7 +42,6 @@ export const useSettingsStore = defineStore('settings', () => {
     onboarding_completed: false,
   })
   const hiddenServiceIds = ref<string[]>(loadHiddenServiceIds())
-  const overviewGrouping = ref<OverviewGrouping>(loadGrouping())
   const autostartEnabled = ref(false)
   const locale = ref<SupportedLocale>(currentLocale())
   const supportedLocaleOptions = SUPPORTED_LOCALE_OPTIONS
@@ -124,18 +94,6 @@ export const useSettingsStore = defineStore('settings', () => {
     saveHiddenServiceIds(next)
   }
 
-  // setOverviewGrouping 设置概览页分组维度并持久化。
-  // 当 primary 与 secondary 相同时，secondary 自动顺移到剩余维度，保证两级维度始终不同。
-  function setOverviewGrouping(primary: Dimension, secondary: Dimension) {
-    let nextSecondary = secondary
-    if (primary === nextSecondary) {
-      nextSecondary = DIMENSIONS.find(d => d !== primary)!
-    }
-    const next = { primary, secondary: nextSecondary }
-    overviewGrouping.value = next
-    saveGrouping(next)
-  }
-
   function setLocale(nextLocale: SupportedLocale) {
     applyLocale(nextLocale)
     locale.value = currentLocale()
@@ -144,7 +102,6 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     agentSettings,
     hiddenServiceIds,
-    overviewGrouping,
     autostartEnabled,
     locale,
     supportedLocaleOptions,
@@ -157,7 +114,6 @@ export const useSettingsStore = defineStore('settings', () => {
     setAutostart,
     isServiceHidden,
     toggleServiceHidden,
-    setOverviewGrouping,
     setLocale,
   }
 })

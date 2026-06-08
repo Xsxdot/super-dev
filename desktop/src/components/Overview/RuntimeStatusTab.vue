@@ -12,39 +12,35 @@ RuntimeStatusTab：项目概览页的运行状态视图。
   - 不展示主机整机负载
 -->
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useNodeStore } from '@/stores/node'
-import { useSettingsStore } from '@/stores/settings'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Deployment, RuntimeInstanceStatus, RuntimeStatusResponse, Service, Project } from '@/api/agent'
-import { pivotInstances, type Dimension } from '@/lib/runtimePivot'
-import InstanceCard from './InstanceCard.vue'
-import PivotToolbar from './PivotToolbar.vue'
+import { buildServiceMatrix } from '@/lib/runtimeServiceMatrix'
+import ServiceMatrixTable from './ServiceMatrixTable.vue'
+import ServiceDetailPane from './ServiceDetailPane.vue'
 
 const props = defineProps<{ project: Project; active: boolean }>()
 const emit = defineEmits<{ 'open-logs': [deploymentId: string, nodeId: string] }>()
 const store = useRuntimeStatusStore()
 const nodeStore = useNodeStore()
-const settings = useSettingsStore()
 const { t } = useAppI18n()
+const selectedServiceId = ref('')
 
 const instances = computed(() => projectRuntimeInstances(props.project, store.statusByProject[props.project.id]))
-const groups = computed(() =>
-  pivotInstances(instances.value, settings.overviewGrouping.primary, settings.overviewGrouping.secondary),
+const matrix = computed(() => buildServiceMatrix(props.project, instances.value))
+const selectedRow = computed(() =>
+  matrix.value.rows.find(row => row.serviceId === selectedServiceId.value) ?? matrix.value.rows[0],
 )
 const error = computed(() => store.errorByProject[props.project.id])
 
-function abnormalCount(instances: Array<{ metrics: { health: string } }>) {
-  return instances.filter(i => ['failed', 'unknown', 'restarting', 'stopped'].includes(i.metrics.health)).length
-}
-
-function groupInstances(group: { children: { instances: RuntimeInstanceStatus[] }[] }) {
-  return group.children.flatMap(child => child.instances)
-}
-
 function refreshIfActive() {
   if (props.active) void store.refresh(props.project.id)
+}
+
+function selectService(serviceId: string) {
+  selectedServiceId.value = serviceId
 }
 
 onMounted(refreshIfActive)
@@ -54,6 +50,10 @@ watch(() => props.active, active => {
 watch(() => props.project.id, () => {
   refreshIfActive()
 })
+watch(matrix, next => {
+  if (next.rows.some(row => row.serviceId === selectedServiceId.value)) return
+  selectedServiceId.value = next.preferredServiceId
+}, { immediate: true })
 
 function projectRuntimeInstances(project: Project, fallback?: RuntimeStatusResponse): RuntimeInstanceStatus[] {
   const envOrder = new Map((project.environments ?? []).map((env, idx) => [env.name, env.order || idx + 1]))
@@ -139,28 +139,46 @@ function unknownInstance(service: Service, deployment: Deployment, envName: stri
 
 <template>
   <section class="runtime-status">
-    <PivotToolbar
-      :primary="settings.overviewGrouping.primary"
-      :secondary="settings.overviewGrouping.secondary"
-      @change="(p: Dimension, s: Dimension) => settings.setOverviewGrouping(p, s)"
-    />
-    <div v-if="error" class="status-error">{{ t('overview.runtimeStatus.updateFailed') }} · {{ error }}</div>
-    <div v-for="group in groups" :key="group.key" class="env-section">
-      <header class="env-head">
-        <h2>{{ group.label }}</h2>
-        <span>{{ t('overview.runtimeStatus.instancesSummary', { count: groupInstances(group).length, abnormal: abnormalCount(groupInstances(group)) }) }}</span>
-      </header>
-      <div v-for="sub in group.children" :key="sub.key" class="sub-section">
-        <div class="sub-label">{{ sub.label }}</div>
-        <div class="instance-list">
-          <InstanceCard
-            v-for="instance in sub.instances"
-            :key="`${instance.deployment_id}:${instance.node_id}`"
-            :instance="instance"
-            @open-logs="(deploymentId, nodeId) => emit('open-logs', deploymentId, nodeId)"
-          />
-        </div>
+    <div class="runtime-kpis">
+      <div class="kpi critical" data-test="runtime-kpi-critical">
+        <span>{{ t('overview.runtimeStatus.critical') }}</span>
+        <strong>{{ matrix.kpis.critical }}</strong>
       </div>
+      <div class="kpi" data-test="runtime-kpi-services">
+        <span>{{ t('overview.runtimeStatus.services') }}</span>
+        <strong>{{ matrix.kpis.services }}</strong>
+      </div>
+      <div class="kpi" data-test="runtime-kpi-instances">
+        <span>{{ t('overview.runtimeStatus.instances') }}</span>
+        <strong>{{ matrix.kpis.instances }}</strong>
+      </div>
+      <div
+        v-for="env in matrix.kpis.envs"
+        :key="env.envName"
+        class="kpi"
+        :data-test="`runtime-kpi-env-${env.envName}`"
+      >
+        <span>{{ env.envName }}</span>
+        <strong>{{ env.healthy }}/{{ env.total }}</strong>
+      </div>
+      <div v-if="matrix.devEnvironments.length > 0" class="kpi quiet" data-test="runtime-kpi-local-dev">
+        <span>{{ t('overview.runtimeStatus.localDev') }}</span>
+        <strong>{{ matrix.localDev.healthy }}/{{ matrix.localDev.total }}</strong>
+      </div>
+    </div>
+    <div v-if="error" class="status-error">{{ t('overview.runtimeStatus.updateFailed') }} · {{ error }}</div>
+    <div class="runtime-grid">
+      <ServiceMatrixTable
+        :matrix="matrix"
+        :selected-service-id="selectedServiceId"
+        @select-service="selectService"
+      />
+      <ServiceDetailPane
+        :row="selectedRow"
+        :environments="matrix.environments"
+        :dev-environments="matrix.devEnvironments"
+        @open-logs="(deploymentId, nodeId) => emit('open-logs', deploymentId, nodeId)"
+      />
     </div>
   </section>
 </template>
@@ -169,7 +187,42 @@ function unknownInstance(service: Service, deployment: Deployment, envName: stri
 .runtime-status {
   height: calc(100vh - 65px);
   overflow: auto;
-  padding: 16px 20px 28px;
+  padding: 14px 18px 28px;
+}
+.runtime-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.kpi {
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.kpi span,
+.kpi strong {
+  display: block;
+}
+.kpi span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.kpi strong {
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 800;
+}
+.kpi.critical strong {
+  color: var(--status-failed);
+}
+.kpi.quiet strong {
+  color: var(--text-secondary);
 }
 .status-error {
   margin-bottom: 12px;
@@ -177,38 +230,15 @@ function unknownInstance(service: Service, deployment: Deployment, envName: stri
   font-size: 12px;
   font-weight: 700;
 }
-.env-section + .env-section {
-  margin-top: 22px;
-}
-.env-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.env-head h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-}
-.env-head span {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-.sub-section + .sub-section {
-  margin-top: 10px;
-}
-.sub-label {
-  margin: 6px 0 4px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.instance-list {
+.runtime-grid {
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .runtime-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

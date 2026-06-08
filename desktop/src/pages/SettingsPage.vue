@@ -4,7 +4,6 @@
 职责：
   - 展示和修改通用设置
   - 管理项目列表中的本地展示偏好和启动选择
-  - 管理概览页默认运行状态分组偏好
 
 边界：
   - 不直接读写 MCP 配置文件，MCP 管理由专用 Tauri command 完成
@@ -31,7 +30,6 @@ import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import type { SupportedLocale } from '@/i18n'
-import type { Dimension } from '@/lib/runtimePivot'
 import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'mcp'
@@ -43,7 +41,6 @@ const operationApprovalStore = useOperationApprovalStore()
 const pipelineTemplateStore = usePipelineTemplateStore()
 const settingsStore = useSettingsStore()
 const { t } = useI18n()
-const groupingDims: Dimension[] = ['service', 'env', 'node']
 const selectedTab = ref<SettingsTab>(
   route.query.tab === 'hosts'
     ? 'hosts'
@@ -329,40 +326,6 @@ const retentionDays = computed({
           </div>
           <div class="settings-row">
             <div>
-              <div class="settings-row-title">{{ t('settings.general.overviewGroupingTitle') }}</div>
-              <div class="settings-row-description">{{ t('settings.general.overviewGroupingDesc') }}</div>
-            </div>
-            <div class="grouping-selects">
-              <select
-                data-test="grouping-primary"
-                class="settings-select"
-                :value="settingsStore.overviewGrouping.primary"
-                @change="settingsStore.setOverviewGrouping(($event.target as HTMLSelectElement).value as Dimension, settingsStore.overviewGrouping.secondary)"
-              >
-                <option v-for="dim in groupingDims" :key="`p-${dim}`" :value="dim">
-                  {{ t(`overview.runtimeStatus.dimension.${dim}`) }}
-                </option>
-              </select>
-              <span class="grouping-arrow">▸</span>
-              <select
-                data-test="grouping-secondary"
-                class="settings-select"
-                :value="settingsStore.overviewGrouping.secondary"
-                @change="settingsStore.setOverviewGrouping(settingsStore.overviewGrouping.primary, ($event.target as HTMLSelectElement).value as Dimension)"
-              >
-                <option
-                  v-for="dim in groupingDims"
-                  :key="`s-${dim}`"
-                  :value="dim"
-                  :disabled="dim === settingsStore.overviewGrouping.primary"
-                >
-                  {{ t(`overview.runtimeStatus.dimension.${dim}`) }}
-                </option>
-              </select>
-            </div>
-          </div>
-          <div class="settings-row">
-            <div>
               <div class="settings-row-title">{{ t('settings.general.autostartTitle') }}</div>
               <div class="settings-row-description">{{ t('settings.general.autostartDesc') }}</div>
             </div>
@@ -568,16 +531,6 @@ const retentionDays = computed({
 
 .locale-select {
   min-width: 156px;
-}
-
-.grouping-selects {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.grouping-arrow {
-  color: var(--text-tertiary);
 }
 
 .settings-switch input {

@@ -135,12 +135,11 @@ describe('SettingsPage', () => {
     expect(wrapper.find('.settings-sidebar').exists()).toBe(true)
     expect(wrapper.find('.settings-main').exists()).toBe(true)
     expect(wrapper.find('.settings-pane').exists()).toBe(true)
-    expect(wrapper.findAll('.settings-row')).toHaveLength(5)
+    expect(wrapper.findAll('.settings-row')).toHaveLength(4)
     expect(wrapper.find('[data-test="retention-days"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="locale-select"]').classes()).toContain('settings-select')
-    expect(wrapper.find('[data-test="grouping-primary"]').classes()).toContain('settings-select')
-    expect(wrapper.find('[data-test="grouping-secondary"]').classes()).toContain('settings-select')
-    expect((wrapper.find('[data-test="grouping-secondary"] option[value="env"]').element as HTMLOptionElement).disabled).toBe(true)
+    expect(wrapper.find('[data-test="grouping-primary"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="grouping-secondary"]').exists()).toBe(false)
   })
 
   it('项目页可切换服务隐藏状态和启动选择', async () => {
