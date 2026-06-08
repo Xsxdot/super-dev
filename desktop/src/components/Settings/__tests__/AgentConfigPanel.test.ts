@@ -277,25 +277,76 @@ describe('AgentConfigPanel', () => {
     })
   })
 
-  it('lets direct transport choose a host IP and saves the selected address with the listen port', async () => {
+  it('hides transport probe controls until the agent is installed', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'testTransport').mockResolvedValue({
+      index: 0,
+      transport_type: 'direct',
+      status: 'reachable',
+      reachable: true,
+      checked_at: '2026-06-07T10:00:00Z',
+    })
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'transport',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.find('[data-test="transport-test-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="transport-entry-0"] .probe-result').exists()).toBe(false)
+    expect(wrapper.find('[data-test="transport-entry-0"]').text()).not.toContain('未测')
+  })
+
+  it('lets direct transport fill the editable address from host IP tags', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'updateAgentTransport').mockResolvedValue(agent())
     const wrapper = mount(AgentConfigPanel, {
-      props: { visible: true, agent: agent(), host: hosts[0], initialTab: 'transport' },
+      props: {
+        visible: true,
+        agent: agent({ transport: { chain: [{ type: 'direct', direct: { address: '203.0.113.10:57017' } }] } }),
+        host: hosts[0],
+        initialTab: 'transport',
+      },
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    expect(wrapper.find('[data-test="direct-address-select-0"]').text()).toContain('203.0.113.10:57017')
-    await wrapper.find('[data-test="direct-address-select-0"]').setValue('private_ip')
+    expect(wrapper.find('[data-test="direct-address-select-0"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="direct-address-input-0"]').element as HTMLInputElement).value).toBe('203.0.113.10:57017')
+    expect(wrapper.find('[data-test="direct-address-option-public_ip-0"]').text()).toContain('203.0.113.10:57017')
+    await wrapper.find('[data-test="direct-address-option-private_ip-0"]').trigger('click')
+    expect((wrapper.find('[data-test="direct-address-input-0"]').element as HTMLInputElement).value).toBe('10.0.0.8:57017')
     await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
 
     expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {
       transport: {
         chain: [
           { type: 'direct', direct: { address: '10.0.0.8:57017' } },
-          { type: 'tunnel', tunnel: { remote_agent_port: 57017 } },
         ],
       },
+    })
+  })
+
+  it('keeps direct custom address editable even when host IP tags exist', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'updateAgentTransport').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ transport: { chain: [{ type: 'direct', direct: { address: '203.0.113.10:57017' } }] } }),
+        host: hosts[0],
+        initialTab: 'transport',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('[data-test="direct-address-input-0"]').setValue('agent.example.com:57017')
+    await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
+
+    expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {
+      transport: { chain: [{ type: 'direct', direct: { address: 'agent.example.com:57017' } }] },
     })
   })
 
@@ -312,8 +363,9 @@ describe('AgentConfigPanel', () => {
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    expect(wrapper.find('[data-test="direct-address-custom-0"]').exists()).toBe(true)
-    await wrapper.find('[data-test="direct-address-custom-0"]').setValue('agent.example.com:57017')
+    expect(wrapper.find('[data-test="direct-address-input-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="direct-address-option-public_ip-0"]').exists()).toBe(false)
+    await wrapper.find('[data-test="direct-address-input-0"]').setValue('agent.example.com:57017')
     await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
 
     expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {

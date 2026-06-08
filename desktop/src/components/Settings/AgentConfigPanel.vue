@@ -3,7 +3,7 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
 
 职责：
   - 将原先分散的安全配置、安装命令、连接链编辑收敛到一个四步面板
-  - 保证监听地址、监听端口、TLS 模式只有一个编辑入口
+  - 保证监听端口、TLS 模式只有一个编辑入口，bind 地址由连接链推导
   - 通过 agents store 调用现有 Agent API 完成保存、下发、生成命令和探测
 
 边界：
@@ -22,7 +22,6 @@ import {
   directAddressOptions,
   recommendedDirectAddress,
   resolveBindAddressFromChain,
-  type DirectAddressSource,
 } from '@/lib/agentBind'
 import type {
   AgentConfigUpdatePayload,
@@ -119,6 +118,7 @@ const hasPublicIP = computed(() => Boolean(currentHost.value?.public_ip?.trim())
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
 const bindScopeDirty = computed(() => (
+  runtime.value?.installed === true &&
   resolveBindAddressFromChain(savedChain.value) !== resolveBindAddressFromChain(chain.value)
 ))
 const currentRows = computed(() => panelAgent.value
@@ -303,27 +303,10 @@ function addEntry(type: TransportType) {
   chain.value = [...chain.value, defaultEntry(type)]
 }
 
-function directSelectValue(entry: TransportEntry): DirectAddressSource | 'custom' {
-  const address = entry.direct?.address?.trim()
-  const option = directOptions.value.find(item => item.address === address)
-  return option?.key ?? 'custom'
-}
-
-function selectDirectAddress(index: number, source: DirectAddressSource | 'custom') {
+function applyDirectAddressOption(index: number, address: string) {
   const entry = chain.value[index]
   if (!entry || entry.type !== 'direct') return
-  if (source === 'custom') {
-    entry.direct = { address: entry.direct?.address?.trim() ?? '' }
-    return
-  }
-  const option = directOptions.value.find(item => item.key === source)
-  entry.direct = { address: option?.address ?? '' }
-}
-
-function onDirectAddressChange(index: number, event: Event) {
-  const target = event.target
-  if (!(target instanceof HTMLSelectElement)) return
-  selectDirectAddress(index, target.value as DirectAddressSource | 'custom')
+  entry.direct = { address }
 }
 
 function removeEntry(index: number) {
@@ -588,7 +571,7 @@ watch(
               <button type="button" class="settings-btn" data-test="transport-add-direct" @click="addEntry('direct')">direct</button>
               <button type="button" class="settings-btn" data-test="transport-add-tunnel" @click="addEntry('tunnel')">tunnel</button>
             </div>
-            <div v-if="transportDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-dirty">
+            <div v-if="canProbe && transportDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-dirty">
               {{ t('settings.agents.saveTransportBeforeProbe') }}
             </div>
             <div v-if="bindScopeDirty" class="settings-alert settings-alert-warning" data-test="agent-bind-scope-dirty">
@@ -606,13 +589,19 @@ watch(
 
               <div v-if="entry.type === 'direct' && entry.direct" class="settings-field">
                 <label class="settings-field-label">{{ t('settings.agents.directAddress') }}</label>
-                <select class="settings-select" :value="directSelectValue(entry)" :data-test="`direct-address-select-${index}`" @change="onDirectAddressChange(index, $event)">
-                  <option v-for="option in directOptions" :key="option.key" :value="option.key">
+                <input v-model="entry.direct.address" class="settings-input" placeholder="agent.example.com:57017" :data-test="`direct-address-input-${index}`" />
+                <div v-if="directOptions.length" class="direct-address-tags">
+                  <button
+                    v-for="option in directOptions"
+                    :key="option.key"
+                    type="button"
+                    class="address-tag"
+                    :data-test="`direct-address-option-${option.key}-${index}`"
+                    @click="applyDirectAddressOption(index, option.address)"
+                  >
                     {{ t(option.labelKey, { address: option.address }) }}
-                  </option>
-                  <option value="custom">{{ t('settings.agents.directAddressCustom') }}</option>
-                </select>
-                <input v-if="directSelectValue(entry) === 'custom'" v-model="entry.direct.address" class="settings-input" placeholder="agent.example.com:57017" :data-test="`direct-address-custom-${index}`" />
+                  </button>
+                </div>
               </div>
 
               <div v-if="entry.type === 'tunnel' && entry.tunnel" class="settings-field">
@@ -622,7 +611,7 @@ watch(
                 </span>
               </div>
 
-              <footer class="transport-entry-actions">
+              <footer v-if="canProbe" class="transport-entry-actions">
                 <button type="button" class="settings-btn" :disabled="needsCreateBeforeNextStep || transportDirty" :data-test="`transport-test-${index}`" @click="testEntry(index)">
                   {{ t('settings.agents.testTransport') }}
                 </button>
@@ -756,6 +745,26 @@ watch(
 }
 .step-actions {
   justify-content: flex-end;
+}
+.direct-address-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.address-tag {
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 4px 8px;
+}
+.address-tag:hover {
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 .command-block {
   max-height: 180px;
