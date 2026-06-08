@@ -21,6 +21,7 @@ function response(serviceName: string): RuntimeStatusResponse {
       instances: [{
         service_id: `svc-${serviceName}`,
         service_name: serviceName,
+        env_name: 'dev',
         deployment_id: `dep-${serviceName}`,
         node_id: 'local',
         node_name: 'local',

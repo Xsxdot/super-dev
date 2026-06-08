@@ -37,6 +37,7 @@ function instance(partial: Partial<RuntimeInstanceStatus> = {}): RuntimeInstance
   return {
     service_id: 'svc-api',
     service_name: 'api',
+    env_name: 'prod',
     deployment_id: 'dep-api',
     node_id: 'host-1',
     node_name: 'ali-01',
