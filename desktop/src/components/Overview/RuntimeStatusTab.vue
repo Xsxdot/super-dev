@@ -4,7 +4,7 @@ RuntimeStatusTab：项目概览页的运行状态视图。
 职责：
   - 从 project 配置与 NodeRegistry 快照投影远端运行态
   - 对本地 deployment 保留 runtime-status 显式刷新 fallback
-  - 按环境分段渲染实例卡
+  - 按用户选择的一级/二级维度透视分组渲染实例卡
   - 网络抖动时显示更新失败角标但保留旧数据
 
 边界：
@@ -15,21 +15,32 @@ RuntimeStatusTab：项目概览页的运行状态视图。
 import { computed, onMounted, watch } from 'vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useNodeStore } from '@/stores/node'
+import { useSettingsStore } from '@/stores/settings'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Deployment, RuntimeInstanceStatus, RuntimeStatusResponse, Service, Project } from '@/api/agent'
+import { pivotInstances, type Dimension } from '@/lib/runtimePivot'
 import InstanceCard from './InstanceCard.vue'
+import PivotToolbar from './PivotToolbar.vue'
 
 const props = defineProps<{ project: Project; active: boolean }>()
 const emit = defineEmits<{ 'open-logs': [deploymentId: string, nodeId: string] }>()
 const store = useRuntimeStatusStore()
 const nodeStore = useNodeStore()
+const settings = useSettingsStore()
 const { t } = useAppI18n()
 
-const status = computed(() => projectRuntimeStatus(props.project, store.statusByProject[props.project.id]))
+const instances = computed(() => projectRuntimeInstances(props.project, store.statusByProject[props.project.id]))
+const groups = computed(() =>
+  pivotInstances(instances.value, settings.overviewGrouping.primary, settings.overviewGrouping.secondary),
+)
 const error = computed(() => store.errorByProject[props.project.id])
 
 function abnormalCount(instances: Array<{ metrics: { health: string } }>) {
   return instances.filter(i => ['failed', 'unknown', 'restarting', 'stopped'].includes(i.metrics.health)).length
+}
+
+function groupInstances(group: { children: { instances: RuntimeInstanceStatus[] }[] }) {
+  return group.children.flatMap(child => child.instances)
 }
 
 function refreshIfActive() {
@@ -44,52 +55,51 @@ watch(() => props.project.id, () => {
   refreshIfActive()
 })
 
-function projectRuntimeStatus(project: Project, fallback?: RuntimeStatusResponse): RuntimeStatusResponse {
-  const sections = new Map<string, RuntimeInstanceStatus[]>()
+function projectRuntimeInstances(project: Project, fallback?: RuntimeStatusResponse): RuntimeInstanceStatus[] {
+  const envOrder = new Map((project.environments ?? []).map((env, idx) => [env.name, env.order || idx + 1]))
+  const rows: Array<{ envRank: number; svcOrder: number; instance: RuntimeInstanceStatus }> = []
   for (const service of [...project.services].sort((a, b) => a.order - b.order)) {
     for (const deployment of service.deployments ?? []) {
       const envName = deployment.env_name || 'default'
-      if (!sections.has(envName)) sections.set(envName, [])
+      const envRank = envOrder.get(envName) ?? 9999
       if (deployment.location === 'remote') {
         for (const hostId of deployment.host_ids ?? []) {
-          sections.get(envName)!.push(remoteInstance(service, deployment, hostId))
+          rows.push({ envRank, svcOrder: service.order, instance: remoteInstance(service, deployment, hostId, envName) })
         }
         continue
       }
-      sections.get(envName)!.push(localInstance(service, deployment, fallback))
+      rows.push({ envRank, svcOrder: service.order, instance: localInstance(service, deployment, envName, fallback) })
     }
   }
-  const envOrder = new Map((project.environments ?? []).map((env, idx) => [env.name, env.order || idx + 1]))
-  return {
-    environments: [...sections.entries()]
-      .sort(([left], [right]) => (envOrder.get(left) ?? 9999) - (envOrder.get(right) ?? 9999) || left.localeCompare(right))
-      .map(([env_name, instances]) => ({ env_name, instances })),
-  }
+  // 先按环境序、再按服务序稳定排序; pivot 分组时会保持这个相对顺序。
+  rows.sort((a, b) => a.envRank - b.envRank || a.svcOrder - b.svcOrder)
+  return rows.map(row => row.instance)
 }
 
-function localInstance(service: Service, deployment: Deployment, fallback?: RuntimeStatusResponse): RuntimeInstanceStatus {
+function localInstance(service: Service, deployment: Deployment, envName: string, fallback?: RuntimeStatusResponse): RuntimeInstanceStatus {
   const found = findFallbackInstance(fallback, deployment.id)
   if (found) {
-    return { ...found, service_id: service.id, service_name: service.name, deployment_id: deployment.id, is_local: true }
+    return { ...found, service_id: service.id, service_name: service.name, env_name: envName, deployment_id: deployment.id, is_local: true }
   }
-  return unknownInstance(service, deployment, 'local', 'local', true, 'runtime not reported')
+  return unknownInstance(service, deployment, envName, 'local', 'local', true, 'runtime not reported')
 }
 
-function remoteInstance(service: Service, deployment: Deployment, hostId: string): RuntimeInstanceStatus {
+function remoteInstance(service: Service, deployment: Deployment, hostId: string, envName: string): RuntimeInstanceStatus {
   const node = nodeStore.nodeOf(hostId)
   const nodeName = node?.name || hostId
-  if (!node) return unknownInstance(service, deployment, hostId, nodeName, false, 'node not reported')
+  if (!node) return unknownInstance(service, deployment, envName, hostId, nodeName, false, 'node not reported')
   if (!node.reachable) {
-    return unknownInstance(service, deployment, hostId, nodeName, false, nodeStore.nodeErrorOf(hostId) ?? 'node unreachable')
+    return unknownInstance(service, deployment, envName, hostId, nodeName, false, nodeStore.nodeErrorOf(hostId) ?? 'node unreachable')
   }
   const found = Array.isArray(node.deployments)
     ? node.deployments.find(instance => instance.deployment_id === deployment.id)
     : undefined
-  if (!found) return unknownInstance(service, deployment, hostId, nodeName, false, 'deployment_not_reported')
+  if (!found) return unknownInstance(service, deployment, envName, hostId, nodeName, false, 'deployment_not_reported')
   return {
     ...found,
     service_id: service.id,
     service_name: service.name,
+    env_name: envName,
     deployment_id: deployment.id,
     node_id: hostId,
     node_name: nodeName,
@@ -105,10 +115,11 @@ function findFallbackInstance(fallback: RuntimeStatusResponse | undefined, deplo
   return undefined
 }
 
-function unknownInstance(service: Service, deployment: Deployment, nodeId: string, nodeName: string, isLocal: boolean, error: string): RuntimeInstanceStatus {
+function unknownInstance(service: Service, deployment: Deployment, envName: string, nodeId: string, nodeName: string, isLocal: boolean, error: string): RuntimeInstanceStatus {
   return {
     service_id: service.id,
     service_name: service.name,
+    env_name: envName,
     deployment_id: deployment.id,
     node_id: nodeId,
     node_name: nodeName,
@@ -128,19 +139,27 @@ function unknownInstance(service: Service, deployment: Deployment, nodeId: strin
 
 <template>
   <section class="runtime-status">
+    <PivotToolbar
+      :primary="settings.overviewGrouping.primary"
+      :secondary="settings.overviewGrouping.secondary"
+      @change="(p: Dimension, s: Dimension) => settings.setOverviewGrouping(p, s)"
+    />
     <div v-if="error" class="status-error">{{ t('overview.runtimeStatus.updateFailed') }} · {{ error }}</div>
-    <div v-for="env in status?.environments ?? []" :key="env.env_name" class="env-section">
+    <div v-for="group in groups" :key="group.key" class="env-section">
       <header class="env-head">
-        <h2>{{ env.env_name }}</h2>
-        <span>{{ t('overview.runtimeStatus.instancesSummary', { count: env.instances.length, abnormal: abnormalCount(env.instances) }) }}</span>
+        <h2>{{ group.label }}</h2>
+        <span>{{ t('overview.runtimeStatus.instancesSummary', { count: groupInstances(group).length, abnormal: abnormalCount(groupInstances(group)) }) }}</span>
       </header>
-      <div class="instance-list">
-        <InstanceCard
-          v-for="instance in env.instances"
-          :key="`${instance.deployment_id}:${instance.node_id}`"
-          :instance="instance"
-          @open-logs="(deploymentId, nodeId) => emit('open-logs', deploymentId, nodeId)"
-        />
+      <div v-for="sub in group.children" :key="sub.key" class="sub-section">
+        <div class="sub-label">{{ sub.label }}</div>
+        <div class="instance-list">
+          <InstanceCard
+            v-for="instance in sub.instances"
+            :key="`${instance.deployment_id}:${instance.node_id}`"
+            :instance="instance"
+            @open-logs="(deploymentId, nodeId) => emit('open-logs', deploymentId, nodeId)"
+          />
+        </div>
       </div>
     </div>
   </section>
@@ -176,6 +195,17 @@ function unknownInstance(service: Service, deployment: Deployment, nodeId: strin
 .env-head span {
   color: var(--text-tertiary);
   font-size: 12px;
+}
+.sub-section + .sub-section {
+  margin-top: 10px;
+}
+.sub-label {
+  margin: 6px 0 4px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .instance-list {
   display: grid;

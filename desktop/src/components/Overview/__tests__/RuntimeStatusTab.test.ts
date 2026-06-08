@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RuntimeStatusTab from '../RuntimeStatusTab.vue'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useNodeStore } from '@/stores/node'
+import { useSettingsStore } from '@/stores/settings'
 import { setLocale } from '@/i18n'
 import type { Project } from '@/api/agent'
 
@@ -41,8 +42,46 @@ function remoteProject(): Project {
   }
 }
 
+function pivotProject(): Project {
+  return {
+    id: 'proj-pivot',
+    name: 'Pivot Demo',
+    root_path: '/tmp/pivot',
+    environments: [
+      { id: 'env-prod', name: 'prod', is_dev: false, order: 1 },
+      { id: 'env-dev', name: 'dev', is_dev: true, order: 2 },
+    ],
+    services: [
+      {
+        id: 'svc-server',
+        project_id: 'proj-pivot',
+        name: 'server',
+        status: '',
+        required: true,
+        order: 1,
+        deployments: [
+          { id: 'dep-server-prod', env_name: 'prod', location: 'local', status: '' },
+          { id: 'dep-server-dev', env_name: 'dev', location: 'local', status: '' },
+        ],
+      },
+      {
+        id: 'svc-audio',
+        project_id: 'proj-pivot',
+        name: 'audio',
+        status: '',
+        required: true,
+        order: 2,
+        deployments: [
+          { id: 'dep-audio-prod', env_name: 'prod', location: 'local', status: '' },
+        ],
+      },
+    ],
+  }
+}
+
 describe('RuntimeStatusTab', () => {
   beforeEach(() => {
+    localStorage.clear()
     setActivePinia(createPinia())
     setLocale('en-US')
   })
@@ -65,6 +104,7 @@ describe('RuntimeStatusTab', () => {
         instances: [{
           service_id: 'svc-api',
           service_name: 'api',
+          env_name: 'dev',
           deployment_id: 'dep-local',
           node_id: 'local',
           node_name: 'local',
@@ -82,6 +122,7 @@ describe('RuntimeStatusTab', () => {
       deployments: [{
         service_id: 'svc-api',
         service_name: 'api',
+        env_name: 'prod',
         deployment_id: 'dep-api',
         node_id: 'h1',
         node_name: 'ali-01',
@@ -112,6 +153,7 @@ describe('RuntimeStatusTab', () => {
       deployments: [{
         service_id: 'svc-api',
         service_name: 'api',
+        env_name: 'prod',
         deployment_id: 'dep-api',
         node_id: 'h1',
         node_name: 'ali-01',
@@ -126,5 +168,32 @@ describe('RuntimeStatusTab', () => {
     expect(wrapper.text()).toContain('ali-01')
     expect(wrapper.text()).toContain('running')
     expect(refreshSpy).toHaveBeenCalledWith('proj-1')
+  })
+
+  it('默认按 env -> service 渲染一级环境分组', async () => {
+    const runtime = useRuntimeStatusStore()
+    vi.spyOn(runtime, 'refresh').mockResolvedValue(undefined)
+
+    const wrapper = mount(RuntimeStatusTab, { props: { project: pivotProject(), active: false } })
+    await wrapper.vm.$nextTick()
+
+    const sections = wrapper.findAll('.env-section')
+    expect(sections).toHaveLength(2)
+    expect(sections.map(section => section.find('.env-head h2').text())).toEqual(['prod', 'dev'])
+    expect(sections[0].findAll('.sub-label').map(label => label.text())).toEqual(['server', 'audio'])
+  })
+
+  it('切换为 service -> env 后以服务作为一级分组', async () => {
+    const runtime = useRuntimeStatusStore()
+    vi.spyOn(runtime, 'refresh').mockResolvedValue(undefined)
+    const settings = useSettingsStore()
+
+    const wrapper = mount(RuntimeStatusTab, { props: { project: pivotProject(), active: false } })
+    settings.setOverviewGrouping('service', 'env')
+    await wrapper.vm.$nextTick()
+
+    const sections = wrapper.findAll('.env-section')
+    expect(sections.map(section => section.find('.env-head h2').text())).toEqual(['server', 'audio'])
+    expect(sections[0].findAll('.sub-label').map(label => label.text())).toEqual(['prod', 'dev'])
   })
 })
