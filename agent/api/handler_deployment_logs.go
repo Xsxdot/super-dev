@@ -12,7 +12,7 @@ package api
 
 import (
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/logbackend"
@@ -23,7 +23,7 @@ type deploymentLogsResponse struct {
 	Items []model.LogEntry `json:"items"`
 	Next  struct {
 		Time string `json:"time,omitempty"`
-		ID   int64  `json:"id,omitempty"`
+		ID   string `json:"id,omitempty"`
 	} `json:"next"`
 }
 
@@ -33,7 +33,7 @@ type deploymentSearchResponse struct {
 	HasMore bool             `json:"has_more"`
 	Next    struct {
 		Time string `json:"time,omitempty"`
-		ID   int64  `json:"id,omitempty"`
+		ID   string `json:"id,omitempty"`
 	} `json:"next"`
 }
 
@@ -58,12 +58,7 @@ func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 		Limit:        parseBoundedInt(q.Get("limit"), 1000, maxLimit),
 	}
 	if beforeStr := q.Get("before"); beforeStr != "" {
-		before, err := strconv.ParseInt(beforeStr, 10, 64)
-		if err != nil || before <= 0 {
-			jsonError(w, http.StatusBadRequest, "before is invalid")
-			return
-		}
-		filter.BeforeID = before
+		filter.Before = logbackend.Cursor{ID: beforeStr}
 	}
 
 	entries, next, err := backend.Query(r.Context(), filter)
@@ -114,8 +109,8 @@ func (a *App) searchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "cursor_time is invalid")
 			return
 		}
-		cursorID, err := strconv.ParseInt(q.Get("cursor_id"), 10, 64)
-		if err != nil || cursorID <= 0 {
+		cursorID := strings.TrimSpace(q.Get("cursor_id"))
+		if cursorID == "" {
 			jsonError(w, http.StatusBadRequest, "cursor_id is required")
 			return
 		}

@@ -4,6 +4,7 @@ package logbackend_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestSQLiteBackend_QueryBeforeID(t *testing.T) {
 	second, _, err := b.Query(context.Background(), logbackend.QueryFilter{
 		DeploymentID: "svc-1",
 		Limit:        3,
-		BeforeID:     first[0].ID,
+		Before:       logbackend.Cursor{ID: strconv.FormatInt(first[0].ID, 10)},
 	})
 	require.NoError(t, err)
 	require.Len(t, second, 2)

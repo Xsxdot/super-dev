@@ -1,8 +1,8 @@
 // Package logbackend 定义日志后端抽象接口及公共数据类型。
 //
 // 职责：
-//   - 定义 LogBackend 接口（Query / Search / Subscribe）
-//   - 定义 QueryFilter、SearchQuery、Cursor、LogStream 公共类型
+//   - 定义 LogReader/LogBackend 接口（Query / Search / Subscribe）
+//   - 定义 QueryFilter、SearchQuery、Cursor、SubscribeOptions、LogStream 公共类型
 //
 // 边界：
 //   - 不包含任何实现，只有接口和类型定义
@@ -24,8 +24,8 @@ type QueryFilter struct {
 	RunID string
 	// Limit 返回条数上限；0 时实现方使用自身默认值。
 	Limit int
-	// BeforeID 游标分页：只返回 id < BeforeID 的记录；0 表示从最新记录开始。
-	BeforeID int64
+	// Before 游标分页：只返回早于此游标的记录；零值表示从最新记录开始。
+	Before Cursor
 }
 
 // SearchQuery 定义关键字搜索参数。
@@ -44,10 +44,23 @@ type SearchQuery struct {
 }
 
 // Cursor 表示分页游标，由 (Time, ID) 确定唯一位置。
-// 零值（Time.IsZero() && ID == 0）表示无游标，从最新记录开始。
+// Time 是一等公民（Federated 归并排序依赖它）；
+// ID 不透明，由各后端自行编码（sqlite 用 rowid 十进制串，PG 用 bigserial，云用自家 token）。
+// 上层只透传、用 == 比较，不解释 ID 内容。
+// 零值（Time.IsZero() && ID == ""）表示无游标，从最新记录开始。
 type Cursor struct {
 	Time time.Time
-	ID   int64
+	ID   string
+}
+
+// SubscribeOptions 定义实时订阅参数。
+type SubscribeOptions struct {
+	// DeploymentID 按部署过滤；空字符串表示不过滤。
+	DeploymentID string
+	// ReplayLast 是回溯窗口：先推最近 N 条历史再无缝转实时；0 表示纯增量。
+	ReplayLast int
+	// Since 是重连去重锚点。只推 > Since 的条目；零值表示不限。
+	Since Cursor
 }
 
 // LogStream 是 Subscribe 返回的实时日志流。
@@ -59,11 +72,11 @@ type LogStream struct {
 	Cancel func()
 }
 
-// LogBackend 抽象「一个 Deployment 的所有日志能力」。
+// LogReader 抽象「读取一个 Deployment 的日志」。
 //
 // handler 只调此接口，不关心日志实际存在本地 SQLite、
 // 远程 agent，还是分布在多个节点。
-type LogBackend interface {
+type LogReader interface {
 	// Query 按 ID 游标拉取历史日志，结果按 timestamp ASC, id ASC 排序。
 	Query(ctx context.Context, f QueryFilter) (entries []model.LogEntry, next Cursor, err error)
 
@@ -74,4 +87,9 @@ type LogBackend interface {
 	// 实现方在 Cancel 调用后应关闭 LogStream.Ch。
 	// ctx 取消和 Cancel 调用均可停止流；实现方应同时响应两者。
 	Subscribe(ctx context.Context, deploymentID string) LogStream
+}
+
+// LogBackend 抽象「一个 Deployment 的所有日志能力」。
+type LogBackend interface {
+	LogReader
 }

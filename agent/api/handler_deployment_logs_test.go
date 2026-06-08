@@ -95,7 +95,7 @@ func TestDeploymentLogsEndpoint_ScopesQueryToPathDeploymentID(t *testing.T) {
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, depID, backend.queryFilter.DeploymentID)
 	assert.Equal(t, 10, backend.queryFilter.Limit)
-	assert.Equal(t, int64(88), backend.queryFilter.BeforeID)
+	assert.Equal(t, logbackend.Cursor{ID: "88"}, backend.queryFilter.Before)
 }
 
 func TestDeploymentLogsWebSocket_ScopesSubscriptionToPathDeploymentID(t *testing.T) {

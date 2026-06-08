@@ -16,7 +16,8 @@ func TestQueryFilterZeroValue(t *testing.T) {
 	f := logbackend.QueryFilter{}
 	assert.Equal(t, "", f.DeploymentID)
 	assert.Equal(t, 0, f.Limit)
-	assert.Equal(t, int64(0), f.BeforeID)
+	assert.True(t, f.Before.Time.IsZero())
+	assert.Equal(t, "", f.Before.ID)
 }
 
 // TestSearchQueryZeroValue 确认 SearchQuery 零值不引发 panic。
@@ -30,7 +31,7 @@ func TestSearchQueryZeroValue(t *testing.T) {
 func TestCursorZeroValue(t *testing.T) {
 	c := logbackend.Cursor{}
 	assert.True(t, c.Time.IsZero())
-	assert.Equal(t, int64(0), c.ID)
+	assert.Equal(t, "", c.ID)
 }
 
 // TestLogStreamSendAndReceive 确认 LogStream channel 可正常发送/接收。

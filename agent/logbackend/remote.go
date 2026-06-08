@@ -47,8 +47,8 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
-	if f.BeforeID > 0 {
-		q.Set("before", strconv.FormatInt(f.BeforeID, 10))
+	if f.Before.ID != "" {
+		q.Set("before", strconv.FormatInt(decodeSQLiteCursor(f.Before.ID), 10))
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)
@@ -75,7 +75,7 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 	var next Cursor
 	if len(entries) > 0 {
 		last := entries[len(entries)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return entries, next, nil
 }
@@ -90,7 +90,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 	}
 	if !q.Cursor.Time.IsZero() {
 		params.Set("cursor_time", q.Cursor.Time.Format(time.RFC3339Nano))
-		params.Set("cursor_id", strconv.FormatInt(q.Cursor.ID, 10))
+		params.Set("cursor_id", strconv.FormatInt(decodeSQLiteCursor(q.Cursor.ID), 10))
 	}
 	if !q.From.IsZero() {
 		params.Set("from", q.From.Format(time.RFC3339Nano))
@@ -127,7 +127,7 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 	var next Cursor
 	if len(payload.Items) > 0 {
 		last := payload.Items[len(payload.Items)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return payload.Items, next, payload.HasMore, nil
 }

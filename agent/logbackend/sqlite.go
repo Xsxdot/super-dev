@@ -39,11 +39,11 @@ func NewSQLiteBackend(s *store.Store, buf *logbuf.Buffer) *SQLiteBackend {
 	return &SQLiteBackend{store: s, buf: buf}
 }
 
-// Query 按 DeploymentID/RunID/ID 游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。
+// Query 按 DeploymentID/RunID/不透明游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。
 //
 // 参数：
 //   - ctx: 上下文（当前实现未使用，保留以满足接口契约）
-//   - f: 查询过滤参数，BeforeID 为 id < BeforeID 的前翻页游标
+//   - f: 查询过滤参数，Before.ID 会在 SQLite 后端内部解码成 rowid
 //
 // 返回：
 //   - 匹配的日志条目列表
@@ -54,7 +54,7 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 		DeploymentID: f.DeploymentID,
 		RunID:        f.RunID,
 		Limit:        f.Limit,
-		Before:       f.BeforeID,
+		Before:       decodeSQLiteCursor(f.Before.ID),
 	}
 
 	entries, err := b.store.Fetch(params)
@@ -64,7 +64,7 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 	var next Cursor
 	if len(entries) > 0 {
 		last := entries[len(entries)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return entries, next, nil
 }
@@ -97,7 +97,7 @@ func (b *SQLiteBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogE
 		Query:         q.Text,
 		Limit:         q.Limit,
 		CursorTime:    cursorTime,
-		CursorID:      q.Cursor.ID,
+		CursorID:      decodeSQLiteCursor(q.Cursor.ID),
 		From:          from,
 		To:            to,
 	})
@@ -107,7 +107,7 @@ func (b *SQLiteBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogE
 	var next Cursor
 	if len(result.Entries) > 0 {
 		last := result.Entries[len(result.Entries)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return result.Entries, next, result.HasMore, nil
 }

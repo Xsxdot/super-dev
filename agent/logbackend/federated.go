@@ -84,7 +84,7 @@ func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]mod
 	var next Cursor
 	if len(merged) > 0 {
 		last := merged[len(merged)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return merged, next, nil
 }
@@ -146,7 +146,7 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 	var next Cursor
 	if len(all) > 0 {
 		last := all[len(all)-1]
-		next = Cursor{Time: last.Timestamp, ID: last.ID}
+		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return all, next, hasMore, nil
 }

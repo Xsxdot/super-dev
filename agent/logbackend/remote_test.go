@@ -92,7 +92,7 @@ func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "hello", got[0].Message)
-	assert.Equal(t, int64(1), next.ID)
+	assert.Equal(t, "1", next.ID)
 }
 
 func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
