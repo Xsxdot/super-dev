@@ -54,6 +54,7 @@ const manualAdvancedOpen = ref(false)
 const installMode = ref<'generated_command' | 'push_over_ssh'>('generated_command')
 const installResult = ref<AgentInstallCommandResponse | null>(null)
 const chain = ref<TransportEntry[]>([])
+const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
 
 const securityForm = reactive({
@@ -72,10 +73,13 @@ const installForm = reactive({
 const title = computed(() => t('settings.agents.panelTitle', { name: props.agent?.host_name ?? '' }))
 const runtime = computed(() => props.agent ? runtimeFor(props.agent, props.node) : undefined)
 const canProbe = computed(() => runtime.value?.installed === true)
-const currentRows = computed(() => props.agent ? agentRouteRows({ ...props.agent, transport: { chain: chain.value } }, props.node) : [])
 const bindAddress = computed(() => securityForm.listenAddress.trim() || '127.0.0.1')
 const bindPort = computed(() => Number(securityForm.listenPort) || 57017)
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
+const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
+const currentRows = computed(() => props.agent
+  ? agentRouteRows({ ...props.agent, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
+  : [])
 
 const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean; done: boolean }>>(() => [
   { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(props.agent?.config?.listen_port) },
@@ -105,6 +109,14 @@ function cloneChain(agent?: AgentDTO | null): TransportEntry[] {
   return source.map(normalizeEntry)
 }
 
+function chainSignature(entries: TransportEntry[]): string {
+  return JSON.stringify(entries.map(normalizeEntry))
+}
+
+function clearProbeResults() {
+  Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
+}
+
 function reset(agent?: AgentDTO | null) {
   activeTab.value = props.initialTab ?? 'security'
   actionError.value = null
@@ -117,8 +129,10 @@ function reset(agent?: AgentDTO | null) {
   securityForm.tlsMode = mode === 'off' || mode === 'manual' ? mode : 'auto'
   securityForm.serverName = agent?.security?.tls?.server_name ?? ''
   securityForm.caCert = agent?.security?.tls?.ca_cert ?? ''
-  chain.value = cloneChain(agent)
-  Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
+  const nextChain = cloneChain(agent)
+  chain.value = nextChain
+  savedChain.value = nextChain.map(normalizeEntry)
+  clearProbeResults()
 }
 
 function selectTab(tab: AgentPanelTab) {
@@ -216,7 +230,7 @@ function moveEntry(index: number, direction: -1 | 1) {
 }
 
 async function testEntry(index: number) {
-  if (!props.agent) return
+  if (!props.agent || transportDirty.value) return
   actionError.value = null
   try {
     probeResults[index] = await agentsStore.testTransport(props.agent.host_id, index)
@@ -229,9 +243,12 @@ async function saveTransport() {
   if (!props.agent) return
   savingTransport.value = true
   actionError.value = null
-  const payload: AgentTransportUpdatePayload = { transport: { chain: chain.value.map(normalizeEntry) } }
+  const normalizedChain = chain.value.map(normalizeEntry)
+  const payload: AgentTransportUpdatePayload = { transport: { chain: normalizedChain } }
   try {
     await agentsStore.updateAgentTransport(props.agent.host_id, payload)
+    chain.value = normalizedChain.map(normalizeEntry)
+    savedChain.value = normalizedChain.map(normalizeEntry)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -240,10 +257,10 @@ async function saveTransport() {
 }
 
 async function probeAll() {
-  if (!props.agent || !canProbe.value) return
+  if (!props.agent || !canProbe.value || transportDirty.value) return
   probingAll.value = true
   actionError.value = null
-  Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
+  clearProbeResults()
   try {
     for (let index = 0; index < chain.value.length; index += 1) {
       probeResults[index] = await agentsStore.testTransport(props.agent.host_id, index)
@@ -269,6 +286,14 @@ watch(
     if (visible) reset(agent)
   },
   { immediate: true },
+)
+
+watch(
+  chain,
+  () => {
+    if (transportDirty.value) clearProbeResults()
+  },
+  { deep: true },
 )
 </script>
 
@@ -395,6 +420,9 @@ watch(
               <button type="button" class="settings-btn" data-test="transport-add-direct" @click="addEntry('direct')">direct</button>
               <button type="button" class="settings-btn" data-test="transport-add-tunnel" @click="addEntry('tunnel')">tunnel</button>
             </div>
+            <div v-if="transportDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-dirty">
+              {{ t('settings.agents.saveTransportBeforeProbe') }}
+            </div>
             <section v-for="(entry, index) in chain" :key="`${entry.type}-${index}`" class="transport-entry" :data-test="`transport-entry-${index}`">
               <header class="transport-entry-head">
                 <strong>{{ index + 1 }}. {{ entry.type }}</strong>
@@ -416,7 +444,7 @@ watch(
               </div>
 
               <footer class="transport-entry-actions">
-                <button type="button" class="settings-btn" :data-test="`transport-test-${index}`" @click="testEntry(index)">
+                <button type="button" class="settings-btn" :disabled="transportDirty" :data-test="`transport-test-${index}`" @click="testEntry(index)">
                   {{ t('settings.agents.testTransport') }}
                 </button>
                 <span class="probe-result">{{ probeLabel(probeResults[index]) }}</span>
@@ -437,7 +465,10 @@ watch(
               </button>
             </div>
             <template v-else>
-              <button type="button" class="settings-btn settings-btn-primary" :disabled="probingAll" data-test="agent-probe-run" @click="probeAll">
+              <div v-if="transportDirty" class="settings-alert settings-alert-warning" data-test="agent-probe-dirty">
+                {{ t('settings.agents.saveTransportBeforeProbe') }}
+              </div>
+              <button type="button" class="settings-btn settings-btn-primary" :disabled="probingAll || transportDirty" data-test="agent-probe-run" @click="probeAll">
                 {{ probingAll ? t('common.loading') : t('settings.agents.runProbe') }}
               </button>
               <div class="route-detail-list">

@@ -58,6 +58,7 @@ describe('agentStage', () => {
     ['pending install from runtime.installed=false', agent({ installed: false, health: 'unknown', reachable: false }), undefined, 'pending-install'],
     ['version mismatch from runtime health', agent({ health: 'version-mismatch', reachable: false }), undefined, 'version-mismatch'],
     ['auth failure from runtime health', agent({ health: 'auth-failed', reachable: false }), undefined, 'auth-failed'],
+    ['pending bootstrap from runtime health', agent({ health: 'pending-bootstrap', reachable: true }), undefined, 'pending-bootstrap'],
     ['unreachable after installed', agent({ health: 'unreachable', reachable: false }), undefined, 'unreachable'],
     ['healthy without degraded route', agent({ health: 'healthy', reachable: true }), node('healthy', { selected_index: 0, selected_type: 'direct', degraded: false }), 'healthy'],
     ['degraded from route.degraded', agent({ health: 'healthy', reachable: true }), node('healthy', { selected_index: 1, selected_type: 'tunnel', degraded: true }), 'degraded'],
@@ -78,6 +79,7 @@ describe('agentStage', () => {
     expect(agentStageView('pending-install')).toMatchObject({ primaryActionKey: 'settings.agents.install', panelTab: 'install', opensPanel: true })
     expect(agentStageView('version-mismatch')).toMatchObject({ primaryActionKey: 'settings.agents.reinstall', panelTab: 'install', opensPanel: true })
     expect(agentStageView('auth-failed')).toMatchObject({ primaryActionKey: 'settings.agents.provisionSecurity', panelTab: 'security', opensPanel: true })
+    expect(agentStageView('pending-bootstrap')).toMatchObject({ primaryActionKey: 'settings.agents.provisionSecurity', panelTab: 'security', opensPanel: true })
     expect(agentStageView('unreachable')).toMatchObject({ primaryActionKey: 'settings.agents.fixConnection', panelTab: 'transport', opensPanel: true })
     expect(agentStageView('degraded')).toMatchObject({ primaryActionKey: 'settings.agents.fixPrimaryConnection', panelTab: 'transport', opensPanel: true })
     expect(agentStageView('healthy')).toMatchObject({ primaryActionKey: 'settings.agents.recheck', panelTab: null, opensPanel: false })

@@ -149,11 +149,11 @@ describe('AgentConfigPanel', () => {
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    await wrapper.find('[data-test="transport-move-down-0"]').trigger('click')
     await wrapper.find('[data-test="transport-test-0"]').trigger('click')
     expect(store.testTransport).toHaveBeenCalledWith('h1', 0)
     expect(wrapper.text()).toContain('reachable')
 
+    await wrapper.find('[data-test="transport-move-down-0"]').trigger('click')
     await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
     expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {
       transport: {
@@ -163,6 +163,54 @@ describe('AgentConfigPanel', () => {
         ],
       },
     })
+  })
+
+  it('locks transport probes while local chain edits are unsaved', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'testTransport').mockResolvedValue({
+      index: 0,
+      transport_type: 'direct',
+      status: 'reachable',
+      reachable: true,
+      checked_at: '2026-06-07T10:00:00Z',
+    })
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, agent: agent(), initialTab: 'transport' },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('[data-test="transport-move-down-0"]').trigger('click')
+
+    expect(wrapper.find('[data-test="agent-transport-dirty"]').text()).toContain('保存连接链后再测试')
+    expect(wrapper.find('[data-test="transport-test-0"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="transport-test-0"]').trigger('click')
+    expect(store.testTransport).not.toHaveBeenCalled()
+  })
+
+  it('clears saved-route and probe-result labels when chain edits are unsaved', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'testTransport').mockResolvedValue({
+      index: 0,
+      transport_type: 'direct',
+      status: 'reachable',
+      reachable: true,
+      latency_ms: 7,
+      checked_at: '2026-06-07T10:00:00Z',
+    })
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, agent: agent(), node: node(), initialTab: 'transport' },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('[data-test="transport-test-0"]').trigger('click')
+    expect(wrapper.find('[data-test="transport-entry-0"] .probe-result').text()).toContain('reachable')
+
+    await wrapper.find('[data-test="transport-move-down-0"]').trigger('click')
+    expect(wrapper.find('[data-test="transport-entry-0"] .probe-result').text()).toContain('未测')
+
+    await wrapper.find('[data-test="agent-panel-tab-probe"]').trigger('click')
+    expect(wrapper.find('[data-test="agent-probe-dirty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="agent-probe-result-1"]').text()).toContain('未测')
   })
 
   it('locks probe tab until agent is installed', async () => {

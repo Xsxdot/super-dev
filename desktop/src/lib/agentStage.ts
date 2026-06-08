@@ -19,6 +19,7 @@ export type AgentStage =
   | 'version-mismatch'
   | 'healthy'
   | 'auth-failed'
+  | 'pending-bootstrap'
 
 export type AgentPanelTab = 'security' | 'install' | 'transport' | 'probe'
 
@@ -48,6 +49,9 @@ export function agentStage(agent: AgentDTO, node?: NodeStatus): AgentStage {
   }
   if (runtime.health === 'auth-failed') {
     return 'auth-failed'
+  }
+  if (runtime.health === 'pending-bootstrap') {
+    return 'pending-bootstrap'
   }
   if (runtime.health === 'unreachable') {
     return 'unreachable'
@@ -88,6 +92,16 @@ export function agentStageView(stage: AgentStage): AgentStageView {
       return {
         stage,
         labelKey: 'settings.agents.stageAuthFailed',
+        primaryActionKey: 'settings.agents.provisionSecurity',
+        panelTab: 'security',
+        tone: 'warning',
+        primary: true,
+        opensPanel: true,
+      }
+    case 'pending-bootstrap':
+      return {
+        stage,
+        labelKey: 'settings.agents.stagePendingBootstrap',
         primaryActionKey: 'settings.agents.provisionSecurity',
         panelTab: 'security',
         tone: 'warning',
