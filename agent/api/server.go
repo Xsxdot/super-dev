@@ -81,12 +81,14 @@ type AppConfig struct {
 	TLSKeyFile string
 }
 
-// HostAgentInstaller 安装或重装远端 SuperDev agent。
+// HostAgentInstaller 安装、重启或原地更新远端 SuperDev agent。
 type HostAgentInstaller interface {
 	// Install 使用 Host SSH 凭据和 Agent 服务参数执行安装。
 	Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error)
 	// Restart 使用 Host SSH 凭据重启远端 Agent 服务。
 	Restart(ctx context.Context, host model.Host) (installer.RestartResult, error)
+	// UpdateBinary 使用 Host SSH 凭据原地替换远端 Agent 二进制并重启服务。
+	UpdateBinary(ctx context.Context, host model.Host) (installer.UpdateResult, error)
 }
 
 type productionHostAgentInstaller struct {
@@ -108,6 +110,10 @@ func (p productionHostAgentInstaller) Install(ctx context.Context, host model.Ho
 
 func (p productionHostAgentInstaller) Restart(ctx context.Context, host model.Host) (installer.RestartResult, error) {
 	return p.installer.Restart(ctx, host)
+}
+
+func (p productionHostAgentInstaller) UpdateBinary(ctx context.Context, host model.Host) (installer.UpdateResult, error) {
+	return p.installer.UpdateBinary(ctx, host)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -532,8 +538,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/agents/{host_id}/config", a.updateAgentConfig)
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
+	mux.HandleFunc("GET /api/agents/update-target", a.getAgentUpdateTarget)
 	mux.HandleFunc("POST /api/agents/{host_id}/install", a.installAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/restart", a.restartAgent)
+	mux.HandleFunc("POST /api/agents/{host_id}/update-binary", a.updateAgentBinary)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
 	mux.HandleFunc("GET /api/agents/install.sh", a.serveAgentInstallScript)
 	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)

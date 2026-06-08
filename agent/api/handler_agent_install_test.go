@@ -19,14 +19,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 type fakeAgentInstaller struct {
 	host         model.Host
 	restartHost  model.Host
+	updateHost   model.Host
 	opts         installer.ServiceOptions
 	calls        int
 	restartCalls int
+	updateCalls  int
 }
 
 func (f *fakeAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
@@ -40,6 +43,12 @@ func (f *fakeAgentInstaller) Restart(ctx context.Context, host model.Host) (inst
 	f.restartCalls++
 	f.restartHost = host
 	return installer.RestartResult{OK: true, HostID: host.ID, Platform: "linux", Message: "restarted"}, nil
+}
+
+func (f *fakeAgentInstaller) UpdateBinary(ctx context.Context, host model.Host) (installer.UpdateResult, error) {
+	f.updateCalls++
+	f.updateHost = host
+	return installer.UpdateResult{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "Agent binary updated and service restarted"}, nil
 }
 
 func createInstallTestHost(t *testing.T, app *App) string {
@@ -170,4 +179,88 @@ func TestRestartAgentUsesHostSSHCredentials(t *testing.T) {
 	assert.Equal(t, 1, fake.restartCalls)
 	assert.Equal(t, hostID, fake.restartHost.ID)
 	assert.Equal(t, "10.0.0.8", fake.restartHost.SSHHost)
+}
+
+func TestAgentUpdateTargetReturnsBundledVersionAndConcurrency(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: &fakeAgentInstaller{}})
+	require.NoError(t, err)
+	defer app.Close()
+
+	resp := httptestDo(t, app, http.MethodGet, "/api/agents/update-target", nil)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"version":"0.1.0"`)
+	assert.Contains(t, resp.Body.String(), `"source":"bundled"`)
+	assert.Contains(t, resp.Body.String(), `"concurrency_default":3`)
+}
+
+func TestUpdateAgentBinaryUsesHostSSHAndPreservesSecurity(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"0.0.0.0","listen_port":57019},
+	  "security":{"token_configured":true,"provision_state":"provisioned","tls":{"mode":"auto","ca_cert":"PEM"}}
+	`)
+	app.nodeRegistry.ApplyForTest([]nodetransport.NodeStatus{{
+		HostID:    hostID,
+		Name:      "ali-01",
+		Reachable: true,
+		Agent: model.AgentRuntime{
+			Installed: true,
+			Health:    model.AgentHealthHealthy,
+			Reachable: true,
+		},
+	}})
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/update-binary", bytes.NewBufferString(`{}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"ok":true`)
+	assert.Contains(t, resp.Body.String(), `"version":"0.1.0"`)
+	assert.Contains(t, resp.Body.String(), `"updated_at":`)
+	assert.Equal(t, 1, fake.updateCalls)
+	assert.Equal(t, hostID, fake.updateHost.ID)
+	assert.Equal(t, "10.0.0.8", fake.updateHost.SSHHost)
+	assert.Equal(t, 0, fake.calls)
+
+	saved, found, err := app.agentStore.AgentByHostID(hostID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, model.AgentProvisionStateProvisioned, saved.Security.ProvisionState)
+	assert.True(t, saved.Security.TokenConfigured)
+	assert.Equal(t, model.AgentTLSModeAuto, saved.Security.TLS.Mode)
+	assert.Equal(t, "PEM", saved.Security.TLS.CACert)
+}
+
+func TestUpdateAgentBinaryRejectsUninstalledAgent(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57017}}]},
+	  "config":{"listen_port":57017},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	app.nodeRegistry.ApplyForTest([]nodetransport.NodeStatus{{
+		HostID:    hostID,
+		Name:      "ali-01",
+		Reachable: false,
+		Agent: model.AgentRuntime{
+			Installed: false,
+			Health:    model.AgentHealthUnknown,
+			Reachable: false,
+		},
+	}})
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/update-binary", bytes.NewBufferString(`{}`))
+
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "agent is not installed")
+	assert.Equal(t, 0, fake.updateCalls)
 }

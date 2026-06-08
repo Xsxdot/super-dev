@@ -30,6 +30,21 @@ type agentInstallRequest struct {
 	Method string `json:"method"`
 }
 
+type agentUpdateTargetResponse struct {
+	Version            string `json:"version"`
+	Source             string `json:"source"`
+	ConcurrencyDefault int    `json:"concurrency_default"`
+}
+
+type agentUpdateBinaryResponse struct {
+	OK        bool   `json:"ok"`
+	HostID    string `json:"host_id"`
+	Platform  string `json:"platform"`
+	Version   string `json:"version"`
+	Message   string `json:"message"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 // installAgent 处理 POST /api/agents/{host_id}/install。
 func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
@@ -116,6 +131,54 @@ func (a *App) restartAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, result)
+}
+
+// getAgentUpdateTarget 处理 GET /api/agents/update-target。
+func (a *App) getAgentUpdateTarget(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, agentUpdateTargetResponse{
+		Version:            agentAPIVersion,
+		Source:             "bundled",
+		ConcurrencyDefault: 3,
+	})
+}
+
+// updateAgentBinary 处理 POST /api/agents/{host_id}/update-binary。
+func (a *App) updateAgentBinary(w http.ResponseWriter, r *http.Request) {
+	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	if !toAgentDTO(host, agent, a.nodeSnapshotOf(host.ID)).Runtime.Installed {
+		jsonError(w, http.StatusBadRequest, "agent is not installed")
+		return
+	}
+
+	result, err := a.hostAgentInstaller.UpdateBinary(r.Context(), host)
+	if err != nil {
+		var installErr *installer.InstallError
+		if errors.As(err, &installErr) {
+			jsonWrite(w, http.StatusBadGateway, map[string]string{
+				"error": installErr.Error(),
+				"stage": installErr.Stage,
+			})
+			return
+		}
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	jsonOK(w, agentUpdateBinaryResponse{
+		OK:        result.OK,
+		HostID:    result.HostID,
+		Platform:  result.Platform,
+		Version:   agentAPIVersion,
+		Message:   result.Message,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func agentServiceOptionsFromSession(session agentInstallSession) installer.ServiceOptions {
