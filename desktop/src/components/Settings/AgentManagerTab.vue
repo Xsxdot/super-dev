@@ -14,7 +14,7 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AgentCreatePayload, AgentDTO, AgentHealth, AgentRuntime } from '@/api/agent'
+import type { AgentDTO, AgentHealth, AgentRuntime } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
@@ -22,7 +22,6 @@ import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
 import { agentStage, agentStageView, runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
 import { agentRouteRows, agentRouteSummary, type AgentRouteRowStatus } from '@/lib/agentRoute'
-import AgentCreateModal from './AgentCreateModal.vue'
 import AgentConfigPanel from './AgentConfigPanel.vue'
 
 const agentsStore = useAgentsStore()
@@ -30,9 +29,9 @@ const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
 const { t } = useI18n()
 
-const createVisible = ref(false)
 const panelTarget = ref<AgentDTO | null>(null)
 const panelInitialTab = ref<AgentPanelTab>('security')
+const panelMode = ref<'edit' | 'create'>('edit')
 const expandedRoutes = ref<Set<string>>(new Set())
 const openMenuHostId = ref<string | null>(null)
 const menuPosition = ref({ top: 0, left: 0 })
@@ -113,7 +112,25 @@ function healthLabelKey(health: AgentHealth) {
 function openPanel(agent: AgentDTO, tab: AgentPanelTab) {
   panelTarget.value = agent
   panelInitialTab.value = tab
+  panelMode.value = 'edit'
   openMenuHostId.value = null
+}
+
+function openCreatePanel() {
+  panelTarget.value = null
+  panelInitialTab.value = 'security'
+  panelMode.value = 'create'
+}
+
+function closePanel() {
+  panelTarget.value = null
+  panelMode.value = 'edit'
+}
+
+function agentCreated(agent: AgentDTO) {
+  panelTarget.value = agent
+  panelInitialTab.value = 'install'
+  panelMode.value = 'edit'
 }
 
 function toggleRoute(hostId: string) {
@@ -184,15 +201,6 @@ function updatedLabel(agent: AgentDTO): string {
   ) || '-'
 }
 
-async function createAgent(payload: AgentCreatePayload) {
-  try {
-    await agentsStore.createAgent(payload)
-    createVisible.value = false
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('settings.agents.saveFailed')
-  }
-}
-
 async function refresh() {
   await Promise.all([remoteStore.loadHosts(), agentsStore.loadAgents()])
 }
@@ -247,7 +255,7 @@ async function removeAgent(agent: AgentDTO) {
         <h1 class="settings-pane-title">{{ t('settings.agents.title') }}</h1>
       </div>
       <div class="settings-toolbar">
-        <button class="settings-btn settings-btn-primary" type="button" data-test="agent-create" :disabled="availableHosts.length === 0" @click="createVisible = true">
+        <button class="settings-btn settings-btn-primary" type="button" data-test="agent-create" :disabled="availableHosts.length === 0" @click="openCreatePanel">
           + {{ t('settings.agents.create') }}
         </button>
         <button class="settings-btn settings-btn-secondary" type="button" :disabled="agentsStore.loading" @click="refresh">
@@ -351,18 +359,15 @@ async function removeAgent(agent: AgentDTO) {
     </div>
     <div v-else class="settings-empty">{{ t('settings.agents.empty') }}</div>
 
-    <AgentCreateModal
-      :visible="createVisible"
-      :hosts="availableHosts"
-      @submit="createAgent"
-      @cancel="createVisible = false"
-    />
     <AgentConfigPanel
-      :visible="Boolean(panelTarget)"
+      :visible="panelMode === 'create' || Boolean(panelTarget)"
       :agent="panelTarget"
       :node="panelTarget ? nodeOf(panelTarget) : undefined"
       :initial-tab="panelInitialTab"
-      @cancel="panelTarget = null"
+      :mode="panelMode"
+      :hosts="availableHosts"
+      @created="agentCreated"
+      @cancel="closePanel"
     />
   </section>
 </template>

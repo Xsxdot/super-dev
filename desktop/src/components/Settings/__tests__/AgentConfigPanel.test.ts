@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentConfigPanel from '../AgentConfigPanel.vue'
 import { useAgentsStore } from '@/stores/agents'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { AgentDTO, NodeStatus } from '@/api/agent'
+import type { AgentDTO, Host, NodeStatus } from '@/api/agent'
 
 function agent(overrides: Partial<AgentDTO> = {}): AgentDTO {
   return {
@@ -56,12 +56,46 @@ function node(): NodeStatus {
   }
 }
 
+const hosts: Host[] = [
+  {
+    id: 'h1',
+    name: 'ali-01',
+    tags: ['prod'],
+  },
+]
+
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.restoreAllMocks()
 })
 
 describe('AgentConfigPanel', () => {
+  it('creates a new Agent from the unified security tab before moving to install', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'createAgent').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, mode: 'create', hosts, initialTab: 'security' },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.find('[data-test="agent-create-host"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
+    await wrapper.find('[data-test="agent-listen-address"]').setValue('0.0.0.0')
+    await wrapper.find('[data-test="agent-security-save"]').trigger('click')
+
+    expect(store.createAgent).toHaveBeenCalledWith({
+      host_id: 'h1',
+      transport: { chain: [{ type: 'direct', direct: { address: '' } }] },
+      config: { listen_address: '0.0.0.0', listen_port: 57017 },
+      security: {
+        token_configured: false,
+        provision_state: 'pending-bootstrap',
+        tls: { mode: 'auto' },
+      },
+    })
+    expect(wrapper.emitted('created')?.[0]?.[0]).toMatchObject({ host_id: 'h1' })
+  })
+
   it('opens on the requested default tab', () => {
     const wrapper = mount(AgentConfigPanel, {
       props: { visible: true, agent: agent(), initialTab: 'install' },

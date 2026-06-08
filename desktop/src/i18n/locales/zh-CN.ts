@@ -386,6 +386,8 @@ export default {
       probeUntested: '未测',
       createTitle: '新增 Agent',
       createHost: '主机',
+      createAndContinue: '创建并继续',
+      createBeforeNextStep: '先保存监听与 TLS 创建 Agent，再继续后续步骤。',
       next: '下一步',
       previous: '上一步',
     },

@@ -19,10 +19,12 @@ import { agentRouteRows } from '@/lib/agentRoute'
 import { runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
 import type {
   AgentConfigUpdatePayload,
+  AgentCreatePayload,
   AgentDTO,
   AgentInstallCommandResponse,
   AgentTLSMode,
   AgentTransportUpdatePayload,
+  Host,
   NodeStatus,
   ProbeResult,
   TransportEntry,
@@ -34,10 +36,13 @@ const props = defineProps<{
   agent?: AgentDTO | null
   node?: NodeStatus
   initialTab?: AgentPanelTab
+  mode?: 'edit' | 'create'
+  hosts?: Host[]
 }>()
 
 const emit = defineEmits<{
   cancel: []
+  created: [agent: AgentDTO]
 }>()
 
 const { t } = useAppI18n()
@@ -46,6 +51,7 @@ const agentsStore = useAgentsStore()
 const activeTab = ref<AgentPanelTab>('security')
 const actionError = ref<string | null>(null)
 const savingSecurity = ref(false)
+const creatingAgent = ref(false)
 const provisioning = ref(false)
 const savingTransport = ref(false)
 const generatingInstall = ref(false)
@@ -56,6 +62,7 @@ const installResult = ref<AgentInstallCommandResponse | null>(null)
 const chain = ref<TransportEntry[]>([])
 const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
+const hostID = ref('')
 
 const securityForm = reactive({
   listenAddress: '',
@@ -70,21 +77,39 @@ const installForm = reactive({
   tokenTTLMinutes: 30,
 })
 
-const title = computed(() => t('settings.agents.panelTitle', { name: props.agent?.host_name ?? '' }))
+const isCreateMode = computed(() => props.mode === 'create')
+const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
+const panelAgent = computed<AgentDTO | null>(() => {
+  if (props.agent) return props.agent
+  if (!isCreateMode.value || !selectedHost.value) return null
+  return {
+    host_id: selectedHost.value.id,
+    host_name: selectedHost.value.name,
+    tags: selectedHost.value.tags,
+    transport: { chain: chain.value },
+    config: { listen_address: securityForm.listenAddress, listen_port: bindPort.value },
+    runtime: { installed: false, health: 'unknown', reachable: false },
+    security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: securityForm.tlsMode } },
+  }
+})
+const title = computed(() => isCreateMode.value && !props.agent
+  ? t('settings.agents.createTitle')
+  : t('settings.agents.panelTitle', { name: panelAgent.value?.host_name ?? '' }))
 const runtime = computed(() => props.agent ? runtimeFor(props.agent, props.node) : undefined)
 const canProbe = computed(() => runtime.value?.installed === true)
 const bindAddress = computed(() => securityForm.listenAddress.trim() || '127.0.0.1')
 const bindPort = computed(() => Number(securityForm.listenPort) || 57017)
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
-const currentRows = computed(() => props.agent
-  ? agentRouteRows({ ...props.agent, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
+const currentRows = computed(() => panelAgent.value
+  ? agentRouteRows({ ...panelAgent.value, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
   : [])
+const needsCreateBeforeNextStep = computed(() => isCreateMode.value && !props.agent)
 
 const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean; done: boolean }>>(() => [
   { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(props.agent?.config?.listen_port) },
-  { key: 'install', label: t('settings.agents.tabInstall'), locked: false, done: runtime.value?.installed === true },
-  { key: 'transport', label: t('settings.agents.tabTransport'), locked: false, done: chain.value.length > 0 },
+  { key: 'install', label: t('settings.agents.tabInstall'), locked: needsCreateBeforeNextStep.value, done: runtime.value?.installed === true },
+  { key: 'transport', label: t('settings.agents.tabTransport'), locked: needsCreateBeforeNextStep.value, done: chain.value.length > 0 },
   { key: 'probe', label: t('settings.agents.tabProbe'), locked: !canProbe.value, done: runtime.value?.health === 'healthy' },
 ])
 
@@ -123,6 +148,7 @@ function reset(agent?: AgentDTO | null) {
   manualAdvancedOpen.value = false
   installMode.value = 'generated_command'
   installResult.value = null
+  hostID.value = agent?.host_id ?? props.hosts?.[0]?.id ?? ''
   securityForm.listenAddress = agent?.config?.listen_address ?? ''
   securityForm.listenPort = agent?.config?.listen_port || 57017
   const mode = agent?.security?.tls?.mode
@@ -141,11 +167,7 @@ function selectTab(tab: AgentPanelTab) {
 }
 
 function securityPayload(): AgentConfigUpdatePayload {
-  const tls: AgentConfigUpdatePayload['security']['tls'] = { mode: securityForm.tlsMode }
-  if (securityForm.tlsMode === 'manual') {
-    if (securityForm.serverName.trim()) tls.server_name = securityForm.serverName.trim()
-    if (securityForm.caCert.trim()) tls.ca_cert = securityForm.caCert
-  }
+  const tls = tlsPayload()
   return {
     config: {
       listen_address: securityForm.listenAddress.trim(),
@@ -159,7 +181,46 @@ function securityPayload(): AgentConfigUpdatePayload {
   }
 }
 
+function tlsPayload(): AgentConfigUpdatePayload['security']['tls'] {
+  const tls: AgentConfigUpdatePayload['security']['tls'] = { mode: securityForm.tlsMode }
+  if (securityForm.tlsMode === 'manual') {
+    if (securityForm.serverName.trim()) tls.server_name = securityForm.serverName.trim()
+    if (securityForm.caCert.trim()) tls.ca_cert = securityForm.caCert
+  }
+  return tls
+}
+
+function createPayload(): AgentCreatePayload {
+  return {
+    host_id: hostID.value,
+    transport: { chain: chain.value.map(normalizeEntry) },
+    config: {
+      listen_address: securityForm.listenAddress.trim(),
+      listen_port: bindPort.value,
+    },
+    security: {
+      token_configured: false,
+      provision_state: 'pending-bootstrap',
+      tls: tlsPayload(),
+    },
+  }
+}
+
 async function saveSecurity() {
+  if (needsCreateBeforeNextStep.value) {
+    if (!hostID.value) return
+    creatingAgent.value = true
+    actionError.value = null
+    try {
+      const created = await agentsStore.createAgent(createPayload())
+      emit('created', created)
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+    } finally {
+      creatingAgent.value = false
+    }
+    return
+  }
   if (!props.agent) return
   savingSecurity.value = true
   actionError.value = null
@@ -298,7 +359,7 @@ watch(
 </script>
 
 <template>
-  <div v-if="visible && agent" class="settings-modal-backdrop" @click.self="emit('cancel')">
+  <div v-if="visible && (agent || isCreateMode)" class="settings-modal-backdrop" @click.self="emit('cancel')">
     <section class="settings-modal settings-modal-wide agent-config-panel" data-test="agent-panel">
       <header class="settings-modal-header">
         <h2 class="settings-modal-title">{{ title }}</h2>
@@ -325,6 +386,12 @@ watch(
           <div v-if="actionError" class="settings-alert settings-alert-danger">{{ actionError }}</div>
 
           <section v-if="activeTab === 'security'" class="panel-step">
+            <div v-if="needsCreateBeforeNextStep" class="settings-field">
+              <label class="settings-field-label">{{ t('settings.agents.createHost') }}</label>
+              <select v-model="hostID" class="settings-select" data-test="agent-create-host">
+                <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
+              </select>
+            </div>
             <div class="row">
               <div class="settings-field flex">
                 <label class="settings-field-label">{{ t('settings.agents.bindAddress') }}</label>
@@ -367,21 +434,25 @@ watch(
               </div>
             </div>
 
-            <div class="security-status">
+            <div v-if="agent" class="security-status">
               <span>{{ t('settings.agents.provisionState') }}: {{ agent.security.provision_state }}</span>
               <span>{{ t('settings.agents.tokenConfigured') }}: {{ agent.security.token_configured ? t('common.yes') : t('common.no') }}</span>
             </div>
             <footer class="step-actions">
-              <button type="button" class="settings-btn settings-btn-secondary" :disabled="provisioning" data-test="agent-provision-security" @click="provisionSecurity">
+              <button v-if="agent" type="button" class="settings-btn settings-btn-secondary" :disabled="provisioning" data-test="agent-provision-security" @click="provisionSecurity">
                 {{ provisioning ? t('common.loading') : t('settings.agents.provisionSecurity') }}
               </button>
-              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingSecurity" data-test="agent-security-save" @click="saveSecurity">
-                {{ savingSecurity ? t('common.loading') : t('common.save') }}
+              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingSecurity || creatingAgent || (needsCreateBeforeNextStep && !hostID)" data-test="agent-security-save" @click="saveSecurity">
+                {{ savingSecurity || creatingAgent ? t('common.loading') : t(needsCreateBeforeNextStep ? 'settings.agents.createAndContinue' : 'common.save') }}
               </button>
             </footer>
           </section>
 
           <section v-if="activeTab === 'install'" class="panel-step">
+            <div v-if="needsCreateBeforeNextStep" class="settings-alert settings-alert-warning" data-test="agent-create-before-install">
+              {{ t('settings.agents.createBeforeNextStep') }}
+            </div>
+            <template v-else>
             <div class="settings-field">
               <label class="settings-field-label">{{ t('settings.agents.installMethod') }}</label>
               <div class="segmented">
@@ -413,9 +484,14 @@ watch(
             </template>
 
             <p v-else class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
+            </template>
           </section>
 
           <section v-if="activeTab === 'transport'" class="panel-step">
+            <div v-if="needsCreateBeforeNextStep" class="settings-alert settings-alert-warning" data-test="agent-create-before-transport">
+              {{ t('settings.agents.createBeforeNextStep') }}
+            </div>
+            <template v-else>
             <div class="chain-toolbar">
               <button type="button" class="settings-btn" data-test="transport-add-direct" @click="addEntry('direct')">direct</button>
               <button type="button" class="settings-btn" data-test="transport-add-tunnel" @click="addEntry('tunnel')">tunnel</button>
@@ -455,6 +531,7 @@ watch(
                 {{ savingTransport ? t('common.loading') : t('common.save') }}
               </button>
             </footer>
+            </template>
           </section>
 
           <section v-if="activeTab === 'probe'" class="panel-step">

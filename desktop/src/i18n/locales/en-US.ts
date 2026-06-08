@@ -386,6 +386,8 @@ export default {
       probeUntested: 'Untested',
       createTitle: 'New Agent',
       createHost: 'Host',
+      createAndContinue: 'Create and continue',
+      createBeforeNextStep: 'Save Listener & TLS to create the Agent before continuing.',
       next: 'Next',
       previous: 'Back',
     },

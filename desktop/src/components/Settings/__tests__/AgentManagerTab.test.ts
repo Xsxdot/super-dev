@@ -18,7 +18,7 @@ import { useAgentsStore } from '@/stores/agents'
 import { useNodeStore } from '@/stores/node'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { AgentDTO, NodeStatus } from '@/api/agent'
+import type { AgentDTO, Host, NodeStatus } from '@/api/agent'
 
 const mountedWrappers: Array<{ unmount: () => void }> = []
 
@@ -53,12 +53,21 @@ function node(route?: NodeStatus['route']): NodeStatus {
   }
 }
 
-async function mountPage(items: AgentDTO[], nodes: NodeStatus[] = []) {
+const hosts: Host[] = [
+  {
+    id: 'h2',
+    name: 'us-02',
+    tags: [],
+  },
+]
+
+async function mountPage(items: AgentDTO[], nodes: NodeStatus[] = [], hostItems: Host[] = hosts) {
   const agents = useAgentsStore()
   vi.spyOn(agents, 'loadAgents').mockResolvedValue(undefined)
   agents.agents = items
   const remote = useRemoteStore()
   vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+  remote.hosts = hostItems
   const nodeStore = useNodeStore()
   vi.spyOn(nodeStore, 'start').mockResolvedValue(undefined)
   nodeStore.applySnapshot(nodes)
@@ -90,6 +99,26 @@ afterEach(() => {
 })
 
 describe('AgentManagerTab', () => {
+  it('opens the unified AgentConfigPanel for new Agent creation and continues to install', async () => {
+    const { wrapper, agents } = await mountPage([])
+    vi.spyOn(agents, 'createAgent').mockResolvedValue(agent({ host_id: 'h2', host_name: 'us-02', tags: [] }))
+
+    await wrapper.find('[data-test="agent-create"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="agent-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="agent-create-host"]').exists()).toBe(true)
+    expect(wrapper.find('.agent-create-modal').exists()).toBe(false)
+
+    await wrapper.find('[data-test="agent-security-save"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(agents.createAgent).toHaveBeenCalled()
+    expect(wrapper.find('[data-test="agent-panel-tab-install"]').classes()).toContain('active')
+  })
+
   it('renders degraded route summary from nodeStore and expandable chain details', async () => {
     const { wrapper } = await mountPage([agent({
       runtime: { installed: true, health: 'healthy', reachable: true },
