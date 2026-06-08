@@ -6,7 +6,7 @@
 //   - 将 installer 的分阶段错误转换成 HTTP 响应
 //
 // 边界：
-//   - 不生成自助安装命令，该能力由 agent_install_command.go 负责
+//   - 不生成用户可复制的自助安装命令，该能力由 agent_install_command.go 负责
 //   - 不直接执行 SSH 命令，全部委托 installer
 //   - 不修改 Host 身份字段
 package api
@@ -16,15 +16,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
 const (
-	agentInstallMethodPushOverSSH    = "push_over_ssh"
-	directInstallAuthRequiredMessage = "direct connection chain requires agent to listen on 0.0.0.0; complete security bootstrap token before installing"
+	agentInstallMethodPushOverSSH = "push_over_ssh"
 )
 
 type agentInstallRequest struct {
@@ -56,11 +55,21 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts, err := agentServiceOptions(agent, a.cfg.BootstrapToken)
+	sessionReq, err := prepareAgentInstallSessionRequest(agent, agentInstallCommandRequest{
+		TransportType:   firstAgentTransportType(agent),
+		TokenTTLMinutes: defaultAgentInstallTokenTTLMinutes,
+	})
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !agentHasTransport(agent, sessionReq.TransportType) {
+		jsonError(w, http.StatusBadRequest, "transport_type is not configured for agent")
+		return
+	}
+	session := newAgentInstallSession(host.ID, sessionReq, time.Now().UTC())
+	a.rememberAgentInstallToken(session.Token)
+	opts := agentServiceOptionsFromSession(session)
 	result, err := a.hostAgentInstaller.Install(r.Context(), host, opts)
 	if err != nil {
 		var installErr *installer.InstallError
@@ -77,21 +86,19 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
-func agentServiceOptions(agent model.Agent, bootstrapToken string) (installer.ServiceOptions, error) {
-	model.ApplyAgentDefaults(&agent)
-	bindAddress := agent.ResolveBindAddress()
-	token := strings.TrimSpace(bootstrapToken)
-	if bindAddress == model.PublicBindAddress && token == "" {
-		return installer.ServiceOptions{}, errors.New(directInstallAuthRequiredMessage)
-	}
-	port := agent.Config.ListenPort
-	if port <= 0 {
-		port = defaultAgentInstallPort
-	}
+func agentServiceOptionsFromSession(session agentInstallSession) installer.ServiceOptions {
 	return installer.ServiceOptions{
-		BindAddress:    bindAddress,
-		Port:           port,
-		RequireAuth:    token != "",
-		BootstrapToken: token,
-	}, nil
+		BindAddress:    session.Token.BindAddress,
+		Port:           session.Token.RemoteAgentPort,
+		RequireAuth:    session.Token.BootstrapToken != "",
+		BootstrapToken: session.Token.BootstrapToken,
+	}
+}
+
+func firstAgentTransportType(agent model.Agent) model.TransportType {
+	model.ApplyAgentDefaults(&agent)
+	if len(agent.Transport.Chain) == 0 {
+		return model.TransportTypeTunnel
+	}
+	return agent.Transport.Chain[0].Type
 }

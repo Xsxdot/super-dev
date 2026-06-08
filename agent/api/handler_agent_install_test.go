@@ -77,11 +77,17 @@ func TestInstallAgentPushesOverSSHWithLoopbackBindForTunnelOnlyChain(t *testing.
 	assert.Equal(t, "10.0.0.8", fake.host.SSHHost)
 	assert.Equal(t, model.LoopbackBindAddress, fake.opts.BindAddress)
 	assert.Equal(t, 57019, fake.opts.Port)
-	assert.False(t, fake.opts.RequireAuth)
-	assert.Empty(t, fake.opts.BootstrapToken)
+	assert.True(t, fake.opts.RequireAuth)
+	assert.NotEmpty(t, fake.opts.BootstrapToken)
+	record, found := app.latestInstallTokenForHost(hostID)
+	require.True(t, found)
+	assert.Equal(t, fake.opts.BootstrapToken, record.BootstrapToken)
+	assert.Equal(t, model.TransportTypeTunnel, record.TransportType)
+	assert.Equal(t, model.LoopbackBindAddress, record.BindAddress)
+	assert.Equal(t, 57019, record.RemoteAgentPort)
 }
 
-func TestInstallAgentPushesOverSSHWithPublicBindForDirectChainAndBootstrapToken(t *testing.T) {
+func TestInstallAgentPushesOverSSHWithPublicBindForDirectChainAndSessionToken(t *testing.T) {
 	fake := &fakeAgentInstaller{}
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
 	require.NoError(t, err)
@@ -95,7 +101,6 @@ func TestInstallAgentPushesOverSSHWithPublicBindForDirectChainAndBootstrapToken(
 	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
 	  "security":{"tls":{"mode":"auto"}}
 	`)
-	app.cfg.BootstrapToken = "bootstrap-token"
 
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
 
@@ -104,24 +109,11 @@ func TestInstallAgentPushesOverSSHWithPublicBindForDirectChainAndBootstrapToken(
 	assert.Equal(t, model.PublicBindAddress, fake.opts.BindAddress)
 	assert.Equal(t, 57019, fake.opts.Port)
 	assert.True(t, fake.opts.RequireAuth)
-	assert.Equal(t, "bootstrap-token", fake.opts.BootstrapToken)
-}
-
-func TestInstallAgentPushOverSSHRejectsDirectChainWithoutBootstrapToken(t *testing.T) {
-	fake := &fakeAgentInstaller{}
-	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
-	require.NoError(t, err)
-	defer app.Close()
-	hostID := createInstallTestHost(t, app)
-	postInstallTestAgent(t, app, hostID, `
-	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
-	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
-	  "security":{"tls":{"mode":"auto"}}
-	`)
-
-	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
-
-	require.Equal(t, http.StatusBadRequest, resp.Code)
-	assert.Contains(t, resp.Body.String(), "direct connection chain requires agent to listen on 0.0.0.0")
-	assert.Equal(t, 0, fake.calls)
+	assert.NotEmpty(t, fake.opts.BootstrapToken)
+	record, found := app.latestInstallTokenForHost(hostID)
+	require.True(t, found)
+	assert.Equal(t, fake.opts.BootstrapToken, record.BootstrapToken)
+	assert.Equal(t, model.TransportTypeDirect, record.TransportType)
+	assert.Equal(t, model.PublicBindAddress, record.BindAddress)
+	assert.Equal(t, 57019, record.RemoteAgentPort)
 }
