@@ -12,13 +12,15 @@
  */
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentManagerTab from '@/components/Settings/AgentManagerTab.vue'
 import { useAgentsStore } from '@/stores/agents'
 import { useNodeStore } from '@/stores/node'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { AgentDTO, NodeStatus } from '@/api/agent'
+
+const mountedWrappers: Array<{ unmount: () => void }> = []
 
 function agent(overrides: Partial<AgentDTO> = {}): AgentDTO {
   return {
@@ -64,13 +66,26 @@ async function mountPage(items: AgentDTO[], nodes: NodeStatus[] = []) {
     attachTo: document.body,
     global: { plugins: [installTestI18n()] },
   })
+  mountedWrappers.push(wrapper)
   await wrapper.vm.$nextTick()
   return { wrapper, agents }
+}
+
+function bodyMenu(hostId: string): HTMLElement {
+  const menu = document.body.querySelector(`[data-test="agent-menu-${hostId}"]`)
+  if (!(menu instanceof HTMLElement)) throw new Error(`agent menu ${hostId} not found`)
+  return menu
 }
 
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
+})
+
+afterEach(() => {
+  for (const wrapper of mountedWrappers.splice(0)) {
+    wrapper.unmount()
+  }
   document.body.innerHTML = ''
 })
 
@@ -122,12 +137,14 @@ describe('AgentManagerTab', () => {
     const { wrapper } = await mountPage([agent()])
 
     await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
-    await wrapper.find('[data-test="agent-menu-transport-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-transport-h1"]')?.click()
+    await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-test="agent-panel-tab-transport"]').classes()).toContain('active')
     await wrapper.find('[data-test="agent-panel"] .settings-btn-ghost').trigger('click')
 
     await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
-    await wrapper.find('[data-test="agent-menu-security-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-security-h1"]')?.click()
+    await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
   })
 
@@ -135,11 +152,21 @@ describe('AgentManagerTab', () => {
     const { wrapper } = await mountPage([agent()])
 
     await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
-    expect(wrapper.find('[data-test="agent-menu-h1"]').exists()).toBe(true)
+    expect(document.body.querySelector('[data-test="agent-menu-h1"]')).toBeTruthy()
     document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('[data-test="agent-menu-h1"]').exists()).toBe(false)
+    expect(document.body.querySelector('[data-test="agent-menu-h1"]')).toBeFalsy()
+  })
+
+  it('renders the more menu outside the table scroll surface to avoid clipping', async () => {
+    const { wrapper } = await mountPage([agent()])
+
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    const menu = bodyMenu('h1')
+
+    expect(menu.closest('.settings-surface-scroll')).toBeNull()
+    expect(menu.classList.contains('agent-action-menu')).toBe(true)
   })
 
   it('runs checkAgent directly for healthy primary action', async () => {

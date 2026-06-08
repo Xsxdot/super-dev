@@ -12,7 +12,7 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
   - 不直接打开 deployment 运行控制
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AgentCreatePayload, AgentDTO, AgentHealth, AgentRuntime } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
@@ -35,9 +35,14 @@ const panelTarget = ref<AgentDTO | null>(null)
 const panelInitialTab = ref<AgentPanelTab>('security')
 const expandedRoutes = ref<Set<string>>(new Set())
 const openMenuHostId = ref<string | null>(null)
+const menuPosition = ref({ top: 0, left: 0 })
+const menuTriggerRect = ref<{ top: number; right: number; bottom: number } | null>(null)
 const checking = ref<Set<string>>(new Set())
 const removing = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
+const actionMenuWidth = 150
+const actionMenuGap = 6
+const viewportMargin = 8
 
 const routeStatusKeys: Record<AgentRouteRowStatus, string> = {
   reachable: 'settings.agents.routeStatusReachable',
@@ -118,15 +123,56 @@ function toggleRoute(hostId: string) {
   expandedRoutes.value = next
 }
 
-function toggleMenu(hostId: string) {
-  openMenuHostId.value = openMenuHostId.value === hostId ? null : hostId
+async function toggleMenu(hostId: string, event: MouseEvent) {
+  if (openMenuHostId.value === hostId) {
+    openMenuHostId.value = null
+    return
+  }
+  positionMenu(event.currentTarget)
+  openMenuHostId.value = hostId
+  await nextTick()
+  fitMenuInViewport()
 }
 
 function closeMenuOnOutsideClick(event: MouseEvent) {
   const target = event.target
   if (!(target instanceof Element)) return
   if (target.closest('.agent-more')) return
+  if (target.closest('.agent-action-menu')) return
   openMenuHostId.value = null
+}
+
+function positionMenu(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return
+  const rect = target.getBoundingClientRect()
+  menuTriggerRect.value = { top: rect.top, right: rect.right, bottom: rect.bottom }
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth
+  const maxLeft = Math.max(viewportMargin, viewportWidth - actionMenuWidth - viewportMargin)
+  menuPosition.value = {
+    top: rect.bottom + actionMenuGap,
+    left: Math.min(Math.max(viewportMargin, rect.right - actionMenuWidth), maxLeft),
+  }
+}
+
+function fitMenuInViewport() {
+  if (!openMenuHostId.value || !menuTriggerRect.value) return
+  const menu = document.querySelector(`[data-test="agent-menu-${openMenuHostId.value}"]`)
+  if (!(menu instanceof HTMLElement)) return
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+  const menuHeight = menu.getBoundingClientRect().height
+  if (menuPosition.value.top + menuHeight <= viewportHeight - viewportMargin) return
+  menuPosition.value = {
+    ...menuPosition.value,
+    top: Math.max(viewportMargin, menuTriggerRect.value.top - menuHeight - actionMenuGap),
+  }
+}
+
+function actionMenuStyle(): CSSProperties {
+  return {
+    top: `${menuPosition.value.top}px`,
+    left: `${menuPosition.value.left}px`,
+    width: `${actionMenuWidth}px`,
+  }
 }
 
 function updatedLabel(agent: AgentDTO): string {
@@ -279,16 +325,23 @@ async function removeAgent(agent: AgentDTO) {
                   {{ checking.has(agent.host_id) ? t('common.loading') : t(stageViewFor(agent).primaryActionKey) }}
                 </button>
                 <div class="agent-more">
-                  <button class="settings-btn settings-btn-icon" type="button" :data-test="`agent-more-${agent.host_id}`" @click="toggleMenu(agent.host_id)">⋯</button>
-                  <div v-if="openMenuHostId === agent.host_id" class="agent-action-menu" :data-test="`agent-menu-${agent.host_id}`">
-                    <button type="button" :data-test="`agent-menu-transport-${agent.host_id}`" @click="openPanel(agent, 'transport')">{{ t('settings.agents.editConnection') }}</button>
-                    <button type="button" :data-test="`agent-menu-security-${agent.host_id}`" @click="openPanel(agent, 'security')">{{ t('settings.agents.securityConfig') }}</button>
-                    <button type="button" :data-test="`agent-menu-install-${agent.host_id}`" @click="openPanel(agent, 'install')">{{ t('settings.agents.generateCommand') }}</button>
-                    <button type="button" :data-test="`agent-menu-check-${agent.host_id}`" @click="checkAgent(agent)">{{ t('settings.agents.recheck') }}</button>
-                    <button type="button" class="danger" :disabled="removing.has(agent.host_id)" :data-test="`agent-menu-remove-${agent.host_id}`" @click="removeAgent(agent)">
-                      {{ t('settings.agents.removeConfig') }}
-                    </button>
-                  </div>
+                  <button class="settings-btn settings-btn-icon" type="button" :data-test="`agent-more-${agent.host_id}`" @click="toggleMenu(agent.host_id, $event)">⋯</button>
+                  <Teleport to="body">
+                    <div
+                      v-if="openMenuHostId === agent.host_id"
+                      class="agent-action-menu"
+                      :style="actionMenuStyle()"
+                      :data-test="`agent-menu-${agent.host_id}`"
+                    >
+                      <button type="button" :data-test="`agent-menu-transport-${agent.host_id}`" @click="openPanel(agent, 'transport')">{{ t('settings.agents.editConnection') }}</button>
+                      <button type="button" :data-test="`agent-menu-security-${agent.host_id}`" @click="openPanel(agent, 'security')">{{ t('settings.agents.securityConfig') }}</button>
+                      <button type="button" :data-test="`agent-menu-install-${agent.host_id}`" @click="openPanel(agent, 'install')">{{ t('settings.agents.generateCommand') }}</button>
+                      <button type="button" :data-test="`agent-menu-check-${agent.host_id}`" @click="checkAgent(agent)">{{ t('settings.agents.recheck') }}</button>
+                      <button type="button" class="danger" :disabled="removing.has(agent.host_id)" :data-test="`agent-menu-remove-${agent.host_id}`" @click="removeAgent(agent)">
+                        {{ t('settings.agents.removeConfig') }}
+                      </button>
+                    </div>
+                  </Teleport>
                 </div>
               </div>
             </td>
@@ -436,12 +489,9 @@ async function removeAgent(agent: AgentDTO) {
   position: relative;
 }
 .agent-action-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 10;
+  position: fixed;
+  z-index: 1000;
   display: grid;
-  min-width: 150px;
   padding: 6px;
   border: 1px solid var(--border-secondary);
   border-radius: 7px;
