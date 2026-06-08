@@ -27,6 +27,11 @@ type SQLiteBackend struct {
 	buf   *logbuf.Buffer
 }
 
+var (
+	_ LogReader = (*SQLiteBackend)(nil)
+	_ LogWriter = (*SQLiteBackend)(nil)
+)
+
 // NewSQLiteBackend 创建 SQLiteBackend。
 //
 // 参数：
@@ -37,6 +42,21 @@ type SQLiteBackend struct {
 //   - 实现了 LogBackend 接口的 *SQLiteBackend
 func NewSQLiteBackend(s *store.Store, buf *logbuf.Buffer) *SQLiteBackend {
 	return &SQLiteBackend{store: s, buf: buf}
+}
+
+// AppendBatch 批量写入日志到本地 SQLite。
+//
+// 参数：
+//   - ctx: 上下文（当前本地写入不支持取消，保留以满足 LogWriter 契约）
+//   - entries: 待写入的日志条目
+//
+// 返回：
+//   - 写入失败时返回 store.AppendBatch 的错误
+//
+// 注意：
+//   - 当前实现只写持久化 store，不反向注入实时 logbuf
+func (b *SQLiteBackend) AppendBatch(ctx context.Context, entries []model.LogEntry) error {
+	return b.store.AppendBatch(entries)
 }
 
 // Query 按 DeploymentID/RunID/不透明游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。

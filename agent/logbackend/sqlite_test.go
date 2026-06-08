@@ -16,7 +16,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/store"
 )
 
-func newTestSQLiteBackend(t *testing.T) (logbackend.LogBackend, *logbuf.Buffer) {
+func newTestSQLiteBackend(t *testing.T) (*logbackend.SQLiteBackend, *logbuf.Buffer) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	require.NoError(t, err)
@@ -24,6 +24,20 @@ func newTestSQLiteBackend(t *testing.T) (logbackend.LogBackend, *logbuf.Buffer) 
 	buf := logbuf.New(s, 100, "")
 	t.Cleanup(buf.Close)
 	return logbackend.NewSQLiteBackend(s, buf), buf
+}
+
+func TestSQLiteBackend_AppendBatchWritesEntries(t *testing.T) {
+	b, _ := newTestSQLiteBackend(t)
+
+	err := b.AppendBatch(context.Background(), []model.LogEntry{
+		{DeploymentID: "svc-1", Message: "hello", Timestamp: time.Now()},
+	})
+	require.NoError(t, err)
+
+	entries, _, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "hello", entries[0].Message)
 }
 
 func TestSQLiteBackend_QueryEmpty(t *testing.T) {
