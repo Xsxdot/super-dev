@@ -3,7 +3,8 @@ InstanceCard：展示单个 service×node 实例的进程级指标。
 
 职责：
   - 渲染健康状态、CPU、内存、运行时长、重启次数和运行基座
-  - 将未知指标显示为 --
+  - 运行态未知指标显示为 --
+  - 停止/异常态折叠指标列, 避免无效指标占据主要视线
   - 点击时请求打开该实例日志
 
 边界：
@@ -11,10 +12,15 @@ InstanceCard：展示单个 service×node 实例的进程级指标。
   - 不计算跨节点聚合
 -->
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { RuntimeInstanceStatus } from '@/api/agent'
 
 const props = defineProps<{ instance: RuntimeInstanceStatus }>()
 const emit = defineEmits<{ 'open-logs': [deploymentId: string, nodeId: string] }>()
+
+const isStopped = computed(() =>
+  ['stopped', 'failed', 'unknown', 'restarting'].includes(props.instance.metrics.health),
+)
 
 function formatPercent(value: number | null) {
   return value == null ? '--' : `${value.toFixed(1)}%`
@@ -44,28 +50,33 @@ function openLogs() {
 </script>
 
 <template>
-  <button type="button" class="instance-card" :class="`health-${instance.metrics.health}`" @click="openLogs">
+  <button type="button" class="instance-card" :class="[`health-${instance.metrics.health}`, { stopped: isStopped }]" @click="openLogs">
     <div class="instance-main">
       <div class="instance-title">{{ instance.service_name }}</div>
-      <div class="instance-meta">{{ instance.node_name }} · {{ instance.metrics.base }}</div>
+      <div class="instance-meta">
+        <span>{{ instance.node_name }}</span>
+        <span class="base-chip">{{ instance.metrics.base }}</span>
+      </div>
     </div>
     <div class="health-badge">{{ instance.metrics.health }}</div>
-    <div class="metric">
-      <span>CPU</span>
-      <strong>{{ formatPercent(instance.metrics.cpu_percent) }}</strong>
-    </div>
-    <div class="metric">
-      <span>MEM</span>
-      <strong>{{ formatBytes(instance.metrics.mem_bytes) }}</strong>
-    </div>
-    <div class="metric">
-      <span>UP</span>
-      <strong>{{ formatUptime(instance.metrics.uptime_sec) }}</strong>
-    </div>
-    <div class="metric">
-      <span>RE</span>
-      <strong>{{ formatRestarts(instance.metrics.restarts) }}</strong>
-    </div>
+    <template v-if="!isStopped">
+      <div class="metric">
+        <span>CPU</span>
+        <strong>{{ formatPercent(instance.metrics.cpu_percent) }}</strong>
+      </div>
+      <div class="metric">
+        <span>MEM</span>
+        <strong>{{ formatBytes(instance.metrics.mem_bytes) }}</strong>
+      </div>
+      <div class="metric">
+        <span>UP</span>
+        <strong>{{ formatUptime(instance.metrics.uptime_sec) }}</strong>
+      </div>
+      <div class="metric">
+        <span>RE</span>
+        <strong>{{ formatRestarts(instance.metrics.restarts) }}</strong>
+      </div>
+    </template>
     <div v-if="instance.error" class="instance-error">{{ instance.error }}</div>
   </button>
 </template>
@@ -90,6 +101,9 @@ function openLogs() {
   border-color: var(--border);
   background: var(--bg-overlay);
 }
+.instance-card.stopped {
+  grid-template-columns: minmax(140px, 1fr) auto;
+}
 .instance-main {
   min-width: 0;
 }
@@ -101,12 +115,27 @@ function openLogs() {
   white-space: nowrap;
 }
 .instance-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   overflow: hidden;
   margin-top: 2px;
   color: var(--text-tertiary);
   font-size: 11px;
+}
+.instance-meta > span:first-child {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.base-chip {
+  flex: none;
+  border: 1px solid var(--border-secondary);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--text-tertiary);
+  font-size: 9px;
 }
 .health-badge {
   min-width: 0;
