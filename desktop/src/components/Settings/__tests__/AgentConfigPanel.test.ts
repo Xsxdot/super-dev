@@ -60,6 +60,9 @@ const hosts: Host[] = [
   {
     id: 'h1',
     name: 'ali-01',
+    public_ip: '203.0.113.10',
+    private_ip: '10.0.0.8',
+    ssh_host: '10.0.0.8',
     tags: ['prod'],
   },
 ]
@@ -70,9 +73,12 @@ beforeEach(() => {
 })
 
 describe('AgentConfigPanel', () => {
-  it('creates a new Agent from the connection-chain step before moving to install', async () => {
+  it('creates a new Agent without user-editable bind address and keeps tunnel port sourced from Listener & TLS', async () => {
     const store = useAgentsStore()
-    vi.spyOn(store, 'createAgent').mockResolvedValue(agent())
+    vi.spyOn(store, 'createAgent').mockResolvedValue(agent({
+      transport: { chain: [{ type: 'tunnel', tunnel: { remote_agent_port: 57019 } }] },
+      config: { listen_port: 57019 },
+    }))
     vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({ command: 'curl install', expires_at: '2026-06-07T10:30:00Z', token_id: 'tok_1' })
     const wrapper = mount(AgentConfigPanel, {
       props: { visible: true, mode: 'create', hosts, initialTab: 'security' },
@@ -87,21 +93,23 @@ describe('AgentConfigPanel', () => {
     ])
     expect(wrapper.find('[data-test="agent-create-host"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
-    await wrapper.find('[data-test="agent-listen-address"]').setValue('0.0.0.0')
+    expect(wrapper.find('[data-test="agent-listen-address"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="agent-public-ip-tls-hint"]').text()).toContain('公网 IP')
     await wrapper.find('[data-test="agent-listen-port"]').setValue(57019)
     await wrapper.find('[data-test="agent-security-save"]').trigger('click')
 
     expect(store.createAgent).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="agent-panel-tab-transport"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="agent-create-before-transport"]').exists()).toBe(false)
-    expect((wrapper.find('[data-test="tunnel-remote-agent-port-0"]').element as HTMLInputElement).value).toBe('57019')
+    expect(wrapper.find('[data-test="tunnel-remote-agent-port-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tunnel-loopback-note-0"]').text()).toContain('57019')
 
     await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
 
     expect(store.createAgent).toHaveBeenCalledWith({
       host_id: 'h1',
       transport: { chain: [{ type: 'tunnel', tunnel: { remote_agent_port: 57019 } }] },
-      config: { listen_address: '0.0.0.0', listen_port: 57019 },
+      config: { listen_port: 57019 },
       security: {
         token_configured: false,
         provision_state: 'pending-bootstrap',
@@ -112,14 +120,17 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-panel-tab-install"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="agent-create-before-install"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="agent-install-generate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="agent-install-bind-preview"]').text()).toContain('127.0.0.1:57019')
 
     await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
 
-    expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', expect.objectContaining({
+    expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', {
       method: 'generated_command',
+      controller_url: 'http://127.0.0.1:57017',
       remote_agent_port: 57019,
       transport_type: 'tunnel',
-    }))
+      token_ttl_minutes: 30,
+    })
   })
 
   it('syncs the default create-mode tunnel port when the connection-chain tab is opened directly', async () => {
@@ -131,7 +142,7 @@ describe('AgentConfigPanel', () => {
     await wrapper.find('[data-test="agent-listen-port"]').setValue(57021)
     await wrapper.find('[data-test="agent-panel-tab-transport"]').trigger('click')
 
-    expect((wrapper.find('[data-test="tunnel-remote-agent-port-0"]').element as HTMLInputElement).value).toBe('57021')
+    expect(wrapper.find('[data-test="tunnel-loopback-note-0"]').text()).toContain('57021')
   })
 
   it('opens on the requested default tab', () => {
@@ -144,14 +155,16 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-install-generate"]').exists()).toBe(true)
   })
 
-  it('saves listening and manual TLS config from the security tab', async () => {
+  it('saves listen port and manual TLS config from the security tab without persisting listen_address', async () => {
     const store = useAgentsStore()
-    vi.spyOn(store, 'updateAgentConfig').mockResolvedValue(agent())
+    vi.spyOn(store, 'updateAgentConfig').mockResolvedValue(agent({ config: { listen_port: 57017 } }))
     const wrapper = mount(AgentConfigPanel, {
-      props: { visible: true, agent: agent(), initialTab: 'security' },
+      props: { visible: true, agent: agent(), host: hosts[0], initialTab: 'security' },
       global: { plugins: [installTestI18n('en-US')] },
     })
 
+    expect(wrapper.find('[data-test="agent-listen-address"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="agent-public-ip-tls-hint"]').text()).toContain('public IP')
     await wrapper.find('[data-test="agent-tls-mode-manual"]').setValue(true)
     await wrapper.find('[data-test="agent-manual-advanced-toggle"]').trigger('click')
     await wrapper.find('[data-test="agent-server-name"]').setValue('agent.internal')
@@ -159,7 +172,7 @@ describe('AgentConfigPanel', () => {
     await wrapper.find('[data-test="agent-security-save"]').trigger('click')
 
     expect(store.updateAgentConfig).toHaveBeenCalledWith('h1', {
-      config: { listen_address: '127.0.0.1', listen_port: 57017 },
+      config: { listen_port: 57017 },
       security: {
         token_configured: false,
         provision_state: 'pending-bootstrap',
@@ -181,23 +194,23 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-server-name"]').exists()).toBe(true)
   })
 
-  it('generates install command from security-tab listen values without exposing duplicate inputs', async () => {
+  it('generates install command from derived bind preview without sending bind_address from the browser', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({ command: 'curl install', expires_at: '2026-06-07T10:30:00Z', token_id: 'tok_1' })
     const wrapper = mount(AgentConfigPanel, {
-      props: { visible: true, agent: agent(), initialTab: 'install' },
+      props: { visible: true, agent: agent(), host: hosts[0], initialTab: 'install' },
       global: { plugins: [installTestI18n('en-US')] },
     })
 
     expect(wrapper.find('[data-test="agent-install-bind-address-input"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="agent-install-bind-preview"]').text()).toContain('127.0.0.1:57017')
+    expect(wrapper.find('[data-test="agent-install-bind-preview"]').text()).toContain('0.0.0.0:57017')
+    expect(wrapper.find('[data-test="agent-bind-reason"]').text()).toContain('direct')
     await wrapper.find('[data-test="agent-install-controller-url"]').setValue('http://controller:57017')
     await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
 
     expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', {
       method: 'generated_command',
       controller_url: 'http://controller:57017',
-      bind_address: '127.0.0.1',
       remote_agent_port: 57017,
       transport_type: 'direct',
       token_ttl_minutes: 30,
@@ -262,6 +275,61 @@ describe('AgentConfigPanel', () => {
         ],
       },
     })
+  })
+
+  it('lets direct transport choose a host IP and saves the selected address with the listen port', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'updateAgentTransport').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, agent: agent(), host: hosts[0], initialTab: 'transport' },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="direct-address-select-0"]').text()).toContain('203.0.113.10:57017')
+    await wrapper.find('[data-test="direct-address-select-0"]').setValue('private_ip')
+    await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
+
+    expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {
+      transport: {
+        chain: [
+          { type: 'direct', direct: { address: '10.0.0.8:57017' } },
+          { type: 'tunnel', tunnel: { remote_agent_port: 57017 } },
+        ],
+      },
+    })
+  })
+
+  it('falls back to a custom direct address when the host has no recorded IP options', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'updateAgentTransport').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ transport: { chain: [{ type: 'direct', direct: { address: '' } }] } }),
+        host: { id: 'h1', name: 'ali-01', tags: [] },
+        initialTab: 'transport',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="direct-address-custom-0"]').exists()).toBe(true)
+    await wrapper.find('[data-test="direct-address-custom-0"]').setValue('agent.example.com:57017')
+    await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
+
+    expect(store.updateAgentTransport).toHaveBeenCalledWith('h1', {
+      transport: { chain: [{ type: 'direct', direct: { address: 'agent.example.com:57017' } }] },
+    })
+  })
+
+  it('shows a reinstall hint when transport edits change the derived bind scope', async () => {
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, agent: agent({ transport: { chain: [{ type: 'tunnel', tunnel: { remote_agent_port: 57017 } }] } }), host: hosts[0], initialTab: 'transport' },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    expect(wrapper.find('[data-test="agent-bind-scope-dirty"]').exists()).toBe(false)
+    await wrapper.find('[data-test="transport-add-direct"]').trigger('click')
+    expect(wrapper.find('[data-test="agent-bind-scope-dirty"]').text()).toContain('重新安装')
   })
 
   it('locks transport probes while local chain edits are unsaved', async () => {

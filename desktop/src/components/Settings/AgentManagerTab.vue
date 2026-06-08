@@ -101,6 +101,10 @@ function routeRowsFor(agent: AgentDTO) {
   return agentRouteRows(agent, nodeOf(agent))
 }
 
+function hostFor(agent: AgentDTO) {
+  return remoteStore.hosts.find(host => host.id === agent.host_id) ?? null
+}
+
 function routeStatusKey(status: AgentRouteRowStatus) {
   return routeStatusKeys[status]
 }
@@ -366,6 +370,7 @@ async function removeAgent(agent: AgentDTO) {
       :initial-tab="panelInitialTab"
       :mode="panelMode"
       :hosts="availableHosts"
+      :host="panelTarget ? hostFor(panelTarget) : null"
       @created="agentCreated"
       @cancel="closePanel"
     />

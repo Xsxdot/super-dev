@@ -17,6 +17,13 @@ import { useAppI18n } from '@/i18n/useAppI18n'
 import { useAgentsStore } from '@/stores/agents'
 import { agentRouteRows } from '@/lib/agentRoute'
 import { runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
+import {
+  bindReasonFromChain,
+  directAddressOptions,
+  recommendedDirectAddress,
+  resolveBindAddressFromChain,
+  type DirectAddressSource,
+} from '@/lib/agentBind'
 import type {
   AgentConfigUpdatePayload,
   AgentCreatePayload,
@@ -39,6 +46,7 @@ const props = defineProps<{
   initialTab?: AgentPanelTab
   mode?: 'edit' | 'create'
   hosts?: Host[]
+  host?: Host | null
 }>()
 
 const emit = defineEmits<{
@@ -69,7 +77,6 @@ const hostID = ref('')
 const localAgent = ref<AgentDTO | null>(null)
 
 const securityForm = reactive({
-  listenAddress: '',
   listenPort: 57017,
   tlsMode: 'auto' as AgentTLSMode,
   serverName: '',
@@ -83,6 +90,7 @@ const installForm = reactive({
 
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
+const currentHost = computed(() => isCreateMode.value ? selectedHost.value : props.host ?? selectedHost.value)
 const persistedAgent = computed<AgentDTO | null>(() => localAgent.value ?? props.agent ?? null)
 const panelAgent = computed<AgentDTO | null>(() => {
   if (persistedAgent.value) return persistedAgent.value
@@ -92,7 +100,7 @@ const panelAgent = computed<AgentDTO | null>(() => {
     host_name: selectedHost.value.name,
     tags: selectedHost.value.tags,
     transport: { chain: chain.value.map(normalizeEntry) },
-    config: { listen_address: securityForm.listenAddress, listen_port: bindPort.value },
+    config: { listen_port: bindPort.value },
     runtime: { installed: false, health: 'unknown', reachable: false },
     security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: securityForm.tlsMode } },
   }
@@ -102,10 +110,17 @@ const title = computed(() => isCreateMode.value && !persistedAgent.value
   : t('settings.agents.panelTitle', { name: panelAgent.value?.host_name ?? '' }))
 const runtime = computed(() => persistedAgent.value ? runtimeFor(persistedAgent.value, props.node) : undefined)
 const canProbe = computed(() => runtime.value?.installed === true)
-const bindAddress = computed(() => securityForm.listenAddress.trim() || '127.0.0.1')
 const bindPort = computed(() => Number(securityForm.listenPort) || 57017)
+const bindAddress = computed(() => resolveBindAddressFromChain(chain.value))
+const bindReason = computed(() => bindReasonFromChain(chain.value))
+const bindReasonKey = computed(() => bindReason.value === 'direct' ? 'settings.agents.bindReasonDirect' : 'settings.agents.bindReasonLoopback')
+const directOptions = computed(() => directAddressOptions(currentHost.value, bindPort.value))
+const hasPublicIP = computed(() => Boolean(currentHost.value?.public_ip?.trim()))
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
+const bindScopeDirty = computed(() => (
+  resolveBindAddressFromChain(savedChain.value) !== resolveBindAddressFromChain(chain.value)
+))
 const currentRows = computed(() => panelAgent.value
   ? agentRouteRows({ ...panelAgent.value, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
   : [])
@@ -119,14 +134,14 @@ const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean
 ])
 
 function defaultEntry(type: TransportType): TransportEntry {
-  if (type === 'tunnel') return { type, tunnel: { remote_agent_port: 57017 } }
-  if (type === 'direct') return { type, direct: { address: '' } }
+  if (type === 'tunnel') return { type, tunnel: { remote_agent_port: bindPort.value } }
+  if (type === 'direct') return { type, direct: { address: recommendedDirectAddress(currentHost.value, bindPort.value) } }
   return { type }
 }
 
 function normalizeEntry(entry: TransportEntry): TransportEntry {
   if (entry.type === 'tunnel') {
-    return { type: 'tunnel', tunnel: { remote_agent_port: Number(entry.tunnel?.remote_agent_port) || 57017 } }
+    return { type: 'tunnel', tunnel: { remote_agent_port: bindPort.value } }
   }
   if (entry.type === 'direct') {
     return { type: 'direct', direct: { address: entry.direct?.address?.trim() ?? '' } }
@@ -165,7 +180,6 @@ function reset(agent?: AgentDTO | null) {
   installResult.value = null
   pushInstallResult.value = null
   hostID.value = agent?.host_id ?? props.hosts?.[0]?.id ?? ''
-  securityForm.listenAddress = agent?.config?.listen_address ?? ''
   securityForm.listenPort = agent?.config?.listen_port || 57017
   const mode = agent?.security?.tls?.mode
   securityForm.tlsMode = mode === 'off' || mode === 'manual' ? mode : 'auto'
@@ -190,7 +204,6 @@ function securityPayload(): AgentConfigUpdatePayload {
   const tls = tlsPayload()
   return {
     config: {
-      listen_address: securityForm.listenAddress.trim(),
       listen_port: bindPort.value,
     },
     security: {
@@ -215,7 +228,6 @@ function createPayload(): AgentCreatePayload {
     host_id: hostID.value,
     transport: { chain: chain.value.map(normalizeEntry) },
     config: {
-      listen_address: securityForm.listenAddress.trim(),
       listen_port: bindPort.value,
     },
     security: {
@@ -271,7 +283,6 @@ async function generateInstallCommand() {
     installResult.value = await agentsStore.generateInstallCommand(agent.host_id, {
       method: 'generated_command',
       controller_url: installForm.controllerURL.trim(),
-      bind_address: bindAddress.value,
       remote_agent_port: bindPort.value,
       transport_type: installTransportType.value,
       token_ttl_minutes: Number(installForm.tokenTTLMinutes) || 30,
@@ -290,6 +301,29 @@ async function copyCommand() {
 
 function addEntry(type: TransportType) {
   chain.value = [...chain.value, defaultEntry(type)]
+}
+
+function directSelectValue(entry: TransportEntry): DirectAddressSource | 'custom' {
+  const address = entry.direct?.address?.trim()
+  const option = directOptions.value.find(item => item.address === address)
+  return option?.key ?? 'custom'
+}
+
+function selectDirectAddress(index: number, source: DirectAddressSource | 'custom') {
+  const entry = chain.value[index]
+  if (!entry || entry.type !== 'direct') return
+  if (source === 'custom') {
+    entry.direct = { address: entry.direct?.address?.trim() ?? '' }
+    return
+  }
+  const option = directOptions.value.find(item => item.key === source)
+  entry.direct = { address: option?.address ?? '' }
+}
+
+function onDirectAddressChange(index: number, event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  selectDirectAddress(index, target.value as DirectAddressSource | 'custom')
 }
 
 function removeEntry(index: number) {
@@ -449,14 +483,13 @@ watch(
               </select>
             </div>
             <div class="row">
-              <div class="settings-field flex">
-                <label class="settings-field-label">{{ t('settings.agents.bindAddress') }}</label>
-                <input v-model="securityForm.listenAddress" class="settings-input" data-test="agent-listen-address" />
-              </div>
               <div class="settings-field port">
                 <label class="settings-field-label">{{ t('settings.agents.remotePort') }}</label>
                 <input v-model.number="securityForm.listenPort" class="settings-input" type="number" min="1" data-test="agent-listen-port" />
               </div>
+            </div>
+            <div v-if="hasPublicIP" class="settings-alert settings-alert-warning" data-test="agent-public-ip-tls-hint">
+              {{ t('settings.agents.publicIPTLSHint') }}
             </div>
 
             <div class="settings-field">
@@ -523,6 +556,7 @@ watch(
                 <span class="settings-badge">{{ t('settings.agents.installTLSPreview', { mode: securityForm.tlsMode }) }}</span>
                 <span class="settings-badge">{{ t('settings.agents.installTransportPreview', { type: installTransportType }) }}</span>
               </div>
+              <p class="step-note" data-test="agent-bind-reason">{{ t(bindReasonKey) }}</p>
               <p class="step-note">{{ t('settings.agents.installPreviewHint') }}</p>
               <div class="settings-field">
                 <label class="settings-field-label">{{ t('settings.agents.controllerURL') }}</label>
@@ -557,6 +591,9 @@ watch(
             <div v-if="transportDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-dirty">
               {{ t('settings.agents.saveTransportBeforeProbe') }}
             </div>
+            <div v-if="bindScopeDirty" class="settings-alert settings-alert-warning" data-test="agent-bind-scope-dirty">
+              {{ t('settings.agents.bindScopeDirtyHint') }}
+            </div>
             <section v-for="(entry, index) in chain" :key="`${entry.type}-${index}`" class="transport-entry" :data-test="`transport-entry-${index}`">
               <header class="transport-entry-head">
                 <strong>{{ index + 1 }}. {{ entry.type }}</strong>
@@ -569,12 +606,20 @@ watch(
 
               <div v-if="entry.type === 'direct' && entry.direct" class="settings-field">
                 <label class="settings-field-label">{{ t('settings.agents.directAddress') }}</label>
-                <input v-model="entry.direct.address" class="settings-input" placeholder="100.64.0.8:57017" />
+                <select class="settings-select" :value="directSelectValue(entry)" :data-test="`direct-address-select-${index}`" @change="onDirectAddressChange(index, $event)">
+                  <option v-for="option in directOptions" :key="option.key" :value="option.key">
+                    {{ t(option.labelKey, { address: option.address }) }}
+                  </option>
+                  <option value="custom">{{ t('settings.agents.directAddressCustom') }}</option>
+                </select>
+                <input v-if="directSelectValue(entry) === 'custom'" v-model="entry.direct.address" class="settings-input" placeholder="agent.example.com:57017" :data-test="`direct-address-custom-${index}`" />
               </div>
 
               <div v-if="entry.type === 'tunnel' && entry.tunnel" class="settings-field">
-                <label class="settings-field-label">{{ t('settings.hostForm.remoteAgentPort') }}</label>
-                <input v-model.number="entry.tunnel.remote_agent_port" class="settings-input" type="number" min="1" :data-test="`tunnel-remote-agent-port-${index}`" />
+                <label class="settings-field-label">{{ t('settings.agents.tunnelLoopback') }}</label>
+                <span class="field-hint" :data-test="`tunnel-loopback-note-${index}`">
+                  {{ t('settings.agents.tunnelLoopbackHint', { port: bindPort }) }}
+                </span>
               </div>
 
               <footer class="transport-entry-actions">
