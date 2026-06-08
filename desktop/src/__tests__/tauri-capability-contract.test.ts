@@ -15,4 +15,8 @@ describe('Tauri capabilities', () => {
   it('allows manual window dragging from custom runtime chrome', () => {
     expect(defaultCapability.permissions).toContain('core:window:allow-start-dragging')
   })
+
+  it('allows native notification access for approval reminders', () => {
+    expect(defaultCapability.permissions).toContain('notification:default')
+  })
 })

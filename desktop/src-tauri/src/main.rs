@@ -67,6 +67,15 @@ fn show_main_window(app: tauri::AppHandle) {
     reveal_main_window_from_aux_context(&app, None);
 }
 
+/// show_home_window 显示主窗口并切换到首页。
+///
+/// 系统通知点击后只负责把用户带回 SuperDev 首页，审批快捷操作继续由首页右下角
+/// 现有浮层承载。
+#[tauri::command]
+fn show_home_window(app: tauri::AppHandle) {
+    reveal_main_window_from_aux_context(&app, Some("#/"));
+}
+
 /// show_settings_window 显示主窗口并切换到设置页。
 fn show_settings_window(app: &tauri::AppHandle) {
     reveal_main_window_from_aux_context(app, Some("#/settings"));
@@ -277,12 +286,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
         ))
         .invoke_handler(tauri::generate_handler![
             show_main_window,
+            show_home_window,
             detect_coding_agents,
             install_mcp,
             mcp_install_hint,
@@ -387,6 +398,14 @@ mod tests {
         &MAIN_RS[start..start + relative_end]
     }
 
+    fn main_source() -> &'static str {
+        let start = MAIN_RS.find("fn main()").expect("main.rs should define main");
+        let relative_end = MAIN_RS[start..]
+            .find("\n#[cfg(test)]")
+            .expect("test module should appear after main");
+        &MAIN_RS[start..start + relative_end]
+    }
+
     #[test]
     fn app_menu_includes_standard_edit_commands_for_webview_text_inputs() {
         let menu_source = install_app_menu_source();
@@ -420,6 +439,32 @@ mod tests {
             menu_source
                 .contains("MenuItem::with_id(app, \"quit\", \"退出 SuperDev\", true, Some(\"CmdOrCtrl+Q\"))"),
             "the app menu quit item must bind Cmd+Q so macOS can dispatch app quit instead of only supporting mouse clicks"
+        );
+    }
+
+    #[test]
+    fn approval_notification_plugin_is_registered() {
+        let source = main_source();
+        assert!(
+            source.contains(".plugin(tauri_plugin_notification::init())"),
+            "native approval reminders require the Tauri notification plugin"
+        );
+    }
+
+    #[test]
+    fn approval_notification_show_home_window_routes_to_main_home() {
+        let source = main_source();
+        assert!(
+            MAIN_RS.contains("fn show_home_window(app: tauri::AppHandle)"),
+            "main.rs should expose a command for notification clicks to reveal the home page"
+        );
+        assert!(
+            MAIN_RS.contains("reveal_main_window_from_aux_context(&app, Some(\"#/\"))"),
+            "notification clicks should return to the SuperDev home route"
+        );
+        assert!(
+            source.contains("show_home_window,"),
+            "show_home_window must be registered in the invoke handler"
         );
     }
 }
