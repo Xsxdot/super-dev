@@ -76,8 +76,10 @@ function previous() {
 
 function submit() {
   const tls: AgentCreatePayload['security']['tls'] = { mode: tlsMode.value }
-  if (serverName.value.trim()) tls.server_name = serverName.value.trim()
-  if (tlsMode.value === 'manual' && caCert.value.trim()) tls.ca_cert = caCert.value
+  if (tlsMode.value === 'manual') {
+    if (serverName.value.trim()) tls.server_name = serverName.value.trim()
+    if (caCert.value.trim()) tls.ca_cert = caCert.value
+  }
   emit('submit', {
     host_id: hostID.value,
     transport: { chain: chain.value.map(normalizeEntry) },
@@ -172,13 +174,16 @@ watch(
               <label><input v-model="tlsMode" type="radio" value="manual" data-test="agent-create-tls-manual" /> {{ t('settings.agents.tlsManual') }}</label>
             </div>
           </div>
-          <div class="settings-field">
-            <label class="settings-field-label">{{ t('settings.agents.serverName') }}</label>
-            <input v-model="serverName" class="settings-input" data-test="agent-create-server-name" />
-          </div>
-          <div v-if="tlsMode === 'manual'" class="settings-field">
-            <label class="settings-field-label">{{ t('settings.agents.caCert') }}</label>
-            <textarea v-model="caCert" class="settings-input cert-box" data-test="agent-create-ca-cert" />
+          <div v-if="tlsMode === 'manual'" class="manual-tls">
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.agents.sniName') }}</label>
+              <input v-model="serverName" class="settings-input" data-test="agent-create-server-name" />
+              <span class="field-hint">{{ t('settings.agents.sniNameHint') }}</span>
+            </div>
+            <div class="settings-field">
+              <label class="settings-field-label">{{ t('settings.agents.caCert') }}</label>
+              <textarea v-model="caCert" class="settings-input cert-box" data-test="agent-create-ca-cert" />
+            </div>
           </div>
         </template>
       </div>
@@ -208,6 +213,18 @@ watch(
 .segmented label {
   color: var(--text-secondary);
   font-size: 12px;
+}
+.field-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.manual-tls {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  background: var(--bg-primary);
 }
 .flex { flex: 1; }
 .port { width: 116px; }
