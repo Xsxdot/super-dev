@@ -69,6 +69,11 @@ const manualAdvancedOpen = ref(false)
 const installMode = ref<'generated_command' | 'push_over_ssh'>('generated_command')
 const installResult = ref<AgentInstallCommandResponse | null>(null)
 const pushInstallResult = ref<AgentInstallResponse | null>(null)
+const installStartStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
+const installSecurityStatus = ref<'idle' | 'waiting' | 'running' | 'success' | 'error'>('idle')
+const installStartMessage = ref('')
+const installSecurityMessage = ref('')
+const checkingGeneratedInstall = ref(false)
 const chain = ref<TransportEntry[]>([])
 const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
@@ -179,6 +184,7 @@ function reset(agent?: AgentDTO | null) {
   installMode.value = 'generated_command'
   installResult.value = null
   pushInstallResult.value = null
+  resetInstallPhases()
   hostID.value = agent?.host_id ?? props.hosts?.[0]?.id ?? ''
   securityForm.listenPort = agent?.config?.listen_port || 57017
   const mode = agent?.security?.tls?.mode
@@ -279,6 +285,7 @@ async function generateInstallCommand() {
   generatingInstall.value = true
   actionError.value = null
   installResult.value = null
+  resetInstallPhases()
   try {
     installResult.value = await agentsStore.generateInstallCommand(agent.host_id, {
       method: 'generated_command',
@@ -287,6 +294,9 @@ async function generateInstallCommand() {
       transport_type: installTransportType.value,
       token_ttl_minutes: Number(installForm.tokenTTLMinutes) || 30,
     })
+    installStartMessage.value = t('settings.agents.installCommandWaiting')
+    installSecurityStatus.value = 'waiting'
+    installSecurityMessage.value = t('settings.agents.installSecurityWaitingForCommand')
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -369,20 +379,86 @@ async function saveTransport() {
   }
 }
 
+function resetInstallPhases() {
+  installStartStatus.value = 'idle'
+  installSecurityStatus.value = 'idle'
+  installStartMessage.value = ''
+  installSecurityMessage.value = ''
+  checkingGeneratedInstall.value = false
+}
+
+function firstProvisionIndex(): number {
+  return 0
+}
+
+async function provisionAndConnect() {
+  const agent = persistedAgent.value
+  if (!agent) return
+  installSecurityStatus.value = 'running'
+  installSecurityMessage.value = t('settings.agents.installSecurityRunning')
+  await agentsStore.provisionAgent(agent.host_id, { index: firstProvisionIndex(), tls_mode: securityForm.tlsMode })
+  const checked = await agentsStore.checkAgent(agent.host_id)
+  localAgent.value = checked
+  installSecurityStatus.value = 'success'
+  installSecurityMessage.value = t('settings.agents.installConnected')
+}
+
+async function confirmGeneratedInstallExecuted() {
+  const agent = persistedAgent.value
+  if (!agent) return
+  checkingGeneratedInstall.value = true
+  actionError.value = null
+  installStartStatus.value = 'running'
+  installStartMessage.value = t('settings.agents.installCheckingStarted')
+  installSecurityStatus.value = 'waiting'
+  installSecurityMessage.value = t('settings.agents.installSecurityWaitingForStart')
+  try {
+    const checked = await agentsStore.checkAgent(agent.host_id)
+    localAgent.value = checked
+    if (!checked.runtime.installed) {
+      throw new Error(t('settings.agents.installStartCheckFailed'))
+    }
+    installStartStatus.value = 'success'
+    installStartMessage.value = t('settings.agents.installStarted')
+    await provisionAndConnect()
+  } catch (err) {
+    if (installStartStatus.value !== 'success') {
+      installStartStatus.value = 'error'
+      installStartMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+    } else {
+      installSecurityStatus.value = 'error'
+      installSecurityMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+    }
+    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+  } finally {
+    checkingGeneratedInstall.value = false
+  }
+}
+
 async function pushInstall() {
   const agent = persistedAgent.value
   if (!agent) return
   installingPush.value = true
   actionError.value = null
   pushInstallResult.value = null
+  resetInstallPhases()
+  installStartStatus.value = 'running'
+  installStartMessage.value = t('settings.agents.installStartRunning')
+  installSecurityStatus.value = 'waiting'
+  installSecurityMessage.value = t('settings.agents.installSecurityWaitingForStart')
   try {
     pushInstallResult.value = await agentsStore.installAgent(agent.host_id, { method: 'push_over_ssh' })
-    const checked = await agentsStore.checkAgent(agent.host_id)
-    localAgent.value = checked
-    if (checked.runtime.installed) {
-      activeTab.value = 'probe'
-    }
+    installStartStatus.value = 'success'
+    installStartMessage.value = t('settings.agents.installStarted')
+    await provisionAndConnect()
   } catch (err) {
+    if (installStartStatus.value !== 'success') {
+      installStartStatus.value = 'error'
+      installStartMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+    } else {
+      installSecurityStatus.value = 'error'
+      installSecurityMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+    }
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
     installingPush.value = false
@@ -525,44 +601,74 @@ watch(
               {{ t('settings.agents.createBeforeNextStep') }}
             </div>
             <template v-else>
-            <div class="settings-field">
-              <label class="settings-field-label">{{ t('settings.agents.installMethod') }}</label>
-              <div class="segmented">
-                <label><input v-model="installMode" type="radio" value="generated_command" /> {{ t('settings.agents.generatedCommand') }}</label>
-                <label><input v-model="installMode" type="radio" value="push_over_ssh" /> {{ t('settings.agents.pushOverSSH') }}</label>
+              <div class="settings-field">
+                <label class="settings-field-label">{{ t('settings.agents.installMethod') }}</label>
+                <div class="segmented">
+                  <label><input v-model="installMode" type="radio" value="generated_command" /> {{ t('settings.agents.generatedCommand') }}</label>
+                  <label><input v-model="installMode" type="radio" value="push_over_ssh" /> {{ t('settings.agents.pushOverSSH') }}</label>
+                </div>
               </div>
-            </div>
 
-            <template v-if="installMode === 'generated_command'">
               <div class="readonly-chips">
                 <span class="settings-badge" data-test="agent-install-bind-preview">{{ t('settings.agents.installBindPreview', { address: bindAddress, port: bindPort }) }}</span>
                 <span class="settings-badge">{{ t('settings.agents.installTLSPreview', { mode: securityForm.tlsMode }) }}</span>
                 <span class="settings-badge">{{ t('settings.agents.installTransportPreview', { type: installTransportType }) }}</span>
               </div>
               <p class="step-note" data-test="agent-bind-reason">{{ t(bindReasonKey) }}</p>
-              <p class="step-note">{{ t('settings.agents.installPreviewHint') }}</p>
-              <div class="settings-field">
-                <label class="settings-field-label">{{ t('settings.agents.controllerURL') }}</label>
-                <input v-model="installForm.controllerURL" class="settings-input" data-test="agent-install-controller-url" />
-              </div>
-              <div class="settings-field small-field">
-                <label class="settings-field-label">{{ t('settings.agents.tokenTTL') }}</label>
-                <input v-model.number="installForm.tokenTTLMinutes" class="settings-input" type="number" min="1" />
-              </div>
-              <button class="settings-btn settings-btn-primary" type="button" :disabled="generatingInstall" data-test="agent-install-generate" @click="generateInstallCommand">
-                {{ generatingInstall ? t('common.loading') : t('settings.agents.generateCommand') }}
-              </button>
-              <pre v-if="installResult" class="command-block" data-test="agent-install-command">{{ installResult.command }}</pre>
-              <button v-if="installResult" class="settings-btn settings-btn-secondary" type="button" @click="copyCommand">{{ t('common.copy') }}</button>
-            </template>
 
-            <div v-else class="push-install">
-              <p class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
-              <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush" data-test="agent-install-push" @click="pushInstall">
-                {{ installingPush ? t('common.loading') : t('settings.agents.installNow') }}
-              </button>
-              <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
-            </div>
+              <div class="install-phases">
+                <section class="install-phase" :class="`phase-${installStartStatus}`" data-test="install-phase-start">
+                  <header class="install-phase-head">
+                    <strong>{{ t('settings.agents.installPhaseStart') }}</strong>
+                    <span class="phase-state">
+                      {{ installStartMessage || t(installStartStatus === 'idle' ? 'settings.agents.installPhaseIdle' : installStartStatus === 'running' ? 'settings.agents.installStartRunning' : installStartStatus === 'success' ? 'settings.agents.installStarted' : 'common.requestFailed') }}
+                    </span>
+                  </header>
+
+                  <template v-if="installMode === 'generated_command'">
+                    <p class="step-note">{{ t('settings.agents.installPreviewHint') }}</p>
+                    <p class="step-note">{{ t('settings.agents.generatedCommandPhaseHint') }}</p>
+                    <div class="settings-field">
+                      <label class="settings-field-label">{{ t('settings.agents.controllerURL') }}</label>
+                      <input v-model="installForm.controllerURL" class="settings-input" data-test="agent-install-controller-url" />
+                    </div>
+                    <div class="settings-field small-field">
+                      <label class="settings-field-label">{{ t('settings.agents.tokenTTL') }}</label>
+                      <input v-model.number="installForm.tokenTTLMinutes" class="settings-input" type="number" min="1" />
+                    </div>
+                    <div class="step-actions step-actions-left">
+                      <button class="settings-btn settings-btn-primary" type="button" :disabled="generatingInstall" data-test="agent-install-generate" @click="generateInstallCommand">
+                        {{ generatingInstall ? t('common.loading') : t('settings.agents.generateCommand') }}
+                      </button>
+                    </div>
+                    <pre v-if="installResult" class="command-block" data-test="agent-install-command">{{ installResult.command }}</pre>
+                    <div v-if="installResult" class="step-actions step-actions-left">
+                      <button class="settings-btn settings-btn-secondary" type="button" @click="copyCommand">{{ t('common.copy') }}</button>
+                      <button class="settings-btn settings-btn-primary" type="button" :disabled="checkingGeneratedInstall" data-test="agent-install-command-executed" @click="confirmGeneratedInstallExecuted">
+                        {{ checkingGeneratedInstall ? t('common.loading') : t('settings.agents.installCommandExecuted') }}
+                      </button>
+                    </div>
+                  </template>
+
+                  <template v-else>
+                    <p class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
+                    <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush" data-test="agent-install-push" @click="pushInstall">
+                      {{ installingPush ? t('common.loading') : t('settings.agents.installStartNow') }}
+                    </button>
+                    <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
+                  </template>
+                </section>
+
+                <section class="install-phase" :class="`phase-${installSecurityStatus}`" data-test="install-phase-security">
+                  <header class="install-phase-head">
+                    <strong>{{ t('settings.agents.installPhaseSecurity') }}</strong>
+                    <span class="phase-state">
+                      {{ installSecurityMessage || t(installSecurityStatus === 'idle' ? 'settings.agents.installSecurityNotStarted' : installSecurityStatus === 'waiting' ? 'settings.agents.installSecurityWaitingForStart' : installSecurityStatus === 'running' ? 'settings.agents.installSecurityRunning' : installSecurityStatus === 'success' ? 'settings.agents.installConnected' : 'common.requestFailed') }}
+                    </span>
+                  </header>
+                  <p class="step-note">{{ t('settings.agents.installSecurityHint') }}</p>
+                </section>
+              </div>
             </template>
           </section>
 
@@ -745,6 +851,51 @@ watch(
 }
 .step-actions {
   justify-content: flex-end;
+}
+.step-actions-left {
+  justify-content: flex-start;
+}
+.install-phases {
+  display: grid;
+  gap: 12px;
+}
+.install-phase {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  background: var(--bg-primary);
+}
+.install-phase-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.phase-state {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.phase-running,
+.phase-waiting {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.phase-running .phase-state,
+.phase-waiting .phase-state {
+  color: #f59e0b;
+}
+.phase-success {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+.phase-success .phase-state {
+  color: #22c55e;
+}
+.phase-error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+.phase-error .phase-state {
+  color: #ef4444;
 }
 .direct-address-tags {
   display: flex;

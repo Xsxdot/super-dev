@@ -10,7 +10,7 @@
  *   - 不访问真实 agent HTTP API
  *   - 不测试 AgentManagerTab 行布局
  */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentConfigPanel from '../AgentConfigPanel.vue'
@@ -218,7 +218,7 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.text()).toContain('curl install')
   })
 
-  it('runs SSH push install from the install step and refreshes health', async () => {
+  it('runs SSH push as install/start then provision/connect automatically', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'installAgent').mockResolvedValue({
       ok: true,
@@ -226,6 +226,7 @@ describe('AgentConfigPanel', () => {
       platform: 'linux/amd64',
       message: 'installed',
     })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
     vi.spyOn(store, 'checkAgent').mockResolvedValue(agent())
     const wrapper = mount(AgentConfigPanel, {
       props: {
@@ -237,12 +238,51 @@ describe('AgentConfigPanel', () => {
     })
 
     await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    expect(wrapper.find('[data-test="install-phase-start"]').text()).toContain('安装并启动')
+    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('下发安全配置并连接')
     expect(wrapper.find('[data-test="agent-install-push"]').exists()).toBe(true)
     await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+    await flushPromises()
 
     expect(store.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh' })
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
     expect(store.checkAgent).toHaveBeenCalledWith('h1')
-    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('已连接')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('locked')
+  })
+
+  it('waits for generated command execution before provisioning and connecting', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({
+      command: 'curl install',
+      expires_at: '2026-06-08T10:30:00Z',
+      token_id: 'tok_1',
+    })
+    vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
+    vi.spyOn(store, 'checkAgent')
+      .mockResolvedValueOnce(agent({ runtime: { installed: true, health: 'pending-bootstrap', reachable: true } }))
+      .mockResolvedValueOnce(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
+    await flushPromises()
+    expect(store.provisionAgent).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="agent-install-command-executed"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="agent-install-command-executed"]').trigger('click')
+    await flushPromises()
+
+    expect(store.checkAgent).toHaveBeenCalledWith('h1')
+    expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
+    expect(wrapper.find('[data-test="install-phase-start"]').text()).toContain('已启动')
+    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('已连接')
   })
 
   it('saves ordered transport chain and tests one entry', async () => {
