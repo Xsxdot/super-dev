@@ -12,6 +12,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, isApprovalRequiredError, type OperationApproval } from '@/api/agent'
+import { notifyOperationApproval } from '@/lib/operationApprovalNotification'
 
 const approvalPollIntervalMs = 2000
 
@@ -56,6 +57,10 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     }
   }
 
+  async function notifyApproval(approval: OperationApproval) {
+    await notifyOperationApproval(approval).catch(() => undefined)
+  }
+
   function recordObservedApprovals(items: OperationApproval[]) {
     for (const approval of items) {
       observedApprovalIds.add(approval.id)
@@ -91,6 +96,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       notificationBaselineReady = true
       if (newApprovals.length > 0) {
         notice.value = noticeFromApproval(newApprovals[0])
+        await notifyApproval(newApprovals[0])
       }
     } catch (err) {
       if (!error.value) error.value = err instanceof Error ? err.message : String(err)
@@ -152,6 +158,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     observedApprovalIds.add(err.approval.id)
     notificationBaselineReady = true
     notice.value = noticeFromApproval(err.approval)
+    await notifyApproval(err.approval)
     await loadPending()
     return true
   }

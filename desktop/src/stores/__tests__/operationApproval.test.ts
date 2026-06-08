@@ -10,8 +10,14 @@
  */
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/api/agent'
+import { AgentAPIError, api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+
+const notifyOperationApprovalMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@/lib/operationApprovalNotification', () => ({
+  notifyOperationApproval: notifyOperationApprovalMock,
+}))
 
 function pendingApproval(id = 'opa_1') {
   return {
@@ -36,6 +42,7 @@ describe('operationApproval store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
+    notifyOperationApprovalMock.mockResolvedValue(undefined)
   })
 
   it('loads pending approvals', async () => {
@@ -74,6 +81,35 @@ describe('operationApproval store', () => {
       kind: 'runtime.restart',
       target_summary: 'demo/prod/api',
     })
+  })
+
+  it('sends a native notification when a new pending approval appears after baseline', async () => {
+    const nextApproval = pendingApproval('opa_2')
+    vi.spyOn(api, 'listOperationApprovals')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([nextApproval])
+
+    const store = useOperationApprovalStore()
+    await store.syncPendingNotifications()
+    await store.syncPendingNotifications()
+
+    expect(notifyOperationApprovalMock).toHaveBeenCalledWith(nextApproval)
+  })
+
+  it('keeps existing approval state when native notification fails', async () => {
+    const nextApproval = pendingApproval('opa_2')
+    vi.spyOn(api, 'listOperationApprovals')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([nextApproval])
+    notifyOperationApprovalMock.mockRejectedValue(new Error('notification failed'))
+
+    const store = useOperationApprovalStore()
+    await store.syncPendingNotifications()
+    await store.syncPendingNotifications()
+
+    expect(store.pendingCount).toBe(1)
+    expect(store.notice?.approval_id).toBe('opa_2')
+    expect(store.error).toBe('')
   })
 
   it('approves and refreshes pending approvals', async () => {
@@ -218,5 +254,21 @@ describe('operationApproval store', () => {
 
     expect(store.notice?.approval_id).toBe('opa_1')
     expect(store.error).toBe('reject failed')
+  })
+
+  it('sends a native notification when capturing an approval_required response', async () => {
+    const captured = pendingApproval('opa_capture')
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([captured])
+
+    const store = useOperationApprovalStore()
+    const handled = await store.captureApprovalRequired(new AgentAPIError('approval required', 403, {
+      code: 'approval_required',
+      error: 'approval required',
+      approval: captured,
+      plan: captured.plan,
+    }))
+
+    expect(handled).toBe(true)
+    expect(notifyOperationApprovalMock).toHaveBeenCalledWith(captured)
   })
 })
