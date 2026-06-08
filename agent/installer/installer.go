@@ -468,7 +468,7 @@ func (i *Installer) verifyDelay() time.Duration {
 }
 
 func verifyAgentReady(ctx context.Context, remote Remote, port int, attempts int, delay time.Duration) error {
-	cmd := fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/hosts >/dev/null", port)
+	cmd := fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/security/health >/dev/null", port)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if _, err := remote.Run(ctx, cmd); err != nil {

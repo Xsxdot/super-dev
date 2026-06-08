@@ -13,6 +13,7 @@ package installer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,10 @@ func installerTestHost(id, sshHost, sshUser string, sshPort, remoteAgentPort int
 	return model.Host{ID: id, SSHHost: sshHost, SSHPort: sshPort, SSHUser: sshUser}
 }
 
+func installerVerifyCommand(port int) string {
+	return fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/security/health >/dev/null", port)
+}
+
 func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
@@ -78,14 +83,14 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, "uname -m")
 	assert.Contains(t, remote.commands, "sudo -n install -m 0755 /tmp/superdev-agent-linux-amd64 /usr/local/bin/superdev-agent")
 	assert.Contains(t, remote.commands, "sudo -n systemctl restart superdev-agent.service")
-	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57017/api/hosts >/dev/null")
+	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
 func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
 	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
-	verifyCmd := "curl -fsS http://127.0.0.1:57017/api/hosts >/dev/null"
+	verifyCmd := installerVerifyCommand(57017)
 	remote := &fakeRemote{
 		outputs: []string{"Linux\n", "x86_64\n"},
 		failCommands: map[string][]error{
@@ -119,7 +124,7 @@ func TestInstallerInstallsMacOSAgent(t *testing.T) {
 	assert.Equal(t, []string{binary + "->/tmp/superdev-agent-darwin-arm64"}, remote.uploads)
 	assert.Contains(t, remote.commands, "sudo -n install -m 0755 /tmp/superdev-agent-darwin-arm64 /usr/local/bin/superdev-agent")
 	assert.Contains(t, remote.commands, "sudo -n launchctl bootstrap system /Library/LaunchDaemons/dev.superdev.agent.plist")
-	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57017/api/hosts >/dev/null")
+	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
 func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *testing.T) {
@@ -152,7 +157,7 @@ func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *
 	assert.Contains(t, remote.commands, "launchctl bootstrap gui/501 '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist'")
 	assert.Contains(t, remote.commands, "launchctl kickstart -k gui/501/dev.superdev.agent")
 	assert.NotContains(t, remote.commands, "sudo -n launchctl bootstrap system /Library/LaunchDaemons/dev.superdev.agent.plist")
-	assert.Contains(t, remote.commands, "curl -fsS http://127.0.0.1:57017/api/hosts >/dev/null")
+	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
 func TestInstallerUninstallsLinuxAgentKeepingData(t *testing.T) {
