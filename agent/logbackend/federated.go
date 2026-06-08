@@ -258,10 +258,11 @@ func mergeLogStreams(streams [][]model.LogEntry, limit int) []model.LogEntry {
 	return out
 }
 
-// lessLogEntry 按 timestamp ASC, id ASC 比较两条日志。
+// lessLogEntry 按 timestamp ASC 比较，时间相同时按游标 ID 的字符串字典序兜底。
+// 字符串序兜底让数值 ID（sqlite/remote）与非数值 ID（云后端）能在同一次归并里共存。
 func lessLogEntry(a, b model.LogEntry) bool {
 	if a.Timestamp.Equal(b.Timestamp) {
-		return a.ID < b.ID
+		return encodeSQLiteCursor(a.ID) < encodeSQLiteCursor(b.ID)
 	}
 	return a.Timestamp.Before(b.Timestamp)
 }
