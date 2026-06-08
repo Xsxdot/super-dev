@@ -23,6 +23,7 @@ import { formatRelativeAge } from '@/lib/timeDisplay'
 import { agentStage, agentStageView, runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
 import { agentRouteRows, agentRouteSummary, transportTypeLabelKey, type AgentRouteRowStatus } from '@/lib/agentRoute'
 import AgentConfigPanel from './AgentConfigPanel.vue'
+import AgentBulkUpdateModal from './AgentBulkUpdateModal.vue'
 
 const agentsStore = useAgentsStore()
 const remoteStore = useRemoteStore()
@@ -39,6 +40,7 @@ const menuTriggerRect = ref<{ top: number; right: number; bottom: number } | nul
 const checking = ref<Set<string>>(new Set())
 const removing = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
+const bulkUpdateVisible = ref(false)
 const actionMenuWidth = 150
 const actionMenuGap = 6
 const viewportMargin = 8
@@ -133,6 +135,14 @@ function openCreatePanel() {
 function closePanel() {
   panelTarget.value = null
   panelMode.value = 'edit'
+}
+
+function openBulkUpdate() {
+  bulkUpdateVisible.value = true
+}
+
+function closeBulkUpdate() {
+  bulkUpdateVisible.value = false
 }
 
 function agentCreated(agent: AgentDTO) {
@@ -266,6 +276,9 @@ async function removeAgent(agent: AgentDTO) {
         <button class="settings-btn settings-btn-primary" type="button" data-test="agent-create" :disabled="availableHosts.length === 0" @click="openCreatePanel">
           + {{ t('settings.agents.create') }}
         </button>
+        <button class="settings-btn settings-btn-secondary" type="button" data-test="agent-bulk-update" :disabled="sortedAgents.length === 0" @click="openBulkUpdate">
+          {{ t('settings.agents.bulkUpdate') }}
+        </button>
         <button class="settings-btn settings-btn-secondary" type="button" :disabled="agentsStore.loading" @click="refresh">
           {{ t('settings.agents.refresh') }}
         </button>
@@ -378,6 +391,12 @@ async function removeAgent(agent: AgentDTO) {
       :host="panelTarget ? hostFor(panelTarget) : null"
       @created="agentCreated"
       @cancel="closePanel"
+    />
+    <AgentBulkUpdateModal
+      :visible="bulkUpdateVisible"
+      :agents="sortedAgents"
+      :hosts="remoteStore.hosts"
+      @cancel="closeBulkUpdate"
     />
   </section>
 </template>

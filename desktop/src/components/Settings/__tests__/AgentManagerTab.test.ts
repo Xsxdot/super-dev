@@ -20,6 +20,14 @@ import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { AgentDTO, Host, NodeStatus } from '@/api/agent'
 
+vi.mock('@/components/Settings/AgentBulkUpdateModal.vue', () => ({
+  default: {
+    props: ['visible', 'agents', 'hosts'],
+    emits: ['cancel'],
+    template: '<div v-if="visible" data-test="bulk-update-modal">bulk update</div>',
+  },
+}))
+
 const mountedWrappers: Array<{ unmount: () => void }> = []
 
 function agent(overrides: Partial<AgentDTO> = {}): AgentDTO {
@@ -61,6 +69,18 @@ const hosts: Host[] = [
   },
 ]
 
+function hostForManager(id: string): Host {
+  return {
+    id,
+    name: id,
+    tags: [],
+    ssh_host: '10.0.0.8',
+    ssh_port: 22,
+    ssh_user: 'root',
+    ssh_private_key: 'KEY',
+  }
+}
+
 async function mountPage(items: AgentDTO[], nodes: NodeStatus[] = [], hostItems: Host[] = hosts) {
   const agents = useAgentsStore()
   vi.spyOn(agents, 'loadAgents').mockResolvedValue(undefined)
@@ -99,6 +119,16 @@ afterEach(() => {
 })
 
 describe('AgentManagerTab', () => {
+  it('opens the batch update modal from the toolbar', async () => {
+    const { wrapper } = await mountPage([agent({
+      runtime: { installed: true, health: 'healthy', reachable: true, version: '0.1.0' },
+    })], [], [hostForManager('h1')])
+
+    await wrapper.find('[data-test="agent-bulk-update"]').trigger('click')
+
+    expect(wrapper.find('[data-test="bulk-update-modal"]').exists()).toBe(true)
+  })
+
   it('opens the unified AgentConfigPanel for new Agent creation and creates from the connection chain', async () => {
     const { wrapper, agents } = await mountPage([])
     vi.spyOn(agents, 'createAgent').mockResolvedValue(agent({
