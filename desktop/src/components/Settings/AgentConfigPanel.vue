@@ -82,12 +82,11 @@ const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID
 const panelAgent = computed<AgentDTO | null>(() => {
   if (props.agent) return props.agent
   if (!isCreateMode.value || !selectedHost.value) return null
-  const transportChain = createTransportChain()
   return {
     host_id: selectedHost.value.id,
     host_name: selectedHost.value.name,
     tags: selectedHost.value.tags,
-    transport: { chain: transportChain },
+    transport: { chain: chain.value.map(normalizeEntry) },
     config: { listen_address: securityForm.listenAddress, listen_port: bindPort.value },
     runtime: { installed: false, health: 'unknown', reachable: false },
     security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: securityForm.tlsMode } },
@@ -109,8 +108,8 @@ const needsCreateBeforeNextStep = computed(() => isCreateMode.value && !props.ag
 
 const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean; done: boolean }>>(() => [
   { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(props.agent?.config?.listen_port) },
+  { key: 'transport', label: t('settings.agents.tabTransport'), locked: false, done: Boolean(props.agent?.transport?.chain?.length) },
   { key: 'install', label: t('settings.agents.tabInstall'), locked: needsCreateBeforeNextStep.value, done: runtime.value?.installed === true },
-  { key: 'transport', label: t('settings.agents.tabTransport'), locked: needsCreateBeforeNextStep.value, done: chain.value.length > 0 },
   { key: 'probe', label: t('settings.agents.tabProbe'), locked: !canProbe.value, done: runtime.value?.health === 'healthy' },
 ])
 
@@ -139,16 +138,17 @@ function chainSignature(entries: TransportEntry[]): string {
   return JSON.stringify(entries.map(normalizeEntry))
 }
 
-function createTransportChain(): TransportEntry[] {
-  const normalizedChain = chain.value.map(normalizeEntry)
-  if (normalizedChain.length === 1 && normalizedChain[0]?.type === 'tunnel') {
-    return [{ type: 'tunnel', tunnel: { remote_agent_port: bindPort.value } }]
-  }
-  return normalizedChain
-}
-
 function clearProbeResults() {
   Object.keys(probeResults).forEach(key => delete probeResults[Number(key)])
+}
+
+function syncDefaultCreateTunnelPort() {
+  if (!needsCreateBeforeNextStep.value || transportDirty.value) return
+  const normalizedChain = chain.value.map(normalizeEntry)
+  if (normalizedChain.length !== 1 || normalizedChain[0]?.type !== 'tunnel') return
+  const nextChain: TransportEntry[] = [{ type: 'tunnel', tunnel: { remote_agent_port: bindPort.value } }]
+  chain.value = nextChain
+  savedChain.value = nextChain.map(normalizeEntry)
 }
 
 function reset(agent?: AgentDTO | null) {
@@ -171,6 +171,9 @@ function reset(agent?: AgentDTO | null) {
 }
 
 function selectTab(tab: AgentPanelTab) {
+  if (tab === 'transport') {
+    syncDefaultCreateTunnelPort()
+  }
   activeTab.value = tab
   actionError.value = null
 }
@@ -202,7 +205,7 @@ function tlsPayload(): AgentConfigUpdatePayload['security']['tls'] {
 function createPayload(): AgentCreatePayload {
   return {
     host_id: hostID.value,
-    transport: { chain: createTransportChain() },
+    transport: { chain: chain.value.map(normalizeEntry) },
     config: {
       listen_address: securityForm.listenAddress.trim(),
       listen_port: bindPort.value,
@@ -218,16 +221,9 @@ function createPayload(): AgentCreatePayload {
 async function saveSecurity() {
   if (needsCreateBeforeNextStep.value) {
     if (!hostID.value) return
-    creatingAgent.value = true
     actionError.value = null
-    try {
-      const created = await agentsStore.createAgent(createPayload())
-      emit('created', created)
-    } catch (err) {
-      actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
-    } finally {
-      creatingAgent.value = false
-    }
+    syncDefaultCreateTunnelPort()
+    activeTab.value = 'transport'
     return
   }
   if (!props.agent) return
@@ -310,10 +306,26 @@ async function testEntry(index: number) {
 }
 
 async function saveTransport() {
-  if (!props.agent) return
-  savingTransport.value = true
   actionError.value = null
   const normalizedChain = chain.value.map(normalizeEntry)
+  if (needsCreateBeforeNextStep.value) {
+    if (!hostID.value) return
+    creatingAgent.value = true
+    try {
+      chain.value = normalizedChain.map(normalizeEntry)
+      savedChain.value = normalizedChain.map(normalizeEntry)
+      const created = await agentsStore.createAgent(createPayload())
+      activeTab.value = 'install'
+      emit('created', created)
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+    } finally {
+      creatingAgent.value = false
+    }
+    return
+  }
+  if (!props.agent) return
+  savingTransport.value = true
   const payload: AgentTransportUpdatePayload = { transport: { chain: normalizedChain } }
   try {
     await agentsStore.updateAgentTransport(props.agent.host_id, payload)
@@ -451,8 +463,8 @@ watch(
               <button v-if="agent" type="button" class="settings-btn settings-btn-secondary" :disabled="provisioning" data-test="agent-provision-security" @click="provisionSecurity">
                 {{ provisioning ? t('common.loading') : t('settings.agents.provisionSecurity') }}
               </button>
-              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingSecurity || creatingAgent || (needsCreateBeforeNextStep && !hostID)" data-test="agent-security-save" @click="saveSecurity">
-                {{ savingSecurity || creatingAgent ? t('common.loading') : t(needsCreateBeforeNextStep ? 'settings.agents.createAndContinue' : 'common.save') }}
+              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingSecurity || (needsCreateBeforeNextStep && !hostID)" data-test="agent-security-save" @click="saveSecurity">
+                {{ savingSecurity ? t('common.loading') : t(needsCreateBeforeNextStep ? 'settings.agents.next' : 'common.save') }}
               </button>
             </footer>
           </section>
@@ -497,10 +509,6 @@ watch(
           </section>
 
           <section v-if="activeTab === 'transport'" class="panel-step">
-            <div v-if="needsCreateBeforeNextStep" class="settings-alert settings-alert-warning" data-test="agent-create-before-transport">
-              {{ t('settings.agents.createBeforeNextStep') }}
-            </div>
-            <template v-else>
             <div class="chain-toolbar">
               <button type="button" class="settings-btn" data-test="transport-add-direct" @click="addEntry('direct')">direct</button>
               <button type="button" class="settings-btn" data-test="transport-add-tunnel" @click="addEntry('tunnel')">tunnel</button>
@@ -529,18 +537,17 @@ watch(
               </div>
 
               <footer class="transport-entry-actions">
-                <button type="button" class="settings-btn" :disabled="transportDirty" :data-test="`transport-test-${index}`" @click="testEntry(index)">
+                <button type="button" class="settings-btn" :disabled="needsCreateBeforeNextStep || transportDirty" :data-test="`transport-test-${index}`" @click="testEntry(index)">
                   {{ t('settings.agents.testTransport') }}
                 </button>
                 <span class="probe-result">{{ probeLabel(probeResults[index]) }}</span>
               </footer>
             </section>
             <footer class="step-actions">
-              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingTransport" data-test="agent-transport-save" @click="saveTransport">
-                {{ savingTransport ? t('common.loading') : t('common.save') }}
+              <button type="button" class="settings-btn settings-btn-primary" :disabled="savingTransport || creatingAgent || (needsCreateBeforeNextStep && !hostID)" data-test="agent-transport-save" @click="saveTransport">
+                {{ savingTransport || creatingAgent ? t('common.loading') : t(needsCreateBeforeNextStep ? 'settings.agents.createAndContinue' : 'common.save') }}
               </button>
             </footer>
-            </template>
           </section>
 
           <section v-if="activeTab === 'probe'" class="panel-step">

@@ -99,7 +99,7 @@ afterEach(() => {
 })
 
 describe('AgentManagerTab', () => {
-  it('opens the unified AgentConfigPanel for new Agent creation and continues to install', async () => {
+  it('opens the unified AgentConfigPanel for new Agent creation and creates from the connection chain', async () => {
     const { wrapper, agents } = await mountPage([])
     vi.spyOn(agents, 'createAgent').mockResolvedValue(agent({ host_id: 'h2', host_name: 'us-02', tags: [] }))
 
@@ -112,6 +112,12 @@ describe('AgentManagerTab', () => {
     expect(wrapper.find('.agent-create-modal').exists()).toBe(false)
 
     await wrapper.find('[data-test="agent-security-save"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(agents.createAgent).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="agent-panel-tab-transport"]').classes()).toContain('active')
+
+    await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 

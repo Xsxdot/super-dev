@@ -70,7 +70,7 @@ beforeEach(() => {
 })
 
 describe('AgentConfigPanel', () => {
-  it('creates a new Agent from the unified security tab before moving to install', async () => {
+  it('creates a new Agent from the connection-chain step before moving to install', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'createAgent').mockResolvedValue(agent())
     const wrapper = mount(AgentConfigPanel, {
@@ -78,11 +78,24 @@ describe('AgentConfigPanel', () => {
       global: { plugins: [installTestI18n()] },
     })
 
+    expect(wrapper.findAll('.panel-tab').map(tab => tab.attributes('data-test'))).toEqual([
+      'agent-panel-tab-security',
+      'agent-panel-tab-transport',
+      'agent-panel-tab-install',
+      'agent-panel-tab-probe',
+    ])
     expect(wrapper.find('[data-test="agent-create-host"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
     await wrapper.find('[data-test="agent-listen-address"]').setValue('0.0.0.0')
     await wrapper.find('[data-test="agent-listen-port"]').setValue(57019)
     await wrapper.find('[data-test="agent-security-save"]').trigger('click')
+
+    expect(store.createAgent).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="agent-panel-tab-transport"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="agent-create-before-transport"]').exists()).toBe(false)
+    expect((wrapper.find('[data-test="tunnel-remote-agent-port-0"]').element as HTMLInputElement).value).toBe('57019')
+
+    await wrapper.find('[data-test="agent-transport-save"]').trigger('click')
 
     expect(store.createAgent).toHaveBeenCalledWith({
       host_id: 'h1',
@@ -95,6 +108,19 @@ describe('AgentConfigPanel', () => {
       },
     })
     expect(wrapper.emitted('created')?.[0]?.[0]).toMatchObject({ host_id: 'h1' })
+    expect(wrapper.find('[data-test="agent-panel-tab-install"]').classes()).toContain('active')
+  })
+
+  it('syncs the default create-mode tunnel port when the connection-chain tab is opened directly', async () => {
+    const wrapper = mount(AgentConfigPanel, {
+      props: { visible: true, mode: 'create', hosts, initialTab: 'security' },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('[data-test="agent-listen-port"]').setValue(57021)
+    await wrapper.find('[data-test="agent-panel-tab-transport"]').trigger('click')
+
+    expect((wrapper.find('[data-test="tunnel-remote-agent-port-0"]').element as HTMLInputElement).value).toBe('57021')
   })
 
   it('opens on the requested default tab', () => {
