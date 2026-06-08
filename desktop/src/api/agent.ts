@@ -140,6 +140,7 @@ export interface InstanceMetrics {
 export interface RuntimeInstanceStatus {
   service_id: string
   service_name: string
+  env_name: string
   deployment_id: string
   node_id: string
   node_name: string
