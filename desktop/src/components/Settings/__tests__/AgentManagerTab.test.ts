@@ -178,6 +178,21 @@ describe('AgentManagerTab', () => {
     expect(firstRow.text()).not.toContain('未测')
   })
 
+  it('renders localized transport names in route details', async () => {
+    const { wrapper } = await mountPage([agent({
+      runtime: { installed: true, health: 'healthy', reachable: true },
+    })], [node({
+      selected_index: 1,
+      selected_type: 'tunnel',
+      degraded: true,
+    })])
+
+    await wrapper.find('[data-test="agent-route-toggle-h1"]').trigger('click')
+
+    expect(wrapper.find('[data-test="agent-route-row-h1-0"]').text()).toContain('直连 · 100.64.0.8:57017')
+    expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).toContain('隧道 · :57017')
+  })
+
   it('shows one primary action plus a more menu instead of duplicated row links', async () => {
     const { wrapper } = await mountPage([agent()])
 

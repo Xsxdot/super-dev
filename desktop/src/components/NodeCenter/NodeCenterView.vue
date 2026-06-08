@@ -131,7 +131,8 @@ function openLogs(deploymentId: string) {
 }
 .node-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  width: 100%;
+  grid-template-columns: repeat(auto-fill, minmax(max(400px, calc((100% - 36px) / 4)), 1fr));
   gap: 12px;
   min-height: 0;
   overflow: auto;

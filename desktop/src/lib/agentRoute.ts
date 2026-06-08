@@ -36,6 +36,17 @@ export interface AgentRouteRow {
   error?: string
 }
 
+export function transportTypeLabelKey(type?: string): string {
+  switch (type) {
+    case 'direct':
+      return 'common.transport.direct'
+    case 'tunnel':
+      return 'common.transport.tunnel'
+    default:
+      return 'common.transport.unknown'
+  }
+}
+
 export function transportAddress(entry?: TransportEntry): string {
   if (!entry) return '-'
   if (entry.type === 'direct') return entry.direct?.address?.trim() || 'direct'

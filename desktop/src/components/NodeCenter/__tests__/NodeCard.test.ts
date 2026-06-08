@@ -172,6 +172,18 @@ describe('NodeCard', () => {
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    expect(wrapper.text()).toContain('via tunnel (degraded)')
+    expect(wrapper.find('[data-test="node-route-badge"]').text()).toBe('Tunnel · degraded')
+  })
+
+  it('renders the selected connection type as a localized badge beside the node name', () => {
+    const wrapper = mount(NodeCard, {
+      props: { node: card({ route: { selectedIndex: 0, selectedType: 'direct', degraded: false } }) },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const titleRow = wrapper.find('.node-title-row')
+    expect(titleRow.text()).toContain('ali-01')
+    expect(titleRow.find('[data-test="node-route-badge"]').text()).toBe('直连')
+    expect(wrapper.text()).not.toContain('via direct')
   })
 })

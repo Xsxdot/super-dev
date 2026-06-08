@@ -105,16 +105,6 @@ onBeforeUnmount(() => {
   <div class="sidebar">
     <div class="sidebar-scroll">
       <button
-        type="button"
-        class="node-center-strip"
-        data-test="sidebar-node-center"
-        @click="openNodeCenter"
-      >
-        <span class="node-center-icon" aria-hidden="true"></span>
-        <span class="node-center-main">{{ t('shell.sidebar.nodeCenter') }}</span>
-        <span class="node-center-hint">{{ t('shell.sidebar.nodeCenterHint') }}</span>
-      </button>
-      <button
         v-if="agentStore.projects.length === 0"
         type="button"
         class="empty-add-project"
@@ -171,9 +161,28 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </div>
-    <button data-test="sidebar-settings" type="button" class="settings-entry" @click="router.push('/settings')">
-      ⚙ {{ t('shell.sidebar.settings') }}
-    </button>
+    <div class="sidebar-tools">
+      <button
+        type="button"
+        class="sidebar-tool-button"
+        data-test="sidebar-node-center"
+        @click="openNodeCenter"
+      >
+        <span class="sidebar-tool-icon node-center-icon" aria-hidden="true"></span>
+        <span class="sidebar-tool-main">{{ t('shell.sidebar.nodeCenter') }}</span>
+        <span class="sidebar-tool-hint">{{ t('shell.sidebar.nodeCenterHint') }}</span>
+      </button>
+      <button
+        data-test="sidebar-settings"
+        type="button"
+        class="sidebar-tool-button"
+        @click="router.push('/settings')"
+      >
+        <span class="sidebar-tool-icon settings-icon" aria-hidden="true">⚙</span>
+        <span class="sidebar-tool-main">{{ t('shell.sidebar.settings') }}</span>
+        <span class="sidebar-tool-hint">{{ t('shell.sidebar.settingsHint') }}</span>
+      </button>
+    </div>
   </div>
   <ProjectConfigEditor
     v-if="editorProject"
@@ -217,55 +226,6 @@ onBeforeUnmount(() => {
 .empty-add-project:hover {
   border-color: var(--border);
   color: var(--text-primary);
-}
-
-.node-center-strip {
-  display: grid;
-  width: calc(100% - 20px);
-  min-height: 42px;
-  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  margin: 10px 10px 8px;
-  padding: 0 11px;
-  border: 1px solid rgba(91, 106, 128, 0.32);
-  border-radius: 7px;
-  background: rgba(15, 24, 34, 0.72);
-  color: var(--text-secondary);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.12s, background 0.12s, color 0.12s;
-}
-
-.node-center-strip:hover {
-  border-color: rgba(63, 185, 80, 0.42);
-  background: rgba(24, 39, 54, 0.78);
-  color: var(--text-primary);
-}
-
-.node-center-icon {
-  width: 16px;
-  height: 16px;
-  border: 2px solid currentColor;
-  border-radius: 5px;
-  opacity: 0.92;
-}
-
-.node-center-main {
-  min-width: 0;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.node-center-hint {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar-project-shell {
@@ -377,19 +337,68 @@ onBeforeUnmount(() => {
   opacity: 0.8;
   flex-shrink: 0;
 }
-.settings-entry {
-  width: 100%;
-  padding: 12px 18px;
+.sidebar-tools {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
   border-top: 1px solid var(--border-secondary);
-  border-right: 0;
-  border-bottom: 0;
-  border-left: 0;
+}
+.sidebar-tool-button {
+  display: grid;
+  width: 100%;
+  min-height: 38px;
+  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
   text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.sidebar-tool-button:hover {
+  background: rgba(24, 39, 54, 0.58);
+  color: var(--text-primary);
+}
+.sidebar-tool-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
   color: var(--text-secondary);
   font-size: 13px;
-  cursor: pointer;
-  transition: color 0.12s;
+  line-height: 1;
 }
-.settings-entry:hover { color: var(--text-secondary); }
+.node-center-icon::before {
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(63, 185, 80, 0.28);
+  border-radius: 50%;
+  background: var(--status-running);
+  content: '';
+}
+.settings-icon {
+  font-size: 13px;
+  opacity: 0.86;
+}
+.sidebar-tool-main {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.sidebar-tool-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

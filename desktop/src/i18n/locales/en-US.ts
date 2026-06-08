@@ -37,6 +37,11 @@ export default {
     yes: 'Yes',
     no: 'No',
     serviceCount: '{count} services',
+    transport: {
+      direct: 'Direct',
+      tunnel: 'Tunnel',
+      unknown: 'Unknown route',
+    },
     status: {
       running: 'Running',
       starting: 'Starting...',
@@ -661,6 +666,7 @@ export default {
       currentProject: 'Current',
       nodeCenter: 'Node Center',
       nodeCenterHint: 'All remote nodes',
+      settingsHint: 'Preferences',
       projectOverviewHint: 'Status · pipelines · ingress',
     },
     env: {

@@ -103,14 +103,14 @@ describe('nodeCenter view model', () => {
     expect(nodes.map(item => item.hostId)).toEqual(['remote'])
   })
 
-  it('includes snapshot-only remote nodes after configured hosts', () => {
+  it('includes snapshot-only remote nodes in the connectivity and service-count order', () => {
     const nodes = buildNodeCenterNodes(
       [host({ id: 'host-1', name: 'ali-01' })],
       [node({ host_id: 'host-2', name: 'tokyo-01', deployments: [instance({ node_id: 'host-2', node_name: 'tokyo-01' })] })],
       [],
     )
 
-    expect(nodes.map(item => item.hostId)).toEqual(['host-1', 'host-2'])
+    expect(nodes.map(item => item.hostId)).toEqual(['host-2', 'host-1'])
     expect(nodes.find(item => item.hostId === 'host-2')?.configured).toBe(false)
   })
 
@@ -178,5 +178,45 @@ describe('nodeCenter view model', () => {
     )
 
     expect(nodes[0].route).toEqual({ selectedIndex: 1, selectedType: 'tunnel', degraded: true })
+  })
+
+  it('sorts reachable nodes before disconnected nodes and then by remote service count', () => {
+    const nodes = buildNodeCenterNodes(
+      [
+        host({ id: 'small', name: 'small' }),
+        host({ id: 'offline', name: 'offline' }),
+        host({ id: 'large', name: 'large' }),
+        host({ id: 'empty', name: 'empty' }),
+      ],
+      [
+        node({
+          host_id: 'small',
+          name: 'small',
+          deployments: [instance({ deployment_id: 'dep-small', node_id: 'small' })],
+        }),
+        node({
+          host_id: 'offline',
+          name: 'offline',
+          reachable: false,
+          agent: { installed: true, health: 'unreachable', reachable: false },
+          deployments: [
+            instance({ deployment_id: 'dep-offline-a', node_id: 'offline' }),
+            instance({ deployment_id: 'dep-offline-b', node_id: 'offline' }),
+          ],
+        }),
+        node({
+          host_id: 'large',
+          name: 'large',
+          deployments: [
+            instance({ deployment_id: 'dep-large-a', node_id: 'large' }),
+            instance({ deployment_id: 'dep-large-b', node_id: 'large' }),
+            instance({ deployment_id: 'dep-large-c', node_id: 'large' }),
+          ],
+        }),
+      ],
+      [],
+    )
+
+    expect(nodes.map(item => item.hostId)).toEqual(['large', 'small', 'offline', 'empty'])
   })
 })

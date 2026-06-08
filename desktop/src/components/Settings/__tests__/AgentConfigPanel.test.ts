@@ -712,6 +712,7 @@ describe('AgentConfigPanel', () => {
     expect(store.testTransport).toHaveBeenCalledWith('h1', 0)
     expect(store.testTransport).toHaveBeenCalledWith('h1', 1)
     expect(store.checkAgent).toHaveBeenCalledWith('h1')
+    expect(wrapper.find('[data-test="agent-probe-result-1"]').text()).toContain('Tunnel · :57017')
     expect(wrapper.find('[data-test="agent-probe-result-1"]').text()).toContain('reachable')
   })
 })

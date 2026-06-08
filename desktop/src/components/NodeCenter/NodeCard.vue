@@ -20,6 +20,7 @@ import {
   formatRestarts,
   formatUptime,
 } from '@/lib/runtimeMetrics'
+import { transportTypeLabelKey } from '@/lib/agentRoute'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
 const props = defineProps<{ node: NodeCenterNode }>()
@@ -41,8 +42,8 @@ function agentSummary(): string {
 
 function routeSummary(): string {
   if (!props.node.route?.selectedType) return ''
-  const via = `via ${props.node.route.selectedType}`
-  return props.node.route.degraded ? `${via} (${t('nodeCenter.degraded')})` : via
+  const label = t(transportTypeLabelKey(props.node.route.selectedType))
+  return props.node.route.degraded ? `${label} · ${t('nodeCenter.degraded')}` : label
 }
 
 function openLogs(deploymentId: string, nodeId: string) {
@@ -60,9 +61,11 @@ function openLogs(deploymentId: string, nodeId: string) {
       <div class="node-title-group">
         <span class="node-status-dot" aria-hidden="true"></span>
         <div class="node-title-text">
-          <h2>{{ node.name }}</h2>
+          <div class="node-title-row">
+            <h2>{{ node.name }}</h2>
+            <span v-if="routeSummary()" class="node-route-badge" data-test="node-route-badge">{{ routeSummary() }}</span>
+          </div>
           <p>{{ agentSummary() }}</p>
-          <p v-if="routeSummary()" class="node-route">{{ routeSummary() }}</p>
         </div>
       </div>
       <span class="node-health-badge">{{ node.reachable ? node.agent.health : t('nodeCenter.disconnected') }}</span>
@@ -159,11 +162,30 @@ function openLogs(deploymentId: string, nodeId: string) {
 .node-title-text {
   min-width: 0;
 }
+.node-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
 .node-title-text h2 {
   margin: 0;
   overflow: hidden;
   font-size: 14px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-route-badge {
+  max-width: 112px;
+  padding: 1px 6px;
+  border: 1px solid rgba(210, 153, 34, 0.32);
+  border-radius: 999px;
+  color: var(--status-warning);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -174,9 +196,6 @@ function openLogs(deploymentId: string, nodeId: string) {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.node-title-text .node-route {
-  color: var(--status-warning);
 }
 .node-health-badge {
   flex-shrink: 0;
@@ -208,7 +227,7 @@ function openLogs(deploymentId: string, nodeId: string) {
 }
 .node-service-row {
   display: grid;
-  grid-template-columns: 12px minmax(96px, 1fr) minmax(240px, auto);
+  grid-template-columns: 12px minmax(88px, 1fr) minmax(0, 240px);
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -219,6 +238,7 @@ function openLogs(deploymentId: string, nodeId: string) {
   background: var(--bg-primary);
   color: inherit;
   cursor: pointer;
+  overflow: hidden;
   text-align: left;
 }
 .node-service-row:hover {
@@ -265,9 +285,13 @@ function openLogs(deploymentId: string, nodeId: string) {
 }
 .service-metrics {
   display: grid;
-  grid-template-columns: 76px 64px 58px 36px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 76px) minmax(0, 64px) minmax(0, 58px) minmax(0, 36px);
   gap: 8px;
   justify-content: end;
+}
+.metric {
+  min-width: 0;
 }
 .metric-label {
   display: block;
@@ -280,10 +304,13 @@ function openLogs(deploymentId: string, nodeId: string) {
   margin-top: 2px;
   font-size: 11px;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cpu-bar {
   display: block;
-  width: 54px;
+  width: min(54px, 100%);
   height: 3px;
   margin-top: 4px;
   border-radius: 999px;

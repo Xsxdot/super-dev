@@ -21,7 +21,7 @@ import { useNodeStore } from '@/stores/node'
 import { tagColor } from '@/lib/tagColor'
 import { formatRelativeAge } from '@/lib/timeDisplay'
 import { agentStage, agentStageView, runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
-import { agentRouteRows, agentRouteSummary, type AgentRouteRowStatus } from '@/lib/agentRoute'
+import { agentRouteRows, agentRouteSummary, transportTypeLabelKey, type AgentRouteRowStatus } from '@/lib/agentRoute'
 import AgentConfigPanel from './AgentConfigPanel.vue'
 
 const agentsStore = useAgentsStore()
@@ -107,6 +107,10 @@ function hostFor(agent: AgentDTO) {
 
 function routeStatusKey(status: AgentRouteRowStatus) {
   return routeStatusKeys[status]
+}
+
+function transportLabel(type?: string) {
+  return t(transportTypeLabelKey(type))
 }
 
 function healthLabelKey(health: AgentHealth) {
@@ -312,7 +316,7 @@ async function removeAgent(agent: AgentDTO) {
                 >
                   <span class="mono">{{ row.index + 1 }}</span>
                   <span class="route-dot" :class="`route-${row.status}`" aria-hidden="true"></span>
-                  <span class="mono route-entry">{{ row.type }} · {{ row.address }}</span>
+                  <span class="mono route-entry">{{ transportLabel(row.type) }} · {{ row.address }}</span>
                   <span class="route-status-label">{{ t(routeStatusKey(row.status)) }}</span>
                   <span v-if="row.current" class="route-current-badge">{{ t('settings.agents.routeCurrent') }}</span>
                   <span>{{ row.role === 'primary' ? t('settings.agents.primaryTransport') : t('settings.agents.fallbackTransport') }}</span>

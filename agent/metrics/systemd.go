@@ -15,7 +15,7 @@ type systemdLastSample struct {
 }
 
 func (s *Sampler) sampleSystemd(ctx context.Context, target SampleTarget) (model.InstanceMetrics, error) {
-	out, err := s.cmd.Run(ctx, "systemctl", "show", target.Unit, "--property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState")
+	out, err := s.cmd.Run(ctx, "systemctl", "show", target.Unit, "--property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState,MainPID")
 	if err != nil {
 		return unknownMetrics(target.Base), err
 	}
@@ -30,6 +30,9 @@ func (s *Sampler) sampleSystemd(ctx context.Context, target SampleTarget) (model
 	}
 	if restarts := parseOptionalInt(props["NRestarts"]); restarts != nil {
 		metrics.Restarts = restarts
+	}
+	if mainPID := parseOptionalInt(props["MainPID"]); mainPID != nil && *mainPID > 0 {
+		s.fillSystemdUptime(ctx, &metrics, *mainPID)
 	}
 	if cpuNS := parseOptionalInt64(props["CPUUsageNSec"]); cpuNS != nil {
 		now := s.clock.Now()
@@ -48,6 +51,18 @@ func (s *Sampler) sampleSystemd(ctx context.Context, target SampleTarget) (model
 		}
 	}
 	return metrics, nil
+}
+
+func (s *Sampler) fillSystemdUptime(ctx context.Context, metrics *model.InstanceMetrics, mainPID int) {
+	out, err := s.cmd.Run(ctx, "ps", "-axo", "pid=,ppid=,%cpu=,rss=,etime=")
+	if err != nil {
+		return
+	}
+	_, _, uptime, found, err := parsePSProcessTree(out, mainPID)
+	if err != nil || !found {
+		return
+	}
+	metrics.UptimeSec = uptime
 }
 
 func parseSystemdShow(output string) map[string]string {

@@ -47,7 +47,7 @@ func TestSystemdSamplerCalculatesCPUFromSecondSample(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(100, 0)}
 	cmd := &fakeCommand{
 		outputs: map[string]string{
-			"systemctl show api.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState": "MemoryCurrent=104857600\nCPUUsageNSec=1000000000\nNRestarts=2\nActiveState=active\nSubState=running\n",
+			"systemctl show api.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState,MainPID": "MemoryCurrent=104857600\nCPUUsageNSec=1000000000\nNRestarts=2\nActiveState=active\nSubState=running\n",
 		},
 		errs: map[string]error{},
 	}
@@ -62,11 +62,30 @@ func TestSystemdSamplerCalculatesCPUFromSecondSample(t *testing.T) {
 	assert.Equal(t, model.HealthRunning, first.Health)
 
 	clock.now = clock.now.Add(2 * time.Second)
-	cmd.outputs["systemctl show api.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState"] = "MemoryCurrent=104857600\nCPUUsageNSec=3000000000\nNRestarts=2\nActiveState=active\nSubState=running\n"
+	cmd.outputs["systemctl show api.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState,MainPID"] = "MemoryCurrent=104857600\nCPUUsageNSec=3000000000\nNRestarts=2\nActiveState=active\nSubState=running\n"
 	second, err := sampler.Sample(context.Background(), target)
 	require.NoError(t, err)
 	require.NotNil(t, second.CPUPercent)
 	assert.InDelta(t, 100.0, *second.CPUPercent, 0.01)
+}
+
+func TestSystemdSamplerUsesMainPIDForUptime(t *testing.T) {
+	systemdOutput := "MemoryCurrent=104857600\nCPUUsageNSec=1000000000\nNRestarts=2\nActiveState=active\nSubState=running\nMainPID=200\n"
+	cmd := &fakeCommand{
+		outputs: map[string]string{
+			"systemctl show api.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState,MainPID": systemdOutput,
+			"ps -axo pid=,ppid=,%cpu=,rss=,etime=": "200 1 1.5 4000 02:00\n201 200 0.5 1000 01:00\n",
+		},
+		errs: map[string]error{},
+	}
+	sampler := NewSampler(cmd)
+
+	got, err := sampler.Sample(context.Background(), SampleTarget{DeploymentID: "dep-api", Base: "systemd", Unit: "api.service"})
+	require.NoError(t, err)
+	require.NotNil(t, got.UptimeSec)
+	assert.Equal(t, int64(120), *got.UptimeSec)
+	assert.Equal(t, model.HealthRunning, got.Health)
+	assert.Equal(t, "systemd", got.Base)
 }
 
 func TestDockerSamplerParsesStatsAndInspect(t *testing.T) {
@@ -150,7 +169,7 @@ func TestSamplerReturnsUnknownForUnsupportedOrCommandError(t *testing.T) {
 	cmd := &fakeCommand{
 		outputs: map[string]string{},
 		errs: map[string]error{
-			"systemctl show bad.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState": errors.New("not found"),
+			"systemctl show bad.service --property=MemoryCurrent,CPUUsageNSec,NRestarts,ActiveState,SubState,MainPID": errors.New("not found"),
 		},
 	}
 	sampler := NewSampler(cmd)

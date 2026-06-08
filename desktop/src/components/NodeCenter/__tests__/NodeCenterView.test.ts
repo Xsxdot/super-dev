@@ -15,6 +15,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import NodeCenterView from '../NodeCenterView.vue'
+import nodeCenterViewSource from '../NodeCenterView.vue?raw'
 import { installTestI18n } from '@/test-utils/i18n'
 import { useAgentStore } from '@/stores/agent'
 import { useNodeStore } from '@/stores/node'
@@ -170,5 +171,12 @@ describe('NodeCenterView', () => {
     if (workspace.activeTab?.type !== 'deployment') throw new Error('expected deployment tab')
     expect(workspace.activeTab.deploymentId).toBe('dep-api')
     expect(workspace.activeTab.title).toBe('api · prod')
+  })
+
+  it('uses the full workspace width with a four-column adaptive cap', () => {
+    expect(nodeCenterViewSource).toContain('width: 100%;')
+    expect(nodeCenterViewSource).toContain('grid-template-columns: repeat(auto-fill')
+    expect(nodeCenterViewSource).toContain('calc((100% - 36px) / 4)')
+    expect(nodeCenterViewSource).not.toContain('1560px')
   })
 })

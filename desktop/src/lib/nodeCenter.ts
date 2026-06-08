@@ -189,5 +189,8 @@ function sortDeployments(
 }
 
 function compareNodes(left: NodeCenterNode, right: NodeCenterNode): number {
+  if (left.reachable !== right.reachable) return left.reachable ? -1 : 1
+  const serviceCountDiff = right.serviceCount - left.serviceCount
+  if (serviceCountDiff) return serviceCountDiff
   return left.name.localeCompare(right.name) || left.hostId.localeCompare(right.hostId)
 }

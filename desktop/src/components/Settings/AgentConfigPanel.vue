@@ -15,7 +15,7 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { useAgentsStore } from '@/stores/agents'
-import { agentRouteRows } from '@/lib/agentRoute'
+import { agentRouteRows, transportTypeLabelKey } from '@/lib/agentRoute'
 import { runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
 import {
   bindReasonFromChain,
@@ -625,6 +625,10 @@ function probeLabel(result?: ProbeResult | null): string {
   return `${result.status}${latency}${error}`
 }
 
+function transportLabel(type?: string): string {
+  return t(transportTypeLabelKey(type))
+}
+
 watch(
   () => [props.visible, props.agent, props.initialTab] as const,
   ([visible, agent]) => {
@@ -907,7 +911,7 @@ onBeforeUnmount(() => {
               <div class="route-detail-list">
                 <div v-for="row in currentRows" :key="row.index" class="route-detail-row" :data-test="`agent-probe-result-${row.index}`">
                   <span class="route-index">{{ row.index + 1 }}</span>
-                  <span class="route-address">{{ row.type }} · {{ row.address }}</span>
+                  <span class="route-address">{{ transportLabel(row.type) }} · {{ row.address }}</span>
                   <span class="route-status">{{ probeLabel(probeResults[row.index] ?? row.probe) }}</span>
                 </div>
               </div>

@@ -301,4 +301,42 @@ describe('SidebarView', () => {
     expect(workspace.activeTab?.type).toBe('nodes')
     expect(workspace.tabs.filter(tab => tab.type === 'nodes')).toHaveLength(1)
   })
+
+  it('节点中心入口位于底部工具区并排在设置上方', () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const tools = wrapper.find('.sidebar-tools')
+    expect(tools.exists()).toBe(true)
+    expect(tools.find('[data-test="sidebar-node-center"]').exists()).toBe(true)
+    expect(tools.find('[data-test="sidebar-settings"]').exists()).toBe(true)
+    expect(tools.text().indexOf('节点中心')).toBeLessThan(tools.text().indexOf('设置'))
+    expect(wrapper.find('.sidebar-scroll [data-test="sidebar-node-center"]').exists()).toBe(false)
+  })
+
+  it('节点中心和设置入口使用统一的底部工具按钮结构', () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const tools = wrapper.find('.sidebar-tools')
+    const buttons = tools.findAll('.sidebar-tool-button')
+
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0].attributes('data-test')).toBe('sidebar-node-center')
+    expect(buttons[1].attributes('data-test')).toBe('sidebar-settings')
+    expect(buttons[0].find('.sidebar-tool-icon').exists()).toBe(true)
+    expect(buttons[0].find('.sidebar-tool-main').text()).toBe('节点中心')
+    expect(buttons[0].find('.sidebar-tool-hint').text()).toBe('所有远端节点')
+    expect(buttons[1].find('.sidebar-tool-icon').exists()).toBe(true)
+    expect(buttons[1].find('.sidebar-tool-main').text()).toBe('设置')
+    expect(buttons[1].find('.sidebar-tool-hint').text()).toBe('偏好与管理')
+  })
 })

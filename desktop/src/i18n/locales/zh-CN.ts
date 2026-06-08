@@ -37,6 +37,11 @@ export default {
     yes: '是',
     no: '否',
     serviceCount: '{count} 个服务',
+    transport: {
+      direct: '直连',
+      tunnel: '隧道',
+      unknown: '未知连接',
+    },
     status: {
       running: '运行中',
       starting: '启动中...',
@@ -661,6 +666,7 @@ export default {
       currentProject: '当前',
       nodeCenter: '节点中心',
       nodeCenterHint: '所有远端节点',
+      settingsHint: '偏好与管理',
       projectOverviewHint: '状态 · 流水线 · 入口',
     },
     env: {
