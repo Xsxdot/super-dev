@@ -137,6 +137,61 @@ func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
 	assert.NotEqual(t, token, result.Token.TokenHash)
 }
 
+func TestNewAgentInstallSessionDerivesDirectBindAndToken(t *testing.T) {
+	now := time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	agent := model.Agent{
+		HostID: "h1",
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeDirect,
+			Direct: &model.DirectParams{Address: "100.117.127.123:57021"},
+		}}},
+		Config: model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57021},
+	}
+
+	req, err := prepareAgentInstallSessionRequest(agent, agentInstallCommandRequest{
+		ControllerURL:   "http://100.64.0.10:57017",
+		TransportType:   model.TransportTypeDirect,
+		TokenTTLMinutes: 45,
+	})
+	require.NoError(t, err)
+	session := newAgentInstallSession("h1", req, now)
+
+	assert.Equal(t, model.PublicBindAddress, session.Request.BindAddress)
+	assert.Equal(t, 57021, session.Request.RemoteAgentPort)
+	assert.Equal(t, model.TransportTypeDirect, session.Request.TransportType)
+	assert.Equal(t, "h1", session.Token.HostID)
+	assert.Equal(t, model.PublicBindAddress, session.Token.BindAddress)
+	assert.Equal(t, 57021, session.Token.RemoteAgentPort)
+	assert.Equal(t, now.Add(45*time.Minute), session.Token.ExpiresAt)
+	assert.NotEmpty(t, session.InstallToken)
+	assert.Equal(t, hashAgentInstallToken(session.InstallToken), session.Token.TokenHash)
+	assert.NotEmpty(t, session.Token.BootstrapToken)
+}
+
+func TestNewAgentInstallSessionUsesTunnelPortAndLoopback(t *testing.T) {
+	now := time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	agent := model.Agent{
+		HostID: "h1",
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeTunnel,
+			Tunnel: &model.TunnelParams{RemoteAgentPort: 57023},
+		}}},
+		Config: model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57017},
+	}
+
+	req, err := prepareAgentInstallSessionRequest(agent, agentInstallCommandRequest{
+		ControllerURL: "http://100.64.0.10:57017",
+		TransportType: model.TransportTypeTunnel,
+	})
+	require.NoError(t, err)
+	session := newAgentInstallSession("h1", req, now)
+
+	assert.Equal(t, model.LoopbackBindAddress, session.Request.BindAddress)
+	assert.Equal(t, 57023, session.Request.RemoteAgentPort)
+	assert.Equal(t, model.TransportTypeTunnel, session.Token.TransportType)
+	assert.NotEmpty(t, session.Token.BootstrapToken)
+}
+
 func TestGenerateAgentInstallCommandAcceptsTransportTypeAfterChainValidation(t *testing.T) {
 	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
 

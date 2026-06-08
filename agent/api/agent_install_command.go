@@ -69,48 +69,109 @@ type agentInstallCommandResult struct {
 	Token    agentInstallTokenRecord
 }
 
-// generateAgentInstallCommand 生成安装命令和仅供服务端保存的 token 记录。
-func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, now time.Time) (agentInstallCommandResult, error) {
-	normalized, err := normalizeAgentInstallCommandRequest(req)
-	if err != nil {
-		return agentInstallCommandResult{}, err
+type agentInstallSession struct {
+	Request      agentInstallCommandRequest
+	InstallToken string
+	Token        agentInstallTokenRecord
+}
+
+func prepareAgentInstallSessionRequest(agent model.Agent, req agentInstallCommandRequest) (agentInstallCommandRequest, error) {
+	applyAgentInstallDefaultsFromAgent(&req, agent)
+	req.ControllerURL = strings.TrimSpace(req.ControllerURL)
+	req.BindAddress = strings.TrimSpace(req.BindAddress)
+	if req.BindAddress == "" {
+		req.BindAddress = defaultAgentInstallBindAddress
 	}
+	if req.RemoteAgentPort <= 0 {
+		req.RemoteAgentPort = defaultAgentInstallPort
+	}
+	if req.TransportType == "" {
+		req.TransportType = model.TransportTypeTunnel
+	}
+	if !validAgentTransportType(req.TransportType) {
+		return agentInstallCommandRequest{}, errors.New("invalid transport_type")
+	}
+	if req.TokenTTLMinutes <= 0 {
+		req.TokenTTLMinutes = defaultAgentInstallTokenTTLMinutes
+	}
+	return req, nil
+}
+
+func newAgentInstallSession(hostID string, req agentInstallCommandRequest, now time.Time) agentInstallSession {
 	tokenID := uuid.NewString()
-	token := uuid.NewString()
+	installToken := uuid.NewString()
 	bootstrapToken := uuid.NewString()
-	expiresAt := now.Add(time.Duration(normalized.TokenTTLMinutes) * time.Minute).UTC()
+	expiresAt := now.Add(time.Duration(req.TokenTTLMinutes) * time.Minute).UTC()
+	return agentInstallSession{
+		Request:      req,
+		InstallToken: installToken,
+		Token: agentInstallTokenRecord{
+			TokenID:         tokenID,
+			TokenHash:       hashAgentInstallToken(installToken),
+			BootstrapToken:  bootstrapToken,
+			HostID:          hostID,
+			ControllerURL:   req.ControllerURL,
+			TransportType:   req.TransportType,
+			BindAddress:     req.BindAddress,
+			RemoteAgentPort: req.RemoteAgentPort,
+			ExpiresAt:       expiresAt,
+		},
+	}
+}
+
+func agentInstallCommandResultFromSession(hostID string, session agentInstallSession) agentInstallCommandResult {
 	scriptURL := fmt.Sprintf(
 		"%s/api/agents/install.sh?token=%s",
-		strings.TrimRight(normalized.ControllerURL, "/"),
-		url.QueryEscape(token),
+		strings.TrimRight(session.Request.ControllerURL, "/"),
+		url.QueryEscape(session.InstallToken),
 	)
 	command := fmt.Sprintf(
 		"curl -fsSL %s | bash -s -- --host-id %s --transport %s --bind-address %s --port %d --bootstrap-token %s --require-auth",
 		shellQuote(scriptURL),
 		shellArg(hostID),
-		shellArg(string(normalized.TransportType)),
-		shellArg(normalized.BindAddress),
-		normalized.RemoteAgentPort,
-		shellArg(bootstrapToken),
+		shellArg(string(session.Request.TransportType)),
+		shellArg(session.Request.BindAddress),
+		session.Request.RemoteAgentPort,
+		shellArg(session.Token.BootstrapToken),
 	)
 	return agentInstallCommandResult{
 		Response: agentInstallCommandResponse{
 			Command:   command,
-			ExpiresAt: expiresAt.Format(time.RFC3339),
-			TokenID:   tokenID,
+			ExpiresAt: session.Token.ExpiresAt.Format(time.RFC3339),
+			TokenID:   session.Token.TokenID,
 		},
-		Token: agentInstallTokenRecord{
-			TokenID:         tokenID,
-			TokenHash:       hashAgentInstallToken(token),
-			BootstrapToken:  bootstrapToken,
-			HostID:          hostID,
-			ControllerURL:   normalized.ControllerURL,
-			TransportType:   normalized.TransportType,
-			BindAddress:     normalized.BindAddress,
-			RemoteAgentPort: normalized.RemoteAgentPort,
-			ExpiresAt:       expiresAt,
-		},
-	}, nil
+		Token: session.Token,
+	}
+}
+
+// generateAgentInstallCommand 生成安装命令和仅供服务端保存的 token 记录。
+func generateAgentInstallCommand(hostID string, req agentInstallCommandRequest, now time.Time) (agentInstallCommandResult, error) {
+	prepared, err := prepareAgentInstallSessionRequest(model.Agent{}, req)
+	if err != nil {
+		return agentInstallCommandResult{}, err
+	}
+	normalized, err := normalizeAgentInstallCommandRequest(prepared)
+	if err != nil {
+		return agentInstallCommandResult{}, err
+	}
+	session := newAgentInstallSession(hostID, normalized, now)
+	return agentInstallCommandResultFromSession(hostID, session), nil
+}
+
+func generateAgentInstallCommandForAgent(hostID string, agent model.Agent, req agentInstallCommandRequest, now time.Time) (agentInstallCommandResult, error) {
+	prepared, err := prepareAgentInstallSessionRequest(agent, req)
+	if err != nil {
+		return agentInstallCommandResult{}, err
+	}
+	if !agentHasTransport(agent, prepared.TransportType) {
+		return agentInstallCommandResult{}, errors.New("transport_type is not configured for agent")
+	}
+	normalized, err := normalizeAgentInstallCommandRequest(prepared)
+	if err != nil {
+		return agentInstallCommandResult{}, err
+	}
+	session := newAgentInstallSession(hostID, normalized, now)
+	return agentInstallCommandResultFromSession(hostID, session), nil
 }
 
 // generateAgentInstallCommand 处理 POST /api/agents/{host_id}/install-command。
@@ -130,12 +191,7 @@ func (a *App) generateAgentInstallCommand(w http.ResponseWriter, r *http.Request
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	applyAgentInstallDefaultsFromAgent(&req, agent)
-	if !agentHasTransport(agent, req.TransportType) {
-		jsonError(w, http.StatusBadRequest, "transport_type is not configured for agent")
-		return
-	}
-	result, err := generateAgentInstallCommand(host.ID, req, time.Now().UTC())
+	result, err := generateAgentInstallCommandForAgent(host.ID, agent, req, time.Now().UTC())
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
