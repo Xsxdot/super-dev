@@ -229,11 +229,12 @@ describe('BottomBar', () => {
   })
 
   it('只渲染一个 agent 状态并通过浮层提供审批入口', async () => {
-    vi.mocked(agentApi.listOperationApprovals).mockResolvedValue([
-      makePendingApproval(),
-    ] as any)
-    const { wrapper } = await mountBottomBarWithServices('en-US')
+    const pending = makePendingApproval()
     const approvalStore = useOperationApprovalStore()
+    approvalStore.approvals = [pending]
+    vi.mocked(agentApi.listOperationApprovals).mockResolvedValue([pending] as any)
+
+    const { wrapper } = await mountBottomBarWithServices('en-US')
 
     await flushPromises()
 
@@ -250,25 +251,6 @@ describe('BottomBar', () => {
     await wrapper.find('[data-test="approval-popover-view-all"]').trigger('click')
 
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
-  })
-
-  it('轮询到 MCP 新审批后刷新右下角角标', async () => {
-    vi.mocked(agentApi.listOperationApprovals)
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([makePendingApproval()] as any)
-    const { wrapper } = await mountBottomBarWithServices('zh-CN')
-    const approvalStore = useOperationApprovalStore()
-
-    await flushPromises()
-    expect(approvalStore.pendingCount).toBe(0)
-    expect(wrapper.find('[data-test="approvals-entry"]').text()).not.toContain('1')
-
-    await vi.advanceTimersByTimeAsync(2000)
-    await flushPromises()
-
-    expect(approvalStore.pendingCount).toBe(1)
-    expect(approvalStore.notice?.approval_id).toBe('opa-1')
-    expect(wrapper.find('[data-test="approvals-entry"]').text()).toContain('1')
   })
 
   it('uses bookmark store as the shared sync enabled source', async () => {

@@ -13,6 +13,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.vue'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useSettingsStore } from '@/stores/settings'
 import { installTestI18n } from '@/test-utils/i18n'
 
@@ -56,5 +57,46 @@ describe('App', () => {
     await flushPromises()
 
     expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('starts operation approval polling in the main window', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+    })
+    const approvals = useOperationApprovalStore()
+    const loadPending = vi.spyOn(approvals, 'loadPending').mockResolvedValue(undefined)
+    const startPolling = vi.spyOn(approvals, 'startPolling').mockImplementation(() => undefined)
+    const stopPolling = vi.spyOn(approvals, 'stopPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    expect(loadPending).toHaveBeenCalledWith(false)
+    expect(startPolling).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    expect(stopPolling).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start operation approval polling in the popover window', async () => {
+    routeState.path = '/popover'
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+    })
+    const approvals = useOperationApprovalStore()
+    const loadPending = vi.spyOn(approvals, 'loadPending').mockResolvedValue(undefined)
+    const startPolling = vi.spyOn(approvals, 'startPolling').mockImplementation(() => undefined)
+    const stopPolling = vi.spyOn(approvals, 'stopPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    expect(loadPending).not.toHaveBeenCalled()
+    expect(startPolling).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    expect(stopPolling).not.toHaveBeenCalled()
   })
 })

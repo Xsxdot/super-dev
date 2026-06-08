@@ -393,13 +393,10 @@ function openApprovals() {
 }
 
 onMounted(() => {
-  void operationApprovalStore.loadPending(false)
-  operationApprovalStore.startPolling()
   window.addEventListener('resize', updateLogDisplayMenuPosition)
 })
 
 onBeforeUnmount(() => {
-  operationApprovalStore.stopPolling()
   window.removeEventListener('resize', updateLogDisplayMenuPosition)
 })
 </script>
