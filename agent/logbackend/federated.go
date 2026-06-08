@@ -83,8 +83,8 @@ func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]mod
 
 	var next Cursor
 	if len(merged) > 0 {
-		last := merged[len(merged)-1]
-		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
+		first := merged[0]
+		next = Cursor{Time: first.Timestamp, ID: encodeSQLiteCursor(first.ID)}
 	}
 	return merged, next, nil
 }

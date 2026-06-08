@@ -74,8 +74,8 @@ func (b *RemoteAgentBackend) Query(ctx context.Context, f QueryFilter) ([]model.
 	}
 	var next Cursor
 	if len(entries) > 0 {
-		last := entries[len(entries)-1]
-		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
+		first := entries[0]
+		next = Cursor{Time: first.Timestamp, ID: encodeSQLiteCursor(first.ID)}
 	}
 	return entries, next, nil
 }

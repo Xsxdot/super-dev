@@ -67,7 +67,7 @@ func (b *SQLiteBackend) AppendBatch(ctx context.Context, entries []model.LogEntr
 //
 // 返回：
 //   - 匹配的日志条目列表
-//   - 下一页游标（取最后一条的 Timestamp 和 ID）
+//   - 下一页游标（取最旧一条的 Timestamp 和 ID）
 //   - 查询错误
 func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEntry, Cursor, error) {
 	params := store.FetchParams{
@@ -83,8 +83,8 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 	}
 	var next Cursor
 	if len(entries) > 0 {
-		last := entries[len(entries)-1]
-		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
+		first := entries[0]
+		next = Cursor{Time: first.Timestamp, ID: encodeSQLiteCursor(first.ID)}
 	}
 	return entries, next, nil
 }
