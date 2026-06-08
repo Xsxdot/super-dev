@@ -86,7 +86,7 @@ type LogReader interface {
 	// Subscribe 订阅实时日志流。调用方通过 LogStream.Cancel 取消订阅。
 	// 实现方在 Cancel 调用后应关闭 LogStream.Ch。
 	// ctx 取消和 Cancel 调用均可停止流；实现方应同时响应两者。
-	Subscribe(ctx context.Context, deploymentID string) LogStream
+	Subscribe(ctx context.Context, opts SubscribeOptions) LogStream
 }
 
 // LogBackend 抽象「一个 Deployment 的所有日志能力」。

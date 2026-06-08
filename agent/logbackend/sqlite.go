@@ -132,11 +132,11 @@ func (b *SQLiteBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogE
 	return result.Entries, next, result.HasMore, nil
 }
 
-// Subscribe 订阅实时日志流，只推送 deploymentID 匹配的条目。
+// Subscribe 订阅实时日志流，可先回放最近日志并按 Since 锚点去重。
 //
 // 参数：
 //   - ctx: 上下文，ctx.Done() 触发时自动停止流并关闭 Ch
-//   - deploymentID: 过滤条件，只有 DeploymentID 匹配的日志才推入 Ch
+//   - opts: 订阅过滤、回放窗口和重连去重锚点
 //
 // 返回：
 //   - LogStream.Ch: 接收过滤后实时日志的 channel，Cancel 或 ctx 取消后关闭
@@ -145,7 +145,7 @@ func (b *SQLiteBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogE
 // 注意：
 //   - 消费方过慢时丢弃新日志，不阻塞 logbuf.Buffer 的 Append 调用
 //   - 调用方必须最终调用 Cancel 或取消 ctx，否则 goroutine 泄漏
-func (b *SQLiteBackend) Subscribe(ctx context.Context, deploymentID string) LogStream {
+func (b *SQLiteBackend) Subscribe(ctx context.Context, opts SubscribeOptions) LogStream {
 	subID := uuid.NewString()
 	raw := b.buf.Subscribe(subID)
 
@@ -159,8 +159,29 @@ func (b *SQLiteBackend) Subscribe(ctx context.Context, deploymentID string) LogS
 		})
 	}
 
+	replay := []model.LogEntry{}
+	if opts.ReplayLast > 0 {
+		for _, e := range b.buf.Recent(opts.ReplayLast) {
+			if opts.DeploymentID != "" && e.DeploymentID != opts.DeploymentID {
+				continue
+			}
+			if !sinceAllows(e, opts.Since) {
+				continue
+			}
+			replay = append(replay, e)
+		}
+	}
+
 	go func() {
 		defer close(ch)
+		for _, e := range replay {
+			select {
+			case ch <- e:
+			case <-ctx.Done():
+				doCancel()
+				return
+			}
+		}
 		for {
 			select {
 			case entry, ok := <-raw:
@@ -168,8 +189,11 @@ func (b *SQLiteBackend) Subscribe(ctx context.Context, deploymentID string) LogS
 					// raw channel 已被 Unsubscribe 关闭，停止循环
 					return
 				}
-				if deploymentID != "" && entry.DeploymentID != deploymentID {
+				if opts.DeploymentID != "" && entry.DeploymentID != opts.DeploymentID {
 					// 过滤掉不属于目标 deploymentID 的条目
+					continue
+				}
+				if !sinceAllows(entry, opts.Since) {
 					continue
 				}
 				select {
@@ -186,4 +210,19 @@ func (b *SQLiteBackend) Subscribe(ctx context.Context, deploymentID string) LogS
 	}()
 
 	return LogStream{Ch: ch, Cancel: doCancel}
+}
+
+// sinceAllows 判断 entry 是否在 Since 锚点之后（只推 > Since 的条目）。
+// Since 零值表示不过滤。
+func sinceAllows(e model.LogEntry, since Cursor) bool {
+	if since.Time.IsZero() && since.ID == "" {
+		return true
+	}
+	if e.Timestamp.After(since.Time) {
+		return true
+	}
+	if e.Timestamp.Equal(since.Time) {
+		return encodeSQLiteCursor(e.ID) > since.ID
+	}
+	return false
 }

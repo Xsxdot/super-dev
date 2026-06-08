@@ -101,7 +101,7 @@ func TestDeploymentLogsEndpoint_ScopesQueryToPathDeploymentID(t *testing.T) {
 func TestDeploymentLogsWebSocket_ScopesSubscriptionToPathDeploymentID(t *testing.T) {
 	app := newTestAppInstance(t)
 	depID := "dep-ws-scoped"
-	backend := &recordingLogBackend{subscribeIDs: make(chan string, 1)}
+	backend := &recordingLogBackend{subscribeOptions: make(chan logbackend.SubscribeOptions, 1)}
 	app.SetBackendForTest(depID, backend)
 
 	srv := httptest.NewServer(app.Handler())
@@ -113,8 +113,8 @@ func TestDeploymentLogsWebSocket_ScopesSubscriptionToPathDeploymentID(t *testing
 	defer conn.Close()
 
 	select {
-	case got := <-backend.subscribeIDs:
-		assert.Equal(t, depID, got)
+	case got := <-backend.subscribeOptions:
+		assert.Equal(t, depID, got.DeploymentID)
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for backend subscription")
 	}
@@ -149,9 +149,9 @@ func TestDeploymentSearchEndpoint_ReturnsResults(t *testing.T) {
 }
 
 type recordingLogBackend struct {
-	queryFilter  logbackend.QueryFilter
-	queryEntries []model.LogEntry
-	subscribeIDs chan string
+	queryFilter      logbackend.QueryFilter
+	queryEntries     []model.LogEntry
+	subscribeOptions chan logbackend.SubscribeOptions
 }
 
 func (b *recordingLogBackend) Query(ctx context.Context, f logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
@@ -163,10 +163,10 @@ func (b *recordingLogBackend) Search(ctx context.Context, q logbackend.SearchQue
 	return nil, logbackend.Cursor{}, false, nil
 }
 
-func (b *recordingLogBackend) Subscribe(ctx context.Context, deploymentID string) logbackend.LogStream {
+func (b *recordingLogBackend) Subscribe(ctx context.Context, opts logbackend.SubscribeOptions) logbackend.LogStream {
 	ch := make(chan model.LogEntry)
-	if b.subscribeIDs != nil {
-		b.subscribeIDs <- deploymentID
+	if b.subscribeOptions != nil {
+		b.subscribeOptions <- opts
 	}
 	close(ch)
 	return logbackend.LogStream{

@@ -12,6 +12,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,7 +152,21 @@ func (a *App) wsDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	stream := backend.Subscribe(r.Context(), depID)
+	q := r.URL.Query()
+	opts := logbackend.SubscribeOptions{DeploymentID: depID}
+	if rep := q.Get("replay"); rep != "" {
+		if n, err := strconv.Atoi(rep); err == nil && n > 0 {
+			opts.ReplayLast = n
+		}
+	}
+	if st := q.Get("since_time"); st != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, st); err == nil {
+			opts.Since.Time = ts
+		}
+	}
+	opts.Since.ID = q.Get("since_id")
+
+	stream := backend.Subscribe(r.Context(), opts)
 	defer stream.Cancel()
 
 	ctx := r.Context()

@@ -135,12 +135,22 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 // Subscribe 连接远端 /ws/logs WebSocket，转发实时日志。
 // ctx 取消和 Cancel 调用均可停止流并关闭 Ch；两者均幂等。
 // 连接断开时自动关闭 Ch（不重连，由上层 FederatedBackend 决策）。
-func (b *RemoteAgentBackend) Subscribe(ctx context.Context, deploymentID string) LogStream {
+func (b *RemoteAgentBackend) Subscribe(ctx context.Context, opts SubscribeOptions) LogStream {
 	ch := make(chan model.LogEntry, 64)
+	q := url.Values{"deployment": []string{b.deploymentID}}
+	if opts.ReplayLast > 0 {
+		q.Set("replay", strconv.Itoa(opts.ReplayLast))
+	}
+	if !opts.Since.Time.IsZero() {
+		q.Set("since_time", opts.Since.Time.Format(time.RFC3339Nano))
+	}
+	if opts.Since.ID != "" {
+		q.Set("since_id", opts.Since.ID)
+	}
 
 	stream, err := b.transport.Stream(ctx, b.hostID, nodetransport.NodeRequest{
 		Path:  "/ws/logs",
-		Query: url.Values{"deployment": []string{b.deploymentID}},
+		Query: q,
 	})
 	if err != nil {
 		close(ch)

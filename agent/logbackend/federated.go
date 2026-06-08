@@ -155,7 +155,7 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 //
 // 参数：
 //   - ctx: 上下文，用于控制取消；ctx 取消时会触发所有子流的 Cancel
-//   - deploymentID: 订阅的部署 ID
+//   - opts: 订阅过滤、回放窗口和重连去重锚点
 //
 // 返回：
 //   - LogStream，包含日志条目 channel 和 Cancel 函数
@@ -165,10 +165,10 @@ func (f *FederatedBackend) Search(ctx context.Context, q SearchQuery) ([]model.L
 //   - ctx 取消时本层也会立即响应，不依赖子流自己退出
 //   - Cancel 与 ctx 取消均可触发子流停止，两者互为补充
 //   - ctx 为 context.Background() 时，ctx watcher goroutine 会永久阻塞，这是已知可接受行为
-func (f *FederatedBackend) Subscribe(ctx context.Context, deploymentID string) LogStream {
+func (f *FederatedBackend) Subscribe(ctx context.Context, opts SubscribeOptions) LogStream {
 	streams := make([]LogStream, len(f.children))
 	for i, child := range f.children {
-		streams[i] = child.Subscribe(ctx, deploymentID)
+		streams[i] = child.Subscribe(ctx, opts)
 	}
 
 	ch := make(chan model.LogEntry, 64)

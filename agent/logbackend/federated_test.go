@@ -44,7 +44,7 @@ func (s *stubBackend) Search(_ context.Context, q logbackend.SearchQuery) ([]mod
 	return out, logbackend.Cursor{}, false, nil
 }
 
-func (s *stubBackend) Subscribe(_ context.Context, _ string) logbackend.LogStream {
+func (s *stubBackend) Subscribe(_ context.Context, _ logbackend.SubscribeOptions) logbackend.LogStream {
 	ch := make(chan model.LogEntry, 16)
 	cancel := func() { close(ch) }
 	// 转发 subCh 到 ch
@@ -131,7 +131,7 @@ func TestFederatedBackend_SubscribeFanIn(t *testing.T) {
 	b2 := newStubBackend(nil)
 	fed := logbackend.NewFederatedBackend([]logbackend.LogBackend{b1, b2})
 
-	stream := fed.Subscribe(context.Background(), "svc-1")
+	stream := fed.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
 	defer stream.Cancel()
 
 	now := time.Now()

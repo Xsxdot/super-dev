@@ -151,7 +151,7 @@ func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	wsURL := "ws" + srv.URL[4:]
 	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{wsURL: wsURL})
 
-	stream := b.Subscribe(context.Background(), "svc-1")
+	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
 	defer stream.Cancel()
 
 	select {

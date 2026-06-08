@@ -119,7 +119,7 @@ func TestSQLiteBackend_SearchReturnsMatches(t *testing.T) {
 func TestSQLiteBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	b, buf := newTestSQLiteBackend(t)
 
-	stream := b.Subscribe(context.Background(), "svc-1")
+	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
 	defer stream.Cancel()
 
 	entry := model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: time.Now(), Message: "live", Stream: "stdout"}
@@ -133,10 +133,33 @@ func TestSQLiteBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	}
 }
 
+func TestSQLiteBackend_SubscribeReplayLast(t *testing.T) {
+	b, buf := newTestSQLiteBackend(t)
+
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "old1", Timestamp: time.Now()})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "old2", Timestamp: time.Now().Add(time.Millisecond)})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := b.Subscribe(ctx, logbackend.SubscribeOptions{DeploymentID: "svc-1", ReplayLast: 2})
+	defer stream.Cancel()
+
+	got := []string{}
+	for i := 0; i < 2; i++ {
+		select {
+		case e := <-stream.Ch:
+			got = append(got, e.Message)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for replay entry %d", i)
+		}
+	}
+	assert.Equal(t, []string{"old1", "old2"}, got)
+}
+
 func TestSQLiteBackend_SubscribeFiltersOtherServices(t *testing.T) {
 	b, buf := newTestSQLiteBackend(t)
 
-	stream := b.Subscribe(context.Background(), "svc-1")
+	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
 	defer stream.Cancel()
 
 	// 写入 svc-2 的日志，svc-1 的订阅者不应收到
@@ -154,7 +177,7 @@ func TestSQLiteBackend_SubscribeFiltersOtherServices(t *testing.T) {
 
 func TestSQLiteBackend_CancelStopsStream(t *testing.T) {
 	b, _ := newTestSQLiteBackend(t)
-	stream := b.Subscribe(context.Background(), "svc-1")
+	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
 	stream.Cancel()
 	// channel 应被关闭
 	select {
