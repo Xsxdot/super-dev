@@ -55,6 +55,14 @@ type RestartResult struct {
 	Message  string `json:"message"`
 }
 
+// UpdateResult 描述一次远端 agent 二进制更新结果。
+type UpdateResult struct {
+	OK       bool   `json:"ok"`
+	HostID   string `json:"host_id"`
+	Platform string `json:"platform"`
+	Message  string `json:"message"`
+}
+
 type installMode string
 
 const (
@@ -281,6 +289,58 @@ func (i *Installer) Restart(ctx context.Context, host model.Host) (RestartResult
 	}, nil
 }
 
+// UpdateBinary replaces the remote agent binary and restarts the existing service.
+//
+// 参数：
+//   - ctx: 上下文，用于取消 SSH 命令和上传
+//   - host: 远端主机配置，包含 SSH 凭据
+//
+// 返回：
+//   - 更新成功结果，包含 host ID 和平台
+//   - 分阶段错误，便于 API 和 UI 展示
+//
+// 注意：
+//   - 该方法不重写 systemd/launchd 配置
+//   - 该方法不删除 security.json，不触发 bootstrap/provision
+func (i *Installer) UpdateBinary(ctx context.Context, host model.Host) (UpdateResult, error) {
+	remote, err := i.factory(host)
+	if err != nil {
+		return UpdateResult{}, stageErr("connect", err)
+	}
+	defer remote.Close() //nolint:errcheck
+
+	osName, err := remote.Run(ctx, "uname -s")
+	if err != nil {
+		return UpdateResult{}, stageErr("detect_os", err)
+	}
+	machine, err := remote.Run(ctx, "uname -m")
+	if err != nil {
+		return UpdateResult{}, stageErr("detect_arch", err)
+	}
+	platform, err := NormalizePlatform(trimOutput(osName), trimOutput(machine))
+	if err != nil {
+		return UpdateResult{}, stageErr("detect_platform", err)
+	}
+	localBinary, err := ResolveBinary(i.opts.BinaryDir, platform)
+	if err != nil {
+		return UpdateResult{}, stageErr("resolve_binary", err)
+	}
+
+	remoteTmp := "/tmp/" + platform.BinaryName()
+	if err := remote.Upload(ctx, localBinary, remoteTmp); err != nil {
+		return UpdateResult{}, stageErr("upload", err)
+	}
+	mode, err := updateBinaryCommands(ctx, remote, platform, remoteTmp)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	message := "Agent binary updated and service restarted"
+	if mode == installModeUserLaunchAgent {
+		message = "Agent binary updated and user LaunchAgent restarted"
+	}
+	return UpdateResult{OK: true, HostID: host.ID, Platform: platform.String(), Message: message}, nil
+}
+
 func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOptions {
 	opts := ServiceOptions{
 		BindAddress:    "127.0.0.1",
@@ -357,6 +417,44 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		return "", stageErr("install_service", fmt.Errorf("unsupported os %q", platform.OS))
 	}
 	return installModeSystem, nil
+}
+
+func updateBinaryCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string) (installMode, error) {
+	switch platform.OS {
+	case "linux":
+		if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
+			return "", stageErr("replace_binary", err)
+		}
+		return restartCommands(ctx, remote, "linux")
+	case "darwin":
+		if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
+			if shouldUseMacOSUserLaunchAgent(err) {
+				if err := updateMacOSUserLaunchAgentBinary(ctx, remote, remoteTmp); err != nil {
+					return "", err
+				}
+				if err := restartMacOSUserLaunchAgent(ctx, remote); err != nil {
+					return "", err
+				}
+				return installModeUserLaunchAgent, nil
+			}
+			return "", stageErr("replace_binary", err)
+		}
+		return restartCommands(ctx, remote, "darwin")
+	default:
+		return "", stageErr("replace_binary", fmt.Errorf("unsupported os %q", platform.OS))
+	}
+}
+
+func updateMacOSUserLaunchAgentBinary(ctx context.Context, remote Remote, remoteTmp string) error {
+	home, _, err := macOSUserContext(ctx, remote)
+	if err != nil {
+		return stageErr("replace_binary", err)
+	}
+	paths := macOSUserAgentPaths(home)
+	if _, err := remote.Run(ctx, "install -m 0755 "+remoteTmp+" "+shellQuote(paths.binary)); err != nil {
+		return stageErr("replace_binary", err)
+	}
+	return nil
 }
 
 func resetSecurityStateCommand(prefix string, securityPath string, opts ServiceOptions) string {

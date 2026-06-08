@@ -106,6 +106,32 @@ func TestInstallerResetsSecurityStateWhenBootstrappingLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, "sudo -n rm -f '/var/lib/superdev-agent/security.json'")
 }
 
+func TestInstallerUpdatesLinuxAgentBinaryWithoutResettingSecurityOrService(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{outputs: []string{"Linux\n", "x86_64\n"}}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.UpdateBinary(context.Background(), model.Host{ID: "h1"})
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "h1", result.HostID)
+	assert.Equal(t, "linux/amd64", result.Platform)
+	assert.Equal(t, "Agent binary updated and service restarted", result.Message)
+	assert.Equal(t, []string{binary + "->/tmp/superdev-agent-linux-amd64"}, remote.uploads)
+	assert.Contains(t, remote.commands, "uname -s")
+	assert.Contains(t, remote.commands, "uname -m")
+	assert.Contains(t, remote.commands, "sudo -n install -m 0755 /tmp/superdev-agent-linux-amd64 /usr/local/bin/superdev-agent")
+	assert.Contains(t, remote.commands, "sudo -n systemctl restart superdev-agent.service")
+	assert.NotContains(t, remote.commands, "sudo -n rm -f '/var/lib/superdev-agent/security.json'")
+	assert.NotContains(t, remote.commands, "cat > /tmp/superdev-agent.service <<'EOF'\n")
+	assert.NotContains(t, remote.commands, installerVerifyCommand(57017))
+}
+
 func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
@@ -219,6 +245,34 @@ func TestInstallerDowngradesMacOSAgentToUserLaunchAgentWhenSudoNeedsPassword(t *
 	assert.Contains(t, remote.commands, "launchctl kickstart -k gui/501/dev.superdev.agent")
 	assert.NotContains(t, remote.commands, "sudo -n launchctl bootstrap system /Library/LaunchDaemons/dev.superdev.agent.plist")
 	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
+}
+
+func TestInstallerUpdatesMacOSUserLaunchAgentBinaryWhenSudoNeedsPassword(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-darwin-arm64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{
+		outputs: []string{"Darwin\n", "arm64\n", "/Users/sycm", "501\n", "", "/Users/sycm", "501\n"},
+		failCommands: map[string][]error{
+			"sudo -n install -m 0755 /tmp/superdev-agent-darwin-arm64 /usr/local/bin/superdev-agent": {
+				errors.New("sudo: a password is required"),
+			},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.UpdateBinary(context.Background(), model.Host{ID: "mac1"})
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "darwin/arm64", result.Platform)
+	assert.Equal(t, "Agent binary updated and user LaunchAgent restarted", result.Message)
+	assert.Equal(t, []string{binary + "->/tmp/superdev-agent-darwin-arm64"}, remote.uploads)
+	assert.Contains(t, remote.commands, "install -m 0755 /tmp/superdev-agent-darwin-arm64 '/Users/sycm/Library/Application Support/SuperDev/Agent/bin/superdev-agent'")
+	assert.Contains(t, remote.commands, "launchctl kickstart -k gui/501/dev.superdev.agent")
+	assert.NotContains(t, remote.commands, "cat > '/Users/sycm/Library/LaunchAgents/dev.superdev.agent.plist' <<'EOF'\n")
 }
 
 func TestInstallerUninstallsLinuxAgentKeepingData(t *testing.T) {
