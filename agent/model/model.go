@@ -208,6 +208,15 @@ const (
 	DefaultRemoteAgentPort = 57017
 	// DefaultAgentListenPort 是 agent 配置的默认监听端口。
 	DefaultAgentListenPort = 57017
+
+	// LoopbackBindAddress 是 agent 仅供本机访问时的 bind 地址。
+	// tunnel 经 SSH 在远端连 127.0.0.1，verify 在远端 curl 127.0.0.1，
+	// 二者都依赖 loopback；链路只含 tunnel 时 bind 此地址即足够且最安全。
+	LoopbackBindAddress = "127.0.0.1"
+	// PublicBindAddress 是 agent 需被外部直连时的 bind 地址。
+	// 链路含 direct 时，桌面端从远端机器之外访问 direct.address，
+	// 必须 bind 0.0.0.0 才能既满足外部直连，又保留 loopback 给 tunnel/verify。
+	PublicBindAddress = "0.0.0.0"
 )
 
 // Host 表示一台被管理的远程主机身份。
@@ -399,6 +408,39 @@ func (a Agent) DirectParams() (*DirectParams, bool) {
 		return nil, false
 	}
 	return entry.Direct, true
+}
+
+// HasDirectTransport 报告 Agent 的传输链是否包含 direct 直连。
+//
+// 返回：
+//   - true 表示链上存在 direct 链项，意味着 agent 需要被远端机器之外直连
+//
+// 注意：
+//   - direct 的有无是 bind 地址自动推导的唯一依据，见 ResolveBindAddress
+func (a Agent) HasDirectTransport() bool {
+	for _, entry := range a.Transport.Chain {
+		if entry.Type == TransportTypeDirect {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveBindAddress 根据传输链自动推导 agent 进程应当 bind 的地址。
+//
+// 返回：
+//   - 链路含 direct 时返回 PublicBindAddress(0.0.0.0)，使外部可直连
+//   - 否则返回 LoopbackBindAddress(127.0.0.1)，仅暴露给本机的 tunnel/verify
+//
+// 注意：
+//   - bind 不再由用户填写，意图(要不要 direct)决定暴露范围，避免把 loopback
+//     这条 tunnel/verify 的生命线误绑到具体 IP 上导致两者失效
+//   - bind 0.0.0.0 的安全前提是开启 token 认证，由调用方在安装流程强制保证
+func (a Agent) ResolveBindAddress() string {
+	if a.HasDirectTransport() {
+		return PublicBindAddress
+	}
+	return LoopbackBindAddress
 }
 
 // EnsureTunnelTransport 确保 Agent 拥有 tunnel 链项，并返回可修改的 tunnel 参数。

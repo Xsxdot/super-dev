@@ -190,6 +190,96 @@ func TestAgentTransportHelpersReadAndCreateChainEntries(t *testing.T) {
 	assert.Equal(t, model.TransportTypeDirect, agent.Transport.Chain[1].Type)
 }
 
+func TestAgentHasDirectTransport(t *testing.T) {
+	tests := []struct {
+		name  string
+		chain []model.TransportEntry
+		want  bool
+	}{
+		{
+			name: "empty chain",
+			want: false,
+		},
+		{
+			name: "tunnel only",
+			chain: []model.TransportEntry{{
+				Type:   model.TransportTypeTunnel,
+				Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+			}},
+			want: false,
+		},
+		{
+			name: "direct only",
+			chain: []model.TransportEntry{{
+				Type:   model.TransportTypeDirect,
+				Direct: &model.DirectParams{Address: "100.64.0.8:57017"},
+			}},
+			want: true,
+		},
+		{
+			name: "fallback direct",
+			chain: []model.TransportEntry{
+				{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+				{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "10.0.0.8:57017"}},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := model.Agent{Transport: model.TransportConfig{Chain: tt.chain}}
+			assert.Equal(t, tt.want, agent.HasDirectTransport())
+		})
+	}
+}
+
+func TestAgentResolveBindAddress(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent model.Agent
+		want  string
+	}{
+		{
+			name: "empty chain uses loopback",
+			want: model.LoopbackBindAddress,
+		},
+		{
+			name: "tunnel only uses loopback even when legacy listen address is non-loopback",
+			agent: model.Agent{
+				Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+					Type:   model.TransportTypeTunnel,
+					Tunnel: &model.TunnelParams{RemoteAgentPort: 57017},
+				}}},
+				Config: model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57017},
+			},
+			want: model.LoopbackBindAddress,
+		},
+		{
+			name: "direct only uses public bind",
+			agent: model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+				Type:   model.TransportTypeDirect,
+				Direct: &model.DirectParams{Address: "100.117.127.123:57017"},
+			}}}},
+			want: model.PublicBindAddress,
+		},
+		{
+			name: "mixed chain uses public bind",
+			agent: model.Agent{Transport: model.TransportConfig{Chain: []model.TransportEntry{
+				{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+				{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.117.127.123:57017"}},
+			}}},
+			want: model.PublicBindAddress,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.agent.ResolveBindAddress())
+		})
+	}
+}
+
 func TestLogSourceJSON(t *testing.T) {
 	ls := model.LogSource{
 		ID: "ls-1", Name: "nova-api",
