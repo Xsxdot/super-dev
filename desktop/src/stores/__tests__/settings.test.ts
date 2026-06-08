@@ -95,4 +95,31 @@ describe('settingsStore', () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en-US')
     expect(document.documentElement.lang).toBe('en-US')
   })
+
+  it('overviewGrouping 默认 env -> service', () => {
+    const store = useSettingsStore()
+    expect(store.overviewGrouping).toEqual({ primary: 'env', secondary: 'service' })
+  })
+
+  it('setOverviewGrouping 持久化到 localStorage', () => {
+    const store = useSettingsStore()
+    store.setOverviewGrouping('service', 'env')
+    expect(store.overviewGrouping).toEqual({ primary: 'service', secondary: 'env' })
+    expect(JSON.parse(localStorage.getItem('superdev.overview_grouping.v1') ?? '{}'))
+      .toEqual({ primary: 'service', secondary: 'env' })
+  })
+
+  it('setOverviewGrouping 在 primary 撞上 secondary 时自动顺移 secondary', () => {
+    const store = useSettingsStore()
+    store.setOverviewGrouping('env', 'service')
+    store.setOverviewGrouping('service', 'service')
+    expect(store.overviewGrouping.primary).toBe('service')
+    expect(store.overviewGrouping.secondary).not.toBe('service')
+  })
+
+  it('加载非法持久化值时回落默认', () => {
+    localStorage.setItem('superdev.overview_grouping.v1', '{"primary":"x","secondary":"y"}')
+    const store = useSettingsStore()
+    expect(store.overviewGrouping).toEqual({ primary: 'env', secondary: 'service' })
+  })
 })
