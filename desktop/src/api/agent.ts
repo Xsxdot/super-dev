@@ -419,7 +419,7 @@ export interface Project {
 }
 
 export interface LogEntry {
-  id: number
+  id: string
   deployment_id: string
   run_id: string
   timestamp: string
@@ -939,14 +939,14 @@ export interface RemoteSearchResponse {
 export interface DeploymentFetchLogsParams {
   deploymentId: string
   limit?: number
-  before?: number
+  before?: string
 }
 
 export interface DeploymentLogsResponse {
   items: LogEntry[]
   next?: {
     time?: string
-    id?: number
+    id?: string
   }
 }
 
@@ -955,12 +955,12 @@ export interface DeploymentSearchParams {
   q: string
   limit?: number
   cursor_time?: string
-  cursor_id?: number
+  cursor_id?: string
 }
 
 export interface DeploymentSearchResponse {
   items: LogEntry[]
-  cursor: { time: string; id: number } | null
+  cursor: { time: string; id: string } | null
   has_more: boolean
 }
 
@@ -1263,8 +1263,17 @@ export const api = {
 }
 
 /** deploymentWsUrl 返回指定 deployment 的 WebSocket 日志流 URL。 */
-export function deploymentWsUrl(deploymentId: string): string {
-  return `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
+export function deploymentWsUrl(
+  deploymentId: string,
+  opts?: { replay?: number; sinceTime?: string; sinceId?: string },
+): string {
+  const base = `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
+  const q = new URLSearchParams()
+  if (opts?.replay) q.set('replay', String(opts.replay))
+  if (opts?.sinceTime) q.set('since_time', opts.sinceTime)
+  if (opts?.sinceId) q.set('since_id', opts.sinceId)
+  const encoded = q.toString()
+  return encoded ? `${base}?${encoded}` : base
 }
 
 /** nodesWsUrl 返回 NodeRegistry 快照 WebSocket URL。 */
