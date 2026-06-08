@@ -313,7 +313,8 @@ async function removeAgent(agent: AgentDTO) {
                   <span class="mono">{{ row.index + 1 }}</span>
                   <span class="route-dot" :class="`route-${row.status}`" aria-hidden="true"></span>
                   <span class="mono route-entry">{{ row.type }} · {{ row.address }}</span>
-                  <span>{{ row.current ? t('settings.agents.routeCurrent') : t(routeStatusKey(row.status)) }}</span>
+                  <span class="route-status-label">{{ t(routeStatusKey(row.status)) }}</span>
+                  <span v-if="row.current" class="route-current-badge">{{ t('settings.agents.routeCurrent') }}</span>
                   <span>{{ row.role === 'primary' ? t('settings.agents.primaryTransport') : t('settings.agents.fallbackTransport') }}</span>
                   <span v-if="row.error" class="route-error">{{ row.error }}</span>
                 </div>
@@ -467,7 +468,7 @@ async function removeAgent(agent: AgentDTO) {
 }
 .route-detail-row {
   display: grid;
-  grid-template-columns: 20px 10px minmax(150px, 1fr) auto auto;
+  grid-template-columns: 20px 10px minmax(150px, 1fr) auto auto auto;
   gap: 6px;
   align-items: center;
   padding: 6px;
@@ -476,6 +477,13 @@ async function removeAgent(agent: AgentDTO) {
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: 11px;
+}
+.route-current-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 10px;
 }
 .route-error {
   grid-column: 3 / -1;

@@ -159,7 +159,21 @@ describe('AgentManagerTab', () => {
     expect(wrapper.text()).toContain('健康')
     await wrapper.find('[data-test="agent-route-toggle-h1"]').trigger('click')
     expect(wrapper.find('[data-test="agent-route-row-h1-0"]').text()).toContain('connection refused')
-    expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).toContain('当前走通')
+    expect(wrapper.find('[data-test="agent-route-row-h1-0"]').text()).toContain('探活失败')
+    expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).toContain('探活成功')
+    expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).toContain('当前')
+    expect(wrapper.find('[data-test="agent-route-row-h1-1"]').text()).not.toContain('当前走通')
+  })
+
+  it('shows untested current route as untested plus current, not as reachable', async () => {
+    const { wrapper } = await mountPage([agent()])
+
+    await wrapper.find('[data-test="agent-route-toggle-h1"]').trigger('click')
+
+    const firstRow = wrapper.find('[data-test="agent-route-row-h1-0"]')
+    expect(firstRow.text()).toContain('未测')
+    expect(firstRow.text()).toContain('当前')
+    expect(firstRow.text()).not.toContain('当前走通')
   })
 
   it('shows one primary action plus a more menu instead of duplicated row links', async () => {
