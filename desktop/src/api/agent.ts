@@ -836,6 +836,21 @@ export interface AgentRestartResponse {
   message: string
 }
 
+export interface AgentUpdateTargetResponse {
+  version: string
+  source: 'bundled' | string
+  concurrency_default: number
+}
+
+export interface AgentUpdateBinaryResponse {
+  ok: boolean
+  host_id: string
+  platform: string
+  version: string
+  message: string
+  updated_at: string
+}
+
 export interface AgentTransportTestPayload {
   index: number
 }
@@ -1075,6 +1090,13 @@ export const api = {
     }),
   restartAgent: (hostId: string) =>
     request<AgentRestartResponse>(`/api/agents/${encodeURIComponent(hostId)}/restart`, { method: 'POST' }),
+  getAgentUpdateTarget: () =>
+    request<AgentUpdateTargetResponse>('/api/agents/update-target'),
+  updateAgentBinary: (hostId: string) =>
+    request<AgentUpdateBinaryResponse>(`/api/agents/${encodeURIComponent(hostId)}/update-binary`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   generateAgentInstallCommand: (hostId: string, payload: AgentInstallCommandPayload) =>
     request<AgentInstallCommandResponse>(`/api/agents/${encodeURIComponent(hostId)}/install-command`, {
       method: 'POST',

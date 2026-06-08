@@ -28,6 +28,8 @@ vi.mock('@/api/agent', async () => {
       deleteAgent: vi.fn(),
       checkAgent: vi.fn(),
       installAgent: vi.fn(),
+      getAgentUpdateTarget: vi.fn(),
+      updateAgentBinary: vi.fn(),
       generateAgentInstallCommand: vi.fn(),
       testAgentTransport: vi.fn(),
       provisionAgent: vi.fn(),
@@ -139,6 +141,29 @@ describe('agents store', () => {
     expect(api.deleteAgent).toHaveBeenCalledWith('h1')
     expect(store.agentOf('h1')).toBeUndefined()
     expect(store.agentOf('h2')?.host_id).toBe('h2')
+  })
+
+  it('loads update target metadata and updates agent binary through the api', async () => {
+    const store = useAgentsStore()
+    vi.mocked(api.getAgentUpdateTarget).mockResolvedValue({
+      version: '0.1.0',
+      source: 'bundled',
+      concurrency_default: 3,
+    })
+    vi.mocked(api.updateAgentBinary).mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      version: '0.1.0',
+      message: 'updated',
+      updated_at: '2026-06-08T12:00:00Z',
+    })
+
+    await expect(store.getAgentUpdateTarget()).resolves.toMatchObject({ version: '0.1.0' })
+    await expect(store.updateAgentBinary('h1')).resolves.toMatchObject({ ok: true })
+
+    expect(api.getAgentUpdateTarget).toHaveBeenCalled()
+    expect(api.updateAgentBinary).toHaveBeenCalledWith('h1')
   })
 
   it('tests and provisions agent transports through the api', async () => {
