@@ -57,6 +57,62 @@ func TestGenerateAgentInstallCommandBindsHostAndParameters(t *testing.T) {
 	assert.NotContains(t, resp.Body.String(), `"bootstrap_token"`)
 }
 
+func TestGenerateAgentInstallCommandDefaultsBindAddressFromDirectChain(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
+	require.Equal(t, http.StatusOK, hostResp.Code)
+	hostID := decodeHostID(t, hostResp.Body.Bytes())
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: hostID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeDirect,
+			Direct: &model.DirectParams{Address: "100.117.127.123:57021"},
+		}}},
+		Config:   model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57021},
+		Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeAuto}},
+	})
+	require.NoError(t, err)
+
+	body := `{"method":"generated_command","controller_url":"http://100.64.0.10:57017","transport_type":"direct","token_ttl_minutes":30}`
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install-command", bytes.NewBufferString(body))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), "--bind-address 0.0.0.0")
+	assert.Contains(t, resp.Body.String(), "--port 57021")
+	assert.NotContains(t, resp.Body.String(), "--bind-address 100.117.127.123")
+}
+
+func TestGenerateAgentInstallCommandDefaultsBindAddressFromTunnelOnlyChain(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
+	require.Equal(t, http.StatusOK, hostResp.Code)
+	hostID := decodeHostID(t, hostResp.Body.Bytes())
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: hostID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeTunnel,
+			Tunnel: &model.TunnelParams{RemoteAgentPort: 57021},
+		}}},
+		Config:   model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57021},
+		Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeAuto}},
+	})
+	require.NoError(t, err)
+
+	body := `{"method":"generated_command","controller_url":"http://100.64.0.10:57017","transport_type":"tunnel","token_ttl_minutes":30}`
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install-command", bytes.NewBufferString(body))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), "--bind-address 127.0.0.1")
+	assert.Contains(t, resp.Body.String(), "--port 57021")
+	assert.NotContains(t, resp.Body.String(), "--bind-address 100.117.127.123")
+}
+
 func TestAgentInstallCommandTokenRecordBindsHostAndTTL(t *testing.T) {
 	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 

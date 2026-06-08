@@ -22,7 +22,10 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-const agentInstallMethodPushOverSSH = "push_over_ssh"
+const (
+	agentInstallMethodPushOverSSH    = "push_over_ssh"
+	directInstallAuthRequiredMessage = "direct connection chain requires agent to listen on 0.0.0.0; complete security bootstrap token before installing"
+)
 
 type agentInstallRequest struct {
 	Method string `json:"method"`
@@ -53,7 +56,12 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := a.hostAgentInstaller.Install(r.Context(), host, agentServiceOptions(agent, a.cfg.BootstrapToken))
+	opts, err := agentServiceOptions(agent, a.cfg.BootstrapToken)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := a.hostAgentInstaller.Install(r.Context(), host, opts)
 	if err != nil {
 		var installErr *installer.InstallError
 		if errors.As(err, &installErr) {
@@ -69,10 +77,12 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
-func agentServiceOptions(agent model.Agent, bootstrapToken string) installer.ServiceOptions {
-	bindAddress := strings.TrimSpace(agent.Config.ListenAddress)
-	if bindAddress == "" {
-		bindAddress = defaultAgentInstallBindAddress
+func agentServiceOptions(agent model.Agent, bootstrapToken string) (installer.ServiceOptions, error) {
+	model.ApplyAgentDefaults(&agent)
+	bindAddress := agent.ResolveBindAddress()
+	token := strings.TrimSpace(bootstrapToken)
+	if bindAddress == model.PublicBindAddress && token == "" {
+		return installer.ServiceOptions{}, errors.New(directInstallAuthRequiredMessage)
 	}
 	port := agent.Config.ListenPort
 	if port <= 0 {
@@ -81,7 +91,7 @@ func agentServiceOptions(agent model.Agent, bootstrapToken string) installer.Ser
 	return installer.ServiceOptions{
 		BindAddress:    bindAddress,
 		Port:           port,
-		RequireAuth:    strings.TrimSpace(bootstrapToken) != "",
-		BootstrapToken: bootstrapToken,
-	}
+		RequireAuth:    token != "",
+		BootstrapToken: token,
+	}, nil
 }

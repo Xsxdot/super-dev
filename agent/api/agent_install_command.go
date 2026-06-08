@@ -149,8 +149,8 @@ func applyAgentInstallDefaultsFromAgent(req *agentInstallCommandRequest, agent m
 	if req.TransportType == "" && len(agent.Transport.Chain) > 0 {
 		req.TransportType = agent.Transport.Chain[0].Type
 	}
-	if strings.TrimSpace(req.BindAddress) == "" && strings.TrimSpace(agent.Config.ListenAddress) != "" {
-		req.BindAddress = agent.Config.ListenAddress
+	if strings.TrimSpace(req.BindAddress) == "" {
+		req.BindAddress = agent.ResolveBindAddress()
 	}
 	if req.RemoteAgentPort <= 0 {
 		if req.TransportType == model.TransportTypeTunnel {
