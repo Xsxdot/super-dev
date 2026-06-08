@@ -1,6 +1,7 @@
 package logbuf_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -10,6 +11,26 @@ import (
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+type fakeLogWriter struct {
+	entries []model.LogEntry
+}
+
+func (f *fakeLogWriter) AppendBatch(_ context.Context, entries []model.LogEntry) error {
+	f.entries = append(f.entries, entries...)
+	return nil
+}
+
+func TestBufferFlushUsesContextAwareLogWriter(t *testing.T) {
+	writer := &fakeLogWriter{}
+	buf := logbuf.New(writer, 10, "")
+
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", Message: "persist me", Timestamp: time.Now()})
+	buf.Close()
+
+	require.Len(t, writer.entries, 1)
+	assert.Equal(t, "persist me", writer.entries[0].Message)
+}
 
 func TestBufferSubscribeReceivesEntries(t *testing.T) {
 	buf := logbuf.New(nil, 8000, "")

@@ -7,11 +7,12 @@
 //
 // 边界：
 //   - 不解析日志格式，仅存储已构造好的 model.LogEntry
-//   - 不直接依赖 store 包，通过 Flusher 接口解耦，便于测试注入 nil
+//   - 不直接依赖 store 包，通过 LogWriter 接口解耦，便于测试注入 nil
 //   - 订阅者 channel 满时跳过写入，不阻塞生产者
 package logbuf
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -25,9 +26,12 @@ const (
 	flushBatch = 50
 )
 
-// Flusher 是 store.Store 的最小接口，便于测试时注入 nil。
-type Flusher interface {
-	AppendBatch([]model.LogEntry) error
+// LogWriter 是 buffer 的持久化出口（与 logbackend.LogWriter 结构等价）。
+//
+// 本地定义避免 logbuf → logbackend → logbuf 的 import 环。
+type LogWriter interface {
+	// AppendBatch 批量写入日志条目。ctx 为未来中心化写入保留超时/取消能力。
+	AppendBatch(ctx context.Context, entries []model.LogEntry) error
 }
 
 // Buffer 是线程安全的环形日志缓冲，支持订阅推送和批量持久化。
@@ -39,7 +43,7 @@ type Buffer struct {
 	maxSize int
 	pending []model.LogEntry
 	subs    map[string]chan model.LogEntry
-	store   Flusher
+	store   LogWriter
 	done    chan struct{}
 	nodeID  string // 本机 node_id，Append 时填入 LogEntry.SourceID（空字符串时不填充）
 }
@@ -53,7 +57,7 @@ type Buffer struct {
 //
 // 返回：
 //   - 已启动 flush goroutine 的 *Buffer
-func New(store Flusher, maxSize int, nodeID string) *Buffer {
+func New(store LogWriter, maxSize int, nodeID string) *Buffer {
 	b := &Buffer{
 		ring:    make([]model.LogEntry, maxSize),
 		maxSize: maxSize,
@@ -195,6 +199,6 @@ func (b *Buffer) flush() {
 	b.mu.Unlock()
 
 	if b.store != nil {
-		_ = b.store.AppendBatch(batch)
+		_ = b.store.AppendBatch(context.Background(), batch)
 	}
 }

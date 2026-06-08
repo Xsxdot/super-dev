@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -8,8 +9,17 @@ import (
 	"github.com/xsxdot/super-dev/agent/api"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/logbuf"
+	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/store"
 )
+
+type testStoreWriter struct {
+	s *store.Store
+}
+
+func (w testStoreWriter) AppendBatch(_ context.Context, entries []model.LogEntry) error {
+	return w.s.AppendBatch(entries)
+}
 
 // newTestAppInstance 创建一个直接返回 *api.App 的测试实例，供需要直接操作 App 的测试使用。
 // 与 newTestApp 不同，此函数不启动 HTTP Server，由调用方自行 wrap。
@@ -52,7 +62,7 @@ func addTestDeploymentBackend(t *testing.T, app *api.App) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	buf := logbuf.New(s, 100, "")
+	buf := logbuf.New(testStoreWriter{s: s}, 100, "")
 	t.Cleanup(buf.Close)
 	backend := logbackend.NewSQLiteBackend(s, buf)
 	app.SetBackendForTest(depID, backend)

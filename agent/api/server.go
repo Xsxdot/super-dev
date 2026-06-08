@@ -93,6 +93,15 @@ type productionHostAgentInstaller struct {
 	installer *installer.Installer
 }
 
+// storeWriter 把 store.Store 适配成 logbuf 的 ctx-aware 写入接口。
+type storeWriter struct {
+	s *store.Store
+}
+
+func (w storeWriter) AppendBatch(_ context.Context, entries []model.LogEntry) error {
+	return w.s.AppendBatch(entries)
+}
+
 func (p productionHostAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
 	return p.installer.InstallWithOptions(ctx, host, opts)
 }
@@ -216,7 +225,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	buf := logbuf.New(s, 2000, id.NodeID)
+	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
 	if result, err := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
