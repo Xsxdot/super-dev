@@ -2,7 +2,7 @@
  * workspaceStore Project Overview 标签测试。
  *
  * 职责：
- *   - 验证 Project Overview 作为 workspace tab 打开和复用
+ *   - 验证项目概览作为 workspace tab 打开和复用
  *   - 验证切换 overview 不破坏已有日志 tab 布局状态
  *
  * 边界：
@@ -38,7 +38,7 @@ describe('workspace overview tabs', () => {
     expect(workspace.tabs).toHaveLength(1)
     expect(workspace.activeTabId).toBe(first.id)
     expect(workspace.activeTab?.type).toBe('overview')
-    expect(workspace.activeTab?.title).toBe('Project Overview')
+    expect(workspace.activeTab?.title).toBe('Demo')
   })
 
   it('does not overwrite active log panel layout when switching to overview', () => {

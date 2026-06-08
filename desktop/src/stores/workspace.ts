@@ -108,12 +108,12 @@ function makeProjectTab(projectId: string, title: string): ProjectWorkspaceTab {
   }
 }
 
-function makeProjectOverviewTab(projectId: string): ProjectOverviewWorkspaceTab {
+function makeProjectOverviewTab(projectId: string, title: string): ProjectOverviewWorkspaceTab {
   return {
     id: `overview:${projectId}`,
     type: 'overview',
     projectId,
-    title: 'Project Overview',
+    title,
   }
 }
 
@@ -121,7 +121,7 @@ function makeNodesTab(): NodesWorkspaceTab {
   return {
     id: 'nodes',
     type: 'nodes',
-    title: 'Node Center',
+    title: 'nodes',
   }
 }
 
@@ -222,7 +222,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       activeTabId.value = existing.id
       return existing
     }
-    const tab = makeProjectOverviewTab(projectId)
+    const tab = makeProjectOverviewTab(projectId, projectName(projectId))
     tabs.value.unshift(tab)
     runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
@@ -246,7 +246,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function openSearch(projectId: string): SearchWorkspaceTab {
     saveActiveLogWorkspaceLayout()
-    const tab = makeSearchTab(projectId, `Search · ${projectName(projectId)}`)
+    const tab = makeSearchTab(projectId, projectName(projectId))
     tabs.value.push(tab)
     runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
@@ -411,7 +411,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const trimmed = query.trim()
     if (!tab || !trimmed) return
     tab.query = trimmed
-    tab.title = `Search: ${trimmed}`
+    tab.title = trimmed
     tab.status = 'loading'
     tab.error = null
     try {

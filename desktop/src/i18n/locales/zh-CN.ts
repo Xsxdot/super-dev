@@ -828,6 +828,8 @@ export default {
     },
   },
   search: {
+    tabTitleForProject: '搜索 · {project}',
+    tabTitleForQuery: '搜索：{query}',
     placeholder: '输入 traceID、orderID、错误关键字...',
     submit: '搜索',
     summary: '{shown} / {total} 条命中',

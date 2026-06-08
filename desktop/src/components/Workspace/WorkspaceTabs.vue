@@ -10,9 +10,13 @@
   - 不负责创建标签，创建由侧边栏触发
 -->
 <script setup lang="ts">
+import { useAppI18n } from '@/i18n/useAppI18n'
+import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
 
+const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const { t } = useAppI18n()
 
 function tabKind(tab: WorkspaceTab): string {
   if (tab.type === 'nodes') return '◎'
@@ -20,6 +24,22 @@ function tabKind(tab: WorkspaceTab): string {
   if (tab.type === 'project') return '▣'
   if (tab.type === 'search') return '⌕'
   return '●'
+}
+
+function projectName(projectId: string): string {
+  return agentStore.projectById(projectId)?.name ?? projectId
+}
+
+function displayTitle(tab: WorkspaceTab): string {
+  if (tab.type === 'nodes') return t('nodeCenter.title')
+  if (tab.type === 'overview') return t('overview.title')
+  if (tab.type === 'project') return projectName(tab.projectId)
+  if (tab.type === 'search') {
+    return tab.query
+      ? t('search.tabTitleForQuery', { query: tab.query })
+      : t('search.tabTitleForProject', { project: projectName(tab.projectId) })
+  }
+  return tab.title
 }
 </script>
 
@@ -38,7 +58,7 @@ function tabKind(tab: WorkspaceTab): string {
       @click="workspace.activateTab(tab.id)"
     >
       <span class="tab-kind">{{ tabKind(tab) }}</span>
-      <span class="tab-title">{{ tab.title }}</span>
+      <span class="tab-title">{{ displayTitle(tab) }}</span>
       <span class="tab-close" @click.stop="workspace.closeTab(tab.id)">×</span>
     </button>
   </div>

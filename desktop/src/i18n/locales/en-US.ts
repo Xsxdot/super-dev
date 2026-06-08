@@ -828,6 +828,8 @@ export default {
     },
   },
   search: {
+    tabTitleForProject: 'Search · {project}',
+    tabTitleForQuery: 'Search: {query}',
     placeholder: 'Enter traceID, orderID, or error keyword...',
     submit: 'Search',
     summary: '{shown} / {total} hits',
