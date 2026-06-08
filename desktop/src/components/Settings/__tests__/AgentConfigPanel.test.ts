@@ -73,6 +73,7 @@ describe('AgentConfigPanel', () => {
   it('creates a new Agent from the connection-chain step before moving to install', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'createAgent').mockResolvedValue(agent())
+    vi.spyOn(store, 'generateInstallCommand').mockResolvedValue({ command: 'curl install', expires_at: '2026-06-07T10:30:00Z', token_id: 'tok_1' })
     const wrapper = mount(AgentConfigPanel, {
       props: { visible: true, mode: 'create', hosts, initialTab: 'security' },
       global: { plugins: [installTestI18n()] },
@@ -109,6 +110,16 @@ describe('AgentConfigPanel', () => {
     })
     expect(wrapper.emitted('created')?.[0]?.[0]).toMatchObject({ host_id: 'h1' })
     expect(wrapper.find('[data-test="agent-panel-tab-install"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="agent-create-before-install"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="agent-install-generate"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
+
+    expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', expect.objectContaining({
+      method: 'generated_command',
+      remote_agent_port: 57019,
+      transport_type: 'tunnel',
+    }))
   })
 
   it('syncs the default create-mode tunnel port when the connection-chain tab is opened directly', async () => {

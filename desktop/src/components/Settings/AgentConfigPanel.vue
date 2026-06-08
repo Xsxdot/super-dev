@@ -63,6 +63,7 @@ const chain = ref<TransportEntry[]>([])
 const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
 const hostID = ref('')
+const localCreatedAgent = ref<AgentDTO | null>(null)
 
 const securityForm = reactive({
   listenAddress: '',
@@ -79,8 +80,9 @@ const installForm = reactive({
 
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
+const persistedAgent = computed<AgentDTO | null>(() => props.agent ?? localCreatedAgent.value)
 const panelAgent = computed<AgentDTO | null>(() => {
-  if (props.agent) return props.agent
+  if (persistedAgent.value) return persistedAgent.value
   if (!isCreateMode.value || !selectedHost.value) return null
   return {
     host_id: selectedHost.value.id,
@@ -92,10 +94,10 @@ const panelAgent = computed<AgentDTO | null>(() => {
     security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: securityForm.tlsMode } },
   }
 })
-const title = computed(() => isCreateMode.value && !props.agent
+const title = computed(() => isCreateMode.value && !persistedAgent.value
   ? t('settings.agents.createTitle')
   : t('settings.agents.panelTitle', { name: panelAgent.value?.host_name ?? '' }))
-const runtime = computed(() => props.agent ? runtimeFor(props.agent, props.node) : undefined)
+const runtime = computed(() => persistedAgent.value ? runtimeFor(persistedAgent.value, props.node) : undefined)
 const canProbe = computed(() => runtime.value?.installed === true)
 const bindAddress = computed(() => securityForm.listenAddress.trim() || '127.0.0.1')
 const bindPort = computed(() => Number(securityForm.listenPort) || 57017)
@@ -104,11 +106,11 @@ const transportDirty = computed(() => chainSignature(chain.value) !== chainSigna
 const currentRows = computed(() => panelAgent.value
   ? agentRouteRows({ ...panelAgent.value, transport: { chain: chain.value } }, transportDirty.value ? undefined : props.node)
   : [])
-const needsCreateBeforeNextStep = computed(() => isCreateMode.value && !props.agent)
+const needsCreateBeforeNextStep = computed(() => isCreateMode.value && !persistedAgent.value)
 
 const tabs = computed<Array<{ key: AgentPanelTab; label: string; locked: boolean; done: boolean }>>(() => [
-  { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(props.agent?.config?.listen_port) },
-  { key: 'transport', label: t('settings.agents.tabTransport'), locked: false, done: Boolean(props.agent?.transport?.chain?.length) },
+  { key: 'security', label: t('settings.agents.tabSecurity'), locked: false, done: Boolean(persistedAgent.value?.config?.listen_port) },
+  { key: 'transport', label: t('settings.agents.tabTransport'), locked: false, done: Boolean(persistedAgent.value?.transport?.chain?.length) },
   { key: 'install', label: t('settings.agents.tabInstall'), locked: needsCreateBeforeNextStep.value, done: runtime.value?.installed === true },
   { key: 'probe', label: t('settings.agents.tabProbe'), locked: !canProbe.value, done: runtime.value?.health === 'healthy' },
 ])
@@ -152,6 +154,7 @@ function syncDefaultCreateTunnelPort() {
 }
 
 function reset(agent?: AgentDTO | null) {
+  localCreatedAgent.value = null
   activeTab.value = props.initialTab ?? 'security'
   actionError.value = null
   manualAdvancedOpen.value = false
@@ -179,6 +182,7 @@ function selectTab(tab: AgentPanelTab) {
 }
 
 function securityPayload(): AgentConfigUpdatePayload {
+  const agent = persistedAgent.value
   const tls = tlsPayload()
   return {
     config: {
@@ -186,8 +190,8 @@ function securityPayload(): AgentConfigUpdatePayload {
       listen_port: bindPort.value,
     },
     security: {
-      token_configured: Boolean(props.agent?.security?.token_configured),
-      provision_state: props.agent?.security?.provision_state || 'pending-bootstrap',
+      token_configured: Boolean(agent?.security?.token_configured),
+      provision_state: agent?.security?.provision_state || 'pending-bootstrap',
       tls,
     },
   }
@@ -226,11 +230,12 @@ async function saveSecurity() {
     activeTab.value = 'transport'
     return
   }
-  if (!props.agent) return
+  const agent = persistedAgent.value
+  if (!agent) return
   savingSecurity.value = true
   actionError.value = null
   try {
-    await agentsStore.updateAgentConfig(props.agent.host_id, securityPayload())
+    await agentsStore.updateAgentConfig(agent.host_id, securityPayload())
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -239,11 +244,12 @@ async function saveSecurity() {
 }
 
 async function provisionSecurity() {
-  if (!props.agent) return
+  const agent = persistedAgent.value
+  if (!agent) return
   provisioning.value = true
   actionError.value = null
   try {
-    await agentsStore.provisionAgent(props.agent.host_id, { index: 0, tls_mode: securityForm.tlsMode })
+    await agentsStore.provisionAgent(agent.host_id, { index: 0, tls_mode: securityForm.tlsMode })
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -252,12 +258,13 @@ async function provisionSecurity() {
 }
 
 async function generateInstallCommand() {
-  if (!props.agent) return
+  const agent = persistedAgent.value
+  if (!agent) return
   generatingInstall.value = true
   actionError.value = null
   installResult.value = null
   try {
-    installResult.value = await agentsStore.generateInstallCommand(props.agent.host_id, {
+    installResult.value = await agentsStore.generateInstallCommand(agent.host_id, {
       method: 'generated_command',
       controller_url: installForm.controllerURL.trim(),
       bind_address: bindAddress.value,
@@ -296,10 +303,11 @@ function moveEntry(index: number, direction: -1 | 1) {
 }
 
 async function testEntry(index: number) {
-  if (!props.agent || transportDirty.value) return
+  const agent = persistedAgent.value
+  if (!agent || transportDirty.value) return
   actionError.value = null
   try {
-    probeResults[index] = await agentsStore.testTransport(props.agent.host_id, index)
+    probeResults[index] = await agentsStore.testTransport(agent.host_id, index)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   }
@@ -315,6 +323,7 @@ async function saveTransport() {
       chain.value = normalizedChain.map(normalizeEntry)
       savedChain.value = normalizedChain.map(normalizeEntry)
       const created = await agentsStore.createAgent(createPayload())
+      localCreatedAgent.value = created
       activeTab.value = 'install'
       emit('created', created)
     } catch (err) {
@@ -324,11 +333,12 @@ async function saveTransport() {
     }
     return
   }
-  if (!props.agent) return
+  const agent = persistedAgent.value
+  if (!agent) return
   savingTransport.value = true
   const payload: AgentTransportUpdatePayload = { transport: { chain: normalizedChain } }
   try {
-    await agentsStore.updateAgentTransport(props.agent.host_id, payload)
+    await agentsStore.updateAgentTransport(agent.host_id, payload)
     chain.value = normalizedChain.map(normalizeEntry)
     savedChain.value = normalizedChain.map(normalizeEntry)
   } catch (err) {
@@ -339,15 +349,16 @@ async function saveTransport() {
 }
 
 async function probeAll() {
-  if (!props.agent || !canProbe.value || transportDirty.value) return
+  const agent = persistedAgent.value
+  if (!agent || !canProbe.value || transportDirty.value) return
   probingAll.value = true
   actionError.value = null
   clearProbeResults()
   try {
     for (let index = 0; index < chain.value.length; index += 1) {
-      probeResults[index] = await agentsStore.testTransport(props.agent.host_id, index)
+      probeResults[index] = await agentsStore.testTransport(agent.host_id, index)
     }
-    await agentsStore.checkAgent(props.agent.host_id)
+    await agentsStore.checkAgent(agent.host_id)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -380,7 +391,7 @@ watch(
 </script>
 
 <template>
-  <div v-if="visible && (agent || isCreateMode)" class="settings-modal-backdrop" @click.self="emit('cancel')">
+  <div v-if="visible && (persistedAgent || isCreateMode)" class="settings-modal-backdrop" @click.self="emit('cancel')">
     <section class="settings-modal settings-modal-wide agent-config-panel" data-test="agent-panel">
       <header class="settings-modal-header">
         <h2 class="settings-modal-title">{{ title }}</h2>
@@ -455,12 +466,12 @@ watch(
               </div>
             </div>
 
-            <div v-if="agent" class="security-status">
-              <span>{{ t('settings.agents.provisionState') }}: {{ agent.security.provision_state }}</span>
-              <span>{{ t('settings.agents.tokenConfigured') }}: {{ agent.security.token_configured ? t('common.yes') : t('common.no') }}</span>
+            <div v-if="persistedAgent" class="security-status">
+              <span>{{ t('settings.agents.provisionState') }}: {{ persistedAgent.security.provision_state }}</span>
+              <span>{{ t('settings.agents.tokenConfigured') }}: {{ persistedAgent.security.token_configured ? t('common.yes') : t('common.no') }}</span>
             </div>
             <footer class="step-actions">
-              <button v-if="agent" type="button" class="settings-btn settings-btn-secondary" :disabled="provisioning" data-test="agent-provision-security" @click="provisionSecurity">
+              <button v-if="persistedAgent" type="button" class="settings-btn settings-btn-secondary" :disabled="provisioning" data-test="agent-provision-security" @click="provisionSecurity">
                 {{ provisioning ? t('common.loading') : t('settings.agents.provisionSecurity') }}
               </button>
               <button type="button" class="settings-btn settings-btn-primary" :disabled="savingSecurity || (needsCreateBeforeNextStep && !hostID)" data-test="agent-security-save" @click="saveSecurity">

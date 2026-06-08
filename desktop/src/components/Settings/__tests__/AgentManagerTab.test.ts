@@ -101,7 +101,13 @@ afterEach(() => {
 describe('AgentManagerTab', () => {
   it('opens the unified AgentConfigPanel for new Agent creation and creates from the connection chain', async () => {
     const { wrapper, agents } = await mountPage([])
-    vi.spyOn(agents, 'createAgent').mockResolvedValue(agent({ host_id: 'h2', host_name: 'us-02', tags: [] }))
+    vi.spyOn(agents, 'createAgent').mockResolvedValue(agent({
+      host_id: 'h2',
+      host_name: 'us-02',
+      tags: [],
+      transport: { chain: [{ type: 'tunnel', tunnel: { remote_agent_port: 57017 } }] },
+    }))
+    vi.spyOn(agents, 'generateInstallCommand').mockResolvedValue({ command: 'curl install h2', expires_at: '2026-06-07T10:30:00Z', token_id: 'tok_1' })
 
     await wrapper.find('[data-test="agent-create"]').trigger('click')
     await wrapper.vm.$nextTick()
@@ -123,6 +129,15 @@ describe('AgentManagerTab', () => {
 
     expect(agents.createAgent).toHaveBeenCalled()
     expect(wrapper.find('[data-test="agent-panel-tab-install"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="agent-create-before-install"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="agent-install-generate"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="agent-install-generate"]').trigger('click')
+
+    expect(agents.generateInstallCommand).toHaveBeenCalledWith('h2', expect.objectContaining({
+      method: 'generated_command',
+      transport_type: 'tunnel',
+    }))
   })
 
   it('renders degraded route summary from nodeStore and expandable chain details', async () => {
