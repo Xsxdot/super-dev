@@ -138,7 +138,23 @@ func NewWithRemoteFactory(opts Options, factory RemoteFactory) *Installer {
 //   - 安装成功结果，包含 host ID 和平台
 //   - 分阶段错误，便于上层定位失败原因
 func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error) {
-	serviceOpts := serviceOptionsForHost(host, i.opts.BootstrapToken)
+	return i.InstallWithOptions(ctx, host, serviceOptionsForHost(host, i.opts.BootstrapToken))
+}
+
+// InstallWithOptions 使用显式服务参数安装或重装远端 agent。
+//
+// 参数：
+//   - ctx: 上下文，用于取消 SSH 命令和上传前置检查
+//   - host: 远端主机配置，包含 SSH 凭据
+//   - serviceOpts: 远端 agent 服务启动时使用的监听、安全参数
+//
+// 返回：
+//   - 安装成功结果，包含 host ID 和平台
+//   - 分阶段错误，便于上层定位失败原因
+//
+// 注意：
+//   - Agent API 已将监听/TLS 配置从 Host 拆出，因此直推安装需通过该入口显式传参
+func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, serviceOpts ServiceOptions) (Result, error) {
 	remote, err := i.factory(host)
 	if err != nil {
 		return Result{}, stageErr("connect", err)

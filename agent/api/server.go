@@ -30,6 +30,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/debugsession"
 	"github.com/xsxdot/super-dev/agent/identity"
 	"github.com/xsxdot/super-dev/agent/ingress"
+	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/logbuf"
 	"github.com/xsxdot/super-dev/agent/metrics"
@@ -56,8 +57,12 @@ type AppConfig struct {
 	NodeTransportOverride nodetransport.NodeTransport
 	// NodeRegistryOverride 注入自定义节点状态中心，仅用于测试。
 	NodeRegistryOverride *noderegistry.Registry
+	// InstallBinaryDir 是远端 agent 安装二进制目录；为空时安装接口返回明确错误。
+	InstallBinaryDir string
 	// SampleBinaryPath 是随桌面端打包的 onboarding 示例服务二进制；为空时跳过示例落地。
 	SampleBinaryPath string
+	// InstallerOverride 注入自定义远端 agent 安装器，仅用于测试。
+	InstallerOverride HostAgentInstaller
 	// RuntimeMetricsSampler 注入进程级指标采样器；nil 时使用 metrics.NewSampler。
 	RuntimeMetricsSampler metrics.MetricsSampler
 	// RuntimeStatusRequestTimeout 是一次聚合的整体超时；0 时使用 3 秒。
@@ -74,6 +79,20 @@ type AppConfig struct {
 	TLSCertFile string
 	// TLSKeyFile 是用户手动配置的 HTTPS 服务端私钥路径；必须与 TLSCertFile 同时提供。
 	TLSKeyFile string
+}
+
+// HostAgentInstaller 安装或重装远端 SuperDev agent。
+type HostAgentInstaller interface {
+	// Install 使用 Host SSH 凭据和 Agent 服务参数执行安装。
+	Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error)
+}
+
+type productionHostAgentInstaller struct {
+	installer *installer.Installer
+}
+
+func (p productionHostAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
+	return p.installer.InstallWithOptions(ctx, host, opts)
 }
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
@@ -120,6 +139,7 @@ type App struct {
 	backends                    map[string]logbackend.LogBackend
 	identity                    identity.Identity
 	pidStore                    *process.PIDStore
+	hostAgentInstaller          HostAgentInstaller
 	runtimeMetricsSampler       metrics.MetricsSampler
 	runtimeStatusRequestTimeout time.Duration
 	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
@@ -279,6 +299,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if runtimeTimeout == 0 {
 		runtimeTimeout = 3 * time.Second
 	}
+	hostAgentInstaller := cfg.InstallerOverride
+	if hostAgentInstaller == nil {
+		hostAgentInstaller = productionHostAgentInstaller{installer: installer.New(installer.Options{BinaryDir: cfg.InstallBinaryDir})}
+	}
 	executionAuthorizer := cfg.ExecutionAuthorizer
 	if executionAuthorizer == nil {
 		executionAuthorizer = remoteexec.AllowAll{}
@@ -311,6 +335,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		backends:                    map[string]logbackend.LogBackend{},
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
+		hostAgentInstaller:          hostAgentInstaller,
 		runtimeMetricsSampler:       runtimeSampler,
 		runtimeStatusRequestTimeout: runtimeTimeout,
 		agentHealth:                 agentHealthMonitor,
@@ -492,6 +517,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/agents/{host_id}/config", a.updateAgentConfig)
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
+	mux.HandleFunc("POST /api/agents/{host_id}/install", a.installAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
 	mux.HandleFunc("GET /api/agents/install.sh", a.serveAgentInstallScript)
 	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)

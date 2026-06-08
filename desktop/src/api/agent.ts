@@ -779,10 +779,21 @@ export interface AgentInstallCommandPayload {
   token_ttl_minutes?: number
 }
 
+export interface AgentInstallPayload {
+  method: 'push_over_ssh'
+}
+
 export interface AgentInstallCommandResponse {
   command: string
   expires_at: string
   token_id: string
+}
+
+export interface AgentInstallResponse {
+  ok: boolean
+  host_id: string
+  platform: string
+  message: string
 }
 
 export interface AgentTransportTestPayload {
@@ -1017,6 +1028,11 @@ export const api = {
     request<void>(`/api/agents/${encodeURIComponent(hostId)}`, { method: 'DELETE' }),
   checkAgent: (hostId: string) =>
     request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/check`, { method: 'POST' }),
+  installAgent: (hostId: string, payload: AgentInstallPayload) =>
+    request<AgentInstallResponse>(`/api/agents/${encodeURIComponent(hostId)}/install`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   generateAgentInstallCommand: (hostId: string, payload: AgentInstallCommandPayload) =>
     request<AgentInstallCommandResponse>(`/api/agents/${encodeURIComponent(hostId)}/install-command`, {
       method: 'POST',

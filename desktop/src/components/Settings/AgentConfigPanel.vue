@@ -20,6 +20,7 @@ import { runtimeFor, type AgentPanelTab } from '@/lib/agentStage'
 import type {
   AgentConfigUpdatePayload,
   AgentCreatePayload,
+  AgentInstallResponse,
   AgentDTO,
   AgentInstallCommandResponse,
   AgentTLSMode,
@@ -55,15 +56,17 @@ const creatingAgent = ref(false)
 const provisioning = ref(false)
 const savingTransport = ref(false)
 const generatingInstall = ref(false)
+const installingPush = ref(false)
 const probingAll = ref(false)
 const manualAdvancedOpen = ref(false)
 const installMode = ref<'generated_command' | 'push_over_ssh'>('generated_command')
 const installResult = ref<AgentInstallCommandResponse | null>(null)
+const pushInstallResult = ref<AgentInstallResponse | null>(null)
 const chain = ref<TransportEntry[]>([])
 const savedChain = ref<TransportEntry[]>([])
 const probeResults = reactive<Record<number, ProbeResult | null>>({})
 const hostID = ref('')
-const localCreatedAgent = ref<AgentDTO | null>(null)
+const localAgent = ref<AgentDTO | null>(null)
 
 const securityForm = reactive({
   listenAddress: '',
@@ -80,7 +83,7 @@ const installForm = reactive({
 
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
-const persistedAgent = computed<AgentDTO | null>(() => props.agent ?? localCreatedAgent.value)
+const persistedAgent = computed<AgentDTO | null>(() => localAgent.value ?? props.agent ?? null)
 const panelAgent = computed<AgentDTO | null>(() => {
   if (persistedAgent.value) return persistedAgent.value
   if (!isCreateMode.value || !selectedHost.value) return null
@@ -154,12 +157,13 @@ function syncDefaultCreateTunnelPort() {
 }
 
 function reset(agent?: AgentDTO | null) {
-  localCreatedAgent.value = null
+  localAgent.value = agent ?? null
   activeTab.value = props.initialTab ?? 'security'
   actionError.value = null
   manualAdvancedOpen.value = false
   installMode.value = 'generated_command'
   installResult.value = null
+  pushInstallResult.value = null
   hostID.value = agent?.host_id ?? props.hosts?.[0]?.id ?? ''
   securityForm.listenAddress = agent?.config?.listen_address ?? ''
   securityForm.listenPort = agent?.config?.listen_port || 57017
@@ -235,7 +239,7 @@ async function saveSecurity() {
   savingSecurity.value = true
   actionError.value = null
   try {
-    await agentsStore.updateAgentConfig(agent.host_id, securityPayload())
+    localAgent.value = await agentsStore.updateAgentConfig(agent.host_id, securityPayload())
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
@@ -323,7 +327,7 @@ async function saveTransport() {
       chain.value = normalizedChain.map(normalizeEntry)
       savedChain.value = normalizedChain.map(normalizeEntry)
       const created = await agentsStore.createAgent(createPayload())
-      localCreatedAgent.value = created
+      localAgent.value = created
       activeTab.value = 'install'
       emit('created', created)
     } catch (err) {
@@ -338,13 +342,33 @@ async function saveTransport() {
   savingTransport.value = true
   const payload: AgentTransportUpdatePayload = { transport: { chain: normalizedChain } }
   try {
-    await agentsStore.updateAgentTransport(agent.host_id, payload)
+    localAgent.value = await agentsStore.updateAgentTransport(agent.host_id, payload)
     chain.value = normalizedChain.map(normalizeEntry)
     savedChain.value = normalizedChain.map(normalizeEntry)
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
   } finally {
     savingTransport.value = false
+  }
+}
+
+async function pushInstall() {
+  const agent = persistedAgent.value
+  if (!agent) return
+  installingPush.value = true
+  actionError.value = null
+  pushInstallResult.value = null
+  try {
+    pushInstallResult.value = await agentsStore.installAgent(agent.host_id, { method: 'push_over_ssh' })
+    const checked = await agentsStore.checkAgent(agent.host_id)
+    localAgent.value = checked
+    if (checked.runtime.installed) {
+      activeTab.value = 'probe'
+    }
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.requestFailed')
+  } finally {
+    installingPush.value = false
   }
 }
 
@@ -515,7 +539,13 @@ watch(
               <button v-if="installResult" class="settings-btn settings-btn-secondary" type="button" @click="copyCommand">{{ t('common.copy') }}</button>
             </template>
 
-            <p v-else class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
+            <div v-else class="push-install">
+              <p class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
+              <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush" data-test="agent-install-push" @click="pushInstall">
+                {{ installingPush ? t('common.loading') : t('settings.agents.installNow') }}
+              </button>
+              <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
+            </div>
             </template>
           </section>
 

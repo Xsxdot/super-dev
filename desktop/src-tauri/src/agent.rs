@@ -1,12 +1,13 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::mcp_install::resolve_sidecar_binary;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
@@ -95,6 +96,10 @@ impl AgentProcess {
             args.push("--sample-binary".to_string());
             args.push(sample.to_string_lossy().to_string());
         }
+        if let Some(install_dir) = resolve_agent_install_dir(app) {
+            args.push("--install-binaries".to_string());
+            args.push(install_dir.to_string_lossy().to_string());
+        }
 
         let (_rx, child) = app
             .shell()
@@ -128,6 +133,26 @@ impl AgentProcess {
             println!("[SuperDev] agent stopped");
         }
     }
+}
+
+fn resolve_agent_install_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join("agent-install");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    if cfg!(debug_assertions) {
+        let candidate = std::env::current_dir()
+            .ok()?
+            .join("src-tauri")
+            .join("resources")
+            .join("agent-install");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn wait_for_compatible_agent(addr: &str, timeout: Duration) -> Result<(), String> {

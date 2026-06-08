@@ -352,6 +352,7 @@ export default {
       generatedCommand: 'Generated command',
       pushOverSSH: 'Push over SSH',
       pushOverSSHNote: 'Push-over-SSH install reuses the Host SSH login info. Save the Host first, then install.',
+      installNow: 'Install',
       generateCommand: 'Generate command',
       controllerURL: 'Controller URL',
       bindAddress: 'Bind address',

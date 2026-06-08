@@ -352,6 +352,7 @@ export default {
       generatedCommand: '生成命令',
       pushOverSSH: 'SSH 直推',
       pushOverSSHNote: 'SSH 直推安装会复用 Host 的 SSH 登录信息；请先保存主机，再执行安装。',
+      installNow: '执行安装',
       generateCommand: '生成命令',
       controllerURL: '控制端 URL',
       bindAddress: '绑定地址',

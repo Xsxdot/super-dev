@@ -1,7 +1,7 @@
 // Package main 是 SuperDev agent 的启动入口。
 //
 // 职责：
-//   - 解析命令行标志（--addr 监听地址，--data 数据目录）
+//   - 解析命令行标志（--addr 监听地址，--data 数据目录，--install-binaries 安装二进制目录）
 //   - 创建和启动 HTTP API 服务
 //   - 管理应用生命周期
 //
@@ -22,6 +22,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
+	installBinariesDir := flag.String("install-binaries", "", "Directory containing remote install agent binaries")
 	sampleBinary := flag.String("sample-binary", "", "Path to bundled onboarding sample service binary")
 	bootstrapToken := flag.String("bootstrap-token", "", "One-time bootstrap token for first security provision")
 	requireAuth := flag.Bool("require-auth", false, "Require bearer token authentication for agent API")
@@ -35,6 +36,7 @@ func main() {
 
 	app, err := api.NewApp(api.AppConfig{
 		DataDir:          *dataDir,
+		InstallBinaryDir: *installBinariesDir,
 		SampleBinaryPath: *sampleBinary,
 		BootstrapToken:   *bootstrapToken,
 		RequireAuth:      *requireAuth,

@@ -27,6 +27,7 @@ vi.mock('@/api/agent', async () => {
       updateAgentConfig: vi.fn(),
       deleteAgent: vi.fn(),
       checkAgent: vi.fn(),
+      installAgent: vi.fn(),
       generateAgentInstallCommand: vi.fn(),
       testAgentTransport: vi.fn(),
       provisionAgent: vi.fn(),
@@ -112,6 +113,20 @@ describe('agents store', () => {
 
     expect(api.checkAgent).toHaveBeenCalledWith('h1')
     expect(store.agentOf('h1')?.runtime.health).toBe('healthy')
+  })
+
+  it('installs an agent through first-class agent api', async () => {
+    vi.mocked(api.installAgent).mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'installed',
+    })
+    const store = useAgentsStore()
+
+    await expect(store.installAgent('h1', { method: 'push_over_ssh' })).resolves.toMatchObject({ ok: true })
+
+    expect(api.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh' })
   })
 
   it('deletes agent config through first-class agent api', async () => {

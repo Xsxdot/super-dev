@@ -205,6 +205,33 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.text()).toContain('curl install')
   })
 
+  it('runs SSH push install from the install step and refreshes health', async () => {
+    const store = useAgentsStore()
+    vi.spyOn(store, 'installAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      platform: 'linux/amd64',
+      message: 'installed',
+    })
+    vi.spyOn(store, 'checkAgent').mockResolvedValue(agent())
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+    expect(wrapper.find('[data-test="agent-install-push"]').exists()).toBe(true)
+    await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+
+    expect(store.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh' })
+    expect(store.checkAgent).toHaveBeenCalledWith('h1')
+    expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+  })
+
   it('saves ordered transport chain and tests one entry', async () => {
     const store = useAgentsStore()
     vi.spyOn(store, 'updateAgentTransport').mockResolvedValue(agent())
