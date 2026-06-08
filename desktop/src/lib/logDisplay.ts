@@ -34,7 +34,7 @@ export interface MarkerIds {
 
 export interface HistoryBoundary {
   timestamp: string
-  id: number
+  id: string
 }
 
 function ts(log: DisplayLogEntry): Date {

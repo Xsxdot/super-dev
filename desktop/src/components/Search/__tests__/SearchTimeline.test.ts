@@ -40,7 +40,7 @@ function project(services: Service[]): Project {
 
 function log(id: number, deploymentId: string, message: string, level = 'INFO'): LogEntry {
   return {
-    id,
+    id: String(id),
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp: '2026-05-20T22:41:32.000Z',
@@ -73,7 +73,7 @@ describe('SearchTimeline', () => {
       props: { tabId: tab.id },
     })
 
-    workspace.searchTab(tab.id)!.selectedLogId = 30
+    workspace.searchTab(tab.id)!.selectedLogId = '30'
     await nextTick()
     await nextTick()
 
@@ -113,7 +113,7 @@ describe('SearchTimeline', () => {
       log(20, 'sample-api-demo', 'trace-8f21 api published job', 'INFO'),
       log(30, 'sample-worker-demo', 'trace-8f21 worker retry latency_ms=320', 'WARN'),
     ]
-    tab.selectedLogId = 30
+    tab.selectedLogId = '30'
 
     const wrapper = mount(SearchTimeline, {
       props: { tabId: tab.id },

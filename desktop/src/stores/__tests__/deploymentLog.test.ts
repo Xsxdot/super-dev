@@ -81,7 +81,7 @@ describe('useDeploymentLogStore', () => {
     store.subscribe('dep-1')
     const ws = MockWebSocket.instances[0]
     ws.onmessage?.({ data: JSON.stringify({
-      id: 1,
+      id: '1',
       deployment_id: 'svc',
       run_id: 'r',
       timestamp: '2024-01-01T00:00:00Z',
@@ -117,12 +117,12 @@ describe('log ingestion', () => {
     const ws = MockWebSocket.instances[0]
 
     // 乱序发送，期望按 id/timestamp 排序
-    ws.onmessage?.({ data: JSON.stringify({ id: 3, timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
-    ws.onmessage?.({ data: JSON.stringify({ id: 1, timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
-    ws.onmessage?.({ data: JSON.stringify({ id: 2, timestamp: '2024-01-01T00:00:02Z', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '3', timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '2', timestamp: '2024-01-01T00:00:02Z', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
 
     const logs = store.getLogs('dep1')
-    expect(logs.map(l => l.id)).toEqual([1, 2, 3])
+    expect(logs.map(l => l.id)).toEqual(['1', '2', '3'])
   })
 
   it('deduplicates by id', () => {
@@ -130,8 +130,8 @@ describe('log ingestion', () => {
     store.subscribe('dep1')
     const ws = MockWebSocket.instances[0]
 
-    ws.onmessage?.({ data: JSON.stringify({ id: 1, timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
-    ws.onmessage?.({ data: JSON.stringify({ id: 1, timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
 
     expect(store.getLogs('dep1')).toHaveLength(1)
   })
@@ -141,11 +141,11 @@ describe('log ingestion', () => {
     store.subscribe('dep-invalid-time')
     const ws = MockWebSocket.instances[0]
 
-    ws.onmessage?.({ data: JSON.stringify({ id: 1, timestamp: 'invalid-time', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
-    ws.onmessage?.({ data: JSON.stringify({ id: 2, timestamp: 'invalid-time', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
-    ws.onmessage?.({ data: JSON.stringify({ id: 3, timestamp: 'invalid-time', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: 'invalid-time', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '2', timestamp: 'invalid-time', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '3', timestamp: 'invalid-time', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
 
-    expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual([1, 2, 3])
+    expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual(['1', '2', '3'])
   })
 
   it('超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', () => {
@@ -156,7 +156,7 @@ describe('log ingestion', () => {
     // 注入 5001 条日志
     for (let i = 1; i <= 5001; i++) {
       ws.onmessage?.({ data: JSON.stringify({
-        id: i,
+        id: String(i),
         timestamp: `2024-01-01T00:00:${String(i).padStart(5, '0')}Z`,
         message: `msg-${i}`,
         level: 'INFO',
@@ -184,11 +184,11 @@ describe('loadMoreHistory', () => {
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
     mockFetch
       .mockResolvedValueOnce([
-        { id: 5, timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
-        { id: 6, timestamp: '2024-01-01T00:00:06Z', message: 'f', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        { id: '5', timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        { id: '6', timestamp: '2024-01-01T00:00:06Z', message: 'f', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
       ])
       .mockResolvedValueOnce([
-        { id: 3, timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        { id: '3', timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
       ])
 
     await store.loadMoreHistory('dep1', 2)
@@ -202,7 +202,7 @@ describe('loadMoreHistory', () => {
     expect(mockFetch).toHaveBeenNthCalledWith(2, expect.objectContaining({
       deploymentId: 'dep1',
       limit: 2,
-      before: 5,
+      before: '5',
     }))
   })
 
@@ -212,7 +212,7 @@ describe('loadMoreHistory', () => {
     const ws = MockWebSocket.instances[0]
 
     ws.onmessage?.({ data: JSON.stringify({
-      id: 1,
+      id: '1',
       timestamp: '2024-01-01T00:00:10Z',
       message: 'live',
       level: 'INFO',
@@ -223,7 +223,7 @@ describe('loadMoreHistory', () => {
 
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
     mockFetch.mockResolvedValueOnce([
-      { id: 20, timestamp: '2024-01-01T00:00:05Z', message: 'history', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout' },
+      { id: '20', timestamp: '2024-01-01T00:00:05Z', message: 'history', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout' },
     ])
 
     await store.loadMoreHistory('dep1', 200)

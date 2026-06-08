@@ -48,7 +48,7 @@ vi.mock('@tanstack/vue-virtual', () => ({
 
 function makeLog(id: number): DisplayLogEntry {
   return {
-    id,
+    id: String(id),
     deployment_id: 'dep-1',
     run_id: 'run-1',
     timestamp: `2026-05-30T10:00:${String(id).padStart(2, '0')}.000Z`,
@@ -115,7 +115,7 @@ describe('LogPanel', () => {
     vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([
       {
-        id: 7,
+        id: '7',
         deployment_id: 'dep-1',
         run_id: 'run-1',
         timestamp: '2026-05-30T10:00:00.000Z',

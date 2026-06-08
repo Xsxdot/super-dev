@@ -27,8 +27,8 @@ const { t } = useAppI18n()
 const localTab = computed(() => workspace.searchTab(props.tabId))
 const tab = computed(() => localTab.value ?? null)
 const columnsEl = ref<HTMLElement | null>(null)
-const selectedFromColumnsScrollId = ref<number | null>(null)
-const suppressScrollSelectionId = ref<number | null>(null)
+const selectedFromColumnsScrollId = ref<string | null>(null)
+const suppressScrollSelectionId = ref<string | null>(null)
 const pinnedScrollTopByService = ref<Record<string, number>>({})
 const pinnedBucketsByService = ref<Record<string, SearchBucketRow[]>>({})
 const pinnedBucketServiceIdsByService = ref<Record<string, string[]>>({})
@@ -77,7 +77,13 @@ const allContextEntries = computed(() => {
   if (!tab.value) return []
   return visibleServiceIds.value
     .flatMap(serviceId => tab.value!.contextByService[serviceId] ?? [])
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime() || a.id - b.id)
+    .sort((a, b) => {
+      const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      if (timeDiff !== 0) return timeDiff
+      if (a.id < b.id) return -1
+      if (a.id > b.id) return 1
+      return 0
+    })
 })
 
 const selectedEntry = computed<LogEntry | null>(() => {
@@ -111,7 +117,7 @@ const nearbySignals = computed(() => {
     || /timeout|retry|latency/i.test(entry.message)
     || entry.id === selectedEntry.value?.id,
   )
-  const deduped = new Map<number, LogEntry>()
+  const deduped = new Map<string, LogEntry>()
   for (const entry of signals) deduped.set(entry.id, entry)
   return [...deduped.values()].slice(0, 4)
 })
@@ -224,7 +230,7 @@ function serviceName(deploymentId: string): string {
   return agentStore.serviceForDeployment(deploymentId)?.service.name ?? deploymentId
 }
 
-function entryKey(entry: LogEntry): string | number {
+function entryKey(entry: LogEntry): string {
   return entry.id
 }
 
@@ -284,7 +290,7 @@ function cellEntries(bucket: SearchBucketRow, serviceId: string): LogEntry[] {
   return bucket.cells[serviceId]?.entries ?? []
 }
 
-function suppressScrollSelection(logId: number) {
+function suppressScrollSelection(logId: string) {
   suppressScrollSelectionId.value = logId
   if (suppressScrollSelectionTimer) {
     window.clearTimeout(suppressScrollSelectionTimer)
@@ -365,11 +371,12 @@ function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirectio
 
   const viewport = el.getBoundingClientRect()
   const viewportCenter = viewport.top + (viewport.bottom - viewport.top) / 2
-  const visibleCandidates: Array<{ id: number; center: number; distance: number }> = []
+  const visibleCandidates: Array<{ id: string; center: number; distance: number }> = []
 
   const entryEls = Array.from(el.querySelectorAll<HTMLElement>('.context-entry'))
   for (const entryEl of entryEls) {
-    const entryId = Number(entryEl.dataset.entryId)
+    const entryId = entryEl.dataset.entryId
+    if (!entryId) continue
     if (!resultIds.has(entryId)) continue
     const rect = entryEl.getBoundingClientRect()
     if (rect.bottom < viewport.top || rect.top > viewport.bottom) continue
@@ -383,7 +390,7 @@ function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirectio
 
   if (visibleCandidates.length === 0) return
   const currentCandidate = visibleCandidates.find(item => item.id === currentTab.selectedLogId)
-  let candidate: { id: number; center: number; distance: number } | null = null
+  let candidate: { id: string; center: number; distance: number } | null = null
   if (direction === 'down' && currentTab.selectedLogId !== null) {
     const below = currentCandidate
       ? visibleCandidates.filter(item => item.center > currentCandidate.center)

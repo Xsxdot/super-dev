@@ -65,7 +65,7 @@ const activeSelectionRect = ref<DOMRect | null>(null)
 
 const markerStartId = ref('')
 const markerEndId = ref('')
-const bookmarkCapturedIds = new Set<number>()
+const bookmarkCapturedIds = new Set<string>()
 
 const cachedDisplay = ref<{ items: LogDisplayItem[]; stats: DisplayStats }>({
   items: [],

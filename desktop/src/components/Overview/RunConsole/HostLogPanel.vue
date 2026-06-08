@@ -36,7 +36,7 @@ function sourceLabel(line: RunLogLine): string {
 
 function runLogToLogEntry(line: RunLogLine): LogEntry {
   return {
-    id: line.id,
+    id: String(line.id),
     deployment_id: line.step_name,
     run_id: line.run_id,
     timestamp: new Date(line.at).toISOString(),

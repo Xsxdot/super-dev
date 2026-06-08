@@ -6,7 +6,7 @@ import type { LogEntry } from '@/api/agent'
 let nextLogId = 1
 function makeLog(message: string, ts: string): LogEntry {
   return {
-    id: nextLogId++,
+    id: String(nextLogId++),
     deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
@@ -51,7 +51,7 @@ describe('bookmarkStore', () => {
     store.endBookmark(
       'p1',
       [makeLog('a', t1), makeLog('b', t2), makeLog('folded', afterEndTs)],
-      new Set([1, 2, 3]),
+      new Set(['1', '2', '3']),
     )
     const done = store.getBookmark('p1')!
     expect(done.lockedLogs).toHaveLength(3)
@@ -87,7 +87,7 @@ describe('bookmarkStore', () => {
     const start = store.getBookmark('p1')!.startTime!
     vi.advanceTimersByTime(1000)
     const ts = new Date(start.getTime() + 100).toISOString()
-    store.endBookmark('p1', [{ ...makeLog('x', ts), repeat_count: 3 }], new Set([1]))
+    store.endBookmark('p1', [{ ...makeLog('x', ts), repeat_count: 3 }], new Set(['1']))
     const text = store.formatBookmark('p1')
     expect(text.split('\n')).toHaveLength(3)
   })

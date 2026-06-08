@@ -12,7 +12,7 @@ import type { LogEntry } from '@/api/agent'
 
 function makeLog(id: number, ts: string, repeat = 1): LogEntry {
   return {
-    id,
+    id: String(id),
     deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
@@ -34,7 +34,7 @@ describe('captureLockedLogs', () => {
       makeLog(4, '2026-05-20T10:39:40.000Z'),
     ]
     const locked = captureLockedLogs(logs, start, end)
-    expect(locked.map(l => l.id)).toEqual([2, 3])
+    expect(locked.map(l => l.id)).toEqual(['2', '3'])
   })
 
   it('capturedIds 保留结束后 timestamp 越过 end 的折叠行', () => {
@@ -44,8 +44,8 @@ describe('captureLockedLogs', () => {
       makeLog(10, '2026-05-20T10:38:54.000Z'),
       makeLog(11, '2026-05-20T10:40:00.000Z', 50),
     ]
-    const locked = captureLockedLogs(logs, start, end, new Set([10, 11]))
-    expect(locked.map(l => l.id)).toEqual([10, 11])
+    const locked = captureLockedLogs(logs, start, end, new Set(['10', '11']))
+    expect(locked.map(l => l.id)).toEqual(['10', '11'])
     expect(locked[1].repeat_count).toBe(50)
   })
 })

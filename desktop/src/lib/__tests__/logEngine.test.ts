@@ -10,7 +10,7 @@ import type { LogEntry } from '@/api/agent'
 
 function makeLog(message: string, serviceId = 'svc-a'): LogEntry {
   return {
-    id: Math.floor(Math.random() * 1e6),
+    id: String(Math.floor(Math.random() * 1e6)),
     deployment_id: serviceId,
     run_id: 'run',
     timestamp: new Date().toISOString(),
@@ -60,11 +60,11 @@ describe('logEngine', () => {
   })
 
   it('toDisplayEntry assigns unique ids to live logs without database ids', () => {
-    const first = toDisplayEntry({ ...makeLog('first live'), id: 0 })
-    const second = toDisplayEntry({ ...makeLog('second live'), id: 0 })
+    const first = toDisplayEntry({ ...makeLog('first live'), id: '0' })
+    const second = toDisplayEntry({ ...makeLog('second live'), id: '0' })
 
-    expect(first.id).not.toBe(0)
-    expect(second.id).not.toBe(0)
+    expect(first.id).not.toBe('0')
+    expect(second.id).not.toBe('0')
     expect(first.id).not.toBe(second.id)
   })
 

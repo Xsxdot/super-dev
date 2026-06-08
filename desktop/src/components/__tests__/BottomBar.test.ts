@@ -96,7 +96,7 @@ function makeRemoteService(
 
 function makeLog(deploymentId: string, message: string, timestamp: string): LogEntry {
   return {
-    id: 101,
+    id: '101',
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
@@ -193,8 +193,11 @@ describe('BottomBar', () => {
       ws: null,
       logs: [toDisplayEntry(makeLog(apiDep, 'sync captured', ts))],
       hasMoreHistory: true,
-      oldestLoadedId: null,
+      oldestCursor: null,
       loadingMoreHistory: false,
+      lastSeen: null,
+      reconnectAttempts: 0,
+      discontinuous: false,
     })
     vi.advanceTimersByTime(5000)
 

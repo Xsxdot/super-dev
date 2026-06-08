@@ -47,7 +47,7 @@ function log(
   level = 'INFO',
 ): LogEntry {
   return {
-    id,
+    id: String(id),
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
@@ -389,7 +389,7 @@ describe('SearchServiceColumns', () => {
       log(20, 'svc-logger', 'logger trace', '2026-05-20T14:41:43.401Z'),
       log(40, 'svc-server', 'server trace', '2026-05-20T14:41:44.401Z'),
     ]
-    tab.selectedLogId = 20
+    tab.selectedLogId = '20'
     tab.contextAnchorTime = '2026-05-20T14:41:43.401Z'
     tab.contextByService = {
       'svc-logger': [
@@ -414,7 +414,7 @@ describe('SearchServiceColumns', () => {
 
     await wrapper.find('.columns').trigger('scroll')
 
-    expect(tab.selectedLogId).toBe(20)
+    expect(tab.selectedLogId).toBe('20')
   })
 
   it('滚动到顶部时请求向上加载更多上下文', async () => {
@@ -522,7 +522,7 @@ describe('SearchServiceColumns', () => {
 
     await wrapper.find('.columns').trigger('scroll')
 
-    expect(tab.selectedLogId).toBe(20)
+    expect(tab.selectedLogId).toBe('20')
   })
 
   it('右侧向下滚动时优先同步下方新进入视野的命中日志', async () => {
@@ -536,7 +536,7 @@ describe('SearchServiceColumns', () => {
       log(20, 'svc-logger', 'logger trace', '2026-05-20T14:41:43.401Z'),
       log(40, 'svc-server', 'server trace', '2026-05-21T02:00:55.683Z'),
     ]
-    tab.selectedLogId = 20
+    tab.selectedLogId = '20'
     tab.contextAnchorTime = '2026-05-20T14:41:43.401Z'
     tab.contextByService = {
       'svc-logger': [
@@ -560,7 +560,7 @@ describe('SearchServiceColumns', () => {
 
     await wrapper.find('.columns').trigger('scroll')
 
-    expect(tab.selectedLogId).toBe(40)
+    expect(tab.selectedLogId).toBe('40')
   })
 
   it('外部选中命中项触发的程序滚动不会反向覆盖选中项', async () => {
@@ -597,12 +597,12 @@ describe('SearchServiceColumns', () => {
     setRect(wrapper.find('[data-entry-id="20"]').element, 180, 204)
     setRect(wrapper.find('[data-entry-id="40"]').element, 330, 354)
 
-    workspace.searchTab(tab.id)!.selectedLogId = 40
+    workspace.searchTab(tab.id)!.selectedLogId = '40'
     await nextTick()
     await nextTick()
     await wrapper.find('.columns').trigger('scroll')
 
-    expect(tab.selectedLogId).toBe(40)
+    expect(tab.selectedLogId).toBe('40')
   })
 
   it('两服务上下文渲染 trace header、同步列、minimap 和选中详情', () => {
@@ -617,7 +617,7 @@ describe('SearchServiceColumns', () => {
       log(216, 'sample-api-demo', 'trace-8f21 downstream timeout seq=216', '2026-05-20T15:35:18.916Z', 'ERROR'),
       log(217, 'sample-worker-demo', 'trace-8f21 worker retry latency_ms=320', '2026-05-20T15:35:18.930Z', 'WARN'),
     ]
-    tab.selectedLogId = 216
+    tab.selectedLogId = '216'
     tab.contextAnchorTime = '2026-05-20T15:35:18.916Z'
     tab.contextByService = {
       'sample-api-demo': [

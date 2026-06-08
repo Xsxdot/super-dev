@@ -36,10 +36,11 @@ export function normalize(line: string): string {
   return result.trim()
 }
 
-function displayLogId(log: LogEntry): number {
-  if (log.id > 0) return log.id
+function displayLogId(log: LogEntry): string {
+  const rawID = String(log.id ?? '')
+  if (rawID !== '' && rawID !== '0') return rawID
   // 实时 WebSocket 日志尚未写入 SQLite，后端 id 为 0；前端必须补稳定 id 供渲染和书签去重使用。
-  return nextSyntheticLogId++
+  return `synthetic-${nextSyntheticLogId++}`
 }
 
 /**

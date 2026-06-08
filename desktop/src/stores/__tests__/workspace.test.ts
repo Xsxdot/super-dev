@@ -46,7 +46,7 @@ function log(
   timestamp = '2026-05-20T22:41:32.000Z',
 ): LogEntry {
   return {
-    id,
+    id: String(id),
     deployment_id: deploymentId,
     run_id: 'run-1',
     timestamp,
@@ -193,7 +193,7 @@ describe('workspaceStore', () => {
       q: 'trace-8f21',
       deployment: ['svc-api'],
       cursor_time: '2026-05-20T22:41:32.000Z',
-      cursor_id: 1,
+      cursor_id: '1',
       limit: 1000,
     })
     expect(tab.results.map(entry => entry.message)).toEqual(['first', 'second'])
@@ -239,7 +239,7 @@ describe('workspaceStore', () => {
     const billing = service('svc-billing', 'billing')
     useAgentStore().projects = [project([api, worker, billing])]
     vi.spyOn(agentApi, 'fetchLogContext').mockResolvedValue({
-      target_id: 9,
+      target_id: '9',
       anchor_time: '2026-05-20T22:41:32.000Z',
       items_by_deployment: {
         'svc-api': [log(9, 'svc-api', 'new api')],
@@ -253,11 +253,11 @@ describe('workspaceStore', () => {
     workspace.pinService(tab.id, 'svc-api')
     workspace.hideService(tab.id, 'svc-billing')
 
-    await workspace.loadContext(tab.id, 9)
+    await workspace.loadContext(tab.id, '9')
 
     expect(agentApi.fetchLogContext).toHaveBeenCalledWith({
       project: 'proj-1',
-      id: 9,
+      id: '9',
       deployment: ['svc-api', 'svc-worker'],
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['old api'])
@@ -295,7 +295,7 @@ describe('workspaceStore', () => {
       deployment: 'svc-api',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
-      cursor_id: 9,
+      cursor_id: '9',
       limit: 200,
     })
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledWith({
@@ -303,7 +303,7 @@ describe('workspaceStore', () => {
       deployment: 'svc-worker',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
-      cursor_id: 0,
+      cursor_id: '0',
       limit: 200,
     })
     expect(agentApi.fetchLogContextPage).toHaveBeenCalledTimes(2)
@@ -346,7 +346,7 @@ describe('workspaceStore', () => {
       deployment: 'svc-worker',
       direction: 'before',
       cursor_time: '2026-05-20T22:41:32.000Z',
-      cursor_id: 10,
+      cursor_id: '10',
       limit: 200,
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['pinned api'])

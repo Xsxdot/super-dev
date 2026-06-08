@@ -51,7 +51,7 @@ function messageParts(message: string) {
   return splitSearchHighlight(message, tab.value?.query ?? '')
 }
 
-function select(entryId: number) {
+function select(entryId: string) {
   if (!tab.value) return
   void workspace.loadContext(tab.value.id, entryId)
 }

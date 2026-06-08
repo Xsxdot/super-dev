@@ -430,6 +430,37 @@ export interface LogEntry {
   source_id?: string
 }
 
+function normalizeLogEntry<T extends LogEntry>(entry: T): T {
+  return { ...entry, id: String(entry.id ?? '') }
+}
+
+function normalizeLogEntries<T extends LogEntry>(entries: T[] | undefined): T[] {
+  return (entries ?? []).map(entry => normalizeLogEntry(entry))
+}
+
+function normalizeLogContextResponse(response: LogContextResponse): LogContextResponse {
+  const items: Record<string, LogEntry[]> = {}
+  for (const [deploymentId, entries] of Object.entries(response.items_by_deployment ?? {})) {
+    items[deploymentId] = normalizeLogEntries(entries)
+  }
+  return {
+    ...response,
+    target_id: String(response.target_id ?? ''),
+    items_by_deployment: items,
+  }
+}
+
+function normalizeRemoteSearchResponse(response: RemoteSearchResponse): RemoteSearchResponse {
+  return {
+    ...response,
+    entries: normalizeLogEntries(response.entries),
+    service_columns: response.service_columns?.map(column => ({
+      ...column,
+      entries: normalizeLogEntries(column.entries),
+    })),
+  }
+}
+
 export interface LogRule {
   id: string
   name: string
@@ -531,7 +562,7 @@ export interface LogSearchResponse {
 }
 
 export interface LogContextResponse {
-  target_id: number
+  target_id: string
   anchor_time: string
   items_by_deployment: Record<string, LogEntry[]>
 }
@@ -551,12 +582,12 @@ export interface SearchLogsParams {
   deployment?: string[]
   limit?: number
   cursor_time?: string
-  cursor_id?: number
+  cursor_id?: string
 }
 
 export interface FetchLogContextParams {
   project: string
-  id: number
+  id: string
   deployment?: string[]
   before_ms?: number
   after_ms?: number
@@ -567,7 +598,7 @@ export interface FetchLogContextPageParams {
   deployment: string
   direction: LogContextPageDirection
   cursor_time: string
-  cursor_id: number
+  cursor_id: string
   limit?: number
 }
 
@@ -1147,6 +1178,7 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before) qs.set('before', String(params.before))
     return request<LogEntry[]>(`/api/logs${qs.toString() ? '?' + qs : ''}`)
+      .then(normalizeLogEntries)
   },
   searchLogs: (params: SearchLogsParams) => {
     const qs = new URLSearchParams()
@@ -1157,6 +1189,7 @@ export const api = {
     if (params.cursor_time) qs.set('cursor_time', params.cursor_time)
     if (params.cursor_id) qs.set('cursor_id', String(params.cursor_id))
     return request<LogSearchResponse>(`/api/log-search?${qs}`)
+      .then(response => ({ ...response, items: normalizeLogEntries(response.items) }))
   },
   fetchLogContext: (params: FetchLogContextParams) => {
     const qs = new URLSearchParams()
@@ -1166,6 +1199,7 @@ export const api = {
     if (params.before_ms) qs.set('before_ms', String(params.before_ms))
     if (params.after_ms) qs.set('after_ms', String(params.after_ms))
     return request<LogContextResponse>(`/api/logs/context?${qs}`)
+      .then(normalizeLogContextResponse)
   },
   fetchLogContextPage: (params: FetchLogContextPageParams) => {
     const qs = new URLSearchParams()
@@ -1176,6 +1210,7 @@ export const api = {
     qs.set('cursor_id', String(params.cursor_id))
     if (params.limit) qs.set('limit', String(params.limit))
     return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
+      .then(response => ({ ...response, items: normalizeLogEntries(response.items) }))
   },
 
   // 远程监听：Host CRUD
@@ -1241,6 +1276,7 @@ export const api = {
     if (params.from) qs.set('from', params.from)
     if (params.to) qs.set('to', params.to)
     return request<RemoteSearchResponse>(`/api/remote-log-search?${qs}`)
+      .then(normalizeRemoteSearchResponse)
   },
 
   // Deployment 统一日志接口
@@ -1250,7 +1286,7 @@ export const api = {
     if (params.before != null) qs.set('before', String(params.before))
     const q = qs.toString()
     return request<DeploymentLogsResponse | LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
-      .then(body => Array.isArray(body) ? body : (body.items ?? []))
+      .then(body => normalizeLogEntries(Array.isArray(body) ? body : (body.items ?? [])))
   },
   searchDeploymentLogs: (params: DeploymentSearchParams) => {
     const qs = new URLSearchParams()
@@ -1259,6 +1295,7 @@ export const api = {
     if (params.cursor_time) qs.set('cursor_time', params.cursor_time)
     if (params.cursor_id != null) qs.set('cursor_id', String(params.cursor_id))
     return request<DeploymentSearchResponse>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/search?${qs}`)
+      .then(response => ({ ...response, items: normalizeLogEntries(response.items) }))
   },
 }
 

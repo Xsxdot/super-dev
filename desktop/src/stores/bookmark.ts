@@ -25,7 +25,7 @@ export interface SyncBookmarkPanel {
 export interface SyncBookmarkCapture {
   panelId: string
   captureLogs?: LogEntry[]
-  capturedIds?: Iterable<number>
+  capturedIds?: Iterable<string>
 }
 
 function snapshotLog(log: LogEntry): LogEntry {
@@ -57,14 +57,14 @@ export function captureLockedLogs(
   captureLogs: LogEntry[],
   start: Date,
   end: Date,
-  capturedIds?: Iterable<number>,
+  capturedIds?: Iterable<string>,
   recordedLogs: LogEntry[] = [],
 ): LogEntry[] {
   const byId = new Map(recordedLogs.map(l => [l.id, l]))
   for (const log of captureLogs) {
     byId.set(log.id, log)
   }
-  const seen = new Set<number>()
+  const seen = new Set<string>()
   const out: LogEntry[] = []
 
   const add = (log: LogEntry) => {
@@ -136,7 +136,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
   function endBookmark(
     panelId: string,
     captureLogs?: LogEntry[],
-    capturedIds?: Iterable<number>,
+    capturedIds?: Iterable<string>,
   ) {
     const bm = bookmarks.value[panelId]
     if (!bm || bm.state !== 'recording') return
@@ -161,7 +161,7 @@ export const useBookmarkStore = defineStore('bookmark', () => {
   function finalizeLockedLogs(
     panelId: string,
     captureLogs: LogEntry[],
-    capturedIds?: Iterable<number>,
+    capturedIds?: Iterable<string>,
   ) {
     const bm = bookmarks.value[panelId]
     if (!bm?.startTime || !bm.endTime || bm.lockedLogs.length > 0) return

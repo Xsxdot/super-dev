@@ -24,7 +24,7 @@ describe('fetchDeploymentLogs', () => {
       json: () => Promise.resolve({
         items: [
           {
-            id: 7,
+            id: '7',
             deployment_id: 'dep-abc',
             run_id: 'run-1',
             timestamp: '2026-05-30T13:11:25Z',
@@ -33,13 +33,14 @@ describe('fetchDeploymentLogs', () => {
             stream: 'stderr',
           },
         ],
-        next: { id: 7, time: '2026-05-30T13:11:25Z' },
+        next: { id: '7', time: '2026-05-30T13:11:25Z' },
       }),
     } as Response)
 
     const logs = await api.fetchDeploymentLogs({ deploymentId: 'dep-abc', limit: 5 })
 
     expect(logs).toHaveLength(1)
+    expect(logs[0].id).toBe('7')
     expect(logs[0].message).toBe('vite ready')
   })
 })

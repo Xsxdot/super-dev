@@ -11,8 +11,9 @@ import { makeDisplayItems, computeDisplayStats } from '../logDisplay'
 import type { DisplayLogEntry } from '../logEngine'
 
 function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
+  const logId = String(id)
   return {
-    id,
+    id: logId,
     deployment_id: 'svc',
     run_id: 'run',
     timestamp: ts,
@@ -46,9 +47,9 @@ describe('makeDisplayItems', () => {
     const startIdx = items.findIndex(i => i.kind === 'markerStart')
     const endIdx = items.findIndex(i => i.kind === 'markerEnd')
     const between = items.slice(startIdx + 1, endIdx).filter(i => i.kind === 'entry')
-    expect(between.map(i => (i as { log: DisplayLogEntry }).log.id)).toEqual([2, 3])
+    expect(between.map(i => (i as { log: DisplayLogEntry }).log.id)).toEqual(['2', '3'])
     const afterEnd = items.slice(endIdx + 1).filter(i => i.kind === 'entry')
-    expect(afterEnd.map(i => (i as { log: DisplayLogEntry }).log.id)).toEqual([4])
+    expect(afterEnd.map(i => (i as { log: DisplayLogEntry }).log.id)).toEqual(['4'])
   })
 
   it('done 后折叠行 id 与书签相同仍出现在 after 段', () => {
@@ -68,7 +69,7 @@ describe('makeDisplayItems', () => {
     const endIdx = items.findIndex(i => i.kind === 'markerEnd')
     const afterEnd = items.slice(endIdx + 1).filter(i => i.kind === 'entry')
     expect(afterEnd.length).toBeGreaterThan(0)
-    expect(afterEnd[afterEnd.length - 1].kind === 'entry' && (afterEnd[afterEnd.length - 1] as { log: DisplayLogEntry }).log.id).toBe(99)
+    expect(afterEnd[afterEnd.length - 1].kind === 'entry' && (afterEnd[afterEnd.length - 1] as { log: DisplayLogEntry }).log.id).toBe('99')
   })
 
   it('done 状态只插入标记，不用 lockedLogs 替换 live 日志流', () => {
@@ -94,13 +95,13 @@ describe('makeDisplayItems', () => {
     )
 
     expect(items.map(item => (item.kind === 'entry' ? item.log.id : item.kind))).toEqual([
-      1,
+      '1',
       'markerStart',
-      2,
-      3,
-      4,
+      '2',
+      '3',
+      '4',
       'markerEnd',
-      5,
+      '5',
     ])
   })
 
@@ -113,7 +114,7 @@ describe('makeDisplayItems', () => {
 
     const items = makeDisplayItems(logs, null, markers, {
       timestamp: '2026-05-21T10:00:02.000Z',
-      id: 2,
+      id: '2',
     })
 
     expect(items.map(item => item.kind)).toEqual(['entry', 'entry', 'historySeparator', 'entry'])
@@ -127,7 +128,7 @@ describe('makeDisplayItems', () => {
 
     const items = makeDisplayItems(logs, null, markers, {
       timestamp: '2026-05-21T10:00:01.000Z',
-      id: 1,
+      id: '1',
     })
 
     expect(computeDisplayStats(items).total).toBe(2)

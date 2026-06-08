@@ -60,7 +60,7 @@ describe('SearchPage i18n', () => {
     tab.query = 'trace-8f21'
     tab.results = [
       {
-        id: 1,
+        id: '1',
         deployment_id: 'sample-api-demo',
         run_id: 'run-1',
         timestamp: '2026-05-20T22:41:32.000Z',
@@ -69,7 +69,7 @@ describe('SearchPage i18n', () => {
         stream: 'stdout',
       },
       {
-        id: 2,
+        id: '2',
         deployment_id: 'sample-worker-demo',
         run_id: 'run-1',
         timestamp: '2026-05-20T22:41:33.000Z',

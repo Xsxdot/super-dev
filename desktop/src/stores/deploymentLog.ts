@@ -9,59 +9,36 @@
 //   - 不渲染 UI
 //   - 不处理过滤、高亮、书签，交给 Panel 层
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { markRaw, ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
 import { closeActiveFold, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
+import { insertSorted } from '@/lib/logOrder'
 
 const MAX_LOGS = 5000
 const TRIM_BATCH = 500
+const MAX_RECONNECT = 5
+const REPLAY_ON_RECONNECT = 100
+
+interface LogCursor {
+  time: string
+  id: string
+}
 
 interface DeploymentSession {
   refCount: number
   ws: WebSocket | null
   logs: DisplayLogEntry[]
   hasMoreHistory: boolean
-  oldestLoadedId: number | null
+  oldestCursor: LogCursor | null
   loadingMoreHistory: boolean
+  lastSeen: LogCursor | null
+  reconnectAttempts: number
+  discontinuous: boolean
 }
 
 export interface LoadHistoryResult {
   added: number
   entries: DisplayLogEntry[]
-}
-
-// compareLogs 按 timestamp 升序排列，时间相同时按 id 升序。
-function compareLogs(a: DisplayLogEntry, b: DisplayLogEntry): number {
-  const aTime = new Date(a.timestamp).getTime()
-  const bTime = new Date(b.timestamp).getTime()
-  // 日志时间来自外部进程，异常格式不能让比较结果变成 NaN，否则二分插入会退化并破坏顺序。
-  if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
-    const timeDiff = aTime - bTime
-    if (timeDiff !== 0) return timeDiff
-  }
-  return a.id - b.id
-}
-
-// insertSorted 将单条日志以 O(n) 二分插入有序数组，重复 id 原地覆盖。
-function insertSorted(logs: DisplayLogEntry[], entry: DisplayLogEntry) {
-  const existing = logs.findIndex(item => item.id === entry.id)
-  if (existing >= 0) {
-    logs[existing] = entry
-    logs.sort(compareLogs)
-    return
-  }
-  if (logs.length === 0 || compareLogs(logs[logs.length - 1], entry) <= 0) {
-    logs.push(entry)
-    return
-  }
-  let lo = 0
-  let hi = logs.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (compareLogs(logs[mid], entry) <= 0) lo = mid + 1
-    else hi = mid
-  }
-  logs.splice(lo, 0, entry)
 }
 
 export const useDeploymentLogStore = defineStore('deploymentLog', () => {
@@ -82,9 +59,16 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       ws: null,
       logs: [],
       hasMoreHistory: true,
-      oldestLoadedId: null,
+      oldestCursor: null,
       loadingMoreHistory: false,
+      lastSeen: null,
+      reconnectAttempts: 0,
+      discontinuous: false,
     }
+  }
+
+  function cursorFromLog(log: LogEntry): LogCursor {
+    return { time: log.timestamp, id: String(log.id ?? '') }
   }
 
   /**
@@ -96,7 +80,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
    *   - 同 id 的日志以新内容覆盖旧内容
    *   - 超出 MAX_LOGS 时裁剪最早的条目，防止内存无限增长
    */
-  function ingestEntry(session: DeploymentSession, raw: LogEntry) {
+  function ingestEntry(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
     const entry = toDisplayEntry(raw)
     insertSorted(session.logs, entry)
     if (session.logs.length > MAX_LOGS) {
@@ -104,6 +88,51 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     }
     bumpRevision()
     touchSessions()
+    return entry
+  }
+
+  function connect(deploymentId: string, session: DeploymentSession) {
+    const ws = markRaw(new WebSocket(deploymentWsUrl(deploymentId, {
+      replay: session.lastSeen ? REPLAY_ON_RECONNECT : undefined,
+      sinceTime: session.lastSeen?.time,
+      sinceId: session.lastSeen?.id,
+    })))
+    session.ws = ws
+
+    ws.onmessage = event => {
+      try {
+        const raw = JSON.parse(event.data) as LogEntry
+        const s = sessions.value.get(deploymentId)
+        if (!s || s.ws !== ws) return
+        ingestEntry(s, raw)
+        s.lastSeen = cursorFromLog(raw)
+        s.reconnectAttempts = 0
+        s.discontinuous = false
+      } catch {
+        // 忽略解析失败的消息，避免单条损坏数据影响整体
+      }
+    }
+    ws.onerror = () => {
+      touchSessions()
+    }
+    ws.onclose = () => {
+      const s = sessions.value.get(deploymentId)
+      if (!s || s.ws !== ws) return
+      s.ws = null
+      if (s.refCount > 0 && s.reconnectAttempts < MAX_RECONNECT) {
+        s.reconnectAttempts++
+        const attempt = s.reconnectAttempts
+        setTimeout(() => {
+          const latest = sessions.value.get(deploymentId)
+          if (latest && latest.refCount > 0 && latest.ws === null) {
+            connect(deploymentId, latest)
+          }
+        }, 1000 * attempt)
+      } else if (s.reconnectAttempts >= MAX_RECONNECT) {
+        s.discontinuous = true
+      }
+      touchSessions()
+    }
   }
 
   /**
@@ -127,27 +156,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     const session = makeSession()
     sessions.value.set(deploymentId, session)
     touchSessions()
-
-    const ws = new WebSocket(deploymentWsUrl(deploymentId))
-    session.ws = ws
-
-    ws.onmessage = event => {
-      try {
-        const raw = JSON.parse(event.data) as LogEntry
-        const s = sessions.value.get(deploymentId)
-        if (s) ingestEntry(s, raw)
-      } catch {
-        // 忽略解析失败的消息，避免单条损坏数据影响整体
-      }
-    }
-    ws.onerror = () => {
-      touchSessions()
-    }
-    ws.onclose = () => {
-      const s = sessions.value.get(deploymentId)
-      if (s) s.ws = null
-      touchSessions()
-    }
+    connect(deploymentId, session)
   }
 
   /**
@@ -195,17 +204,15 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       const entries = await api.fetchDeploymentLogs({
         deploymentId,
         limit,
-        before: session.oldestLoadedId ?? undefined,
+        before: session.oldestCursor?.id,
       })
       const displayEntries = entries.map(toDisplayEntry)
       // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
       for (let i = entries.length - 1; i >= 0; i--) {
         ingestEntry(session, entries[i])
       }
-      for (const entry of entries) {
-        if (session.oldestLoadedId == null || entry.id < session.oldestLoadedId) {
-          session.oldestLoadedId = entry.id
-        }
+      if (entries.length > 0) {
+        session.oldestCursor = cursorFromLog(entries[0])
       }
       session.hasMoreHistory = entries.length >= limit
       return { added: entries.length, entries: displayEntries }

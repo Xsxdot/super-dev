@@ -61,7 +61,7 @@ export interface SearchWorkspaceTab {
   results: LogEntry[]
   serviceCounts: Record<string, number>
   hiddenServiceIds: string[]
-  selectedLogId: number | null
+  selectedLogId: string | null
   contextAnchorTime: string | null
   contextByService: Record<string, LogEntry[]>
   pinnedServiceIds: string[]
@@ -151,11 +151,14 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
 
 function compareLogs(a: LogEntry, b: LogEntry): number {
   const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  return timeDiff || a.id - b.id
+  if (timeDiff !== 0) return timeDiff
+  if (a.id < b.id) return -1
+  if (a.id > b.id) return 1
+  return 0
 }
 
 function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
-  const byID = new Map<number, LogEntry>()
+  const byID = new Map<string, LogEntry>()
   for (const entry of existing) byID.set(entry.id, entry)
   for (const entry of incoming) byID.set(entry.id, entry)
   return [...byID.values()].sort(compareLogs)
@@ -324,7 +327,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tab: SearchWorkspaceTab,
     serviceId: string,
     direction: LogContextPageDirection,
-  ): { cursor_time: string; cursor_id: number } | null {
+  ): { cursor_time: string; cursor_id: string } | null {
     const entries = [...(tab.contextByService[serviceId] ?? [])].sort(compareLogs)
     if (entries.length > 0) {
       const cursor = direction === 'before' ? entries[0] : entries[entries.length - 1]
@@ -332,7 +335,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     if (!tab.contextAnchorTime) return null
     // 当前服务在锚点附近没有日志时，以锚点时间继续向两端探测，避免空服务永远无法补数据。
-    return { cursor_time: tab.contextAnchorTime, cursor_id: 0 }
+    return { cursor_time: tab.contextAnchorTime, cursor_id: '0' }
   }
 
   function visibleSearchServiceIds(tab: SearchWorkspaceTab): string[] {
@@ -359,7 +362,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return visibleSearchResults(tab).length < visibleSearchTotal(tab)
   }
 
-  function searchResultCursor(tab: SearchWorkspaceTab): { cursor_time: string; cursor_id: number } | null {
+  function searchResultCursor(tab: SearchWorkspaceTab): { cursor_time: string; cursor_id: string } | null {
     const entries = visibleSearchResults(tab)
     const cursor = entries[entries.length - 1]
     return cursor ? { cursor_time: cursor.timestamp, cursor_id: cursor.id } : null
@@ -391,7 +394,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tab.pinnedServiceIds = tab.pinnedServiceIds.filter(id => id !== serviceId)
   }
 
-  function selectSearchResult(tabId: string, logId: number): boolean {
+  function selectSearchResult(tabId: string, logId: string): boolean {
     const tab = searchTab(tabId)
     if (!tab || tab.selectedLogId === logId) return false
     const hidden = new Set(tab.hiddenServiceIds)
@@ -428,7 +431,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function loadContext(tabId: string, logId: number) {
+  async function loadContext(tabId: string, logId: string) {
     const tab = searchTab(tabId)
     if (!tab) return
     const visibleServices = visibleContextServiceIds(tab)
@@ -495,7 +498,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         if (!cursor) return null
         return { serviceId, cursor }
       })
-      .filter((item): item is { serviceId: string; cursor: { cursor_time: string; cursor_id: number } } =>
+      .filter((item): item is { serviceId: string; cursor: { cursor_time: string; cursor_id: string } } =>
         item !== null,
       )
     if (requests.length === 0) return false
