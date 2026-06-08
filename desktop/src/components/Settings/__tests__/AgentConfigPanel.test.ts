@@ -81,12 +81,13 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-create-host"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="agent-panel-tab-security"]').classes()).toContain('active')
     await wrapper.find('[data-test="agent-listen-address"]').setValue('0.0.0.0')
+    await wrapper.find('[data-test="agent-listen-port"]').setValue(57019)
     await wrapper.find('[data-test="agent-security-save"]').trigger('click')
 
     expect(store.createAgent).toHaveBeenCalledWith({
       host_id: 'h1',
-      transport: { chain: [{ type: 'direct', direct: { address: '' } }] },
-      config: { listen_address: '0.0.0.0', listen_port: 57017 },
+      transport: { chain: [{ type: 'tunnel', tunnel: { remote_agent_port: 57019 } }] },
+      config: { listen_address: '0.0.0.0', listen_port: 57019 },
       security: {
         token_configured: false,
         provision_state: 'pending-bootstrap',

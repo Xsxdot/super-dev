@@ -82,11 +82,12 @@ const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID
 const panelAgent = computed<AgentDTO | null>(() => {
   if (props.agent) return props.agent
   if (!isCreateMode.value || !selectedHost.value) return null
+  const transportChain = createTransportChain()
   return {
     host_id: selectedHost.value.id,
     host_name: selectedHost.value.name,
     tags: selectedHost.value.tags,
-    transport: { chain: chain.value },
+    transport: { chain: transportChain },
     config: { listen_address: securityForm.listenAddress, listen_port: bindPort.value },
     runtime: { installed: false, health: 'unknown', reachable: false },
     security: { token_configured: false, provision_state: 'pending-bootstrap', tls: { mode: securityForm.tlsMode } },
@@ -129,13 +130,21 @@ function normalizeEntry(entry: TransportEntry): TransportEntry {
   return { type: entry.type }
 }
 
-function cloneChain(agent?: AgentDTO | null): TransportEntry[] {
-  const source = agent?.transport?.chain?.length ? agent.transport.chain : [defaultEntry('direct')]
+function cloneChain(agent?: AgentDTO | null, fallbackType: TransportType = 'direct'): TransportEntry[] {
+  const source = agent?.transport?.chain?.length ? agent.transport.chain : [defaultEntry(fallbackType)]
   return source.map(normalizeEntry)
 }
 
 function chainSignature(entries: TransportEntry[]): string {
   return JSON.stringify(entries.map(normalizeEntry))
+}
+
+function createTransportChain(): TransportEntry[] {
+  const normalizedChain = chain.value.map(normalizeEntry)
+  if (normalizedChain.length === 1 && normalizedChain[0]?.type === 'tunnel') {
+    return [{ type: 'tunnel', tunnel: { remote_agent_port: bindPort.value } }]
+  }
+  return normalizedChain
 }
 
 function clearProbeResults() {
@@ -155,7 +164,7 @@ function reset(agent?: AgentDTO | null) {
   securityForm.tlsMode = mode === 'off' || mode === 'manual' ? mode : 'auto'
   securityForm.serverName = agent?.security?.tls?.server_name ?? ''
   securityForm.caCert = agent?.security?.tls?.ca_cert ?? ''
-  const nextChain = cloneChain(agent)
+  const nextChain = cloneChain(agent, isCreateMode.value ? 'tunnel' : 'direct')
   chain.value = nextChain
   savedChain.value = nextChain.map(normalizeEntry)
   clearProbeResults()
@@ -193,7 +202,7 @@ function tlsPayload(): AgentConfigUpdatePayload['security']['tls'] {
 function createPayload(): AgentCreatePayload {
   return {
     host_id: hostID.value,
-    transport: { chain: chain.value.map(normalizeEntry) },
+    transport: { chain: createTransportChain() },
     config: {
       listen_address: securityForm.listenAddress.trim(),
       listen_port: bindPort.value,
