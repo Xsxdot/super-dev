@@ -20,20 +20,30 @@ const pipeline = (): ProjectPipeline => ({
   name: 'Deploy Prod',
   services: ['api'],
   artifact_kind: 'file',
+  variables: { app_name: 'api' },
+  environments: {
+    test: { variables: { env: 'test' } },
+    prod: { variables: { env: 'prod' } },
+  },
   pipeline: {},
 })
 
+function mountForm(pipelineValue = pipeline()) {
+  return mount(SingleProjectPipelineForm, {
+    props: {
+      pipeline: pipelineValue,
+      services: [{ id: 'api', name: 'api' }, { id: 'web', name: 'web' }],
+      hosts: [{ id: 'h1', name: 'builder-01' }],
+      templates: [],
+      targetsByEnv: { test: ['web-test-01'], prod: ['web-prod-01'] },
+    },
+    global: { plugins: [installTestI18n()] },
+  })
+}
+
 describe('SingleProjectPipelineForm', () => {
   it('edits one pipeline name and services', async () => {
-    const wrapper = mount(SingleProjectPipelineForm, {
-      props: {
-        pipeline: pipeline(),
-        services: [{ id: 'api', name: 'api' }, { id: 'web', name: 'web' }],
-        hosts: [],
-        templates: [],
-      },
-      global: { plugins: [installTestI18n()] },
-    })
+    const wrapper = mountForm()
 
     expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(false)
@@ -47,5 +57,21 @@ describe('SingleProjectPipelineForm', () => {
     const emitted = wrapper.emitted('update:pipeline')!.at(-1)![0] as ProjectPipeline
     expect(emitted.name).toBe('Deploy Server Admin Prod')
     expect(emitted.services).toEqual(['api', 'web'])
+  })
+
+  it('renders build config bar and env matrix', () => {
+    const wrapper = mountForm()
+
+    expect(wrapper.find('[data-test="build-config-bar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-env-matrix"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deploy-target-readonly"]').exists()).toBe(true)
+  })
+
+  it('updates sync_mode through build config bar', async () => {
+    const wrapper = mountForm()
+
+    await wrapper.get('[data-test="build-config-sync-remote_cmd"]').trigger('click')
+    const emitted = wrapper.emitted('update:pipeline')
+    expect(emitted?.at(-1)?.[0]).toMatchObject({ sync_mode: 'remote_cmd' })
   })
 })

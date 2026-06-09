@@ -10,9 +10,12 @@ SingleProjectPipelineForm：单条项目流水线表单。
   - 不执行流水线或读取运行历史
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { ArtifactKind, Pipeline, PipelineTemplateSummary, ProjectPipeline } from '@/api/agent'
+import BuildConfigBar from './BuildConfigBar.vue'
+import DeployTargetReadonly from './DeployTargetReadonly.vue'
+import PipelineEnvMatrix from './PipelineEnvMatrix.vue'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
 
 const props = defineProps<{
@@ -20,6 +23,7 @@ const props = defineProps<{
   services: Array<{ id: string; name: string }>
   hosts: Array<{ id: string; name: string }>
   templates: PipelineTemplateSummary[]
+  targetsByEnv?: Record<string, string[]>
   initialMode?: 'template' | 'blank'
   withStructureRail?: boolean
   hidePreviewStrip?: boolean
@@ -30,6 +34,8 @@ const emit = defineEmits<{ 'update:pipeline': [ProjectPipeline] }>()
 const { t } = useAppI18n()
 const draft = ref<ProjectPipeline>({ ...props.pipeline, services: [...(props.pipeline.services ?? [])] })
 const wizard = ref<InstanceType<typeof PipelineTemplateWizard> | null>(null)
+const reservedNames = ['workspace', 'output', 'artifacts', 'version', 'env', 'date', 'time', 'run_temp_dir', 'sync_mode']
+const targetsByEnv = computed(() => props.targetsByEnv ?? {})
 
 watch(() => props.pipeline, (pipeline) => {
   draft.value = { ...pipeline, services: [...(pipeline.services ?? [])] }
@@ -53,6 +59,12 @@ function toggleService(name: string, checked: boolean) {
 
 function setPipeline(pipeline: Pipeline | undefined) {
   patch({ pipeline: pipeline ?? {} })
+}
+
+function setBuilderHost(hostId: string) {
+  const roles = { ...(draft.value.roles ?? {}) }
+  roles.builder = { hosts: hostId ? [hostId] : [] }
+  patch({ roles })
 }
 
 function saveDraft() {
@@ -112,6 +124,25 @@ defineExpose({ saveDraft })
       </div>
     </div>
 
+    <BuildConfigBar
+      :builder-host-id="draft.roles?.builder?.hosts?.[0] ?? ''"
+      :sync-mode="draft.sync_mode ?? 'transfer'"
+      :hosts="hosts"
+      @update:builder-host-id="setBuilderHost"
+      @update:sync-mode="patch({ sync_mode: $event })"
+    />
+
+    <PipelineEnvMatrix
+      :variables="draft.variables ?? {}"
+      :environments="draft.environments ?? {}"
+      :roles="draft.roles"
+      :reserved-names="reservedNames"
+      @update:variables="patch({ variables: $event })"
+      @update:environments="patch({ environments: $event })"
+    />
+
+    <DeployTargetReadonly :targets-by-env="targetsByEnv" />
+
     <div class="single-pipeline-lower">
       <div v-if="withStructureRail" class="single-pipeline-rail-slot">
         <slot name="rail" />
@@ -136,7 +167,7 @@ defineExpose({ saveDraft })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
