@@ -145,19 +145,9 @@ function hostDisplayName(hostID: string) {
   return hosts.value.find(host => host.id === hostID)?.name ?? hostID
 }
 
-function phaseRunnerTarget(phase: PipelinePhase) {
-  const pipeline = activePipeline.value?.pipeline
-  for (const [index, step] of (pipeline?.[phase] ?? []).entries()) {
-    for (const role of step.roles ?? []) {
-      const target = pipeline?.roles?.[role]?.[0]
-      if (target) return hostDisplayName(target)
-    }
-    const conventionRole = `${phase}_${index}_runner`
-    const conventionTarget = activePipeline.value?.roles?.[conventionRole]?.hosts?.[0]
-    if (conventionTarget) return hostDisplayName(conventionTarget)
-  }
-  if (phase === 'build') return hosts.value[0]?.name
-  return undefined
+function builderRoleTarget() {
+  const target = activePipeline.value?.roles?.builder?.hosts?.[0]
+  return target ? hostDisplayName(target) : undefined
 }
 
 function compactStepName(name: string) {
@@ -177,7 +167,7 @@ function previewNodeFromStep(step: PreviewStepRun, index: number, targetFallback
 }
 
 function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
-  const buildTarget = phaseRunnerTarget('build')
+  const buildTarget = builderRoleTarget()
   const buildNodes = steps
     .filter(step => step.phase === 'build')
     .map((step, index) => previewNodeFromStep(step, index, buildTarget))

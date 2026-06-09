@@ -324,6 +324,9 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Build Frontend')
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Deploy')
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('ali-01')
+    const nodes = wrapper.findAll('[data-test="pipeline-preview-node"]')
+    expect(nodes[0].text()).toContain('本地')
+    expect(nodes[0].text()).not.toContain('host-1')
 
     await wrapper.find('[data-test="pipeline-preview-close"]').trigger('click')
     expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
