@@ -178,6 +178,50 @@ func TestAuthorizeOperationGraceHit(t *testing.T) {
 	}
 }
 
+func TestApproveGrantsGraceWindow(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	ctx := context.Background()
+	plan := operation.Plan{Kind: operation.OperationConfigServiceUpsert, RequiresApproval: true, Target: operation.Target{ProjectID: "p1"}}
+	pending, err := app.operationApprovals.FindOrCreatePending(ctx, plan, "ai", "AI")
+	require.NoError(t, err)
+
+	body := []byte(`{"decided_by":"user","grant_grace":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/operation-approvals/"+pending.ID+"/approve", bytes.NewReader(body))
+	req.SetPathValue("id", pending.ID)
+	app.approveOperationApproval(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	_, ok, err := app.operationGrace.ActiveGrace(ctx, "p1")
+	require.NoError(t, err)
+	if !ok {
+		t.Fatal("approve with grant_grace must open grace window")
+	}
+}
+
+func TestApproveGrantGraceNoProjectIgnored(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	ctx := context.Background()
+	plan := operation.Plan{Kind: operation.OperationTemplateImport, RequiresApproval: true, Target: operation.Target{TemplatePath: "/x.yaml"}}
+	pending, err := app.operationApprovals.FindOrCreatePending(ctx, plan, "ai", "AI")
+	require.NoError(t, err)
+
+	body := []byte(`{"decided_by":"user","grant_grace":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
+	req.SetPathValue("id", pending.ID)
+	app.approveOperationApproval(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	if resp["grace_granted"] != false {
+		t.Fatalf("no-project approval must report grace_granted=false, got %v", resp["grace_granted"])
+	}
+}
+
 func operationAPIProject(isDev bool, readOnly bool) model.Project {
 	return model.Project{
 		ID:   "proj-op",

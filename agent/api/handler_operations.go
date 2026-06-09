@@ -33,6 +33,13 @@ type operationApprovalDetailResponse struct {
 	ApprovalToken string             `json:"approval_token,omitempty"`
 }
 
+// operationApprovalDecisionResponse 是 approve 接口的响应。
+type operationApprovalDecisionResponse struct {
+	Approval       operation.Approval `json:"approval"`
+	GraceGranted   bool               `json:"grace_granted"`
+	GraceExpiresAt *time.Time         `json:"grace_expires_at,omitempty"`
+}
+
 type operationAuditListResponse struct {
 	Events []operation.AuditEvent `json:"events"`
 	Count  int                    `json:"count"`
@@ -56,8 +63,9 @@ type operationTargetRequest struct {
 }
 
 type operationDecisionRequest struct {
-	DecidedBy string `json:"decided_by"`
-	Note      string `json:"note"`
+	DecidedBy  string `json:"decided_by"`
+	Note       string `json:"note"`
+	GrantGrace bool   `json:"grant_grace"`
 }
 
 type operationApprovalTokenBody struct {
@@ -136,7 +144,31 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 		Summary:    "operation approval approved",
 		Data:       map[string]any{"decided_by": approval.DecidedBy},
 	})
-	jsonOK(w, sanitizeOperationApproval(approval))
+
+	graceGranted := false
+	var graceExpiresAt *time.Time
+	if req.GrantGrace && approval.Plan.Target.ProjectID != "" {
+		minutes := a.loadApprovalPolicy().GraceMinutes
+		ttl := time.Duration(minutes) * time.Minute
+		if grant, err := a.operationGrace.GrantGrace(r.Context(), approval.Plan.Target.ProjectID, approval.DecidedBy, approval.ID, ttl); err == nil {
+			graceGranted = true
+			graceExpiresAt = &grant.ExpiresAt
+			a.appendOperationAudit(r.Context(), operation.AuditEvent{
+				Kind:       approval.Plan.Kind,
+				Action:     operation.AuditGraceGranted,
+				ApprovalID: approval.ID,
+				Plan:       approval.Plan,
+				Summary:    "project grace window opened",
+				Data:       map[string]any{"project_id": approval.Plan.Target.ProjectID, "expires_at": grant.ExpiresAt},
+			})
+		}
+	}
+
+	jsonOK(w, operationApprovalDecisionResponse{
+		Approval:       sanitizeOperationApproval(approval),
+		GraceGranted:   graceGranted,
+		GraceExpiresAt: graceExpiresAt,
+	})
 }
 
 // rejectOperationApproval 处理 POST /api/operation-approvals/{id}/reject。
