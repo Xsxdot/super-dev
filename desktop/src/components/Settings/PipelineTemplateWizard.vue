@@ -68,7 +68,6 @@ const activePhase = ref<PipelinePhase>('build')
 const activeStation = ref<WizardStation>('build')
 const draggingBlockId = ref<string | null>(null)
 const nextBlockId = ref(0)
-const expandedRunnerBlockIDs = ref<Set<string>>(new Set())
 const { t } = useAppI18n()
 
 const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(block => {
@@ -158,13 +157,10 @@ function addBlock(phase: PipelinePhase) {
 }
 
 function removeBlock(block: TemplateBlock) {
-  blocks.value = blocks.value.filter(item => item !== block)
-  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
-  nextExpanded.delete(block.id)
-  expandedRunnerBlockIDs.value = nextExpanded
-  if (activeBlockId.value === block.id) {
-    activeBlockId.value = blocks.value[0]?.id ?? null
-  }
+	blocks.value = blocks.value.filter(item => item !== block)
+	if (activeBlockId.value === block.id) {
+		activeBlockId.value = blocks.value[0]?.id ?? null
+	}
 }
 
 function startBlockDrag(block: TemplateBlock) {
@@ -221,11 +217,10 @@ function roleKey(block: TemplateBlock, inputName: string) {
 function hydrateFromPipeline(pipeline?: Pipeline) {
   blocks.value = []
   activeBlockId.value = null
-  activePhase.value = 'build'
-  activeStation.value = 'build'
-  nextBlockId.value = 0
-  expandedRunnerBlockIDs.value = new Set()
-  if (!pipeline) return
+	activePhase.value = 'build'
+	activeStation.value = 'build'
+	nextBlockId.value = 0
+	if (!pipeline) return
   for (const phase of phases) {
     for (const step of pipeline[phase] ?? []) {
       if (step.type !== 'include' || !step.with) continue
@@ -291,59 +286,15 @@ function isTargetHostChecked(block: TemplateBlock, name: string, host: HostOptio
   return includesHost(block.targets[name] ?? [], host)
 }
 
-function isRunnerHostChecked(block: TemplateBlock, host: HostOption) {
-  return includesHost(block.runnerTargets, host)
-}
-
-function compactRunnerHosts(block: TemplateBlock) {
-  const allHosts = props.hosts ?? []
-  if (allHosts.length <= 3) return allHosts
-  const selected = allHosts.filter(host => isRunnerHostChecked(block, host))
-  const byID = new Map<string, HostOption>()
-  for (const host of [...selected, ...allHosts]) {
-    if (!byID.has(host.id)) byID.set(host.id, host)
-    if (byID.size >= 3) break
-  }
-  return [...byID.values()]
-}
-
-function isRunnerHostsExpanded(block: TemplateBlock) {
-  return expandedRunnerBlockIDs.value.has(block.id)
-}
-
-function visibleRunnerHosts(block: TemplateBlock) {
-  return isRunnerHostsExpanded(block) ? props.hosts ?? [] : compactRunnerHosts(block)
-}
-
-function hasHiddenRunnerHosts(block: TemplateBlock) {
-  return (props.hosts?.length ?? 0) > compactRunnerHosts(block).length
-}
-
-function hiddenRunnerHostCount(block: TemplateBlock) {
-  if (isRunnerHostsExpanded(block)) return 0
-  return Math.max(0, (props.hosts?.length ?? 0) - compactRunnerHosts(block).length)
-}
-
-function toggleRunnerHostsExpanded(block: TemplateBlock) {
-  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
-  if (nextExpanded.has(block.id)) nextExpanded.delete(block.id)
-  else nextExpanded.add(block.id)
-  expandedRunnerBlockIDs.value = nextExpanded
-}
-
 function updateHostSelection(values: string[], host: HostOption, checked: boolean) {
-  const aliases = new Set(hostAliases(host))
-  const next = values.filter(value => !aliases.has(value))
-  if (checked) next.push(host.id)
-  return next
-}
-
-function toggleRunnerHost(block: TemplateBlock, host: HostOption, checked: boolean) {
-  block.runnerTargets = updateHostSelection(block.runnerTargets, host, checked)
+	const aliases = new Set(hostAliases(host))
+	const next = values.filter(value => !aliases.has(value))
+	if (checked) next.push(host.id)
+	return next
 }
 
 function toggleTargetHost(block: TemplateBlock, name: string, host: HostOption, checked: boolean) {
-  block.targets[name] = updateHostSelection(block.targets[name] ?? [], host, checked)
+	block.targets[name] = updateHostSelection(block.targets[name] ?? [], host, checked)
 }
 
 function inputSatisfied(block: TemplateBlock, name: string, input: TemplateInput) {
@@ -583,31 +534,7 @@ defineExpose({ saveTemplate })
               <div class="detail-subtitle" :title="selectedFor(activeBlock)?.name">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
               <div class="detail-count">{{ t('settings.pipeline.inputCount', { n: activeBlockInputs.length }) }}</div>
 
-              <section class="form-block template-runner-row">
-                <h4>{{ t('settings.pipeline.machine') }} / Runner machines <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span></h4>
-                <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
-                <div v-else class="target-list target-grid" :data-test="`block-${activeBlock.id}-runner-targets`">
-                  <label v-for="host in visibleRunnerHosts(activeBlock)" :key="host.id" class="target-item">
-                    <input
-                      type="checkbox"
-                      :data-test="`block-${activeBlock.id}-runner-${host.id}`"
-                      :checked="isRunnerHostChecked(activeBlock, host)"
-                      @change="toggleRunnerHost(activeBlock, host, ($event.target as HTMLInputElement).checked)"
-                    />
-                    {{ host.name }}
-                  </label>
-                  <button
-                    v-if="hasHiddenRunnerHosts(activeBlock)"
-                    type="button"
-                    class="target-more"
-                    :data-test="`block-${activeBlock.id}-runner-more`"
-                    :title="isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : t('settings.pipeline.machineMore', { count: hiddenRunnerHostCount(activeBlock) })"
-                    @click="toggleRunnerHostsExpanded(activeBlock)"
-                  >
-                    {{ isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : `+${hiddenRunnerHostCount(activeBlock)}` }}
-                  </button>
-                </div>
-
+              <section v-if="activeBlockTargetInputs.length > 0" class="form-block template-target-row">
                 <div v-for="[name, input] in activeBlockTargetInputs" :key="name" class="template-input-row">
                   <label class="field-label">
                     {{ input.label || name }}<span v-if="input.required" class="required">*</span>
@@ -1059,7 +986,7 @@ defineExpose({ saveTemplate })
   align-items: start;
   margin-top: 6px;
 }
-.template-runner-row {
+.template-target-row {
   display: block;
   margin-top: 14px;
 }
@@ -1312,7 +1239,7 @@ defineExpose({ saveTemplate })
     border-top: 1px solid var(--border-secondary);
   }
   .template-input-row,
-  .template-runner-row {
+  .template-target-row {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -1341,8 +1268,8 @@ defineExpose({ saveTemplate })
     grid-column: 3;
     grid-row: 2;
   }
-  .template-runner-row .field-help,
-  .template-runner-row .target-list {
+  .template-target-row .field-help,
+  .template-target-row .target-list {
     grid-column: auto;
   }
   .file-row {
