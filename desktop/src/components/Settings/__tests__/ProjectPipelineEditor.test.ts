@@ -125,7 +125,7 @@ function projectWithPipeline(): Project {
 
 function projectWithUnevenPhaseCounts(): Project {
   const p = projectWithPipeline()
-  const pipeline = p.pipelines[0]
+  const pipeline = p.pipelines![0]
   pipeline.pipeline = {
     ...pipeline.pipeline,
     build: [
