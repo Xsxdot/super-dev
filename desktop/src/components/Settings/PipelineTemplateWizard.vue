@@ -37,6 +37,9 @@ type TemplateBlock = {
   runnerTargets: string[]
 }
 
+type InputGroupKey = 'machine' | 'path' | 'command' | 'file' | 'optional'
+type InputGroupSelection = InputGroupKey | 'all'
+
 const props = defineProps<{
   modelValue?: Pipeline
   templates: PipelineTemplateSummary[]
@@ -57,6 +60,7 @@ const phaseCategory: Record<PipelinePhase, PipelineTemplateCategory> = {
 const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
+const activeInputGroup = ref<InputGroupSelection>('all')
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
 
@@ -66,6 +70,26 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
   return Object.entries(template.inputs ?? {}).every(([name, input]) => inputSatisfied(block, name, input))
 }))
 const activeBlock = computed(() => blocks.value.find(block => block.id === activeBlockId.value) ?? blocks.value[0] ?? null)
+const inputGroups = computed(() => {
+  const block = activeBlock.value
+  return [
+    {
+      key: 'machine' as const,
+      label: t('settings.pipeline.machine'),
+      count: block ? 1 + groupedInputEntries('machine').length : 0,
+    },
+    { key: 'path' as const, label: t('settings.pipeline.inputGroupPath'), count: groupedInputEntries('path').length },
+    { key: 'command' as const, label: t('settings.pipeline.inputGroupCommand'), count: groupedInputEntries('command').length },
+    { key: 'file' as const, label: t('settings.pipeline.inputGroupFile'), count: groupedInputEntries('file').length },
+    { key: 'optional' as const, label: t('settings.pipeline.inputGroupOptional'), count: groupedInputEntries('optional').length },
+  ]
+})
+const activeInputEntries = computed(() => {
+  const block = activeBlock.value
+  if (!block) return []
+  if (activeInputGroup.value === 'all') return inputEntries(block)
+  return groupedInputEntries(activeInputGroup.value)
+})
 const previewBlocks = computed(() =>
   blocks.value
     .map(block => ({
@@ -112,6 +136,25 @@ function inputEntries(block: TemplateBlock): [string, TemplateInput][] {
   return Object.entries(selectedFor(block)?.inputs ?? {})
 }
 
+function inputGroupFor(name: string, input: TemplateInput): InputGroupKey {
+  const key = name.toLowerCase()
+  if (input.type === 'target_role') return 'machine'
+  if (input.type === 'file_list') return 'file'
+  if (input.type === 'path' || key.includes('dir') || key.includes('path')) return 'path'
+  if (key.includes('command') || key.includes('cmd')) return 'command'
+  return 'optional'
+}
+
+function groupedInputEntries(group: InputGroupKey): [string, TemplateInput][] {
+  const block = activeBlock.value
+  if (!block) return []
+  return inputEntries(block).filter(([name, input]) => inputGroupFor(name, input) === group)
+}
+
+function selectInputGroup(group: InputGroupKey) {
+  activeInputGroup.value = group
+}
+
 function blocksForPhase(phase: PipelinePhase) {
   return blocks.value.filter(block => block.phase === phase)
 }
@@ -124,16 +167,19 @@ function addBlock(phase: PipelinePhase) {
   const block = { id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {}, runnerTargets: [] }
   blocks.value.push(block)
   activeBlockId.value = block.id
+  activeInputGroup.value = 'all'
 }
 
 function removeBlock(block: TemplateBlock) {
   blocks.value = blocks.value.filter(item => item !== block)
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
+    activeInputGroup.value = 'all'
   }
 }
 
 function resetBlockInputs(block: TemplateBlock) {
+  activeInputGroup.value = 'all'
   const template = selectedFor(block)
   block.vars = {}
   block.targets = {}
@@ -284,6 +330,7 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 
 function selectBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
+  activeInputGroup.value = 'all'
 }
 
 function blockVarSummary(block: TemplateBlock) {
@@ -449,15 +496,21 @@ defineExpose({ saveTemplate })
             <template v-if="activeBlock && selectedFor(activeBlock)">
               <div class="detail-title">{{ t('settings.pipeline.dynamicInputs') }}</div>
               <div class="detail-subtitle">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
-              <div class="detail-tabs" aria-hidden="true">
-                <span class="active">{{ t('settings.pipeline.machine') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupPath') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupCommand') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupFile') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupOptional') }}</span>
+              <div class="detail-tabs">
+                <button
+                  v-for="group in inputGroups"
+                  :key="group.key"
+                  type="button"
+                  :class="{ active: activeInputGroup === group.key }"
+                  :data-test="`input-group-${group.key}`"
+                  @click="selectInputGroup(group.key)"
+                >
+                  <span>{{ group.label }}</span>
+                  <small>{{ group.count }}</small>
+                </button>
               </div>
 
-              <div class="template-runner-row">
+              <div v-if="activeInputGroup === 'all' || activeInputGroup === 'machine'" class="template-runner-row">
                 <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
                 <div class="field-help">{{ t('settings.pipeline.machineHelp') }}</div>
                 <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
@@ -474,7 +527,7 @@ defineExpose({ saveTemplate })
                 </div>
               </div>
 
-              <div v-for="[name, input] in inputEntries(activeBlock)" :key="name" class="template-input-row">
+              <div v-for="[name, input] in activeInputEntries" :key="name" class="template-input-row">
                 <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
                   {{ input.label || name }}<span v-if="input.required" class="required">*</span>
                   <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
@@ -696,21 +749,36 @@ defineExpose({ saveTemplate })
   overflow: hidden;
   background: rgba(8, 13, 20, 0.4);
 }
-.detail-tabs span {
+.detail-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   min-width: 0;
   padding: 7px 4px;
+  border: 0;
   border-left: 1px solid var(--border-secondary);
+  background: transparent;
   color: var(--text-tertiary);
+  cursor: pointer;
   font-size: 11px;
   text-align: center;
 }
-.detail-tabs span:first-child {
+.detail-tabs button:first-child {
   border-left: 0;
 }
 .detail-tabs .active {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--accent);
   font-weight: 800;
+}
+.detail-tabs small {
+  border-radius: 999px;
+  padding: 0 5px;
+  background: rgba(139, 148, 158, 0.16);
+  color: inherit;
+  font-size: 10px;
+  line-height: 16px;
 }
 .detail-empty {
   min-height: 180px;

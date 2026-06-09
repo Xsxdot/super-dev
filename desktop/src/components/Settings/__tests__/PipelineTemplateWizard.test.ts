@@ -278,6 +278,42 @@ describe('PipelineTemplateWizard', () => {
     })
   })
 
+  it('按输入分组切换右侧模板输入', async () => {
+    const template: PipelineTemplateSummary = {
+      source: 'builtin',
+      id: 'combined',
+      category: 'build',
+      name: 'Combined Build',
+      version: '1.0.0',
+      digest: 'sha256:combined',
+      inputs: {
+        frontend_dir: { label: '前端目录', type: 'path', required: true },
+        build_command: { label: '构建命令', type: 'string', required: true },
+        files: { label: '文件', type: 'file_list', required: true },
+        skip_cache: { label: '跳过缓存', type: 'boolean', required: false, default: 'false' },
+      },
+    }
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [template],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://combined@1.0.0')
+
+    expect(wrapper.find('[data-test="input-group-path"]').text()).toContain('1')
+    await wrapper.find('[data-test="input-group-file"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-add-file"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-input-frontend_dir"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="input-group-optional"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-input-skip_cache"]').exists()).toBe(true)
+  })
+
   it('已有 include pipeline 时回填 file_list 输入', () => {
     const pipeline: Pipeline = {
       build: [{
