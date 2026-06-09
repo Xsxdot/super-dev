@@ -39,6 +39,12 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.LogRetentionDays != nil {
 		current.LogRetentionDays = *req.LogRetentionDays
 	}
+	if req.LogMaxBytes != nil {
+		current.LogMaxBytes = *req.LogMaxBytes
+	}
+	if req.LogCleanupIntervalSeconds != nil {
+		current.LogCleanupIntervalSeconds = *req.LogCleanupIntervalSeconds
+	}
 	if req.OnboardingCompleted != nil {
 		current.OnboardingCompleted = *req.OnboardingCompleted
 	}
@@ -50,6 +56,8 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsPatchRequest struct {
-	LogRetentionDays    *int  `json:"log_retention_days"`
-	OnboardingCompleted *bool `json:"onboarding_completed"`
+	LogRetentionDays          *int   `json:"log_retention_days"`
+	LogMaxBytes               *int64 `json:"log_max_bytes"`
+	LogCleanupIntervalSeconds *int   `json:"log_cleanup_interval_seconds"`
+	OnboardingCompleted       *bool  `json:"onboarding_completed"`
 }

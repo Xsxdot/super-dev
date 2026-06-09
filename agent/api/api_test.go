@@ -160,19 +160,23 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var defaults struct {
-		LogRetentionDays    int  `json:"log_retention_days"`
-		SampleSeeded        bool `json:"sample_seeded"`
-		OnboardingCompleted bool `json:"onboarding_completed"`
+		LogRetentionDays          int   `json:"log_retention_days"`
+		LogMaxBytes               int64 `json:"log_max_bytes"`
+		LogCleanupIntervalSeconds int   `json:"log_cleanup_interval_seconds"`
+		SampleSeeded              bool  `json:"sample_seeded"`
+		OnboardingCompleted       bool  `json:"onboarding_completed"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&defaults))
 	assert.Equal(t, 7, defaults.LogRetentionDays)
+	assert.Equal(t, int64(256*1024*1024), defaults.LogMaxBytes)
+	assert.Equal(t, 3600, defaults.LogCleanupIntervalSeconds)
 	assert.False(t, defaults.SampleSeeded)
 	assert.False(t, defaults.OnboardingCompleted)
 
 	req, err := http.NewRequest(
 		http.MethodPut,
 		srv.URL+"/api/settings",
-		strings.NewReader(`{"log_retention_days": 14, "onboarding_completed": true}`),
+		strings.NewReader(`{"log_retention_days": 14, "log_max_bytes": 33554432, "log_cleanup_interval_seconds": 120, "onboarding_completed": true}`),
 	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -185,6 +189,8 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	raw, err := os.ReadFile(settingsPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"log_retention_days": 14`)
+	assert.Contains(t, string(raw), `"log_max_bytes": 33554432`)
+	assert.Contains(t, string(raw), `"log_cleanup_interval_seconds": 120`)
 	assert.Contains(t, string(raw), `"onboarding_completed": true`)
 }
 

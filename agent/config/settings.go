@@ -24,13 +24,25 @@ const (
 	MinLogRetentionDays = 1
 	// MaxLogRetentionDays 是允许的最大日志保留天数。
 	MaxLogRetentionDays = 90
+	// DefaultLogMaxBytes 是日志库体积上限默认值（256 MiB）。
+	DefaultLogMaxBytes = 256 * 1024 * 1024
+	// MinLogMaxBytes 是允许的最小体积上限（16 MiB），避免设得过小频繁删。
+	MinLogMaxBytes = 16 * 1024 * 1024
+	// MaxLogMaxBytes 是允许的最大体积上限（8 GiB）。
+	MaxLogMaxBytes = 8 * 1024 * 1024 * 1024
+	// DefaultLogCleanupIntervalSeconds 是后台淘汰任务默认周期（1 小时）。
+	DefaultLogCleanupIntervalSeconds = 3600
+	// MinLogCleanupIntervalSeconds 是允许的最小淘汰周期（1 分钟）。
+	MinLogCleanupIntervalSeconds = 60
 )
 
 // AgentSettings 表示 agent 级全局设置。
 type AgentSettings struct {
-	LogRetentionDays    int  `json:"log_retention_days"`
-	SampleSeeded        bool `json:"sample_seeded"`
-	OnboardingCompleted bool `json:"onboarding_completed"`
+	LogRetentionDays          int   `json:"log_retention_days"`
+	LogMaxBytes               int64 `json:"log_max_bytes"`
+	LogCleanupIntervalSeconds int   `json:"log_cleanup_interval_seconds"`
+	SampleSeeded              bool  `json:"sample_seeded"`
+	OnboardingCompleted       bool  `json:"onboarding_completed"`
 }
 
 // SettingsStore 负责读写 agent 数据目录下的 settings.json。
@@ -45,7 +57,11 @@ func NewSettingsStore(dataDir string) *SettingsStore {
 
 // DefaultAgentSettings 返回默认 agent 设置。
 func DefaultAgentSettings() AgentSettings {
-	return AgentSettings{LogRetentionDays: DefaultLogRetentionDays}
+	return AgentSettings{
+		LogRetentionDays:          DefaultLogRetentionDays,
+		LogMaxBytes:               DefaultLogMaxBytes,
+		LogCleanupIntervalSeconds: DefaultLogCleanupIntervalSeconds,
+	}
 }
 
 // MarkSampleSeeded 将示例落地标记置为 true，并保留其他设置。
@@ -69,6 +85,12 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	if settings.LogRetentionDays < MinLogRetentionDays || settings.LogRetentionDays > MaxLogRetentionDays {
 		return fmt.Errorf("log_retention_days must be between %d and %d", MinLogRetentionDays, MaxLogRetentionDays)
 	}
+	if settings.LogMaxBytes < MinLogMaxBytes || settings.LogMaxBytes > MaxLogMaxBytes {
+		return fmt.Errorf("log_max_bytes must be between %d and %d", MinLogMaxBytes, MaxLogMaxBytes)
+	}
+	if settings.LogCleanupIntervalSeconds < MinLogCleanupIntervalSeconds {
+		return fmt.Errorf("log_cleanup_interval_seconds must be >= %d", MinLogCleanupIntervalSeconds)
+	}
 	return nil
 }
 
@@ -84,6 +106,12 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 	settings := DefaultAgentSettings()
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return AgentSettings{}, fmt.Errorf("parse settings: %w", err)
+	}
+	if settings.LogMaxBytes == 0 {
+		settings.LogMaxBytes = DefaultLogMaxBytes
+	}
+	if settings.LogCleanupIntervalSeconds == 0 {
+		settings.LogCleanupIntervalSeconds = DefaultLogCleanupIntervalSeconds
 	}
 	if err := ValidateAgentSettings(settings); err != nil {
 		return AgentSettings{}, err
