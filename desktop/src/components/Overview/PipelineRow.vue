@@ -94,11 +94,11 @@ function statusIcon() {
 <style scoped>
 .pipeline-row {
   display: grid;
-  grid-template-columns: 40px minmax(250px, 1.45fr) minmax(170px, 0.95fr) 112px minmax(130px, 0.8fr) 78px 112px 150px;
+  grid-template-columns: 38px minmax(220px, 1.4fr) minmax(130px, 0.8fr) 104px minmax(118px, 0.72fr) 66px 96px 128px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-height: 62px;
-  padding: 8px 18px 8px 12px;
+  padding: 8px 12px;
   border: 0;
   border-radius: 0;
   background: rgba(18, 24, 34, 0.72);
@@ -195,7 +195,7 @@ function statusIcon() {
 .service-tag {
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
-  padding: 3px 8px;
+  padding: 3px 7px;
   color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
@@ -249,7 +249,7 @@ function statusIcon() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 @media (max-width: 980px) {

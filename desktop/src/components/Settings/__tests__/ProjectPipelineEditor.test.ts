@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -95,12 +95,12 @@ function projectWithPipeline(): Project {
     name: 'Deploy Server Admin Prod',
     services: ['web', 'server'],
     artifact_kind: 'file',
+    roles: { build_0_runner: { hosts: ['h1'] }, deploy_1_targets: { hosts: ['h1'] } },
     pipeline: {
-      roles: { build_0_runner: ['h1'], deploy_1_targets: ['h1'] },
+      roles: { deploy_1_targets: ['h1'] },
       build: [{
         name: 'Vue + Go 组合构建',
         type: 'include',
-        roles: ['build_0_runner'],
         with: {
           template: 'builtin://vue-go-combined',
           version: '1.0.0',
@@ -231,6 +231,49 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-editor-rail-build"]').text()).toContain('2 模板')
     expect(wrapper.find('[data-test="pipeline-editor-rail-deploy"]').text()).toContain('0 模板')
     expect(wrapper.find('[data-test="pipeline-editor-rail-finally"]').text()).toContain('1 模板')
+    expect(wrapper.find('[data-test="pipeline-editor-rail-build"] .rail-icon svg').exists()).toBe(true)
+  })
+
+  it('编辑已有流水线时优先展示后端展开后的预览步骤', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.previewProjectPipeline).mockResolvedValueOnce({
+      run: {
+        deployment_id: 'project:p1:pipeline:deploy-server-admin-prod:env:dev',
+        status: 'pending',
+        step_runs: [
+          { step_name: 'Vue + Go 组合构建.Build Frontend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Vue + Go 组合构建.Build Backend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Vue + Go 组合构建.Package', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Systemd 无缝部署.Prepare', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+          { step_name: 'Systemd 无缝部署.Upload', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+          { step_name: 'Systemd 无缝部署.Restart', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+          { step_name: 'Health Check', type: 'http_check', phase: 'finally', status: 'pending', tasks: [] },
+        ],
+      },
+    })
+
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    expect(api.previewProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-server-admin-prod', expect.objectContaining({
+      env_name: 'dev',
+      service_names: ['web', 'server'],
+    }))
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Build Frontend')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Build Frontendpendinghost-1')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).not.toContain('"step_name"')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Deploy')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Health Check')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Health Checkpendingali-01')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).not.toContain('Prepare')
+    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(5)
   })
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {

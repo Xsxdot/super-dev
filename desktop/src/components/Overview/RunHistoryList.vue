@@ -213,9 +213,9 @@ function summary(run: Run) {
 }
 .history-head {
   display: grid;
-  grid-template-columns: 96px minmax(130px, 0.9fr) 72px 150px 66px 74px minmax(170px, 1fr) 190px;
+  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-height: var(--history-header-height);
   padding: 0 12px;
   color: var(--text-tertiary);
@@ -225,9 +225,9 @@ function summary(run: Run) {
 .history-loading,
 .run-row {
   display: grid;
-  grid-template-columns: 96px minmax(130px, 0.9fr) 72px 150px 66px 74px minmax(170px, 1fr) 190px;
+  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-height: var(--history-row-height);
   padding: 7px 12px;
   border: 1px solid var(--border-secondary);
@@ -283,14 +283,14 @@ function summary(run: Run) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   white-space: nowrap;
 }
 .run-actions button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   height: 24px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;

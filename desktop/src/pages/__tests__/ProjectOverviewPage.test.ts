@@ -1,6 +1,7 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { api } from '@/api/agent'
 import ProjectOverviewPage from '@/pages/ProjectOverviewPage.vue'
 import { useAgentStore } from '@/stores/agent'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -12,6 +13,17 @@ vi.mock('vue-router', () => ({
   useRoute: () => route,
   useRouter: () => ({ push }),
 }))
+
+vi.mock('@/api/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/agent')>()
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listProjects: vi.fn(),
+    },
+  }
+})
 
 vi.mock('@/components/Overview/RuntimeStatusTab.vue', () => ({
   default: { template: '<div data-test="runtime-tab">runtime</div>' },
@@ -29,6 +41,8 @@ describe('ProjectOverviewPage', () => {
   beforeEach(() => {
     route.params.id = 'p1'
     push.mockClear()
+    vi.mocked(api.listProjects).mockReset()
+    vi.mocked(api.listProjects).mockResolvedValue([])
     setActivePinia(createPinia())
   })
 
@@ -49,7 +63,7 @@ describe('ProjectOverviewPage', () => {
     expect(wrapper.find('[data-test="runtime-tab"]').exists()).toBe(true)
   })
 
-  it('returns to the main workspace from the overview header', async () => {
+  it('does not render standalone back chrome in the project overview first viewport', () => {
     const agent = useAgentStore()
     agent.projects = [{
       id: 'p1',
@@ -62,9 +76,8 @@ describe('ProjectOverviewPage', () => {
 
     const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('en-US')] } })
 
-    await wrapper.find('[data-test="overview-back"]').trigger('click')
-
-    expect(push).toHaveBeenCalledWith('/')
+    expect(wrapper.find('[data-test="overview-back"]').exists()).toBe(false)
+    expect(push).not.toHaveBeenCalled()
   })
 
   it('switches to pipelines tab', async () => {
@@ -86,6 +99,24 @@ describe('ProjectOverviewPage', () => {
 
     expect(wrapper.find('[data-test="project-ingress-tab"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('入口配置')
+  })
+
+  it('loads projects when opened directly by route', async () => {
+    vi.mocked(api.listProjects).mockResolvedValue([{
+      id: 'p1',
+      name: 'demo',
+      root_path: '/tmp/demo',
+      services: [],
+      pipelines: [],
+      environments: [],
+    }])
+
+    const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('en-US')] } })
+    await flushPromises()
+
+    expect(api.listProjects).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('demo')
+    expect(wrapper.find('[data-test="runtime-tab"]').exists()).toBe(true)
   })
 
   it('shows missing project state for unknown route id', () => {

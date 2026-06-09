@@ -13,6 +13,7 @@ ProjectPipelineEditor：项目流水线独立编辑器。
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Icon } from '@iconify/vue'
 import {
   api,
   type PipelinePreviewResponse,
@@ -62,9 +63,13 @@ const applyPreview = ref<PipelinePreviewResponse | null>(null)
 const applyPreviewError = ref('')
 const applyingTemplate = ref(false)
 const applyTemplateDraft = ref<(() => void) | null>(null)
+const editorPreview = ref<PipelinePreviewResponse | null>(null)
+const editorPreviewError = ref('')
 const previewPhases: PipelinePhase[] = ['build', 'deploy', 'finally']
+type PreviewStepRun = PipelinePreviewResponse['run']['step_runs'][number]
 
 onMounted(async () => {
+  void loadEditorPreview()
   try {
     const list = await api.listHosts()
     hosts.value = list.map(h => ({ id: h.id, name: h.name }))
@@ -109,10 +114,88 @@ function phaseLabel(phase: PipelinePhase) {
 function previewTarget(step: PipelineStep) {
   const role = step.roles?.[0]
   if (!role) return t('common.local')
-  return activePipeline.value?.pipeline?.roles?.[role]?.[0] ?? role
+  const target = activePipeline.value?.pipeline?.roles?.[role]?.[0]
+  return target ? hostDisplayName(target) : role
 }
 
-const editorPreviewNodes = computed(() => {
+function phaseIcon(phase: PipelinePhase) {
+  if (phase === 'deploy') return 'lucide:server'
+  if (phase === 'finally') return 'lucide:shield-check'
+  return 'lucide:package'
+}
+
+function hasPreviewablePipeline() {
+  const pipeline = activePipeline.value?.pipeline
+  return previewPhases.some(phase => (pipeline?.[phase] ?? []).length > 0)
+}
+
+function compiledPreviewTarget(step: PreviewStepRun) {
+  const task = step.tasks.find(item => item.host_name || item.host_id)
+  return task?.host_name || task?.host_id || t('common.local')
+}
+
+function hostDisplayName(hostID: string) {
+  return hosts.value.find(host => host.id === hostID)?.name ?? hostID
+}
+
+function phaseRunnerTarget(phase: PipelinePhase) {
+  const pipeline = activePipeline.value?.pipeline
+  for (const [index, step] of (pipeline?.[phase] ?? []).entries()) {
+    for (const role of step.roles ?? []) {
+      const target = pipeline?.roles?.[role]?.[0]
+      if (target) return hostDisplayName(target)
+    }
+    const conventionRole = `${phase}_${index}_runner`
+    const conventionTarget = activePipeline.value?.roles?.[conventionRole]?.hosts?.[0]
+    if (conventionTarget) return hostDisplayName(conventionTarget)
+  }
+  return undefined
+}
+
+function compactStepName(name: string) {
+  const parts = name.split('.')
+  return parts[parts.length - 1] || name
+}
+
+function previewNodeFromStep(step: PreviewStepRun, index: number, targetFallback?: string) {
+  const target = compiledPreviewTarget(step)
+  return {
+    id: `${step.phase}-${index}-${step.step_name}`,
+    phase: step.phase,
+    name: compactStepName(step.step_name),
+    target: target === t('common.local') && targetFallback ? targetFallback : target,
+    icon: phaseIcon(step.phase),
+  }
+}
+
+function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
+  const buildTarget = phaseRunnerTarget('build')
+  const buildNodes = steps
+    .filter(step => step.phase === 'build')
+    .map((step, index) => previewNodeFromStep(step, index, buildTarget))
+    .slice(0, 3)
+  const deploySteps = steps.filter(step => step.phase === 'deploy')
+  const deployTarget = deploySteps
+    .map(step => compiledPreviewTarget(step))
+    .find(target => target !== t('common.local'))
+  const deployNodes = deploySteps.length > 0
+    ? [{
+        id: 'deploy-summary',
+        phase: 'deploy' as PipelinePhase,
+        name: 'Deploy',
+        target: deployTarget || compiledPreviewTarget(deploySteps[0]),
+        icon: phaseIcon('deploy'),
+      }]
+    : []
+  const remaining = Math.max(0, 5 - buildNodes.length - deployNodes.length)
+  const finallyNodes = steps
+    .filter(step => step.phase === 'finally')
+    .map((step, index) => previewNodeFromStep(step, index, deployTarget))
+    .slice(0, remaining)
+  return [...buildNodes, ...deployNodes, ...finallyNodes].slice(0, 5)
+}
+
+const localPreviewNodes = computed(() => {
   const pipeline = activePipeline.value?.pipeline
   if (!pipeline) return []
   return previewPhases
@@ -121,9 +204,20 @@ const editorPreviewNodes = computed(() => {
       phase,
       name: step.name || phaseLabel(phase),
       target: previewTarget(step),
+      icon: phaseIcon(phase),
     })))
     .slice(0, 6)
 })
+
+const compiledPreviewNodes = computed(() =>
+  compactCompiledPreviewNodes(editorPreview.value?.run.step_runs ?? []),
+)
+
+const editorPreviewNodes = computed(() =>
+  compiledPreviewNodes.value.length > localPreviewNodes.value.length
+    ? compiledPreviewNodes.value
+    : localPreviewNodes.value,
+)
 
 const railItems = computed(() => {
   const buildCount = phaseBlockCount('build')
@@ -133,7 +227,7 @@ const railItems = computed(() => {
     {
       key: 'basic',
       state: 'done',
-      icon: 'i',
+      icon: 'lucide:info',
       title: t('settings.pipeline.basicInfo'),
       hint: t('settings.pipeline.basicInfoHint'),
       count: '',
@@ -141,7 +235,7 @@ const railItems = computed(() => {
     {
       key: 'build',
       state: buildCount > 0 ? 'active' : '',
-      icon: '⌁',
+      icon: 'lucide:wrench',
       title: t('settings.pipeline.buildPhase'),
       hint: t('settings.pipeline.buildPhaseHint'),
       count: `${buildCount} ${t('settings.pipeline.templateUnit')}`,
@@ -149,7 +243,7 @@ const railItems = computed(() => {
     {
       key: 'deploy',
       state: buildCount === 0 && deployCount > 0 ? 'active' : '',
-      icon: '↗',
+      icon: 'lucide:rocket',
       title: t('settings.pipeline.deployPhase'),
       hint: t('settings.pipeline.deployPhaseHint'),
       count: `${deployCount} ${t('settings.pipeline.templateUnit')}`,
@@ -157,7 +251,7 @@ const railItems = computed(() => {
     {
       key: 'finally',
       state: buildCount === 0 && deployCount === 0 && finallyCount > 0 ? 'active' : '',
-      icon: '□',
+      icon: 'lucide:trash-2',
       title: t('settings.pipeline.cleanupPhase'),
       hint: t('settings.pipeline.cleanupPhaseHint'),
       count: `${finallyCount} ${t('settings.pipeline.templateUnit')}`,
@@ -165,13 +259,29 @@ const railItems = computed(() => {
     {
       key: 'preview',
       state: 'preview-item',
-      icon: '◎',
+      icon: 'lucide:eye',
       title: t('settings.pipeline.previewAndSave'),
       hint: t('settings.pipeline.previewHint'),
       count: '',
     },
   ]
 })
+
+async function loadEditorPreview() {
+  const pipeline = activePipeline.value
+  if (!pipeline || !hasPreviewablePipeline()) return
+  editorPreviewError.value = ''
+  editorPreview.value = null
+  try {
+    editorPreview.value = await api.previewProjectPipeline(props.project.id, pipeline.id, {
+      env_name: defaultEnvName(),
+      service_names: pipeline.services ?? [],
+      variables: pipeline.variables,
+    })
+  } catch (e) {
+    editorPreviewError.value = e instanceof Error ? e.message : t('settings.pipeline.applyPreviewFailed')
+  }
+}
 
 const pipelineYaml = computed(() => {
   const pipeline = activePipeline.value
@@ -257,6 +367,7 @@ async function save() {
         </div>
         <div class="pipeline-editor-header-actions">
           <button type="button" class="settings-btn settings-btn-secondary" data-test="pipeline-editor-yaml" @click="yamlOpen = true">
+            <Icon icon="lucide:code-2" aria-hidden="true" />
             {{ t('settings.pipeline.viewYaml') }}
           </button>
           <button
@@ -273,7 +384,7 @@ async function save() {
             data-test="pipeline-editor-close"
             @click="emit('cancel')"
           >
-            ×
+            <Icon icon="lucide:x" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -309,7 +420,7 @@ async function save() {
                     :class="item.state"
                     :data-test="`pipeline-editor-rail-${item.key}`"
                   >
-                    <span class="rail-icon">{{ item.icon }}</span>
+                    <span class="rail-icon"><Icon :icon="item.icon" aria-hidden="true" /></span>
                     <span>
                       <strong>{{ item.title }}</strong>
                       <small>{{ item.hint }}</small>
@@ -336,7 +447,9 @@ async function save() {
               class="pipeline-editor-preview-node"
               data-test="pipeline-editor-preview-node"
             >
-              <span class="pipeline-editor-preview-icon" aria-hidden="true"></span>
+              <span class="pipeline-editor-preview-icon" aria-hidden="true">
+                <Icon :icon="node.icon" />
+              </span>
               <strong>{{ node.name }}</strong>
               <small>pending</small>
               <em>{{ node.target }}</em>
@@ -346,6 +459,7 @@ async function save() {
               {{ t('settings.pipeline.requiredComplete') }}
             </div>
           </div>
+          <div v-if="editorPreviewError" class="pipeline-editor-preview-error">{{ editorPreviewError }}</div>
         </div>
         <div class="pipeline-editor-footer-buttons">
           <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
@@ -436,15 +550,27 @@ async function save() {
   align-items: center;
   gap: 12px;
 }
+.pipeline-editor-header-actions .settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.pipeline-editor-header-actions .settings-btn svg {
+  width: 15px;
+  height: 15px;
+}
 .pipeline-editor-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-color: transparent;
-  font-size: 24px;
-  line-height: 1;
 }
 .pipeline-editor-content {
   min-height: 0;
   padding: 0;
   overflow: auto;
+  scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .pipeline-editor-shell {
   min-width: 0;
@@ -508,6 +634,10 @@ async function save() {
   font-size: 12px;
   font-style: normal;
   font-weight: 800;
+}
+.rail-icon svg {
+  width: 14px;
+  height: 14px;
 }
 .rail-item strong {
   display: block;
@@ -583,11 +713,19 @@ async function save() {
   position: absolute;
   top: 13px;
   left: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   border: 2px solid var(--accent);
   border-radius: 5px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.pipeline-editor-preview-icon svg {
+  width: 13px;
+  height: 13px;
 }
 .pipeline-editor-preview-node strong {
   overflow: hidden;
@@ -626,6 +764,11 @@ async function save() {
   height: 15px;
   border-radius: 50%;
   background: var(--status-success);
+}
+.pipeline-editor-preview-error {
+  margin-top: 6px;
+  color: var(--status-failed);
+  font-size: 11px;
 }
 .pipeline-editor-footer-buttons {
   display: flex;

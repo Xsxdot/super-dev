@@ -1,7 +1,9 @@
 // API 封装对 Go agent HTTP 接口的请求，统一处理 baseURL 和错误。
 
-// dev 模式对应开发版 agent（57018），build 后对应正式版（57017）
-const AGENT_HOST = import.meta.env.DEV ? '127.0.0.1:57018' : '127.0.0.1:57017'
+// dev 模式对应开发版 agent（57018），build 后对应正式版（57017）。
+// VITE_AGENT_HOST 只用于本地联调/截图 QA，避免临时 agent 占用默认端口。
+const DEFAULT_AGENT_HOST = import.meta.env.DEV ? '127.0.0.1:57018' : '127.0.0.1:57017'
+const AGENT_HOST = import.meta.env.VITE_AGENT_HOST || DEFAULT_AGENT_HOST
 const BASE = `http://${AGENT_HOST}`
 export const WS_BASE = `ws://${AGENT_HOST}`
 export { AGENT_HOST }

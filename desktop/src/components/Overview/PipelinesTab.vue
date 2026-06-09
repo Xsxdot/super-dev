@@ -364,7 +364,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         <div v-if="latestArtifact(overviewPipeline)" class="overview-section">
           <div class="overview-section-title">{{ t('overview.pipeline.latestArtifact') }}</div>
           <div class="artifact-card">
-            <span class="artifact-file-icon" aria-hidden="true"></span>
+            <Icon class="artifact-file-icon" icon="lucide:file-archive" aria-hidden="true" />
             <div class="artifact-file-copy">
               <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
               <div class="artifact-file-meta">
@@ -522,12 +522,12 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   background: rgba(139, 148, 158, 0.36);
 }
 .pipeline-table-inner {
-  min-width: 1050px;
+  min-width: 960px;
 }
 .pipeline-table-head {
   display: grid;
-  grid-template-columns: minmax(250px, 1.45fr) minmax(170px, 0.95fr) 112px minmax(130px, 0.8fr) 78px 112px 150px;
-  gap: 12px;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(130px, 0.8fr) 104px minmax(118px, 0.72fr) 66px 96px 128px;
+  gap: 10px;
   align-items: center;
   min-height: 48px;
   padding: 0 18px 0 86px;
@@ -748,11 +748,9 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   background: rgba(7, 12, 18, 0.52);
 }
 .artifact-file-icon {
-  width: 18px;
-  height: 22px;
-  border: 1px solid var(--text-tertiary);
-  border-radius: 3px;
-  background: rgba(139, 148, 158, 0.1);
+  width: 19px;
+  height: 19px;
+  color: var(--text-tertiary);
 }
 .artifact-file-copy {
   min-width: 0;

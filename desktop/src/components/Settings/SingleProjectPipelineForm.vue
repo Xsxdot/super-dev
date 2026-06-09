@@ -120,6 +120,7 @@ defineExpose({ saveTemplateConfig })
         <PipelineTemplateWizard
           ref="wizard"
           :model-value="draft.pipeline"
+          :pipeline-roles="draft.roles ?? pipeline.roles"
           :templates="templates"
           :hosts="hosts"
           :initial-mode="initialMode"
