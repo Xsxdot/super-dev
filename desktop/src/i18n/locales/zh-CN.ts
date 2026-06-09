@@ -1089,6 +1089,7 @@ export default {
       edit: '编辑',
       moreActions: '更多操作',
       rollback: '回滚',
+      promoteTo: '提升到 {env}',
       confirm: '确认',
       cancel: '取消',
       deployFailed: '部署失败',

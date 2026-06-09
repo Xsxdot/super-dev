@@ -34,6 +34,7 @@ const editorMode = ref<'template' | 'blank'>('blank')
 const editingPipelineId = ref<string | undefined>(undefined)
 const pending = ref<{ pipeline: ProjectPipeline; rollbackRun?: Run } | null>(null)
 const deployError = ref<string | null>(null)
+type PromoteRunPayload = { runId: string; artifactVersion: string; targetEnv: string }
 const hasPipelines = computed(() => (props.project.pipelines ?? []).length > 0)
 const consoleSummary = computed(() => {
   const pipelines = props.project.pipelines ?? []
@@ -162,6 +163,12 @@ function requestRollback(pipeline: ProjectPipeline, run: Run) {
   deployError.value = null
 }
 
+function promotableEnvsForPipeline(pipeline: ProjectPipeline) {
+  const pipelineEnvs = Object.keys(pipeline.environments ?? {})
+  if (pipelineEnvs.length > 0) return pipelineEnvs
+  return props.project.environments?.map(env => env.name) ?? []
+}
+
 function openEditor(mode: 'template' | 'blank', pipelineId?: string) {
   editorMode.value = mode
   editingPipelineId.value = pipelineId
@@ -179,6 +186,21 @@ async function confirmDeploy() {
     const key = keyForPipeline(pipeline)
     runsByPipeline[key] = [run, ...(runsByPipeline[key] ?? []).filter(item => item.id !== run.id)]
     pending.value = null
+    openRunConsole(pipeline, run, 'live')
+  } catch (e) {
+    deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
+  }
+}
+
+async function promoteRun(pipeline: ProjectPipeline, payload: PromoteRunPayload) {
+  deployError.value = null
+  try {
+    const run = await api.deployProjectPipeline(props.project.id, pipeline.id, {
+      env_name: payload.targetEnv,
+      artifact_version: payload.artifactVersion,
+    })
+    const key = keyForPipeline(pipeline)
+    runsByPipeline[key] = [run, ...(runsByPipeline[key] ?? []).filter(item => item.id !== run.id)]
     openRunConsole(pipeline, run, 'live')
   } catch (e) {
     deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
@@ -273,8 +295,10 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
                 :runs="runsForPipeline(pipeline)"
                 :loading="loadingForPipeline(pipeline)"
                 :artifact-kind="pipeline.artifact_kind || 'file'"
+                :promotable-envs="promotableEnvsForPipeline(pipeline)"
                 @detail="openDetail(pipeline, $event)"
                 @rollback="requestRollback(pipeline, $event)"
+                @promote="promoteRun(pipeline, $event)"
               />
             </div>
           </div>

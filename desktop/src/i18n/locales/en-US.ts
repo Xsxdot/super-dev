@@ -1089,6 +1089,7 @@ export default {
       edit: 'Edit',
       moreActions: 'More actions',
       rollback: 'Rollback',
+      promoteTo: 'Promote to {env}',
       confirm: 'Confirm',
       cancel: 'Cancel',
       deployFailed: 'Deploy failed',

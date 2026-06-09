@@ -223,6 +223,30 @@ describe('PipelinesTab', () => {
     }))
   })
 
+  it('promotes successful run to target environment through deploy path', async () => {
+    const p = project()
+    p.environments = [
+      { id: 'env-dev', name: 'dev', is_dev: true, order: 0 },
+      { id: 'env-prod', name: 'prod', is_dev: false, order: 1 },
+    ]
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
+      items: [run({ id: 'run-success', env_name: 'dev', artifact_version: 'v1', status: 'success' })],
+    })
+    vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-promote', env_name: 'prod', status: 'running' }))
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="promote-run-success-prod"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-dev', expect.objectContaining({
+      env_name: 'prod',
+      artifact_version: 'v1',
+    }))
+    const workspace = useWorkspaceStore()
+    expect(workspace.activeTab?.id).toBe('run:run-promote')
+  })
+
   it('shows failed step summary in expanded history', async () => {
     vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
       items: [run({
