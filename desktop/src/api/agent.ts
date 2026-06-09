@@ -223,6 +223,7 @@ export interface ProjectPipelineRole {
 }
 
 export type ArtifactKind = 'file' | 'image'
+export type SyncMode = 'transfer' | 'remote_cmd'
 
 export interface ProjectPipeline {
   id: string
@@ -232,6 +233,7 @@ export interface ProjectPipeline {
   variables?: Record<string, string>
   environments?: Record<string, PipelineEnvironment>
   roles?: Record<string, ProjectPipelineRole>
+  sync_mode?: SyncMode
   pipeline: Pipeline
 }
 
