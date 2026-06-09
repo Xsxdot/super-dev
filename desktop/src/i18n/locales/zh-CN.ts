@@ -547,6 +547,7 @@ export default {
       machineHelp: '留空时在本机执行；选择后会作为模板内部未指定角色步骤的运行机器。',
       noHostsHelp: '还没有可选主机，请先在主机管理中添加。',
       editorStructure: '配置结构',
+      baseInfo: '基础信息',
       basicInfo: '基础信息',
       basicInfoHint: '名称、服务、产物类型等',
       buildPhase: '构建阶段',

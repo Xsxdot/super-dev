@@ -79,9 +79,28 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
     expect(wrapper.find('.pipeline-wizard > template').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-phase-tabs"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
+  })
+
+  it('基础信息 station 通过 slot 与阶段编排切换', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: undefined, templates: [buildTemplate], initialMode: 'template' },
+      slots: { base: '<div data-test="base-fields">基础字段</div>' },
+    })
+
+    expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="pipeline-station-base"]').trigger('click')
+    expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="pipeline-phase-tab-build"]').trigger('click')
+    expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(true)
   })
 
   it('左栏一次只渲染当前阶段', async () => {

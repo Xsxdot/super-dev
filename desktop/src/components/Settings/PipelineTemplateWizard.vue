@@ -40,6 +40,7 @@ type TemplateBlock = {
 }
 
 type HostOption = { id: string; name: string }
+type WizardStation = 'base' | PipelinePhase
 
 const props = defineProps<{
   modelValue?: Pipeline
@@ -64,6 +65,7 @@ const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template
 const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
 const activePhase = ref<PipelinePhase>('build')
+const activeStation = ref<WizardStation>('build')
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
 
@@ -150,6 +152,7 @@ function addBlock(phase: PipelinePhase) {
   blocks.value.push(block)
   activeBlockId.value = block.id
   activePhase.value = phase
+  activeStation.value = phase
 }
 
 function removeBlock(block: TemplateBlock) {
@@ -189,6 +192,7 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
   blocks.value = []
   activeBlockId.value = null
   activePhase.value = 'build'
+  activeStation.value = 'build'
   nextBlockId.value = 0
   if (!pipeline) return
   for (const phase of phases) {
@@ -224,6 +228,7 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
       if (!activeBlockId.value) {
         activeBlockId.value = block.id
         activePhase.value = phase
+        activeStation.value = phase
       }
     }
   }
@@ -231,12 +236,14 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
 
 function enable() {
   enabled.value = true
+  activeStation.value = 'build'
 }
 
 function disable() {
   enabled.value = false
   blocks.value = []
   activePhase.value = 'build'
+  activeStation.value = 'build'
   emit('update:modelValue', undefined)
 }
 
@@ -343,12 +350,22 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 function selectBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
   activePhase.value = block.phase
+  activeStation.value = block.phase
 }
 
 function selectPhase(phase: PipelinePhase) {
   activePhase.value = phase
+  activeStation.value = phase
   const firstBlock = blocksForPhase(phase)[0]
   if (firstBlock) selectBlock(firstBlock)
+}
+
+function selectStation(station: WizardStation) {
+  if (station === 'base') {
+    activeStation.value = station
+    return
+  }
+  selectPhase(station)
 }
 
 function hydrateVars(rawVars: Record<string, unknown>, template?: PipelineTemplateSummary): Record<string, TemplateVarValue> {
@@ -435,19 +452,34 @@ defineExpose({ saveTemplate })
       </div>
 
       <div class="phase-tabs" data-test="pipeline-phase-tabs">
-          <button
-            v-for="phase in phases"
-            :key="phase"
-            type="button"
-            :class="{ active: activePhase === phase }"
-            :data-test="`pipeline-phase-tab-${phase}`"
-            @click="selectPhase(phase)"
-          >
-            {{ phaseDisplayLabel(phase) }}
-          </button>
-        </div>
+        <button
+          type="button"
+          class="base-tab"
+          :class="{ active: activeStation === 'base' }"
+          data-test="pipeline-station-base"
+          @click="selectStation('base')"
+        >
+          <span class="station-token">ⓘ</span>
+          {{ t('settings.pipeline.baseInfo') }}
+        </button>
+        <button
+          v-for="(phase, index) in phases"
+          :key="phase"
+          type="button"
+          :class="{ active: activeStation === phase }"
+          :data-test="`pipeline-phase-tab-${phase}`"
+          @click="selectStation(phase)"
+        >
+          <span class="station-token">{{ index + 1 }}</span>
+          {{ phaseDisplayLabel(phase) }}
+        </button>
+      </div>
 
-        <div class="wizard-layout">
+        <section v-if="activeStation === 'base'" class="wizard-base-panel" data-test="pipeline-wizard-base">
+          <slot name="base" />
+        </section>
+
+        <div v-else class="wizard-layout">
           <div class="wizard-main" data-test="pipeline-wizard-canvas">
             <div v-if="templates.length === 0" class="pipeline-empty">
               {{ t('settings.pipeline.emptyTemplates') }}
@@ -699,10 +731,10 @@ defineExpose({ saveTemplate })
   display: none;
 }
 .phase-tabs {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   height: 54px;
   border: 0;
   border-bottom: 1px solid #263240;
@@ -714,6 +746,10 @@ defineExpose({ saveTemplate })
   background: #0e151d;
 }
 .phase-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   height: 34px;
   border: 1px solid #263240;
   border-radius: 0;
@@ -736,6 +772,27 @@ defineExpose({ saveTemplate })
   background: linear-gradient(180deg, #2587ff, #176de9);
   border-color: transparent;
   color: #fff;
+}
+.station-token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(139, 148, 158, 0.14);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+.wizard-base-panel {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-top: 0;
+  background: #0e151d;
 }
 .wizard-layout {
   display: contents;

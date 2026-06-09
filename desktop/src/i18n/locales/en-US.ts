@@ -547,6 +547,7 @@ export default {
       machineHelp: 'Leave blank to run locally. Selected hosts are used for template steps without an explicit role.',
       noHostsHelp: 'No hosts available. Add one in Hosts first.',
       editorStructure: 'Structure',
+      baseInfo: 'Basics',
       basicInfo: 'Basics',
       basicInfoHint: 'Name, services, artifact kind',
       buildPhase: 'Build',

@@ -64,54 +64,6 @@ defineExpose({ saveTemplateConfig })
 
 <template>
   <section class="single-pipeline-form" :class="{ 'with-structure-rail': withStructureRail }">
-    <div class="single-pipeline-topbar" data-test="single-pipeline-form-topbar">
-      <div class="topbar-field name-field">
-        <label class="field-row">
-          <span>{{ t('settings.pipeline.name') }} / Pipeline name</span>
-          <input
-            class="settings-input"
-            data-test="single-pipeline-name"
-            :value="draft.name"
-            @input="patch({ name: ($event.target as HTMLInputElement).value })"
-          />
-        </label>
-      </div>
-
-      <div class="topbar-field">
-        <label class="field-row">
-          <span>{{ t('settings.pipeline.artifactKind') }} / Artifact kind</span>
-          <div class="artifact-segment" data-test="single-pipeline-artifact-kind">
-            <button
-              v-for="kind in (['file', 'image'] as ArtifactKind[])"
-              :key="kind"
-              type="button"
-              :class="{ active: (draft.artifact_kind || 'file') === kind }"
-              @click="patch({ artifact_kind: kind })"
-            >
-              {{ kind }}
-            </button>
-          </div>
-        </label>
-      </div>
-
-      <div class="topbar-field services-field">
-        <div class="field-row">
-          <span>{{ t('settings.pipeline.services') }} / Services</span>
-          <div class="service-list">
-            <label v-for="service in services" :key="service.id || service.name" class="service-item">
-              <input
-                type="checkbox"
-                :data-test="`single-pipeline-service-${service.name}`"
-                :checked="(draft.services ?? []).includes(service.name)"
-                @change="toggleService(service.name, ($event.target as HTMLInputElement).checked)"
-              />
-              {{ service.name }}
-            </label>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <div class="single-pipeline-lower">
       <div v-if="withStructureRail" class="single-pipeline-rail-slot">
         <slot name="rail" />
@@ -127,7 +79,57 @@ defineExpose({ saveTemplateConfig })
           :hide-preview-strip="hidePreviewStrip"
           :on-view-template="onViewTemplate"
           @update:model-value="setPipeline"
-        />
+        >
+          <template #base>
+            <div class="single-pipeline-topbar" data-test="single-pipeline-form-topbar">
+              <div class="topbar-field name-field">
+                <label class="field-row">
+                  <span>{{ t('settings.pipeline.name') }} / Pipeline name</span>
+                  <input
+                    class="settings-input"
+                    data-test="single-pipeline-name"
+                    :value="draft.name"
+                    @input="patch({ name: ($event.target as HTMLInputElement).value })"
+                  />
+                </label>
+              </div>
+
+              <div class="topbar-field">
+                <label class="field-row">
+                  <span>{{ t('settings.pipeline.artifactKind') }} / Artifact kind</span>
+                  <div class="artifact-segment" data-test="single-pipeline-artifact-kind">
+                    <button
+                      v-for="kind in (['file', 'image'] as ArtifactKind[])"
+                      :key="kind"
+                      type="button"
+                      :class="{ active: (draft.artifact_kind || 'file') === kind }"
+                      @click="patch({ artifact_kind: kind })"
+                    >
+                      {{ kind }}
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              <div class="topbar-field services-field">
+                <div class="field-row">
+                  <span>{{ t('settings.pipeline.services') }} / Services</span>
+                  <div class="service-list">
+                    <label v-for="service in services" :key="service.id || service.name" class="service-item">
+                      <input
+                        type="checkbox"
+                        :data-test="`single-pipeline-service-${service.name}`"
+                        :checked="(draft.services ?? []).includes(service.name)"
+                        @change="toggleService(service.name, ($event.target as HTMLInputElement).checked)"
+                      />
+                      {{ service.name }}
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </PipelineTemplateWizard>
       </div>
     </div>
   </section>
@@ -136,7 +138,7 @@ defineExpose({ saveTemplateConfig })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: 98px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -146,7 +148,7 @@ defineExpose({ saveTemplateConfig })
   grid-template-columns: 370px 206px minmax(0, 1fr);
   align-items: start;
   gap: 22px;
-  height: 98px;
+  min-height: 98px;
   border: 0;
   border-bottom: 1px solid #263240;
   border-radius: 0;
@@ -163,6 +165,7 @@ defineExpose({ saveTemplateConfig })
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-height: 0;
+  height: 100%;
 }
 .with-structure-rail .single-pipeline-lower {
   grid-template-columns: 290px minmax(0, 1fr);
