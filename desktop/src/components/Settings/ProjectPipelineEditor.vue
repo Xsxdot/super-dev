@@ -11,7 +11,7 @@ ProjectPipelineEditor：项目流水线独立编辑器。
   - 不执行流水线，不新增后端接口
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   api,
@@ -24,19 +24,27 @@ import {
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
 import PipelinePreview from './PipelinePreview.vue'
-import ProjectPipelinePanel from './ProjectPipelinePanel.vue'
+import SingleProjectPipelineForm from './SingleProjectPipelineForm.vue'
 import TemplateContentModal from './TemplateContentModal.vue'
 
 const props = defineProps<{
   project: Project
   pipelineTemplates?: PipelineTemplateSummary[]
   initialMode?: 'template' | 'blank'
+  pipelineId?: string
 }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
 const agentStore = useAgentStore()
 const { t } = useI18n()
 const draft = ref(projectToDraft(props.project))
+if (draft.value.pipelines.length === 0) {
+  draft.value.pipelines = [{ id: 'pipeline-1', name: 'Deploy', services: [], artifact_kind: 'file', pipeline: {} }]
+}
+const activePipelineId = ref(props.pipelineId ?? draft.value.pipelines[0]?.id ?? '')
+const activePipeline = computed(() =>
+  draft.value.pipelines.find(pipeline => pipeline.id === activePipelineId.value) ?? draft.value.pipelines[0],
+)
 const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
@@ -60,8 +68,14 @@ onMounted(async () => {
   }
 })
 
-function updatePipelines(pipelines: ProjectPipeline[]) {
-  draft.value.pipelines = pipelines
+function updateActivePipeline(next: ProjectPipeline) {
+  const exists = draft.value.pipelines.some(pipeline => pipeline.id === next.id)
+  if (!exists) {
+    draft.value.pipelines = [...draft.value.pipelines, next]
+    activePipelineId.value = next.id
+    return
+  }
+  draft.value.pipelines = draft.value.pipelines.map(pipeline => pipeline.id === next.id ? next : pipeline)
 }
 
 function pipelineValidationErrors(): string[] {
@@ -76,7 +90,7 @@ function defaultEnvName() {
 }
 
 function firstPipelineId() {
-  return draft.value.pipelines[0]?.id || 'pipeline-1'
+  return activePipeline.value?.id || 'pipeline-1'
 }
 
 async function viewTemplate(template: PipelineTemplateSummary, apply: () => void) {
@@ -105,8 +119,8 @@ async function applyViewedTemplate() {
   try {
     applyPreview.value = await api.previewProjectPipeline(props.project.id, firstPipelineId(), {
       env_name: defaultEnvName(),
-      service_names: draft.value.pipelines[0]?.services ?? [],
-      variables: draft.value.pipelines[0]?.variables,
+      service_names: activePipeline.value?.services ?? [],
+      variables: activePipeline.value?.variables,
     })
   } catch (e) {
     applyPreviewError.value = e instanceof Error ? e.message : t('settings.pipeline.applyPreviewFailed')
@@ -145,15 +159,27 @@ async function save() {
         </ul>
         <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
-        <ProjectPipelinePanel
-          :model-value="draft.pipelines"
-          :services="draft.services"
-          :hosts="hosts"
-          :templates="pipelineTemplates ?? []"
-          :initial-mode="initialMode"
-          :on-view-template="viewTemplate"
-          @update:model-value="updatePipelines"
-        />
+        <div class="pipeline-editor-shell">
+          <aside class="pipeline-editor-rail" data-test="pipeline-editor-structure">
+            <div class="rail-title">{{ t('settings.pipeline.editorStructure') }}</div>
+            <div class="rail-item active">{{ t('settings.pipeline.basicInfo') }}</div>
+            <div class="rail-item">{{ t('settings.pipeline.buildPhase') }}</div>
+            <div class="rail-item">{{ t('settings.pipeline.deployPhase') }}</div>
+            <div class="rail-item">{{ t('settings.pipeline.cleanupPhase') }}</div>
+            <div class="rail-item">{{ t('settings.pipeline.previewAndSave') }}</div>
+          </aside>
+
+          <SingleProjectPipelineForm
+            v-if="activePipeline"
+            :pipeline="activePipeline"
+            :services="draft.services"
+            :hosts="hosts"
+            :templates="pipelineTemplates ?? []"
+            :initial-mode="initialMode"
+            :on-view-template="viewTemplate"
+            @update:pipeline="updateActivePipeline"
+          />
+        </div>
       </div>
 
       <div class="settings-modal-footer pipeline-editor-actions">
@@ -189,12 +215,70 @@ async function save() {
 </template>
 
 <style scoped>
+.pipeline-editor-body {
+  width: min(1380px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+}
 .pipeline-editor-content {
   display: grid;
   gap: 12px;
 }
+.pipeline-editor-shell {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+.pipeline-editor-rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg-elevated);
+}
+.rail-title {
+  margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.rail-item {
+  border-radius: 6px;
+  padding: 8px 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.rail-item + .rail-item {
+  margin-top: 4px;
+}
+.rail-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+}
 .err-list {
   margin: 0;
   list-style: none;
+}
+
+@media (max-width: 1040px) {
+  .pipeline-editor-shell {
+    grid-template-columns: 1fr;
+  }
+  .pipeline-editor-rail {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rail-title {
+    width: 100%;
+    margin-bottom: 0;
+  }
+  .rail-item + .rail-item {
+    margin-top: 0;
+  }
 }
 </style>

@@ -82,7 +82,9 @@ describe('ProjectPipelineEditor', () => {
     await new Promise(r => setTimeout(r))
 
     expect(wrapper.text()).toContain('编辑流水线 · demo')
-    expect(wrapper.find('[data-test="add-project-pipeline"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="single-pipeline-name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-basics"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(true)
   })
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {
@@ -90,8 +92,7 @@ describe('ProjectPipelineEditor', () => {
     const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))
 
-    await wrapper.find('[data-test="add-project-pipeline"]').trigger('click')
-    await wrapper.find('[data-test="project-pipeline-name"]').setValue('Deploy Dev')
+    await wrapper.find('[data-test="single-pipeline-name"]').setValue('Deploy Dev')
     await wrapper.find('[data-test="pipeline-config-save"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
