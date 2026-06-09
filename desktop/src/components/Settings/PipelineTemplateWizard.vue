@@ -409,12 +409,6 @@ function selectPhase(phase: PipelinePhase) {
   if (firstBlock) selectBlock(firstBlock)
 }
 
-function blockVarSummary(block: TemplateBlock) {
-  return Object.values(block.vars)
-    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
-    .slice(0, 4)
-}
-
 function hydrateVars(rawVars: Record<string, unknown>, template?: PipelineTemplateSummary): Record<string, TemplateVarValue> {
   const vars: Record<string, TemplateVarValue> = {}
   for (const [key, value] of Object.entries(rawVars)) {
@@ -536,6 +530,7 @@ defineExpose({ saveTemplate })
                 <div class="block-row">
                   <span class="block-grip" aria-hidden="true">⋮⋮</span>
                   <span class="block-cube" aria-hidden="true"><Icon :icon="phaseIcon(block.phase)" /></span>
+                  <span class="block-order">#{{ blocksForPhase(activePhase).indexOf(block) + 1 }}</span>
                   <select
                     v-model="block.selectedKey"
                     class="settings-select field-input"
@@ -564,42 +559,6 @@ defineExpose({ saveTemplate })
 
                 <div v-if="selectedFor(block)?.description" class="template-description">
                   {{ selectedFor(block)?.description }}
-                </div>
-
-                <div v-if="selectedFor(block) && activeBlock?.id === block.id" class="block-inline-detail">
-                  <div class="block-inline-section">
-                    <div class="inline-label">
-                      {{ t('settings.pipeline.machine') }} / Runner machines
-                      <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span>
-                    </div>
-                    <div class="inline-target-list" :data-test="`block-${block.id}-inline-runner-targets`">
-                      <label v-for="host in compactRunnerHosts(block)" :key="host.id" class="target-item">
-                        <input
-                          type="checkbox"
-                          :checked="isRunnerHostChecked(block, host)"
-                          @change="toggleRunnerHost(block, host, ($event.target as HTMLInputElement).checked)"
-                          @click.stop
-                        />
-                        {{ host.name }}
-                      </label>
-                      <span v-if="hiddenRunnerHostCount(block) > 0" class="target-more">+{{ hiddenRunnerHostCount(block) }}</span>
-                      <span v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</span>
-                    </div>
-                  </div>
-
-                  <div class="block-inline-section">
-                    <div class="inline-label">
-                      {{ t('settings.pipeline.keyVars') }} / Key vars ({{ blockVarSummary(block).length }})
-                    </div>
-                    <div class="inline-key-vars" :data-test="`block-${block.id}-inline-key-vars`">
-                      <span v-for="value in blockVarSummary(block)" :key="value" class="summary-chip">{{ value }}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="block-summary">
-                  <span>{{ t('settings.pipeline.machine') }}: {{ block.runnerTargets.length || 0 }}</span>
-                  <span v-for="value in blockVarSummary(block)" :key="value" class="summary-chip">{{ value }}</span>
                 </div>
               </div>
             </section>
@@ -967,29 +926,6 @@ defineExpose({ saveTemplate })
   font-size: 11px;
   color: var(--text-tertiary);
 }
-.block-inline-detail {
-  display: grid;
-  gap: 12px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-secondary);
-}
-.block-inline-section {
-  display: grid;
-  gap: 8px;
-}
-.inline-label {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 700;
-}
-.inline-target-list,
-.inline-key-vars {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  align-items: center;
-}
 .pipeline-empty {
   margin: 0 0 10px;
   border: 1px dashed var(--border-secondary);
@@ -1034,6 +970,12 @@ defineExpose({ saveTemplate })
   color: var(--text-tertiary);
   font-size: 16px;
   line-height: 0.8;
+}
+.block-order {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 800;
 }
 .block-cube,
 .preview-node-icon {
@@ -1200,24 +1142,6 @@ defineExpose({ saveTemplate })
   gap: 7px;
   color: var(--text-secondary);
   font-size: 12px;
-}
-.block-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.template-block.active .block-summary {
-  display: none;
-}
-.summary-chip {
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  padding: 5px 7px;
-  background: #101821;
-  color: #f5f8fd;
 }
 .wizard-preview-strip {
   grid-column: 1 / -1;

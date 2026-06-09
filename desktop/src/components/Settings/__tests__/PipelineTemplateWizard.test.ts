@@ -385,7 +385,7 @@ describe('PipelineTemplateWizard', () => {
     expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
   })
 
-  it('选中模板卡片展示运行机器和关键变量摘要', () => {
+  it('左栏模板卡片不展示运行机器和关键变量摘要', () => {
     const pipeline: Pipeline = {
       roles: { build_0_runner: ['h1'] },
       build: [{
@@ -409,8 +409,10 @@ describe('PipelineTemplateWizard', () => {
       },
     })
 
-    expect(wrapper.find('[data-test="block-0-inline-runner-targets"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="block-0-inline-key-vars"]').text()).toContain('api')
+    expect(wrapper.find('[data-test="block-0-inline-runner-targets"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-inline-key-vars"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-runner-targets"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-input-app_name"]').exists()).toBe(true)
   })
 
   it('展示预览结果和预览错误', () => {
