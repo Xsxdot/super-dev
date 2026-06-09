@@ -147,6 +147,8 @@ type App struct {
 	operationApprovals operation.ApprovalStore
 	// operationAudit 持久化 MCP 写操作安全链路审计事件。
 	operationAudit operation.AuditStore
+	// operationGrace 持久化项目级审批豁免窗口。
+	operationGrace operation.GraceStore
 	// securityStore 持久化 agent 安全自举与长期 token 状态。
 	securityStore *security.Store
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
@@ -265,6 +267,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	debugSessions := debugsession.NewFileStore(filepath.Join(cfg.DataDir, "debug-sessions.json"))
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
+	operationGrace := operation.NewGraceFileStore(filepath.Join(cfg.DataDir, "operation-grace.json"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	targetSource := agentTargetSource(remoteStore, agentStore)
 	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, targetSource)
@@ -354,6 +357,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		debugSessions:               debugSessions,
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
+		operationGrace:              operationGrace,
 		securityStore:               securityStore,
 		nodeTransport:               nodeTransport,
 		nodeTransportProviders:      appNodeTransportProviders,
