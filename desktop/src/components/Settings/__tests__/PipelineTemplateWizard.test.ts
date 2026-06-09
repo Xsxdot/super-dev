@@ -453,7 +453,7 @@ describe('PipelineTemplateWizard', () => {
     })
   })
 
-  it('按输入分组切换右侧模板输入', async () => {
+  it('右侧模板输入不再分组，按声明顺序单列展示', async () => {
     const template: PipelineTemplateSummary = {
       source: 'builtin',
       id: 'combined',
@@ -480,15 +480,18 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="add-template-build"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://combined@1.0.0')
 
-    expect(wrapper.find('[data-test="input-group-path"]').text()).toContain('1')
-    await wrapper.find('[data-test="input-group-file"]').trigger('click')
-    expect(wrapper.find('[data-test="input-group-file"]').classes()).toContain('active')
-    expect(wrapper.find('[data-test="block-0-add-file"]').exists()).toBe(true)
+    expect(wrapper.find('.detail-tabs').exists()).toBe(false)
+    expect(wrapper.find('[data-test="input-group-path"]').exists()).toBe(false)
+    expect(wrapper.find('.detail-count').text()).toContain('共 4 项')
     expect(wrapper.find('[data-test="block-0-input-frontend_dir"]').exists()).toBe(true)
-
-    await wrapper.find('[data-test="input-group-optional"]').trigger('click')
-    expect(wrapper.find('[data-test="input-group-optional"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="block-0-input-build_command"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-add-file"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="block-0-input-skip_cache"]').exists()).toBe(true)
+
+    const detailText = wrapper.find('[data-test="pipeline-wizard-detail"]').text()
+    expect(detailText.indexOf('前端目录')).toBeLessThan(detailText.indexOf('构建命令'))
+    expect(detailText.indexOf('构建命令')).toBeLessThan(detailText.indexOf('文件'))
+    expect(detailText.indexOf('文件')).toBeLessThan(detailText.indexOf('跳过缓存'))
   })
 
   it('已有 include pipeline 时回填 file_list 输入', () => {

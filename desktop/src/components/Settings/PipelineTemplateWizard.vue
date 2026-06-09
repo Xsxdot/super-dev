@@ -40,8 +40,6 @@ type TemplateBlock = {
 }
 
 type HostOption = { id: string; name: string }
-type InputGroupKey = 'machine' | 'path' | 'command' | 'file' | 'optional'
-type InputGroupSelection = InputGroupKey | 'all'
 
 const props = defineProps<{
   modelValue?: Pipeline
@@ -65,7 +63,6 @@ const phaseCategory: Record<PipelinePhase, PipelineTemplateCategory> = {
 const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
-const activeInputGroup = ref<InputGroupSelection>('all')
 const activePhase = ref<PipelinePhase>('build')
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
@@ -76,26 +73,13 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
   return Object.entries(template.inputs ?? {}).every(([name, input]) => inputSatisfied(block, name, input))
 }))
 const activeBlock = computed(() => blocks.value.find(block => block.id === activeBlockId.value) ?? blocks.value[0] ?? null)
-const inputGroups = computed(() => {
+const activeBlockInputs = computed<[string, TemplateInput][]>(() => {
   const block = activeBlock.value
-  return [
-    {
-      key: 'machine' as const,
-      label: t('settings.pipeline.machine'),
-      count: block ? 1 + groupedInputEntries('machine').length : 0,
-    },
-    { key: 'path' as const, label: t('settings.pipeline.inputGroupPath'), count: groupedInputEntries('path').length },
-    { key: 'command' as const, label: t('settings.pipeline.inputGroupCommand'), count: groupedInputEntries('command').length },
-    { key: 'file' as const, label: t('settings.pipeline.inputGroupFile'), count: groupedInputEntries('file').length },
-    { key: 'optional' as const, label: t('settings.pipeline.inputGroupOptional'), count: groupedInputEntries('optional').length },
-  ]
+  const template = block ? selectedFor(block) : null
+  return Object.entries(template?.inputs ?? {})
 })
-const detailInputGroups = computed(() =>
-  inputGroups.value
-    .filter(group => group.key !== 'machine')
-    .map(group => ({ ...group, entries: groupedInputEntries(group.key) }))
-    .filter(group => group.entries.length > 0),
-)
+const activeBlockTargetInputs = computed(() => activeBlockInputs.value.filter(([, input]) => input.type === 'target_role'))
+const activeBlockFieldInputs = computed(() => activeBlockInputs.value.filter(([, input]) => input.type !== 'target_role'))
 const previewBlocks = computed(() =>
   blocks.value
     .map(block => ({
@@ -139,44 +123,6 @@ function templatesForBlock(block: TemplateBlock) {
   return options
 }
 
-function inputEntries(block: TemplateBlock): [string, TemplateInput][] {
-  return Object.entries(selectedFor(block)?.inputs ?? {})
-}
-
-function inputGroupFor(name: string, input: TemplateInput): InputGroupKey {
-  const key = name.toLowerCase()
-  if (input.type === 'target_role') return 'machine'
-  if (input.type === 'file_list') return 'file'
-  if (input.type === 'path' || key.includes('dir') || key.includes('path')) return 'path'
-  if (key.includes('command') || key.includes('cmd')) return 'command'
-  return 'optional'
-}
-
-function groupedInputEntries(group: InputGroupKey): [string, TemplateInput][] {
-  const block = activeBlock.value
-  if (!block) return []
-  return inputEntries(block)
-    .filter(([name, input]) => inputGroupFor(name, input) === group)
-    .sort(([left], [right]) => inputSortRank(group, left) - inputSortRank(group, right))
-}
-
-function inputSortRank(group: InputGroupKey, name: string) {
-  const key = name.toLowerCase()
-  const ranks: Record<InputGroupKey, string[]> = {
-    machine: ['runner', 'target', 'role'],
-    path: ['frontend_dir', 'frontend_directory', 'backend_dir', 'backend_directory', 'binary_output', 'artifact_path', 'artifact'],
-    command: ['frontend_build_cmd', 'frontend_build_command', 'build_command', 'command'],
-    file: ['package_files', 'files'],
-    optional: ['go_build_env', 'go_package'],
-  }
-  const index = ranks[group].findIndex(item => key === item || key.includes(item))
-  return index === -1 ? 100 : index
-}
-
-function selectInputGroup(group: InputGroupKey) {
-  activeInputGroup.value = group
-}
-
 function blocksForPhase(phase: PipelinePhase) {
   return blocks.value.filter(block => block.phase === phase)
 }
@@ -204,19 +150,16 @@ function addBlock(phase: PipelinePhase) {
   blocks.value.push(block)
   activeBlockId.value = block.id
   activePhase.value = phase
-  activeInputGroup.value = 'all'
 }
 
 function removeBlock(block: TemplateBlock) {
   blocks.value = blocks.value.filter(item => item !== block)
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
-    activeInputGroup.value = 'all'
   }
 }
 
 function resetBlockInputs(block: TemplateBlock) {
-  activeInputGroup.value = 'all'
   const template = selectedFor(block)
   block.vars = {}
   block.targets = {}
@@ -400,7 +343,6 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 function selectBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
   activePhase.value = block.phase
-  activeInputGroup.value = 'all'
 }
 
 function selectPhase(phase: PipelinePhase) {
@@ -568,19 +510,7 @@ defineExpose({ saveTemplate })
             <template v-if="activeBlock && selectedFor(activeBlock)">
               <div class="detail-title">{{ t('settings.pipeline.dynamicInputs') }}</div>
               <div class="detail-subtitle">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
-              <div class="detail-tabs">
-                <button
-                  v-for="group in inputGroups"
-                  :key="group.key"
-                  type="button"
-                  :class="{ active: activeInputGroup === group.key || (activeInputGroup === 'all' && group.key === 'machine') }"
-                  :data-test="`input-group-${group.key}`"
-                  @click="selectInputGroup(group.key)"
-                >
-                  <span>{{ group.label }}</span>
-                  <small>{{ group.count }}</small>
-                </button>
-              </div>
+              <div class="detail-count">{{ t('settings.pipeline.inputCount', { n: activeBlockInputs.length }) }}</div>
 
               <section class="form-block template-runner-row">
                 <h4>{{ t('settings.pipeline.machine') }} / Runner machines <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span></h4>
@@ -598,8 +528,11 @@ defineExpose({ saveTemplate })
                   <span v-if="hiddenRunnerHostCount(activeBlock) > 0" class="target-more">+{{ hiddenRunnerHostCount(activeBlock) }}</span>
                 </div>
 
-                <div v-for="[name, input] in groupedInputEntries('machine')" :key="name" class="template-input-row">
-                  <label class="field-label">{{ input.label || name }}<span v-if="input.required" class="required">*</span></label>
+                <div v-for="[name, input] in activeBlockTargetInputs" :key="name" class="template-input-row">
+                  <label class="field-label">
+                    {{ input.label || name }}<span v-if="input.required" class="required">*</span>
+                    <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
+                  </label>
                   <div class="target-list target-grid" :data-test="`block-${activeBlock.id}-${name}-targets`">
                     <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
                       <input
@@ -614,9 +547,8 @@ defineExpose({ saveTemplate })
                 </div>
               </section>
 
-              <section v-for="group in detailInputGroups" :key="group.key" class="form-block">
-                <h4>{{ group.label }}</h4>
-                <div v-for="[name, input] in group.entries" :key="name" class="template-input-row">
+              <section v-if="activeBlockFieldInputs.length > 0" class="form-block template-input-list">
+                <div v-for="[name, input] in activeBlockFieldInputs" :key="name" class="template-input-row">
                   <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
                     {{ input.label || name }}<span v-if="input.required" class="required">*</span>
                     <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
@@ -844,46 +776,10 @@ defineExpose({ saveTemplate })
   font-size: 12px;
   line-height: 1.4;
 }
-.detail-tabs {
-  display: grid;
-  grid-template-columns: 1.1fr 0.9fr 0.9fr 0.9fr 0.8fr;
-  height: 29px;
-  margin: 10px 0 12px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  overflow: hidden;
-  background: #111820;
-}
-.detail-tabs button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 0 4px;
-  border: 0;
-  border-left: 1px solid var(--border-secondary);
-  background: #111820;
+.detail-count {
+  margin-top: 6px;
   color: var(--text-tertiary);
-  cursor: pointer;
   font-size: 11px;
-  text-align: center;
-}
-.detail-tabs button:first-child {
-  border-left: 0;
-}
-.detail-tabs .active {
-  background: #113d78;
-  color: #58a0ff;
-  font-weight: 800;
-}
-.detail-tabs small {
-  border-radius: 999px;
-  padding: 0 5px;
-  background: rgba(139, 148, 158, 0.16);
-  color: inherit;
-  font-size: 10px;
-  line-height: 16px;
 }
 .detail-empty {
   min-height: 180px;
@@ -1031,6 +927,10 @@ defineExpose({ saveTemplate })
 .template-runner-row {
   display: block;
   margin-top: 14px;
+}
+.template-input-list {
+  display: grid;
+  gap: 14px;
 }
 .required {
   margin-left: 2px;
@@ -1247,10 +1147,6 @@ defineExpose({ saveTemplate })
     max-height: none;
     border-top: 1px solid var(--border-secondary);
     border-left: 0;
-  }
-  .detail-tabs {
-    grid-template-columns: repeat(5, minmax(74px, 1fr));
-    overflow-x: auto;
   }
   .preview-flow {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

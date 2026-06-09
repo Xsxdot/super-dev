@@ -571,6 +571,7 @@ export default {
       unsavedPreviewHint: '预览来自当前未保存配置',
       stageUnit: '个阶段',
       stepCount: '个步骤',
+      inputCount: '填写本模板的输入参数 · 共 {n} 项',
       phaseSuffix: '阶段',
       phases: {
         build: '构建阶段',

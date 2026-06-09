@@ -571,6 +571,7 @@ export default {
       unsavedPreviewHint: 'Preview uses current unsaved config',
       stageUnit: 'phases',
       stepCount: 'steps',
+      inputCount: 'Fill in template inputs · {n} total',
       phaseSuffix: 'Phase',
       phases: {
         build: 'Build Phase',
