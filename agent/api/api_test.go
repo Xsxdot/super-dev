@@ -165,6 +165,13 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 		LogCleanupIntervalSeconds int   `json:"log_cleanup_interval_seconds"`
 		SampleSeeded              bool  `json:"sample_seeded"`
 		OnboardingCompleted       bool  `json:"onboarding_completed"`
+		Approval                  struct {
+			ConfigUpsert   bool `json:"config_upsert"`
+			PipelineUpsert bool `json:"pipeline_upsert"`
+			PipelineRun    bool `json:"pipeline_run"`
+			TemplateImport bool `json:"template_import"`
+			GraceMinutes   int  `json:"grace_minutes"`
+		} `json:"approval"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&defaults))
 	assert.Equal(t, 7, defaults.LogRetentionDays)
@@ -172,11 +179,14 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.Equal(t, 3600, defaults.LogCleanupIntervalSeconds)
 	assert.False(t, defaults.SampleSeeded)
 	assert.False(t, defaults.OnboardingCompleted)
+	assert.True(t, defaults.Approval.ConfigUpsert)
+	assert.True(t, defaults.Approval.PipelineRun)
+	assert.Equal(t, 15, defaults.Approval.GraceMinutes)
 
 	req, err := http.NewRequest(
 		http.MethodPut,
 		srv.URL+"/api/settings",
-		strings.NewReader(`{"log_retention_days": 14, "log_max_bytes": 33554432, "log_cleanup_interval_seconds": 120, "onboarding_completed": true}`),
+		strings.NewReader(`{"log_retention_days": 14, "log_max_bytes": 33554432, "log_cleanup_interval_seconds": 120, "onboarding_completed": true, "approval":{"config_upsert":false,"pipeline_upsert":true,"pipeline_run":false,"template_import":true,"grace_minutes":30}}`),
 	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -192,6 +202,9 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.Contains(t, string(raw), `"log_max_bytes": 33554432`)
 	assert.Contains(t, string(raw), `"log_cleanup_interval_seconds": 120`)
 	assert.Contains(t, string(raw), `"onboarding_completed": true`)
+	assert.Contains(t, string(raw), `"config_upsert": false`)
+	assert.Contains(t, string(raw), `"pipeline_run": false`)
+	assert.Contains(t, string(raw), `"grace_minutes": 30`)
 }
 
 // TestCORSAllowsDesktopRequesterHeaders 验证桌面端自定义请求头能通过浏览器预检。

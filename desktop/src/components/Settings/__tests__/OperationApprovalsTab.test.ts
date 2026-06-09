@@ -12,7 +12,9 @@ import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OperationApprovalsTab from '../OperationApprovalsTab.vue'
+import { api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useSettingsStore } from '@/stores/settings'
 import { installTestI18n } from '@/test-utils/i18n'
 
 describe('OperationApprovalsTab', () => {
@@ -82,5 +84,47 @@ describe('OperationApprovalsTab', () => {
     expect(wrapper.find('.settings-badge').exists()).toBe(true)
     expect(wrapper.find('[data-test="approval-approve-opa_1"]').classes()).toContain('settings-btn-primary')
     expect(wrapper.find('[data-test="approval-reject-opa_1"]').classes()).toContain('settings-btn-danger')
+  })
+
+  it('submits a complete approval policy from settings controls', async () => {
+    const approvalStore = useOperationApprovalStore()
+    vi.spyOn(approvalStore, 'loadPending').mockResolvedValue(undefined)
+    const settingsStore = useSettingsStore()
+    settingsStore.agentSettings = {
+      log_retention_days: 7,
+      approval: {
+        config_upsert: true,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        grace_minutes: 15,
+      },
+    }
+    vi.spyOn(settingsStore, 'loadAgentSettings').mockResolvedValue(undefined)
+    const putSettings = vi.spyOn(api, 'putSettings').mockResolvedValue({
+      log_retention_days: 7,
+      approval: {
+        config_upsert: false,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        grace_minutes: 30,
+      },
+    } as any)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await wrapper.find('[data-test="approval-switch-config-upsert"]').setValue(false)
+    await wrapper.find('[data-test="approval-grace-minutes"]').setValue(30)
+    await wrapper.find('[data-test="approval-settings-save"]').trigger('click')
+
+    expect(putSettings).toHaveBeenCalledWith({
+      approval: {
+        config_upsert: false,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        grace_minutes: 30,
+      },
+    })
   })
 })

@@ -478,7 +478,7 @@ export interface AgentSettings {
   approval?: ApprovalPolicy
 }
 
-export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed'>>
+export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed' | 'approval'>>
 
 export interface ApprovalPolicy {
   config_upsert: boolean
