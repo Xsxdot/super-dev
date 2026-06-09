@@ -90,12 +90,12 @@ const inputGroups = computed(() => {
     { key: 'optional' as const, label: t('settings.pipeline.inputGroupOptional'), count: groupedInputEntries('optional').length },
   ]
 })
-const activeInputEntries = computed(() => {
-  const block = activeBlock.value
-  if (!block) return []
-  if (activeInputGroup.value === 'all') return inputEntries(block)
-  return groupedInputEntries(activeInputGroup.value)
-})
+const detailInputGroups = computed(() =>
+  inputGroups.value
+    .filter(group => group.key !== 'machine')
+    .map(group => ({ ...group, entries: groupedInputEntries(group.key) }))
+    .filter(group => group.entries.length > 0),
+)
 const previewBlocks = computed(() =>
   blocks.value
     .map(block => ({
@@ -155,7 +155,22 @@ function inputGroupFor(name: string, input: TemplateInput): InputGroupKey {
 function groupedInputEntries(group: InputGroupKey): [string, TemplateInput][] {
   const block = activeBlock.value
   if (!block) return []
-  return inputEntries(block).filter(([name, input]) => inputGroupFor(name, input) === group)
+  return inputEntries(block)
+    .filter(([name, input]) => inputGroupFor(name, input) === group)
+    .sort(([left], [right]) => inputSortRank(group, left) - inputSortRank(group, right))
+}
+
+function inputSortRank(group: InputGroupKey, name: string) {
+  const key = name.toLowerCase()
+  const ranks: Record<InputGroupKey, string[]> = {
+    machine: ['runner', 'target', 'role'],
+    path: ['frontend_dir', 'frontend_directory', 'backend_dir', 'backend_directory', 'binary_output', 'artifact_path', 'artifact'],
+    command: ['frontend_build_cmd', 'frontend_build_command', 'build_command', 'command'],
+    file: ['package_files', 'files'],
+    optional: ['go_build_env', 'go_package'],
+  }
+  const index = ranks[group].findIndex(item => key === item || key.includes(item))
+  return index === -1 ? 100 : index
 }
 
 function selectInputGroup(group: InputGroupKey) {
@@ -168,6 +183,10 @@ function blocksForPhase(phase: PipelinePhase) {
 
 function phaseLabel(phase: PipelinePhase) {
   return t(`settings.pipeline.phases.${phase}`)
+}
+
+function phaseDisplayLabel(phase: PipelinePhase) {
+  return `${phaseLabel(phase).replace(/\s*Phase$/, '').replace(/阶段$/, '')} ${phase}`
 }
 
 function roleHostIDs(pipeline: Pipeline | undefined, role: string) {
@@ -293,6 +312,22 @@ function isTargetHostChecked(block: TemplateBlock, name: string, host: HostOptio
 
 function isRunnerHostChecked(block: TemplateBlock, host: HostOption) {
   return includesHost(block.runnerTargets, host)
+}
+
+function compactRunnerHosts(block: TemplateBlock) {
+  const allHosts = props.hosts ?? []
+  if (allHosts.length <= 3) return allHosts
+  const selected = allHosts.filter(host => isRunnerHostChecked(block, host))
+  const byID = new Map<string, HostOption>()
+  for (const host of [...selected, ...allHosts]) {
+    if (!byID.has(host.id)) byID.set(host.id, host)
+    if (byID.size >= 3) break
+  }
+  return [...byID.values()]
+}
+
+function hiddenRunnerHostCount(block: TemplateBlock) {
+  return Math.max(0, (props.hosts?.length ?? 0) - compactRunnerHosts(block).length)
 }
 
 function updateHostSelection(values: string[], host: HostOption, checked: boolean) {
@@ -472,7 +507,7 @@ defineExpose({ saveTemplate })
             :data-test="`pipeline-phase-tab-${phase}`"
             @click="selectPhase(phase)"
           >
-            {{ phaseLabel(phase) }}
+            {{ phaseDisplayLabel(phase) }}
           </button>
         </div>
 
@@ -483,7 +518,7 @@ defineExpose({ saveTemplate })
             </div>
             <section v-for="phase in phases" :key="phase" class="phase-section">
               <header class="phase-head">
-                <span>{{ phaseLabel(phase) }} <small>{{ phase }}</small></span>
+                <span>{{ phaseDisplayLabel(phase) }} <small>{{ t('settings.pipeline.phaseSuffix') }}</small></span>
                 <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
                   {{ t('settings.pipeline.addTemplate') }}
                 </button>
@@ -538,7 +573,7 @@ defineExpose({ saveTemplate })
                       <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span>
                     </div>
                     <div class="inline-target-list" :data-test="`block-${block.id}-inline-runner-targets`">
-                      <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
+                      <label v-for="host in compactRunnerHosts(block)" :key="host.id" class="target-item">
                         <input
                           type="checkbox"
                           :checked="isRunnerHostChecked(block, host)"
@@ -547,6 +582,7 @@ defineExpose({ saveTemplate })
                         />
                         {{ host.name }}
                       </label>
+                      <span v-if="hiddenRunnerHostCount(block) > 0" class="target-more">+{{ hiddenRunnerHostCount(block) }}</span>
                       <span v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</span>
                     </div>
                   </div>
@@ -587,12 +623,11 @@ defineExpose({ saveTemplate })
                 </button>
               </div>
 
-              <div v-if="activeInputGroup === 'all' || activeInputGroup === 'machine'" class="template-runner-row">
-                <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
-                <div class="field-help">{{ t('settings.pipeline.machineHelp') }}</div>
+              <section class="form-block template-runner-row">
+                <h4>{{ t('settings.pipeline.machine') }} / Runner machines <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span></h4>
                 <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
                 <div v-else class="target-list target-grid" :data-test="`block-${activeBlock.id}-runner-targets`">
-                  <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
+                  <label v-for="host in compactRunnerHosts(activeBlock)" :key="host.id" class="target-item">
                     <input
                       type="checkbox"
                       :data-test="`block-${activeBlock.id}-runner-${host.id}`"
@@ -601,92 +636,100 @@ defineExpose({ saveTemplate })
                     />
                     {{ host.name }}
                   </label>
+                  <span v-if="hiddenRunnerHostCount(activeBlock) > 0" class="target-more">+{{ hiddenRunnerHostCount(activeBlock) }}</span>
                 </div>
-              </div>
 
-              <div v-for="[name, input] in activeInputEntries" :key="name" class="template-input-row">
-                <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
-                  {{ input.label || name }}<span v-if="input.required" class="required">*</span>
-                  <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
-                </label>
+                <div v-for="[name, input] in groupedInputEntries('machine')" :key="name" class="template-input-row">
+                  <label class="field-label">{{ input.label || name }}<span v-if="input.required" class="required">*</span></label>
+                  <div class="target-list target-grid" :data-test="`block-${activeBlock.id}-${name}-targets`">
+                    <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
+                      <input
+                        type="checkbox"
+                        :data-test="`block-${activeBlock.id}-target-${host.id}`"
+                        :checked="isTargetHostChecked(activeBlock, name, host)"
+                        @change="toggleTargetHost(activeBlock, name, host, ($event.target as HTMLInputElement).checked)"
+                      />
+                      {{ host.name }}
+                    </label>
+                  </div>
+                </div>
+              </section>
 
-                <div v-if="input.type === 'target_role'" class="target-list target-grid" :data-test="`block-${activeBlock.id}-${name}-targets`">
-                  <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
-                    <input
-                      type="checkbox"
-                      :data-test="`block-${activeBlock.id}-target-${host.id}`"
-                      :checked="isTargetHostChecked(activeBlock, name, host)"
-                      @change="toggleTargetHost(activeBlock, name, host, ($event.target as HTMLInputElement).checked)"
-                    />
-                    {{ host.name }}
+              <section v-for="group in detailInputGroups" :key="group.key" class="form-block">
+                <h4>{{ group.label }}</h4>
+                <div v-for="[name, input] in group.entries" :key="name" class="template-input-row">
+                  <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
+                    {{ input.label || name }}<span v-if="input.required" class="required">*</span>
+                    <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
                   </label>
-                  <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
-                </div>
 
-                <select
-                  v-else-if="input.type === 'select'"
-                  :id="`template-input-${activeBlock.id}-${name}`"
-                  :value="stringVar(activeBlock, name)"
-                  class="settings-select field-input"
-                  :data-test="`block-${activeBlock.id}-input-${name}`"
-                  @change="setStringVar(activeBlock, name, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option v-for="option in input.options ?? []" :key="option" :value="option">{{ option }}</option>
-                </select>
+                  <select
+                    v-if="input.type === 'select'"
+                    :id="`template-input-${activeBlock.id}-${name}`"
+                    :value="stringVar(activeBlock, name)"
+                    class="settings-select field-input"
+                    :data-test="`block-${activeBlock.id}-input-${name}`"
+                    @change="setStringVar(activeBlock, name, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="option in input.options ?? []" :key="option" :value="option">{{ option }}</option>
+                  </select>
 
-                <div v-else-if="input.type === 'file_list'" class="file-list">
-                  <div v-for="(file, index) in fileItems(activeBlock, name)" :key="index" class="file-row">
-                    <input
-                      class="settings-input field-input file-input"
-                      type="text"
-                      placeholder="from"
-                      :data-test="`block-${activeBlock.id}-file-from-${index}`"
-                      :value="file.from"
-                      @input="updateFileItem(activeBlock, name, index, 'from', ($event.target as HTMLInputElement).value)"
-                    />
-                    <input
-                      class="settings-input field-input file-input"
-                      type="text"
-                      placeholder="to"
-                      :data-test="`block-${activeBlock.id}-file-to-${index}`"
-                      :value="file.to"
-                      @input="updateFileItem(activeBlock, name, index, 'to', ($event.target as HTMLInputElement).value)"
-                    />
-                    <button
-                      type="button"
-                      class="settings-btn settings-btn-danger danger-btn file-remove"
-                      :data-test="`block-${activeBlock.id}-remove-file-${index}`"
-                      @click="removeFileItem(activeBlock, name, index)"
-                    >
-                      {{ t('common.remove') }}
+                  <div v-else-if="input.type === 'file_list'" class="file-list">
+                    <div class="file-table-head"><span>from</span><span>to</span><span></span></div>
+                    <div v-for="(file, index) in fileItems(activeBlock, name)" :key="index" class="file-row">
+                      <input
+                        class="settings-input field-input file-input"
+                        type="text"
+                        placeholder="from"
+                        :data-test="`block-${activeBlock.id}-file-from-${index}`"
+                        :value="file.from"
+                        @input="updateFileItem(activeBlock, name, index, 'from', ($event.target as HTMLInputElement).value)"
+                      />
+                      <input
+                        class="settings-input field-input file-input"
+                        type="text"
+                        placeholder="to"
+                        :data-test="`block-${activeBlock.id}-file-to-${index}`"
+                        :value="file.to"
+                        @input="updateFileItem(activeBlock, name, index, 'to', ($event.target as HTMLInputElement).value)"
+                      />
+                      <button
+                        type="button"
+                        class="settings-btn settings-btn-danger danger-btn file-remove"
+                        :data-test="`block-${activeBlock.id}-remove-file-${index}`"
+                        @click="removeFileItem(activeBlock, name, index)"
+                      >
+                        <Icon icon="lucide:trash-2" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <button type="button" class="settings-btn settings-btn-text text-btn add-file-btn" :data-test="`block-${activeBlock.id}-add-file`" @click="addFileItem(activeBlock, name)">
+                      <Icon icon="lucide:plus" aria-hidden="true" />
+                      {{ t('settings.pipeline.addFile') }}
                     </button>
                   </div>
-                  <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`block-${activeBlock.id}-add-file`" @click="addFileItem(activeBlock, name)">
-                    {{ t('settings.pipeline.addFile') }}
-                  </button>
-                </div>
 
-                <label v-else-if="isBooleanInput(input)" class="boolean-field">
+                  <label v-else-if="isBooleanInput(input)" class="boolean-field">
+                    <input
+                      :id="`template-input-${activeBlock.id}-${name}`"
+                      type="checkbox"
+                      :checked="boolVar(activeBlock, name)"
+                      :data-test="`block-${activeBlock.id}-input-${name}`"
+                      @change="setBoolVar(activeBlock, name, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ boolVar(activeBlock, name) ? t('settings.pipeline.booleanTrue') : t('settings.pipeline.booleanFalse') }}</span>
+                  </label>
+
                   <input
+                    v-else
                     :id="`template-input-${activeBlock.id}-${name}`"
-                    type="checkbox"
-                    :checked="boolVar(activeBlock, name)"
+                    :value="stringVar(activeBlock, name)"
+                    class="settings-input field-input"
+                    :type="input.type === 'number' ? 'number' : 'text'"
                     :data-test="`block-${activeBlock.id}-input-${name}`"
-                    @change="setBoolVar(activeBlock, name, ($event.target as HTMLInputElement).checked)"
+                    @input="setStringVar(activeBlock, name, ($event.target as HTMLInputElement).value)"
                   />
-                  <span>{{ boolVar(activeBlock, name) ? t('settings.pipeline.booleanTrue') : t('settings.pipeline.booleanFalse') }}</span>
-                </label>
-
-                <input
-                  v-else
-                  :id="`template-input-${activeBlock.id}-${name}`"
-                  :value="stringVar(activeBlock, name)"
-                  class="settings-input field-input"
-                  :type="input.type === 'number' ? 'number' : 'text'"
-                  :data-test="`block-${activeBlock.id}-input-${name}`"
-                  @input="setStringVar(activeBlock, name, ($event.target as HTMLInputElement).value)"
-                />
-              </div>
+                </div>
+              </section>
             </template>
             <div v-else class="detail-empty">
               {{ t('settings.pipeline.selectTemplate') }}
@@ -695,6 +738,7 @@ defineExpose({ saveTemplate })
         </div>
 
         <button
+          v-if="!hidePreviewStrip"
           type="button"
           class="settings-btn settings-btn-primary pipeline-save"
           data-test="pipeline-save-template"
@@ -731,11 +775,12 @@ defineExpose({ saveTemplate })
 <style scoped>
 .pipeline-wizard {
   display: grid;
-  grid-template-columns: minmax(520px, 1fr) minmax(360px, 508px);
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) 504px;
+  grid-template-rows: 54px minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
-  background: rgba(9, 14, 22, 0.9);
+  height: 100%;
+  background: #0e151d;
 }
 .pipeline-enable {
   font-size: 11px;
@@ -766,27 +811,38 @@ defineExpose({ saveTemplate })
   grid-row: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  margin: 12px;
-  max-width: 580px;
+  height: 54px;
+  border: 0;
+  border-bottom: 1px solid #263240;
+  border-radius: 0;
+  margin: 0;
+  padding: 10px;
+  max-width: none;
   overflow: hidden;
-  background: rgba(8, 13, 20, 0.78);
+  background: #0e151d;
 }
 .phase-tabs button {
   height: 34px;
-  border: 0;
-  background: transparent;
+  border: 1px solid #263240;
+  border-radius: 0;
+  background: #0e151d;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
+.phase-tabs button:first-child {
+  border-radius: 5px 0 0 5px;
+}
+.phase-tabs button:last-child {
+  border-radius: 0 5px 5px 0;
+}
 .phase-tabs button + button {
-  border-left: 1px solid var(--border-secondary);
+  border-left: 0;
 }
 .phase-tabs button.active {
-  background: var(--accent);
+  background: linear-gradient(180deg, #2587ff, #176de9);
+  border-color: transparent;
   color: #fff;
 }
 .wizard-layout {
@@ -800,9 +856,10 @@ defineExpose({ saveTemplate })
   grid-row: 2;
   min-width: 0;
   overflow: auto;
-  padding: 0 12px 12px;
-  border-top: 1px solid var(--border-secondary);
-  background: rgba(9, 14, 22, 0.42);
+  padding: 0;
+  border-top: 0;
+  border-right: 1px solid #263240;
+  background: #0e151d;
   scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .wizard-detail-panel {
@@ -811,14 +868,15 @@ defineExpose({ saveTemplate })
   min-width: 0;
   max-height: 100%;
   overflow: auto;
-  border-left: 1px solid var(--border-secondary);
-  padding: 14px;
-  background: rgba(21, 30, 42, 0.76);
+  border-left: 0;
+  padding: 12px 16px 54px;
+  background: #121922;
+  font-size: 13px;
   scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .detail-title {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
 }
 .detail-subtitle {
@@ -829,12 +887,13 @@ defineExpose({ saveTemplate })
 }
 .detail-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 12px 0 14px;
+  grid-template-columns: 1.1fr 0.9fr 0.9fr 0.9fr 0.8fr;
+  height: 29px;
+  margin: 10px 0 12px;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   overflow: hidden;
-  background: rgba(8, 13, 20, 0.4);
+  background: #111820;
 }
 .detail-tabs button {
   display: inline-flex;
@@ -842,10 +901,10 @@ defineExpose({ saveTemplate })
   justify-content: center;
   gap: 5px;
   min-width: 0;
-  padding: 7px 4px;
+  padding: 0 4px;
   border: 0;
   border-left: 1px solid var(--border-secondary);
-  background: transparent;
+  background: #111820;
   color: var(--text-tertiary);
   cursor: pointer;
   font-size: 11px;
@@ -855,8 +914,8 @@ defineExpose({ saveTemplate })
   border-left: 0;
 }
 .detail-tabs .active {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
+  background: #113d78;
+  color: #58a0ff;
   font-weight: 800;
 }
 .detail-tabs small {
@@ -873,22 +932,28 @@ defineExpose({ saveTemplate })
   font-size: 12px;
 }
 .phase-section {
-  border-top: 1px solid var(--border-secondary);
-  padding: 14px 0 12px;
+  border-top: 0;
+  border-bottom: 1px solid #263240;
+  padding: 16px 10px 10px;
   background: transparent;
 }
 .phase-section:first-of-type {
   border-top: 0;
 }
 .phase-head {
-  min-height: 32px;
+  display: block;
+  min-height: 0;
   color: var(--text-primary);
   font-weight: 800;
 }
 .phase-head small {
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
+}
+.phase-head .text-btn {
+  float: right;
+  color: #1f7bff;
 }
 .pipeline-disable,
 .danger-btn,
@@ -954,13 +1019,13 @@ defineExpose({ saveTemplate })
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   padding: 12px;
-  margin-top: 8px;
-  background: rgba(13, 18, 26, 0.88);
+  margin-top: 12px;
+  background: #0d131b;
   cursor: pointer;
 }
 .template-block.active {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 52%, transparent);
+  border-color: #1f7bff;
+  box-shadow: inset 0 0 0 1px rgba(31, 123, 255, 0.22);
 }
 .block-row {
   gap: 8px;
@@ -995,26 +1060,34 @@ defineExpose({ saveTemplate })
   border-color: transparent;
   background: transparent;
   color: var(--text-primary);
+  font-size: 14px;
   font-weight: 800;
 }
 .field-label {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   margin: 0;
   font-weight: 600;
 }
+.form-block {
+  margin-bottom: 10px;
+}
+.form-block h4 {
+  margin: 0 0 6px;
+  color: #f3f6fb;
+  font-size: 14px;
+  font-weight: 800;
+}
 .template-input-row {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
+  gap: 5px;
   align-items: start;
-  margin-top: 13px;
+  margin-top: 6px;
 }
 .template-runner-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+  display: block;
   margin-top: 14px;
 }
 .required {
@@ -1035,9 +1108,10 @@ defineExpose({ saveTemplate })
 }
 .target-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 10px 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 12px;
   align-items: center;
+  margin-top: 8px;
 }
 .target-item {
   display: inline-flex;
@@ -1047,13 +1121,43 @@ defineExpose({ saveTemplate })
   font-size: 12px;
   color: var(--text-primary);
 }
+.target-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-width: 30px;
+  height: 20px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 800;
+}
 .file-list {
   display: flex;
   flex-direction: column;
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: 5px;
+  background: #121922;
+}
+.file-table-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px;
+  min-height: 26px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.file-table-head span {
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--border-secondary);
+  padding: 0 10px;
+}
+.file-table-head span:last-child {
+  border-right: 0;
 }
 .file-row {
   display: grid;
@@ -1067,15 +1171,28 @@ defineExpose({ saveTemplate })
 }
 .file-input {
   min-width: 0;
+  height: 26px;
   border: 0;
   border-right: 1px solid var(--border-secondary);
   border-radius: 0;
 }
 .file-remove {
-  min-height: 30px;
+  min-height: 26px;
   border: 0;
   border-radius: 0;
   white-space: nowrap;
+}
+.file-remove svg {
+  width: 14px;
+  height: 14px;
+}
+.add-file-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #1f7bff;
 }
 .boolean-field {
   display: inline-flex;
@@ -1098,8 +1215,9 @@ defineExpose({ saveTemplate })
 .summary-chip {
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
-  padding: 4px 7px;
-  color: var(--text-secondary);
+  padding: 5px 7px;
+  background: #101821;
+  color: #f5f8fd;
 }
 .wizard-preview-strip {
   grid-column: 1 / -1;

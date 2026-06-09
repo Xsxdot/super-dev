@@ -50,24 +50,27 @@ const { t } = useAppI18n()
 
 <style scoped>
 .overview-tabs {
-  display: inline-flex;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: min(386px, 100%);
+  height: 56px;
+  gap: 0;
   padding: 4px;
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
-  background: rgba(16, 22, 31, 0.72);
+  background: #0e141d;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 .overview-tabs button {
-  min-width: 122px;
-  height: 44px;
+  min-width: 0;
+  height: 46px;
   padding: 0 18px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
 }
 .overview-tabs button.active {

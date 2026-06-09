@@ -94,30 +94,30 @@ function statusIcon() {
 <style scoped>
 .pipeline-row {
   display: grid;
-  grid-template-columns: 38px minmax(220px, 1.4fr) minmax(130px, 0.8fr) 104px minmax(118px, 0.72fr) 66px 96px 128px;
+  grid-template-columns: 44px 248px 224px 112px 148px 72px 102px 126px;
   align-items: center;
-  gap: 10px;
-  min-height: 62px;
-  padding: 8px 12px;
+  gap: 0;
+  min-height: 64px;
+  padding: 0 16px 0 14px;
   border: 0;
   border-radius: 0;
-  background: rgba(18, 24, 34, 0.72);
+  background: linear-gradient(180deg, #151e29 0%, #111923 100%);
 }
 .icon-btn,
 .primary-action,
 .text-action,
 .more-action {
-  height: 30px;
+  height: 31px;
   border: 1px solid var(--border-secondary);
-  background: var(--bg-primary);
+  border-radius: 6px;
+  background: #121923;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
 }
 .icon-btn {
   width: 36px;
   padding: 0;
-  border-radius: 7px;
   line-height: 1;
 }
 .icon-btn svg,
@@ -126,18 +126,24 @@ function statusIcon() {
   height: 16px;
 }
 .primary-action {
-  background: var(--accent);
-  border-color: var(--accent);
+  width: 54px;
+  min-width: 54px;
+  padding: 0;
+  background: linear-gradient(180deg, #2385ff 0%, #1669e3 100%);
+  border-color: transparent;
   color: #fff;
   font-weight: 700;
+  white-space: nowrap;
 }
 .text-action {
+  width: 34px;
   background: transparent;
   border-color: transparent;
   font-weight: 700;
+  white-space: nowrap;
 }
 .more-action {
-  width: 26px;
+  width: 20px;
   border-color: transparent;
   background: transparent;
   color: var(--text-tertiary);
@@ -181,7 +187,7 @@ function statusIcon() {
 }
 .pipeline-name {
   overflow: hidden;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -189,15 +195,19 @@ function statusIcon() {
 .pipeline-services {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 8px;
   min-width: 0;
 }
 .service-tag {
   border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  padding: 3px 7px;
+  border-radius: 4px;
+  max-width: 150px;
+  padding: 5px 10px;
+  overflow: hidden;
+  background: #151e29;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 14px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .service-tag.muted {
@@ -210,38 +220,40 @@ function statusIcon() {
   justify-self: start;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
-  padding: 4px 8px;
+  min-width: 62px;
+  height: 30px;
+  padding: 0 8px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
 }
 .status-icon {
   width: 14px;
   height: 14px;
 }
-.status-success {
-  border-color: color-mix(in srgb, var(--status-success) 45%, transparent);
-  background: color-mix(in srgb, var(--status-success) 12%, transparent);
-  color: var(--status-success);
+.pipeline-status.status-success {
+  border-color: rgba(71, 215, 100, 0.22);
+  background: rgba(33, 143, 61, 0.16);
+  color: #47d764;
 }
-.status-running,
-.status-pending {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+.pipeline-status.status-running,
+.pipeline-status.status-pending {
+  border-color: rgba(255, 189, 23, 0.28);
+  background: rgba(210, 153, 19, 0.2);
+  color: #ffbd17;
 }
-.status-failed,
-.status-canceled {
-  border-color: color-mix(in srgb, var(--status-failed) 45%, transparent);
-  background: color-mix(in srgb, var(--status-failed) 12%, transparent);
-  color: var(--status-failed);
+.pipeline-status.status-failed,
+.pipeline-status.status-canceled {
+  border-color: rgba(255, 75, 85, 0.22);
+  background: rgba(223, 54, 64, 0.16);
+  color: #ff4b55;
 }
 .pipeline-version,
 .pipeline-duration,
 .pipeline-time {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -249,7 +261,7 @@ function statusIcon() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
 }
 
 @media (max-width: 980px) {

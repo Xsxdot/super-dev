@@ -452,10 +452,12 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="input-group-path"]').text()).toContain('1')
     await wrapper.find('[data-test="input-group-file"]').trigger('click')
+    expect(wrapper.find('[data-test="input-group-file"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="block-0-add-file"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="block-0-input-frontend_dir"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-input-frontend_dir"]').exists()).toBe(true)
 
     await wrapper.find('[data-test="input-group-optional"]').trigger('click')
+    expect(wrapper.find('[data-test="input-group-optional"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="block-0-input-skip_cache"]').exists()).toBe(true)
   })
 

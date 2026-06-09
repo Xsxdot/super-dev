@@ -111,6 +111,10 @@ function phaseLabel(phase: PipelinePhase) {
   return t(`settings.pipeline.phases.${phase}`)
 }
 
+function phaseDisplayLabel(phase: PipelinePhase) {
+  return `${phaseLabel(phase).replace(/\s*Phase$/, '').replace(/阶段$/, '')} ${phase}`
+}
+
 function previewTarget(step: PipelineStep) {
   const role = step.roles?.[0]
   if (!role) return t('common.local')
@@ -149,6 +153,7 @@ function phaseRunnerTarget(phase: PipelinePhase) {
     const conventionTarget = activePipeline.value?.roles?.[conventionRole]?.hosts?.[0]
     if (conventionTarget) return hostDisplayName(conventionTarget)
   }
+  if (phase === 'build') return hosts.value[0]?.name
   return undefined
 }
 
@@ -178,14 +183,26 @@ function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
   const deployTarget = deploySteps
     .map(step => compiledPreviewTarget(step))
     .find(target => target !== t('common.local'))
+  const healthStep = deploySteps.find(step => /health|check/i.test(step.step_name))
   const deployNodes = deploySteps.length > 0
-    ? [{
+    ? [
+        {
         id: 'deploy-summary',
         phase: 'deploy' as PipelinePhase,
         name: 'Deploy',
         target: deployTarget || compiledPreviewTarget(deploySteps[0]),
         icon: phaseIcon('deploy'),
-      }]
+        },
+        ...(healthStep
+          ? [{
+              id: 'deploy-health-check',
+              phase: 'finally' as PipelinePhase,
+              name: 'Health Check',
+              target: (compiledPreviewTarget(healthStep) === t('common.local') ? deployTarget : compiledPreviewTarget(healthStep)) || deployTarget || compiledPreviewTarget(deploySteps[0]),
+              icon: phaseIcon('finally'),
+            }]
+          : []),
+      ]
     : []
   const remaining = Math.max(0, 5 - buildNodes.length - deployNodes.length)
   const finallyNodes = steps
@@ -236,7 +253,7 @@ const railItems = computed(() => {
       key: 'build',
       state: buildCount > 0 ? 'active' : '',
       icon: 'lucide:wrench',
-      title: t('settings.pipeline.buildPhase'),
+      title: phaseDisplayLabel('build'),
       hint: t('settings.pipeline.buildPhaseHint'),
       count: `${buildCount} ${t('settings.pipeline.templateUnit')}`,
     },
@@ -244,7 +261,7 @@ const railItems = computed(() => {
       key: 'deploy',
       state: buildCount === 0 && deployCount > 0 ? 'active' : '',
       icon: 'lucide:rocket',
-      title: t('settings.pipeline.deployPhase'),
+      title: phaseDisplayLabel('deploy'),
       hint: t('settings.pipeline.deployPhaseHint'),
       count: `${deployCount} ${t('settings.pipeline.templateUnit')}`,
     },
@@ -252,7 +269,7 @@ const railItems = computed(() => {
       key: 'finally',
       state: buildCount === 0 && deployCount === 0 && finallyCount > 0 ? 'active' : '',
       icon: 'lucide:trash-2',
-      title: t('settings.pipeline.cleanupPhase'),
+      title: phaseDisplayLabel('finally'),
       hint: t('settings.pipeline.cleanupPhaseHint'),
       count: `${finallyCount} ${t('settings.pipeline.templateUnit')}`,
     },
@@ -461,6 +478,11 @@ async function save() {
           </div>
           <div v-if="editorPreviewError" class="pipeline-editor-preview-error">{{ editorPreviewError }}</div>
         </div>
+        <div class="pipeline-editor-footer-status">
+          <Icon icon="lucide:circle-check" aria-hidden="true" />
+          {{ t('settings.pipeline.requiredFieldsComplete') }} · 2 {{ t('settings.pipeline.stageUnit') }} · {{ t('settings.pipeline.savedPreviewHint') }}
+          <Icon icon="lucide:circle-help" aria-hidden="true" />
+        </div>
         <div class="pipeline-editor-footer-buttons">
           <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
           <button
@@ -510,18 +532,30 @@ async function save() {
 </template>
 
 <style scoped>
-.pipeline-editor-body {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(1480px, calc(100vw - 20px));
+:global(.settings-modal.pipeline-editor-body) {
+  width: min(1487px, calc(100vw - 20px));
+  max-width: none;
   height: calc(100vh - 20px);
   max-height: calc(100vh - 20px);
-  background: rgba(13, 18, 26, 0.98);
+  border-radius: 12px;
+}
+
+:global(.settings-modal-backdrop:has(.pipeline-editor-body)) {
+  padding: 10px;
+  background: rgba(2, 5, 8, 0.72);
+}
+
+.pipeline-editor-body {
+  display: grid;
+  grid-template-rows: 62px minmax(0, 1fr) 202px;
+  background: linear-gradient(180deg, #121922 0%, #111820 100%);
   overflow: hidden;
 }
 .pipeline-editor-header {
+  grid-column: 1;
   min-height: 62px;
-  padding: 14px 16px;
+  padding: 0 28px 0 16px;
+  border-bottom: 1px solid #263240;
 }
 .pipeline-editor-heading {
   display: flex;
@@ -531,24 +565,29 @@ async function save() {
 }
 .pipeline-editor-heading .settings-modal-title {
   overflow: hidden;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pipeline-editor-project-badge {
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
-  border-radius: 5px;
-  padding: 4px 8px;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: #9cc2ff;
-  font-size: 12px;
+  min-width: 31px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #0b3c85;
+  color: #7bb2ff;
+  font-size: 14px;
   font-weight: 800;
 }
 .pipeline-editor-header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
 }
 .pipeline-editor-header-actions .settings-btn {
   display: inline-flex;
@@ -567,9 +606,11 @@ async function save() {
   border-color: transparent;
 }
 .pipeline-editor-content {
+  grid-column: 1;
+  grid-row: 2 / 4;
   min-height: 0;
   padding: 0;
-  overflow: auto;
+  overflow: hidden;
   scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .pipeline-editor-shell {
@@ -584,35 +625,35 @@ async function save() {
 }
 .pipeline-editor-rail {
   height: 100%;
-  border-right: 1px solid var(--border-secondary);
-  padding: 12px;
-  background: rgba(18, 27, 38, 0.78);
+  border-right: 1px solid #263240;
+  padding: 12px 10px;
+  background: #111820;
 }
 .rail-title {
-  margin-bottom: 12px;
+  margin: 0 0 12px 4px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
 }
 .rail-item {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 62px;
+  gap: 8px;
+  min-height: 64px;
   border: 1px solid var(--border-secondary);
-  border-radius: 7px;
-  padding: 10px;
+  border-radius: 6px;
+  padding: 0 12px;
   color: var(--text-secondary);
-  font-size: 12px;
-  background: rgba(13, 18, 26, 0.58);
+  font-size: 14px;
+  background: #121923;
 }
 .rail-item + .rail-item {
   margin-top: 8px;
 }
 .rail-item.active {
-  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
-  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: #1f7bff;
+  background: linear-gradient(135deg, rgba(31, 123, 255, 0.78), rgba(15, 94, 216, 0.72));
   color: var(--text-primary);
 }
 .rail-item.done .rail-icon {
@@ -626,8 +667,8 @@ async function save() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   border: 1px solid var(--border-secondary);
   border-radius: 50%;
   color: var(--text-tertiary);
@@ -642,13 +683,13 @@ async function save() {
 .rail-item strong {
   display: block;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
 }
 .rail-item small {
   display: block;
-  margin-top: 3px;
+  margin-top: 5px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
 }
 .rail-item em {
   border-radius: 5px;
@@ -660,16 +701,30 @@ async function save() {
   font-weight: 800;
 }
 .pipeline-editor-actions {
-  align-items: center;
-  justify-content: space-between;
-  min-height: 62px;
-  gap: 18px;
-  padding: 12px 30px 12px 24px;
-  background: rgba(21, 30, 42, 0.96);
+  position: relative;
+  z-index: 2;
+  grid-column: 1;
+  grid-row: 3;
+  display: grid;
+  grid-template-columns: calc(100% - 504px) 504px;
+  grid-template-rows: 1fr 52px;
+  align-items: stretch;
+  justify-content: stretch;
+  min-height: 202px;
+  gap: 0;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+  pointer-events: none;
 }
 .pipeline-editor-preview-strip {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
-  flex: 1;
+  padding: 14px 16px 0;
+  border-top: 1px solid #263240;
+  background: #141c25;
+  pointer-events: auto;
 }
 .pipeline-editor-preview-head {
   display: flex;
@@ -685,39 +740,43 @@ async function save() {
   font-weight: 600;
 }
 .pipeline-editor-preview-flow {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(118px, 1fr));
-  gap: 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
   min-width: 0;
 }
 .pipeline-editor-preview-node {
   position: relative;
   display: grid;
-  gap: 3px;
+  grid-template-columns: 28px 1fr;
+  grid-template-rows: 24px 20px 22px;
+  column-gap: 8px;
+  gap: 0;
   min-width: 0;
-  min-height: 68px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  padding: 9px 10px 9px 38px;
-  background: rgba(13, 18, 26, 0.72);
+  width: 166px;
+  height: 76px;
+  border: 1px solid #2d3949;
+  border-radius: 5px;
+  padding: 10px;
+  background: #151e29;
 }
 .pipeline-editor-preview-node + .pipeline-editor-preview-node::before {
   position: absolute;
   top: 50%;
-  left: -17px;
+  left: -18px;
   color: var(--text-tertiary);
   content: '→';
   transform: translateY(-50%);
 }
 .pipeline-editor-preview-icon {
-  position: absolute;
-  top: 13px;
-  left: 11px;
+  position: static;
+  grid-row: 1 / 4;
+  align-self: start;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border: 2px solid var(--accent);
   border-radius: 5px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -730,7 +789,7 @@ async function save() {
 .pipeline-editor-preview-node strong {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -771,10 +830,34 @@ async function save() {
   font-size: 11px;
 }
 .pipeline-editor-footer-buttons {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 14px;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 0 30px 14px 0;
+  border-top: 1px solid rgba(38, 50, 64, 0.55);
+  background: #141c25;
+  pointer-events: auto;
+}
+.pipeline-editor-footer-status {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 24px;
+  border-top: 1px solid rgba(38, 50, 64, 0.55);
+  background: #141c25;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+  pointer-events: auto;
+}
+.pipeline-editor-footer-status svg:first-child {
+  color: #47d764;
 }
 .err-list {
   margin: 0;

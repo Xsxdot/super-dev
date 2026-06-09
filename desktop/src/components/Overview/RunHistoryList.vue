@@ -88,7 +88,11 @@ function summary(run: Run) {
         :key="run.id"
         :class="`status-${run.status}`"
         data-test="run-history-node"
-      ></span>
+      >
+        <Icon v-if="run.status === 'success'" icon="lucide:check" aria-hidden="true" />
+        <Icon v-else-if="run.status === 'failed'" icon="lucide:x" aria-hidden="true" />
+        <Icon v-else-if="run.status === 'running' || run.status === 'pending'" icon="lucide:refresh-cw" aria-hidden="true" />
+      </span>
     </div>
     <div class="history-table">
       <div class="history-head">
@@ -126,6 +130,10 @@ function summary(run: Run) {
               <Icon icon="lucide:terminal-square" aria-hidden="true" />
               {{ run.status === 'running' ? t('overview.pipeline.openLiveConsole') : t('overview.pipeline.openConsole') }}
             </button>
+            <button type="button" data-test="run-log" @click="emit('detail', run)">
+              <Icon icon="lucide:file-text" aria-hidden="true" />
+              {{ t('overview.pipeline.logs') }}
+            </button>
             <button
               type="button"
               data-test="run-rollback"
@@ -155,14 +163,15 @@ function summary(run: Run) {
 .run-history {
   --history-header-height: 42px;
   --history-row-height: 61px;
-  --history-node-size: 17px;
+  --history-node-size: 18px;
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  margin: 0 12px 16px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 7px;
-  background: rgba(8, 13, 20, 0.72);
-  overflow: hidden;
+  grid-template-columns: 66px minmax(0, 1fr);
+  margin: 0;
+  padding: 14px 20px 12px 22px;
+  border: 0;
+  border-radius: 0;
+  background: #0b1118;
+  overflow: visible;
 }
 .run-history-timeline {
   position: relative;
@@ -170,6 +179,7 @@ function summary(run: Run) {
   grid-template-rows: repeat(var(--history-row-count), var(--history-row-height));
   align-content: start;
   justify-items: center;
+  width: 36px;
   padding: var(--history-header-height) 0 16px;
 }
 .run-history-timeline::before {
@@ -178,69 +188,87 @@ function summary(run: Run) {
   bottom: calc(16px + var(--history-node-size) / 2);
   left: 50%;
   width: 2px;
-  background: var(--text-tertiary);
+  background: #778292;
   content: '';
-  opacity: 0.72;
   transform: translateX(-50%);
 }
 .run-history-timeline span {
   position: relative;
   z-index: 1;
+  display: grid;
+  place-items: center;
   align-self: center;
   width: var(--history-node-size);
   height: var(--history-node-size);
-  border: 2px solid var(--text-tertiary);
+  border: 0;
   border-radius: 50%;
-  background: var(--bg-primary);
+  background: #737d8c;
+  color: #071018;
 }
 .run-history-timeline .status-success {
-  border-color: var(--status-success);
-  background: var(--status-success);
+  background: #47d764;
+  color: #082310;
 }
 .run-history-timeline .status-running,
 .run-history-timeline .status-pending {
-  border-color: var(--status-starting);
-  background: var(--bg-primary);
+  background: transparent;
+  color: #ffbd17;
 }
 .run-history-timeline .status-failed,
 .run-history-timeline .status-canceled {
-  border-color: var(--status-failed);
-  background: var(--status-failed);
+  background: #ff4b55;
+  color: #200508;
+}
+.run-history-timeline svg {
+  width: 14px;
+  height: 14px;
 }
 .history-table {
   min-width: 0;
-  padding: 16px 8px 16px 0;
+  padding: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  overflow: hidden;
 }
 .history-head {
   display: grid;
-  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
+  grid-template-columns: 94px 140px 64px 150px 72px 76px minmax(150px, 1fr) 201px;
   align-items: center;
-  gap: 10px;
-  min-height: var(--history-header-height);
-  padding: 0 12px;
+  gap: 0;
+  height: var(--history-header-height);
+  padding: 0;
+  background: #0f151e;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
+}
+.history-head span {
+  padding: 0 11px;
 }
 .history-loading,
 .run-row {
   display: grid;
-  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
+  grid-template-columns: 94px 140px 64px 150px 72px 76px minmax(150px, 1fr) 201px;
   align-items: center;
-  gap: 10px;
-  min-height: var(--history-row-height);
-  padding: 7px 12px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
+  gap: 0;
+  min-height: 61px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--border-secondary);
+  border-radius: 0;
   color: var(--text-secondary);
-  font-size: 12px;
-  background: rgba(18, 24, 34, 0.64);
+  font-size: 14px;
+  background: #0b1118;
+}
+.run-row > span,
+.history-loading {
+  padding: 0 11px;
 }
 .run-item {
   margin-top: 0;
 }
 .run-item + .run-item {
-  margin-top: -1px;
+  margin-top: 0;
 }
 .run-version {
   overflow: hidden;
@@ -251,7 +279,14 @@ function summary(run: Run) {
 .run-status {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  width: fit-content;
+  min-width: 62px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 8px;
   font-weight: 700;
 }
 .status-icon {
@@ -259,15 +294,21 @@ function summary(run: Run) {
   height: 14px;
 }
 .status-success {
-  color: var(--status-success);
+  border-color: rgba(71, 215, 100, 0.22);
+  background: rgba(33, 143, 61, 0.16);
+  color: #47d764;
 }
 .status-running,
 .status-pending {
-  color: var(--status-running);
+  border-color: rgba(255, 189, 23, 0.28);
+  background: rgba(210, 153, 19, 0.2);
+  color: #ffbd17;
 }
 .status-failed,
 .status-canceled {
-  color: var(--status-failed);
+  border-color: rgba(255, 75, 85, 0.22);
+  background: rgba(223, 54, 64, 0.16);
+  color: #ff4b55;
 }
 .run-summary {
   overflow: hidden;
@@ -285,24 +326,25 @@ function summary(run: Run) {
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
+  padding: 0 11px;
   white-space: nowrap;
 }
 .run-actions button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 32px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
   background: rgba(22, 27, 34, 0.82);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
+  white-space: nowrap;
 }
 .run-actions button svg {
-  width: 12px;
-  height: 12px;
+  display: none;
 }
 .run-actions button:disabled {
   cursor: not-allowed;
@@ -310,12 +352,12 @@ function summary(run: Run) {
 }
 .history-view-all {
   display: block;
-  margin: 14px auto 0;
+  margin: 14px auto 10px;
   border: 0;
   background: transparent;
   color: var(--accent);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 .history-view-all:hover {

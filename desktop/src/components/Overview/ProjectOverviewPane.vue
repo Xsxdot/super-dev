@@ -30,7 +30,7 @@ defineProps<{
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
-const activeTab = ref<OverviewTab>('runtime')
+const activeTab = ref<OverviewTab>('pipelines')
 
 function openInstanceLogs(deploymentId: string) {
   const info = agentStore.serviceForDeployment(deploymentId)
@@ -66,16 +66,18 @@ function openInstanceLogs(deploymentId: string) {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg-primary);
+  background:
+    radial-gradient(circle at 72% 10%, rgba(30, 122, 255, 0.12), transparent 25%),
+    linear-gradient(180deg, #060a10 0%, #090f16 45%, #070b11 100%);
   color: var(--text-primary);
 }
 .overview-pane-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   min-height: 92px;
-  padding: 18px 20px 14px;
+  padding: 20px 22px 14px;
   border-bottom: 1px solid var(--border-secondary);
   flex-shrink: 0;
 }
@@ -88,11 +90,11 @@ function openInstanceLogs(deploymentId: string) {
   font-weight: 700;
 }
 .overview-pane-head h1 {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   overflow: hidden;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -136,19 +136,22 @@ defineExpose({ saveTemplateConfig })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: 98px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
 .single-pipeline-topbar {
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) 198px minmax(420px, 1.9fr);
-  gap: 24px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 16px;
-  background: rgba(21, 30, 42, 0.72);
+  grid-template-columns: 370px 206px minmax(0, 1fr);
+  align-items: start;
+  gap: 22px;
+  height: 98px;
+  border: 0;
+  border-bottom: 1px solid #263240;
+  border-radius: 0;
+  padding: 18px 18px 16px;
+  background: #121922;
 }
 .with-structure-rail .single-pipeline-topbar {
   border-top: 0;
@@ -162,7 +165,7 @@ defineExpose({ saveTemplateConfig })
   min-height: 0;
 }
 .with-structure-rail .single-pipeline-lower {
-  grid-template-columns: 288px minmax(0, 1fr);
+  grid-template-columns: 290px minmax(0, 1fr);
 }
 .single-pipeline-rail-slot {
   min-width: 0;
@@ -179,7 +182,7 @@ defineExpose({ saveTemplateConfig })
   align-items: start;
   gap: 8px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 .service-list {
@@ -189,16 +192,16 @@ defineExpose({ saveTemplateConfig })
   min-height: 38px;
   align-items: center;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: 5px;
   padding: 0 12px;
-  background: rgba(8, 13, 20, 0.56);
+  background: #0b1118;
 }
 .service-item {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 .service-item input,
@@ -210,9 +213,9 @@ defineExpose({ saveTemplateConfig })
   display: grid;
   grid-template-columns: 1fr 1fr;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: 5px;
   overflow: hidden;
-  background: rgba(8, 13, 20, 0.56);
+  background: #0b1118;
 }
 .artifact-segment button {
   height: 38px;
@@ -220,14 +223,14 @@ defineExpose({ saveTemplateConfig })
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
 }
 .artifact-segment button + button {
   border-left: 1px solid var(--border-secondary);
 }
 .artifact-segment button.active {
-  background: var(--accent);
+  background: linear-gradient(180deg, #2587ff, #176de9);
   color: #fff;
   font-weight: 700;
 }

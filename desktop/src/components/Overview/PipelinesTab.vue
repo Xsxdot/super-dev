@@ -345,8 +345,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
           <div class="overview-section-title">{{ t('overview.pipeline.phasesTitle') }}</div>
           <div class="overview-phase-list" data-test="pipeline-overview-phases">
             <div v-for="item in phaseCountItems(overviewPipeline)" :key="item.phase" class="phase-count" :class="`phase-${item.phase}`">
-              <span>{{ item.label }}</span>
-              <small>{{ item.phase }}</small>
+              <span>{{ item.label }} <small>{{ item.phase }}</small></span>
               <strong>{{ item.count }}</strong>
             </div>
           </div>
@@ -408,12 +407,12 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 
 <style scoped>
 .pipelines-tab {
-  height: calc(100vh - 65px);
+  height: calc(100vh - 92px);
   overflow: auto;
-  padding: 24px 24px 34px;
+  padding: 24px 20px 28px;
   background:
-    linear-gradient(180deg, rgba(13, 17, 23, 0.92), rgba(7, 11, 17, 0.98)),
-    var(--bg-primary);
+    radial-gradient(circle at 72% 10%, rgba(30, 122, 255, 0.1), transparent 24%),
+    linear-gradient(180deg, rgba(13, 19, 27, 0.78), rgba(7, 11, 17, 0.96));
 }
 .pipeline-console-head {
   display: flex;
@@ -425,24 +424,25 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipeline-console-title-row {
   display: flex;
   align-items: baseline;
-  gap: 16px;
+  gap: 20px;
   min-width: 0;
 }
 .pipeline-console-subtitle {
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 .pipeline-console-title {
   color: var(--text-primary);
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 800;
   letter-spacing: 0;
+  line-height: 1;
 }
 .pipeline-console-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 22px;
 }
 .pipeline-console-summary {
   display: grid;
@@ -450,30 +450,37 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   min-width: 0;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
+  overflow: hidden;
   margin-bottom: 20px;
-  background: rgba(16, 22, 31, 0.72);
+  background: linear-gradient(180deg, #111922, #0e151d);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 .pipeline-stat {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   min-height: 64px;
-  padding: 0 28px;
+  padding: 0 32px;
 }
 .pipeline-stat + .pipeline-stat {
-  border-left: 1px solid var(--border-secondary);
+  border-left: 1px solid rgba(29, 39, 51, 0.98);
 }
 .pipeline-stat strong {
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 23px;
   font-weight: 800;
 }
 .pipeline-stat span:last-child {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
+}
+.pipeline-stat:not(:first-child) strong {
+  order: 3;
+}
+.pipeline-stat:not(:first-child) span:last-child {
+  order: 2;
 }
 .pipeline-stat-icon {
   width: 22px;
@@ -482,27 +489,27 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .tone-success .pipeline-stat-icon,
 .tone-success strong {
-  color: var(--status-success);
+  color: #47d764;
 }
 .tone-failed .pipeline-stat-icon,
 .tone-failed strong {
-  color: var(--status-failed);
+  color: #ff4b55;
 }
 .tone-running .pipeline-stat-icon,
 .tone-running strong {
-  color: var(--status-starting);
+  color: #ffbd17;
 }
 .pipeline-console-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 292px;
+  grid-template-columns: minmax(860px, 1fr) 286px;
   gap: 16px;
   align-items: start;
 }
 .pipeline-table-card,
 .pipeline-overview-card {
   border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  background: rgba(13, 18, 26, 0.88);
+  border-radius: 6px;
+  background: #0b1118;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 48px rgba(0, 0, 0, 0.14);
 }
 .pipeline-table-card {
@@ -522,99 +529,111 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   background: rgba(139, 148, 158, 0.36);
 }
 .pipeline-table-inner {
-  min-width: 960px;
+  min-width: 1108px;
 }
 .pipeline-table-head {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(130px, 0.8fr) 104px minmax(118px, 0.72fr) 66px 96px 128px;
-  gap: 10px;
+  grid-template-columns: 248px 224px 112px 148px 72px 102px 126px;
+  gap: 0;
   align-items: center;
-  min-height: 48px;
-  padding: 0 18px 0 86px;
+  min-height: 47px;
+  padding: 0 16px 0 60px;
   border-bottom: 1px solid var(--border-secondary);
+  background: #0e151d;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 .pipeline-overview-card {
-  padding: 16px;
+  align-self: start;
+  padding: 18px 16px;
+  background: #0e151d;
 }
 .pipeline-overview-card h3 {
-  margin: 0 0 10px;
-  padding-bottom: 10px;
+  margin: 0 0 14px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--border-secondary);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
 }
 .pipeline-overview-card dl {
   display: grid;
-  gap: 12px;
+  gap: 0;
   margin: 0;
-  padding-bottom: 14px;
+  padding-bottom: 2px;
   border-bottom: 1px solid var(--border-secondary);
 }
 .pipeline-overview-card dt {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 14px;
+  font-weight: 650;
 }
 .pipeline-overview-card dd {
-  margin: 4px 0 0;
+  margin: 4px 0 13px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.4;
 }
 .overview-section {
-  padding-top: 14px;
+  padding-top: 12px;
+}
+.overview-section + .overview-section {
+  border-top: 1px solid var(--border-secondary);
+  margin-top: 12px;
 }
 .overview-section-title {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
 }
 .overview-phase-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 .phase-count {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 10px 1fr auto;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 26px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
 }
 .phase-count::before {
   content: '';
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: var(--accent);
+  background: #1f7bff;
 }
 .phase-count.phase-deploy::before {
-  background: var(--status-success);
+  background: #47d764;
 }
 .phase-count.phase-finally::before {
-  background: #a371f7;
+  background: #9f6cff;
 }
 .phase-count small {
-  color: var(--text-tertiary);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 .template-chip {
   display: grid;
   gap: 4px;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
-  padding: 8px;
+  padding: 10px;
+  background: #121923;
   color: var(--text-secondary);
   font-size: 12px;
 }
 .template-chip strong {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -632,22 +651,23 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipeline-add-btn,
 .pipeline-refresh-btn,
 .deploy-dialog button {
-  height: 38px;
+  height: 40px;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
 }
 .pipeline-add-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 20px;
+  min-width: 98px;
+  padding: 0 22px;
   border-color: var(--accent);
-  background: var(--accent);
+  background: linear-gradient(180deg, #2385ff 0%, #1669e3 100%);
   color: #fff;
 }
 .pipeline-add-btn span {
@@ -659,7 +679,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   height: 17px;
 }
 .pipeline-refresh-btn {
-  width: 42px;
+  width: 50px;
   padding: 0;
   color: var(--text-secondary);
 }
@@ -745,7 +765,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   border: 1px solid var(--border-secondary);
   border-radius: 7px;
   padding: 10px;
-  background: rgba(7, 12, 18, 0.52);
+  background: #121923;
 }
 .artifact-file-icon {
   width: 19px;
@@ -779,9 +799,9 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   line-height: 1;
 }
 .pipeline-timezone {
-  margin-top: 22px;
+  margin: 24px 0 20px;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 14px;
   text-align: center;
 }
 @keyframes pipeline-spin {
