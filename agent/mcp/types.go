@@ -186,17 +186,18 @@ type OperationAuditList struct {
 
 // ConfigChangeRequest 描述 MCP 侧配置 upsert 请求。
 type ConfigChangeRequest struct {
-	Kind           string         `json:"kind"`
-	ProjectID      string         `json:"project_id,omitempty"`
-	ProjectName    string         `json:"project_name,omitempty"`
-	RootPath       string         `json:"root_path,omitempty"`
-	ApprovalToken  string         `json:"approval_token,omitempty"`
-	DebugSessionID string         `json:"debug_session_id,omitempty"`
-	Project        map[string]any `json:"project,omitempty"`
-	Service        map[string]any `json:"service,omitempty"`
-	Pipeline       map[string]any `json:"pipeline,omitempty"`
-	Delete         bool           `json:"delete,omitempty"`
-	Remove         bool           `json:"remove,omitempty"`
+	Kind                string         `json:"kind"`
+	ProjectID           string         `json:"project_id,omitempty"`
+	ProjectName         string         `json:"project_name,omitempty"`
+	RootPath            string         `json:"root_path,omitempty"`
+	ApprovalToken       string         `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int           `json:"approval_wait_seconds,omitempty"`
+	DebugSessionID      string         `json:"debug_session_id,omitempty"`
+	Project             map[string]any `json:"project,omitempty"`
+	Service             map[string]any `json:"service,omitempty"`
+	Pipeline            map[string]any `json:"pipeline,omitempty"`
+	Delete              bool           `json:"delete,omitempty"`
+	Remove              bool           `json:"remove,omitempty"`
 }
 
 // ConfigChangeValidation 描述 config change preview 的校验结果。

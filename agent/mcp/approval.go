@@ -46,3 +46,18 @@ func (s *Server) callWithApproval(ctx context.Context, wait time.Duration, do fu
 	}
 	return do(ctx, token)
 }
+
+// boundedApprovalWait 把秒数（可空）换算为受上限约束的等待时长。
+func boundedApprovalWait(seconds *int) time.Duration {
+	v := defaultApprovalWaitSeconds
+	if seconds != nil {
+		v = *seconds
+	}
+	if v <= 0 {
+		return 0
+	}
+	if v > 300 {
+		v = 300
+	}
+	return time.Duration(v) * time.Second
+}

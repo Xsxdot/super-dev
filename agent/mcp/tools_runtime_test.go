@@ -44,6 +44,8 @@ type fakeAgentClient struct {
 	restartErrors              []error
 	templatePreview            PipelineTemplatePreview
 	importedTemplate           PipelineTemplateSummary
+	importTemplateErrs         []error
+	importTemplateCallCount    int
 	importedTemplatePath       string
 	operationPlan              OperationPlan
 	operationApprovals         []OperationApproval
@@ -54,6 +56,8 @@ type fakeAgentClient struct {
 	configProject              model.Project
 	configPreview              ConfigChangePreview
 	configApplyErr             error
+	configApplyErrs            []error
+	configApplyCallCount       int
 	lastConfigChange           ConfigChangeRequest
 	lastApprovalToken          string
 	pipelineRun                model.Run
@@ -173,8 +177,12 @@ func (f *fakeAgentClient) PreviewConfigChange(_ context.Context, req ConfigChang
 }
 
 func (f *fakeAgentClient) ApplyConfigChange(_ context.Context, req ConfigChangeRequest, approvalToken string) (ConfigChangePreview, error) {
+	f.configApplyCallCount++
 	f.lastConfigChange = req
 	f.lastApprovalToken = approvalToken
+	if f.configApplyCallCount <= len(f.configApplyErrs) && f.configApplyErrs[f.configApplyCallCount-1] != nil {
+		return ConfigChangePreview{}, f.configApplyErrs[f.configApplyCallCount-1]
+	}
 	if f.configApplyErr != nil {
 		return ConfigChangePreview{}, f.configApplyErr
 	}
@@ -213,8 +221,12 @@ func (f *fakeAgentClient) PreviewPipelineTemplate(context.Context, string, strin
 }
 
 func (f *fakeAgentClient) ImportPipelineTemplate(_ context.Context, path string, approvalToken string) (PipelineTemplateSummary, error) {
+	f.importTemplateCallCount++
 	f.importedTemplatePath = path
 	f.lastApprovalToken = approvalToken
+	if f.importTemplateCallCount <= len(f.importTemplateErrs) && f.importTemplateErrs[f.importTemplateCallCount-1] != nil {
+		return PipelineTemplateSummary{}, f.importTemplateErrs[f.importTemplateCallCount-1]
+	}
 	return f.importedTemplate, nil
 }
 

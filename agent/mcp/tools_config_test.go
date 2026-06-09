@@ -69,11 +69,35 @@ func TestApplyConfigChangePreservesApprovalRequiredError(t *testing.T) {
 	}}
 	server := NewServer(client)
 
-	result, err := server.callToolForTest(context.Background(), "apply_config_change", `{"kind":"config.service.upsert","project_id":"p1","service":{"name":"api"}}`)
+	result, err := server.callToolForTest(context.Background(), "apply_config_change", `{"kind":"config.service.upsert","project_id":"p1","service":{"name":"api"},"approval_wait_seconds":0}`)
 
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	payload := result.StructuredContent.(toolErrorPayload)
 	assert.Equal(t, "approval_required", payload.Code)
 	assert.Equal(t, "opa_cfg", payload.Data.(map[string]any)["approval"].(OperationApproval).ID)
+}
+
+func TestApplyConfigChangeWaitsForApproval(t *testing.T) {
+	client := &fakeAgentClient{
+		configPreview: ConfigChangePreview{Kind: "config.service.upsert", Validation: ConfigChangeValidation{OK: true}},
+		configApplyErrs: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     OperationPlan{ID: "op_cfg", Kind: "config.service.upsert"},
+			Approval: OperationApproval{ID: "opa_cfg", Status: "pending"},
+		}},
+		operationApprovalDetail: OperationApprovalDetail{
+			Approval:      OperationApproval{ID: "opa_cfg", Status: "approved"},
+			ApprovalToken: "tok_cfg",
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "apply_config_change", `{"kind":"config.service.upsert","project_id":"p1","service":{"name":"api"},"approval_wait_seconds":1}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, 2, client.configApplyCallCount)
+	assert.Equal(t, "tok_cfg", client.lastApprovalToken)
 }

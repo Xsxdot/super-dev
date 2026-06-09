@@ -113,7 +113,21 @@ func (s *Server) upsertProjectPipelineTool(ctx context.Context, args json.RawMes
 }
 
 func (s *Server) applyConfigChangeFromRequest(ctx context.Context, req ConfigChangeRequest) (CallToolResult, error) {
-	preview, err := s.client.ApplyConfigChange(ctx, req, req.ApprovalToken)
+	var preview ConfigChangePreview
+	apply := func(ctx context.Context, token string) error {
+		p, err := s.client.ApplyConfigChange(ctx, req, token)
+		if err != nil {
+			return err
+		}
+		preview = p
+		return nil
+	}
+	var err error
+	if strings.TrimSpace(req.ApprovalToken) != "" {
+		err = apply(ctx, req.ApprovalToken)
+	} else {
+		err = s.callWithApproval(ctx, boundedApprovalWait(req.ApprovalWaitSeconds), apply)
+	}
 	if err != nil {
 		s.appendConfigToolObservation(ctx, req.DebugSessionID, req.Kind, "config change failed", err)
 		return clientToolError(err), nil

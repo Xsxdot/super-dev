@@ -213,17 +213,7 @@ func approvalRequiredAgentError(err error) (AgentError, bool) {
 }
 
 func approvalWaitDuration(req targetArgs) time.Duration {
-	seconds := defaultApprovalWaitSeconds
-	if req.ApprovalWaitSeconds != nil {
-		seconds = *req.ApprovalWaitSeconds
-	}
-	if seconds <= 0 {
-		return 0
-	}
-	if seconds > 300 {
-		seconds = 300
-	}
-	return time.Duration(seconds) * time.Second
+	return boundedApprovalWait(req.ApprovalWaitSeconds)
 }
 
 func (s *Server) waitForApprovalToken(ctx context.Context, approvalID string, wait time.Duration) (string, error) {

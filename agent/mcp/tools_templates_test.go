@@ -62,3 +62,27 @@ func TestImportPipelineTemplatePassesApprovalToken(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Equal(t, "tok_1", client.lastApprovalToken)
 }
+
+func TestImportPipelineTemplateWaitsForApproval(t *testing.T) {
+	client := &fakeAgentClient{
+		importedTemplate: PipelineTemplateSummary{Source: "user", ID: "custom", Version: "1.0.0", Digest: "sha256:abc"},
+		importTemplateErrs: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     OperationPlan{ID: "op_tpl", Kind: "template.import"},
+			Approval: OperationApproval{ID: "opa_tpl", Status: "pending"},
+		}},
+		operationApprovalDetail: OperationApprovalDetail{
+			Approval:      OperationApproval{ID: "opa_tpl", Status: "approved"},
+			ApprovalToken: "tok_tpl",
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "import_pipeline_template", `{"path":"/tmp/custom.yaml","approval_wait_seconds":1}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, 2, client.importTemplateCallCount)
+	assert.Equal(t, "tok_tpl", client.lastApprovalToken)
+}
