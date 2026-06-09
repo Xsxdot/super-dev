@@ -536,6 +536,7 @@ export default {
       selectTemplate: '请选择模板',
       viewTemplate: '查看模板',
       viewYaml: '查看 YAML',
+      previewGraph: '预览执行图',
       yamlTitle: '流水线 YAML',
       addFile: '+ 添加文件',
       booleanTrue: 'true',

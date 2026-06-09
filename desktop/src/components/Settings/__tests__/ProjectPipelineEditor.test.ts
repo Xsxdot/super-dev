@@ -192,7 +192,8 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="single-pipeline-name"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-editor-preview"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-preview-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-preview"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-config-save-template"]').classes()).toContain('settings-btn-primary')
   })
 
@@ -211,9 +212,9 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Vue + Go 组合构建')
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('模板输入')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Vue + Go 组合构建')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Systemd 无缝部署')
-    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(2)
+    expect(wrapper.find('[data-test="pipeline-preview-open"]').attributes('data-preview-count')).toBe('2')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(0)
     expect(wrapper.find('[data-test="wizard-preview-strip"]').exists()).toBe(false)
   })
 
@@ -266,14 +267,9 @@ describe('ProjectPipelineEditor', () => {
       env_name: 'dev',
       service_names: ['web', 'server'],
     }))
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Build Frontend')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Build Frontendpendinghost-1')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).not.toContain('"step_name"')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Deploy')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Health Check')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Health Checkpendingali-01')
-    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).not.toContain('Prepare')
-    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(5)
+    expect(wrapper.find('[data-test="pipeline-preview-open"]').attributes('data-preview-count')).toBe('5')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(0)
   })
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {

@@ -536,6 +536,7 @@ export default {
       selectTemplate: 'Select a template',
       viewTemplate: 'View Template',
       viewYaml: 'View YAML',
+      previewGraph: 'Preview graph',
       yamlTitle: 'Pipeline YAML',
       addFile: '+ Add File',
       booleanTrue: 'true',

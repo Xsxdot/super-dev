@@ -52,6 +52,8 @@ const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
 const yamlOpen = ref(false)
+// 全屏预览弹层开关：顶部「预览执行图」按钮触发，替代旧的底部预览窄带。
+const previewModalOpen = ref(false)
 const saveError = ref<string | null>(null)
 const pipelineForm = ref<InstanceType<typeof SingleProjectPipelineForm> | null>(null)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
@@ -389,6 +391,15 @@ async function save() {
           </button>
           <button
             type="button"
+            class="settings-btn settings-btn-secondary"
+            data-test="pipeline-preview-open"
+            :data-preview-count="editorPreviewNodes.length"
+            @click="previewModalOpen = true"
+          >
+            {{ t('settings.pipeline.previewGraph') }}
+          </button>
+          <button
+            type="button"
             class="settings-btn settings-btn-primary"
             :disabled="saving"
             @click="save"
@@ -452,32 +463,6 @@ async function save() {
       </div>
 
       <div class="settings-modal-footer pipeline-editor-actions">
-        <div class="pipeline-editor-preview-strip" data-test="pipeline-editor-preview-strip">
-          <header class="pipeline-editor-preview-head">
-            <span>{{ t('settings.pipeline.preview') }} / PipelinePreview</span>
-            <small>{{ t('settings.pipeline.unsavedPreviewHint') }}</small>
-          </header>
-          <div class="pipeline-editor-preview-flow">
-            <article
-              v-for="node in editorPreviewNodes"
-              :key="node.id"
-              class="pipeline-editor-preview-node"
-              data-test="pipeline-editor-preview-node"
-            >
-              <span class="pipeline-editor-preview-icon" aria-hidden="true">
-                <Icon :icon="node.icon" />
-              </span>
-              <strong>{{ node.name }}</strong>
-              <small>pending</small>
-              <em>{{ node.target }}</em>
-            </article>
-            <div v-if="editorPreviewNodes.length === 0" class="pipeline-editor-preview-empty" data-test="pipeline-editor-preview">
-              <span aria-hidden="true"></span>
-              {{ t('settings.pipeline.requiredComplete') }}
-            </div>
-          </div>
-          <div v-if="editorPreviewError" class="pipeline-editor-preview-error">{{ editorPreviewError }}</div>
-        </div>
         <div class="pipeline-editor-footer-status">
           <Icon icon="lucide:circle-check" aria-hidden="true" />
           {{ t('settings.pipeline.requiredFieldsComplete') }} · 2 {{ t('settings.pipeline.stageUnit') }} · {{ t('settings.pipeline.savedPreviewHint') }}
@@ -547,7 +532,7 @@ async function save() {
 
 .pipeline-editor-body {
   display: grid;
-  grid-template-rows: 62px minmax(0, 1fr) 202px;
+  grid-template-rows: 62px minmax(0, 1fr) 66px;
   background: linear-gradient(180deg, #121922 0%, #111820 100%);
   overflow: hidden;
 }
@@ -607,7 +592,7 @@ async function save() {
 }
 .pipeline-editor-content {
   grid-column: 1;
-  grid-row: 2 / 4;
+  grid-row: 2;
   min-height: 0;
   padding: 0;
   overflow: hidden;
@@ -706,151 +691,31 @@ async function save() {
   grid-column: 1;
   grid-row: 3;
   display: grid;
-  grid-template-columns: calc(100% - 504px) 504px;
-  grid-template-rows: 1fr 52px;
-  align-items: stretch;
-  justify-content: stretch;
-  min-height: 202px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 66px;
   gap: 0;
   padding: 0;
-  border-top: 0;
-  background: transparent;
-  pointer-events: none;
-}
-.pipeline-editor-preview-strip {
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  padding: 14px 16px 0;
   border-top: 1px solid #263240;
   background: #141c25;
   pointer-events: auto;
 }
-.pipeline-editor-preview-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 800;
-}
-.pipeline-editor-preview-head small {
-  color: var(--text-tertiary);
-  font-weight: 600;
-}
-.pipeline-editor-preview-flow {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-.pipeline-editor-preview-node {
-  position: relative;
-  display: grid;
-  grid-template-columns: 28px 1fr;
-  grid-template-rows: 24px 20px 22px;
-  column-gap: 8px;
-  gap: 0;
-  min-width: 0;
-  width: 166px;
-  height: 76px;
-  border: 1px solid #2d3949;
-  border-radius: 5px;
-  padding: 10px;
-  background: #151e29;
-}
-.pipeline-editor-preview-node + .pipeline-editor-preview-node::before {
-  position: absolute;
-  top: 50%;
-  left: -18px;
-  color: var(--text-tertiary);
-  content: '→';
-  transform: translateY(-50%);
-}
-.pipeline-editor-preview-icon {
-  position: static;
-  grid-row: 1 / 4;
-  align-self: start;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--accent);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-}
-.pipeline-editor-preview-icon svg {
-  width: 13px;
-  height: 13px;
-}
-.pipeline-editor-preview-node strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pipeline-editor-preview-node small {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.pipeline-editor-preview-node em {
-  justify-self: start;
-  overflow: hidden;
-  max-width: 100%;
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-  padding: 1px 5px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pipeline-editor-preview-empty {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
-.pipeline-editor-preview-empty span {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--status-success);
-}
-.pipeline-editor-preview-error {
-  margin-top: 6px;
-  color: var(--status-failed);
-  font-size: 11px;
-}
 .pipeline-editor-footer-buttons {
   grid-column: 2;
-  grid-row: 2;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
   padding: 0 30px 14px 0;
-  border-top: 1px solid rgba(38, 50, 64, 0.55);
-  background: #141c25;
   pointer-events: auto;
 }
 .pipeline-editor-footer-status {
   grid-column: 1;
-  grid-row: 2;
   display: flex;
   align-items: center;
   gap: 7px;
   padding-left: 24px;
-  border-top: 1px solid rgba(38, 50, 64, 0.55);
-  background: #141c25;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 650;
@@ -871,9 +736,6 @@ async function save() {
   .pipeline-editor-actions {
     align-items: stretch;
     flex-direction: column;
-  }
-  .pipeline-editor-preview-flow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>
