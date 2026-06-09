@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 type pipelineReferenceArgs struct {
@@ -31,6 +33,8 @@ func (s *Server) deployProjectPipelineTool(ctx context.Context, args json.RawMes
 	}
 	req.PipelineID = strings.TrimSpace(req.PipelineID)
 	req.EnvName = strings.TrimSpace(req.EnvName)
+	req.ApprovalToken = strings.TrimSpace(req.ApprovalToken)
+	req.DebugSessionID = strings.TrimSpace(req.DebugSessionID)
 	if req.PipelineID == "" {
 		return toolError("invalid_arguments", "pipeline_id is required", nil), nil
 	}
@@ -44,7 +48,22 @@ func (s *Server) deployProjectPipelineTool(ctx context.Context, args json.RawMes
 	req.ProjectID = projectID
 	req.ProjectName = ""
 
-	run, err := s.client.DeployProjectPipeline(ctx, projectID, req.PipelineID, req)
+	var run model.Run
+	deploy := func(ctx context.Context, token string) error {
+		req.ApprovalToken = token
+		got, err := s.client.DeployProjectPipeline(ctx, projectID, req.PipelineID, req)
+		if err != nil {
+			return err
+		}
+		run = got
+		return nil
+	}
+	var err error
+	if req.ApprovalToken != "" {
+		err = deploy(ctx, req.ApprovalToken)
+	} else {
+		err = s.callWithApproval(ctx, boundedApprovalWait(req.ApprovalWaitSeconds), deploy)
+	}
 	operationKind := "pipeline.deploy"
 	if strings.TrimSpace(req.ArtifactVersion) != "" {
 		operationKind = "pipeline.rollback"

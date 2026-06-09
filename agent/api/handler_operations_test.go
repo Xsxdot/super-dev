@@ -11,13 +11,16 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
@@ -108,6 +111,115 @@ func TestOperationAPI_ReadOnlyDeploymentDeniedEvenWithApproval(t *testing.T) {
 
 	assert.Equal(t, "operation_denied", resp["code"])
 	assert.Nil(t, resp["approval"])
+}
+
+func TestApplyApprovalPolicyOverrides(t *testing.T) {
+	policy := config.ApprovalPolicy{
+		ConfigUpsert: false, PipelineUpsert: true, PipelineRun: false, TemplateImport: true, GraceMinutes: 15,
+	}
+	cases := []struct {
+		kind string
+		want bool
+	}{
+		{operation.OperationConfigProjectUpsert, false},
+		{operation.OperationConfigServiceUpsert, false},
+		{operation.OperationConfigPipelineUpsert, true},
+		{operation.OperationPipelineRun, false},
+		{operation.OperationTemplateImport, true},
+	}
+	for _, c := range cases {
+		plan := operation.Plan{Kind: c.kind, RequiresApproval: true}
+		got := applyApprovalPolicy(plan, policy)
+		if got.RequiresApproval != c.want {
+			t.Fatalf("kind %s: requires=%v, want %v", c.kind, got.RequiresApproval, c.want)
+		}
+	}
+}
+
+func TestApplyApprovalPolicyNeverOverridesDenied(t *testing.T) {
+	policy := config.ApprovalPolicy{ConfigUpsert: false, GraceMinutes: 15}
+	plan := operation.Plan{Kind: operation.OperationConfigProjectUpsert, Denied: true, RequiresApproval: false}
+	got := applyApprovalPolicy(plan, policy)
+	if !got.Denied {
+		t.Fatal("denied must stay denied")
+	}
+	// 开关为 false 也不得把 denied 操作变成可执行
+	if got.RequiresApproval {
+		t.Fatal("denied plan requires_approval should remain as-is, not be re-enabled")
+	}
+}
+
+func TestApplyApprovalPolicyLeavesRuntimeUntouched(t *testing.T) {
+	policy := config.ApprovalPolicy{ConfigUpsert: false, GraceMinutes: 15}
+	plan := operation.Plan{Kind: operation.OperationRuntimeStart, RequiresApproval: true}
+	got := applyApprovalPolicy(plan, policy)
+	if !got.RequiresApproval {
+		t.Fatal("runtime.* must not be affected by switches")
+	}
+}
+
+func TestAuthorizeOperationGraceHit(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	ctx := context.Background()
+	if _, err := app.operationGrace.GrantGrace(ctx, "p1", "u", "a1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	plan := operation.Plan{Kind: operation.OperationConfigServiceUpsert, RequiresApproval: true, Target: operation.Target{ProjectID: "p1"}}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	allowed, approval := app.authorizeOperation(rec, req, plan)
+	if !allowed {
+		t.Fatal("grace hit must allow")
+	}
+	if approval != nil {
+		t.Fatal("grace hit must not create approval")
+	}
+}
+
+func TestApproveGrantsGraceWindow(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	ctx := context.Background()
+	plan := operation.Plan{Kind: operation.OperationConfigServiceUpsert, RequiresApproval: true, Target: operation.Target{ProjectID: "p1"}}
+	pending, err := app.operationApprovals.FindOrCreatePending(ctx, plan, "ai", "AI")
+	require.NoError(t, err)
+
+	body := []byte(`{"decided_by":"user","grant_grace":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/operation-approvals/"+pending.ID+"/approve", bytes.NewReader(body))
+	req.SetPathValue("id", pending.ID)
+	app.approveOperationApproval(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	_, ok, err := app.operationGrace.ActiveGrace(ctx, "p1")
+	require.NoError(t, err)
+	if !ok {
+		t.Fatal("approve with grant_grace must open grace window")
+	}
+}
+
+func TestApproveGrantGraceNoProjectIgnored(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	ctx := context.Background()
+	plan := operation.Plan{Kind: operation.OperationTemplateImport, RequiresApproval: true, Target: operation.Target{TemplatePath: "/x.yaml"}}
+	pending, err := app.operationApprovals.FindOrCreatePending(ctx, plan, "ai", "AI")
+	require.NoError(t, err)
+
+	body := []byte(`{"decided_by":"user","grant_grace":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
+	req.SetPathValue("id", pending.ID)
+	app.approveOperationApproval(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	if resp["grace_granted"] != false {
+		t.Fatalf("no-project approval must report grace_granted=false, got %v", resp["grace_granted"])
+	}
 }
 
 func operationAPIProject(isDev bool, readOnly bool) model.Project {

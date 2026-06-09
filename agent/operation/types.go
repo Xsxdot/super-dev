@@ -38,6 +38,8 @@ const (
 	OperationConfigServiceUpsert = "config.service.upsert"
 	// OperationConfigPipelineUpsert 表示新增或编辑项目级流水线。
 	OperationConfigPipelineUpsert = "config.pipeline.upsert"
+	// OperationPipelineRun 表示运行项目级流水线（部署或回滚）的写操作。
+	OperationPipelineRun = "pipeline.run"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"
@@ -69,6 +71,10 @@ const (
 	AuditExecuted = "executed"
 	// AuditFailed 记录一次操作执行失败。
 	AuditFailed = "failed"
+	// AuditApprovedByGrace 记录一次因项目豁免窗口命中而放行的操作。
+	AuditApprovedByGrace = "approved_by_grace"
+	// AuditGraceGranted 记录一次项目豁免窗口的开启。
+	AuditGraceGranted = "grace_granted"
 
 	// DefaultPlanTTL 是 operation plan 的默认有效期。
 	DefaultPlanTTL = 10 * time.Minute
@@ -175,6 +181,19 @@ type AuditEvent struct {
 	Summary    string         `json:"summary"`
 	Data       map[string]any `json:"data,omitempty"`
 	CreatedAt  time.Time      `json:"created_at"`
+}
+
+// GraceGrant 记录一次项目级审批豁免授权。
+//
+// 注意：
+//   - 同项目重复授权会续期，不堆叠
+//   - 仅对带 ProjectID 的 plan 生效
+type GraceGrant struct {
+	ProjectID   string    `json:"project_id"`
+	GrantedBy   string    `json:"granted_by"`
+	GrantedFrom string    `json:"granted_from"` // 触发豁免的 approval ID，便于审计追溯
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 // ApprovalFilter 描述审批列表过滤条件。

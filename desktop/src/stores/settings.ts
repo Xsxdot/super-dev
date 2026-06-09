@@ -11,7 +11,7 @@
 //   - 不直接渲染设置页
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, type AgentSettings } from '@/api/agent'
+import { api, type AgentSettings, type ApprovalPolicy } from '@/api/agent'
 import {
   SUPPORTED_LOCALE_OPTIONS,
   currentLocale,
@@ -40,6 +40,13 @@ export const useSettingsStore = defineStore('settings', () => {
     log_retention_days: 7,
     sample_seeded: false,
     onboarding_completed: false,
+    approval: {
+      config_upsert: true,
+      pipeline_upsert: true,
+      pipeline_run: true,
+      template_import: true,
+      grace_minutes: 15,
+    },
   })
   const hiddenServiceIds = ref<string[]>(loadHiddenServiceIds())
   const autostartEnabled = ref(false)
@@ -67,6 +74,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function setOnboardingCompleted(completed: boolean) {
     const saved = await api.putSettings({ onboarding_completed: completed })
+    agentSettings.value = saved
+  }
+
+  async function saveApprovalPolicy(approval: ApprovalPolicy) {
+    const saved = await api.putSettings({ approval })
     agentSettings.value = saved
   }
 
@@ -109,6 +121,7 @@ export const useSettingsStore = defineStore('settings', () => {
     error,
     loadAgentSettings,
     saveLogRetentionDays,
+    saveApprovalPolicy,
     setOnboardingCompleted,
     loadAutostart,
     setAutostart,

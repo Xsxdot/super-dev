@@ -122,6 +122,32 @@ func TestOperationFingerprintChangesWhenTargetChanges(t *testing.T) {
 	assert.NotEqual(t, planA.Fingerprint, planB.Fingerprint)
 }
 
+func TestPlanPipelineRunBaseline(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo"}
+	plan, err := PlanPipelineRun(project, "pl1", "prod", false, "")
+	require.NoError(t, err)
+	assert.Equal(t, OperationPipelineRun, plan.Kind)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, "p1", plan.Target.ProjectID)
+	assert.Equal(t, "pl1", plan.Target.PipelineID)
+	assert.Equal(t, "prod", plan.Target.EnvName)
+	assert.NotEmpty(t, plan.Fingerprint)
+}
+
+func TestPlanPipelineRunRollbackFingerprintDiffers(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo"}
+	deploy, err := PlanPipelineRun(project, "pl1", "prod", false, "")
+	require.NoError(t, err)
+	rollback, err := PlanPipelineRun(project, "pl1", "prod", true, "v1")
+	require.NoError(t, err)
+	assert.NotEqual(t, deploy.Fingerprint, rollback.Fingerprint)
+}
+
+func TestPlanPipelineRunRequiresPipelineID(t *testing.T) {
+	_, err := PlanPipelineRun(model.Project{ID: "p1"}, "", "prod", false, "")
+	require.Error(t, err)
+}
+
 func operationProject(isDev bool, location model.DeployLocation, readOnly bool) model.Project {
 	return model.Project{
 		ID:   "proj-1",

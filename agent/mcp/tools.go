@@ -252,6 +252,11 @@ func deployProjectPipelineInputSchema() map[string]any {
 			},
 			"artifact_version": map[string]any{"type": "string"},
 			"variables":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"approval_token":   map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Max seconds to block-wait for human approval before returning. 0 = do not wait. Capped at 300.",
+			},
 			"debug_session_id": map[string]any{"type": "string"},
 		},
 		"required": []string{"pipeline_id", "env_name"},

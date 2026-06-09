@@ -307,6 +307,63 @@ func PlanTemplateImport(req TemplateImportRequest) (Plan, error) {
 	return plan, nil
 }
 
+// PlanPipelineRun 为运行项目级流水线（部署或回滚）生成安全预检计划。
+//
+// 参数：
+//   - project: 流水线所属项目
+//   - pipelineID: 流水线 ID
+//   - envName: 运行环境名
+//   - isRollback: 是否为回滚（影响 fingerprint 与摘要）
+//   - artifactVersion: 回滚目标制品版本，部署时为空
+//
+// 返回：
+//   - 基准要求审批的 plan；pipelineID 为空时返回错误
+//
+// 注意：
+//   - 基准不区分环境，是否真正审批由 API 层按 settings 开关覆盖
+//   - Target 带 ProjectID，使项目级豁免窗口可命中
+func PlanPipelineRun(project model.Project, pipelineID, envName string, isRollback bool, artifactVersion string) (Plan, error) {
+	pipelineID = trim(pipelineID)
+	if pipelineID == "" {
+		return Plan{}, ErrInvalidOperation
+	}
+	now := time.Now().UTC()
+	verb := "deploy"
+	if isRollback {
+		verb = "rollback"
+	}
+	target := Target{
+		ProjectID:   project.ID,
+		ProjectName: project.Name,
+		EnvName:     trim(envName),
+		PipelineID:  pipelineID,
+	}
+	plan := Plan{
+		ID:               newID("op"),
+		Kind:             OperationPipelineRun,
+		Target:           target,
+		TargetSummary:    fmt.Sprintf("%s/%s pipeline %s (%s)", project.Name, trim(envName), pipelineID, verb),
+		RiskLevel:        RiskHigh,
+		RequiresApproval: true,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+		ExpectedEffects: []string{
+			fmt.Sprintf("%s pipeline %s in %s", verb, pipelineID, trim(envName)),
+		},
+		Checks: []Check{
+			{Name: "target_resolved", Status: "passed", Message: "pipeline target resolved by agent"},
+		},
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"expected_effects": plan.ExpectedEffects,
+		"is_rollback":      isRollback,
+		"artifact_version": trim(artifactVersion),
+	})
+	return plan, nil
+}
+
 func findEnvironment(project model.Project, envName string) (model.Environment, bool) {
 	for _, env := range project.Environments {
 		if env.Name == envName {

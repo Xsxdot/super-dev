@@ -113,7 +113,7 @@ describe('operationApproval store', () => {
   })
 
   it('approves and refreshes pending approvals', async () => {
-    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ id: 'opa_1', status: 'approved' } as any)
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval: { id: 'opa_1', status: 'approved' } } as any)
     vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
 
     const store = useOperationApprovalStore()
@@ -121,6 +121,20 @@ describe('operationApproval store', () => {
 
     expect(api.approveOperationApproval).toHaveBeenCalledWith('opa_1', { decided_by: 'user', note: 'ok' })
     expect(store.pendingCount).toBe(0)
+  })
+
+  it('passes grant_grace flag through approve', async () => {
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval: { id: 'opa_1', status: 'approved' }, grace_granted: true } as any)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_1', { note: 'ok', grantGrace: true })
+
+    expect(api.approveOperationApproval).toHaveBeenCalledWith('opa_1', {
+      decided_by: 'user',
+      note: 'ok',
+      grant_grace: true,
+    })
   })
 
   it('resumes a desktop runtime operation after approval', async () => {
@@ -139,7 +153,7 @@ describe('operationApproval store', () => {
         fingerprint: 'fp_1',
       },
     } as any
-    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue(approval)
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval } as any)
     vi.spyOn(api, 'getOperationApproval').mockResolvedValue({ approval, approval_token: 'tok_1' })
     vi.spyOn(api, 'startDeployment').mockResolvedValue(undefined)
     vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
@@ -168,7 +182,7 @@ describe('operationApproval store', () => {
         fingerprint: 'fp_1',
       },
     } as any
-    const approve = vi.spyOn(api, 'approveOperationApproval').mockResolvedValue(approval)
+    const approve = vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval } as any)
     vi.spyOn(api, 'getOperationApproval')
       .mockResolvedValueOnce({ approval, approval_token: 'tok_1' })
       .mockResolvedValueOnce({ approval, approval_token: 'tok_2' })
@@ -198,7 +212,7 @@ describe('operationApproval store', () => {
   })
 
   it('does not issue a token for MCP-requested approvals', async () => {
-    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval: {
       id: 'opa_1',
       status: 'approved',
       requested_by: 'mcp',
@@ -212,7 +226,7 @@ describe('operationApproval store', () => {
         denied: false,
         fingerprint: 'fp_1',
       },
-    } as any)
+    } } as any)
     const getDetail = vi.spyOn(api, 'getOperationApproval').mockResolvedValue({} as any)
     vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
 

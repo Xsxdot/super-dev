@@ -10,17 +10,53 @@
   - 不展示 approval token
 -->
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
-import type { OperationApproval } from '@/api/agent'
+import { useSettingsStore } from '@/stores/settings'
+import type { ApprovalPolicy, OperationApproval } from '@/api/agent'
 
 const { t } = useI18n()
 const store = useOperationApprovalStore()
+const settingsStore = useSettingsStore()
+const approvalForm = reactive<ApprovalPolicy>(defaultApprovalPolicy())
 
 onMounted(() => {
   void store.loadPending()
+  void settingsStore.loadAgentSettings()
 })
+
+watch(
+  () => settingsStore.agentSettings.approval,
+  approval => {
+    Object.assign(approvalForm, normalizeApprovalPolicy(approval))
+  },
+  { immediate: true },
+)
+
+function defaultApprovalPolicy(): ApprovalPolicy {
+  return {
+    config_upsert: true,
+    pipeline_upsert: true,
+    pipeline_run: true,
+    template_import: true,
+    grace_minutes: 15,
+  }
+}
+
+function normalizeApprovalPolicy(approval?: ApprovalPolicy): ApprovalPolicy {
+  return { ...defaultApprovalPolicy(), ...(approval ?? {}) }
+}
+
+async function saveApprovalSettings() {
+  await settingsStore.saveApprovalPolicy({
+    config_upsert: approvalForm.config_upsert,
+    pipeline_upsert: approvalForm.pipeline_upsert,
+    pipeline_run: approvalForm.pipeline_run,
+    template_import: approvalForm.template_import,
+    grace_minutes: approvalForm.grace_minutes,
+  })
+}
 
 function shortFingerprint(approval: OperationApproval): string {
   const fp = approval.plan.fingerprint || ''
@@ -41,7 +77,54 @@ function shortFingerprint(approval: OperationApproval): string {
     </header>
 
     <p v-if="store.error" class="settings-alert settings-alert-danger">{{ store.error }}</p>
-    <p v-else-if="store.approvals.length === 0" class="settings-empty">{{ t('settings.approvals.empty') }}</p>
+    <section class="settings-card approval-policy-card" data-test="approval-policy-card">
+      <div class="approval-policy-header">
+        <div>
+          <h2>{{ t('settings.approvals.policyTitle') }}</h2>
+          <p>{{ t('settings.approvals.policyDescription') }}</p>
+        </div>
+        <button
+          class="settings-btn settings-btn-primary"
+          type="button"
+          data-test="approval-settings-save"
+          :disabled="settingsStore.loading"
+          @click="saveApprovalSettings"
+        >
+          {{ t('settings.approvals.savePolicy') }}
+        </button>
+      </div>
+
+      <div class="approval-policy-grid">
+        <label class="policy-toggle">
+          <input v-model="approvalForm.config_upsert" data-test="approval-switch-config-upsert" type="checkbox">
+          <span>{{ t('settings.approvals.configUpsert') }}</span>
+        </label>
+        <label class="policy-toggle">
+          <input v-model="approvalForm.pipeline_upsert" data-test="approval-switch-pipeline-upsert" type="checkbox">
+          <span>{{ t('settings.approvals.pipelineUpsert') }}</span>
+        </label>
+        <label class="policy-toggle">
+          <input v-model="approvalForm.pipeline_run" data-test="approval-switch-pipeline-run" type="checkbox">
+          <span>{{ t('settings.approvals.pipelineRun') }}</span>
+        </label>
+        <label class="policy-toggle">
+          <input v-model="approvalForm.template_import" data-test="approval-switch-template-import" type="checkbox">
+          <span>{{ t('settings.approvals.templateImport') }}</span>
+        </label>
+        <label class="policy-number">
+          <span>{{ t('settings.approvals.graceMinutes') }}</span>
+          <input
+            v-model.number="approvalForm.grace_minutes"
+            data-test="approval-grace-minutes"
+            type="number"
+            min="1"
+            max="120"
+          >
+        </label>
+      </div>
+    </section>
+
+    <p v-if="!store.error && store.approvals.length === 0" class="settings-empty">{{ t('settings.approvals.empty') }}</p>
 
     <div v-else class="approval-list">
       <article v-for="approval in store.approvals" :key="approval.id" class="settings-card approval-item">
@@ -97,7 +180,10 @@ function shortFingerprint(approval: OperationApproval): string {
   width: 100%;
 }
 .approval-title,
-.approval-actions {
+.approval-actions,
+.approval-policy-header,
+.policy-toggle,
+.policy-number {
   display: flex;
   align-items: center;
 }
@@ -128,6 +214,52 @@ function shortFingerprint(approval: OperationApproval): string {
 .approval-pane > .settings-empty,
 .approval-pane > .settings-alert {
   margin: 0;
+}
+.approval-policy-card {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+.approval-policy-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+.approval-policy-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.approval-policy-header p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.approval-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 14px;
+}
+.policy-toggle,
+.policy-number {
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.policy-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+.policy-number input {
+  width: 84px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 .fingerprint {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

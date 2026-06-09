@@ -502,7 +502,7 @@ func (c *HTTPAgentClient) ImportPipelineTemplate(ctx context.Context, path strin
 func (c *HTTPAgentClient) DeployProjectPipeline(ctx context.Context, projectID, pipelineID string, req PipelineDeployRequest) (model.Run, error) {
 	var out model.Run
 	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/deploy"
-	return out, c.post(ctx, path, req, &out)
+	return out, c.postWithApprovalToken(ctx, path, req, req.ApprovalToken, &out)
 }
 
 // ValidateProjectPipeline 预览并校验已保存的项目级 pipeline。

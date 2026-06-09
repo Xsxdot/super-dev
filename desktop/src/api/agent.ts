@@ -491,9 +491,18 @@ export interface AgentSettings {
   log_retention_days: number
   sample_seeded?: boolean
   onboarding_completed?: boolean
+  approval?: ApprovalPolicy
 }
 
-export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed'>>
+export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed' | 'approval'>>
+
+export interface ApprovalPolicy {
+  config_upsert: boolean
+  pipeline_upsert: boolean
+  pipeline_run: boolean
+  template_import: boolean
+  grace_minutes: number
+}
 
 export interface OperationTarget {
   project_id?: string
@@ -545,6 +554,12 @@ export interface OperationApproval {
 export interface OperationApprovalDetail {
   approval: OperationApproval
   approval_token?: string
+}
+
+export interface OperationApprovalDecision {
+  approval: OperationApproval
+  grace_granted: boolean
+  grace_expires_at?: string
 }
 
 export interface OperationAuditEvent {
@@ -1140,8 +1155,8 @@ export const api = {
     request<OperationApproval[]>(`/api/operation-approvals${qs(params)}`),
   getOperationApproval: (id: string) =>
     request<OperationApprovalDetail>(`/api/operation-approvals/${encodeURIComponent(id)}`),
-  approveOperationApproval: (id: string, payload: { decided_by: string; note?: string }) =>
-    request<OperationApproval>(`/api/operation-approvals/${encodeURIComponent(id)}/approve`, {
+  approveOperationApproval: (id: string, payload: { decided_by: string; note?: string; grant_grace?: boolean }) =>
+    request<OperationApprovalDecision>(`/api/operation-approvals/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

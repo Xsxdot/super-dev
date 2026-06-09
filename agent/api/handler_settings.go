@@ -12,6 +12,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/xsxdot/super-dev/agent/config"
 )
 
 // getSettings 处理 GET /api/settings。
@@ -48,6 +50,9 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.OnboardingCompleted != nil {
 		current.OnboardingCompleted = *req.OnboardingCompleted
 	}
+	if req.Approval != nil {
+		current.Approval = *req.Approval
+	}
 	if err := a.settings.Save(current); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -56,8 +61,9 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsPatchRequest struct {
-	LogRetentionDays          *int   `json:"log_retention_days"`
-	LogMaxBytes               *int64 `json:"log_max_bytes"`
-	LogCleanupIntervalSeconds *int   `json:"log_cleanup_interval_seconds"`
-	OnboardingCompleted       *bool  `json:"onboarding_completed"`
+	LogRetentionDays          *int                   `json:"log_retention_days"`
+	LogMaxBytes               *int64                 `json:"log_max_bytes"`
+	LogCleanupIntervalSeconds *int                   `json:"log_cleanup_interval_seconds"`
+	OnboardingCompleted       *bool                  `json:"onboarding_completed"`
+	Approval                  *config.ApprovalPolicy `json:"approval"`
 }
