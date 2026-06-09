@@ -20,6 +20,7 @@ const props = defineProps<{
   variables: Record<string, string>
   environments: Record<string, PipelineEnvironment>
   reservedNames: string[]
+  roles?: Record<string, { from_service?: string; hosts?: string[] }>
 }>()
 
 const emit = defineEmits<{
@@ -32,6 +33,8 @@ const { t } = useAppI18n()
 const envNames = computed(() => Object.keys(props.environments ?? {}))
 const isMultiEnv = computed(() => envNames.value.length > 1)
 const globalEntries = computed(() => Object.entries(props.variables ?? {}))
+const roleNames = computed(() => Object.keys(props.roles ?? {}))
+const hasRoles = computed(() => roleNames.value.length > 0)
 
 // 矩阵行必须取所有环境变量名并集，避免某环境新增变量后其他环境列缺位。
 const envVarNames = computed(() => {
@@ -71,6 +74,14 @@ function setEnvVar(envName: string, varName: string, event: Event) {
       },
     },
   })
+}
+
+function roleSource(roleName: string) {
+  const role = props.roles?.[roleName]
+  if (role?.from_service) {
+    return t('settings.pipeline.fromService', { svc: role.from_service })
+  }
+  return t('settings.pipeline.hostCount', { count: role?.hosts?.length ?? 0 })
 }
 </script>
 
@@ -134,6 +145,18 @@ function setEnvVar(envName: string, varName: string, event: Event) {
         </tbody>
       </table>
     </div>
+
+    <div v-if="hasRoles" class="emr-section" data-test="run-groups">
+      <div class="emr-label">{{ t('settings.pipeline.runGroups') }}</div>
+      <div class="emr-flow">
+        <span v-for="roleName in roleNames" :key="roleName" class="emr-var" :data-test="`run-group-${roleName}`">
+          <button type="button" class="emr-varname run-group" @click="copyVar(roleName)">
+            {{ roleName }}
+          </button>
+          <span class="emr-rg-source">{{ roleSource(roleName) }}</span>
+        </span>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -179,6 +202,15 @@ function setEnvVar(envName: string, varName: string, event: Event) {
   cursor: pointer;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
+}
+
+.emr-varname.run-group {
+  color: #6cc8ff;
+}
+
+.emr-rg-source {
+  color: var(--text-tertiary, #667);
+  font-size: 11px;
 }
 
 .emr-input {

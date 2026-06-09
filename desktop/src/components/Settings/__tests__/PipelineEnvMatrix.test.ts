@@ -62,4 +62,23 @@ describe('PipelineEnvMatrix', () => {
     await input.setValue('renamed')
     expect(wrapper.emitted('update:variables')?.[0][0]).toMatchObject({ app_name: 'renamed' })
   })
+
+  it('renders run group rows when roles provided', () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { compute: { from_service: 'api' } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    expect(wrapper.get('[data-test="run-group-compute"]').text()).toContain('compute')
+  })
+
+  it('does not render run group section when no roles', () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    expect(wrapper.find('[data-test="run-groups"]').exists()).toBe(false)
+  })
 })
