@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -53,6 +54,43 @@ func TestAppendBatchUpsertsByFoldKey(t *testing.T) {
 	assert.Equal(t, 5, got[0].RepeatCount)
 	assert.Equal(t, "k1", got[0].FoldKey)
 	assert.Equal(t, ts.Add(time.Second), got[0].Timestamp)
+}
+
+func TestNewMigratesExistingLogEntriesBeforeCreatingFoldIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/logs.db"
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE log_entries (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			deployment_id TEXT     NOT NULL,
+			run_id        TEXT     NOT NULL,
+			timestamp     DATETIME NOT NULL,
+			level         TEXT     NOT NULL,
+			message       TEXT     NOT NULL,
+			stream        TEXT     NOT NULL
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	ts := time.Now().UTC()
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "r", Timestamp: ts, Level: "INFO", Message: "boom", Stream: "stdout", FoldKey: "legacy-k", RepeatCount: 2},
+		{DeploymentID: "A", RunID: "r", Timestamp: ts.Add(time.Second), Level: "INFO", Message: "boom", Stream: "stdout", FoldKey: "legacy-k", RepeatCount: 3},
+	}))
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "A"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 3, got[0].RepeatCount)
+	assert.Equal(t, "legacy-k", got[0].FoldKey)
 }
 
 func TestFetchPagination(t *testing.T) {

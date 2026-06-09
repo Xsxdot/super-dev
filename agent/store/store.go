@@ -163,7 +163,6 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_deployment_id ON log_entries(deployment_id);
 		CREATE INDEX IF NOT EXISTS idx_run_id        ON log_entries(run_id);
 		CREATE INDEX IF NOT EXISTS idx_timestamp     ON log_entries(timestamp);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_fold_key ON log_entries(fold_key) WHERE fold_key != '';
 
 		CREATE TABLE IF NOT EXISTS pipeline_artifacts (
 			project_id  TEXT NOT NULL,
@@ -209,6 +208,7 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	// 旧库没有 fold_key 列，唯一索引必须等列补齐后再创建。
 	if err := ensureLogEntriesFoldColumns(db); err != nil {
 		return err
 	}
