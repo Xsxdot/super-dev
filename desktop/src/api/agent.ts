@@ -1166,6 +1166,21 @@ export const api = {
     request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, postWithApprovalToken(approvalToken)),
   restartDeployment: (id: string, approvalToken?: string) =>
     request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, postWithApprovalToken(approvalToken)),
+  startDeploymentOnHost: (id: string, hostId: string, approvalToken?: string) =>
+    request<void>(
+      `/api/deployments/${encodeURIComponent(id)}/hosts/${encodeURIComponent(hostId)}/start`,
+      postWithApprovalToken(approvalToken),
+    ),
+  stopDeploymentOnHost: (id: string, hostId: string, approvalToken?: string) =>
+    request<void>(
+      `/api/deployments/${encodeURIComponent(id)}/hosts/${encodeURIComponent(hostId)}/stop`,
+      postWithApprovalToken(approvalToken),
+    ),
+  restartDeploymentOnHost: (id: string, hostId: string, approvalToken?: string) =>
+    request<void>(
+      `/api/deployments/${encodeURIComponent(id)}/hosts/${encodeURIComponent(hostId)}/restart`,
+      postWithApprovalToken(approvalToken),
+    ),
 
   // Pipeline 模板与预览
   listPipelineTemplates: () => request<PipelineTemplatesResponse>('/api/pipeline/templates'),

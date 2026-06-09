@@ -25,7 +25,7 @@ import {
   type DeploymentNodeIssueKind,
   type DeploymentNodeState,
 } from '@/lib/deploymentNodeStatus'
-import type { Deployment, Service } from '@/api/agent'
+import type { Deployment, RuntimeInstanceStatus, Service } from '@/api/agent'
 
 const props = defineProps<{
   envName: string
@@ -92,12 +92,26 @@ function isRunningStatus(status: string): boolean {
   return status === 'running' || status === 'starting'
 }
 
+function isRuntimeHealthRunning(health: string | undefined): boolean {
+  return health === 'running' || health === 'healthy' || health === 'restarting' || health === 'starting'
+}
+
 /**
  * deploymentForService 取出本 env 下 service 对应的 deployment。
  * deployment_id 是系统唯一日志单元，一个 service 在一个 env 下对应一个 deployment。
  */
 function deploymentForService(svc: Service) {
   return svc.deployments?.find(d => d.env_name === props.envName)
+}
+
+function deploymentHostIds(dep: Deployment | undefined): string[] {
+  return [...new Set((dep?.host_ids ?? []).map(id => id.trim()).filter(Boolean))]
+}
+
+function singleRemoteHostId(dep: Deployment | undefined): string | null {
+  if (!dep || dep.location !== 'remote') return null
+  const hostIds = deploymentHostIds(dep)
+  return hostIds.length === 1 ? hostIds[0] : null
 }
 
 const remoteHostIds = computed(() => {
@@ -129,6 +143,41 @@ function deploymentNodeStatusForService(svc: Service): DeploymentAggregateNodeSt
   const dep = deploymentForService(svc)
   if (!dep) return null
   return buildDeploymentNodeStatus(dep, remoteStore.hosts, remoteManagedStatuses.value)
+}
+
+function remoteRuntimeInstanceForHost(svc: Service, hostId: string): RuntimeInstanceStatus | undefined {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.location !== 'remote') return undefined
+  return nodeStore.nodeOf(hostId)?.deployments?.find(instance => instance.deployment_id === dep.id)
+}
+
+function remoteNodeStateForHost(svc: Service, hostId: string): DeploymentNodeState | undefined {
+  return deploymentNodeStatusForService(svc)?.nodes.find(node => node.hostId === hostId)
+}
+
+function isRemoteHostRunningForActions(svc: Service, hostId: string): boolean {
+  const instance = remoteRuntimeInstanceForHost(svc, hostId)
+  if (instance) return isRuntimeHealthRunning(instance.metrics.health)
+  const node = remoteNodeStateForHost(svc, hostId)
+  // 某些远端 agent 只上报 managed collector 聚合，还没有 runtime instance。
+  // 这时 Collector 正在运行是侧边栏已有的最强运行证据，避免绿色节点仍显示“启动”。
+  if (node?.collectorExpected) return node.collectorReady
+  return isRunningStatus(deploymentForService(svc)?.status ?? '')
+}
+
+function isServiceRunningForActions(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  if (!dep) return false
+  if (dep.location !== 'remote') return isRunningStatus(dep.status)
+  const hostIds = deploymentHostIds(dep)
+  if (hostIds.length === 0) return isRunningStatus(dep.status)
+  return hostIds.some(hostId => isRemoteHostRunningForActions(svc, hostId))
+}
+
+function showServiceRowActions(svc: Service): boolean {
+  const dep = deploymentForService(svc)
+  if (!dep || !canControlDeployment(svc)) return false
+  return dep.location !== 'remote' || deploymentHostIds(dep).length <= 1
 }
 
 function deploymentNodeSummary(status: DeploymentAggregateNodeStatus): string {
@@ -217,25 +266,58 @@ function isServiceOpen(svc: Service): boolean {
 
 function canControlDeployment(svc: Service): boolean {
   const dep = deploymentForService(svc)
-  return !!dep && dep.read_only !== true
+  return !!dep && dep.read_only !== true && dep.control_mode !== 'monitor'
 }
 
 async function startOne(svc: Service) {
   const dep = deploymentForService(svc)
   if (!dep || dep.read_only) return
+  const hostId = singleRemoteHostId(dep)
+  if (hostId) {
+    await agentStore.startDeploymentOnHost(dep.id, hostId)
+    return
+  }
   await agentStore.startDeployment(dep.id)
 }
 
 async function stopOne(svc: Service) {
   const dep = deploymentForService(svc)
   if (!dep || dep.read_only) return
+  const hostId = singleRemoteHostId(dep)
+  if (hostId) {
+    await agentStore.stopDeploymentOnHost(dep.id, hostId)
+    return
+  }
   await agentStore.stopDeployment(dep.id)
 }
 
 async function restartOne(svc: Service) {
   const dep = deploymentForService(svc)
   if (!dep || dep.read_only) return
+  const hostId = singleRemoteHostId(dep)
+  if (hostId) {
+    await agentStore.restartDeploymentOnHost(dep.id, hostId)
+    return
+  }
   await agentStore.restartDeployment(dep.id)
+}
+
+async function startNode(svc: Service, hostId: string) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.startDeploymentOnHost(dep.id, hostId)
+}
+
+async function stopNode(svc: Service, hostId: string) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.stopDeploymentOnHost(dep.id, hostId)
+}
+
+async function restartNode(svc: Service, hostId: string) {
+  const dep = deploymentForService(svc)
+  if (!dep || dep.read_only) return
+  await agentStore.restartDeploymentOnHost(dep.id, hostId)
 }
 
 /**
@@ -265,15 +347,15 @@ async function startAll() {
  */
 async function stopAll() {
   const deps = props.services
-    .map(svc => svc.deployments?.find(d => d.env_name === props.envName))
-    .filter(d => d && d.read_only !== true && isRunningStatus(d.status))
+    .filter(svc => canControlDeployment(svc) && isServiceRunningForActions(svc))
+    .map(svc => deploymentForService(svc))
+    .filter((dep): dep is Deployment => !!dep)
   await Promise.all(deps.map(d => agentStore.stopDeployment(d!.id)))
 }
 
 const canStart = computed(() => props.services.some(svc => {
   if (!agentStore.isServiceEnvSelected(props.projectId, props.envName, svc.name)) return false
-  const dep = svc.deployments?.find(d => d.env_name === props.envName)
-  return dep && dep.read_only !== true && !isRunningStatus(dep.status)
+  return canControlDeployment(svc) && !isServiceRunningForActions(svc)
 }))
 
 // ===== 拖拽逻辑 =====
@@ -414,14 +496,14 @@ onUnmounted(() => {
             @pointerdown.stop
           >{{ isNodeExpanded(svc) ? '▾' : '▸' }}</button>
           <div
-            v-if="canControlDeployment(svc)"
+            v-if="showServiceRowActions(svc)"
             class="row-actions"
             data-test="service-action-rail"
             @click.stop
             @pointerdown.stop
           >
             <button
-              v-if="!isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              v-if="!isServiceRunningForActions(svc)"
               type="button"
               class="row-action start"
               data-test="row-start"
@@ -429,7 +511,7 @@ onUnmounted(() => {
               @click="startOne(svc)"
             >▶</button>
             <button
-              v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              v-if="isServiceRunningForActions(svc)"
               type="button"
               class="row-action restart"
               data-test="row-restart"
@@ -437,7 +519,7 @@ onUnmounted(() => {
               @click="restartOne(svc)"
             >↻</button>
             <button
-              v-if="isRunningStatus(deploymentForService(svc)?.status ?? '')"
+              v-if="isServiceRunningForActions(svc)"
               type="button"
               class="row-action stop"
               data-test="row-stop"
@@ -451,19 +533,54 @@ onUnmounted(() => {
           class="node-leaf-list"
           data-test="env-node-leaf-list"
         >
-          <button
+          <div
             v-for="node in deploymentNodeStatusForService(svc)?.nodes ?? []"
             :key="node.hostId"
-            type="button"
             class="node-leaf-row"
             data-test="env-node-leaf-row"
             :title="nodeIssueLabel(node)"
+            role="button"
+            tabindex="0"
             @click="onServiceRowClick(svc)"
+            @keydown.enter.prevent="onServiceRowClick(svc)"
+            @keydown.space.prevent="onServiceRowClick(svc)"
           >
             <span class="node-dot" :style="{ background: nodeHealthColor(node.health) }" />
             <span class="node-name">{{ node.hostName }}</span>
             <span class="node-issue">{{ nodeIssueLabel(node) }}</span>
-          </button>
+            <div
+              v-if="canControlDeployment(svc)"
+              class="node-row-actions"
+              data-test="node-action-rail"
+              @click.stop
+              @pointerdown.stop
+            >
+              <button
+                v-if="!isRemoteHostRunningForActions(svc, node.hostId)"
+                type="button"
+                class="row-action start"
+                data-test="node-row-start"
+                :title="t('shell.env.start')"
+                @click="startNode(svc, node.hostId)"
+              >▶</button>
+              <button
+                v-if="isRemoteHostRunningForActions(svc, node.hostId)"
+                type="button"
+                class="row-action restart"
+                data-test="node-row-restart"
+                :title="t('shell.env.restart')"
+                @click="restartNode(svc, node.hostId)"
+              >↻</button>
+              <button
+                v-if="isRemoteHostRunningForActions(svc, node.hostId)"
+                type="button"
+                class="row-action stop"
+                data-test="node-row-stop"
+                :title="t('shell.env.stop')"
+                @click="stopNode(svc, node.hostId)"
+              >⏹</button>
+            </div>
+          </div>
         </div>
       </template>
     </div>
@@ -680,7 +797,7 @@ onUnmounted(() => {
 
 .node-leaf-row {
   display: grid;
-  grid-template-columns: 8px minmax(52px, 88px) minmax(0, 1fr);
+  grid-template-columns: 8px minmax(52px, 88px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
   min-height: 28px;
@@ -715,6 +832,14 @@ onUnmounted(() => {
 
 .node-issue {
   color: var(--text-tertiary);
+}
+
+.node-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 52px;
+  justify-content: flex-end;
 }
 
 .row-action {

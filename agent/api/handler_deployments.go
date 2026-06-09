@@ -12,7 +12,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
@@ -20,63 +22,54 @@ import (
 
 // startDeployment 处理 POST /api/deployments/{id}/start。
 func (a *App) startDeployment(w http.ResponseWriter, r *http.Request) {
-	depID := r.PathValue("id")
-	dep, svc, p, ok := a.findDeploymentWithService(depID)
-	if !ok {
-		jsonError(w, http.StatusNotFound, "deployment not found")
-		return
-	}
-	plan, err := operation.PlanRuntime(operation.OperationRuntimeStart, p, svc, dep)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "invalid operation")
-		return
-	}
-	allowed, approval := a.authorizeOperation(w, r, plan)
-	if !allowed {
-		return
-	}
-	if err := a.startDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
-		a.appendOperationExecutionFailure(r, plan, approval, "failed to start deployment: "+err.Error())
-		jsonError(w, http.StatusInternalServerError, "failed to start deployment: "+err.Error())
-		return
-	}
-	jsonOK(w, map[string]string{"status": "starting"})
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", "")
 }
 
 // stopDeployment 处理 POST /api/deployments/{id}/stop。
 func (a *App) stopDeployment(w http.ResponseWriter, r *http.Request) {
-	depID := r.PathValue("id")
-	dep, svc, p, ok := a.findDeploymentWithService(depID)
-	if !ok {
-		jsonError(w, http.StatusNotFound, "deployment not found")
-		return
-	}
-	plan, err := operation.PlanRuntime(operation.OperationRuntimeStop, p, svc, dep)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "invalid operation")
-		return
-	}
-	allowed, approval := a.authorizeOperation(w, r, plan)
-	if !allowed {
-		return
-	}
-	if err := a.stopDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
-		a.appendOperationExecutionFailure(r, plan, approval, "failed to stop deployment: "+err.Error())
-		jsonError(w, http.StatusInternalServerError, "failed to stop deployment: "+err.Error())
-		return
-	}
-	jsonOK(w, map[string]string{"status": "stopped"})
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", "")
 }
 
 // restartDeployment 处理 POST /api/deployments/{id}/restart。
 func (a *App) restartDeployment(w http.ResponseWriter, r *http.Request) {
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", "")
+}
+
+// startDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/start。
+func (a *App) startDeploymentHost(w http.ResponseWriter, r *http.Request) {
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", r.PathValue("host_id"))
+}
+
+// stopDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/stop。
+func (a *App) stopDeploymentHost(w http.ResponseWriter, r *http.Request) {
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", r.PathValue("host_id"))
+}
+
+// restartDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/restart。
+func (a *App) restartDeploymentHost(w http.ResponseWriter, r *http.Request) {
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", r.PathValue("host_id"))
+}
+
+func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, kind string, okStatus string, hostID string) {
 	depID := r.PathValue("id")
 	dep, svc, p, ok := a.findDeploymentWithService(depID)
 	if !ok {
 		jsonError(w, http.StatusNotFound, "deployment not found")
 		return
 	}
-	plan, err := operation.PlanRuntime(operation.OperationRuntimeRestart, p, svc, dep)
+	runDep := dep
+	var err error
+	var plan operation.Plan
+	if strings.TrimSpace(hostID) == "" {
+		plan, err = operation.PlanRuntime(kind, p, svc, dep)
+	} else {
+		runDep, err = deploymentScopedToHost(dep, hostID)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		plan, err = operation.PlanRuntimeOnHost(kind, p, svc, runDep, hostID)
+	}
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid operation")
 		return
@@ -85,12 +78,57 @@ func (a *App) restartDeployment(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
-	if err := a.restartDeploymentRuntime(r.Context(), p.ID, dep); err != nil {
-		a.appendOperationExecutionFailure(r, plan, approval, "failed to restart deployment: "+err.Error())
-		jsonError(w, http.StatusInternalServerError, "failed to restart deployment: "+err.Error())
+	if err := a.runDeploymentRuntimeAction(r.Context(), p.ID, runDep, kind); err != nil {
+		action := runtimeActionLabel(kind)
+		a.appendOperationExecutionFailure(r, plan, approval, "failed to "+action+" deployment: "+err.Error())
+		jsonError(w, http.StatusInternalServerError, "failed to "+action+" deployment: "+err.Error())
 		return
 	}
-	jsonOK(w, map[string]string{"status": "starting"})
+	jsonOK(w, map[string]string{"status": okStatus})
+}
+
+func (a *App) runDeploymentRuntimeAction(ctx context.Context, projectID string, dep model.Deployment, kind string) error {
+	switch kind {
+	case operation.OperationRuntimeStart:
+		return a.startDeploymentRuntime(ctx, projectID, dep)
+	case operation.OperationRuntimeStop:
+		return a.stopDeploymentRuntime(ctx, projectID, dep)
+	case operation.OperationRuntimeRestart:
+		return a.restartDeploymentRuntime(ctx, projectID, dep)
+	default:
+		return operation.ErrInvalidOperation
+	}
+}
+
+func runtimeActionLabel(kind string) string {
+	switch kind {
+	case operation.OperationRuntimeStart:
+		return "start"
+	case operation.OperationRuntimeStop:
+		return "stop"
+	case operation.OperationRuntimeRestart:
+		return "restart"
+	default:
+		return "control"
+	}
+}
+
+func deploymentScopedToHost(dep model.Deployment, hostID string) (model.Deployment, error) {
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		return model.Deployment{}, fmt.Errorf("host_id is required")
+	}
+	if dep.Location != model.LocationRemote {
+		return model.Deployment{}, fmt.Errorf("host-scoped runtime control requires remote deployment")
+	}
+	for _, candidate := range dep.HostIDs {
+		if strings.TrimSpace(candidate) == hostID {
+			scoped := dep
+			scoped.HostIDs = []string{hostID}
+			return scoped, nil
+		}
+	}
+	return model.Deployment{}, fmt.Errorf("host %s is not configured for deployment %s", hostID, dep.ID)
 }
 
 func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {

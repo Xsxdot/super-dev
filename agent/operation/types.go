@@ -101,6 +101,7 @@ type Target struct {
 	ServiceID      string `json:"service_id,omitempty"`
 	ServiceName    string `json:"service_name,omitempty"`
 	DeploymentID   string `json:"deployment_id,omitempty"`
+	HostID         string `json:"host_id,omitempty"`
 	TemplatePath   string `json:"template_path,omitempty"`
 	TemplateDigest string `json:"template_digest,omitempty"`
 	PipelineID     string `json:"pipeline_id,omitempty"`
