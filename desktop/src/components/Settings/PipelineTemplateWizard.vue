@@ -62,6 +62,7 @@ const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template
 const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
 const activeInputGroup = ref<InputGroupSelection>('all')
+const activePhase = ref<PipelinePhase>('build')
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
 
@@ -168,6 +169,7 @@ function addBlock(phase: PipelinePhase) {
   const block = { id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {}, runnerTargets: [] }
   blocks.value.push(block)
   activeBlockId.value = block.id
+  activePhase.value = phase
   activeInputGroup.value = 'all'
 }
 
@@ -209,6 +211,7 @@ function roleKey(block: TemplateBlock, inputName: string) {
 function hydrateFromPipeline(pipeline?: Pipeline) {
   blocks.value = []
   activeBlockId.value = null
+  activePhase.value = 'build'
   nextBlockId.value = 0
   if (!pipeline) return
   for (const phase of phases) {
@@ -240,7 +243,10 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
         if (ids) block.targets[name] = [...ids]
       }
       blocks.value.push(block)
-      activeBlockId.value = activeBlockId.value ?? block.id
+      if (!activeBlockId.value) {
+        activeBlockId.value = block.id
+        activePhase.value = phase
+      }
     }
   }
 }
@@ -252,6 +258,7 @@ function enable() {
 function disable() {
   enabled.value = false
   blocks.value = []
+  activePhase.value = 'build'
   emit('update:modelValue', undefined)
 }
 
@@ -331,7 +338,14 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 
 function selectBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
+  activePhase.value = block.phase
   activeInputGroup.value = 'all'
+}
+
+function selectPhase(phase: PipelinePhase) {
+  activePhase.value = phase
+  const firstBlock = blocksForPhase(phase)[0]
+  if (firstBlock) selectBlock(firstBlock)
 }
 
 function blockVarSummary(block: TemplateBlock) {
@@ -425,7 +439,14 @@ defineExpose({ saveTemplate })
 
       <template>
         <div class="phase-tabs" data-test="pipeline-phase-tabs">
-          <button v-for="phase in phases" :key="phase" type="button" :class="{ active: activeBlock?.phase === phase }">
+          <button
+            v-for="phase in phases"
+            :key="phase"
+            type="button"
+            :class="{ active: activePhase === phase }"
+            :data-test="`pipeline-phase-tab-${phase}`"
+            @click="selectPhase(phase)"
+          >
             {{ phaseLabel(phase) }}
           </button>
         </div>
@@ -502,7 +523,7 @@ defineExpose({ saveTemplate })
                   v-for="group in inputGroups"
                   :key="group.key"
                   type="button"
-                  :class="{ active: activeInputGroup === group.key }"
+                  :class="{ active: activeInputGroup === group.key || (activeInputGroup === 'all' && group.key === 'machine') }"
                   :data-test="`input-group-${group.key}`"
                   @click="selectInputGroup(group.key)"
                 >

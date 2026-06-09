@@ -133,6 +133,27 @@ describe('PipelineTemplateWizard', () => {
     expect(deployOptions.join('\n')).not.toContain('Go Build')
   })
 
+  it('阶段 tab 可切换当前模板输入详情', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+
+    await wrapper.find('[data-test="pipeline-phase-tab-build"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-input-app_name"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
+    expect(wrapper.find('[data-test="block-1-role-targets"]').exists()).toBe(true)
+  })
+
   it('机器选择使用紧凑网格展示', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
