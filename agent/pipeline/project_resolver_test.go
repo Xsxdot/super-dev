@@ -129,6 +129,45 @@ func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
 	assert.Equal(t, "batch:2", resolved.Pipeline.Deploy[0].Concurrency)
 }
 
+func TestResolveInjectsSyncModeVar(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "pp-1",
+			Name:     "demo",
+			SyncMode: model.SyncModeRemoteCmd,
+			Pipeline: model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "remote_cmd", resolved.Pipeline.Variables["sync_mode"])
+}
+
+func TestResolveSyncModeDefaultsTransfer(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "pp-1",
+			Name:     "demo",
+			Pipeline: model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "transfer", resolved.Pipeline.Variables["sync_mode"])
+}
+
 func TestResolveProjectPipelineInjectsWorkspaceForRuntimeWithoutPreview(t *testing.T) {
 	project := model.Project{
 		ID:       "p1",
