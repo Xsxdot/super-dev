@@ -123,6 +123,39 @@ function projectWithPipeline(): Project {
   return p
 }
 
+function projectWithUnevenPhaseCounts(): Project {
+  const p = projectWithPipeline()
+  const pipeline = p.pipelines[0]
+  pipeline.pipeline = {
+    ...pipeline.pipeline,
+    build: [
+      ...(pipeline.pipeline?.build ?? []),
+      {
+        name: 'Vue + Go 组合构建 Extra',
+        type: 'include',
+        with: {
+          template: 'builtin://vue-go-combined',
+          version: '1.0.0',
+          digest: 'sha256:build-extra',
+          vars: { frontend_dir: '${workspace}/admin-extra' },
+        },
+      },
+    ],
+    deploy: [],
+    finally: [{
+      name: 'Systemd 清理',
+      type: 'include',
+      with: {
+        template: 'builtin://systemd-seamless',
+        version: '1.0.0',
+        digest: 'sha256:cleanup',
+        vars: {},
+      },
+    }],
+  }
+  return p
+}
+
 function mountProjectPipelineEditor(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   return mount(ProjectPipelineEditor, {
     props: { project: project(), pipelineTemplates: [] },
@@ -178,6 +211,22 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Vue + Go 组合构建')
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('模板输入')
+  })
+
+  it('左侧结构 rail 展示当前流水线真实阶段模板数量', async () => {
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithUnevenPhaseCounts(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="pipeline-editor-rail-build"]').text()).toContain('2 模板')
+    expect(wrapper.find('[data-test="pipeline-editor-rail-deploy"]').text()).toContain('0 模板')
+    expect(wrapper.find('[data-test="pipeline-editor-rail-finally"]').text()).toContain('1 模板')
   })
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {

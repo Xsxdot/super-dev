@@ -95,6 +95,58 @@ function firstPipelineId() {
   return activePipeline.value?.id || 'pipeline-1'
 }
 
+function phaseBlockCount(phase: 'build' | 'deploy' | 'finally') {
+  return activePipeline.value?.pipeline?.[phase]?.length ?? 0
+}
+
+const railItems = computed(() => {
+  const buildCount = phaseBlockCount('build')
+  const deployCount = phaseBlockCount('deploy')
+  const finallyCount = phaseBlockCount('finally')
+  return [
+    {
+      key: 'basic',
+      state: 'done',
+      icon: 'i',
+      title: t('settings.pipeline.basicInfo'),
+      hint: t('settings.pipeline.basicInfoHint'),
+      count: '',
+    },
+    {
+      key: 'build',
+      state: buildCount > 0 ? 'active' : '',
+      icon: '⌁',
+      title: t('settings.pipeline.buildPhase'),
+      hint: t('settings.pipeline.buildPhaseHint'),
+      count: `${buildCount} ${t('settings.pipeline.templateUnit')}`,
+    },
+    {
+      key: 'deploy',
+      state: buildCount === 0 && deployCount > 0 ? 'active' : '',
+      icon: '↗',
+      title: t('settings.pipeline.deployPhase'),
+      hint: t('settings.pipeline.deployPhaseHint'),
+      count: `${deployCount} ${t('settings.pipeline.templateUnit')}`,
+    },
+    {
+      key: 'finally',
+      state: buildCount === 0 && deployCount === 0 && finallyCount > 0 ? 'active' : '',
+      icon: '□',
+      title: t('settings.pipeline.cleanupPhase'),
+      hint: t('settings.pipeline.cleanupPhaseHint'),
+      count: `${finallyCount} ${t('settings.pipeline.templateUnit')}`,
+    },
+    {
+      key: 'preview',
+      state: 'preview-item',
+      icon: '◎',
+      title: t('settings.pipeline.previewAndSave'),
+      hint: t('settings.pipeline.previewHint'),
+      count: '',
+    },
+  ]
+})
+
 const pipelineYaml = computed(() => {
   const pipeline = activePipeline.value
   if (!pipeline) return ''
@@ -223,43 +275,19 @@ async function save() {
               <template #rail>
                 <aside class="pipeline-editor-rail" data-test="pipeline-editor-structure">
                   <div class="rail-title">{{ t('settings.pipeline.editorStructure') }}</div>
-                  <div class="rail-item done">
-                    <span class="rail-icon">i</span>
+                  <div
+                    v-for="item in railItems"
+                    :key="item.key"
+                    class="rail-item"
+                    :class="item.state"
+                    :data-test="`pipeline-editor-rail-${item.key}`"
+                  >
+                    <span class="rail-icon">{{ item.icon }}</span>
                     <span>
-                      <strong>{{ t('settings.pipeline.basicInfo') }}</strong>
-                      <small>{{ t('settings.pipeline.basicInfoHint') }}</small>
+                      <strong>{{ item.title }}</strong>
+                      <small>{{ item.hint }}</small>
                     </span>
-                  </div>
-                  <div class="rail-item active">
-                    <span class="rail-icon">⌁</span>
-                    <span>
-                      <strong>{{ t('settings.pipeline.buildPhase') }}</strong>
-                      <small>{{ t('settings.pipeline.buildPhaseHint') }}</small>
-                    </span>
-                    <em>1 {{ t('settings.pipeline.templateUnit') }}</em>
-                  </div>
-                  <div class="rail-item">
-                    <span class="rail-icon">↗</span>
-                    <span>
-                      <strong>{{ t('settings.pipeline.deployPhase') }}</strong>
-                      <small>{{ t('settings.pipeline.deployPhaseHint') }}</small>
-                    </span>
-                    <em>1 {{ t('settings.pipeline.templateUnit') }}</em>
-                  </div>
-                  <div class="rail-item">
-                    <span class="rail-icon">□</span>
-                    <span>
-                      <strong>{{ t('settings.pipeline.cleanupPhase') }}</strong>
-                      <small>{{ t('settings.pipeline.cleanupPhaseHint') }}</small>
-                    </span>
-                    <em>0</em>
-                  </div>
-                  <div class="rail-item preview-item">
-                    <span class="rail-icon">◎</span>
-                    <span>
-                      <strong>{{ t('settings.pipeline.previewAndSave') }}</strong>
-                      <small>{{ t('settings.pipeline.previewHint') }}</small>
-                    </span>
+                    <em v-if="item.count">{{ item.count }}</em>
                   </div>
                 </aside>
               </template>
