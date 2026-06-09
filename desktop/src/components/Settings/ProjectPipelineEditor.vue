@@ -145,6 +145,24 @@ function hostDisplayName(hostID: string) {
   return hosts.value.find(host => host.id === hostID)?.name ?? hostID
 }
 
+const targetsByEnv = computed<Record<string, string[]>>(() => {
+  const out: Record<string, string[]> = {}
+  const envs = Object.keys(activePipeline.value?.environments ?? {})
+  const serviceNames = activePipeline.value?.services ?? []
+  for (const env of envs) {
+    const ids = new Set<string>()
+    for (const service of draft.value.services ?? []) {
+      if (serviceNames.length > 0 && !serviceNames.includes(service.name)) continue
+      const deployment = (service.deployments ?? []).find(item => item.env_name === env)
+      for (const id of deployment?.host_ids ?? []) {
+        ids.add(id)
+      }
+    }
+    out[env] = [...ids].map(hostDisplayName)
+  }
+  return out
+})
+
 function builderRoleTarget() {
   const target = activePipeline.value?.roles?.builder?.hosts?.[0]
   return target ? hostDisplayName(target) : undefined
@@ -392,6 +410,7 @@ async function save() {
               :services="draft.services"
               :hosts="hosts"
               :templates="pipelineTemplates ?? []"
+              :targets-by-env="targetsByEnv"
               :initial-mode="initialMode"
               hide-preview-strip
               :on-view-template="viewTemplate"
