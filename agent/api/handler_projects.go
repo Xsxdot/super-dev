@@ -85,8 +85,11 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 分配 UUID（Loader 不负责 ID 分配）
-	assignIDs(&p)
+	// 分配 UUID 并避开已注册项目身份，复制项目目录时不能复用旧 ID。
+	a.mu.RLock()
+	used := a.projectIdentitySetLocked(-1)
+	a.mu.RUnlock()
+	assignIDsAvoiding(&p, &used)
 
 	// 持久化 ID，避免 agent 重启后 service ID 变化导致重复启动
 	if err := loader.Save(p); err != nil {

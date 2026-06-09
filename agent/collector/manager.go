@@ -89,6 +89,10 @@ func (m *Manager) Start(name string, t model.LogSourceType) (string, error) {
 //
 // 注意：同一 (name, type) 重复调用幂等；extraArgs 只在首次启动时生效。
 func (m *Manager) StartWithOptions(name string, t model.LogSourceType, extraArgs []string) (string, error) {
+	return m.startWithOptionsAs("", name, t, extraArgs)
+}
+
+func (m *Manager) startWithOptionsAs(id string, name string, t model.LogSourceType, extraArgs []string) (string, error) {
 	argv, err := BuildCommand(t, name, extraArgs)
 	if err != nil {
 		return "", err
@@ -96,19 +100,25 @@ func (m *Manager) StartWithOptions(name string, t model.LogSourceType, extraArgs
 	if err := m.probe.Exists(t, name); err != nil {
 		return "", err
 	}
-	return m.startWithArgv(name, t, argv)
+	return m.startWithArgvAs(id, name, t, argv)
 }
 
 // StartForTest 测试入口:跳过 BuildCommand,直接用指定 argv 启动。
 //
 // 仅用于测试,生产代码不要调用。
 func (m *Manager) StartForTest(name string, t model.LogSourceType, argv []string) (string, error) {
-	return m.startWithArgv(name, t, argv)
+	return m.startWithArgvAs("", name, t, argv)
 }
 
 // startWithArgv 内部入口,跳过 name/type 校验和 probe。
 func (m *Manager) startWithArgv(name string, t model.LogSourceType, argv []string) (string, error) {
-	id := CollectorID(name, t)
+	return m.startWithArgvAs("", name, t, argv)
+}
+
+func (m *Manager) startWithArgvAs(id string, name string, t model.LogSourceType, argv []string) (string, error) {
+	if id == "" {
+		id = CollectorID(name, t)
+	}
 
 	m.mu.Lock()
 	if existing, ok := m.items[id]; ok {

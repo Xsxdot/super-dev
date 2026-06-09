@@ -34,16 +34,23 @@ func buildBackend(dep model.Deployment, localDeploymentID string, s *store.Store
 
 	// remote deployment：按 host 数量决定单节点还是联邦
 	if len(dep.HostIDs) == 1 {
-		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
+		remoteDeploymentID := remoteCollectorIDForDeployment(dep)
 		return logbackend.NewRemoteAgentBackend(dep.HostIDs[0], remoteDeploymentID, transport)
 	}
 
 	children := make([]logbackend.LogBackend, 0, len(dep.HostIDs))
 	for _, hostID := range dep.HostIDs {
-		remoteDeploymentID := collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
+		remoteDeploymentID := remoteCollectorIDForDeployment(dep)
 		children = append(children, logbackend.NewRemoteAgentBackend(hostID, remoteDeploymentID, transport))
 	}
 	return logbackend.NewFederatedBackend(children)
+}
+
+func remoteCollectorIDForDeployment(dep model.Deployment) string {
+	if dep.ID != "" {
+		return dep.ID
+	}
+	return collector.CollectorID(deploymentCollectorName(dep), deploymentCollectorType(dep))
 }
 
 // deploymentCollectorType 返回远程日志采集任务类型，优先使用新 logs 配置。
