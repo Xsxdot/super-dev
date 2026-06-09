@@ -94,4 +94,23 @@ describe('useCertStore', () => {
 
     expect(result.status).toBe('active')
   })
+
+  it('throws the certificate failure reason after issue polling fails', async () => {
+    vi.useFakeTimers()
+    mockedApi.issueCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], status: 'pending' })
+    mockedApi.getCertificate.mockResolvedValue({
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      status: 'failed',
+      last_error: 'acme account email is required',
+    })
+    const store = useCertStore()
+
+    const promise = expect(store.issueCertificate('cert-1', { intervalMs: 10, maxAttempts: 3 }))
+      .rejects.toThrow('acme account email is required')
+    await vi.advanceTimersByTimeAsync(10)
+
+    await promise
+    expect(store.certificates[0].status).toBe('failed')
+  })
 })

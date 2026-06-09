@@ -133,6 +133,7 @@ export default {
       privateKey: '私钥',
       domainRequired: '至少需要一个域名',
       dnsProviderRequired: '请先配置 DNS 提供商',
+      acmeAccountRequired: '请先保存 ACME 账号邮箱',
       customDirectoryRequired: '请填写自定义 ACME 服务 URL',
       acmeAccountSaved: 'ACME 账号已保存',
       deployHosts: '部署到主机',

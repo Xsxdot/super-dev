@@ -26,6 +26,7 @@ export interface CertificatePollOptions {
 
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const DEFAULT_POLL_ATTEMPTS = 45
+const CERTIFICATE_ISSUE_FAILED = 'certificate issue failed'
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -33,6 +34,15 @@ function wait(ms: number): Promise<void> {
 
 function normalizeCertificates(certs: ManagedCertificate[] | null | undefined): ManagedCertificate[] {
   return Array.isArray(certs) ? certs : []
+}
+
+function certificateFailureMessage(cert: ManagedCertificate): string {
+  return cert.last_error?.trim() || CERTIFICATE_ISSUE_FAILED
+}
+
+function throwIfCertificateIssueFailed(cert: ManagedCertificate) {
+  if (cert.status !== 'failed') return
+  throw new Error(certificateFailureMessage(cert))
 }
 
 export const useCertStore = defineStore('cert', () => {
@@ -68,6 +78,7 @@ export const useCertStore = defineStore('cert', () => {
   async function issueCertificate(id: string, options: CertificatePollOptions = {}) {
     const issued = await certApi.issueCertificate(id)
     upsertLocal(issued)
+    throwIfCertificateIssueFailed(issued)
     if (issued.status !== 'pending') {
       return issued
     }
@@ -85,16 +96,19 @@ export const useCertStore = defineStore('cert', () => {
       upsertLocal(latest)
       // pending 表示后台任务仍在运行，其他状态都应该立即反馈给用户。
       if (latest.status !== 'pending') {
+        throwIfCertificateIssueFailed(latest)
         return latest
       }
     }
 
     const fallback = latest ?? certificates.value.find(cert => cert.id === id)
     if (fallback) {
+      throwIfCertificateIssueFailed(fallback)
       return fallback
     }
     const fetched = await certApi.getCertificate(id)
     upsertLocal(fetched)
+    throwIfCertificateIssueFailed(fetched)
     return fetched
   }
 

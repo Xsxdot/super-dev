@@ -137,7 +137,20 @@ describe('CertificateTab', () => {
     expect(wrapper.find('[data-test="cert-submit"]').attributes('disabled')).toBeDefined()
   })
 
+  it('requires a saved ACME account before creating ACME certificates', async () => {
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    await wrapper.find('[data-test="cert-add"]').trigger('click')
+    await wrapper.find('[data-test="cert-domain-0"]').setValue('api.example.com')
+    await wrapper.find('[data-test="cert-submit"]').trigger('click')
+
+    expect(wrapper.text()).toContain('请先保存 ACME 账号邮箱')
+    expect(certMock.createCertificate).not.toHaveBeenCalled()
+  })
+
   it('creates and issues an ACME certificate', async () => {
+    certMock.getACMEAccount.mockResolvedValue({ email: 'ops@example.com', directory_url: '' })
     certMock.createCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], issuer: 'acme', status: 'pending', auto_renew: true })
     certMock.issueCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], issuer: 'acme', status: 'pending', auto_renew: true })
     certMock.getCertificate.mockResolvedValue({ id: 'cert-1', domains: ['api.example.com'], issuer: 'acme', status: 'active', auto_renew: true })
@@ -162,6 +175,7 @@ describe('CertificateTab', () => {
   })
 
   it('closes the create dialog while ACME issue continues in the background', async () => {
+    certMock.getACMEAccount.mockResolvedValue({ email: 'ops@example.com', directory_url: '' })
     certMock.createCertificate.mockResolvedValue({
       id: 'cert-1',
       domains: ['api.example.com'],
@@ -261,6 +275,23 @@ describe('CertificateTab', () => {
     await wrapper.find('[data-test="cert-copy-cert-edge-a"]').trigger('click')
 
     expect(writeText).toHaveBeenCalledWith('/opt/certs/api/fullchain.pem')
+  })
+
+  it('shows the certificate failure reason in the status column', async () => {
+    certMock.listCertificates.mockResolvedValue([{
+      id: 'cert-1',
+      domains: ['api.example.com'],
+      issuer: 'acme',
+      status: 'failed',
+      auto_renew: true,
+      last_error: 'acme account email is required',
+    }])
+    const wrapper = mount(CertificateTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flush()
+
+    const row = wrapper.find('[data-test="cert-row"]')
+    expect(row.text()).toContain('失败')
+    expect(row.find('[data-test="cert-last-error"]').text()).toContain('acme account email is required')
   })
 })
 

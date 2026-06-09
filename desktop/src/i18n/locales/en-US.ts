@@ -133,6 +133,7 @@ export default {
       privateKey: 'Private Key',
       domainRequired: 'At least one domain is required',
       dnsProviderRequired: 'Configure a DNS Provider first',
+      acmeAccountRequired: 'Save the ACME account email first',
       customDirectoryRequired: 'Enter a custom ACME service URL',
       acmeAccountSaved: 'ACME account saved',
       deployHosts: 'Deploy to Hosts',

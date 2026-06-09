@@ -142,12 +142,26 @@ function cleanDomains(): string[] {
   return certDraft.domains.map(domain => domain.trim()).filter(Boolean)
 }
 
+function hasSavedACMEAccount() {
+  return Boolean(certStore.acmeAccount.email.trim())
+}
+
+function ensureSavedACMEAccount() {
+  if (hasSavedACMEAccount()) return true
+  error.value = t('settings.certificates.acmeAccountRequired')
+  return false
+}
+
 async function saveAccount() {
   saving.value = true
   error.value = ''
   accountNotice.value = ''
   clearAccountNoticeTimer()
   try {
+    if (!accountDraft.email.trim()) {
+      error.value = t('settings.certificates.acmeAccountRequired')
+      return
+    }
     const directoryURL = selectedDirectoryURL()
     if (!directoryURL) {
       error.value = t('settings.certificates.customDirectoryRequired')
@@ -178,6 +192,9 @@ async function submitCertificate() {
     error.value = t('settings.certificates.dnsProviderRequired')
     return
   }
+  if (certDraft.issuer === 'acme' && !ensureSavedACMEAccount()) {
+    return
+  }
   saving.value = true
   error.value = ''
   try {
@@ -203,6 +220,9 @@ async function submitCertificate() {
 }
 
 async function issueCertificate(cert: ManagedCertificate) {
+  if (cert.issuer === 'acme' && !ensureSavedACMEAccount()) {
+    return
+  }
   saving.value = true
   error.value = ''
   try {
@@ -396,10 +416,13 @@ function startIssuePolling(certID: string) {
             <td>{{ cert.domains.join(', ') }}</td>
             <td>{{ cert.issuer }}</td>
             <td>
-              <span class="status-cell">
-                <span class="status-dot" :class="cert.status" />
-                {{ certStatusText(cert.status) }}
-              </span>
+              <div class="status-column">
+                <span class="status-cell">
+                  <span class="status-dot" :class="cert.status" />
+                  {{ certStatusText(cert.status) }}
+                </span>
+                <div v-if="cert.last_error" class="cert-error" data-test="cert-last-error">{{ cert.last_error }}</div>
+              </div>
             </td>
             <td class="settings-mono">{{ certExpiresAt(cert) }}</td>
             <td>
@@ -659,6 +682,17 @@ function startIssuePolling(certID: string) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.status-column {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+}
+.cert-error {
+  color: var(--status-failed);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
 }
 .deployment-list {
   display: grid;
