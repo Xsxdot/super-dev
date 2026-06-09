@@ -36,6 +36,25 @@ func TestAppendAndFetch(t *testing.T) {
 	assert.Equal(t, "boom", got[1].Message)
 }
 
+func TestAppendBatchUpsertsByFoldKey(t *testing.T) {
+	s := newTestStore(t)
+	ts := time.Now().UTC()
+
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "r", Timestamp: ts, Level: "INFO", Message: "boom", Stream: "stdout", FoldKey: "k1", RepeatCount: 1},
+	}))
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "r", Timestamp: ts.Add(time.Second), Level: "INFO", Message: "boom", Stream: "stdout", FoldKey: "k1", RepeatCount: 5},
+	}))
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "A"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 5, got[0].RepeatCount)
+	assert.Equal(t, "k1", got[0].FoldKey)
+	assert.Equal(t, ts.Add(time.Second), got[0].Timestamp)
+}
+
 func TestFetchPagination(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()
@@ -112,8 +131,8 @@ func TestSearchFindsKeywordAcrossServicesInTimeOrder(t *testing.T) {
 
 	got, err := s.Search(store.SearchParams{
 		DeploymentIDs: []string{"svc-a", "svc-b", "svc-c"},
-		Query:      "trace-8f21",
-		Limit:      10,
+		Query:         "trace-8f21",
+		Limit:         10,
 	})
 	require.NoError(t, err)
 
@@ -134,8 +153,8 @@ func TestSearchRestrictsToServiceSet(t *testing.T) {
 
 	got, err := s.Search(store.SearchParams{
 		DeploymentIDs: []string{"svc-b"},
-		Query:      "trace-8f21",
-		Limit:      10,
+		Query:         "trace-8f21",
+		Limit:         10,
 	})
 	require.NoError(t, err)
 
@@ -156,8 +175,8 @@ func TestSearchPagesAfterCursorWithoutChangingCounts(t *testing.T) {
 
 	first, err := s.Search(store.SearchParams{
 		DeploymentIDs: []string{"svc-a", "svc-b"},
-		Query:      "trace page",
-		Limit:      2,
+		Query:         "trace page",
+		Limit:         2,
 	})
 	require.NoError(t, err)
 	require.Len(t, first.Entries, 2)
@@ -168,10 +187,10 @@ func TestSearchPagesAfterCursorWithoutChangingCounts(t *testing.T) {
 	cursor := first.Entries[len(first.Entries)-1]
 	second, err := s.Search(store.SearchParams{
 		DeploymentIDs: []string{"svc-a", "svc-b"},
-		Query:      "trace page",
-		Limit:      2,
-		CursorTime: &cursor.Timestamp,
-		CursorID:   cursor.ID,
+		Query:         "trace page",
+		Limit:         2,
+		CursorTime:    &cursor.Timestamp,
+		CursorID:      cursor.ID,
 	})
 	require.NoError(t, err)
 
@@ -197,10 +216,10 @@ func TestFetchContextReturnsProjectServicesAroundTargetTime(t *testing.T) {
 	targetID := search.Entries[0].ID
 
 	got, err := s.FetchContext(store.ContextParams{
-		TargetID:   targetID,
+		TargetID:      targetID,
 		DeploymentIDs: []string{"svc-a", "svc-b", "svc-c"},
-		Before:     3 * time.Second,
-		After:      3 * time.Second,
+		Before:        3 * time.Second,
+		After:         3 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -221,10 +240,10 @@ func TestFetchContextRejectsTargetOutsideServiceSet(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = s.FetchContext(store.ContextParams{
-		TargetID:   search.Entries[0].ID,
+		TargetID:      search.Entries[0].ID,
 		DeploymentIDs: []string{"svc-b"},
-		Before:     time.Second,
-		After:      time.Second,
+		Before:        time.Second,
+		After:         time.Second,
 	})
 	require.ErrorIs(t, err, store.ErrLogEntryNotFound)
 }
@@ -247,22 +266,22 @@ func TestFetchContextPagePagesBeforeAndAfter(t *testing.T) {
 	target := search.Entries[0]
 
 	before, err := s.FetchContextPage(store.ContextPageParams{
-		DeploymentID:  "svc-a",
-		CursorTime: target.Timestamp,
-		CursorID:   target.ID,
-		Direction:  store.ContextPageBefore,
-		Limit:      2,
+		DeploymentID: "svc-a",
+		CursorTime:   target.Timestamp,
+		CursorID:     target.ID,
+		Direction:    store.ContextPageBefore,
+		Limit:        2,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a-2", "a-1"}, messagesOf(before.Entries))
 	assert.True(t, before.HasMore)
 
 	after, err := s.FetchContextPage(store.ContextPageParams{
-		DeploymentID:  "svc-a",
-		CursorTime: target.Timestamp,
-		CursorID:   target.ID,
-		Direction:  store.ContextPageAfter,
-		Limit:      2,
+		DeploymentID: "svc-a",
+		CursorTime:   target.Timestamp,
+		CursorID:     target.ID,
+		Direction:    store.ContextPageAfter,
+		Limit:        2,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a+1", "a+2"}, messagesOf(after.Entries))

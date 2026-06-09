@@ -152,11 +152,14 @@ func migrate(db *sql.DB) error {
 			timestamp     DATETIME NOT NULL,
 			level         TEXT     NOT NULL,
 			message       TEXT     NOT NULL,
-			stream        TEXT     NOT NULL
+			stream        TEXT     NOT NULL,
+			repeat_count  INTEGER  NOT NULL DEFAULT 1,
+			fold_key      TEXT     NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_deployment_id ON log_entries(deployment_id);
 		CREATE INDEX IF NOT EXISTS idx_run_id        ON log_entries(run_id);
 		CREATE INDEX IF NOT EXISTS idx_timestamp     ON log_entries(timestamp);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_fold_key ON log_entries(fold_key) WHERE fold_key != '';
 
 		CREATE TABLE IF NOT EXISTS pipeline_artifacts (
 			project_id  TEXT NOT NULL,
@@ -202,7 +205,47 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureLogEntriesFoldColumns(db); err != nil {
+		return err
+	}
 	return ensurePipelineRunLogsHostNameColumn(db)
+}
+
+func ensureLogEntriesFoldColumns(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(log_entries)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !cols["repeat_count"] {
+		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return err
+		}
+	}
+	if !cols["fold_key"] {
+		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN fold_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fold_key ON log_entries(fold_key) WHERE fold_key != ''`)
+	return err
 }
 
 func ensurePipelineRunLogsHostNameColumn(db *sql.DB) error {
@@ -249,8 +292,11 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 		return err
 	}
 	stmt, err := tx.Prepare(`
-		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(fold_key) WHERE fold_key != '' DO UPDATE SET
+			repeat_count = excluded.repeat_count,
+			timestamp    = excluded.timestamp
 	`)
 	if err != nil {
 		_ = tx.Rollback()
@@ -259,7 +305,11 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 	defer stmt.Close()
 
 	for _, e := range entries {
-		if _, err := stmt.Exec(e.DeploymentID, e.RunID, e.Timestamp.UTC(), e.Level, e.Message, e.Stream); err != nil {
+		repeatCount := e.RepeatCount
+		if repeatCount <= 0 {
+			repeatCount = 1
+		}
+		if _, err := stmt.Exec(e.DeploymentID, e.RunID, e.Timestamp.UTC(), e.Level, e.Message, e.Stream, repeatCount, e.FoldKey); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -282,7 +332,7 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		p.Limit = 1000
 	}
 
-	query := `SELECT id, deployment_id, run_id, timestamp, level, message, stream FROM log_entries WHERE 1=1`
+	query := `SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key FROM log_entries WHERE 1=1`
 	args := []any{}
 
 	if p.DeploymentID != "" {
@@ -310,7 +360,7 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 	for rows.Next() {
 		var e model.LogEntry
 		// modernc.org/sqlite 将 DATETIME 列以 time.Time 形式返回，直接 Scan 避免格式解析歧义。
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -410,7 +460,7 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	}
 
 	entryQuery := fmt.Sprintf(
-		"SELECT id, deployment_id, run_id, timestamp, level, message, stream FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
+		"SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
 		entryWhere,
 		p.Limit+1,
 	)
@@ -421,7 +471,7 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)
@@ -479,7 +529,7 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 	from := result.AnchorTime.Add(-p.Before)
 	to := result.AnchorTime.Add(p.After)
 	contextQuery := fmt.Sprintf(`
-		SELECT id, deployment_id, run_id, timestamp, level, message, stream
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key
 		FROM log_entries
 		WHERE deployment_id IN (%s) AND timestamp >= ? AND timestamp <= ?
 		ORDER BY timestamp ASC, id ASC
@@ -493,7 +543,7 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
 			return result, err
 		}
 		result.ItemsByDeployment[e.DeploymentID] = append(result.ItemsByDeployment[e.DeploymentID], e)
@@ -529,7 +579,7 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, deployment_id, run_id, timestamp, level, message, stream
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key
 		FROM log_entries
 		WHERE deployment_id = ? AND %s
 		ORDER BY timestamp %s, id %s
@@ -550,7 +600,7 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 
 	for rows.Next() {
 		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream); err != nil {
+		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)
