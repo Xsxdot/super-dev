@@ -72,9 +72,10 @@ func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.Mana
 	}
 	for _, failure := range collectorResult.Failed {
 		result.FailedCollectors = append(result.FailedCollectors, model.ManagedCollectorFailure{
-			Name:  failure.Name,
-			Type:  failure.Type,
-			Error: failure.Error,
+			CollectorID: failure.ID,
+			Name:        failure.Name,
+			Type:        failure.Type,
+			Error:       failure.Error,
 		})
 	}
 	status := a.buildManagedDeploymentStatus(normalized, desiredCollectors, result)
@@ -196,7 +197,7 @@ func managedCollectorsFromDeployments(list []model.ManagedDeployment) []collecto
 			log.Printf("[SuperDev] skip unsupported managed collector for deployment %s: logs=%+v", item.DeploymentID, item.Logs)
 			continue
 		}
-		out = append(out, collector.DesiredCollector{Name: name, Type: t, ExtraArgs: extraArgs})
+		out = append(out, collector.DesiredCollector{ID: item.DeploymentID, Name: name, Type: t, ExtraArgs: extraArgs})
 	}
 	return out
 }
@@ -208,7 +209,11 @@ func (a *App) buildManagedDeploymentStatus(
 ) model.ManagedDeploymentStatus {
 	failureByKey := map[string]string{}
 	for _, failure := range result.FailedCollectors {
-		failureByKey[collector.CollectorID(failure.Name, failure.Type)] = failure.Error
+		key := failure.CollectorID
+		if key == "" {
+			key = collector.CollectorID(failure.Name, failure.Type)
+		}
+		failureByKey[key] = failure.Error
 	}
 
 	collectorStatuses := make([]model.ManagedCollectorStatus, 0, len(list))
@@ -216,7 +221,7 @@ func (a *App) buildManagedDeploymentStatus(
 		if item.Logs == nil {
 			continue
 		}
-		dep := model.Deployment{Logs: item.Logs}
+		dep := model.Deployment{ID: item.DeploymentID, Logs: item.Logs}
 		name, t, _, ok := managedCollectorTarget(dep)
 		status := model.ManagedCollectorStatus{
 			DeploymentID: item.DeploymentID,
@@ -233,7 +238,7 @@ func (a *App) buildManagedDeploymentStatus(
 		}
 		status.Name = name
 		status.Type = t
-		status.CollectorID = collector.CollectorID(name, t)
+		status.CollectorID = managedDeploymentCollectorID(dep)
 		if col, exists := a.collector.Get(status.CollectorID); exists {
 			status.Running = true
 			status.Status = col.Status
@@ -256,6 +261,9 @@ func managedDeploymentCollectorID(dep model.Deployment) string {
 	name, t, _, ok := managedCollectorTarget(dep)
 	if !ok {
 		return ""
+	}
+	if dep.ID != "" {
+		return dep.ID
 	}
 	return collector.CollectorID(name, t)
 }

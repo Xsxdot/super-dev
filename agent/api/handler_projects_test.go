@@ -113,6 +113,34 @@ func TestAddProject_BuildsDeploymentLogBackends(t *testing.T) {
 	assert.NotNil(t, body.Items)
 }
 
+// TestAddProject_RewritesCopiedProjectIdentities 验证复制项目目录后，
+// 第二个项目不会复用已有的 project/deployment ID。
+func TestAddProject_RewritesCopiedProjectIdentities(t *testing.T) {
+	srv, _ := newTestApp(t)
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+	writeCopiedIdentityProject(t, firstDir)
+	writeCopiedIdentityProject(t, secondDir)
+
+	first := addProjectFromConfigDir(t, srv.URL, firstDir)
+	second := addProjectFromConfigDir(t, srv.URL, secondDir)
+
+	require.Len(t, first.Services, 1)
+	require.Len(t, first.Services[0].Deployments, 1)
+	require.Len(t, second.Services, 1)
+	require.Len(t, second.Services[0].Deployments, 1)
+	assert.Equal(t, "copied-project", first.ID)
+	assert.Equal(t, "api-dev", first.Services[0].Deployments[0].ID)
+	assert.NotEqual(t, first.ID, second.ID)
+	assert.NotEqual(t, first.Services[0].Deployments[0].ID, second.Services[0].Deployments[0].ID)
+
+	saved, err := os.ReadFile(filepath.Join(secondDir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(saved), "id: "+second.ID)
+	assert.Contains(t, string(saved), "id: "+second.Services[0].Deployments[0].ID)
+	assert.NotContains(t, string(saved), "\n        id: api-dev\n")
+}
+
 func writeProjectWithDeployment(t *testing.T, dir string) {
 	t.Helper()
 	cfgDir := filepath.Join(dir, ".superdev")
@@ -137,4 +165,44 @@ services:
           type: process
 `
 	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(content), 0o644))
+}
+
+func writeCopiedIdentityProject(t *testing.T, dir string) {
+	t.Helper()
+	cfgDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	content := `
+id: copied-project
+name: copied
+environments:
+  - name: dev
+    is_dev: true
+    order: 1
+services:
+  - id: svc-api
+    name: api
+    deployments:
+      - id: api-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: echo ready
+        working_dir: .
+        logs:
+          type: process
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(content), 0o644))
+}
+
+func addProjectFromConfigDir(t *testing.T, srvURL string, dir string) model.Project {
+	t.Helper()
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srvURL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	return created
 }

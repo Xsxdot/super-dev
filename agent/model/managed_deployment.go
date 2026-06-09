@@ -34,9 +34,10 @@ type ManagedDeployment struct {
 
 // ManagedCollectorFailure 表示某个期望 collector 未能启动。
 type ManagedCollectorFailure struct {
-	Name  string        `json:"name"`
-	Type  LogSourceType `json:"type"`
-	Error string        `json:"error"`
+	CollectorID string        `json:"collector_id,omitempty"`
+	Name        string        `json:"name"`
+	Type        LogSourceType `json:"type"`
+	Error       string        `json:"error"`
 }
 
 // ManagedDeploymentReconcileResult 表示远端应用声明式清单后的状态。
