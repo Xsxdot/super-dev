@@ -75,8 +75,10 @@ func TestRemoteRuntimeControllerRunsStopCommandOnEachHost(t *testing.T) {
 	recent := app.buf.Recent(1)
 	require.Len(t, recent, 1)
 	assert.Equal(t, "dep-api-prod", recent[0].DeploymentID)
-	assert.Equal(t, "h2", recent[0].SourceID)
+	assert.Equal(t, "h1", recent[0].SourceID)
 	assert.Equal(t, "remote command output", recent[0].Message)
+	assert.Equal(t, 2, recent[0].RepeatCount)
+	assert.NotEmpty(t, recent[0].FoldKey)
 }
 
 func TestRemoteRuntimeControllerRequiresStopCommand(t *testing.T) {

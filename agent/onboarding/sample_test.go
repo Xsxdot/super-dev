@@ -60,7 +60,9 @@ func TestSeedSampleProjectCopiesRegistersAndMarks(t *testing.T) {
 func TestSeedSampleProjectSkipsWhenAlreadyMarked(t *testing.T) {
 	dataDir := t.TempDir()
 	settings := config.NewSettingsStore(dataDir)
-	require.NoError(t, settings.Save(config.AgentSettings{LogRetentionDays: 7, SampleSeeded: true}))
+	initial := config.DefaultAgentSettings()
+	initial.SampleSeeded = true
+	require.NoError(t, settings.Save(initial))
 	reg := &fakeRegistry{}
 
 	result, err := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
