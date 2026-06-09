@@ -196,10 +196,14 @@ const panelFilterSignature = computed(() => {
   return `${panel.logic}:${chips}`
 })
 
-const ruleFilteredLogs = computed(() => {
+const ruleFilterResult = computed(() => {
   panelFilterSignature.value
-  return filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value)
+  return filterStore.applyFiltersWithStats(props.panelId, props.projectId ?? null, rawLogs.value)
 })
+
+const ruleFilteredLogs = computed(() => ruleFilterResult.value.logs)
+
+const ruleFilteredCount = computed(() => ruleFilterResult.value.filteredCount)
 
 const selectedRemoteHostIds = computed(() => {
   const deploymentId = deploymentIdFromSource(props.source)
@@ -680,6 +684,7 @@ function toggleNode(hostId: string) {
     <div class="status-bar" data-test="log-panel-status">
       <span>
         {{ t('panel.log.liveStats', { total: stats.total }) }}
+        <template v-if="ruleFilteredCount > 0"> · {{ t('panel.log.filtered', { count: ruleFilteredCount }) }}</template>
         <template v-if="stats.folded > 0"> · {{ t('panel.log.folded', { count: stats.folded }) }}</template>
       </span>
       <div class="status-badges">

@@ -857,6 +857,7 @@ export default {
       addSelectionToFilter: '填入过滤关键词',
       newLogs: '↓ {count} 条新日志',
       liveStats: '实时 · 显示 {total} 条',
+      filtered: '已过滤 {count} 条',
       folded: '折叠 {count} 条',
       errors: '● {count} 错误',
       warnings: '● {count} 警告',

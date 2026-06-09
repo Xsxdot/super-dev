@@ -857,6 +857,7 @@ export default {
       addSelectionToFilter: 'Use as filter keyword',
       newLogs: '↓ {count} new logs',
       liveStats: 'Live · showing {total}',
+      filtered: 'filtered {count}',
       folded: 'Folded {count}',
       errors: '● {count} errors',
       warnings: '● {count} warnings',
