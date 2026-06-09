@@ -133,6 +133,8 @@ type App struct {
 	managedStatus          model.ManagedDeploymentStatus
 	managedReconciler      *HostDeploymentReconciler
 	managedReconcileCancel context.CancelFunc
+	logCleanupCancel       context.CancelFunc
+	logCleanupDone         <-chan struct{}
 	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
@@ -328,6 +330,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if executionAuthorizer == nil {
 		executionAuthorizer = remoteexec.AllowAll{}
 	}
+	logCleanupCtx, logCleanupCancel := context.WithCancel(context.Background())
+	logCleanupDone := make(chan struct{})
 
 	app := &App{
 		cfg:                         cfg,
@@ -341,6 +345,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		collector:                   colMgr,
 		managedStore:                managedStore,
 		managedProjectIDs:           map[string]struct{}{},
+		logCleanupCancel:            logCleanupCancel,
+		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
 		agentStore:                  agentStore,
@@ -367,6 +373,14 @@ func NewApp(cfg AppConfig) (*App, error) {
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
 		ingressRegistry:             ingress.NewRegistry(),
 	}
+	cleaner := newLogCleaner(s, cleanupConfig{
+		RetentionDays: settings.LogRetentionDays,
+		MaxBytes:      settings.LogMaxBytes,
+	})
+	go func() {
+		defer close(logCleanupDone)
+		cleaner.Start(logCleanupCtx, time.Duration(settings.LogCleanupIntervalSeconds)*time.Second)
+	}()
 	if err := app.initIngress(agentHealthCtx); err != nil {
 		app.Close()
 		return nil, err
@@ -415,6 +429,12 @@ func (a *App) Close() {
 	}
 	if a.managedReconcileCancel != nil {
 		a.managedReconcileCancel()
+	}
+	if a.logCleanupCancel != nil {
+		a.logCleanupCancel()
+	}
+	if a.logCleanupDone != nil {
+		<-a.logCleanupDone
 	}
 	if a.procMgr != nil {
 		a.procMgr.StopAll()
