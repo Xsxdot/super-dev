@@ -72,13 +72,83 @@ describe('PipelinesTab', () => {
     expect(wrapper.text()).toContain('Deploy Dev')
     await new Promise(r => setTimeout(r))
     expect(wrapper.find('[data-test="pipeline-console-summary"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="pipeline-stat-total"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="pipeline-stat-success"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="pipeline-refresh"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-table-scroll"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-table-head"]').text()).toContain('流水线')
     expect(wrapper.find('[data-test="pipeline-overview"]').text()).toContain('Deploy Dev')
+    expect(wrapper.find('[data-test="pipeline-overview-phases"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-latest-version"]').text()).toContain('v1')
     expect(wrapper.find('[data-test="pipeline-latest-duration"]').text()).toContain('10s')
+    expect(wrapper.find('[data-test="pipeline-timezone"]').text()).toContain('Asia/Shanghai')
 
     expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p1', 'deploy-dev')
     expect(wrapper.find('[data-test="run-history"]').text()).toContain('v1')
+    expect(wrapper.find('[data-test="run-history-timeline"]').exists()).toBe(true)
+  })
+
+  it('limits expanded history to recent records and exposes the full history action', async () => {
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
+      items: Array.from({ length: 12 }, (_, index) => run({
+        id: `run-${index}`,
+        artifact_version: `v${index}`,
+        started_at: 1000 + index,
+        finished_at: 11000 + index,
+        status: index > 4 ? 'failed' : 'success',
+      })),
+    })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.findAll('[data-test="run-history-row"]')).toHaveLength(5)
+    expect(wrapper.find('[data-test="run-history-view-all"]').text()).toContain('12')
+  })
+
+  it('refreshes all pipeline runs from the dashboard action', async () => {
+    const p = project()
+    p.pipelines = [
+      { id: 'deploy-dev', name: 'Deploy Dev', services: ['api'], artifact_kind: 'file', pipeline: {} },
+      { id: 'deploy-prod', name: 'Deploy Prod', services: ['api'], artifact_kind: 'file', pipeline: {} },
+    ]
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({ items: [run()] })
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+    vi.mocked(api.listProjectPipelineRuns).mockClear()
+
+    await wrapper.find('[data-test="pipeline-refresh"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p1', 'deploy-dev')
+    expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p1', 'deploy-prod')
+  })
+
+  it('isolates run history by project when pipeline ids match', async () => {
+    const firstProject = project()
+    const secondProject: Project = {
+      ...project(),
+      id: 'p2',
+      name: 'demo 2',
+      services: [{ id: 'svc-api-2', project_id: 'p2', name: 'api', status: '', required: true, order: 0, deployments: [] }],
+    }
+    vi.mocked(api.listProjectPipelineRuns).mockImplementation(async (projectId) => ({
+      items: [run({
+        id: projectId === 'p1' ? 'run-p1' : 'run-p2',
+        project_id: projectId,
+        artifact_version: projectId === 'p1' ? 'v-p1' : 'v-p2',
+      })],
+    }))
+    const wrapper = mount(PipelinesTab, { props: { project: firstProject }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="run-history"]').text()).toContain('v-p1')
+
+    await wrapper.setProps({ project: secondProject })
+    await new Promise(r => setTimeout(r))
+
+    expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p2', 'deploy-dev')
+    expect(wrapper.find('[data-test="run-history"]').text()).toContain('v-p2')
+    expect(wrapper.find('[data-test="run-history"]').text()).not.toContain('v-p1')
   })
 
   it('shows failed pipeline count in console summary', async () => {
@@ -89,7 +159,7 @@ describe('PipelinesTab', () => {
     await new Promise(r => setTimeout(r))
 
     expect(wrapper.find('[data-test="pipeline-console-summary"]').text()).toContain('1')
-    expect(wrapper.find('[data-test="pipeline-status"]').text()).toContain('failed')
+    expect(wrapper.find('[data-test="pipeline-status"]').text()).toContain('失败')
   })
 
   it('deploys selected environment and navigates to live console', async () => {

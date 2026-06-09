@@ -13,6 +13,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/xsxdot/super-dev/agent/ingress"
@@ -26,13 +27,17 @@ func TestEnsureRecordCreatesMissingRecord(t *testing.T) {
 		}
 		actions = append(actions, r.Form.Get("Action"))
 		switch r.Form.Get("Action") {
-		case "DescribeDomainRecords":
+		case "DescribeSubDomainRecords":
+			assertEqual(t, r.Form.Get("DomainName"), "example.com")
+			assertEqual(t, r.Form.Get("SubDomain"), "api.example.com")
+			assertEqual(t, r.Form.Get("PageSize"), "100")
 			_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[]}}`))
 		case "AddDomainRecord":
 			assertEqual(t, r.Form.Get("DomainName"), "example.com")
 			assertEqual(t, r.Form.Get("RR"), "api")
 			assertEqual(t, r.Form.Get("Type"), "A")
 			assertEqual(t, r.Form.Get("Value"), "203.0.113.10")
+			assertEqual(t, r.Form.Get("TTL"), "600")
 			_, _ = w.Write([]byte(`{"RecordId":"rec-1"}`))
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -50,7 +55,7 @@ func TestEnsureRecordCreatesMissingRecord(t *testing.T) {
 
 	assertBool(t, result.Changed, true)
 	assertEqual(t, result.Record.ID, "rec-1")
-	assertStringSliceEqual(t, actions, []string{"DescribeDomainRecords", "AddDomainRecord"})
+	assertStringSliceEqual(t, actions, []string{"DescribeSubDomainRecords", "AddDomainRecord"})
 }
 
 func TestEnsureRecordUpdatesChangedRecord(t *testing.T) {
@@ -61,11 +66,12 @@ func TestEnsureRecordUpdatesChangedRecord(t *testing.T) {
 		}
 		actions = append(actions, r.Form.Get("Action"))
 		switch r.Form.Get("Action") {
-		case "DescribeDomainRecords":
+		case "DescribeSubDomainRecords":
 			_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[{"RecordId":"rec-1","RR":"api","Type":"A","Value":"198.51.100.1","TTL":120}]}}`))
 		case "UpdateDomainRecord":
 			assertEqual(t, r.Form.Get("RecordId"), "rec-1")
 			assertEqual(t, r.Form.Get("Value"), "203.0.113.10")
+			assertEqual(t, r.Form.Get("TTL"), "600")
 			_, _ = w.Write([]byte(`{"RecordId":"rec-1"}`))
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -82,7 +88,7 @@ func TestEnsureRecordUpdatesChangedRecord(t *testing.T) {
 	}
 
 	assertBool(t, result.Changed, true)
-	assertStringSliceEqual(t, actions, []string{"DescribeDomainRecords", "UpdateDomainRecord"})
+	assertStringSliceEqual(t, actions, []string{"DescribeSubDomainRecords", "UpdateDomainRecord"})
 }
 
 func TestEnsureRecordKeepsMatchingRecord(t *testing.T) {
@@ -92,7 +98,7 @@ func TestEnsureRecordKeepsMatchingRecord(t *testing.T) {
 			t.Fatalf("ParseForm() error = %v", err)
 		}
 		actions = append(actions, r.Form.Get("Action"))
-		_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[{"RecordId":"rec-1","RR":"api","Type":"A","Value":"203.0.113.10","TTL":300}]}}`))
+		_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[{"RecordId":"rec-1","RR":"api","Type":"A","Value":"203.0.113.10","TTL":600}]}}`))
 	}))
 	defer srv.Close()
 
@@ -106,7 +112,97 @@ func TestEnsureRecordKeepsMatchingRecord(t *testing.T) {
 
 	assertBool(t, result.Changed, false)
 	assertEqual(t, result.Record.ID, "rec-1")
-	assertStringSliceEqual(t, actions, []string{"DescribeDomainRecords"})
+	assertStringSliceEqual(t, actions, []string{"DescribeSubDomainRecords"})
+}
+
+func TestEnsureRecordKeepsExistingTXTChallengeValueWithDifferentTTL(t *testing.T) {
+	var actions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm() error = %v", err)
+		}
+		actions = append(actions, r.Form.Get("Action"))
+		_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[{"RecordId":"txt-1","RR":"_acme-challenge","Type":"TXT","Value":"token-value","TTL":600}]}}`))
+	}))
+	defer srv.Close()
+
+	provider := New(Config{Name: "aliyun-prod", AccessKeyID: "ak", AccessKeySecret: "sk", BaseURL: srv.URL})
+	result, err := provider.EnsureRecord(context.Background(), ingress.Record{
+		Type: ingress.RecordTXT, Name: "_acme-challenge.example.com", Value: "token-value", TTL: 120,
+	})
+	if err != nil {
+		t.Fatalf("EnsureRecord() error = %v", err)
+	}
+
+	assertBool(t, result.Changed, false)
+	assertEqual(t, result.Record.ID, "txt-1")
+	assertStringSliceEqual(t, actions, []string{"DescribeSubDomainRecords"})
+}
+
+func TestEnsureRecordAddsAdditionalTXTChallengeValue(t *testing.T) {
+	var actions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm() error = %v", err)
+		}
+		actions = append(actions, r.Form.Get("Action"))
+		switch r.Form.Get("Action") {
+		case "DescribeSubDomainRecords":
+			_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[{"RecordId":"txt-1","RR":"_acme-challenge","Type":"TXT","Value":"old-token","TTL":120}]}}`))
+		case "AddDomainRecord":
+			assertEqual(t, r.Form.Get("DomainName"), "example.com")
+			assertEqual(t, r.Form.Get("RR"), "_acme-challenge")
+			assertEqual(t, r.Form.Get("Type"), "TXT")
+			assertEqual(t, r.Form.Get("Value"), "new-token")
+			assertEqual(t, r.Form.Get("TTL"), "600")
+			_, _ = w.Write([]byte(`{"RecordId":"txt-2"}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	provider := New(Config{Name: "aliyun-prod", AccessKeyID: "ak", AccessKeySecret: "sk", BaseURL: srv.URL})
+	result, err := provider.EnsureRecord(context.Background(), ingress.Record{
+		Type: ingress.RecordTXT, Name: "_acme-challenge.example.com", Value: "new-token", TTL: 120,
+	})
+	if err != nil {
+		t.Fatalf("EnsureRecord() error = %v", err)
+	}
+
+	assertBool(t, result.Changed, true)
+	assertEqual(t, result.Record.ID, "txt-2")
+	assertStringSliceEqual(t, actions, []string{"DescribeSubDomainRecords", "AddDomainRecord"})
+}
+
+func TestEnsureRecordReportsAliyunErrorBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm() error = %v", err)
+		}
+		switch r.Form.Get("Action") {
+		case "DescribeSubDomainRecords":
+			_, _ = w.Write([]byte(`{"DomainRecords":{"Record":[]}}`))
+		case "AddDomainRecord":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Code":"DomainRecordDuplicate","Message":"解析记录已存在","RequestId":"req-1"}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	provider := New(Config{Name: "aliyun-prod", AccessKeyID: "ak", AccessKeySecret: "sk", BaseURL: srv.URL})
+	_, err := provider.EnsureRecord(context.Background(), ingress.Record{
+		Type: ingress.RecordTXT, Name: "_acme-challenge.example.com", Value: "token-value", TTL: 120,
+	})
+	if err == nil {
+		t.Fatal("EnsureRecord() error = nil, want aliyun error")
+	}
+	requireErrorContains(t, err, "status 400")
+	requireErrorContains(t, err, "DomainRecordDuplicate")
+	requireErrorContains(t, err, "解析记录已存在")
+	requireErrorContains(t, err, "req-1")
 }
 
 func TestRemoveRecordDeletesByRecordID(t *testing.T) {
@@ -159,5 +255,15 @@ func assertStringSliceEqual(t *testing.T, got []string, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}
+	}
+}
+
+func requireErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error = nil, want containing %q", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }

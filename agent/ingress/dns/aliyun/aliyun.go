@@ -28,7 +28,13 @@ import (
 	"github.com/xsxdot/super-dev/agent/ingress"
 )
 
-const defaultBaseURL = "https://alidns.aliyuncs.com/"
+const (
+	defaultBaseURL      = "https://alidns.aliyuncs.com/"
+	aliyunListPageSize  = 100
+	aliyunMinTTL        = 600
+	aliyunMaxTTL        = 86400
+	maxErrorBodyPreview = 512
+)
 
 // Config 描述阿里云 DNS provider 的运行配置。
 type Config struct {
@@ -132,6 +138,9 @@ func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ing
 			record.ID = existing.ID
 			return ingress.RecordResult{Record: record, Changed: false}, nil
 		}
+		if record.Type == ingress.RecordTXT {
+			continue
+		}
 		updatedID, err := p.updateRecord(ctx, existing.ID, record)
 		if err != nil {
 			return ingress.RecordResult{}, err
@@ -158,20 +167,34 @@ func (p *Provider) EnsureRecord(ctx context.Context, record ingress.Record) (ing
 //   - 阿里云返回的 DNS 记录列表
 //   - 请求或响应解析失败时返回错误
 func (p *Provider) ListRecords(ctx context.Context, domain string) ([]ingress.Record, error) {
-	domainName, _ := splitRecordName(domain)
-	params := url.Values{}
-	params.Set("DomainName", domainName)
-
-	var resp describeResponse
-	if err := p.call(ctx, "DescribeDomainRecords", params, &resp); err != nil {
-		return nil, err
+	normalized := trimFQDN(domain)
+	if normalized == "" {
+		return nil, errors.New("aliyun record domain is required")
 	}
+	domainName, _ := splitRecordName(normalized)
+	records := []ingress.Record{}
+	seenRemote := 0
+	for pageNumber := 1; ; pageNumber++ {
+		params := url.Values{}
+		params.Set("DomainName", domainName)
+		params.Set("SubDomain", normalized)
+		params.Set("PageNumber", strconv.Itoa(pageNumber))
+		params.Set("PageSize", strconv.Itoa(aliyunListPageSize))
 
-	records := make([]ingress.Record, 0, len(resp.DomainRecords.Record))
-	for _, item := range resp.DomainRecords.Record {
-		record := item.toIngress(domainName)
-		if strings.TrimSpace(domain) == "" || record.Name == domain {
-			records = append(records, record)
+		var resp describeResponse
+		if err := p.call(ctx, "DescribeSubDomainRecords", params, &resp); err != nil {
+			return nil, err
+		}
+
+		seenRemote += len(resp.DomainRecords.Record)
+		for _, item := range resp.DomainRecords.Record {
+			record := item.toIngress(domainName)
+			if record.Name == normalized {
+				records = append(records, record)
+			}
+		}
+		if len(resp.DomainRecords.Record) == 0 || resp.TotalCount <= seenRemote {
+			break
 		}
 	}
 	return records, nil
@@ -203,7 +226,7 @@ func (p *Provider) addRecord(ctx context.Context, record ingress.Record) (string
 	params.Set("Type", string(record.Type))
 	params.Set("Value", record.Value)
 	if record.TTL > 0 {
-		params.Set("TTL", strconv.Itoa(record.TTL))
+		params.Set("TTL", strconv.Itoa(normalizeAliyunTTL(record.TTL)))
 	}
 
 	var resp recordIDResponse
@@ -221,7 +244,7 @@ func (p *Provider) updateRecord(ctx context.Context, recordID string, record ing
 	params.Set("Type", string(record.Type))
 	params.Set("Value", record.Value)
 	if record.TTL > 0 {
-		params.Set("TTL", strconv.Itoa(record.TTL))
+		params.Set("TTL", strconv.Itoa(normalizeAliyunTTL(record.TTL)))
 	}
 
 	var resp recordIDResponse
@@ -264,23 +287,60 @@ func (p *Provider) call(ctx context.Context, action string, params url.Values, o
 	if err != nil {
 		return err
 	}
+	apiErr := decodeAPIError(data)
+	if apiErr.Code != "" {
+		return formatAPIError(action, resp.StatusCode, apiErr, data)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("aliyun API %s failed with status %d", action, resp.StatusCode)
-	}
-	var apiErr struct {
-		Code    string `json:"Code"`
-		Message string `json:"Message"`
-	}
-	if err := json.Unmarshal(data, &apiErr); err == nil && apiErr.Code != "" {
-		if apiErr.Message != "" {
-			return errors.New(apiErr.Message)
-		}
-		return errors.New(apiErr.Code)
+		return formatAPIError(action, resp.StatusCode, apiErr, data)
 	}
 	return json.Unmarshal(data, out)
 }
 
+func decodeAPIError(data []byte) aliyunAPIError {
+	var apiErr aliyunAPIError
+	_ = json.Unmarshal(data, &apiErr)
+	return apiErr
+}
+
+func formatAPIError(action string, statusCode int, apiErr aliyunAPIError, data []byte) error {
+	status := ""
+	if statusCode < 200 || statusCode >= 300 {
+		status = fmt.Sprintf(" with status %d", statusCode)
+	}
+	if apiErr.Code != "" || apiErr.Message != "" {
+		detail := strings.TrimSpace(apiErr.Code)
+		if apiErr.Message != "" {
+			if detail != "" {
+				detail += ": "
+			}
+			detail += strings.TrimSpace(apiErr.Message)
+		}
+		if apiErr.RequestID != "" {
+			detail += fmt.Sprintf(" (request_id=%s)", apiErr.RequestID)
+		}
+		return fmt.Errorf("aliyun API %s failed%s: %s", action, status, detail)
+	}
+	body := strings.TrimSpace(string(data))
+	if body != "" {
+		if len(body) > maxErrorBodyPreview {
+			body = body[:maxErrorBodyPreview] + "..."
+		}
+		return fmt.Errorf("aliyun API %s failed%s: %s", action, status, body)
+	}
+	return fmt.Errorf("aliyun API %s failed%s", action, status)
+}
+
+type aliyunAPIError struct {
+	Code      string `json:"Code"`
+	Message   string `json:"Message"`
+	RequestID string `json:"RequestId"`
+}
+
 type describeResponse struct {
+	TotalCount    int `json:"TotalCount"`
+	PageNumber    int `json:"PageNumber"`
+	PageSize      int `json:"PageSize"`
 	DomainRecords struct {
 		Record []aliRecord `json:"Record"`
 	} `json:"DomainRecords"`
@@ -322,11 +382,28 @@ func splitRecordName(name string) (string, string) {
 	return domainName, rr
 }
 
+func trimFQDN(name string) string {
+	return strings.TrimSuffix(strings.TrimSpace(name), ".")
+}
+
+func normalizeAliyunTTL(ttl int) int {
+	if ttl < aliyunMinTTL {
+		return aliyunMinTTL
+	}
+	if ttl > aliyunMaxTTL {
+		return aliyunMaxTTL
+	}
+	return ttl
+}
+
 func recordsMatch(existing ingress.Record, desired ingress.Record) bool {
 	if existing.Value != desired.Value {
 		return false
 	}
-	return desired.TTL <= 0 || existing.TTL == desired.TTL
+	if desired.Type == ingress.RecordTXT {
+		return true
+	}
+	return desired.TTL <= 0 || existing.TTL == normalizeAliyunTTL(desired.TTL)
 }
 
 type defaultSigner struct{}

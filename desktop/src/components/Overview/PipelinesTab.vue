@@ -11,7 +11,7 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
   - 不执行 pipeline 引擎逻辑
 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
@@ -27,6 +27,7 @@ const templateStore = usePipelineTemplateStore()
 const expanded = ref<string | null>(props.project.pipelines?.[0]?.id ?? null)
 const runsByPipeline = reactive<Record<string, Run[]>>({})
 const loadingRuns = reactive<Record<string, boolean>>({})
+const refreshingRuns = ref(false)
 const editing = ref(false)
 const editorMode = ref<'template' | 'blank'>('blank')
 const editingPipelineId = ref<string | undefined>(undefined)
@@ -43,15 +44,25 @@ const consoleSummary = computed(() => {
     failed: latestRuns.filter(run => run.status === 'failed').length,
   }
 })
+const summaryItems = computed(() => [
+  { key: 'total', label: t('overview.pipeline.totalLabel'), value: consoleSummary.value.total, tone: 'neutral' },
+  { key: 'success', label: t('overview.pipeline.successLabel'), value: consoleSummary.value.success, tone: 'success' },
+  { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed' },
+  { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running' },
+])
 const overviewPipeline = computed(() =>
   (props.project.pipelines ?? []).find(pipeline => pipeline.id === expanded.value) ?? props.project.pipelines?.[0] ?? null,
 )
+const overviewRuns = computed(() => overviewPipeline.value ? runsForPipeline(overviewPipeline.value) : [])
 
 onMounted(() => {
   void templateStore.loadTemplates().catch(() => undefined)
-  for (const pipeline of props.project.pipelines ?? []) {
-    void loadRunsForPipeline(pipeline).catch(() => undefined)
-  }
+  void loadProjectRuns().catch(() => undefined)
+})
+
+watch(() => props.project.id, () => {
+  expanded.value = props.project.pipelines?.[0]?.id ?? null
+  void loadProjectRuns().catch(() => undefined)
 })
 
 function runTitle(pipeline: ProjectPipeline, run: Run) {
@@ -60,11 +71,11 @@ function runTitle(pipeline: ProjectPipeline, run: Run) {
 }
 
 function runningRun(pipeline: ProjectPipeline): Run | null {
-  return (runsByPipeline[pipeline.id] ?? []).find(run => run.status === 'running') ?? null
+  return runsForPipeline(pipeline).find(run => run.status === 'running') ?? null
 }
 
 function latestRun(pipeline: ProjectPipeline): Run | null {
-  return runsByPipeline[pipeline.id]?.[0] ?? null
+  return runsForPipeline(pipeline)[0] ?? null
 }
 
 function duration(run?: Run | null) {
@@ -93,12 +104,69 @@ function includeSteps(pipeline: ProjectPipeline | null) {
   return phases.flat().filter(step => step.type === 'include').slice(0, 4)
 }
 
-async function loadRunsForPipeline(pipeline: ProjectPipeline) {
-  loadingRuns[pipeline.id] = true
+function pipelineDescription(pipeline: ProjectPipeline | null) {
+  const services = pipeline?.services ?? []
+  if (services.length === 0) return '--'
+  return t('overview.pipeline.pipelineDescription', { services: services.join(' + ') })
+}
+
+function templateMeta(step: { with?: Record<string, unknown> }) {
+  const template = typeof step.with?.template === 'string' ? step.with.template : ''
+  const version = typeof step.with?.version === 'string' ? step.with.version : ''
+  const source = template.includes('://') ? template.split('://')[0] : 'builtin'
+  return [source, version].filter(Boolean).join(' · ') || '--'
+}
+
+function latestArtifact(pipeline: ProjectPipeline | null) {
+  if (!pipeline) return null
+  return latestRun(pipeline)
+}
+
+function phaseCountItems(pipeline: ProjectPipeline | null) {
+  return [
+    { phase: 'build' as const, label: t('settings.pipeline.phases.build'), count: phaseCount(pipeline, 'build') },
+    { phase: 'deploy' as const, label: t('settings.pipeline.phases.deploy'), count: phaseCount(pipeline, 'deploy') },
+    { phase: 'finally' as const, label: t('settings.pipeline.phases.finally'), count: phaseCount(pipeline, 'finally') },
+  ]
+}
+
+function pipelineRunKey(projectId: string, pipelineId: string) {
+  return `${encodeURIComponent(projectId)}:${encodeURIComponent(pipelineId)}`
+}
+
+function keyForPipeline(pipeline: ProjectPipeline) {
+  return pipelineRunKey(props.project.id, pipeline.id)
+}
+
+function runsForPipeline(pipeline: ProjectPipeline) {
+  return runsByPipeline[keyForPipeline(pipeline)] ?? []
+}
+
+function loadingForPipeline(pipeline: ProjectPipeline) {
+  return loadingRuns[keyForPipeline(pipeline)] ?? false
+}
+
+async function loadRunsForPipeline(pipeline: ProjectPipeline, projectId = props.project.id) {
+  const key = pipelineRunKey(projectId, pipeline.id)
+  loadingRuns[key] = true
   try {
-    runsByPipeline[pipeline.id] = (await api.listProjectPipelineRuns(props.project.id, pipeline.id)).items
+    runsByPipeline[key] = (await api.listProjectPipelineRuns(projectId, pipeline.id)).items
   } finally {
-    loadingRuns[pipeline.id] = false
+    loadingRuns[key] = false
+  }
+}
+
+async function loadProjectRuns() {
+  const projectId = props.project.id
+  await Promise.all((props.project.pipelines ?? []).map(pipeline => loadRunsForPipeline(pipeline, projectId)))
+}
+
+async function refreshRuns() {
+  refreshingRuns.value = true
+  try {
+    await loadProjectRuns()
+  } finally {
+    refreshingRuns.value = false
   }
 }
 
@@ -114,7 +182,7 @@ function openRunConsole(pipeline: ProjectPipeline, run: Run, mode: 'live' | 'rep
 
 async function toggleHistory(pipeline: ProjectPipeline) {
   expanded.value = expanded.value === pipeline.id ? null : pipeline.id
-  if (expanded.value !== pipeline.id || runsByPipeline[pipeline.id]) return
+  if (expanded.value !== pipeline.id || runsByPipeline[keyForPipeline(pipeline)]) return
   await loadRunsForPipeline(pipeline)
 }
 
@@ -146,7 +214,8 @@ async function confirmDeploy() {
       env_name: rollbackRun?.env_name || defaultEnvName(),
       artifact_version: rollbackRun?.artifact_version,
     })
-    runsByPipeline[pipeline.id] = [run, ...(runsByPipeline[pipeline.id] ?? []).filter(item => item.id !== run.id)]
+    const key = keyForPipeline(pipeline)
+    runsByPipeline[key] = [run, ...(runsByPipeline[key] ?? []).filter(item => item.id !== run.id)]
     pending.value = null
     openRunConsole(pipeline, run, 'live')
   } catch (e) {
@@ -163,16 +232,40 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   <section class="pipelines-tab">
     <div class="pipeline-console-head">
       <div>
-        <div class="pipeline-console-eyebrow">{{ t('overview.pipeline.consoleEyebrow') }}</div>
-        <div class="pipeline-console-title">{{ t('overview.pipeline.consoleTitle') }}</div>
+        <div class="pipeline-console-title-row">
+          <div class="pipeline-console-title">{{ t('overview.pipeline.consoleTitle') }}</div>
+          <span class="pipeline-console-subtitle">{{ t('overview.pipeline.consoleSubtitle') }}</span>
+        </div>
       </div>
-      <div class="pipeline-console-summary" data-test="pipeline-console-summary">
-        <span>{{ t('overview.pipeline.totalCount', { count: consoleSummary.total }) }}</span>
-        <span>{{ t('overview.pipeline.successCount', { count: consoleSummary.success }) }}</span>
-        <span>{{ t('overview.pipeline.runningCount', { count: consoleSummary.running }) }}</span>
-        <span>{{ t('overview.pipeline.failedCount', { count: consoleSummary.failed }) }}</span>
+      <div class="pipeline-console-actions">
+        <button type="button" class="pipeline-add-btn" data-test="pipeline-add" @click="openEditor('blank')">
+          <span aria-hidden="true">+</span>
+          {{ t('overview.pipeline.add') }}
+        </button>
+        <button
+          type="button"
+          class="pipeline-refresh-btn"
+          data-test="pipeline-refresh"
+          :disabled="refreshingRuns"
+          :aria-label="t('overview.pipeline.refresh')"
+          @click="refreshRuns"
+        >
+          <span aria-hidden="true" :class="{ spinning: refreshingRuns }">↻</span>
+        </button>
       </div>
-      <button type="button" data-test="pipeline-add" @click="openEditor('blank')">{{ t('overview.pipeline.add') }}</button>
+    </div>
+    <div class="pipeline-console-summary" data-test="pipeline-console-summary">
+      <article
+        v-for="item in summaryItems"
+        :key="item.key"
+        class="pipeline-stat"
+        :class="`tone-${item.tone}`"
+        :data-test="`pipeline-stat-${item.key}`"
+      >
+        <span class="pipeline-stat-icon" aria-hidden="true"></span>
+        <strong>{{ item.value }}</strong>
+        <span>{{ item.label }}</span>
+      </article>
     </div>
     <article v-if="!hasPipelines" class="pipeline-empty-card" data-test="pipeline-empty">
       <h2>{{ t('overview.pipeline.emptyTitle') }}</h2>
@@ -188,36 +281,41 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
     </article>
     <div v-if="hasPipelines" class="pipeline-console-grid">
       <div class="pipeline-table-card">
-        <div class="pipeline-table-head" data-test="pipeline-table-head">
-          <span>{{ t('overview.pipeline.columnPipeline') }}</span>
-          <span>{{ t('overview.pipeline.columnServices') }}</span>
-          <span>{{ t('overview.pipeline.columnStatus') }}</span>
-          <span>{{ t('overview.pipeline.columnVersion') }}</span>
-          <span>{{ t('overview.pipeline.columnDuration') }}</span>
-          <span>{{ t('overview.pipeline.columnRecent') }}</span>
-          <span>{{ t('overview.pipeline.columnActions') }}</span>
-        </div>
+        <div class="pipeline-table-scroll" data-test="pipeline-table-scroll">
+          <div class="pipeline-table-inner">
+            <div class="pipeline-table-head" data-test="pipeline-table-head">
+              <span>{{ t('overview.pipeline.columnPipeline') }}</span>
+              <span>{{ t('overview.pipeline.columnServices') }}</span>
+              <span>{{ t('overview.pipeline.columnStatus') }}</span>
+              <span>{{ t('overview.pipeline.columnVersion') }}</span>
+              <span>{{ t('overview.pipeline.columnDuration') }}</span>
+              <span>{{ t('overview.pipeline.columnRecent') }}</span>
+              <span>{{ t('overview.pipeline.columnActions') }}</span>
+            </div>
 
-        <div v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" class="pipeline-block">
-          <PipelineRow
-            :pipeline="pipeline"
-            :expanded="expanded === pipeline.id"
-            :running-run="runningRun(pipeline)"
-            :latest-run="latestRun(pipeline)"
-            :latest-duration="duration(latestRun(pipeline))"
-            :latest-time="recentTime(latestRun(pipeline))"
-            @toggle="toggleHistory(pipeline)"
-            @run="requestRun(pipeline)"
-            @edit="openEditor('blank', pipeline.id)"
-            @open-running="() => { const run = runningRun(pipeline); if (run) openRunConsole(pipeline, run, 'live') }"
-          />
-          <RunHistoryList
-            v-if="expanded === pipeline.id"
-            :runs="runsByPipeline[pipeline.id] ?? []"
-            :loading="loadingRuns[pipeline.id]"
-            @detail="openDetail(pipeline, $event)"
-            @rollback="requestRollback(pipeline, $event)"
-          />
+            <div v-for="pipeline in project.pipelines ?? []" :key="pipeline.id" class="pipeline-block">
+              <PipelineRow
+                :pipeline="pipeline"
+                :expanded="expanded === pipeline.id"
+                :running-run="runningRun(pipeline)"
+                :latest-run="latestRun(pipeline)"
+                :latest-duration="duration(latestRun(pipeline))"
+                :latest-time="recentTime(latestRun(pipeline))"
+                @toggle="toggleHistory(pipeline)"
+                @run="requestRun(pipeline)"
+                @edit="openEditor('blank', pipeline.id)"
+                @open-running="() => { const run = runningRun(pipeline); if (run) openRunConsole(pipeline, run, 'live') }"
+              />
+              <RunHistoryList
+                v-if="expanded === pipeline.id"
+                :runs="runsForPipeline(pipeline)"
+                :loading="loadingForPipeline(pipeline)"
+                :artifact-kind="pipeline.artifact_kind || 'file'"
+                @detail="openDetail(pipeline, $event)"
+                @rollback="requestRollback(pipeline, $event)"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -236,23 +334,45 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
             <dt>{{ t('settings.pipeline.services') }}</dt>
             <dd>{{ (overviewPipeline.services ?? []).join(', ') || '--' }}</dd>
           </div>
+          <div>
+            <dt>{{ t('overview.pipeline.descriptionLabel') }}</dt>
+            <dd>{{ pipelineDescription(overviewPipeline) }}</dd>
+          </div>
         </dl>
 
         <div class="overview-section">
           <div class="overview-section-title">{{ t('overview.pipeline.phasesTitle') }}</div>
-          <div class="phase-count"><span>{{ t('settings.pipeline.phases.build') }}</span><strong>{{ phaseCount(overviewPipeline, 'build') }}</strong></div>
-          <div class="phase-count"><span>{{ t('settings.pipeline.phases.deploy') }}</span><strong>{{ phaseCount(overviewPipeline, 'deploy') }}</strong></div>
-          <div class="phase-count"><span>{{ t('settings.pipeline.phases.finally') }}</span><strong>{{ phaseCount(overviewPipeline, 'finally') }}</strong></div>
+          <div class="overview-phase-list" data-test="pipeline-overview-phases">
+            <div v-for="item in phaseCountItems(overviewPipeline)" :key="item.phase" class="phase-count" :class="`phase-${item.phase}`">
+              <span>{{ item.label }}</span>
+              <small>{{ item.phase }}</small>
+              <strong>{{ item.count }}</strong>
+            </div>
+          </div>
         </div>
 
         <div class="overview-section">
           <div class="overview-section-title">{{ t('overview.pipeline.templatesTitle') }}</div>
           <div v-if="includeSteps(overviewPipeline).length === 0" class="overview-empty">--</div>
           <div v-for="step in includeSteps(overviewPipeline)" :key="step.name" class="template-chip">
-            {{ step.name }}
+            <strong>{{ step.name }}</strong>
+            <small>{{ templateMeta(step) }}</small>
+          </div>
+        </div>
+
+        <div v-if="latestArtifact(overviewPipeline)" class="overview-section">
+          <div class="overview-section-title">{{ t('overview.pipeline.latestArtifact') }}</div>
+          <div class="artifact-card">
+            <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
+            <div class="artifact-file-meta">
+              {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
+            </div>
           </div>
         </div>
       </aside>
+    </div>
+    <div v-if="hasPipelines" class="pipeline-timezone" data-test="pipeline-timezone">
+      {{ t('overview.pipeline.timezone') }}
     </div>
     <ProjectPipelineEditor
       v-if="editing"
@@ -276,44 +396,96 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipelines-tab {
   height: calc(100vh - 65px);
   overflow: auto;
-  padding: 20px 24px 32px;
+  padding: 24px 24px 34px;
+  background:
+    linear-gradient(180deg, rgba(13, 17, 23, 0.92), rgba(7, 11, 17, 0.98)),
+    var(--bg-primary);
 }
 .pipeline-console-head {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 14px;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
 }
-.pipeline-console-eyebrow {
+.pipeline-console-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  min-width: 0;
+}
+.pipeline-console-subtitle {
   color: var(--text-tertiary);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .pipeline-console-title {
-  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.pipeline-console-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pipeline-console-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  margin-bottom: 20px;
+  background: rgba(16, 22, 31, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.pipeline-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 0 28px;
+}
+.pipeline-stat + .pipeline-stat {
+  border-left: 1px solid var(--border-secondary);
+}
+.pipeline-stat strong {
   color: var(--text-primary);
   font-size: 20px;
   font-weight: 800;
 }
-.pipeline-console-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.pipeline-console-summary span {
-  border: 1px solid var(--border-secondary);
-  border-radius: 999px;
-  padding: 5px 9px;
-  background: var(--bg-elevated);
+.pipeline-stat span:last-child {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 700;
   white-space: nowrap;
+}
+.pipeline-stat-icon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--text-tertiary);
+  border-radius: 50%;
+}
+.tone-success .pipeline-stat-icon,
+.tone-success strong {
+  border-color: var(--status-success);
+  color: var(--status-success);
+}
+.tone-failed .pipeline-stat-icon,
+.tone-failed strong {
+  border-color: var(--status-failed);
+  color: var(--status-failed);
+}
+.tone-running .pipeline-stat-icon,
+.tone-running strong {
+  border-color: var(--status-starting);
+  color: var(--status-starting);
 }
 .pipeline-console-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 292px;
   gap: 16px;
   align-items: start;
 }
@@ -321,34 +493,54 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipeline-overview-card {
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  background: rgba(13, 18, 26, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 48px rgba(0, 0, 0, 0.14);
 }
 .pipeline-table-card {
   overflow: hidden;
 }
+.pipeline-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.pipeline-table-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+.pipeline-table-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid rgba(13, 18, 26, 0.88);
+  border-radius: 999px;
+  background: rgba(139, 148, 158, 0.36);
+}
+.pipeline-table-inner {
+  min-width: 1050px;
+}
 .pipeline-table-head {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) minmax(150px, 0.9fr) 110px minmax(120px, 0.8fr) 76px 108px 170px;
+  grid-template-columns: minmax(250px, 1.45fr) minmax(170px, 0.95fr) 112px minmax(130px, 0.8fr) 78px 112px 150px;
   gap: 12px;
   align-items: center;
-  min-height: 42px;
-  padding: 0 14px 0 54px;
+  min-height: 48px;
+  padding: 0 18px 0 86px;
   border-bottom: 1px solid var(--border-secondary);
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 700;
 }
 .pipeline-overview-card {
-  padding: 14px;
+  padding: 16px;
 }
 .pipeline-overview-card h3 {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-secondary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 800;
 }
 .pipeline-overview-card dl {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   margin: 0;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-secondary);
@@ -372,22 +564,54 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   font-size: 11px;
   font-weight: 700;
 }
+.overview-phase-list {
+  display: grid;
+  gap: 8px;
+}
 .phase-count {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
 }
-.phase-count + .phase-count {
-  margin-top: 7px;
+.phase-count::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.phase-count.phase-deploy::before {
+  background: var(--status-success);
+}
+.phase-count.phase-finally::before {
+  background: #a371f7;
+}
+.phase-count small {
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 .template-chip {
+  display: grid;
+  gap: 4px;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   padding: 8px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+.template-chip strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-chip small {
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 .template-chip + .template-chip {
   margin-top: 7px;
@@ -396,18 +620,47 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   color: var(--text-tertiary);
   font-size: 12px;
 }
-.pipeline-console-head button,
+.pipeline-add-btn,
+.pipeline-refresh-btn,
 .deploy-dialog button {
-  height: 28px;
-  padding: 0 12px;
+  height: 38px;
   border: 1px solid var(--border-secondary);
+  border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.pipeline-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.pipeline-add-btn span {
+  font-size: 19px;
+  line-height: 1;
+}
+.pipeline-refresh-btn {
+  width: 42px;
+  padding: 0;
+  color: var(--text-secondary);
+}
+.pipeline-refresh-btn:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+.spinning {
+  display: inline-block;
+  animation: pipeline-spin 1s linear infinite;
 }
 .pipeline-block + .pipeline-block {
-  margin-top: 10px;
+  margin-top: 0;
+  border-top: 1px solid var(--border-secondary);
 }
 .pipeline-empty-card {
   padding: 18px;
@@ -467,19 +720,47 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   color: var(--status-failed);
   font-size: 12px;
 }
+.artifact-card {
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  padding: 10px;
+  background: rgba(7, 12, 18, 0.52);
+}
+.artifact-file-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-file-meta {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.pipeline-timezone {
+  margin-top: 22px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+@keyframes pipeline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 @media (max-width: 900px) {
   .pipeline-console-head {
-    grid-template-columns: 1fr;
     align-items: stretch;
+    flex-direction: column;
   }
   .pipeline-console-summary {
-    flex-wrap: wrap;
+    grid-template-columns: 1fr 1fr;
   }
   .pipeline-console-grid {
     grid-template-columns: 1fr;
   }
-  .pipeline-table-head,
   .pipeline-overview-card {
     display: none;
   }

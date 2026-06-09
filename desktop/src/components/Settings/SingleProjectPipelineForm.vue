@@ -21,12 +21,14 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   templates: PipelineTemplateSummary[]
   initialMode?: 'template' | 'blank'
+  withStructureRail?: boolean
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
 }>()
 
 const emit = defineEmits<{ 'update:pipeline': [ProjectPipeline] }>()
 const { t } = useAppI18n()
 const draft = ref<ProjectPipeline>({ ...props.pipeline, services: [...(props.pipeline.services ?? [])] })
+const wizard = ref<InstanceType<typeof PipelineTemplateWizard> | null>(null)
 
 watch(() => props.pipeline, (pipeline) => {
   draft.value = { ...pipeline, services: [...(pipeline.services ?? [])] }
@@ -51,14 +53,20 @@ function toggleService(name: string, checked: boolean) {
 function setPipeline(pipeline: Pipeline | undefined) {
   patch({ pipeline: pipeline ?? {} })
 }
+
+function saveTemplateConfig() {
+  wizard.value?.saveTemplate()
+}
+
+defineExpose({ saveTemplateConfig })
 </script>
 
 <template>
-  <section class="single-pipeline-form">
-    <div class="single-pipeline-topbar" data-test="pipeline-editor-basics">
+  <section class="single-pipeline-form" :class="{ 'with-structure-rail': withStructureRail }">
+    <div class="single-pipeline-topbar" data-test="single-pipeline-form-topbar">
       <div class="topbar-field name-field">
         <label class="field-row">
-          <span>{{ t('settings.pipeline.name') }}</span>
+          <span>{{ t('settings.pipeline.name') }} / Pipeline name</span>
           <input
             class="settings-input"
             data-test="single-pipeline-name"
@@ -70,7 +78,7 @@ function setPipeline(pipeline: Pipeline | undefined) {
 
       <div class="topbar-field">
         <label class="field-row">
-          <span>{{ t('settings.pipeline.artifactKind') }}</span>
+          <span>{{ t('settings.pipeline.artifactKind') }} / Artifact kind</span>
           <div class="artifact-segment" data-test="single-pipeline-artifact-kind">
             <button
               v-for="kind in (['file', 'image'] as ArtifactKind[])"
@@ -87,7 +95,7 @@ function setPipeline(pipeline: Pipeline | undefined) {
 
       <div class="topbar-field services-field">
         <div class="field-row">
-          <span>{{ t('settings.pipeline.services') }}</span>
+          <span>{{ t('settings.pipeline.services') }} / Services</span>
           <div class="service-list">
             <label v-for="service in services" :key="service.id || service.name" class="service-item">
               <input
@@ -103,59 +111,97 @@ function setPipeline(pipeline: Pipeline | undefined) {
       </div>
     </div>
 
-    <div class="single-pipeline-main">
-      <PipelineTemplateWizard
-        :model-value="draft.pipeline"
-        :templates="templates"
-        :hosts="hosts"
-        :initial-mode="initialMode"
-        :on-view-template="onViewTemplate"
-        @update:model-value="setPipeline"
-      />
+    <div class="single-pipeline-lower">
+      <div v-if="withStructureRail" class="single-pipeline-rail-slot">
+        <slot name="rail" />
+      </div>
+      <div class="single-pipeline-main" data-test="pipeline-editor-stage-area">
+        <PipelineTemplateWizard
+          ref="wizard"
+          :model-value="draft.pipeline"
+          :templates="templates"
+          :hosts="hosts"
+          :initial-mode="initialMode"
+          :on-view-template="onViewTemplate"
+          @update:model-value="setPipeline"
+        />
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
 .single-pipeline-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 .single-pipeline-topbar {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) 210px minmax(360px, 1.4fr);
-  gap: 14px;
+  grid-template-columns: minmax(300px, 1fr) 198px minmax(420px, 1.9fr);
+  gap: 24px;
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  padding: 16px;
+  background: rgba(21, 30, 42, 0.72);
+}
+.with-structure-rail .single-pipeline-topbar {
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+.single-pipeline-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+.with-structure-rail .single-pipeline-lower {
+  grid-template-columns: 288px minmax(0, 1fr);
+}
+.single-pipeline-rail-slot {
+  min-width: 0;
+  min-height: 0;
 }
 .single-pipeline-main {
-  display: grid;
-  gap: 12px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 .field-row {
   display: grid;
   grid-template-columns: 1fr;
   align-items: start;
-  gap: 6px;
+  gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
+  font-weight: 700;
 }
 .service-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 10px 18px;
+  min-height: 38px;
+  align-items: center;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: rgba(8, 13, 20, 0.56);
 }
 .service-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--text-secondary);
-  font-size: 12px;
+  gap: 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.service-item input,
+.target-item input,
+.boolean-field input {
+  accent-color: var(--accent);
 }
 .artifact-segment {
   display: grid;
@@ -163,14 +209,16 @@ function setPipeline(pipeline: Pipeline | undefined) {
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   overflow: hidden;
+  background: rgba(8, 13, 20, 0.56);
 }
 .artifact-segment button {
-  height: 30px;
+  height: 38px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
 }
 .artifact-segment button + button {
   border-left: 1px solid var(--border-secondary);
@@ -180,7 +228,6 @@ function setPipeline(pipeline: Pipeline | undefined) {
   color: #fff;
   font-weight: 700;
 }
-
 @media (max-width: 1040px) {
   .single-pipeline-topbar {
     grid-template-columns: 1fr;
@@ -188,6 +235,14 @@ function setPipeline(pipeline: Pipeline | undefined) {
   .field-row {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+}
+@media (max-width: 1100px) {
+  .with-structure-rail .single-pipeline-lower {
+    grid-template-columns: 1fr;
+  }
+  .single-pipeline-rail-slot {
+    display: none;
   }
 }
 </style>

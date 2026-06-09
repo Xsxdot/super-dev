@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { Project } from '@/api/agent'
+import type { PipelineTemplateSummary, Project } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -53,6 +53,76 @@ function project(): Project {
   }
 }
 
+const buildTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'vue-go-combined',
+  name: 'Vue + Go 组合构建',
+  category: 'build',
+  version: '1.0.0',
+  digest: 'sha256:build',
+  description: '构建 Vue 前端和 Go 后端',
+  inputs: {
+    frontend_dir: { label: '前端目录 / Frontend directory', type: 'path', required: true, default: '${workspace}/admin' },
+  },
+}
+
+const deployTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'systemd-seamless',
+  name: 'Systemd 无缝部署',
+  category: 'deploy',
+  version: '1.0.0',
+  digest: 'sha256:deploy',
+  description: '上传产物并切换服务',
+  inputs: {
+    role: { label: '目标机器 / Target machines', type: 'target_role', required: true },
+  },
+}
+
+function projectWithPipeline(): Project {
+  const p = project()
+  p.services.push({
+    id: 's2',
+    project_id: 'p1',
+    name: 'server',
+    status: '',
+    required: false,
+    order: 1,
+    deployments: [],
+  })
+  p.pipelines = [{
+    id: 'deploy-server-admin-prod',
+    name: 'Deploy Server Admin Prod',
+    services: ['web', 'server'],
+    artifact_kind: 'file',
+    pipeline: {
+      roles: { build_0_runner: ['h1'], deploy_1_targets: ['h1'] },
+      build: [{
+        name: 'Vue + Go 组合构建',
+        type: 'include',
+        roles: ['build_0_runner'],
+        with: {
+          template: 'builtin://vue-go-combined',
+          version: '1.0.0',
+          digest: 'sha256:build',
+          vars: { frontend_dir: '${workspace}/admin' },
+        },
+      }],
+      deploy: [{
+        name: 'Systemd 无缝部署',
+        type: 'include',
+        with: {
+          template: 'builtin://systemd-seamless',
+          version: '1.0.0',
+          digest: 'sha256:deploy',
+          vars: { role: 'deploy_1_targets' },
+        },
+      }],
+    },
+  }]
+  return p
+}
+
 function mountProjectPipelineEditor(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   return mount(ProjectPipelineEditor, {
     props: { project: project(), pipelineTemplates: [] },
@@ -81,10 +151,33 @@ describe('ProjectPipelineEditor', () => {
     const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))
 
-    expect(wrapper.text()).toContain('编辑流水线 · demo')
+    expect(wrapper.text()).toContain('编辑流水线 · Deploy')
+    expect(wrapper.find('[data-test="pipeline-editor-yaml"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-close"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-shell"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-scroll"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="single-pipeline-name"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-editor-basics"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-preview"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-save-template"]').classes()).toContain('settings-btn-primary')
+  })
+
+  it('编辑已有流水线时渲染可操作的阶段编排区和模板输入区', async () => {
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="pipeline-editor-form-column"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Vue + Go 组合构建')
+    expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
+    expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('模板输入')
   })
 
   it('保存项目级 pipeline 并保留非流水线配置', async () => {

@@ -48,7 +48,9 @@ const activePipeline = computed(() =>
 const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
+const yamlOpen = ref(false)
 const saveError = ref<string | null>(null)
+const pipelineForm = ref<InstanceType<typeof SingleProjectPipelineForm> | null>(null)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetail = ref<PipelineTemplateDetail | null>(null)
 const templateLoading = ref(false)
@@ -91,6 +93,27 @@ function defaultEnvName() {
 
 function firstPipelineId() {
   return activePipeline.value?.id || 'pipeline-1'
+}
+
+const pipelineYaml = computed(() => {
+  const pipeline = activePipeline.value
+  if (!pipeline) return ''
+  const services = (pipeline.services ?? []).map(service => `  - ${service}`).join('\n') || '  []'
+  return [
+    `id: ${pipeline.id}`,
+    `name: ${pipeline.name}`,
+    `artifact_kind: ${pipeline.artifact_kind || 'file'}`,
+    'services:',
+    services,
+    'pipeline:',
+    `  build: ${pipeline.pipeline?.build?.length ?? 0}`,
+    `  deploy: ${pipeline.pipeline?.deploy?.length ?? 0}`,
+    `  finally: ${pipeline.pipeline?.finally?.length ?? 0}`,
+  ].join('\n')
+})
+
+function saveTemplateConfig() {
+  pipelineForm.value?.saveTemplateConfig()
 }
 
 async function viewTemplate(template: PipelineTemplateSummary, apply: () => void) {
@@ -149,51 +172,135 @@ async function save() {
 <template>
   <div class="settings-modal-backdrop" @click.self="emit('cancel')">
     <div class="settings-modal settings-modal-wide pipeline-editor-body">
-      <div class="settings-modal-header">
-        <h2 class="settings-modal-title">{{ t('settings.projects.editPipeline') }} · {{ project.name }}</h2>
+      <div class="settings-modal-header pipeline-editor-header">
+        <div class="pipeline-editor-heading">
+          <h2 class="settings-modal-title">{{ t('settings.projects.editPipeline') }} · {{ activePipeline?.name || project.name }}</h2>
+          <span class="pipeline-editor-project-badge">{{ project.name }}</span>
+        </div>
+        <div class="pipeline-editor-header-actions">
+          <button type="button" class="settings-btn settings-btn-secondary" data-test="pipeline-editor-yaml" @click="yamlOpen = true">
+            {{ t('settings.pipeline.viewYaml') }}
+          </button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-primary"
+            :disabled="saving"
+            @click="save"
+          >
+            {{ saving ? t('common.loading') : t('common.save') }}
+          </button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-icon settings-btn-ghost pipeline-editor-close"
+            data-test="pipeline-editor-close"
+            @click="emit('cancel')"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
-      <div class="settings-modal-body pipeline-editor-content">
+      <div class="settings-modal-body pipeline-editor-content" data-test="pipeline-editor-scroll">
         <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
           <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
         </ul>
         <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
-        <div class="pipeline-editor-shell">
-          <aside class="pipeline-editor-rail" data-test="pipeline-editor-structure">
-            <div class="rail-title">{{ t('settings.pipeline.editorStructure') }}</div>
-            <div class="rail-item active">{{ t('settings.pipeline.basicInfo') }}</div>
-            <div class="rail-item">{{ t('settings.pipeline.buildPhase') }}</div>
-            <div class="rail-item">{{ t('settings.pipeline.deployPhase') }}</div>
-            <div class="rail-item">{{ t('settings.pipeline.cleanupPhase') }}</div>
-            <div class="rail-item">{{ t('settings.pipeline.previewAndSave') }}</div>
-          </aside>
-
-          <SingleProjectPipelineForm
-            v-if="activePipeline"
-            :pipeline="activePipeline"
-            :services="draft.services"
-            :hosts="hosts"
-            :templates="pipelineTemplates ?? []"
-            :initial-mode="initialMode"
-            :on-view-template="viewTemplate"
-            @update:pipeline="updateActivePipeline"
-          />
+        <div class="pipeline-editor-shell" data-test="pipeline-editor-shell">
+          <div class="pipeline-editor-form-column" data-test="pipeline-editor-form-column">
+            <SingleProjectPipelineForm
+              v-if="activePipeline"
+              ref="pipelineForm"
+              with-structure-rail
+              :pipeline="activePipeline"
+              :services="draft.services"
+              :hosts="hosts"
+              :templates="pipelineTemplates ?? []"
+              :initial-mode="initialMode"
+              :on-view-template="viewTemplate"
+              @update:pipeline="updateActivePipeline"
+            >
+              <template #rail>
+                <aside class="pipeline-editor-rail" data-test="pipeline-editor-structure">
+                  <div class="rail-title">{{ t('settings.pipeline.editorStructure') }}</div>
+                  <div class="rail-item done">
+                    <span class="rail-icon">i</span>
+                    <span>
+                      <strong>{{ t('settings.pipeline.basicInfo') }}</strong>
+                      <small>{{ t('settings.pipeline.basicInfoHint') }}</small>
+                    </span>
+                  </div>
+                  <div class="rail-item active">
+                    <span class="rail-icon">⌁</span>
+                    <span>
+                      <strong>{{ t('settings.pipeline.buildPhase') }}</strong>
+                      <small>{{ t('settings.pipeline.buildPhaseHint') }}</small>
+                    </span>
+                    <em>1 {{ t('settings.pipeline.templateUnit') }}</em>
+                  </div>
+                  <div class="rail-item">
+                    <span class="rail-icon">↗</span>
+                    <span>
+                      <strong>{{ t('settings.pipeline.deployPhase') }}</strong>
+                      <small>{{ t('settings.pipeline.deployPhaseHint') }}</small>
+                    </span>
+                    <em>1 {{ t('settings.pipeline.templateUnit') }}</em>
+                  </div>
+                  <div class="rail-item">
+                    <span class="rail-icon">□</span>
+                    <span>
+                      <strong>{{ t('settings.pipeline.cleanupPhase') }}</strong>
+                      <small>{{ t('settings.pipeline.cleanupPhaseHint') }}</small>
+                    </span>
+                    <em>0</em>
+                  </div>
+                  <div class="rail-item preview-item">
+                    <span class="rail-icon">◎</span>
+                    <span>
+                      <strong>{{ t('settings.pipeline.previewAndSave') }}</strong>
+                      <small>{{ t('settings.pipeline.previewHint') }}</small>
+                    </span>
+                  </div>
+                </aside>
+              </template>
+            </SingleProjectPipelineForm>
+          </div>
         </div>
       </div>
 
       <div class="settings-modal-footer pipeline-editor-actions">
-        <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button
-          type="button"
-          class="settings-btn settings-btn-primary"
-          data-test="pipeline-config-save"
-          :disabled="saving"
-          @click="save"
-        >
-          {{ saving ? t('common.loading') : t('common.save') }}
-        </button>
+        <div class="pipeline-editor-save-note" data-test="pipeline-editor-preview">
+          <span aria-hidden="true"></span>
+          {{ t('settings.pipeline.requiredComplete') }}
+        </div>
+        <div class="pipeline-editor-footer-buttons">
+          <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-primary"
+            data-test="pipeline-config-save-template"
+            @click="saveTemplateConfig"
+          >
+            {{ t('settings.pipeline.saveTemplateConfig') }}
+          </button>
+          <button
+            type="button"
+            class="settings-btn settings-btn-primary"
+            data-test="pipeline-config-save"
+            :disabled="saving"
+            @click="save"
+          >
+            {{ saving ? t('common.loading') : t('common.save') }}
+          </button>
+        </div>
       </div>
+
+      <TemplateContentModal
+        :open="yamlOpen"
+        :title="t('settings.pipeline.yamlTitle')"
+        :yaml="pipelineYaml"
+        @close="yamlOpen = false"
+      />
 
       <TemplateContentModal
         :open="templateModalOpen"
@@ -216,69 +323,173 @@ async function save() {
 
 <style scoped>
 .pipeline-editor-body {
-  width: min(1380px, calc(100vw - 32px));
-  max-height: calc(100vh - 40px);
-}
-.pipeline-editor-content {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1480px, calc(100vw - 20px));
+  height: calc(100vh - 20px);
+  max-height: calc(100vh - 20px);
+  background: rgba(13, 18, 26, 0.98);
+  overflow: hidden;
+}
+.pipeline-editor-header {
+  min-height: 62px;
+  padding: 14px 16px;
+}
+.pipeline-editor-heading {
+  display: flex;
+  align-items: center;
   gap: 12px;
-}
-.pipeline-editor-shell {
-  display: grid;
-  grid-template-columns: 170px minmax(0, 1fr);
-  gap: 14px;
   min-width: 0;
 }
+.pipeline-editor-heading .settings-modal-title {
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-editor-project-badge {
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: #9cc2ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.pipeline-editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pipeline-editor-close {
+  border-color: transparent;
+  font-size: 24px;
+  line-height: 1;
+}
+.pipeline-editor-content {
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+}
+.pipeline-editor-shell {
+  min-width: 0;
+  min-height: 100%;
+  height: 100%;
+}
+.pipeline-editor-form-column {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
 .pipeline-editor-rail {
-  position: sticky;
-  top: 0;
-  align-self: start;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--bg-elevated);
+  height: 100%;
+  border-right: 1px solid var(--border-secondary);
+  padding: 12px;
+  background: rgba(18, 27, 38, 0.78);
 }
 .rail-title {
-  margin-bottom: 8px;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
   font-weight: 700;
 }
 .rail-item {
-  border-radius: 6px;
-  padding: 8px 9px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  padding: 10px;
   color: var(--text-secondary);
   font-size: 12px;
+  background: rgba(13, 18, 26, 0.58);
 }
 .rail-item + .rail-item {
-  margin-top: 4px;
+  margin-top: 8px;
 }
 .rail-item.active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--text-primary);
+}
+.rail-item.done .rail-icon {
+  border-color: var(--status-success);
+  color: var(--status-success);
+}
+.rail-item.preview-item {
+  grid-template-columns: 28px minmax(0, 1fr) 10px;
+}
+.rail-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+.rail-item strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.rail-item small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.rail-item em {
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: #9cc2ff;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+.pipeline-editor-actions {
+  align-items: center;
+  justify-content: space-between;
+  min-height: 62px;
+  padding: 12px 30px 12px 24px;
+  background: rgba(21, 30, 42, 0.96);
+}
+.pipeline-editor-save-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 700;
+}
+.pipeline-editor-save-note span {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--status-success);
+}
+.pipeline-editor-footer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 .err-list {
   margin: 0;
   list-style: none;
 }
 
-@media (max-width: 1040px) {
-  .pipeline-editor-shell {
-    grid-template-columns: 1fr;
-  }
+@media (max-width: 1100px) {
   .pipeline-editor-rail {
-    position: static;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .rail-title {
-    width: 100%;
-    margin-bottom: 0;
-  }
-  .rail-item + .rail-item {
-    margin-top: 0;
+    display: none;
   }
 }
 </style>

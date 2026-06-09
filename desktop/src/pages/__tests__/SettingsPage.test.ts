@@ -177,7 +177,7 @@ describe('SettingsPage', () => {
     expect(button.exists()).toBe(true)
 
     await button.trigger('click')
-    expect(wrapper.text()).toContain('编辑流水线 · Project')
+    expect(wrapper.text()).toContain('编辑流水线 · Deploy')
   })
 
   it('renders projects as shared settings cards without changing actions', async () => {

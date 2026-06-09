@@ -27,55 +27,68 @@ const { t } = useAppI18n()
 function statusClass() {
   return `status-${props.latestRun?.status ?? 'idle'}`
 }
+
+function statusLabel() {
+  return props.latestRun?.status ? t(`overview.pipeline.status.${props.latestRun.status}`) : '--'
+}
 </script>
 
 <template>
   <div class="pipeline-row">
     <button type="button" data-test="pipeline-expand" class="icon-btn" @click="emit('toggle')">
-      {{ expanded ? 'v' : '>' }}
+      <span aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
     </button>
     <div class="pipeline-main">
-      <div class="pipeline-name">{{ pipeline.name }}</div>
-      <div class="pipeline-meta">{{ pipeline.artifact_kind || 'file' }}</div>
+      <span class="pipeline-state-dot" :class="statusClass()" aria-hidden="true"></span>
+      <div class="pipeline-name-group">
+        <div class="pipeline-name">{{ pipeline.name }}</div>
+      </div>
     </div>
     <div class="pipeline-services">
       <span v-for="service in pipeline.services ?? []" :key="service" class="service-tag">{{ service }}</span>
       <span v-if="(pipeline.services ?? []).length === 0" class="service-tag muted">--</span>
     </div>
-    <span class="pipeline-status" :class="statusClass()" data-test="pipeline-status">{{ latestRun?.status || 'idle' }}</span>
+    <span class="pipeline-status" :class="statusClass()" data-test="pipeline-status">
+      <span class="status-ring" aria-hidden="true"></span>
+      {{ statusLabel() }}
+    </span>
     <span class="pipeline-version" data-test="pipeline-latest-version">{{ latestRun?.artifact_version || '--' }}</span>
     <span class="pipeline-duration" data-test="pipeline-latest-duration">{{ latestDuration || '--' }}</span>
     <span class="pipeline-time">{{ latestTime || '--' }}</span>
-    <button
-      v-if="runningRun"
-      type="button"
-      data-test="pipeline-running"
-      class="running-badge"
-      @click="emit('open-running')"
-    >
-      {{ t('overview.pipeline.running') }}
-    </button>
-    <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">{{ t('overview.pipeline.run') }}</button>
-    <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">{{ t('overview.pipeline.edit') }}</button>
+    <div class="pipeline-actions">
+      <button
+        v-if="runningRun"
+        type="button"
+        data-test="pipeline-running"
+        class="running-badge"
+        @click="emit('open-running')"
+      >
+        {{ t('overview.pipeline.running') }}
+      </button>
+      <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">{{ t('overview.pipeline.run') }}</button>
+      <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">{{ t('overview.pipeline.edit') }}</button>
+      <button type="button" class="more-action" :aria-label="t('overview.pipeline.moreActions')">⋮</button>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .pipeline-row {
   display: grid;
-  grid-template-columns: 30px minmax(220px, 1.5fr) minmax(150px, 0.9fr) 110px minmax(120px, 0.8fr) 76px 108px minmax(72px, auto) 64px 64px;
+  grid-template-columns: 40px minmax(250px, 1.45fr) minmax(170px, 0.95fr) 112px minmax(130px, 0.8fr) 78px 112px 150px;
   align-items: center;
   gap: 12px;
   min-height: 62px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  background: var(--bg-elevated);
+  padding: 8px 18px 8px 12px;
+  border: 0;
+  border-radius: 0;
+  background: rgba(18, 24, 34, 0.72);
 }
 .icon-btn,
 .primary-action,
-.text-action {
-  height: 28px;
+.text-action,
+.more-action {
+  height: 30px;
   border: 1px solid var(--border-secondary);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -83,9 +96,11 @@ function statusClass() {
   font-size: 12px;
 }
 .icon-btn {
-  width: 30px;
+  width: 36px;
   padding: 0;
   border-radius: 7px;
+  font-size: 20px;
+  line-height: 1;
 }
 .primary-action {
   background: var(--accent);
@@ -95,18 +110,51 @@ function statusClass() {
 }
 .text-action {
   background: transparent;
+  border-color: transparent;
+  font-weight: 700;
+}
+.more-action {
+  width: 26px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 18px;
 }
 .running-badge {
-  height: 24px;
+  height: 30px;
   border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 .pipeline-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.pipeline-state-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.pipeline-state-dot.status-success {
+  background: var(--status-success);
+}
+.pipeline-state-dot.status-running,
+.pipeline-state-dot.status-pending {
+  background: var(--status-starting);
+}
+.pipeline-state-dot.status-failed,
+.pipeline-state-dot.status-canceled {
+  background: var(--status-failed);
+}
+.pipeline-name-group {
   min-width: 0;
 }
 .pipeline-name {
@@ -115,11 +163,6 @@ function statusClass() {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.pipeline-meta {
-  margin-top: 4px;
-  color: var(--text-tertiary);
-  font-size: 11px;
 }
 .pipeline-services {
   display: flex;
@@ -139,13 +182,22 @@ function statusClass() {
   color: var(--text-tertiary);
 }
 .pipeline-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   justify-self: start;
   border: 1px solid var(--border-secondary);
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 4px 8px;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
+}
+.status-ring {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
 }
 .status-success {
   border-color: color-mix(in srgb, var(--status-success) 45%, transparent);
@@ -172,6 +224,12 @@ function statusClass() {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.pipeline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (max-width: 980px) {

@@ -66,6 +66,16 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
   return Object.entries(template.inputs ?? {}).every(([name, input]) => inputSatisfied(block, name, input))
 }))
 const activeBlock = computed(() => blocks.value.find(block => block.id === activeBlockId.value) ?? blocks.value[0] ?? null)
+const previewBlocks = computed(() =>
+  blocks.value
+    .map(block => ({
+      id: block.id,
+      phase: block.phase,
+      name: selectedFor(block)?.name || phaseLabel(block.phase),
+      target: block.runnerTargets[0] || Object.values(block.targets)[0]?.[0] || t('common.local'),
+    }))
+    .slice(0, 5),
+)
 
 watch(() => props.modelValue, (value) => {
   enabled.value = Boolean(value) || enabled.value || props.initialMode === 'template'
@@ -307,6 +317,7 @@ function viewSelected(block: TemplateBlock) {
 }
 
 function saveTemplate() {
+  if (!canSave.value) return
   const pipeline: Pipeline = { build: [], deploy: [], finally: [], roles: {}, variables: {} }
   for (const block of blocks.value) {
     const template = selectedFor(block)
@@ -346,6 +357,8 @@ function saveTemplate() {
   if (Object.keys(pipeline.variables ?? {}).length === 0) delete pipeline.variables
   emit('update:modelValue', pipeline)
 }
+
+defineExpose({ saveTemplate })
 </script>
 
 <template>
@@ -362,11 +375,7 @@ function saveTemplate() {
         </button>
       </div>
 
-      <div v-if="templates.length === 0" class="pipeline-empty">
-        {{ t('settings.pipeline.emptyTemplates') }}
-      </div>
-
-      <template v-else>
+      <template>
         <div class="phase-tabs" data-test="pipeline-phase-tabs">
           <button v-for="phase in phases" :key="phase" type="button" :class="{ active: activeBlock?.phase === phase }">
             {{ phaseLabel(phase) }}
@@ -374,10 +383,13 @@ function saveTemplate() {
         </div>
 
         <div class="wizard-layout">
-          <div class="wizard-main">
+          <div class="wizard-main" data-test="pipeline-wizard-canvas">
+            <div v-if="templates.length === 0" class="pipeline-empty">
+              {{ t('settings.pipeline.emptyTemplates') }}
+            </div>
             <section v-for="phase in phases" :key="phase" class="phase-section">
               <header class="phase-head">
-                <span>{{ phaseLabel(phase) }}</span>
+                <span>{{ phaseLabel(phase) }} <small>{{ phase }}</small></span>
                 <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
                   {{ t('settings.pipeline.addTemplate') }}
                 </button>
@@ -393,6 +405,8 @@ function saveTemplate() {
                 @click="selectBlock(block)"
               >
                 <div class="block-row">
+                  <span class="block-grip" aria-hidden="true">⋮⋮</span>
+                  <span class="block-cube" aria-hidden="true"></span>
                   <select
                     v-model="block.selectedKey"
                     class="settings-select field-input"
@@ -434,7 +448,14 @@ function saveTemplate() {
           <aside class="wizard-detail-panel" data-test="pipeline-wizard-detail">
             <template v-if="activeBlock && selectedFor(activeBlock)">
               <div class="detail-title">{{ t('settings.pipeline.dynamicInputs') }}</div>
-              <div class="detail-subtitle">{{ selectedFor(activeBlock)?.name }}</div>
+              <div class="detail-subtitle">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
+              <div class="detail-tabs" aria-hidden="true">
+                <span class="active">{{ t('settings.pipeline.machine') }}</span>
+                <span>{{ t('settings.pipeline.inputGroupPath') }}</span>
+                <span>{{ t('settings.pipeline.inputGroupCommand') }}</span>
+                <span>{{ t('settings.pipeline.inputGroupFile') }}</span>
+                <span>{{ t('settings.pipeline.inputGroupOptional') }}</span>
+              </div>
 
               <div class="template-runner-row">
                 <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
@@ -553,6 +574,24 @@ function saveTemplate() {
           {{ t('settings.pipeline.saveTemplate') }}
         </button>
 
+        <section class="wizard-preview-strip">
+          <header class="preview-strip-head">
+            <span>{{ t('settings.pipeline.preview') }} / PipelinePreview</span>
+            <small>{{ t('settings.pipeline.unsavedPreviewHint') }}</small>
+          </header>
+          <div class="preview-flow">
+            <article v-for="block in previewBlocks" :key="block.id" class="preview-node">
+              <span class="preview-node-icon" aria-hidden="true"></span>
+              <strong>{{ block.name }}</strong>
+              <small>pending</small>
+              <em>{{ block.target }}</em>
+            </article>
+            <div v-if="previewBlocks.length === 0" class="preview-empty">
+              {{ t('settings.pipeline.noTemplate') }}
+            </div>
+          </div>
+        </section>
+
         <div v-if="previewError" class="preview-error">{{ previewError }}</div>
         <PipelinePreview v-if="preview" :preview="preview" />
       </template>
@@ -561,11 +600,18 @@ function saveTemplate() {
 </template>
 
 <style scoped>
+.pipeline-wizard {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  background: rgba(9, 14, 22, 0.9);
+}
 .pipeline-enable {
   font-size: 11px;
 }
 .pipeline-save {
-  margin-top: 10px;
+  justify-self: start;
+  margin: 10px 0 0 12px;
 }
 .wizard-head,
 .phase-head,
@@ -576,24 +622,21 @@ function saveTemplate() {
 .wizard-head,
 .phase-head {
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 .wizard-head {
-  margin-bottom: 10px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: var(--bg-elevated);
+  display: none;
 }
 .phase-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--border-secondary);
-  border-radius: 7px;
-  margin-bottom: 10px;
+  border-radius: 6px;
+  margin: 12px;
+  max-width: 580px;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: rgba(8, 13, 20, 0.78);
 }
 .phase-tabs button {
   height: 34px;
@@ -613,42 +656,84 @@ function saveTemplate() {
 }
 .wizard-layout {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(300px, 360px);
-  gap: 14px;
-  align-items: start;
+  grid-template-columns: minmax(520px, 1fr) minmax(360px, 508px);
+  gap: 0;
+  align-items: stretch;
+  min-height: 520px;
+  border-top: 1px solid var(--border-secondary);
 }
 .wizard-main {
   min-width: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  background: rgba(9, 14, 22, 0.42);
 }
 .wizard-detail-panel {
-  position: sticky;
-  top: 0;
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 12px;
-  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  min-width: 0;
+  max-height: 100%;
+  overflow: auto;
+  border-left: 1px solid var(--border-secondary);
+  padding: 14px;
+  background: rgba(21, 30, 42, 0.76);
 }
 .detail-title {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 800;
 }
 .detail-subtitle {
   margin-top: 5px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
 }
+.detail-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 12px 0 14px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(8, 13, 20, 0.4);
+}
+.detail-tabs span {
+  min-width: 0;
+  padding: 7px 4px;
+  border-left: 1px solid var(--border-secondary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
+}
+.detail-tabs span:first-child {
+  border-left: 0;
+}
+.detail-tabs .active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-weight: 800;
+}
 .detail-empty {
+  min-height: 180px;
   color: var(--text-tertiary);
   font-size: 12px;
 }
 .phase-section {
-  border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 10px;
-  margin-top: 10px;
-  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-secondary);
+  padding: 14px 0 12px;
+  background: transparent;
+}
+.phase-section:first-of-type {
+  border-top: 0;
+}
+.phase-head {
+  min-height: 32px;
+  color: var(--text-primary);
+  font-weight: 800;
+}
+.phase-head small {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
 }
 .pipeline-disable,
 .danger-btn,
@@ -662,8 +747,21 @@ function saveTemplate() {
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.pipeline-empty {
+  margin: 0 0 10px;
+  border: 1px dashed var(--border-secondary);
+  border-radius: 6px;
+  padding: 10px;
+}
 .phase-empty {
-  padding: 8px 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border: 1px dashed var(--border-secondary);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--accent);
 }
 .preview-error {
   margin-top: 8px;
@@ -672,22 +770,41 @@ function saveTemplate() {
 }
 .template-block {
   border: 1px solid var(--border-secondary);
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: 6px;
+  padding: 12px;
   margin-top: 8px;
-  background: var(--bg-primary);
+  background: rgba(13, 18, 26, 0.88);
   cursor: pointer;
 }
 .template-block.active {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 52%, transparent);
 }
 .block-row {
   gap: 8px;
 }
+.block-grip {
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 0.8;
+}
+.block-cube,
+.preview-node-icon {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text-tertiary);
+  border-radius: 5px;
+}
+.block-cube {
+  border-color: #9fb4d2;
+}
 .block-row .field-input {
   flex: 1;
   min-width: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 800;
 }
 .field-label {
   display: block;
@@ -699,9 +816,9 @@ function saveTemplate() {
 .template-input-row {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 8px;
   align-items: start;
-  margin-top: 12px;
+  margin-top: 13px;
 }
 .template-runner-row {
   display: grid;
@@ -727,33 +844,46 @@ function saveTemplate() {
 }
 .target-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 6px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px 14px;
   align-items: center;
 }
 .target-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   min-width: 0;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 .file-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
 }
 .file-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px;
+  gap: 0;
   align-items: center;
+  border-top: 1px solid var(--border-secondary);
+}
+.file-row:first-child {
+  border-top: 0;
 }
 .file-input {
   min-width: 0;
+  border: 0;
+  border-right: 1px solid var(--border-secondary);
+  border-radius: 0;
 }
 .file-remove {
+  min-height: 30px;
+  border: 0;
+  border-radius: 0;
   white-space: nowrap;
 }
 .boolean-field {
@@ -777,13 +907,110 @@ function saveTemplate() {
   padding: 4px 7px;
   color: var(--text-secondary);
 }
-
+.wizard-preview-strip {
+  border-top: 1px solid var(--border-secondary);
+  padding: 16px 24px;
+  background: rgba(21, 30, 42, 0.64);
+}
+.preview-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+.preview-strip-head small {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+.preview-flow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 24px;
+}
+.preview-node {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-height: 74px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  padding: 10px 12px 10px 42px;
+  background: rgba(13, 18, 26, 0.72);
+}
+.preview-node + .preview-node::before {
+  position: absolute;
+  top: 50%;
+  left: -18px;
+  color: var(--text-tertiary);
+  content: '→';
+  transform: translateY(-50%);
+}
+.preview-node-icon {
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.preview-node strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.preview-node small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.preview-node em {
+  justify-self: start;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: normal;
+}
+.preview-empty {
+  border: 1px dashed var(--border-secondary);
+  border-radius: 6px;
+  padding: 18px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+@media (max-width: 1280px) {
+  .wizard-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+  .wizard-main {
+    max-height: none;
+  }
+  .wizard-detail-panel {
+    max-height: none;
+    border-top: 1px solid var(--border-secondary);
+    border-left: 0;
+  }
+  .detail-tabs {
+    grid-template-columns: repeat(5, minmax(74px, 1fr));
+    overflow-x: auto;
+  }
+  .preview-flow {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+  .preview-node + .preview-node::before {
+    display: none;
+  }
+}
 @media (max-width: 780px) {
   .wizard-layout {
     grid-template-columns: 1fr;
   }
   .wizard-detail-panel {
     position: static;
+    border-left: 0;
+    border-top: 1px solid var(--border-secondary);
   }
   .block-row,
   .template-input-row,
@@ -797,6 +1024,12 @@ function saveTemplate() {
   }
   .file-row {
     grid-template-columns: 1fr;
+  }
+  .preview-flow {
+    grid-template-columns: 1fr;
+  }
+  .preview-node + .preview-node::before {
+    display: none;
   }
 }
 </style>
