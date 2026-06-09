@@ -37,6 +37,12 @@ function pendingApproval() {
   } as any
 }
 
+function projectApproval() {
+  const approval = pendingApproval()
+  approval.plan.target.project_id = 'p1'
+  return approval
+}
+
 describe('OperationApprovalPopover', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -59,6 +65,25 @@ describe('OperationApprovalPopover', () => {
     await wrapper.find('[data-test="approval-popover-approve-opa_1"]').trigger('click')
 
     expect(approve).toHaveBeenCalledWith('opa_1', '')
+  })
+
+  it('approves with project grace when selected', async () => {
+    const store = useOperationApprovalStore()
+    store.approvals = [projectApproval()]
+    const approve = vi.spyOn(store, 'approve').mockResolvedValue({
+      approval: { ...projectApproval(), status: 'approved' },
+      grace_granted: true,
+    } as any)
+
+    const wrapper = mount(OperationApprovalPopover, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="approval-popover-grace-opa_1"]').setValue(true)
+    await wrapper.find('[data-test="approval-popover-approve-opa_1"]').trigger('click')
+
+    expect(approve).toHaveBeenCalledWith('opa_1', { grantGrace: true })
+    expect(wrapper.text()).toContain('已对项目开启 15 分钟免审')
   })
 
   it('rejects directly and emits view-all from the footer', async () => {

@@ -214,6 +214,9 @@ export default {
       noticeTitle: '需要操作审批',
       resumeFailedTitle: '继续执行失败',
       retry: '重试',
+      grantGrace: '批准，并 {minutes} 分钟内对本项目免审',
+      graceGranted: '已对项目开启 {minutes} 分钟免审',
+      graceUnavailable: '此操作不关联项目，无法开启免审窗口',
     },
     mcp: {
       title: 'MCP 管理',

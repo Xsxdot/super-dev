@@ -214,6 +214,9 @@ export default {
       noticeTitle: 'Approval required',
       resumeFailedTitle: 'Execution failed',
       retry: 'Retry',
+      grantGrace: 'Approve and skip approvals for this project for {minutes} minutes',
+      graceGranted: 'Project approvals skipped for {minutes} minutes',
+      graceUnavailable: 'This operation is not linked to a project',
     },
     mcp: {
       title: 'MCP',
