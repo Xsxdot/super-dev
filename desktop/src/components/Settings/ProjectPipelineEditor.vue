@@ -18,6 +18,8 @@ import {
   type PipelinePreviewResponse,
   type PipelineTemplateDetail,
   type PipelineTemplateSummary,
+  type PipelinePhase,
+  type PipelineStep,
   type Project,
   type ProjectPipeline,
 } from '@/api/agent'
@@ -60,6 +62,7 @@ const applyPreview = ref<PipelinePreviewResponse | null>(null)
 const applyPreviewError = ref('')
 const applyingTemplate = ref(false)
 const applyTemplateDraft = ref<(() => void) | null>(null)
+const previewPhases: PipelinePhase[] = ['build', 'deploy', 'finally']
 
 onMounted(async () => {
   try {
@@ -98,6 +101,29 @@ function firstPipelineId() {
 function phaseBlockCount(phase: 'build' | 'deploy' | 'finally') {
   return activePipeline.value?.pipeline?.[phase]?.length ?? 0
 }
+
+function phaseLabel(phase: PipelinePhase) {
+  return t(`settings.pipeline.phases.${phase}`)
+}
+
+function previewTarget(step: PipelineStep) {
+  const role = step.roles?.[0]
+  if (!role) return t('common.local')
+  return activePipeline.value?.pipeline?.roles?.[role]?.[0] ?? role
+}
+
+const editorPreviewNodes = computed(() => {
+  const pipeline = activePipeline.value?.pipeline
+  if (!pipeline) return []
+  return previewPhases
+    .flatMap(phase => (pipeline[phase] ?? []).map((step, index) => ({
+      id: `${phase}-${index}-${step.name}`,
+      phase,
+      name: step.name || phaseLabel(phase),
+      target: previewTarget(step),
+    })))
+    .slice(0, 6)
+})
 
 const railItems = computed(() => {
   const buildCount = phaseBlockCount('build')
@@ -269,6 +295,7 @@ async function save() {
               :hosts="hosts"
               :templates="pipelineTemplates ?? []"
               :initial-mode="initialMode"
+              hide-preview-strip
               :on-view-template="viewTemplate"
               @update:pipeline="updateActivePipeline"
             >
@@ -297,9 +324,28 @@ async function save() {
       </div>
 
       <div class="settings-modal-footer pipeline-editor-actions">
-        <div class="pipeline-editor-save-note" data-test="pipeline-editor-preview">
-          <span aria-hidden="true"></span>
-          {{ t('settings.pipeline.requiredComplete') }}
+        <div class="pipeline-editor-preview-strip" data-test="pipeline-editor-preview-strip">
+          <header class="pipeline-editor-preview-head">
+            <span>{{ t('settings.pipeline.preview') }} / PipelinePreview</span>
+            <small>{{ t('settings.pipeline.unsavedPreviewHint') }}</small>
+          </header>
+          <div class="pipeline-editor-preview-flow">
+            <article
+              v-for="node in editorPreviewNodes"
+              :key="node.id"
+              class="pipeline-editor-preview-node"
+              data-test="pipeline-editor-preview-node"
+            >
+              <span class="pipeline-editor-preview-icon" aria-hidden="true"></span>
+              <strong>{{ node.name }}</strong>
+              <small>pending</small>
+              <em>{{ node.target }}</em>
+            </article>
+            <div v-if="editorPreviewNodes.length === 0" class="pipeline-editor-preview-empty" data-test="pipeline-editor-preview">
+              <span aria-hidden="true"></span>
+              {{ t('settings.pipeline.requiredComplete') }}
+            </div>
+          </div>
         </div>
         <div class="pipeline-editor-footer-buttons">
           <button type="button" class="settings-btn" data-test="pipeline-config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
@@ -487,19 +533,95 @@ async function save() {
   align-items: center;
   justify-content: space-between;
   min-height: 62px;
+  gap: 18px;
   padding: 12px 30px 12px 24px;
   background: rgba(21, 30, 42, 0.96);
 }
-.pipeline-editor-save-note {
+.pipeline-editor-preview-strip {
+  min-width: 0;
+  flex: 1;
+}
+.pipeline-editor-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+.pipeline-editor-preview-head small {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+.pipeline-editor-preview-flow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(118px, 1fr));
+  gap: 22px;
+  min-width: 0;
+}
+.pipeline-editor-preview-node {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 68px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  padding: 9px 10px 9px 38px;
+  background: rgba(13, 18, 26, 0.72);
+}
+.pipeline-editor-preview-node + .pipeline-editor-preview-node::before {
+  position: absolute;
+  top: 50%;
+  left: -17px;
+  color: var(--text-tertiary);
+  content: '→';
+  transform: translateY(-50%);
+}
+.pipeline-editor-preview-icon {
+  position: absolute;
+  top: 13px;
+  left: 11px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--accent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.pipeline-editor-preview-node strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-editor-preview-node small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.pipeline-editor-preview-node em {
+  justify-self: start;
+  overflow: hidden;
+  max-width: 100%;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-editor-preview-empty {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
-.pipeline-editor-save-note span {
+.pipeline-editor-preview-empty span {
   width: 15px;
   height: 15px;
   border-radius: 50%;
@@ -507,6 +629,7 @@ async function save() {
 }
 .pipeline-editor-footer-buttons {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 14px;
 }
@@ -518,6 +641,13 @@ async function save() {
 @media (max-width: 1100px) {
   .pipeline-editor-rail {
     display: none;
+  }
+  .pipeline-editor-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pipeline-editor-preview-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

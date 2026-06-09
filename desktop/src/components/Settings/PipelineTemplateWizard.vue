@@ -48,6 +48,7 @@ const props = defineProps<{
   previewError?: string
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
   initialMode?: 'template' | 'blank'
+  hidePreviewStrip?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
@@ -627,7 +628,7 @@ defineExpose({ saveTemplate })
           {{ t('settings.pipeline.saveTemplate') }}
         </button>
 
-        <section class="wizard-preview-strip">
+        <section v-if="!hidePreviewStrip" class="wizard-preview-strip" data-test="wizard-preview-strip">
           <header class="preview-strip-head">
             <span>{{ t('settings.pipeline.preview') }} / PipelinePreview</span>
             <small>{{ t('settings.pipeline.unsavedPreviewHint') }}</small>

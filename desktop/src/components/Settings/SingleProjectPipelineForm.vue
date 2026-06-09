@@ -22,6 +22,7 @@ const props = defineProps<{
   templates: PipelineTemplateSummary[]
   initialMode?: 'template' | 'blank'
   withStructureRail?: boolean
+  hidePreviewStrip?: boolean
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
 }>()
 
@@ -122,6 +123,7 @@ defineExpose({ saveTemplateConfig })
           :templates="templates"
           :hosts="hosts"
           :initial-mode="initialMode"
+          :hide-preview-strip="hidePreviewStrip"
           :on-view-template="onViewTemplate"
           @update:model-value="setPipeline"
         />

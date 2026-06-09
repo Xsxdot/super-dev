@@ -211,6 +211,10 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Vue + Go 组合构建')
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('模板输入')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Vue + Go 组合构建')
+    expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').text()).toContain('Systemd 无缝部署')
+    expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(2)
+    expect(wrapper.find('[data-test="wizard-preview-strip"]').exists()).toBe(false)
   })
 
   it('左侧结构 rail 展示当前流水线真实阶段模板数量', async () => {
