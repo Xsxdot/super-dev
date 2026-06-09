@@ -93,8 +93,12 @@ function statusIcon() {
 
 <style scoped>
 .pipeline-row {
+  --pipeline-actions-width: 126px;
+  --pipeline-name-width: 360px;
+  --pipeline-services-width: 280px;
+  --pipeline-version-width: 176px;
   display: grid;
-  grid-template-columns: 44px 248px 224px 112px 148px 72px 102px 126px;
+  grid-template-columns: 44px var(--pipeline-name-width) var(--pipeline-services-width) 112px var(--pipeline-version-width) 72px minmax(140px, 1fr) var(--pipeline-actions-width);
   align-items: center;
   gap: 0;
   min-height: 64px;
@@ -116,6 +120,8 @@ function statusIcon() {
   font-size: 14px;
 }
 .icon-btn {
+  display: inline-grid;
+  place-items: center;
   width: 36px;
   padding: 0;
   line-height: 1;
@@ -201,7 +207,7 @@ function statusIcon() {
 .service-tag {
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
-  max-width: 150px;
+  max-width: 220px;
   padding: 5px 10px;
   overflow: hidden;
   background: #151e29;

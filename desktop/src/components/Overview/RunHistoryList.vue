@@ -164,6 +164,9 @@ function summary(run: Run) {
   --history-header-height: 42px;
   --history-row-height: 61px;
   --history-node-size: 18px;
+  --history-version-width: 176px;
+  --history-started-at-width: 184px;
+  --history-artifact-kind-width: 104px;
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
   margin: 0;
@@ -232,7 +235,7 @@ function summary(run: Run) {
 }
 .history-head {
   display: grid;
-  grid-template-columns: 94px 140px 64px 150px 72px 76px minmax(150px, 1fr) 201px;
+  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) 201px;
   align-items: center;
   gap: 0;
   height: var(--history-header-height);
@@ -248,7 +251,7 @@ function summary(run: Run) {
 .history-loading,
 .run-row {
   display: grid;
-  grid-template-columns: 94px 140px 64px 150px 72px 76px minmax(150px, 1fr) 201px;
+  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) 201px;
   align-items: center;
   gap: 0;
   min-height: 61px;

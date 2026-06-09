@@ -2,6 +2,8 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import PipelinesTab from '../PipelinesTab.vue'
+import pipelinesTabSource from '../PipelinesTab.vue?raw'
+import pipelineRowSource from '../PipelineRow.vue?raw'
 import type { Project, Run } from '@/api/agent'
 import { api } from '@/api/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -79,7 +81,7 @@ describe('PipelinesTab', () => {
     expect(wrapper.find('[data-test="pipeline-table-head"]').text()).toContain('流水线')
     expect(wrapper.find('[data-test="pipeline-overview"]').text()).toContain('Deploy Dev')
     expect(wrapper.find('[data-test="pipeline-overview-phases"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-artifact-download"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-artifact-download"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-latest-version"]').text()).toContain('v1')
     expect(wrapper.find('[data-test="pipeline-latest-duration"]').text()).toContain('10s')
     expect(wrapper.find('[data-test="pipeline-timezone"]').text()).toContain('Asia/Shanghai')
@@ -87,6 +89,23 @@ describe('PipelinesTab', () => {
     expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p1', 'deploy-dev')
     expect(wrapper.find('[data-test="run-history"]').text()).toContain('v1')
     expect(wrapper.find('[data-test="run-history-timeline"]').exists()).toBe(true)
+  })
+
+  it('centers icon-only controls through explicit layout styles', () => {
+    expect(pipelinesTabSource).toMatch(/\.pipeline-refresh-btn\s*{[^}]*display:\s*inline-grid;[^}]*place-items:\s*center;/s)
+    expect(pipelineRowSource).toMatch(/\.icon-btn\s*{[^}]*display:\s*inline-grid;[^}]*place-items:\s*center;/s)
+  })
+
+  it('uses a flexible pre-action column so pipeline actions align to the right edge', () => {
+    expect(pipelinesTabSource).toContain('--pipeline-actions-width: 126px;')
+    expect(pipelinesTabSource).toMatch(/grid-template-columns:\s*var\(--pipeline-name-width\) var\(--pipeline-services-width\) 112px var\(--pipeline-version-width\) 72px minmax\(140px,\s*1fr\) var\(--pipeline-actions-width\);/)
+    expect(pipelineRowSource).toMatch(/grid-template-columns:\s*44px var\(--pipeline-name-width\) var\(--pipeline-services-width\) 112px var\(--pipeline-version-width\) 72px minmax\(140px,\s*1fr\) var\(--pipeline-actions-width\);/)
+  })
+
+  it('keeps the pipeline name, services, and latest version columns readable', () => {
+    expect(pipelinesTabSource).toContain('--pipeline-name-width: 360px;')
+    expect(pipelinesTabSource).toContain('--pipeline-services-width: 280px;')
+    expect(pipelinesTabSource).toContain('--pipeline-version-width: 176px;')
   })
 
   it('limits expanded history to recent records and exposes the full history action', async () => {

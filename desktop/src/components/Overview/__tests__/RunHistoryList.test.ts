@@ -13,6 +13,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import RunHistoryList from '@/components/Overview/RunHistoryList.vue'
+import runHistoryListSource from '../RunHistoryList.vue?raw'
 import type { Run } from '@/api/agent'
 import { installTestI18n } from '@/test-utils/i18n'
 
@@ -72,5 +73,15 @@ describe('RunHistoryList', () => {
     })
 
     expect(wrapper.find('[data-test="run-rollback"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps the artifact kind column wide enough for the full header label', () => {
+    expect(runHistoryListSource).toContain('--history-artifact-kind-width: 104px;')
+    expect(runHistoryListSource).toMatch(/grid-template-columns:\s*94px var\(--history-version-width\) 64px var\(--history-started-at-width\) 72px var\(--history-artifact-kind-width\) minmax\(150px,\s*1fr\) 201px;/)
+  })
+
+  it('keeps the version and start time columns wide enough for timestamp-like values', () => {
+    expect(runHistoryListSource).toContain('--history-version-width: 176px;')
+    expect(runHistoryListSource).toContain('--history-started-at-width: 184px;')
   })
 })

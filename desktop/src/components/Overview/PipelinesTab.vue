@@ -370,16 +370,6 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
                 {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
               </div>
             </div>
-            <button
-              type="button"
-              class="artifact-download"
-              data-test="pipeline-artifact-download"
-              :aria-label="t('overview.pipeline.downloadArtifact')"
-              :title="t('overview.pipeline.downloadArtifact')"
-              disabled
-            >
-              <Icon icon="lucide:download" aria-hidden="true" />
-            </button>
           </div>
         </div>
       </aside>
@@ -529,11 +519,15 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   background: rgba(139, 148, 158, 0.36);
 }
 .pipeline-table-inner {
-  min-width: 1108px;
+  --pipeline-actions-width: 126px;
+  --pipeline-name-width: 360px;
+  --pipeline-services-width: 280px;
+  --pipeline-version-width: 176px;
+  min-width: 1342px;
 }
 .pipeline-table-head {
   display: grid;
-  grid-template-columns: 248px 224px 112px 148px 72px 102px 126px;
+  grid-template-columns: var(--pipeline-name-width) var(--pipeline-services-width) 112px var(--pipeline-version-width) 72px minmax(140px, 1fr) var(--pipeline-actions-width);
   gap: 0;
   align-items: center;
   min-height: 47px;
@@ -679,6 +673,8 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   height: 17px;
 }
 .pipeline-refresh-btn {
+  display: inline-grid;
+  place-items: center;
   width: 50px;
   padding: 0;
   color: var(--text-secondary);
@@ -759,7 +755,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .artifact-card {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) 28px;
+  grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   border: 1px solid var(--border-secondary);
@@ -786,17 +782,6 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   margin-top: 6px;
   color: var(--text-tertiary);
   font-size: 11px;
-}
-.artifact-download {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  background: rgba(22, 27, 34, 0.68);
-  color: var(--text-tertiary);
-  cursor: not-allowed;
-  font-size: 15px;
-  line-height: 1;
 }
 .pipeline-timezone {
   margin: 24px 0 20px;
