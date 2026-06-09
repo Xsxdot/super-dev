@@ -570,6 +570,7 @@ export default {
       savedPreviewHint: 'Preview uses the saved config',
       unsavedPreviewHint: 'Preview uses current unsaved config',
       stageUnit: 'phases',
+      stepCount: 'steps',
       phaseSuffix: 'Phase',
       phases: {
         build: 'Build Phase',

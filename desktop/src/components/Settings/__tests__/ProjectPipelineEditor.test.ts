@@ -210,8 +210,10 @@ describe('ProjectPipelineEditor', () => {
 
     expect(wrapper.find('[data-test="pipeline-editor-form-column"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Vue + Go 组合构建')
-    expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
+    expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).not.toContain('Systemd 无缝部署')
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('模板输入')
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
+    expect(wrapper.find('[data-test="pipeline-editor-stage-area"]').text()).toContain('Systemd 无缝部署')
     expect(wrapper.find('[data-test="pipeline-preview-open"]').attributes('data-preview-count')).toBe('2')
     expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(0)
@@ -375,6 +377,7 @@ describe('ProjectPipelineEditor', () => {
       global: { plugins: [installTestI18n()] },
     })
     await new Promise(r => setTimeout(r))
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd@1.0.0')
     await wrapper.find('[data-test="block-0-view-template"]').trigger('click')

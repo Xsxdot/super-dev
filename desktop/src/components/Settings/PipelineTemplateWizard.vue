@@ -516,18 +516,18 @@ defineExpose({ saveTemplate })
             <div v-if="templates.length === 0" class="pipeline-empty">
               {{ t('settings.pipeline.emptyTemplates') }}
             </div>
-            <section v-for="phase in phases" :key="phase" class="phase-section">
+            <section :key="activePhase" class="phase-section">
               <header class="phase-head">
-                <span>{{ phaseDisplayLabel(phase) }} <small>{{ t('settings.pipeline.phaseSuffix') }}</small></span>
-                <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${phase}`" @click="addBlock(phase)">
+                <span>{{ phaseDisplayLabel(activePhase) }} · {{ blocksForPhase(activePhase).length }} {{ t('settings.pipeline.stepCount') }}</span>
+                <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${activePhase}`" @click="addBlock(activePhase)">
                   {{ t('settings.pipeline.addTemplate') }}
                 </button>
               </header>
 
-              <div v-if="blocksForPhase(phase).length === 0" class="phase-empty">{{ t('settings.pipeline.noTemplate') }}</div>
+              <div v-if="blocksForPhase(activePhase).length === 0" class="phase-empty">{{ t('settings.pipeline.noTemplate') }}</div>
 
               <div
-                v-for="block in blocksForPhase(phase)"
+                v-for="block in blocksForPhase(activePhase)"
                 :key="block.id"
                 class="template-block"
                 :class="{ active: activeBlock?.id === block.id }"

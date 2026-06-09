@@ -84,6 +84,29 @@ describe('PipelineTemplateWizard', () => {
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
   })
 
+  it('左栏一次只渲染当前阶段', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, deployTemplate],
+        initialMode: 'template',
+      },
+    })
+
+    expect(wrapper.findAll('.phase-section')).toHaveLength(1)
+    expect(wrapper.find('.phase-section').text()).toContain('构建')
+    expect(wrapper.find('.phase-section').text()).not.toContain('部署')
+    expect(wrapper.find('[data-test="add-template-deploy"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
+
+    expect(wrapper.findAll('.phase-section')).toHaveLength(1)
+    expect(wrapper.find('.phase-section').text()).toContain('部署')
+    expect(wrapper.find('.phase-section').text()).not.toContain('构建')
+    expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="add-template-deploy"]').exists()).toBe(true)
+  })
+
   it('按阶段保存多个模板和目标机器角色', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
@@ -98,6 +121,7 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
     expect(wrapper.find('[data-test="block-0-help-app_name"]').attributes('title')).toBe('应用名')
 
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
     await wrapper.find('[data-test="block-1-input-app_name"]').setValue('api')
@@ -127,6 +151,7 @@ describe('PipelineTemplateWizard', () => {
     expect(buildOptions.join('\n')).toContain('Archive Package')
     expect(buildOptions.join('\n')).not.toContain('Systemd Deploy')
 
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     const deployOptions = wrapper.find('[data-test="block-1-template-select"]').findAll('option').map(option => option.text())
     expect(deployOptions.join('\n')).toContain('Systemd Deploy')
@@ -145,6 +170,7 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
     await wrapper.find('[data-test="add-template-build"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
 
@@ -164,6 +190,7 @@ describe('PipelineTemplateWizard', () => {
       },
     })
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
 
@@ -180,6 +207,7 @@ describe('PipelineTemplateWizard', () => {
       },
     })
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
     await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
@@ -492,6 +520,7 @@ describe('PipelineTemplateWizard', () => {
       props: { modelValue: undefined, templates: [booleanTemplate] },
     })
     await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
 

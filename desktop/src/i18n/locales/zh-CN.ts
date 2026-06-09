@@ -570,6 +570,7 @@ export default {
       savedPreviewHint: '预览来自保存后的配置',
       unsavedPreviewHint: '预览来自当前未保存配置',
       stageUnit: '个阶段',
+      stepCount: '个步骤',
       phaseSuffix: '阶段',
       phases: {
         build: '构建阶段',
