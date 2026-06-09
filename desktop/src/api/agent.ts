@@ -513,6 +513,7 @@ export interface OperationTarget {
   service_id?: string
   service_name?: string
   deployment_id?: string
+  host_id?: string
   template_path?: string
   template_digest?: string
   pipeline_id?: string

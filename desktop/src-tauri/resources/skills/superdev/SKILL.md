@@ -13,7 +13,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 ### 读写分离 + 双层安全门
 
-只读工具可放心使用。配置写入必须走 `preview_config_change → apply_config_change`。运行态危险操作可以先用 `preview_operation` 解释风险，但实际执行应直接调用 `start_service` / `stop_service` / `restart_service`；如需审批，MCP 会创建 pending approval，默认等待用户在 SuperDev 桌面端批准，并在拿到一次性 token 后自动重试。
+只读工具可放心使用。配置写入必须走 `preview_config_change → apply_config_change`。**所有写工具采用统一审批模型**：直接调用（不传 `approval_token`），需要审批时 MCP 默认在 SuperDev 桌面端等待用户批准并自动带 token 续跑，对你无感。是否真正审批由用户配置的开关决定，用户也可在批准时开启「项目级免审窗口」让后续同项目操作自动通过。详见 `references/safe-operations.md`。
 
 ## 第一步：永远先建立全局视野
 
@@ -29,8 +29,8 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 | --- | --- | --- |
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
-| 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再 apply | `references/safe-operations.md` |
-| 启动、停止、重启服务 | 可选 `preview_operation`，默认直接调用 runtime tool 并等待审批自动续跑 | `references/safe-operations.md` |
+| 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
+| 启动、停止、重启服务、部署/回滚 pipeline、导入模板 | 可选 `preview_operation`，直接调用写工具并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
 | 记录一次排查过程 | 建立 debug session，过程中追加分析和观察 | `references/debugging-workflow.md` |
 
@@ -38,10 +38,10 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 1. 没收集证据前不下根因。
 2. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
-3. 运行态危险操作直接调用 runtime tool；需要审批时等待桌面端批准并自动续跑。只有超时或显式关闭等待时，才手动 `get_operation_approval` 拿 one-time token 后重试。
+3. 所有写工具直接调用即可；需要审批时统一由 MCP 等待桌面端批准并自动续跑。不要先查审批再手动传 token——那会浪费多轮调用。只有显式关闭等待（`approval_wait_seconds=0`）时才回到手动流程。
 4. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
 
-危险运行态操作的手动审批链路可概括为：`preview_operation → get_operation_approval`，但默认优先让 runtime tool 自动等待审批并续跑。
+写操作的审批对你无感：直接调用 → 需要审批时 MCP 自动等待并续跑 → 仅超时/被拒才返回失败。批量写操作时可提示用户在审批弹窗勾选「项目级免审窗口」，后续同项目操作将自动通过。
 
 ## 工具速查表
 

@@ -166,6 +166,37 @@ describe('operationApproval store', () => {
     expect(store.error).toBe('')
   })
 
+  it('resumes a desktop host-scoped runtime operation after approval', async () => {
+    const approval = {
+      id: 'opa_1',
+      status: 'approved',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_1',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'dep-prod', host_id: 'host-a' },
+        target_summary: 'demo/prod/api on host-a',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_host',
+      },
+    } as any
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval } as any)
+    vi.spyOn(api, 'getOperationApproval').mockResolvedValue({ approval, approval_token: 'tok_1' })
+    vi.spyOn(api, 'restartDeployment').mockResolvedValue(undefined)
+    vi.spyOn(api, 'restartDeploymentOnHost').mockResolvedValue(undefined)
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_1', 'ok')
+
+    expect(api.restartDeploymentOnHost).toHaveBeenCalledWith('dep-prod', 'host-a', 'tok_1')
+    expect(api.restartDeployment).not.toHaveBeenCalled()
+    expect(store.error).toBe('')
+  })
+
   it('retries execution without approving again after a resume failure', async () => {
     const approval = {
       id: 'opa_1',

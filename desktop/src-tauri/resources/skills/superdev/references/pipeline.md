@@ -55,6 +55,10 @@ get_project_config
 
 执行前说明影响面：项目、环境、pipeline、目标主机、变量、artifact version。
 
+### 审批
+
+`deploy_project_pipeline` 与其他写工具一样走统一审批模型（见 `references/safe-operations.md`）：直接调用，不传 `approval_token`。流水线运行是否需要审批由用户配置的开关决定；需要时 MCP 默认等待用户在桌面端批准并自动续跑，对你无感。若用户已对该项目开启免审窗口（例如刚在前面的配置步骤里勾选过），本次部署会直接通过。不要为部署单独设计查审批、传 token 的流程。
+
 ## 观测与排查
 
 执行后按顺序观察：

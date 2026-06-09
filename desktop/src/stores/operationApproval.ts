@@ -216,14 +216,26 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     switch (approval.plan.kind) {
       case 'runtime.start':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.startDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.startDeployment(target.deployment_id, token)
         return
       case 'runtime.stop':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.stopDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.stopDeployment(target.deployment_id, token)
         return
       case 'runtime.restart':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.restartDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.restartDeployment(target.deployment_id, token)
         return
       case 'runtime.start_selected':
