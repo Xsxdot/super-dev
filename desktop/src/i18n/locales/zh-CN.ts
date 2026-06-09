@@ -1044,6 +1044,7 @@ export default {
       phasesTitle: '阶段（步骤数量）',
       templatesTitle: '模板',
       latestArtifact: '最近制品',
+      downloadArtifact: '下载制品',
       run: '运行',
       running: '运行中',
       edit: '编辑',

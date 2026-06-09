@@ -52,26 +52,28 @@ const { t } = useAppI18n()
 .overview-tabs {
   display: inline-flex;
   gap: 2px;
-  padding: 2px;
+  padding: 4px;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  background: var(--bg-elevated);
+  border-radius: 8px;
+  background: rgba(16, 22, 31, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 .overview-tabs button {
-  min-width: 86px;
-  height: 30px;
-  padding: 0 12px;
+  min-width: 122px;
+  height: 44px;
+  padding: 0 18px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 800;
 }
 .overview-tabs button.active {
-  background: var(--bg-overlay);
+  background: rgba(38, 46, 58, 0.9);
   color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .overview-tabs button:hover {
   color: var(--text-primary);

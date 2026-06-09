@@ -12,6 +12,7 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
 -->
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
@@ -363,10 +364,23 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         <div v-if="latestArtifact(overviewPipeline)" class="overview-section">
           <div class="overview-section-title">{{ t('overview.pipeline.latestArtifact') }}</div>
           <div class="artifact-card">
-            <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
-            <div class="artifact-file-meta">
-              {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
+            <span class="artifact-file-icon" aria-hidden="true"></span>
+            <div class="artifact-file-copy">
+              <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
+              <div class="artifact-file-meta">
+                {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
+              </div>
             </div>
+            <button
+              type="button"
+              class="artifact-download"
+              data-test="pipeline-artifact-download"
+              :aria-label="t('overview.pipeline.downloadArtifact')"
+              :title="t('overview.pipeline.downloadArtifact')"
+              disabled
+            >
+              <Icon icon="lucide:download" aria-hidden="true" />
+            </button>
           </div>
         </div>
       </aside>
@@ -721,10 +735,24 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   font-size: 12px;
 }
 .artifact-card {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--border-secondary);
   border-radius: 7px;
   padding: 10px;
   background: rgba(7, 12, 18, 0.52);
+}
+.artifact-file-icon {
+  width: 18px;
+  height: 22px;
+  border: 1px solid var(--text-tertiary);
+  border-radius: 3px;
+  background: rgba(139, 148, 158, 0.1);
+}
+.artifact-file-copy {
+  min-width: 0;
 }
 .artifact-file-name {
   overflow: hidden;
@@ -737,6 +765,17 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   margin-top: 6px;
   color: var(--text-tertiary);
   font-size: 11px;
+}
+.artifact-download {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 5px;
+  background: rgba(22, 27, 34, 0.68);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  font-size: 15px;
+  line-height: 1;
 }
 .pipeline-timezone {
   margin-top: 22px;

@@ -1044,6 +1044,7 @@ export default {
       phasesTitle: 'Phases (steps)',
       templatesTitle: 'Templates',
       latestArtifact: 'Latest artifact',
+      downloadArtifact: 'Download artifact',
       run: 'Run',
       running: 'Running',
       edit: 'Edit',
