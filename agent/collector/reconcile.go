@@ -13,6 +13,7 @@ import "github.com/xsxdot/super-dev/agent/model"
 
 // DesiredCollector 表示一个期望运行的 managed collector。
 type DesiredCollector struct {
+	ID        string
 	Name      string
 	Type      model.LogSourceType
 	ExtraArgs []string
@@ -20,6 +21,7 @@ type DesiredCollector struct {
 
 // ReconcileFailure 表示某个期望 collector 未能启动。
 type ReconcileFailure struct {
+	ID    string
 	Name  string
 	Type  model.LogSourceType
 	Error string
@@ -52,15 +54,15 @@ func (m *Manager) Reconcile(desired []DesiredCollector) ReconcileResult {
 	desiredIDs := map[string]struct{}{}
 
 	for _, item := range desired {
-		id := CollectorID(item.Name, item.Type)
+		id := desiredCollectorID(item)
 		desiredIDs[id] = struct{}{}
 		alreadyRunning := false
 		if _, ok := m.Get(id); ok {
 			alreadyRunning = true
 		}
-		startedID, err := m.StartWithOptions(item.Name, item.Type, item.ExtraArgs)
+		startedID, err := m.startWithOptionsAs(id, item.Name, item.Type, item.ExtraArgs)
 		if err != nil {
-			result.Failed = append(result.Failed, ReconcileFailure{Name: item.Name, Type: item.Type, Error: err.Error()})
+			result.Failed = append(result.Failed, ReconcileFailure{ID: id, Name: item.Name, Type: item.Type, Error: err.Error()})
 			continue
 		}
 		m.mu.Lock()
@@ -90,4 +92,11 @@ func (m *Manager) Reconcile(desired []DesiredCollector) ReconcileResult {
 		result.Stopped = append(result.Stopped, id)
 	}
 	return result
+}
+
+func desiredCollectorID(item DesiredCollector) string {
+	if item.ID != "" {
+		return item.ID
+	}
+	return CollectorID(item.Name, item.Type)
 }

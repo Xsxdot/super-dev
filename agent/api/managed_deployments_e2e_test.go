@@ -121,9 +121,8 @@ services:
 	assert.False(t, inst.IsLocal)
 	assert.Equal(t, model.HealthRunning, inst.Metrics.Health)
 
-	collectorID := collector.CollectorID("printf remote-log", model.LogSourceTypeCommand)
 	remoteApp.WriteTestLog(model.LogEntry{
-		DeploymentID: collectorID,
+		DeploymentID: "dep-api-prod",
 		Timestamp:    time.Now().UTC(),
 		Level:        "INFO",
 		Message:      "remote log recovered",
@@ -145,4 +144,118 @@ services:
 		}
 		return false
 	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *testing.T) {
+	remoteApp, err := NewApp(AppConfig{
+		DataDir: t.TempDir(),
+		ProbeOverride: collector.ProbeFunc(func(model.LogSourceType, string) error {
+			return nil
+		}),
+		RuntimeMetricsSampler: e2eRuntimeSampler{},
+	})
+	require.NoError(t, err)
+	t.Cleanup(remoteApp.Close)
+	remoteSrv := httptest.NewServer(remoteApp.Handler())
+	t.Cleanup(remoteSrv.Close)
+
+	desktopApp, err := NewApp(AppConfig{
+		DataDir:               t.TempDir(),
+		NodeTransportOverride: testNodeTransport{table: map[string]string{"h1": remoteSrv.URL}},
+	})
+	require.NoError(t, err)
+	t.Cleanup(desktopApp.Close)
+
+	_, err = desktopApp.remoteStore.AddHost(model.Host{ID: "h1", Name: "local-01"})
+	require.NoError(t, err)
+	addRemoteServerProject(t, desktopApp, "proj-tk", "TK", "dep-tk-server-prod")
+	addRemoteServerProject(t, desktopApp, "proj-ai-hub", "AI-HUB", "dep-ai-hub-server-prod")
+
+	require.Eventually(t, func() bool {
+		status := remoteApp.nodeStatusSnapshot(context.Background(), "h1", "local-01")
+		if status.Managed == nil || len(status.Managed.Collectors) != 2 {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, collectorStatus := range status.Managed.Collectors {
+			seen[collectorStatus.CollectorID] = true
+		}
+		return seen["dep-tk-server-prod"] && seen["dep-ai-hub-server-prod"]
+	}, 2*time.Second, 20*time.Millisecond)
+
+	now := time.Now().UTC()
+	remoteApp.WriteTestLog(model.LogEntry{
+		DeploymentID: "dep-tk-server-prod",
+		Timestamp:    now,
+		Level:        "INFO",
+		Message:      "tk server scoped log",
+		Stream:       "stdout",
+	})
+	remoteApp.WriteTestLog(model.LogEntry{
+		DeploymentID: "dep-ai-hub-server-prod",
+		Timestamp:    now.Add(time.Millisecond),
+		Level:        "INFO",
+		Message:      "ai hub server scoped log",
+		Stream:       "stdout",
+	})
+
+	tkBackend, ok := desktopApp.lookupBackend("dep-tk-server-prod")
+	require.True(t, ok)
+	aiBackend, ok := desktopApp.lookupBackend("dep-ai-hub-server-prod")
+	require.True(t, ok)
+
+	require.Eventually(t, func() bool {
+		entries, _, err := tkBackend.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "dep-tk-server-prod", Limit: 10})
+		if err != nil {
+			return false
+		}
+		return containsLogMessage(entries, "tk server scoped log") && !containsLogMessage(entries, "ai hub server scoped log")
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool {
+		entries, _, err := aiBackend.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "dep-ai-hub-server-prod", Limit: 10})
+		if err != nil {
+			return false
+		}
+		return containsLogMessage(entries, "ai hub server scoped log") && !containsLogMessage(entries, "tk server scoped log")
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func addRemoteServerProject(t *testing.T, app *App, projectID string, projectName string, deploymentID string) {
+	t.Helper()
+	projectDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, ".superdev"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, ".superdev", "config.yaml"), []byte(`
+id: `+projectID+`
+name: `+projectName+`
+environments:
+  - name: prod
+services:
+  - id: svc-server
+    name: server
+    deployments:
+      - id: `+deploymentID+`
+        env: prod
+        location: remote
+        hosts: [h1]
+        runtime:
+          type: systemd
+          service_name: server.service
+        logs:
+          type: command
+          command: printf shared-server-log
+`), 0o644))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+func containsLogMessage(entries []model.LogEntry, message string) bool {
+	for _, entry := range entries {
+		if entry.Message == message {
+			return true
+		}
+	}
+	return false
 }

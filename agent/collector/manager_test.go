@@ -98,6 +98,23 @@ func TestManagerReconcileStartsStopsAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, collector.CollectorID("svc-a", model.LogSourceTypeCommand), third.Stopped[0])
 }
 
+func TestManagerReconcileScopesManagedCollectorsByDesiredID(t *testing.T) {
+	mgr := newTestManager(t)
+
+	result := mgr.Reconcile([]collector.DesiredCollector{
+		{ID: "dep-tk-server-prod", Name: "shared-server", Type: model.LogSourceTypeCommand},
+		{ID: "dep-ai-hub-server-prod", Name: "shared-server", Type: model.LogSourceTypeCommand},
+	})
+
+	require.Empty(t, result.Failed)
+	require.Len(t, result.Started, 2)
+	assert.ElementsMatch(t, []string{"dep-tk-server-prod", "dep-ai-hub-server-prod"}, []string{
+		result.Started[0].ID,
+		result.Started[1].ID,
+	})
+	assert.Len(t, mgr.List(), 2)
+}
+
 func TestManagerReconcilePreservesUnmanagedCollectors(t *testing.T) {
 	mgr := newTestManager(t)
 	unmanagedID, err := mgr.StartForTest("adhoc", model.LogSourceTypeCommand, []string{"sleep", "60"})

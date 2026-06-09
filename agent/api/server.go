@@ -685,13 +685,14 @@ func (a *App) startManagedDeploymentReconciler() {
 func (a *App) loadRegisteredProjects() {
 	a.pidStore.KillAll()
 	paths := a.registry.List()
+	used := newProjectIdentitySet()
 	for _, path := range paths {
 		loader := config.NewLoader(path)
 		p, err := loader.Load()
 		if err != nil {
 			continue
 		}
-		assignIDs(&p)
+		assignIDsAvoiding(&p, &used)
 		// 将新生成的 ID 写回配置，避免重启后 ID 变化
 		_ = loader.Save(p)
 		a.mu.Lock()
@@ -779,9 +780,93 @@ func (a *App) getOrCreateManager(projectID string) *process.Manager {
 
 // assignIDs 为 Project、Services 及 Deployments 分配 UUID（若 ID 为空字符串）。
 func assignIDs(p *model.Project) {
-	if p.ID == "" {
-		p.ID = uuid.NewString()
+	used := newProjectIdentitySet()
+	assignIDsAvoiding(p, &used)
+}
+
+type projectIdentitySet struct {
+	projectIDs    map[string]struct{}
+	deploymentIDs map[string]struct{}
+}
+
+func newProjectIdentitySet() projectIdentitySet {
+	return projectIdentitySet{
+		projectIDs:    map[string]struct{}{},
+		deploymentIDs: map[string]struct{}{},
 	}
+}
+
+func (s *projectIdentitySet) addProjectID(id string) {
+	if id == "" {
+		return
+	}
+	s.projectIDs[id] = struct{}{}
+}
+
+func (s *projectIdentitySet) hasProjectID(id string) bool {
+	if id == "" {
+		return false
+	}
+	_, ok := s.projectIDs[id]
+	return ok
+}
+
+func (s *projectIdentitySet) addDeploymentID(id string) {
+	if id == "" {
+		return
+	}
+	s.deploymentIDs[id] = struct{}{}
+}
+
+func (s *projectIdentitySet) hasDeploymentID(id string) bool {
+	if id == "" {
+		return false
+	}
+	_, ok := s.deploymentIDs[id]
+	return ok
+}
+
+func (s *projectIdentitySet) addProject(project model.Project) {
+	s.addProjectID(project.ID)
+	for _, svc := range project.Services {
+		for _, dep := range svc.Deployments {
+			s.addDeploymentID(dep.ID)
+		}
+	}
+}
+
+func (a *App) projectIdentitySetLocked(excludeIndex int) projectIdentitySet {
+	used := newProjectIdentitySet()
+	for i, project := range a.projects {
+		if i == excludeIndex {
+			continue
+		}
+		used.addProject(project)
+	}
+	return used
+}
+
+func (a *App) projectIdentitySetExcludingRootPathLocked(rootPath string) projectIdentitySet {
+	used := newProjectIdentitySet()
+	for _, project := range a.projects {
+		if rootPath != "" && project.RootPath == rootPath {
+			continue
+		}
+		used.addProject(project)
+	}
+	return used
+}
+
+// assignIDsAvoiding 为项目补齐身份，并在复制项目携带旧 ID 时避开已有 project/deployment ID。
+func assignIDsAvoiding(p *model.Project, used *projectIdentitySet) {
+	if p.ID == "" {
+		p.ID = uniqueUUID(used.hasProjectID)
+	} else if used.hasProjectID(p.ID) {
+		// 复制项目目录会把 .superdev/config.yaml 中的 ID 一起复制。
+		// project/deployment ID 在运行态是全局身份，冲突时必须为新项目重分配。
+		p.ID = uniqueUUID(used.hasProjectID)
+	}
+	used.addProjectID(p.ID)
 	for i := range p.Services {
 		if p.Services[i].ID == "" {
 			p.Services[i].ID = uuid.NewString()
@@ -789,8 +874,20 @@ func assignIDs(p *model.Project) {
 		p.Services[i].ProjectID = p.ID
 		for j := range p.Services[i].Deployments {
 			if p.Services[i].Deployments[j].ID == "" {
-				p.Services[i].Deployments[j].ID = uuid.NewString()
+				p.Services[i].Deployments[j].ID = uniqueUUID(used.hasDeploymentID)
+			} else if used.hasDeploymentID(p.Services[i].Deployments[j].ID) {
+				p.Services[i].Deployments[j].ID = uniqueUUID(used.hasDeploymentID)
 			}
+			used.addDeploymentID(p.Services[i].Deployments[j].ID)
+		}
+	}
+}
+
+func uniqueUUID(exists func(string) bool) string {
+	for {
+		id := uuid.NewString()
+		if !exists(id) {
+			return id
 		}
 	}
 }

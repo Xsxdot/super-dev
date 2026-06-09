@@ -166,8 +166,9 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	candidate.Services = newServices
 
-	// 填充空 ID（environment ID、deployment ID 等）
-	assignIDs(&candidate)
+	// 填充空 ID，并防止本项目新建 deployment 复用其他项目的运行态身份。
+	used := a.projectIdentitySetLocked(idx)
+	assignIDsAvoiding(&candidate, &used)
 	if errs := remoteHostReferenceErrors(candidate, knownHosts); len(errs) > 0 {
 		a.mu.Unlock()
 		jsonError(w, http.StatusBadRequest, strings.Join(errs, "; "))

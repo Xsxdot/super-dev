@@ -88,7 +88,10 @@ func (a *App) previewConfigChangeRequest(req configchange.ChangeRequest) (config
 	if after.RootPath == "" {
 		after.RootPath = before.RootPath
 	}
-	assignIDs(&after)
+	a.mu.RLock()
+	used := a.projectIdentitySetExcludingRootPathLocked(after.RootPath)
+	a.mu.RUnlock()
+	assignIDsAvoiding(&after, &used)
 
 	knownHosts, err := a.knownRemoteHostIDs()
 	if err != nil {
@@ -149,7 +152,10 @@ func (a *App) resolveConfigChangeProject(req configchange.ChangeRequest) (model.
 	} else if err != nil {
 		return model.Project{}, http.StatusBadRequest, "failed to load project config: " + err.Error()
 	}
-	assignIDs(&project)
+	a.mu.RLock()
+	used := a.projectIdentitySetExcludingRootPathLocked(project.RootPath)
+	a.mu.RUnlock()
+	assignIDsAvoiding(&project, &used)
 	return project, http.StatusOK, ""
 }
 
