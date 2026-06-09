@@ -66,6 +66,7 @@ const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
 const activePhase = ref<PipelinePhase>('build')
 const activeStation = ref<WizardStation>('build')
+const draggingBlockId = ref<string | null>(null)
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
 
@@ -160,6 +161,31 @@ function removeBlock(block: TemplateBlock) {
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
   }
+}
+
+function startBlockDrag(block: TemplateBlock) {
+  draggingBlockId.value = block.id
+}
+
+function finishBlockDrag() {
+  draggingBlockId.value = null
+}
+
+function dropBlock(target: TemplateBlock) {
+  const sourceId = draggingBlockId.value
+  if (!sourceId || sourceId === target.id) return
+  const sourceIndex = blocks.value.findIndex(block => block.id === sourceId)
+  const targetIndex = blocks.value.findIndex(block => block.id === target.id)
+  const source = blocks.value[sourceIndex]
+  if (!source || targetIndex < 0 || source.phase !== target.phase) return
+
+  const next = [...blocks.value]
+  next.splice(sourceIndex, 1)
+  next.splice(targetIndex, 0, source)
+  blocks.value = next
+  activeBlockId.value = source.id
+  activePhase.value = source.phase
+  activeStation.value = source.phase
 }
 
 function resetBlockInputs(block: TemplateBlock) {
@@ -498,8 +524,13 @@ defineExpose({ saveTemplate })
                 v-for="block in blocksForPhase(activePhase)"
                 :key="block.id"
                 class="template-block"
-                :class="{ active: activeBlock?.id === block.id }"
+                :class="{ active: activeBlock?.id === block.id, dragging: draggingBlockId === block.id }"
+                draggable="true"
                 @click="selectBlock(block)"
+                @dragstart="startBlockDrag(block)"
+                @dragend="finishBlockDrag"
+                @dragover.prevent
+                @drop.prevent="dropBlock(block)"
               >
                 <div class="block-row">
                   <span class="block-grip" aria-hidden="true">⋮⋮</span>
@@ -923,6 +954,9 @@ defineExpose({ saveTemplate })
 .template-block.active {
   border-color: #1f7bff;
   box-shadow: inset 0 0 0 1px rgba(31, 123, 255, 0.22);
+}
+.template-block.dragging {
+  opacity: 0.64;
 }
 .block-row {
   gap: 8px;

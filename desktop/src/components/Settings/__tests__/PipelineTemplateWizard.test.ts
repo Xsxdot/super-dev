@@ -66,6 +66,26 @@ const booleanTemplate: PipelineTemplateSummary = {
   },
 }
 
+const firstNoInputTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'first-build',
+  category: 'build',
+  name: 'First Build',
+  version: '1.0.0',
+  digest: 'sha256:first',
+  inputs: {},
+}
+
+const secondNoInputTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'second-build',
+  category: 'build',
+  name: 'Second Build',
+  version: '1.0.0',
+  digest: 'sha256:second',
+  inputs: {},
+}
+
 describe('PipelineTemplateWizard', () => {
   it('无 pipeline 时展示配置入口', () => {
     const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [buildTemplate] } })
@@ -176,6 +196,31 @@ describe('PipelineTemplateWizard', () => {
     expect(deployOptions.join('\n')).toContain('Systemd Deploy')
     expect(deployOptions.join('\n')).toContain('Archive Package')
     expect(deployOptions.join('\n')).not.toContain('Go Build')
+  })
+
+  it('同阶段模板块可通过拖拽调整保存顺序', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [firstNoInputTemplate, secondNoInputTemplate],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://first-build@1.0.0')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://second-build@1.0.0')
+
+    const blocks = wrapper.findAll('.template-block')
+    await blocks[0].trigger('dragstart')
+    await blocks[1].trigger('drop')
+    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
+
+    const pipeline = wrapper.emitted('update:modelValue')!.at(-1)![0] as Pipeline
+    expect(pipeline.build?.map(step => step.with?.template)).toEqual([
+      'builtin://second-build',
+      'builtin://first-build',
+    ])
   })
 
   it('阶段 tab 可切换当前模板输入详情', async () => {
