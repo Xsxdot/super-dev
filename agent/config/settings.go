@@ -34,7 +34,26 @@ const (
 	DefaultLogCleanupIntervalSeconds = 3600
 	// MinLogCleanupIntervalSeconds 是允许的最小淘汰周期（1 分钟）。
 	MinLogCleanupIntervalSeconds = 60
+	// DefaultGraceMinutes 是项目级审批豁免窗口的默认时长（分钟）。
+	DefaultGraceMinutes = 15
+	// MinGraceMinutes 是豁免窗口允许的最小时长。
+	MinGraceMinutes = 1
+	// MaxGraceMinutes 是豁免窗口允许的最大时长。
+	MaxGraceMinutes = 120
 )
+
+// ApprovalPolicy 表示 agent 级写操作审批策略。
+//
+// 注意：
+//   - 四个 bool 开关默认全为 true，等价于现状（一律审批）
+//   - 开关只能把“要审批”降级为“不审批”，不能放行被安全策略 Denied 的操作
+type ApprovalPolicy struct {
+	ConfigUpsert   bool `json:"config_upsert"`   // 项目/服务增改是否审批
+	PipelineUpsert bool `json:"pipeline_upsert"` // 流水线增改是否审批
+	PipelineRun    bool `json:"pipeline_run"`    // 流水线运行是否审批
+	TemplateImport bool `json:"template_import"` // 模板导入是否审批
+	GraceMinutes   int  `json:"grace_minutes"`   // 豁免窗口时长（分钟）
+}
 
 // AgentSettings 表示 agent 级全局设置。
 type AgentSettings struct {
@@ -43,6 +62,8 @@ type AgentSettings struct {
 	LogCleanupIntervalSeconds int   `json:"log_cleanup_interval_seconds"`
 	SampleSeeded              bool  `json:"sample_seeded"`
 	OnboardingCompleted       bool  `json:"onboarding_completed"`
+	// Approval 表示写操作审批策略。
+	Approval ApprovalPolicy `json:"approval"`
 }
 
 // SettingsStore 负责读写 agent 数据目录下的 settings.json。
@@ -61,6 +82,13 @@ func DefaultAgentSettings() AgentSettings {
 		LogRetentionDays:          DefaultLogRetentionDays,
 		LogMaxBytes:               DefaultLogMaxBytes,
 		LogCleanupIntervalSeconds: DefaultLogCleanupIntervalSeconds,
+		Approval: ApprovalPolicy{
+			ConfigUpsert:   true,
+			PipelineUpsert: true,
+			PipelineRun:    true,
+			TemplateImport: true,
+			GraceMinutes:   DefaultGraceMinutes,
+		},
 	}
 }
 
@@ -91,6 +119,9 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	if settings.LogCleanupIntervalSeconds < MinLogCleanupIntervalSeconds {
 		return fmt.Errorf("log_cleanup_interval_seconds must be >= %d", MinLogCleanupIntervalSeconds)
 	}
+	if settings.Approval.GraceMinutes < MinGraceMinutes || settings.Approval.GraceMinutes > MaxGraceMinutes {
+		return fmt.Errorf("grace_minutes must be between %d and %d", MinGraceMinutes, MaxGraceMinutes)
+	}
 	return nil
 }
 
@@ -112,6 +143,9 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 	}
 	if settings.LogCleanupIntervalSeconds == 0 {
 		settings.LogCleanupIntervalSeconds = DefaultLogCleanupIntervalSeconds
+	}
+	if settings.Approval.GraceMinutes == 0 {
+		settings.Approval.GraceMinutes = DefaultGraceMinutes
 	}
 	if err := ValidateAgentSettings(settings); err != nil {
 		return AgentSettings{}, err

@@ -36,3 +36,57 @@ func TestLoadBackfillsLogCleanupDefaults(t *testing.T) {
 	assert.Equal(t, int64(config.DefaultLogMaxBytes), settings.LogMaxBytes)
 	assert.Equal(t, config.DefaultLogCleanupIntervalSeconds, settings.LogCleanupIntervalSeconds)
 }
+
+func TestDefaultAgentSettingsApprovalPolicy(t *testing.T) {
+	s := config.DefaultAgentSettings()
+	if !s.Approval.ConfigUpsert || !s.Approval.PipelineUpsert ||
+		!s.Approval.PipelineRun || !s.Approval.TemplateImport {
+		t.Fatalf("default approval switches must all be true, got %+v", s.Approval)
+	}
+	if s.Approval.GraceMinutes != config.DefaultGraceMinutes {
+		t.Fatalf("default grace minutes = %d, want %d", s.Approval.GraceMinutes, config.DefaultGraceMinutes)
+	}
+}
+
+func TestLoadLegacySettingsFillsApprovalDefaults(t *testing.T) {
+	dir := t.TempDir()
+	// 旧文件：没有 approval 字段
+	legacy := `{"log_retention_days":7,"log_max_bytes":268435456,"log_cleanup_interval_seconds":3600}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(legacy), 0o644))
+
+	got, err := config.NewSettingsStore(dir).Load()
+	require.NoError(t, err)
+	if !got.Approval.ConfigUpsert || !got.Approval.PipelineRun {
+		t.Fatalf("legacy load must default switches to true, got %+v", got.Approval)
+	}
+	if got.Approval.GraceMinutes != config.DefaultGraceMinutes {
+		t.Fatalf("legacy grace minutes = %d, want %d", got.Approval.GraceMinutes, config.DefaultGraceMinutes)
+	}
+}
+
+func TestLoadExplicitFalseSwitchPreserved(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"log_retention_days":7,"log_max_bytes":268435456,"log_cleanup_interval_seconds":3600,"approval":{"config_upsert":false,"pipeline_upsert":true,"pipeline_run":true,"template_import":true,"grace_minutes":30}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(raw), 0o644))
+
+	got, err := config.NewSettingsStore(dir).Load()
+	require.NoError(t, err)
+	if got.Approval.ConfigUpsert {
+		t.Fatal("explicit false config_upsert must be preserved")
+	}
+	if got.Approval.GraceMinutes != 30 {
+		t.Fatalf("grace minutes = %d, want 30", got.Approval.GraceMinutes)
+	}
+}
+
+func TestValidateGraceMinutesRange(t *testing.T) {
+	s := config.DefaultAgentSettings()
+	s.Approval.GraceMinutes = 0
+	if err := config.ValidateAgentSettings(s); err == nil {
+		t.Fatal("grace_minutes=0 must fail validation")
+	}
+	s.Approval.GraceMinutes = config.MaxGraceMinutes + 1
+	if err := config.ValidateAgentSettings(s); err == nil {
+		t.Fatal("grace_minutes above max must fail validation")
+	}
+}
