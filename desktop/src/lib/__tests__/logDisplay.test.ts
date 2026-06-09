@@ -20,7 +20,6 @@ function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
     level: 'INFO',
     message: `msg-${id}`,
     stream: 'stdout',
-    normalized_message: `msg-${id}`,
     repeat_count: repeatCount,
   }
 }

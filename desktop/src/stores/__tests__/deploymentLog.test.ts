@@ -94,6 +94,39 @@ describe('useDeploymentLogStore', () => {
     expect(logs[0].message).toBe('hello')
   })
 
+  it('收到折叠增量时按 fold_key 更新已有行计数', () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-1')
+    const ws = MockWebSocket.instances[0]
+
+    ws.onmessage?.({ data: JSON.stringify({
+      id: '1',
+      deployment_id: 'dep-1',
+      run_id: 'r',
+      timestamp: '2024-01-01T00:00:00Z',
+      level: 'INFO',
+      message: 'boom',
+      stream: 'stdout',
+      repeat_count: 1,
+      fold_key: 'k1',
+    }) })
+    ws.onmessage?.({ data: JSON.stringify({
+      id: '0',
+      deployment_id: 'dep-1',
+      run_id: '',
+      timestamp: '',
+      level: '',
+      message: '',
+      stream: '',
+      repeat_count: 4,
+      fold_key: 'k1',
+    }) })
+
+    const logs = store.getLogs('dep-1')
+    expect(logs).toHaveLength(1)
+    expect(logs[0].repeat_count).toBe(4)
+  })
+
   it('getLogs 未知 deploymentId 返回空数组', () => {
     const store = useDeploymentLogStore()
     expect(store.getLogs('unknown')).toEqual([])

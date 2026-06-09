@@ -212,11 +212,6 @@ function syncCaptures(): SyncBookmarkCapture[] {
 }
 
 function toggleSyncRecord() {
-  for (const panelId of bookmarkStore.syncPanelIds) {
-    const leaf = panelStore.allLeaves.find(l => l.id === panelId)
-    const deploymentId = leaf ? leafDeploymentId(leaf) : null
-    if (deploymentId) deploymentLogStore.closeActiveFoldForDeployment(deploymentId)
-  }
   if (syncRecording.value) {
     bookmarkStore.endSyncBookmark(syncCaptures())
   } else {

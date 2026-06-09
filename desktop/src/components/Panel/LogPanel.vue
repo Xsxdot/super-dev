@@ -288,12 +288,6 @@ function serviceNameFor(log: DisplayLogEntry): string {
   return info?.service.name ?? log.deployment_id.slice(0, 12)
 }
 
-function closeActiveFoldsForScope() {
-  if (props.source?.type === 'deployment') {
-    deploymentLogStore.closeActiveFoldForDeployment(props.source.deploymentId)
-  }
-}
-
 watch(
   [filteredLogs, () => bookmark.value?.state, () => deploymentLogStore.logSourceRevision],
   ([logs, state]) => {
@@ -308,7 +302,6 @@ watch(
 )
 
 function onEndBookmark() {
-  closeActiveFoldsForScope()
   bookmarkStore.endBookmark(
     props.panelId,
     bookmarkMatchesCurrentSource() ? filteredLogs.value : [],

@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { markRaw, ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
-import { closeActiveFold, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
+import { applyEvent, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
 import { insertSorted } from '@/lib/logOrder'
 
 const MAX_LOGS = 5000
@@ -91,6 +91,18 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return entry
   }
 
+  function applyIncrement(session: DeploymentSession, raw: LogEntry) {
+    applyEvent(session.logs, {
+      increment: {
+        deployment_id: raw.deployment_id,
+        fold_key: raw.fold_key ?? '',
+        repeat_count: raw.repeat_count ?? 1,
+      },
+    })
+    bumpRevision()
+    touchSessions()
+  }
+
   function connect(deploymentId: string, session: DeploymentSession) {
     const ws = markRaw(new WebSocket(deploymentWsUrl(deploymentId, {
       replay: session.lastSeen ? REPLAY_ON_RECONNECT : undefined,
@@ -104,8 +116,12 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         const raw = JSON.parse(event.data) as LogEntry
         const s = sessions.value.get(deploymentId)
         if (!s || s.ws !== ws) return
-        ingestEntry(s, raw)
-        s.lastSeen = cursorFromLog(raw)
+        if (raw.message === '' && raw.fold_key) {
+          applyIncrement(s, raw)
+        } else {
+          ingestEntry(s, raw)
+          s.lastSeen = cursorFromLog(raw)
+        }
         s.reconnectAttempts = 0
         s.discontinuous = false
       } catch {
@@ -262,24 +278,6 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return sessions.value.get(deploymentId)?.refCount ?? 0
   }
 
-  /**
-   * closeActiveFoldForDeployment 收尾指定 deployment 当前正在累积的折叠行。
-   *
-   * 参数：
-   *   - deploymentId: deployment 唯一标识
-   *
-   * 注意：
-   *   - 用于书签录制开始/结束时，避免折叠状态跨区间污染
-   *   - 未订阅时静默返回
-   */
-  function closeActiveFoldForDeployment(deploymentId: string) {
-    const session = sessions.value.get(deploymentId)
-    if (!session) return
-    closeActiveFold(session.logs)
-    bumpRevision()
-    touchSessions()
-  }
-
   return {
     sessions,
     logSourceRevision,
@@ -290,6 +288,5 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     hasMoreHistory,
     isLoadingMore,
     refCountOf,
-    closeActiveFoldForDeployment,
   }
 })

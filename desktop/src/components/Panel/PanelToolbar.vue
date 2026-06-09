@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { save } from '@tauri-apps/plugin-dialog'
 import { useFilterStore } from '@/stores/filter'
 import { useBookmarkStore } from '@/stores/bookmark'
-import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import type { PanelSource } from '@/stores/panel'
 import RuleManagerModal from './RuleManagerModal.vue'
 const props = defineProps<{
@@ -20,7 +19,6 @@ const emit = defineEmits<{
 
 const filterStore = useFilterStore()
 const bookmarkStore = useBookmarkStore()
-const deploymentLogStore = useDeploymentLogStore()
 const { t } = useI18n()
 
 // 当前面板订阅的 deployment 日志键（deployment 单源）。
@@ -43,14 +41,7 @@ function submitChip() {
   chipInput.value = ''
 }
 
-function closeActiveFoldsForScope() {
-  if (deploymentId.value) {
-    deploymentLogStore.closeActiveFoldForDeployment(deploymentId.value)
-  }
-}
-
 function startBookmark() {
-  closeActiveFoldsForScope()
   bookmarkStore.startBookmark(props.panelId, deploymentId.value)
 }
 function endBookmark() {

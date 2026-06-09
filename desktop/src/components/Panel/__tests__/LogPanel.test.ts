@@ -55,7 +55,6 @@ function makeLog(id: number): DisplayLogEntry {
     level: 'INFO',
     message: `log-${id}`,
     stream: 'stdout',
-    normalized_message: `log-${id}`,
     repeat_count: 1,
   }
 }
@@ -122,7 +121,6 @@ describe('LogPanel', () => {
         level: 'INFO',
         message: 'history',
         stream: 'stdout',
-        normalized_message: 'history',
         repeat_count: 1,
       },
     ])

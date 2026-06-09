@@ -427,6 +427,7 @@ export interface LogEntry {
   message: string
   stream: string
   repeat_count?: number
+  fold_key?: string
   source_id?: string
 }
 

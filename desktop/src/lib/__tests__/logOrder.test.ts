@@ -21,7 +21,6 @@ function entry(id: string, timestamp = '2024-01-01T00:00:00.000Z', message = id)
     level: 'INFO',
     message,
     stream: 'stdout',
-    normalized_message: message,
     repeat_count: 1,
   }
 }
