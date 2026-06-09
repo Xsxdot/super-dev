@@ -4,6 +4,7 @@
 //   - 以环形缓冲方式保存最近 maxSize 条日志条目
 //   - 每 100ms 或积累 50 条时批量 flush 到持久化存储（store）
 //   - 支持 WebSocket 订阅者实时接收新日志推送
+//   - 在写入链路对重复日志做折叠，降低落库与实时推送成本
 //
 // 边界：
 //   - 不解析日志格式，仅存储已构造好的 model.LogEntry
@@ -24,6 +25,8 @@ const (
 	flushInterval = 100 * time.Millisecond
 	// flushBatch 是触发立即 flush 的积累条数阈值。
 	flushBatch = 50
+	// defaultFoldWindow 是折叠时间窗口默认值；超窗的同签名日志不折叠。
+	defaultFoldWindow = 5 * time.Second
 )
 
 // LogWriter 是 buffer 的持久化出口（与 logbackend.LogWriter 结构等价）。
@@ -46,6 +49,8 @@ type Buffer struct {
 	store   LogWriter
 	done    chan struct{}
 	nodeID  string // 本机 node_id，Append 时填入 LogEntry.SourceID（空字符串时不填充）
+	fold    *foldTracker
+	foldPos map[string]int // fold_key -> ring index，用于折叠增量同步 Recent 回放计数
 }
 
 // New 创建并启动一个新的日志缓冲实例。
@@ -65,17 +70,39 @@ func New(store LogWriter, maxSize int, nodeID string) *Buffer {
 		store:   store,
 		done:    make(chan struct{}),
 		nodeID:  nodeID,
+		fold:    newFoldTracker(defaultFoldWindow),
+		foldPos: map[string]int{},
 	}
 	go b.flushLoop()
 	return b
 }
 
-// Append 追加一条日志条目到环形缓冲，并推送给所有订阅者。
+// SetFoldWindow 设置折叠时间窗口（启动时按配置注入）。
+func (b *Buffer) SetFoldWindow(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fold.window = d
+}
+
+// incrementEntry 把折叠增量编码为一条 model.LogEntry，供实时订阅 channel 透传。
+//
+// 约定：Message 为空 + FoldKey 非空 + RepeatCount 为最新值 + ID 为 0。
+// 下游据此识别为"对现有折叠行的计数更新"，而非新行。
+func incrementEntry(inc *foldIncrement) model.LogEntry {
+	return model.LogEntry{
+		DeploymentID: inc.DeploymentID,
+		FoldKey:      inc.FoldKey,
+		RepeatCount:  inc.RepeatCount,
+	}
+}
+
+// Append 追加一条日志：先做折叠判定，再决定落库与实时推送。
 //
 // SourceID 填充：若 e.SourceID 为空且 b.nodeID 非空，则自动填充 e.SourceID = b.nodeID；
 // 若 e.SourceID 已有值（远端日志转发场景），不覆盖。
 //
 // 注意：
+//   - 折叠命中时不新增 ring 行，只推送增量条目并把最终计数交给 store upsert
 //   - 订阅者 channel 满时跳过写入，不阻塞调用方
 //   - 当 pending 积累达到 flushBatch 时触发立即 flush
 func (b *Buffer) Append(e model.LogEntry) {
@@ -84,10 +111,28 @@ func (b *Buffer) Append(e model.LogEntry) {
 	}
 
 	b.mu.Lock()
-	b.ring[b.head] = e
-	b.head = (b.head + 1) % b.maxSize
-	b.count++
-	b.pending = append(b.pending, e)
+	emit, inc := b.fold.observe(e)
+	var pushed model.LogEntry
+	if emit != nil {
+		if old := b.ring[b.head]; old.FoldKey != "" {
+			delete(b.foldPos, old.FoldKey)
+		}
+		b.ring[b.head] = *emit
+		b.foldPos[emit.FoldKey] = b.head
+		b.head = (b.head + 1) % b.maxSize
+		b.count++
+		b.pending = append(b.pending, *emit)
+		pushed = *emit
+	} else {
+		rep := b.fold.lanes[e.DeploymentID].rep
+		b.pending = append(b.pending, rep)
+		if idx, ok := b.foldPos[inc.FoldKey]; ok && b.ring[idx].FoldKey == inc.FoldKey {
+			// Recent() 回放读 ring；折叠命中时同步计数，避免重连拿到旧 repeat_count。
+			b.ring[idx].RepeatCount = inc.RepeatCount
+			b.ring[idx].Timestamp = rep.Timestamp
+		}
+		pushed = incrementEntry(inc)
+	}
 	shouldFlush := len(b.pending) >= flushBatch
 	// 在持有锁时收集订阅者列表，避免遍历时并发修改
 	subs := make([]chan model.LogEntry, 0, len(b.subs))
@@ -99,7 +144,7 @@ func (b *Buffer) Append(e model.LogEntry) {
 	// 锁外推送，避免阻塞 Append
 	for _, ch := range subs {
 		select {
-		case ch <- e:
+		case ch <- pushed:
 		default:
 			// 订阅者消费过慢时丢弃，不阻塞生产者
 		}
@@ -170,6 +215,13 @@ func (b *Buffer) Unsubscribe(id string) {
 // Close 停止 flush goroutine 并将剩余 pending 日志 flush 到 store。
 func (b *Buffer) Close() {
 	close(b.done)
+	b.mu.Lock()
+	for _, row := range b.fold.closeAll() {
+		if row.RepeatCount > 1 {
+			b.pending = append(b.pending, row)
+		}
+	}
+	b.mu.Unlock()
 	b.flush()
 }
 
@@ -180,11 +232,24 @@ func (b *Buffer) flushLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			b.sweepFolds()
 			b.flush()
 		case <-b.done:
 			return
 		}
 	}
+}
+
+// sweepFolds 把超过折叠窗口仍未收尾的段强制落库（计数最终化）。
+func (b *Buffer) sweepFolds() {
+	b.mu.Lock()
+	closed := b.fold.sweep(time.Now())
+	for _, row := range closed {
+		if row.RepeatCount > 1 {
+			b.pending = append(b.pending, row)
+		}
+	}
+	b.mu.Unlock()
 }
 
 // flush 将当前 pending 批次写入 store，写完后清空 pending。

@@ -50,6 +50,44 @@ func TestBufferSubscribeReceivesEntries(t *testing.T) {
 	}
 }
 
+func TestBufferFoldEmitsIncrement(t *testing.T) {
+	buf := logbuf.New(nil, 100, "node-1")
+	defer buf.Close()
+	buf.SetFoldWindow(5 * time.Second)
+
+	ch := buf.Subscribe("s1")
+	defer buf.Unsubscribe("s1")
+	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+
+	buf.Append(model.LogEntry{DeploymentID: "A", Message: "boom count=1", Timestamp: t0, Stream: "stdout"})
+	ev1 := <-ch
+	require.NotEmpty(t, ev1.Message)
+	require.NotEmpty(t, ev1.FoldKey)
+	assert.Equal(t, 1, ev1.RepeatCount)
+	foldKey := ev1.FoldKey
+
+	buf.Append(model.LogEntry{DeploymentID: "A", Message: "boom count=2", Timestamp: t0.Add(time.Second), Stream: "stdout"})
+	ev2 := <-ch
+	assert.Empty(t, ev2.Message)
+	assert.Equal(t, foldKey, ev2.FoldKey)
+	assert.Equal(t, 2, ev2.RepeatCount)
+}
+
+func TestBufferFoldUpdatesRecentCount(t *testing.T) {
+	buf := logbuf.New(nil, 100, "node-1")
+	defer buf.Close()
+	buf.SetFoldWindow(5 * time.Second)
+	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+
+	buf.Append(model.LogEntry{DeploymentID: "A", Message: "boom count=1", Timestamp: t0, Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "A", Message: "boom count=2", Timestamp: t0.Add(time.Second), Stream: "stdout"})
+
+	recent := buf.Recent(10)
+	require.Len(t, recent, 1)
+	assert.Equal(t, 2, recent[0].RepeatCount)
+	assert.NotEmpty(t, recent[0].FoldKey)
+}
+
 func TestBufferRecentReturnsLastN(t *testing.T) {
 	buf := logbuf.New(nil, 5, "")
 	defer buf.Close()

@@ -189,11 +189,12 @@ func (b *SQLiteBackend) Subscribe(ctx context.Context, opts SubscribeOptions) Lo
 					// raw channel 已被 Unsubscribe 关闭，停止循环
 					return
 				}
+				isIncrement := entry.Message == "" && entry.FoldKey != ""
 				if opts.DeploymentID != "" && entry.DeploymentID != opts.DeploymentID {
 					// 过滤掉不属于目标 deploymentID 的条目
 					continue
 				}
-				if !sinceAllows(entry, opts.Since) {
+				if !isIncrement && !sinceAllows(entry, opts.Since) {
 					continue
 				}
 				select {

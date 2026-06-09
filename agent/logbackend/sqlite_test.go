@@ -183,6 +183,27 @@ func TestSQLiteBackend_SubscribeFiltersOtherServices(t *testing.T) {
 	}
 }
 
+func TestSQLiteBackend_SubscribeAllowsFoldIncrementWithSince(t *testing.T) {
+	b, buf := newTestSQLiteBackend(t)
+
+	since := logbackend.Cursor{Time: time.Date(2026, 6, 8, 12, 0, 10, 0, time.UTC), ID: "999"}
+	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1", Since: since})
+	defer stream.Cancel()
+
+	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: t0, Message: "boom count=1", Stream: "stdout"})
+	buf.Append(model.LogEntry{DeploymentID: "svc-1", RunID: "r1", Timestamp: t0.Add(time.Second), Message: "boom count=2", Stream: "stdout"})
+
+	select {
+	case got := <-stream.Ch:
+		assert.Empty(t, got.Message)
+		assert.NotEmpty(t, got.FoldKey)
+		assert.Equal(t, 2, got.RepeatCount)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for fold increment")
+	}
+}
+
 func TestSQLiteBackend_CancelStopsStream(t *testing.T) {
 	b, _ := newTestSQLiteBackend(t)
 	stream := b.Subscribe(context.Background(), logbackend.SubscribeOptions{DeploymentID: "svc-1"})
