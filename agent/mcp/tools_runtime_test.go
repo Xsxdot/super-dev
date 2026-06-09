@@ -61,6 +61,8 @@ type fakeAgentClient struct {
 	lastConfigChange           ConfigChangeRequest
 	lastApprovalToken          string
 	pipelineRun                model.Run
+	pipelineDeployErrs         []error
+	pipelineDeployCallCount    int
 	pipelineRuns               []model.Run
 	pipelineArtifacts          []model.ArtifactRef
 	pipelineLogs               []model.RunLogLine
@@ -231,7 +233,11 @@ func (f *fakeAgentClient) ImportPipelineTemplate(_ context.Context, path string,
 }
 
 func (f *fakeAgentClient) DeployProjectPipeline(_ context.Context, _ string, _ string, req PipelineDeployRequest) (model.Run, error) {
+	f.pipelineDeployCallCount++
 	f.lastPipelineDeploy = req
+	if f.pipelineDeployCallCount <= len(f.pipelineDeployErrs) && f.pipelineDeployErrs[f.pipelineDeployCallCount-1] != nil {
+		return model.Run{}, f.pipelineDeployErrs[f.pipelineDeployCallCount-1]
+	}
 	if f.pipelineRun.ID != "" {
 		return f.pipelineRun, nil
 	}

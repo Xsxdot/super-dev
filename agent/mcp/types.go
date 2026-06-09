@@ -74,14 +74,16 @@ type PipelineTemplatePreview = pipelinetemplate.PreviewResult
 
 // PipelineDeployRequest 描述项目级 pipeline 部署或回滚请求。
 type PipelineDeployRequest struct {
-	ProjectID       string            `json:"project_id,omitempty"`
-	ProjectName     string            `json:"project_name,omitempty"`
-	PipelineID      string            `json:"pipeline_id"`
-	EnvName         string            `json:"env_name"`
-	HostIDs         []string          `json:"host_ids,omitempty"`
-	ArtifactVersion string            `json:"artifact_version,omitempty"`
-	Variables       map[string]string `json:"variables,omitempty"`
-	DebugSessionID  string            `json:"debug_session_id,omitempty"`
+	ProjectID           string            `json:"project_id,omitempty"`
+	ProjectName         string            `json:"project_name,omitempty"`
+	PipelineID          string            `json:"pipeline_id"`
+	EnvName             string            `json:"env_name"`
+	HostIDs             []string          `json:"host_ids,omitempty"`
+	ArtifactVersion     string            `json:"artifact_version,omitempty"`
+	Variables           map[string]string `json:"variables,omitempty"`
+	ApprovalToken       string            `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int              `json:"approval_wait_seconds,omitempty"`
+	DebugSessionID      string            `json:"debug_session_id,omitempty"`
 }
 
 // ProjectPipelinePreviewRequest 描述项目级 pipeline 校验请求。

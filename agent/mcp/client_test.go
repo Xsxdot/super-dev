@@ -231,6 +231,31 @@ func TestHTTPAgentClientValidateProjectPipeline(t *testing.T) {
 	assert.Equal(t, "run-1", preview.Run.ID)
 }
 
+func TestHTTPAgentClientDeployProjectPipelinePassesApprovalToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/p1/pipelines/deploy-dev/deploy":
+			assert.Equal(t, "tok_pipe", r.Header.Get("X-SuperDev-Approval-Token"))
+			var req PipelineDeployRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			assert.Equal(t, "prod", req.EnvName)
+			jsonOKForMCPClientTest(w, model.Run{ID: "run-1", Status: model.RunStatusRunning})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	run, err := client.DeployProjectPipeline(context.Background(), "p1", "deploy-dev", PipelineDeployRequest{
+		EnvName:       "prod",
+		ApprovalToken: "tok_pipe",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "run-1", run.ID)
+}
+
 func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
