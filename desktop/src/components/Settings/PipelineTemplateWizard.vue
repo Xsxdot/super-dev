@@ -475,8 +475,9 @@ defineExpose({ saveTemplate })
                   <span class="block-order">#{{ blocksForPhase(activePhase).indexOf(block) + 1 }}</span>
                   <select
                     v-model="block.selectedKey"
-                    class="settings-select field-input"
+                    class="settings-select field-input block-name"
                     :data-test="`block-${block.id}-template-select`"
+                    :title="selectedFor(block)?.name"
                     @change="resetBlockInputs(block); selectBlock(block)"
                     @click.stop
                   >
@@ -509,7 +510,7 @@ defineExpose({ saveTemplate })
           <aside class="wizard-detail-panel" data-test="pipeline-wizard-detail">
             <template v-if="activeBlock && selectedFor(activeBlock)">
               <div class="detail-title">{{ t('settings.pipeline.dynamicInputs') }}</div>
-              <div class="detail-subtitle">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
+              <div class="detail-subtitle" :title="selectedFor(activeBlock)?.name">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
               <div class="detail-count">{{ t('settings.pipeline.inputCount', { n: activeBlockInputs.length }) }}</div>
 
               <section class="form-block template-runner-row">
@@ -775,6 +776,13 @@ defineExpose({ saveTemplate })
   color: var(--text-tertiary);
   font-size: 12px;
   line-height: 1.4;
+}
+.template-block .block-name,
+.detail-subtitle {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .detail-count {
   margin-top: 6px;
