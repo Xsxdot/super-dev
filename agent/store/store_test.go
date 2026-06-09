@@ -120,6 +120,36 @@ func TestDeleteOldEntries(t *testing.T) {
 	assert.Equal(t, "new", got[0].Message)
 }
 
+func TestDeleteToMaxBytesRemovesOldest(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Now().UTC()
+	var batch []model.LogEntry
+	for i := 0; i < 200; i++ {
+		batch = append(batch, model.LogEntry{
+			DeploymentID: "A",
+			RunID:        "r",
+			Timestamp:    base.Add(time.Duration(i) * time.Second),
+			Level:        "INFO",
+			Message:      "line",
+			Stream:       "stdout",
+			RepeatCount:  1,
+		})
+	}
+	require.NoError(t, s.AppendBatch(batch))
+	before, err := s.SizeBytes()
+	require.NoError(t, err)
+
+	deleted, err := s.DeleteToMaxBytes(before - 1)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "A", Limit: 1000})
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	require.Less(t, len(got), 200)
+	assert.True(t, got[0].Timestamp.After(base), "oldest remaining should be newer than base")
+}
+
 func TestSearchFindsKeywordAcrossServicesInTimeOrder(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)

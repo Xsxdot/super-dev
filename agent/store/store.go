@@ -4,6 +4,7 @@
 //   - 批量写入日志条目（AppendBatch）
 //   - 按 DeploymentID、RunID 或 ID 游标分页查询日志（Fetch）
 //   - 清理过期日志（DeleteOlderThan）
+//   - 按 SQLite 数据库体积做容量兜底淘汰（DeleteToMaxBytes）
 //
 // 边界：
 //   - 不负责日志解析或格式化，仅存取原始 model.LogEntry
@@ -144,6 +145,9 @@ func (s *Store) Close() error { return s.db.Close() }
 //
 // 注意：多条 DDL 语句放在一个 Exec 中执行，SQLite 支持此方式。
 func migrate(db *sql.DB) error {
+	if _, err := db.Exec(`PRAGMA auto_vacuum=INCREMENTAL`); err != nil {
+		return err
+	}
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS log_entries (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -632,4 +636,76 @@ func (s *Store) DeleteOlderThan(days int) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	_, err := s.db.Exec("DELETE FROM log_entries WHERE timestamp < ?", cutoff)
 	return err
+}
+
+// SizeBytes 返回数据库当前占用字节数（page_count * page_size）。
+//
+// 返回：
+//   - SQLite 当前页数与页大小相乘得到的整库体积
+//   - PRAGMA 查询失败时返回错误
+//
+// 注意：
+//   - 这是整库体积（含所有表与空闲页），用于容量兜底淘汰的水位判断；
+//     轻量 PRAGMA 查询，不扫表。
+func (s *Store) SizeBytes() (int64, error) {
+	var pageCount, pageSize int64
+	if err := s.db.QueryRow("PRAGMA page_count").Scan(&pageCount); err != nil {
+		return 0, err
+	}
+	if err := s.db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, err
+	}
+	return pageCount * pageSize, nil
+}
+
+// deleteBatchSize 是容量淘汰每批删除的行数，避免单次大事务长锁。
+const deleteBatchSize = 100
+
+// DeleteToMaxBytes 当库体积超过 maxBytes 时，按 id 升序（最旧优先）分批删除，
+// 直到体积回落到 maxBytes 以下、无更多日志可删，或 SQLite 暂未释放更多页。
+//
+// 参数：
+//   - maxBytes: 体积上限；<=0 时视为不限，直接返回
+//
+// 返回：
+//   - 删除的总行数
+//   - 删除或度量失败时返回错误
+//
+// 注意：
+//   - 行为是"丢最旧保运行"：宁可删未到保留期的老日志，也不让磁盘被打爆
+//   - SQLite 可能不会在每批删除后立即降低 page_count；若体积不再下降，停止本轮，
+//     避免因空闲页未回收而把剩余日志全部删空。
+func (s *Store) DeleteToMaxBytes(maxBytes int64) (int64, error) {
+	if maxBytes <= 0 {
+		return 0, nil
+	}
+	var total int64
+	var previousSize int64
+	for {
+		size, err := s.SizeBytes()
+		if err != nil {
+			return total, err
+		}
+		if size <= maxBytes {
+			return total, nil
+		}
+		if previousSize > 0 && size >= previousSize {
+			return total, nil
+		}
+		previousSize = size
+
+		res, err := s.db.Exec(`
+			DELETE FROM log_entries
+			WHERE id IN (SELECT id FROM log_entries ORDER BY id ASC LIMIT ?)
+		`, deleteBatchSize)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+		if n == 0 {
+			return total, nil
+		}
+		_, _ = s.db.Exec("PRAGMA incremental_vacuum")
+	}
 }
