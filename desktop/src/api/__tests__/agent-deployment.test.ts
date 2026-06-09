@@ -29,7 +29,7 @@ describe('deploymentWsUrl', () => {
 })
 
 describe('fetchDeploymentLogs', () => {
-  it('从 deployment 日志响应中取出 items 数组', async () => {
+  it('保留 deployment 日志响应中的 items 和 next cursor', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
@@ -48,11 +48,12 @@ describe('fetchDeploymentLogs', () => {
       }),
     } as Response)
 
-    const logs = await api.fetchDeploymentLogs({ deploymentId: 'dep-abc', limit: 5 })
+    const page = await api.fetchDeploymentLogs({ deploymentId: 'dep-abc', limit: 5 })
 
-    expect(logs).toHaveLength(1)
-    expect(logs[0].id).toBe('7')
-    expect(logs[0].message).toBe('vite ready')
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0].id).toBe('7')
+    expect(page.items[0].message).toBe('vite ready')
+    expect(page.next?.id).toBe('7')
   })
 })
 

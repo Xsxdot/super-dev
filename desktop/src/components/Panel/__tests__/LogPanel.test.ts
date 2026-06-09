@@ -17,6 +17,7 @@ import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
+import { useFilterStore } from '@/stores/filter'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { Project } from '@/api/agent'
@@ -269,6 +270,54 @@ describe('LogPanel', () => {
 
     expect(virtualizerMock.measure).toHaveBeenCalled()
     expect(virtualizerMock.optionsRef.value.getItemKey(0)).toBe('live-7')
+  })
+
+  it('切换临时过滤 AND/OR 后立即刷新显示统计', async () => {
+    const filterStore = useFilterStore()
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([
+      { ...makeLog(1), message: 'error only' },
+      { ...makeLog(2), message: 'timeout only' },
+      { ...makeLog(3), message: 'error timeout' },
+    ])
+
+    filterStore.addChip('panel-filter', 'error', 'include')
+    filterStore.addChip('panel-filter', 'timeout', 'include')
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-filter',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="log-panel-status"]').text()).toContain('3')
+
+    filterStore.toggleLogic('panel-filter')
+    await nextTick()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await nextTick()
+
+    expect(wrapper.find('[data-test="log-panel-status"]').text()).toContain('1')
   })
 
   it('英文 locale 下渲染状态栏文案', async () => {

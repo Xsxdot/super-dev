@@ -111,6 +111,36 @@ export const useAgentStore = defineStore('agent', () => {
     logLifecycleStore.recordMarker(id, 'restart')
   }
 
+  async function startDeploymentOnHost(id: string, hostId: string) {
+    try {
+      await api.startDeploymentOnHost(id, hostId)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
+    logLifecycleStore.recordMarker(id, 'start')
+  }
+
+  async function stopDeploymentOnHost(id: string, hostId: string) {
+    try {
+      await api.stopDeploymentOnHost(id, hostId)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
+    logLifecycleStore.recordMarker(id, 'stop')
+  }
+
+  async function restartDeploymentOnHost(id: string, hostId: string) {
+    try {
+      await api.restartDeploymentOnHost(id, hostId)
+    } catch (err) {
+      if (await captureApprovalRequired(err)) return
+      throw err
+    }
+    logLifecycleStore.recordMarker(id, 'restart')
+  }
+
   async function putEnvSelected(projectId: string, envName: string, names: string[]) {
     await api.putEnvSelected(projectId, envName, names)
     const project = projects.value.find(p => p.id === projectId)
@@ -246,6 +276,9 @@ export const useAgentStore = defineStore('agent', () => {
     startDeployment,
     stopDeployment,
     restartDeployment,
+    startDeploymentOnHost,
+    stopDeploymentOnHost,
+    restartDeploymentOnHost,
     putEnvSelected,
     startEnvSelected,
     isServiceEnvSelected,

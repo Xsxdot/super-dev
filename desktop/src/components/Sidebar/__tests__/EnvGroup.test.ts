@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import EnvGroup from '@/components/Sidebar/EnvGroup.vue'
 import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { useNodeStore } from '@/stores/node'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { Deployment, Service } from '@/api/agent'
+import type { Deployment, Health, NodeStatus, Service } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -37,6 +38,44 @@ const makeService = (
   deployments: [{ id: 'dep-' + id, env_name: envName, location: 'local', status: '', ...depExtra }],
   ...serviceExtra,
 })
+
+function makeNode(hostId: string, name: string, deploymentId: string, health: Health): NodeStatus {
+  const running = health === 'running' || health === 'healthy' || health === 'restarting'
+  return {
+    host_id: hostId,
+    name,
+    reachable: true,
+    agent: { installed: true, health: 'healthy', reachable: true },
+    deployments: [{
+      service_id: 'svc-1',
+      service_name: 'api',
+      env_name: 'prod',
+      deployment_id: deploymentId,
+      node_id: hostId,
+      node_name: name,
+      is_local: false,
+      metrics: {
+        cpu_percent: null,
+        mem_bytes: null,
+        uptime_sec: null,
+        restarts: null,
+        health,
+        base: 'systemd',
+      },
+    }],
+    managed: {
+      deployment_count: 1,
+      collector_count: 1,
+      collectors: [{
+        deployment_id: deploymentId,
+        desired: true,
+        running,
+        status: running ? 'running' : 'stopped',
+      }],
+    },
+    updated_at: new Date(0).toISOString(),
+  }
+}
 
 describe('EnvGroup', () => {
   beforeEach(() => {
@@ -175,6 +214,135 @@ describe('EnvGroup', () => {
     expect(wrapper.find('[data-test="row-restart"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="row-stop"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="row-start"]').exists()).toBe(false)
+  })
+
+  it('远端单节点运行态为 running 时显示重启和停止按钮', async () => {
+    const agentStore = useAgentStore()
+    const stop = vi.spyOn(agentStore, 'stopDeploymentOnHost').mockResolvedValue(undefined)
+    const nodeStore = useNodeStore()
+    nodeStore.applySnapshot([makeNode('h1', 'prod-a', 'dep-svc-1', 'running')])
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'prod',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'api', 'prod', {
+          location: 'remote',
+          status: '',
+          host_ids: ['h1'],
+          control_mode: 'managed',
+          runtime: { type: 'systemd', service_name: 'api' },
+          start_command: 'systemctl start api',
+          stop_command: 'systemctl stop api',
+        })],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-test="env-service-row"]').trigger('mouseenter')
+
+    expect(wrapper.find('[data-test="row-restart"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="row-stop"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="row-start"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="row-stop"]').trigger('click')
+    expect(stop).toHaveBeenCalledWith('dep-svc-1', 'h1')
+    expect(wrapper.emitted('open-deployment')).toBeFalsy()
+  })
+
+  it('远端单节点只有 collector 运行证据时也显示重启和停止按钮', async () => {
+    mockedApi.listHosts.mockResolvedValue([
+      { id: 'h1', name: 'prod-a', private_ip: '10.0.0.1', tags: [] },
+    ])
+    mockedApi.getHostManagedDeploymentStatus.mockResolvedValue({
+      host_id: 'h1',
+      host_name: 'prod-a',
+      desired_deployment_count: 1,
+      desired_collector_count: 1,
+      tunnel_connected: true,
+      remote: {
+        deployment_count: 1,
+        collector_count: 1,
+        collectors: [{
+          deployment_id: 'dep-svc-1',
+          desired: true,
+          running: true,
+          status: 'running',
+        }],
+      },
+    })
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'prod',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'api', 'prod', {
+          location: 'remote',
+          status: '',
+          host_ids: ['h1'],
+          control_mode: 'managed',
+          runtime: { type: 'systemd', service_name: 'api' },
+          logs: { type: 'journalctl', target: 'api.service' },
+          start_command: 'systemctl start api',
+          stop_command: 'systemctl stop api',
+        })],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="service-meta"]').text()).toContain('Collector 1/1')
+    expect(wrapper.find('[data-test="row-restart"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="row-stop"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="row-start"]').exists()).toBe(false)
+  })
+
+  it('远端多节点展开后在二级节点列表按节点运行态显示动作', async () => {
+    const agentStore = useAgentStore()
+    const stop = vi.spyOn(agentStore, 'stopDeploymentOnHost').mockResolvedValue(undefined)
+    const nodeStore = useNodeStore()
+    nodeStore.applySnapshot([
+      makeNode('h1', 'prod-a', 'dep-svc-1', 'running'),
+      makeNode('h2', 'prod-b', 'dep-svc-1', 'stopped'),
+    ])
+    const wrapper = mount(EnvGroup, {
+      props: {
+        envName: 'prod',
+        isDev: true,
+        projectId: 'proj-1',
+        services: [makeService('svc-1', 'api', 'prod', {
+          location: 'remote',
+          status: '',
+          host_ids: ['h1', 'h2'],
+          control_mode: 'managed',
+          runtime: { type: 'systemd', service_name: 'api' },
+          start_command: 'systemctl start api',
+          stop_command: 'systemctl stop api',
+        })],
+        selectedServiceIds: new Set<string>(),
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-test="service-node-toggle"]').trigger('click')
+
+    const nodeRows = wrapper.findAll('[data-test="env-node-leaf-row"]')
+    expect(nodeRows).toHaveLength(2)
+    expect(nodeRows[0].find('[data-test="node-row-restart"]').exists()).toBe(true)
+    expect(nodeRows[0].find('[data-test="node-row-stop"]').exists()).toBe(true)
+    expect(nodeRows[0].find('[data-test="node-row-start"]').exists()).toBe(false)
+    expect(nodeRows[1].find('[data-test="node-row-start"]').exists()).toBe(true)
+    expect(nodeRows[1].find('[data-test="node-row-restart"]').exists()).toBe(false)
+    expect(nodeRows[1].find('[data-test="node-row-stop"]').exists()).toBe(false)
+
+    await nodeRows[0].find('[data-test="node-row-stop"]').trigger('click')
+    expect(stop).toHaveBeenCalledWith('dep-svc-1', 'h1')
+    expect(wrapper.emitted('open-deployment')).toBeFalsy()
   })
 
   it('英文 locale 下渲染环境操作 tooltip', async () => {

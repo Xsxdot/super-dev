@@ -3,6 +3,7 @@ package logbackend_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -24,11 +25,30 @@ func newStubBackend(entries []model.LogEntry) *stubBackend {
 	return &stubBackend{entries: entries, subCh: make(chan model.LogEntry, 16)}
 }
 
-func (s *stubBackend) Query(_ context.Context, _ logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
+func (s *stubBackend) Query(_ context.Context, f logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]model.LogEntry, len(s.entries))
-	copy(out, s.entries)
+	limit := f.Limit
+	if limit <= 0 {
+		limit = len(s.entries)
+	}
+	before := int64(0)
+	if f.Before.ID != "" {
+		_, _ = fmt.Sscan(f.Before.ID, &before)
+	}
+	filtered := make([]model.LogEntry, 0, len(s.entries))
+	for _, entry := range s.entries {
+		if before > 0 && entry.ID >= before {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	start := len(filtered) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]model.LogEntry, len(filtered[start:]))
+	copy(out, filtered[start:])
 	return out, logbackend.Cursor{}, nil
 }
 
@@ -109,8 +129,52 @@ func TestFederatedBackend_QueryRespectsLimit(t *testing.T) {
 	entries, _, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, entries, 2)
-	assert.Equal(t, "a", entries[0].Message)
-	assert.Equal(t, "b", entries[1].Message)
+	assert.Equal(t, "b", entries[0].Message)
+	assert.Equal(t, "c", entries[1].Message)
+}
+
+// TestFederatedBackend_QueryReturnsGlobalLatestPage verifies multi-node history uses global recency.
+func TestFederatedBackend_QueryReturnsGlobalLatestPage(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	oldNode := newStubBackend([]model.LogEntry{
+		makeEntry(1, "old-a", now),
+		makeEntry(2, "old-b", now.Add(time.Millisecond)),
+	})
+	newNode := newStubBackend([]model.LogEntry{
+		makeEntry(1, "new-a", now.Add(10*time.Millisecond)),
+		makeEntry(2, "new-b", now.Add(11*time.Millisecond)),
+	})
+	fed := logbackend.NewFederatedBackend([]logbackend.LogBackend{oldNode, newNode})
+
+	entries, _, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2})
+	require.NoError(t, err)
+
+	require.Len(t, entries, 2)
+	assert.Equal(t, []string{"new-a", "new-b"}, []string{entries[0].Message, entries[1].Message})
+}
+
+// TestFederatedBackend_QueryCursorKeepsUnemittedChildPage verifies child cursors are independent.
+func TestFederatedBackend_QueryCursorKeepsUnemittedChildPage(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	oldNode := newStubBackend([]model.LogEntry{
+		makeEntry(1, "old-a", now),
+		makeEntry(2, "old-b", now.Add(time.Millisecond)),
+	})
+	newNode := newStubBackend([]model.LogEntry{
+		makeEntry(1, "new-a", now.Add(10*time.Millisecond)),
+		makeEntry(2, "new-b", now.Add(11*time.Millisecond)),
+	})
+	fed := logbackend.NewFederatedBackend([]logbackend.LogBackend{oldNode, newNode})
+
+	first, next, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+
+	second, _, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2, Before: next})
+	require.NoError(t, err)
+
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"old-a", "old-b"}, []string{second[0].Message, second[1].Message})
 }
 
 func TestFederatedBackend_SearchMergesResults(t *testing.T) {

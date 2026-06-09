@@ -611,6 +611,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/deployments/{id}/start", a.startDeployment)
 	mux.HandleFunc("POST /api/deployments/{id}/stop", a.stopDeployment)
 	mux.HandleFunc("POST /api/deployments/{id}/restart", a.restartDeployment)
+	mux.HandleFunc("POST /api/deployments/{id}/hosts/{host_id}/start", a.startDeploymentHost)
+	mux.HandleFunc("POST /api/deployments/{id}/hosts/{host_id}/stop", a.stopDeploymentHost)
+	mux.HandleFunc("POST /api/deployments/{id}/hosts/{host_id}/restart", a.restartDeploymentHost)
 
 	return cors(a.withSecurity(mux))
 }

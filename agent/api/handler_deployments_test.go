@@ -107,6 +107,52 @@ func TestDeploymentRuntimeEndpoint_RunsRemoteStopAfterApproval(t *testing.T) {
 	assert.Equal(t, remoteexec.CommandRequest{Command: "systemctl stop api", WorkDir: ""}, runner.requests[0])
 }
 
+func TestDeploymentRuntimeEndpoint_RunsRemoteStopOnSingleHostAfterApproval(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	_, err = app.remoteStore.AddHost(model.Host{ID: "h1", Name: "prod-a"})
+	require.NoError(t, err)
+	_, err = app.remoteStore.AddHost(model.Host{ID: "h2", Name: "prod-b"})
+	require.NoError(t, err)
+	project := remoteOperationAPIProject(true)
+	project.Services[0].Deployments[0].HostIDs = []string{"h1", "h2"}
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	runner := &recordingPipelineAgentRunner{}
+	app.pipelineAgentRunner = runner
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+	app.agentHealth.ProbeOnce(context.Background(), "h1")
+	app.agentHealth.ProbeOnce(context.Background(), "h2")
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/hosts/h2/stop", map[string]any{}, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	plan := required["plan"].(map[string]any)
+	target := plan["target"].(map[string]any)
+	assert.Equal(t, "h2", target["host_id"])
+	_ = postJSONForTest[operation.Approval](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"decided_by": "user",
+		"note":       "remote stop h2",
+	}, http.StatusOK)
+	detail := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+
+	ok := postJSONWithHeadersForTest[map[string]string](t, srv.URL+"/api/deployments/api-prod/hosts/h2/stop", map[string]any{}, map[string]string{
+		"X-SuperDev-Approval-Token": detail.ApprovalToken,
+	}, http.StatusOK)
+
+	assert.Equal(t, "stopped", ok["status"])
+	require.Len(t, runner.requests, 1)
+	assert.Equal(t, remoteexec.CommandRequest{Command: "systemctl stop api", WorkDir: ""}, runner.requests[0])
+	require.Len(t, runner.targets, 1)
+	assert.Equal(t, "h2", runner.targets[0].HostID)
+	assert.Equal(t, "prod-b", runner.targets[0].HostName)
+}
+
 func TestStartEnvSelectedRequiresApprovalForNonDevLocal(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)

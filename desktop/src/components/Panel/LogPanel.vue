@@ -187,9 +187,19 @@ const rawLogs = computed<DisplayLogEntry[]>(() => {
   return []
 })
 
-const ruleFilteredLogs = computed(() =>
-  filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value),
-)
+const panelFilterSignature = computed(() => {
+  const panel = filterStore.panelFilters[props.panelId]
+  if (!panel) return ''
+  const chips = panel.chips
+    .map(chip => `${chip.id}:${chip.type}:${chip.keyword}`)
+    .join('|')
+  return `${panel.logic}:${chips}`
+})
+
+const ruleFilteredLogs = computed(() => {
+  panelFilterSignature.value
+  return filterStore.applyFilters(props.panelId, props.projectId ?? null, rawLogs.value)
+})
 
 const selectedRemoteHostIds = computed(() => {
   const deploymentId = deploymentIdFromSource(props.source)
@@ -341,9 +351,8 @@ watch(
 )
 
 watch(
-  () => filterStore.getPanel(props.panelId).chips,
+  panelFilterSignature,
   () => refreshDisplayImmediately(),
-  { deep: true },
 )
 
 watch(

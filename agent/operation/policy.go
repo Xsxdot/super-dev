@@ -116,6 +116,44 @@ func PlanRuntime(kind string, project model.Project, service model.Service, dep 
 	return plan, nil
 }
 
+// PlanRuntimeOnHost 为远端 deployment 的单 host 运行态写操作生成安全预检计划。
+//
+// 参数：
+//   - kind: runtime.start/runtime.stop/runtime.restart
+//   - project: deployment 所属项目
+//   - service: deployment 所属服务
+//   - dep: 解析后的 remote deployment
+//   - hostID: 本次操作限定的远端 host ID
+//
+// 返回：
+//   - 绑定 host_id 的稳定 plan
+//   - 非远端 deployment、空 hostID 或非法操作类型返回错误
+//
+// 注意：
+//   - 此函数只做策略判断，不验证 hostID 是否属于 dep.HostIDs；调用方在解析目标时负责。
+func PlanRuntimeOnHost(kind string, project model.Project, service model.Service, dep model.Deployment, hostID string) (Plan, error) {
+	hostID = trim(hostID)
+	if hostID == "" || effectiveDeployLocation(dep) != model.LocationRemote {
+		return Plan{}, ErrInvalidOperation
+	}
+	plan, err := PlanRuntime(kind, project, service, dep)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Target.HostID = hostID
+	plan.TargetSummary = fmt.Sprintf("%s/%s/%s on %s", project.Name, dep.EnvName, service.Name, hostID)
+	plan.ExpectedEffects = []string{
+		fmt.Sprintf("%s remote deployment %s on host %s", runtimeVerb(kind), dep.ID, hostID),
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"expected_effects": plan.ExpectedEffects,
+		"denied":           plan.Denied,
+	})
+	return plan, nil
+}
+
 // PlanRuntimeStartSelected 为项目环境下的“启动所选”批量操作生成安全预检计划。
 //
 // 参数：
