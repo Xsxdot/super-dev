@@ -217,17 +217,20 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     session.loadingMoreHistory = true
     touchSessions()
     try {
-      const entries = await api.fetchDeploymentLogs({
+      const page = await api.fetchDeploymentLogs({
         deploymentId,
         limit,
         before: session.oldestCursor?.id,
       })
+      const entries = page.items
       const displayEntries = entries.map(toDisplayEntry)
       // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
       for (let i = entries.length - 1; i >= 0; i--) {
         ingestEntry(session, entries[i])
       }
-      if (entries.length > 0) {
+      if (page.next?.id) {
+        session.oldestCursor = { time: page.next.time ?? entries[0]?.timestamp ?? '', id: page.next.id }
+      } else if (entries.length > 0) {
         session.oldestCursor = cursorFromLog(entries[0])
       }
       session.hasMoreHistory = entries.length >= limit

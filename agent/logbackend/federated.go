@@ -11,16 +11,38 @@
 package logbackend
 
 import (
-	"container/heap"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // defaultLimit 是 Query/Search 未指定 Limit 时的默认最大返回条数。
 const defaultLimit = 1000
+
+const federatedCursorPrefix = "fed:"
+
+type federatedCursorState struct {
+	Cursor    Cursor
+	Exhausted bool
+}
+
+type federatedCursorWire struct {
+	Time      string `json:"time,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Exhausted bool   `json:"exhausted,omitempty"`
+}
+
+type federatedQueryResult struct {
+	child   int
+	entries []model.LogEntry
+}
 
 // FederatedBackend 聚合多个子 LogBackend，实现跨节点日志统一访问。
 type FederatedBackend struct {
@@ -38,7 +60,7 @@ func NewFederatedBackend(children []LogBackend) *FederatedBackend {
 	return &FederatedBackend{children: children}
 }
 
-// Query 并发拉取所有子 backend 的历史日志，k-way 归并后截取 limit。
+// Query 并发拉取所有子 backend 的历史日志，取全局最新 limit 条后按升序返回。
 //
 // 参数：
 //   - ctx: 上下文，用于控制超时和取消
@@ -46,47 +68,58 @@ func NewFederatedBackend(children []LogBackend) *FederatedBackend {
 //
 // 返回：
 //   - 按 timestamp ASC, id ASC 排序的日志条目列表
-//   - 指向最后一条记录的游标，供下一页查询使用
+//   - 联邦层不透明游标，内部记录每个子 backend 的独立位置
 //   - 错误信息（子 backend 错误时降级跳过，不向上传播）
 //
 // 注意：
 //   - Limit <= 0 时使用 defaultLimit（1000）
 //   - 子 backend 返回错误时静默降级，不影响其他节点结果
 func (f *FederatedBackend) Query(ctx context.Context, filter QueryFilter) ([]model.LogEntry, Cursor, error) {
-	type result struct {
-		entries []model.LogEntry
-	}
-	results := make([]result, len(f.children))
+	results := make([]federatedQueryResult, len(f.children))
+	childCursors, hasFederatedCursor := decodeFederatedCursor(filter.Before.ID)
 	var wg sync.WaitGroup
 	for i, child := range f.children {
+		childCursor := childCursors[i]
+		if !hasFederatedCursor {
+			childCursor.Cursor = filter.Before
+		}
+		if childCursor.Exhausted {
+			results[i] = federatedQueryResult{child: i}
+			continue
+		}
+
+		childFilter := filter
+		childFilter.Before = childCursor.Cursor
 		wg.Add(1)
-		go func(idx int, b LogBackend) {
+		go func(idx int, b LogBackend, cf QueryFilter) {
 			defer wg.Done()
-			entries, _, _ := b.Query(ctx, filter)
-			results[idx] = result{entries: entries}
-		}(i, child)
+			entries, _, _ := b.Query(ctx, cf)
+			results[idx] = federatedQueryResult{child: idx, entries: entries}
+		}(i, child, childFilter)
 	}
 	wg.Wait()
-
-	streams := make([][]model.LogEntry, 0, len(results))
-	for _, r := range results {
-		if len(r.entries) > 0 {
-			streams = append(streams, r.entries)
-		}
-	}
 
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
-	merged := mergeLogStreams(streams, limit)
+	merged := mergeLatestFederatedResults(results, limit)
+	entries := make([]model.LogEntry, 0, len(merged))
+	emittedCount := map[int]int{}
+	oldestEmitted := map[int]model.LogEntry{}
+	for _, item := range merged {
+		entries = append(entries, item.entry)
+		emittedCount[item.child]++
+		if current, ok := oldestEmitted[item.child]; !ok || lessLogEntry(item.entry, current) {
+			oldestEmitted[item.child] = item.entry
+		}
+	}
 
 	var next Cursor
-	if len(merged) > 0 {
-		first := merged[0]
-		next = Cursor{Time: first.Timestamp, ID: encodeSQLiteCursor(first.ID)}
+	if len(entries) > 0 {
+		next = Cursor{Time: entries[0].Timestamp, ID: encodeFederatedCursor(nextFederatedCursorStates(results, childCursors, filter.Before, hasFederatedCursor, emittedCount, oldestEmitted, limit))}
 	}
-	return merged, next, nil
+	return entries, next, nil
 }
 
 // Search 并发搜索所有子 backend，归并排序后截取 limit。
@@ -217,45 +250,117 @@ func (f *FederatedBackend) Subscribe(ctx context.Context, opts SubscribeOptions)
 	return LogStream{Ch: ch, Cancel: cancel}
 }
 
-// fedHeapItem 是 k-way 归并堆中的单个元素。
-type fedHeapItem struct {
-	entry  model.LogEntry
-	slice  []model.LogEntry
-	cursor int
+type federatedMergedItem struct {
+	child int
+	entry model.LogEntry
 }
 
-type fedHeap []*fedHeapItem
-
-func (h fedHeap) Len() int           { return len(h) }
-func (h fedHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h fedHeap) Less(i, j int) bool { return lessLogEntry(h[i].entry, h[j].entry) }
-func (h *fedHeap) Push(x any)        { *h = append(*h, x.(*fedHeapItem)) }
-func (h *fedHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	*h = old[:n-1]
-	return item
+func mergeLatestFederatedResults(results []federatedQueryResult, limit int) []federatedMergedItem {
+	all := []federatedMergedItem{}
+	for _, result := range results {
+		for _, entry := range result.entries {
+			all = append(all, federatedMergedItem{child: result.child, entry: entry})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return lessLogEntry(all[i].entry, all[j].entry)
+	})
+	if limit > 0 && len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all
 }
 
-// mergeLogStreams 将多个已排序切片 k-way 归并为单一已排序切片，截取 limit 条。
-func mergeLogStreams(streams [][]model.LogEntry, limit int) []model.LogEntry {
-	h := &fedHeap{}
-	heap.Init(h)
-	for _, s := range streams {
-		if len(s) > 0 {
-			heap.Push(h, &fedHeapItem{entry: s[0], slice: s, cursor: 1})
+func nextFederatedCursorStates(
+	results []federatedQueryResult,
+	oldStates map[int]federatedCursorState,
+	legacyBefore Cursor,
+	hasFederatedCursor bool,
+	emittedCount map[int]int,
+	oldestEmitted map[int]model.LogEntry,
+	limit int,
+) map[int]federatedCursorState {
+	next := map[int]federatedCursorState{}
+	for _, result := range results {
+		state := oldStates[result.child]
+		if !hasFederatedCursor {
+			state.Cursor = legacyBefore
+		}
+		if state.Exhausted {
+			next[result.child] = state
+			continue
+		}
+
+		count := emittedCount[result.child]
+		switch {
+		case count == 0 && len(result.entries) == 0:
+			next[result.child] = federatedCursorState{Exhausted: true}
+		case count == 0:
+			next[result.child] = state
+		case count == len(result.entries) && len(result.entries) < limit:
+			next[result.child] = federatedCursorState{Exhausted: true}
+		default:
+			oldest := oldestEmitted[result.child]
+			next[result.child] = federatedCursorState{Cursor: Cursor{Time: oldest.Timestamp, ID: encodeSQLiteCursor(oldest.ID)}}
 		}
 	}
-	out := make([]model.LogEntry, 0, limit)
-	for h.Len() > 0 && len(out) < limit {
-		item := heap.Pop(h).(*fedHeapItem)
-		out = append(out, item.entry)
-		if item.cursor < len(item.slice) {
-			heap.Push(h, &fedHeapItem{entry: item.slice[item.cursor], slice: item.slice, cursor: item.cursor + 1})
+	return next
+}
+
+func encodeFederatedCursor(states map[int]federatedCursorState) string {
+	wire := map[string]federatedCursorWire{}
+	for child, state := range states {
+		if state.Exhausted || state.Cursor.ID != "" || !state.Cursor.Time.IsZero() {
+			item := federatedCursorWire{ID: state.Cursor.ID, Exhausted: state.Exhausted}
+			if !state.Cursor.Time.IsZero() {
+				item.Time = state.Cursor.Time.Format(time.RFC3339Nano)
+			}
+			wire[strconv.Itoa(child)] = item
 		}
 	}
-	return out
+	if len(wire) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		return ""
+	}
+	return federatedCursorPrefix + base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeFederatedCursor(id string) (map[int]federatedCursorState, bool) {
+	if !strings.HasPrefix(id, federatedCursorPrefix) {
+		return map[int]federatedCursorState{}, false
+	}
+	raw := strings.TrimPrefix(id, federatedCursorPrefix)
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return map[int]federatedCursorState{}, false
+	}
+	wire := map[string]federatedCursorWire{}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return map[int]federatedCursorState{}, false
+	}
+	out := map[int]federatedCursorState{}
+	for rawChild, item := range wire {
+		child, err := strconv.Atoi(rawChild)
+		if err != nil {
+			continue
+		}
+		var cursorTime time.Time
+		if item.Time != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, item.Time)
+			if err != nil {
+				continue
+			}
+			cursorTime = parsed
+		}
+		out[child] = federatedCursorState{
+			Cursor:    Cursor{Time: cursorTime, ID: item.ID},
+			Exhausted: item.Exhausted,
+		}
+	}
+	return out, true
 }
 
 // lessLogEntry 按 timestamp ASC 比较，时间相同时按游标 ID 的字符串字典序兜底。

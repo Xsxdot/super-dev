@@ -21,7 +21,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      fetchDeploymentLogs: vi.fn().mockResolvedValue([]),
+      fetchDeploymentLogs: vi.fn().mockResolvedValue({ items: [] }),
     },
     deploymentWsUrl: actual.deploymentWsUrl,
   }
@@ -155,7 +155,7 @@ describe('log ingestion', () => {
     ws.onmessage?.({ data: JSON.stringify({ id: '2', timestamp: '2024-01-01T00:00:02Z', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
 
     const logs = store.getLogs('dep1')
-    expect(logs.map(l => l.id)).toEqual(['1', '2', '3'])
+    expect(logs.map(l => l.id)).toEqual(['x:1', 'x:2', 'x:3'])
   })
 
   it('deduplicates by id', () => {
@@ -178,7 +178,7 @@ describe('log ingestion', () => {
     ws.onmessage?.({ data: JSON.stringify({ id: '2', timestamp: 'invalid-time', message: 'b', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
     ws.onmessage?.({ data: JSON.stringify({ id: '3', timestamp: 'invalid-time', message: 'c', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
 
-    expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual(['1', '2', '3'])
+    expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual(['x:1', 'x:2', 'x:3'])
   })
 
   it('超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', () => {
@@ -216,13 +216,19 @@ describe('loadMoreHistory', () => {
 
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
     mockFetch
-      .mockResolvedValueOnce([
-        { id: '5', timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
-        { id: '6', timestamp: '2024-01-01T00:00:06Z', message: 'f', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
-      ])
-      .mockResolvedValueOnce([
-        { id: '3', timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
-      ])
+      .mockResolvedValueOnce({
+        items: [
+          { id: '5', timestamp: '2024-01-01T00:00:05Z', message: 'e', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+          { id: '6', timestamp: '2024-01-01T00:00:06Z', message: 'f', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        ],
+        next: { id: 'cursor-5', time: '2024-01-01T00:00:05Z' },
+      })
+      .mockResolvedValueOnce({
+        items: [
+          { id: '3', timestamp: '2024-01-01T00:00:03Z', message: 'c', level: 'info', deployment_id: 'dep1', run_id: '', stream: '' },
+        ],
+        next: { id: 'cursor-3', time: '2024-01-01T00:00:03Z' },
+      })
 
     await store.loadMoreHistory('dep1', 2)
     await store.loadMoreHistory('dep1', 2)
@@ -235,7 +241,7 @@ describe('loadMoreHistory', () => {
     expect(mockFetch).toHaveBeenNthCalledWith(2, expect.objectContaining({
       deploymentId: 'dep1',
       limit: 2,
-      before: '5',
+      before: 'cursor-5',
     }))
   })
 
@@ -255,12 +261,33 @@ describe('loadMoreHistory', () => {
     }) })
 
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
-    mockFetch.mockResolvedValueOnce([
-      { id: '20', timestamp: '2024-01-01T00:00:05Z', message: 'history', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout' },
-    ])
+    mockFetch.mockResolvedValueOnce({
+      items: [
+        { id: '20', timestamp: '2024-01-01T00:00:05Z', message: 'history', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout' },
+      ],
+      next: { id: 'cursor-20', time: '2024-01-01T00:00:05Z' },
+    })
 
     await store.loadMoreHistory('dep1', 200)
 
     expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({ before: undefined }))
+  })
+
+  it('keeps history rows with the same remote sqlite id from different sources', async () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep1')
+
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({
+      items: [
+        { id: '1', timestamp: '2024-01-01T00:00:01Z', message: 'from h1', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout', source_id: 'h1' },
+        { id: '1', timestamp: '2024-01-01T00:00:02Z', message: 'from h2', level: 'INFO', deployment_id: 'dep1', run_id: '', stream: 'stdout', source_id: 'h2' },
+      ],
+      next: { id: 'cursor-1', time: '2024-01-01T00:00:01Z' },
+    })
+
+    await store.loadMoreHistory('dep1', 2)
+
+    expect(store.getLogs('dep1').map(log => log.message)).toEqual(['from h1', 'from h2'])
   })
 })

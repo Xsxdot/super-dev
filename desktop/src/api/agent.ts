@@ -462,6 +462,22 @@ function normalizeRemoteSearchResponse(response: RemoteSearchResponse): RemoteSe
   }
 }
 
+function normalizeDeploymentLogsResponse(response: DeploymentLogsResponse | LogEntry[]): DeploymentLogsResponse {
+  if (Array.isArray(response)) {
+    return { items: normalizeLogEntries(response) }
+  }
+  return {
+    ...response,
+    items: normalizeLogEntries(response.items),
+    next: response.next
+      ? {
+          time: response.next.time,
+          id: response.next.id != null ? String(response.next.id) : undefined,
+        }
+      : undefined,
+  }
+}
+
 export interface LogRule {
   id: string
   name: string
@@ -1309,7 +1325,7 @@ export const api = {
     if (params.before != null) qs.set('before', String(params.before))
     const q = qs.toString()
     return request<DeploymentLogsResponse | LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
-      .then(body => normalizeLogEntries(Array.isArray(body) ? body : (body.items ?? [])))
+      .then(normalizeDeploymentLogsResponse)
   },
   searchDeploymentLogs: (params: DeploymentSearchParams) => {
     const qs = new URLSearchParams()
