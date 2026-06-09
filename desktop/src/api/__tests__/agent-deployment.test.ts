@@ -6,6 +6,7 @@ const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('deploymentWsUrl', () => {
@@ -14,6 +15,16 @@ describe('deploymentWsUrl', () => {
     // 测试环境不是 dev，所以用 57017
     const url = deploymentWsUrl('dep-abc')
     expect(url).toContain('/ws/deployments/dep-abc/logs')
+  })
+
+  it('允许通过 VITE_AGENT_HOST 覆盖本地 agent 地址', async () => {
+    vi.stubEnv('VITE_AGENT_HOST', '127.0.0.1:57118')
+    vi.resetModules()
+
+    const agentModule = await import('@/api/agent')
+
+    expect(agentModule.AGENT_HOST).toBe('127.0.0.1:57118')
+    expect(agentModule.deploymentWsUrl('dep-abc')).toContain('ws://127.0.0.1:57118')
   })
 })
 

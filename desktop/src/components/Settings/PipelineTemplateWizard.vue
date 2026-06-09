@@ -14,10 +14,12 @@ PipelineTemplateWizard：模板化流水线组合编辑器。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import type {
   Pipeline,
   PipelinePhase,
   PipelinePreviewResponse,
+  ProjectPipelineRole,
   PipelineTemplateCategory,
   PipelineTemplateSummary,
   TemplateFileItem,
@@ -37,14 +39,20 @@ type TemplateBlock = {
   runnerTargets: string[]
 }
 
+type HostOption = { id: string; name: string }
+type InputGroupKey = 'machine' | 'path' | 'command' | 'file' | 'optional'
+type InputGroupSelection = InputGroupKey | 'all'
+
 const props = defineProps<{
   modelValue?: Pipeline
   templates: PipelineTemplateSummary[]
-  hosts?: Array<{ id: string; name: string }>
+  hosts?: HostOption[]
   preview?: PipelinePreviewResponse
+  pipelineRoles?: Record<string, ProjectPipelineRole>
   previewError?: string
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
   initialMode?: 'template' | 'blank'
+  hidePreviewStrip?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Pipeline | undefined] }>()
 
@@ -57,6 +65,8 @@ const phaseCategory: Record<PipelinePhase, PipelineTemplateCategory> = {
 const enabled = ref(Boolean(props.modelValue) || props.initialMode === 'template')
 const blocks = ref<TemplateBlock[]>([])
 const activeBlockId = ref<string | null>(null)
+const activeInputGroup = ref<InputGroupSelection>('all')
+const activePhase = ref<PipelinePhase>('build')
 const nextBlockId = ref(0)
 const { t } = useAppI18n()
 
@@ -66,6 +76,26 @@ const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(blo
   return Object.entries(template.inputs ?? {}).every(([name, input]) => inputSatisfied(block, name, input))
 }))
 const activeBlock = computed(() => blocks.value.find(block => block.id === activeBlockId.value) ?? blocks.value[0] ?? null)
+const inputGroups = computed(() => {
+  const block = activeBlock.value
+  return [
+    {
+      key: 'machine' as const,
+      label: t('settings.pipeline.machine'),
+      count: block ? 1 + groupedInputEntries('machine').length : 0,
+    },
+    { key: 'path' as const, label: t('settings.pipeline.inputGroupPath'), count: groupedInputEntries('path').length },
+    { key: 'command' as const, label: t('settings.pipeline.inputGroupCommand'), count: groupedInputEntries('command').length },
+    { key: 'file' as const, label: t('settings.pipeline.inputGroupFile'), count: groupedInputEntries('file').length },
+    { key: 'optional' as const, label: t('settings.pipeline.inputGroupOptional'), count: groupedInputEntries('optional').length },
+  ]
+})
+const activeInputEntries = computed(() => {
+  const block = activeBlock.value
+  if (!block) return []
+  if (activeInputGroup.value === 'all') return inputEntries(block)
+  return groupedInputEntries(activeInputGroup.value)
+})
 const previewBlocks = computed(() =>
   blocks.value
     .map(block => ({
@@ -73,11 +103,12 @@ const previewBlocks = computed(() =>
       phase: block.phase,
       name: selectedFor(block)?.name || phaseLabel(block.phase),
       target: block.runnerTargets[0] || Object.values(block.targets)[0]?.[0] || t('common.local'),
+      icon: phaseIcon(block.phase),
     }))
     .slice(0, 5),
 )
 
-watch(() => props.modelValue, (value) => {
+watch(() => [props.modelValue, props.pipelineRoles] as const, ([value]) => {
   enabled.value = Boolean(value) || enabled.value || props.initialMode === 'template'
   hydrateFromPipeline(value)
 }, { immediate: true })
@@ -112,6 +143,25 @@ function inputEntries(block: TemplateBlock): [string, TemplateInput][] {
   return Object.entries(selectedFor(block)?.inputs ?? {})
 }
 
+function inputGroupFor(name: string, input: TemplateInput): InputGroupKey {
+  const key = name.toLowerCase()
+  if (input.type === 'target_role') return 'machine'
+  if (input.type === 'file_list') return 'file'
+  if (input.type === 'path' || key.includes('dir') || key.includes('path')) return 'path'
+  if (key.includes('command') || key.includes('cmd')) return 'command'
+  return 'optional'
+}
+
+function groupedInputEntries(group: InputGroupKey): [string, TemplateInput][] {
+  const block = activeBlock.value
+  if (!block) return []
+  return inputEntries(block).filter(([name, input]) => inputGroupFor(name, input) === group)
+}
+
+function selectInputGroup(group: InputGroupKey) {
+  activeInputGroup.value = group
+}
+
 function blocksForPhase(phase: PipelinePhase) {
   return blocks.value.filter(block => block.phase === phase)
 }
@@ -120,20 +170,34 @@ function phaseLabel(phase: PipelinePhase) {
   return t(`settings.pipeline.phases.${phase}`)
 }
 
+function roleHostIDs(pipeline: Pipeline | undefined, role: string) {
+  return pipeline?.roles?.[role] ?? props.pipelineRoles?.[role]?.hosts ?? []
+}
+
+function phaseIcon(phase: PipelinePhase) {
+  if (phase === 'deploy') return 'lucide:server'
+  if (phase === 'finally') return 'lucide:shield-check'
+  return 'lucide:package'
+}
+
 function addBlock(phase: PipelinePhase) {
   const block = { id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {}, runnerTargets: [] }
   blocks.value.push(block)
   activeBlockId.value = block.id
+  activePhase.value = phase
+  activeInputGroup.value = 'all'
 }
 
 function removeBlock(block: TemplateBlock) {
   blocks.value = blocks.value.filter(item => item !== block)
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
+    activeInputGroup.value = 'all'
   }
 }
 
 function resetBlockInputs(block: TemplateBlock) {
+  activeInputGroup.value = 'all'
   const template = selectedFor(block)
   block.vars = {}
   block.targets = {}
@@ -162,6 +226,7 @@ function roleKey(block: TemplateBlock, inputName: string) {
 function hydrateFromPipeline(pipeline?: Pipeline) {
   blocks.value = []
   activeBlockId.value = null
+  activePhase.value = 'build'
   nextBlockId.value = 0
   if (!pipeline) return
   for (const phase of phases) {
@@ -183,17 +248,21 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
         targets: {},
         runnerTargets: [],
       }
-      for (const role of step.roles ?? []) {
-        block.runnerTargets.push(...(pipeline.roles?.[role] ?? []))
+      const runnerRoles = step.roles?.length ? step.roles : [runnerRoleKey(block)]
+      for (const role of runnerRoles) {
+        block.runnerTargets.push(...roleHostIDs(pipeline, role))
       }
       block.runnerTargets = Array.from(new Set(block.runnerTargets))
       for (const [name, value] of Object.entries(vars)) {
         if (typeof value !== 'string') continue
-        const ids = pipeline.roles?.[String(value)]
+        const ids = roleHostIDs(pipeline, String(value))
         if (ids) block.targets[name] = [...ids]
       }
       blocks.value.push(block)
-      activeBlockId.value = activeBlockId.value ?? block.id
+      if (!activeBlockId.value) {
+        activeBlockId.value = block.id
+        activePhase.value = phase
+      }
     }
   }
 }
@@ -205,29 +274,40 @@ function enable() {
 function disable() {
   enabled.value = false
   blocks.value = []
+  activePhase.value = 'build'
   emit('update:modelValue', undefined)
 }
 
-function isTargetChecked(block: TemplateBlock, name: string, hostID: string) {
-  return (block.targets[name] ?? []).includes(hostID)
+function hostAliases(host: HostOption) {
+  return Array.from(new Set([host.id, host.name].filter(Boolean)))
 }
 
-function isRunnerChecked(block: TemplateBlock, hostID: string) {
-  return block.runnerTargets.includes(hostID)
+function includesHost(values: string[], host: HostOption) {
+  const aliases = hostAliases(host)
+  return aliases.some(alias => values.includes(alias))
 }
 
-function toggleRunner(block: TemplateBlock, hostID: string, checked: boolean) {
-  const set = new Set(block.runnerTargets)
-  if (checked) set.add(hostID)
-  else set.delete(hostID)
-  block.runnerTargets = [...set]
+function isTargetHostChecked(block: TemplateBlock, name: string, host: HostOption) {
+  return includesHost(block.targets[name] ?? [], host)
 }
 
-function toggleTarget(block: TemplateBlock, name: string, hostID: string, checked: boolean) {
-  const set = new Set(block.targets[name] ?? [])
-  if (checked) set.add(hostID)
-  else set.delete(hostID)
-  block.targets[name] = [...set]
+function isRunnerHostChecked(block: TemplateBlock, host: HostOption) {
+  return includesHost(block.runnerTargets, host)
+}
+
+function updateHostSelection(values: string[], host: HostOption, checked: boolean) {
+  const aliases = new Set(hostAliases(host))
+  const next = values.filter(value => !aliases.has(value))
+  if (checked) next.push(host.id)
+  return next
+}
+
+function toggleRunnerHost(block: TemplateBlock, host: HostOption, checked: boolean) {
+  block.runnerTargets = updateHostSelection(block.runnerTargets, host, checked)
+}
+
+function toggleTargetHost(block: TemplateBlock, name: string, host: HostOption, checked: boolean) {
+  block.targets[name] = updateHostSelection(block.targets[name] ?? [], host, checked)
 }
 
 function inputSatisfied(block: TemplateBlock, name: string, input: TemplateInput) {
@@ -284,6 +364,14 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 
 function selectBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
+  activePhase.value = block.phase
+  activeInputGroup.value = 'all'
+}
+
+function selectPhase(phase: PipelinePhase) {
+  activePhase.value = phase
+  const firstBlock = blocksForPhase(phase)[0]
+  if (firstBlock) selectBlock(firstBlock)
 }
 
 function blockVarSummary(block: TemplateBlock) {
@@ -375,9 +463,15 @@ defineExpose({ saveTemplate })
         </button>
       </div>
 
-      <template>
-        <div class="phase-tabs" data-test="pipeline-phase-tabs">
-          <button v-for="phase in phases" :key="phase" type="button" :class="{ active: activeBlock?.phase === phase }">
+      <div class="phase-tabs" data-test="pipeline-phase-tabs">
+          <button
+            v-for="phase in phases"
+            :key="phase"
+            type="button"
+            :class="{ active: activePhase === phase }"
+            :data-test="`pipeline-phase-tab-${phase}`"
+            @click="selectPhase(phase)"
+          >
             {{ phaseLabel(phase) }}
           </button>
         </div>
@@ -406,7 +500,7 @@ defineExpose({ saveTemplate })
               >
                 <div class="block-row">
                   <span class="block-grip" aria-hidden="true">⋮⋮</span>
-                  <span class="block-cube" aria-hidden="true"></span>
+                  <span class="block-cube" aria-hidden="true"><Icon :icon="phaseIcon(block.phase)" /></span>
                   <select
                     v-model="block.selectedKey"
                     class="settings-select field-input"
@@ -437,6 +531,36 @@ defineExpose({ saveTemplate })
                   {{ selectedFor(block)?.description }}
                 </div>
 
+                <div v-if="selectedFor(block) && activeBlock?.id === block.id" class="block-inline-detail">
+                  <div class="block-inline-section">
+                    <div class="inline-label">
+                      {{ t('settings.pipeline.machine') }} / Runner machines
+                      <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span>
+                    </div>
+                    <div class="inline-target-list" :data-test="`block-${block.id}-inline-runner-targets`">
+                      <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
+                        <input
+                          type="checkbox"
+                          :checked="isRunnerHostChecked(block, host)"
+                          @change="toggleRunnerHost(block, host, ($event.target as HTMLInputElement).checked)"
+                          @click.stop
+                        />
+                        {{ host.name }}
+                      </label>
+                      <span v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</span>
+                    </div>
+                  </div>
+
+                  <div class="block-inline-section">
+                    <div class="inline-label">
+                      {{ t('settings.pipeline.keyVars') }} / Key vars ({{ blockVarSummary(block).length }})
+                    </div>
+                    <div class="inline-key-vars" :data-test="`block-${block.id}-inline-key-vars`">
+                      <span v-for="value in blockVarSummary(block)" :key="value" class="summary-chip">{{ value }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="block-summary">
                   <span>{{ t('settings.pipeline.machine') }}: {{ block.runnerTargets.length || 0 }}</span>
                   <span v-for="value in blockVarSummary(block)" :key="value" class="summary-chip">{{ value }}</span>
@@ -449,15 +573,21 @@ defineExpose({ saveTemplate })
             <template v-if="activeBlock && selectedFor(activeBlock)">
               <div class="detail-title">{{ t('settings.pipeline.dynamicInputs') }}</div>
               <div class="detail-subtitle">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
-              <div class="detail-tabs" aria-hidden="true">
-                <span class="active">{{ t('settings.pipeline.machine') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupPath') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupCommand') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupFile') }}</span>
-                <span>{{ t('settings.pipeline.inputGroupOptional') }}</span>
+              <div class="detail-tabs">
+                <button
+                  v-for="group in inputGroups"
+                  :key="group.key"
+                  type="button"
+                  :class="{ active: activeInputGroup === group.key || (activeInputGroup === 'all' && group.key === 'machine') }"
+                  :data-test="`input-group-${group.key}`"
+                  @click="selectInputGroup(group.key)"
+                >
+                  <span>{{ group.label }}</span>
+                  <small>{{ group.count }}</small>
+                </button>
               </div>
 
-              <div class="template-runner-row">
+              <div v-if="activeInputGroup === 'all' || activeInputGroup === 'machine'" class="template-runner-row">
                 <div class="field-label">{{ t('settings.pipeline.machine') }}</div>
                 <div class="field-help">{{ t('settings.pipeline.machineHelp') }}</div>
                 <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
@@ -466,15 +596,15 @@ defineExpose({ saveTemplate })
                     <input
                       type="checkbox"
                       :data-test="`block-${activeBlock.id}-runner-${host.id}`"
-                      :checked="isRunnerChecked(activeBlock, host.id)"
-                      @change="toggleRunner(activeBlock, host.id, ($event.target as HTMLInputElement).checked)"
+                      :checked="isRunnerHostChecked(activeBlock, host)"
+                      @change="toggleRunnerHost(activeBlock, host, ($event.target as HTMLInputElement).checked)"
                     />
                     {{ host.name }}
                   </label>
                 </div>
               </div>
 
-              <div v-for="[name, input] in inputEntries(activeBlock)" :key="name" class="template-input-row">
+              <div v-for="[name, input] in activeInputEntries" :key="name" class="template-input-row">
                 <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
                   {{ input.label || name }}<span v-if="input.required" class="required">*</span>
                   <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
@@ -485,8 +615,8 @@ defineExpose({ saveTemplate })
                     <input
                       type="checkbox"
                       :data-test="`block-${activeBlock.id}-target-${host.id}`"
-                      :checked="isTargetChecked(activeBlock, name, host.id)"
-                      @change="toggleTarget(activeBlock, name, host.id, ($event.target as HTMLInputElement).checked)"
+                      :checked="isTargetHostChecked(activeBlock, name, host)"
+                      @change="toggleTargetHost(activeBlock, name, host, ($event.target as HTMLInputElement).checked)"
                     />
                     {{ host.name }}
                   </label>
@@ -574,14 +704,14 @@ defineExpose({ saveTemplate })
           {{ t('settings.pipeline.saveTemplate') }}
         </button>
 
-        <section class="wizard-preview-strip">
+        <section v-if="!hidePreviewStrip" class="wizard-preview-strip" data-test="wizard-preview-strip">
           <header class="preview-strip-head">
             <span>{{ t('settings.pipeline.preview') }} / PipelinePreview</span>
             <small>{{ t('settings.pipeline.unsavedPreviewHint') }}</small>
           </header>
           <div class="preview-flow">
             <article v-for="block in previewBlocks" :key="block.id" class="preview-node">
-              <span class="preview-node-icon" aria-hidden="true"></span>
+              <span class="preview-node-icon" aria-hidden="true"><Icon :icon="block.icon" /></span>
               <strong>{{ block.name }}</strong>
               <small>pending</small>
               <em>{{ block.target }}</em>
@@ -594,7 +724,6 @@ defineExpose({ saveTemplate })
 
         <div v-if="previewError" class="preview-error">{{ previewError }}</div>
         <PipelinePreview v-if="preview" :preview="preview" />
-      </template>
     </template>
   </div>
 </template>
@@ -602,6 +731,8 @@ defineExpose({ saveTemplate })
 <style scoped>
 .pipeline-wizard {
   display: grid;
+  grid-template-columns: minmax(520px, 1fr) minmax(360px, 508px);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
   background: rgba(9, 14, 22, 0.9);
@@ -610,6 +741,8 @@ defineExpose({ saveTemplate })
   font-size: 11px;
 }
 .pipeline-save {
+  grid-column: 1;
+  grid-row: 3;
   justify-self: start;
   margin: 10px 0 0 12px;
 }
@@ -629,6 +762,8 @@ defineExpose({ saveTemplate })
   display: none;
 }
 .phase-tabs {
+  grid-column: 1;
+  grid-row: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--border-secondary);
@@ -655,26 +790,31 @@ defineExpose({ saveTemplate })
   color: #fff;
 }
 .wizard-layout {
-  display: grid;
-  grid-template-columns: minmax(520px, 1fr) minmax(360px, 508px);
+  display: contents;
   gap: 0;
   align-items: stretch;
   min-height: 520px;
-  border-top: 1px solid var(--border-secondary);
 }
 .wizard-main {
+  grid-column: 1;
+  grid-row: 2;
   min-width: 0;
   overflow: auto;
   padding: 0 12px 12px;
+  border-top: 1px solid var(--border-secondary);
   background: rgba(9, 14, 22, 0.42);
+  scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .wizard-detail-panel {
+  grid-column: 2;
+  grid-row: 1 / span 4;
   min-width: 0;
   max-height: 100%;
   overflow: auto;
   border-left: 1px solid var(--border-secondary);
   padding: 14px;
   background: rgba(21, 30, 42, 0.76);
+  scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .detail-title {
   color: var(--text-primary);
@@ -696,21 +836,36 @@ defineExpose({ saveTemplate })
   overflow: hidden;
   background: rgba(8, 13, 20, 0.4);
 }
-.detail-tabs span {
+.detail-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   min-width: 0;
   padding: 7px 4px;
+  border: 0;
   border-left: 1px solid var(--border-secondary);
+  background: transparent;
   color: var(--text-tertiary);
+  cursor: pointer;
   font-size: 11px;
   text-align: center;
 }
-.detail-tabs span:first-child {
+.detail-tabs button:first-child {
   border-left: 0;
 }
 .detail-tabs .active {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--accent);
   font-weight: 800;
+}
+.detail-tabs small {
+  border-radius: 999px;
+  padding: 0 5px;
+  background: rgba(139, 148, 158, 0.16);
+  color: inherit;
+  font-size: 10px;
+  line-height: 16px;
 }
 .detail-empty {
   min-height: 180px;
@@ -747,6 +902,29 @@ defineExpose({ saveTemplate })
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.block-inline-detail {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-secondary);
+}
+.block-inline-section {
+  display: grid;
+  gap: 8px;
+}
+.inline-label {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.inline-target-list,
+.inline-key-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
 .pipeline-empty {
   margin: 0 0 10px;
   border: 1px dashed var(--border-secondary);
@@ -764,9 +942,13 @@ defineExpose({ saveTemplate })
   color: var(--accent);
 }
 .preview-error {
+  grid-column: 1 / -1;
   margin-top: 8px;
   font-size: 11px;
   color: var(--status-failed);
+}
+.pipeline-wizard :deep(.pipeline-preview) {
+  grid-column: 1 / -1;
 }
 .template-block {
   border: 1px solid var(--border-secondary);
@@ -790,6 +972,9 @@ defineExpose({ saveTemplate })
 }
 .block-cube,
 .preview-node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   border: 2px solid var(--text-tertiary);
@@ -797,6 +982,12 @@ defineExpose({ saveTemplate })
 }
 .block-cube {
   border-color: #9fb4d2;
+  color: #9fb4d2;
+}
+.block-cube svg,
+.preview-node-icon svg {
+  width: 13px;
+  height: 13px;
 }
 .block-row .field-input {
   flex: 1;
@@ -901,6 +1092,9 @@ defineExpose({ saveTemplate })
   color: var(--text-tertiary);
   font-size: 11px;
 }
+.template-block.active .block-summary {
+  display: none;
+}
 .summary-chip {
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
@@ -908,6 +1102,8 @@ defineExpose({ saveTemplate })
   color: var(--text-secondary);
 }
 .wizard-preview-strip {
+  grid-column: 1 / -1;
+  grid-row: 4;
   border-top: 1px solid var(--border-secondary);
   padding: 16px 24px;
   background: rgba(21, 30, 42, 0.64);
@@ -954,6 +1150,7 @@ defineExpose({ saveTemplate })
   left: 12px;
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
 }
 .preview-node strong {
   color: var(--text-primary);
@@ -980,12 +1177,29 @@ defineExpose({ saveTemplate })
   font-size: 12px;
 }
 @media (max-width: 1280px) {
+  .pipeline-wizard {
+    grid-template-columns: 1fr;
+  }
+  .phase-tabs,
+  .wizard-layout,
+  .wizard-main,
+  .wizard-detail-panel,
+  .pipeline-save,
+  .wizard-preview-strip,
+  .preview-error,
+  .pipeline-wizard :deep(.pipeline-preview) {
+    grid-column: 1;
+    grid-row: auto;
+  }
   .wizard-layout {
+    display: grid;
     grid-template-columns: 1fr;
     min-height: auto;
+    border-top: 1px solid var(--border-secondary);
   }
   .wizard-main {
     max-height: none;
+    border-top: 0;
   }
   .wizard-detail-panel {
     max-height: none;

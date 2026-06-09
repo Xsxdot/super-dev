@@ -11,6 +11,7 @@ RunHistoryList：展示单条流水线下的 run 历史。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import type { Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
@@ -42,6 +43,22 @@ function statusLabel(run: Run) {
   return t(`overview.pipeline.status.${run.status}`)
 }
 
+function statusIcon(run: Run) {
+  switch (run.status) {
+    case 'success':
+      return 'lucide:circle-check'
+    case 'failed':
+      return 'lucide:circle-x'
+    case 'running':
+    case 'pending':
+      return 'lucide:refresh-cw'
+    case 'canceled':
+      return 'lucide:ban'
+    default:
+      return 'lucide:circle'
+  }
+}
+
 function startedAt(run: Run) {
   if (!run.started_at) return '--'
   const value = run.started_at < 1_000_000_000_000 ? run.started_at * 1000 : run.started_at
@@ -60,9 +77,18 @@ function summary(run: Run) {
 </script>
 
 <template>
-  <div class="run-history" data-test="run-history">
+  <div
+    class="run-history"
+    data-test="run-history"
+    :style="{ '--history-row-count': visibleRuns.length }"
+  >
     <div class="run-history-timeline" data-test="run-history-timeline" aria-hidden="true">
-      <span v-for="run in visibleRuns" :key="run.id" :class="`status-${run.status}`"></span>
+      <span
+        v-for="run in visibleRuns"
+        :key="run.id"
+        :class="`status-${run.status}`"
+        data-test="run-history-node"
+      ></span>
     </div>
     <div class="history-table">
       <div class="history-head">
@@ -79,7 +105,7 @@ function summary(run: Run) {
       <div v-for="run in visibleRuns" :key="run.id" class="run-item" data-test="run-history-row">
         <div class="run-row">
           <span class="run-status" :class="`status-${run.status}`">
-            <span class="status-ring" aria-hidden="true"></span>
+            <Icon class="status-icon" :icon="statusIcon(run)" aria-hidden="true" />
             {{ statusLabel(run) }}
           </span>
           <span class="run-version">{{ run.artifact_version || '--' }}</span>
@@ -87,11 +113,17 @@ function summary(run: Run) {
           <span>{{ startedAt(run) }}</span>
           <span>{{ duration(run) }}</span>
           <span>{{ artifactKind || 'file' }}</span>
-          <span class="run-summary" :class="{ failed: failedSteps(run).length }" data-test="run-failed-summary">
+          <span
+            class="run-summary"
+            :class="{ failed: failedSteps(run).length }"
+            data-test="run-failed-summary"
+            :title="summary(run)"
+          >
             {{ summary(run) }}
           </span>
           <span class="run-actions">
             <button type="button" data-test="run-detail" @click="emit('detail', run)">
+              <Icon icon="lucide:terminal-square" aria-hidden="true" />
               {{ run.status === 'running' ? t('overview.pipeline.openLiveConsole') : t('overview.pipeline.openConsole') }}
             </button>
             <button
@@ -100,6 +132,7 @@ function summary(run: Run) {
               :disabled="run.status === 'running'"
               @click="emit('rollback', run)"
             >
+              <Icon icon="lucide:rotate-ccw" aria-hidden="true" />
               {{ t('overview.pipeline.rollback') }}
             </button>
           </span>
@@ -120,6 +153,9 @@ function summary(run: Run) {
 
 <style scoped>
 .run-history {
+  --history-header-height: 42px;
+  --history-row-height: 61px;
+  --history-node-size: 17px;
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
   margin: 0 12px 16px;
@@ -131,15 +167,15 @@ function summary(run: Run) {
 .run-history-timeline {
   position: relative;
   display: grid;
+  grid-template-rows: repeat(var(--history-row-count), var(--history-row-height));
   align-content: start;
   justify-items: center;
-  gap: 26px;
-  padding: 38px 0 20px;
+  padding: var(--history-header-height) 0 16px;
 }
 .run-history-timeline::before {
   position: absolute;
-  top: 26px;
-  bottom: 22px;
+  top: calc(var(--history-header-height) + var(--history-node-size) / 2);
+  bottom: calc(16px + var(--history-node-size) / 2);
   left: 50%;
   width: 2px;
   background: var(--text-tertiary);
@@ -150,8 +186,9 @@ function summary(run: Run) {
 .run-history-timeline span {
   position: relative;
   z-index: 1;
-  width: 17px;
-  height: 17px;
+  align-self: center;
+  width: var(--history-node-size);
+  height: var(--history-node-size);
   border: 2px solid var(--text-tertiary);
   border-radius: 50%;
   background: var(--bg-primary);
@@ -176,10 +213,10 @@ function summary(run: Run) {
 }
 .history-head {
   display: grid;
-  grid-template-columns: 96px minmax(130px, 0.9fr) 72px 150px 66px 74px minmax(170px, 1fr) 190px;
+  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
   align-items: center;
-  gap: 12px;
-  min-height: 32px;
+  gap: 10px;
+  min-height: var(--history-header-height);
   padding: 0 12px;
   color: var(--text-tertiary);
   font-size: 12px;
@@ -188,10 +225,10 @@ function summary(run: Run) {
 .history-loading,
 .run-row {
   display: grid;
-  grid-template-columns: 96px minmax(130px, 0.9fr) 72px 150px 66px 74px minmax(170px, 1fr) 190px;
+  grid-template-columns: 92px minmax(118px, 0.9fr) 64px 138px 58px 62px minmax(130px, 1fr) 156px;
   align-items: center;
-  gap: 12px;
-  min-height: 48px;
+  gap: 10px;
+  min-height: var(--history-row-height);
   padding: 7px 12px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
@@ -217,11 +254,9 @@ function summary(run: Run) {
   gap: 5px;
   font-weight: 700;
 }
-.status-ring {
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
+.status-icon {
+  width: 14px;
+  height: 14px;
 }
 .status-success {
   color: var(--status-success);
@@ -242,15 +277,20 @@ function summary(run: Run) {
 }
 .run-summary.failed {
   color: var(--status-failed);
-  white-space: normal;
+  white-space: nowrap;
 }
 .run-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
 }
 .run-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   height: 24px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
@@ -259,6 +299,10 @@ function summary(run: Run) {
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
+}
+.run-actions button svg {
+  width: 12px;
+  height: 12px;
 }
 .run-actions button:disabled {
   cursor: not-allowed;

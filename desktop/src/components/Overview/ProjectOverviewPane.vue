@@ -74,8 +74,8 @@ function openInstanceLogs(deploymentId: string) {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 64px;
-  padding: 16px 20px 12px;
+  min-height: 92px;
+  padding: 18px 20px 14px;
   border-bottom: 1px solid var(--border-secondary);
   flex-shrink: 0;
 }
@@ -84,21 +84,20 @@ function openInstanceLogs(deploymentId: string) {
 }
 .overview-kicker {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  text-transform: uppercase;
 }
 .overview-pane-head h1 {
-  margin: 2px 0 0;
+  margin: 8px 0 0;
   overflow: hidden;
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 24px;
+  font-weight: 800;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .overview-pane.compact .overview-pane-head {
-  min-height: 56px;
+  min-height: 70px;
   padding: 12px 16px 10px;
 }
 @media (max-width: 640px) {

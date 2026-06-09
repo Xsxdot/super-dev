@@ -79,6 +79,7 @@ describe('PipelinesTab', () => {
     expect(wrapper.find('[data-test="pipeline-table-head"]').text()).toContain('流水线')
     expect(wrapper.find('[data-test="pipeline-overview"]').text()).toContain('Deploy Dev')
     expect(wrapper.find('[data-test="pipeline-overview-phases"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-artifact-download"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-latest-version"]').text()).toContain('v1')
     expect(wrapper.find('[data-test="pipeline-latest-duration"]').text()).toContain('10s')
     expect(wrapper.find('[data-test="pipeline-timezone"]').text()).toContain('Asia/Shanghai')

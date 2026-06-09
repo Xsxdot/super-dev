@@ -12,6 +12,7 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
 -->
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
@@ -45,10 +46,10 @@ const consoleSummary = computed(() => {
   }
 })
 const summaryItems = computed(() => [
-  { key: 'total', label: t('overview.pipeline.totalLabel'), value: consoleSummary.value.total, tone: 'neutral' },
-  { key: 'success', label: t('overview.pipeline.successLabel'), value: consoleSummary.value.success, tone: 'success' },
-  { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed' },
-  { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running' },
+  { key: 'total', label: t('overview.pipeline.totalLabel'), value: consoleSummary.value.total, tone: 'neutral', icon: 'lucide:workflow' },
+  { key: 'success', label: t('overview.pipeline.successLabel'), value: consoleSummary.value.success, tone: 'success', icon: 'lucide:circle-check' },
+  { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed', icon: 'lucide:circle-x' },
+  { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running', icon: 'lucide:refresh-cw' },
 ])
 const overviewPipeline = computed(() =>
   (props.project.pipelines ?? []).find(pipeline => pipeline.id === expanded.value) ?? props.project.pipelines?.[0] ?? null,
@@ -239,7 +240,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
       </div>
       <div class="pipeline-console-actions">
         <button type="button" class="pipeline-add-btn" data-test="pipeline-add" @click="openEditor('blank')">
-          <span aria-hidden="true">+</span>
+          <Icon icon="lucide:plus" aria-hidden="true" />
           {{ t('overview.pipeline.add') }}
         </button>
         <button
@@ -250,7 +251,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
           :aria-label="t('overview.pipeline.refresh')"
           @click="refreshRuns"
         >
-          <span aria-hidden="true" :class="{ spinning: refreshingRuns }">↻</span>
+          <Icon icon="lucide:refresh-cw" aria-hidden="true" :class="{ spinning: refreshingRuns }" />
         </button>
       </div>
     </div>
@@ -262,7 +263,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         :class="`tone-${item.tone}`"
         :data-test="`pipeline-stat-${item.key}`"
       >
-        <span class="pipeline-stat-icon" aria-hidden="true"></span>
+        <Icon class="pipeline-stat-icon" :icon="item.icon" aria-hidden="true" />
         <strong>{{ item.value }}</strong>
         <span>{{ item.label }}</span>
       </article>
@@ -363,10 +364,23 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         <div v-if="latestArtifact(overviewPipeline)" class="overview-section">
           <div class="overview-section-title">{{ t('overview.pipeline.latestArtifact') }}</div>
           <div class="artifact-card">
-            <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
-            <div class="artifact-file-meta">
-              {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
+            <Icon class="artifact-file-icon" icon="lucide:file-archive" aria-hidden="true" />
+            <div class="artifact-file-copy">
+              <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
+              <div class="artifact-file-meta">
+                {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
+              </div>
             </div>
+            <button
+              type="button"
+              class="artifact-download"
+              data-test="pipeline-artifact-download"
+              :aria-label="t('overview.pipeline.downloadArtifact')"
+              :title="t('overview.pipeline.downloadArtifact')"
+              disabled
+            >
+              <Icon icon="lucide:download" aria-hidden="true" />
+            </button>
           </div>
         </div>
       </aside>
@@ -462,25 +476,20 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   white-space: nowrap;
 }
 .pipeline-stat-icon {
-  position: relative;
   width: 22px;
   height: 22px;
-  border: 2px solid var(--text-tertiary);
-  border-radius: 50%;
+  color: var(--text-tertiary);
 }
 .tone-success .pipeline-stat-icon,
 .tone-success strong {
-  border-color: var(--status-success);
   color: var(--status-success);
 }
 .tone-failed .pipeline-stat-icon,
 .tone-failed strong {
-  border-color: var(--status-failed);
   color: var(--status-failed);
 }
 .tone-running .pipeline-stat-icon,
 .tone-running strong {
-  border-color: var(--status-starting);
   color: var(--status-starting);
 }
 .pipeline-console-grid {
@@ -513,12 +522,12 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   background: rgba(139, 148, 158, 0.36);
 }
 .pipeline-table-inner {
-  min-width: 1050px;
+  min-width: 960px;
 }
 .pipeline-table-head {
   display: grid;
-  grid-template-columns: minmax(250px, 1.45fr) minmax(170px, 0.95fr) 112px minmax(130px, 0.8fr) 78px 112px 150px;
-  gap: 12px;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(130px, 0.8fr) 104px minmax(118px, 0.72fr) 66px 96px 128px;
+  gap: 10px;
   align-items: center;
   min-height: 48px;
   padding: 0 18px 0 86px;
@@ -645,10 +654,18 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   font-size: 19px;
   line-height: 1;
 }
+.pipeline-add-btn svg {
+  width: 17px;
+  height: 17px;
+}
 .pipeline-refresh-btn {
   width: 42px;
   padding: 0;
   color: var(--text-secondary);
+}
+.pipeline-refresh-btn svg {
+  width: 16px;
+  height: 16px;
 }
 .pipeline-refresh-btn:disabled {
   cursor: wait;
@@ -721,10 +738,22 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   font-size: 12px;
 }
 .artifact-card {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--border-secondary);
   border-radius: 7px;
   padding: 10px;
   background: rgba(7, 12, 18, 0.52);
+}
+.artifact-file-icon {
+  width: 19px;
+  height: 19px;
+  color: var(--text-tertiary);
+}
+.artifact-file-copy {
+  min-width: 0;
 }
 .artifact-file-name {
   overflow: hidden;
@@ -737,6 +766,17 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   margin-top: 6px;
   color: var(--text-tertiary);
   font-size: 11px;
+}
+.artifact-download {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 5px;
+  background: rgba(22, 27, 34, 0.68);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  font-size: 15px;
+  line-height: 1;
 }
 .pipeline-timezone {
   margin-top: 22px;

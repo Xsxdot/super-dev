@@ -78,6 +78,7 @@ describe('PipelineTemplateWizard', () => {
     })
 
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
+    expect(wrapper.find('.pipeline-wizard > template').exists()).toBe(false)
     expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-phase-tabs"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
@@ -131,6 +132,27 @@ describe('PipelineTemplateWizard', () => {
     expect(deployOptions.join('\n')).toContain('Systemd Deploy')
     expect(deployOptions.join('\n')).toContain('Archive Package')
     expect(deployOptions.join('\n')).not.toContain('Go Build')
+  })
+
+  it('阶段 tab 可切换当前模板输入详情', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+
+    await wrapper.find('[data-test="pipeline-phase-tab-build"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-input-app_name"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
+    expect(wrapper.find('[data-test="block-1-role-targets"]').exists()).toBe(true)
   })
 
   it('机器选择使用紧凑网格展示', async () => {
@@ -240,6 +262,129 @@ describe('PipelineTemplateWizard', () => {
     expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
   })
 
+  it('已有项目级 roles 时回填运行机器和 target_role 目标', async () => {
+    const pipeline: Pipeline = {
+      build: [{
+        name: 'Go Build',
+        type: 'include',
+        with: {
+          template: 'builtin://go-binary-build',
+          version: '1.0.0',
+          digest: 'sha256:build',
+          vars: { app_name: 'api' },
+        },
+      }],
+      deploy: [{
+        name: 'Systemd Deploy',
+        type: 'include',
+        with: {
+          template: 'builtin://systemd-seamless-deploy',
+          version: '1.0.0',
+          digest: 'sha256:deploy',
+          vars: { role: 'deploy_1_targets', app_name: 'api' },
+        },
+      }],
+    }
+
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: pipeline,
+        pipelineRoles: {
+          build_0_runner: { hosts: ['h1'] },
+          deploy_1_targets: { hosts: ['h1'] },
+        },
+        templates: [buildTemplate, deployTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+
+    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
+    expect((wrapper.find('[data-test="block-1-target-h1"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('项目级 roles 后到时重新回填运行机器', async () => {
+    const pipeline: Pipeline = {
+      build: [{
+        name: 'Go Build',
+        type: 'include',
+        with: {
+          template: 'builtin://go-binary-build',
+          version: '1.0.0',
+          digest: 'sha256:build',
+          vars: { app_name: 'api' },
+        },
+      }],
+    }
+
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: pipeline,
+        templates: [buildTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.setProps({ pipelineRoles: { build_0_runner: { hosts: ['h1'] } } })
+
+    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('roles 使用主机名时也能回填对应 checkbox', () => {
+    const pipeline: Pipeline = {
+      build: [{
+        name: 'Go Build',
+        type: 'include',
+        with: {
+          template: 'builtin://go-binary-build',
+          version: '1.0.0',
+          digest: 'sha256:build',
+          vars: { app_name: 'api' },
+        },
+      }],
+    }
+
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: pipeline,
+        pipelineRoles: { build_0_runner: { hosts: ['Host 1'] } },
+        templates: [buildTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+
+    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('选中模板卡片展示运行机器和关键变量摘要', () => {
+    const pipeline: Pipeline = {
+      roles: { build_0_runner: ['h1'] },
+      build: [{
+        name: 'Go Build',
+        type: 'include',
+        roles: ['build_0_runner'],
+        with: {
+          template: 'builtin://go-binary-build',
+          version: '1.0.0',
+          digest: 'sha256:build',
+          vars: { app_name: 'api' },
+        },
+      }],
+    }
+
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: pipeline,
+        templates: [buildTemplate],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+
+    expect(wrapper.find('[data-test="block-0-inline-runner-targets"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-inline-key-vars"]').text()).toContain('api')
+  })
+
   it('展示预览结果和预览错误', () => {
     const preview: PipelinePreviewResponse = {
       run: {
@@ -276,6 +421,42 @@ describe('PipelineTemplateWizard', () => {
       artifact: '${artifacts}/api.tar.gz',
       files: [{ from: '${output}/api', to: 'bin/api' }],
     })
+  })
+
+  it('按输入分组切换右侧模板输入', async () => {
+    const template: PipelineTemplateSummary = {
+      source: 'builtin',
+      id: 'combined',
+      category: 'build',
+      name: 'Combined Build',
+      version: '1.0.0',
+      digest: 'sha256:combined',
+      inputs: {
+        frontend_dir: { label: '前端目录', type: 'path', required: true },
+        build_command: { label: '构建命令', type: 'string', required: true },
+        files: { label: '文件', type: 'file_list', required: true },
+        skip_cache: { label: '跳过缓存', type: 'boolean', required: false, default: 'false' },
+      },
+    }
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [template],
+        hosts: [{ id: 'h1', name: 'Host 1' }],
+      },
+    })
+
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://combined@1.0.0')
+
+    expect(wrapper.find('[data-test="input-group-path"]').text()).toContain('1')
+    await wrapper.find('[data-test="input-group-file"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-add-file"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-input-frontend_dir"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="input-group-optional"]').trigger('click')
+    expect(wrapper.find('[data-test="block-0-input-skip_cache"]').exists()).toBe(true)
   })
 
   it('已有 include pipeline 时回填 file_list 输入', () => {
