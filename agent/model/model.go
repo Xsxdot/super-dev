@@ -656,6 +656,16 @@ type ProjectPipelineRole struct {
 	Hosts       []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 }
 
+// SyncMode 标识构建产物到达目标机的方式。
+type SyncMode string
+
+const (
+	// SyncModeTransfer 由 agent 打包上传产物到目标机。
+	SyncModeTransfer SyncMode = "transfer"
+	// SyncModeRemoteCmd 目标机执行命令自行获取代码（如 git clone/pull）。
+	SyncModeRemoteCmd SyncMode = "remote_cmd"
+)
+
 // ProjectPipeline 描述项目级部署流水线，可一次部署多个服务。
 //
 // 职责：
@@ -676,7 +686,11 @@ type ProjectPipeline struct {
 	Variables    map[string]string              `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments map[string]PipelineEnvironment `json:"environments,omitempty" yaml:"environments,omitempty"`
 	Roles        map[string]ProjectPipelineRole `json:"roles,omitempty" yaml:"roles,omitempty"`
-	Pipeline     Pipeline                       `json:"pipeline" yaml:"pipeline"`
+	// SyncMode 声明构建产物如何到达部署目标机。
+	// transfer = agent 打包上传；remote_cmd = 目标机执行命令（如 git 拉取）自取。
+	// 为空时消费方按 transfer 兜底。
+	SyncMode SyncMode `json:"sync_mode,omitempty" yaml:"sync_mode,omitempty"`
+	Pipeline Pipeline `json:"pipeline" yaml:"pipeline"`
 }
 
 // Environment 表示一个运行环境定义，集中管理名称、排序和开发标记。
