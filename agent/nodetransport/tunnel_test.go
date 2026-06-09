@@ -35,6 +35,20 @@ func (d *recordingDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	return tunnel.NewFakeConn(d.port), nil
 }
 
+type sequenceDialer struct {
+	ports []int
+	calls int
+}
+
+func (d *sequenceDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
+	d.calls++
+	idx := d.calls - 1
+	if idx >= len(d.ports) {
+		idx = len(d.ports) - 1
+	}
+	return tunnel.NewFakeConn(d.ports[idx]), nil
+}
+
 func tunnelNode(id, name string) nodetransport.NodeTarget {
 	return nodetransport.NodeTarget{
 		Host: model.Host{ID: id, Name: name, SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root"},
@@ -362,6 +376,39 @@ func TestTunnelTransportDoEnsuresTunnelBeforeRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestTunnelTransportInvalidatesStaleTunnelAfterRequestFailure(t *testing.T) {
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	stalePort := serverPort(t, stale.URL)
+	stale.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/exec/health", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	target := tunnelNode("h1", "ali-01")
+	dialer := &sequenceDialer{ports: []int{stalePort, serverPort(t, srv.URL)}}
+	mgr := tunnel.NewManager(dialer)
+	defer mgr.Close()
+	_, err := mgr.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(target))
+	require.NoError(t, err)
+	tr := nodetransport.NewTunnelTransport(mgr, tunnelSource(target))
+
+	_, err = tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
+	require.Error(t, err)
+	assert.Equal(t, nodetransport.CodeTransportUnreachable, nodetransport.ErrorCode(err))
+	assert.Equal(t, tunnel.StatusFailed, mgr.Status("h1"))
+	assert.Equal(t, 0, mgr.LocalPort("h1"))
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Method: http.MethodGet, Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	assert.Equal(t, 2, dialer.calls)
+	assert.Equal(t, serverPort(t, srv.URL), mgr.LocalPort("h1"))
 }
 
 func TestTunnelTransportSubscribeNodesEnsuresTunnel(t *testing.T) {

@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 维护 hostID → 隧道连接的映射,EnsureConnected 幂等
-//   - 隧道失败时标记 Failed,不自动重试(由前端用户重新触发)
+//   - 隧道失败时标记 Failed,由调用方后续 EnsureConnected 重新触发建连
 //   - 提供状态变更订阅(Subscribe/Unsubscribe),通过 channel 推送
 //
 // 边界：
@@ -171,6 +171,36 @@ func (m *Manager) Disconnect(hostID string) {
 		conn.Close()
 	}
 	m.emit(hostID, StatusDisconnected, "")
+}
+
+// MarkFailed 关闭并移除指定 host 的当前隧道,记录传输失败原因。
+//
+// 参数：
+//   - hostID: 发生传输失败的 host
+//   - err: 触发失效的底层错误；nil 时仅清空旧错误文本
+//
+// 注意：
+//   - 该方法不主动重连，后续 EnsureConnected 会基于空本地端口重新拨号
+//   - 可以在没有现存连接时调用，用于同步失败状态和订阅事件
+func (m *Manager) MarkFailed(hostID string, err error) {
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	m.mu.Lock()
+	conn, ok := m.conns[hostID]
+	delete(m.conns, hostID)
+	if errMsg == "" {
+		delete(m.errors, hostID)
+	} else {
+		m.errors[hostID] = errMsg
+	}
+	m.status[hostID] = StatusFailed
+	m.mu.Unlock()
+	if ok {
+		conn.Close()
+	}
+	m.emit(hostID, StatusFailed, errMsg)
 }
 
 // Status 返回指定 host 的隧道状态;未知 host 返回 StatusDisconnected。

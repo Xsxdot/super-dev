@@ -76,7 +76,19 @@ func (t *TunnelTransport) Do(ctx context.Context, hostID string, req NodeRequest
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return NodeResponse{}, err
+		t.markTunnelFailure(ctx, hostID, err)
+		code := CodeTransportUnreachable
+		if isTimeoutError(ctx, err) {
+			code = CodeRequestTimeout
+		}
+		return NodeResponse{}, &NodeError{
+			Code:          code,
+			HostID:        hostID,
+			TransportType: model.TransportTypeTunnel,
+			Operation:     "http",
+			Message:       err.Error(),
+			Cause:         err,
+		}
 	}
 	return NodeResponse{StatusCode: resp.StatusCode, Headers: resp.Header, Body: resp.Body}, nil
 }
@@ -110,6 +122,11 @@ func (t *TunnelTransport) Stream(ctx context.Context, hostID string, req NodeReq
 		code := CodeTransportUnreachable
 		if statusCode == http.StatusNotFound {
 			code = CodeAgentAPIMissing
+		} else if statusCode == 0 {
+			t.markTunnelFailure(ctx, hostID, err)
+			if isTimeoutError(ctx, err) {
+				code = CodeRequestTimeout
+			}
 		}
 		return nil, &NodeError{
 			Code:          code,
@@ -293,6 +310,7 @@ func (t *TunnelTransport) watchNodeStatus(ctx context.Context, target NodeTarget
 		var batch []NodeStatus
 		if err := stream.ReadJSON(&batch); err != nil {
 			if ctx.Err() == nil {
+				t.markTunnelFailure(ctx, target.Host.ID, err)
 				t.emitUnreachable(ctx, out, target, err)
 			}
 			return
@@ -349,6 +367,13 @@ func (t *TunnelTransport) execHealthReachable(ctx context.Context, hostID string
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode/100 == 2
+}
+
+func (t *TunnelTransport) markTunnelFailure(ctx context.Context, hostID string, err error) {
+	if t.mgr == nil || ctx.Err() != nil {
+		return
+	}
+	t.mgr.MarkFailed(hostID, err)
 }
 
 func (t *TunnelTransport) ensureTargetFor(hostID string) (NodeTarget, error) {
