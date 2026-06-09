@@ -54,6 +54,18 @@ const packageTemplate: PipelineTemplateSummary = {
   },
 }
 
+const booleanTemplate: PipelineTemplateSummary = {
+  source: 'builtin',
+  id: 'systemd-seamless-deploy',
+  category: 'deploy',
+  name: 'Systemd Deploy',
+  version: '1.0.0',
+  digest: 'sha256:boolean',
+  inputs: {
+    skip_http_check: { label: '跳过 HTTP 检查 / Skip HTTP check', type: 'boolean', required: false, default: 'false' },
+  },
+}
+
 describe('PipelineTemplateWizard', () => {
   it('无 pipeline 时展示配置入口', () => {
     const wrapper = mount(PipelineTemplateWizard, { props: { modelValue: undefined, templates: [buildTemplate] } })
@@ -67,6 +79,8 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-phase-tabs"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
   })
 
   it('按阶段保存多个模板和目标机器角色', async () => {
@@ -288,5 +302,22 @@ describe('PipelineTemplateWizard', () => {
     expect((wrapper.find('[data-test="block-0-input-artifact"]').element as HTMLInputElement).value).toBe('${artifacts}/api.tar.gz')
     expect((wrapper.find('[data-test="block-0-file-from-0"]').element as HTMLInputElement).value).toBe('${output}/api')
     expect((wrapper.find('[data-test="block-0-file-to-0"]').element as HTMLInputElement).value).toBe('bin/api')
+  })
+
+  it('boolean 模板输入用 checkbox 编辑并保存字符串值', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: { modelValue: undefined, templates: [booleanTemplate] },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+
+    const checkbox = wrapper.find('[data-test="block-0-input-skip_http_check"]')
+    expect((checkbox.element as HTMLInputElement).type).toBe('checkbox')
+    await checkbox.setValue(true)
+    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
+
+    const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
+    expect(pipeline.deploy?.[0].with?.vars).toMatchObject({ skip_http_check: 'true' })
   })
 })

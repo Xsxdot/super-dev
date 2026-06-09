@@ -22,8 +22,8 @@ vi.mock('@/api/agent', async (importOriginal) => {
 
 vi.mock('@/components/Settings/ProjectPipelineEditor.vue', () => ({
   default: {
-    props: ['initialMode'],
-    template: '<div data-test="pipeline-editor" :data-mode="initialMode"><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>',
+    props: ['initialMode', 'pipelineId'],
+    template: '<div data-test="pipeline-editor" :data-mode="initialMode" :data-pipeline-id="pipelineId"><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>',
   },
 }))
 
@@ -53,7 +53,7 @@ function run(partial: Partial<Run> = {}): Run {
     status: 'success',
     step_runs: [],
     started_at: 1000,
-    finished_at: 2000,
+    finished_at: 11000,
     ...partial,
   }
 }
@@ -66,15 +66,30 @@ describe('PipelinesTab', () => {
     vi.mocked(api.listPipelineTemplates).mockResolvedValue({ items: [] })
   })
 
-  it('renders pipeline row and loads history when expanded', async () => {
+  it('renders console table, overview panel, and default history', async () => {
     const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     expect(wrapper.text()).toContain('Deploy Dev')
-    await wrapper.find('[data-test="pipeline-expand"]').trigger('click')
     await new Promise(r => setTimeout(r))
+    expect(wrapper.find('[data-test="pipeline-console-summary"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="pipeline-table-head"]').text()).toContain('流水线')
+    expect(wrapper.find('[data-test="pipeline-overview"]').text()).toContain('Deploy Dev')
+    expect(wrapper.find('[data-test="pipeline-latest-version"]').text()).toContain('v1')
+    expect(wrapper.find('[data-test="pipeline-latest-duration"]').text()).toContain('10s')
 
     expect(api.listProjectPipelineRuns).toHaveBeenCalledWith('p1', 'deploy-dev')
-    expect(wrapper.text()).toContain('v1')
+    expect(wrapper.find('[data-test="run-history"]').text()).toContain('v1')
+  })
+
+  it('shows failed pipeline count in console summary', async () => {
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
+      items: [run({ id: 'run-failed', status: 'failed', artifact_version: 'v2' })],
+    })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="pipeline-console-summary"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="pipeline-status"]').text()).toContain('failed')
   })
 
   it('deploys selected environment and navigates to live console', async () => {
@@ -108,7 +123,6 @@ describe('PipelinesTab', () => {
     vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-rollback', status: 'running' }))
     const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
-    await wrapper.find('[data-test="pipeline-expand"]').trigger('click')
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="run-rollback"]').trigger('click')
     await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
@@ -120,12 +134,44 @@ describe('PipelinesTab', () => {
     }))
   })
 
+  it('shows failed step summary in expanded history', async () => {
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
+      items: [run({
+        id: 'run-failed',
+        status: 'failed',
+        artifact_version: 'v2',
+        step_runs: [
+          { step_name: 'Deploy', type: 'include', phase: 'deploy', status: 'failed', tasks: [] },
+        ],
+      })],
+    })
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
+
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="run-failed-summary"]').text()).toContain('Deploy')
+  })
+
   it('opens existing ProjectPipelineEditor for edit', async () => {
     const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="pipeline-edit"]').trigger('click')
 
     expect(wrapper.find('[data-test="pipeline-editor"]').exists()).toBe(true)
+  })
+
+  it('passes selected pipeline id to editor', async () => {
+    const p = project()
+    p.pipelines = [
+      { id: 'deploy-dev', name: 'Deploy Dev', services: ['api'], artifact_kind: 'file', pipeline: {} },
+      { id: 'deploy-prod', name: 'Deploy Prod', services: ['api'], artifact_kind: 'file', pipeline: {} },
+    ]
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({ items: [] })
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+
+    await wrapper.findAll('[data-test="pipeline-edit"]')[1].trigger('click')
+
+    expect(wrapper.find('[data-test="pipeline-editor"]').attributes('data-pipeline-id')).toBe('deploy-prod')
   })
 
   it('空流水线时展示模板和空白创建入口', async () => {
