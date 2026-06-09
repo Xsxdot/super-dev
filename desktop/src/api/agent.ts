@@ -184,6 +184,11 @@ export interface Pipeline {
   finally?: PipelineStep[]
 }
 
+export interface PipelineReservedVariable {
+  name: string
+  description: string
+}
+
 export interface RuntimeConfig {
   type: RuntimeType
   command?: string
@@ -1201,6 +1206,7 @@ export const api = {
     ),
 
   // Pipeline 模板与预览
+  listPipelineReservedVariables: () => request<PipelineReservedVariable[]>('/api/pipeline/reserved-variables'),
   listPipelineTemplates: () => request<PipelineTemplatesResponse>('/api/pipeline/templates'),
   getPipelineTemplate: (source: PipelineTemplateSummary['source'], id: string, version: string) =>
     request<PipelineTemplateDetail>(

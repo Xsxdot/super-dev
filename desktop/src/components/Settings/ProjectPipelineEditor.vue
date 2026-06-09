@@ -17,6 +17,7 @@ import { Icon } from '@iconify/vue'
 import {
   api,
   type PipelinePreviewResponse,
+  type PipelineReservedVariable,
   type PipelineTemplateDetail,
   type PipelineTemplateSummary,
   type PipelinePhase,
@@ -51,9 +52,12 @@ const activePipeline = computed(() =>
 const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
-const yamlOpen = ref(false)
 // 全屏预览弹层开关：顶部「预览执行图」按钮触发，替代旧的底部预览窄带。
 const previewModalOpen = ref(false)
+const reservedVarsModalOpen = ref(false)
+const reservedVars = ref<PipelineReservedVariable[]>([])
+const reservedVarsLoading = ref(false)
+const reservedVarsError = ref('')
 const saveError = ref<string | null>(null)
 const pipelineForm = ref<InstanceType<typeof SingleProjectPipelineForm> | null>(null)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
@@ -110,16 +114,8 @@ function firstPipelineId() {
   return activePipeline.value?.id || 'pipeline-1'
 }
 
-function phaseBlockCount(phase: 'build' | 'deploy' | 'finally') {
-  return activePipeline.value?.pipeline?.[phase]?.length ?? 0
-}
-
 function phaseLabel(phase: PipelinePhase) {
   return t(`settings.pipeline.phases.${phase}`)
-}
-
-function phaseDisplayLabel(phase: PipelinePhase) {
-  return `${phaseLabel(phase).replace(/\s*Phase$/, '').replace(/阶段$/, '')} ${phase}`
 }
 
 function previewTarget(step: PipelineStep) {
@@ -219,6 +215,12 @@ function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
   return [...buildNodes, ...deployNodes, ...finallyNodes].slice(0, 5)
 }
 
+function isFullRowPreviewNode(index: number) {
+  return editorPreviewNodes.value.length > 1
+    && editorPreviewNodes.value.length % 4 === 1
+    && index === editorPreviewNodes.value.length - 1
+}
+
 const localPreviewNodes = computed(() => {
   const pipeline = activePipeline.value?.pipeline
   if (!pipeline) return []
@@ -243,54 +245,6 @@ const editorPreviewNodes = computed(() =>
     : localPreviewNodes.value,
 )
 
-const railItems = computed(() => {
-  const buildCount = phaseBlockCount('build')
-  const deployCount = phaseBlockCount('deploy')
-  const finallyCount = phaseBlockCount('finally')
-  return [
-    {
-      key: 'basic',
-      state: 'done',
-      icon: 'lucide:info',
-      title: t('settings.pipeline.basicInfo'),
-      hint: t('settings.pipeline.basicInfoHint'),
-      count: '',
-    },
-    {
-      key: 'build',
-      state: buildCount > 0 ? 'active' : '',
-      icon: 'lucide:wrench',
-      title: phaseDisplayLabel('build'),
-      hint: t('settings.pipeline.buildPhaseHint'),
-      count: `${buildCount} ${t('settings.pipeline.templateUnit')}`,
-    },
-    {
-      key: 'deploy',
-      state: buildCount === 0 && deployCount > 0 ? 'active' : '',
-      icon: 'lucide:rocket',
-      title: phaseDisplayLabel('deploy'),
-      hint: t('settings.pipeline.deployPhaseHint'),
-      count: `${deployCount} ${t('settings.pipeline.templateUnit')}`,
-    },
-    {
-      key: 'finally',
-      state: buildCount === 0 && deployCount === 0 && finallyCount > 0 ? 'active' : '',
-      icon: 'lucide:trash-2',
-      title: phaseDisplayLabel('finally'),
-      hint: t('settings.pipeline.cleanupPhaseHint'),
-      count: `${finallyCount} ${t('settings.pipeline.templateUnit')}`,
-    },
-    {
-      key: 'preview',
-      state: 'preview-item',
-      icon: 'lucide:eye',
-      title: t('settings.pipeline.previewAndSave'),
-      hint: t('settings.pipeline.previewHint'),
-      count: '',
-    },
-  ]
-})
-
 async function loadEditorPreview() {
   const pipeline = activePipeline.value
   if (!pipeline || !hasPreviewablePipeline()) return
@@ -307,6 +261,20 @@ async function loadEditorPreview() {
   }
 }
 
+async function openReservedVarsModal() {
+  reservedVarsModalOpen.value = true
+  if (reservedVars.value.length > 0 || reservedVarsLoading.value) return
+  reservedVarsLoading.value = true
+  reservedVarsError.value = ''
+  try {
+    reservedVars.value = await api.listPipelineReservedVariables()
+  } catch (e) {
+    reservedVarsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    reservedVarsLoading.value = false
+  }
+}
+
 function openPreviewModal() {
   previewModalOpen.value = true
   void loadEditorPreview()
@@ -316,25 +284,8 @@ function onPreviewKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') previewModalOpen.value = false
 }
 
-const pipelineYaml = computed(() => {
-  const pipeline = activePipeline.value
-  if (!pipeline) return ''
-  const services = (pipeline.services ?? []).map(service => `  - ${service}`).join('\n') || '  []'
-  return [
-    `id: ${pipeline.id}`,
-    `name: ${pipeline.name}`,
-    `artifact_kind: ${pipeline.artifact_kind || 'file'}`,
-    'services:',
-    services,
-    'pipeline:',
-    `  build: ${pipeline.pipeline?.build?.length ?? 0}`,
-    `  deploy: ${pipeline.pipeline?.deploy?.length ?? 0}`,
-    `  finally: ${pipeline.pipeline?.finally?.length ?? 0}`,
-  ].join('\n')
-})
-
-function saveTemplateConfig() {
-  pipelineForm.value?.saveTemplateConfig()
+function saveDraft() {
+  pipelineForm.value?.saveDraft()
 }
 
 async function viewTemplate(template: PipelineTemplateSummary, apply: () => void) {
@@ -399,9 +350,14 @@ async function save() {
           <span class="pipeline-editor-project-badge">{{ project.name }}</span>
         </div>
         <div class="pipeline-editor-header-actions">
-          <button type="button" class="settings-btn settings-btn-secondary" data-test="pipeline-editor-yaml" @click="yamlOpen = true">
-            <Icon icon="lucide:code-2" aria-hidden="true" />
-            {{ t('settings.pipeline.viewYaml') }}
+          <button
+            type="button"
+            class="settings-btn settings-btn-secondary"
+            data-test="pipeline-reserved-vars-open"
+            @click="openReservedVarsModal"
+          >
+            <Icon icon="lucide:list" aria-hidden="true" />
+            {{ t('settings.pipeline.reservedVariables') }}
           </button>
           <button
             type="button"
@@ -442,7 +398,6 @@ async function save() {
             <SingleProjectPipelineForm
               v-if="activePipeline"
               ref="pipelineForm"
-              with-structure-rail
               :pipeline="activePipeline"
               :services="draft.services"
               :hosts="hosts"
@@ -451,27 +406,7 @@ async function save() {
               hide-preview-strip
               :on-view-template="viewTemplate"
               @update:pipeline="updateActivePipeline"
-            >
-              <template #rail>
-                <aside class="pipeline-editor-rail" data-test="pipeline-editor-structure">
-                  <div class="rail-title">{{ t('settings.pipeline.editorStructure') }}</div>
-                  <div
-                    v-for="item in railItems"
-                    :key="item.key"
-                    class="rail-item"
-                    :class="item.state"
-                    :data-test="`pipeline-editor-rail-${item.key}`"
-                  >
-                    <span class="rail-icon"><Icon :icon="item.icon" aria-hidden="true" /></span>
-                    <span>
-                      <strong>{{ item.title }}</strong>
-                      <small>{{ item.hint }}</small>
-                    </span>
-                    <em v-if="item.count">{{ item.count }}</em>
-                  </div>
-                </aside>
-              </template>
-            </SingleProjectPipelineForm>
+            />
           </div>
         </div>
       </div>
@@ -487,10 +422,10 @@ async function save() {
           <button
             type="button"
             class="settings-btn settings-btn-primary"
-            data-test="pipeline-config-save-template"
-            @click="saveTemplateConfig"
+            data-test="pipeline-config-save-draft"
+            @click="saveDraft"
           >
-            {{ t('settings.pipeline.saveTemplateConfig') }}
+            {{ t('settings.pipeline.saveDraft') }}
           </button>
           <button
             type="button"
@@ -503,13 +438,6 @@ async function save() {
           </button>
         </div>
       </div>
-
-      <TemplateContentModal
-        :open="yamlOpen"
-        :title="t('settings.pipeline.yamlTitle')"
-        :yaml="pipelineYaml"
-        @close="yamlOpen = false"
-      />
 
       <TemplateContentModal
         :open="templateModalOpen"
@@ -526,6 +454,37 @@ async function save() {
         <div v-if="applyPreviewError" class="settings-alert settings-alert-danger err-list">{{ applyPreviewError }}</div>
         <PipelinePreview v-if="applyPreview" :preview="applyPreview" />
       </TemplateContentModal>
+
+      <div
+        v-if="reservedVarsModalOpen"
+        class="pipeline-preview-overlay"
+        data-test="pipeline-reserved-vars-modal"
+        @click.self="reservedVarsModalOpen = false"
+      >
+        <div class="pipeline-vars-modal">
+          <header class="preview-modal-head">
+            <h3>{{ t('settings.pipeline.reservedVariablesTitle') }}</h3>
+            <button
+              type="button"
+              class="preview-modal-close"
+              data-test="pipeline-reserved-vars-close"
+              @click="reservedVarsModalOpen = false"
+            >
+              ×
+            </button>
+          </header>
+          <div class="preview-modal-body">
+            <div v-if="reservedVarsLoading" class="settings-alert">{{ t('common.loading') }}</div>
+            <div v-else-if="reservedVarsError" class="settings-alert settings-alert-danger">{{ reservedVarsError }}</div>
+            <div v-else class="reserved-vars-list" data-test="pipeline-reserved-vars-list">
+              <article v-for="item in reservedVars" :key="item.name" class="reserved-var-row">
+                <code>{{ '${' + item.name + '}' }}</code>
+                <span>{{ item.description }}</span>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div
         v-if="previewModalOpen"
@@ -551,7 +510,11 @@ async function save() {
           <div class="preview-modal-body">
             <div class="preview-flow" data-test="pipeline-preview-flow">
               <template v-for="(node, i) in editorPreviewNodes" :key="node.id">
-                <div class="preview-node">
+                <div
+                  class="preview-node"
+                  :class="{ 'preview-node-full-row': isFullRowPreviewNode(i) }"
+                  data-test="pipeline-preview-node"
+                >
                   <div class="preview-node-phase">{{ phaseLabel(node.phase) }}</div>
                   <div class="preview-node-name">{{ node.name }}</div>
                   <div class="preview-node-target">{{ node.target }}</div>
@@ -604,8 +567,8 @@ async function save() {
 }
 .pipeline-editor-heading .settings-modal-title {
   overflow: hidden;
-  font-size: 20px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -620,8 +583,8 @@ async function save() {
   padding: 0 8px;
   background: #0b3c85;
   color: #7bb2ff;
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 650;
 }
 .pipeline-editor-header-actions {
   display: flex;
@@ -662,83 +625,6 @@ async function save() {
   min-height: 0;
   height: 100%;
 }
-.pipeline-editor-rail {
-  height: 100%;
-  border-right: 1px solid #263240;
-  padding: 12px 10px;
-  background: #111820;
-}
-.rail-title {
-  margin: 0 0 12px 4px;
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 700;
-}
-.rail-item {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 64px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  padding: 0 12px;
-  color: var(--text-secondary);
-  font-size: 14px;
-  background: #121923;
-}
-.rail-item + .rail-item {
-  margin-top: 8px;
-}
-.rail-item.active {
-  border-color: #1f7bff;
-  background: linear-gradient(135deg, rgba(31, 123, 255, 0.78), rgba(15, 94, 216, 0.72));
-  color: var(--text-primary);
-}
-.rail-item.done .rail-icon {
-  border-color: var(--status-success);
-  color: var(--status-success);
-}
-.rail-item.preview-item {
-  grid-template-columns: 28px minmax(0, 1fr) 10px;
-}
-.rail-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 50%;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 800;
-}
-.rail-icon svg {
-  width: 14px;
-  height: 14px;
-}
-.rail-item strong {
-  display: block;
-  color: var(--text-primary);
-  font-size: 14px;
-}
-.rail-item small {
-  display: block;
-  margin-top: 5px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-.rail-item em {
-  border-radius: 5px;
-  padding: 4px 7px;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: #9cc2ff;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 800;
-}
 .pipeline-editor-actions {
   position: relative;
   z-index: 2;
@@ -771,8 +657,8 @@ async function save() {
   gap: 7px;
   padding-left: 24px;
   color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 500;
   pointer-events: auto;
 }
 .pipeline-editor-footer-status svg:first-child {
@@ -797,6 +683,16 @@ async function save() {
   border-radius: 12px;
   background: var(--bg-secondary);
 }
+.pipeline-vars-modal {
+  display: flex;
+  width: min(720px, 92vw);
+  max-height: 78vh;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-secondary);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
 .preview-modal-head {
   display: flex;
   align-items: center;
@@ -807,8 +703,8 @@ async function save() {
 .preview-modal-head h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 650;
 }
 .preview-modal-sub {
   color: var(--text-tertiary);
@@ -841,6 +737,9 @@ async function save() {
   padding: 18px;
   background: var(--bg-tertiary);
 }
+.preview-node-full-row {
+  flex: 1 1 100%;
+}
 .preview-node-phase {
   color: var(--text-tertiary);
   font-size: 11px;
@@ -850,8 +749,8 @@ async function save() {
 .preview-node-name {
   margin: 8px 0 10px;
   color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 .preview-node-target {
   color: var(--text-tertiary);
@@ -868,13 +767,38 @@ async function save() {
 }
 .preview-empty {
   color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
 }
 .preview-error {
   margin-top: 14px;
   color: var(--status-failed);
   font-size: 12px;
+}
+.reserved-vars-list {
+  display: grid;
+  gap: 8px;
+}
+.reserved-var-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg-tertiary);
+}
+.reserved-var-row code {
+  color: #7bb2ff;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 650;
+}
+.reserved-var-row span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .err-list {
   margin: 0;
@@ -882,12 +806,12 @@ async function save() {
 }
 
 @media (max-width: 1100px) {
-  .pipeline-editor-rail {
-    display: none;
-  }
   .pipeline-editor-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+  .reserved-var-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

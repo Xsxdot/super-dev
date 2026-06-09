@@ -55,15 +55,63 @@ function setPipeline(pipeline: Pipeline | undefined) {
   patch({ pipeline: pipeline ?? {} })
 }
 
-function saveTemplateConfig() {
+function saveDraft() {
   wizard.value?.saveTemplate()
 }
 
-defineExpose({ saveTemplateConfig })
+defineExpose({ saveDraft })
 </script>
 
 <template>
   <section class="single-pipeline-form" :class="{ 'with-structure-rail': withStructureRail }">
+    <div class="single-pipeline-topbar" data-test="single-pipeline-form-topbar">
+      <div class="topbar-field name-field">
+        <label class="field-row">
+          <span>{{ t('settings.pipeline.name') }} / Pipeline name</span>
+          <input
+            class="settings-input"
+            data-test="single-pipeline-name"
+            :value="draft.name"
+            @input="patch({ name: ($event.target as HTMLInputElement).value })"
+          />
+        </label>
+      </div>
+
+      <div class="topbar-field">
+        <label class="field-row">
+          <span>{{ t('settings.pipeline.artifactKind') }} / Artifact kind</span>
+          <div class="artifact-segment" data-test="single-pipeline-artifact-kind">
+            <button
+              v-for="kind in (['file', 'image'] as ArtifactKind[])"
+              :key="kind"
+              type="button"
+              :class="{ active: (draft.artifact_kind || 'file') === kind }"
+              @click="patch({ artifact_kind: kind })"
+            >
+              {{ kind }}
+            </button>
+          </div>
+        </label>
+      </div>
+
+      <div class="topbar-field services-field">
+        <div class="field-row">
+          <span>{{ t('settings.pipeline.services') }} / Services</span>
+          <div class="service-list">
+            <label v-for="service in services" :key="service.id || service.name" class="service-item">
+              <input
+                type="checkbox"
+                :data-test="`single-pipeline-service-${service.name}`"
+                :checked="(draft.services ?? []).includes(service.name)"
+                @change="toggleService(service.name, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ service.name }}
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="single-pipeline-lower">
       <div v-if="withStructureRail" class="single-pipeline-rail-slot">
         <slot name="rail" />
@@ -79,57 +127,7 @@ defineExpose({ saveTemplateConfig })
           :hide-preview-strip="hidePreviewStrip"
           :on-view-template="onViewTemplate"
           @update:model-value="setPipeline"
-        >
-          <template #base>
-            <div class="single-pipeline-topbar" data-test="single-pipeline-form-topbar">
-              <div class="topbar-field name-field">
-                <label class="field-row">
-                  <span>{{ t('settings.pipeline.name') }} / Pipeline name</span>
-                  <input
-                    class="settings-input"
-                    data-test="single-pipeline-name"
-                    :value="draft.name"
-                    @input="patch({ name: ($event.target as HTMLInputElement).value })"
-                  />
-                </label>
-              </div>
-
-              <div class="topbar-field">
-                <label class="field-row">
-                  <span>{{ t('settings.pipeline.artifactKind') }} / Artifact kind</span>
-                  <div class="artifact-segment" data-test="single-pipeline-artifact-kind">
-                    <button
-                      v-for="kind in (['file', 'image'] as ArtifactKind[])"
-                      :key="kind"
-                      type="button"
-                      :class="{ active: (draft.artifact_kind || 'file') === kind }"
-                      @click="patch({ artifact_kind: kind })"
-                    >
-                      {{ kind }}
-                    </button>
-                  </div>
-                </label>
-              </div>
-
-              <div class="topbar-field services-field">
-                <div class="field-row">
-                  <span>{{ t('settings.pipeline.services') }} / Services</span>
-                  <div class="service-list">
-                    <label v-for="service in services" :key="service.id || service.name" class="service-item">
-                      <input
-                        type="checkbox"
-                        :data-test="`single-pipeline-service-${service.name}`"
-                        :checked="(draft.services ?? []).includes(service.name)"
-                        @change="toggleService(service.name, ($event.target as HTMLInputElement).checked)"
-                      />
-                      {{ service.name }}
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-        </PipelineTemplateWizard>
+        />
       </div>
     </div>
   </section>
@@ -138,7 +136,7 @@ defineExpose({ saveTemplateConfig })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -177,7 +175,7 @@ defineExpose({ saveTemplateConfig })
 .single-pipeline-main {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 .field-row {
   display: grid;
@@ -185,8 +183,8 @@ defineExpose({ saveTemplateConfig })
   align-items: start;
   gap: 8px;
   color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 500;
 }
 .service-list {
   display: flex;
@@ -204,8 +202,8 @@ defineExpose({ saveTemplateConfig })
   align-items: center;
   gap: 7px;
   color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
 }
 .service-item input,
 .target-item input,
@@ -226,8 +224,8 @@ defineExpose({ saveTemplateConfig })
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 .artifact-segment button + button {
   border-left: 1px solid var(--border-secondary);
@@ -235,7 +233,7 @@ defineExpose({ saveTemplateConfig })
 .artifact-segment button.active {
   background: linear-gradient(180deg, #2587ff, #176de9);
   color: #fff;
-  font-weight: 700;
+  font-weight: 600;
 }
 @media (max-width: 1040px) {
   .single-pipeline-topbar {

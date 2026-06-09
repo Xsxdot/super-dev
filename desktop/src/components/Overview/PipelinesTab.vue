@@ -51,10 +51,6 @@ const summaryItems = computed(() => [
   { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed', icon: 'lucide:circle-x' },
   { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running', icon: 'lucide:refresh-cw' },
 ])
-const overviewPipeline = computed(() =>
-  (props.project.pipelines ?? []).find(pipeline => pipeline.id === expanded.value) ?? props.project.pipelines?.[0] ?? null,
-)
-const overviewRuns = computed(() => overviewPipeline.value ? runsForPipeline(overviewPipeline.value) : [])
 
 onMounted(() => {
   void templateStore.loadTemplates().catch(() => undefined)
@@ -94,41 +90,6 @@ function recentTime(run?: Run | null) {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
-}
-
-function phaseCount(pipeline: ProjectPipeline | null, phase: 'build' | 'deploy' | 'finally') {
-  return pipeline?.pipeline?.[phase]?.length ?? 0
-}
-
-function includeSteps(pipeline: ProjectPipeline | null) {
-  const phases = [pipeline?.pipeline?.build ?? [], pipeline?.pipeline?.deploy ?? [], pipeline?.pipeline?.finally ?? []]
-  return phases.flat().filter(step => step.type === 'include').slice(0, 4)
-}
-
-function pipelineDescription(pipeline: ProjectPipeline | null) {
-  const services = pipeline?.services ?? []
-  if (services.length === 0) return '--'
-  return t('overview.pipeline.pipelineDescription', { services: services.join(' + ') })
-}
-
-function templateMeta(step: { with?: Record<string, unknown> }) {
-  const template = typeof step.with?.template === 'string' ? step.with.template : ''
-  const version = typeof step.with?.version === 'string' ? step.with.version : ''
-  const source = template.includes('://') ? template.split('://')[0] : 'builtin'
-  return [source, version].filter(Boolean).join(' · ') || '--'
-}
-
-function latestArtifact(pipeline: ProjectPipeline | null) {
-  if (!pipeline) return null
-  return latestRun(pipeline)
-}
-
-function phaseCountItems(pipeline: ProjectPipeline | null) {
-  return [
-    { phase: 'build' as const, label: t('settings.pipeline.phases.build'), count: phaseCount(pipeline, 'build') },
-    { phase: 'deploy' as const, label: t('settings.pipeline.phases.deploy'), count: phaseCount(pipeline, 'deploy') },
-    { phase: 'finally' as const, label: t('settings.pipeline.phases.finally'), count: phaseCount(pipeline, 'finally') },
-  ]
 }
 
 function pipelineRunKey(projectId: string, pipelineId: string) {
@@ -319,60 +280,6 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
           </div>
         </div>
       </div>
-
-      <aside v-if="overviewPipeline" class="pipeline-overview-card" data-test="pipeline-overview">
-        <h3>{{ t('overview.pipeline.overviewTitle') }}</h3>
-        <dl>
-          <div>
-            <dt>{{ t('settings.pipeline.name') }}</dt>
-            <dd>{{ overviewPipeline.name }}</dd>
-          </div>
-          <div>
-            <dt>{{ t('settings.pipeline.artifactKind') }}</dt>
-            <dd>{{ overviewPipeline.artifact_kind || 'file' }}</dd>
-          </div>
-          <div>
-            <dt>{{ t('settings.pipeline.services') }}</dt>
-            <dd>{{ (overviewPipeline.services ?? []).join(', ') || '--' }}</dd>
-          </div>
-          <div>
-            <dt>{{ t('overview.pipeline.descriptionLabel') }}</dt>
-            <dd>{{ pipelineDescription(overviewPipeline) }}</dd>
-          </div>
-        </dl>
-
-        <div class="overview-section">
-          <div class="overview-section-title">{{ t('overview.pipeline.phasesTitle') }}</div>
-          <div class="overview-phase-list" data-test="pipeline-overview-phases">
-            <div v-for="item in phaseCountItems(overviewPipeline)" :key="item.phase" class="phase-count" :class="`phase-${item.phase}`">
-              <span>{{ item.label }} <small>{{ item.phase }}</small></span>
-              <strong>{{ item.count }}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div class="overview-section">
-          <div class="overview-section-title">{{ t('overview.pipeline.templatesTitle') }}</div>
-          <div v-if="includeSteps(overviewPipeline).length === 0" class="overview-empty">--</div>
-          <div v-for="step in includeSteps(overviewPipeline)" :key="step.name" class="template-chip">
-            <strong>{{ step.name }}</strong>
-            <small>{{ templateMeta(step) }}</small>
-          </div>
-        </div>
-
-        <div v-if="latestArtifact(overviewPipeline)" class="overview-section">
-          <div class="overview-section-title">{{ t('overview.pipeline.latestArtifact') }}</div>
-          <div class="artifact-card">
-            <Icon class="artifact-file-icon" icon="lucide:file-archive" aria-hidden="true" />
-            <div class="artifact-file-copy">
-              <div class="artifact-file-name">{{ latestArtifact(overviewPipeline)?.artifact_version || '--' }}</div>
-              <div class="artifact-file-meta">
-                {{ overviewRuns.length }} {{ t('overview.pipeline.historyTitle') }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
     </div>
     <div v-if="hasPipelines" class="pipeline-timezone" data-test="pipeline-timezone">
       {{ t('overview.pipeline.timezone') }}
@@ -419,20 +326,20 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .pipeline-console-subtitle {
   color: var(--text-tertiary);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
 }
 .pipeline-console-title {
   color: var(--text-primary);
-  font-size: 28px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 700;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: 1.2;
 }
 .pipeline-console-actions {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 12px;
 }
 .pipeline-console-summary {
   display: grid;
@@ -448,22 +355,22 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipeline-stat {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 64px;
-  padding: 0 32px;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 24px;
 }
 .pipeline-stat + .pipeline-stat {
   border-left: 1px solid rgba(29, 39, 51, 0.98);
 }
 .pipeline-stat strong {
   color: var(--text-primary);
-  font-size: 23px;
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 700;
 }
 .pipeline-stat span:last-child {
   color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 .pipeline-stat:not(:first-child) strong {
@@ -473,8 +380,8 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   order: 2;
 }
 .pipeline-stat-icon {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   color: var(--text-tertiary);
 }
 .tone-success .pipeline-stat-icon,
@@ -491,19 +398,15 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .pipeline-console-grid {
   display: grid;
-  grid-template-columns: minmax(860px, 1fr) 286px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
-.pipeline-table-card,
-.pipeline-overview-card {
+.pipeline-table-card {
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
+  overflow: hidden;
   background: #0b1118;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 48px rgba(0, 0, 0, 0.14);
-}
-.pipeline-table-card {
-  overflow: hidden;
 }
 .pipeline-table-scroll {
   width: 100%;
@@ -535,131 +438,27 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   border-bottom: 1px solid var(--border-secondary);
   background: #0e151d;
   color: var(--text-tertiary);
-  font-size: 14px;
-  font-weight: 700;
-}
-.pipeline-overview-card {
-  align-self: start;
-  padding: 18px 16px;
-  background: #0e151d;
-}
-.pipeline-overview-card h3 {
-  margin: 0 0 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border-secondary);
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 800;
-}
-.pipeline-overview-card dl {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border-secondary);
-}
-.pipeline-overview-card dt {
-  color: var(--text-tertiary);
-  font-size: 14px;
-  font-weight: 650;
-}
-.pipeline-overview-card dd {
-  margin: 4px 0 13px;
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.4;
-}
-.overview-section {
-  padding-top: 12px;
-}
-.overview-section + .overview-section {
-  border-top: 1px solid var(--border-secondary);
-  margin-top: 12px;
-}
-.overview-section-title {
-  margin-bottom: 10px;
-  color: var(--text-tertiary);
-  font-size: 14px;
-  font-weight: 700;
-}
-.overview-phase-list {
-  display: grid;
-  gap: 0;
-}
-.phase-count {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 26px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-.phase-count::before {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #1f7bff;
-}
-.phase-count.phase-deploy::before {
-  background: #47d764;
-}
-.phase-count.phase-finally::before {
-  background: #9f6cff;
-}
-.phase-count small {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-.template-chip {
-  display: grid;
-  gap: 4px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  padding: 10px;
-  background: #121923;
-  color: var(--text-secondary);
   font-size: 12px;
-}
-.template-chip strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.template-chip small {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-.template-chip + .template-chip {
-  margin-top: 7px;
-}
-.overview-empty {
-  color: var(--text-tertiary);
-  font-size: 12px;
+  font-weight: 500;
 }
 .pipeline-add-btn,
 .pipeline-refresh-btn,
 .deploy-dialog button {
-  height: 40px;
+  height: 36px;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 .pipeline-add-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-width: 98px;
-  padding: 0 22px;
+  min-width: 82px;
+  padding: 0 16px;
   border-color: var(--accent);
   background: linear-gradient(180deg, #2385ff 0%, #1669e3 100%);
   color: #fff;
@@ -675,7 +474,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .pipeline-refresh-btn {
   display: inline-grid;
   place-items: center;
-  width: 50px;
+  width: 40px;
   padding: 0;
   color: var(--text-secondary);
 }
@@ -703,7 +502,8 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 }
 .pipeline-empty-card h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 650;
 }
 .pipeline-empty-card p {
   max-width: 560px;
@@ -753,40 +553,10 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   color: var(--status-failed);
   font-size: 12px;
 }
-.artifact-card {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 7px;
-  padding: 10px;
-  background: #121923;
-}
-.artifact-file-icon {
-  width: 19px;
-  height: 19px;
-  color: var(--text-tertiary);
-}
-.artifact-file-copy {
-  min-width: 0;
-}
-.artifact-file-name {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-file-meta {
-  margin-top: 6px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
 .pipeline-timezone {
   margin: 24px 0 20px;
   color: var(--text-tertiary);
-  font-size: 14px;
+  font-size: 12px;
   text-align: center;
 }
 @keyframes pipeline-spin {
@@ -805,9 +575,6 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   }
   .pipeline-console-grid {
     grid-template-columns: 1fr;
-  }
-  .pipeline-overview-card {
-    display: none;
   }
 }
 </style>

@@ -117,7 +117,7 @@ function statusIcon() {
   background: #121923;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px;
 }
 .icon-btn {
   display: inline-grid;
@@ -138,14 +138,14 @@ function statusIcon() {
   background: linear-gradient(180deg, #2385ff 0%, #1669e3 100%);
   border-color: transparent;
   color: #fff;
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 .text-action {
   width: 34px;
   background: transparent;
   border-color: transparent;
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 .more-action {
@@ -193,8 +193,8 @@ function statusIcon() {
 }
 .pipeline-name {
   overflow: hidden;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -212,7 +212,7 @@ function statusIcon() {
   overflow: hidden;
   background: #151e29;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -230,8 +230,8 @@ function statusIcon() {
   height: 30px;
   padding: 0 8px;
   color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 .status-icon {
   width: 14px;
@@ -259,7 +259,7 @@ function statusIcon() {
 .pipeline-time {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

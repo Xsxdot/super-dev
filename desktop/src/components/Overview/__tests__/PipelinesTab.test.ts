@@ -68,7 +68,7 @@ describe('PipelinesTab', () => {
     vi.mocked(api.listPipelineTemplates).mockResolvedValue({ items: [] })
   })
 
-  it('renders console table, overview panel, and default history', async () => {
+  it('renders console table without the removed overview panel and shows default history', async () => {
     const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     expect(wrapper.text()).toContain('Deploy Dev')
@@ -79,8 +79,7 @@ describe('PipelinesTab', () => {
     expect(wrapper.find('[data-test="pipeline-refresh"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-table-scroll"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-table-head"]').text()).toContain('流水线')
-    expect(wrapper.find('[data-test="pipeline-overview"]').text()).toContain('Deploy Dev')
-    expect(wrapper.find('[data-test="pipeline-overview-phases"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-overview"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-artifact-download"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-latest-version"]').text()).toContain('v1')
     expect(wrapper.find('[data-test="pipeline-latest-duration"]').text()).toContain('10s')

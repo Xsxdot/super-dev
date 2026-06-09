@@ -40,7 +40,7 @@ type TemplateBlock = {
 }
 
 type HostOption = { id: string; name: string }
-type WizardStation = 'base' | PipelinePhase
+type WizardStation = PipelinePhase
 
 const props = defineProps<{
   modelValue?: Pipeline
@@ -68,6 +68,7 @@ const activePhase = ref<PipelinePhase>('build')
 const activeStation = ref<WizardStation>('build')
 const draggingBlockId = ref<string | null>(null)
 const nextBlockId = ref(0)
+const expandedRunnerBlockIDs = ref<Set<string>>(new Set())
 const { t } = useAppI18n()
 
 const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(block => {
@@ -158,6 +159,9 @@ function addBlock(phase: PipelinePhase) {
 
 function removeBlock(block: TemplateBlock) {
   blocks.value = blocks.value.filter(item => item !== block)
+  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
+  nextExpanded.delete(block.id)
+  expandedRunnerBlockIDs.value = nextExpanded
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
   }
@@ -220,6 +224,7 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
   activePhase.value = 'build'
   activeStation.value = 'build'
   nextBlockId.value = 0
+  expandedRunnerBlockIDs.value = new Set()
   if (!pipeline) return
   for (const phase of phases) {
     for (const step of pipeline[phase] ?? []) {
@@ -302,8 +307,28 @@ function compactRunnerHosts(block: TemplateBlock) {
   return [...byID.values()]
 }
 
+function isRunnerHostsExpanded(block: TemplateBlock) {
+  return expandedRunnerBlockIDs.value.has(block.id)
+}
+
+function visibleRunnerHosts(block: TemplateBlock) {
+  return isRunnerHostsExpanded(block) ? props.hosts ?? [] : compactRunnerHosts(block)
+}
+
+function hasHiddenRunnerHosts(block: TemplateBlock) {
+  return (props.hosts?.length ?? 0) > compactRunnerHosts(block).length
+}
+
 function hiddenRunnerHostCount(block: TemplateBlock) {
+  if (isRunnerHostsExpanded(block)) return 0
   return Math.max(0, (props.hosts?.length ?? 0) - compactRunnerHosts(block).length)
+}
+
+function toggleRunnerHostsExpanded(block: TemplateBlock) {
+  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
+  if (nextExpanded.has(block.id)) nextExpanded.delete(block.id)
+  else nextExpanded.add(block.id)
+  expandedRunnerBlockIDs.value = nextExpanded
 }
 
 function updateHostSelection(values: string[], host: HostOption, checked: boolean) {
@@ -387,10 +412,6 @@ function selectPhase(phase: PipelinePhase) {
 }
 
 function selectStation(station: WizardStation) {
-  if (station === 'base') {
-    activeStation.value = station
-    return
-  }
   selectPhase(station)
 }
 
@@ -479,16 +500,6 @@ defineExpose({ saveTemplate })
 
       <div class="phase-tabs" data-test="pipeline-phase-tabs">
         <button
-          type="button"
-          class="base-tab"
-          :class="{ active: activeStation === 'base' }"
-          data-test="pipeline-station-base"
-          @click="selectStation('base')"
-        >
-          <span class="station-token">ⓘ</span>
-          {{ t('settings.pipeline.baseInfo') }}
-        </button>
-        <button
           v-for="(phase, index) in phases"
           :key="phase"
           type="button"
@@ -501,11 +512,7 @@ defineExpose({ saveTemplate })
         </button>
       </div>
 
-        <section v-if="activeStation === 'base'" class="wizard-base-panel" data-test="pipeline-wizard-base">
-          <slot name="base" />
-        </section>
-
-        <div v-else class="wizard-layout">
+        <div class="wizard-layout">
           <div class="wizard-main" data-test="pipeline-wizard-canvas">
             <div v-if="templates.length === 0" class="pipeline-empty">
               {{ t('settings.pipeline.emptyTemplates') }}
@@ -580,7 +587,7 @@ defineExpose({ saveTemplate })
                 <h4>{{ t('settings.pipeline.machine') }} / Runner machines <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span></h4>
                 <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
                 <div v-else class="target-list target-grid" :data-test="`block-${activeBlock.id}-runner-targets`">
-                  <label v-for="host in compactRunnerHosts(activeBlock)" :key="host.id" class="target-item">
+                  <label v-for="host in visibleRunnerHosts(activeBlock)" :key="host.id" class="target-item">
                     <input
                       type="checkbox"
                       :data-test="`block-${activeBlock.id}-runner-${host.id}`"
@@ -589,7 +596,16 @@ defineExpose({ saveTemplate })
                     />
                     {{ host.name }}
                   </label>
-                  <span v-if="hiddenRunnerHostCount(activeBlock) > 0" class="target-more">+{{ hiddenRunnerHostCount(activeBlock) }}</span>
+                  <button
+                    v-if="hasHiddenRunnerHosts(activeBlock)"
+                    type="button"
+                    class="target-more"
+                    :data-test="`block-${activeBlock.id}-runner-more`"
+                    :title="isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : t('settings.pipeline.machineMore', { count: hiddenRunnerHostCount(activeBlock) })"
+                    @click="toggleRunnerHostsExpanded(activeBlock)"
+                  >
+                    {{ isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : `+${hiddenRunnerHostCount(activeBlock)}` }}
+                  </button>
                 </div>
 
                 <div v-for="[name, input] in activeBlockTargetInputs" :key="name" class="template-input-row">
@@ -730,7 +746,7 @@ defineExpose({ saveTemplate })
 <style scoped>
 .pipeline-wizard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 504px;
+  grid-template-columns: minmax(360px, 1fr) minmax(560px, 2fr);
   grid-template-rows: 54px minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
@@ -764,8 +780,8 @@ defineExpose({ saveTemplate })
 .phase-tabs {
   grid-column: 1 / -1;
   grid-row: 1;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  gap: 0;
   height: 54px;
   border: 0;
   border-bottom: 1px solid #263240;
@@ -773,22 +789,27 @@ defineExpose({ saveTemplate })
   margin: 0;
   padding: 10px;
   max-width: none;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #0e151d;
+  scrollbar-width: thin;
 }
 .phase-tabs button {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
+  min-width: 150px;
   height: 34px;
+  padding: 0 16px;
   border: 1px solid #263240;
   border-radius: 0;
   background: #0e151d;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 .phase-tabs button:first-child {
   border-radius: 5px 0 0 5px;
@@ -814,16 +835,7 @@ defineExpose({ saveTemplate })
   background: rgba(139, 148, 158, 0.14);
   color: inherit;
   font-size: 11px;
-  font-weight: 800;
-}
-.wizard-base-panel {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  border-top: 0;
-  background: #0e151d;
+  font-weight: 600;
 }
 .wizard-layout {
   display: contents;
@@ -844,20 +856,20 @@ defineExpose({ saveTemplate })
 }
 .wizard-detail-panel {
   grid-column: 2;
-  grid-row: 1 / span 4;
+  grid-row: 2;
   min-width: 0;
   max-height: 100%;
   overflow: auto;
   border-left: 0;
-  padding: 12px 16px 54px;
+  padding: 26px 28px 54px;
   background: #121922;
   font-size: 13px;
   scrollbar-color: rgba(139, 148, 158, 0.38) rgba(13, 18, 26, 0.72);
 }
 .detail-title {
   color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 650;
 }
 .detail-subtitle {
   margin-top: 5px;
@@ -895,12 +907,13 @@ defineExpose({ saveTemplate })
   display: block;
   min-height: 0;
   color: var(--text-primary);
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 650;
 }
 .phase-head small {
   color: var(--text-tertiary);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
 }
 .phase-head .text-btn {
   float: right;
@@ -946,31 +959,39 @@ defineExpose({ saveTemplate })
 .template-block {
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
-  padding: 12px;
+  padding: 10px 12px;
   margin-top: 12px;
   background: #0d131b;
   cursor: pointer;
 }
 .template-block.active {
   border-color: #1f7bff;
-  box-shadow: inset 0 0 0 1px rgba(31, 123, 255, 0.22);
+  background: rgba(31, 123, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(31, 123, 255, 0.26);
 }
 .template-block.dragging {
   opacity: 0.64;
 }
 .block-row {
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 18px 24px auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 8px;
 }
 .block-grip {
+  grid-column: 1;
+  grid-row: 1 / span 2;
   color: var(--text-tertiary);
   font-size: 16px;
   line-height: 0.8;
 }
 .block-order {
-  flex: 0 0 auto;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: center;
   color: var(--text-tertiary);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
 }
 .block-cube,
 .preview-node-icon {
@@ -983,6 +1004,8 @@ defineExpose({ saveTemplate })
   border-radius: 5px;
 }
 .block-cube {
+  grid-column: 2;
+  grid-row: 1;
   border-color: #9fb4d2;
   color: #9fb4d2;
 }
@@ -992,20 +1015,33 @@ defineExpose({ saveTemplate })
   height: 13px;
 }
 .block-row .field-input {
-  flex: 1;
+  grid-column: 4;
+  grid-row: 1;
   min-width: 0;
+  height: 28px;
+  padding: 0;
   border-color: transparent;
   background: transparent;
   color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 650;
+}
+.block-row .text-btn {
+  grid-column: 5;
+  grid-row: 1;
+  justify-self: start;
+}
+.block-row .danger-btn {
+  grid-column: 6;
+  grid-row: 1;
+  justify-self: end;
 }
 .field-label {
   display: block;
-  font-size: 13px;
+  font-size: 11px;
   color: var(--text-secondary);
   margin: 0;
-  font-weight: 600;
+  font-weight: 500;
 }
 .form-block {
   margin-bottom: 10px;
@@ -1013,8 +1049,8 @@ defineExpose({ saveTemplate })
 .form-block h4 {
   margin: 0 0 6px;
   color: #f3f6fb;
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 600;
 }
 .template-input-row {
   display: grid;
@@ -1071,9 +1107,21 @@ defineExpose({ saveTemplate })
   height: 20px;
   border: 1px solid var(--border-secondary);
   border-radius: 999px;
+  padding: 0 8px;
+  background: transparent;
   color: var(--text-tertiary);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
+}
+.target-more:hover {
+  border-color: #1f7bff;
+  color: #d8e6ff;
+}
+.target-more:focus-visible {
+  outline: 2px solid rgba(31, 123, 255, 0.7);
+  outline-offset: 2px;
 }
 .file-list {
   display: flex;
@@ -1156,7 +1204,7 @@ defineExpose({ saveTemplate })
   margin-bottom: 12px;
   color: var(--text-primary);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 .preview-strip-head small {
   color: var(--text-tertiary);
@@ -1217,7 +1265,7 @@ defineExpose({ saveTemplate })
   color: var(--text-tertiary);
   font-size: 12px;
 }
-@media (max-width: 1280px) {
+@media (max-width: 960px) {
   .pipeline-wizard {
     grid-template-columns: 1fr;
   }
@@ -1263,11 +1311,35 @@ defineExpose({ saveTemplate })
     border-left: 0;
     border-top: 1px solid var(--border-secondary);
   }
-  .block-row,
   .template-input-row,
   .template-runner-row {
     display: grid;
     grid-template-columns: 1fr;
+  }
+  .block-row {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+  .block-grip {
+    display: none;
+  }
+  .block-cube {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .block-order {
+    display: none;
+  }
+  .block-row .field-input {
+    grid-column: 2 / 4;
+    grid-row: 1;
+  }
+  .block-row .text-btn {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .block-row .danger-btn {
+    grid-column: 3;
+    grid-row: 2;
   }
   .template-runner-row .field-help,
   .template-runner-row .target-list {

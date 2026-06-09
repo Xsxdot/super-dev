@@ -12,6 +12,10 @@ vi.mock('@/api/agent', async () => {
     api: {
       ...actual.api,
       listHosts: vi.fn().mockResolvedValue([{ id: 'h1', name: 'host-1' }]),
+      listPipelineReservedVariables: vi.fn().mockResolvedValue([
+        { name: 'artifacts', description: '本次运行的产物输出目录' },
+        { name: 'workspace', description: '当前项目根目录' },
+      ]),
       putProjectSetup: vi.fn().mockResolvedValue({ id: 'p1' }),
       listProjects: vi.fn().mockResolvedValue([]),
       previewProjectPipeline: vi.fn().mockResolvedValue({
@@ -185,21 +189,21 @@ describe('ProjectPipelineEditor', () => {
     await new Promise(r => setTimeout(r))
 
     expect(wrapper.text()).toContain('编辑流水线 · Deploy')
-    expect(wrapper.find('[data-test="pipeline-editor-yaml"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-yaml"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-editor-close"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-shell"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-scroll"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(true)
-    await wrapper.find('[data-test="pipeline-station-base"]').trigger('click')
+    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="single-pipeline-name"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="single-pipeline-artifact-kind"]').exists()).toBe(true)
     await wrapper.find('[data-test="pipeline-phase-tab-build"]').trigger('click')
-    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-preview-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-reserved-vars-open"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-editor-preview"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-config-save-template"]').classes()).toContain('settings-btn-primary')
+    expect(wrapper.find('[data-test="pipeline-config-save-draft"]').text()).toContain('保存流水线草稿')
   })
 
   it('编辑已有流水线时渲染可操作的阶段编排区和模板输入区', async () => {
@@ -225,7 +229,7 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="wizard-preview-strip"]').exists()).toBe(false)
   })
 
-  it('左侧结构 rail 展示当前流水线真实阶段模板数量', async () => {
+  it('移除外层结构 rail 后保留完整阶段导航', async () => {
     const wrapper = mount(ProjectPipelineEditor, {
       props: {
         project: projectWithUnevenPhaseCounts(),
@@ -236,10 +240,16 @@ describe('ProjectPipelineEditor', () => {
     })
     await new Promise(r => setTimeout(r))
 
-    expect(wrapper.find('[data-test="pipeline-editor-rail-build"]').text()).toContain('2 模板')
-    expect(wrapper.find('[data-test="pipeline-editor-rail-deploy"]').text()).toContain('0 模板')
-    expect(wrapper.find('[data-test="pipeline-editor-rail-finally"]').text()).toContain('1 模板')
-    expect(wrapper.find('[data-test="pipeline-editor-rail-build"] .rail-icon svg').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-editor-structure"]').exists()).toBe(false)
+    const stationTests = wrapper
+      .find('[data-test="pipeline-phase-tabs"]')
+      .findAll('button')
+      .map(button => button.attributes('data-test'))
+    expect(stationTests).toEqual([
+      'pipeline-phase-tab-build',
+      'pipeline-phase-tab-deploy',
+      'pipeline-phase-tab-finally',
+    ])
   })
 
   it('编辑已有流水线时优先展示后端展开后的预览步骤', async () => {
@@ -319,6 +329,96 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
   })
 
+  it('预览执行图换行后孤立节点占满整行', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.previewProjectPipeline).mockResolvedValue({
+      run: {
+        deployment_id: 'project:p1:pipeline:deploy-server-admin-prod:env:dev',
+        status: 'pending',
+        step_runs: [
+          { step_name: 'Vue + Go 组合构建.Build Frontend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Vue + Go 组合构建.Build Backend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Vue + Go 组合构建.Package', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Systemd 无缝部署.Restart', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+          { step_name: 'Health Check', type: 'http_check', phase: 'finally', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+        ],
+      },
+    })
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="pipeline-preview-open"]').trigger('click')
+    await flushPromises()
+
+    const nodes = wrapper.findAll('[data-test="pipeline-preview-node"]')
+    expect(nodes).toHaveLength(5)
+    expect(nodes.at(-1)?.classes()).toContain('preview-node-full-row')
+  })
+
+  it('点击保留变量按钮后列出变量名和作用', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="pipeline-reserved-vars-open"]').trigger('click')
+    await flushPromises()
+
+    expect(api.listPipelineReservedVariables).toHaveBeenCalled()
+    expect(wrapper.find('[data-test="pipeline-reserved-vars-modal"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-reserved-vars-list"]').text()).toContain('workspace')
+    expect(wrapper.find('[data-test="pipeline-reserved-vars-list"]').text()).toContain('当前项目根目录')
+  })
+
+  it('保存草稿只同步模板输入，最终保存仍由保存按钮落盘', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="block-0-input-frontend_dir"]').setValue('${workspace}/client')
+    await wrapper.find('[data-test="pipeline-config-save-draft"]').trigger('click')
+    expect(api.putProjectSetup).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-test="pipeline-config-save"]').trigger('click')
+    await flushPromises()
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      pipelines: expect.arrayContaining([
+        expect.objectContaining({
+          pipeline: expect.objectContaining({
+            build: expect.arrayContaining([
+              expect.objectContaining({
+                with: expect.objectContaining({
+                  vars: expect.objectContaining({ frontend_dir: '${workspace}/client' }),
+                }),
+              }),
+            ]),
+          }),
+        }),
+      ]),
+    }))
+  })
+
   it('Esc 关闭预览弹层', async () => {
     const wrapper = mount(ProjectPipelineEditor, {
       props: {
@@ -344,7 +444,6 @@ describe('ProjectPipelineEditor', () => {
     const wrapper = mountProjectPipelineEditor()
     await new Promise(r => setTimeout(r))
 
-    await wrapper.find('[data-test="pipeline-station-base"]').trigger('click')
     await wrapper.find('[data-test="single-pipeline-name"]').setValue('Deploy Dev')
     await wrapper.find('[data-test="pipeline-config-save"]').trigger('click')
     await new Promise(r => setTimeout(r))

@@ -599,6 +599,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
 
 	// Pipeline 模板与预览
+	mux.HandleFunc("GET /api/pipeline/reserved-variables", a.listPipelineReservedVariables)
 	mux.HandleFunc("GET /api/pipeline/templates", a.listPipelineTemplates)
 	mux.HandleFunc("GET /api/pipeline/templates/{source}/{id}", a.getPipelineTemplate)
 	mux.HandleFunc("POST /api/pipeline/templates/preview", a.previewPipelineTemplate)

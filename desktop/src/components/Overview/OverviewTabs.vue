@@ -52,10 +52,10 @@ const { t } = useAppI18n()
 .overview-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  width: min(386px, 100%);
-  height: 56px;
+  width: min(330px, 100%);
+  height: 44px;
   gap: 0;
-  padding: 4px;
+  padding: 3px;
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
   background: #0e141d;
@@ -63,15 +63,15 @@ const { t } = useAppI18n()
 }
 .overview-tabs button {
   min-width: 0;
-  height: 46px;
-  padding: 0 18px;
+  height: 36px;
+  padding: 0 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 650;
 }
 .overview-tabs button.active {
   background: rgba(38, 46, 58, 0.9);

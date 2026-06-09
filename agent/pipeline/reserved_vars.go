@@ -21,15 +21,21 @@ import (
 // PreviewRunTempDir 是流水线预览使用的稳定临时目录。
 const PreviewRunTempDir = "/tmp/super-debug-pipeline-preview"
 
-var reservedVariableNames = map[string]bool{
-	"workspace":    true,
-	"output":       true,
-	"artifacts":    true,
-	"version":      true,
-	"env":          true,
-	"date":         true,
-	"time":         true,
-	"run_temp_dir": true,
+var reservedVariables = map[string]string{
+	"workspace":    "当前项目根目录，用于在模板中引用仓库工作目录。",
+	"output":       "本次运行的输出目录，适合写入临时结果或中间产物。",
+	"artifacts":    "本次运行的产物目录，构建模板应把归档或镜像元数据写到这里。",
+	"version":      "本次发布版本，运行入口可传入，未传入时保持为空。",
+	"env":          "当前部署环境名称，用于区分 dev、prod 等环境。",
+	"date":         "运行日期，格式为 yyyyMMdd。",
+	"time":         "运行时间，格式为 HHmmss。",
+	"run_temp_dir": "本次运行的临时根目录，output 和 artifacts 都从这里派生。",
+}
+
+// ReservedVariableInfo 描述一个流水线运行时保留变量。
+type ReservedVariableInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // ReservedVarOptions 描述保留变量派生所需的上下文。
@@ -57,12 +63,31 @@ type ReservedVarOptions struct {
 // 注意：
 //   - 返回稳定顺序，便于错误信息和测试断言
 func ReservedVariableNames() []string {
-	names := make([]string, 0, len(reservedVariableNames))
-	for name := range reservedVariableNames {
+	names := make([]string, 0, len(reservedVariables))
+	for name := range reservedVariables {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ReservedVariableInfos 返回所有保留变量及用途说明。
+//
+// 返回：
+//   - 按变量名字典序排序的保留变量元数据
+//
+// 注意：
+//   - 该列表是 UI 展示和用户变量冲突校验共用的源头
+func ReservedVariableInfos() []ReservedVariableInfo {
+	names := ReservedVariableNames()
+	out := make([]ReservedVariableInfo, 0, len(names))
+	for _, name := range names {
+		out = append(out, ReservedVariableInfo{
+			Name:        name,
+			Description: reservedVariables[name],
+		})
+	}
+	return out
 }
 
 // RejectReservedVariableOverrides 检查用户变量是否覆盖保留变量。

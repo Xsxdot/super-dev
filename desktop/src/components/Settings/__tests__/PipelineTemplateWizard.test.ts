@@ -99,13 +99,13 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
     expect(wrapper.find('.pipeline-wizard > template').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="add-template-build"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-phase-tabs"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
   })
 
-  it('基础信息 station 通过 slot 与阶段编排切换', async () => {
+  it('阶段导航只展示流水线阶段，不再渲染基础信息 slot', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: { modelValue: undefined, templates: [buildTemplate], initialMode: 'template' },
       slots: { base: '<div data-test="base-fields">基础字段</div>' },
@@ -113,14 +113,7 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(true)
-
-    await wrapper.find('[data-test="pipeline-station-base"]').trigger('click')
-    expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(false)
-
-    await wrapper.find('[data-test="pipeline-phase-tab-build"]').trigger('click')
-    expect(wrapper.find('[data-test="base-fields"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-phase-tabs"]').findAll('button')).toHaveLength(3)
   })
 
   it('左栏一次只渲染当前阶段', async () => {
@@ -260,6 +253,36 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="block-0-runner-targets"]').classes()).toContain('target-grid')
     expect(wrapper.find('[data-test="block-0-role-targets"]').classes()).toContain('target-grid')
+  })
+
+  it('可展开隐藏的运行机器并选择保存', async () => {
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate],
+        hosts: [
+          { id: 'h1', name: 'Host 1' },
+          { id: 'h2', name: 'Host 2' },
+          { id: 'h3', name: 'Host 3' },
+          { id: 'h4', name: 'Host 4' },
+          { id: 'h5', name: 'Host 5' },
+        ],
+      },
+    })
+    await wrapper.find('[data-test="pipeline-enable"]').trigger('click')
+    await wrapper.find('[data-test="add-template-build"]').trigger('click')
+    await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
+    await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
+
+    expect(wrapper.find('[data-test="block-0-runner-h5"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-runner-more"]').text()).toBe('+2')
+
+    await wrapper.find('[data-test="block-0-runner-more"]').trigger('click')
+    await wrapper.find('[data-test="block-0-runner-h5"]').setValue(true)
+    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
+
+    const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
+    expect(pipeline.roles?.build_0_runner).toEqual(['h5'])
   })
 
   it('target_role 未选择机器时禁用保存', async () => {

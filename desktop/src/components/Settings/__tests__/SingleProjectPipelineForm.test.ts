@@ -35,15 +35,11 @@ describe('SingleProjectPipelineForm', () => {
       global: { plugins: [installTestI18n()] },
     })
 
-    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-station-base"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="pipeline-phase-tabs"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="pipeline-wizard-detail"]').exists()).toBe(true)
-
-    await wrapper.find('[data-test="pipeline-station-base"]').trigger('click')
-    expect(wrapper.find('[data-test="single-pipeline-form-topbar"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-wizard-canvas"]').exists()).toBe(false)
 
     await wrapper.find('[data-test="single-pipeline-name"]').setValue('Deploy Server Admin Prod')
     await wrapper.find('[data-test="single-pipeline-service-web"]').setValue(true)

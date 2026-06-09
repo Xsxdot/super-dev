@@ -126,10 +126,6 @@ function summary(run: Run) {
             {{ summary(run) }}
           </span>
           <span class="run-actions">
-            <button type="button" data-test="run-detail" @click="emit('detail', run)">
-              <Icon icon="lucide:terminal-square" aria-hidden="true" />
-              {{ run.status === 'running' ? t('overview.pipeline.openLiveConsole') : t('overview.pipeline.openConsole') }}
-            </button>
             <button type="button" data-test="run-log" @click="emit('detail', run)">
               <Icon icon="lucide:file-text" aria-hidden="true" />
               {{ t('overview.pipeline.logs') }}
@@ -167,6 +163,7 @@ function summary(run: Run) {
   --history-version-width: 176px;
   --history-started-at-width: 184px;
   --history-artifact-kind-width: 104px;
+  --history-actions-width: 172px;
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
   margin: 0;
@@ -235,7 +232,7 @@ function summary(run: Run) {
 }
 .history-head {
   display: grid;
-  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) 201px;
+  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) var(--history-actions-width);
   align-items: center;
   gap: 0;
   height: var(--history-header-height);
@@ -251,7 +248,7 @@ function summary(run: Run) {
 .history-loading,
 .run-row {
   display: grid;
-  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) 201px;
+  grid-template-columns: 94px var(--history-version-width) 64px var(--history-started-at-width) 72px var(--history-artifact-kind-width) minmax(150px, 1fr) var(--history-actions-width);
   align-items: center;
   gap: 0;
   min-height: 61px;
@@ -327,7 +324,7 @@ function summary(run: Run) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   padding: 0 11px;
   white-space: nowrap;
@@ -339,11 +336,12 @@ function summary(run: Run) {
   height: 32px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
+  padding: 0 10px;
   background: rgba(22, 27, 34, 0.82);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
 }
 .run-actions button svg {
