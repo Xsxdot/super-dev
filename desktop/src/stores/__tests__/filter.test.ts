@@ -38,6 +38,54 @@ describe('filterStore', () => {
     expect(result[0].message).toBe('error occurred')
   })
 
+  it('applyFiltersWithStats：include chip 返回过滤数量', () => {
+    const store = useFilterStore()
+    store.addChip('p1', 'error', 'include')
+    const logs = [makeLog('error occurred', 1), makeLog('info message', 2)]
+
+    const result = store.applyFiltersWithStats('p1', null, logs)
+
+    expect(result.logs).toHaveLength(1)
+    expect(result.logs[0].message).toBe('error occurred')
+    expect(result.filteredCount).toBe(1)
+  })
+
+  it('applyFiltersWithStats：exclude chip 返回过滤数量', () => {
+    const store = useFilterStore()
+    store.addChip('p1', 'debug', 'exclude')
+    const logs = [makeLog('debug info', 1), makeLog('error occurred', 2)]
+
+    const result = store.applyFiltersWithStats('p1', null, logs)
+
+    expect(result.logs).toHaveLength(1)
+    expect(result.logs[0].message).toBe('error occurred')
+    expect(result.filteredCount).toBe(1)
+  })
+
+  it('applyFiltersWithStats：项目规则和 chip 叠加时只统计最终隐藏数量', () => {
+    const store = useFilterStore()
+    store.projectRules['proj-1'] = [{
+      id: 'rule-1',
+      name: 'Errors',
+      type: 'include',
+      keywords: ['error'],
+      logic: 'or',
+      enabled: true,
+    }]
+    store.addChip('p1', 'retry', 'exclude')
+    const logs = [
+      makeLog('error retry', 1),
+      makeLog('error ok', 2),
+      makeLog('info retry', 3),
+      makeLog('info ok', 4),
+    ]
+
+    const result = store.applyFiltersWithStats('p1', 'proj-1', logs)
+
+    expect(result.logs.map(log => log.message)).toEqual(['error ok'])
+    expect(result.filteredCount).toBe(3)
+  })
+
   it('createRule 新增项目规则并持久化', async () => {
     const store = useFilterStore()
     store.projectRules['proj-1'] = []

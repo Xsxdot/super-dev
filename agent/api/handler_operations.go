@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/configchange"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
@@ -30,6 +31,13 @@ import (
 type operationApprovalDetailResponse struct {
 	Approval      operation.Approval `json:"approval"`
 	ApprovalToken string             `json:"approval_token,omitempty"`
+}
+
+// operationApprovalDecisionResponse 是 approve 接口的响应。
+type operationApprovalDecisionResponse struct {
+	Approval       operation.Approval `json:"approval"`
+	GraceGranted   bool               `json:"grace_granted"`
+	GraceExpiresAt *time.Time         `json:"grace_expires_at,omitempty"`
 }
 
 type operationAuditListResponse struct {
@@ -55,8 +63,9 @@ type operationTargetRequest struct {
 }
 
 type operationDecisionRequest struct {
-	DecidedBy string `json:"decided_by"`
-	Note      string `json:"note"`
+	DecidedBy  string `json:"decided_by"`
+	Note       string `json:"note"`
+	GrantGrace bool   `json:"grant_grace"`
 }
 
 type operationApprovalTokenBody struct {
@@ -135,7 +144,31 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 		Summary:    "operation approval approved",
 		Data:       map[string]any{"decided_by": approval.DecidedBy},
 	})
-	jsonOK(w, sanitizeOperationApproval(approval))
+
+	graceGranted := false
+	var graceExpiresAt *time.Time
+	if req.GrantGrace && approval.Plan.Target.ProjectID != "" {
+		minutes := a.loadApprovalPolicy().GraceMinutes
+		ttl := time.Duration(minutes) * time.Minute
+		if grant, err := a.operationGrace.GrantGrace(r.Context(), approval.Plan.Target.ProjectID, approval.DecidedBy, approval.ID, ttl); err == nil {
+			graceGranted = true
+			graceExpiresAt = &grant.ExpiresAt
+			a.appendOperationAudit(r.Context(), operation.AuditEvent{
+				Kind:       approval.Plan.Kind,
+				Action:     operation.AuditGraceGranted,
+				ApprovalID: approval.ID,
+				Plan:       approval.Plan,
+				Summary:    "project grace window opened",
+				Data:       map[string]any{"project_id": approval.Plan.Target.ProjectID, "expires_at": grant.ExpiresAt},
+			})
+		}
+	}
+
+	jsonOK(w, operationApprovalDecisionResponse{
+		Approval:       sanitizeOperationApproval(approval),
+		GraceGranted:   graceGranted,
+		GraceExpiresAt: graceExpiresAt,
+	})
 }
 
 // rejectOperationApproval 处理 POST /api/operation-approvals/{id}/reject。
@@ -300,7 +333,39 @@ func (a *App) resolveOperationRuntimeTarget(req operationTargetRequest) (model.P
 	return candidates[0].project, candidates[0].service, candidates[0].dep, http.StatusOK, ""
 }
 
+// applyApprovalPolicy 用 agent 设置覆盖 plan 的审批要求。
+//
+// 注意：
+//   - Denied 的 plan 原样返回，开关无权放行被安全策略禁止的操作
+//   - runtime.* 不在覆盖范围，dev 启停逻辑保持代码写死
+func applyApprovalPolicy(plan operation.Plan, policy config.ApprovalPolicy) operation.Plan {
+	if plan.Denied {
+		return plan
+	}
+	switch plan.Kind {
+	case operation.OperationConfigProjectUpsert, operation.OperationConfigServiceUpsert:
+		plan.RequiresApproval = policy.ConfigUpsert
+	case operation.OperationConfigPipelineUpsert:
+		plan.RequiresApproval = policy.PipelineUpsert
+	case operation.OperationPipelineRun:
+		plan.RequiresApproval = policy.PipelineRun
+	case operation.OperationTemplateImport:
+		plan.RequiresApproval = policy.TemplateImport
+	}
+	return plan
+}
+
+// loadApprovalPolicy 读取当前审批策略；读取失败时回退默认策略（保持必审）。
+func (a *App) loadApprovalPolicy() config.ApprovalPolicy {
+	settings, err := a.settings.Load()
+	if err != nil {
+		return config.DefaultAgentSettings().Approval
+	}
+	return settings.Approval
+}
+
 func (a *App) authorizeOperation(w http.ResponseWriter, r *http.Request, plan operation.Plan) (bool, *operation.Approval) {
+	plan = applyApprovalPolicy(plan, a.loadApprovalPolicy())
 	if plan.Denied {
 		a.appendOperationAudit(r.Context(), operation.AuditEvent{
 			Kind:    plan.Kind,
@@ -324,6 +389,20 @@ func (a *App) authorizeOperation(w http.ResponseWriter, r *http.Request, plan op
 			Summary: "operation allowed without approval",
 		})
 		return true, nil
+	}
+
+	// 项目级豁免窗口：命中则直接放行，无需 token。
+	if plan.Target.ProjectID != "" {
+		if grant, ok, err := a.operationGrace.ActiveGrace(r.Context(), plan.Target.ProjectID); err == nil && ok {
+			a.appendOperationAudit(r.Context(), operation.AuditEvent{
+				Kind:    plan.Kind,
+				Action:  operation.AuditApprovedByGrace,
+				Plan:    plan,
+				Summary: "operation allowed by project grace window",
+				Data:    map[string]any{"grace_from": grant.GrantedFrom, "grace_expires_at": grant.ExpiresAt},
+			})
+			return true, nil
+		}
 	}
 
 	if token := approvalTokenFromRequest(r); token != "" {

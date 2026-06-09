@@ -11,10 +11,15 @@
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, isApprovalRequiredError, type OperationApproval } from '@/api/agent'
+import { api, isApprovalRequiredError, type OperationApproval, type OperationApprovalDecision } from '@/api/agent'
 import { notifyOperationApproval } from '@/lib/operationApprovalNotification'
 
 const approvalPollIntervalMs = 2000
+
+interface ApproveOptions {
+  note?: string
+  grantGrace?: boolean
+}
 
 // OperationApprovalNotice 描述桌面端需要展示的审批提示。
 //
@@ -116,14 +121,21 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     pollTimer = null
   }
 
-  async function approve(id: string, note = '') {
+  async function approve(id: string, noteOrOptions: string | ApproveOptions = ''): Promise<OperationApprovalDecision | undefined> {
     loading.value = true
     error.value = ''
+    const options = typeof noteOrOptions === 'string' ? { note: noteOrOptions } : noteOrOptions
+    const note = options.note ?? ''
+    const grantGrace = options.grantGrace === true
+    let decision: OperationApprovalDecision | undefined
     try {
       if (isApprovedNotice(id)) {
         await resumeApprovedOperation(id)
       } else {
-        const approved = await api.approveOperationApproval(id, { decided_by: 'user', note })
+        const payload: { decided_by: string; note?: string; grant_grace?: boolean } = { decided_by: 'user', note }
+        if (grantGrace) payload.grant_grace = true
+        decision = await api.approveOperationApproval(id, payload)
+        const approved = decision.approval
         if (shouldResumeDesktopOperation(approved)) {
           markNoticeApproved(id)
           await resumeApprovedOperation(id, approved)
@@ -132,10 +144,12 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       if (notice.value?.approval_id === id) notice.value = null
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
+      return undefined
     } finally {
       loading.value = false
       await loadPending(false)
     }
+    return decision
   }
 
   async function reject(id: string, note = '') {
@@ -202,14 +216,26 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
     switch (approval.plan.kind) {
       case 'runtime.start':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.startDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.startDeployment(target.deployment_id, token)
         return
       case 'runtime.stop':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.stopDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.stopDeployment(target.deployment_id, token)
         return
       case 'runtime.restart':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        if (target.host_id) {
+          await api.restartDeploymentOnHost(target.deployment_id, target.host_id, token)
+          return
+        }
         await api.restartDeployment(target.deployment_id, token)
         return
       case 'runtime.start_selected':

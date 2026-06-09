@@ -320,6 +320,47 @@ describe('LogPanel', () => {
     expect(wrapper.find('[data-test="log-panel-status"]').text()).toContain('1')
   })
 
+  it('底部状态栏显示被过滤规则隐藏的日志数量', async () => {
+    const filterStore = useFilterStore()
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([
+      { ...makeLog(1), message: 'debug noise' },
+      { ...makeLog(2), message: 'error signal' },
+    ])
+    filterStore.addChip('panel-filter-count', 'debug', 'exclude')
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-filter-count',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await nextTick()
+
+    const status = wrapper.find('[data-test="log-panel-status"]').text()
+    expect(status).toContain('显示 1 条')
+    expect(status).toContain('已过滤 1 条')
+  })
+
   it('英文 locale 下渲染状态栏文案', async () => {
     const wrapper = mount(LogPanel, {
       props: {
@@ -373,6 +414,10 @@ describe('LogPanel', () => {
     vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([
+      { ...makeLog(1), deployment_id: 'dep-api', message: 'from h1', source_id: 'h1' },
+      { ...makeLog(2), deployment_id: 'dep-api', message: 'from h2', source_id: 'h2' },
+    ])
     const project: Project = {
       id: 'proj-1',
       name: 'Project',
@@ -427,5 +472,9 @@ describe('LogPanel', () => {
 
     expect(nodeSelectionStore.selectedHostIds('dep-api')).toEqual(['h1'])
     expect(wrapper.find('[data-test="log-node-filter-strip"]').text()).toContain('节点 1/2')
+
+    const status = wrapper.find('[data-test="log-panel-status"]').text()
+    expect(status).toContain('显示 1 条')
+    expect(status).not.toContain('已过滤')
   })
 })

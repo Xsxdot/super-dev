@@ -117,6 +117,35 @@ func TestDeployProjectPipelineToolReturnsRun(t *testing.T) {
 	assert.Equal(t, "v1", client.lastPipelineDeploy.Variables["version"])
 }
 
+func TestDeployProjectPipelineToolWaitsForApproval(t *testing.T) {
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		pipelineDeployErrs: []error{AgentError{
+			Code:     "approval_required",
+			Message:  "approval required",
+			Plan:     OperationPlan{ID: "op_pipe", Kind: "pipeline.run"},
+			Approval: OperationApproval{ID: "opa_pipe", Status: "pending"},
+		}},
+		operationApprovalDetail: OperationApprovalDetail{
+			Approval:      OperationApproval{ID: "opa_pipe", Status: "approved"},
+			ApprovalToken: "tok_pipe",
+		},
+	}
+	server := NewServer(client)
+
+	result := callPipelineTool(t, server, "deploy_project_pipeline", `{
+		"project_id":"p1",
+		"pipeline_id":"deploy-prod",
+		"env_name":"prod",
+		"variables":{"version":"v1"},
+		"approval_wait_seconds":1
+	}`)
+
+	assert.False(t, result.IsError)
+	assert.Equal(t, 2, client.pipelineDeployCallCount)
+	assert.Equal(t, "tok_pipe", client.lastPipelineDeploy.ApprovalToken)
+}
+
 func TestRollbackProjectPipelineToolReturnsRun(t *testing.T) {
 	client := &fakeAgentClient{projects: []model.Project{sampleProject()}}
 	server := NewServer(client)

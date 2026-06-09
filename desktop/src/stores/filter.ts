@@ -30,6 +30,11 @@ export interface PanelRuleDraft {
   enabled: boolean
 }
 
+export interface FilterResult<T extends LogEntry> {
+  logs: T[]
+  filteredCount: number
+}
+
 interface PanelFilter {
   chips: FilterChip[]
   logic: ChipLogic
@@ -171,8 +176,8 @@ export const useFilterStore = defineStore('filter', () => {
     await saveProjectRules(projectId, next)
   }
 
-  // 核心过滤函数：先应用 LogRule，再应用 chip
-  function applyFilters<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): T[] {
+  // 核心过滤函数：先应用 LogRule，再应用 chip，并返回最终被隐藏的数量。
+  function applyFiltersWithStats<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): FilterResult<T> {
     let result = logs
 
     // 应用项目级 LogRule
@@ -197,28 +202,36 @@ export const useFilterStore = defineStore('filter', () => {
 
     // 应用面板临时 chip
     const panel = panelFilters.value[panelId]
-    if (!panel || panel.chips.length === 0) return result
+    if (panel && panel.chips.length > 0) {
+      const includes = panel.chips.filter(c => c.type === 'include').map(c => c.keyword)
+      const excludes = panel.chips.filter(c => c.type === 'exclude').map(c => c.keyword)
+      const logic = panel.logic
 
-    const includes = panel.chips.filter(c => c.type === 'include').map(c => c.keyword)
-    const excludes = panel.chips.filter(c => c.type === 'exclude').map(c => c.keyword)
-    const logic = panel.logic
-
-    if (includes.length > 0) {
-      result = result.filter(log =>
-        logic === 'and'
-          ? includes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-          : includes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-      )
+      if (includes.length > 0) {
+        result = result.filter(log =>
+          logic === 'and'
+            ? includes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+            : includes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+        )
+      }
+      if (excludes.length > 0) {
+        result = result.filter(log =>
+          logic === 'and'
+            ? !excludes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+            : !excludes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+        )
+      }
     }
-    if (excludes.length > 0) {
-      result = result.filter(log =>
-        logic === 'and'
-          ? !excludes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-          : !excludes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-      )
-    }
 
-    return result
+    return {
+      logs: result,
+      filteredCount: logs.length - result.length,
+    }
+  }
+
+  // 核心过滤函数：先应用 LogRule，再应用 chip
+  function applyFilters<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): T[] {
+    return applyFiltersWithStats(panelId, projectId, logs).logs
   }
 
   return {
@@ -239,6 +252,7 @@ export const useFilterStore = defineStore('filter', () => {
     deleteRule,
     savePanelChipsAsRule,
     toggleRule,
+    applyFiltersWithStats,
     applyFilters,
   }
 })

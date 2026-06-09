@@ -11,13 +11,19 @@
   - 不替代设置页完整审批列表
 -->
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useSettingsStore } from '@/stores/settings'
 import type { OperationApproval } from '@/api/agent'
 
 const emit = defineEmits<{ (event: 'view-all'): void }>()
 const { t } = useI18n()
 const store = useOperationApprovalStore()
+const settingsStore = useSettingsStore()
+const graceSelections = ref<Record<string, boolean>>({})
+const graceMessage = ref('')
+const graceMinutes = computed(() => settingsStore.agentSettings.approval?.grace_minutes ?? 15)
 
 function targetSummary(approval: OperationApproval): string {
   return approval.plan.target_summary
@@ -28,6 +34,20 @@ function targetSummary(approval: OperationApproval): string {
 
 function shortItems(items?: string[]): string[] {
   return (items ?? []).slice(0, 2)
+}
+
+function canGrantGrace(approval: OperationApproval): boolean {
+  return !!approval.plan.target.project_id
+}
+
+async function approveApproval(approval: OperationApproval) {
+  graceMessage.value = ''
+  const grantGrace = canGrantGrace(approval) && graceSelections.value[approval.id] === true
+  const decision = await store.approve(approval.id, grantGrace ? { grantGrace: true } : '')
+  if (decision?.grace_granted) {
+    graceSelections.value[approval.id] = false
+    graceMessage.value = t('settings.approvals.graceGranted', { minutes: graceMinutes.value })
+  }
 }
 </script>
 
@@ -50,6 +70,7 @@ function shortItems(items?: string[]): string[] {
     </header>
 
     <p v-if="store.error" class="popover-error" data-test="approval-popover-error">{{ store.error }}</p>
+    <p v-if="graceMessage" class="popover-success" data-test="approval-popover-grace-message">{{ graceMessage }}</p>
     <p v-if="store.approvals.length === 0" class="popover-empty" data-test="approval-popover-empty">
       {{ t('settings.approvals.empty') }}
     </p>
@@ -73,12 +94,25 @@ function shortItems(items?: string[]): string[] {
         </div>
 
         <div class="approval-row-actions">
+          <label
+            class="grace-option"
+            :class="{ disabled: !canGrantGrace(approval) }"
+            :title="canGrantGrace(approval) ? '' : t('settings.approvals.graceUnavailable')"
+          >
+            <input
+              v-model="graceSelections[approval.id]"
+              type="checkbox"
+              :data-test="`approval-popover-grace-${approval.id}`"
+              :disabled="store.loading || !canGrantGrace(approval)"
+            >
+            <span>{{ t('settings.approvals.grantGrace', { minutes: graceMinutes }) }}</span>
+          </label>
           <button
             type="button"
             class="approve-btn"
             :data-test="`approval-popover-approve-${approval.id}`"
             :disabled="store.loading"
-            @click="store.approve(approval.id, '')"
+            @click="approveApproval(approval)"
           >
             {{ t('settings.approvals.approve') }}
           </button>
@@ -185,6 +219,7 @@ function shortItems(items?: string[]): string[] {
 }
 
 .popover-error,
+.popover-success,
 .popover-empty {
   margin: 0;
   font-size: 12px;
@@ -198,6 +233,10 @@ function shortItems(items?: string[]): string[] {
 
 .popover-empty {
   color: var(--text-tertiary);
+}
+
+.popover-success {
+  color: var(--success);
 }
 
 .popover-list {
@@ -261,7 +300,31 @@ function shortItems(items?: string[]): string[] {
 
 .approval-row-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.grace-option {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  gap: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.grace-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.grace-option.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .approve-btn,

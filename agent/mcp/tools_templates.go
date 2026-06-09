@@ -43,18 +43,35 @@ func (s *Server) previewPipelineTemplateTool(ctx context.Context, args json.RawM
 
 func (s *Server) importPipelineTemplateTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
-		Path           string `json:"path"`
-		ApprovalToken  string `json:"approval_token"`
-		DebugSessionID string `json:"debug_session_id"`
+		Path                string `json:"path"`
+		ApprovalToken       string `json:"approval_token"`
+		ApprovalWaitSeconds *int   `json:"approval_wait_seconds"`
+		DebugSessionID      string `json:"debug_session_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
 	req.Path = strings.TrimSpace(req.Path)
+	req.ApprovalToken = strings.TrimSpace(req.ApprovalToken)
+	req.DebugSessionID = strings.TrimSpace(req.DebugSessionID)
 	if req.Path == "" {
 		return toolError("invalid_arguments", "path is required", nil), nil
 	}
-	summary, err := s.client.ImportPipelineTemplate(ctx, req.Path, req.ApprovalToken)
+	var summary PipelineTemplateSummary
+	importTemplate := func(ctx context.Context, token string) error {
+		got, err := s.client.ImportPipelineTemplate(ctx, req.Path, token)
+		if err != nil {
+			return err
+		}
+		summary = got
+		return nil
+	}
+	var err error
+	if req.ApprovalToken != "" {
+		err = importTemplate(ctx, req.ApprovalToken)
+	} else {
+		err = s.callWithApproval(ctx, boundedApprovalWait(req.ApprovalWaitSeconds), importTemplate)
+	}
 	if err != nil {
 		s.appendOperationToolObservation(ctx, req.DebugSessionID, "template.import", "template import failed", err)
 		return clientToolError(err), nil
