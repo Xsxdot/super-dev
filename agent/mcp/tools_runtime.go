@@ -194,32 +194,14 @@ func (s *Server) restartServiceTool(ctx context.Context, args json.RawMessage) (
 }
 
 func (s *Server) runDeploymentControl(ctx context.Context, target resolvedTarget, req targetArgs, control deploymentControlFunc) error {
-	if err := control(ctx, target.Deployment.ID, req.ApprovalToken); err != nil {
-		return s.waitForApprovalAndRetry(ctx, target, req, control, err)
-	}
-	return nil
-}
-
-func (s *Server) waitForApprovalAndRetry(ctx context.Context, target resolvedTarget, req targetArgs, control deploymentControlFunc, originalErr error) error {
+	// 已显式带 token 时，直接执行一次，不进入等待（保持原语义）。
 	if strings.TrimSpace(req.ApprovalToken) != "" {
-		return originalErr
-	}
-	agentErr, ok := approvalRequiredAgentError(originalErr)
-	if !ok {
-		return originalErr
+		return control(ctx, target.Deployment.ID, req.ApprovalToken)
 	}
 	wait := approvalWaitDuration(req)
-	if wait <= 0 {
-		return originalErr
-	}
-	token, err := s.waitForApprovalToken(ctx, agentErr.Approval.ID, wait)
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return originalErr
-	}
-	return control(ctx, target.Deployment.ID, token)
+	return s.callWithApproval(ctx, wait, func(ctx context.Context, token string) error {
+		return control(ctx, target.Deployment.ID, token)
+	})
 }
 
 func approvalRequiredAgentError(err error) (AgentError, bool) {
