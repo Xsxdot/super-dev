@@ -105,6 +105,11 @@ type LogEntry struct {
 	Level        string    `json:"level"`
 	Message      string    `json:"message"`
 	Stream       string    `json:"stream"` // stdout / stderr
+	// RepeatCount 是该折叠行代表的原始日志条数；未折叠为 1。
+	RepeatCount int `json:"repeat_count"`
+	// FoldKey 标识折叠段，供实时增量推送时前端对齐"当前折叠行"；
+	// 同一段（同 deployment + 同签名 + 时间窗内）共享同一 FoldKey。
+	FoldKey string `json:"fold_key,omitempty"`
 }
 
 // LogRule 表示一条日志过滤规则。
