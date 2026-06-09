@@ -22,11 +22,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestDeployProjectPipelineReturnsRunningThenPersistsTerminalRun(t *testing.T) {
-	app := newTestAppInstance(t)
+	app := newPipelineDeployTestApp(t, false)
 	projectID := addProjectWithArtifactPipeline(t, app)
 
 	req := httptest.NewRequest(http.MethodPost,
@@ -58,8 +59,38 @@ func TestDeployProjectPipelineReturnsRunningThenPersistsTerminalRun(t *testing.T
 	}, 3*time.Second, 20*time.Millisecond)
 }
 
+func TestDeployProjectPipelineRequiresApprovalWhenSwitchOn(t *testing.T) {
+	app := newPipelineDeployTestApp(t, true)
+	projectID := addProjectWithArtifactPipeline(t, app)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
+		strings.NewReader(`{"env_name":"prod","variables":{"version":"v1"}}`))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&body))
+	assert.Equal(t, "approval_required", body["code"])
+}
+
+func TestDeployProjectPipelineSkipsApprovalWhenSwitchOff(t *testing.T) {
+	app := newPipelineDeployTestApp(t, false)
+	projectID := addProjectWithArtifactPipeline(t, app)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
+		strings.NewReader(`{"env_name":"prod","variables":{"version":"v2"}}`))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+
+	require.NotEqual(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+}
+
 func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
-	app := newTestAppInstance(t)
+	app := newPipelineDeployTestApp(t, false)
 	projectID := addProjectWithCompletedRun(t, app)
 
 	runsReq := httptest.NewRequest(http.MethodGet,
@@ -96,6 +127,18 @@ func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
 	app.Handler().ServeHTTP(logsRR, logsReq)
 	require.Equal(t, http.StatusOK, logsRR.Code)
 	assert.Contains(t, logsRR.Body.String(), `"line":"built"`)
+}
+
+func newPipelineDeployTestApp(t *testing.T, pipelineRunApproval bool) *api.App {
+	t.Helper()
+	dataDir := t.TempDir()
+	settings := config.DefaultAgentSettings()
+	settings.Approval.PipelineRun = pipelineRunApproval
+	require.NoError(t, config.NewSettingsStore(dataDir).Save(settings))
+	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	return app
 }
 
 func addProjectWithArtifactPipeline(t *testing.T, app *api.App) string {

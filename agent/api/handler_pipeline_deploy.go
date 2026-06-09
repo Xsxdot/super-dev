@@ -16,8 +16,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/store"
 )
 
@@ -40,6 +42,24 @@ func (a *App) deployProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	var req projectPipelineDeployRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	a.mu.RLock()
+	project, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	isRollback := strings.TrimSpace(req.ArtifactVersion) != ""
+	plan, err := operation.PlanPipelineRun(project, pipelineID, req.EnvName, isRollback, req.ArtifactVersion)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid pipeline run target")
+		return
+	}
+	allowed, _ := a.authorizeOperation(w, r, plan)
+	if !allowed {
 		return
 	}
 
