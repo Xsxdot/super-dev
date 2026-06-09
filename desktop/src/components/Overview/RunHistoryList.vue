@@ -11,6 +11,7 @@ RunHistoryList：展示单条流水线下的 run 历史。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import type { Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
@@ -40,6 +41,22 @@ function failedSteps(run: Run) {
 
 function statusLabel(run: Run) {
   return t(`overview.pipeline.status.${run.status}`)
+}
+
+function statusIcon(run: Run) {
+  switch (run.status) {
+    case 'success':
+      return 'lucide:circle-check'
+    case 'failed':
+      return 'lucide:circle-x'
+    case 'running':
+    case 'pending':
+      return 'lucide:refresh-cw'
+    case 'canceled':
+      return 'lucide:ban'
+    default:
+      return 'lucide:circle'
+  }
 }
 
 function startedAt(run: Run) {
@@ -88,7 +105,7 @@ function summary(run: Run) {
       <div v-for="run in visibleRuns" :key="run.id" class="run-item" data-test="run-history-row">
         <div class="run-row">
           <span class="run-status" :class="`status-${run.status}`">
-            <span class="status-ring" aria-hidden="true"></span>
+            <Icon class="status-icon" :icon="statusIcon(run)" aria-hidden="true" />
             {{ statusLabel(run) }}
           </span>
           <span class="run-version">{{ run.artifact_version || '--' }}</span>
@@ -106,6 +123,7 @@ function summary(run: Run) {
           </span>
           <span class="run-actions">
             <button type="button" data-test="run-detail" @click="emit('detail', run)">
+              <Icon icon="lucide:terminal-square" aria-hidden="true" />
               {{ run.status === 'running' ? t('overview.pipeline.openLiveConsole') : t('overview.pipeline.openConsole') }}
             </button>
             <button
@@ -114,6 +132,7 @@ function summary(run: Run) {
               :disabled="run.status === 'running'"
               @click="emit('rollback', run)"
             >
+              <Icon icon="lucide:rotate-ccw" aria-hidden="true" />
               {{ t('overview.pipeline.rollback') }}
             </button>
           </span>
@@ -235,11 +254,9 @@ function summary(run: Run) {
   gap: 5px;
   font-weight: 700;
 }
-.status-ring {
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
+.status-icon {
+  width: 14px;
+  height: 14px;
 }
 .status-success {
   color: var(--status-success);
@@ -271,6 +288,9 @@ function summary(run: Run) {
   white-space: nowrap;
 }
 .run-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 24px;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
@@ -279,6 +299,10 @@ function summary(run: Run) {
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
+}
+.run-actions button svg {
+  width: 12px;
+  height: 12px;
 }
 .run-actions button:disabled {
   cursor: not-allowed;

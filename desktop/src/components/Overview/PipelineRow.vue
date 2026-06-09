@@ -10,6 +10,7 @@ PipelineRow：项目概览页的一条流水线行。
   - 不渲染 run 历史详情
 -->
 <script setup lang="ts">
+import { Icon } from '@iconify/vue'
 import type { ProjectPipeline, Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
@@ -31,12 +32,28 @@ function statusClass() {
 function statusLabel() {
   return props.latestRun?.status ? t(`overview.pipeline.status.${props.latestRun.status}`) : '--'
 }
+
+function statusIcon() {
+  switch (props.latestRun?.status) {
+    case 'success':
+      return 'lucide:circle-check'
+    case 'failed':
+      return 'lucide:circle-x'
+    case 'running':
+    case 'pending':
+      return 'lucide:refresh-cw'
+    case 'canceled':
+      return 'lucide:ban'
+    default:
+      return 'lucide:circle'
+  }
+}
 </script>
 
 <template>
   <div class="pipeline-row">
     <button type="button" data-test="pipeline-expand" class="icon-btn" @click="emit('toggle')">
-      <span aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
+      <Icon :icon="expanded ? 'lucide:chevron-down' : 'lucide:chevron-right'" aria-hidden="true" />
     </button>
     <div class="pipeline-main">
       <span class="pipeline-state-dot" :class="statusClass()" aria-hidden="true"></span>
@@ -49,7 +66,7 @@ function statusLabel() {
       <span v-if="(pipeline.services ?? []).length === 0" class="service-tag muted">--</span>
     </div>
     <span class="pipeline-status" :class="statusClass()" data-test="pipeline-status">
-      <span class="status-ring" aria-hidden="true"></span>
+      <Icon class="status-icon" :icon="statusIcon()" aria-hidden="true" />
       {{ statusLabel() }}
     </span>
     <span class="pipeline-version" data-test="pipeline-latest-version">{{ latestRun?.artifact_version || '--' }}</span>
@@ -67,7 +84,9 @@ function statusLabel() {
       </button>
       <button type="button" data-test="pipeline-run" class="primary-action" @click="emit('run')">{{ t('overview.pipeline.run') }}</button>
       <button type="button" data-test="pipeline-edit" class="text-action" @click="emit('edit')">{{ t('overview.pipeline.edit') }}</button>
-      <button type="button" class="more-action" :aria-label="t('overview.pipeline.moreActions')">⋮</button>
+      <button type="button" class="more-action" :aria-label="t('overview.pipeline.moreActions')">
+        <Icon icon="lucide:more-vertical" aria-hidden="true" />
+      </button>
     </div>
   </div>
 </template>
@@ -99,8 +118,12 @@ function statusLabel() {
   width: 36px;
   padding: 0;
   border-radius: 7px;
-  font-size: 20px;
   line-height: 1;
+}
+.icon-btn svg,
+.more-action svg {
+  width: 16px;
+  height: 16px;
 }
 .primary-action {
   background: var(--accent);
@@ -118,7 +141,6 @@ function statusLabel() {
   border-color: transparent;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 18px;
 }
 .running-badge {
   height: 30px;
@@ -193,11 +215,9 @@ function statusLabel() {
   font-size: 11px;
   font-weight: 700;
 }
-.status-ring {
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
+.status-icon {
+  width: 14px;
+  height: 14px;
 }
 .status-success {
   border-color: color-mix(in srgb, var(--status-success) 45%, transparent);

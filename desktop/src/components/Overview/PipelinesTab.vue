@@ -46,10 +46,10 @@ const consoleSummary = computed(() => {
   }
 })
 const summaryItems = computed(() => [
-  { key: 'total', label: t('overview.pipeline.totalLabel'), value: consoleSummary.value.total, tone: 'neutral' },
-  { key: 'success', label: t('overview.pipeline.successLabel'), value: consoleSummary.value.success, tone: 'success' },
-  { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed' },
-  { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running' },
+  { key: 'total', label: t('overview.pipeline.totalLabel'), value: consoleSummary.value.total, tone: 'neutral', icon: 'lucide:workflow' },
+  { key: 'success', label: t('overview.pipeline.successLabel'), value: consoleSummary.value.success, tone: 'success', icon: 'lucide:circle-check' },
+  { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed', icon: 'lucide:circle-x' },
+  { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running', icon: 'lucide:refresh-cw' },
 ])
 const overviewPipeline = computed(() =>
   (props.project.pipelines ?? []).find(pipeline => pipeline.id === expanded.value) ?? props.project.pipelines?.[0] ?? null,
@@ -240,7 +240,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
       </div>
       <div class="pipeline-console-actions">
         <button type="button" class="pipeline-add-btn" data-test="pipeline-add" @click="openEditor('blank')">
-          <span aria-hidden="true">+</span>
+          <Icon icon="lucide:plus" aria-hidden="true" />
           {{ t('overview.pipeline.add') }}
         </button>
         <button
@@ -251,7 +251,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
           :aria-label="t('overview.pipeline.refresh')"
           @click="refreshRuns"
         >
-          <span aria-hidden="true" :class="{ spinning: refreshingRuns }">↻</span>
+          <Icon icon="lucide:refresh-cw" aria-hidden="true" :class="{ spinning: refreshingRuns }" />
         </button>
       </div>
     </div>
@@ -263,7 +263,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
         :class="`tone-${item.tone}`"
         :data-test="`pipeline-stat-${item.key}`"
       >
-        <span class="pipeline-stat-icon" aria-hidden="true"></span>
+        <Icon class="pipeline-stat-icon" :icon="item.icon" aria-hidden="true" />
         <strong>{{ item.value }}</strong>
         <span>{{ item.label }}</span>
       </article>
@@ -476,25 +476,20 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   white-space: nowrap;
 }
 .pipeline-stat-icon {
-  position: relative;
   width: 22px;
   height: 22px;
-  border: 2px solid var(--text-tertiary);
-  border-radius: 50%;
+  color: var(--text-tertiary);
 }
 .tone-success .pipeline-stat-icon,
 .tone-success strong {
-  border-color: var(--status-success);
   color: var(--status-success);
 }
 .tone-failed .pipeline-stat-icon,
 .tone-failed strong {
-  border-color: var(--status-failed);
   color: var(--status-failed);
 }
 .tone-running .pipeline-stat-icon,
 .tone-running strong {
-  border-color: var(--status-starting);
   color: var(--status-starting);
 }
 .pipeline-console-grid {
@@ -659,10 +654,18 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
   font-size: 19px;
   line-height: 1;
 }
+.pipeline-add-btn svg {
+  width: 17px;
+  height: 17px;
+}
 .pipeline-refresh-btn {
   width: 42px;
   padding: 0;
   color: var(--text-secondary);
+}
+.pipeline-refresh-btn svg {
+  width: 16px;
+  height: 16px;
 }
 .pipeline-refresh-btn:disabled {
   cursor: wait;
