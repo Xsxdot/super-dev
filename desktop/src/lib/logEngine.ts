@@ -21,7 +21,9 @@ export type LogEvent = LogEventNew | LogEventIncrement
 
 function displayLogId(log: LogEntry): string {
   const rawID = String(log.id ?? '')
-  if (rawID !== '' && rawID !== '0') return rawID
+  if (rawID !== '' && rawID !== '0') {
+    return log.source_id ? `${log.source_id}:${rawID}` : rawID
+  }
   // 实时 WebSocket 日志尚未写入 SQLite，后端 id 为 0；前端补稳定 id 供渲染和书签去重。
   return `synthetic-${nextSyntheticLogId++}`
 }
