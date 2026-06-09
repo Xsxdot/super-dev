@@ -537,6 +537,7 @@ export default {
       viewTemplate: '查看模板',
       viewYaml: '查看 YAML',
       previewGraph: '预览执行图',
+      previewFromDraft: '预览来自当前未保存配置',
       yamlTitle: '流水线 YAML',
       addFile: '+ 添加文件',
       booleanTrue: 'true',

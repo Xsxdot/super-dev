@@ -11,7 +11,7 @@ ProjectPipelineEditor：项目流水线独立编辑器。
   - 不执行流水线，不新增后端接口
 -->
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
 import {
@@ -71,6 +71,7 @@ const previewPhases: PipelinePhase[] = ['build', 'deploy', 'finally']
 type PreviewStepRun = PipelinePreviewResponse['run']['step_runs'][number]
 
 onMounted(async () => {
+  window.addEventListener('keydown', onPreviewKeydown)
   void loadEditorPreview()
   try {
     const list = await api.listHosts()
@@ -78,6 +79,10 @@ onMounted(async () => {
   } catch {
     hosts.value = []
   }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onPreviewKeydown)
 })
 
 function updateActivePipeline(next: ProjectPipeline) {
@@ -302,6 +307,15 @@ async function loadEditorPreview() {
   }
 }
 
+function openPreviewModal() {
+  previewModalOpen.value = true
+  void loadEditorPreview()
+}
+
+function onPreviewKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') previewModalOpen.value = false
+}
+
 const pipelineYaml = computed(() => {
   const pipeline = activePipeline.value
   if (!pipeline) return ''
@@ -394,7 +408,7 @@ async function save() {
             class="settings-btn settings-btn-secondary"
             data-test="pipeline-preview-open"
             :data-preview-count="editorPreviewNodes.length"
-            @click="previewModalOpen = true"
+            @click="openPreviewModal"
           >
             {{ t('settings.pipeline.previewGraph') }}
           </button>
@@ -512,6 +526,46 @@ async function save() {
         <div v-if="applyPreviewError" class="settings-alert settings-alert-danger err-list">{{ applyPreviewError }}</div>
         <PipelinePreview v-if="applyPreview" :preview="applyPreview" />
       </TemplateContentModal>
+
+      <div
+        v-if="previewModalOpen"
+        class="pipeline-preview-overlay"
+        data-test="pipeline-preview-overlay"
+        @click.self="previewModalOpen = false"
+      >
+        <div class="pipeline-preview-modal">
+          <header class="preview-modal-head">
+            <h3>
+              {{ t('settings.pipeline.previewGraph') }}
+              <span class="preview-modal-sub">· {{ t('settings.pipeline.previewFromDraft') }}</span>
+            </h3>
+            <button
+              type="button"
+              class="preview-modal-close"
+              data-test="pipeline-preview-close"
+              @click="previewModalOpen = false"
+            >
+              ×
+            </button>
+          </header>
+          <div class="preview-modal-body">
+            <div class="preview-flow" data-test="pipeline-preview-flow">
+              <template v-for="(node, i) in editorPreviewNodes" :key="node.id">
+                <div class="preview-node">
+                  <div class="preview-node-phase">{{ phaseLabel(node.phase) }}</div>
+                  <div class="preview-node-name">{{ node.name }}</div>
+                  <div class="preview-node-target">{{ node.target }}</div>
+                </div>
+                <div v-if="i < editorPreviewNodes.length - 1" class="preview-conn">→</div>
+              </template>
+              <div v-if="editorPreviewNodes.length === 0" class="preview-empty">
+                {{ t('settings.pipeline.requiredComplete') }}
+              </div>
+            </div>
+            <div v-if="editorPreviewError" class="preview-error">{{ editorPreviewError }}</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -723,6 +777,104 @@ async function save() {
 }
 .pipeline-editor-footer-status svg:first-child {
   color: #47d764;
+}
+.pipeline-preview-overlay {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 11, 0.72);
+}
+.pipeline-preview-modal {
+  display: flex;
+  width: min(1100px, 92vw);
+  max-height: 86vh;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-secondary);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+.preview-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-secondary);
+  padding: 18px 24px;
+}
+.preview-modal-head h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 800;
+}
+.preview-modal-sub {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.preview-modal-close {
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+.preview-modal-body {
+  overflow: auto;
+  padding: 34px 28px;
+}
+.preview-flow {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0;
+}
+.preview-node {
+  min-width: 190px;
+  flex: 1;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--bg-tertiary);
+}
+.preview-node-phase {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.preview-node-name {
+  margin: 8px 0 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+.preview-node-target {
+  color: var(--text-tertiary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+}
+.preview-conn {
+  display: flex;
+  width: 42px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 18px;
+}
+.preview-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.preview-error {
+  margin-top: 14px;
+  color: var(--status-failed);
+  font-size: 12px;
 }
 .err-list {
   margin: 0;

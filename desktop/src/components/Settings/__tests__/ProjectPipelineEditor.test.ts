@@ -272,6 +272,66 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(0)
   })
 
+  it('点击预览按钮时刷新并渲染全屏执行图', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.previewProjectPipeline).mockResolvedValue({
+      run: {
+        deployment_id: 'project:p1:pipeline:deploy-server-admin-prod:env:dev',
+        status: 'pending',
+        step_runs: [
+          { step_name: 'Vue + Go 组合构建.Build Frontend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Vue + Go 组合构建.Build Backend', type: 'local_command', phase: 'build', status: 'pending', tasks: [] },
+          { step_name: 'Systemd 无缝部署.Restart', type: 'remote_command', phase: 'deploy', status: 'pending', tasks: [{ host_id: 'h1', host_name: 'ali-01', status: 'pending' }] },
+        ],
+      },
+    })
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+    vi.mocked(api.previewProjectPipeline).mockClear()
+
+    await wrapper.find('[data-test="pipeline-preview-open"]').trigger('click')
+    await flushPromises()
+
+    expect(api.previewProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-server-admin-prod', expect.objectContaining({
+      env_name: 'dev',
+      service_names: ['web', 'server'],
+    }))
+    expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Build Frontend')
+    expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Deploy')
+    expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('ali-01')
+
+    await wrapper.find('[data-test="pipeline-preview-close"]').trigger('click')
+    expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
+  })
+
+  it('Esc 关闭预览弹层', async () => {
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: projectWithPipeline(),
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="pipeline-preview-open"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
+  })
+
   it('保存项目级 pipeline 并保留非流水线配置', async () => {
     const { api } = await import('@/api/agent')
     const wrapper = mountProjectPipelineEditor()

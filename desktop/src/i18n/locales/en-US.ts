@@ -537,6 +537,7 @@ export default {
       viewTemplate: 'View Template',
       viewYaml: 'View YAML',
       previewGraph: 'Preview graph',
+      previewFromDraft: 'Preview from current unsaved config',
       yamlTitle: 'Pipeline YAML',
       addFile: '+ Add File',
       booleanTrue: 'true',
