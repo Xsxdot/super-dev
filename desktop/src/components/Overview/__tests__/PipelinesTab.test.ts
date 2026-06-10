@@ -254,6 +254,7 @@ describe('PipelinesTab', () => {
 
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="run-rollback"]').trigger('click')
+    expect(wrapper.find('[data-test="deploy-env-select"]').exists()).toBe(false)
     await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
