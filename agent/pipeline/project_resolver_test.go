@@ -240,6 +240,37 @@ func TestResolveProjectPipelineDoesNotApplyBuilderRoleToLocalOnlyBuildSteps(t *t
 	assert.Empty(t, resolved.Pipeline.Build[2].Roles)
 }
 
+func TestResolveProjectPipelineDoesNotApplyBuilderRoleToUnknownBuildStep(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Custom",
+					Type: "custom_build_plugin",
+					With: map[string]interface{}{"cmd": "build"},
+				}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resolved.Pipeline.Build, 1)
+	assert.Empty(t, resolved.Pipeline.Build[0].Roles)
+}
+
 func TestResolveProjectPipelineInjectsWorkspaceForRuntimeWithoutPreview(t *testing.T) {
 	project := model.Project{
 		ID:       "p1",

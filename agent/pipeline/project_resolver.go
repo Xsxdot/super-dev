@@ -136,10 +136,12 @@ func applyDefaultBuildRole(steps []model.Step, roleName string) []model.Step {
 
 func canApplyDefaultBuildRole(stepType string) bool {
 	switch stepType {
-	case "", "include", "local_command", "archive", "archive_package":
-		return false
-	default:
+	case "remote_command", "transfer":
+		// 只有需要远端 target 的内置构建步骤才默认绑定构建机。
+		// 新增插件必须显式进入白名单，避免本地/元步骤被隐式套 roles 后破坏插件校验。
 		return true
+	default:
+		return false
 	}
 }
 

@@ -1,7 +1,7 @@
 // settings_test.go 验证 agent 级 settings 的默认值、兼容加载与校验。
 //
 // 职责：
-//   - 覆盖日志保留、容量上限和后台清理周期的范围校验
+//   - 覆盖日志保留、容量上限、制品保留版本数和后台清理周期的范围校验
 //   - 防止老 settings.json 缺少新字段时加载失败
 //
 // 边界：
@@ -35,6 +35,16 @@ func TestLoadBackfillsLogCleanupDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(config.DefaultLogMaxBytes), settings.LogMaxBytes)
 	assert.Equal(t, config.DefaultLogCleanupIntervalSeconds, settings.LogCleanupIntervalSeconds)
+}
+
+func TestLoadBackfillsArtifactKeepVersionsDefault(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"log_retention_days":7,"log_max_bytes":268435456,"log_cleanup_interval_seconds":3600,"artifact_keep_versions":0}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(raw), 0o644))
+
+	settings, err := config.NewSettingsStore(dir).Load()
+	require.NoError(t, err)
+	assert.Equal(t, config.DefaultArtifactKeepVersions, settings.ArtifactKeepVersions)
 }
 
 func TestDefaultAgentSettingsApprovalPolicy(t *testing.T) {
@@ -89,4 +99,19 @@ func TestValidateGraceMinutesRange(t *testing.T) {
 	if err := config.ValidateAgentSettings(s); err == nil {
 		t.Fatal("grace_minutes above max must fail validation")
 	}
+}
+
+func TestValidateArtifactKeepVersionsRange(t *testing.T) {
+	s := config.DefaultAgentSettings()
+	s.ArtifactKeepVersions = config.MinArtifactKeepVersions - 1
+	require.Error(t, config.ValidateAgentSettings(s))
+
+	s.ArtifactKeepVersions = config.MinArtifactKeepVersions
+	require.NoError(t, config.ValidateAgentSettings(s))
+
+	s.ArtifactKeepVersions = config.MaxArtifactKeepVersions
+	require.NoError(t, config.ValidateAgentSettings(s))
+
+	s.ArtifactKeepVersions = config.MaxArtifactKeepVersions + 1
+	require.Error(t, config.ValidateAgentSettings(s))
 }
