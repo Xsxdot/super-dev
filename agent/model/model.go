@@ -690,7 +690,9 @@ type ProjectPipeline struct {
 	// transfer = agent 打包上传；remote_cmd = 目标机执行命令（如 git 拉取）自取。
 	// 为空时消费方按 transfer 兜底。
 	SyncMode SyncMode `json:"sync_mode,omitempty" yaml:"sync_mode,omitempty"`
-	Pipeline Pipeline `json:"pipeline" yaml:"pipeline"`
+	// SyncCommand 是 remote_cmd 同步模式下 transfer 步骤未显式配置 remote_cmd 时使用的默认命令。
+	SyncCommand string   `json:"sync_command,omitempty" yaml:"sync_command,omitempty"`
+	Pipeline    Pipeline `json:"pipeline" yaml:"pipeline"`
 }
 
 // Environment 表示一个运行环境定义，集中管理名称、排序和开发标记。

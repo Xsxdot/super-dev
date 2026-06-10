@@ -310,6 +310,24 @@ describe('configDraft', () => {
     expect(errors.some(e => e.includes('插件类型不能为空'))).toBe(true)
   })
 
+  it('remote_cmd 同步方式要求 transfer 步骤填写远端同步命令', () => {
+    const draft = projectToDraft(makeProject())
+    draft.pipelines = [{
+      id: 'deploy-prod',
+      name: 'Deploy Prod',
+      sync_mode: 'remote_cmd',
+      pipeline: {
+        deploy: [{
+          name: 'Upload',
+          type: 'transfer',
+          with: { source: '${artifact}', target: '/tmp/app.tar.gz' },
+        }],
+      },
+    }]
+
+    expect(validateDraft(draft)).toContain('项目流水线「Deploy Prod」步骤「Upload」的目标机同步命令不能为空')
+  })
+
   it('remote deployment 必须选择主机', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].name = 'api'

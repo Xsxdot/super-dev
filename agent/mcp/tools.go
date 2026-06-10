@@ -203,8 +203,13 @@ func configChangeInputSchema() map[string]any {
 				"description": "Service config. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
 			},
 			"pipeline": map[string]any{
-				"type":        "object",
-				"description": "Project pipeline config. Any host_ids or task host_id values must use canonical non-self Host.id values returned by list_hosts, not host names.",
+				"type": "object",
+				"description": "Project pipeline config. Key fields: " +
+					"`variables` are pipeline-wide defaults (strings). " +
+					"`environments` is a map of env name -> { variables } that OVERRIDE defaults per environment (precedence: project < pipeline < pipeline.pipeline < environments[env] < run vars); the same pipeline serves multiple environments by overriding only the differing variables. " +
+					"`sync_mode` declares how build artifacts reach targets: \"transfer\" (agent uploads the packaged artifact) or \"remote_cmd\" (the target host runs a command such as git pull to fetch code itself); empty defaults to transfer. " +
+					"`roles` maps a role/run-group name to a host list (run groups); a role entry uses {from_service} to derive hosts from a service's deployment for the running env, or {hosts:[...]} for an explicit set. Only plugins that need to target a specific group (e.g. nginx upstream) reference roles; most deploy steps follow the env deployment targets automatically. " +
+					"Any host_ids, roles hosts, or task host_id values must use canonical non-self Host.id values returned by list_hosts, not host names.",
 			},
 		},
 		"required": []string{"kind"},
@@ -250,9 +255,14 @@ func deployProjectPipelineInputSchema() map[string]any {
 				"description": "Canonical non-self Host.id values returned by list_hosts; do not pass host names.",
 				"items":       map[string]any{"type": "string"},
 			},
-			"artifact_version": map[string]any{"type": "string"},
-			"variables":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"approval_token":   map[string]any{"type": "string"},
+			"artifact_version": map[string]any{
+				"type": "string",
+				"description": "Reuse an existing built artifact instead of building fresh. Empty = normal deploy (build then deploy). " +
+					"Set it to deploy an existing artifact version to env_name, which SKIPS the build phase and runs deploy+finally only. " +
+					"This powers both rollback (redeploy an old version) and promotion (deploy the artifact a test run produced into prod with prod's variables and deployment targets).",
+			},
+			"variables":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"approval_token": map[string]any{"type": "string"},
 			"approval_wait_seconds": map[string]any{
 				"type":        "integer",
 				"description": "Max seconds to block-wait for human approval before returning. 0 = do not wait. Capped at 300.",

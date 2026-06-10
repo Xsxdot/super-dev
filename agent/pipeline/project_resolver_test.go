@@ -149,6 +149,27 @@ func TestResolveInjectsSyncModeVar(t *testing.T) {
 	assert.Equal(t, "remote_cmd", resolved.Pipeline.Variables["sync_mode"])
 }
 
+func TestResolveInjectsSyncCommandVar(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:          "pp-1",
+			Name:        "demo",
+			SyncMode:    model.SyncModeRemoteCmd,
+			SyncCommand: "git pull --ff-only",
+			Pipeline:    model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "git pull --ff-only", resolved.Pipeline.Variables["sync_command"])
+}
+
 func TestResolveSyncModeDefaultsTransfer(t *testing.T) {
 	project := model.Project{
 		ID:   "proj-1",

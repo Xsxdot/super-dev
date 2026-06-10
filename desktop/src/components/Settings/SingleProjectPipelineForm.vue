@@ -18,10 +18,12 @@ import DeployTargetReadonly from './DeployTargetReadonly.vue'
 import PipelineEnvMatrix from './PipelineEnvMatrix.vue'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
 
+type HostOption = { id: string; name: string; is_self?: boolean }
+
 const props = defineProps<{
   pipeline: ProjectPipeline
   services: Array<{ id: string; name: string }>
-  hosts: Array<{ id: string; name: string }>
+  hosts: HostOption[]
   templates: PipelineTemplateSummary[]
   targetsByEnv?: Record<string, string[]>
   availableEnvironments?: string[]
@@ -37,6 +39,10 @@ const draft = ref<ProjectPipeline>({ ...props.pipeline, services: [...(props.pip
 const wizard = ref<InstanceType<typeof PipelineTemplateWizard> | null>(null)
 const reservedNames = ['workspace', 'output', 'artifacts', 'version', 'env', 'date', 'time', 'run_temp_dir', 'sync_mode']
 const targetsByEnv = computed(() => props.targetsByEnv ?? {})
+const selfHostId = computed(() => props.hosts.find(host => host.is_self)?.id ?? '')
+const selectedBuilderHostId = computed(() => draft.value.roles?.builder?.hosts?.[0] ?? selfHostId.value)
+const selectedBuilderIsLocal = computed(() => selectedBuilderHostId.value === '' || (selfHostId.value !== '' && selectedBuilderHostId.value === selfHostId.value))
+const effectiveSyncMode = computed(() => selectedBuilderIsLocal.value ? 'transfer' : (draft.value.sync_mode ?? 'transfer'))
 
 watch(() => props.pipeline, (pipeline) => {
   draft.value = { ...pipeline, services: [...(pipeline.services ?? [])] }
@@ -65,7 +71,8 @@ function setPipeline(pipeline: Pipeline | undefined) {
 function setBuilderHost(hostId: string) {
   const roles = { ...(draft.value.roles ?? {}) }
   roles.builder = { hosts: hostId ? [hostId] : [] }
-  patch({ roles })
+  const hostIsLocal = hostId === '' || (selfHostId.value !== '' && hostId === selfHostId.value)
+  patch(hostIsLocal ? { roles, sync_mode: 'transfer' } : { roles })
 }
 
 function saveDraft() {
@@ -126,11 +133,13 @@ defineExpose({ saveDraft })
     </div>
 
     <BuildConfigBar
-      :builder-host-id="draft.roles?.builder?.hosts?.[0] ?? ''"
-      :sync-mode="draft.sync_mode ?? 'transfer'"
+      :builder-host-id="selectedBuilderHostId"
+      :sync-mode="effectiveSyncMode"
+      :sync-command="draft.sync_command ?? ''"
       :hosts="hosts"
       @update:builder-host-id="setBuilderHost"
       @update:sync-mode="patch({ sync_mode: $event })"
+      @update:sync-command="patch({ sync_command: $event })"
     />
 
     <PipelineEnvMatrix

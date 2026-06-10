@@ -84,13 +84,17 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	if syncMode == "" {
 		syncMode = string(model.SyncModeTransfer)
 	}
-	vars = MergeVariables(vars, map[string]string{
+	reservedVars := map[string]string{
 		// workspace 不依赖本次运行的临时目录，真实运行也需要先参与 include vars 渲染。
 		"workspace": req.Project.RootPath,
 		"env":       req.EnvName,
 		"version":   runtimeVersion,
 		"sync_mode": syncMode,
-	})
+	}
+	if pp.SyncCommand != "" {
+		reservedVars["sync_command"] = pp.SyncCommand
+	}
+	vars = MergeVariables(vars, reservedVars)
 	if req.Preview {
 		vars = MergeVariables(vars, PreviewReservedVars(ReservedVarOptions{
 			Workspace: req.Project.RootPath,

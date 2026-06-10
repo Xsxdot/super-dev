@@ -177,6 +177,24 @@ describe('PipelineEnvMatrix', () => {
     expect(wrapper.get('[data-test="run-group-compute"]').text()).toContain('compute')
   })
 
+  it('shows copied feedback after run group variable click', async () => {
+    const writeText = vi.fn()
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { compute: { hosts: ['h1'] } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="copy-run-group-compute"]').trigger('click')
+
+    expect(writeText).toHaveBeenCalledWith('${compute}')
+    expect(wrapper.get('[data-test="copy-run-group-compute-feedback"]').text()).toContain('已复制')
+  })
+
   it('hides builder and legacy runner roles from run groups', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: {

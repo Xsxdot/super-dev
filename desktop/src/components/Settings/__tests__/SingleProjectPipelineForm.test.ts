@@ -33,7 +33,7 @@ function mountForm(pipelineValue = pipeline()) {
     props: {
       pipeline: pipelineValue,
       services: [{ id: 'api', name: 'api' }, { id: 'web', name: 'web' }],
-      hosts: [{ id: 'h1', name: 'builder-01' }],
+      hosts: [{ id: 'self-node', name: 'MacBook-Pro.local', is_self: true }, { id: 'h1', name: 'builder-01' }],
       templates: [],
       targetsByEnv: { test: ['web-test-01'], prod: ['web-prod-01'] },
     },
@@ -68,10 +68,28 @@ describe('SingleProjectPipelineForm', () => {
   })
 
   it('updates sync_mode through build config bar', async () => {
-    const wrapper = mountForm()
+    const wrapper = mountForm({
+      ...pipeline(),
+      roles: { builder: { hosts: ['h1'] } },
+    })
 
     await wrapper.get('[data-test="build-config-sync-remote_cmd"]').trigger('click')
     const emitted = wrapper.emitted('update:pipeline')
     expect(emitted?.at(-1)?.[0]).toMatchObject({ sync_mode: 'remote_cmd' })
+  })
+
+  it('normalizes sync mode to transfer when selecting the self node', async () => {
+    const wrapper = mountForm({
+      ...pipeline(),
+      sync_mode: 'remote_cmd',
+      roles: { builder: { hosts: ['h1'] } },
+    })
+
+    await wrapper.get('[data-test="build-config-builder"]').setValue('self-node')
+    const emitted = wrapper.emitted('update:pipeline')
+    expect(emitted?.at(-1)?.[0]).toMatchObject({
+      sync_mode: 'transfer',
+      roles: { builder: { hosts: ['self-node'] } },
+    })
   })
 })

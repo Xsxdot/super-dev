@@ -24,6 +24,7 @@ import {
   type PipelineStep,
   type Project,
   type ProjectPipeline,
+  type Host,
 } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
@@ -49,7 +50,7 @@ const activePipelineId = ref(props.pipelineId ?? draft.value.pipelines[0]?.id ??
 const activePipeline = computed(() =>
   draft.value.pipelines.find(pipeline => pipeline.id === activePipelineId.value) ?? draft.value.pipelines[0],
 )
-const hosts = ref<Array<{ id: string; name: string }>>([])
+const hosts = ref<Array<Pick<Host, 'id' | 'name' | 'is_self'>>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
 // 全屏预览弹层开关：顶部「预览执行图」按钮触发，替代旧的底部预览窄带。
@@ -79,7 +80,7 @@ onMounted(async () => {
   void loadEditorPreview()
   try {
     const list = await api.listHosts()
-    hosts.value = list.map(h => ({ id: h.id, name: h.name }))
+    hosts.value = list.map(h => ({ id: h.id, name: h.name, is_self: h.is_self }))
   } catch {
     hosts.value = []
   }

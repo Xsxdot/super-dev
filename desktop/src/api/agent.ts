@@ -234,6 +234,7 @@ export interface ProjectPipeline {
   environments?: Record<string, PipelineEnvironment>
   roles?: Record<string, ProjectPipelineRole>
   sync_mode?: SyncMode
+  sync_command?: string
   pipeline: Pipeline
 }
 

@@ -319,9 +319,19 @@ function addRunGroup() {
       </div>
       <div v-if="hasRoles" class="emr-flow emr-run-groups">
         <div v-for="roleName in roleNames" :key="roleName" class="emr-run-group" :data-test="`run-group-${roleName}`">
-          <button type="button" class="emr-varname run-group" @click="copyVar(roleName)">
-            {{ roleName }}
-          </button>
+          <span class="emr-copy-chip">
+            <button
+              type="button"
+              class="emr-varname run-group"
+              :data-test="`copy-run-group-${roleName}`"
+              @click="copyVar(roleName)"
+            >
+              {{ roleName }}
+            </button>
+            <span v-if="copiedName === roleName" class="emr-copy-feedback" :data-test="`copy-run-group-${roleName}-feedback`">
+              {{ t('common.copied') }}
+            </span>
+          </span>
           <span class="emr-rg-source">{{ roleSource(roleName) }}</span>
           <label v-for="host in hosts ?? []" :key="host.id" class="emr-host-chip">
             <input

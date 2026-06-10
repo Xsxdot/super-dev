@@ -139,6 +139,28 @@ func TestTransferRemoteCmdModeRunsRemoteSyncCommand(t *testing.T) {
 	assert.Contains(t, logs, "stdout:synced")
 }
 
+func TestTransferRemoteCmdModeUsesPipelineSyncCommand(t *testing.T) {
+	transport := &fakeSyncTransport{}
+	plugin := plugins.NewTransfer(transport)
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		Vars: map[string]string{
+			"sync_mode":    "remote_cmd",
+			"sync_command": "git fetch --all && git reset --hard origin/main",
+		},
+	})
+	step := model.Step{
+		Name: "Sync Artifact",
+		Type: "transfer",
+		With: map[string]interface{}{"source": "a.tar.gz", "target": "/opt/api/a.tar.gz"},
+	}
+
+	err := plugin.Execute(ctx, step, []pipeline.Target{{HostID: "h1", HostName: "box1"}})
+
+	require.NoError(t, err)
+	assert.Empty(t, transport.transferCalls)
+	assert.Equal(t, []string{"h1::git fetch --all && git reset --hard origin/main"}, transport.remoteCalls)
+}
+
 func TestTransferRemoteCmdModeRequiresRemoteSyncCommand(t *testing.T) {
 	plugin := plugins.NewTransfer(&fakeSyncTransport{})
 	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{

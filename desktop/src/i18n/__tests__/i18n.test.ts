@@ -70,6 +70,8 @@ describe('i18n', () => {
   })
 
   it('contains run console labels in both locales', () => {
+    expect(zhCN.common.add).toBeTruthy()
+    expect(enUS.common.add).toBeTruthy()
     expect(zhCN.runConsole.waitingOutput).toBeTruthy()
     expect(zhCN.runConsole.backToBottom).toBeTruthy()
     expect(zhCN.runConsole.failureTitle).toBeTruthy()

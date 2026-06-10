@@ -10,22 +10,30 @@ BuildConfigBar：流水线级构建配置带。
   - 不处理环境变量或部署目标展示
 -->
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { SyncMode } from '@/api/agent'
 
-defineProps<{
+type HostOption = { id: string; name: string; is_self?: boolean }
+
+const props = defineProps<{
   builderHostId: string
   syncMode: SyncMode
-  hosts: Array<{ id: string; name: string }>
+  syncCommand?: string
+  hosts: HostOption[]
 }>()
 
 const emit = defineEmits<{
   'update:builderHostId': [string]
   'update:syncMode': [SyncMode]
+  'update:syncCommand': [string]
 }>()
 
 const { t } = useAppI18n()
 const modes: SyncMode[] = ['transfer', 'remote_cmd']
+const selfHostId = computed(() => props.hosts.find(host => host.is_self)?.id ?? '')
+const selectedIsLocal = computed(() => props.builderHostId === '' || (selfHostId.value !== '' && props.builderHostId === selfHostId.value))
+const showLocalOption = computed(() => selfHostId.value === '')
 
 function selectBuilder(event: Event) {
   emit('update:builderHostId', (event.target as HTMLSelectElement).value)
@@ -33,6 +41,10 @@ function selectBuilder(event: Event) {
 
 function selectSyncMode(mode: SyncMode) {
   emit('update:syncMode', mode)
+}
+
+function updateSyncCommand(event: Event) {
+  emit('update:syncCommand', (event.target as HTMLInputElement).value)
 }
 </script>
 
@@ -46,12 +58,12 @@ function selectSyncMode(mode: SyncMode) {
         :value="builderHostId"
         @change="selectBuilder"
       >
-        <option value="">{{ t('common.local') }}</option>
+        <option v-if="showLocalOption" value="">{{ t('common.local') }}</option>
         <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
       </select>
     </label>
 
-    <div class="bcb-field">
+    <div v-if="!selectedIsLocal" class="bcb-field" data-test="build-config-sync">
       <span>{{ t('settings.pipeline.syncMode') }}</span>
       <div class="bcb-segment" role="group" :aria-label="t('settings.pipeline.syncMode')">
         <button
@@ -66,6 +78,17 @@ function selectSyncMode(mode: SyncMode) {
         </button>
       </div>
     </div>
+
+    <label v-if="!selectedIsLocal && syncMode === 'remote_cmd'" class="bcb-field bcb-command-field">
+      <span>{{ t('settings.pipeline.syncCommand') }}</span>
+      <input
+        class="settings-input bcb-command"
+        data-test="build-config-sync-command"
+        :placeholder="t('settings.pipeline.syncCommandPlaceholder')"
+        :value="syncCommand ?? ''"
+        @input="updateSyncCommand"
+      />
+    </label>
   </div>
 </template>
 
@@ -91,6 +114,15 @@ function selectSyncMode(mode: SyncMode) {
 
 .bcb-select {
   min-width: 180px;
+  height: 34px;
+}
+
+.bcb-command-field {
+  flex: 1 1 320px;
+}
+
+.bcb-command {
+  width: min(520px, 100%);
   height: 34px;
 }
 

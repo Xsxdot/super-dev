@@ -117,7 +117,10 @@ func (p *Transfer) Execute(ctx *pipeline.RunContext, step model.Step, targets []
 func (p *Transfer) executeRemoteSync(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
 	cmd := withString(step.With, "remote_cmd", "sync_cmd")
 	if cmd == "" {
-		return errors.New("transfer remote_cmd mode requires with.remote_cmd")
+		cmd = ctx.Vars["sync_command"]
+	}
+	if cmd == "" {
+		return errors.New("transfer remote_cmd mode requires with.remote_cmd or sync_command")
 	}
 	if p.runner == nil {
 		return errors.New("transfer remote_cmd mode requires remote runner")

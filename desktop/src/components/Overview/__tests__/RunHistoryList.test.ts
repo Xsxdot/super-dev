@@ -109,7 +109,7 @@ describe('RunHistoryList', () => {
       },
       global: { plugins: [installTestI18n()] },
     })
-    expect(wrapper.get('[data-test="promote-r1-prod"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="promote-r1-prod"]').exists()).toBe(true)
   })
 
   it('emits promote with artifact version and target env', async () => {
