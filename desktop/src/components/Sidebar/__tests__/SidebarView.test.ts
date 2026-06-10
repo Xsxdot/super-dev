@@ -80,6 +80,7 @@ function projectWithService(id: string, name: string, serviceName: string, envNa
 describe('SidebarView', () => {
   beforeEach(() => {
     localStorage.clear()
+    document.body.innerHTML = ''
     setActivePinia(createPinia())
     vi.clearAllMocks()
   })
@@ -365,8 +366,10 @@ describe('SidebarView', () => {
     await entry.trigger('click')
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('[data-test="getting-started-popover"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="step-step2"]').classes()).toContain('is-done')
+    const popover = document.body.querySelector<HTMLElement>('[data-test="getting-started-popover"]')
+    expect(popover).not.toBeNull()
+    expect(popover && wrapper.element.contains(popover)).toBe(false)
+    expect(popover?.querySelector('[data-test="step-step2"]')?.classList.contains('is-done')).toBe(true)
     expect(useGettingStartedStore().completedSteps.sort()).toEqual(['step0', 'step2'])
   })
 

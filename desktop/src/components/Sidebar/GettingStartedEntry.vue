@@ -11,7 +11,7 @@
   - 浮层内容委托给 GettingStartedPanel
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { useGettingStartedStore } from '@/stores/gettingStarted'
 import GettingStartedPanel from './GettingStartedPanel.vue'
@@ -19,14 +19,48 @@ import GettingStartedPanel from './GettingStartedPanel.vue'
 const { t } = useAppI18n()
 const gs = useGettingStartedStore()
 const open = ref(false)
+const entryWrap = ref<HTMLElement | null>(null)
+const popoverPosition = ref({ left: 16, bottom: 16 })
 
-function toggle() {
-  open.value = !open.value
+const POPOVER_MAX_WIDTH = 520
+const VIEWPORT_MARGIN = 16
+const POPOVER_GAP = 8
+
+function updatePopoverPosition() {
+  const rect = entryWrap.value?.getBoundingClientRect()
+  if (!rect) return
+
+  // 弹层脱离侧栏后仍优先贴着侧栏右侧；窄窗口时向左收，保证完整落在视口内。
+  const availableWidth = Math.max(0, window.innerWidth - VIEWPORT_MARGIN * 2)
+  const panelWidth = Math.min(POPOVER_MAX_WIDTH, availableWidth)
+  const preferredLeft = rect.right + POPOVER_GAP
+  const maxLeft = window.innerWidth - panelWidth - VIEWPORT_MARGIN
+  const left = Math.max(VIEWPORT_MARGIN, Math.min(preferredLeft, maxLeft))
+  const bottom = Math.max(VIEWPORT_MARGIN, window.innerHeight - rect.top + POPOVER_GAP)
+
+  popoverPosition.value = { left, bottom }
 }
+
+function stopTrackingPosition() {
+  window.removeEventListener('resize', updatePopoverPosition)
+}
+
+async function toggle() {
+  open.value = !open.value
+  if (!open.value) {
+    stopTrackingPosition()
+    return
+  }
+  await nextTick()
+  updatePopoverPosition()
+  window.addEventListener('resize', updatePopoverPosition)
+}
+
+onBeforeUnmount(stopTrackingPosition)
 </script>
 
 <template>
-  <div v-if="gs.visible" class="gs-entry-wrap">
+  <div v-if="gs.visible" ref="entryWrap" class="gs-entry-wrap">
     <button
       type="button"
       class="gs-entry"
@@ -41,10 +75,17 @@ function toggle() {
     <div class="gs-progress-track" aria-hidden="true">
       <div class="gs-progress-fill" :style="{ width: `${(gs.completedCount / gs.totalSteps) * 100}%` }"></div>
     </div>
-    <div v-if="open" class="gs-popover" data-test="getting-started-popover">
+  </div>
+  <Teleport to="body">
+    <div
+      v-if="gs.visible && open"
+      class="gs-popover"
+      data-test="getting-started-popover"
+      :style="{ left: `${popoverPosition.left}px`, bottom: `${popoverPosition.bottom}px` }"
+    >
       <GettingStartedPanel />
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -129,9 +170,13 @@ function toggle() {
 }
 
 .gs-popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 246px;
+  position: fixed;
   z-index: 70;
+  max-height: calc(100vh - 32px);
+}
+
+.gs-popover :deep(.gs-panel) {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 </style>
