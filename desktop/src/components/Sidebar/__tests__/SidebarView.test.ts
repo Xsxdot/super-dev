@@ -344,7 +344,7 @@ describe('SidebarView', () => {
     expect(buttons[1].find('.sidebar-tool-hint').text()).toBe('偏好与管理')
   })
 
-  it('onboarding 完成且有非 sample 本地部署时显示起步入口并标记 step2 完成', async () => {
+  it('onboarding 完成且有非 sample 本地部署时标记前两步和 step2 完成', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = {
       ...settings.agentSettings,
@@ -361,7 +361,7 @@ describe('SidebarView', () => {
 
     const entry = wrapper.find('[data-test="getting-started-entry"]')
     expect(entry.exists()).toBe(true)
-    expect(entry.text()).toContain('起步 2/5')
+    expect(entry.text()).toContain('起步 3/5')
 
     await entry.trigger('click')
     await wrapper.vm.$nextTick()
@@ -370,7 +370,7 @@ describe('SidebarView', () => {
     expect(popover).not.toBeNull()
     expect(popover && wrapper.element.contains(popover)).toBe(false)
     expect(popover?.querySelector('[data-test="step-step2"]')?.classList.contains('is-done')).toBe(true)
-    expect(useGettingStartedStore().completedSteps.sort()).toEqual(['step0', 'step2'])
+    expect(useGettingStartedStore().completedSteps.sort()).toEqual(['step0', 'step1', 'step2'])
   })
 
   it('首次挂载时主线前三步已完成的老用户自动关闭起步入口', async () => {

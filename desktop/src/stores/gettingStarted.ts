@@ -69,7 +69,7 @@ export function deriveDetection(input: DetectionInput): StepDetection {
 
   return {
     step0: input.onboardingCompleted,
-    step1: input.step1ApprovedSample,
+    step1: input.onboardingCompleted || input.step1ApprovedSample,
     step2: nonSampleProjects.length > 0 && hasLocalDeployment,
     step3: hasHealthyNode,
     step4: hasRemoteDeployment,

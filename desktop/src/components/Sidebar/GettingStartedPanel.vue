@@ -25,8 +25,10 @@ const mainSteps: GettingStartedStep[] = ['step0', 'step1', 'step2', 'step3', 'st
 const copyableSteps: GettingStartedStep[] = ['step1', 'step2', 'step3', 'step4', 'step5']
 const chosenPath = ref('')
 const copyState = ref<{ step: GettingStartedStep | null; ok: boolean }>({ step: null, ok: true })
+const expandedStep = ref<GettingStartedStep | null>(null)
 
 const currentStep = computed<GettingStartedStep>(() => gs.currentStep ?? 'step4')
+const activeStep = computed<GettingStartedStep>(() => expandedStep.value ?? currentStep.value)
 
 // readyRemoteHostName 取第一台健康远端主机名，用于把真实主机注入 step4 提示词。
 const readyRemoteHostName = computed(() => {
@@ -42,8 +44,16 @@ function isCurrent(step: GettingStartedStep): boolean {
   return currentStep.value === step
 }
 
+function isExpanded(step: GettingStartedStep): boolean {
+  return activeStep.value === step
+}
+
 function canCopy(step: GettingStartedStep): boolean {
   return copyableSteps.includes(step)
+}
+
+function expandStep(step: GettingStartedStep) {
+  expandedStep.value = step
 }
 
 function promptFor(step: GettingStartedStep): string {
@@ -100,15 +110,21 @@ function dismiss() {
         v-for="step in mainSteps"
         :key="step"
         class="gs-step"
-        :class="{ 'is-done': isDone(step), 'is-current': isCurrent(step) }"
+        :class="{ 'is-done': isDone(step), 'is-current': isCurrent(step), 'is-expanded': isExpanded(step) }"
         :data-test="`step-${step}`"
       >
-        <div class="gs-step-head">
+        <button
+          type="button"
+          class="gs-step-head gs-step-toggle"
+          :data-test="`toggle-${step}`"
+          :aria-expanded="isExpanded(step)"
+          @click="expandStep(step)"
+        >
           <span class="gs-step-mark">{{ isDone(step) ? '✓' : '○' }}</span>
           <span class="gs-step-title">{{ t(`gettingStarted.steps.${step}.title`) }}</span>
-        </div>
+        </button>
 
-        <template v-if="isCurrent(step)">
+        <template v-if="isExpanded(step)">
           <p class="gs-step-desc">{{ t(`gettingStarted.steps.${step}.desc`) }}</p>
 
           <div v-if="step === 'step2'" class="gs-field-row">
@@ -257,8 +273,12 @@ function dismiss() {
   background: rgba(31, 111, 235, 0.08);
 }
 
+.gs-step.is-expanded:not(.is-current) {
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .gs-step.is-done .gs-step-title {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .gs-step-head {
@@ -266,6 +286,19 @@ function dismiss() {
   min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+.gs-step-toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gs-step-toggle:hover .gs-step-title {
+  color: var(--text-primary);
 }
 
 .gs-step-mark {

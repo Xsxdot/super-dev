@@ -60,6 +60,25 @@ describe('GettingStartedPanel', () => {
     expect(wrapper.find('[data-test="step-step0"]').classes()).toContain('is-done')
   })
 
+  it('已完成步骤可点击展开回看提示词', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useGettingStartedStore()
+    store.markCompleted('step0')
+    store.markCompleted('step1')
+    const wrapper = mountPanel(pinia)
+
+    expect(wrapper.find('[data-test="copy-step1"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="toggle-step1"]').trigger('click')
+
+    expect(wrapper.find('[data-test="copy-step1"]').exists()).toBe(true)
+    await wrapper.find('[data-test="copy-step1"]').trigger('click')
+
+    const prompt = vi.mocked(navigator.clipboard.writeText).mock.calls[0][0]
+    expect(prompt).toContain('superdev-sample')
+  })
+
   it('step1 当前态按计划展示清单分组并复制示例提示词', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

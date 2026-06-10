@@ -86,6 +86,19 @@ describe('gettingStarted store 持久化与只进不退', () => {
 })
 
 describe('deriveDetection 检测规则', () => {
+  it('进入主页后前两步都视为完成', () => {
+    const detection = deriveDetection({
+      onboardingCompleted: true,
+      projects: [],
+      sampleSeeded: false,
+      nodes: [],
+      step1ApprovedSample: false,
+    })
+
+    expect(detection.step0).toBe(true)
+    expect(detection.step1).toBe(true)
+  })
+
   it('step2：非 sample 项目有 local 部署时完成', () => {
     const projects = [makeProject({
       root_path: '/home/u/myapp',
