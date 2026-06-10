@@ -10,16 +10,23 @@ SingleProjectPipelineForm：单条项目流水线表单。
   - 不执行流水线或读取运行历史
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { ArtifactKind, Pipeline, PipelineTemplateSummary, ProjectPipeline } from '@/api/agent'
+import BuildConfigBar from './BuildConfigBar.vue'
+import DeployTargetReadonly from './DeployTargetReadonly.vue'
+import PipelineEnvMatrix from './PipelineEnvMatrix.vue'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
+
+type HostOption = { id: string; name: string; is_self?: boolean }
 
 const props = defineProps<{
   pipeline: ProjectPipeline
   services: Array<{ id: string; name: string }>
-  hosts: Array<{ id: string; name: string }>
+  hosts: HostOption[]
   templates: PipelineTemplateSummary[]
+  targetsByEnv?: Record<string, string[]>
+  availableEnvironments?: string[]
   initialMode?: 'template' | 'blank'
   withStructureRail?: boolean
   hidePreviewStrip?: boolean
@@ -31,6 +38,12 @@ const emit = defineEmits<{ 'update:pipeline': [ProjectPipeline] }>()
 const { t } = useAppI18n()
 const draft = ref<ProjectPipeline>({ ...props.pipeline, services: [...(props.pipeline.services ?? [])] })
 const wizard = ref<InstanceType<typeof PipelineTemplateWizard> | null>(null)
+const reservedNames = ['workspace', 'output', 'artifacts', 'version', 'env', 'date', 'time', 'run_temp_dir', 'sync_mode']
+const targetsByEnv = computed(() => props.targetsByEnv ?? {})
+const selfHostId = computed(() => props.hosts.find(host => host.is_self)?.id ?? '')
+const selectedBuilderHostId = computed(() => draft.value.roles?.builder?.hosts?.[0] ?? selfHostId.value)
+const selectedBuilderIsLocal = computed(() => selectedBuilderHostId.value === '' || (selfHostId.value !== '' && selectedBuilderHostId.value === selfHostId.value))
+const effectiveSyncMode = computed(() => selectedBuilderIsLocal.value ? 'transfer' : (draft.value.sync_mode ?? 'transfer'))
 
 watch(() => props.pipeline, (pipeline) => {
   draft.value = { ...pipeline, services: [...(pipeline.services ?? [])] }
@@ -54,6 +67,13 @@ function toggleService(name: string, checked: boolean) {
 
 function setPipeline(pipeline: Pipeline | undefined) {
   patch({ pipeline: pipeline ?? {} })
+}
+
+function setBuilderHost(hostId: string) {
+  const roles = { ...(draft.value.roles ?? {}) }
+  roles.builder = { hosts: hostId ? [hostId] : [] }
+  const hostIsLocal = hostId === '' || (selfHostId.value !== '' && hostId === selfHostId.value)
+  patch(hostIsLocal ? { roles, sync_mode: 'transfer' } : { roles })
 }
 
 function saveDraft() {
@@ -113,6 +133,30 @@ defineExpose({ saveDraft })
       </div>
     </div>
 
+    <BuildConfigBar
+      :builder-host-id="selectedBuilderHostId"
+      :sync-mode="effectiveSyncMode"
+      :sync-command="draft.sync_command ?? ''"
+      :hosts="hosts"
+      @update:builder-host-id="setBuilderHost"
+      @update:sync-mode="patch({ sync_mode: $event })"
+      @update:sync-command="patch({ sync_command: $event })"
+    />
+
+    <PipelineEnvMatrix
+      :variables="draft.variables ?? {}"
+      :environments="draft.environments ?? {}"
+      :roles="draft.roles"
+      :available-environments="availableEnvironments"
+      :hosts="hosts"
+      :reserved-names="reservedNames"
+      @update:variables="patch({ variables: $event })"
+      @update:environments="patch({ environments: $event })"
+      @update:roles="patch({ roles: $event })"
+    />
+
+    <DeployTargetReadonly :targets-by-env="targetsByEnv" />
+
     <div class="single-pipeline-lower">
       <div v-if="withStructureRail" class="single-pipeline-rail-slot">
         <slot name="rail" />
@@ -138,7 +182,7 @@ defineExpose({ saveDraft })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;

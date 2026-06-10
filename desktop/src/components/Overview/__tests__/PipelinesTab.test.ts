@@ -181,11 +181,12 @@ describe('PipelinesTab', () => {
     expect(wrapper.find('[data-test="pipeline-status"]').text()).toContain('失败')
   })
 
-  it('deploys selected environment and navigates to live console', async () => {
+  it('单环境流水线运行时自动选中唯一环境且不显示下拉', async () => {
     vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-live', status: 'running' }))
     const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
 
     await wrapper.find('[data-test="pipeline-run"]').trigger('click')
+    expect(wrapper.find('[data-test="deploy-env-select"]').exists()).toBe(false)
     await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
@@ -193,6 +194,45 @@ describe('PipelinesTab', () => {
     const workspace = useWorkspaceStore()
     expect(workspace.activeTab?.type).toBe('run')
     expect(workspace.activeTab?.id).toBe('run:run-live')
+  })
+
+  it('多环境流水线运行时必须先选环境，确认按钮初始禁用', async () => {
+    const p = project()
+    p.environments = [
+      { id: 'env-dev', name: 'dev', is_dev: true, order: 0 },
+      { id: 'env-prod', name: 'prod', is_dev: false, order: 1 },
+    ]
+    vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-multi', env_name: 'prod', status: 'running' }))
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="pipeline-run"]').trigger('click')
+
+    const select = wrapper.find('[data-test="deploy-env-select"]')
+    expect(select.exists()).toBe(true)
+    expect(wrapper.find('[data-test="deploy-confirm"]').attributes('disabled')).toBeDefined()
+
+    await select.setValue('prod')
+    expect(wrapper.find('[data-test="deploy-confirm"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-dev', expect.objectContaining({ env_name: 'prod' }))
+  })
+
+  it('无声明环境的流水线运行时不显示下拉并走默认环境兜底', async () => {
+    const p = project()
+    p.environments = []
+    vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-fallback', status: 'running' }))
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+
+    await wrapper.find('[data-test="pipeline-run"]').trigger('click')
+    expect(wrapper.find('[data-test="deploy-env-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="deploy-confirm"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-dev', expect.objectContaining({ env_name: 'dev' }))
   })
 
   it('shows running run and re-enters live console from the row', async () => {
@@ -214,6 +254,7 @@ describe('PipelinesTab', () => {
 
     await new Promise(r => setTimeout(r))
     await wrapper.find('[data-test="run-rollback"]').trigger('click')
+    expect(wrapper.find('[data-test="deploy-env-select"]').exists()).toBe(false)
     await wrapper.find('[data-test="deploy-confirm"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
@@ -221,6 +262,30 @@ describe('PipelinesTab', () => {
       env_name: 'dev',
       artifact_version: 'v1',
     }))
+  })
+
+  it('promotes successful run to target environment through deploy path', async () => {
+    const p = project()
+    p.environments = [
+      { id: 'env-dev', name: 'dev', is_dev: true, order: 0 },
+      { id: 'env-prod', name: 'prod', is_dev: false, order: 1 },
+    ]
+    vi.mocked(api.listProjectPipelineRuns).mockResolvedValue({
+      items: [run({ id: 'run-success', env_name: 'dev', artifact_version: 'v1', status: 'success' })],
+    })
+    vi.mocked(api.deployProjectPipeline).mockResolvedValue(run({ id: 'run-promote', env_name: 'prod', status: 'running' }))
+    const wrapper = mount(PipelinesTab, { props: { project: p }, global: { plugins: [installTestI18n()] } })
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="promote-run-success-prod"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-dev', expect.objectContaining({
+      env_name: 'prod',
+      artifact_version: 'v1',
+    }))
+    const workspace = useWorkspaceStore()
+    expect(workspace.activeTab?.id).toBe('run:run-promote')
   })
 
   it('shows failed step summary in expanded history', async () => {

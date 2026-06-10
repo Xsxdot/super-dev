@@ -511,6 +511,24 @@ func TestProjectPipelineKindDefaultsEmpty(t *testing.T) {
 	assert.Equal(t, model.ArtifactKind(""), got.ArtifactKind)
 }
 
+func TestProjectPipelineSyncModeJSON(t *testing.T) {
+	pp := model.ProjectPipeline{
+		ID:       "p-1",
+		Name:     "demo",
+		SyncMode: model.SyncModeTransfer,
+	}
+	data, err := json.Marshal(pp)
+	assert.NoError(t, err)
+	var got model.ProjectPipeline
+	assert.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, model.SyncModeTransfer, got.SyncMode)
+
+	// 省略时为空，按 transfer 兜底由消费方处理。
+	var empty model.ProjectPipeline
+	assert.NoError(t, json.Unmarshal([]byte(`{"id":"p-2","name":"x","pipeline":{}}`), &empty))
+	assert.Equal(t, model.SyncMode(""), empty.SyncMode)
+}
+
 func TestLogEntrySourceID(t *testing.T) {
 	e := model.LogEntry{ID: 1, DeploymentID: "svc-1", SourceID: "superdev-a3f9", Message: "hi"}
 	data, err := json.Marshal(e)

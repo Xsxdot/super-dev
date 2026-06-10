@@ -3,8 +3,8 @@
  *
  * 职责：
  *   - 验证按阶段添加多个模板
- *   - 验证模板运行机器保存为 include roles
- *   - 验证 target_role 输入保存为 pipeline.roles
+ *   - 验证模板不再渲染每模板运行机器选择
+ *   - 验证 target_role 输入保存为运行组变量引用
  *   - 验证已有 include pipeline 可回填
  *
  * 边界：
@@ -151,7 +151,7 @@ describe('PipelineTemplateWizard', () => {
     expect(wrapper.find('[data-test="add-template-deploy"]').exists()).toBe(true)
   })
 
-  it('按阶段保存多个模板和目标机器角色', async () => {
+  it('按阶段保存多个模板和运行组变量引用', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
         modelValue: undefined,
@@ -168,15 +168,15 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-1-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
+    await wrapper.find('[data-test="block-1-input-role"]').setValue('api_targets')
     await wrapper.find('[data-test="block-1-input-app_name"]').setValue('api')
-    await wrapper.find('[data-test="block-1-target-h1"]').setValue(true)
     await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
 
     const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
     expect(pipeline.build?.[0].with?.template).toBe('builtin://go-binary-build')
     expect(pipeline.deploy?.[0].with?.template).toBe('builtin://systemd-seamless-deploy')
-    expect(pipeline.deploy?.[0].with?.vars).toMatchObject({ role: 'deploy_1_targets', app_name: 'api' })
-    expect(pipeline.roles?.deploy_1_targets).toEqual(['h1'])
+    expect(pipeline.deploy?.[0].with?.vars).toMatchObject({ role: 'api_targets', app_name: 'api' })
+    expect(pipeline.roles).toBeUndefined()
     expect(pipeline.variables?.app_name).toBe('api')
   })
 
@@ -266,10 +266,11 @@ describe('PipelineTemplateWizard', () => {
     expect(wrapper.find('[data-test="block-0-input-app_name"]').exists()).toBe(true)
 
     await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
-    expect(wrapper.find('[data-test="block-1-role-targets"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-1-input-role"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-1-role-targets"]').exists()).toBe(false)
   })
 
-  it('机器选择使用紧凑网格展示', async () => {
+  it('target_role 使用变量输入且不渲染主机勾选网格', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
         modelValue: undefined,
@@ -282,11 +283,13 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="add-template-deploy"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://systemd-seamless-deploy@1.0.0')
 
-    expect(wrapper.find('[data-test="block-0-runner-targets"]').classes()).toContain('target-grid')
-    expect(wrapper.find('[data-test="block-0-role-targets"]').classes()).toContain('target-grid')
+    expect(wrapper.find('[data-test="block-0-runner-targets"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-role-targets"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-target-h1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-input-role"]').exists()).toBe(true)
   })
 
-  it('可展开隐藏的运行机器并选择保存', async () => {
+  it('不渲染每模板 runner 主机勾选和展开按钮', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
         modelValue: undefined,
@@ -306,14 +309,8 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
 
     expect(wrapper.find('[data-test="block-0-runner-h5"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="block-0-runner-more"]').text()).toBe('+2')
-
-    await wrapper.find('[data-test="block-0-runner-more"]').trigger('click')
-    await wrapper.find('[data-test="block-0-runner-h5"]').setValue(true)
-    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
-
-    const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
-    expect(pipeline.roles?.build_0_runner).toEqual(['h5'])
+    expect(wrapper.find('[data-test="block-0-runner-more"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="block-0-runner-targets"]').exists()).toBe(false)
   })
 
   it('target_role 未选择机器时禁用保存', async () => {
@@ -333,7 +330,7 @@ describe('PipelineTemplateWizard', () => {
     expect(wrapper.find('[data-test="pipeline-save-template"]').attributes('disabled')).toBeDefined()
   })
 
-  it('每个模板块可选择运行机器并保存 include roles', async () => {
+  it('新建模板块不再通过每模板 runner 保存 include roles', async () => {
     const wrapper = mount(PipelineTemplateWizard, {
       props: {
         modelValue: undefined,
@@ -345,15 +342,14 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="add-template-build"]').trigger('click')
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://go-binary-build@1.0.0')
     await wrapper.find('[data-test="block-0-input-app_name"]').setValue('api')
-    await wrapper.find('[data-test="block-0-runner-h1"]').setValue(true)
     await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
 
     const pipeline = wrapper.emitted('update:modelValue')![0][0] as Pipeline
-    expect(pipeline.build?.[0].roles).toEqual(['build_0_runner'])
-    expect(pipeline.roles?.build_0_runner).toEqual(['h1'])
+    expect(pipeline.build?.[0].roles).toBeUndefined()
+    expect(pipeline.roles?.build_0_runner).toBeUndefined()
   })
 
-  it('已有 include pipeline 时回填模板、输入和目标机器', () => {
+  it('已有 include pipeline 时回填模板、输入和运行组变量引用', () => {
     const pipeline: Pipeline = {
       roles: { deploy_0_targets: ['h1'] },
       deploy: [{
@@ -378,10 +374,11 @@ describe('PipelineTemplateWizard', () => {
 
     expect((wrapper.find('[data-test="block-0-template-select"]').element as HTMLSelectElement).value).toBe('builtin://systemd-seamless-deploy@1.0.0')
     expect((wrapper.find('[data-test="block-0-input-app_name"]').element as HTMLInputElement).value).toBe('api')
-    expect((wrapper.find('[data-test="block-0-target-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.find('[data-test="block-0-input-role"]').element as HTMLInputElement).value).toBe('deploy_0_targets')
+    expect(wrapper.find('[data-test="block-0-target-h1"]').exists()).toBe(false)
   })
 
-  it('已有 include roles 时回填模板运行机器', () => {
+  it('已有 include roles 时不渲染每模板 runner 勾选且保存时移除旧 runner 数据', async () => {
     const pipeline: Pipeline = {
       roles: { build_0_runner: ['h1'] },
       build: [{
@@ -405,10 +402,14 @@ describe('PipelineTemplateWizard', () => {
       },
     })
 
-    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-test="block-0-runner-h1"]').exists()).toBe(false)
+    await wrapper.find('[data-test="pipeline-save-template"]').trigger('click')
+    const saved = wrapper.emitted('update:modelValue')![0][0] as Pipeline
+    expect(saved.build?.[0].roles).toBeUndefined()
+    expect(saved.roles?.build_0_runner).toBeUndefined()
   })
 
-  it('已有项目级 roles 时回填运行机器和 target_role 目标', async () => {
+  it('已有项目级 roles 时只回填 target_role 变量名，不渲染主机勾选', async () => {
     const pipeline: Pipeline = {
       build: [{
         name: 'Go Build',
@@ -444,12 +445,13 @@ describe('PipelineTemplateWizard', () => {
       },
     })
 
-    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-test="block-0-runner-h1"]').exists()).toBe(false)
     await wrapper.find('[data-test="pipeline-phase-tab-deploy"]').trigger('click')
-    expect((wrapper.find('[data-test="block-1-target-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.find('[data-test="block-1-input-role"]').element as HTMLInputElement).value).toBe('deploy_1_targets')
+    expect(wrapper.find('[data-test="block-1-target-h1"]').exists()).toBe(false)
   })
 
-  it('项目级 roles 后到时重新回填运行机器', async () => {
+  it('项目级 runner roles 后到时仍不渲染每模板 runner 勾选', async () => {
     const pipeline: Pipeline = {
       build: [{
         name: 'Go Build',
@@ -470,14 +472,14 @@ describe('PipelineTemplateWizard', () => {
         hosts: [{ id: 'h1', name: 'Host 1' }],
       },
     })
-    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('[data-test="block-0-runner-h1"]').exists()).toBe(false)
 
     await wrapper.setProps({ pipelineRoles: { build_0_runner: { hosts: ['h1'] } } })
 
-    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-test="block-0-runner-h1"]').exists()).toBe(false)
   })
 
-  it('roles 使用主机名时也能回填对应 checkbox', () => {
+  it('roles 使用主机名时也不渲染每模板 runner checkbox', () => {
     const pipeline: Pipeline = {
       build: [{
         name: 'Go Build',
@@ -500,7 +502,7 @@ describe('PipelineTemplateWizard', () => {
       },
     })
 
-    expect((wrapper.find('[data-test="block-0-runner-h1"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-test="block-0-runner-h1"]').exists()).toBe(false)
   })
 
   it('左栏模板卡片不展示运行机器和关键变量摘要', () => {
@@ -529,7 +531,7 @@ describe('PipelineTemplateWizard', () => {
 
     expect(wrapper.find('[data-test="block-0-inline-runner-targets"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="block-0-inline-key-vars"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="block-0-runner-targets"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="block-0-runner-targets"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="block-0-input-app_name"]').exists()).toBe(true)
   })
 

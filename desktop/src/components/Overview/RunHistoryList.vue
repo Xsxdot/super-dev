@@ -15,10 +15,15 @@ import { Icon } from '@iconify/vue'
 import type { Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
-const props = withDefaults(defineProps<{ runs: Run[]; loading?: boolean; artifactKind?: string; limit?: number }>(), {
+const props = withDefaults(defineProps<{ runs: Run[]; loading?: boolean; artifactKind?: string; limit?: number; promotableEnvs?: string[] }>(), {
   limit: 5,
+  promotableEnvs: () => [],
 })
-const emit = defineEmits<{ detail: [run: Run]; rollback: [run: Run] }>()
+const emit = defineEmits<{
+  detail: [run: Run]
+  rollback: [run: Run]
+  promote: [{ runId: string; artifactVersion: string; targetEnv: string }]
+}>()
 const { t } = useAppI18n()
 const showAll = ref(false)
 const visibleRuns = computed(() => showAll.value ? props.runs : props.runs.slice(0, props.limit))
@@ -73,6 +78,11 @@ function summary(run: Run) {
   if (run.status === 'running') return t('overview.pipeline.runningSummary')
   if (run.status === 'canceled') return t('overview.pipeline.canceledSummary')
   return '-'
+}
+
+function promotableEnvsFor(run: Run) {
+  if (run.status !== 'success' || !run.artifact_version) return []
+  return props.promotableEnvs.filter(env => env !== run.env_name)
 }
 </script>
 
@@ -139,6 +149,19 @@ function summary(run: Run) {
               <Icon icon="lucide:rotate-ccw" aria-hidden="true" />
               {{ t('overview.pipeline.rollback') }}
             </button>
+            <template v-if="promotableEnvsFor(run).length > 0">
+              <button
+                v-for="env in promotableEnvsFor(run)"
+                :key="env"
+                type="button"
+                class="run-promote-btn"
+                :data-test="`promote-${run.id}-${env}`"
+                @click="emit('promote', { runId: run.id, artifactVersion: run.artifact_version!, targetEnv: env })"
+              >
+                <Icon icon="lucide:arrow-up-right" aria-hidden="true" />
+                {{ t('overview.pipeline.promoteTo', { env }) }}
+              </button>
+            </template>
           </span>
         </div>
       </div>
@@ -163,7 +186,7 @@ function summary(run: Run) {
   --history-version-width: 176px;
   --history-started-at-width: 184px;
   --history-artifact-kind-width: 104px;
-  --history-actions-width: 172px;
+  --history-actions-width: 260px;
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
   margin: 0;

@@ -40,6 +40,30 @@ get_project_config
 
 `validate_project_pipeline` 是只读工具，用于校验已保存的 pipeline。它会展开 include 模板、解析变量、校验 DAG、解析角色/主机，并执行插件静态参数校验，但不会执行命令、传输文件、写配置或创建 run。
 
+### 多环境（一条 pipeline 服务多个环境）
+
+一条 pipeline 可以同时服务多个环境（如 test/prod），免重复配置——环境之间不同的只是少数变量，编排共享一份。
+
+- `pipeline.variables`：pipeline 级默认变量（字符串）。
+- `pipeline.environments`：`{ 环境名: { variables } }`，按环境覆盖默认值。变量优先级：项目 < pipeline < pipeline.pipeline < `environments[env]` < 运行入参。
+- 典型用法：默认配好一套，只在 `environments.prod.variables` 里写明该环境要改的几个（如 `env=prod`、数据库地址），其余继承默认。启动命令写 `sh start.sh --env=${env}`，跑哪个环境 `${env}` 自动取对应值。
+- 各环境的部署目标主机不同，由项目里各服务在该环境的 deployment（`host_ids`）决定，pipeline 不重复指定。
+
+### 代码同步方式 sync_mode
+
+`pipeline.sync_mode` 声明构建产物如何到达目标机：
+
+- `transfer`：agent 把打包后的产物上传到目标机（默认，留空即此）。
+- `remote_cmd`：目标机执行命令（如 `git pull`）自行获取代码。
+
+### 运行组 roles（按需，少数场景）
+
+大多数 deploy 步骤自动发往「当前环境的部署目标」，无需配 roles。只有少数插件（如 nginx 配置的 upstream 需指向另一组机）才需要具名运行组：
+
+- `pipeline.roles`：`{ 组名: { from_service } }`（从某服务在当前环境的 deployment 派生主机）或 `{ 组名: { hosts: [...] } }`（显式一组主机）。
+- 插件通过 `role: ${组名}` 引用；多个步骤写同一组名即共用同一组机。
+- `roles` 里的 hosts 必须用 `list_hosts` 返回的 `hosts[].id`，不能用主机名（后端会在保存时把名规整为 ID，但应直接传 ID）。
+
 ## 执行 deploy 或 rollback
 
 执行入口是 `deploy_project_pipeline`。参数应明确：
@@ -48,7 +72,7 @@ get_project_config
 - `pipeline_id`
 - `env_name`
 - deploy 时的 `variables`
-- rollback 时的 `artifact_version`
+- `artifact_version`：复用已构建的产物，留空则正常构建+部署。指定它会**跳过 build 阶段、只跑 deploy+finally**，用于两种场景：①回滚（重新部署旧版本）；②升级（把 test 环境某次成功 run 产出的产物，用同一 `artifact_version` + `env_name=prod` 部署到 prod，复用同一制品、套用 prod 的变量覆盖和部署目标）。
 - 需要指定机器时的 `host_ids`。这些值必须来自 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`），不能使用主机展示名。
 
 执行前必须已经跑过 `validate_project_pipeline`，并确认返回成功。

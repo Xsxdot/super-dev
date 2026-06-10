@@ -32,8 +32,9 @@ const refreshingRuns = ref(false)
 const editing = ref(false)
 const editorMode = ref<'template' | 'blank'>('blank')
 const editingPipelineId = ref<string | undefined>(undefined)
-const pending = ref<{ pipeline: ProjectPipeline; rollbackRun?: Run } | null>(null)
+const pending = ref<{ pipeline: ProjectPipeline; rollbackRun?: Run; env?: string } | null>(null)
 const deployError = ref<string | null>(null)
+type PromoteRunPayload = { runId: string; artifactVersion: string; targetEnv: string }
 const hasPipelines = computed(() => (props.project.pipelines ?? []).length > 0)
 const consoleSummary = computed(() => {
   const pipelines = props.project.pipelines ?? []
@@ -51,6 +52,13 @@ const summaryItems = computed(() => [
   { key: 'failed', label: t('overview.pipeline.failedLabel'), value: consoleSummary.value.failed, tone: 'failed', icon: 'lucide:circle-x' },
   { key: 'running', label: t('overview.pipeline.runningLabel'), value: consoleSummary.value.running, tone: 'running', icon: 'lucide:refresh-cw' },
 ])
+// 运行对话框需要展示环境下拉的条件：新建运行（非回滚）且可选环境多于一个
+const runDialogEnvs = computed(() =>
+  pending.value && !pending.value.rollbackRun ? promotableEnvsForPipeline(pending.value.pipeline) : [],
+)
+const needsEnvChoice = computed(() => runDialogEnvs.value.length > 1)
+// 多环境且尚未选定时禁用确认，杜绝静默部署到默认环境
+const confirmDisabled = computed(() => needsEnvChoice.value && !pending.value?.env)
 
 onMounted(() => {
   void templateStore.loadTemplates().catch(() => undefined)
@@ -153,13 +161,22 @@ function defaultEnvName() {
 }
 
 function requestRun(pipeline: ProjectPipeline) {
-  pending.value = { pipeline }
+  const envs = promotableEnvsForPipeline(pipeline)
+  // 单环境无歧义直接选中；多环境/无环境用空串占位，与下拉的 <option value=""> 对齐，避免浏览器显示空白
+  const env = envs.length === 1 ? envs[0] : ''
+  pending.value = { pipeline, env }
   deployError.value = null
 }
 
 function requestRollback(pipeline: ProjectPipeline, run: Run) {
   pending.value = { pipeline, rollbackRun: run }
   deployError.value = null
+}
+
+function promotableEnvsForPipeline(pipeline: ProjectPipeline) {
+  const pipelineEnvs = Object.keys(pipeline.environments ?? {})
+  if (pipelineEnvs.length > 0) return pipelineEnvs
+  return props.project.environments?.map(env => env.name) ?? []
 }
 
 function openEditor(mode: 'template' | 'blank', pipelineId?: string) {
@@ -173,12 +190,27 @@ async function confirmDeploy() {
   const { pipeline, rollbackRun } = pending.value
   try {
     const run = await api.deployProjectPipeline(props.project.id, pipeline.id, {
-      env_name: rollbackRun?.env_name || defaultEnvName(),
+      env_name: rollbackRun?.env_name || pending.value.env || defaultEnvName(),
       artifact_version: rollbackRun?.artifact_version,
     })
     const key = keyForPipeline(pipeline)
     runsByPipeline[key] = [run, ...(runsByPipeline[key] ?? []).filter(item => item.id !== run.id)]
     pending.value = null
+    openRunConsole(pipeline, run, 'live')
+  } catch (e) {
+    deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
+  }
+}
+
+async function promoteRun(pipeline: ProjectPipeline, payload: PromoteRunPayload) {
+  deployError.value = null
+  try {
+    const run = await api.deployProjectPipeline(props.project.id, pipeline.id, {
+      env_name: payload.targetEnv,
+      artifact_version: payload.artifactVersion,
+    })
+    const key = keyForPipeline(pipeline)
+    runsByPipeline[key] = [run, ...(runsByPipeline[key] ?? []).filter(item => item.id !== run.id)]
     openRunConsole(pipeline, run, 'live')
   } catch (e) {
     deployError.value = e instanceof Error ? e.message : t('overview.pipeline.deployFailed')
@@ -273,8 +305,10 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
                 :runs="runsForPipeline(pipeline)"
                 :loading="loadingForPipeline(pipeline)"
                 :artifact-kind="pipeline.artifact_kind || 'file'"
+                :promotable-envs="promotableEnvsForPipeline(pipeline)"
                 @detail="openDetail(pipeline, $event)"
                 @rollback="requestRollback(pipeline, $event)"
+                @promote="promoteRun(pipeline, $event)"
               />
             </div>
           </div>
@@ -295,8 +329,15 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
     />
     <div v-if="pending" class="deploy-dialog">
       <div>{{ pending.rollbackRun ? t('overview.pipeline.rollback') : t('overview.pipeline.run') }} · {{ pending.pipeline.name }}</div>
+      <label v-if="needsEnvChoice" class="deploy-env-field">
+        <span>{{ t('overview.pipeline.selectEnv') }}</span>
+        <select v-model="pending.env" data-test="deploy-env-select" class="deploy-env-select">
+          <option value="" disabled>{{ t('overview.pipeline.selectEnv') }}</option>
+          <option v-for="env in runDialogEnvs" :key="env" :value="env">{{ env }}</option>
+        </select>
+      </label>
       <div v-if="deployError" class="deploy-error">{{ deployError }}</div>
-      <button type="button" data-test="deploy-confirm" @click="confirmDeploy">{{ t('overview.pipeline.confirm') }}</button>
+      <button type="button" data-test="deploy-confirm" :disabled="confirmDisabled" @click="confirmDeploy">{{ t('overview.pipeline.confirm') }}</button>
       <button type="button" @click="pending = null">{{ t('overview.pipeline.cancel') }}</button>
     </div>
   </section>
@@ -547,6 +588,27 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
 .deploy-dialog button {
   margin-top: 12px;
   margin-right: 8px;
+}
+.deploy-env-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.deploy-env-select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.deploy-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .deploy-error {
   margin-top: 8px;

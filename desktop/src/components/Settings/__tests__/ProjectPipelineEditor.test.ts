@@ -357,6 +357,9 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Build Frontend')
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('Deploy')
     expect(wrapper.find('[data-test="pipeline-preview-flow"]').text()).toContain('ali-01')
+    const nodes = wrapper.findAll('[data-test="pipeline-preview-node"]')
+    expect(nodes[0].text()).toContain('本地')
+    expect(nodes[0].text()).not.toContain('host-1')
 
     await wrapper.find('[data-test="pipeline-preview-close"]').trigger('click')
     expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
@@ -393,6 +396,38 @@ describe('ProjectPipelineEditor', () => {
     const nodes = wrapper.findAll('[data-test="pipeline-preview-node"]')
     expect(nodes).toHaveLength(5)
     expect(nodes.at(-1)?.classes()).not.toContain('preview-node-full-row')
+  })
+
+  it('passes deploy targets per environment to form', async () => {
+    const p = projectWithPipeline()
+    p.environments = [
+      { id: 'e-test', name: 'test', is_dev: true, order: 0 },
+      { id: 'e-prod', name: 'prod', is_dev: false, order: 1 },
+    ]
+    p.pipelines![0].environments = {
+      test: { variables: { env: 'test' } },
+      prod: { variables: { env: 'prod' } },
+    }
+    p.services = p.services.map(service => ({
+      ...service,
+      deployments: [
+        { id: `${service.id}-test`, env_name: 'test', location: 'remote', host_ids: ['h1'], status: '' },
+        { id: `${service.id}-prod`, env_name: 'prod', location: 'remote', host_ids: ['h1'], status: '' },
+      ],
+    }))
+
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: p,
+        pipelineId: 'deploy-server-admin-prod',
+        pipelineTemplates: [buildTemplate, deployTemplate],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    const form = wrapper.getComponent({ name: 'SingleProjectPipelineForm' })
+    expect(form.props('targetsByEnv')).toMatchObject({ test: ['host-1'], prod: ['host-1'] })
   })
 
   it('点击保留变量按钮后列出变量名和作用', async () => {

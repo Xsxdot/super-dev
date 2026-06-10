@@ -220,9 +220,11 @@ export interface PipelineEnvironment {
 export interface ProjectPipelineRole {
   from_service?: string
   hosts?: string[]
+  environments?: Record<string, string[]>
 }
 
 export type ArtifactKind = 'file' | 'image'
+export type SyncMode = 'transfer' | 'remote_cmd'
 
 export interface ProjectPipeline {
   id: string
@@ -232,6 +234,8 @@ export interface ProjectPipeline {
   variables?: Record<string, string>
   environments?: Record<string, PipelineEnvironment>
   roles?: Record<string, ProjectPipelineRole>
+  sync_mode?: SyncMode
+  sync_command?: string
   pipeline: Pipeline
 }
 
@@ -496,12 +500,15 @@ export interface LogRule {
 
 export interface AgentSettings {
   log_retention_days: number
+  artifact_keep_versions: number
   sample_seeded?: boolean
   onboarding_completed?: boolean
   approval?: ApprovalPolicy
 }
 
-export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed' | 'approval'>>
+export type AgentSettingsPatch = Partial<
+  Pick<AgentSettings, 'log_retention_days' | 'artifact_keep_versions' | 'onboarding_completed' | 'approval'>
+>
 
 export interface ApprovalPolicy {
   config_upsert: boolean

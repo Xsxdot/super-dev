@@ -88,7 +88,7 @@ describe('RunHistoryList', () => {
 
   it('keeps the artifact kind column wide enough for the full header label', () => {
     expect(runHistoryListSource).toContain('--history-artifact-kind-width: 104px;')
-    expect(runHistoryListSource).toContain('--history-actions-width: 172px;')
+    expect(runHistoryListSource).toContain('--history-actions-width: 260px;')
     expect(runHistoryListSource).toMatch(/grid-template-columns:\s*94px var\(--history-version-width\) 64px var\(--history-started-at-width\) 72px var\(--history-artifact-kind-width\) minmax\(150px,\s*1fr\) var\(--history-actions-width\);/)
   })
 
@@ -99,5 +99,39 @@ describe('RunHistoryList', () => {
 
   it('keeps history action buttons readable without bold squeezed text', () => {
     expect(runHistoryListSource).toMatch(/\.run-actions button\s*{[^}]*padding:\s*0 10px;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/s)
+  })
+
+  it('shows promote action for successful run', () => {
+    const wrapper = mount(RunHistoryList, {
+      props: {
+        runs: [run({ id: 'r1', env_name: 'test', artifact_version: 'v1', status: 'success' })],
+        promotableEnvs: ['prod'],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    expect(wrapper.find('[data-test="promote-r1-prod"]').exists()).toBe(true)
+  })
+
+  it('emits promote with artifact version and target env', async () => {
+    const wrapper = mount(RunHistoryList, {
+      props: {
+        runs: [run({ id: 'r1', env_name: 'test', artifact_version: 'v1', status: 'success' })],
+        promotableEnvs: ['prod'],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await wrapper.get('[data-test="promote-r1-prod"]').trigger('click')
+    expect(wrapper.emitted('promote')?.[0][0]).toMatchObject({ runId: 'r1', artifactVersion: 'v1', targetEnv: 'prod' })
+  })
+
+  it('hides promote for failed run', () => {
+    const wrapper = mount(RunHistoryList, {
+      props: {
+        runs: [run({ id: 'r2', env_name: 'test', artifact_version: 'v1', status: 'failed' })],
+        promotableEnvs: ['prod'],
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    expect(wrapper.find('[data-test="promote-r2-prod"]').exists()).toBe(false)
   })
 })

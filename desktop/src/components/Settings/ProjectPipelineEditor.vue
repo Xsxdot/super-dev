@@ -24,6 +24,7 @@ import {
   type PipelineStep,
   type Project,
   type ProjectPipeline,
+  type Host,
 } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue } from '@/lib/configDraft'
@@ -50,7 +51,7 @@ const activePipelineId = ref(props.pipelineId ?? draft.value.pipelines[0]?.id ??
 const activePipeline = computed(() =>
   draft.value.pipelines.find(pipeline => pipeline.id === activePipelineId.value) ?? draft.value.pipelines[0],
 )
-const hosts = ref<Array<{ id: string; name: string }>>([])
+const hosts = ref<Array<Pick<Host, 'id' | 'name' | 'is_self'>>>([])
 const errors = ref<string[]>([])
 const saving = ref(false)
 // 全屏预览弹层开关：顶部「预览执行图」按钮触发，替代旧的底部预览窄带。
@@ -80,7 +81,7 @@ onMounted(async () => {
   void loadEditorPreview()
   try {
     const list = await api.listHosts()
-    hosts.value = list.map(h => ({ id: h.id, name: h.name }))
+    hosts.value = list.map(h => ({ id: h.id, name: h.name, is_self: h.is_self }))
   } catch {
     hosts.value = []
   }
@@ -146,42 +147,46 @@ function hostDisplayName(hostID: string) {
   return hosts.value.find(host => host.id === hostID)?.name ?? hostID
 }
 
-function phaseRunnerTarget(phase: PipelinePhase) {
-  const pipeline = activePipeline.value?.pipeline
-  for (const [index, step] of (pipeline?.[phase] ?? []).entries()) {
-    for (const role of step.roles ?? []) {
-      const target = pipeline?.roles?.[role]?.[0]
-      if (target) return hostDisplayName(target)
+const targetsByEnv = computed<Record<string, string[]>>(() => {
+  const out: Record<string, string[]> = {}
+  const envs = Object.keys(activePipeline.value?.environments ?? {})
+  const serviceNames = activePipeline.value?.services ?? []
+  for (const env of envs) {
+    const ids = new Set<string>()
+    for (const service of draft.value.services ?? []) {
+      if (serviceNames.length > 0 && !serviceNames.includes(service.name)) continue
+      const deployment = (service.deployments ?? []).find(item => item.env_name === env)
+      for (const id of deployment?.host_ids ?? []) {
+        ids.add(id)
+      }
     }
-    const conventionRole = `${phase}_${index}_runner`
-    const conventionTarget = activePipeline.value?.roles?.[conventionRole]?.hosts?.[0]
-    if (conventionTarget) return hostDisplayName(conventionTarget)
+    out[env] = [...ids].map(hostDisplayName)
   }
-  if (phase === 'build') return hosts.value[0]?.name
-  return undefined
-}
+  return out
+})
+
+const availableEnvironmentNames = computed(() => draft.value.environments.map(env => env.name).filter(Boolean))
 
 function compactStepName(name: string) {
   const parts = name.split('.')
   return parts[parts.length - 1] || name
 }
 
-function previewNodeFromStep(step: PreviewStepRun, index: number, targetFallback?: string) {
+function previewNodeFromStep(step: PreviewStepRun, index: number) {
   const target = compiledPreviewTarget(step)
   return {
     id: `${step.phase}-${index}-${step.step_name}`,
     phase: step.phase,
     name: compactStepName(step.step_name),
-    target: target === t('common.local') && targetFallback ? targetFallback : target,
+    target,
     icon: phaseIcon(step.phase),
   }
 }
 
 function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
-  const buildTarget = phaseRunnerTarget('build')
   const buildNodes = steps
     .filter(step => step.phase === 'build')
-    .map((step, index) => previewNodeFromStep(step, index, buildTarget))
+    .map((step, index) => previewNodeFromStep(step, index))
     .slice(0, 3)
   const deploySteps = steps.filter(step => step.phase === 'deploy')
   const deployTarget = deploySteps
@@ -211,7 +216,7 @@ function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
   const remaining = Math.max(0, 5 - buildNodes.length - deployNodes.length)
   const finallyNodes = steps
     .filter(step => step.phase === 'finally')
-    .map((step, index) => previewNodeFromStep(step, index, deployTarget))
+    .map((step, index) => previewNodeFromStep(step, index))
     .slice(0, remaining)
   return [...buildNodes, ...deployNodes, ...finallyNodes].slice(0, 5)
 }
@@ -397,6 +402,8 @@ async function save() {
               :services="draft.services"
               :hosts="hosts"
               :templates="pipelineTemplates ?? []"
+              :targets-by-env="targetsByEnv"
+              :available-environments="availableEnvironmentNames"
               :initial-mode="initialMode"
               hide-preview-strip
               :on-view-template="viewTemplate"

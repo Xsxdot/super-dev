@@ -89,6 +89,44 @@ func TestResolveProjectPipelineAppliesEnvVariablesAndServiceRoles(t *testing.T) 
 	assert.Equal(t, "project:p1:pipeline:deploy-dev:env:dev", resolved.RunID)
 }
 
+func TestResolveProjectPipelinePrefersRoleHostsForCurrentEnvironment(t *testing.T) {
+	project := model.Project{
+		ID: "p1",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "deploy",
+			Name: "Deploy",
+			Roles: map[string]model.ProjectPipelineRole{
+				"deploy_targets": {
+					Hosts: []string{"h-legacy"},
+					Environments: map[string][]string{
+						"test": {"h-test-1", "h-test-2"},
+						"prod": {"h-prod-1", "h-prod-2"},
+					},
+				},
+			},
+			Pipeline: model.Pipeline{
+				Deploy: []model.Step{{Name: "Deploy", Type: "remote_command", Roles: []string{"deploy_targets"}}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "deploy",
+		EnvName:    "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-prod-1", "h-prod-2"}, resolved.Pipeline.Roles["deploy_targets"])
+
+	fallback, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "deploy",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-legacy"}, fallback.Pipeline.Roles["deploy_targets"])
+}
+
 func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
 	project := model.Project{
 		ID:        "p1",
@@ -127,6 +165,169 @@ func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
 	// 制品位置来自渲染后的保留字变量 artifact。
 	assert.Equal(t, "/tmp/super-debug-pipeline-preview/artifacts/api-v1.tar.gz", resolved.Pipeline.Variables["artifact"])
 	assert.Equal(t, "batch:2", resolved.Pipeline.Deploy[0].Concurrency)
+}
+
+func TestResolveInjectsSyncModeVar(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "pp-1",
+			Name:     "demo",
+			SyncMode: model.SyncModeRemoteCmd,
+			Pipeline: model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "remote_cmd", resolved.Pipeline.Variables["sync_mode"])
+}
+
+func TestResolveInjectsSyncCommandVar(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:          "pp-1",
+			Name:        "demo",
+			SyncMode:    model.SyncModeRemoteCmd,
+			SyncCommand: "git pull --ff-only",
+			Pipeline:    model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "git pull --ff-only", resolved.Pipeline.Variables["sync_command"])
+}
+
+func TestResolveSyncModeDefaultsTransfer(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:       "pp-1",
+			Name:     "demo",
+			Pipeline: model.Pipeline{},
+		}},
+	}
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "transfer", resolved.Pipeline.Variables["sync_mode"])
+}
+
+func TestResolveProjectPipelineAppliesBuilderRoleToBuildSteps(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Build",
+					Type: "remote_command",
+					With: map[string]interface{}{"cmd": "go build"},
+				}},
+				Deploy: []model.Step{{
+					Name: "Deploy",
+					Type: "remote_command",
+					With: map[string]interface{}{"cmd": "systemctl restart api"},
+				}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-builder"}, resolved.Pipeline.Roles["builder"])
+	require.Len(t, resolved.Pipeline.Build, 1)
+	assert.Equal(t, []string{"builder"}, resolved.Pipeline.Build[0].Roles)
+	require.Len(t, resolved.Pipeline.Deploy, 1)
+	assert.Empty(t, resolved.Pipeline.Deploy[0].Roles)
+}
+
+func TestResolveProjectPipelineDoesNotApplyBuilderRoleToLocalOnlyBuildSteps(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{
+					{Name: "Build", Type: "local_command", With: map[string]interface{}{"cmd": "go build"}},
+					{Name: "Package", Type: "archive_package", With: map[string]interface{}{"artifact": "api.tar.gz"}},
+					{Name: "Include", Type: "include", With: map[string]interface{}{"template": "builtin://go-binary-build"}},
+				},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resolved.Pipeline.Build, 3)
+	assert.Empty(t, resolved.Pipeline.Build[0].Roles)
+	assert.Empty(t, resolved.Pipeline.Build[1].Roles)
+	assert.Empty(t, resolved.Pipeline.Build[2].Roles)
+}
+
+func TestResolveProjectPipelineDoesNotApplyBuilderRoleToUnknownBuildStep(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Custom",
+					Type: "custom_build_plugin",
+					With: map[string]interface{}{"cmd": "build"},
+				}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resolved.Pipeline.Build, 1)
+	assert.Empty(t, resolved.Pipeline.Build[0].Roles)
 }
 
 func TestResolveProjectPipelineInjectsWorkspaceForRuntimeWithoutPreview(t *testing.T) {

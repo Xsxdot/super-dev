@@ -135,7 +135,7 @@ describe('settings style contract', () => {
   it('keeps pipeline base fields above the phase wizard', () => {
     const source = singlePipelineFormSource()
 
-    expect(source).toMatch(/\.single-pipeline-form\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\);/s)
+    expect(source).toMatch(/\.single-pipeline-form\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto\s+auto\s+minmax\(0,\s*1fr\);/s)
     expect(source).not.toContain('<template #base>')
   })
 

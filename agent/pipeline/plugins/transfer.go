@@ -25,6 +25,7 @@ type FileTransfer interface {
 // Transfer copies one local file or directory source to remote targets.
 type Transfer struct {
 	transfer FileTransfer
+	runner   RemoteRunner
 }
 
 // NewTransfer creates Transfer.
@@ -35,7 +36,8 @@ type Transfer struct {
 // 返回：
 //   - transfer 插件实例
 func NewTransfer(transfer FileTransfer) *Transfer {
-	return &Transfer{transfer: transfer}
+	runner, _ := transfer.(RemoteRunner)
+	return &Transfer{transfer: transfer, runner: runner}
 }
 
 // Name returns the plugin type name.
@@ -95,6 +97,9 @@ func (p *Transfer) Execute(ctx *pipeline.RunContext, step model.Step, targets []
 	if err := p.ValidateTargets(step, targets); err != nil {
 		return err
 	}
+	if ctx.Vars["sync_mode"] == "remote_cmd" {
+		return p.executeRemoteSync(ctx, step, targets)
+	}
 	if p.transfer == nil {
 		return errors.New("file transfer is required")
 	}
@@ -103,6 +108,27 @@ func (p *Transfer) Execute(ctx *pipeline.RunContext, step model.Step, targets []
 	ctx.LogLine("transfer: "+source+" -> "+targetPath, model.StreamCommand)
 	for _, target := range targets {
 		if err := p.transfer.Transfer(ctx.Context, target, source, targetPath, ctx.LogLine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Transfer) executeRemoteSync(ctx *pipeline.RunContext, step model.Step, targets []pipeline.Target) error {
+	cmd := withString(step.With, "remote_cmd", "sync_cmd")
+	if cmd == "" {
+		cmd = ctx.Vars["sync_command"]
+	}
+	if cmd == "" {
+		return errors.New("transfer remote_cmd mode requires with.remote_cmd or sync_command")
+	}
+	if p.runner == nil {
+		return errors.New("transfer remote_cmd mode requires remote runner")
+	}
+	workDir := withString(step.With, "workDir", "work_dir", "workdir")
+	ctx.LogLine("remote sync: "+cmd, model.StreamCommand)
+	for _, target := range targets {
+		if err := p.runner.RunRemote(ctx.Context, target, cmd, workDir, ctx.LogLine); err != nil {
 			return err
 		}
 	}

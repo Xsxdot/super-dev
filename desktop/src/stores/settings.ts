@@ -38,6 +38,7 @@ function saveHiddenServiceIds(ids: string[]) {
 export const useSettingsStore = defineStore('settings', () => {
   const agentSettings = ref<AgentSettings>({
     log_retention_days: 7,
+    artifact_keep_versions: 10,
     sample_seeded: false,
     onboarding_completed: false,
     approval: {
@@ -69,6 +70,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function saveLogRetentionDays(days: number) {
     const saved = await api.putSettings({ log_retention_days: days })
+    agentSettings.value = saved
+  }
+
+  async function saveArtifactKeepVersions(versions: number) {
+    const saved = await api.putSettings({ artifact_keep_versions: versions })
     agentSettings.value = saved
   }
 
@@ -121,6 +127,7 @@ export const useSettingsStore = defineStore('settings', () => {
     error,
     loadAgentSettings,
     saveLogRetentionDays,
+    saveArtifactKeepVersions,
     saveApprovalPolicy,
     setOnboardingCompleted,
     loadAutostart,

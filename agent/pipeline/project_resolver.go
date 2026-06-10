@@ -80,12 +80,21 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	}
 	runtimeVersion := req.RunVariables["version"]
 	vars = mergeStringMaps(vars, req.RunVariables)
-	vars = MergeVariables(vars, map[string]string{
+	syncMode := string(pp.SyncMode)
+	if syncMode == "" {
+		syncMode = string(model.SyncModeTransfer)
+	}
+	reservedVars := map[string]string{
 		// workspace 不依赖本次运行的临时目录，真实运行也需要先参与 include vars 渲染。
 		"workspace": req.Project.RootPath,
 		"env":       req.EnvName,
 		"version":   runtimeVersion,
-	})
+		"sync_mode": syncMode,
+	}
+	if pp.SyncCommand != "" {
+		reservedVars["sync_command"] = pp.SyncCommand
+	}
+	vars = MergeVariables(vars, reservedVars)
 	if req.Preview {
 		vars = MergeVariables(vars, PreviewReservedVars(ReservedVarOptions{
 			Workspace: req.Project.RootPath,
@@ -101,6 +110,9 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	}
 
 	p := pp.Pipeline
+	if len(resolvedRoles["builder"]) > 0 {
+		p.Build = applyDefaultBuildRole(p.Build, "builder")
+	}
 	p.Variables = vars
 	p.Roles = resolvedRoles
 	p.Build = renderSteps(p.Build, vars)
@@ -113,6 +125,28 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 		RunID:           fmt.Sprintf("project:%s:pipeline:%s:env:%s", req.Project.ID, pp.ID, req.EnvName),
 		ServiceNames:    append([]string(nil), serviceNames...),
 	}, nil
+}
+
+func applyDefaultBuildRole(steps []model.Step, roleName string) []model.Step {
+	out := make([]model.Step, len(steps))
+	for i, step := range steps {
+		out[i] = step
+		if len(out[i].Roles) == 0 && canApplyDefaultBuildRole(out[i].Type) {
+			out[i].Roles = []string{roleName}
+		}
+	}
+	return out
+}
+
+func canApplyDefaultBuildRole(stepType string) bool {
+	switch stepType {
+	case "remote_command", "transfer":
+		// 只有需要远端 target 的内置构建步骤才默认绑定构建机。
+		// 新增插件必须显式进入白名单，避免本地/元步骤被隐式套 roles 后破坏插件校验。
+		return true
+	default:
+		return false
+	}
 }
 
 func findProjectPipeline(items []model.ProjectPipeline, id string) (model.ProjectPipeline, bool) {
@@ -150,6 +184,12 @@ func rejectRunVariableReservedOverrides(vars map[string]string) error {
 func resolveProjectRoles(project model.Project, envName string, roles map[string]model.ProjectPipelineRole) (map[string][]string, error) {
 	out := map[string][]string{}
 	for roleName, role := range roles {
+		if role.Environments != nil {
+			if hosts, ok := role.Environments[envName]; ok {
+				out[roleName] = append([]string(nil), hosts...)
+				continue
+			}
+		}
 		if len(role.Hosts) > 0 {
 			out[roleName] = append([]string(nil), role.Hosts...)
 			continue

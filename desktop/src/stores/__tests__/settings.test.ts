@@ -29,7 +29,7 @@ describe('settingsStore', () => {
   })
 
   it('loadAgentSettings 从 agent 加载日志保留天数', async () => {
-    vi.spyOn(agentApi, 'getSettings').mockResolvedValue({ log_retention_days: 14 })
+    vi.spyOn(agentApi, 'getSettings').mockResolvedValue({ log_retention_days: 14, artifact_keep_versions: 10 })
     const store = useSettingsStore()
 
     await store.loadAgentSettings()
@@ -40,6 +40,7 @@ describe('settingsStore', () => {
   it('saveLogRetentionDays 持久化到 agent 并更新本地状态', async () => {
     vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
       log_retention_days: 21,
+      artifact_keep_versions: 10,
       sample_seeded: false,
       onboarding_completed: false,
     })
@@ -51,14 +52,30 @@ describe('settingsStore', () => {
     expect(store.agentSettings.log_retention_days).toBe(21)
   })
 
+  it('saveArtifactKeepVersions 持久化到 agent 并更新本地状态', async () => {
+    vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
+      log_retention_days: 7,
+      artifact_keep_versions: 20,
+      sample_seeded: false,
+      onboarding_completed: false,
+    })
+    const store = useSettingsStore()
+
+    await store.saveArtifactKeepVersions(20)
+
+    expect(agentApi.putSettings).toHaveBeenCalledWith({ artifact_keep_versions: 20 })
+    expect(store.agentSettings.artifact_keep_versions).toBe(20)
+  })
+
   it('setOnboardingCompleted patches only completion flag', async () => {
     vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
       log_retention_days: 7,
+      artifact_keep_versions: 10,
       sample_seeded: true,
       onboarding_completed: true,
     })
     const store = useSettingsStore()
-    store.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
+    store.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: false }
 
     await store.setOnboardingCompleted(true)
 

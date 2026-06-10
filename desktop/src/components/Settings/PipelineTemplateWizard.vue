@@ -4,7 +4,7 @@ PipelineTemplateWizard：模板化流水线组合编辑器。
 职责：
   - 无 pipeline 时提供「配置流水线」入口
   - 按 build/deploy/finally 阶段组合多个模板 include
-  - 把 target_role 输入保存为 pipeline.roles 机器映射
+  - 把 target_role 输入保存为运行组变量名引用
   - 展示后端展开后的流水线预览
 
 边界：
@@ -35,8 +35,6 @@ type TemplateBlock = {
   phase: PipelinePhase
   selectedKey: string
   vars: Record<string, TemplateVarValue>
-  targets: Record<string, string[]>
-  runnerTargets: string[]
 }
 
 type HostOption = { id: string; name: string }
@@ -69,7 +67,6 @@ const activePhase = ref<PipelinePhase>('build')
 const activeStation = ref<WizardStation>('build')
 const draggingBlockId = ref<string | null>(null)
 const nextBlockId = ref(0)
-const expandedRunnerBlockIDs = ref<Set<string>>(new Set())
 const { t } = useAppI18n()
 
 const canSave = computed(() => blocks.value.length > 0 && blocks.value.every(block => {
@@ -83,15 +80,13 @@ const activeBlockInputs = computed<[string, TemplateInput][]>(() => {
   const template = block ? selectedFor(block) : null
   return Object.entries(template?.inputs ?? {})
 })
-const activeBlockTargetInputs = computed(() => activeBlockInputs.value.filter(([, input]) => input.type === 'target_role'))
-const activeBlockFieldInputs = computed(() => activeBlockInputs.value.filter(([, input]) => input.type !== 'target_role'))
 const previewBlocks = computed(() =>
   blocks.value
     .map(block => ({
       id: block.id,
       phase: block.phase,
       name: selectedFor(block)?.name || phaseLabel(block.phase),
-      target: block.runnerTargets[0] || Object.values(block.targets)[0]?.[0] || t('common.local'),
+      target: t('common.local'),
       icon: phaseIcon(block.phase),
     }))
     .slice(0, 5),
@@ -140,10 +135,6 @@ function phaseDisplayLabel(phase: PipelinePhase) {
   return `${phaseLabel(phase).replace(/\s*Phase$/, '').replace(/阶段$/, '')} ${phase}`
 }
 
-function roleHostIDs(pipeline: Pipeline | undefined, role: string) {
-  return pipeline?.roles?.[role] ?? props.pipelineRoles?.[role]?.hosts ?? []
-}
-
 function phaseIcon(phase: PipelinePhase) {
   if (phase === 'deploy') return 'lucide:server'
   if (phase === 'finally') return 'lucide:shield-check'
@@ -151,7 +142,7 @@ function phaseIcon(phase: PipelinePhase) {
 }
 
 function createBlock(phase: PipelinePhase, selectedKey = ''): TemplateBlock {
-  return { id: String(nextBlockId.value++), phase, selectedKey, vars: {}, targets: {}, runnerTargets: [] }
+  return { id: String(nextBlockId.value++), phase, selectedKey, vars: {} }
 }
 
 function activateBlock(block: TemplateBlock) {
@@ -168,9 +159,6 @@ function addBlock(phase: PipelinePhase) {
 
 function removeBlock(block: TemplateBlock) {
   blocks.value = blocks.value.filter(item => item !== block)
-  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
-  nextExpanded.delete(block.id)
-  expandedRunnerBlockIDs.value = nextExpanded
   if (activeBlockId.value === block.id) {
     activeBlockId.value = blocks.value[0]?.id ?? null
   }
@@ -203,12 +191,7 @@ function dropBlock(target: TemplateBlock) {
 
 function resetBlockInputsFromTemplate(block: TemplateBlock, template?: PipelineTemplateSummary) {
   block.vars = {}
-  block.targets = {}
   for (const [name, input] of Object.entries(template?.inputs ?? {})) {
-    if (input.type === 'target_role') {
-      block.targets[name] = []
-      continue
-    }
     if (input.type === 'file_list') {
       block.vars[name] = []
       continue
@@ -240,22 +223,12 @@ async function importBlock(phase: PipelinePhase) {
   activateBlock(block)
 }
 
-function runnerRoleKey(block: TemplateBlock) {
-  return `${block.phase}_${block.id}_runner`
-}
-
-function roleKey(block: TemplateBlock, inputName: string) {
-  if (inputName === 'role') return `${block.phase}_${block.id}_targets`
-  return `${block.phase}_${block.id}_${inputName}_targets`
-}
-
 function hydrateFromPipeline(pipeline?: Pipeline) {
   blocks.value = []
   activeBlockId.value = null
   activePhase.value = 'build'
   activeStation.value = 'build'
   nextBlockId.value = 0
-  expandedRunnerBlockIDs.value = new Set()
   if (!pipeline) return
   for (const phase of phases) {
     for (const step of pipeline[phase] ?? []) {
@@ -273,18 +246,6 @@ function hydrateFromPipeline(pipeline?: Pipeline) {
         phase,
         selectedKey,
         vars,
-        targets: {},
-        runnerTargets: [],
-      }
-      const runnerRoles = step.roles?.length ? step.roles : [runnerRoleKey(block)]
-      for (const role of runnerRoles) {
-        block.runnerTargets.push(...roleHostIDs(pipeline, role))
-      }
-      block.runnerTargets = Array.from(new Set(block.runnerTargets))
-      for (const [name, value] of Object.entries(vars)) {
-        if (typeof value !== 'string') continue
-        const ids = roleHostIDs(pipeline, String(value))
-        if (ids) block.targets[name] = [...ids]
       }
       blocks.value.push(block)
       if (!activeBlockId.value) {
@@ -309,76 +270,7 @@ function disable() {
   emit('update:modelValue', undefined)
 }
 
-function hostAliases(host: HostOption) {
-  return Array.from(new Set([host.id, host.name].filter(Boolean)))
-}
-
-function includesHost(values: string[], host: HostOption) {
-  const aliases = hostAliases(host)
-  return aliases.some(alias => values.includes(alias))
-}
-
-function isTargetHostChecked(block: TemplateBlock, name: string, host: HostOption) {
-  return includesHost(block.targets[name] ?? [], host)
-}
-
-function isRunnerHostChecked(block: TemplateBlock, host: HostOption) {
-  return includesHost(block.runnerTargets, host)
-}
-
-function compactRunnerHosts(block: TemplateBlock) {
-  const allHosts = props.hosts ?? []
-  if (allHosts.length <= 3) return allHosts
-  const selected = allHosts.filter(host => isRunnerHostChecked(block, host))
-  const byID = new Map<string, HostOption>()
-  for (const host of [...selected, ...allHosts]) {
-    if (!byID.has(host.id)) byID.set(host.id, host)
-    if (byID.size >= 3) break
-  }
-  return [...byID.values()]
-}
-
-function isRunnerHostsExpanded(block: TemplateBlock) {
-  return expandedRunnerBlockIDs.value.has(block.id)
-}
-
-function visibleRunnerHosts(block: TemplateBlock) {
-  return isRunnerHostsExpanded(block) ? props.hosts ?? [] : compactRunnerHosts(block)
-}
-
-function hasHiddenRunnerHosts(block: TemplateBlock) {
-  return (props.hosts?.length ?? 0) > compactRunnerHosts(block).length
-}
-
-function hiddenRunnerHostCount(block: TemplateBlock) {
-  if (isRunnerHostsExpanded(block)) return 0
-  return Math.max(0, (props.hosts?.length ?? 0) - compactRunnerHosts(block).length)
-}
-
-function toggleRunnerHostsExpanded(block: TemplateBlock) {
-  const nextExpanded = new Set(expandedRunnerBlockIDs.value)
-  if (nextExpanded.has(block.id)) nextExpanded.delete(block.id)
-  else nextExpanded.add(block.id)
-  expandedRunnerBlockIDs.value = nextExpanded
-}
-
-function updateHostSelection(values: string[], host: HostOption, checked: boolean) {
-  const aliases = new Set(hostAliases(host))
-  const next = values.filter(value => !aliases.has(value))
-  if (checked) next.push(host.id)
-  return next
-}
-
-function toggleRunnerHost(block: TemplateBlock, host: HostOption, checked: boolean) {
-  block.runnerTargets = updateHostSelection(block.runnerTargets, host, checked)
-}
-
-function toggleTargetHost(block: TemplateBlock, name: string, host: HostOption, checked: boolean) {
-  block.targets[name] = updateHostSelection(block.targets[name] ?? [], host, checked)
-}
-
 function inputSatisfied(block: TemplateBlock, name: string, input: TemplateInput) {
-  if (input.type === 'target_role') return !input.required || (block.targets[name] ?? []).length > 0
   if (input.type === 'file_list') {
     const files = fileItems(block, name)
     if (files.length > 0 && !files.every(file => file.from.trim() !== '' && file.to.trim() !== '')) return false
@@ -476,11 +368,6 @@ function saveTemplate() {
     if (!template) continue
     const vars: Record<string, TemplateVarValue> = { ...block.vars }
     for (const [name, input] of Object.entries(template.inputs ?? {})) {
-      if (input.type === 'target_role') {
-        const key = roleKey(block, name)
-        vars[name] = key
-        pipeline.roles![key] = block.targets[name] ?? []
-      }
       if (input.type === 'file_list' && fileItems(block, name).length === 0 && !input.required) {
         delete vars[name]
       }
@@ -488,15 +375,9 @@ function saveTemplate() {
     if (typeof vars.app_name === 'string' && vars.app_name && !pipeline.variables!.app_name) {
       pipeline.variables!.app_name = vars.app_name
     }
-    const runnerTargets = block.runnerTargets.filter(Boolean)
-    const runnerKey = runnerRoleKey(block)
-    if (runnerTargets.length > 0) {
-      pipeline.roles![runnerKey] = runnerTargets
-    }
     pipeline[block.phase]!.push({
       name: template.name,
       type: 'include',
-      roles: runnerTargets.length > 0 ? [runnerKey] : undefined,
       with: {
         template: `${template.source}://${template.id}`,
         version: template.version,
@@ -623,52 +504,8 @@ defineExpose({ saveTemplate })
               <div class="detail-subtitle" :title="selectedFor(activeBlock)?.name">{{ t('settings.pipeline.currentTemplate', { name: selectedFor(activeBlock)?.name }) }}</div>
               <div class="detail-count">{{ t('settings.pipeline.inputCount', { n: activeBlockInputs.length }) }}</div>
 
-              <section class="form-block template-runner-row">
-                <h4>{{ t('settings.pipeline.machine') }} / Runner machines <span class="help-icon" :title="t('settings.pipeline.machineHelp')">?</span></h4>
-                <div v-if="(hosts ?? []).length === 0" class="field-help">{{ t('settings.pipeline.noHostsHelp') }}</div>
-                <div v-else class="target-list target-grid" :data-test="`block-${activeBlock.id}-runner-targets`">
-                  <label v-for="host in visibleRunnerHosts(activeBlock)" :key="host.id" class="target-item">
-                    <input
-                      type="checkbox"
-                      :data-test="`block-${activeBlock.id}-runner-${host.id}`"
-                      :checked="isRunnerHostChecked(activeBlock, host)"
-                      @change="toggleRunnerHost(activeBlock, host, ($event.target as HTMLInputElement).checked)"
-                    />
-                    {{ host.name }}
-                  </label>
-                  <button
-                    v-if="hasHiddenRunnerHosts(activeBlock)"
-                    type="button"
-                    class="target-more"
-                    :data-test="`block-${activeBlock.id}-runner-more`"
-                    :title="isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : t('settings.pipeline.machineMore', { count: hiddenRunnerHostCount(activeBlock) })"
-                    @click="toggleRunnerHostsExpanded(activeBlock)"
-                  >
-                    {{ isRunnerHostsExpanded(activeBlock) ? t('settings.pipeline.machineCollapse') : `+${hiddenRunnerHostCount(activeBlock)}` }}
-                  </button>
-                </div>
-
-                <div v-for="[name, input] in activeBlockTargetInputs" :key="name" class="template-input-row">
-                  <label class="field-label">
-                    {{ input.label || name }}<span v-if="input.required" class="required">*</span>
-                    <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
-                  </label>
-                  <div class="target-list target-grid" :data-test="`block-${activeBlock.id}-${name}-targets`">
-                    <label v-for="host in hosts ?? []" :key="host.id" class="target-item">
-                      <input
-                        type="checkbox"
-                        :data-test="`block-${activeBlock.id}-target-${host.id}`"
-                        :checked="isTargetHostChecked(activeBlock, name, host)"
-                        @change="toggleTargetHost(activeBlock, name, host, ($event.target as HTMLInputElement).checked)"
-                      />
-                      {{ host.name }}
-                    </label>
-                  </div>
-                </div>
-              </section>
-
-              <section v-if="activeBlockFieldInputs.length > 0" class="form-block template-input-list">
-                <div v-for="[name, input] in activeBlockFieldInputs" :key="name" class="template-input-row">
+              <section v-if="activeBlockInputs.length > 0" class="form-block template-input-list">
+                <div v-for="[name, input] in activeBlockInputs" :key="name" class="template-input-row">
                   <label class="field-label" :for="`template-input-${activeBlock.id}-${name}`">
                     {{ input.label || name }}<span v-if="input.required" class="required">*</span>
                     <span v-if="input.description" class="help-icon" :title="input.description" :data-test="`block-${activeBlock.id}-help-${name}`">?</span>
@@ -1107,10 +944,6 @@ defineExpose({ saveTemplate })
   align-items: start;
   margin-top: 6px;
 }
-.template-runner-row {
-  display: block;
-  margin-top: 14px;
-}
 .template-input-list {
   display: grid;
   gap: 14px;
@@ -1130,46 +963,6 @@ defineExpose({ saveTemplate })
   border: 1px solid var(--border-secondary);
   color: var(--text-tertiary);
   font-size: 10px;
-}
-.target-list {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px 12px;
-  align-items: center;
-  margin-top: 8px;
-}
-.target-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-.target-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  min-width: 30px;
-  height: 20px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 999px;
-  padding: 0 8px;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-}
-.target-more:hover {
-  border-color: #1f7bff;
-  color: #d8e6ff;
-}
-.target-more:focus-visible {
-  outline: 2px solid rgba(31, 123, 255, 0.7);
-  outline-offset: 2px;
 }
 .file-list {
   display: flex;
@@ -1360,8 +1153,7 @@ defineExpose({ saveTemplate })
     border-left: 0;
     border-top: 1px solid var(--border-secondary);
   }
-  .template-input-row,
-  .template-runner-row {
+  .template-input-row {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -1389,10 +1181,6 @@ defineExpose({ saveTemplate })
   .block-row .danger-btn {
     grid-column: 3;
     grid-row: 2;
-  }
-  .template-runner-row .field-help,
-  .template-runner-row .target-list {
-    grid-column: auto;
   }
   .file-row {
     grid-template-columns: 1fr;

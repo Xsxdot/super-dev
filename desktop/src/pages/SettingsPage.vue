@@ -157,6 +157,15 @@ const retentionDays = computed({
     void settingsStore.saveLogRetentionDays(days)
   },
 })
+
+const artifactKeepVersions = computed({
+  get: () => settingsStore.agentSettings.artifact_keep_versions,
+  set: value => {
+    // 与后端 ValidateAgentSettings 的 1~100 范围保持一致，避免提交后被拒。
+    const versions = Math.min(100, Math.max(1, Number(value)))
+    void settingsStore.saveArtifactKeepVersions(versions)
+  },
+})
 </script>
 
 <template>
@@ -303,6 +312,21 @@ const retentionDays = computed({
               max="90"
               :value="retentionDays"
               @change="retentionDays = Number(($event.target as HTMLInputElement).value)"
+            />
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.artifactKeepTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.artifactKeepDesc') }}</div>
+            </div>
+            <input
+              data-test="artifact-keep-versions"
+              class="settings-input retention-input"
+              type="number"
+              min="1"
+              max="100"
+              :value="artifactKeepVersions"
+              @change="artifactKeepVersions = Number(($event.target as HTMLInputElement).value)"
             />
           </div>
           <div class="settings-row">

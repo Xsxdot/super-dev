@@ -40,6 +40,13 @@ const (
 	MinGraceMinutes = 1
 	// MaxGraceMinutes 是豁免窗口允许的最大时长。
 	MaxGraceMinutes = 120
+	// DefaultArtifactKeepVersions 是每条流水线保留的制品版本数默认值。
+	DefaultArtifactKeepVersions = 10
+	// MinArtifactKeepVersions 是允许保留的最小制品版本数。
+	// 至少保留 1 个，确保最近一次构建始终可回滚。
+	MinArtifactKeepVersions = 1
+	// MaxArtifactKeepVersions 是允许保留的最大制品版本数。
+	MaxArtifactKeepVersions = 100
 )
 
 // ApprovalPolicy 表示 agent 级写操作审批策略。
@@ -60,8 +67,10 @@ type AgentSettings struct {
 	LogRetentionDays          int   `json:"log_retention_days"`
 	LogMaxBytes               int64 `json:"log_max_bytes"`
 	LogCleanupIntervalSeconds int   `json:"log_cleanup_interval_seconds"`
-	SampleSeeded              bool  `json:"sample_seeded"`
-	OnboardingCompleted       bool  `json:"onboarding_completed"`
+	// ArtifactKeepVersions 表示每条流水线保留的构建制品版本数，超出按 created_at 淘汰最旧的。
+	ArtifactKeepVersions int  `json:"artifact_keep_versions"`
+	SampleSeeded         bool `json:"sample_seeded"`
+	OnboardingCompleted  bool `json:"onboarding_completed"`
 	// Approval 表示写操作审批策略。
 	Approval ApprovalPolicy `json:"approval"`
 }
@@ -82,6 +91,7 @@ func DefaultAgentSettings() AgentSettings {
 		LogRetentionDays:          DefaultLogRetentionDays,
 		LogMaxBytes:               DefaultLogMaxBytes,
 		LogCleanupIntervalSeconds: DefaultLogCleanupIntervalSeconds,
+		ArtifactKeepVersions:      DefaultArtifactKeepVersions,
 		Approval: ApprovalPolicy{
 			ConfigUpsert:   true,
 			PipelineUpsert: true,
@@ -122,6 +132,9 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	if settings.Approval.GraceMinutes < MinGraceMinutes || settings.Approval.GraceMinutes > MaxGraceMinutes {
 		return fmt.Errorf("grace_minutes must be between %d and %d", MinGraceMinutes, MaxGraceMinutes)
 	}
+	if settings.ArtifactKeepVersions < MinArtifactKeepVersions || settings.ArtifactKeepVersions > MaxArtifactKeepVersions {
+		return fmt.Errorf("artifact_keep_versions must be between %d and %d", MinArtifactKeepVersions, MaxArtifactKeepVersions)
+	}
 	return nil
 }
 
@@ -146,6 +159,10 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 	}
 	if settings.Approval.GraceMinutes == 0 {
 		settings.Approval.GraceMinutes = DefaultGraceMinutes
+	}
+	// 历史 settings.json 没有该字段时反序列化为 0，回填默认值，避免校验失败。
+	if settings.ArtifactKeepVersions == 0 {
+		settings.ArtifactKeepVersions = DefaultArtifactKeepVersions
 	}
 	if err := ValidateAgentSettings(settings); err != nil {
 		return AgentSettings{}, err

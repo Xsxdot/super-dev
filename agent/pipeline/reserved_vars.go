@@ -30,6 +30,7 @@ var reservedVariables = map[string]string{
 	"date":         "运行日期，格式为 yyyyMMdd。",
 	"time":         "运行时间，格式为 HHmmss。",
 	"run_temp_dir": "本次运行的临时根目录，output 和 artifacts 都从这里派生。",
+	"sync_mode":    "代码同步方式：transfer 打包上传 / remote_cmd 目标机执行命令。",
 }
 
 // ReservedVariableInfo 描述一个流水线运行时保留变量。

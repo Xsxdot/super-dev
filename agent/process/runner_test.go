@@ -28,7 +28,11 @@ func TestRunnerCapturesOutput(t *testing.T) {
 	})
 
 	require.NoError(t, r.Start())
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(strings.Join(lines, ""), "hello world")
+	}, 5*time.Second, 10*time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -57,7 +61,11 @@ func TestRunnerFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	})
 
 	require.NoError(t, r.Start())
-	require.Eventually(t, func() bool { return !r.IsRunning() }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return !r.IsRunning() && len(lines) == 1 && lines[0] == "nvm-tool"
+	}, 5*time.Second, 10*time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -74,6 +82,6 @@ func TestRunnerStop(t *testing.T) {
 	assert.True(t, r.IsRunning())
 
 	r.Stop()
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool { return !r.IsRunning() }, 5*time.Second, 10*time.Millisecond)
 	assert.False(t, r.IsRunning())
 }

@@ -275,6 +275,16 @@ function pipelineSteps(pipeline?: Pipeline): PipelineStep[] {
   ]
 }
 
+function stepWithString(step: PipelineStep, ...keys: string[]): string {
+  const withConfig = step.with
+  if (!withConfig || typeof withConfig !== 'object') return ''
+  for (const key of keys) {
+    const value = (withConfig as Record<string, unknown>)[key]
+    if (typeof value === 'string' && value.trim() !== '') return value
+  }
+  return ''
+}
+
 /**
  * formatValidationIssue 把校验 issue 格式化为当前语言下的可展示错误信息。
  *
@@ -372,7 +382,25 @@ export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
   }
 
   for (const projectPipeline of draft.pipelines) {
-    for (const step of pipelineSteps(projectPipeline.pipeline)) {
+    const steps = pipelineSteps(projectPipeline.pipeline)
+    if (projectPipeline.sync_mode === 'remote_cmd' && (projectPipeline.sync_command ?? '').trim() === '') {
+      const transferSteps = steps.filter(step => step.type === 'transfer')
+      const transferWithoutCommand = steps.find(step =>
+        step.type === 'transfer' && stepWithString(step, 'remote_cmd', 'sync_cmd') === '',
+      )
+      if (transferWithoutCommand) {
+        errors.push(issue('pipeline', 'validation.pipelineStepSyncCommandRequired', {
+          pipeline: projectPipeline.name || projectPipeline.id || '',
+          step: transferWithoutCommand.name || '',
+        }))
+      } else if (transferSteps.length === 0) {
+        errors.push(issue('pipeline', 'validation.pipelineSyncCommandRequired', {
+          pipeline: projectPipeline.name || projectPipeline.id || '',
+        }))
+      }
+    }
+
+    for (const step of steps) {
       if ((step.name ?? '').trim() === '') {
         errors.push(issue('pipeline', 'validation.pipelineStepNameRequired', { pipeline: projectPipeline.name || projectPipeline.id || '' }))
       }

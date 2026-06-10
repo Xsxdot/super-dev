@@ -108,7 +108,12 @@ describe('SettingsPage', () => {
 
   it('通用页展示日志保留天数并保存', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+    }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
     vi.spyOn(settings, 'saveLogRetentionDays').mockResolvedValue(undefined)
@@ -122,9 +127,35 @@ describe('SettingsPage', () => {
     expect(settings.saveLogRetentionDays).toHaveBeenCalledWith(14)
   })
 
+  it('通用页展示制品保留版本数并保存', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+    }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'saveArtifactKeepVersions').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    const input = wrapper.find('[data-test="artifact-keep-versions"]')
+    await input.setValue(20)
+    await input.trigger('change')
+
+    expect(settings.saveArtifactKeepVersions).toHaveBeenCalledWith(20)
+  })
+
   it('renders the settings workbench shell and general rows with shared classes', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+    }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
@@ -135,8 +166,9 @@ describe('SettingsPage', () => {
     expect(wrapper.find('.settings-sidebar').exists()).toBe(true)
     expect(wrapper.find('.settings-main').exists()).toBe(true)
     expect(wrapper.find('.settings-pane').exists()).toBe(true)
-    expect(wrapper.findAll('.settings-row')).toHaveLength(4)
+    expect(wrapper.findAll('.settings-row')).toHaveLength(5)
     expect(wrapper.find('[data-test="retention-days"]').classes()).toContain('settings-input')
+    expect(wrapper.find('[data-test="artifact-keep-versions"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="locale-select"]').classes()).toContain('settings-select')
     expect(wrapper.find('[data-test="grouping-primary"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="grouping-secondary"]').exists()).toBe(false)
@@ -379,7 +411,7 @@ describe('SettingsPage', () => {
 
   it('通用页可切换到英文并立即更新界面文案', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7, sample_seeded: false, onboarding_completed: false }
+    settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: false, onboarding_completed: false }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
@@ -397,7 +429,7 @@ describe('SettingsPage', () => {
 
   it('通用页可重新运行首次引导', async () => {
     const settings = useSettingsStore()
-    settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+    settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
 
