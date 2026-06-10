@@ -51,13 +51,52 @@ describe('PipelineEnvMatrix', () => {
     })
   })
 
-  it('hides matrix when single environment', async () => {
+  it('shows single-column matrix when single environment', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: { ...baseProps(), environments: { test: { variables: { env: 'test' } } } },
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
+    // 单环境也要能编辑：矩阵区存在，且退化为单列（只有 test 列）
+    expect(wrapper.find('[data-test="env-matrix"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="env-col-test"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="env-col-prod"]').exists()).toBe(false)
+  })
+
+  it('hides matrix only when no environment selected', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: { ...baseProps(), environments: {} },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
     expect(wrapper.find('[data-test="env-matrix"]').exists()).toBe(false)
+  })
+
+  it('adds a new env variable across environments', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+    await wrapper.get('[data-test="env-var-name-input"]').setValue('region')
+    await wrapper.get('[data-test="env-var-add"]').trigger('click')
+    const emitted = wrapper.emitted('update:environments')
+    expect(emitted).toBeTruthy()
+    const payload = emitted?.at(-1)?.[0] as Record<string, { variables: Record<string, string> }>
+    // 新变量名应在每个环境里建出空值占位，供矩阵渲染该行
+    expect(payload.test.variables).toHaveProperty('region')
+    expect(payload.prod.variables).toHaveProperty('region')
+  })
+
+  it('forbids unselecting the last remaining environment', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: { ...baseProps(), environments: { test: { variables: { env: 'test' } } } },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+    // 取消最后一个环境应被阻止：setValue(false) 使 change 走取消分支，但不应 emit
+    await wrapper.get('[data-test="env-select-test"]').setValue(false)
+    expect(wrapper.emitted('update:environments')).toBeFalsy()
   })
 
   it('copies ${var} to clipboard on variable name click', async () => {
@@ -72,6 +111,20 @@ describe('PipelineEnvMatrix', () => {
     expect(writeText).toHaveBeenCalledWith('${app_name}')
   })
 
+  it('shows copied feedback after variable name click', async () => {
+    const writeText = vi.fn()
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="copy-var-app_name"]').trigger('click')
+
+    expect(wrapper.get('[data-test="copy-var-app_name-feedback"]').text()).toContain('已复制')
+  })
+
   it('emits updated global variable', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: baseProps(),
@@ -81,6 +134,23 @@ describe('PipelineEnvMatrix', () => {
     const input = wrapper.get('[data-test="global-var-value-app_name"]')
     await input.setValue('renamed')
     expect(wrapper.emitted('update:variables')?.[0][0]).toMatchObject({ app_name: 'renamed' })
+  })
+
+  it('adds global variables on demand', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="global-var-name-input"]').setValue('artifact')
+    await wrapper.get('[data-test="global-var-value-input"]').setValue('${output}/app.tar.gz')
+    await wrapper.get('[data-test="global-var-add"]').trigger('click')
+
+    expect(wrapper.emitted('update:variables')?.[0][0]).toMatchObject({
+      app_name: 'myapp',
+      artifact: '${output}/app.tar.gz',
+    })
   })
 
   it('selects project environments into the pipeline subset', async () => {

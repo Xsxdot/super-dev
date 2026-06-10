@@ -34,13 +34,19 @@ const emit = defineEmits<{
 const { t } = useAppI18n()
 const collapsed = ref(true)
 const runGroupName = ref('')
+const newGlobalName = ref('')
+const newGlobalValue = ref('')
+const newEnvVarName = ref('')
+const copiedName = ref('')
 
 const envNames = computed(() => Object.keys(props.environments ?? {}))
 const availableEnvNames = computed(() => {
   const names = props.availableEnvironments?.length ? props.availableEnvironments : envNames.value
   return Array.from(new Set(names.filter(Boolean)))
 })
-const isMultiEnv = computed(() => envNames.value.length > 1)
+// 只要选了至少一个环境就显示矩阵：单环境退化为单列，仍可编辑/新增；
+// 仅当一个环境都没选时才隐藏整块（流水线必须至少属于一个环境）。
+const hasEnvironments = computed(() => envNames.value.length >= 1)
 const globalEntries = computed(() => Object.entries(props.variables ?? {}))
 const roleNames = computed(() => Object.keys(props.roles ?? {}).filter(name => name !== 'builder' && !name.endsWith('_runner')))
 const hasRoles = computed(() => roleNames.value.length > 0)
@@ -67,6 +73,7 @@ function varPlaceholder(name: string) {
 
 async function copyVar(name: string) {
   await navigator.clipboard?.writeText(varPlaceholder(name))
+  copiedName.value = name
 }
 
 function setGlobal(name: string, event: Event) {
@@ -74,6 +81,17 @@ function setGlobal(name: string, event: Event) {
     ...props.variables,
     [name]: (event.target as HTMLInputElement).value,
   })
+}
+
+function addGlobalVar() {
+  const name = newGlobalName.value.trim()
+  if (!name) return
+  emit('update:variables', {
+    ...(props.variables ?? {}),
+    [name]: newGlobalValue.value,
+  })
+  newGlobalName.value = ''
+  newGlobalValue.value = ''
 }
 
 function setEnvVar(envName: string, varName: string, event: Event) {
@@ -90,7 +108,29 @@ function setEnvVar(envName: string, varName: string, event: Event) {
   })
 }
 
+// addEnvVar 在所有已选环境里为新变量建出空值占位。
+//
+// 注意：
+//   - 矩阵行来自各环境变量名并集，必须在每个环境都建占位，否则新行不渲染。
+//   - 值留空，由用户在矩阵各列填入；空 key 忽略。
+function addEnvVar() {
+  const name = newEnvVarName.value.trim()
+  if (!name) return
+  const next: Record<string, PipelineEnvironment> = {}
+  for (const [envName, env] of Object.entries(props.environments ?? {})) {
+    next[envName] = {
+      ...env,
+      variables: { ...(env.variables ?? {}), [name]: env.variables?.[name] ?? '' },
+    }
+  }
+  emit('update:environments', next)
+  newEnvVarName.value = ''
+}
+
 function setEnvSelected(envName: string, checked: boolean) {
+  // 流水线必须至少属于一个环境：取消最后一个环境时阻止，不 emit。
+  // 复选框靠 :checked 绑定 envNames，不 emit 即自动回弹为选中。
+  if (!checked && envNames.value.length <= 1) return
   const next = { ...(props.environments ?? {}) }
   if (checked) {
     next[envName] = next[envName] ?? { variables: { env: envName } }
@@ -164,6 +204,9 @@ function addRunGroup() {
           <button type="button" class="emr-varname" :data-test="`copy-var-${name}`" @click="copyVar(name)">
             {{ name }}
           </button>
+          <span v-if="copiedName === name" class="emr-copy-feedback" :data-test="`copy-var-${name}-feedback`">
+            {{ t('common.copied') }}
+          </span>
           <input
             class="settings-input emr-input"
             :data-test="`global-var-value-${name}`"
@@ -172,22 +215,44 @@ function addRunGroup() {
           />
         </span>
       </div>
+      <div class="emr-add-row">
+        <input
+          v-model="newGlobalName"
+          class="settings-input emr-input"
+          data-test="global-var-name-input"
+          :placeholder="t('settings.pipeline.varName')"
+          @keydown.enter.prevent="addGlobalVar"
+        />
+        <input
+          v-model="newGlobalValue"
+          class="settings-input emr-value-input"
+          data-test="global-var-value-input"
+          placeholder="value"
+          @keydown.enter.prevent="addGlobalVar"
+        />
+        <button type="button" class="settings-btn settings-btn-secondary" data-test="global-var-add" @click="addGlobalVar">
+          {{ t('common.add') }}
+        </button>
+      </div>
       <div class="emr-reserved">
         <span class="emr-label">{{ t('settings.pipeline.reservedVars') }}</span>
-        <button
-          v-for="name in reservedNames"
-          :key="name"
-          type="button"
-          class="emr-reserved-chip"
-          :data-test="`copy-var-${name}`"
-          @click="copyVar(name)"
-        >
-          {{ varPlaceholder(name) }}
-        </button>
+        <span v-for="name in reservedNames" :key="name" class="emr-copy-chip">
+          <button
+            type="button"
+            class="emr-reserved-chip"
+            :data-test="`copy-var-${name}`"
+            @click="copyVar(name)"
+          >
+            {{ varPlaceholder(name) }}
+          </button>
+          <span v-if="copiedName === name" class="emr-copy-feedback" :data-test="`copy-var-${name}-feedback`">
+            {{ t('common.copied') }}
+          </span>
+        </span>
       </div>
     </div>
 
-    <div v-if="isMultiEnv" class="emr-section" data-test="env-matrix">
+    <div v-if="hasEnvironments" class="emr-section" data-test="env-matrix">
       <div class="emr-label">{{ t('settings.pipeline.envVars') }}</div>
       <table class="emr-table">
         <thead>
@@ -202,6 +267,9 @@ function addRunGroup() {
               <button type="button" class="emr-varname" :data-test="`copy-var-${varName}`" @click="copyVar(varName)">
                 {{ varName }}
               </button>
+              <span v-if="copiedName === varName" class="emr-copy-feedback" :data-test="`copy-var-${varName}-feedback`">
+                {{ t('common.copied') }}
+              </span>
             </td>
             <td v-for="envName in envNames" :key="envName">
               <input
@@ -214,6 +282,18 @@ function addRunGroup() {
           </tr>
         </tbody>
       </table>
+      <div class="emr-add-row">
+        <input
+          v-model="newEnvVarName"
+          class="settings-input emr-input"
+          data-test="env-var-name-input"
+          :placeholder="t('settings.pipeline.varName')"
+          @keydown.enter.prevent="addEnvVar"
+        />
+        <button type="button" class="settings-btn settings-btn-secondary" data-test="env-var-add" @click="addEnvVar">
+          {{ t('common.add') }}
+        </button>
+      </div>
     </div>
 
     <div class="emr-section" data-test="run-groups">
@@ -343,7 +423,8 @@ function addRunGroup() {
   font-size: 11px;
 }
 
-.emr-run-group-add {
+.emr-run-group-add,
+.emr-add-row {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -369,6 +450,11 @@ function addRunGroup() {
   height: 30px;
 }
 
+.emr-value-input {
+  width: min(320px, 100%);
+  height: 30px;
+}
+
 .emr-reserved {
   display: flex;
   flex-wrap: wrap;
@@ -385,6 +471,18 @@ function addRunGroup() {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   padding: 2px 8px;
+}
+
+.emr-copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emr-copy-feedback {
+  color: #54d27d;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .emr-table {
