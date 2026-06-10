@@ -62,9 +62,51 @@ describe('SingleProjectPipelineForm', () => {
   it('renders build config bar and env matrix', () => {
     const wrapper = mountForm()
 
-    expect(wrapper.find('[data-test="build-config-bar"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pipeline-env-matrix"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="deploy-target-readonly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-panel-build"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-panel-variables"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-panel-deploy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="build-config-bar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-env-matrix"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="deploy-target-readonly"]').exists()).toBe(false)
+  })
+
+  it('opens only one configuration panel at a time', async () => {
+    const wrapper = mountForm()
+
+    await wrapper.get('[data-test="pipeline-config-toggle-build"]').trigger('click')
+    expect(wrapper.find('[data-test="pipeline-config-body-build"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipeline-config-body-variables"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="pipeline-config-toggle-variables"]').trigger('click')
+    expect(wrapper.find('[data-test="pipeline-config-body-build"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-config-body-variables"]').exists()).toBe(true)
+  })
+
+  it('does not expose variable copy controls while variable panel is collapsed', () => {
+    const wrapper = mountForm()
+
+    expect(wrapper.get('[data-test="pipeline-config-panel-variables"]').text()).toContain('全局变量 1')
+    expect(wrapper.find('[data-test="copy-var-app_name"]').exists()).toBe(false)
+  })
+
+  it('shows remote sync command only inside the opened build panel', async () => {
+    const wrapper = mountForm({
+      ...pipeline(),
+      sync_mode: 'remote_cmd',
+      sync_command: 'git fetch --all && git reset --hard origin/main',
+      roles: { builder: { hosts: ['h1'] } },
+    })
+
+    expect(wrapper.find('[data-test="build-config-sync-command"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="pipeline-config-toggle-build"]').trigger('click')
+
+    expect(wrapper.get('[data-test="build-config-builder"]').element).toHaveProperty('value', 'h1')
+    expect(wrapper.find('[data-test="build-config-sync"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="build-config-sync-command"]').element).toHaveProperty(
+      'value',
+      'git fetch --all && git reset --hard origin/main',
+    )
   })
 
   it('updates sync_mode through build config bar', async () => {
@@ -73,6 +115,7 @@ describe('SingleProjectPipelineForm', () => {
       roles: { builder: { hosts: ['h1'] } },
     })
 
+    await wrapper.get('[data-test="pipeline-config-toggle-build"]').trigger('click')
     await wrapper.get('[data-test="build-config-sync-remote_cmd"]').trigger('click')
     const emitted = wrapper.emitted('update:pipeline')
     expect(emitted?.at(-1)?.[0]).toMatchObject({ sync_mode: 'remote_cmd' })
@@ -85,6 +128,7 @@ describe('SingleProjectPipelineForm', () => {
       roles: { builder: { hosts: ['h1'] } },
     })
 
+    await wrapper.get('[data-test="pipeline-config-toggle-build"]').trigger('click')
     await wrapper.get('[data-test="build-config-builder"]').setValue('self-node')
     const emitted = wrapper.emitted('update:pipeline')
     expect(emitted?.at(-1)?.[0]).toMatchObject({

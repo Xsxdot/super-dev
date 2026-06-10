@@ -98,9 +98,9 @@ function updateSyncCommand(event: Event) {
   flex-wrap: wrap;
   gap: 20px;
   align-items: end;
-  padding: 12px 18px;
-  background: #121922;
-  border-bottom: 1px solid #263240;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
 }
 
 .bcb-field {

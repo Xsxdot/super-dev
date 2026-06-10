@@ -20,7 +20,6 @@ const { t } = useAppI18n()
 const visibleHostLimit = 2
 
 const envEntries = computed(() => Object.entries(props.targetsByEnv ?? {}).filter(([env]) => env))
-const totalHostCount = computed(() => envEntries.value.reduce((sum, [, hosts]) => sum + hosts.length, 0))
 
 function visibleHosts(hosts: string[]) {
   return hosts.slice(0, visibleHostLimit)
@@ -34,15 +33,7 @@ function overflowHosts(hosts: string[]) {
 <template>
   <div class="deploy-target-readonly" data-test="deploy-target-readonly">
     <div class="dtr-head">
-      <div>
-        <div class="dtr-title">
-          {{ t('settings.pipeline.deployTarget') }}
-          <span class="dtr-badge">{{ t('settings.pipeline.readonly') }}</span>
-          <span class="dtr-badge">{{ t('settings.pipeline.envCount', { count: envEntries.length }) }}</span>
-          <span class="dtr-badge">{{ t('settings.pipeline.hostCount', { count: totalHostCount }) }}</span>
-        </div>
-        <div class="dtr-hint">{{ t('settings.pipeline.deployTargetHint') }}</div>
-      </div>
+      <div class="dtr-hint">{{ t('settings.pipeline.deployTargetHint') }}</div>
       <button type="button" class="settings-btn settings-btn-text dtr-link">
         {{ t('settings.pipeline.viewProjectEnv') }}
       </button>
@@ -80,9 +71,9 @@ function overflowHosts(hosts: string[]) {
 .deploy-target-readonly {
   display: grid;
   gap: 10px;
-  padding: 12px 18px 14px;
-  background: #0e141c;
-  border-bottom: 1px solid #263240;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
 }
 
 .dtr-head {
@@ -92,28 +83,7 @@ function overflowHosts(hosts: string[]) {
   gap: 16px;
 }
 
-.dtr-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.dtr-badge {
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
-  background: #15202b;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 7px;
-}
-
 .dtr-hint {
-  margin-top: 5px;
   color: var(--text-tertiary, #667);
   font-size: 11px;
 }

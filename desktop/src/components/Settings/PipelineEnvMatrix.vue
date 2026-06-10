@@ -13,20 +13,24 @@ PipelineEnvMatrix：流水线变量矩阵（全局默认值 + 环境覆盖 + 运
   - 不负责解析或校验模板表达式
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { Icon } from '@iconify/vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { PipelineEnvironment, ProjectPipelineRole } from '@/api/agent'
 
 type HostOption = { id: string; name: string }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   variables: Record<string, string>
   environments: Record<string, PipelineEnvironment>
   reservedNames: string[]
   roles?: Record<string, ProjectPipelineRole>
   availableEnvironments?: string[]
   hosts?: HostOption[]
-}>()
+  standalone?: boolean
+}>(), {
+  standalone: true,
+})
 
 const emit = defineEmits<{
   'update:variables': [Record<string, string>]
@@ -36,11 +40,14 @@ const emit = defineEmits<{
 
 const { t } = useAppI18n()
 const collapsed = ref(true)
+const rootRef = ref<HTMLElement | null>(null)
 const runGroupName = ref('')
+const runGroupHostIds = ref<string[]>([])
 const newGlobalName = ref('')
 const newGlobalValue = ref('')
-const newEnvVarName = ref('')
 const copiedName = ref('')
+const addHostPickerOpen = ref(false)
+const openRolePickerKey = ref('')
 
 const envNames = computed(() => Object.keys(props.environments ?? {}))
 const availableEnvNames = computed(() => {
@@ -50,6 +57,7 @@ const availableEnvNames = computed(() => {
 const hasEnvironments = computed(() => envNames.value.length >= 1)
 const globalEntries = computed(() => Object.entries(props.variables ?? {}))
 const roleNames = computed(() => Object.keys(props.roles ?? {}).filter(name => name !== 'builder' && !name.endsWith('_runner')))
+const runGroupHostSummary = computed(() => hostSummary(runGroupHostIds.value))
 
 const summaryText = computed(() => {
   const globals = globalEntries.value.map(([name]) => name).join(', ') || '0'
@@ -116,18 +124,24 @@ function setEnvVar(envName: string, varName: string, event: Event) {
   })
 }
 
-function addEnvVar() {
-  const name = newEnvVarName.value.trim()
-  if (!name) return
-  const next: Record<string, PipelineEnvironment> = {}
+function isReservedName(name: string) {
+  return props.reservedNames.includes(name)
+}
+
+function deleteVariable(name: string) {
+  if (isReservedName(name)) return
+  const nextVariables = { ...(props.variables ?? {}) }
+  delete nextVariables[name]
+
+  const nextEnvironments: Record<string, PipelineEnvironment> = {}
   for (const [envName, env] of Object.entries(props.environments ?? {})) {
-    next[envName] = {
-      ...env,
-      variables: { ...(env.variables ?? {}), [name]: env.variables?.[name] ?? '' },
-    }
+    const variables = { ...(env.variables ?? {}) }
+    delete variables[name]
+    nextEnvironments[envName] = { ...env, variables }
   }
-  emit('update:environments', next)
-  newEnvVarName.value = ''
+
+  emit('update:variables', nextVariables)
+  emit('update:environments', nextEnvironments)
 }
 
 function setEnvSelected(envName: string, checked: boolean) {
@@ -150,6 +164,13 @@ function displayHostName(ref: string) {
   return props.hosts?.find(host => hostRoleKeys(host).includes(ref))?.name ?? ref
 }
 
+function hostSummary(hostRefs: string[]) {
+  if (hostRefs.length === 0) return t('settings.pipeline.selectHost')
+  const labels = hostRefs.map(displayHostName)
+  if (labels.length <= 2) return labels.join(', ')
+  return `${labels.slice(0, 2).join(', ')} +${labels.length - 2}`
+}
+
 function roleHosts(roleName: string, envName: string) {
   const role = props.roles?.[roleName]
   if (!role) return []
@@ -161,6 +182,25 @@ function roleHosts(roleName: string, envName: string) {
 
 function roleHostLabels(roleName: string, envName: string) {
   return roleHosts(roleName, envName).map(displayHostName)
+}
+
+function rolePickerKey(envName: string, roleName: string) {
+  return `${envName}::${roleName}`
+}
+
+function isRolePickerOpen(envName: string, roleName: string) {
+  return openRolePickerKey.value === rolePickerKey(envName, roleName)
+}
+
+function toggleRolePicker(envName: string, roleName: string) {
+  const key = rolePickerKey(envName, roleName)
+  openRolePickerKey.value = openRolePickerKey.value === key ? '' : key
+  if (openRolePickerKey.value) addHostPickerOpen.value = false
+}
+
+function toggleAddHostPicker() {
+  addHostPickerOpen.value = !addHostPickerOpen.value
+  if (addHostPickerOpen.value) openRolePickerKey.value = ''
 }
 
 function roleSource(roleName: string) {
@@ -175,6 +215,18 @@ function roleSource(roleName: string) {
 function isRoleHostChecked(roleName: string, envName: string, host: HostOption) {
   const selected = new Set(roleHosts(roleName, envName))
   return hostRoleKeys(host).some(key => selected.has(key))
+}
+
+function isRunGroupHostChecked(host: HostOption) {
+  const selected = new Set(runGroupHostIds.value)
+  return hostRoleKeys(host).some(key => selected.has(key))
+}
+
+function setRunGroupHost(host: HostOption, checked: boolean) {
+  const next = new Set(runGroupHostIds.value)
+  for (const key of hostRoleKeys(host)) next.delete(key)
+  if (checked) next.add(host.id || host.name)
+  runGroupHostIds.value = [...next]
 }
 
 function setRoleHost(roleName: string, envName: string, host: HostOption, checked: boolean) {
@@ -195,18 +247,35 @@ function addRunGroup() {
   const name = runGroupName.value.trim()
   if (!name || name === 'builder') return
   const environments: Record<string, string[]> = {}
-  for (const envName of envNames.value) environments[envName] = []
+  for (const envName of envNames.value) environments[envName] = [...runGroupHostIds.value]
   emit('update:roles', {
     ...(props.roles ?? {}),
     [name]: props.roles?.[name] ?? { environments },
   })
   runGroupName.value = ''
+  runGroupHostIds.value = []
+  addHostPickerOpen.value = false
 }
+
+function deleteRunGroup(name: string) {
+  const next = { ...(props.roles ?? {}) }
+  delete next[name]
+  emit('update:roles', next)
+}
+
+function closePickersOnOutsideClick(event: MouseEvent) {
+  if (rootRef.value?.contains(event.target as Node)) return
+  addHostPickerOpen.value = false
+  openRolePickerKey.value = ''
+}
+
+onMounted(() => document.addEventListener('click', closePickersOnOutsideClick))
+onBeforeUnmount(() => document.removeEventListener('click', closePickersOnOutsideClick))
 </script>
 
 <template>
-  <section class="env-matrix-root" data-test="pipeline-env-matrix">
-    <header class="emr-summary" data-test="env-matrix-summary">
+  <section ref="rootRef" class="env-matrix-root" :class="{ standalone }" data-test="pipeline-env-matrix">
+    <header v-if="standalone" class="emr-summary" data-test="env-matrix-summary">
       <button type="button" class="emr-toggle" data-test="env-matrix-toggle" @click="collapsed = !collapsed">
         {{ collapsed ? '▸' : '▾' }}
       </button>
@@ -224,7 +293,7 @@ function addRunGroup() {
       </div>
     </header>
 
-    <template v-if="!collapsed">
+    <template v-if="!standalone || !collapsed">
       <div v-if="hasEnvironments" class="emr-section" data-test="env-matrix">
         <div class="emr-section-head">
           <div>
@@ -233,23 +302,16 @@ function addRunGroup() {
               {{ t('settings.pipeline.globalVars') }} / {{ t('settings.pipeline.envVars') }} / {{ t('settings.pipeline.runGroups') }}
             </div>
           </div>
-          <div class="emr-table-actions">
-            <button type="button" class="settings-btn settings-btn-secondary" data-test="global-var-add" @click="addGlobalVar">
-              {{ t('common.add') }}
-            </button>
-            <button type="button" class="settings-btn settings-btn-secondary" data-test="env-var-add" @click="addEnvVar">
-              {{ t('common.add') }}
-            </button>
-            <input
-              v-model="runGroupName"
-              class="settings-input emr-inline-input"
-              data-test="run-group-name-input"
-              placeholder="group_name"
-              @keydown.enter.prevent="addRunGroup"
-            />
-            <button type="button" class="settings-btn settings-btn-secondary" data-test="run-group-add" @click="addRunGroup">
-              {{ t('settings.pipeline.runGroups') }}
-            </button>
+          <div v-if="availableEnvNames.length > 0 && !standalone" class="emr-env-selectors">
+            <label v-for="envName in availableEnvNames" :key="envName" class="emr-env-chip">
+              <input
+                type="checkbox"
+                :data-test="`env-select-${envName}`"
+                :checked="envNames.includes(envName)"
+                @change="setEnvSelected(envName, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ envName }}
+            </label>
           </div>
         </div>
 
@@ -259,6 +321,7 @@ function addRunGroup() {
               <th>{{ t('settings.pipeline.varName') }}</th>
               <th>{{ t('settings.pipeline.globalVars') }}</th>
               <th v-for="envName in envNames" :key="envName" :data-test="`env-col-${envName}`">{{ envName }}</th>
+              <th class="emr-op-head">{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -266,7 +329,8 @@ function addRunGroup() {
               <td>
                 <span class="emr-name-cell">
                   <button type="button" class="emr-varname" :data-test="`copy-var-${varName}`" @click="copyVar(varName)">
-                    {{ varName }}
+                    <span>{{ varName }}</span>
+                    <Icon class="emr-copy-icon" icon="lucide:copy" :data-test="`copy-var-${varName}-icon`" aria-hidden="true" />
                   </button>
                   <span v-if="copiedName === varName" class="emr-copy-feedback" :data-test="`copy-var-${varName}-feedback`">
                     {{ t('common.copied') }}
@@ -292,13 +356,25 @@ function addRunGroup() {
                   @input="setEnvVar(envName, varName, $event)"
                 />
               </td>
+              <td class="emr-op-cell">
+                <button
+                  v-if="!isReservedName(varName)"
+                  type="button"
+                  class="settings-btn settings-btn-text settings-btn-danger emr-delete-btn"
+                  :data-test="`delete-var-${varName}`"
+                  @click="deleteVariable(varName)"
+                >
+                  {{ t('common.delete') }}
+                </button>
+              </td>
             </tr>
 
             <tr v-for="roleName in roleNames" :key="roleName" class="emr-role-row" :data-test="`env-var-row-${roleName}`">
               <td>
                 <span class="emr-name-cell">
                   <button type="button" class="emr-varname run-group" :data-test="`copy-var-${roleName}`" @click="copyVar(roleName)">
-                    {{ roleName }}
+                    <span>{{ roleName }}</span>
+                    <Icon class="emr-copy-icon" icon="lucide:copy" :data-test="`copy-var-${roleName}-icon`" aria-hidden="true" />
                   </button>
                   <span v-if="copiedName === roleName" class="emr-copy-feedback" :data-test="`copy-var-${roleName}-feedback`">
                     {{ t('common.copied') }}
@@ -310,16 +386,27 @@ function addRunGroup() {
                 <span class="emr-muted">{{ roleSource(roleName) }}</span>
               </td>
               <td v-for="envName in envNames" :key="envName">
-                <details class="emr-role-picker" :data-test="`role-hosts-${envName}-${roleName}`">
-                  <summary>
+                <div class="emr-host-picker emr-role-picker" :data-test="`role-hosts-${envName}-${roleName}`">
+                  <button
+                    type="button"
+                    class="emr-picker-trigger"
+                    :aria-expanded="isRolePickerOpen(envName, roleName)"
+                    :data-test="`role-host-trigger-${envName}-${roleName}`"
+                    @click="toggleRolePicker(envName, roleName)"
+                  >
                     <span v-if="roleHostLabels(roleName, envName).length" class="emr-role-chip-list">
                       <span v-for="hostName in roleHostLabels(roleName, envName)" :key="hostName" class="emr-host-token">
                         {{ hostName }}
                       </span>
                     </span>
                     <span v-else class="emr-muted">{{ t('common.none') }}</span>
-                  </summary>
-                  <div class="emr-role-menu">
+                    <Icon class="emr-picker-chevron" icon="lucide:chevron-down" aria-hidden="true" />
+                  </button>
+                  <div
+                    v-if="isRolePickerOpen(envName, roleName)"
+                    class="emr-picker-menu emr-role-menu"
+                    :data-test="`role-host-menu-${envName}-${roleName}`"
+                  >
                     <label v-for="host in hosts ?? []" :key="host.id" class="emr-role-option">
                       <input
                         type="checkbox"
@@ -327,60 +414,106 @@ function addRunGroup() {
                         :checked="isRoleHostChecked(roleName, envName, host)"
                         @change="setRoleHost(roleName, envName, host, ($event.target as HTMLInputElement).checked)"
                       />
-                      {{ host.name }}
+                      <span>{{ host.name }}</span>
                     </label>
+                    <span v-if="!hosts?.length" class="emr-muted">{{ t('common.none') }}</span>
                   </div>
-                </details>
+                </div>
+              </td>
+              <td class="emr-op-cell">
+                <button
+                  type="button"
+                  class="settings-btn settings-btn-text settings-btn-danger emr-delete-btn"
+                  :data-test="`delete-role-${roleName}`"
+                  @click="deleteRunGroup(roleName)"
+                >
+                  {{ t('common.delete') }}
+                </button>
               </td>
             </tr>
 
-            <tr class="emr-add-line">
-              <td>
-                <input
-                  v-model="newGlobalName"
-                  class="settings-input emr-cell-input"
-                  data-test="global-var-name-input"
-                  :placeholder="t('settings.pipeline.varName')"
-                  @keydown.enter.prevent="addGlobalVar"
-                />
-              </td>
-              <td>
-                <input
-                  v-model="newGlobalValue"
-                  class="settings-input emr-cell-input"
-                  data-test="global-var-value-input"
-                  placeholder="value"
-                  @keydown.enter.prevent="addGlobalVar"
-                />
-              </td>
-              <td v-for="envName in envNames" :key="envName">
-                <input
-                  v-model="newEnvVarName"
-                  class="settings-input emr-cell-input"
-                  data-test="env-var-name-input"
-                  :placeholder="t('settings.pipeline.varName')"
-                  @keydown.enter.prevent="addEnvVar"
-                />
-              </td>
-            </tr>
           </tbody>
         </table>
 
-        <div class="emr-reserved">
-          <span class="emr-label">{{ t('settings.pipeline.reservedVars') }}</span>
-          <span v-for="name in reservedNames" :key="name" class="emr-copy-chip">
-            <button
-              type="button"
-              class="emr-reserved-chip"
-              :data-test="`copy-var-${name}`"
-              @click="copyVar(name)"
-            >
-              {{ varPlaceholder(name) }}
-            </button>
-            <span v-if="copiedName === name" class="emr-copy-feedback" :data-test="`copy-var-${name}-feedback`">
-              {{ t('common.copied') }}
+        <div class="emr-add-panel">
+          <div class="emr-add-toolbar" data-test="variable-add-toolbar">
+            <div class="emr-add-group">
+              <input
+                v-model="newGlobalName"
+                class="settings-input emr-add-name-input"
+                data-test="global-var-name-input"
+                :placeholder="t('settings.pipeline.newVarName')"
+                @keydown.enter.prevent="addGlobalVar"
+              />
+              <input
+                v-model="newGlobalValue"
+                class="settings-input emr-add-value-input"
+                data-test="global-var-value-input"
+                :placeholder="t('settings.pipeline.defaultValueOptional')"
+                @keydown.enter.prevent="addGlobalVar"
+              />
+              <button type="button" class="settings-btn settings-btn-secondary" data-test="global-var-add" @click="addGlobalVar">
+                {{ t('settings.pipeline.addVariable') }}
+              </button>
+            </div>
+
+            <div class="emr-add-divider" aria-hidden="true"></div>
+
+            <div class="emr-add-group emr-run-group-add">
+              <input
+                v-model="runGroupName"
+                class="settings-input emr-add-role-input"
+                data-test="run-group-name-input"
+                :placeholder="t('settings.pipeline.newRunGroupName')"
+                @keydown.enter.prevent="addRunGroup"
+              />
+              <div class="emr-host-picker emr-add-host-picker">
+                <button
+                  type="button"
+                  class="emr-picker-trigger emr-add-host-trigger"
+                  :aria-expanded="addHostPickerOpen"
+                  data-test="run-group-host-trigger"
+                  @click="toggleAddHostPicker"
+                >
+                  <span :class="{ 'emr-muted': runGroupHostIds.length === 0 }">{{ runGroupHostSummary }}</span>
+                  <Icon class="emr-picker-chevron" icon="lucide:chevron-down" aria-hidden="true" />
+                </button>
+                <div v-if="addHostPickerOpen" class="emr-picker-menu emr-add-host-menu" data-test="run-group-host-menu">
+                  <label v-for="host in hosts ?? []" :key="host.id" class="emr-role-option">
+                    <input
+                      type="checkbox"
+                      :data-test="`run-group-host-option-${host.id}`"
+                      :checked="isRunGroupHostChecked(host)"
+                      @change="setRunGroupHost(host, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ host.name }}</span>
+                  </label>
+                  <span v-if="!hosts?.length" class="emr-muted">{{ t('common.none') }}</span>
+                </div>
+              </div>
+              <button type="button" class="settings-btn settings-btn-secondary" data-test="run-group-add" @click="addRunGroup">
+                {{ t('settings.pipeline.addRunGroup') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="emr-reserved">
+            <span class="emr-label">{{ t('settings.pipeline.reservedVarsHint') }}</span>
+            <span v-for="name in reservedNames" :key="name" class="emr-copy-chip">
+              <button
+                type="button"
+                class="emr-reserved-chip"
+                :data-test="`copy-var-${name}`"
+                @click="copyVar(name)"
+              >
+                <span>{{ varPlaceholder(name) }}</span>
+                <Icon class="emr-copy-icon" icon="lucide:copy" :data-test="`copy-var-${name}-icon`" aria-hidden="true" />
+              </button>
+              <span v-if="copiedName === name" class="emr-copy-feedback" :data-test="`copy-var-${name}-feedback`">
+                {{ t('common.copied') }}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
       </div>
     </template>
@@ -392,6 +525,12 @@ function addRunGroup() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+}
+
+.env-matrix-root.standalone {
   padding: 12px 18px;
   background: #0e141c;
   border-bottom: 1px solid #263240;
@@ -477,6 +616,9 @@ function addRunGroup() {
 }
 
 .emr-varname {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   background: transparent;
   color: #7fdc8f;
@@ -484,6 +626,17 @@ function addRunGroup() {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   padding: 0;
+}
+
+.emr-copy-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary, #7d8896);
+}
+
+.emr-varname:hover .emr-copy-icon,
+.emr-reserved-chip:hover .emr-copy-icon {
+  color: var(--text-primary);
 }
 
 .emr-varname.run-group {
@@ -524,7 +677,7 @@ function addRunGroup() {
   font-size: 12px;
   border: 1px solid #1d2936;
   border-radius: 6px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .emr-table th,
@@ -548,6 +701,15 @@ function addRunGroup() {
   border-right: 0;
 }
 
+.emr-op-head,
+.emr-op-cell {
+  width: 96px;
+}
+
+.emr-op-cell {
+  white-space: nowrap;
+}
+
 .emr-table tbody tr:first-child td {
   border-top: 1px solid #1a2330;
 }
@@ -569,12 +731,18 @@ function addRunGroup() {
   font-family: var(--font-mono, monospace);
 }
 
-.emr-role-picker {
-  position: relative;
+.emr-delete-btn {
+  padding: 0 2px;
 }
 
-.emr-role-picker summary {
+.emr-host-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.emr-picker-trigger {
   min-height: 30px;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -585,17 +753,24 @@ function addRunGroup() {
   color: var(--text-primary);
   padding: 4px 8px;
   cursor: pointer;
-  list-style: none;
+  font: inherit;
+  text-align: left;
 }
 
-.emr-role-picker summary::-webkit-details-marker {
-  display: none;
+.emr-picker-trigger:hover,
+.emr-picker-trigger[aria-expanded="true"] {
+  border-color: rgba(47, 128, 237, 0.72);
 }
 
-.emr-role-picker summary::after {
-  content: "⌄";
+.emr-picker-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
   color: var(--text-tertiary);
-  font-size: 12px;
+}
+
+.emr-picker-trigger[aria-expanded="true"] .emr-picker-chevron {
+  transform: rotate(180deg);
 }
 
 .emr-host-token,
@@ -610,18 +785,25 @@ function addRunGroup() {
   padding: 2px 7px;
 }
 
-.emr-role-menu {
+.emr-picker-menu {
   position: absolute;
-  z-index: 4;
-  min-width: 180px;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 190px;
+  max-height: 220px;
+  overflow: auto;
   display: grid;
   gap: 4px;
-  margin-top: 6px;
   padding: 8px;
   border: 1px solid #263240;
   border-radius: 6px;
   background: #111a24;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.emr-role-menu {
+  width: max-content;
 }
 
 .emr-role-option {
@@ -630,10 +812,77 @@ function addRunGroup() {
   gap: 6px;
   color: var(--text-primary);
   font-size: 12px;
+  min-height: 26px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
-.emr-add-line td {
-  background: #0d151d;
+.emr-role-option:hover {
+  color: #e6edf3;
+}
+
+.emr-add-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #1d2936;
+  border-radius: 6px;
+  background: #0b121a;
+  padding: 10px 12px;
+}
+
+.emr-add-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+
+.emr-add-group,
+.emr-run-group-add {
+  display: flex;
+  flex: 1 1 420px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.emr-add-divider {
+  align-self: stretch;
+  width: 1px;
+  min-height: 34px;
+  background: #344152;
+}
+
+.emr-add-name-input,
+.emr-add-value-input,
+.emr-add-role-input,
+.emr-add-host-picker {
+  height: 34px;
+  min-height: 34px;
+}
+
+.emr-add-name-input,
+.emr-add-value-input {
+  flex: 1 1 220px;
+}
+
+.emr-add-role-input {
+  flex: 1 1 180px;
+}
+
+.emr-add-host-picker {
+  flex: 1 1 190px;
+}
+
+.emr-add-host-trigger {
+  min-height: 34px;
+  background: #0f151d;
+}
+
+.emr-add-host-menu {
+  width: 100%;
+  min-width: 220px;
 }
 
 .emr-reserved {
@@ -642,6 +891,9 @@ function addRunGroup() {
 }
 
 .emr-reserved-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
   font-family: var(--font-mono, monospace);
   font-size: 11px;
