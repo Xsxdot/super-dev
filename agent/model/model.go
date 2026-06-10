@@ -652,8 +652,9 @@ type PipelineEnvironment struct {
 
 // ProjectPipelineRole 描述项目级流水线角色如何解析到主机列表。
 type ProjectPipelineRole struct {
-	FromService string   `json:"from_service,omitempty" yaml:"from_service,omitempty"`
-	Hosts       []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+	FromService  string              `json:"from_service,omitempty" yaml:"from_service,omitempty"`
+	Hosts        []string            `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+	Environments map[string][]string `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
 
 // SyncMode 标识构建产物到达目标机的方式。

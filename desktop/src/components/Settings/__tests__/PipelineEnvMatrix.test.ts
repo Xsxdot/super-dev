@@ -23,7 +23,12 @@ const baseProps = () => ({
   },
   reservedNames: ['artifact', 'workspace', 'version', 'env'],
   availableEnvironments: ['test', 'prod', 'staging'],
-  hosts: [{ id: 'h1', name: 'Host 1' }, { id: 'h2', name: 'Host 2' }],
+  hosts: [
+    { id: 'h1', name: 'Host 1' },
+    { id: 'h2', name: 'Host 2' },
+    { id: 'h3', name: 'Host 3' },
+    { id: 'h4', name: 'Host 4' },
+  ],
 })
 
 async function openMatrix(wrapper: ReturnType<typeof mount>) {
@@ -49,6 +54,20 @@ describe('PipelineEnvMatrix', () => {
     expect(wrapper.get('[data-test="env-col-test"]').text()).toContain('test')
     expect(wrapper.get('[data-test="env-col-prod"]').text()).toContain('prod')
     })
+  })
+
+  it('does not show a dead delete column in the variable matrix', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { local01_targets: { environments: { test: ['h1'], prod: ['h2'] } } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    expect(wrapper.findAll('th').map(th => th.text())).not.toContain('删除')
+    expect(wrapper.findAll('.emr-op-cell')).toHaveLength(0)
   })
 
   it('shows single-column matrix when single environment', async () => {
@@ -165,16 +184,21 @@ describe('PipelineEnvMatrix', () => {
     })
   })
 
-  it('renders run group rows when roles provided', async () => {
+  it('renders run groups as special rows inside the environment matrix', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: {
         ...baseProps(),
-        roles: { compute: { from_service: 'api' } },
+        roles: { local01_targets: { environments: { test: ['h1', 'h2'], prod: ['h3', 'h4'] } } },
       },
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
-    expect(wrapper.get('[data-test="run-group-compute"]').text()).toContain('compute')
+    const row = wrapper.get('[data-test="env-var-row-local01_targets"]')
+    expect(row.text()).toContain('local01_targets')
+    expect(row.text()).toContain('运行组')
+    expect(row.get('[data-test="role-hosts-test-local01_targets"]').text()).toContain('Host 1')
+    expect(row.get('[data-test="role-hosts-prod-local01_targets"]').text()).toContain('Host 3')
+    expect(wrapper.find('[data-test="run-groups"]').exists()).toBe(false)
   })
 
   it('shows copied feedback after run group variable click', async () => {
@@ -189,10 +213,10 @@ describe('PipelineEnvMatrix', () => {
     })
     await openMatrix(wrapper)
 
-    await wrapper.get('[data-test="copy-run-group-compute"]').trigger('click')
+    await wrapper.get('[data-test="copy-var-compute"]').trigger('click')
 
     expect(writeText).toHaveBeenCalledWith('${compute}')
-    expect(wrapper.get('[data-test="copy-run-group-compute-feedback"]').text()).toContain('已复制')
+    expect(wrapper.get('[data-test="copy-var-compute-feedback"]').text()).toContain('已复制')
   })
 
   it('hides builder and legacy runner roles from run groups', async () => {
@@ -208,23 +232,23 @@ describe('PipelineEnvMatrix', () => {
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
-    expect(wrapper.find('[data-test="run-group-builder"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="run-group-build_0_runner"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="run-group-compute"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="env-var-row-builder"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="env-var-row-build_0_runner"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="env-var-row-compute"]').exists()).toBe(true)
   })
 
-  it('edits run group host lists', async () => {
+  it('edits run group host lists per environment', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: {
         ...baseProps(),
-        roles: { compute: { hosts: ['h1'] } },
+        roles: { compute: { environments: { test: ['h1'] } } },
       },
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
-    await wrapper.get('[data-test="run-group-compute-host-h2"]').setValue(true)
+    await wrapper.get('[data-test="role-host-test-compute-h2"]').setValue(true)
     expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
-      compute: { hosts: ['h1', 'h2'] },
+      compute: { environments: { test: ['h1', 'h2'] } },
     })
   })
 
@@ -238,12 +262,12 @@ describe('PipelineEnvMatrix', () => {
     })
     await openMatrix(wrapper)
 
-    const checkbox = wrapper.get('[data-test="run-group-compute-host-h1"]').element as HTMLInputElement
+    const checkbox = wrapper.get('[data-test="role-host-test-compute-h1"]').element as HTMLInputElement
     expect(checkbox.checked).toBe(true)
 
-    await wrapper.get('[data-test="run-group-compute-host-h1"]').setValue(false)
+    await wrapper.get('[data-test="role-host-test-compute-h1"]').setValue(false)
     expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
-      compute: { hosts: [] },
+      compute: { environments: { test: [] } },
     })
   })
 
@@ -256,7 +280,7 @@ describe('PipelineEnvMatrix', () => {
     await wrapper.get('[data-test="run-group-name-input"]').setValue('nginx_upstream')
     await wrapper.get('[data-test="run-group-add"]').trigger('click')
     expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
-      nginx_upstream: { hosts: [] },
+      nginx_upstream: { environments: { test: [], prod: [] } },
     })
   })
 

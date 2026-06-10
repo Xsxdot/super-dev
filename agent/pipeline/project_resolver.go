@@ -184,6 +184,12 @@ func rejectRunVariableReservedOverrides(vars map[string]string) error {
 func resolveProjectRoles(project model.Project, envName string, roles map[string]model.ProjectPipelineRole) (map[string][]string, error) {
 	out := map[string][]string{}
 	for roleName, role := range roles {
+		if role.Environments != nil {
+			if hosts, ok := role.Environments[envName]; ok {
+				out[roleName] = append([]string(nil), hosts...)
+				continue
+			}
+		}
 		if len(role.Hosts) > 0 {
 			out[roleName] = append([]string(nil), role.Hosts...)
 			continue

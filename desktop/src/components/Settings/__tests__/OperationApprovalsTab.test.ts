@@ -92,6 +92,7 @@ describe('OperationApprovalsTab', () => {
     const settingsStore = useSettingsStore()
     settingsStore.agentSettings = {
       log_retention_days: 7,
+      artifact_keep_versions: 10,
       approval: {
         config_upsert: true,
         pipeline_upsert: true,
@@ -103,6 +104,7 @@ describe('OperationApprovalsTab', () => {
     vi.spyOn(settingsStore, 'loadAgentSettings').mockResolvedValue(undefined)
     const putSettings = vi.spyOn(api, 'putSettings').mockResolvedValue({
       log_retention_days: 7,
+      artifact_keep_versions: 10,
       approval: {
         config_upsert: false,
         pipeline_upsert: true,

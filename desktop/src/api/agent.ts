@@ -220,6 +220,7 @@ export interface PipelineEnvironment {
 export interface ProjectPipelineRole {
   from_service?: string
   hosts?: string[]
+  environments?: Record<string, string[]>
 }
 
 export type ArtifactKind = 'file' | 'image'
@@ -499,12 +500,15 @@ export interface LogRule {
 
 export interface AgentSettings {
   log_retention_days: number
+  artifact_keep_versions: number
   sample_seeded?: boolean
   onboarding_completed?: boolean
   approval?: ApprovalPolicy
 }
 
-export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'log_retention_days' | 'onboarding_completed' | 'approval'>>
+export type AgentSettingsPatch = Partial<
+  Pick<AgentSettings, 'log_retention_days' | 'artifact_keep_versions' | 'onboarding_completed' | 'approval'>
+>
 
 export interface ApprovalPolicy {
   config_upsert: boolean

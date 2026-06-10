@@ -14,14 +14,23 @@ import DeployTargetReadonly from '../DeployTargetReadonly.vue'
 import { installTestI18n } from '@/test-utils/i18n'
 
 describe('DeployTargetReadonly', () => {
-  it('shows hosts per environment', () => {
+  it('shows pipeline-level hosts per environment without service rows', () => {
     const wrapper = mount(DeployTargetReadonly, {
       props: {
-        targetsByEnv: { test: ['web-test-01', 'web-test-02'], prod: ['web-prod-01'] },
+        targetsByEnv: {
+          dev: ['local-01', 'local-02'],
+          test: ['test-01', 'test-02'],
+          prod: ['ali-01', 'ali-02', 'ali-03', 'ali-04'],
+        },
       },
       global: { plugins: [installTestI18n()] },
     })
-    expect(wrapper.get('[data-test="deploy-target-test"]').text()).toContain('web-test-01')
-    expect(wrapper.get('[data-test="deploy-target-prod"]').text()).toContain('web-prod-01')
+    expect(wrapper.get('[data-test="deploy-target-label"]').text()).toContain('当前流水线')
+    expect(wrapper.get('[data-test="deploy-target-env-dev"]').text()).toContain('local-01')
+    expect(wrapper.get('[data-test="deploy-target-env-test"]').text()).toContain('test-01')
+    expect(wrapper.get('[data-test="deploy-target-env-prod"]').text()).toContain('ali-01')
+    expect(wrapper.get('[data-test="deploy-target-env-prod"]').text()).toContain('+2')
+    expect(wrapper.get('[data-test="deploy-target-overflow-prod"]').text()).toContain('ali-04')
+    expect(wrapper.text()).not.toContain('Service')
   })
 })

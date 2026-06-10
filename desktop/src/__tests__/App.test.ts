@@ -37,7 +37,7 @@ describe('App', () => {
   it('redirects main window to onboarding when incomplete', async () => {
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
-      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: false }
     })
 
     mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
@@ -50,7 +50,7 @@ describe('App', () => {
     routeState.path = '/popover'
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
-      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: false }
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: false }
     })
 
     mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
@@ -62,7 +62,7 @@ describe('App', () => {
   it('starts operation approval polling in the main window', async () => {
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
-      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
     })
     const approvals = useOperationApprovalStore()
     const loadPending = vi.spyOn(approvals, 'loadPending').mockResolvedValue(undefined)
@@ -83,7 +83,7 @@ describe('App', () => {
     routeState.path = '/popover'
     const settings = useSettingsStore()
     vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
-      settings.agentSettings = { log_retention_days: 7, sample_seeded: true, onboarding_completed: true }
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
     })
     const approvals = useOperationApprovalStore()
     const loadPending = vi.spyOn(approvals, 'loadPending').mockResolvedValue(undefined)
