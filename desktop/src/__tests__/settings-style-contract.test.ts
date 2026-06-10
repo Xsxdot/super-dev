@@ -175,4 +175,12 @@ describe('settings style contract', () => {
     expectRule(wizard, '\\.field-label', ['font-size:\\s*11px;', 'font-weight:\\s*500;'])
     expectRule(wizard, '\\.form-block h4', ['font-size:\\s*12px;', 'font-weight:\\s*600;'])
   })
+
+  it('keeps wrapped pipeline preview nodes from stretching across a full row', () => {
+    const source = projectPipelineEditorSource()
+
+    expect(source).toMatch(/\.preview-node\s*\{[^}]*flex:\s*0\s+1\s+216px;/s)
+    expect(source).toMatch(/\.preview-node\s*\{[^}]*max-width:\s*216px;/s)
+    expect(source).not.toContain('preview-node-full-row')
+  })
 })

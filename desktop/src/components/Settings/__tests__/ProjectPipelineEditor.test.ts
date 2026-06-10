@@ -329,7 +329,7 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-preview-overlay"]').exists()).toBe(false)
   })
 
-  it('预览执行图换行后孤立节点占满整行', async () => {
+  it('预览执行图换行后的孤立节点保持卡片宽度', async () => {
     const { api } = await import('@/api/agent')
     vi.mocked(api.previewProjectPipeline).mockResolvedValue({
       run: {
@@ -359,7 +359,7 @@ describe('ProjectPipelineEditor', () => {
 
     const nodes = wrapper.findAll('[data-test="pipeline-preview-node"]')
     expect(nodes).toHaveLength(5)
-    expect(nodes.at(-1)?.classes()).toContain('preview-node-full-row')
+    expect(nodes.at(-1)?.classes()).not.toContain('preview-node-full-row')
   })
 
   it('点击保留变量按钮后列出变量名和作用', async () => {

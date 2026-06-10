@@ -215,12 +215,6 @@ function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
   return [...buildNodes, ...deployNodes, ...finallyNodes].slice(0, 5)
 }
 
-function isFullRowPreviewNode(index: number) {
-  return editorPreviewNodes.value.length > 1
-    && editorPreviewNodes.value.length % 4 === 1
-    && index === editorPreviewNodes.value.length - 1
-}
-
 const localPreviewNodes = computed(() => {
   const pipeline = activePipeline.value?.pipeline
   if (!pipeline) return []
@@ -512,7 +506,6 @@ async function save() {
               <template v-for="(node, i) in editorPreviewNodes" :key="node.id">
                 <div
                   class="preview-node"
-                  :class="{ 'preview-node-full-row': isFullRowPreviewNode(i) }"
                   data-test="pipeline-preview-node"
                 >
                   <div class="preview-node-phase">{{ phaseLabel(node.phase) }}</div>
@@ -731,14 +724,13 @@ async function save() {
 }
 .preview-node {
   min-width: 190px;
-  flex: 1;
+  max-width: 216px;
+  flex: 0 1 216px;
+  box-sizing: border-box;
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
   padding: 18px;
   background: var(--bg-tertiary);
-}
-.preview-node-full-row {
-  flex: 1 1 100%;
 }
 .preview-node-phase {
   color: var(--text-tertiary);
