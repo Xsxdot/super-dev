@@ -14,6 +14,7 @@
   <a href="https://gosuper.dev/"><strong>gosuper.dev</strong></a> ·
   <a href="#why-superdev">Why</a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="https://gosuper.dev/#demo">Demo</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
@@ -23,6 +24,8 @@
     <img alt="SuperDev runtime console" src="./docs/assets/readme/screenshot-en.png" width="760" />
   </a>
 </p>
+
+> **Watch the workflow:** choose an AI agent, install MCP, add a host, let AI create the project, services, environments, pipeline and deployment, approve operations, and arrive at the shared runtime overview: [gosuper.dev/#demo](https://gosuper.dev/#demo).
 
 <p align="center">
   <img alt="Platform: macOS first" src="https://img.shields.io/badge/platform-macOS%20first-111827" />
@@ -145,7 +148,7 @@ Ingress examples live in `examples/ingress/` and cover manual DNS, Cloudflare, A
 SuperDev is approaching its first open-source release. The current focus is macOS desktop usage and local-first workflows.
 
 - Available: Tauri desktop app, Go local agent, MCP server, SuperDev skill, multi-service logs, operation approvals, pipeline templates, ingress, and zero-touch onboarding.
-- Near term: verified release packaging, final README screenshots, more pipeline templates, a smoother remote agent / tunnel experience, and a demo video.
+- Near term: verified release packaging, final README screenshots, more pipeline templates, a smoother remote agent / tunnel experience, and a richer release walkthrough.
 - Principle: local-first by default. AI can participate in operations, but writes must remain preflighted, approved, token-bound, and auditable.
 
 ## Development

@@ -775,6 +775,7 @@ export default {
   gettingStarted: {
     entryTitle: '起步',
     entryHint: '让 AI 带你跑通',
+    replayAction: '重新演练',
     progress: '起步 {done}/{total}',
     optional: '可选',
     dismiss: '关闭引导',

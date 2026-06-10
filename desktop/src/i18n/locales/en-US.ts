@@ -775,6 +775,7 @@ export default {
   gettingStarted: {
     entryTitle: 'Getting started',
     entryHint: 'Let AI walk you through',
+    replayAction: 'Replay guide',
     progress: 'Getting started {done}/{total}',
     optional: 'Optional',
     dismiss: 'Dismiss',

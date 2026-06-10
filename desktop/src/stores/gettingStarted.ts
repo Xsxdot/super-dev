@@ -22,6 +22,7 @@ export const PRIMARY_STEPS: GettingStartedStep[] = ['step0', 'step1', 'step2', '
 
 export const COMPLETED_STEPS_KEY = 'superdev.gettingStarted.completedSteps'
 export const DISMISSED_KEY = 'superdev.gettingStarted.dismissed'
+export const REPLAY_KEY = 'superdev.gettingStarted.replay'
 
 export type StepDetection = Record<GettingStartedStep, boolean>
 
@@ -93,9 +94,14 @@ function saveCompleted(steps: GettingStartedStep[]) {
   localStorage.setItem(COMPLETED_STEPS_KEY, JSON.stringify(steps))
 }
 
+function saveReplay(active: boolean) {
+  localStorage.setItem(REPLAY_KEY, active ? 'true' : 'false')
+}
+
 export const useGettingStartedStore = defineStore('gettingStarted', () => {
   const completedSteps = ref<GettingStartedStep[]>(loadCompleted())
   const dismissed = ref(localStorage.getItem(DISMISSED_KEY) === 'true')
+  const replaying = ref(localStorage.getItem(REPLAY_KEY) === 'true')
 
   // markCompleted 幂等地标记单个步骤完成，并同步写入 localStorage。
   function markCompleted(step: GettingStartedStep) {
@@ -115,6 +121,7 @@ export const useGettingStartedStore = defineStore('gettingStarted', () => {
   function dismiss() {
     dismissed.value = true
     localStorage.setItem(DISMISSED_KEY, 'true')
+    stopReplay()
   }
 
   // reopen 清除关闭状态，用于设置页重新打开起步引导。
@@ -123,24 +130,39 @@ export const useGettingStartedStore = defineStore('gettingStarted', () => {
     localStorage.setItem(DISMISSED_KEY, 'false')
   }
 
-  // isStepCompleted 查询指定步骤是否已经完成。
-  function isStepCompleted(step: GettingStartedStep): boolean {
-    return completedSteps.value.includes(step)
+  // startReplay 重新演练起步引导，但不清空由真实环境推导出的完成记录。
+  function startReplay() {
+    replaying.value = true
+    saveReplay(true)
+    reopen()
   }
 
+  function stopReplay() {
+    if (!replaying.value) return
+    replaying.value = false
+    saveReplay(false)
+  }
+
+  // isStepCompleted 查询指定步骤是否已经完成。
+  function isStepCompleted(step: GettingStartedStep): boolean {
+    return displayCompletedSteps.value.includes(step)
+  }
+
+  const displayCompletedSteps = computed(() => replaying.value ? [] : completedSteps.value)
   const completedCount = computed(() =>
-    PRIMARY_STEPS.filter(step => completedSteps.value.includes(step)).length,
+    PRIMARY_STEPS.filter(step => displayCompletedSteps.value.includes(step)).length,
   )
   const totalSteps = computed(() => PRIMARY_STEPS.length)
   const allDone = computed(() => completedCount.value === totalSteps.value)
   const currentStep = computed<GettingStartedStep | null>(
-    () => PRIMARY_STEPS.find(step => !completedSteps.value.includes(step)) ?? null,
+    () => PRIMARY_STEPS.find(step => !displayCompletedSteps.value.includes(step)) ?? null,
   )
   const visible = computed(() => !dismissed.value && !allDone.value)
 
   return {
     completedSteps,
     dismissed,
+    replaying,
     completedCount,
     totalSteps,
     allDone,
@@ -150,6 +172,7 @@ export const useGettingStartedStore = defineStore('gettingStarted', () => {
     reconcile,
     dismiss,
     reopen,
+    startReplay,
     isStepCompleted,
   }
 })

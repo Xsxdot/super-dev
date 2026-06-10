@@ -12,6 +12,7 @@
   <a href="https://gosuper.dev/"><strong>官网 gosuper.dev</strong></a> ·
   <a href="#为什么是-superdev">为什么</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="https://gosuper.dev/#demo">演示</a> ·
   <a href="#核心架构">架构</a> ·
   <a href="./README.md">English</a>
 </p>
@@ -21,6 +22,8 @@
     <img alt="SuperDev runtime console" src="./docs/assets/readme/screenshot-zh.png" width="760" />
   </a>
 </p>
+
+> **观看完整流程：** 选择 AI 工具、安装 MCP、新增主机，让 AI 创建项目、服务、环境、流水线和部署，完成必要审批，并得到共享运行态总览：[gosuper.dev/#demo](https://gosuper.dev/#demo)。
 
 <p align="center">
   <img alt="Platform: macOS first" src="https://img.shields.io/badge/platform-macOS%20first-111827" />
@@ -143,7 +146,7 @@ Ingress 示例位于 `examples/ingress/`，覆盖 manual DNS、Cloudflare、Aliy
 SuperDev 正处于第一版开源发布前夜，当前主要面向 macOS 桌面端和本地优先工作流。
 
 - 已有：Tauri 桌面端、Go local agent、MCP server、SuperDev skill、多服务日志、operation approvals、pipeline 模板、ingress 子系统、零操作 onboarding。
-- 近期：更完整的 release 打包、正式 README 截图、更多 pipeline 模板、更稳的远端 agent / tunnel 体验、演示视频。
+- 近期：更完整的 release 打包、正式 README 截图、更多 pipeline 模板、更稳的远端 agent / tunnel 体验、更完整的发布演示。
 - 原则：本地优先，不把控制面强行放到云上；AI 可以参与操作，但写操作必须可预检、可批准、可审计。
 
 ## 开发

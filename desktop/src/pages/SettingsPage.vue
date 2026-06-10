@@ -388,9 +388,9 @@ const artifactKeepVersions = computed({
               class="settings-btn settings-btn-secondary"
               data-test="reopen-getting-started"
               type="button"
-              @click="gettingStarted.reopen()"
+              @click="gettingStarted.startReplay()"
             >
-              {{ t('gettingStarted.entryTitle') }}
+              {{ t('gettingStarted.replayAction') }}
             </button>
           </div>
         </div>

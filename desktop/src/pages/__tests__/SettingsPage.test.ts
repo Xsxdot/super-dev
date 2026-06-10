@@ -16,7 +16,7 @@ import { nextTick } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import SettingsPage from '../SettingsPage.vue'
 import { useAgentStore } from '@/stores/agent'
-import { DISMISSED_KEY, useGettingStartedStore } from '@/stores/gettingStarted'
+import { DISMISSED_KEY, PRIMARY_STEPS, useGettingStartedStore } from '@/stores/gettingStarted'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -442,19 +442,25 @@ describe('SettingsPage', () => {
     expect(wrapper.text()).toContain('首次引导')
   })
 
-  it('通用页可重新打开侧边栏起步引导', async () => {
+  it('通用页可重新演练已完成的侧边栏起步引导', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
     vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
     localStorage.setItem(DISMISSED_KEY, 'true')
     const gettingStarted = useGettingStartedStore()
+    PRIMARY_STEPS.forEach(step => gettingStarted.markCompleted(step))
 
     const wrapper = mountSettingsPage()
     await nextTick()
+    expect(wrapper.find('[data-test="reopen-getting-started"]').text()).toBe('重新演练')
     await wrapper.find('[data-test="reopen-getting-started"]').trigger('click')
 
     expect(gettingStarted.dismissed).toBe(false)
+    expect(gettingStarted.replaying).toBe(true)
+    expect(gettingStarted.visible).toBe(true)
+    expect(gettingStarted.currentStep).toBe('step0')
+    expect(gettingStarted.completedSteps.sort()).toEqual([...PRIMARY_STEPS].sort())
     expect(localStorage.getItem(DISMISSED_KEY)).toBe('false')
   })
 })

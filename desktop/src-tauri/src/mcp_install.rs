@@ -175,12 +175,15 @@ impl AgentKind {
 
     fn detect_installation(
         &self,
+        home: &Path,
         command_dirs: &[PathBuf],
         app_dirs: &[PathBuf],
     ) -> Option<PathBuf> {
         match self {
             Self::ClaudeCode => find_command_in_dirs(command_dirs, &["claude"]),
-            Self::Codex => find_command_in_dirs(command_dirs, &["codex"]),
+            Self::Codex => find_command_in_dirs(command_dirs, &["codex"])
+                .or_else(|| find_app_bundle(app_dirs, "Codex.app"))
+                .or_else(|| find_existing_config_target(&self.config_path(home))),
             Self::Cursor => find_command_in_dirs(command_dirs, &["cursor"])
                 .or_else(|| find_app_bundle(app_dirs, "Cursor.app")),
         }
@@ -284,17 +287,18 @@ pub fn detect_coding_agents_for_paths(
     app_dirs: &[PathBuf],
 ) -> Vec<CodingAgentAvailability> {
     let command_dirs = command_search_dirs(home, path_value);
-    detect_coding_agents_for_search_dirs(&command_dirs, app_dirs)
+    detect_coding_agents_for_search_dirs(home, &command_dirs, app_dirs)
 }
 
 fn detect_coding_agents_for_search_dirs(
+    home: &Path,
     command_dirs: &[PathBuf],
     app_dirs: &[PathBuf],
 ) -> Vec<CodingAgentAvailability> {
     [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor]
         .into_iter()
         .map(|kind| {
-            let detection_path = kind.detect_installation(command_dirs, app_dirs);
+            let detection_path = kind.detect_installation(home, command_dirs, app_dirs);
             CodingAgentAvailability {
                 agent: kind.label().to_string(),
                 installed: detection_path.is_some(),
@@ -302,6 +306,16 @@ fn detect_coding_agents_for_search_dirs(
             }
         })
         .collect()
+}
+
+fn find_existing_config_target(config_path: &Path) -> Option<PathBuf> {
+    if config_path.is_file() {
+        return Some(config_path.to_path_buf());
+    }
+    config_path
+        .parent()
+        .filter(|dir| dir.is_dir())
+        .map(Path::to_path_buf)
 }
 
 fn find_command_in_dirs(command_dirs: &[PathBuf], commands: &[&str]) -> Option<PathBuf> {
@@ -1118,7 +1132,7 @@ pub fn mcp_status_for_paths(
     skill_source_error: Option<String>,
 ) -> Vec<McpStatus> {
     let command_dirs = command_search_dirs(home, path_value);
-    let detected = detect_coding_agents_for_search_dirs(&command_dirs, app_dirs);
+    let detected = detect_coding_agents_for_search_dirs(home, &command_dirs, app_dirs);
     [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor]
         .into_iter()
         .map(|kind| {
@@ -1757,8 +1771,28 @@ mod path_tests {
     }
 
     #[test]
+    fn detect_coding_agents_accepts_existing_codex_config_without_cli() {
+        let home = tempfile_dir();
+        fs::create_dir_all(home.join(".codex")).expect("mkdir codex config dir");
+        fs::write(home.join(".codex").join("config.toml"), b"").expect("write codex config");
+        let config_path = home
+            .join(".codex")
+            .join("config.toml")
+            .to_string_lossy()
+            .to_string();
+
+        let detection_path = AgentKind::Codex
+            .detect_installation(&home, &[], &[])
+            .map(|path| path.to_string_lossy().to_string());
+
+        assert_eq!(detection_path.as_deref(), Some(config_path.as_str()));
+    }
+
+    #[test]
     fn detect_coding_agents_marks_missing_agents_uninstalled() {
-        let statuses = detect_coding_agents_for_search_dirs(&[], &[]);
+        let home = tempfile_dir().join("missing-home");
+        fs::create_dir_all(&home).expect("mkdir missing home");
+        let statuses = detect_coding_agents_for_search_dirs(&home, &[], &[]);
 
         assert!(!agent_status(&statuses, "claude-code").installed);
         assert!(!agent_status(&statuses, "codex").installed);

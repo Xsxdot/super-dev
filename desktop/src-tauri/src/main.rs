@@ -25,6 +25,7 @@ const POPOVER_HEIGHT: i32 = 420;
 const POPOVER_GAP: i32 = 8;
 /// 打开后忽略失焦关闭的宽限期（macOS 菜单栏点击常会立刻触发一次失焦）。
 const POPOVER_FOCUS_GRACE_MS: u64 = 250;
+const LOOPBACK_PROXY_BYPASS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -228,6 +229,40 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
     }
 }
 
+fn append_loopback_proxy_bypass(existing: Option<&str>) -> String {
+    let mut entries: Vec<String> = existing
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    for loopback in LOOPBACK_PROXY_BYPASS {
+        if !entries.iter().any(|entry| entry == loopback) {
+            entries.push(loopback.to_string());
+        }
+    }
+    entries.join(",")
+}
+
+fn install_loopback_proxy_bypass() {
+    let existing = match (
+        std::env::var("NO_PROXY").ok(),
+        std::env::var("no_proxy").ok(),
+    ) {
+        (Some(upper), Some(lower)) if upper != lower => Some(format!("{upper},{lower}")),
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    let bypass = append_loopback_proxy_bypass(existing.as_deref());
+
+    // 桌面端和 agent 只通过本机回环地址通信；这些请求被系统/环境代理接管时，
+    // WebView fetch 会报 Load failed，导致 onboarding 和设置保存无法继续。
+    std::env::set_var("NO_PROXY", &bypass);
+    std::env::set_var("no_proxy", bypass);
+}
+
 fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
     let about = PredefinedMenuItem::about(
         app,
@@ -281,7 +316,51 @@ fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn install_tray(app: &tauri::App) -> tauri::Result<()> {
+    // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
+    let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&settings, &quit])?;
+
+    // 菜单栏用专用彩色图标（按 superdev-logo-v5-launch.svg 设计），不用 app icon
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+
+    TrayIconBuilder::with_id("main")
+        .icon(tray_icon)
+        .icon_as_template(false)
+        .show_menu_on_left_click(false)
+        .menu(&menu)
+        .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
+        .on_tray_icon_event(|tray, event| match event {
+            // 左键抬起 → 切换 Popover（左键不弹出菜单，见 show_menu_on_left_click(false)）
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } => {
+                toggle_popover(tray.app_handle(), Some(rect));
+            }
+            // 右键按下时系统会弹出菜单；先收起 Popover
+            TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Down,
+                ..
+            } => {
+                if let Some(w) = tray.app_handle().get_webview_window("popover") {
+                    let _ = w.hide();
+                }
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 fn main() {
+    install_loopback_proxy_bypass();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -305,52 +384,15 @@ fn main() {
         .setup(|app| {
             let agent = AgentProcess::new();
             if let Err(e) = agent.start(app.handle()) {
-                return Err(e.into());
+                eprintln!("[SuperDev] agent failed to start: {e}");
             }
             app.manage(agent);
-            install_app_menu(app)?;
-
-            // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
-            let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出 SuperDev", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings, &quit])?;
-
-            // 菜单栏用专用彩色图标（按 superdev-logo-v5-launch.svg 设计），不用 app icon
-            let tray_icon =
-                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-                    .map_err(|e| format!("加载托盘图标失败: {e}"))?;
-
-            TrayIconBuilder::with_id("main")
-                .icon(tray_icon)
-                .icon_as_template(false)
-                .show_menu_on_left_click(false)
-                .menu(&menu)
-                .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
-                .on_tray_icon_event(|tray, event| {
-                    match event {
-                        // 左键抬起 → 切换 Popover（左键不弹出菜单，见 show_menu_on_left_click(false)）
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            rect,
-                            ..
-                        } => {
-                            toggle_popover(tray.app_handle(), Some(rect));
-                        }
-                        // 右键按下时系统会弹出菜单；先收起 Popover
-                        TrayIconEvent::Click {
-                            button: MouseButton::Right,
-                            button_state: MouseButtonState::Down,
-                            ..
-                        } => {
-                            if let Some(w) = tray.app_handle().get_webview_window("popover") {
-                                let _ = w.hide();
-                            }
-                        }
-                        _ => {}
-                    }
-                })
-                .build(app)?;
+            if let Err(e) = install_app_menu(app) {
+                eprintln!("[SuperDev] app menu failed to install: {e}");
+            }
+            if let Err(e) = install_tray(app) {
+                eprintln!("[SuperDev] tray icon failed to install: {e}");
+            }
 
             Ok(())
         })
@@ -386,6 +428,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::append_loopback_proxy_bypass;
+
     const MAIN_RS: &str = include_str!("main.rs");
 
     fn install_app_menu_source() -> &'static str {
@@ -399,11 +443,51 @@ mod tests {
     }
 
     fn main_source() -> &'static str {
-        let start = MAIN_RS.find("fn main()").expect("main.rs should define main");
+        let start = MAIN_RS
+            .find("fn main()")
+            .expect("main.rs should define main");
         let relative_end = MAIN_RS[start..]
             .find("\n#[cfg(test)]")
             .expect("test module should appear after main");
         &MAIN_RS[start..start + relative_end]
+    }
+
+    fn setup_source() -> &'static str {
+        let source = main_source();
+        let start = source
+            .find(".setup(|app| {")
+            .expect("main.rs should define setup callback");
+        let relative_end = source[start..]
+            .find("\n        .on_window_event")
+            .expect("setup callback should appear before window events");
+        &source[start..start + relative_end]
+    }
+
+    #[test]
+    fn loopback_proxy_bypass_preserves_existing_domains() {
+        assert_eq!(
+            append_loopback_proxy_bypass(Some("example.com,localhost")),
+            "example.com,localhost,127.0.0.1,::1"
+        );
+        assert_eq!(
+            append_loopback_proxy_bypass(None),
+            "localhost,127.0.0.1,::1"
+        );
+    }
+
+    #[test]
+    fn main_installs_loopback_proxy_bypass_before_tauri_builder() {
+        let source = main_source();
+        let bypass_pos = source
+            .find("install_loopback_proxy_bypass();")
+            .expect("main should install loopback proxy bypass");
+        let builder_pos = source
+            .find("tauri::Builder::default()")
+            .expect("main should create tauri builder");
+        assert!(
+            bypass_pos < builder_pos,
+            "proxy bypass must be configured before WebView and sidecar startup"
+        );
     }
 
     #[test]
@@ -465,6 +549,48 @@ mod tests {
         assert!(
             source.contains("show_home_window,"),
             "show_home_window must be registered in the invoke handler"
+        );
+    }
+
+    #[test]
+    fn setup_keeps_desktop_open_when_agent_start_fails() {
+        let source = setup_source();
+        assert!(
+            source.contains("if let Err(e) = agent.start(app.handle()) {"),
+            "setup should explicitly handle agent startup failures"
+        );
+        assert!(
+            source.contains("[SuperDev] agent failed to start"),
+            "agent startup failures should be logged for crash diagnosis"
+        );
+        assert!(
+            !source.contains("return Err(e.into());"),
+            "agent startup failure should not abort the Tauri app during did_finish_launching"
+        );
+    }
+
+    #[test]
+    fn setup_keeps_desktop_open_when_menu_or_tray_setup_fails() {
+        let source = setup_source();
+        assert!(
+            source.contains("if let Err(e) = install_app_menu(app) {"),
+            "app menu setup should be handled as a recoverable startup step"
+        );
+        assert!(
+            source.contains("[SuperDev] app menu failed to install"),
+            "app menu failures should leave a diagnostic log"
+        );
+        assert!(
+            source.contains("if let Err(e) = install_tray(app) {"),
+            "tray setup should be handled as a recoverable startup step"
+        );
+        assert!(
+            source.contains("[SuperDev] tray icon failed to install"),
+            "tray failures should leave a diagnostic log"
+        );
+        assert!(
+            !source.contains("install_app_menu(app)?"),
+            "app menu failure should not abort the Tauri app during did_finish_launching"
         );
     }
 }

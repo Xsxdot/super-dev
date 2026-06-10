@@ -15,6 +15,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import {
   COMPLETED_STEPS_KEY,
   DISMISSED_KEY,
+  PRIMARY_STEPS,
+  REPLAY_KEY,
   deriveDetection,
   isSampleProject,
   useGettingStartedStore,
@@ -253,5 +255,29 @@ describe('gettingStarted 派生 getter', () => {
     store.dismiss()
 
     expect(store.visible).toBe(false)
+  })
+
+  it('startReplay 在保留真实完成记录的同时从第一步重新展示起步引导', () => {
+    const store = useGettingStartedStore()
+    PRIMARY_STEPS.forEach(step => store.markCompleted(step))
+
+    expect(store.visible).toBe(false)
+
+    store.startReplay()
+
+    expect(store.replaying).toBe(true)
+    expect(store.visible).toBe(true)
+    expect(store.completedSteps.sort()).toEqual([...PRIMARY_STEPS].sort())
+    expect(store.completedCount).toBe(0)
+    expect(store.currentStep).toBe('step0')
+    expect(store.isStepCompleted('step0')).toBe(false)
+    expect(localStorage.getItem(REPLAY_KEY)).toBe('true')
+
+    store.dismiss()
+
+    expect(store.replaying).toBe(false)
+    expect(store.visible).toBe(false)
+    expect(store.completedSteps.sort()).toEqual([...PRIMARY_STEPS].sort())
+    expect(localStorage.getItem(REPLAY_KEY)).toBe('false')
   })
 })
