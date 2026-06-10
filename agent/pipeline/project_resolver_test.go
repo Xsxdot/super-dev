@@ -89,6 +89,44 @@ func TestResolveProjectPipelineAppliesEnvVariablesAndServiceRoles(t *testing.T) 
 	assert.Equal(t, "project:p1:pipeline:deploy-dev:env:dev", resolved.RunID)
 }
 
+func TestResolveProjectPipelinePrefersRoleHostsForCurrentEnvironment(t *testing.T) {
+	project := model.Project{
+		ID: "p1",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "deploy",
+			Name: "Deploy",
+			Roles: map[string]model.ProjectPipelineRole{
+				"deploy_targets": {
+					Hosts: []string{"h-legacy"},
+					Environments: map[string][]string{
+						"test": {"h-test-1", "h-test-2"},
+						"prod": {"h-prod-1", "h-prod-2"},
+					},
+				},
+			},
+			Pipeline: model.Pipeline{
+				Deploy: []model.Step{{Name: "Deploy", Type: "remote_command", Roles: []string{"deploy_targets"}}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "deploy",
+		EnvName:    "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-prod-1", "h-prod-2"}, resolved.Pipeline.Roles["deploy_targets"])
+
+	fallback, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "deploy",
+		EnvName:    "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-legacy"}, fallback.Pipeline.Roles["deploy_targets"])
+}
+
 func TestResolveProjectPipelineRendersArtifactVarAndConcurrency(t *testing.T) {
 	project := model.Project{
 		ID:        "p1",
