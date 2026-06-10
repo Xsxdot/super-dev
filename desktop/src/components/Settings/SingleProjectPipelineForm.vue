@@ -19,6 +19,7 @@ import PipelineEnvMatrix from './PipelineEnvMatrix.vue'
 import PipelineTemplateWizard from './PipelineTemplateWizard.vue'
 
 type HostOption = { id: string; name: string; is_self?: boolean }
+type ConfigPanel = 'build' | 'variables' | 'deploy'
 
 const props = defineProps<{
   pipeline: ProjectPipeline
@@ -37,12 +38,38 @@ const emit = defineEmits<{ 'update:pipeline': [ProjectPipeline] }>()
 const { t } = useAppI18n()
 const draft = ref<ProjectPipeline>({ ...props.pipeline, services: [...(props.pipeline.services ?? [])] })
 const wizard = ref<InstanceType<typeof PipelineTemplateWizard> | null>(null)
+const activeConfigPanel = ref<ConfigPanel | null>(null)
 const reservedNames = ['workspace', 'output', 'artifacts', 'version', 'env', 'date', 'time', 'run_temp_dir', 'sync_mode']
 const targetsByEnv = computed(() => props.targetsByEnv ?? {})
 const selfHostId = computed(() => props.hosts.find(host => host.is_self)?.id ?? '')
 const selectedBuilderHostId = computed(() => draft.value.roles?.builder?.hosts?.[0] ?? selfHostId.value)
 const selectedBuilderIsLocal = computed(() => selectedBuilderHostId.value === '' || (selfHostId.value !== '' && selectedBuilderHostId.value === selfHostId.value))
 const effectiveSyncMode = computed(() => selectedBuilderIsLocal.value ? 'transfer' : (draft.value.sync_mode ?? 'transfer'))
+const builderHostLabel = computed(() => {
+  const hostID = selectedBuilderHostId.value
+  if (!hostID) return t('common.local')
+  return props.hosts.find(host => host.id === hostID)?.name ?? hostID
+})
+const builderSummary = computed(() => {
+  const items = [builderHostLabel.value]
+  if (!selectedBuilderIsLocal.value) items.push(t(`settings.pipeline.syncMode_${effectiveSyncMode.value}`))
+  return items
+})
+const envNames = computed(() => Object.keys(draft.value.environments ?? {}).filter(Boolean))
+const globalVarCount = computed(() => Object.keys(draft.value.variables ?? {}).length)
+const visibleRoleNames = computed(() => Object.keys(draft.value.roles ?? {}).filter(name => name !== 'builder' && !name.endsWith('_runner')))
+const variableSummary = computed(() => [
+  `${t('settings.pipeline.globalVars')} ${globalVarCount.value}`,
+  envNames.value.length ? envNames.value.join('/') : '0',
+  `${t('settings.pipeline.runGroups')} ${visibleRoleNames.value.length}`,
+])
+const deployEnvCount = computed(() => Object.keys(targetsByEnv.value).filter(Boolean).length)
+const deployHostCount = computed(() => Object.values(targetsByEnv.value).reduce((sum, hosts) => sum + hosts.length, 0))
+const deploySummary = computed(() => [
+  t('settings.pipeline.readonly'),
+  t('settings.pipeline.envCount', { count: deployEnvCount.value }),
+  t('settings.pipeline.hostCount', { count: deployHostCount.value }),
+])
 
 watch(() => props.pipeline, (pipeline) => {
   draft.value = { ...pipeline, services: [...(pipeline.services ?? [])] }
@@ -73,6 +100,10 @@ function setBuilderHost(hostId: string) {
   roles.builder = { hosts: hostId ? [hostId] : [] }
   const hostIsLocal = hostId === '' || (selfHostId.value !== '' && hostId === selfHostId.value)
   patch(hostIsLocal ? { roles, sync_mode: 'transfer' } : { roles })
+}
+
+function toggleConfigPanel(panel: ConfigPanel) {
+  activeConfigPanel.value = activeConfigPanel.value === panel ? null : panel
 }
 
 function saveDraft() {
@@ -132,29 +163,92 @@ defineExpose({ saveDraft })
       </div>
     </div>
 
-    <BuildConfigBar
-      :builder-host-id="selectedBuilderHostId"
-      :sync-mode="effectiveSyncMode"
-      :sync-command="draft.sync_command ?? ''"
-      :hosts="hosts"
-      @update:builder-host-id="setBuilderHost"
-      @update:sync-mode="patch({ sync_mode: $event })"
-      @update:sync-command="patch({ sync_command: $event })"
-    />
+    <div class="single-pipeline-config-stack" data-test="pipeline-config-stack">
+      <section
+        class="config-panel"
+        :class="{ open: activeConfigPanel === 'build' }"
+        data-test="pipeline-config-panel-build"
+      >
+        <button type="button" class="config-panel-head" data-test="pipeline-config-toggle-build" @click="toggleConfigPanel('build')">
+          <span class="config-panel-main">
+            <span class="config-chevron">{{ activeConfigPanel === 'build' ? '▾' : '▸' }}</span>
+            <span>
+              <span class="config-title">{{ t('settings.pipeline.builderHost') }} / Build machine</span>
+              <span class="config-hint">{{ selectedBuilderIsLocal ? t('settings.pipeline.builderLocalHint') : t('settings.pipeline.builderRemoteHint') }}</span>
+            </span>
+          </span>
+          <span class="config-badges">
+            <span v-for="item in builderSummary" :key="item" class="config-badge">{{ item }}</span>
+          </span>
+        </button>
+        <div v-if="activeConfigPanel === 'build'" class="config-panel-body" data-test="pipeline-config-body-build">
+          <BuildConfigBar
+            :builder-host-id="selectedBuilderHostId"
+            :sync-mode="effectiveSyncMode"
+            :sync-command="draft.sync_command ?? ''"
+            :hosts="hosts"
+            @update:builder-host-id="setBuilderHost"
+            @update:sync-mode="patch({ sync_mode: $event })"
+            @update:sync-command="patch({ sync_command: $event })"
+          />
+        </div>
+      </section>
 
-    <PipelineEnvMatrix
-      :variables="draft.variables ?? {}"
-      :environments="draft.environments ?? {}"
-      :roles="draft.roles"
-      :available-environments="availableEnvironments"
-      :hosts="hosts"
-      :reserved-names="reservedNames"
-      @update:variables="patch({ variables: $event })"
-      @update:environments="patch({ environments: $event })"
-      @update:roles="patch({ roles: $event })"
-    />
+      <section
+        class="config-panel"
+        :class="{ open: activeConfigPanel === 'variables' }"
+        data-test="pipeline-config-panel-variables"
+      >
+        <button type="button" class="config-panel-head" data-test="pipeline-config-toggle-variables" @click="toggleConfigPanel('variables')">
+          <span class="config-panel-main">
+            <span class="config-chevron">{{ activeConfigPanel === 'variables' ? '▾' : '▸' }}</span>
+            <span>
+              <span class="config-title">{{ t('settings.pipeline.envVars') }} / Variables</span>
+              <span class="config-hint">{{ t('settings.pipeline.variableCopyHint') }}</span>
+            </span>
+          </span>
+          <span class="config-badges">
+            <span v-for="item in variableSummary" :key="item" class="config-badge">{{ item }}</span>
+          </span>
+        </button>
+        <div v-if="activeConfigPanel === 'variables'" class="config-panel-body" data-test="pipeline-config-body-variables">
+          <PipelineEnvMatrix
+            :variables="draft.variables ?? {}"
+            :environments="draft.environments ?? {}"
+            :roles="draft.roles"
+            :available-environments="availableEnvironments"
+            :hosts="hosts"
+            :reserved-names="reservedNames"
+            :standalone="false"
+            @update:variables="patch({ variables: $event })"
+            @update:environments="patch({ environments: $event })"
+            @update:roles="patch({ roles: $event })"
+          />
+        </div>
+      </section>
 
-    <DeployTargetReadonly :targets-by-env="targetsByEnv" />
+      <section
+        class="config-panel"
+        :class="{ open: activeConfigPanel === 'deploy' }"
+        data-test="pipeline-config-panel-deploy"
+      >
+        <button type="button" class="config-panel-head" data-test="pipeline-config-toggle-deploy" @click="toggleConfigPanel('deploy')">
+          <span class="config-panel-main">
+            <span class="config-chevron">{{ activeConfigPanel === 'deploy' ? '▾' : '▸' }}</span>
+            <span>
+              <span class="config-title">{{ t('settings.pipeline.deployTarget') }} / Deployment targets</span>
+              <span class="config-hint">{{ t('settings.pipeline.deployTargetHint') }}</span>
+            </span>
+          </span>
+          <span class="config-badges">
+            <span v-for="item in deploySummary" :key="item" class="config-badge">{{ item }}</span>
+          </span>
+        </button>
+        <div v-if="activeConfigPanel === 'deploy'" class="config-panel-body" data-test="pipeline-config-body-deploy">
+          <DeployTargetReadonly :targets-by-env="targetsByEnv" />
+        </div>
+      </section>
+    </div>
 
     <div class="single-pipeline-lower">
       <div v-if="withStructureRail" class="single-pipeline-rail-slot">
@@ -180,7 +274,7 @@ defineExpose({ saveDraft })
 <style scoped>
 .single-pipeline-form {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -220,6 +314,103 @@ defineExpose({ saveDraft })
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.single-pipeline-config-stack {
+  display: grid;
+  background: #0e141c;
+  border-bottom: 1px solid #263240;
+}
+
+.config-panel + .config-panel {
+  border-top: 1px solid #1f2b38;
+}
+
+.config-panel.open {
+  background: #0f1720;
+}
+
+.config-panel-head {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 9px 18px;
+  text-align: left;
+}
+
+.config-panel-head:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.config-panel-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-chevron {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: #17212c;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.config-title,
+.config-hint {
+  display: block;
+}
+
+.config-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.config-hint {
+  margin-top: 3px;
+  color: var(--text-tertiary, #667);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.config-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.config-badge {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-secondary);
+  border-radius: 5px;
+  background: #15202b;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 550;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.config-panel-body {
+  padding: 0 18px 14px 52px;
 }
 .field-row {
   display: grid;

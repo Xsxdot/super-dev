@@ -132,10 +132,14 @@ describe('settings style contract', () => {
     expect(source).toMatch(/@media\s*\(max-width:\s*960px\)/s)
   })
 
-  it('keeps pipeline base fields above the phase wizard', () => {
+  it('keeps pipeline base accordion above the phase wizard', () => {
     const source = singlePipelineFormSource()
 
-    expect(source).toMatch(/\.single-pipeline-form\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto\s+auto\s+minmax\(0,\s*1fr\);/s)
+    expect(source).toMatch(/\.single-pipeline-form\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+minmax\(0,\s*1fr\);/s)
+    expect(source).toContain('single-pipeline-config-stack')
+    expect(source).toContain('pipeline-config-toggle-build')
+    expect(source).toContain('pipeline-config-toggle-variables')
+    expect(source).toContain('pipeline-config-toggle-deploy')
     expect(source).not.toContain('<template #base>')
   })
 

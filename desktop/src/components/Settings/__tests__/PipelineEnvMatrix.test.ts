@@ -21,7 +21,7 @@ const baseProps = () => ({
     test: { variables: { env: 'test', db_url: 'test-db' } },
     prod: { variables: { env: 'prod', db_url: 'prod-db' } },
   },
-  reservedNames: ['artifact', 'workspace', 'version', 'env'],
+  reservedNames: ['artifacts', 'workspace', 'version', 'env'],
   availableEnvironments: ['test', 'prod', 'staging'],
   hosts: [
     { id: 'h1', name: 'Host 1' },
@@ -56,7 +56,7 @@ describe('PipelineEnvMatrix', () => {
     })
   })
 
-  it('does not show a dead delete column in the variable matrix', async () => {
+  it('shows delete actions for custom variables and run groups', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: {
         ...baseProps(),
@@ -66,8 +66,10 @@ describe('PipelineEnvMatrix', () => {
     })
     await openMatrix(wrapper)
 
-    expect(wrapper.findAll('th').map(th => th.text())).not.toContain('删除')
-    expect(wrapper.findAll('.emr-op-cell')).toHaveLength(0)
+    expect(wrapper.findAll('th').map(th => th.text())).toContain('操作')
+    expect(wrapper.find('[data-test="delete-var-app_name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="delete-role-local01_targets"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="delete-var-env"]').exists()).toBe(false)
   })
 
   it('shows single-column matrix when single environment', async () => {
@@ -91,20 +93,19 @@ describe('PipelineEnvMatrix', () => {
     expect(wrapper.find('[data-test="env-matrix"]').exists()).toBe(false)
   })
 
-  it('adds a new env variable across environments', async () => {
+  it('adds a new variable with an optional default value', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: baseProps(),
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
-    await wrapper.get('[data-test="env-var-name-input"]').setValue('region')
-    await wrapper.get('[data-test="env-var-add"]').trigger('click')
-    const emitted = wrapper.emitted('update:environments')
-    expect(emitted).toBeTruthy()
-    const payload = emitted?.at(-1)?.[0] as Record<string, { variables: Record<string, string> }>
-    // 新变量名应在每个环境里建出空值占位，供矩阵渲染该行
-    expect(payload.test.variables).toHaveProperty('region')
-    expect(payload.prod.variables).toHaveProperty('region')
+    await wrapper.get('[data-test="global-var-name-input"]').setValue('region')
+    await wrapper.get('[data-test="global-var-value-input"]').setValue('cn')
+    await wrapper.get('[data-test="global-var-add"]').trigger('click')
+    expect(wrapper.emitted('update:variables')?.[0][0]).toMatchObject({
+      app_name: 'myapp',
+      region: 'cn',
+    })
   })
 
   it('forbids unselecting the last remaining environment', async () => {
@@ -128,6 +129,21 @@ describe('PipelineEnvMatrix', () => {
     await openMatrix(wrapper)
     await wrapper.get('[data-test="copy-var-app_name"]').trigger('click')
     expect(writeText).toHaveBeenCalledWith('${app_name}')
+  })
+
+  it('shows copy icons beside copyable variable names', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { local01_targets: { environments: { test: ['h1'], prod: ['h2'] } } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    expect(wrapper.find('[data-test="copy-var-app_name-icon"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="copy-var-local01_targets-icon"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="copy-var-artifacts-icon"]').exists()).toBe(true)
   })
 
   it('shows copied feedback after variable name click', async () => {
@@ -172,6 +188,45 @@ describe('PipelineEnvMatrix', () => {
     })
   })
 
+  it('renders add controls in a standalone toolbar below the variable table', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    expect(wrapper.find('[data-test="variable-add-toolbar"]').exists()).toBe(true)
+    expect(wrapper.find('tr.emr-add-line').exists()).toBe(false)
+    expect(wrapper.get('[data-test="global-var-name-input"]').attributes('placeholder')).toBe('新变量名')
+    expect(wrapper.get('[data-test="global-var-value-input"]').attributes('placeholder')).toBe('默认值（可选）')
+    expect(wrapper.get('[data-test="run-group-name-input"]').attributes('placeholder')).toBe('新运行组名')
+    expect(wrapper.find('select[data-test="run-group-host-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="run-group-host-trigger"]').exists()).toBe(true)
+  })
+
+  it('deletes a custom variable from global and environment values', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        variables: { app_name: 'myapp', artifact: 'app.tar.gz' },
+        environments: {
+          test: { variables: { env: 'test', artifact: 'test.tar.gz' } },
+          prod: { variables: { env: 'prod', artifact: 'prod.tar.gz' } },
+        },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="delete-var-artifact"]').trigger('click')
+
+    expect(wrapper.emitted('update:variables')?.[0][0]).toEqual({ app_name: 'myapp' })
+    expect(wrapper.emitted('update:environments')?.[0][0]).toEqual({
+      test: { variables: { env: 'test' } },
+      prod: { variables: { env: 'prod' } },
+    })
+  })
+
   it('selects project environments into the pipeline subset', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: { ...baseProps(), environments: { test: { variables: { env: 'test' } } } },
@@ -199,6 +254,25 @@ describe('PipelineEnvMatrix', () => {
     expect(row.get('[data-test="role-hosts-test-local01_targets"]').text()).toContain('Host 1')
     expect(row.get('[data-test="role-hosts-prod-local01_targets"]').text()).toContain('Host 3')
     expect(wrapper.find('[data-test="run-groups"]').exists()).toBe(false)
+  })
+
+  it('opens run group host dropdowns inside the variable table', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { local01_targets: { environments: { test: ['h1'], prod: ['h2'] } } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    expect(wrapper.find('[data-test="role-host-menu-test-local01_targets"]').exists()).toBe(false)
+    await wrapper.get('[data-test="role-host-trigger-test-local01_targets"]').trigger('click')
+
+    const menu = wrapper.get('[data-test="role-host-menu-test-local01_targets"]')
+    expect(menu.text()).toContain('Host 1')
+    expect(menu.text()).toContain('Host 2')
+    expect((wrapper.get('[data-test="role-host-test-local01_targets-h1"]').element as HTMLInputElement).checked).toBe(true)
   })
 
   it('shows copied feedback after run group variable click', async () => {
@@ -246,6 +320,7 @@ describe('PipelineEnvMatrix', () => {
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
+    await wrapper.get('[data-test="role-host-trigger-test-compute"]').trigger('click')
     await wrapper.get('[data-test="role-host-test-compute-h2"]').setValue(true)
     expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
       compute: { environments: { test: ['h1', 'h2'] } },
@@ -261,6 +336,7 @@ describe('PipelineEnvMatrix', () => {
       global: { plugins: [installTestI18n()] },
     })
     await openMatrix(wrapper)
+    await wrapper.get('[data-test="role-host-trigger-test-compute"]').trigger('click')
 
     const checkbox = wrapper.get('[data-test="role-host-test-compute-h1"]').element as HTMLInputElement
     expect(checkbox.checked).toBe(true)
@@ -281,6 +357,46 @@ describe('PipelineEnvMatrix', () => {
     await wrapper.get('[data-test="run-group-add"]').trigger('click')
     expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
       nginx_upstream: { environments: { test: [], prod: [] } },
+    })
+  })
+
+  it('adds run group variables with multiple selected hosts', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: baseProps(),
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="run-group-name-input"]').setValue('api_targets')
+    await wrapper.get('[data-test="run-group-host-trigger"]').trigger('click')
+    expect(wrapper.get('[data-test="run-group-host-menu"]').text()).toContain('Host 1')
+    await wrapper.get('[data-test="run-group-host-option-h1"]').setValue(true)
+    await wrapper.get('[data-test="run-group-host-option-h2"]').setValue(true)
+    await wrapper.get('[data-test="run-group-add"]').trigger('click')
+
+    expect(wrapper.get('[data-test="run-group-host-trigger"]').text()).toContain('选择主机')
+    expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
+      api_targets: { environments: { test: ['h1', 'h2'], prod: ['h1', 'h2'] } },
+    })
+  })
+
+  it('deletes run group variables on demand', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: {
+          builder: { hosts: ['h1'] },
+          local01_targets: { environments: { test: ['h1'], prod: ['h2'] } },
+        },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    await wrapper.get('[data-test="delete-role-local01_targets"]').trigger('click')
+
+    expect(wrapper.emitted('update:roles')?.[0][0]).toEqual({
+      builder: { hosts: ['h1'] },
     })
   })
 
