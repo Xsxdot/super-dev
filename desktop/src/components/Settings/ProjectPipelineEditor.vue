@@ -163,32 +163,28 @@ const targetsByEnv = computed<Record<string, string[]>>(() => {
   return out
 })
 
-function builderRoleTarget() {
-  const target = activePipeline.value?.roles?.builder?.hosts?.[0]
-  return target ? hostDisplayName(target) : undefined
-}
+const availableEnvironmentNames = computed(() => draft.value.environments.map(env => env.name).filter(Boolean))
 
 function compactStepName(name: string) {
   const parts = name.split('.')
   return parts[parts.length - 1] || name
 }
 
-function previewNodeFromStep(step: PreviewStepRun, index: number, targetFallback?: string) {
+function previewNodeFromStep(step: PreviewStepRun, index: number) {
   const target = compiledPreviewTarget(step)
   return {
     id: `${step.phase}-${index}-${step.step_name}`,
     phase: step.phase,
     name: compactStepName(step.step_name),
-    target: target === t('common.local') && targetFallback ? targetFallback : target,
+    target,
     icon: phaseIcon(step.phase),
   }
 }
 
 function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
-  const buildTarget = builderRoleTarget()
   const buildNodes = steps
     .filter(step => step.phase === 'build')
-    .map((step, index) => previewNodeFromStep(step, index, buildTarget))
+    .map((step, index) => previewNodeFromStep(step, index))
     .slice(0, 3)
   const deploySteps = steps.filter(step => step.phase === 'deploy')
   const deployTarget = deploySteps
@@ -218,7 +214,7 @@ function compactCompiledPreviewNodes(steps: PreviewStepRun[]) {
   const remaining = Math.max(0, 5 - buildNodes.length - deployNodes.length)
   const finallyNodes = steps
     .filter(step => step.phase === 'finally')
-    .map((step, index) => previewNodeFromStep(step, index, deployTarget))
+    .map((step, index) => previewNodeFromStep(step, index))
     .slice(0, remaining)
   return [...buildNodes, ...deployNodes, ...finallyNodes].slice(0, 5)
 }
@@ -411,6 +407,7 @@ async function save() {
               :hosts="hosts"
               :templates="pipelineTemplates ?? []"
               :targets-by-env="targetsByEnv"
+              :available-environments="availableEnvironmentNames"
               :initial-mode="initialMode"
               hide-preview-strip
               :on-view-template="viewTemplate"

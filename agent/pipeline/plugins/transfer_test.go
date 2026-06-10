@@ -32,6 +32,22 @@ func (f *fakeFileTransfer) Transfer(ctx context.Context, target pipeline.Target,
 	return nil
 }
 
+type fakeSyncTransport struct {
+	transferCalls []string
+	remoteCalls   []string
+}
+
+func (f *fakeSyncTransport) Transfer(ctx context.Context, target pipeline.Target, source string, targetPath string, onLine func(string, string)) error {
+	f.transferCalls = append(f.transferCalls, target.HostID+":"+source+":"+targetPath)
+	return nil
+}
+
+func (f *fakeSyncTransport) RunRemote(ctx context.Context, target pipeline.Target, cmd string, workDir string, onLine func(string, string)) error {
+	f.remoteCalls = append(f.remoteCalls, target.HostID+":"+workDir+":"+cmd)
+	onLine("synced", "stdout")
+	return nil
+}
+
 func TestTransferRequiresTarget(t *testing.T) {
 	err := plugins.NewTransfer(nil).Validate(model.Step{With: map[string]interface{}{"source": "a"}})
 	require.ErrorContains(t, err, "with.target")
@@ -93,4 +109,44 @@ func TestTransferAllowsDirectorySource(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"h1:" + dir + ":/tmp/site.tar.gz"}, transfer.calls)
+}
+
+func TestTransferRemoteCmdModeRunsRemoteSyncCommand(t *testing.T) {
+	transport := &fakeSyncTransport{}
+	plugin := plugins.NewTransfer(transport)
+	var logs []string
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		Vars:    map[string]string{"sync_mode": "remote_cmd"},
+		LogLine: func(line, stream string) { logs = append(logs, stream+":"+line) },
+	})
+	step := model.Step{
+		Name: "Sync Artifact",
+		Type: "transfer",
+		With: map[string]interface{}{
+			"source":     "a.tar.gz",
+			"target":     "/opt/api/a.tar.gz",
+			"remote_cmd": "git pull --ff-only",
+			"workDir":    "/srv/api",
+		},
+	}
+
+	err := plugin.Execute(ctx, step, []pipeline.Target{{HostID: "h1", HostName: "box1"}})
+
+	require.NoError(t, err)
+	assert.Empty(t, transport.transferCalls)
+	assert.Equal(t, []string{"h1:/srv/api:git pull --ff-only"}, transport.remoteCalls)
+	assert.Contains(t, logs, model.StreamCommand+":remote sync: git pull --ff-only")
+	assert.Contains(t, logs, "stdout:synced")
+}
+
+func TestTransferRemoteCmdModeRequiresRemoteSyncCommand(t *testing.T) {
+	plugin := plugins.NewTransfer(&fakeSyncTransport{})
+	ctx := pipeline.NewRunContext(context.Background(), pipeline.RunContextOptions{
+		Vars: map[string]string{"sync_mode": "remote_cmd"},
+	})
+	step := model.Step{Name: "Sync Artifact", Type: "transfer", With: map[string]interface{}{"source": "a", "target": "/tmp/a"}}
+
+	err := plugin.Execute(ctx, step, []pipeline.Target{{HostID: "h1"}})
+
+	require.ErrorContains(t, err, "transfer remote_cmd mode requires with.remote_cmd")
 }

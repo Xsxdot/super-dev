@@ -24,6 +24,7 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   templates: PipelineTemplateSummary[]
   targetsByEnv?: Record<string, string[]>
+  availableEnvironments?: string[]
   initialMode?: 'template' | 'blank'
   withStructureRail?: boolean
   hidePreviewStrip?: boolean
@@ -136,9 +137,12 @@ defineExpose({ saveDraft })
       :variables="draft.variables ?? {}"
       :environments="draft.environments ?? {}"
       :roles="draft.roles"
+      :available-environments="availableEnvironments"
+      :hosts="hosts"
       :reserved-names="reservedNames"
       @update:variables="patch({ variables: $event })"
       @update:environments="patch({ environments: $event })"
+      @update:roles="patch({ roles: $event })"
     />
 
     <DeployTargetReadonly :targets-by-env="targetsByEnv" />

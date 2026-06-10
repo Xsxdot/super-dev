@@ -106,6 +106,9 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 	}
 
 	p := pp.Pipeline
+	if len(resolvedRoles["builder"]) > 0 {
+		p.Build = applyDefaultBuildRole(p.Build, "builder")
+	}
 	p.Variables = vars
 	p.Roles = resolvedRoles
 	p.Build = renderSteps(p.Build, vars)
@@ -118,6 +121,26 @@ func ResolveProjectPipeline(req ProjectPipelineRequest) (ResolvedProjectPipeline
 		RunID:           fmt.Sprintf("project:%s:pipeline:%s:env:%s", req.Project.ID, pp.ID, req.EnvName),
 		ServiceNames:    append([]string(nil), serviceNames...),
 	}, nil
+}
+
+func applyDefaultBuildRole(steps []model.Step, roleName string) []model.Step {
+	out := make([]model.Step, len(steps))
+	for i, step := range steps {
+		out[i] = step
+		if len(out[i].Roles) == 0 && canApplyDefaultBuildRole(out[i].Type) {
+			out[i].Roles = []string{roleName}
+		}
+	}
+	return out
+}
+
+func canApplyDefaultBuildRole(stepType string) bool {
+	switch stepType {
+	case "", "include", "local_command", "archive", "archive_package":
+		return false
+	default:
+		return true
+	}
 }
 
 func findProjectPipeline(items []model.ProjectPipeline, id string) (model.ProjectPipeline, bool) {

@@ -168,6 +168,78 @@ func TestResolveSyncModeDefaultsTransfer(t *testing.T) {
 	assert.Equal(t, "transfer", resolved.Pipeline.Variables["sync_mode"])
 }
 
+func TestResolveProjectPipelineAppliesBuilderRoleToBuildSteps(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{{
+					Name: "Build",
+					Type: "remote_command",
+					With: map[string]interface{}{"cmd": "go build"},
+				}},
+				Deploy: []model.Step{{
+					Name: "Deploy",
+					Type: "remote_command",
+					With: map[string]interface{}{"cmd": "systemctl restart api"},
+				}},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-builder"}, resolved.Pipeline.Roles["builder"])
+	require.Len(t, resolved.Pipeline.Build, 1)
+	assert.Equal(t, []string{"builder"}, resolved.Pipeline.Build[0].Roles)
+	require.Len(t, resolved.Pipeline.Deploy, 1)
+	assert.Empty(t, resolved.Pipeline.Deploy[0].Roles)
+}
+
+func TestResolveProjectPipelineDoesNotApplyBuilderRoleToLocalOnlyBuildSteps(t *testing.T) {
+	project := model.Project{
+		ID:   "proj-1",
+		Name: "demo",
+		Pipelines: []model.ProjectPipeline{{
+			ID:   "pp-1",
+			Name: "demo",
+			Roles: map[string]model.ProjectPipelineRole{
+				"builder": {Hosts: []string{"h-builder"}},
+			},
+			Pipeline: model.Pipeline{
+				Build: []model.Step{
+					{Name: "Build", Type: "local_command", With: map[string]interface{}{"cmd": "go build"}},
+					{Name: "Package", Type: "archive_package", With: map[string]interface{}{"artifact": "api.tar.gz"}},
+					{Name: "Include", Type: "include", With: map[string]interface{}{"template": "builtin://go-binary-build"}},
+				},
+			},
+		}},
+	}
+
+	resolved, err := pipeline.ResolveProjectPipeline(pipeline.ProjectPipelineRequest{
+		Project:    project,
+		PipelineID: "pp-1",
+		EnvName:    "dev",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resolved.Pipeline.Build, 3)
+	assert.Empty(t, resolved.Pipeline.Build[0].Roles)
+	assert.Empty(t, resolved.Pipeline.Build[1].Roles)
+	assert.Empty(t, resolved.Pipeline.Build[2].Roles)
+}
+
 func TestResolveProjectPipelineInjectsWorkspaceForRuntimeWithoutPreview(t *testing.T) {
 	project := model.Project{
 		ID:       "p1",
