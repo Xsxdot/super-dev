@@ -93,9 +93,18 @@ func (a *App) previewConfigChangeRequest(req configchange.ChangeRequest) (config
 	a.mu.RUnlock()
 	assignIDsAvoiding(&after, &used)
 
-	knownHosts, err := a.knownRemoteHostIDs()
+	hosts, err := a.remoteStore.ListHosts()
 	if err != nil {
 		return configchange.PreviewResult{}, http.StatusInternalServerError, "failed to load hosts: " + err.Error()
+	}
+	// 持久化前单点归一化：把 pipeline roles 里的 host name 统一规整为 ID。
+	// 前端勾选 / MCP upsert / 配置文件三条写入路径都汇到这里。
+	normalizePipelineRoleHosts(&after, hosts)
+	knownHosts := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		if strings.TrimSpace(h.ID) != "" {
+			knownHosts[h.ID] = true
+		}
 	}
 	validation := configchange.Validate(after, req)
 	validation.Errors = append(validation.Errors, remoteHostReferenceErrors(after, knownHosts)...)
