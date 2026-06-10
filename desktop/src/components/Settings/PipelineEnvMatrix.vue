@@ -16,13 +16,15 @@ import { computed, ref } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { PipelineEnvironment } from '@/api/agent'
 
+type HostOption = { id: string; name: string }
+
 const props = defineProps<{
   variables: Record<string, string>
   environments: Record<string, PipelineEnvironment>
   reservedNames: string[]
   roles?: Record<string, { from_service?: string; hosts?: string[] }>
   availableEnvironments?: string[]
-  hosts?: Array<{ id: string; name: string }>
+  hosts?: HostOption[]
 }>()
 
 const emit = defineEmits<{
@@ -152,15 +154,20 @@ function roleHosts(roleName: string) {
   return props.roles?.[roleName]?.hosts ?? []
 }
 
-function isRoleHostChecked(roleName: string, hostId: string) {
-  return roleHosts(roleName).includes(hostId)
+function hostRoleKeys(host: HostOption) {
+  return [host.id, host.name].filter(Boolean)
 }
 
-function setRoleHost(roleName: string, hostId: string, checked: boolean) {
+function isRoleHostChecked(roleName: string, host: HostOption) {
+  const selected = new Set(roleHosts(roleName))
+  return hostRoleKeys(host).some(key => selected.has(key))
+}
+
+function setRoleHost(roleName: string, host: HostOption, checked: boolean) {
   const next = { ...(props.roles ?? {}) }
   const hosts = new Set(roleHosts(roleName))
-  if (checked) hosts.add(hostId)
-  else hosts.delete(hostId)
+  for (const key of hostRoleKeys(host)) hosts.delete(key)
+  if (checked) hosts.add(host.id || host.name)
   next[roleName] = { hosts: [...hosts] }
   emit('update:roles', next)
 }
@@ -320,8 +327,8 @@ function addRunGroup() {
             <input
               type="checkbox"
               :data-test="`run-group-${roleName}-host-${host.id}`"
-              :checked="isRoleHostChecked(roleName, host.id)"
-              @change="setRoleHost(roleName, host.id, ($event.target as HTMLInputElement).checked)"
+              :checked="isRoleHostChecked(roleName, host)"
+              @change="setRoleHost(roleName, host, ($event.target as HTMLInputElement).checked)"
             />
             {{ host.name }}
           </label>

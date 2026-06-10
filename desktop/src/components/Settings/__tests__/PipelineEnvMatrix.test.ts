@@ -210,6 +210,25 @@ describe('PipelineEnvMatrix', () => {
     })
   })
 
+  it('checks run group hosts saved by host name', async () => {
+    const wrapper = mount(PipelineEnvMatrix, {
+      props: {
+        ...baseProps(),
+        roles: { compute: { hosts: ['Host 1'] } },
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await openMatrix(wrapper)
+
+    const checkbox = wrapper.get('[data-test="run-group-compute-host-h1"]').element as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+
+    await wrapper.get('[data-test="run-group-compute-host-h1"]').setValue(false)
+    expect(wrapper.emitted('update:roles')?.[0][0]).toMatchObject({
+      compute: { hosts: [] },
+    })
+  })
+
   it('adds run group variables on demand', async () => {
     const wrapper = mount(PipelineEnvMatrix, {
       props: baseProps(),
