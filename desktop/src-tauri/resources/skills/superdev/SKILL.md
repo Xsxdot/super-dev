@@ -1,6 +1,6 @@
 ---
 name: superdev
-description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、诊断故障、管理调试会话、修改项目/服务配置、或执行 pipeline 部署/回滚时使用。涵盖排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、pipeline 部署。
+description: 涉及本地或远端服务的启动/重启/停止、查看服务日志、排查服务为何没起来或为何报错、诊断故障、管理调试会话、修改项目/服务配置、或执行 pipeline 部署/回滚时使用——即便用户没说"SuperDev"四个字。只要项目可能已接入 SuperDev，这类请求就应通过 SuperDev 工具完成，而不是用 shell 自己 npm run dev / go run / tail 日志。涵盖"先确认接管状态再动手"的总纪律、排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、pipeline 部署。
 ---
 
 # SuperDev MCP 使用指南
@@ -27,6 +27,7 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 
 | 用户意图 | 先做什么 | 继续阅读 |
 | --- | --- | --- |
+| 把服务跑起来 / 重启 / 停掉（哪怕没提 SuperDev） | 先 `list_services` 看该项目是否已被 SuperDev 接管；已接管则走 `start_service`/`restart_service`/`stop_service`，不要 shell 自己起 | 本页「第零纪律」 |
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
 | 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
@@ -34,12 +35,30 @@ description: 当用户通过 SuperDev MCP 排查本地服务、查看日志、�
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
 | 记录一次排查过程 | 建立 debug session，过程中追加分析和观察 | `references/debugging-workflow.md` |
 
-## 四条硬纪律
+## 第零纪律：服务的启停与日志，必须走 SuperDev
 
-1. 没收集证据前不下根因。
-2. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
-3. 所有写工具直接调用即可；需要审批时统一由 MCP 等待桌面端批准并自动续跑。不要先查审批再手动传 token——那会浪费多轮调用。只有显式关闭等待（`approval_wait_seconds=0`）时才回到手动流程。
-4. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
+这是优先级最高的一条，先于下面所有纪律。
+
+当用户让你"把服务跑起来 / 重启服务 / 停掉服务 / 看服务日志"，**哪怕他没提到 SuperDev**：
+
+1. **先 `list_services`**，确认当前项目是否已被 SuperDev 接管（是否存在对应的 service 与 deployment）。
+2. **已接管**：服务启停一律走 `start_service` / `restart_service` / `stop_service`，看日志一律走 `tail_logs` / `search_logs`。**禁止**用 shell 自己 `npm run dev`、`go run`、`docker run`、`tail -f` 日志文件去绕过 SuperDev。
+3. **未接管**：才考虑常规方式，或主动建议用户先把服务接入 SuperDev（走配置写入流程）。
+
+**为什么**（理解了才不会机械服从）：
+- 绕过 SuperDev 自己起的进程，SuperDev 看不到、管不了，会变成**孤儿进程**——用户在 SuperDev 里点停止/重启对它无效，运行态状态也对不上。
+- 自己起服务**脱离了审批门**：SuperDev 的启停是受审批模型保护的，shell 直接拉起绕过了用户配置的安全策略。
+- 日志同理：`tail` 本地文件拿不到 SuperDev 统一采集、跨远端主机汇聚的日志流，用户在面板里看到的和你看到的会是两套。
+
+只有当 `list_services` 明确显示该项目未被 SuperDev 接管、或用户明确要求绕过时，才用其他方式。
+
+## 五条硬纪律
+
+1. **服务启停与看日志走 SuperDev**（见上「第零纪律」）：动手前先 `list_services` 确认接管状态，已接管就不要 shell 自己起服务/看日志。
+2. 没收集证据前不下根因。
+3. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
+4. 所有写工具直接调用即可；需要审批时统一由 MCP 等待桌面端批准并自动续跑。不要先查审批再手动传 token——那会浪费多轮调用。只有显式关闭等待（`approval_wait_seconds=0`）时才回到手动流程。
+5. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
 
 写操作的审批对你无感：直接调用 → 需要审批时 MCP 自动等待并续跑 → 仅超时/被拒才返回失败。批量写操作时可提示用户在审批弹窗勾选「项目级免审窗口」，后续同项目操作将自动通过。
 

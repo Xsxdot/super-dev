@@ -51,7 +51,7 @@ function card(overrides: Partial<NodeCenterNode> = {}): NodeCenterNode {
       health: 'healthy',
       reachable: true,
     },
-    deployments: [{ instance: instance(), envName: 'prod', abnormal: false }],
+    deployments: [{ instance: instance(), envName: 'prod', projectName: 'Demo', abnormal: false }],
     serviceCount: 1,
     updatedAt: '2026-06-06T10:00:00Z',
     configured: true,
@@ -70,7 +70,7 @@ describe('NodeCard', () => {
     expect(wrapper.text()).toContain('ali-01')
     expect(wrapper.text()).toContain('Remote · agent 0.1.0 · healthy · 1 service')
     expect(wrapper.text()).toContain('api')
-    expect(wrapper.text()).toContain('prod')
+    expect(wrapper.text()).toContain('Demo · prod')
     expect(wrapper.text()).toContain('12.5%')
     expect(wrapper.text()).toContain('128 MiB')
     expect(wrapper.text()).toContain('1h 1m')
@@ -154,6 +154,29 @@ describe('NodeCard', () => {
       expect.stringContaining('api'),
     ]))
     expect(rows[0].text()).toContain('worker')
+  })
+
+  it('renders project and environment as secondary service metadata', () => {
+    const wrapper = mount(NodeCard, {
+      props: {
+        node: card({
+          deployments: [{
+            abnormal: false,
+            envName: 'prod',
+            projectName: 'Billing API',
+            instance: instance({
+              service_name: 'server',
+              deployment_id: 'dep-billing-server',
+            }),
+          }],
+        }),
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    const row = wrapper.find('[data-test="node-service-dep-billing-server"]')
+    expect(row.find('[data-test="service-name"]').text()).toBe('server')
+    expect(row.find('[data-test="service-context"]').text()).toBe('Billing API · prod')
   })
 
   it('emits open logs with deployment and node ids', async () => {

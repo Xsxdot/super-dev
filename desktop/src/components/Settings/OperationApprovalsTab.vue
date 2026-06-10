@@ -10,7 +10,7 @@
   - 不展示 approval token
 -->
 <script setup lang="ts">
-import { onMounted, reactive, watch } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useSettingsStore } from '@/stores/settings'
@@ -20,6 +20,9 @@ const { t } = useI18n()
 const store = useOperationApprovalStore()
 const settingsStore = useSettingsStore()
 const approvalForm = reactive<ApprovalPolicy>(defaultApprovalPolicy())
+const savingApprovalPolicy = ref(false)
+const saveMessage = ref('')
+const saveMessageKind = ref<'success' | 'error'>('success')
 
 onMounted(() => {
   void store.loadPending()
@@ -48,14 +51,33 @@ function normalizeApprovalPolicy(approval?: ApprovalPolicy): ApprovalPolicy {
   return { ...defaultApprovalPolicy(), ...(approval ?? {}) }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function clearSaveMessage() {
+  saveMessage.value = ''
+}
+
 async function saveApprovalSettings() {
-  await settingsStore.saveApprovalPolicy({
-    config_upsert: approvalForm.config_upsert,
-    pipeline_upsert: approvalForm.pipeline_upsert,
-    pipeline_run: approvalForm.pipeline_run,
-    template_import: approvalForm.template_import,
-    grace_minutes: approvalForm.grace_minutes,
-  })
+  clearSaveMessage()
+  savingApprovalPolicy.value = true
+  try {
+    await settingsStore.saveApprovalPolicy({
+      config_upsert: approvalForm.config_upsert,
+      pipeline_upsert: approvalForm.pipeline_upsert,
+      pipeline_run: approvalForm.pipeline_run,
+      template_import: approvalForm.template_import,
+      grace_minutes: approvalForm.grace_minutes,
+    })
+    saveMessageKind.value = 'success'
+    saveMessage.value = t('settings.approvals.saveSucceeded')
+  } catch (err) {
+    saveMessageKind.value = 'error'
+    saveMessage.value = t('settings.approvals.saveFailed', { message: errorMessage(err) })
+  } finally {
+    savingApprovalPolicy.value = false
+  }
 }
 
 function shortFingerprint(approval: OperationApproval): string {
@@ -87,7 +109,7 @@ function shortFingerprint(approval: OperationApproval): string {
           class="settings-btn settings-btn-primary"
           type="button"
           data-test="approval-settings-save"
-          :disabled="settingsStore.loading"
+          :disabled="settingsStore.loading || savingApprovalPolicy"
           @click="saveApprovalSettings"
         >
           {{ t('settings.approvals.savePolicy') }}
@@ -96,19 +118,19 @@ function shortFingerprint(approval: OperationApproval): string {
 
       <div class="approval-policy-grid">
         <label class="policy-toggle">
-          <input v-model="approvalForm.config_upsert" data-test="approval-switch-config-upsert" type="checkbox">
+          <input v-model="approvalForm.config_upsert" data-test="approval-switch-config-upsert" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.configUpsert') }}</span>
         </label>
         <label class="policy-toggle">
-          <input v-model="approvalForm.pipeline_upsert" data-test="approval-switch-pipeline-upsert" type="checkbox">
+          <input v-model="approvalForm.pipeline_upsert" data-test="approval-switch-pipeline-upsert" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.pipelineUpsert') }}</span>
         </label>
         <label class="policy-toggle">
-          <input v-model="approvalForm.pipeline_run" data-test="approval-switch-pipeline-run" type="checkbox">
+          <input v-model="approvalForm.pipeline_run" data-test="approval-switch-pipeline-run" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.pipelineRun') }}</span>
         </label>
         <label class="policy-toggle">
-          <input v-model="approvalForm.template_import" data-test="approval-switch-template-import" type="checkbox">
+          <input v-model="approvalForm.template_import" data-test="approval-switch-template-import" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.templateImport') }}</span>
         </label>
         <label class="policy-number">
@@ -119,9 +141,20 @@ function shortFingerprint(approval: OperationApproval): string {
             type="number"
             min="1"
             max="120"
+            @change="clearSaveMessage"
           >
         </label>
       </div>
+      <p
+        v-if="saveMessage"
+        class="settings-alert approval-save-notice"
+        :class="saveMessageKind === 'success' ? 'settings-alert-success' : 'settings-alert-danger'"
+        :role="saveMessageKind === 'success' ? 'status' : 'alert'"
+        aria-live="polite"
+        data-test="approval-policy-save-notice"
+      >
+        {{ saveMessage }}
+      </p>
     </section>
 
     <p v-if="!store.error && store.approvals.length === 0" class="settings-empty">{{ t('settings.approvals.empty') }}</p>
@@ -242,15 +275,24 @@ function shortFingerprint(approval: OperationApproval): string {
 }
 .policy-toggle,
 .policy-number {
-  justify-content: space-between;
-  gap: 10px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+.policy-toggle {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.policy-number {
+  justify-content: space-between;
+  gap: 10px;
 }
 .policy-toggle input {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+}
+.approval-save-notice {
+  margin: 0;
 }
 .policy-number input {
   width: 84px;

@@ -50,6 +50,9 @@ const codexStatus: McpStatus = {
   skill_installed: true,
   skill_matches_bundled: true,
   skill_error: null,
+  hook_config_path: '/Users/alice/.codex/hooks.json',
+  hook_installed: true,
+  hook_needs_trust: true,
 }
 
 const missingClaudeStatus: McpStatus = {
@@ -66,6 +69,9 @@ const missingClaudeStatus: McpStatus = {
   skill_installed: false,
   skill_matches_bundled: false,
   skill_error: null,
+  hook_config_path: '/Users/alice/.claude/settings.json',
+  hook_installed: false,
+  hook_needs_trust: false,
 }
 
 const cursorStatus: McpStatus = {
@@ -82,6 +88,9 @@ const cursorStatus: McpStatus = {
   skill_installed: false,
   skill_matches_bundled: false,
   skill_error: null,
+  hook_config_path: '/Users/alice/.cursor/hooks.json',
+  hook_installed: false,
+  hook_needs_trust: false,
 }
 
 const docs: McpDocs = {
@@ -127,6 +136,14 @@ describe('McpManagerTab', () => {
         backup_path: null,
         error: null,
       },
+      session_hook: {
+        installed: false,
+        already_present: true,
+        config_path: codexStatus.hook_config_path,
+        backup_path: null,
+        needs_trust: true,
+        error: null,
+      },
     })
     vi.mocked(uninstallMcp).mockResolvedValue({
       agent: 'codex',
@@ -135,6 +152,8 @@ describe('McpManagerTab', () => {
       config_backup_path: '/Users/alice/.codex/config.toml.superdev-bak',
       skill_path: codexStatus.skill_path,
       removed_skill: true,
+      hook_config_path: codexStatus.hook_config_path,
+      removed_hook: true,
     })
     vi.mocked(getMcpInstallHint).mockResolvedValue({
       agent: 'codex',

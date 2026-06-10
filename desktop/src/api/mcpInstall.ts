@@ -29,6 +29,15 @@ export interface SkillInstallOutcome {
   error?: string | null
 }
 
+export interface SessionHookOutcome {
+  installed: boolean
+  already_present: boolean
+  config_path: string
+  backup_path?: string | null
+  needs_trust: boolean
+  error?: string | null
+}
+
 export interface InstallOutcome {
   installed: boolean
   already_present: boolean
@@ -37,6 +46,7 @@ export interface InstallOutcome {
   config_path: string
   manual_config: string
   skill: SkillInstallOutcome
+  session_hook: SessionHookOutcome
 }
 
 export interface InstallHint {
@@ -60,6 +70,9 @@ export interface McpStatus {
   skill_installed: boolean
   skill_matches_bundled?: boolean | null
   skill_error?: string | null
+  hook_config_path: string
+  hook_installed: boolean
+  hook_needs_trust: boolean
 }
 
 export interface UninstallOutcome {
@@ -69,6 +82,8 @@ export interface UninstallOutcome {
   config_backup_path?: string | null
   skill_path: string
   removed_skill: boolean
+  hook_config_path: string
+  removed_hook: boolean
 }
 
 export interface McpCapabilityTool {

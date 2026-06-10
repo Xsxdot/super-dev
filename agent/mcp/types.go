@@ -21,7 +21,10 @@ type LogsResponse struct {
 	Items []model.LogEntry `json:"items"`
 	Next  struct {
 		Time string `json:"time,omitempty"`
-		ID   int64  `json:"id,omitempty"`
+		// ID 必须与 API 端 deploymentLogsResponse.Next.ID 一致为 string：
+		// 游标 ID 源头是 logbackend.Cursor.ID(string)，此前误标 int64 导致
+		// "cannot unmarshal string into Go struct field .next.id of type int64"。
+		ID string `json:"id,omitempty"`
 	} `json:"next"`
 }
 

@@ -76,6 +76,13 @@ function skillLabel(status: McpStatus | null): string {
   return t('settings.mcp.skillOutdated')
 }
 
+// hookLabel 描述 SessionStart hook 状态：未装 / 已装但 Codex 需手动信任 / 已装生效。
+function hookLabel(status: McpStatus | null): string {
+  if (!status?.hook_installed) return t('settings.mcp.hookMissing')
+  if (status.hook_needs_trust) return t('settings.mcp.hookNeedsTrust')
+  return t('settings.mcp.hookActive')
+}
+
 async function refreshAll() {
   await Promise.all([refreshStatus(), refreshDocs()])
 }
@@ -109,7 +116,10 @@ async function installOrUpdate(agent: CodingAgent) {
   operationMessage.value[agent] = ''
   try {
     const outcome = await installMcp(agent)
-    operationMessage.value[agent] = outcome.already_present && outcome.skill.already_present
+    // 三者都已是最新才算「已是最新」；hook 是本次新装时应提示「已更新」。
+    const allCurrent =
+      outcome.already_present && outcome.skill.already_present && outcome.session_hook.already_present
+    operationMessage.value[agent] = allCurrent
       ? t('settings.mcp.installCurrent')
       : t('settings.mcp.installUpdated')
     await refreshStatus()
@@ -237,12 +247,23 @@ async function showManualConfig(agent: CodingAgent, label: string) {
             <span>{{ t('settings.mcp.skillPath') }}</span>
             <code>{{ row.status?.skill_path }}</code>
           </div>
+          <div class="mcp-detail-item">
+            <span>{{ t('settings.mcp.hook') }}</span>
+            <strong>{{ hookLabel(row.status) }}</strong>
+          </div>
+          <div class="mcp-detail-item">
+            <span>{{ t('settings.mcp.hookPath') }}</span>
+            <code>{{ row.status?.hook_config_path }}</code>
+          </div>
         </div>
         <div v-if="row.status?.config_error" class="settings-alert settings-alert-danger mcp-inline-alert">
           {{ row.status.config_error }}
         </div>
         <div v-if="row.status?.skill_error" class="settings-alert settings-alert-warning mcp-inline-alert">
           {{ row.status.skill_error }}
+        </div>
+        <div v-if="row.status?.hook_installed && row.status?.hook_needs_trust" class="settings-alert settings-alert-warning mcp-inline-alert">
+          {{ t('settings.mcp.hookTrustHint') }}
         </div>
         <div v-if="operationMessage[row.id]" class="settings-alert mcp-inline-alert">
           {{ operationMessage[row.id] }}

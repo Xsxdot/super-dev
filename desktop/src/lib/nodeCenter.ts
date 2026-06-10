@@ -25,7 +25,13 @@ const ABNORMAL_HEALTHS = new Set<Health>(['failed', 'unknown', 'restarting', 'st
 export interface NodeCenterDeployment {
   instance: RuntimeInstanceStatus
   envName?: string
+  projectName?: string
   abnormal: boolean
+}
+
+export interface NodeCenterDeploymentContext {
+  envName: string
+  projectName: string
 }
 
 export interface NodeCenterNode {
@@ -63,10 +69,31 @@ export function isRemoteNodeHost(host: Host): boolean {
 
 export function buildDeploymentEnvIndex(projects: Project[]): Map<string, string> {
   const out = new Map<string, string>()
+  for (const [deploymentId, context] of buildDeploymentContextIndex(projects)) {
+    out.set(deploymentId, context.envName)
+  }
+  return out
+}
+
+// buildDeploymentContextIndex 生成 deployment 到项目/环境展示信息的索引。
+//
+// 参数：
+//   - projects: 当前桌面端已加载的项目配置
+//
+// 返回：
+//   - deployment id 到项目名和环境名的映射
+//
+// 注意：
+//   - NodeRegistry 实时快照不包含项目维度，这里用项目配置反查，避免同名服务无法区分。
+export function buildDeploymentContextIndex(projects: Project[]): Map<string, NodeCenterDeploymentContext> {
+  const out = new Map<string, NodeCenterDeploymentContext>()
   for (const project of projects) {
     for (const service of project.services) {
       for (const deployment of service.deployments ?? []) {
-        out.set(deployment.id, deployment.env_name)
+        out.set(deployment.id, {
+          envName: deployment.env_name,
+          projectName: project.name,
+        })
       }
     }
   }
@@ -81,17 +108,17 @@ export function buildNodeCenterNodes(
   const remoteHosts = hosts.filter(isRemoteNodeHost)
   const nodesByHost = new Map(nodeSnapshots.filter(node => node.host_id).map(node => [node.host_id, node]))
   const hostIds = new Set(remoteHosts.map(host => host.id))
-  const envByDeployment = buildDeploymentEnvIndex(projects)
+  const contextByDeployment = buildDeploymentContextIndex(projects)
 
   const configuredNodes = remoteHosts.map(host =>
-    buildNodeFromHost(host, nodesByHost.get(host.id), envByDeployment),
+    buildNodeFromHost(host, nodesByHost.get(host.id), contextByDeployment),
   )
 
   const snapshotOnlyNodes = nodeSnapshots
     .filter(node => node.host_id && !hostIds.has(node.host_id))
     .filter(node => node.host_id !== 'local')
     .filter(node => nodeDeployments(node).some(instance => !instance.is_local) || node.agent.reachable)
-    .map(node => buildNodeFromSnapshot(node, envByDeployment))
+    .map(node => buildNodeFromSnapshot(node, contextByDeployment))
 
   return [...configuredNodes, ...snapshotOnlyNodes].sort(compareNodes)
 }
@@ -99,7 +126,7 @@ export function buildNodeCenterNodes(
 function buildNodeFromHost(
   host: Host,
   node: NodeStatus | undefined,
-  envByDeployment: Map<string, string>,
+  contextByDeployment: Map<string, NodeCenterDeploymentContext>,
 ): NodeCenterNode {
   const deployments = node ? nodeDeployments(node) : []
   if (!node) {
@@ -122,7 +149,7 @@ function buildNodeFromHost(
     reachable: node.reachable,
     muted: !node.reachable,
     agent: node.agent,
-    deployments: sortDeployments(deployments, envByDeployment),
+    deployments: sortDeployments(deployments, contextByDeployment),
     serviceCount: deployments.length,
     updatedAt: node.updated_at,
     error: node.error,
@@ -133,7 +160,7 @@ function buildNodeFromHost(
 
 function buildNodeFromSnapshot(
   node: NodeStatus,
-  envByDeployment: Map<string, string>,
+  contextByDeployment: Map<string, NodeCenterDeploymentContext>,
 ): NodeCenterNode {
   const deployments = nodeDeployments(node)
   return {
@@ -143,7 +170,7 @@ function buildNodeFromSnapshot(
     reachable: node.reachable,
     muted: !node.reachable,
     agent: node.agent,
-    deployments: sortDeployments(deployments, envByDeployment),
+    deployments: sortDeployments(deployments, contextByDeployment),
     serviceCount: deployments.length,
     updatedAt: node.updated_at,
     error: node.error,
@@ -169,21 +196,27 @@ function nodeDeployments(node: NodeStatus): RuntimeInstanceStatus[] {
 
 function sortDeployments(
   instances: RuntimeInstanceStatus[],
-  envByDeployment: Map<string, string>,
+  contextByDeployment: Map<string, NodeCenterDeploymentContext>,
 ): NodeCenterDeployment[] {
   return instances
     .filter(instance => !instance.is_local)
-    .map(instance => ({
-      instance,
-      envName: envByDeployment.get(instance.deployment_id),
-      abnormal: isAbnormalHealth(instance.metrics.health),
-    }))
+    .map(instance => {
+      const context = contextByDeployment.get(instance.deployment_id)
+      return {
+        instance,
+        envName: context?.envName,
+        projectName: context?.projectName,
+        abnormal: isAbnormalHealth(instance.metrics.health),
+      }
+    })
     .sort((left, right) => {
       if (left.abnormal !== right.abnormal) return left.abnormal ? -1 : 1
       const nameDiff = left.instance.service_name.localeCompare(right.instance.service_name)
       if (nameDiff) return nameDiff
       const envDiff = (left.envName ?? '').localeCompare(right.envName ?? '')
       if (envDiff) return envDiff
+      const projectDiff = (left.projectName ?? '').localeCompare(right.projectName ?? '')
+      if (projectDiff) return projectDiff
       return left.instance.deployment_id.localeCompare(right.instance.deployment_id)
     })
 }

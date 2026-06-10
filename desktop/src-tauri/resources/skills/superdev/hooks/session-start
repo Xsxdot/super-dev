@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# SuperDev SessionStart hook
+#
+# 职责：
+#   - 在每个会话开始时，把 bootstrap.md 的内容以「强提醒」形式注入为
+#     额外上下文，确保 agent 一开口就知道：服务相关操作要走 SuperDev。
+#   - 按 harness 选择正确的输出字段（Claude Code / Codex / Cursor 各异）。
+#
+# 边界：
+#   - 不调用任何 SuperDev 工具、不触网、不读项目代码。
+#   - 读不到 bootstrap.md 时退出 0 且不注入，宁可静默也不让会话失败。
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BOOTSTRAP_FILE="${SCRIPT_DIR}/bootstrap.md"
+
+# 读 bootstrap 正文；读不到就静默退出（少一次注入，但不报错）
+if [ ! -f "$BOOTSTRAP_FILE" ]; then
+    exit 0
+fi
+bootstrap_content="$(cat "$BOOTSTRAP_FILE" 2>/dev/null || true)"
+if [ -z "$bootstrap_content" ]; then
+    exit 0
+fi
+
+# 把字符串转义成可嵌入 JSON 的形式。用 bash 参数替换做整段替换，
+# 比逐字符循环快几个数量级。顺序：先转义反斜杠，再转义其余。
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+bootstrap_escaped="$(escape_for_json "$bootstrap_content")"
+
+# 强提醒包裹：用 <EXTREMELY_IMPORTANT> 提高 agent 遵守度。
+session_context="<EXTREMELY_IMPORTANT>\n${bootstrap_escaped}\n</EXTREMELY_IMPORTANT>"
+
+# 按 harness 选输出字段：
+#   - Cursor 期望顶层 additional_context（snake_case）。
+#   - Claude Code 期望 hookSpecificOutput.additionalContext（嵌套）。
+#   - Codex 同样吃 hookSpecificOutput.additionalContext。
+#   - 其它/未知平台回落到 SDK 标准的顶层 additionalContext。
+# 用 printf 而非 heredoc，规避 bash 5.3+ 的 heredoc 卡死问题。
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+    printf '{\n  "additional_context": "%s"\n}\n' "$session_context"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] || [ -n "${CODEX_HOOK:-}" ]; then
+    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
+else
+    printf '{\n  "additionalContext": "%s"\n}\n' "$session_context"
+fi
+
+exit 0

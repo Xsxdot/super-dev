@@ -12,7 +12,7 @@
   - 不打开 workspace tab
 -->
 <script setup lang="ts">
-import type { NodeCenterNode } from '@/lib/nodeCenter'
+import type { NodeCenterDeployment, NodeCenterNode } from '@/lib/nodeCenter'
 import {
   cpuBarWidth,
   formatBytes,
@@ -44,6 +44,10 @@ function routeSummary(): string {
   if (!props.node.route?.selectedType) return ''
   const label = t(transportTypeLabelKey(props.node.route.selectedType))
   return props.node.route.degraded ? `${label} · ${t('nodeCenter.degraded')}` : label
+}
+
+function serviceContext(deployment: NodeCenterDeployment): string {
+  return [deployment.projectName, deployment.envName].filter(Boolean).join(' · ')
 }
 
 function openLogs(deploymentId: string, nodeId: string) {
@@ -89,8 +93,10 @@ function openLogs(deploymentId: string, nodeId: string) {
       >
         <span class="service-status-dot" :class="`health-${deployment.instance.metrics.health}`" aria-hidden="true"></span>
         <span class="service-main">
-          <span class="service-name">{{ deployment.instance.service_name }}</span>
-          <span v-if="deployment.envName" class="env-tag">{{ deployment.envName }}</span>
+          <span class="service-name" data-test="service-name">{{ deployment.instance.service_name }}</span>
+          <span v-if="serviceContext(deployment)" class="service-context" data-test="service-context">
+            {{ serviceContext(deployment) }}
+          </span>
         </span>
         <span class="service-metrics">
           <span class="metric cpu">
@@ -260,25 +266,27 @@ function openLogs(deploymentId: string, nodeId: string) {
 }
 .service-main {
   display: flex;
+  flex-direction: column;
   min-width: 0;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 2px;
 }
 .service-name {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.env-tag {
-  max-width: 72px;
-  padding: 1px 5px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 5px;
+.service-context {
+  display: block;
+  max-width: 100%;
   color: var(--text-tertiary);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

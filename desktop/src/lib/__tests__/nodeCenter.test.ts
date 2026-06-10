@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Host, NodeStatus, Project, RuntimeInstanceStatus } from '@/api/agent'
-import { buildDeploymentEnvIndex, buildNodeCenterNodes } from '../nodeCenter'
+import { buildDeploymentContextIndex, buildDeploymentEnvIndex, buildNodeCenterNodes } from '../nodeCenter'
 
 function host(partial: Partial<Host> = {}): Host {
   return {
@@ -144,6 +144,58 @@ describe('nodeCenter view model', () => {
     expect(labels).toEqual(['prod', undefined])
   })
 
+  it('adds project labels by deployment id so same-name services can be distinguished', () => {
+    const nodes = buildNodeCenterNodes(
+      [host()],
+      [node({
+        deployments: [
+          instance({ deployment_id: 'dep-api-a', service_id: 'svc-api-a', service_name: 'server' }),
+          instance({ deployment_id: 'dep-api-b', service_id: 'svc-api-b', service_name: 'server' }),
+        ],
+      })],
+      [
+        {
+          id: 'proj-1',
+          name: 'Billing API',
+          root_path: '/tmp/billing',
+          services: [{
+            id: 'svc-api-a',
+            project_id: 'proj-1',
+            name: 'server',
+            status: 'running',
+            required: false,
+            order: 1,
+            deployments: [{ id: 'dep-api-a', env_name: 'prod', location: 'remote', status: 'running' }],
+          }],
+          environments: [{ id: 'env-prod', name: 'prod', is_dev: false, order: 1 }],
+        },
+        {
+          id: 'proj-2',
+          name: 'Admin Console',
+          root_path: '/tmp/admin',
+          services: [{
+            id: 'svc-api-b',
+            project_id: 'proj-2',
+            name: 'server',
+            status: 'running',
+            required: false,
+            order: 1,
+            deployments: [{ id: 'dep-api-b', env_name: 'prod', location: 'remote', status: 'running' }],
+          }],
+          environments: [{ id: 'env-prod', name: 'prod', is_dev: false, order: 1 }],
+        },
+      ],
+    )
+
+    const projectLabels = Object.fromEntries(
+      nodes[0].deployments.map(item => [item.instance.deployment_id, item.projectName]),
+    )
+    expect(projectLabels).toEqual({
+      'dep-api-a': 'Billing API',
+      'dep-api-b': 'Admin Console',
+    })
+  })
+
   it('sorts abnormal deployments above healthy deployments', () => {
     const failed = instance({
       service_name: 'worker',
@@ -169,6 +221,13 @@ describe('nodeCenter view model', () => {
 
     expect(envIndex.get('dep-api')).toBe('prod')
     expect(envIndex.get('missing')).toBeUndefined()
+  })
+
+  it('builds deployment context from all projects', () => {
+    const contextIndex = buildDeploymentContextIndex([project()])
+
+    expect(contextIndex.get('dep-api')).toEqual({ envName: 'prod', projectName: 'Demo' })
+    expect(contextIndex.get('missing')).toBeUndefined()
   })
 
   it('keeps current route status from node snapshots', () => {

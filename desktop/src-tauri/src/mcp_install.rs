@@ -54,6 +54,31 @@ pub struct SkillInstallOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionHookOutcome {
+    pub installed: bool,
+    pub already_present: bool,
+    pub config_path: String,
+    pub backup_path: Option<String>,
+    // needs_trust 为 true 时表示该 Agent（目前仅 Codex）要求用户在 CLI 里
+    // 手动 review/trust 后 hook 才会生效，前端应据此提示用户。
+    pub needs_trust: bool,
+    pub error: Option<String>,
+}
+
+impl SessionHookOutcome {
+    fn failed(config_path: &Path, needs_trust: bool, error: String) -> Self {
+        Self {
+            installed: false,
+            already_present: false,
+            config_path: config_path.to_string_lossy().to_string(),
+            backup_path: None,
+            needs_trust,
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct InstallOutcome {
     pub installed: bool,
     pub already_present: bool,
@@ -62,6 +87,7 @@ pub struct InstallOutcome {
     pub backup_path: Option<String>,
     pub manual_config: String,
     pub skill: SkillInstallOutcome,
+    pub session_hook: SessionHookOutcome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -87,6 +113,9 @@ pub struct McpStatus {
     pub skill_installed: bool,
     pub skill_matches_bundled: Option<bool>,
     pub skill_error: Option<String>,
+    pub hook_config_path: String,
+    pub hook_installed: bool,
+    pub hook_needs_trust: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -97,6 +126,8 @@ pub struct UninstallOutcome {
     pub config_backup_path: Option<String>,
     pub skill_path: String,
     pub removed_skill: bool,
+    pub hook_config_path: String,
+    pub removed_hook: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -205,6 +236,27 @@ impl AgentKind {
         }
     }
 
+    // hook_needs_trust 表示该 Agent 是否要求用户手动信任非托管 hook 后才生效。
+    // Codex 的非托管 command hook 必须在 CLI 里 /hooks 审核信任，写入即生效不成立；
+    // Claude Code 与 Cursor 写入用户 settings 后即生效，无此门槛。
+    fn hook_needs_trust(&self) -> bool {
+        matches!(self, Self::Codex)
+    }
+
+    // session_hook_path 返回各 Agent 存放 SessionStart hook 的配置文件路径。
+    //
+    // 注意：hook 与 MCP 的配置文件不一定是同一个——
+    //   - Claude Code：MCP 在 ~/.claude.json，但 hooks 在 ~/.claude/settings.json。
+    //   - Codex：用独立的 ~/.codex/hooks.json，刻意不并进 config.toml，避免 TOML 合并风险。
+    //   - Cursor：hooks 在 ~/.cursor/hooks.json。
+    fn session_hook_path(&self, home: &Path) -> PathBuf {
+        match self {
+            Self::ClaudeCode => home.join(".claude").join("settings.json"),
+            Self::Codex => home.join(".codex").join("hooks.json"),
+            Self::Cursor => home.join(".cursor").join("hooks.json"),
+        }
+    }
+
     fn manual_config(&self, entry: &McpEntry) -> String {
         match self {
             Self::ClaudeCode | Self::Cursor => serde_json::to_string_pretty(&json!({
@@ -252,6 +304,20 @@ pub fn install_mcp_for_paths_with_skill(
             skill_source_error.unwrap_or_else(|| "找不到 SuperDev skill 源目录".to_string()),
         ),
     };
+    // SessionStart hook 依赖 skill 目录里的 run-hook.cmd/session-start，
+    // 因此仅在 skill 已就位（本次装好或先前已存在）时才注册 hook。
+    // hook 注册失败不阻断整体安装：降级后仍有 skill description 兜底触发。
+    let hook_path = kind.session_hook_path(home);
+    let session_hook = if skill_target.join("hooks").join("session-start").is_file() {
+        install_session_hook(kind, &hook_path, &skill_target)
+            .unwrap_or_else(|err| SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err))
+    } else {
+        SessionHookOutcome::failed(
+            &hook_path,
+            kind.hook_needs_trust(),
+            "skill hook 脚本缺失，跳过 SessionStart hook 注册".to_string(),
+        )
+    };
     Ok(InstallOutcome {
         installed: config_outcome.installed,
         already_present: config_outcome.already_present,
@@ -260,6 +326,7 @@ pub fn install_mcp_for_paths_with_skill(
         backup_path: config_outcome.backup_path,
         manual_config: config_outcome.manual_config,
         skill,
+        session_hook,
     })
 }
 
@@ -767,6 +834,243 @@ fn remove_skill_dir(target: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+// SuperDev hook 的稳定标识：所有 Agent 的 hook command 都包含这段路径片段，
+// 据此在用户 settings 里幂等识别「我们装的那条」，避免重复追加、并支持精确卸载。
+const HOOK_MARKER: &str = "skills/superdev/hooks";
+
+// hook_command_for 生成各 Agent 写入 settings 的 hook 调用命令。
+// 统一走 skill 目录下的 run-hook.cmd（跨平台 polyglot wrapper），由它再调 session-start。
+// 用绝对路径，使 hook 不依赖会话 cwd；run-hook.cmd 含 HOOK_MARKER，是幂等与卸载的锚点。
+fn hook_command_for(skill_dir: &Path) -> String {
+    let runner = skill_dir.join("hooks").join("run-hook.cmd");
+    // 统一用正斜杠，保证 HOOK_MARKER（含正斜杠）在 Windows 上也能匹配命中。
+    let runner = runner.to_string_lossy().replace('\\', "/");
+    format!("\"{runner}\" session-start")
+}
+
+// session_hook_event 返回各 Agent 的 SessionStart 事件键名与是否带 matcher。
+// Cursor 用小写 sessionStart 且不需要 matcher；Claude Code / Codex 用 SessionStart 且带 startup 类 matcher。
+fn session_hook_event(kind: AgentKind) -> (&'static str, Option<&'static str>) {
+    match kind {
+        AgentKind::ClaudeCode => ("SessionStart", Some("startup|clear|compact")),
+        AgentKind::Codex => ("SessionStart", Some("startup|resume|clear|compact")),
+        AgentKind::Cursor => ("sessionStart", None),
+    }
+}
+
+// hook_already_present 判断给定 hooks 数组里是否已存在带 HOOK_MARKER 的条目。
+// 同时兼容 Claude/Codex 的嵌套结构（matcher 组 -> hooks[].command）与 Cursor 的扁平结构（command）。
+fn hook_array_contains_marker(arr: &[serde_json::Value]) -> bool {
+    arr.iter().any(|group| {
+        // 扁平结构：{ "command": "..." }
+        if group
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(|cmd| cmd.contains(HOOK_MARKER))
+        {
+            return true;
+        }
+        // 嵌套结构：{ "hooks": [ { "command": "..." } ] }
+        group
+            .get("hooks")
+            .and_then(|v| v.as_array())
+            .is_some_and(|inner| {
+                inner.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|cmd| cmd.contains(HOOK_MARKER))
+                })
+            })
+    })
+}
+
+// build_hook_entry 按 Agent 结构构造要追加的单个 hook 条目。
+fn build_hook_entry(kind: AgentKind, command: &str) -> serde_json::Value {
+    match kind {
+        AgentKind::Cursor => json!({ "command": command }),
+        AgentKind::ClaudeCode | AgentKind::Codex => {
+            let (_, matcher) = session_hook_event(kind);
+            let mut group = serde_json::Map::new();
+            if let Some(m) = matcher {
+                group.insert("matcher".to_string(), json!(m));
+            }
+            group.insert(
+                "hooks".to_string(),
+                json!([{ "type": "command", "command": command }]),
+            );
+            serde_json::Value::Object(group)
+        }
+    }
+}
+
+// merge_session_hook 把 SuperDev 的 SessionStart hook 幂等合并进现有 settings JSON。
+// 已存在带 HOOK_MARKER 的条目则不改动（changed=false）；否则在对应事件数组末尾追加。
+// 严格只追加、不重写用户的其它 hooks 与配置，保证对用户 settings 的最小侵入。
+fn merge_session_hook(
+    existing: Option<&str>,
+    kind: AgentKind,
+    command: &str,
+) -> Result<MergeResult, String> {
+    let mut root = match existing {
+        Some(content) if !content.trim().is_empty() => {
+            serde_json::from_str::<serde_json::Value>(content)
+                .map_err(|err| format!("配置文件格式异常(JSON): {err}"))?
+        }
+        _ => json!({}),
+    };
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| "配置文件格式异常(JSON): 根节点必须是对象".to_string())?;
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| "配置文件格式异常(JSON): hooks 必须是对象".to_string())?;
+    let (event, _) = session_hook_event(kind);
+    let arr = hooks
+        .entry(event.to_string())
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(|| format!("配置文件格式异常(JSON): hooks.{event} 必须是数组"))?;
+    if hook_array_contains_marker(arr) {
+        let content = serde_json::to_string_pretty(&root)
+            .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
+            + "\n";
+        return Ok(MergeResult {
+            content,
+            changed: false,
+        });
+    }
+    arr.push(build_hook_entry(kind, command));
+    let content = serde_json::to_string_pretty(&root)
+        .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
+        + "\n";
+    Ok(MergeResult {
+        content,
+        changed: true,
+    })
+}
+
+// install_session_hook 将 SuperDev SessionStart hook 写入指定 Agent 的 settings 文件。
+// 沿用 MCP 配置一致的「备份 + 临时文件原子替换」策略；幂等：已存在则 already_present。
+fn install_session_hook(
+    kind: AgentKind,
+    hook_path: &Path,
+    skill_dir: &Path,
+) -> Result<SessionHookOutcome, String> {
+    let command = hook_command_for(skill_dir);
+    let existing = if hook_path.exists() {
+        Some(fs::read_to_string(hook_path).map_err(|err| format!("读取 hook 配置失败: {err}"))?)
+    } else {
+        None
+    };
+    let merged = merge_session_hook(existing.as_deref(), kind, &command)?;
+    if !merged.changed {
+        return Ok(SessionHookOutcome {
+            installed: false,
+            already_present: true,
+            config_path: hook_path.to_string_lossy().to_string(),
+            backup_path: None,
+            needs_trust: kind.hook_needs_trust(),
+            error: None,
+        });
+    }
+    if let Some(parent) = hook_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
+    }
+    let backup_path = if hook_path.exists() {
+        let backup = backup_path(hook_path);
+        fs::copy(hook_path, &backup).map_err(|err| format!("备份 hook 配置失败: {err}"))?;
+        Some(backup.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    let tmp = hook_path.with_extension("superdev-hook-tmp");
+    fs::write(&tmp, merged.content).map_err(|err| format!("写入临时 hook 配置失败: {err}"))?;
+    fs::rename(&tmp, hook_path).map_err(|err| format!("替换 hook 配置失败: {err}"))?;
+    Ok(SessionHookOutcome {
+        installed: true,
+        already_present: false,
+        config_path: hook_path.to_string_lossy().to_string(),
+        backup_path,
+        needs_trust: kind.hook_needs_trust(),
+        error: None,
+    })
+}
+
+// remove_session_hook 从指定 Agent 的 settings 里精确摘除带 HOOK_MARKER 的 SuperDev hook 条目，
+// 不动用户的其它 hooks。返回是否确实移除了条目。
+fn remove_session_hook(kind: AgentKind, hook_path: &Path) -> Result<bool, String> {
+    if !hook_path.exists() {
+        return Ok(false);
+    }
+    let content =
+        fs::read_to_string(hook_path).map_err(|err| format!("读取 hook 配置失败: {err}"))?;
+    if content.trim().is_empty() {
+        return Ok(false);
+    }
+    let mut root = serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|err| format!("配置文件格式异常(JSON): {err}"))?;
+    let (event, _) = session_hook_event(kind);
+    let Some(arr) = root
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("hooks"))
+        .and_then(|hooks| hooks.as_object_mut())
+        .and_then(|hooks| hooks.get_mut(event))
+        .and_then(|ev| ev.as_array_mut())
+    else {
+        return Ok(false);
+    };
+    let before = arr.len();
+    arr.retain(|group| {
+        let flat = group
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(|cmd| cmd.contains(HOOK_MARKER));
+        let nested = group
+            .get("hooks")
+            .and_then(|v| v.as_array())
+            .is_some_and(|inner| {
+                inner.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|cmd| cmd.contains(HOOK_MARKER))
+                })
+            });
+        !(flat || nested)
+    });
+    if arr.len() == before {
+        return Ok(false);
+    }
+    let backup = backup_path(hook_path);
+    fs::copy(hook_path, &backup).map_err(|err| format!("备份 hook 配置失败: {err}"))?;
+    let tmp = hook_path.with_extension("superdev-hook-tmp");
+    let out = serde_json::to_string_pretty(&root)
+        .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
+        + "\n";
+    fs::write(&tmp, out).map_err(|err| format!("写入临时 hook 配置失败: {err}"))?;
+    fs::rename(&tmp, hook_path).map_err(|err| format!("替换 hook 配置失败: {err}"))?;
+    Ok(true)
+}
+
+// session_hook_status 只读地判断指定 Agent 的 settings 里是否已装 SuperDev hook。
+fn session_hook_status(kind: AgentKind, hook_path: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(hook_path) else {
+        return false;
+    };
+    if content.trim().is_empty() {
+        return false;
+    }
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let (event, _) = session_hook_event(kind);
+    root.get("hooks")
+        .and_then(|h| h.get(event))
+        .and_then(|ev| ev.as_array())
+        .is_some_and(|arr| hook_array_contains_marker(arr))
+}
+
 fn capability_tool(name: &str, purpose: &str, access: &str, reference: &str) -> McpCapabilityTool {
     McpCapabilityTool {
         name: name.to_string(),
@@ -1143,10 +1447,12 @@ pub fn mcp_status_for_paths(
                 .expect("known agent availability");
             let config_path = kind.config_path(home);
             let skill_path = kind.skill_dir(home);
+            let hook_path = kind.session_hook_path(home);
             let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
                 read_config_status(kind, &config_path);
             let (skill_installed, skill_matches_bundled, skill_error) =
                 skill_status_for_target(skill_source, skill_source_error.clone(), &skill_path);
+            let hook_installed = session_hook_status(kind, &hook_path);
             McpStatus {
                 agent,
                 agent_installed: availability.installed,
@@ -1161,6 +1467,9 @@ pub fn mcp_status_for_paths(
                 skill_installed,
                 skill_matches_bundled,
                 skill_error,
+                hook_config_path: hook_path.to_string_lossy().to_string(),
+                hook_installed,
+                hook_needs_trust: kind.hook_needs_trust(),
             }
         })
         .collect()
@@ -1189,6 +1498,8 @@ pub fn uninstall_mcp_for_paths(agent: &str, home: &Path) -> Result<UninstallOutc
     };
     let skill_path = kind.skill_dir(home);
     let removed_skill = remove_skill_dir(&skill_path)?;
+    let hook_path = kind.session_hook_path(home);
+    let removed_hook = remove_session_hook(kind, &hook_path)?;
     Ok(UninstallOutcome {
         agent: kind.label().to_string(),
         config_path: config_path.to_string_lossy().to_string(),
@@ -1196,6 +1507,8 @@ pub fn uninstall_mcp_for_paths(agent: &str, home: &Path) -> Result<UninstallOutc
         config_backup_path,
         skill_path: skill_path.to_string_lossy().to_string(),
         removed_skill,
+        hook_config_path: hook_path.to_string_lossy().to_string(),
+        removed_hook,
     })
 }
 
@@ -1412,6 +1725,124 @@ command = "gh"
             parsed["mcp_servers"]["superdev"]["env"]["SUPERDEV_AGENT_URL"].as_str(),
             Some("http://127.0.0.1:57017")
         );
+    }
+
+    #[test]
+    fn merge_hook_claude_appends_nested_entry_with_matcher() {
+        let merged = merge_session_hook(None, AgentKind::ClaudeCode, "\"/skills/superdev/hooks/run-hook.cmd\" session-start")
+            .expect("merge");
+        let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
+
+        assert!(merged.changed);
+        let arr = parsed["hooks"]["SessionStart"].as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["matcher"], "startup|clear|compact");
+        assert!(arr[0]["hooks"][0]["command"]
+            .as_str()
+            .expect("cmd")
+            .contains(HOOK_MARKER));
+        assert_eq!(arr[0]["hooks"][0]["type"], "command");
+    }
+
+    #[test]
+    fn merge_hook_cursor_appends_flat_entry_lowercase_event() {
+        let merged = merge_session_hook(None, AgentKind::Cursor, "\"/skills/superdev/hooks/run-hook.cmd\" session-start")
+            .expect("merge");
+        let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
+
+        // Cursor 用小写 sessionStart 且扁平结构（无 matcher 包裹）。
+        let arr = parsed["hooks"]["sessionStart"].as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0]["command"].as_str().expect("cmd").contains(HOOK_MARKER));
+        assert!(arr[0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn merge_hook_keeps_user_other_hooks() {
+        // 用户已有自己的 SessionStart hook 和一个 PreToolUse hook，合并不能动它们。
+        let existing = r#"{
+  "hooks": {
+    "SessionStart": [ { "matcher": "startup", "hooks": [ { "type": "command", "command": "echo mine" } ] } ],
+    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo guard" } ] } ]
+  },
+  "theme": "dark"
+}"#;
+        let merged = merge_session_hook(Some(existing), AgentKind::ClaudeCode, "\"/x/skills/superdev/hooks/run-hook.cmd\" session-start")
+            .expect("merge");
+        let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
+
+        assert!(merged.changed);
+        assert_eq!(parsed["theme"], "dark");
+        // 用户原有的两类 hook 都还在
+        assert_eq!(parsed["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "echo guard");
+        let ss = parsed["hooks"]["SessionStart"].as_array().expect("array");
+        assert_eq!(ss.len(), 2, "应在保留用户原条目的基础上追加");
+        assert_eq!(ss[0]["hooks"][0]["command"], "echo mine");
+        assert!(ss[1]["hooks"][0]["command"].as_str().expect("cmd").contains(HOOK_MARKER));
+    }
+
+    #[test]
+    fn merge_hook_is_idempotent() {
+        let cmd = "\"/x/skills/superdev/hooks/run-hook.cmd\" session-start";
+        let first = merge_session_hook(None, AgentKind::ClaudeCode, cmd).expect("first");
+        let second = merge_session_hook(Some(&first.content), AgentKind::ClaudeCode, cmd).expect("second");
+
+        assert!(!second.changed, "已存在 SuperDev hook 时不应再次追加");
+        assert_eq!(first.content, second.content);
+    }
+
+    #[test]
+    fn merge_hook_rejects_bad_json() {
+        let err = merge_session_hook(Some("{broken"), AgentKind::ClaudeCode, "x").expect_err("bad");
+        assert!(err.contains("配置文件格式异常"));
+    }
+
+    #[test]
+    fn install_and_remove_session_hook_round_trip() {
+        let dir = tempfile_dir();
+        let skill_dir = dir.join("skills").join("superdev");
+        fs::create_dir_all(skill_dir.join("hooks")).expect("mkdir skill hooks");
+        let hook_path = dir.join("settings.json");
+        // 预置用户已有的无关 hook，验证安装/卸载都不动它
+        fs::write(&hook_path, r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo keep"}]}]}}"#)
+            .expect("seed");
+
+        // 安装
+        let installed = install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install");
+        assert!(installed.installed);
+        assert!(!installed.already_present);
+        assert!(!installed.needs_trust);
+        assert!(installed.backup_path.is_some(), "已有文件应先备份");
+        assert!(session_hook_status(AgentKind::ClaudeCode, &hook_path));
+
+        // 再装一次 -> 幂等
+        let again = install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install2");
+        assert!(!again.installed);
+        assert!(again.already_present);
+
+        // 卸载 -> 精确摘除 SuperDev 条目，保留用户的 PreToolUse
+        let removed = remove_session_hook(AgentKind::ClaudeCode, &hook_path).expect("remove");
+        assert!(removed);
+        assert!(!session_hook_status(AgentKind::ClaudeCode, &hook_path));
+        let after: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&hook_path).expect("read")).expect("json");
+        assert_eq!(after["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "echo keep");
+
+        // 再卸载 -> 没有可移除项，返回 false
+        let removed_again = remove_session_hook(AgentKind::ClaudeCode, &hook_path).expect("remove2");
+        assert!(!removed_again);
+    }
+
+    #[test]
+    fn codex_hook_flags_needs_trust() {
+        let dir = tempfile_dir();
+        let skill_dir = dir.join("skills").join("superdev");
+        fs::create_dir_all(skill_dir.join("hooks")).expect("mkdir");
+        let hook_path = dir.join("hooks.json");
+
+        let installed = install_session_hook(AgentKind::Codex, &hook_path, &skill_dir).expect("install");
+        assert!(installed.installed);
+        assert!(installed.needs_trust, "Codex 需要用户手动信任 hook");
     }
 
     #[test]

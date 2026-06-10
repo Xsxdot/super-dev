@@ -3,12 +3,15 @@
 
 职责：
   - 渲染 5 个主推步骤 + 1 个可选流水线步骤的完成态与说明
-  - 当前步骤展开，提供提示词复制（step2 支持注入项目目录、step4 注入主机名）
+  - 当前步骤展开，提供「示范例句」复制（step2 支持注入项目目录、step4 注入主机名）
   - 以 Outcome Coach 形式强调「远端实时日志」的价值兑现点
 
 边界：
   - 不自行判定完成状态，只读取 gettingStartedStore 派生状态
   - 不发业务 API；目录选择用 plugin-dialog，复制用 navigator.clipboard
+  - 复制的内容是「意图例句」而非工具调用序列：只描述用户想要什么，
+    具体走哪些 MCP 工具、是否走 preview→apply 审批，由 superdev skill 接管，
+    避免引导文案与 skill 的安全纪律（禁止直接调 upsert_* 等）脱节甚至冲突
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'

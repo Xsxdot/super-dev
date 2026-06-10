@@ -8,14 +8,24 @@
  * 边界：
  *   - 不访问真实 agent API
  */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+// @ts-expect-error Vitest runs this contract in Node, while app tsconfig intentionally omits Node types.
+import { readFileSync } from 'node:fs'
 import OperationApprovalsTab from '../OperationApprovalsTab.vue'
 import { api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useSettingsStore } from '@/stores/settings'
 import { installTestI18n } from '@/test-utils/i18n'
+
+declare const process: { cwd: () => string }
+
+const operationApprovalsTabPath = `${process.cwd()}/src/components/Settings/OperationApprovalsTab.vue`
+
+function operationApprovalsTabSource() {
+  return readFileSync(operationApprovalsTabPath, 'utf8') as string
+}
 
 describe('OperationApprovalsTab', () => {
   beforeEach(() => {
@@ -128,5 +138,51 @@ describe('OperationApprovalsTab', () => {
         grace_minutes: 30,
       },
     })
+  })
+
+  it('shows a confirmation after saving approval policy', async () => {
+    const approvalStore = useOperationApprovalStore()
+    vi.spyOn(approvalStore, 'loadPending').mockResolvedValue(undefined)
+    const settingsStore = useSettingsStore()
+    settingsStore.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      approval: {
+        config_upsert: true,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        grace_minutes: 15,
+      },
+    }
+    vi.spyOn(settingsStore, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(api, 'putSettings').mockResolvedValue({
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      approval: {
+        config_upsert: true,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        grace_minutes: 15,
+      },
+    } as any)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await wrapper.find('[data-test="approval-settings-save"]').trigger('click')
+    await flushPromises()
+
+    const notice = wrapper.find('[data-test="approval-policy-save-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('审批策略已保存')
+    expect(notice.classes()).toContain('settings-alert-success')
+  })
+
+  it('keeps approval policy checkbox labels adjacent to their controls', () => {
+    const source = operationApprovalsTabSource()
+
+    expect(source).toMatch(/\.policy-toggle\s*\{[^}]*justify-content:\s*flex-start;/s)
+    expect(source).toMatch(/\.policy-toggle\s*\{[^}]*gap:\s*8px;/s)
+    expect(source).not.toMatch(/\.policy-toggle,\s*\.policy-number\s*\{[^}]*justify-content:\s*space-between;/s)
   })
 })
