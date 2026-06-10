@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -293,8 +294,11 @@ func (a *App) registerPipelineArtifact(ctx context.Context, projectID, pipelineI
 	}
 	ref := model.ArtifactRef{Version: version, Kind: kind, Location: location}
 	if kind == model.ArtifactKindImage {
-		_, err := a.store.PutArtifact(ctx, projectID, pipelineID, ref, nil)
-		return err
+		if _, err := a.store.PutArtifact(ctx, projectID, pipelineID, ref, nil); err != nil {
+			return err
+		}
+		a.pruneArtifactVersions(ctx, projectID, pipelineID)
+		return nil
 	}
 	if location == "" {
 		return errors.New("artifact path is required")
@@ -304,8 +308,27 @@ func (a *App) registerPipelineArtifact(ctx context.Context, projectID, pipelineI
 		return err
 	}
 	defer body.Close()
-	_, err = a.store.PutArtifact(ctx, projectID, pipelineID, ref, body)
-	return err
+	if _, err := a.store.PutArtifact(ctx, projectID, pipelineID, ref, body); err != nil {
+		return err
+	}
+	a.pruneArtifactVersions(ctx, projectID, pipelineID)
+	return nil
+}
+
+// pruneArtifactVersions 按 agent 设置的保留版本数淘汰该流水线最旧的制品。
+//
+// 注意：
+//   - 淘汰发生在制品登记成功之后，失败只记日志、不中断部署：
+//     此刻部署已成功且最新制品已落库，清理失败只是磁盘多占用，可在下次部署时重试。
+func (a *App) pruneArtifactVersions(ctx context.Context, projectID, pipelineID string) {
+	settings, err := a.settings.Load()
+	if err != nil {
+		log.Printf("[SuperDev] artifact prune skipped, load settings failed: %v", err)
+		return
+	}
+	if err := a.store.PruneArtifacts(ctx, projectID, pipelineID, settings.ArtifactKeepVersions); err != nil {
+		log.Printf("[SuperDev] artifact prune failed for %s/%s: %v", projectID, pipelineID, err)
+	}
 }
 
 func restoreFileArtifact(ref model.ArtifactRef, targetPath string) error {
