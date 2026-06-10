@@ -31,6 +31,7 @@ screenshot-*.png
 superdev-product-audit/
 
 # Local/internal planning notes (not product source)
+design-qa.md
 docs/model-redesign.md
 docs/superpowers/
 
