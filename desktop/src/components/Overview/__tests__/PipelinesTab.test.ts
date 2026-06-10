@@ -1,13 +1,20 @@
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { open } from '@tauri-apps/plugin-dialog'
 import PipelinesTab from '../PipelinesTab.vue'
 import pipelinesTabSource from '../PipelinesTab.vue?raw'
 import pipelineRowSource from '../PipelineRow.vue?raw'
 import type { Project, Run } from '@/api/agent'
 import { api } from '@/api/agent'
+import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn(),
+  message: vi.fn(),
+}))
 
 vi.mock('@/api/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/agent')>()
@@ -24,8 +31,8 @@ vi.mock('@/api/agent', async (importOriginal) => {
 
 vi.mock('@/components/Settings/ProjectPipelineEditor.vue', () => ({
   default: {
-    props: ['initialMode', 'pipelineId'],
-    template: '<div data-test="pipeline-editor" :data-mode="initialMode" :data-pipeline-id="pipelineId"><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>',
+    props: ['initialMode', 'pipelineId', 'onImportTemplate'],
+    template: '<div data-test="pipeline-editor" :data-mode="initialMode" :data-pipeline-id="pipelineId" :data-has-import="String(Boolean(onImportTemplate))"><button data-test="editor-import" @click="onImportTemplate?.()">import</button><button data-test="editor-cancel" @click="$emit(`cancel`)">cancel</button></div>',
   },
 }))
 
@@ -312,6 +319,32 @@ describe('PipelinesTab', () => {
     await wrapper.find('[data-test="pipeline-edit"]').trigger('click')
 
     expect(wrapper.find('[data-test="pipeline-editor"]').exists()).toBe(true)
+  })
+
+  it('passes template import callback to the reused pipeline editor', async () => {
+    const templateStore = usePipelineTemplateStore()
+    const importTemplate = vi.spyOn(templateStore, 'importTemplate').mockResolvedValue({
+      source: 'user',
+      id: 'overview-imported',
+      name: 'Overview Imported',
+      category: 'build',
+      version: '1.0.0',
+      digest: 'sha256:overview',
+    })
+    vi.mocked(open).mockResolvedValue('/tmp/overview-template.yaml')
+    const wrapper = mount(PipelinesTab, { props: { project: project() }, global: { plugins: [installTestI18n()] } })
+
+    await wrapper.find('[data-test="pipeline-edit"]').trigger('click')
+
+    expect(wrapper.find('[data-test="pipeline-editor"]').attributes('data-has-import')).toBe('true')
+
+    await wrapper.find('[data-test="editor-import"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    }))
+    expect(importTemplate).toHaveBeenCalledWith('/tmp/overview-template.yaml')
   })
 
   it('passes selected pipeline id to editor', async () => {

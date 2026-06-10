@@ -13,7 +13,8 @@ PipelinesTab：项目概览页的流水线列表和历史入口。
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { api, type Project, type ProjectPipeline, type Run } from '@/api/agent'
+import { message, open } from '@tauri-apps/plugin-dialog'
+import { api, type PipelineTemplateSummary, type Project, type ProjectPipeline, type Run } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -185,6 +186,22 @@ function openEditor(mode: 'template' | 'blank', pipelineId?: string) {
   editing.value = true
 }
 
+async function importPipelineTemplate(): Promise<PipelineTemplateSummary | undefined> {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    title: t('settings.templates.importTitle'),
+  })
+  if (!selected || Array.isArray(selected)) return undefined
+  try {
+    return await templateStore.importTemplate(selected)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await message(msg, { title: t('settings.templates.unableImport'), kind: 'error' })
+    return undefined
+  }
+}
+
 async function confirmDeploy() {
   if (!pending.value) return
   const { pipeline, rollbackRun } = pending.value
@@ -324,6 +341,7 @@ function openDetail(pipeline: ProjectPipeline, run: Run) {
       :pipeline-templates="templateStore.templates"
       :initial-mode="editorMode"
       :pipeline-id="editingPipelineId"
+      :on-import-template="importPipelineTemplate"
       @cancel="editing = false"
       @saved="editing = false"
     />
