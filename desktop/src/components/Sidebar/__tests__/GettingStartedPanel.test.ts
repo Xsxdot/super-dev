@@ -2,7 +2,7 @@
  * GettingStartedPanel 测试起步旅程浮层清单。
  *
  * 职责：
- *   - 验证步骤渲染、完成态与 Outcome Coach 文案
+ *   - 验证步骤清单渲染、完成态与当前步骤展开
  *   - 验证提示词复制和目录/主机真实值注入
  *   - 验证关闭引导会写入 gettingStarted store
  *
@@ -58,6 +58,24 @@ describe('GettingStartedPanel', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-test="step-step0"]').classes()).toContain('is-done')
+  })
+
+  it('step1 当前态按计划展示清单分组并复制示例提示词', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useGettingStartedStore()
+    store.markCompleted('step0')
+    const wrapper = mountPanel(pinia)
+
+    expect(wrapper.text()).toContain('主线')
+    expect(wrapper.text()).toContain('进阶 · 可选')
+    expect(wrapper.find('[data-test="copy-step1"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('完成后你会看到')
+
+    await wrapper.find('[data-test="copy-step1"]').trigger('click')
+
+    const prompt = vi.mocked(navigator.clipboard.writeText).mock.calls[0][0]
+    expect(prompt).toContain('superdev-sample')
   })
 
   it('step2 选择目录后复制提示词会注入真实路径', async () => {
