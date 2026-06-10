@@ -70,6 +70,18 @@ const buildTemplate: PipelineTemplateSummary = {
   },
 }
 
+const importedBuildTemplate: PipelineTemplateSummary = {
+  source: 'user',
+  id: 'imported-build',
+  name: 'Imported Build',
+  category: 'build',
+  version: '1.0.0',
+  digest: 'sha256:imported',
+  inputs: {
+    frontend_dir: { label: '前端目录 / Frontend directory', type: 'path', required: true, default: '${workspace}/frontend' },
+  },
+}
+
 const deployTemplate: PipelineTemplateSummary = {
   source: 'builtin',
   id: 'systemd-seamless',
@@ -227,6 +239,27 @@ describe('ProjectPipelineEditor', () => {
     expect(wrapper.find('[data-test="pipeline-editor-preview-strip"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-test="pipeline-editor-preview-node"]')).toHaveLength(0)
     expect(wrapper.find('[data-test="wizard-preview-strip"]').exists()).toBe(false)
+  })
+
+  it('从流水线编辑器导入模板后追加到当前阶段', async () => {
+    const onImportTemplate = vi.fn().mockResolvedValue(importedBuildTemplate)
+    const wrapper = mount(ProjectPipelineEditor, {
+      props: {
+        project: project(),
+        pipelineTemplates: [importedBuildTemplate],
+        initialMode: 'template',
+        onImportTemplate,
+      },
+      global: { plugins: [installTestI18n()] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="import-template-build"]').trigger('click')
+    await flushPromises()
+
+    expect(onImportTemplate).toHaveBeenCalled()
+    expect((wrapper.find('[data-test="block-0-template-select"]').element as HTMLSelectElement).value).toBe('user://imported-build@1.0.0')
+    expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('当前模板：Imported Build')
   })
 
   it('移除外层结构 rail 后保留完整阶段导航', async () => {

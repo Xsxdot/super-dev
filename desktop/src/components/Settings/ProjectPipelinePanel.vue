@@ -23,6 +23,7 @@ const props = defineProps<{
   templates: PipelineTemplateSummary[]
   initialMode?: 'template' | 'blank'
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
+  onImportTemplate?: () => Promise<PipelineTemplateSummary | undefined>
 }>()
 
 const emit = defineEmits<{ 'update:modelValue': [ProjectPipeline[]] }>()
@@ -96,6 +97,7 @@ onMounted(() => {
         :hosts="hosts"
         :initial-mode="initialMode"
         :on-view-template="onViewTemplate"
+        :on-import-template="onImportTemplate"
         @update:model-value="setPipeline(index, $event)"
       />
 

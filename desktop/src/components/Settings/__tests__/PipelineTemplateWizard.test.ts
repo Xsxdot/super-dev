@@ -12,7 +12,7 @@
  *   - 不解析模板 YAML
  */
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import PipelineTemplateWizard from '@/components/Settings/PipelineTemplateWizard.vue'
 import type { Pipeline, PipelinePreviewResponse, PipelineTemplateSummary } from '@/api/agent'
 
@@ -51,6 +51,18 @@ const packageTemplate: PipelineTemplateSummary = {
   inputs: {
     artifact: { label: '产物', type: 'path', required: true, description: '最终产物' },
     files: { label: '文件', type: 'file_list', required: true, description: '文件清单' },
+  },
+}
+
+const importedBuildTemplate: PipelineTemplateSummary = {
+  source: 'user',
+  id: 'imported-build',
+  category: 'build',
+  name: 'Imported Build',
+  version: '1.0.0',
+  digest: 'sha256:imported',
+  inputs: {
+    app_name: { label: '应用名', type: 'string', required: true, default: 'demo' },
   },
 }
 
@@ -189,6 +201,25 @@ describe('PipelineTemplateWizard', () => {
     expect(deployOptions.join('\n')).toContain('Systemd Deploy')
     expect(deployOptions.join('\n')).toContain('Archive Package')
     expect(deployOptions.join('\n')).not.toContain('Go Build')
+  })
+
+  it('导入模板后在当前阶段新增模板块并选中导入结果', async () => {
+    const onImportTemplate = vi.fn().mockResolvedValue(importedBuildTemplate)
+    const wrapper = mount(PipelineTemplateWizard, {
+      props: {
+        modelValue: undefined,
+        templates: [buildTemplate, importedBuildTemplate],
+        initialMode: 'template',
+        onImportTemplate,
+      },
+    })
+
+    await wrapper.find('[data-test="import-template-build"]').trigger('click')
+
+    expect(onImportTemplate).toHaveBeenCalled()
+    expect(wrapper.findAll('.template-block')).toHaveLength(1)
+    expect((wrapper.find('[data-test="block-0-template-select"]').element as HTMLSelectElement).value).toBe('user://imported-build@1.0.0')
+    expect(wrapper.find('[data-test="pipeline-wizard-detail"]').text()).toContain('当前模板：Imported Build')
   })
 
   it('同阶段模板块可通过拖拽调整保存顺序', async () => {
@@ -527,6 +558,7 @@ describe('PipelineTemplateWizard', () => {
     await wrapper.find('[data-test="block-0-template-select"]').setValue('builtin://archive-package@1.0.0')
     await wrapper.find('[data-test="block-0-input-artifact"]').setValue('${artifacts}/api.tar.gz')
     expect(wrapper.find('[data-test="pipeline-save-template"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="block-0-add-file"]').text()).toBe('添加文件')
 
     await wrapper.find('[data-test="block-0-add-file"]').trigger('click')
     await wrapper.find('[data-test="block-0-file-from-0"]').setValue('${output}/api')

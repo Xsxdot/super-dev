@@ -24,6 +24,7 @@ const props = defineProps<{
   withStructureRail?: boolean
   hidePreviewStrip?: boolean
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
+  onImportTemplate?: () => Promise<PipelineTemplateSummary | undefined>
 }>()
 
 const emit = defineEmits<{ 'update:pipeline': [ProjectPipeline] }>()
@@ -126,6 +127,7 @@ defineExpose({ saveDraft })
           :initial-mode="initialMode"
           :hide-preview-strip="hidePreviewStrip"
           :on-view-template="onViewTemplate"
+          :on-import-template="onImportTemplate"
           @update:model-value="setPipeline"
         />
       </div>
