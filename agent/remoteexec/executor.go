@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 
@@ -117,13 +116,17 @@ func (e *Executor) Execute(ctx context.Context, req CommandRequest, emit func(Me
 	go scanCommandOutput(stdout, "stdout", safeEmit, errCh)
 	go scanCommandOutput(stderr, "stderr", safeEmit, errCh)
 
-	waitErr := cmd.Wait()
+	// 必须先等两个 scanner goroutine 把管道读到 EOF，再调用 cmd.Wait：
+	// Wait 会在进程退出后立即关闭 StdoutPipe/StderrPipe，若此时还有未读完
+	// 的输出，数据会直接丢失（os/exec 文档明确要求读完管道后才能 Wait）。
+	// errCh 收满两次即代表两个 scanner 都已结束。
 	var scanErr error
 	for i := 0; i < 2; i++ {
 		if err := <-errCh; err != nil && scanErr == nil {
 			scanErr = err
 		}
 	}
+	waitErr := cmd.Wait()
 	if scanErr != nil {
 		return scanErr
 	}
@@ -138,16 +141,14 @@ func scanCommandOutput(r io.Reader, stream string, emit func(Message) error, err
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		if err := emit(Message{Type: MessageOutput, Stream: stream, Line: scanner.Text()}); err != nil {
+			// emit 失败后仍要把管道排干：Execute 会先等本 goroutine 结束
+			// 再 cmd.Wait，若不排干，子进程可能因管道写满而无法退出。
+			_, _ = io.Copy(io.Discard, r)
 			errCh <- err
 			return
 		}
 	}
-	if err := scanner.Err(); errors.Is(err, os.ErrClosed) {
-		errCh <- nil
-		return
-	} else {
-		errCh <- err
-	}
+	errCh <- scanner.Err()
 }
 
 func commandExitCode(err error) (int, error) {

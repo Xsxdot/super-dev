@@ -24,6 +24,17 @@ import (
 	"github.com/xsxdot/super-dev/agent/store"
 )
 
+// recentLogBase 返回种子日志的基准时间（1 分钟前，整秒）。
+//
+// 必须使用相对当前时间的时间戳：NewApp 会启动后台清理 goroutine，
+// 启动后立即按保留期（默认 7 天）执行 DeleteOlderThan。若种子日志用
+// 硬编码历史日期，一旦日历跨过保留边界，清理任务就会与测试断言竞争，
+// 把刚插入的日志异步删掉（慢机器上随机失败）。取整秒是为了保证
+// 时间戳经 SQLite 与 JSON 往返后仍可与基准时间精确相等比较。
+func recentLogBase() time.Time {
+	return time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+}
+
 func newSearchTestServer(t *testing.T) (*App, *httptest.Server) {
 	t.Helper()
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
@@ -50,7 +61,7 @@ func newSearchTestServer(t *testing.T) (*App, *httptest.Server) {
 
 func TestLogSearchAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
-	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace-8f21 api", Stream: "stdout"},
 		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-8f21 worker", Stream: "stdout"},
@@ -93,7 +104,7 @@ func TestLogSearchAPIUsesDeploymentIDs(t *testing.T) {
 			},
 		},
 	}
-	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "dep-api", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace-dep api", Stream: "stdout"},
 		{DeploymentID: "dep-worker", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace-dep worker", Stream: "stdout"},
@@ -116,7 +127,7 @@ func TestLogSearchAPIUsesDeploymentIDs(t *testing.T) {
 
 func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 	app, srv := newSearchTestServer(t)
-	base := time.Date(2026, 5, 20, 12, 31, 0, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "trace page api", Stream: "stdout"},
 		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "trace page worker", Stream: "stdout"},
@@ -154,7 +165,7 @@ func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
 
 func TestLogSearchAPIAllowsServiceWithoutProject(t *testing.T) {
 	app, srv := newSearchTestServer(t)
-	base := time.Date(2026, 5, 20, 12, 32, 0, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "collector-1", RunID: "run-collector", Timestamp: base, Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "remote collector trace", Stream: "stdout"},
@@ -188,7 +199,7 @@ func TestLogSearchAPIRequiresProjectAndQuery(t *testing.T) {
 
 func TestLogContextAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
-	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "trace-8f21 target", Stream: "stderr"},
 		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "worker context", Stream: "stdout"},
@@ -212,7 +223,7 @@ func TestLogContextAPI(t *testing.T) {
 
 func TestLogContextPageAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
-	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	base := recentLogBase()
 	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "api older", Stream: "stdout"},
 		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "api near", Stream: "stdout"},

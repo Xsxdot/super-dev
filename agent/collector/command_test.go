@@ -56,10 +56,10 @@ func TestBuildCommand(t *testing.T) {
 		args,
 	)
 
-	// docker 模板:docker logs -f <name>
+	// docker 模板:docker logs -f --tail 0 <name>,避免 collector 重启后重放容器历史日志。
 	args, err = collector.BuildCommand(model.LogSourceTypeDocker, "nova-worker", nil)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"docker", "logs", "-f", "nova-worker"}, args)
+	assert.Equal(t, []string{"docker", "logs", "-f", "--tail", "0", "nova-worker"}, args)
 
 	// 不允许的 type
 	_, err = collector.BuildCommand(model.LogSourceType("file"), "anything", nil)
@@ -107,10 +107,10 @@ func TestBuildCommandExtraArgs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"journalctl", "-fu", "nova-api", "-o", "cat", "--no-pager", "--since", "1h"}, argv)
 
-	// docker 同样支持
+	// docker 同样支持,extra args 追加在默认模板后。
 	argv, err = collector.BuildCommand(model.LogSourceTypeDocker, "nova-api", []string{"--tail", "100"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"docker", "logs", "-f", "nova-api", "--tail", "100"}, argv)
+	assert.Equal(t, []string{"docker", "logs", "-f", "--tail", "0", "nova-api", "--tail", "100"}, argv)
 
 	// 非法 arg（含空格注入字符）被拒绝
 	_, err = collector.BuildCommand(model.LogSourceTypeJournalctl, "nova-api", []string{"--since", "1h; rm -rf /"})

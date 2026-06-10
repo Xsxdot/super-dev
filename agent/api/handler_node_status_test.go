@@ -74,7 +74,7 @@ func TestWsNodeStatusReportsManagedRuntimeAndCollectors(t *testing.T) {
 	assert.Equal(t, "ali-01", status.Name)
 	assert.True(t, status.Reachable)
 	assert.Equal(t, model.AgentHealthHealthy, status.Agent.Health)
-	assert.Equal(t, "0.1.0", status.Agent.Version)
+	assert.Equal(t, agentAPIVersion, status.Agent.Version)
 	require.NotNil(t, status.Managed)
 	assert.Equal(t, 1, status.Managed.DeploymentCount)
 	require.Len(t, status.Deployments, 1)

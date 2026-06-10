@@ -95,7 +95,7 @@ func TestExecHealthReturnsVersion(t *testing.T) {
 	app.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Contains(t, rr.Body.String(), `"version":"0.1.0"`)
+	assert.Contains(t, rr.Body.String(), `"version":"`+agentAPIVersion+`"`)
 }
 
 func dialAppWebSocket(t *testing.T, app *App, path string) *websocket.Conn {
@@ -116,7 +116,10 @@ func dialAppWebSocket(t *testing.T, app *App, path string) *websocket.Conn {
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		// 这里只是防死锁兜底，不是性能断言：客户端读到 exit 消息后，
+		// 服务端还要经历 Execute 返回、handler 退出、ServeHTTP 收尾等
+		// 多次 goroutine 调度，高负载 CI 上 1 秒不够用，会随机超时。
+		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for in-memory websocket server")
 		}
 	})

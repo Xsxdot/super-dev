@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/xsxdot/super-dev/agent/internal/buildinfo"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
@@ -23,7 +24,7 @@ type execHealthResponse struct {
 	ProvisionState string `json:"provision_state,omitempty"`
 }
 
-const agentAPIVersion = "0.1.0"
+const agentAPIVersion = buildinfo.Version
 
 // wsExec 处理 GET /ws/exec，在 agent 本机执行一条命令并流式回传结果。
 //

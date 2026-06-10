@@ -30,7 +30,7 @@ defineProps<{
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
-const activeTab = ref<OverviewTab>('pipelines')
+const activeTab = ref<OverviewTab>('runtime')
 
 function openInstanceLogs(deploymentId: string) {
   const info = agentStore.serviceForDeployment(deploymentId)

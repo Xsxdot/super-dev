@@ -46,7 +46,7 @@ describe('ProjectOverviewPage', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders project name and pipelines tab by default', () => {
+  it('renders project name and runtime status tab by default', () => {
     const agent = useAgentStore()
     agent.projects = [{
       id: 'p1',
@@ -60,7 +60,8 @@ describe('ProjectOverviewPage', () => {
     const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('en-US')] } })
 
     expect(wrapper.text()).toContain('demo')
-    expect(wrapper.find('[data-test="pipelines-tab"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="runtime-tab"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pipelines-tab"]').exists()).toBe(false)
   })
 
   it('does not render standalone back chrome in the project overview first viewport', () => {
@@ -116,7 +117,7 @@ describe('ProjectOverviewPage', () => {
 
     expect(api.listProjects).toHaveBeenCalled()
     expect(wrapper.text()).toContain('demo')
-    expect(wrapper.find('[data-test="pipelines-tab"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="runtime-tab"]').exists()).toBe(true)
   })
 
   it('shows missing project state for unknown route id', () => {

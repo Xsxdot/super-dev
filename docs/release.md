@@ -30,6 +30,7 @@ v0.1.0
 The release manager must keep these files synchronized:
 
 - `VERSION`
+- `agent/internal/buildinfo/version.go`
 - `desktop/package.json`
 - `desktop/src-tauri/Cargo.toml`
 - `desktop/src-tauri/tauri.conf.json`
@@ -47,8 +48,9 @@ This prevents a release where the app bundle, package metadata, and repository v
 1. Confirm `main` is green in GitHub Actions.
 2. Update `VERSION`.
 3. Update `desktop/package.json`, `desktop/src-tauri/Cargo.toml`, and `desktop/src-tauri/tauri.conf.json` to match `VERSION`.
-4. Update `CHANGELOG.md`.
-5. Run local verification:
+4. Update `agent/internal/buildinfo/version.go` to match `VERSION`.
+5. Update `CHANGELOG.md`.
+6. Run local verification:
 
    ```bash
    node scripts/check-version.mjs
@@ -63,17 +65,17 @@ This prevents a release where the app bundle, package metadata, and repository v
    pnpm test
    ```
 
-6. Build release artifacts from a clean checkout.
-7. Sign and notarize macOS artifacts when signing credentials are available.
-8. Generate checksums for all published binaries and archives.
-9. Create an annotated tag:
+7. Build release artifacts from a clean checkout.
+8. Sign and notarize macOS artifacts when signing credentials are available.
+9. Generate checksums for all published binaries and archives.
+10. Create an annotated tag:
 
    ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   git push origin v0.1.0
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
    ```
 
-10. Create a GitHub Release with release notes, artifacts, and checksums.
+11. Create a GitHub Release with release notes, artifacts, and checksums.
 
 ## Release Notes
 

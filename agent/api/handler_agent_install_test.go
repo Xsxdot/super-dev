@@ -189,7 +189,7 @@ func TestAgentUpdateTargetReturnsBundledVersionAndConcurrency(t *testing.T) {
 	resp := httptestDo(t, app, http.MethodGet, "/api/agents/update-target", nil)
 
 	require.Equal(t, http.StatusOK, resp.Code)
-	assert.Contains(t, resp.Body.String(), `"version":"0.1.0"`)
+	assert.Contains(t, resp.Body.String(), `"version":"`+agentAPIVersion+`"`)
 	assert.Contains(t, resp.Body.String(), `"source":"bundled"`)
 	assert.Contains(t, resp.Body.String(), `"concurrency_default":3`)
 }
@@ -220,7 +220,7 @@ func TestUpdateAgentBinaryUsesHostSSHAndPreservesSecurity(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), `"ok":true`)
-	assert.Contains(t, resp.Body.String(), `"version":"0.1.0"`)
+	assert.Contains(t, resp.Body.String(), `"version":"`+agentAPIVersion+`"`)
 	assert.Contains(t, resp.Body.String(), `"updated_at":`)
 	assert.Equal(t, 1, fake.updateCalls)
 	assert.Equal(t, hostID, fake.updateHost.ID)

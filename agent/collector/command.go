@@ -143,23 +143,27 @@ func BuildCommand(t model.LogSourceType, name string, extraArgs []string) ([]str
 		if err := ValidateName(name); err != nil {
 			return nil, err
 		}
+		// journalctl -f 重启后只读取 journal 尾部窗口并继续 follow,不会全量回放历史日志。
 		base = []string{"journalctl", "-fu", name, "-o", "cat", "--no-pager"}
 	case model.LogSourceTypeMacOSLog:
 		if err := ValidateName(name); err != nil {
 			return nil, err
 		}
 		predicate := fmt.Sprintf(`subsystem == "%s" OR process == "%s" OR eventMessage CONTAINS[c] "%s"`, name, name, name)
+		// log stream 是实时流,collector 重建后从当前系统日志流继续,不读取历史日志。
 		base = []string{"log", "stream", "--style", "compact", "--predicate", predicate}
 	case model.LogSourceTypeDocker:
 		if err := ValidateName(name); err != nil {
 			return nil, err
 		}
-		base = []string{"docker", "logs", "-f", name}
+		// docker logs -f 默认会先输出容器全部历史日志;--tail 0 保证重启后只 follow 新日志。
+		base = []string{"docker", "logs", "-f", "--tail", "0", name}
 	case model.LogSourceTypeFileTail:
 		path, err := NormalizeFileTailPath(name)
 		if err != nil {
 			return nil, err
 		}
+		// tail -F 重启后读取文件尾部窗口并继续 follow,不会从文件开头全量回放。
 		base = []string{"tail", "-F", path}
 	case model.LogSourceTypeCommand:
 		if err := ValidateCommand(name); err != nil {

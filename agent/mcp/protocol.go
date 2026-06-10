@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/xsxdot/super-dev/agent/internal/buildinfo"
 )
 
 const protocolVersion = "2025-11-25"
@@ -89,7 +91,7 @@ func (s *Server) Handle(ctx context.Context, req rpcRequest) rpcResponse {
 			"serverInfo": map[string]any{
 				"name":    "superdev-mcp",
 				"title":   "SuperDev MCP",
-				"version": "0.1.0",
+				"version": buildinfo.Version,
 			},
 			"instructions": "Use SuperDev MCP tools to inspect runtime state, control deployments, and query logs through the local SuperDev agent.",
 		})

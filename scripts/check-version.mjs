@@ -26,11 +26,14 @@ const desktopPackage = readJSON('desktop/package.json');
 const tauriConfig = readJSON('desktop/src-tauri/tauri.conf.json');
 const cargoToml = readFileSync('desktop/src-tauri/Cargo.toml', 'utf8');
 const cargoVersion = cargoToml.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1];
+const agentBuildInfo = readFileSync('agent/internal/buildinfo/version.go', 'utf8');
+const agentVersion = agentBuildInfo.match(/^const Version = "([^"]+)"/m)?.[1];
 
 const checks = [
   ['desktop/package.json', desktopPackage.version],
   ['desktop/src-tauri/tauri.conf.json', tauriConfig.version],
   ['desktop/src-tauri/Cargo.toml', cargoVersion],
+  ['agent/internal/buildinfo/version.go', agentVersion],
 ];
 
 for (const [path, actual] of checks) {
