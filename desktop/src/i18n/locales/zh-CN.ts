@@ -1098,6 +1098,7 @@ export default {
       promoteTo: '提升到 {env}',
       confirm: '确认',
       cancel: '取消',
+      selectEnv: '选择部署环境',
       deployFailed: '部署失败',
       detail: '详情',
       historyTitle: '运行历史',

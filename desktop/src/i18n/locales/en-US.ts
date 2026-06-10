@@ -1098,6 +1098,7 @@ export default {
       promoteTo: 'Promote to {env}',
       confirm: 'Confirm',
       cancel: 'Cancel',
+      selectEnv: 'Select target environment',
       deployFailed: 'Deploy failed',
       detail: 'Detail',
       historyTitle: 'Run History',
