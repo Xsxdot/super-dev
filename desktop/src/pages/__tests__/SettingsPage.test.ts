@@ -16,6 +16,7 @@ import { nextTick } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import SettingsPage from '../SettingsPage.vue'
 import { useAgentStore } from '@/stores/agent'
+import { DISMISSED_KEY, useGettingStartedStore } from '@/stores/gettingStarted'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -166,7 +167,7 @@ describe('SettingsPage', () => {
     expect(wrapper.find('.settings-sidebar').exists()).toBe(true)
     expect(wrapper.find('.settings-main').exists()).toBe(true)
     expect(wrapper.find('.settings-pane').exists()).toBe(true)
-    expect(wrapper.findAll('.settings-row')).toHaveLength(5)
+    expect(wrapper.findAll('.settings-row')).toHaveLength(6)
     expect(wrapper.find('[data-test="retention-days"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="artifact-keep-versions"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="locale-select"]').classes()).toContain('settings-select')
@@ -439,5 +440,21 @@ describe('SettingsPage', () => {
     await wrapper.find('[data-test="rerun-onboarding"]').trigger('click')
 
     expect(wrapper.text()).toContain('首次引导')
+  })
+
+  it('通用页可重新打开侧边栏起步引导', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    localStorage.setItem(DISMISSED_KEY, 'true')
+    const gettingStarted = useGettingStartedStore()
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    await wrapper.find('[data-test="reopen-getting-started"]').trigger('click')
+
+    expect(gettingStarted.dismissed).toBe(false)
+    expect(localStorage.getItem(DISMISSED_KEY)).toBe('false')
   })
 })

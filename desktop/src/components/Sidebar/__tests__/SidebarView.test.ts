@@ -15,6 +15,8 @@ import { open, ask } from '@tauri-apps/plugin-dialog'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
 import { api, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { useGettingStartedStore } from '@/stores/gettingStarted'
+import { useSettingsStore } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 
@@ -42,6 +44,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
     api: {
       ...actual.api,
       getVscodeLaunch: vi.fn(),
+      listOperationAudit: vi.fn().mockResolvedValue({ events: [], count: 0 }),
     },
   }
 })
@@ -338,5 +341,65 @@ describe('SidebarView', () => {
     expect(buttons[1].find('.sidebar-tool-icon').exists()).toBe(true)
     expect(buttons[1].find('.sidebar-tool-main').text()).toBe('设置')
     expect(buttons[1].find('.sidebar-tool-hint').text()).toBe('偏好与管理')
+  })
+
+  it('onboarding 完成且有非 sample 本地部署时显示起步入口并标记 step2 完成', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      ...settings.agentSettings,
+      onboarding_completed: true,
+      sample_seeded: true,
+    }
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-local', 'My App', 'api')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flushPromises()
+
+    const entry = wrapper.find('[data-test="getting-started-entry"]')
+    expect(entry.exists()).toBe(true)
+    expect(entry.text()).toContain('起步 2/5')
+
+    await entry.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="getting-started-popover"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="step-step2"]').classes()).toContain('is-done')
+    expect(useGettingStartedStore().completedSteps.sort()).toEqual(['step0', 'step2'])
+  })
+
+  it('首次挂载时主线前三步已完成的老用户自动关闭起步入口', async () => {
+    vi.mocked(api.listOperationAudit).mockResolvedValueOnce({
+      events: [{
+        id: 'aud-1',
+        kind: 'runtime.restart',
+        action: 'approved',
+        plan: { id: 'plan-1', kind: 'runtime.restart', target: {}, risk_level: 'low', requires_approval: true, denied: false, fingerprint: 'fp-1' },
+        summary: 'operation approval approved',
+      }],
+      count: 1,
+    })
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      ...settings.agentSettings,
+      onboarding_completed: true,
+      sample_seeded: true,
+    }
+    const agent = useAgentStore()
+    agent.projects = [
+      projectWithService('sample', 'SuperDev Sample', 'sample-api'),
+      projectWithService('proj-local', 'My App', 'api'),
+    ]
+    agent.projects[0].root_path = '/tmp/superdev-sample'
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flushPromises()
+
+    expect(useGettingStartedStore().dismissed).toBe(true)
+    expect(wrapper.find('[data-test="getting-started-entry"]').exists()).toBe(false)
   })
 })

@@ -15,6 +15,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message, open } from '@tauri-apps/plugin-dialog'
 import { useAgentStore } from '@/stores/agent'
+import { useGettingStartedStore } from '@/stores/gettingStarted'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { usePipelineTemplateStore } from '@/stores/pipelineTemplate'
 import { useSettingsStore } from '@/stores/settings'
@@ -37,6 +38,7 @@ type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' |
 const route = useRoute()
 const router = useRouter()
 const agentStore = useAgentStore()
+const gettingStarted = useGettingStartedStore()
 const operationApprovalStore = useOperationApprovalStore()
 const pipelineTemplateStore = usePipelineTemplateStore()
 const settingsStore = useSettingsStore()
@@ -375,6 +377,20 @@ const artifactKeepVersions = computed({
               @click="router.push('/onboarding')"
             >
               {{ t('settings.general.onboardingAction') }}
+            </button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('gettingStarted.entryTitle') }}</div>
+              <div class="settings-row-description">{{ t('gettingStarted.entryHint') }}</div>
+            </div>
+            <button
+              class="settings-btn settings-btn-secondary"
+              data-test="reopen-getting-started"
+              type="button"
+              @click="gettingStarted.reopen()"
+            >
+              {{ t('gettingStarted.entryTitle') }}
             </button>
           </div>
         </div>

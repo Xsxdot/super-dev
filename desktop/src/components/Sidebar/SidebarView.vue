@@ -1,18 +1,32 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import {
+  COMPLETED_STEPS_KEY,
+  DISMISSED_KEY,
+  deriveDetection,
+  isSampleProject,
+  useGettingStartedStore,
+} from '@/stores/gettingStarted'
+import { useNodeStore } from '@/stores/node'
 import { usePanelStore } from '@/stores/panel'
+import { useSettingsStore } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAddProjectFlow } from '@/composables/useAddProjectFlow'
 import ProjectHeader from './ProjectHeader.vue'
 import EnvGroup from './EnvGroup.vue'
+import GettingStartedEntry from './GettingStartedEntry.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import type { Service } from '@/api/agent'
 import { useRouter } from 'vue-router'
 
 const agentStore = useAgentStore()
+const gettingStarted = useGettingStartedStore()
+const nodeStore = useNodeStore()
 const panelStore = usePanelStore()
+const settingsStore = useSettingsStore()
 const workspace = useWorkspaceStore()
 const router = useRouter()
 const { t } = useI18n()
@@ -27,6 +41,10 @@ const {
 const serviceQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const selectedProjectId = ref<string | null>(null)
+const step1ApprovedSample = ref(false)
+const legacyDismissPending = ref(
+  localStorage.getItem(COMPLETED_STEPS_KEY) === null && localStorage.getItem(DISMISSED_KEY) === null,
+)
 const selectedProject = computed(() =>
   agentStore.projects.find(project => project.id === selectedProjectId.value)
   ?? agentStore.projects[0]
@@ -45,6 +63,25 @@ watch(
     }
   },
   { immediate: true },
+)
+
+watch(
+  () => agentStore.projects.map(project => `${project.id}:${project.root_path}`).join('|'),
+  () => {
+    void checkSampleApproval()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [
+    agentStore.projects,
+    nodeStore.nodesList,
+    settingsStore.agentSettings,
+    step1ApprovedSample.value,
+  ],
+  () => runGettingStartedReconcile(),
+  { deep: true, immediate: true },
 )
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
@@ -66,6 +103,40 @@ function openProjectOverview(projectId: string) {
 
 function openNodeCenter() {
   workspace.openNodesTab()
+}
+
+async function checkSampleApproval() {
+  const sample = agentStore.projects.find(project => isSampleProject(project))
+  if (!sample) {
+    step1ApprovedSample.value = false
+    legacyDismissPending.value = false
+    return
+  }
+  try {
+    const audit = await api.listOperationAudit({ project_id: sample.id, limit: 50 })
+    step1ApprovedSample.value = (audit.events ?? []).some(event => event.action === 'approved')
+  } catch {
+    step1ApprovedSample.value = false
+  }
+  if (legacyDismissPending.value) {
+    runGettingStartedReconcile(true)
+    legacyDismissPending.value = false
+  }
+}
+
+function runGettingStartedReconcile(allowLegacyDismiss = false) {
+  const detection = deriveDetection({
+    onboardingCompleted: settingsStore.agentSettings.onboarding_completed === true,
+    sampleSeeded: settingsStore.agentSettings.sample_seeded === true,
+    projects: agentStore.projects,
+    nodes: nodeStore.nodesList,
+    step1ApprovedSample: step1ApprovedSample.value,
+  })
+  gettingStarted.reconcile(detection)
+  // 老用户首次升级时若主线前三步已完成，直接关闭入口，避免空降一个已走过的引导。
+  if (allowLegacyDismiss && detection.step0 && detection.step1 && detection.step2) {
+    gettingStarted.dismiss()
+  }
 }
 
 function servicesForEnv(services: Service[], envName: string): Service[] {
@@ -162,6 +233,7 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div class="sidebar-tools">
+      <GettingStartedEntry />
       <button
         type="button"
         class="sidebar-tool-button"
