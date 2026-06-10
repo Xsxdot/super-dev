@@ -24,6 +24,8 @@ desktop/src-tauri/target/
 # Local tooling
 .claude/
 .playwright-mcp/
+AGENTS.md
+agents.md
 
 # Manual UI test captures
 screenshot-*.png
@@ -34,6 +36,7 @@ superdev-product-audit/
 design-qa.md
 docs/model-redesign.md
 docs/superpowers/
+specs/
 
 # Private business/strategy docs (not for the open-source repo)
 docs/MONETIZATION.md
