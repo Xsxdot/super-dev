@@ -29,8 +29,9 @@ export const usePipelineTemplateStore = defineStore('pipelineTemplate', () => {
   }
 
   async function importTemplate(path: string) {
-    await api.importPipelineTemplate(path)
+    const imported = await api.importPipelineTemplate(path)
     await loadTemplates()
+    return imported
   }
 
   async function loadTemplateDetail(source: PipelineTemplateSummary['source'], id: string, version: string) {

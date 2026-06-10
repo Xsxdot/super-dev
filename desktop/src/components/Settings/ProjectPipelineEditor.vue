@@ -36,6 +36,7 @@ const props = defineProps<{
   pipelineTemplates?: PipelineTemplateSummary[]
   initialMode?: 'template' | 'blank'
   pipelineId?: string
+  onImportTemplate?: () => Promise<PipelineTemplateSummary | undefined>
 }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
 
@@ -399,6 +400,7 @@ async function save() {
               :initial-mode="initialMode"
               hide-preview-strip
               :on-view-template="viewTemplate"
+              :on-import-template="onImportTemplate"
               @update:pipeline="updateActivePipeline"
             />
           </div>

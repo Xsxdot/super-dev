@@ -97,10 +97,11 @@ async function importPipelineTemplate() {
   })
   if (!selected || Array.isArray(selected)) return
   try {
-    await pipelineTemplateStore.importTemplate(selected)
+    return await pipelineTemplateStore.importTemplate(selected)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await message(msg, { title: t('settings.templates.unableImport'), kind: 'error' })
+    return undefined
   }
 }
 
@@ -461,6 +462,7 @@ const retentionDays = computed({
       v-if="pipelineEditorProject"
       :project="pipelineEditorProject"
       :pipeline-templates="pipelineTemplateStore.templates"
+      :on-import-template="importPipelineTemplate"
       @saved="onPipelineEditorSaved"
       @cancel="pipelineEditorProject = null"
     />

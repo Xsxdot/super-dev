@@ -317,7 +317,14 @@ describe('SettingsPage', () => {
     vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
     const templateStore = usePipelineTemplateStore()
     vi.spyOn(templateStore, 'loadTemplates').mockResolvedValue(undefined)
-    const importTemplate = vi.spyOn(templateStore, 'importTemplate').mockResolvedValue(undefined)
+    const importTemplate = vi.spyOn(templateStore, 'importTemplate').mockResolvedValue({
+      source: 'user',
+      id: 'custom',
+      name: 'Custom',
+      category: 'build',
+      version: '1.0.0',
+      digest: 'sha256:custom',
+    })
     vi.mocked(open).mockResolvedValue('/tmp/custom.yaml')
 
     const wrapper = mountSettingsPage()

@@ -50,6 +50,7 @@ const props = defineProps<{
   pipelineRoles?: Record<string, ProjectPipelineRole>
   previewError?: string
   onViewTemplate?: (template: PipelineTemplateSummary, apply: () => void) => void
+  onImportTemplate?: () => Promise<PipelineTemplateSummary | undefined>
   initialMode?: 'template' | 'blank'
   hidePreviewStrip?: boolean
 }>()
@@ -149,12 +150,20 @@ function phaseIcon(phase: PipelinePhase) {
   return 'lucide:package'
 }
 
-function addBlock(phase: PipelinePhase) {
-  const block = { id: String(nextBlockId.value++), phase, selectedKey: '', vars: {}, targets: {}, runnerTargets: [] }
-  blocks.value.push(block)
+function createBlock(phase: PipelinePhase, selectedKey = ''): TemplateBlock {
+  return { id: String(nextBlockId.value++), phase, selectedKey, vars: {}, targets: {}, runnerTargets: [] }
+}
+
+function activateBlock(block: TemplateBlock) {
   activeBlockId.value = block.id
-  activePhase.value = phase
-  activeStation.value = phase
+  activePhase.value = block.phase
+  activeStation.value = block.phase
+}
+
+function addBlock(phase: PipelinePhase) {
+  const block = createBlock(phase)
+  blocks.value.push(block)
+  activateBlock(block)
 }
 
 function removeBlock(block: TemplateBlock) {
@@ -192,8 +201,7 @@ function dropBlock(target: TemplateBlock) {
   activeStation.value = source.phase
 }
 
-function resetBlockInputs(block: TemplateBlock) {
-  const template = selectedFor(block)
+function resetBlockInputsFromTemplate(block: TemplateBlock, template?: PipelineTemplateSummary) {
   block.vars = {}
   block.targets = {}
   for (const [name, input] of Object.entries(template?.inputs ?? {})) {
@@ -207,6 +215,29 @@ function resetBlockInputs(block: TemplateBlock) {
     }
     block.vars[name] = input.default ?? ''
   }
+}
+
+function resetBlockInputs(block: TemplateBlock) {
+  resetBlockInputsFromTemplate(block, selectedFor(block))
+}
+
+function phaseForImportedTemplate(template: PipelineTemplateSummary, fallback: PipelinePhase) {
+  if (templateFitsPhase(template, fallback)) return fallback
+  const category = templateCategory(template)
+  if (category === 'build') return 'build'
+  if (category === 'deploy') return 'deploy'
+  if (category === 'cleanup') return 'finally'
+  return fallback
+}
+
+async function importBlock(phase: PipelinePhase) {
+  const template = await props.onImportTemplate?.()
+  if (!template) return
+  const targetPhase = phaseForImportedTemplate(template, phase)
+  const block = createBlock(targetPhase, templateKey(template))
+  resetBlockInputsFromTemplate(block, template)
+  blocks.value.push(block)
+  activateBlock(block)
 }
 
 function runnerRoleKey(block: TemplateBlock) {
@@ -399,9 +430,7 @@ function removeFileItem(block: TemplateBlock, name: string, index: number) {
 }
 
 function selectBlock(block: TemplateBlock) {
-  activeBlockId.value = block.id
-  activePhase.value = block.phase
-  activeStation.value = block.phase
+  activateBlock(block)
 }
 
 function selectPhase(phase: PipelinePhase) {
@@ -520,9 +549,20 @@ defineExpose({ saveTemplate })
             <section :key="activePhase" class="phase-section">
               <header class="phase-head">
                 <span>{{ phaseDisplayLabel(activePhase) }} · {{ blocksForPhase(activePhase).length }} {{ t('settings.pipeline.stepCount') }}</span>
-                <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${activePhase}`" @click="addBlock(activePhase)">
-                  {{ t('settings.pipeline.addTemplate') }}
-                </button>
+                <div class="phase-actions">
+                  <button type="button" class="settings-btn settings-btn-text text-btn" :data-test="`add-template-${activePhase}`" @click="addBlock(activePhase)">
+                    {{ t('settings.pipeline.addTemplate') }}
+                  </button>
+                  <button
+                    v-if="onImportTemplate"
+                    type="button"
+                    class="settings-btn settings-btn-text text-btn"
+                    :data-test="`import-template-${activePhase}`"
+                    @click="importBlock(activePhase)"
+                  >
+                    {{ t('settings.pipeline.importTemplate') }}
+                  </button>
+                </div>
               </header>
 
               <div v-if="blocksForPhase(activePhase).length === 0" class="phase-empty">{{ t('settings.pipeline.noTemplate') }}</div>
@@ -904,7 +944,10 @@ defineExpose({ saveTemplate })
   border-top: 0;
 }
 .phase-head {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   min-height: 0;
   color: var(--text-primary);
   font-size: 13px;
@@ -915,8 +958,13 @@ defineExpose({ saveTemplate })
   font-size: 12px;
   font-weight: 500;
 }
+.phase-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .phase-head .text-btn {
-  float: right;
   color: #1f7bff;
 }
 .pipeline-disable,
@@ -1130,6 +1178,7 @@ defineExpose({ saveTemplate })
   overflow: hidden;
   border: 1px solid var(--border-secondary);
   border-radius: 5px;
+  padding-bottom: 8px;
   background: #121922;
 }
 .file-table-head {
@@ -1180,7 +1229,7 @@ defineExpose({ saveTemplate })
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin: 8px 0 2px 10px;
   color: #1f7bff;
 }
 .boolean-field {

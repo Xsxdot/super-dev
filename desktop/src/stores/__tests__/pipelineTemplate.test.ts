@@ -46,9 +46,10 @@ describe('pipelineTemplate store', () => {
     })
 
     const store = usePipelineTemplateStore()
-    await store.importTemplate('/tmp/custom-deploy.yaml')
+    const imported = await store.importTemplate('/tmp/custom-deploy.yaml')
 
     expect(importTemplate).toHaveBeenCalledWith('/tmp/custom-deploy.yaml')
+    expect(imported.id).toBe('custom-deploy')
     expect(store.templates[0].source).toBe('user')
   })
 
