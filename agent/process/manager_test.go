@@ -133,6 +133,36 @@ func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 	mgr.StopDeployment("dep-bg")
 }
 
+func TestManager_FailureLogIncludesStderrTail(t *testing.T) {
+	var logsMu sync.Mutex
+	var logs []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) {
+		logsMu.Lock()
+		logs = append(logs, e)
+		logsMu.Unlock()
+	})
+
+	require.NoError(t, mgr.StartProcess("dep-x", process.ProcessSpec{
+		Command: "echo faildetail 1>&2; exit 7",
+		WorkDir: t.TempDir(),
+	}))
+
+	require.Eventually(t, func() bool {
+		return mgr.Status("dep-x") == model.StatusFailed
+	}, 5*time.Second, 20*time.Millisecond)
+
+	logsMu.Lock()
+	defer logsMu.Unlock()
+	var joined strings.Builder
+	for _, e := range logs {
+		joined.WriteString(e.Message)
+		joined.WriteByte('\n')
+	}
+	output := joined.String()
+	assert.Contains(t, output, "退出码 7")
+	assert.Contains(t, output, "  | faildetail")
+}
+
 func TestManagerStartProcess(t *testing.T) {
 	var entriesMu sync.Mutex
 	var entries []model.LogEntry

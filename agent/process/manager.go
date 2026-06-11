@@ -28,7 +28,7 @@ type Manager struct {
 	mu          sync.Mutex
 	runners     map[string]*Runner
 	status      map[string]model.ServiceStatus
-	generations map[string]uint64 // 每次 Start 递增，防止旧监控 goroutine 覆盖新进程状态
+	generations map[string]uint64 // 每次 Start/Stop 递增，防止旧退出回调覆盖新进程状态
 	runtimes    map[string]model.RuntimeType
 	launchdDeps map[string]model.Deployment
 	onLog       func(model.LogEntry)
@@ -75,7 +75,7 @@ type ProcessSpec struct {
 //
 // 注意：
 //   - 进程未启动或已退出时调用为空操作
-//   - bumpGeneration 保证后台监控 goroutine 不会在 Stop 后把状态覆盖为 failed
+//   - bumpGeneration 保证旧退出回调不会在 Stop 后把状态覆盖为 failed
 func (m *Manager) Stop(serviceID string) {
 	m.bumpGeneration(serviceID)
 	m.mu.Lock()
@@ -293,15 +293,22 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 		m.mu.Unlock()
 		return nil
 	}
-	if _, ok := m.runners[id]; ok {
-		m.mu.Unlock()
-		return nil
+	if old, ok := m.runners[id]; ok {
+		if old.ProcessGroupAlive() {
+			m.mu.Unlock()
+			return nil
+		}
+		delete(m.runners, id)
+		delete(m.runtimes, id)
+		delete(m.launchdDeps, id)
 	}
 	m.mu.Unlock()
 
 	m.setStatus(id, model.StatusStarting)
+	gen := m.bumpGeneration(id)
 
-	r := NewRunner(RunnerConfig{
+	var r *Runner
+	r = NewRunner(RunnerConfig{
 		Command: spec.Command,
 		WorkDir: spec.WorkDir,
 		Env:     spec.Env,
@@ -320,38 +327,91 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 				Stream:       stream,
 			})
 		},
+		OnExit: func(info ExitInfo) {
+			m.handleRunnerExit(id, r, gen, info)
+		},
 	})
-
-	if err := r.Start(); err != nil {
-		m.setStatus(id, model.StatusFailed)
-		m.emitLog(id, "ERROR", "stderr", "启动失败: "+err.Error())
-		return err
-	}
 
 	m.mu.Lock()
 	m.runners[id] = r
 	m.mu.Unlock()
-	m.setStatus(id, model.StatusRunning)
 
-	gen := m.bumpGeneration(id)
-	go func() {
-		for r.IsRunning() {
-			time.Sleep(200 * time.Millisecond)
+	if err := r.Start(); err != nil {
+		info, ok := r.ExitInfo()
+		if !ok {
+			info = ExitInfo{Reason: ExitReasonStartFailed, ExitCode: -1, Error: err.Error()}
 		}
-		if m.generation(id) != gen {
-			return
+		m.mu.Lock()
+		if m.runners[id] == r {
+			delete(m.runners, id)
+			delete(m.runtimes, id)
+			delete(m.launchdDeps, id)
+			m.status[id] = model.StatusFailed
 		}
-		exitCode := r.ExitCode()
-		if exitCode != 0 {
-			m.setStatus(id, model.StatusFailed)
-			m.emitLog(id, "ERROR", "stderr",
-				fmt.Sprintf("进程异常退出，退出码 %d", exitCode))
-		} else {
-			m.setStatus(id, model.StatusStopped)
-		}
-	}()
+		m.mu.Unlock()
+		m.emitStartFailure(id, info)
+		return err
+	}
+
+	if r.ProcessGroupAlive() {
+		m.setStatus(id, model.StatusRunning)
+	}
 
 	return nil
+}
+
+// handleRunnerExit 处理 Runner 的唯一 Wait 结果。
+//
+// 如果 shell 已退出但进程组仍有后台子进程存活，状态保持 running；
+// 只有进程组整体死亡时，才根据 ExitInfo 翻 stopped/failed 并清理 runner。
+func (m *Manager) handleRunnerExit(id string, r *Runner, gen uint64, info ExitInfo) {
+	if m.generation(id) != gen {
+		return
+	}
+	groupAlive := r.ProcessGroupAlive()
+
+	var failed bool
+	m.mu.Lock()
+	if m.runners[id] != r {
+		m.mu.Unlock()
+		return
+	}
+	if groupAlive {
+		m.status[id] = model.StatusRunning
+		m.mu.Unlock()
+		return
+	}
+	delete(m.runners, id)
+	delete(m.runtimes, id)
+	delete(m.launchdDeps, id)
+	failed = info.ExitCode != 0 || info.Signaled
+	if failed {
+		m.status[id] = model.StatusFailed
+	} else {
+		m.status[id] = model.StatusStopped
+	}
+	m.mu.Unlock()
+
+	if failed {
+		m.emitExitFailure(id, info)
+	}
+}
+
+// emitStartFailure 发出启动失败事件：命令未成功 spawn，没有 exit code。
+func (m *Manager) emitStartFailure(id string, info ExitInfo) {
+	m.emitLog(id, "ERROR", "stderr", "启动失败: "+info.Error)
+}
+
+// emitExitFailure 发出带结构化证据的失败日志：退出码或信号 + stderr 尾部。
+func (m *Manager) emitExitFailure(id string, info ExitInfo) {
+	if info.Signaled {
+		m.emitLog(id, "ERROR", "stderr", fmt.Sprintf("进程被信号终止：%s", info.Signal))
+	} else {
+		m.emitLog(id, "ERROR", "stderr", fmt.Sprintf("进程异常退出，退出码 %d", info.ExitCode))
+	}
+	for _, line := range info.StderrTail {
+		m.emitLog(id, "ERROR", "stderr", "  | "+line)
+	}
 }
 
 // deploymentToSpec 将 Deployment 字段映射为 ProcessSpec。
