@@ -10,10 +10,13 @@
 package configchange
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 
+	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -75,13 +78,13 @@ func validateServices(project model.Project) []string {
 		}
 		seen[name] = true
 		for _, dep := range svc.Deployments {
-			errs = append(errs, validateDeployment(name, dep, envs)...)
+			errs = append(errs, validateDeployment(project.RootPath, name, dep, envs)...)
 		}
 	}
 	return errs
 }
 
-func validateDeployment(serviceName string, dep model.Deployment, envs map[string]bool) []string {
+func validateDeployment(projectRoot, serviceName string, dep model.Deployment, envs map[string]bool) []string {
 	var errs []string
 	envName := strings.TrimSpace(dep.EnvName)
 	if envName == "" {
@@ -99,6 +102,7 @@ func validateDeployment(serviceName string, dep model.Deployment, envs map[strin
 		errs = append(errs, fmt.Sprintf("service %s deployment %s monitor mode cannot declare start or stop commands", serviceName, envName))
 	}
 	errs = append(errs, validateDeploymentWebConfig(dep)...)
+	errs = append(errs, validateDeploymentCodeDebugConfig(projectRoot, serviceName, dep)...)
 	return errs
 }
 
@@ -130,6 +134,113 @@ func validateDeploymentWebConfig(dep model.Deployment) []string {
 		errs = append(errs, "web.url must point to localhost, 127.0.0.1, or [::1]")
 	}
 	return errs
+}
+
+func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep model.Deployment) []string {
+	if dep.CodeDebug == nil || !dep.CodeDebug.Enabled {
+		return nil
+	}
+	var errs []string
+	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || deploymentRuntimeType(dep) != model.RuntimeTypeCommand {
+		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed command deployments only", serviceName, dep.EnvName))
+	}
+	switch dep.CodeDebug.Provider {
+	case "", model.CodeDebugProviderGo, model.CodeDebugProviderPython, model.CodeDebugProviderNode:
+	default:
+		errs = append(errs, "code_debug.provider must be go, python, or node")
+	}
+	switch dep.CodeDebug.Mode {
+	case "", model.CodeDebugModeLaunch:
+	default:
+		errs = append(errs, "code_debug.mode must be launch")
+	}
+	provider := dep.CodeDebug.Provider
+	if provider == "" {
+		provider = codedebug.InferProvider(deploymentCommand(dep))
+	}
+	if provider == model.CodeDebugProviderNode && strings.TrimSpace(dep.CodeDebug.AdapterCommand) == "" {
+		errs = append(errs, "code_debug.adapter_command is required for experimental node provider")
+	}
+	if pathErr := validateCodeDebugProgramPath(projectRoot, provider, dep); pathErr != "" {
+		errs = append(errs, pathErr)
+	}
+	if pathErr := validateCodeDebugWorkingDirPath(projectRoot, dep); pathErr != "" {
+		errs = append(errs, pathErr)
+	}
+	return errs
+}
+
+func validateCodeDebugProgramPath(projectRoot string, provider model.CodeDebugProvider, dep model.Deployment) string {
+	program := strings.TrimSpace(dep.CodeDebug.Program)
+	explicit := program != ""
+	if !explicit {
+		inferred, err := codedebug.DefaultProgramForProvider(provider, deploymentCommand(dep))
+		if err != nil {
+			if provider == model.CodeDebugProviderPython || provider == model.CodeDebugProviderNode {
+				return "code_debug.program is required when it cannot be inferred from a simple command"
+			}
+			return ""
+		}
+		program = inferred
+	}
+	candidate := program
+	if !explicit && !filepath.IsAbs(program) {
+		if workingDir, err := resolvedCodeDebugWorkingDir(projectRoot, dep); err == nil && workingDir != "" {
+			candidate = filepath.Join(workingDir, program)
+		}
+	}
+	if err := validateCodeDebugPathInsideRoot(projectRoot, candidate); err != nil {
+		if errors.Is(err, codedebug.ErrPathOutsideProject) {
+			return "code_debug.program must be inside project root"
+		}
+		return "code_debug.program requires a valid project root"
+	}
+	return ""
+}
+
+func validateCodeDebugWorkingDirPath(projectRoot string, dep model.Deployment) string {
+	workingDir := codeDebugWorkingDir(dep)
+	if workingDir == "" {
+		return ""
+	}
+	if err := validateCodeDebugPathInsideRoot(projectRoot, workingDir); err != nil {
+		if errors.Is(err, codedebug.ErrPathOutsideProject) {
+			return "code_debug.working_dir must be inside project root"
+		}
+		return "code_debug.working_dir requires a valid project root"
+	}
+	return ""
+}
+
+func resolvedCodeDebugWorkingDir(projectRoot string, dep model.Deployment) (string, error) {
+	workingDir := codeDebugWorkingDir(dep)
+	if workingDir == "" {
+		return projectRoot, nil
+	}
+	return codedebug.ResolveInsideRoot(projectRoot, workingDir)
+}
+
+func codeDebugWorkingDir(dep model.Deployment) string {
+	workingDir := strings.TrimSpace(dep.CodeDebug.WorkingDir)
+	if workingDir != "" {
+		return workingDir
+	}
+	if dep.Runtime != nil && strings.TrimSpace(dep.Runtime.WorkingDir) != "" {
+		return strings.TrimSpace(dep.Runtime.WorkingDir)
+	}
+	return strings.TrimSpace(dep.WorkDir)
+}
+
+func validateCodeDebugPathInsideRoot(projectRoot, value string) error {
+	_, err := codedebug.ResolveInsideRoot(projectRoot, value)
+	return err
+}
+
+func deploymentRuntimeType(dep model.Deployment) model.RuntimeType {
+	if dep.Runtime != nil && dep.Runtime.Type != "" {
+		return dep.Runtime.Type
+	}
+	return model.RuntimeTypeCommand
 }
 
 func validateProjectPipelines(project model.Project) []string {

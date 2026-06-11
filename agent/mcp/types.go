@@ -181,6 +181,84 @@ type BrowserEvaluateResult struct {
 	Result    any    `json:"result"`
 }
 
+// CodeDebugTarget 描述可由 AI 打开的本机代码调试目标。
+type CodeDebugTarget struct {
+	ProjectID    string `json:"project_id"`
+	ProjectName  string `json:"project_name"`
+	RootPath     string `json:"root_path"`
+	ServiceID    string `json:"service_id"`
+	ServiceName  string `json:"service_name"`
+	DeploymentID string `json:"deployment_id"`
+	EnvName      string `json:"env_name"`
+	Provider     string `json:"provider"`
+	Experimental bool   `json:"experimental,omitempty"`
+	Command      string `json:"command,omitempty"`
+	WorkDir      string `json:"work_dir,omitempty"`
+	Enabled      bool   `json:"enabled"`
+}
+
+// CodeDebugSession 描述由 SuperDev 创建的代码调试会话。
+type CodeDebugSession struct {
+	ID           string `json:"session_id"`
+	ProjectID    string `json:"project_id"`
+	DeploymentID string `json:"deployment_id"`
+	Provider     string `json:"provider"`
+	AdapterPort  int    `json:"adapter_port"`
+	ProcessID    int    `json:"process_id,omitempty"`
+	Alive        bool   `json:"alive"`
+	Closed       bool   `json:"closed,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// OpenCodeDebugSessionRequest 描述打开代码调试会话的 MCP 请求。
+type OpenCodeDebugSessionRequest struct {
+	DeploymentID        string `json:"deployment_id"`
+	Provider            string `json:"provider,omitempty"`
+	ApprovalToken       string `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
+}
+
+// DebugBreakpointRequest 描述代码调试断点设置请求。
+type DebugBreakpointRequest struct {
+	SessionID string `json:"session_id"`
+	Source    string `json:"source"`
+	Lines     []int  `json:"lines"`
+}
+
+// DebugEvaluateRequest 描述代码调试表达式求值请求。
+type DebugEvaluateRequest struct {
+	SessionID           string `json:"session_id"`
+	Expression          string `json:"expression"`
+	FrameID             int    `json:"frame_id,omitempty"`
+	Source              string `json:"source,omitempty"`
+	ApprovalToken       string `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
+}
+
+// DebugCaptureAtRequest 描述 stop-at-line 并采集现场的复合请求。
+type DebugCaptureAtRequest struct {
+	SessionID           string   `json:"session_id,omitempty"`
+	DeploymentID        string   `json:"deployment_id,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
+	Source              string   `json:"source"`
+	Line                int      `json:"line"`
+	ThreadID            int      `json:"thread_id,omitempty"`
+	TimeoutMilliseconds int      `json:"timeout_ms,omitempty"`
+	MaxVariables        int      `json:"max_variables,omitempty"`
+	VariableNames       []string `json:"variable_names,omitempty"`
+	ApprovalToken       string   `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int     `json:"approval_wait_seconds,omitempty"`
+}
+
+// DebugInspectRequest 描述读取已暂停代码调试会话现场的复合请求。
+type DebugInspectRequest struct {
+	SessionID     string   `json:"session_id"`
+	ThreadID      int      `json:"thread_id,omitempty"`
+	FrameID       int      `json:"frame_id,omitempty"`
+	MaxVariables  int      `json:"max_variables,omitempty"`
+	VariableNames []string `json:"variable_names,omitempty"`
+}
+
 // BrowserSnapshotRequest 描述页面快照请求。
 type BrowserSnapshotRequest struct {
 	SessionID   string `json:"session_id"`

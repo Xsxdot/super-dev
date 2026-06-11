@@ -27,6 +27,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/browsercontrol"
 	"github.com/xsxdot/super-dev/agent/browserdebug"
+	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/debugsession"
@@ -75,6 +76,8 @@ type AppConfig struct {
 	ManagedDeploymentReconcileInterval time.Duration
 	// DebugBrowserCandidates 注入本机浏览器探测候选，仅用于测试或嵌入式发行定制。
 	DebugBrowserCandidates []browserdebug.BrowserCandidate
+	// CodeDebugManagerOverride 注入代码调试 manager，仅用于测试。
+	CodeDebugManagerOverride *codedebug.Manager
 	// BootstrapToken 是远端 agent 首次安全自举的一次性 token。
 	BootstrapToken string
 	// RequireAuth 控制 agent API 是否必须完成安全自举后才允许访问。
@@ -156,6 +159,8 @@ type App struct {
 	operationGrace operation.GraceStore
 	// browserDebug 管理由 SuperDev 创建的本机浏览器调试会话。
 	browserDebug *browserdebug.Manager
+	// codeDebug 管理由 SuperDev 创建的本机代码调试会话。
+	codeDebug *codedebug.Manager
 	// debugBrowserCandidates 保存本机浏览器自动探测候选。
 	debugBrowserCandidates []browserdebug.BrowserCandidate
 	// browserControl 通过 Playwright 控制已创建的浏览器调试会话。
@@ -286,6 +291,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Launch:     browserdebug.NewChromiumLauncher(browserProfileRoot, http.DefaultClient),
 		SessionTTL: browserTTL,
 	})
+	codeDebug := cfg.CodeDebugManagerOverride
+	if codeDebug == nil {
+		codeDebug = codedebug.NewManager(codedebug.ManagerOptions{SessionTTL: 30 * time.Minute})
+	}
 	browserControl := browsercontrol.NewPlaywrightController(filepath.Join(cfg.DataDir, "playwright-driver"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	targetSource := agentTargetSource(remoteStore, agentStore)
@@ -378,6 +387,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		operationAudit:              operationAudit,
 		operationGrace:              operationGrace,
 		browserDebug:                browserDebug,
+		codeDebug:                   codeDebug,
 		debugBrowserCandidates:      cfg.DebugBrowserCandidates,
 		browserControl:              browserControl,
 		securityStore:               securityStore,
@@ -566,6 +576,25 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/browser-sessions/{id}/console-logs", a.browserSessionConsoleLogs)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/network-requests", a.browserSessionNetworkRequests)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/evaluate", a.browserSessionEvaluate)
+
+	// Code debug sessions（本机后端代码调试）
+	mux.HandleFunc("GET /api/code-debug-targets", a.listCodeDebugTargets)
+	mux.HandleFunc("GET /api/code-debug-sessions", a.listCodeDebugSessions)
+	mux.HandleFunc("POST /api/code-debug-sessions", a.openCodeDebugSession)
+	mux.HandleFunc("GET /api/code-debug-sessions/{id}", a.getCodeDebugSession)
+	mux.HandleFunc("DELETE /api/code-debug-sessions/{id}", a.closeCodeDebugSession)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/breakpoints", a.setCodeDebugBreakpoints)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/continue", a.codeDebugContinue)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/pause", a.codeDebugPause)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/step-over", a.codeDebugStepOver)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/step-in", a.codeDebugStepIn)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/step-out", a.codeDebugStepOut)
+	mux.HandleFunc("GET /api/code-debug-sessions/{id}/stack", a.codeDebugStackTrace)
+	mux.HandleFunc("GET /api/code-debug-sessions/{id}/scopes", a.codeDebugScopes)
+	mux.HandleFunc("GET /api/code-debug-sessions/{id}/variables", a.codeDebugVariables)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/evaluate", a.codeDebugEvaluate)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/capture-at", a.codeDebugCaptureAt)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/inspect", a.codeDebugInspect)
 
 	// Operation safety（本机写操作预检、审批与审计）
 	mux.HandleFunc("POST /api/operations/preflight", a.preflightOperation)

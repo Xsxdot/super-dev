@@ -32,6 +32,10 @@ const (
 	OperationRuntimeStartSelected = "runtime.start_selected"
 	// OperationBrowserDebugOpen 表示打开本机浏览器调试会话。
 	OperationBrowserDebugOpen = "browser_debug.open"
+	// OperationCodeDebugOpen 表示打开本机代码调试会话。
+	OperationCodeDebugOpen = "code_debug.open"
+	// OperationCodeDebugEvaluate 表示在代码调试会话中执行表达式求值。
+	OperationCodeDebugEvaluate = "code_debug.evaluate"
 	// OperationBrowserDebugControl 表示在已打开调试会话上执行页面控制动作。
 	//
 	// 注意：
@@ -119,6 +123,7 @@ type Target struct {
 	TemplatePath   string `json:"template_path,omitempty"`
 	TemplateDigest string `json:"template_digest,omitempty"`
 	PipelineID     string `json:"pipeline_id,omitempty"`
+	DebugSessionID string `json:"debug_session_id,omitempty"`
 }
 
 // Check 描述预检中的一个可解释检查项。
@@ -159,6 +164,15 @@ type TemplateImportRequest struct {
 	Path    string
 	Digest  string
 	Summary TemplateSummary
+}
+
+// CodeDebugEvaluateRequest 描述代码调试 evaluate 的安全预检输入。
+type CodeDebugEvaluateRequest struct {
+	ProjectID      string
+	ProjectName    string
+	DeploymentID   string
+	DebugSessionID string
+	ExpressionHash string
 }
 
 // Approval 记录一条需要用户决策的 operation 请求。

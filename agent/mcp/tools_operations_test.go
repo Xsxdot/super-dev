@@ -32,6 +32,18 @@ func TestPreviewOperationToolReturnsPlan(t *testing.T) {
 	assert.Equal(t, "op_1", payload.Data.(map[string]any)["plan"].(OperationPlan).ID)
 }
 
+func TestPreviewOperationSchemaIncludesCodeDebugKinds(t *testing.T) {
+	server := NewServer(&fakeAgentClient{})
+	schema := server.tools["preview_operation"].Tool.InputSchema
+	properties := schema["properties"].(map[string]any)
+	kind := properties["kind"].(map[string]any)
+
+	assert.Contains(t, kind["enum"], "code_debug.open")
+	assert.Contains(t, kind["enum"], "code_debug.evaluate")
+	assert.Contains(t, properties, "debug_session_id")
+	assert.Contains(t, properties, "expression_hash")
+}
+
 func TestGetOperationApprovalReturnsTokenWhenApproved(t *testing.T) {
 	client := &fakeAgentClient{
 		operationApprovalDetail: OperationApprovalDetail{

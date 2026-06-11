@@ -125,6 +125,54 @@ func TestSaveAndReload(t *testing.T) {
 	assert.Equal(t, []string{"api"}, loaded.EnvSelectedServiceIDs["dev"])
 }
 
+func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
+	dir := t.TempDir()
+	project := model.Project{
+		Name:     "debug-demo",
+		RootPath: dir,
+		Environments: []model.Environment{{
+			Name:  "dev",
+			IsDev: true,
+		}},
+		Services: []model.Service{{
+			Name: "api",
+			Deployments: []model.Deployment{{
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "go run ./cmd/api",
+				WorkDir:     dir,
+				CodeDebug: &model.CodeDebugConfig{
+					Enabled:     true,
+					Provider:    model.CodeDebugProviderGo,
+					Mode:        model.CodeDebugModeLaunch,
+					Program:     "./cmd/api",
+					Args:        []string{"--port", "18080"},
+					WorkingDir:  ".",
+					EnvVars:     map[string]string{"LOG_LEVEL": "debug"},
+					StopOnEntry: true,
+				},
+			}},
+		}},
+	}
+
+	loader := config.NewLoader(dir)
+	require.NoError(t, loader.Save(project))
+	loaded, err := loader.Load()
+	require.NoError(t, err)
+
+	got := loaded.Services[0].Deployments[0].CodeDebug
+	require.NotNil(t, got)
+	assert.True(t, got.Enabled)
+	assert.Equal(t, model.CodeDebugProviderGo, got.Provider)
+	assert.Equal(t, model.CodeDebugModeLaunch, got.Mode)
+	assert.Equal(t, "./cmd/api", got.Program)
+	assert.Equal(t, []string{"--port", "18080"}, got.Args)
+	assert.Equal(t, ".", got.WorkingDir)
+	assert.Equal(t, map[string]string{"LOG_LEVEL": "debug"}, got.EnvVars)
+	assert.True(t, got.StopOnEntry)
+}
+
 func TestSaveLogRules(t *testing.T) {
 	dir := t.TempDir()
 	loader := config.NewLoader(dir)

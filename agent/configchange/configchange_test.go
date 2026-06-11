@@ -113,6 +113,105 @@ func TestServiceUpsertRejectsRemoteWebDebugV1(t *testing.T) {
 	assert.Contains(t, strings.Join(result.Errors, "; "), "local deployments only")
 }
 
+func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:           "dep-api-dev",
+		EnvName:      "dev",
+		Location:     model.LocationRemote,
+		ControlMode:  model.ControlModeManaged,
+		HostIDs:      []string{"h1"},
+		StartCommand: "systemctl start api",
+		StopCommand:  "systemctl stop api",
+		CodeDebug: &model.CodeDebugConfig{
+			Enabled:  true,
+			Provider: model.CodeDebugProviderGo,
+			Mode:     model.CodeDebugModeLaunch,
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed command deployments only")
+}
+
+func TestValidateCodeDebugRejectsUnsupportedProvider(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:  true,
+		Provider: model.CodeDebugProvider("ruby"),
+		Mode:     model.CodeDebugModeLaunch,
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.provider must be go, python, or node")
+}
+
+func TestValidateCodeDebugRejectsProgramOutsideProjectRoot(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:  true,
+		Provider: model.CodeDebugProviderPython,
+		Mode:     model.CodeDebugModeLaunch,
+		Program:  "../outside.py",
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.program must be inside project root")
+}
+
+func TestValidateCodeDebugRejectsWorkingDirOutsideProjectRoot(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:    true,
+		Provider:   model.CodeDebugProviderGo,
+		Mode:       model.CodeDebugModeLaunch,
+		Program:    ".",
+		WorkingDir: "../outside",
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.working_dir must be inside project root")
+}
+
+func TestValidateCodeDebugAllowsInferredProgramRelativeToWorkingDir(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].Command = "python ../app.py"
+	project.Services[0].Deployments[0].WorkDir = "server"
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:  true,
+		Provider: model.CodeDebugProviderPython,
+		Mode:     model.CodeDebugModeLaunch,
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.True(t, result.OK, result.Errors)
+}
+
+func TestValidateCodeDebugRequiresNodeAdapterCommand(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].Command = "node server.js"
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:  true,
+		Provider: model.CodeDebugProviderNode,
+		Mode:     model.CodeDebugModeLaunch,
+		Program:  "server.js",
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.adapter_command is required for experimental node provider")
+}
+
 func TestApplyChangeUpsertsProjectPipelineAndPreservesOthers(t *testing.T) {
 	project := sampleProject()
 	change := ChangeRequest{

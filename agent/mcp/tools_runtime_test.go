@@ -83,6 +83,13 @@ type fakeAgentClient struct {
 	browserConsoleLogs         BrowserConsoleLogsResult
 	browserNetworkRequests     BrowserNetworkRequestsResult
 	browserEvaluate            BrowserEvaluateResult
+	codeDebugTargets           []CodeDebugTarget
+	codeDebugSessions          []CodeDebugSession
+	codeDebugSession           CodeDebugSession
+	codeDebugActionResult      map[string]any
+	codeDebugEvaluateResult    map[string]any
+	codeDebugCaptureResult     map[string]any
+	codeDebugInspectResult     map[string]any
 	lastBrowserOpen            OpenBrowserSessionRequest
 	lastBrowserSnapshot        BrowserSnapshotRequest
 	lastBrowserClick           BrowserClickRequest
@@ -97,6 +104,15 @@ type fakeAgentClient struct {
 	lastBrowserNetworkRequests BrowserNetworkRequestsRequest
 	lastBrowserEvaluate        BrowserEvaluateRequest
 	closedBrowserSession       string
+	lastCodeDebugOpen          OpenCodeDebugSessionRequest
+	lastBreakpoint             DebugBreakpointRequest
+	lastDebugActionSessionID   string
+	lastDebugAction            string
+	lastDebugActionBody        map[string]any
+	lastEvaluate               DebugEvaluateRequest
+	lastCaptureAt              DebugCaptureAtRequest
+	lastInspect                DebugInspectRequest
+	closedCodeDebugSession     string
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -365,6 +381,54 @@ func (f *fakeAgentClient) BrowserNetworkRequests(_ context.Context, req BrowserN
 func (f *fakeAgentClient) BrowserEvaluate(_ context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
 	f.lastBrowserEvaluate = req
 	return f.browserEvaluate, nil
+}
+
+func (f *fakeAgentClient) ListCodeDebugTargets(context.Context) ([]CodeDebugTarget, error) {
+	return f.codeDebugTargets, nil
+}
+
+func (f *fakeAgentClient) ListCodeDebugSessions(context.Context) ([]CodeDebugSession, error) {
+	return f.codeDebugSessions, nil
+}
+
+func (f *fakeAgentClient) OpenCodeDebugSession(_ context.Context, req OpenCodeDebugSessionRequest, approvalToken string) (CodeDebugSession, error) {
+	f.lastCodeDebugOpen = req
+	f.lastApprovalToken = approvalToken
+	return f.codeDebugSession, nil
+}
+
+func (f *fakeAgentClient) CloseCodeDebugSession(_ context.Context, sessionID string) error {
+	f.closedCodeDebugSession = sessionID
+	return nil
+}
+
+func (f *fakeAgentClient) SetCodeDebugBreakpoints(_ context.Context, req DebugBreakpointRequest) (map[string]any, error) {
+	f.lastBreakpoint = req
+	return f.codeDebugActionResult, nil
+}
+
+func (f *fakeAgentClient) CodeDebugAction(_ context.Context, sessionID string, action string, body map[string]any) (map[string]any, error) {
+	f.lastDebugActionSessionID = sessionID
+	f.lastDebugAction = action
+	f.lastDebugActionBody = body
+	return f.codeDebugActionResult, nil
+}
+
+func (f *fakeAgentClient) CodeDebugEvaluate(_ context.Context, req DebugEvaluateRequest, approvalToken string) (map[string]any, error) {
+	f.lastEvaluate = req
+	f.lastApprovalToken = approvalToken
+	return f.codeDebugEvaluateResult, nil
+}
+
+func (f *fakeAgentClient) CodeDebugCaptureAt(_ context.Context, req DebugCaptureAtRequest, approvalToken string) (map[string]any, error) {
+	f.lastCaptureAt = req
+	f.lastApprovalToken = approvalToken
+	return f.codeDebugCaptureResult, nil
+}
+
+func (f *fakeAgentClient) CodeDebugInspect(_ context.Context, req DebugInspectRequest) (map[string]any, error) {
+	f.lastInspect = req
+	return f.codeDebugInspectResult, nil
 }
 
 func (f *fakeAgentClient) ListPipelineRuns(context.Context, string, string) ([]model.Run, error) {

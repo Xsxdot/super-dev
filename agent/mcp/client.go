@@ -113,6 +113,24 @@ type AgentClient interface {
 	BrowserNetworkRequests(context.Context, BrowserNetworkRequestsRequest) (BrowserNetworkRequestsResult, error)
 	// BrowserEvaluate 执行浏览器页面 JavaScript。
 	BrowserEvaluate(context.Context, BrowserEvaluateRequest) (BrowserEvaluateResult, error)
+	// ListCodeDebugTargets 查询可打开的本机代码调试目标。
+	ListCodeDebugTargets(context.Context) ([]CodeDebugTarget, error)
+	// ListCodeDebugSessions 查询代码调试会话列表。
+	ListCodeDebugSessions(context.Context) ([]CodeDebugSession, error)
+	// OpenCodeDebugSession 创建本机代码调试会话。
+	OpenCodeDebugSession(context.Context, OpenCodeDebugSessionRequest, string) (CodeDebugSession, error)
+	// CloseCodeDebugSession 关闭代码调试会话。
+	CloseCodeDebugSession(context.Context, string) error
+	// SetCodeDebugBreakpoints 设置代码调试断点。
+	SetCodeDebugBreakpoints(context.Context, DebugBreakpointRequest) (map[string]any, error)
+	// CodeDebugAction 执行非 evaluate 的代码调试动作。
+	CodeDebugAction(context.Context, string, string, map[string]any) (map[string]any, error)
+	// CodeDebugEvaluate 执行代码调试表达式求值。
+	CodeDebugEvaluate(context.Context, DebugEvaluateRequest, string) (map[string]any, error)
+	// CodeDebugCaptureAt 执行 stop-at-line 复合采集。
+	CodeDebugCaptureAt(context.Context, DebugCaptureAtRequest, string) (map[string]any, error)
+	// CodeDebugInspect 执行已暂停会话复合读取。
+	CodeDebugInspect(context.Context, DebugInspectRequest) (map[string]any, error)
 	// ListPipelineRuns 查询项目级 pipeline 执行历史。
 	ListPipelineRuns(context.Context, string, string) ([]model.Run, error)
 	// ListPipelineArtifacts 查询项目级 pipeline 制品历史。
@@ -660,6 +678,124 @@ func (c *HTTPAgentClient) BrowserEvaluate(ctx context.Context, req BrowserEvalua
 	var out BrowserEvaluateResult
 	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/evaluate"
 	return out, c.post(ctx, path, req, &out)
+}
+
+// ListCodeDebugTargets 查询可打开的本机代码调试目标。
+func (c *HTTPAgentClient) ListCodeDebugTargets(ctx context.Context) ([]CodeDebugTarget, error) {
+	var out []CodeDebugTarget
+	return out, c.get(ctx, "/api/code-debug-targets", &out)
+}
+
+// ListCodeDebugSessions 查询代码调试会话列表。
+func (c *HTTPAgentClient) ListCodeDebugSessions(ctx context.Context) ([]CodeDebugSession, error) {
+	var out []CodeDebugSession
+	return out, c.get(ctx, "/api/code-debug-sessions", &out)
+}
+
+// OpenCodeDebugSession 创建本机代码调试会话。
+func (c *HTTPAgentClient) OpenCodeDebugSession(ctx context.Context, req OpenCodeDebugSessionRequest, approvalToken string) (CodeDebugSession, error) {
+	var out CodeDebugSession
+	return out, c.postWithApprovalToken(ctx, "/api/code-debug-sessions", req, approvalToken, &out)
+}
+
+// CloseCodeDebugSession 关闭代码调试会话。
+func (c *HTTPAgentClient) CloseCodeDebugSession(ctx context.Context, sessionID string) error {
+	return c.delete(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID), nil)
+}
+
+// SetCodeDebugBreakpoints 设置代码调试断点。
+func (c *HTTPAgentClient) SetCodeDebugBreakpoints(ctx context.Context, req DebugBreakpointRequest) (map[string]any, error) {
+	var out map[string]any
+	body := map[string]any{"source": req.Source, "lines": req.Lines}
+	return out, c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/breakpoints", body, &out)
+}
+
+// CodeDebugAction 执行非 evaluate 的代码调试动作。
+func (c *HTTPAgentClient) CodeDebugAction(ctx context.Context, sessionID string, action string, body map[string]any) (map[string]any, error) {
+	var out map[string]any
+	path := "/api/code-debug-sessions/" + url.PathEscape(sessionID) + "/" + strings.Trim(action, "/")
+	switch action {
+	case "stack":
+		q := url.Values{}
+		if threadID, ok := body["thread_id"]; ok {
+			q.Set("thread_id", fmt.Sprint(threadID))
+		}
+		return out, c.get(ctx, withQuery(path, q), &out)
+	case "scopes":
+		q := url.Values{}
+		if frameID, ok := body["frame_id"]; ok {
+			q.Set("frame_id", fmt.Sprint(frameID))
+		}
+		return out, c.get(ctx, withQuery(path, q), &out)
+	case "variables":
+		q := url.Values{}
+		if ref, ok := body["variables_reference"]; ok {
+			q.Set("variables_reference", fmt.Sprint(ref))
+		}
+		return out, c.get(ctx, withQuery(path, q), &out)
+	default:
+		return out, c.post(ctx, path, body, &out)
+	}
+}
+
+// CodeDebugEvaluate 执行代码调试表达式求值。
+func (c *HTTPAgentClient) CodeDebugEvaluate(ctx context.Context, req DebugEvaluateRequest, approvalToken string) (map[string]any, error) {
+	var out map[string]any
+	body := map[string]any{
+		"expression": req.Expression,
+		"frame_id":   req.FrameID,
+		"source":     req.Source,
+	}
+	return out, c.postWithApprovalToken(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/evaluate", body, approvalToken, &out)
+}
+
+// CodeDebugCaptureAt 执行 stop-at-line 复合采集。
+func (c *HTTPAgentClient) CodeDebugCaptureAt(ctx context.Context, req DebugCaptureAtRequest, approvalToken string) (map[string]any, error) {
+	var session CodeDebugSession
+	sessionID := req.SessionID
+	if sessionID == "" {
+		opened, err := c.OpenCodeDebugSession(ctx, OpenCodeDebugSessionRequest{
+			DeploymentID:        req.DeploymentID,
+			Provider:            req.Provider,
+			ApprovalWaitSeconds: req.ApprovalWaitSeconds,
+		}, approvalToken)
+		if err != nil {
+			return nil, err
+		}
+		session = opened
+		sessionID = opened.ID
+	}
+	body := map[string]any{
+		"source":         req.Source,
+		"line":           req.Line,
+		"thread_id":      req.ThreadID,
+		"timeout_ms":     req.TimeoutMilliseconds,
+		"max_variables":  req.MaxVariables,
+		"variable_names": req.VariableNames,
+	}
+	var out map[string]any
+	if err := c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/capture-at", body, &out); err != nil {
+		return nil, err
+	}
+	if session.ID != "" {
+		if out == nil {
+			out = map[string]any{}
+		}
+		out["session"] = session
+	}
+	return out, nil
+}
+
+// CodeDebugInspect 执行已暂停会话复合读取。
+func (c *HTTPAgentClient) CodeDebugInspect(ctx context.Context, req DebugInspectRequest) (map[string]any, error) {
+	var out map[string]any
+	body := map[string]any{
+		"thread_id":      req.ThreadID,
+		"frame_id":       req.FrameID,
+		"max_variables":  req.MaxVariables,
+		"variable_names": req.VariableNames,
+	}
+	return out, c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/inspect", body, &out)
 }
 
 // ListPipelineRuns 查询项目级 pipeline 执行历史。

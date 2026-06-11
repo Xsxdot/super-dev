@@ -115,7 +115,8 @@ func TestOperationAPI_ReadOnlyDeploymentDeniedEvenWithApproval(t *testing.T) {
 
 func TestApplyApprovalPolicyOverrides(t *testing.T) {
 	policy := config.ApprovalPolicy{
-		ConfigUpsert: false, PipelineUpsert: true, PipelineRun: false, TemplateImport: true, GraceMinutes: 15,
+		ConfigUpsert: false, PipelineUpsert: true, PipelineRun: false, TemplateImport: true,
+		BrowserDebugOpen: false, CodeDebugOpen: false, CodeDebugEvaluate: true, GraceMinutes: 15,
 	}
 	cases := []struct {
 		kind string
@@ -126,7 +127,9 @@ func TestApplyApprovalPolicyOverrides(t *testing.T) {
 		{operation.OperationConfigPipelineUpsert, true},
 		{operation.OperationPipelineRun, false},
 		{operation.OperationTemplateImport, true},
-		{operation.OperationBrowserDebugOpen, true},
+		{operation.OperationBrowserDebugOpen, false},
+		{operation.OperationCodeDebugOpen, false},
+		{operation.OperationCodeDebugEvaluate, true},
 	}
 	for _, c := range cases {
 		plan := operation.Plan{Kind: c.kind, RequiresApproval: true}
@@ -135,6 +138,28 @@ func TestApplyApprovalPolicyOverrides(t *testing.T) {
 			t.Fatalf("kind %s: requires=%v, want %v", c.kind, got.RequiresApproval, c.want)
 		}
 	}
+}
+
+func TestOperationAPIPreflightCodeDebugEvaluate(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	plan := postJSONForTest[operation.Plan](t, srv.URL+"/api/operations/preflight", map[string]any{
+		"kind":             operation.OperationCodeDebugEvaluate,
+		"project_id":       "p1",
+		"project_name":     "demo",
+		"deployment_id":    "dep-api",
+		"debug_session_id": "cds_123",
+		"expression_hash":  "sha256:abc",
+	}, http.StatusOK)
+
+	assert.Equal(t, operation.OperationCodeDebugEvaluate, plan.Kind)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, "cds_123", plan.Target.DebugSessionID)
+	assert.NotContains(t, plan.Fingerprint, "password")
 }
 
 func TestApplyApprovalPolicyNeverOverridesDenied(t *testing.T) {

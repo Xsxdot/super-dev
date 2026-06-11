@@ -740,6 +740,48 @@ type WebAIDebugConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
+// CodeDebugProvider 表示代码调试会话使用的语言调试器。
+type CodeDebugProvider string
+
+const (
+	// CodeDebugProviderGo 表示使用 Delve DAP 调试 Go 服务。
+	CodeDebugProviderGo CodeDebugProvider = "go"
+	// CodeDebugProviderPython 表示使用 debugpy 调试 Python 服务。
+	CodeDebugProviderPython CodeDebugProvider = "python"
+	// CodeDebugProviderNode 表示使用 Node DAP adapter 调试 Node 服务。
+	CodeDebugProviderNode CodeDebugProvider = "node"
+)
+
+// CodeDebugMode 表示代码调试会话的启动方式。
+type CodeDebugMode string
+
+const (
+	// CodeDebugModeLaunch 表示由 SuperDev 调试会话启动目标进程。
+	CodeDebugModeLaunch CodeDebugMode = "launch"
+)
+
+// CodeDebugConfig 描述本机代码调试能力配置。
+//
+// 职责：
+//   - 声明 deployment 是否允许 AI 打开代码调试会话
+//   - 保存语言 provider、入口程序、参数和 adapter 配置
+//
+// 边界：
+//   - 不保存运行时 session ID
+//   - 不改变普通 service 启停命令
+type CodeDebugConfig struct {
+	Enabled        bool              `json:"enabled" yaml:"enabled"`
+	Provider       CodeDebugProvider `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Mode           CodeDebugMode     `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Program        string            `json:"program,omitempty" yaml:"program,omitempty"`
+	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	WorkingDir     string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	EnvVars        map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
+	AdapterCommand string            `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
+	AdapterArgs    []string          `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
+	StopOnEntry    bool              `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
+}
+
 // Deployment 描述服务在某个环境下的一份具体实例。
 //
 // 职责：
@@ -765,6 +807,8 @@ type Deployment struct {
 	Logs *LogConfig `json:"logs,omitempty" yaml:"logs,omitempty"`
 	// Web 描述该 deployment 暴露给本机浏览器的前端入口。
 	Web *WebEntrypointConfig `json:"web,omitempty" yaml:"web,omitempty"`
+	// CodeDebug 描述该 deployment 是否允许 AI 打开本机代码调试会话。
+	CodeDebug *CodeDebugConfig `json:"code_debug,omitempty" yaml:"code_debug,omitempty"`
 
 	// location=local 时使用
 	Command string            `json:"command,omitempty"`

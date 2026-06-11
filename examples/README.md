@@ -17,6 +17,24 @@ Ingress examples live in `examples/ingress`. They cover DNS provider configs and
 
 Docker is outside this example matrix.
 
+## Code Debug Config Shape
+
+Local command deployments can opt into AI code debug:
+
+```yaml
+code_debug:
+  enabled: true
+  provider: go
+  mode: launch
+  program: .
+  working_dir: .
+  stop_on_entry: false
+```
+
+Go uses `dlv dap`; Python uses `debugpy.adapter`; Node is experimental and requires `adapter_command` in this release.
+
+Use code debug only after the log-driven path is exhausted. The default AI entry points are the composite tools `debug_capture_at` and `debug_inspect`; low-level stepping tools are escape hatches.
+
 Run unit validation:
 
 ```sh

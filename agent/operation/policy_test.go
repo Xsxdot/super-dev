@@ -162,6 +162,38 @@ func TestPlanBrowserDebugOpenRequiresApproval(t *testing.T) {
 	assert.Contains(t, plan.ExpectedEffects[0], "open debug browser")
 }
 
+func TestPlanCodeDebugOpenRequiresApprovalForLocalCommand(t *testing.T) {
+	project := operationProject(true, model.LocationLocal, false)
+	service := project.Services[0]
+	dep := service.Deployments[0]
+	dep.CodeDebug = &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo}
+
+	plan, err := PlanCodeDebugOpen(project, service, dep, "go")
+
+	require.NoError(t, err)
+	assert.Equal(t, OperationCodeDebugOpen, plan.Kind)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, RiskMedium, plan.RiskLevel)
+	assert.False(t, plan.Denied)
+	assert.Equal(t, dep.ID, plan.Target.DeploymentID)
+}
+
+func TestPlanCodeDebugEvaluateDoesNotStoreExpression(t *testing.T) {
+	plan, err := PlanCodeDebugEvaluate(CodeDebugEvaluateRequest{
+		ProjectID:      "p1",
+		ProjectName:    "demo",
+		DeploymentID:   "dep-api",
+		DebugSessionID: "cds_123",
+		ExpressionHash: "sha256:abc",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, OperationCodeDebugEvaluate, plan.Kind)
+	assert.True(t, plan.RequiresApproval)
+	assert.NotContains(t, plan.Fingerprint, "password")
+	assert.Equal(t, "cds_123", plan.Target.DebugSessionID)
+}
+
 func operationProject(isDev bool, location model.DeployLocation, readOnly bool) model.Project {
 	return model.Project{
 		ID:   "proj-1",

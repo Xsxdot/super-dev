@@ -315,6 +315,124 @@ func PlanBrowserDebugOpen(project model.Project, service model.Service, dep mode
 	return plan, nil
 }
 
+// PlanCodeDebugOpen 为本机代码调试会话生成安全预检计划。
+//
+// 参数：
+//   - project: deployment 所属项目
+//   - service: deployment 所属服务
+//   - dep: 解析后的 deployment
+//   - provider: 调试 provider 名称，仅用于说明和 fingerprint
+//
+// 返回：
+//   - 需要审批的代码调试 plan
+//   - deployment ID 缺失时返回错误
+//
+// 注意：
+//   - 此函数只规划安全策略，不启动 adapter 或目标进程
+//   - v1 仅支持已启用 code_debug 的本机 managed command deployment
+func PlanCodeDebugOpen(project model.Project, service model.Service, dep model.Deployment, provider string) (Plan, error) {
+	if dep.ID == "" {
+		return Plan{}, ErrInvalidOperation
+	}
+	provider = trim(provider)
+	effectProvider := provider
+	if effectProvider == "" {
+		effectProvider = "configured"
+	}
+	now := time.Now().UTC()
+	plan := Plan{
+		ID:   newID("op"),
+		Kind: OperationCodeDebugOpen,
+		Target: Target{
+			ProjectID:    project.ID,
+			ProjectName:  project.Name,
+			EnvName:      dep.EnvName,
+			ServiceID:    service.ID,
+			ServiceName:  service.Name,
+			DeploymentID: dep.ID,
+		},
+		TargetSummary:    fmt.Sprintf("%s/%s/%s", project.Name, dep.EnvName, service.Name),
+		RiskLevel:        RiskMedium,
+		RequiresApproval: true,
+		ExpectedEffects:  []string{fmt.Sprintf("launch %s code debug session for deployment %s", effectProvider, dep.ID)},
+		Checks:           []Check{{Name: "target_resolved", Status: "passed", Message: "local code debug target resolved by agent"}},
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+	}
+	if dep.CodeDebug == nil || !dep.CodeDebug.Enabled {
+		plan.Denied = true
+		plan.RiskLevel = RiskCritical
+		plan.Reasons = append(plan.Reasons, "code debug is not enabled for deployment")
+	}
+	if effectiveDeployLocation(dep) != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || codeDebugRuntimeType(dep) != model.RuntimeTypeCommand {
+		plan.Denied = true
+		plan.RiskLevel = RiskCritical
+		plan.Reasons = append(plan.Reasons, "code debug v1 supports local managed command deployments only")
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"provider":         provider,
+		"expected_effects": plan.ExpectedEffects,
+		"denied":           plan.Denied,
+	})
+	return plan, nil
+}
+
+// PlanCodeDebugEvaluate 为代码调试 evaluate 生成安全预检计划。
+//
+// 参数：
+//   - req: 调试 session、deployment 和表达式 hash
+//
+// 返回：
+//   - 需要审批的 evaluate plan
+//   - session ID 或表达式 hash 缺失时返回错误
+//
+// 注意：
+//   - expression 明文永远不进入 plan、fingerprint 或审计目标
+func PlanCodeDebugEvaluate(req CodeDebugEvaluateRequest) (Plan, error) {
+	req.ProjectID = trim(req.ProjectID)
+	req.ProjectName = trim(req.ProjectName)
+	req.DeploymentID = trim(req.DeploymentID)
+	req.DebugSessionID = trim(req.DebugSessionID)
+	req.ExpressionHash = trim(req.ExpressionHash)
+	if req.DebugSessionID == "" || req.ExpressionHash == "" {
+		return Plan{}, ErrInvalidOperation
+	}
+	now := time.Now().UTC()
+	plan := Plan{
+		ID:   newID("op"),
+		Kind: OperationCodeDebugEvaluate,
+		Target: Target{
+			ProjectID:      req.ProjectID,
+			ProjectName:    req.ProjectName,
+			DeploymentID:   req.DeploymentID,
+			DebugSessionID: req.DebugSessionID,
+		},
+		TargetSummary:    fmt.Sprintf("code debug session %s", req.DebugSessionID),
+		RiskLevel:        RiskHigh,
+		RequiresApproval: true,
+		ExpectedEffects:  []string{fmt.Sprintf("evaluate expression in code debug session %s", req.DebugSessionID)},
+		Checks:           []Check{{Name: "expression_hashed", Status: "passed", Message: "evaluate expression is represented by hash only"}},
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"expression_hash":  req.ExpressionHash,
+		"expected_effects": plan.ExpectedEffects,
+	})
+	return plan, nil
+}
+
+func codeDebugRuntimeType(dep model.Deployment) model.RuntimeType {
+	if dep.Runtime != nil && dep.Runtime.Type != "" {
+		return dep.Runtime.Type
+	}
+	return model.RuntimeTypeCommand
+}
+
 // PlanTemplateImport 为用户模板导入生成安全预检计划。
 //
 // 参数：

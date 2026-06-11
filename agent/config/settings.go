@@ -58,14 +58,17 @@ const (
 // ApprovalPolicy 表示 agent 级写操作审批策略。
 //
 // 注意：
-//   - 四个 bool 开关默认全为 true，等价于现状（一律审批）
+//   - bool 开关默认全为 true，等价于现状（一律审批）
 //   - 开关只能把“要审批”降级为“不审批”，不能放行被安全策略 Denied 的操作
 type ApprovalPolicy struct {
-	ConfigUpsert   bool `json:"config_upsert"`   // 项目/服务增改是否审批
-	PipelineUpsert bool `json:"pipeline_upsert"` // 流水线增改是否审批
-	PipelineRun    bool `json:"pipeline_run"`    // 流水线运行是否审批
-	TemplateImport bool `json:"template_import"` // 模板导入是否审批
-	GraceMinutes   int  `json:"grace_minutes"`   // 豁免窗口时长（分钟）
+	ConfigUpsert      bool `json:"config_upsert"`       // 项目/服务增改是否审批
+	PipelineUpsert    bool `json:"pipeline_upsert"`     // 流水线增改是否审批
+	PipelineRun       bool `json:"pipeline_run"`        // 流水线运行是否审批
+	TemplateImport    bool `json:"template_import"`     // 模板导入是否审批
+	BrowserDebugOpen  bool `json:"browser_debug_open"`  // 打开浏览器调试会话是否审批
+	CodeDebugOpen     bool `json:"code_debug_open"`     // 打开代码调试会话是否审批
+	CodeDebugEvaluate bool `json:"code_debug_evaluate"` // 在代码调试会话中求值是否审批
+	GraceMinutes      int  `json:"grace_minutes"`       // 豁免窗口时长（分钟）
 }
 
 // DebugBrowserSettings 表示本机浏览器调试偏好。
@@ -117,11 +120,14 @@ func DefaultAgentSettings() AgentSettings {
 		LogCleanupIntervalSeconds: DefaultLogCleanupIntervalSeconds,
 		ArtifactKeepVersions:      DefaultArtifactKeepVersions,
 		Approval: ApprovalPolicy{
-			ConfigUpsert:   true,
-			PipelineUpsert: true,
-			PipelineRun:    true,
-			TemplateImport: true,
-			GraceMinutes:   DefaultGraceMinutes,
+			ConfigUpsert:      true,
+			PipelineUpsert:    true,
+			PipelineRun:       true,
+			TemplateImport:    true,
+			BrowserDebugOpen:  true,
+			CodeDebugOpen:     true,
+			CodeDebugEvaluate: true,
+			GraceMinutes:      DefaultGraceMinutes,
 		},
 		DebugBrowser: DebugBrowserSettings{
 			ProfileMode:       "ephemeral",

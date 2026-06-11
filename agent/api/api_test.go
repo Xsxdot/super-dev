@@ -167,11 +167,14 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 		SampleSeeded              bool  `json:"sample_seeded"`
 		OnboardingCompleted       bool  `json:"onboarding_completed"`
 		Approval                  struct {
-			ConfigUpsert   bool `json:"config_upsert"`
-			PipelineUpsert bool `json:"pipeline_upsert"`
-			PipelineRun    bool `json:"pipeline_run"`
-			TemplateImport bool `json:"template_import"`
-			GraceMinutes   int  `json:"grace_minutes"`
+			ConfigUpsert      bool `json:"config_upsert"`
+			PipelineUpsert    bool `json:"pipeline_upsert"`
+			PipelineRun       bool `json:"pipeline_run"`
+			TemplateImport    bool `json:"template_import"`
+			BrowserDebugOpen  bool `json:"browser_debug_open"`
+			CodeDebugOpen     bool `json:"code_debug_open"`
+			CodeDebugEvaluate bool `json:"code_debug_evaluate"`
+			GraceMinutes      int  `json:"grace_minutes"`
 		} `json:"approval"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&defaults))
@@ -182,12 +185,15 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.False(t, defaults.OnboardingCompleted)
 	assert.True(t, defaults.Approval.ConfigUpsert)
 	assert.True(t, defaults.Approval.PipelineRun)
+	assert.True(t, defaults.Approval.BrowserDebugOpen)
+	assert.True(t, defaults.Approval.CodeDebugOpen)
+	assert.True(t, defaults.Approval.CodeDebugEvaluate)
 	assert.Equal(t, 15, defaults.Approval.GraceMinutes)
 
 	req, err := http.NewRequest(
 		http.MethodPut,
 		srv.URL+"/api/settings",
-		strings.NewReader(`{"log_retention_days": 14, "log_max_bytes": 33554432, "log_cleanup_interval_seconds": 120, "onboarding_completed": true, "approval":{"config_upsert":false,"pipeline_upsert":true,"pipeline_run":false,"template_import":true,"grace_minutes":30}}`),
+		strings.NewReader(`{"log_retention_days": 14, "log_max_bytes": 33554432, "log_cleanup_interval_seconds": 120, "onboarding_completed": true, "approval":{"config_upsert":false,"pipeline_upsert":true,"pipeline_run":false,"template_import":true,"code_debug_open":false,"code_debug_evaluate":false,"grace_minutes":30}}`),
 	)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -205,6 +211,8 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.Contains(t, string(raw), `"onboarding_completed": true`)
 	assert.Contains(t, string(raw), `"config_upsert": false`)
 	assert.Contains(t, string(raw), `"pipeline_run": false`)
+	assert.Contains(t, string(raw), `"code_debug_open": false`)
+	assert.Contains(t, string(raw), `"code_debug_evaluate": false`)
 	assert.Contains(t, string(raw), `"grace_minutes": 30`)
 }
 

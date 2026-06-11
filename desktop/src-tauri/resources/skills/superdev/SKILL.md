@@ -97,3 +97,19 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `list_pipeline_runs` | 列出 pipeline 运行历史 | 读 | `references/pipeline.md` |
 | `read_pipeline_run_logs` | 读取 pipeline run 日志 | 读 | `references/pipeline.md` |
 | `list_pipeline_artifacts` | 查看 pipeline 产物历史 | 读 | `references/pipeline.md` |
+
+### 代码断点调试决策线
+
+断点级代码调试只作为最后兜底手段。默认路径仍然是：
+
+1. 先复现问题。
+2. 用 `tail_logs`、`search_logs`、`diagnose_service`、`analyze_trace_logs` 或 `summarize_error_window` 读取日志。
+3. 基于日志证据逐步二分到根因。
+4. 只有当日志无法推断运行时状态时，才打开代码调试会话，例如必须确认某个变量真实值、某一行的调用栈，或暂停 frame 上的分支状态。
+
+确实需要代码调试时，优先使用复合工具：
+
+- `debug_capture_at`：停在 `file:line`，一次性采集 stack、scopes 和 variables。
+- `debug_inspect`：对已经暂停的 session 一次性读取现场。
+
+只有当复合工具不足时，才使用底层 DAP 工具（`set_debug_breakpoints`、`debug_continue`、`debug_step_*`、`debug_variables`、`debug_evaluate`）。`debug_evaluate` 需要审批，并按表达式级别审计；复合工具内部调用时也同样审计。

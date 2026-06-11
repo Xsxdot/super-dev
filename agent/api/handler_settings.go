@@ -51,7 +51,7 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 		current.OnboardingCompleted = *req.OnboardingCompleted
 	}
 	if req.Approval != nil {
-		current.Approval = *req.Approval
+		current.Approval = mergeApprovalPolicyPatch(current.Approval, *req.Approval)
 	}
 	if req.DebugBrowser != nil {
 		current.DebugBrowser = mergeDebugBrowserSettingsPatch(current.DebugBrowser, *req.DebugBrowser)
@@ -68,8 +68,19 @@ type settingsPatchRequest struct {
 	LogMaxBytes               *int64                     `json:"log_max_bytes"`
 	LogCleanupIntervalSeconds *int                       `json:"log_cleanup_interval_seconds"`
 	OnboardingCompleted       *bool                      `json:"onboarding_completed"`
-	Approval                  *config.ApprovalPolicy     `json:"approval"`
+	Approval                  *approvalPolicyPatch       `json:"approval"`
 	DebugBrowser              *debugBrowserSettingsPatch `json:"debug_browser"`
+}
+
+type approvalPolicyPatch struct {
+	ConfigUpsert      *bool `json:"config_upsert"`
+	PipelineUpsert    *bool `json:"pipeline_upsert"`
+	PipelineRun       *bool `json:"pipeline_run"`
+	TemplateImport    *bool `json:"template_import"`
+	BrowserDebugOpen  *bool `json:"browser_debug_open"`
+	CodeDebugOpen     *bool `json:"code_debug_open"`
+	CodeDebugEvaluate *bool `json:"code_debug_evaluate"`
+	GraceMinutes      *int  `json:"grace_minutes"`
 }
 
 type debugBrowserSettingsPatch struct {
@@ -78,6 +89,34 @@ type debugBrowserSettingsPatch struct {
 	AllowEvaluate     *bool                        `json:"allow_evaluate"`
 	SessionTTLMinutes *int                         `json:"session_ttl_minutes"`
 	Browsers          *[]config.DebugBrowserConfig `json:"browsers"`
+}
+
+func mergeApprovalPolicyPatch(current config.ApprovalPolicy, patch approvalPolicyPatch) config.ApprovalPolicy {
+	if patch.ConfigUpsert != nil {
+		current.ConfigUpsert = *patch.ConfigUpsert
+	}
+	if patch.PipelineUpsert != nil {
+		current.PipelineUpsert = *patch.PipelineUpsert
+	}
+	if patch.PipelineRun != nil {
+		current.PipelineRun = *patch.PipelineRun
+	}
+	if patch.TemplateImport != nil {
+		current.TemplateImport = *patch.TemplateImport
+	}
+	if patch.BrowserDebugOpen != nil {
+		current.BrowserDebugOpen = *patch.BrowserDebugOpen
+	}
+	if patch.CodeDebugOpen != nil {
+		current.CodeDebugOpen = *patch.CodeDebugOpen
+	}
+	if patch.CodeDebugEvaluate != nil {
+		current.CodeDebugEvaluate = *patch.CodeDebugEvaluate
+	}
+	if patch.GraceMinutes != nil {
+		current.GraceMinutes = *patch.GraceMinutes
+	}
+	return current
 }
 
 func mergeDebugBrowserSettingsPatch(current config.DebugBrowserSettings, patch debugBrowserSettingsPatch) config.DebugBrowserSettings {

@@ -50,12 +50,20 @@ func TestLoadBackfillsArtifactKeepVersionsDefault(t *testing.T) {
 func TestDefaultAgentSettingsApprovalPolicy(t *testing.T) {
 	s := config.DefaultAgentSettings()
 	if !s.Approval.ConfigUpsert || !s.Approval.PipelineUpsert ||
-		!s.Approval.PipelineRun || !s.Approval.TemplateImport {
+		!s.Approval.PipelineRun || !s.Approval.TemplateImport || !s.Approval.BrowserDebugOpen {
 		t.Fatalf("default approval switches must all be true, got %+v", s.Approval)
 	}
 	if s.Approval.GraceMinutes != config.DefaultGraceMinutes {
 		t.Fatalf("default grace minutes = %d, want %d", s.Approval.GraceMinutes, config.DefaultGraceMinutes)
 	}
+}
+
+func TestDefaultApprovalPolicyIncludesCodeDebug(t *testing.T) {
+	settings := config.DefaultAgentSettings()
+
+	assert.True(t, settings.Approval.CodeDebugOpen)
+	assert.True(t, settings.Approval.CodeDebugEvaluate)
+	require.NoError(t, config.ValidateAgentSettings(settings))
 }
 
 func TestLoadLegacySettingsFillsApprovalDefaults(t *testing.T) {
@@ -66,12 +74,23 @@ func TestLoadLegacySettingsFillsApprovalDefaults(t *testing.T) {
 
 	got, err := config.NewSettingsStore(dir).Load()
 	require.NoError(t, err)
-	if !got.Approval.ConfigUpsert || !got.Approval.PipelineRun {
+	if !got.Approval.ConfigUpsert || !got.Approval.PipelineRun || !got.Approval.BrowserDebugOpen {
 		t.Fatalf("legacy load must default switches to true, got %+v", got.Approval)
 	}
 	if got.Approval.GraceMinutes != config.DefaultGraceMinutes {
 		t.Fatalf("legacy grace minutes = %d, want %d", got.Approval.GraceMinutes, config.DefaultGraceMinutes)
 	}
+}
+
+func TestLoadBackfillsCodeDebugApprovalDefaults(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"log_retention_days":7}`), 0o644))
+
+	settings, err := config.NewSettingsStore(dir).Load()
+	require.NoError(t, err)
+
+	assert.True(t, settings.Approval.CodeDebugOpen)
+	assert.True(t, settings.Approval.CodeDebugEvaluate)
 }
 
 func TestLoadExplicitFalseSwitchPreserved(t *testing.T) {
@@ -87,6 +106,18 @@ func TestLoadExplicitFalseSwitchPreserved(t *testing.T) {
 	if got.Approval.GraceMinutes != 30 {
 		t.Fatalf("grace minutes = %d, want 30", got.Approval.GraceMinutes)
 	}
+}
+
+func TestLoadExplicitFalseCodeDebugApprovalSwitchPreserved(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"log_retention_days":7,"log_max_bytes":268435456,"log_cleanup_interval_seconds":3600,"approval":{"config_upsert":true,"pipeline_upsert":true,"pipeline_run":true,"template_import":true,"browser_debug_open":true,"code_debug_open":false,"code_debug_evaluate":false,"grace_minutes":30}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(raw), 0o644))
+
+	got, err := config.NewSettingsStore(dir).Load()
+	require.NoError(t, err)
+	assert.False(t, got.Approval.CodeDebugOpen)
+	assert.False(t, got.Approval.CodeDebugEvaluate)
+	assert.Equal(t, 30, got.Approval.GraceMinutes)
 }
 
 func TestValidateGraceMinutesRange(t *testing.T) {

@@ -163,6 +163,98 @@ func TestHTTPAgentClientOperationApprovalLifecycle(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestHTTPAgentClientListCodeDebugTargets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/code-debug-targets", r.URL.Path)
+		_ = json.NewEncoder(w).Encode([]CodeDebugTarget{{DeploymentID: "dep-api-dev", Provider: "go"}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+	targets, err := client.ListCodeDebugTargets(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, "dep-api-dev", targets[0].DeploymentID)
+}
+
+func TestHTTPAgentClientOpenCodeDebugSessionPostsApprovalToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/code-debug-sessions", r.URL.Path)
+		assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
+		_ = json.NewEncoder(w).Encode(CodeDebugSession{ID: "cds_1", DeploymentID: "dep-api-dev"})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+	session, err := client.OpenCodeDebugSession(context.Background(), OpenCodeDebugSessionRequest{DeploymentID: "dep-api-dev"}, "tok_1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "cds_1", session.ID)
+}
+
+func TestHTTPAgentClientCodeDebugEvaluatePostsApprovalToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/code-debug-sessions/cds_1/evaluate", r.URL.Path)
+		assert.Equal(t, "tok_eval", r.Header.Get("X-SuperDev-Approval-Token"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "user.id", body["expression"])
+		assert.Equal(t, "debug_evaluate", body["source"])
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"value": "42"}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+	result, err := client.CodeDebugEvaluate(context.Background(), DebugEvaluateRequest{
+		SessionID:  "cds_1",
+		Expression: "user.id",
+		FrameID:    1,
+		Source:     "debug_evaluate",
+	}, "tok_eval")
+
+	require.NoError(t, err)
+	assert.Equal(t, "42", result["result"].(map[string]any)["value"])
+}
+
+func TestHTTPAgentClientCodeDebugCompositePaths(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/code-debug-sessions", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
+		var body OpenCodeDebugSessionRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "dep-api-dev", body.DeploymentID)
+		_ = json.NewEncoder(w).Encode(CodeDebugSession{ID: "cds_1", DeploymentID: "dep-api-dev"})
+	})
+	mux.HandleFunc("POST /api/code-debug-sessions/cds_1/capture-at", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "main.go", body["source"])
+		_ = json.NewEncoder(w).Encode(map[string]any{"stack": []any{map[string]any{"name": "main.main"}}})
+	})
+	mux.HandleFunc("POST /api/code-debug-sessions/cds_1/inspect", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, float64(1), body["thread_id"])
+		_ = json.NewEncoder(w).Encode(map[string]any{"stack": []any{map[string]any{"name": "handler"}}})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+
+	capture, err := client.CodeDebugCaptureAt(context.Background(), DebugCaptureAtRequest{
+		DeploymentID: "dep-api-dev",
+		Source:       "main.go",
+		Line:         12,
+	}, "tok_1")
+	require.NoError(t, err)
+	assert.Equal(t, "dep-api-dev", capture["session"].(CodeDebugSession).DeploymentID)
+
+	inspect, err := client.CodeDebugInspect(context.Background(), DebugInspectRequest{SessionID: "cds_1", ThreadID: 1})
+	require.NoError(t, err)
+	assert.Contains(t, inspect, "stack")
+}
+
 func TestHTTPAgentClientConfigChangeLifecycle(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

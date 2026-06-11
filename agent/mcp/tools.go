@@ -139,11 +139,11 @@ func templateImportInputSchema() map[string]any {
 func previewOperationInputSchema() map[string]any {
 	schema := targetInputSchema()
 	properties := schema["properties"].(map[string]any)
-	properties["kind"] = map[string]any{"type": "string", "enum": []string{"runtime.start", "runtime.stop", "runtime.restart", "template.import", "browser_debug.open"}}
+	properties["kind"] = map[string]any{"type": "string", "enum": []string{"runtime.start", "runtime.stop", "runtime.restart", "template.import", "browser_debug.open", "code_debug.open", "code_debug.evaluate"}}
 	properties["path"] = map[string]any{"type": "string"}
 	properties["template_path"] = map[string]any{"type": "string"}
+	properties["expression_hash"] = map[string]any{"type": "string"}
 	delete(properties, "approval_token")
-	delete(properties, "debug_session_id")
 	schema["required"] = []string{"kind"}
 	return schema
 }
@@ -568,6 +568,139 @@ func browserEvaluateInputSchema() map[string]any {
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
 			"expression": map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id", "expression"},
+	}
+}
+
+func debugCaptureAtInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id":            map[string]any{"type": "string", "description": "Reuse an existing paused/open session. Provide either session_id OR deployment_id."},
+			"deployment_id":         map[string]any{"type": "string", "description": "Open a new session for this local managed command deployment. Provide either session_id OR deployment_id."},
+			"provider":              map[string]any{"type": "string", "enum": []string{"go", "python", "node"}},
+			"source":                map[string]any{"type": "string"},
+			"line":                  map[string]any{"type": "integer", "minimum": 1},
+			"thread_id":             map[string]any{"type": "integer", "minimum": 0},
+			"timeout_ms":            map[string]any{"type": "integer", "minimum": 1},
+			"max_variables":         map[string]any{"type": "integer", "minimum": 1},
+			"variable_names":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"approval_token":        map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0},
+		},
+		"required": []string{"source", "line"},
+		"oneOf": []map[string]any{
+			{"required": []string{"session_id"}},
+			{"required": []string{"deployment_id"}},
+		},
+	}
+}
+
+func debugInspectInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id":     map[string]any{"type": "string"},
+			"thread_id":      map[string]any{"type": "integer", "minimum": 0},
+			"frame_id":       map[string]any{"type": "integer", "minimum": 0},
+			"max_variables":  map[string]any{"type": "integer", "minimum": 1},
+			"variable_names": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func openCodeDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"deployment_id":         map[string]any{"type": "string"},
+			"provider":              map[string]any{"type": "string", "enum": []string{"go", "python", "node"}},
+			"approval_token":        map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0},
+		},
+		"required": []string{"deployment_id"},
+	}
+}
+
+func codeDebugSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func codeDebugBreakpointsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"source":     map[string]any{"type": "string"},
+			"lines":      map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}},
+		},
+		"required": []string{"session_id", "source", "lines"},
+	}
+}
+
+func codeDebugThreadActionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"thread_id":  map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id", "thread_id"},
+	}
+}
+
+func codeDebugStackInputSchema() map[string]any {
+	return codeDebugThreadActionInputSchema()
+}
+
+func codeDebugScopesInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"frame_id":   map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id", "frame_id"},
+	}
+}
+
+func codeDebugVariablesInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id":          map[string]any{"type": "string"},
+			"variables_reference": map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id", "variables_reference"},
+	}
+}
+
+func codeDebugEvaluateInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id":            map[string]any{"type": "string"},
+			"expression":            map[string]any{"type": "string"},
+			"frame_id":              map[string]any{"type": "integer", "minimum": 0},
+			"approval_token":        map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"session_id", "expression"},
 	}
@@ -1005,6 +1138,147 @@ func defaultTools(s *Server) []registeredTool {
 				InputSchema: browserEvaluateInputSchema(),
 			},
 			Handler: s.browserEvaluateTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_capture_at",
+				Title:       "Debug capture at",
+				Description: "Last-resort code debug: open or reuse a local session, stop at a source line, and return stack/scopes/variables in one call. Use logs and diagnose tools first.",
+				InputSchema: debugCaptureAtInputSchema(),
+			},
+			Handler: s.debugCaptureAtTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_inspect",
+				Title:       "Debug inspect",
+				Description: "Inspect an already paused code debug session and return stack/scopes/variables in one call. Prefer this over chaining low-level DAP tools.",
+				InputSchema: debugInspectInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.debugInspectTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_code_debug_targets",
+				Title:       "List code debug targets",
+				Description: "List local managed command deployments that can use last-resort code debugging. Node targets are experimental.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listCodeDebugTargetsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "open_code_debug_session",
+				Title:       "Open code debug session",
+				Description: "Last-resort code debug escape hatch: start a local code debug session after logs and diagnosis tools cannot reveal the runtime state.",
+				InputSchema: openCodeDebugSessionInputSchema(),
+			},
+			Handler: s.openCodeDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "close_code_debug_session",
+				Title:       "Close code debug session",
+				Description: "Close a code debug session created by SuperDev.",
+				InputSchema: codeDebugSessionInputSchema(),
+				Annotations: map[string]any{"destructiveHint": true},
+			},
+			Handler: s.closeCodeDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "set_debug_breakpoints",
+				Title:       "Set debug breakpoints",
+				Description: "Low-level DAP escape hatch: set source breakpoints in an existing code debug session.",
+				InputSchema: codeDebugBreakpointsInputSchema(),
+			},
+			Handler: s.setDebugBreakpointsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_continue",
+				Title:       "Debug continue",
+				Description: "Low-level DAP escape hatch: continue one paused thread in a code debug session.",
+				InputSchema: codeDebugThreadActionInputSchema(),
+			},
+			Handler: s.debugContinueTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_pause",
+				Title:       "Debug pause",
+				Description: "Low-level DAP escape hatch: pause one thread in a code debug session.",
+				InputSchema: codeDebugThreadActionInputSchema(),
+			},
+			Handler: s.debugPauseTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_step_over",
+				Title:       "Debug step over",
+				Description: "Low-level DAP escape hatch: step over one paused thread.",
+				InputSchema: codeDebugThreadActionInputSchema(),
+			},
+			Handler: s.debugStepOverTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_step_in",
+				Title:       "Debug step in",
+				Description: "Low-level DAP escape hatch: step into one paused thread.",
+				InputSchema: codeDebugThreadActionInputSchema(),
+			},
+			Handler: s.debugStepInTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_step_out",
+				Title:       "Debug step out",
+				Description: "Low-level DAP escape hatch: step out from one paused thread.",
+				InputSchema: codeDebugThreadActionInputSchema(),
+			},
+			Handler: s.debugStepOutTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_stack_trace",
+				Title:       "Debug stack trace",
+				Description: "Low-level DAP escape hatch: read stack frames from an existing code debug session.",
+				InputSchema: codeDebugStackInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.debugStackTraceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_scopes",
+				Title:       "Debug scopes",
+				Description: "Low-level DAP escape hatch: read scopes for one stack frame.",
+				InputSchema: codeDebugScopesInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.debugScopesTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_variables",
+				Title:       "Debug variables",
+				Description: "Low-level DAP escape hatch: read variables for one scope. Secret-looking values are redacted by the agent.",
+				InputSchema: codeDebugVariablesInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.debugVariablesTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "debug_evaluate",
+				Title:       "Debug evaluate",
+				Description: "Low-level DAP escape hatch: evaluate an expression inside the debuggee. This is approval-gated and expression-level audited.",
+				InputSchema: codeDebugEvaluateInputSchema(),
+			},
+			Handler: s.debugEvaluateTool,
 		},
 		{
 			Tool: Tool{

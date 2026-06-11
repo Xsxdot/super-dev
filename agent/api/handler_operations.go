@@ -46,21 +46,23 @@ type operationAuditListResponse struct {
 }
 
 type operationTargetRequest struct {
-	Kind         string                             `json:"kind"`
-	ProjectID    string                             `json:"project_id"`
-	ProjectName  string                             `json:"project_name"`
-	RootPath     string                             `json:"root_path"`
-	EnvName      string                             `json:"env_name"`
-	ServiceID    string                             `json:"service_id"`
-	ServiceName  string                             `json:"service_name"`
-	DeploymentID string                             `json:"deployment_id"`
-	Path         string                             `json:"path"`
-	TemplatePath string                             `json:"template_path"`
-	Project      *configchange.ProjectPatch         `json:"project,omitempty"`
-	Service      *configchange.ServicePatch         `json:"service,omitempty"`
-	Pipeline     *configchange.ProjectPipelinePatch `json:"pipeline,omitempty"`
-	Delete       bool                               `json:"delete,omitempty"`
-	Remove       bool                               `json:"remove,omitempty"`
+	Kind           string                             `json:"kind"`
+	ProjectID      string                             `json:"project_id"`
+	ProjectName    string                             `json:"project_name"`
+	RootPath       string                             `json:"root_path"`
+	EnvName        string                             `json:"env_name"`
+	ServiceID      string                             `json:"service_id"`
+	ServiceName    string                             `json:"service_name"`
+	DeploymentID   string                             `json:"deployment_id"`
+	DebugSessionID string                             `json:"debug_session_id"`
+	ExpressionHash string                             `json:"expression_hash"`
+	Path           string                             `json:"path"`
+	TemplatePath   string                             `json:"template_path"`
+	Project        *configchange.ProjectPatch         `json:"project,omitempty"`
+	Service        *configchange.ServicePatch         `json:"service,omitempty"`
+	Pipeline       *configchange.ProjectPipelinePatch `json:"pipeline,omitempty"`
+	Delete         bool                               `json:"delete,omitempty"`
+	Remove         bool                               `json:"remove,omitempty"`
 }
 
 type operationDecisionRequest struct {
@@ -248,6 +250,32 @@ func (a *App) planOperation(req operationTargetRequest) (operation.Plan, int, st
 			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
 		}
 		return plan, http.StatusOK, ""
+	case operation.OperationCodeDebugOpen:
+		project, service, dep, status, msg := a.resolveOperationRuntimeTarget(req)
+		if status != http.StatusOK {
+			return operation.Plan{}, status, msg
+		}
+		provider := ""
+		if dep.CodeDebug != nil {
+			provider = string(dep.CodeDebug.Provider)
+		}
+		plan, err := operation.PlanCodeDebugOpen(project, service, dep, provider)
+		if err != nil {
+			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
+		}
+		return plan, http.StatusOK, ""
+	case operation.OperationCodeDebugEvaluate:
+		plan, err := operation.PlanCodeDebugEvaluate(operation.CodeDebugEvaluateRequest{
+			ProjectID:      req.ProjectID,
+			ProjectName:    req.ProjectName,
+			DeploymentID:   req.DeploymentID,
+			DebugSessionID: req.DebugSessionID,
+			ExpressionHash: req.ExpressionHash,
+		})
+		if err != nil {
+			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
+		}
+		return plan, http.StatusOK, ""
 	case operation.OperationTemplateImport:
 		plan, err := a.planTemplateImport(req.TemplatePath)
 		if err != nil {
@@ -367,7 +395,11 @@ func applyApprovalPolicy(plan operation.Plan, policy config.ApprovalPolicy) oper
 	case operation.OperationTemplateImport:
 		plan.RequiresApproval = policy.TemplateImport
 	case operation.OperationBrowserDebugOpen:
-		plan.RequiresApproval = true
+		plan.RequiresApproval = policy.BrowserDebugOpen
+	case operation.OperationCodeDebugOpen:
+		plan.RequiresApproval = policy.CodeDebugOpen
+	case operation.OperationCodeDebugEvaluate:
+		plan.RequiresApproval = policy.CodeDebugEvaluate
 	}
 	return plan
 }
