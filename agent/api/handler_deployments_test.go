@@ -13,6 +13,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -261,6 +262,65 @@ func TestApplyProcessReconcileResults_RemovesPidStoreEntry(t *testing.T) {
 
 	pgids := app.pidStore.LoadAll()
 	assert.NotContains(t, pgids, "dep-pidstore-dead")
+}
+
+func TestControlEvents_RestartEmitsLifecycle(t *testing.T) {
+	app := newTestAppForPackage(t)
+	dep := model.Deployment{
+		ID:       "dep-control-restart",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 30",
+		WorkDir:  t.TempDir(),
+	}
+	ch := app.buf.Subscribe("control-events-restart")
+	defer app.buf.Unsubscribe("control-events-restart")
+
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-control", dep))
+
+	events := collectControlEvents(t, ch, dep.ID, 4)
+	got := controlEventPhases(events)
+	assert.Equal(t, []string{"command_received", "reconciling", "executing", "succeeded"}, got)
+	app.getOrCreateManager("proj-control").StopDeployment(dep.ID)
+}
+
+func collectControlEvents(t *testing.T, ch <-chan model.LogEntry, depID string, want int) []model.LogEntry {
+	t.Helper()
+	var out []model.LogEntry
+	deadline := time.After(5 * time.Second)
+	for len(out) < want {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				t.Fatalf("control event channel closed after %d/%d events", len(out), want)
+			}
+			if e.DeploymentID == depID && e.Stream == "control" {
+				out = append(out, e)
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d control events, got %d: %+v", want, len(out), out)
+		}
+	}
+	return out
+}
+
+func controlEventPhases(events []model.LogEntry) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		switch {
+		case strings.Contains(e.Message, "command_received"):
+			out = append(out, "command_received")
+		case strings.Contains(e.Message, "reconciling"):
+			out = append(out, "reconciling")
+		case strings.Contains(e.Message, "executing"):
+			out = append(out, "executing")
+		case strings.Contains(e.Message, "succeeded"):
+			out = append(out, "succeeded")
+		case strings.Contains(e.Message, "failed"):
+			out = append(out, "failed")
+		}
+	}
+	return out
 }
 
 func remoteOperationAPIProject(isDev bool) model.Project {

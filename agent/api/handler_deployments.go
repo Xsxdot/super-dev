@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
@@ -131,45 +132,107 @@ func deploymentScopedToHost(dep model.Deployment, hostID string) (model.Deployme
 	return model.Deployment{}, fmt.Errorf("host %s is not configured for deployment %s", hostID, dep.ID)
 }
 
-func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
-	if dep.Location == model.LocationRemote {
-		return a.newRemoteRuntimeController().Start(ctx, dep)
+// emitControlEvent 发出一条控制指令进度事件，归属到 deploymentID。
+//
+// phase 取值：command_received / reconciling / executing / succeeded / failed。
+func (a *App) emitControlEvent(depID, action, phase, detail string) {
+	msg := fmt.Sprintf("[控制] %s · %s", action, phase)
+	if detail != "" {
+		msg += "：" + detail
 	}
-	mgr := a.getOrCreateManager(projectID)
+	a.buf.Append(model.LogEntry{
+		DeploymentID: depID,
+		Timestamp:    time.Now().UTC(),
+		Level:        "INFO",
+		Message:      msg,
+		Stream:       "control",
+	})
+}
+
+func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	a.emitControlEvent(dep.ID, "start", "command_received", "")
+	a.emitControlEvent(dep.ID, "start", "reconciling", "")
+	if dep.Location == model.LocationRemote {
+		a.emitControlEvent(dep.ID, "start", "executing", "remote")
+		if err := a.newRemoteRuntimeController().Start(ctx, dep); err != nil {
+			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "start", "succeeded", "")
+		return nil
+	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
+	mgr := a.getOrCreateManager(projectID)
+	a.emitControlEvent(dep.ID, "start", "executing", "")
 	if err := mgr.StartDeployment(dep); err != nil {
+		a.emitControlEvent(dep.ID, "start", "failed", err.Error())
 		return err
 	}
 	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
-	return a.pidStore.Flush()
+	if err := a.pidStore.Flush(); err != nil {
+		a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+		return err
+	}
+	a.emitControlEvent(dep.ID, "start", "succeeded", "")
+	return nil
 }
 
 func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	a.emitControlEvent(dep.ID, "stop", "command_received", "")
+	a.emitControlEvent(dep.ID, "stop", "reconciling", "")
 	if dep.Location == model.LocationRemote {
+		a.emitControlEvent(dep.ID, "stop", "executing", "remote")
 		if err := a.newRemoteRuntimeController().Stop(ctx, dep); err != nil {
+			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
 			return err
 		}
 		a.pidStore.Remove(dep.ID)
-		return a.pidStore.Flush()
+		if err := a.pidStore.Flush(); err != nil {
+			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "stop", "succeeded", "")
+		return nil
 	}
-	mgr := a.getOrCreateManager(projectID)
 	a.reconcileLocalDeployment(projectID, dep.ID)
+	mgr := a.getOrCreateManager(projectID)
+	a.emitControlEvent(dep.ID, "stop", "executing", "")
 	mgr.StopDeployment(dep.ID)
 	a.pidStore.Remove(dep.ID)
-	return a.pidStore.Flush()
+	if err := a.pidStore.Flush(); err != nil {
+		a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
+		return err
+	}
+	a.emitControlEvent(dep.ID, "stop", "succeeded", "")
+	return nil
 }
 
 func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+	a.emitControlEvent(dep.ID, "restart", "command_received", "")
+	a.emitControlEvent(dep.ID, "restart", "reconciling", "")
 	if dep.Location == model.LocationRemote {
-		return a.newRemoteRuntimeController().Restart(ctx, dep)
+		a.emitControlEvent(dep.ID, "restart", "executing", "remote")
+		if err := a.newRemoteRuntimeController().Restart(ctx, dep); err != nil {
+			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "restart", "succeeded", "")
+		return nil
 	}
-	mgr := a.getOrCreateManager(projectID)
 	a.reconcileLocalDeployment(projectID, dep.ID)
+	mgr := a.getOrCreateManager(projectID)
+	a.emitControlEvent(dep.ID, "restart", "executing", "")
 	if err := mgr.RestartDeployment(dep); err != nil {
+		a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
 		return err
 	}
 	a.pidStore.Set(dep.ID, mgr.DeploymentPID(dep.ID))
-	return a.pidStore.Flush()
+	if err := a.pidStore.Flush(); err != nil {
+		a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+		return err
+	}
+	a.emitControlEvent(dep.ID, "restart", "succeeded", "")
+	return nil
 }
 
 // findDeployment 在所有项目的所有服务中按 deployment ID 查找。
