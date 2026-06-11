@@ -127,6 +127,27 @@ func (s *Server) Handle(ctx context.Context, req rpcRequest) rpcResponse {
 	}
 }
 
+// CallToolForSmoke 调用已注册 MCP 工具，供本机 smoke/e2e 命令复用真实工具链。
+//
+// 参数：
+//   - ctx: 调用上下文
+//   - name: MCP 工具名
+//   - args: 工具参数 JSON
+//
+// 返回：
+//   - 工具业务结果，业务错误会以 IsError=true 返回
+//   - 工具不存在或 handler 异常时返回 error
+//
+// 注意：
+//   - 仅用于本机 smoke 和未来 e2e，不作为外部协议入口
+func (s *Server) CallToolForSmoke(ctx context.Context, name string, args json.RawMessage) (CallToolResult, error) {
+	tool, ok := s.tools[name]
+	if !ok {
+		return CallToolResult{}, fmt.Errorf("unknown tool: %s", name)
+	}
+	return tool.Handler(ctx, args)
+}
+
 // RunStdio reads newline-delimited JSON-RPC requests and writes responses.
 //
 // 参数：

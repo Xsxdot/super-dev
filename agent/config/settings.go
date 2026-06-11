@@ -47,6 +47,12 @@ const (
 	MinArtifactKeepVersions = 1
 	// MaxArtifactKeepVersions 是允许保留的最大制品版本数。
 	MaxArtifactKeepVersions = 100
+	// DefaultDebugBrowserSessionTTLMinutes 是本机浏览器调试 session 的默认 idle TTL。
+	DefaultDebugBrowserSessionTTLMinutes = 30
+	// MinDebugBrowserSessionTTLMinutes 是调试 session TTL 的最小值。
+	MinDebugBrowserSessionTTLMinutes = 1
+	// MaxDebugBrowserSessionTTLMinutes 是调试 session TTL 的最大值。
+	MaxDebugBrowserSessionTTLMinutes = 240
 )
 
 // ApprovalPolicy 表示 agent 级写操作审批策略。
@@ -64,9 +70,11 @@ type ApprovalPolicy struct {
 
 // DebugBrowserSettings 表示本机浏览器调试偏好。
 type DebugBrowserSettings struct {
-	DefaultBrowserID string               `json:"default_browser_id,omitempty"`
-	ProfileMode      string               `json:"profile_mode,omitempty"`
-	Browsers         []DebugBrowserConfig `json:"browsers,omitempty"`
+	DefaultBrowserID  string               `json:"default_browser_id,omitempty"`
+	ProfileMode       string               `json:"profile_mode,omitempty"`
+	AllowEvaluate     bool                 `json:"allow_evaluate"`
+	SessionTTLMinutes int                  `json:"session_ttl_minutes"`
+	Browsers          []DebugBrowserConfig `json:"browsers,omitempty"`
 }
 
 // DebugBrowserConfig 描述一个可被 SuperDev 启动的本机 Chromium 兼容浏览器。
@@ -115,7 +123,11 @@ func DefaultAgentSettings() AgentSettings {
 			TemplateImport: true,
 			GraceMinutes:   DefaultGraceMinutes,
 		},
-		DebugBrowser: DebugBrowserSettings{ProfileMode: "ephemeral"},
+		DebugBrowser: DebugBrowserSettings{
+			ProfileMode:       "ephemeral",
+			AllowEvaluate:     false,
+			SessionTTLMinutes: DefaultDebugBrowserSessionTTLMinutes,
+		},
 	}
 }
 
@@ -154,6 +166,9 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	}
 	if settings.DebugBrowser.ProfileMode != "" && settings.DebugBrowser.ProfileMode != "ephemeral" {
 		return fmt.Errorf("debug_browser.profile_mode must be ephemeral")
+	}
+	if settings.DebugBrowser.SessionTTLMinutes < MinDebugBrowserSessionTTLMinutes || settings.DebugBrowser.SessionTTLMinutes > MaxDebugBrowserSessionTTLMinutes {
+		return fmt.Errorf("debug_browser.session_ttl_minutes must be between %d and %d", MinDebugBrowserSessionTTLMinutes, MaxDebugBrowserSessionTTLMinutes)
 	}
 	seenBrowsers := map[string]bool{}
 	for _, browser := range settings.DebugBrowser.Browsers {
@@ -196,6 +211,9 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 	}
 	if settings.DebugBrowser.ProfileMode == "" {
 		settings.DebugBrowser.ProfileMode = "ephemeral"
+	}
+	if settings.DebugBrowser.SessionTTLMinutes == 0 {
+		settings.DebugBrowser.SessionTTLMinutes = DefaultDebugBrowserSessionTTLMinutes
 	}
 	if err := ValidateAgentSettings(settings); err != nil {
 		return AgentSettings{}, err

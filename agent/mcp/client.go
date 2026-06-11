@@ -97,6 +97,20 @@ type AgentClient interface {
 	BrowserType(context.Context, BrowserTypeRequest) (BrowserActionResult, error)
 	// BrowserScreenshot 截取浏览器页面。
 	BrowserScreenshot(context.Context, BrowserScreenshotRequest) (BrowserScreenshot, error)
+	// BrowserNavigate 对浏览器页面执行同源整页导航。
+	BrowserNavigate(context.Context, BrowserNavigateRequest) (BrowserNavigationResult, error)
+	// BrowserReload 刷新浏览器页面。
+	BrowserReload(context.Context, BrowserReloadRequest) (BrowserNavigationResult, error)
+	// BrowserWaitForSelector 等待浏览器页面 selector。
+	BrowserWaitForSelector(context.Context, BrowserWaitForSelectorRequest) (BrowserWaitResult, error)
+	// BrowserPressKey 向浏览器页面发送按键。
+	BrowserPressKey(context.Context, BrowserPressKeyRequest) (BrowserActionResult, error)
+	// BrowserSelectOption 选择浏览器页面 select 选项。
+	BrowserSelectOption(context.Context, BrowserSelectOptionRequest) (BrowserActionResult, error)
+	// BrowserConsoleLogs 读取浏览器页面 console 日志。
+	BrowserConsoleLogs(context.Context, BrowserConsoleLogsRequest) (BrowserConsoleLogsResult, error)
+	// BrowserNetworkRequests 读取浏览器页面网络请求摘要。
+	BrowserNetworkRequests(context.Context, BrowserNetworkRequestsRequest) (BrowserNetworkRequestsResult, error)
 	// BrowserEvaluate 执行浏览器页面 JavaScript。
 	BrowserEvaluate(context.Context, BrowserEvaluateRequest) (BrowserEvaluateResult, error)
 	// ListPipelineRuns 查询项目级 pipeline 执行历史。
@@ -111,6 +125,7 @@ type AgentClient interface {
 type AgentError struct {
 	Code     string
 	Message  string
+	Data     any
 	Plan     OperationPlan
 	Approval OperationApproval
 }
@@ -591,6 +606,55 @@ func (c *HTTPAgentClient) BrowserScreenshot(ctx context.Context, req BrowserScre
 	return out, c.post(ctx, path, req, &out)
 }
 
+// BrowserNavigate 对浏览器页面执行同源整页导航。
+func (c *HTTPAgentClient) BrowserNavigate(ctx context.Context, req BrowserNavigateRequest) (BrowserNavigationResult, error) {
+	var out BrowserNavigationResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/navigate"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserReload 刷新浏览器页面。
+func (c *HTTPAgentClient) BrowserReload(ctx context.Context, req BrowserReloadRequest) (BrowserNavigationResult, error) {
+	var out BrowserNavigationResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/reload"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserWaitForSelector 等待浏览器页面 selector。
+func (c *HTTPAgentClient) BrowserWaitForSelector(ctx context.Context, req BrowserWaitForSelectorRequest) (BrowserWaitResult, error) {
+	var out BrowserWaitResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/wait-for-selector"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserPressKey 向浏览器页面发送按键。
+func (c *HTTPAgentClient) BrowserPressKey(ctx context.Context, req BrowserPressKeyRequest) (BrowserActionResult, error) {
+	var out BrowserActionResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/press-key"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserSelectOption 选择浏览器页面 select 选项。
+func (c *HTTPAgentClient) BrowserSelectOption(ctx context.Context, req BrowserSelectOptionRequest) (BrowserActionResult, error) {
+	var out BrowserActionResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/select-option"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserConsoleLogs 读取浏览器页面 console 日志。
+func (c *HTTPAgentClient) BrowserConsoleLogs(ctx context.Context, req BrowserConsoleLogsRequest) (BrowserConsoleLogsResult, error) {
+	var out BrowserConsoleLogsResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/console-logs"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserNetworkRequests 读取浏览器页面网络请求摘要。
+func (c *HTTPAgentClient) BrowserNetworkRequests(ctx context.Context, req BrowserNetworkRequestsRequest) (BrowserNetworkRequestsResult, error) {
+	var out BrowserNetworkRequestsResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/network-requests"
+	return out, c.post(ctx, path, req, &out)
+}
+
 // BrowserEvaluate 执行浏览器页面 JavaScript。
 func (c *HTTPAgentClient) BrowserEvaluate(ctx context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
 	var out BrowserEvaluateResult
@@ -706,6 +770,7 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 		var body struct {
 			Code     string            `json:"code"`
 			Error    string            `json:"error"`
+			Data     any               `json:"data"`
 			Plan     OperationPlan     `json:"plan"`
 			Approval OperationApproval `json:"approval"`
 		}
@@ -714,7 +779,7 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 			body.Error = resp.Status
 		}
 		if body.Code != "" {
-			return AgentError{Code: body.Code, Message: body.Error, Plan: body.Plan, Approval: body.Approval}
+			return AgentError{Code: body.Code, Message: body.Error, Data: body.Data, Plan: body.Plan, Approval: body.Approval}
 		}
 		return fmt.Errorf("agent error: %s", body.Error)
 	}

@@ -204,6 +204,46 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.text()).toContain('brs_1')
   })
 
+  it('shows repair hint when debug browser is not configured', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    vi.spyOn(api, 'openBrowserSession').mockRejectedValue(new AgentAPIError('debug browser is not configured', 400, {
+      code: 'debug_browser_not_configured',
+      error: 'debug browser is not configured',
+    }))
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="browser-debug-error"]').text()).toContain('Configure a debug browser')
+  })
+
+  it('shows target and DevTools link after opening browser debug session', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    vi.spyOn(api, 'openBrowserSession').mockResolvedValue({
+      session_id: 'brs_1',
+      deployment_id: 'dep-api',
+      target_url: 'http://127.0.0.1:3000/',
+      browser_id: 'arc',
+      debug_port: 9222,
+      browser_ws: 'ws://127.0.0.1:9222/devtools/browser/a',
+      page_ws: 'ws://127.0.0.1:9222/devtools/page/p',
+      devtools_url: 'http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p',
+      alive: true,
+    })
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="browser-debug-target"]').text()).toContain('127.0.0.1:3000')
+    expect(wrapper.find('[data-test="browser-debug-devtools"]').attributes('href')).toContain('/devtools/inspector.html')
+  })
+
   it('clears stale browser debug session state when a later open fails', async () => {
     const service = makeService()
     useAgentStore().projects = [makeProject(service)]

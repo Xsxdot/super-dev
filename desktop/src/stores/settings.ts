@@ -11,7 +11,7 @@
 //   - 不直接渲染设置页
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, type AgentSettings, type ApprovalPolicy, type DebugBrowserSettings } from '@/api/agent'
+import { api, type AgentSettings, type ApprovalPolicy, type DebugBrowser, type DebugBrowserSettings } from '@/api/agent'
 import {
   SUPPORTED_LOCALE_OPTIONS,
   currentLocale,
@@ -50,6 +50,8 @@ export const useSettingsStore = defineStore('settings', () => {
     },
     debug_browser: {
       profile_mode: 'ephemeral',
+      allow_evaluate: false,
+      session_ttl_minutes: 30,
       browsers: [],
     },
   })
@@ -97,6 +99,10 @@ export const useSettingsStore = defineStore('settings', () => {
     agentSettings.value = saved
   }
 
+  async function detectDebugBrowsers(): Promise<DebugBrowser[]> {
+    return api.detectDebugBrowsers()
+  }
+
   async function loadAutostart() {
     const { isEnabled } = await import('@tauri-apps/plugin-autostart')
     autostartEnabled.value = await isEnabled()
@@ -139,6 +145,7 @@ export const useSettingsStore = defineStore('settings', () => {
     saveArtifactKeepVersions,
     saveApprovalPolicy,
     saveDebugBrowserSettings,
+    detectDebugBrowsers,
     setOnboardingCompleted,
     loadAutostart,
     setAutostart,

@@ -203,16 +203,17 @@ type deploymentYAML struct {
 	EnvFile     string `yaml:"env_file,omitempty"`
 	// EnvVars 使用 yaml key "env_vars" 而非 "env"，因为 "env" 已被 Env 字段（env_name）
 	// 占用。serviceYAML 沿用老格式的 "env" key，两者最终都映射到 model.Deployment.Env。
-	EnvVars      map[string]string    `yaml:"env_vars,omitempty"`
-	Hosts        []string             `yaml:"hosts,omitempty"`
-	LogType      string               `yaml:"log_type,omitempty"`
-	LogTarget    string               `yaml:"log_target,omitempty"`
-	ExtraArgs    []string             `yaml:"extra_args,omitempty"`
-	Runtime      *model.RuntimeConfig `yaml:"runtime,omitempty"`
-	Logs         *model.LogConfig     `yaml:"logs,omitempty"`
-	ReadOnly     bool                 `yaml:"read_only,omitempty"`
-	StartCommand string               `yaml:"start_command,omitempty"`
-	StopCommand  string               `yaml:"stop_command,omitempty"`
+	EnvVars      map[string]string          `yaml:"env_vars,omitempty"`
+	Hosts        []string                   `yaml:"hosts,omitempty"`
+	LogType      string                     `yaml:"log_type,omitempty"`
+	LogTarget    string                     `yaml:"log_target,omitempty"`
+	ExtraArgs    []string                   `yaml:"extra_args,omitempty"`
+	Runtime      *model.RuntimeConfig       `yaml:"runtime,omitempty"`
+	Logs         *model.LogConfig           `yaml:"logs,omitempty"`
+	Web          *model.WebEntrypointConfig `yaml:"web,omitempty"`
+	ReadOnly     bool                       `yaml:"read_only,omitempty"`
+	StartCommand string                     `yaml:"start_command,omitempty"`
+	StopCommand  string                     `yaml:"stop_command,omitempty"`
 }
 
 // serviceYAML 对应 yaml 文件中服务条目，仅作为 deployment 的逻辑分组。
@@ -273,6 +274,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			ExtraArgs:    d.ExtraArgs,
 			Runtime:      d.Runtime,
 			Logs:         d.Logs,
+			Web:          d.Web,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
@@ -348,6 +350,7 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			ExtraArgs:    d.ExtraArgs,
 			Runtime:      d.Runtime,
 			Logs:         d.Logs,
+			Web:          d.Web,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,

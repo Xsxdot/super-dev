@@ -71,3 +71,15 @@ func TestCloseBrowserDebugSessionTool(t *testing.T) {
 	require.False(t, result.IsError)
 	assert.Equal(t, "brs_1", client.closedBrowserSession)
 }
+
+func TestCallToolForSmokeUsesRegisteredTools(t *testing.T) {
+	server := NewServer(&fakeAgentClient{
+		debugBrowsers: []DebugBrowser{{ID: "arc", Name: "Arc", Available: true}},
+	})
+
+	result, err := server.CallToolForSmoke(context.Background(), "list_debug_browsers", []byte(`{}`))
+
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, result.Content[0]["text"], "debug browsers listed")
+}

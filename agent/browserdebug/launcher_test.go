@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -94,6 +95,95 @@ func TestChromiumLauncherHonorsOpenDevtoolsFlag(t *testing.T) {
 	args, err := os.ReadFile(argsPath)
 	require.NoError(t, err)
 	assert.NotContains(t, string(args), "--auto-open-devtools-for-tabs")
+}
+
+func TestChromiumLauncherUsesFreshProfileSafeStartupFlags(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			_, _ = fmt.Fprintf(w, `[{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/page-1"}]`, targetURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	browserPath := filepath.Join(dir, "fake-browser")
+	writeFakeChromium(t, browserPath, serverPort(t, cdp.URL), argsPath)
+
+	launcher := NewChromiumLauncher(t.TempDir(), cdp.Client())
+	result, err := launcher(context.Background(), LaunchRequest{
+		Browser:      BrowserRecord{ID: "fake", Name: "Fake Browser", ExecutablePath: browserPath, Available: true},
+		TargetURL:    targetURL,
+		OpenDevtools: true,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, result.Close()) }()
+
+	argsBytes, err := os.ReadFile(argsPath)
+	require.NoError(t, err)
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	assert.Contains(t, args, "--no-first-run")
+	assert.Contains(t, args, "--no-default-browser-check")
+	assert.Contains(t, args, "--disable-search-engine-choice-screen")
+	assert.Contains(t, args, "--disable-extensions")
+	assert.Contains(t, args, "--new-window")
+	assert.Equal(t, targetURL, args[len(args)-1])
+}
+
+func TestDiscoverCDPPrefersEquivalentTargetURLOverFirstPage(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			_, _ = fmt.Fprintf(w, `[
+				{"type":"page","url":"devtools://devtools/bundled/inspector.html","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/devtools"},
+				{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/app"}
+			]`, targetURL+"/")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	result, err := discoverCDP(context.Background(), cdp.Client(), serverPort(t, cdp.URL), targetURL)
+
+	require.NoError(t, err)
+	assert.Equal(t, "ws://127.0.0.1:9222/devtools/page/app", result.PageWS)
+}
+
+func TestDiscoverCDPWaitsForTargetPageBeforeFallback(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	listCalls := 0
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			listCalls++
+			if listCalls == 1 {
+				_, _ = fmt.Fprint(w, `[{"type":"page","url":"about:blank","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/blank"}]`)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `[{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/app"}]`, targetURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	result, err := discoverCDP(context.Background(), cdp.Client(), serverPort(t, cdp.URL), targetURL)
+
+	require.NoError(t, err)
+	assert.Equal(t, "ws://127.0.0.1:9222/devtools/page/app", result.PageWS)
+	assert.GreaterOrEqual(t, listCalls, 2)
 }
 
 func writeFakeChromium(t *testing.T, path string, cdpPort int, argsPath string) {

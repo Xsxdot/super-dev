@@ -136,10 +136,30 @@ type BrowserSession struct {
 
 // BrowserSnapshot 描述 AI 可读的页面状态快照。
 type BrowserSnapshot struct {
-	SessionID string `json:"session_id"`
-	URL       string `json:"url"`
-	Title     string `json:"title"`
-	Text      string `json:"text"`
+	SessionID string                   `json:"session_id"`
+	URL       string                   `json:"url"`
+	Title     string                   `json:"title"`
+	Text      string                   `json:"text"`
+	Elements  []BrowserSnapshotElement `json:"elements,omitempty"`
+	Focused   *BrowserSnapshotElement  `json:"focused,omitempty"`
+}
+
+// BrowserSnapshotElement 描述页面中 AI 可操作的元素摘要。
+type BrowserSnapshotElement struct {
+	Role     string                 `json:"role"`
+	Name     string                 `json:"name,omitempty"`
+	Selector string                 `json:"selector"`
+	Visible  bool                   `json:"visible"`
+	Enabled  bool                   `json:"enabled"`
+	Bounds   *BrowserSnapshotBounds `json:"bounds,omitempty"`
+}
+
+// BrowserSnapshotBounds 描述页面元素在 viewport 中的位置和尺寸。
+type BrowserSnapshotBounds struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 // BrowserActionResult 描述无额外负载的浏览器控制动作结果。
@@ -163,9 +183,10 @@ type BrowserEvaluateResult struct {
 
 // BrowserSnapshotRequest 描述页面快照请求。
 type BrowserSnapshotRequest struct {
-	SessionID string `json:"session_id"`
-	Selector  string `json:"selector,omitempty"`
-	MaxText   int    `json:"max_text,omitempty"`
+	SessionID   string `json:"session_id"`
+	Selector    string `json:"selector,omitempty"`
+	MaxText     int    `json:"max_text,omitempty"`
+	MaxElements int    `json:"max_elements,omitempty"`
 }
 
 // BrowserClickRequest 描述页面点击请求。
@@ -186,6 +207,99 @@ type BrowserTypeRequest struct {
 type BrowserScreenshotRequest struct {
 	SessionID string `json:"session_id"`
 	FullPage  bool   `json:"full_page,omitempty"`
+}
+
+// BrowserNavigateRequest 描述页面同源整页导航请求。
+type BrowserNavigateRequest struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url,omitempty"`
+	Path      string `json:"path,omitempty"`
+	WaitUntil string `json:"wait_until,omitempty"`
+}
+
+// BrowserReloadRequest 描述页面刷新请求。
+type BrowserReloadRequest struct {
+	SessionID string `json:"session_id"`
+	WaitUntil string `json:"wait_until,omitempty"`
+}
+
+// BrowserNavigationResult 描述页面导航后的状态。
+type BrowserNavigationResult struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+}
+
+// BrowserWaitForSelectorRequest 描述等待页面 selector 的请求。
+type BrowserWaitForSelectorRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+	State     string `json:"state,omitempty"`
+	TimeoutMS int    `json:"timeout_ms,omitempty"`
+}
+
+// BrowserWaitResult 描述等待页面 selector 的结果。
+type BrowserWaitResult struct {
+	SessionID string `json:"session_id"`
+	Matched   bool   `json:"matched"`
+	Text      string `json:"text,omitempty"`
+}
+
+// BrowserPressKeyRequest 描述键盘按键请求。
+type BrowserPressKeyRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector,omitempty"`
+	Key       string `json:"key"`
+}
+
+// BrowserSelectOptionRequest 描述 select 选项选择请求。
+type BrowserSelectOptionRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+	Value     string `json:"value,omitempty"`
+	Label     string `json:"label,omitempty"`
+}
+
+// BrowserConsoleLog 描述浏览器 console 日志摘要。
+type BrowserConsoleLog struct {
+	Time  time.Time `json:"time"`
+	Level string    `json:"level"`
+	Text  string    `json:"text"`
+}
+
+// BrowserNetworkRequest 描述浏览器网络请求摘要。
+type BrowserNetworkRequest struct {
+	Time   time.Time `json:"time"`
+	Method string    `json:"method"`
+	URL    string    `json:"url"`
+	Status int       `json:"status,omitempty"`
+	Error  string    `json:"error,omitempty"`
+}
+
+// BrowserConsoleLogsRequest 描述读取 console 日志请求。
+type BrowserConsoleLogsRequest struct {
+	SessionID string `json:"session_id"`
+	Level     string `json:"level,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+// BrowserConsoleLogsResult 描述 console 日志读取结果。
+type BrowserConsoleLogsResult struct {
+	SessionID string              `json:"session_id"`
+	Logs      []BrowserConsoleLog `json:"logs"`
+}
+
+// BrowserNetworkRequestsRequest 描述读取网络请求摘要请求。
+type BrowserNetworkRequestsRequest struct {
+	SessionID string `json:"session_id"`
+	Filter    string `json:"filter,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+// BrowserNetworkRequestsResult 描述网络请求摘要读取结果。
+type BrowserNetworkRequestsResult struct {
+	SessionID string                  `json:"session_id"`
+	Requests  []BrowserNetworkRequest `json:"requests"`
 }
 
 // BrowserEvaluateRequest 描述页面 JavaScript 执行请求。

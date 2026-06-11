@@ -31,7 +31,14 @@ import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import type { SupportedLocale } from '@/i18n'
-import type { PipelineTemplateDetail, PipelineTemplateSummary, Project, Service } from '@/api/agent'
+import type {
+  DebugBrowserConfig,
+  DebugBrowserSettings,
+  PipelineTemplateDetail,
+  PipelineTemplateSummary,
+  Project,
+  Service,
+} from '@/api/agent'
 
 type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'mcp'
 
@@ -74,6 +81,8 @@ const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetailLoading = ref(false)
 const templateDetailError = ref('')
 const templateDetail = ref<PipelineTemplateDetail | null>(null)
+const debugBrowserDraft = ref<DebugBrowserConfig>({ id: '', name: '', executable_path: '' })
+const detectingDebugBrowsers = ref(false)
 const {
   editorProject,
   editorIsNew,
@@ -170,8 +179,108 @@ const artifactKeepVersions = computed({
 })
 
 function saveDefaultDebugBrowser(browserId: string) {
-  const current = settingsStore.agentSettings.debug_browser ?? { profile_mode: 'ephemeral', browsers: [] }
-  void settingsStore.saveDebugBrowserSettings({ ...current, default_browser_id: browserId })
+  const current = currentDebugBrowserSettings()
+  saveDebugBrowserSettings({ ...current, default_browser_id: browserId })
+}
+
+function defaultDebugBrowserSettings(): DebugBrowserSettings {
+  return {
+    profile_mode: 'ephemeral',
+    allow_evaluate: false,
+    session_ttl_minutes: 30,
+    browsers: [],
+  }
+}
+
+function currentDebugBrowserSettings(): DebugBrowserSettings {
+  const current = settingsStore.agentSettings.debug_browser ?? {}
+  return {
+    ...defaultDebugBrowserSettings(),
+    ...current,
+    browsers: current.browsers ?? [],
+  }
+}
+
+function saveDebugBrowserSettings(next: DebugBrowserSettings) {
+  settingsStore.agentSettings = { ...settingsStore.agentSettings, debug_browser: next }
+  void settingsStore.saveDebugBrowserSettings(next)
+}
+
+function saveDebugBrowserList(browsers: DebugBrowserConfig[], defaultBrowserID?: string) {
+  const current = currentDebugBrowserSettings()
+  saveDebugBrowserSettings({
+    ...current,
+    browsers,
+    default_browser_id: defaultBrowserID ?? current.default_browser_id,
+  })
+}
+
+function saveDebugBrowserEvaluate(allowEvaluate: boolean) {
+  const current = currentDebugBrowserSettings()
+  saveDebugBrowserSettings({ ...current, allow_evaluate: allowEvaluate })
+}
+
+function saveDebugBrowserTTL(value: string | number) {
+  const rawMinutes = Number(value)
+  const minutes = Number.isFinite(rawMinutes) ? Math.min(240, Math.max(1, rawMinutes)) : 30
+  const current = currentDebugBrowserSettings()
+  saveDebugBrowserSettings({ ...current, session_ttl_minutes: minutes })
+}
+
+function addDebugBrowser() {
+  const browser = {
+    id: debugBrowserDraft.value.id.trim(),
+    name: debugBrowserDraft.value.name.trim(),
+    executable_path: debugBrowserDraft.value.executable_path.trim(),
+  }
+  if (!browser.id || !browser.name || !browser.executable_path) {
+    void message(t('settings.general.debugBrowserInvalid'), { title: t('settings.general.debugBrowserAdd'), kind: 'warning' })
+    return
+  }
+  const current = currentDebugBrowserSettings()
+  const rest = (current.browsers ?? []).filter(item => item.id !== browser.id)
+  saveDebugBrowserList([...rest, browser], current.default_browser_id || browser.id)
+  debugBrowserDraft.value = { id: '', name: '', executable_path: '' }
+}
+
+function removeDebugBrowser(id: string) {
+  const current = currentDebugBrowserSettings()
+  const browsers = (current.browsers ?? []).filter(item => item.id !== id)
+  const nextDefault = current.default_browser_id === id ? (browsers[0]?.id ?? '') : current.default_browser_id
+  saveDebugBrowserList(browsers, nextDefault)
+}
+
+function persistableDebugBrowser(browser: DebugBrowserConfig): DebugBrowserConfig {
+  return {
+    id: browser.id,
+    name: browser.name,
+    executable_path: browser.executable_path,
+  }
+}
+
+function mergeDebugBrowsers(existing: DebugBrowserConfig[], detected: DebugBrowserConfig[]) {
+  const byID = new Map<string, DebugBrowserConfig>()
+  for (const browser of detected) byID.set(browser.id, persistableDebugBrowser(browser))
+  for (const browser of existing) byID.set(browser.id, persistableDebugBrowser(browser))
+  return [...byID.values()]
+}
+
+async function detectDebugBrowsers() {
+  detectingDebugBrowsers.value = true
+  try {
+    const detected = await settingsStore.detectDebugBrowsers()
+    const current = currentDebugBrowserSettings()
+    const browsers = mergeDebugBrowsers(current.browsers ?? [], detected)
+    saveDebugBrowserList(browsers, current.default_browser_id || browsers[0]?.id)
+  } finally {
+    detectingDebugBrowsers.value = false
+  }
+}
+
+async function chooseDebugBrowserExecutable() {
+  const selected = await open({ multiple: false, title: t('settings.general.debugBrowserChoose') })
+  if (!selected || Array.isArray(selected)) return
+  debugBrowserDraft.value = { ...debugBrowserDraft.value, executable_path: selected }
 }
 </script>
 
@@ -361,21 +470,126 @@ function saveDefaultDebugBrowser(browserId: string) {
               <div class="settings-row-title">{{ t('settings.general.debugBrowserTitle') }}</div>
               <div class="settings-row-description">{{ t('settings.general.debugBrowserDesc') }}</div>
             </div>
-            <select
-              class="settings-select debug-browser-select"
-              data-test="debug-browser-default"
-              :value="settingsStore.agentSettings.debug_browser?.default_browser_id ?? ''"
-              @change="saveDefaultDebugBrowser(($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">{{ t('settings.general.debugBrowserNone') }}</option>
-              <option
-                v-for="browser in settingsStore.agentSettings.debug_browser?.browsers ?? []"
-                :key="browser.id"
-                :value="browser.id"
-              >
-                {{ browser.name }}
-              </option>
-            </select>
+            <div class="debug-browser-panel">
+              <div class="debug-browser-default">
+                <select
+                  class="settings-select debug-browser-select"
+                  data-test="debug-browser-default"
+                  :value="settingsStore.agentSettings.debug_browser?.default_browser_id ?? ''"
+                  @change="saveDefaultDebugBrowser(($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">{{ t('settings.general.debugBrowserNone') }}</option>
+                  <option
+                    v-for="browser in settingsStore.agentSettings.debug_browser?.browsers ?? []"
+                    :key="browser.id"
+                    :value="browser.id"
+                  >
+                    {{ browser.name }}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  class="settings-btn settings-btn-secondary"
+                  data-test="debug-browser-detect"
+                  :disabled="detectingDebugBrowsers"
+                  @click="detectDebugBrowsers"
+                >
+                  {{ t('settings.general.debugBrowserDetect') }}
+                </button>
+              </div>
+              <div class="debug-browser-options">
+                <label class="debug-browser-option">
+                  <span>
+                    <span class="debug-browser-option-title">{{ t('settings.general.debugBrowserEvaluateTitle') }}</span>
+                    <span class="debug-browser-option-desc">{{ t('settings.general.debugBrowserEvaluateDesc') }}</span>
+                  </span>
+                  <span class="settings-switch">
+                    <input
+                      data-test="debug-browser-allow-evaluate"
+                      type="checkbox"
+                      :checked="currentDebugBrowserSettings().allow_evaluate ?? false"
+                      @change="saveDebugBrowserEvaluate(($event.target as HTMLInputElement).checked)"
+                    />
+                    <span />
+                  </span>
+                </label>
+                <label class="debug-browser-option">
+                  <span>
+                    <span class="debug-browser-option-title">{{ t('settings.general.debugBrowserTTLTitle') }}</span>
+                    <span class="debug-browser-option-desc">{{ t('settings.general.debugBrowserTTLDesc') }}</span>
+                  </span>
+                  <input
+                    class="settings-input debug-browser-ttl"
+                    data-test="debug-browser-ttl"
+                    type="number"
+                    min="1"
+                    max="240"
+                    :value="currentDebugBrowserSettings().session_ttl_minutes ?? 30"
+                    @change="saveDebugBrowserTTL(($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+              </div>
+              <div v-if="(settingsStore.agentSettings.debug_browser?.browsers ?? []).length" class="debug-browser-list">
+                <div
+                  v-for="browser in settingsStore.agentSettings.debug_browser?.browsers ?? []"
+                  :key="browser.id"
+                  class="debug-browser-item"
+                >
+                  <span>{{ browser.name }}</span>
+                  <span class="debug-browser-path">{{ browser.executable_path }}</span>
+                  <span class="debug-browser-status" :data-test="`debug-browser-status-${browser.id}`">
+                    {{ browser.executable_path ? t('settings.general.debugBrowserConfigured') : t('settings.general.debugBrowserMissingPath') }}
+                  </span>
+                  <button
+                    type="button"
+                    class="settings-btn settings-btn-secondary"
+                    :data-test="`debug-browser-remove-${browser.id}`"
+                    @click="removeDebugBrowser(browser.id)"
+                  >
+                    {{ t('common.delete') }}
+                  </button>
+                </div>
+              </div>
+              <div class="debug-browser-editor">
+                <input
+                  class="settings-input debug-browser-id"
+                  data-test="debug-browser-id"
+                  :placeholder="t('settings.general.debugBrowserID')"
+                  :value="debugBrowserDraft.id"
+                  @input="debugBrowserDraft.id = ($event.target as HTMLInputElement).value"
+                />
+                <input
+                  class="settings-input debug-browser-name"
+                  data-test="debug-browser-name"
+                  :placeholder="t('settings.general.debugBrowserName')"
+                  :value="debugBrowserDraft.name"
+                  @input="debugBrowserDraft.name = ($event.target as HTMLInputElement).value"
+                />
+                <input
+                  class="settings-input debug-browser-path-input"
+                  data-test="debug-browser-path"
+                  :placeholder="t('settings.general.debugBrowserPath')"
+                  :value="debugBrowserDraft.executable_path"
+                  @input="debugBrowserDraft.executable_path = ($event.target as HTMLInputElement).value"
+                />
+                <button
+                  type="button"
+                  class="settings-btn settings-btn-secondary"
+                  data-test="debug-browser-choose"
+                  @click="chooseDebugBrowserExecutable"
+                >
+                  {{ t('settings.general.debugBrowserChoose') }}
+                </button>
+                <button
+                  type="button"
+                  class="settings-btn settings-btn-primary"
+                  data-test="debug-browser-add"
+                  @click="addDebugBrowser"
+                >
+                  {{ t('settings.general.debugBrowserAdd') }}
+                </button>
+              </div>
+            </div>
           </div>
           <div class="settings-row">
             <div>
@@ -603,6 +817,100 @@ function saveDefaultDebugBrowser(browserId: string) {
 
 .debug-browser-select {
   min-width: 172px;
+}
+
+.debug-browser-panel {
+  display: grid;
+  gap: 8px;
+  width: min(520px, 100%);
+}
+
+.debug-browser-default,
+.debug-browser-editor,
+.debug-browser-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-browser-options {
+  display: grid;
+  gap: 6px;
+}
+
+.debug-browser-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.debug-browser-option > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.debug-browser-option-title {
+  color: var(--text-primary);
+}
+
+.debug-browser-option-desc {
+  color: var(--text-tertiary);
+  line-height: 1.35;
+}
+
+.debug-browser-ttl {
+  width: 72px;
+  text-align: right;
+}
+
+.debug-browser-editor {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.debug-browser-id {
+  width: 104px;
+}
+
+.debug-browser-name {
+  width: 132px;
+}
+
+.debug-browser-path-input {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.debug-browser-list {
+  display: grid;
+  gap: 6px;
+}
+
+.debug-browser-item {
+  justify-content: flex-end;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.debug-browser-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-browser-status {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .settings-switch input {

@@ -14,17 +14,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const devToolsPortTimeout = 15 * time.Second
+const cdpTargetTimeout = 5 * time.Second
 
 type versionResponse struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
@@ -56,40 +60,65 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		args := []string{
 			"--remote-debugging-port=0",
 			"--user-data-dir=" + profileDir,
+			// 新 profile 首次启动时，Chrome 可能先打开登录/默认浏览器/搜索引擎选择页。
+			// 这些页面会抢占 CDP page target，导致 SuperDev 找不到目标前端页面。
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-search-engine-choice-screen",
+			"--disable-extensions",
 		}
 		if req.OpenDevtools {
 			args = append(args, "--auto-open-devtools-for-tabs")
 		}
+		args = append(args, "--new-window")
 		args = append(args, req.TargetURL)
 		cmd := exec.Command(req.Browser.ExecutablePath, args...)
 		if err := cmd.Start(); err != nil {
 			_ = os.RemoveAll(profileDir)
 			return LaunchResult{}, fmt.Errorf("launch browser: %w", err)
 		}
+		var exited atomic.Bool
+		done := make(chan error, 1)
+		go func() {
+			err := cmd.Wait()
+			exited.Store(true)
+			done <- err
+		}()
 		port, err := waitDevToolsPort(ctx, filepath.Join(profileDir, "DevToolsActivePort"))
 		if err != nil {
-			cleanupStartedBrowser(cmd, profileDir)
+			cleanupStartedBrowser(cmd, done, profileDir)
 			return LaunchResult{}, err
 		}
 		result, err := discoverCDP(ctx, httpClient, port, req.TargetURL)
 		if err != nil {
-			cleanupStartedBrowser(cmd, profileDir)
+			cleanupStartedBrowser(cmd, done, profileDir)
 			return LaunchResult{}, err
 		}
 		result.ProcessID = cmd.Process.Pid
+		result.ProfileDir = profileDir
+		result.Alive = func() bool {
+			return !exited.Load()
+		}
 		result.Close = func() error {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			select {
+			case <-done:
+			default:
+				if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					_ = os.RemoveAll(profileDir)
+					return err
+				}
+				<-done
+			}
 			return os.RemoveAll(profileDir)
 		}
 		return result, nil
 	}
 }
 
-func cleanupStartedBrowser(cmd *exec.Cmd, profileDir string) {
+func cleanupStartedBrowser(cmd *exec.Cmd, done <-chan error, profileDir string) {
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-done
 	}
 	_ = os.RemoveAll(profileDir)
 }
@@ -136,24 +165,92 @@ func discoverCDP(ctx context.Context, client *http.Client, port int, targetURL s
 	if err := getJSON(ctx, client, base+"/json/version", &version); err != nil {
 		return LaunchResult{}, err
 	}
-	var targets []targetResponse
-	if err := getJSON(ctx, client, base+"/json/list", &targets); err != nil {
+	target, err := waitCDPTarget(ctx, client, base, targetURL)
+	if err != nil {
 		return LaunchResult{}, err
 	}
-	for _, target := range targets {
-		if target.Type != "page" || target.WebSocketDebuggerURL == "" {
-			continue
+	return launchResultForTarget(base, port, version, target), nil
+}
+
+func waitCDPTarget(ctx context.Context, client *http.Client, base string, targetURL string) (targetResponse, error) {
+	deadline := time.NewTimer(cdpTargetTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var fallback targetResponse
+	for {
+		var targets []targetResponse
+		if err := getJSON(ctx, client, base+"/json/list", &targets); err != nil {
+			return targetResponse{}, err
 		}
-		if target.URL == targetURL {
-			return launchResultForTarget(base, port, version, target), nil
+		for _, target := range targets {
+			if !isPageTarget(target) {
+				continue
+			}
+			if targetURLMatches(target.URL, targetURL) {
+				return target, nil
+			}
+			if fallback.WebSocketDebuggerURL == "" && isUsableFallbackPage(target.URL) {
+				fallback = target
+			}
+		}
+		if strings.TrimSpace(targetURL) == "" && fallback.WebSocketDebuggerURL != "" {
+			return fallback, nil
+		}
+		select {
+		case <-ctx.Done():
+			return targetResponse{}, ctx.Err()
+		case <-deadline.C:
+			if fallback.WebSocketDebuggerURL != "" {
+				return fallback, nil
+			}
+			return targetResponse{}, fmt.Errorf("page target not found")
+		case <-ticker.C:
 		}
 	}
-	for _, target := range targets {
-		if target.Type == "page" && target.WebSocketDebuggerURL != "" {
-			return launchResultForTarget(base, port, version, target), nil
-		}
+}
+
+func isPageTarget(target targetResponse) bool {
+	return target.Type == "page" && target.WebSocketDebuggerURL != ""
+}
+
+func isUsableFallbackPage(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
 	}
-	return LaunchResult{}, fmt.Errorf("page target not found")
+	switch parsed.Scheme {
+	case "http", "https", "file":
+		return true
+	default:
+		return false
+	}
+}
+
+func targetURLMatches(candidate string, expected string) bool {
+	candidate = strings.TrimSpace(candidate)
+	expected = strings.TrimSpace(expected)
+	if candidate == "" || expected == "" {
+		return false
+	}
+	if candidate == expected {
+		return true
+	}
+	candidateURL, candidateErr := url.Parse(candidate)
+	expectedURL, expectedErr := url.Parse(expected)
+	if candidateErr != nil || expectedErr != nil {
+		return false
+	}
+	normalizeURLForCompare(candidateURL)
+	normalizeURLForCompare(expectedURL)
+	return candidateURL.String() == expectedURL.String()
+}
+
+func normalizeURLForCompare(value *url.URL) {
+	if value.Path == "" {
+		value.Path = "/"
+	}
+	value.Fragment = ""
 }
 
 func launchResultForTarget(base string, port int, version versionResponse, target targetResponse) LaunchResult {

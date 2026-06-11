@@ -9,7 +9,7 @@
  *   - 不测试真实系统登录项
  *   - 不打开真实目录选择器
  */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
@@ -177,9 +177,118 @@ describe('SettingsPage', () => {
     expect(settings.saveDebugBrowserSettings).toHaveBeenCalledWith({
       default_browser_id: 'arc',
       profile_mode: 'ephemeral',
+      allow_evaluate: false,
+      session_ttl_minutes: 30,
       browsers: [
         { id: 'chrome', name: 'Google Chrome', executable_path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
         { id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' },
+      ],
+    })
+  })
+
+  it('通用页可保存浏览器 evaluate 开关和 session TTL', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+      debug_browser: {
+        default_browser_id: 'arc',
+        profile_mode: 'ephemeral',
+        allow_evaluate: false,
+        session_ttl_minutes: 30,
+        browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],
+      },
+    }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'saveDebugBrowserSettings').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+
+    await wrapper.find('[data-test="debug-browser-allow-evaluate"]').setValue(true)
+    await wrapper.find('[data-test="debug-browser-ttl"]').setValue(45)
+    await wrapper.find('[data-test="debug-browser-ttl"]').trigger('change')
+
+    expect(settings.saveDebugBrowserSettings).toHaveBeenLastCalledWith({
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      allow_evaluate: true,
+      session_ttl_minutes: 45,
+      browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],
+    })
+  })
+
+  it('通用页可手动添加调试浏览器并设为默认', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+      debug_browser: {
+        profile_mode: 'ephemeral',
+        browsers: [],
+      },
+    }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'saveDebugBrowserSettings').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    await wrapper.find('[data-test="debug-browser-id"]').setValue('arc')
+    await wrapper.find('[data-test="debug-browser-name"]').setValue('Arc')
+    await wrapper.find('[data-test="debug-browser-path"]').setValue('/Applications/Arc.app/Contents/MacOS/Arc')
+    await wrapper.find('[data-test="debug-browser-add"]').trigger('click')
+
+    expect(settings.saveDebugBrowserSettings).toHaveBeenCalledWith({
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      allow_evaluate: false,
+      session_ttl_minutes: 30,
+      browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],
+    })
+  })
+
+  it('自动探测浏览器时保留用户已有同 ID 修改', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+      debug_browser: {
+        default_browser_id: 'arc',
+        profile_mode: 'ephemeral',
+        allow_evaluate: false,
+        session_ttl_minutes: 30,
+        browsers: [{ id: 'arc', name: 'My Arc', executable_path: '/custom/Arc' }],
+      },
+    }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'detectDebugBrowsers').mockResolvedValue([
+      { id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc', available: true },
+      { id: 'chrome', name: 'Google Chrome', executable_path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', available: true },
+    ])
+    vi.spyOn(settings, 'saveDebugBrowserSettings').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    await wrapper.find('[data-test="debug-browser-detect"]').trigger('click')
+    await flushPromises()
+
+    expect(settings.saveDebugBrowserSettings).toHaveBeenCalledWith({
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      allow_evaluate: false,
+      session_ttl_minutes: 30,
+      browsers: [
+        { id: 'arc', name: 'My Arc', executable_path: '/custom/Arc' },
+        { id: 'chrome', name: 'Google Chrome', executable_path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
       ],
     })
   })

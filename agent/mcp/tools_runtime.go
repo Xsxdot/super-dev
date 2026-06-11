@@ -295,10 +295,18 @@ func clientToolError(err error) CallToolResult {
 		if code == "" {
 			code = "operation_failed"
 		}
-		return toolError(code, agentErr.Message, map[string]any{
-			"plan":     agentErr.Plan,
-			"approval": agentErr.Approval,
-		})
+		data := agentErr.Data
+		if agentErr.Plan.ID != "" || agentErr.Approval.ID != "" {
+			payload := map[string]any{
+				"plan":     agentErr.Plan,
+				"approval": agentErr.Approval,
+			}
+			if agentErr.Data != nil {
+				payload["data"] = agentErr.Data
+			}
+			data = payload
+		}
+		return toolError(code, agentErr.Message, data)
 	}
 	return toolError("operation_failed", err.Error(), nil)
 }

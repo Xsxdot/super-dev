@@ -73,6 +73,8 @@ type AppConfig struct {
 	ExecutionAuthorizer remoteexec.Authorizer
 	// ManagedDeploymentReconcileInterval 控制桌面端推送 remote deployment 期望状态的周期；0 时使用 30 秒。
 	ManagedDeploymentReconcileInterval time.Duration
+	// DebugBrowserCandidates 注入本机浏览器探测候选，仅用于测试或嵌入式发行定制。
+	DebugBrowserCandidates []browserdebug.BrowserCandidate
 	// BootstrapToken 是远端 agent 首次安全自举的一次性 token。
 	BootstrapToken string
 	// RequireAuth 控制 agent API 是否必须完成安全自举后才允许访问。
@@ -153,6 +155,8 @@ type App struct {
 	operationGrace operation.GraceStore
 	// browserDebug 管理由 SuperDev 创建的本机浏览器调试会话。
 	browserDebug *browserdebug.Manager
+	// debugBrowserCandidates 保存本机浏览器自动探测候选。
+	debugBrowserCandidates []browserdebug.BrowserCandidate
 	// browserControl 通过 Playwright 控制已创建的浏览器调试会话。
 	browserControl browsercontrol.Controller
 	// securityStore 持久化 agent 安全自举与长期 token 状态。
@@ -274,8 +278,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	operationGrace := operation.NewGraceFileStore(filepath.Join(cfg.DataDir, "operation-grace.json"))
+	browserProfileRoot := filepath.Join(cfg.DataDir, "browser-debug")
+	browserTTL := time.Duration(settings.DebugBrowser.SessionTTLMinutes) * time.Minute
+	_, _ = browserdebug.CleanupStaleProfiles(browserProfileRoot, browserTTL, time.Now())
 	browserDebug := browserdebug.NewManager(browserdebug.ManagerOptions{
-		Launch: browserdebug.NewChromiumLauncher(filepath.Join(cfg.DataDir, "browser-debug"), http.DefaultClient),
+		Launch:     browserdebug.NewChromiumLauncher(browserProfileRoot, http.DefaultClient),
+		SessionTTL: browserTTL,
 	})
 	browserControl := browsercontrol.NewPlaywrightController(filepath.Join(cfg.DataDir, "playwright-driver"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
@@ -369,6 +377,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		operationAudit:              operationAudit,
 		operationGrace:              operationGrace,
 		browserDebug:                browserDebug,
+		debugBrowserCandidates:      cfg.DebugBrowserCandidates,
 		browserControl:              browserControl,
 		securityStore:               securityStore,
 		nodeTransport:               nodeTransport,
@@ -455,6 +464,9 @@ func (a *App) Close() {
 	if a.procMgr != nil {
 		a.procMgr.StopAll()
 	}
+	if closer, ok := a.browserControl.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
 	a.buf.Close()
 	if a.tunnels != nil {
 		a.tunnels.Close()
@@ -532,6 +544,7 @@ func (a *App) Handler() http.Handler {
 
 	// Browser debug sessions（本机前端 Web entrypoint 调试）
 	mux.HandleFunc("GET /api/debug-browsers", a.listDebugBrowsers)
+	mux.HandleFunc("GET /api/debug-browsers/detected", a.detectDebugBrowsers)
 	mux.HandleFunc("GET /api/browser-targets", a.listBrowserTargets)
 	mux.HandleFunc("POST /api/browser-sessions", a.openBrowserSession)
 	mux.HandleFunc("GET /api/browser-sessions", a.listBrowserSessions)
@@ -541,6 +554,13 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/browser-sessions/{id}/click", a.browserSessionClick)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/type", a.browserSessionType)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/screenshot", a.browserSessionScreenshot)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/navigate", a.browserSessionNavigate)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/reload", a.browserSessionReload)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/wait-for-selector", a.browserSessionWaitForSelector)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/press-key", a.browserSessionPressKey)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/select-option", a.browserSessionSelectOption)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/console-logs", a.browserSessionConsoleLogs)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/network-requests", a.browserSessionNetworkRequests)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/evaluate", a.browserSessionEvaluate)
 
 	// Operation safety（本机写操作预检、审批与审计）

@@ -14,7 +14,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { api, type BrowserSession } from '@/api/agent'
+import { AgentAPIError, api, type BrowserSession } from '@/api/agent'
 import { MAX_PANEL_LEAVES, usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -94,8 +94,24 @@ async function openBrowserDebug() {
     const captured = await operationApprovalStore.captureApprovalRequired(error)
     browserError.value = captured
       ? t('runtimeWorkbench.browserDebugApprovalRequired')
-      : error instanceof Error ? error.message : String(error)
+      : browserDebugErrorMessage(error)
   }
+}
+
+function browserDebugErrorMessage(error: unknown): string {
+  if (error instanceof AgentAPIError) {
+    switch (error.code) {
+      case 'debug_browser_not_configured':
+        return t('runtimeWorkbench.browserDebugConfigureBrowser')
+      case 'browser_executable_unavailable':
+        return t('runtimeWorkbench.browserDebugChoosePath')
+      case 'web_entrypoint_not_ready':
+        return t('runtimeWorkbench.browserDebugServiceNotReady')
+      case 'browser_cdp_connection_failed':
+        return t('runtimeWorkbench.browserDebugCDPFailed')
+    }
+  }
+  return error instanceof Error ? error.message : String(error)
 }
 
 function startWindowDrag(event: MouseEvent) {
@@ -142,9 +158,17 @@ function startWindowDrag(event: MouseEvent) {
       >
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
-      <span v-if="browserSession" class="status-chip browser-session" data-test="browser-debug-session">
-        {{ browserSession.session_id }}
-      </span>
+      <template v-if="browserSession">
+        <span class="status-chip browser-session" data-test="browser-debug-session">
+          {{ browserSession.session_id }}
+        </span>
+        <a class="status-chip browser-session browser-link" data-test="browser-debug-target" :href="browserSession.target_url">
+          {{ browserSession.target_url }}
+        </a>
+        <a class="status-chip browser-session browser-link" data-test="browser-debug-devtools" :href="browserSession.devtools_url">
+          DevTools
+        </a>
+      </template>
       <span v-else-if="browserError" class="status-chip browser-error" data-test="browser-debug-error">
         {{ browserError }}
       </span>
@@ -272,6 +296,13 @@ function startWindowDrag(event: MouseEvent) {
   border-color: rgba(63, 185, 80, 0.28);
   background: rgba(63, 185, 80, 0.08);
   color: #7ce38b;
+}
+
+.status-chip.browser-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
 }
 
 .status-chip.browser-error {

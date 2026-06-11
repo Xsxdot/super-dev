@@ -85,5 +85,9 @@ type Session struct {
 	PageWS       string    `json:"page_ws"`
 	DevtoolsURL  string    `json:"devtools_url"`
 	CreatedAt    time.Time `json:"created_at"`
+	LastUsedAt   time.Time `json:"last_used_at"`
+	Alive        bool      `json:"alive"`
+	Error        string    `json:"error,omitempty"`
 	Closed       bool      `json:"closed,omitempty"`
+	ProfileDir   string    `json:"-"`
 }

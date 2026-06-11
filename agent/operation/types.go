@@ -32,6 +32,12 @@ const (
 	OperationRuntimeStartSelected = "runtime.start_selected"
 	// OperationBrowserDebugOpen 表示打开本机浏览器调试会话。
 	OperationBrowserDebugOpen = "browser_debug.open"
+	// OperationBrowserDebugControl 表示在已打开调试会话上执行页面控制动作。
+	//
+	// 注意：
+	//   - 该 kind 仅用于审计留痕，不参与审批门禁
+	//   - evaluate 等高风险动作的明文表达式与结果永远不进入审计
+	OperationBrowserDebugControl = "browser_debug.control"
 	// OperationTemplateImport 表示导入流水线模板的写操作。
 	OperationTemplateImport = "template.import"
 	// OperationConfigProjectUpsert 表示新增或编辑项目基础配置。

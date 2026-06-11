@@ -41,6 +41,8 @@ type LaunchResult struct {
 	BrowserWS   string
 	PageWS      string
 	DevtoolsURL string
+	ProfileDir  string
+	Alive       func() bool
 	Close       func() error
 }
 
@@ -49,7 +51,9 @@ type Launcher func(context.Context, LaunchRequest) (LaunchResult, error)
 
 // ManagerOptions 描述浏览器 session 管理器依赖。
 type ManagerOptions struct {
-	Launch Launcher
+	Launch     Launcher
+	SessionTTL time.Duration
+	Now        func() time.Time
 }
 
 // SessionRecord 保存 runtime 需要的 session 进程关闭能力。
@@ -57,6 +61,7 @@ type SessionRecord struct {
 	Session
 	ProcessID int
 	ClosedAt  time.Time `json:"closed_at,omitempty"`
+	alive     func() bool
 	close     func() error
 }
 
@@ -64,14 +69,24 @@ type SessionRecord struct {
 type Manager struct {
 	mu       sync.Mutex
 	launch   Launcher
+	ttl      time.Duration
+	now      func() time.Time
 	sessions map[string]*SessionRecord
+	closed   map[string]Session
 }
 
 // NewManager 创建浏览器调试 session 管理器。
 func NewManager(opts ManagerOptions) *Manager {
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Manager{
 		launch:   opts.Launch,
+		ttl:      opts.SessionTTL,
+		now:      now,
 		sessions: map[string]*SessionRecord{},
+		closed:   map[string]Session{},
 	}
 }
 
@@ -90,7 +105,7 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 	if err != nil {
 		return Session{}, err
 	}
-	now := time.Now().UTC()
+	now := m.now().UTC()
 	record := &SessionRecord{
 		Session: Session{
 			ID:           "brs_" + uuid.NewString(),
@@ -102,11 +117,17 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 			PageWS:       result.PageWS,
 			DevtoolsURL:  result.DevtoolsURL,
 			CreatedAt:    now,
+			LastUsedAt:   now,
+			Alive:        true,
+			ProfileDir:   result.ProfileDir,
 		},
 		ProcessID: result.ProcessID,
+		alive:     result.Alive,
 		close:     result.Close,
 	}
 	m.mu.Lock()
+	closeFns := m.cleanupLocked(now)
+	defer closeSessionFns(closeFns)
 	defer m.mu.Unlock()
 	m.sessions[record.ID] = record
 	return record.Session, nil
@@ -115,10 +136,12 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 // List 返回当前已知 session 快照。
 func (m *Manager) List() []Session {
 	m.mu.Lock()
+	closeFns := m.cleanupLocked(m.now().UTC())
+	defer closeSessionFns(closeFns)
 	defer m.mu.Unlock()
 	out := make([]Session, 0, len(m.sessions))
 	for _, record := range m.sessions {
-		out = append(out, record.Session)
+		out = append(out, sessionStatus(record))
 	}
 	return out
 }
@@ -126,12 +149,41 @@ func (m *Manager) List() []Session {
 // Get 返回指定 session 快照。
 func (m *Manager) Get(id string) (SessionRecord, bool) {
 	m.mu.Lock()
+	closeFns := m.cleanupLocked(m.now().UTC())
+	defer closeSessionFns(closeFns)
 	defer m.mu.Unlock()
 	record, ok := m.sessions[id]
 	if !ok {
 		return SessionRecord{}, false
 	}
-	return *record, true
+	out := *record
+	out.Session = sessionStatus(record)
+	return out, true
+}
+
+// Touch 刷新 session 的最近使用时间，用于 idle TTL 续期。
+func (m *Manager) Touch(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, ok := m.sessions[id]
+	if !ok || record.Closed {
+		return false
+	}
+	record.LastUsedAt = m.now().UTC()
+	return true
+}
+
+// Status 返回 session 状态快照，包含浏览器进程存活检查结果。
+func (m *Manager) Status(id string) (Session, bool) {
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(m.now().UTC())
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	if record, ok := m.sessions[id]; ok {
+		return sessionStatus(record), true
+	}
+	session, ok := m.closed[id]
+	return session, ok
 }
 
 // Close 关闭指定浏览器调试会话。
@@ -139,19 +191,66 @@ func (m *Manager) Close(id string) error {
 	m.mu.Lock()
 	record, ok := m.sessions[id]
 	if !ok {
+		if _, closed := m.closed[id]; closed {
+			m.mu.Unlock()
+			return nil
+		}
 		m.mu.Unlock()
 		return fmt.Errorf("browser session not found")
 	}
 	if record.Closed {
+		delete(m.sessions, id)
 		m.mu.Unlock()
 		return nil
 	}
 	record.Closed = true
-	record.ClosedAt = time.Now().UTC()
+	record.ClosedAt = m.now().UTC()
+	record.Alive = false
 	closeFn := record.close
+	delete(m.sessions, id)
+	m.closed[id] = record.Session
 	m.mu.Unlock()
 	if closeFn != nil {
 		return closeFn()
 	}
 	return nil
+}
+
+func (m *Manager) cleanupLocked(now time.Time) []func() error {
+	closeFns := []func() error{}
+	for id, record := range m.sessions {
+		expired := m.ttl > 0 && now.Sub(record.LastUsedAt) > m.ttl
+		if !record.Closed && !expired {
+			continue
+		}
+		if !record.Closed {
+			record.Closed = true
+			record.ClosedAt = now
+			record.Alive = false
+			if expired {
+				record.Error = "browser session idle timeout"
+			}
+			if record.close != nil {
+				closeFns = append(closeFns, record.close)
+			}
+		}
+		delete(m.sessions, id)
+		m.closed[id] = record.Session
+	}
+	return closeFns
+}
+
+func sessionStatus(record *SessionRecord) Session {
+	session := record.Session
+	session.Alive = record.alive == nil || record.alive()
+	if !session.Alive && session.Error == "" {
+		session.Error = "browser process is not alive"
+	}
+	return session
+}
+
+func closeSessionFns(closeFns []func() error) {
+	for _, closeFn := range closeFns {
+		_ = closeFn()
+	}
 }

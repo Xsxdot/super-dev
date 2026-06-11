@@ -11,9 +11,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/xsxdot/super-dev/agent/browsercontrol"
 	"github.com/xsxdot/super-dev/agent/browserdebug"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
@@ -26,6 +28,14 @@ func (a *App) listDebugBrowsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, browserdebug.BrowsersFromSettings(settings.DebugBrowser))
+}
+
+func (a *App) detectDebugBrowsers(w http.ResponseWriter, r *http.Request) {
+	candidates := a.debugBrowserCandidates
+	if len(candidates) == 0 {
+		candidates = browserdebug.DefaultBrowserCandidates()
+	}
+	jsonOK(w, browserdebug.DetectBrowsersFromCandidates(candidates))
 }
 
 func (a *App) listBrowserTargets(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +75,14 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
+	if err := browserdebug.WaitForReadiness(r.Context(), targetURL, dep.Web.Readiness, http.DefaultClient); err != nil {
+		if errors.Is(err, browserdebug.ErrReadinessTimeout) {
+			jsonErrorCode(w, http.StatusServiceUnavailable, "web_entrypoint_not_ready", err.Error(), map[string]any{"target_url": targetURL})
+			return
+		}
+		jsonErrorCode(w, http.StatusServiceUnavailable, "web_entrypoint_not_ready", err.Error(), map[string]any{"target_url": targetURL})
+		return
+	}
 	openDevtools := true
 	if req.OpenDevtools != nil {
 		openDevtools = *req.OpenDevtools
@@ -76,10 +94,31 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		OpenDevtools: openDevtools,
 	})
 	if err != nil {
+		if browserDebugLaunchErrorCode(err) == browsercontrol.CodeCDPConnectionFailed {
+			jsonErrorCode(w, http.StatusInternalServerError, browsercontrol.CodeCDPConnectionFailed, err.Error(), nil)
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	jsonOK(w, session)
+}
+
+func browserDebugLaunchErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "devtools active port"),
+		strings.Contains(message, "page target not found"),
+		strings.Contains(message, "cdp"),
+		strings.Contains(message, "/json/version"),
+		strings.Contains(message, "/json/list"):
+		return browsercontrol.CodeCDPConnectionFailed
+	default:
+		return ""
+	}
 }
 
 func (a *App) listBrowserSessions(w http.ResponseWriter, r *http.Request) {
@@ -87,17 +126,18 @@ func (a *App) listBrowserSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) getBrowserSession(w http.ResponseWriter, r *http.Request) {
-	record, ok := a.browserDebug.Get(r.PathValue("id"))
+	session, ok := a.browserDebug.Status(r.PathValue("id"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "browser session not found")
 		return
 	}
-	jsonOK(w, record.Session)
+	jsonOK(w, session)
 }
 
 func (a *App) closeBrowserSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := a.browserDebug.Get(id); !ok {
+	session, ok := a.browserDebug.Status(id)
+	if !ok {
 		jsonError(w, http.StatusNotFound, "browser session not found")
 		return
 	}
@@ -105,8 +145,12 @@ func (a *App) closeBrowserSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	record, _ := a.browserDebug.Get(id)
-	jsonOK(w, record.Session)
+	session.Closed = true
+	session.Alive = false
+	if closer, ok := a.browserControl.(interface{ CloseBrowserConnection(string) }); ok {
+		closer.CloseBrowserConnection(session.BrowserWS)
+	}
+	jsonOK(w, session)
 }
 
 func (a *App) resolveBrowserDebugTarget(dep model.Deployment, svc model.Service, project model.Project, path string) (browserdebug.Target, string, int, string) {

@@ -134,3 +134,35 @@ func TestValidateDebugBrowserSettings(t *testing.T) {
 	s.DebugBrowser.Browsers = []config.DebugBrowserConfig{{ID: "arc", Name: "Arc"}}
 	require.NoError(t, config.ValidateAgentSettings(s))
 }
+
+func TestDefaultDebugBrowserSettingsDisableEvaluate(t *testing.T) {
+	settings := config.DefaultAgentSettings()
+
+	require.Equal(t, "ephemeral", settings.DebugBrowser.ProfileMode)
+	require.False(t, settings.DebugBrowser.AllowEvaluate)
+	require.Equal(t, config.DefaultDebugBrowserSessionTTLMinutes, settings.DebugBrowser.SessionTTLMinutes)
+}
+
+func TestSettingsLoadBackfillsDebugBrowserDefaults(t *testing.T) {
+	dir := t.TempDir()
+
+	raw := `{"log_retention_days":7,"log_max_bytes":268435456,"log_cleanup_interval_seconds":3600,"artifact_keep_versions":10,"approval":{"config_upsert":true,"pipeline_upsert":true,"pipeline_run":true,"template_import":true,"grace_minutes":15},"debug_browser":{"browsers":[]}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "settings.json"), []byte(raw), 0o644))
+
+	settings, err := config.NewSettingsStore(dir).Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, "ephemeral", settings.DebugBrowser.ProfileMode)
+	assert.False(t, settings.DebugBrowser.AllowEvaluate)
+	assert.Equal(t, config.DefaultDebugBrowserSessionTTLMinutes, settings.DebugBrowser.SessionTTLMinutes)
+}
+
+func TestValidateAgentSettingsRejectsInvalidBrowserTTL(t *testing.T) {
+	settings := config.DefaultAgentSettings()
+	settings.DebugBrowser.SessionTTLMinutes = 0
+
+	err := config.ValidateAgentSettings(settings)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "debug_browser.session_ttl_minutes")
+}

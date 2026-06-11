@@ -549,6 +549,8 @@ export interface DebugBrowserConfig {
 export interface DebugBrowserSettings {
   default_browser_id?: string
   profile_mode?: 'ephemeral' | string
+  allow_evaluate?: boolean
+  session_ttl_minutes?: number
   browsers?: DebugBrowserConfig[]
 }
 
@@ -579,6 +581,11 @@ export interface BrowserSession {
   browser_ws: string
   page_ws: string
   devtools_url: string
+  created_at?: string
+  last_used_at?: string
+  alive?: boolean
+  error?: string
+  closed?: boolean
 }
 
 export interface OperationTarget {
@@ -1231,6 +1238,7 @@ export const api = {
 
   // Browser Debug
   listDebugBrowsers: () => request<DebugBrowser[]>('/api/debug-browsers'),
+  detectDebugBrowsers: () => request<DebugBrowser[]>('/api/debug-browsers/detected'),
   listBrowserTargets: () => request<BrowserTarget[]>('/api/browser-targets'),
   openBrowserSession: (
     payload: { deployment_id: string; browser_id?: string; path?: string; open_devtools?: boolean },

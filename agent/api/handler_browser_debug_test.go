@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,29 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
+
+func TestDetectDebugBrowsersReturnsConfiguredCandidates(t *testing.T) {
+	browserPath := filepath.Join(t.TempDir(), "Chrome")
+	require.NoError(t, os.WriteFile(browserPath, []byte("#!/bin/sh\n"), 0o755))
+	app, err := NewApp(AppConfig{
+		DataDir: t.TempDir(),
+		DebugBrowserCandidates: []browserdebug.BrowserCandidate{{
+			ID:             "chrome",
+			Name:           "Google Chrome",
+			ExecutablePath: browserPath,
+		}},
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	browsers := getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers/detected", http.StatusOK)
+
+	require.Len(t, browsers, 1)
+	assert.Equal(t, "chrome", browsers[0].ID)
+	assert.True(t, browsers[0].Available)
+}
 
 func TestListBrowserTargetsReturnsLocalWebDeployment(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
@@ -53,15 +77,12 @@ func TestOpenBrowserSessionRequiresApprovalThenLaunches(t *testing.T) {
 	browserPath := filepath.Join(t.TempDir(), "Arc")
 	require.NoError(t, os.WriteFile(browserPath, []byte("#!/bin/sh\n"), 0o755))
 	settings := config.DefaultAgentSettings()
-	settings.DebugBrowser = config.DebugBrowserSettings{
-		DefaultBrowserID: "arc",
-		ProfileMode:      "ephemeral",
-		Browsers: []config.DebugBrowserConfig{{
-			ID:             "arc",
-			Name:           "Arc",
-			ExecutablePath: browserPath,
-		}},
-	}
+	settings.DebugBrowser.DefaultBrowserID = "arc"
+	settings.DebugBrowser.Browsers = []config.DebugBrowserConfig{{
+		ID:             "arc",
+		Name:           "Arc",
+		ExecutablePath: browserPath,
+	}}
 	require.NoError(t, app.settings.Save(settings))
 
 	launches := 0
@@ -109,6 +130,108 @@ func TestOpenBrowserSessionRequiresApprovalThenLaunches(t *testing.T) {
 	assert.Equal(t, 1, launches)
 }
 
+func TestOpenBrowserSessionWaitsForReadinessBeforeLaunch(t *testing.T) {
+	readyAttempts := 0
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		readyAttempts++
+		if readyAttempts < 2 {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready"))
+	}))
+	t.Cleanup(web.Close)
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := browserDebugAPIProject()
+	project.Services[0].Deployments[0].Web.URL = web.URL
+	project.Services[0].Deployments[0].Web.Readiness = model.WebReadinessConfig{Type: model.WebReadinessHTTP, TimeoutSeconds: 2}
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	saveDebugBrowserSettingsForTest(t, app)
+
+	launches := 0
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(_ context.Context, req browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			launches++
+			assert.Equal(t, web.URL+"/", req.TargetURL)
+			return browserLaunchResultForTest(), nil
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
+
+	_ = postJSONWithHeadersForTest[browserdebug.Session](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusOK)
+
+	assert.Equal(t, 1, launches)
+	assert.GreaterOrEqual(t, readyAttempts, 2)
+}
+
+func TestOpenBrowserSessionReturnsUnavailableWhenReadinessTimesOut(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "starting", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(web.Close)
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := browserDebugAPIProject()
+	project.Services[0].Deployments[0].Web.URL = web.URL
+	project.Services[0].Deployments[0].Web.Readiness = model.WebReadinessConfig{Type: model.WebReadinessHTTP, TimeoutSeconds: 1}
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	saveDebugBrowserSettingsForTest(t, app)
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(context.Context, browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			t.Fatal("launcher should not run before readiness")
+			return browserdebug.LaunchResult{}, nil
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
+
+	resp := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusServiceUnavailable)
+
+	assert.Equal(t, "web_entrypoint_not_ready", resp["code"])
+	assert.Contains(t, resp["error"], "http status 503")
+}
+
+func TestOpenBrowserSessionClassifiesCDPLaunchFailure(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(browserDebugAPIProject())
+	app.mu.Unlock()
+	saveDebugBrowserSettingsForTest(t, app)
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(context.Context, browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			return browserdebug.LaunchResult{}, errors.New("devtools active port not produced")
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
+
+	resp := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusInternalServerError)
+
+	assert.Equal(t, "browser_cdp_connection_failed", resp["code"])
+	assert.Contains(t, resp["error"], "devtools active port not produced")
+}
+
 func TestBrowserDebugPreflightBuildsOperationPlan(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
@@ -142,15 +265,12 @@ func TestOpenBrowserSessionHonorsExplicitOpenDevtoolsFalse(t *testing.T) {
 	browserPath := filepath.Join(t.TempDir(), "Arc")
 	require.NoError(t, os.WriteFile(browserPath, []byte("#!/bin/sh\n"), 0o755))
 	settings := config.DefaultAgentSettings()
-	settings.DebugBrowser = config.DebugBrowserSettings{
-		DefaultBrowserID: "arc",
-		ProfileMode:      "ephemeral",
-		Browsers: []config.DebugBrowserConfig{{
-			ID:             "arc",
-			Name:           "Arc",
-			ExecutablePath: browserPath,
-		}},
-	}
+	settings.DebugBrowser.DefaultBrowserID = "arc"
+	settings.DebugBrowser.Browsers = []config.DebugBrowserConfig{{
+		ID:             "arc",
+		Name:           "Arc",
+		ExecutablePath: browserPath,
+	}}
 	require.NoError(t, app.settings.Save(settings))
 
 	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
@@ -203,6 +323,46 @@ func TestOpenBrowserSessionRejectsMissingBrowserBeforeApproval(t *testing.T) {
 	assert.Equal(t, "debug browser is not configured", resp["error"])
 	approvals := getJSONForTest[[]operation.Approval](t, srv.URL+"/api/operation-approvals", http.StatusOK)
 	assert.Empty(t, approvals)
+}
+
+func saveDebugBrowserSettingsForTest(t *testing.T, app *App) {
+	t.Helper()
+	browserPath := filepath.Join(t.TempDir(), "Arc")
+	require.NoError(t, os.WriteFile(browserPath, []byte("#!/bin/sh\n"), 0o755))
+	settings := config.DefaultAgentSettings()
+	settings.DebugBrowser.DefaultBrowserID = "arc"
+	settings.DebugBrowser.Browsers = []config.DebugBrowserConfig{{
+		ID:             "arc",
+		Name:           "Arc",
+		ExecutablePath: browserPath,
+	}}
+	require.NoError(t, app.settings.Save(settings))
+}
+
+func browserLaunchResultForTest() browserdebug.LaunchResult {
+	return browserdebug.LaunchResult{
+		ProcessID:   123,
+		DebugPort:   9222,
+		BrowserWS:   "ws://127.0.0.1:9222/devtools/browser/abc",
+		PageWS:      "ws://127.0.0.1:9222/devtools/page/page-1",
+		DevtoolsURL: "http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/page-1",
+		Close:       func() error { return nil },
+	}
+}
+
+func approveBrowserOpenForTest(t *testing.T, baseURL string, deploymentID string, body map[string]any) string {
+	t.Helper()
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["deployment_id"] = deploymentID
+	required := postJSONForRawTest(t, baseURL+"/api/browser-sessions", body, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	_ = postJSONForTest[operation.Approval](t, baseURL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"decided_by": "user",
+	}, http.StatusOK)
+	detail := getJSONForTest[operationApprovalDetailResponse](t, baseURL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+	return detail.ApprovalToken
 }
 
 func browserDebugAPIProject() model.Project {

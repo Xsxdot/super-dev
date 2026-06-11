@@ -489,6 +489,54 @@ pipelines:
 	assert.NotContains(t, saved, "tolerate"+"_failures:")
 }
 
+func TestLoadAndSavePreservesDeploymentWebEntrypoint(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yaml := `
+name: webapp
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - name: web
+    deployments:
+      - id: dep-web-dev
+        env: dev
+        location: local
+        web:
+          enabled: true
+          url: http://127.0.0.1:18991
+          default_path: /
+          readiness:
+            type: http
+            timeout_seconds: 5
+          ai_debug:
+            enabled: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yaml), 0o644))
+
+	loader := config.NewLoader(dir)
+	project, err := loader.Load()
+	require.NoError(t, err)
+	dep := project.Services[0].Deployments[0]
+	require.NotNil(t, dep.Web)
+	assert.Equal(t, "http://127.0.0.1:18991", dep.Web.URL)
+	assert.Equal(t, "/", dep.Web.DefaultPath)
+	assert.Equal(t, "http", dep.Web.Readiness.Type)
+	assert.Equal(t, 5, dep.Web.Readiness.TimeoutSeconds)
+	assert.True(t, dep.Web.AIDebug.Enabled)
+
+	require.NoError(t, loader.Save(project))
+	data, err := os.ReadFile(filepath.Join(superdevDir, "config.yaml"))
+	require.NoError(t, err)
+	saved := string(data)
+	assert.Contains(t, saved, "web:")
+	assert.Contains(t, saved, "ai_debug:")
+	assert.Contains(t, saved, "timeout_seconds: 5")
+}
+
 func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {
 	dir := t.TempDir()
 	p := model.Project{

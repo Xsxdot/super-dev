@@ -420,6 +420,11 @@ func browserSnapshotInputSchema() map[string]any {
 			"session_id": map[string]any{"type": "string"},
 			"selector":   map[string]any{"type": "string"},
 			"max_text":   map[string]any{"type": "integer", "minimum": 1},
+			"max_elements": map[string]any{
+				"type":    "integer",
+				"minimum": 1,
+				"maximum": 200,
+			},
 		},
 		"required": []string{"session_id"},
 	}
@@ -458,6 +463,99 @@ func browserScreenshotInputSchema() map[string]any {
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
 			"full_page":  map[string]any{"type": "boolean"},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserNavigateInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"url":        map[string]any{"type": "string"},
+			"path":       map[string]any{"type": "string"},
+			"wait_until": map[string]any{"type": "string", "enum": []string{"load", "domcontentloaded", "networkidle", "commit"}},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserReloadInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"wait_until": map[string]any{"type": "string", "enum": []string{"load", "domcontentloaded", "networkidle", "commit"}},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserWaitForSelectorInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+			"state":      map[string]any{"type": "string", "enum": []string{"attached", "detached", "visible", "hidden"}},
+			"timeout_ms": map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id", "selector"},
+	}
+}
+
+func browserPressKeyInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+			"key":        map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id", "key"},
+	}
+}
+
+func browserSelectOptionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+			"value":      map[string]any{"type": "string"},
+			"label":      map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id", "selector"},
+	}
+}
+
+func browserConsoleLogsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"level":      map[string]any{"type": "string", "enum": []string{"log", "info", "warning", "error"}},
+			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": 200},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserNetworkRequestsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"filter":     map[string]any{"type": "string"},
+			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": 200},
 		},
 		"required": []string{"session_id"},
 	}
@@ -832,6 +930,72 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.browserScreenshotTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_navigate",
+				Title:       "Browser navigate",
+				Description: "Perform same-origin full page navigation in a browser debug session. This may reload the page and lose SPA in-memory state; prefer browser_click for SPA route changes.",
+				InputSchema: browserNavigateInputSchema(),
+			},
+			Handler: s.browserNavigateTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_reload",
+				Title:       "Browser reload",
+				Description: "Reload the current page in a browser debug session.",
+				InputSchema: browserReloadInputSchema(),
+			},
+			Handler: s.browserReloadTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_wait_for_selector",
+				Title:       "Browser wait for selector",
+				Description: "Wait until a selector reaches a requested state in a browser debug session.",
+				InputSchema: browserWaitForSelectorInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.browserWaitForSelectorTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_press_key",
+				Title:       "Browser press key",
+				Description: "Press a keyboard key in a browser debug session, optionally focusing a selector first.",
+				InputSchema: browserPressKeyInputSchema(),
+			},
+			Handler: s.browserPressKeyTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_select_option",
+				Title:       "Browser select option",
+				Description: "Select an option by value or label in a browser debug session page.",
+				InputSchema: browserSelectOptionInputSchema(),
+			},
+			Handler: s.browserSelectOptionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_console_logs",
+				Title:       "Browser console logs",
+				Description: "Read recent console logs captured from a browser debug session page.",
+				InputSchema: browserConsoleLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.browserConsoleLogsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_network_requests",
+				Title:       "Browser network requests",
+				Description: "Read recent network request summaries captured from a browser debug session page.",
+				InputSchema: browserNetworkRequestsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.browserNetworkRequestsTool,
 		},
 		{
 			Tool: Tool{

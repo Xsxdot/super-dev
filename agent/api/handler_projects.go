@@ -43,6 +43,17 @@ func jsonError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// jsonErrorCode 以指定状态码返回带稳定错误码的 JSON 错误信息。
+func jsonErrorCode(w http.ResponseWriter, status int, code string, msg string, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	payload := map[string]any{"code": code, "error": msg}
+	if data != nil {
+		payload["data"] = data
+	}
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
 // listProjects 处理 GET /api/projects，返回所有已注册项目列表。
 func (a *App) listProjects(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()

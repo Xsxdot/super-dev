@@ -54,7 +54,7 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 		current.Approval = *req.Approval
 	}
 	if req.DebugBrowser != nil {
-		current.DebugBrowser = *req.DebugBrowser
+		current.DebugBrowser = mergeDebugBrowserSettingsPatch(current.DebugBrowser, *req.DebugBrowser)
 	}
 	if err := a.settings.Save(current); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -64,10 +64,37 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsPatchRequest struct {
-	LogRetentionDays          *int                         `json:"log_retention_days"`
-	LogMaxBytes               *int64                       `json:"log_max_bytes"`
-	LogCleanupIntervalSeconds *int                         `json:"log_cleanup_interval_seconds"`
-	OnboardingCompleted       *bool                        `json:"onboarding_completed"`
-	Approval                  *config.ApprovalPolicy       `json:"approval"`
-	DebugBrowser              *config.DebugBrowserSettings `json:"debug_browser"`
+	LogRetentionDays          *int                       `json:"log_retention_days"`
+	LogMaxBytes               *int64                     `json:"log_max_bytes"`
+	LogCleanupIntervalSeconds *int                       `json:"log_cleanup_interval_seconds"`
+	OnboardingCompleted       *bool                      `json:"onboarding_completed"`
+	Approval                  *config.ApprovalPolicy     `json:"approval"`
+	DebugBrowser              *debugBrowserSettingsPatch `json:"debug_browser"`
+}
+
+type debugBrowserSettingsPatch struct {
+	DefaultBrowserID  *string                      `json:"default_browser_id"`
+	ProfileMode       *string                      `json:"profile_mode"`
+	AllowEvaluate     *bool                        `json:"allow_evaluate"`
+	SessionTTLMinutes *int                         `json:"session_ttl_minutes"`
+	Browsers          *[]config.DebugBrowserConfig `json:"browsers"`
+}
+
+func mergeDebugBrowserSettingsPatch(current config.DebugBrowserSettings, patch debugBrowserSettingsPatch) config.DebugBrowserSettings {
+	if patch.DefaultBrowserID != nil {
+		current.DefaultBrowserID = *patch.DefaultBrowserID
+	}
+	if patch.ProfileMode != nil {
+		current.ProfileMode = *patch.ProfileMode
+	}
+	if patch.AllowEvaluate != nil {
+		current.AllowEvaluate = *patch.AllowEvaluate
+	}
+	if patch.SessionTTLMinutes != nil {
+		current.SessionTTLMinutes = *patch.SessionTTLMinutes
+	}
+	if patch.Browsers != nil {
+		current.Browsers = *patch.Browsers
+	}
+	return current
 }

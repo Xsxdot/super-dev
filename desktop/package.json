@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.1",
   "description": "SuperDev desktop UI and Tauri shell.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Xsxdot/super-dev.git",

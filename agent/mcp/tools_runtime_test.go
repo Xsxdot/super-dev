@@ -77,12 +77,24 @@ type fakeAgentClient struct {
 	browserSnapshot            BrowserSnapshot
 	browserAction              BrowserActionResult
 	browserScreenshot          BrowserScreenshot
+	browserScreenshotErr       error
+	browserNavigation          BrowserNavigationResult
+	browserWait                BrowserWaitResult
+	browserConsoleLogs         BrowserConsoleLogsResult
+	browserNetworkRequests     BrowserNetworkRequestsResult
 	browserEvaluate            BrowserEvaluateResult
 	lastBrowserOpen            OpenBrowserSessionRequest
 	lastBrowserSnapshot        BrowserSnapshotRequest
 	lastBrowserClick           BrowserClickRequest
 	lastBrowserType            BrowserTypeRequest
 	lastBrowserScreenshot      BrowserScreenshotRequest
+	lastBrowserNavigate        BrowserNavigateRequest
+	lastBrowserReload          BrowserReloadRequest
+	lastBrowserWait            BrowserWaitForSelectorRequest
+	lastBrowserPress           BrowserPressKeyRequest
+	lastBrowserSelect          BrowserSelectOptionRequest
+	lastBrowserConsoleLogs     BrowserConsoleLogsRequest
+	lastBrowserNetworkRequests BrowserNetworkRequestsRequest
 	lastBrowserEvaluate        BrowserEvaluateRequest
 	closedBrowserSession       string
 }
@@ -309,7 +321,45 @@ func (f *fakeAgentClient) BrowserType(_ context.Context, req BrowserTypeRequest)
 
 func (f *fakeAgentClient) BrowserScreenshot(_ context.Context, req BrowserScreenshotRequest) (BrowserScreenshot, error) {
 	f.lastBrowserScreenshot = req
+	if f.browserScreenshotErr != nil {
+		return BrowserScreenshot{}, f.browserScreenshotErr
+	}
 	return f.browserScreenshot, nil
+}
+
+func (f *fakeAgentClient) BrowserNavigate(_ context.Context, req BrowserNavigateRequest) (BrowserNavigationResult, error) {
+	f.lastBrowserNavigate = req
+	return f.browserNavigation, nil
+}
+
+func (f *fakeAgentClient) BrowserReload(_ context.Context, req BrowserReloadRequest) (BrowserNavigationResult, error) {
+	f.lastBrowserReload = req
+	return f.browserNavigation, nil
+}
+
+func (f *fakeAgentClient) BrowserWaitForSelector(_ context.Context, req BrowserWaitForSelectorRequest) (BrowserWaitResult, error) {
+	f.lastBrowserWait = req
+	return f.browserWait, nil
+}
+
+func (f *fakeAgentClient) BrowserPressKey(_ context.Context, req BrowserPressKeyRequest) (BrowserActionResult, error) {
+	f.lastBrowserPress = req
+	return f.browserAction, nil
+}
+
+func (f *fakeAgentClient) BrowserSelectOption(_ context.Context, req BrowserSelectOptionRequest) (BrowserActionResult, error) {
+	f.lastBrowserSelect = req
+	return f.browserAction, nil
+}
+
+func (f *fakeAgentClient) BrowserConsoleLogs(_ context.Context, req BrowserConsoleLogsRequest) (BrowserConsoleLogsResult, error) {
+	f.lastBrowserConsoleLogs = req
+	return f.browserConsoleLogs, nil
+}
+
+func (f *fakeAgentClient) BrowserNetworkRequests(_ context.Context, req BrowserNetworkRequestsRequest) (BrowserNetworkRequestsResult, error) {
+	f.lastBrowserNetworkRequests = req
+	return f.browserNetworkRequests, nil
 }
 
 func (f *fakeAgentClient) BrowserEvaluate(_ context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
