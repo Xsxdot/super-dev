@@ -136,6 +136,7 @@ func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep 
 		return a.newRemoteRuntimeController().Start(ctx, dep)
 	}
 	mgr := a.getOrCreateManager(projectID)
+	a.reconcileLocalDeployment(projectID, dep.ID)
 	if err := mgr.StartDeployment(dep); err != nil {
 		return err
 	}
@@ -152,6 +153,7 @@ func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep m
 		return a.pidStore.Flush()
 	}
 	mgr := a.getOrCreateManager(projectID)
+	a.reconcileLocalDeployment(projectID, dep.ID)
 	mgr.StopDeployment(dep.ID)
 	a.pidStore.Remove(dep.ID)
 	return a.pidStore.Flush()
@@ -162,6 +164,7 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 		return a.newRemoteRuntimeController().Restart(ctx, dep)
 	}
 	mgr := a.getOrCreateManager(projectID)
+	a.reconcileLocalDeployment(projectID, dep.ID)
 	if err := mgr.RestartDeployment(dep); err != nil {
 		return err
 	}

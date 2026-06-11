@@ -370,6 +370,9 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 		if dep == nil || dep.IsReadOnly() {
 			continue
 		}
+		if dep.Location != model.LocationRemote {
+			a.reconcileLocalDeployment(projectID, dep.ID)
+		}
 		if mgr.IsDeploymentActive(dep.ID) {
 			continue
 		}

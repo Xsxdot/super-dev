@@ -137,6 +137,7 @@ type App struct {
 	managedStatus          model.ManagedDeploymentStatus
 	managedReconciler      *HostDeploymentReconciler
 	managedReconcileCancel context.CancelFunc
+	processReconcileCancel context.CancelFunc
 	logCleanupCancel       context.CancelFunc
 	logCleanupDone         <-chan struct{}
 	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
@@ -455,6 +456,9 @@ func (a *App) Close() {
 	if a.managedReconcileCancel != nil {
 		a.managedReconcileCancel()
 	}
+	if a.processReconcileCancel != nil {
+		a.processReconcileCancel()
+	}
 	if a.logCleanupCancel != nil {
 		a.logCleanupCancel()
 	}
@@ -678,6 +682,7 @@ func (a *App) Handler() http.Handler {
 func (a *App) Start(addr string) error {
 	a.loadRegisteredProjects()
 	a.loadManagedDeployments()
+	a.startProcessReconcileLoop()
 	a.startManagedDeploymentReconciler()
 	server := &http.Server{Addr: addr, Handler: a.Handler()}
 	tlsConfig, enabled, err := a.tlsConfigForListen()

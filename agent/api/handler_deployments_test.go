@@ -13,13 +13,16 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/process"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
 )
 
@@ -219,6 +222,45 @@ func TestStartEnvSelectedRunsRemoteStartAfterApproval(t *testing.T) {
 	assert.Equal(t, "starting", ok["status"])
 	require.Len(t, runner.requests, 1)
 	assert.Equal(t, remoteexec.CommandRequest{Command: "systemctl start api", WorkDir: ""}, runner.requests[0])
+}
+
+func TestRestart_AfterExternalKill_Succeeds(t *testing.T) {
+	app := newTestAppForPackage(t)
+	dep := model.Deployment{
+		ID:       "dep-restart-killed",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 30",
+		WorkDir:  t.TempDir(),
+	}
+
+	require.NoError(t, app.startDeploymentRuntime(context.Background(), "proj-restart", dep))
+	mgr := app.getOrCreateManager("proj-restart")
+	oldPGID := mgr.DeploymentPID(dep.ID)
+	require.NotZero(t, oldPGID)
+	require.NoError(t, syscall.Kill(-oldPGID, syscall.SIGKILL))
+
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep))
+	require.Eventually(t, func() bool {
+		newPGID := mgr.DeploymentPID(dep.ID)
+		return mgr.IsDeploymentActive(dep.ID) && newPGID != 0 && newPGID != oldPGID
+	}, 5*time.Second, 20*time.Millisecond)
+	mgr.StopDeployment(dep.ID)
+}
+
+func TestApplyProcessReconcileResults_RemovesPidStoreEntry(t *testing.T) {
+	app := newTestAppForPackage(t)
+	app.pidStore.Set("dep-pidstore-dead", 12345)
+	require.NoError(t, app.pidStore.Flush())
+
+	app.applyProcessReconcileResults([]process.ReconcileResult{{
+		ID:        "dep-pidstore-dead",
+		Corrected: true,
+		Status:    model.StatusFailed,
+	}})
+
+	pgids := app.pidStore.LoadAll()
+	assert.NotContains(t, pgids, "dep-pidstore-dead")
 }
 
 func remoteOperationAPIProject(isDev bool) model.Project {
