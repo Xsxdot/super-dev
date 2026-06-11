@@ -14,6 +14,9 @@ func (s *Sampler) sampleProcess(ctx context.Context, target SampleTarget) (model
 	if base == "" {
 		base = "process"
 	}
+	if target.PGID != 0 {
+		return s.sampleProcessGroup(ctx, base, target.PGID)
+	}
 	if target.PID == 0 {
 		return stoppedMetrics(base), nil
 	}
@@ -22,6 +25,27 @@ func (s *Sampler) sampleProcess(ctx context.Context, target SampleTarget) (model
 		return unknownMetrics(base), err
 	}
 	cpu, mem, uptime, found, err := parsePSProcessTree(out, target.PID)
+	if err != nil {
+		return unknownMetrics(base), err
+	}
+	if !found {
+		return stoppedMetrics(base), nil
+	}
+	return model.InstanceMetrics{
+		CPUPercent: cpu,
+		MemBytes:   mem,
+		UptimeSec:  uptime,
+		Health:     model.HealthRunning,
+		Base:       base,
+	}, nil
+}
+
+func (s *Sampler) sampleProcessGroup(ctx context.Context, base string, pgid int) (model.InstanceMetrics, error) {
+	out, err := s.cmd.Run(ctx, "ps", "-axo", "pid=,pgid=,%cpu=,rss=,etime=")
+	if err != nil {
+		return unknownMetrics(base), err
+	}
+	cpu, mem, uptime, found, err := parsePSProcessGroup(out, pgid)
 	if err != nil {
 		return unknownMetrics(base), err
 	}
@@ -103,6 +127,51 @@ func parsePSProcessTree(output string, rootPID int) (cpu *float64, memBytes *int
 	mem := totalRSSKiB * 1024
 	up := root.uptimeSec
 	return &totalCPU, &mem, &up, true, nil
+}
+
+func parsePSProcessGroup(output string, targetPGID int) (cpu *float64, memBytes *int64, uptime *int64, found bool, err error) {
+	totalCPU := 0.0
+	totalRSSKiB := int64(0)
+	maxUptime := int64(0)
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) != 5 {
+			return nil, nil, nil, false, fmt.Errorf("unexpected ps row: %q", line)
+		}
+		pgid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		if pgid != targetPGID {
+			continue
+		}
+		cpuValue, err := strconv.ParseFloat(fields[2], 64)
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		rssKiB, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		uptimeSec, err := parseElapsed(fields[4])
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		found = true
+		totalCPU += cpuValue
+		totalRSSKiB += rssKiB
+		if uptimeSec > maxUptime {
+			maxUptime = uptimeSec
+		}
+	}
+	if !found {
+		return nil, nil, nil, false, nil
+	}
+	mem := totalRSSKiB * 1024
+	return &totalCPU, &mem, &maxUptime, true, nil
 }
 
 func parseElapsed(value string) (int64, error) {

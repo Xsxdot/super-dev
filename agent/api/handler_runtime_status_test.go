@@ -147,6 +147,9 @@ services:
 	require.Len(t, got.Environments, 1)
 	require.Len(t, got.Environments[0].Instances, 1)
 	assert.Equal(t, model.HealthRunning, got.Environments[0].Instances[0].Metrics.Health)
+	targets := sampler.targetsByDeployment()
+	assert.NotZero(t, targets["dep-api-dev"].PGID)
+	assert.Zero(t, targets["dep-api-dev"].PID)
 }
 
 func TestRuntimeStatusPassesLaunchdLabelToSampler(t *testing.T) {

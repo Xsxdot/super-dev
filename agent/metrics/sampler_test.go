@@ -129,6 +129,26 @@ func TestProcessSamplerSumsRootProcessAndChildren(t *testing.T) {
 	assert.Equal(t, model.HealthRunning, got.Health)
 }
 
+func TestProcessSamplerSumsProcessGroupWhenPGIDProvided(t *testing.T) {
+	cmd := &fakeCommand{
+		outputs: map[string]string{
+			"ps -axo pid=,pgid=,%cpu=,rss=,etime=": "100 100 1.0 1000 02:00\n101 100 2.5 2000 01:30\n102 102 9.0 9000 00:10\n",
+		},
+		errs: map[string]error{},
+	}
+	sampler := NewSampler(cmd)
+
+	got, err := sampler.Sample(context.Background(), SampleTarget{DeploymentID: "dep-api", Base: "process", PGID: 100})
+	require.NoError(t, err)
+	require.NotNil(t, got.CPUPercent)
+	require.NotNil(t, got.MemBytes)
+	require.NotNil(t, got.UptimeSec)
+	assert.InDelta(t, 3.5, *got.CPUPercent, 0.01)
+	assert.Equal(t, int64(3072000), *got.MemBytes)
+	assert.Equal(t, int64(120), *got.UptimeSec)
+	assert.Equal(t, model.HealthRunning, got.Health)
+}
+
 func TestLaunchdSamplerUsesLaunchctlPIDWhenManagerPIDMissing(t *testing.T) {
 	label := "com.example.worker"
 	target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + label

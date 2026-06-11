@@ -21,6 +21,8 @@ type SampleTarget struct {
 	Container    string
 	Label        string
 	PID          int
+	// PGID 是 command runtime 的进程组 ID；非 0 时按整个进程组采样。
+	PGID int
 }
 
 // Clock 抽象当前时间，便于测试 CPU 增量计算。

@@ -163,11 +163,12 @@ func (s *runtimeStatusService) sampleTarget(projectID string, dep model.Deployme
 		}
 	}
 	if target.Base == string(model.RuntimeTypeCommand) || target.Base == "process" {
+		s.app.reconcileLocalDeployment(projectID, dep.ID)
 		s.app.mu.RLock()
 		mgr := s.app.managers[projectID]
 		s.app.mu.RUnlock()
 		if mgr != nil {
-			target.PID = mgr.DeploymentPID(dep.ID)
+			target.PGID = mgr.DeploymentPID(dep.ID)
 		}
 	}
 	return target
