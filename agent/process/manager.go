@@ -25,15 +25,16 @@ import (
 //   - 不解析配置文件，仅消费 model.Deployment / ProcessSpec 数据结构
 //   - 不直接写日志存储，日志处理由 onLog 回调负责
 type Manager struct {
-	mu          sync.Mutex
-	runners     map[string]*Runner
-	status      map[string]model.ServiceStatus
-	generations map[string]uint64 // 每次 Start/Stop 递增，防止旧退出回调覆盖新进程状态
-	runtimes    map[string]model.RuntimeType
-	launchdDeps map[string]model.Deployment
-	onLog       func(model.LogEntry)
-	runID       string
-	logSeq      atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
+	mu           sync.Mutex
+	runners      map[string]*Runner
+	status       map[string]model.ServiceStatus
+	generations  map[string]uint64 // 每次 Start/Stop 递增，防止旧退出回调覆盖新进程状态
+	runtimes     map[string]model.RuntimeType
+	launchdDeps  map[string]model.Deployment
+	backgrounded map[string]bool
+	onLog        func(model.LogEntry)
+	runID        string
+	logSeq       atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
 }
 
 // NewManager 创建一个新的 Manager。
@@ -42,12 +43,13 @@ type Manager struct {
 //   - onLog: 每当有日志行产生时调用，调用方负责写入存储或广播
 func NewManager(onLog func(model.LogEntry)) *Manager {
 	return &Manager{
-		runners:     map[string]*Runner{},
-		status:      map[string]model.ServiceStatus{},
-		generations: map[string]uint64{},
-		runtimes:    map[string]model.RuntimeType{},
-		launchdDeps: map[string]model.Deployment{},
-		onLog:       onLog,
+		runners:      map[string]*Runner{},
+		status:       map[string]model.ServiceStatus{},
+		generations:  map[string]uint64{},
+		runtimes:     map[string]model.RuntimeType{},
+		launchdDeps:  map[string]model.Deployment{},
+		backgrounded: map[string]bool{},
+		onLog:        onLog,
 	}
 }
 
@@ -83,6 +85,7 @@ func (m *Manager) Stop(serviceID string) {
 	delete(m.runners, serviceID)
 	delete(m.runtimes, serviceID)
 	delete(m.launchdDeps, serviceID)
+	delete(m.backgrounded, serviceID)
 	m.mu.Unlock()
 	if r != nil {
 		r.Stop()
@@ -210,6 +213,7 @@ func (m *Manager) StopDeployment(deploymentID string) {
 		delete(m.runners, deploymentID)
 		delete(m.runtimes, deploymentID)
 		delete(m.launchdDeps, deploymentID)
+		delete(m.backgrounded, deploymentID)
 		m.mu.Unlock()
 		if r != nil {
 			r.Stop()
@@ -288,6 +292,9 @@ func (m *Manager) startLaunchdDeployment(dep model.Deployment) error {
 
 // startByID 以指定的 id 为键启动进程，是所有启动路径的核心实现。
 func (m *Manager) startByID(id string, spec ProcessSpec) error {
+	// 进入启动决策前先对账，避免旧 runner 对象残留导致重启请求被静默跳过。
+	m.Reconcile(id)
+
 	m.mu.Lock()
 	if m.status[id] == model.StatusStarting {
 		m.mu.Unlock()
@@ -301,6 +308,7 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 		delete(m.runners, id)
 		delete(m.runtimes, id)
 		delete(m.launchdDeps, id)
+		delete(m.backgrounded, id)
 	}
 	m.mu.Unlock()
 
@@ -346,6 +354,7 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 			delete(m.runners, id)
 			delete(m.runtimes, id)
 			delete(m.launchdDeps, id)
+			delete(m.backgrounded, id)
 			m.status[id] = model.StatusFailed
 		}
 		m.mu.Unlock()
@@ -378,12 +387,14 @@ func (m *Manager) handleRunnerExit(id string, r *Runner, gen uint64, info ExitIn
 	}
 	if groupAlive {
 		m.status[id] = model.StatusRunning
+		m.backgrounded[id] = true
 		m.mu.Unlock()
 		return
 	}
 	delete(m.runners, id)
 	delete(m.runtimes, id)
 	delete(m.launchdDeps, id)
+	delete(m.backgrounded, id)
 	failed = info.ExitCode != 0 || info.Signaled
 	if failed {
 		m.status[id] = model.StatusFailed
