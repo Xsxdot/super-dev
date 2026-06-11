@@ -134,6 +134,14 @@ describe('OnboardingPage', () => {
         backup_path: null,
         error: null,
       },
+      session_hook: {
+        installed: true,
+        already_present: false,
+        config_path: '/home/me/.claude/settings.json',
+        backup_path: null,
+        needs_trust: false,
+        error: null,
+      },
     }]
 
     const wrapper = mount(OnboardingPage, { global: { plugins: [installTestI18n('zh-CN')] } })
@@ -158,6 +166,14 @@ describe('OnboardingPage', () => {
         target_path: '/home/me/.claude/skills/superdev',
         backup_path: null,
         error: '找不到 SuperDev skill 资源目录，请检查桌面端打包配置',
+      },
+      session_hook: {
+        installed: true,
+        already_present: false,
+        config_path: '/home/me/.claude/settings.json',
+        backup_path: null,
+        needs_trust: false,
+        error: null,
       },
     }]
 
@@ -184,6 +200,14 @@ describe('OnboardingPage', () => {
         already_present: false,
         target_path: '/home/me/.claude/skills/superdev',
         backup_path: null,
+        error: null,
+      },
+      session_hook: {
+        installed: true,
+        already_present: false,
+        config_path: '/home/me/.claude/settings.json',
+        backup_path: null,
+        needs_trust: false,
         error: null,
       },
     }]

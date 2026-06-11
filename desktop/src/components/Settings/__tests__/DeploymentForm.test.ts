@@ -230,6 +230,27 @@ describe('DeploymentForm', () => {
     expect(last.logs).toEqual({ type: 'command', command: 'tail -F /var/log/api/app.log' })
   })
 
+  it('local deployment 支持配置 Web Entry 和 AI Debug', async () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [] },
+    })
+
+    expect(wrapper.find('[data-test="dep-web-enabled"]').exists()).toBe(true)
+    await wrapper.find('[data-test="dep-web-enabled"]').setValue(true)
+    const enabled = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(enabled.web?.enabled).toBe(true)
+
+    await wrapper.setProps({ modelValue: enabled })
+    await wrapper.find('[data-test="dep-web-url"]').setValue('http://127.0.0.1:3000')
+    const withURL = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(withURL.web?.url).toBe('http://127.0.0.1:3000')
+
+    await wrapper.setProps({ modelValue: withURL })
+    await wrapper.find('[data-test="dep-web-ai-debug"]').setValue(true)
+    const withDebug = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(withDebug.web?.ai_debug?.enabled).toBe(true)
+  })
+
   it('only renders runtime and log controls', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: localDep(), hosts: [] },

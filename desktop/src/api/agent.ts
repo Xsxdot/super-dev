@@ -213,6 +213,23 @@ export interface LogConfig {
   extra_args?: string[]
 }
 
+export interface WebReadinessConfig {
+  type?: 'http' | string
+  timeout_seconds?: number
+}
+
+export interface WebAIDebugConfig {
+  enabled: boolean
+}
+
+export interface WebEntrypointConfig {
+  enabled: boolean
+  url?: string
+  default_path?: string
+  readiness?: WebReadinessConfig
+  ai_debug?: WebAIDebugConfig
+}
+
 export interface PipelineEnvironment {
   variables?: Record<string, string>
 }
@@ -383,6 +400,7 @@ export interface Deployment {
   control_mode?: ControlMode
   runtime?: RuntimeConfig
   logs?: LogConfig
+  web?: WebEntrypointConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -504,10 +522,14 @@ export interface AgentSettings {
   sample_seeded?: boolean
   onboarding_completed?: boolean
   approval?: ApprovalPolicy
+  debug_browser?: DebugBrowserSettings
 }
 
 export type AgentSettingsPatch = Partial<
-  Pick<AgentSettings, 'log_retention_days' | 'artifact_keep_versions' | 'onboarding_completed' | 'approval'>
+  Pick<
+    AgentSettings,
+    'log_retention_days' | 'artifact_keep_versions' | 'onboarding_completed' | 'approval' | 'debug_browser'
+  >
 >
 
 export interface ApprovalPolicy {
@@ -516,6 +538,47 @@ export interface ApprovalPolicy {
   pipeline_run: boolean
   template_import: boolean
   grace_minutes: number
+}
+
+export interface DebugBrowserConfig {
+  id: string
+  name: string
+  executable_path: string
+}
+
+export interface DebugBrowserSettings {
+  default_browser_id?: string
+  profile_mode?: 'ephemeral' | string
+  browsers?: DebugBrowserConfig[]
+}
+
+export interface DebugBrowser {
+  id: string
+  name: string
+  executable_path: string
+  available: boolean
+}
+
+export interface BrowserTarget {
+  project_id: string
+  project_name: string
+  service_id: string
+  service_name: string
+  deployment_id: string
+  env_name: string
+  base_url: string
+  default_path: string
+}
+
+export interface BrowserSession {
+  session_id: string
+  deployment_id: string
+  target_url: string
+  browser_id: string
+  debug_port: number
+  browser_ws: string
+  page_ws: string
+  devtools_url: string
 }
 
 export interface OperationTarget {
@@ -714,6 +777,7 @@ export interface SetupDeployment {
   control_mode?: ControlMode
   runtime?: RuntimeConfig
   logs?: LogConfig
+  web?: WebEntrypointConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -1164,6 +1228,21 @@ export const api = {
   getSettings: () => request<AgentSettings>('/api/settings'),
   putSettings: (settings: AgentSettingsPatch) =>
     request<AgentSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+
+  // Browser Debug
+  listDebugBrowsers: () => request<DebugBrowser[]>('/api/debug-browsers'),
+  listBrowserTargets: () => request<BrowserTarget[]>('/api/browser-targets'),
+  openBrowserSession: (
+    payload: { deployment_id: string; browser_id?: string; path?: string; open_devtools?: boolean },
+    approvalToken?: string,
+  ) =>
+    request<BrowserSession>('/api/browser-sessions', {
+      method: 'POST',
+      headers: approvalToken ? { 'X-SuperDev-Approval-Token': approvalToken } : undefined,
+      body: JSON.stringify(payload),
+    }),
+  closeBrowserSession: (sessionId: string) =>
+    request<BrowserSession>(`/api/browser-sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
 
   // Operation 审批
   listOperationApprovals: (params?: { status?: string; project_id?: string; limit?: number }) =>

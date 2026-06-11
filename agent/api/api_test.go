@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/api"
 	"github.com/xsxdot/super-dev/agent/collector"
+	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/store"
 )
@@ -205,6 +206,36 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 	assert.Contains(t, string(raw), `"config_upsert": false`)
 	assert.Contains(t, string(raw), `"pipeline_run": false`)
 	assert.Contains(t, string(raw), `"grace_minutes": 30`)
+}
+
+// TestSettingsRoundTripDebugBrowser 验证本机调试浏览器偏好能通过 settings API 持久化。
+func TestSettingsRoundTripDebugBrowser(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+
+	body := `{
+	  "debug_browser": {
+	    "default_browser_id": "arc",
+	    "profile_mode": "ephemeral",
+	    "browsers": [
+	      {"id":"arc","name":"Arc","executable_path":"/Applications/Arc.app/Contents/MacOS/Arc"}
+	    ]
+	  }
+	}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
+	require.NoError(t, err)
+	var settings config.AgentSettings
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, "arc", settings.DebugBrowser.DefaultBrowserID)
+	require.Len(t, settings.DebugBrowser.Browsers, 1)
+	assert.Equal(t, "/Applications/Arc.app/Contents/MacOS/Arc", settings.DebugBrowser.Browsers[0].ExecutablePath)
 }
 
 // TestCORSAllowsDesktopRequesterHeaders 验证桌面端自定义请求头能通过浏览器预检。

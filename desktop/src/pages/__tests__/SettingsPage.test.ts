@@ -149,6 +149,41 @@ describe('SettingsPage', () => {
     expect(settings.saveArtifactKeepVersions).toHaveBeenCalledWith(20)
   })
 
+  it('通用页可保存默认调试浏览器', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+      debug_browser: {
+        default_browser_id: 'chrome',
+        profile_mode: 'ephemeral',
+        browsers: [
+          { id: 'chrome', name: 'Google Chrome', executable_path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+          { id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' },
+        ],
+      },
+    }
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'loadAutostart').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'saveDebugBrowserSettings').mockResolvedValue(undefined)
+
+    const wrapper = mountSettingsPage()
+    await nextTick()
+    await wrapper.find('[data-test="debug-browser-default"]').setValue('arc')
+    await wrapper.find('[data-test="debug-browser-default"]').trigger('change')
+
+    expect(settings.saveDebugBrowserSettings).toHaveBeenCalledWith({
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      browsers: [
+        { id: 'chrome', name: 'Google Chrome', executable_path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+        { id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' },
+      ],
+    })
+  })
+
   it('renders the settings workbench shell and general rows with shared classes', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = {
@@ -167,7 +202,7 @@ describe('SettingsPage', () => {
     expect(wrapper.find('.settings-sidebar').exists()).toBe(true)
     expect(wrapper.find('.settings-main').exists()).toBe(true)
     expect(wrapper.find('.settings-pane').exists()).toBe(true)
-    expect(wrapper.findAll('.settings-row')).toHaveLength(6)
+    expect(wrapper.findAll('.settings-row')).toHaveLength(7)
     expect(wrapper.find('[data-test="retention-days"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="artifact-keep-versions"]').classes()).toContain('settings-input')
     expect(wrapper.find('[data-test="locale-select"]').classes()).toContain('settings-select')

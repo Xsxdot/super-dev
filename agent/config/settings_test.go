@@ -115,3 +115,22 @@ func TestValidateArtifactKeepVersionsRange(t *testing.T) {
 	s.ArtifactKeepVersions = config.MaxArtifactKeepVersions + 1
 	require.Error(t, config.ValidateAgentSettings(s))
 }
+
+func TestValidateDebugBrowserSettings(t *testing.T) {
+	s := config.DefaultAgentSettings()
+	s.DebugBrowser.ProfileMode = "persistent"
+	require.Error(t, config.ValidateAgentSettings(s))
+
+	s.DebugBrowser.ProfileMode = "ephemeral"
+	s.DebugBrowser.Browsers = []config.DebugBrowserConfig{{Name: "Arc"}}
+	require.Error(t, config.ValidateAgentSettings(s))
+
+	s.DebugBrowser.Browsers = []config.DebugBrowserConfig{
+		{ID: "arc", Name: "Arc"},
+		{ID: "arc", Name: "Arc Canary"},
+	}
+	require.Error(t, config.ValidateAgentSettings(s))
+
+	s.DebugBrowser.Browsers = []config.DebugBrowserConfig{{ID: "arc", Name: "Arc"}}
+	require.NoError(t, config.ValidateAgentSettings(s))
+}

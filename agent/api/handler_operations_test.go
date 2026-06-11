@@ -126,6 +126,7 @@ func TestApplyApprovalPolicyOverrides(t *testing.T) {
 		{operation.OperationConfigPipelineUpsert, true},
 		{operation.OperationPipelineRun, false},
 		{operation.OperationTemplateImport, true},
+		{operation.OperationBrowserDebugOpen, true},
 	}
 	for _, c := range cases {
 		plan := operation.Plan{Kind: c.kind, RequiresApproval: true}

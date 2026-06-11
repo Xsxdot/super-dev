@@ -188,6 +188,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       'runtime.stop',
       'runtime.restart',
       'runtime.start_selected',
+      'browser_debug.open',
     ].includes(approval.plan.kind)
   }
 
@@ -241,6 +242,10 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       case 'runtime.start_selected':
         if (!target.project_id || !target.env_name) throw new Error('approved operation missing project or environment')
         await api.startEnvSelected(target.project_id, target.env_name, token)
+        return
+      case 'browser_debug.open':
+        if (!target.deployment_id) throw new Error('approved operation missing deployment id')
+        await api.openBrowserSession({ deployment_id: target.deployment_id, open_devtools: true }, token)
         return
       default:
         throw new Error(`unsupported approved operation ${approval.plan.kind}`)

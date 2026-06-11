@@ -73,6 +73,14 @@ describe('onboardingStore', () => {
         backup_path: null,
         error: null,
       },
+      session_hook: {
+        installed: true,
+        already_present: false,
+        config_path: '/home/me/.claude/settings.json',
+        backup_path: null,
+        needs_trust: false,
+        error: null,
+      },
     })
     const store = useOnboardingStore()
     await store.detectInstalledAgents()
@@ -107,6 +115,14 @@ describe('onboardingStore', () => {
         target_path: '/home/me/.claude/skills/superdev',
         backup_path: null,
         error: '找不到 SuperDev skill 资源目录，请检查桌面端打包配置',
+      },
+      session_hook: {
+        installed: true,
+        already_present: false,
+        config_path: '/home/me/.claude/settings.json',
+        backup_path: null,
+        needs_trust: false,
+        error: null,
       },
     })
     const store = useOnboardingStore()

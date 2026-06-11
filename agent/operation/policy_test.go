@@ -148,6 +148,20 @@ func TestPlanPipelineRunRequiresPipelineID(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPlanBrowserDebugOpenRequiresApproval(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo"}
+	service := model.Service{ID: "svc-admin", Name: "admin"}
+	dep := model.Deployment{ID: "dep-admin-dev", EnvName: "dev", Location: model.LocationLocal}
+
+	plan, err := PlanBrowserDebugOpen(project, service, dep, "http://127.0.0.1:3000/")
+	require.NoError(t, err)
+	assert.Equal(t, OperationBrowserDebugOpen, plan.Kind)
+	assert.True(t, plan.RequiresApproval)
+	assert.Equal(t, RiskMedium, plan.RiskLevel)
+	assert.Equal(t, "dep-admin-dev", plan.Target.DeploymentID)
+	assert.Contains(t, plan.ExpectedEffects[0], "open debug browser")
+}
+
 func operationProject(isDev bool, location model.DeployLocation, readOnly bool) model.Project {
 	return model.Project{
 		ID:   "proj-1",

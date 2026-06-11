@@ -112,6 +112,25 @@ describe('configDraft', () => {
     expect(out.logs).toEqual({ type: 'command', command: 'tail -F /var/log/api/app.log' })
   })
 
+  it('preserves deployment web entry config through draft payload conversion', () => {
+    const project = makeProject()
+    project.services[0].deployments![0].web = {
+      enabled: true,
+      url: 'http://127.0.0.1:3000',
+      default_path: '/',
+      ai_debug: { enabled: true },
+    }
+
+    const payload = draftToPayload(projectToDraft(project))
+
+    expect(payload.services[0].deployments[0].web).toEqual({
+      enabled: true,
+      url: 'http://127.0.0.1:3000',
+      default_path: '/',
+      ai_debug: { enabled: true },
+    })
+  })
+
   it('projectToDraft 和 draftToPayload 保留 launchd runtime 与 macOS 日志', () => {
     const p = makeProject()
     p.services[0].name = 'api'

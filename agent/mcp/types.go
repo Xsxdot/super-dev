@@ -102,6 +102,109 @@ type ProjectPipelinePreview struct {
 	Run  model.Run     `json:"run"`
 }
 
+// DebugBrowser 描述 MCP 可展示的本机调试浏览器。
+type DebugBrowser struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ExecutablePath string `json:"executable_path"`
+	Available      bool   `json:"available"`
+}
+
+// BrowserTarget 描述 MCP 可打开的本机前端调试目标。
+type BrowserTarget struct {
+	ProjectID    string `json:"project_id"`
+	ProjectName  string `json:"project_name"`
+	ServiceID    string `json:"service_id"`
+	ServiceName  string `json:"service_name"`
+	DeploymentID string `json:"deployment_id"`
+	EnvName      string `json:"env_name"`
+	BaseURL      string `json:"base_url"`
+	DefaultPath  string `json:"default_path"`
+}
+
+// BrowserSession 描述由 SuperDev 创建的浏览器调试会话。
+type BrowserSession struct {
+	ID           string `json:"session_id"`
+	DeploymentID string `json:"deployment_id"`
+	TargetURL    string `json:"target_url"`
+	BrowserID    string `json:"browser_id"`
+	DebugPort    int    `json:"debug_port"`
+	BrowserWS    string `json:"browser_ws"`
+	PageWS       string `json:"page_ws"`
+	DevtoolsURL  string `json:"devtools_url"`
+}
+
+// BrowserSnapshot 描述 AI 可读的页面状态快照。
+type BrowserSnapshot struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Text      string `json:"text"`
+}
+
+// BrowserActionResult 描述无额外负载的浏览器控制动作结果。
+type BrowserActionResult struct {
+	SessionID string `json:"session_id"`
+	OK        bool   `json:"ok"`
+}
+
+// BrowserScreenshot 描述页面截图结果。
+type BrowserScreenshot struct {
+	SessionID  string `json:"session_id"`
+	MimeType   string `json:"mime_type"`
+	DataBase64 string `json:"data_base64"`
+}
+
+// BrowserEvaluateResult 描述页面脚本执行结果。
+type BrowserEvaluateResult struct {
+	SessionID string `json:"session_id"`
+	Result    any    `json:"result"`
+}
+
+// BrowserSnapshotRequest 描述页面快照请求。
+type BrowserSnapshotRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector,omitempty"`
+	MaxText   int    `json:"max_text,omitempty"`
+}
+
+// BrowserClickRequest 描述页面点击请求。
+type BrowserClickRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+}
+
+// BrowserTypeRequest 描述页面输入请求。
+type BrowserTypeRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+	Text      string `json:"text"`
+	Fill      bool   `json:"fill,omitempty"`
+}
+
+// BrowserScreenshotRequest 描述页面截图请求。
+type BrowserScreenshotRequest struct {
+	SessionID string `json:"session_id"`
+	FullPage  bool   `json:"full_page,omitempty"`
+}
+
+// BrowserEvaluateRequest 描述页面 JavaScript 执行请求。
+type BrowserEvaluateRequest struct {
+	SessionID  string `json:"session_id"`
+	Expression string `json:"expression"`
+}
+
+// OpenBrowserSessionRequest 描述打开浏览器调试会话的 MCP 请求。
+type OpenBrowserSessionRequest struct {
+	DeploymentID        string `json:"deployment_id"`
+	BrowserID           string `json:"browser_id,omitempty"`
+	Path                string `json:"path,omitempty"`
+	OpenDevtools        *bool  `json:"open_devtools,omitempty"`
+	ApprovalToken       string `json:"approval_token,omitempty"`
+	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
+	DebugSessionID      string `json:"debug_session_id,omitempty"`
+}
+
 // OperationRequest 描述 MCP 请求 agent 生成 operation plan 的参数。
 type OperationRequest struct {
 	Kind         string `json:"kind"`
@@ -111,6 +214,7 @@ type OperationRequest struct {
 	ServiceID    string `json:"service_id,omitempty"`
 	ServiceName  string `json:"service_name,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
+	Path         string `json:"path,omitempty"`
 	TemplatePath string `json:"template_path,omitempty"`
 }
 

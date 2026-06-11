@@ -30,6 +30,8 @@ const (
 	OperationRuntimeRestart = "runtime.restart"
 	// OperationRuntimeStartSelected 表示启动项目某环境下已选 deployment 的批量写操作。
 	OperationRuntimeStartSelected = "runtime.start_selected"
+	// OperationBrowserDebugOpen 表示打开本机浏览器调试会话。
+	OperationBrowserDebugOpen = "browser_debug.open"
 	// OperationTemplateImport 表示导入流水线模板的写操作。
 	OperationTemplateImport = "template.import"
 	// OperationConfigProjectUpsert 表示新增或编辑项目基础配置。

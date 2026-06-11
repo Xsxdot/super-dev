@@ -11,6 +11,7 @@ package configchange
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
@@ -96,6 +97,37 @@ func validateDeployment(serviceName string, dep model.Deployment, envs map[strin
 	}
 	if dep.EffectiveControlMode() == model.ControlModeMonitor && (dep.StartCommand != "" || dep.StopCommand != "") {
 		errs = append(errs, fmt.Sprintf("service %s deployment %s monitor mode cannot declare start or stop commands", serviceName, envName))
+	}
+	errs = append(errs, validateDeploymentWebConfig(dep)...)
+	return errs
+}
+
+func validateDeploymentWebConfig(dep model.Deployment) []string {
+	if dep.Web == nil {
+		return nil
+	}
+	var errs []string
+	if dep.Web.AIDebug.Enabled && !dep.Web.Enabled {
+		errs = append(errs, "web.ai_debug requires web.enabled")
+	}
+	if !dep.Web.Enabled {
+		return errs
+	}
+	if dep.Location != model.LocationLocal {
+		errs = append(errs, "web debug v1 supports local deployments only")
+		return errs
+	}
+	u, err := url.Parse(strings.TrimSpace(dep.Web.URL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		errs = append(errs, "web.url must be a valid http or https URL")
+		return errs
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		errs = append(errs, "web.url must use http or https")
+	}
+	host := strings.Trim(u.Hostname(), "[]")
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		errs = append(errs, "web.url must point to localhost, 127.0.0.1, or [::1]")
 	}
 	return errs
 }

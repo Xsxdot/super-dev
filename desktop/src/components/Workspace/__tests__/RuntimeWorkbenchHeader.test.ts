@@ -7,7 +7,7 @@
  * 边界：
  *   - 不测试部署控制动作，header 只展示状态与布局入口
  */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RuntimeWorkbenchHeader from '../RuntimeWorkbenchHeader.vue'
@@ -16,7 +16,9 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { usePanelStore, type PanelSplitNode } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
+import { AgentAPIError, api } from '@/api/agent'
 import type { Project, Service } from '@/api/agent'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 
 const windowApiMock = vi.hoisted(() => ({
   startDragging: vi.fn(),
@@ -175,5 +177,94 @@ describe('RuntimeWorkbenchHeader', () => {
     await wrapper.find('[data-test="layout-maximize"]').trigger('click')
 
     expect(workspace.isRuntimeWorkspaceMaximized).toBe(false)
+  })
+
+  it('opens a browser debug session for the active deployment', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const openBrowserSession = vi.spyOn(api, 'openBrowserSession').mockResolvedValue({
+      session_id: 'brs_1',
+      deployment_id: 'dep-api',
+      target_url: 'http://127.0.0.1:3000/',
+      browser_id: 'arc',
+      debug_port: 9222,
+      browser_ws: 'ws://127.0.0.1:9222/devtools/browser/a',
+      page_ws: 'ws://127.0.0.1:9222/devtools/page/p',
+      devtools_url: 'http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p',
+    })
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+
+    expect(openBrowserSession).toHaveBeenCalledWith({
+      deployment_id: 'dep-api',
+      open_devtools: true,
+    }, undefined)
+    expect(wrapper.text()).toContain('brs_1')
+  })
+
+  it('clears stale browser debug session state when a later open fails', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    vi.spyOn(api, 'openBrowserSession')
+      .mockResolvedValueOnce({
+        session_id: 'brs_1',
+        deployment_id: 'dep-api',
+        target_url: 'http://127.0.0.1:3000/',
+        browser_id: 'arc',
+        debug_port: 9222,
+        browser_ws: 'ws://127.0.0.1:9222/devtools/browser/a',
+        page_ws: 'ws://127.0.0.1:9222/devtools/page/p',
+        devtools_url: 'http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p',
+      })
+      .mockRejectedValueOnce(new Error('browser unavailable'))
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="browser-debug-session"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="browser-debug-error"]').text()).toContain('browser unavailable')
+  })
+
+  it('captures browser debug approval requests from the header action', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const approval = {
+      id: 'opa_browser',
+      status: 'pending',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_browser',
+        kind: 'browser_debug.open',
+        target: { deployment_id: 'dep-api' },
+        target_summary: 'demo/sample-api',
+        risk_level: 'medium',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_browser',
+      },
+    } as any
+    const error = new AgentAPIError('approval required', 403, {
+      code: 'approval_required',
+      error: 'approval required',
+      approval,
+      plan: approval.plan,
+    })
+    vi.spyOn(api, 'openBrowserSession').mockRejectedValue(error)
+    const approvalStore = useOperationApprovalStore()
+    const capture = vi.spyOn(approvalStore, 'captureApprovalRequired').mockResolvedValue(true)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="open-browser-debug"]').trigger('click')
+    await flushPromises()
+
+    expect(capture).toHaveBeenCalledWith(error)
+    expect(wrapper.find('[data-test="browser-debug-error"]').text()).toContain('approval')
   })
 })

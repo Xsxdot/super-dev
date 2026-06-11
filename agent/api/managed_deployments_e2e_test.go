@@ -170,6 +170,9 @@ func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *te
 	require.NoError(t, err)
 	addRemoteServerProject(t, desktopApp, "proj-tk", "TK", "dep-tk-server-prod")
 	addRemoteServerProject(t, desktopApp, "proj-ai-hub", "AI-HUB", "dep-ai-hub-server-prod")
+	// 项目注册会触发后台 reconcile；这里需要验证的是最终远端隔离结果，
+	// 因此在两个项目都注册完成后同步推送一次完整 desired 清单，避免测试依赖 goroutine 调度时序。
+	require.NoError(t, desktopApp.managedReconciler.Reconcile(context.Background(), "h1"))
 
 	require.Eventually(t, func() bool {
 		status := remoteApp.nodeStatusSnapshot(context.Background(), "h1", "local-01")

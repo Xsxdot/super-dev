@@ -53,6 +53,9 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.Approval != nil {
 		current.Approval = *req.Approval
 	}
+	if req.DebugBrowser != nil {
+		current.DebugBrowser = *req.DebugBrowser
+	}
 	if err := a.settings.Save(current); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -61,9 +64,10 @@ func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsPatchRequest struct {
-	LogRetentionDays          *int                   `json:"log_retention_days"`
-	LogMaxBytes               *int64                 `json:"log_max_bytes"`
-	LogCleanupIntervalSeconds *int                   `json:"log_cleanup_interval_seconds"`
-	OnboardingCompleted       *bool                  `json:"onboarding_completed"`
-	Approval                  *config.ApprovalPolicy `json:"approval"`
+	LogRetentionDays          *int                         `json:"log_retention_days"`
+	LogMaxBytes               *int64                       `json:"log_max_bytes"`
+	LogCleanupIntervalSeconds *int                         `json:"log_cleanup_interval_seconds"`
+	OnboardingCompleted       *bool                        `json:"onboarding_completed"`
+	Approval                  *config.ApprovalPolicy       `json:"approval"`
+	DebugBrowser              *config.DebugBrowserSettings `json:"debug_browser"`
 }

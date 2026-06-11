@@ -707,6 +707,39 @@ type Environment struct {
 	Order int    `json:"order"`
 }
 
+const (
+	// WebReadinessHTTP 表示通过 HTTP GET 检查前端入口是否可访问。
+	WebReadinessHTTP = "http"
+)
+
+// WebEntrypointConfig 描述本机前端服务可由浏览器打开的入口。
+//
+// 职责：
+//   - 保存 deployment 对外提供的本机 Web URL
+//   - 声明是否允许 AI 创建浏览器调试会话
+//
+// 边界：
+//   - 不保存浏览器可执行文件路径，浏览器是本机 agent 设置
+//   - 不保存运行时 CDP WebSocket，调试会话由 runtime 管理
+type WebEntrypointConfig struct {
+	Enabled     bool               `json:"enabled" yaml:"enabled"`
+	URL         string             `json:"url,omitempty" yaml:"url,omitempty"`
+	DefaultPath string             `json:"default_path,omitempty" yaml:"default_path,omitempty"`
+	Readiness   WebReadinessConfig `json:"readiness,omitempty" yaml:"readiness,omitempty"`
+	AIDebug     WebAIDebugConfig   `json:"ai_debug,omitempty" yaml:"ai_debug,omitempty"`
+}
+
+// WebReadinessConfig 描述打开调试浏览器前如何等待前端入口就绪。
+type WebReadinessConfig struct {
+	Type           string `json:"type,omitempty" yaml:"type,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
+}
+
+// WebAIDebugConfig 描述该 Web 入口是否允许 AI 创建浏览器调试会话。
+type WebAIDebugConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
 // Deployment 描述服务在某个环境下的一份具体实例。
 //
 // 职责：
@@ -730,6 +763,8 @@ type Deployment struct {
 	Runtime *RuntimeConfig `json:"runtime,omitempty" yaml:"runtime,omitempty"`
 	// Logs 描述该服务在当前环境下的日志采集方式。迁移期保留 LogType 等扁平字段。
 	Logs *LogConfig `json:"logs,omitempty" yaml:"logs,omitempty"`
+	// Web 描述该 deployment 暴露给本机浏览器的前端入口。
+	Web *WebEntrypointConfig `json:"web,omitempty" yaml:"web,omitempty"`
 
 	// location=local 时使用
 	Command string            `json:"command,omitempty"`

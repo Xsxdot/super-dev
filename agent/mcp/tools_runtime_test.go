@@ -71,6 +71,20 @@ type fakeAgentClient struct {
 	lastPipelineDeploy         PipelineDeployRequest
 	lastPipelinePreviewRequest ProjectPipelinePreviewRequest
 	lastPipelineLogQuery       url.Values
+	debugBrowsers              []DebugBrowser
+	browserTargets             []BrowserTarget
+	browserSession             BrowserSession
+	browserSnapshot            BrowserSnapshot
+	browserAction              BrowserActionResult
+	browserScreenshot          BrowserScreenshot
+	browserEvaluate            BrowserEvaluateResult
+	lastBrowserOpen            OpenBrowserSessionRequest
+	lastBrowserSnapshot        BrowserSnapshotRequest
+	lastBrowserClick           BrowserClickRequest
+	lastBrowserType            BrowserTypeRequest
+	lastBrowserScreenshot      BrowserScreenshotRequest
+	lastBrowserEvaluate        BrowserEvaluateRequest
+	closedBrowserSession       string
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -257,6 +271,50 @@ func (f *fakeAgentClient) ValidateProjectPipeline(_ context.Context, _ string, _
 		return f.pipelinePreview, nil
 	}
 	return ProjectPipelinePreview{Run: model.Run{ID: "run-1", Status: model.StatusPending}}, nil
+}
+
+func (f *fakeAgentClient) ListDebugBrowsers(context.Context) ([]DebugBrowser, error) {
+	return f.debugBrowsers, nil
+}
+
+func (f *fakeAgentClient) ListBrowserTargets(context.Context) ([]BrowserTarget, error) {
+	return f.browserTargets, nil
+}
+
+func (f *fakeAgentClient) OpenBrowserSession(_ context.Context, req OpenBrowserSessionRequest, approvalToken string) (BrowserSession, error) {
+	f.lastBrowserOpen = req
+	f.lastApprovalToken = approvalToken
+	return f.browserSession, nil
+}
+
+func (f *fakeAgentClient) CloseBrowserSession(_ context.Context, id string) error {
+	f.closedBrowserSession = id
+	return nil
+}
+
+func (f *fakeAgentClient) BrowserSnapshot(_ context.Context, req BrowserSnapshotRequest) (BrowserSnapshot, error) {
+	f.lastBrowserSnapshot = req
+	return f.browserSnapshot, nil
+}
+
+func (f *fakeAgentClient) BrowserClick(_ context.Context, req BrowserClickRequest) (BrowserActionResult, error) {
+	f.lastBrowserClick = req
+	return f.browserAction, nil
+}
+
+func (f *fakeAgentClient) BrowserType(_ context.Context, req BrowserTypeRequest) (BrowserActionResult, error) {
+	f.lastBrowserType = req
+	return f.browserAction, nil
+}
+
+func (f *fakeAgentClient) BrowserScreenshot(_ context.Context, req BrowserScreenshotRequest) (BrowserScreenshot, error) {
+	f.lastBrowserScreenshot = req
+	return f.browserScreenshot, nil
+}
+
+func (f *fakeAgentClient) BrowserEvaluate(_ context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
+	f.lastBrowserEvaluate = req
+	return f.browserEvaluate, nil
 }
 
 func (f *fakeAgentClient) ListPipelineRuns(context.Context, string, string) ([]model.Run, error) {

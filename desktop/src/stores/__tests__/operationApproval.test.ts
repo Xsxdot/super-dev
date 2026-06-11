@@ -197,6 +197,48 @@ describe('operationApproval store', () => {
     expect(store.error).toBe('')
   })
 
+  it('resumes a desktop browser debug operation after approval', async () => {
+    const approval = {
+      id: 'opa_browser',
+      status: 'approved',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_browser',
+        kind: 'browser_debug.open',
+        target: { deployment_id: 'dep-web' },
+        target_summary: 'demo/dev/admin',
+        risk_level: 'medium',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_browser',
+      },
+    } as any
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval } as any)
+    vi.spyOn(api, 'getOperationApproval').mockResolvedValue({ approval, approval_token: 'tok_browser' })
+    vi.spyOn(api, 'openBrowserSession').mockResolvedValue({
+      session_id: 'brs_1',
+      deployment_id: 'dep-web',
+      target_url: 'http://127.0.0.1:5173/',
+      browser_id: 'arc',
+      debug_port: 9222,
+      browser_ws: 'ws://127.0.0.1:9222/devtools/browser/a',
+      page_ws: 'ws://127.0.0.1:9222/devtools/page/p',
+      devtools_url: 'http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/p',
+    })
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_browser', 'ok')
+
+    expect(api.getOperationApproval).toHaveBeenCalledWith('opa_browser')
+    expect(api.openBrowserSession).toHaveBeenCalledWith({
+      deployment_id: 'dep-web',
+      open_devtools: true,
+    }, 'tok_browser')
+    expect(store.error).toBe('')
+  })
+
   it('retries execution without approving again after a resume failure', async () => {
     const approval = {
       id: 'opa_1',

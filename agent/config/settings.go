@@ -62,6 +62,20 @@ type ApprovalPolicy struct {
 	GraceMinutes   int  `json:"grace_minutes"`   // 豁免窗口时长（分钟）
 }
 
+// DebugBrowserSettings 表示本机浏览器调试偏好。
+type DebugBrowserSettings struct {
+	DefaultBrowserID string               `json:"default_browser_id,omitempty"`
+	ProfileMode      string               `json:"profile_mode,omitempty"`
+	Browsers         []DebugBrowserConfig `json:"browsers,omitempty"`
+}
+
+// DebugBrowserConfig 描述一个可被 SuperDev 启动的本机 Chromium 兼容浏览器。
+type DebugBrowserConfig struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ExecutablePath string `json:"executable_path"`
+}
+
 // AgentSettings 表示 agent 级全局设置。
 type AgentSettings struct {
 	LogRetentionDays          int   `json:"log_retention_days"`
@@ -73,6 +87,8 @@ type AgentSettings struct {
 	OnboardingCompleted  bool `json:"onboarding_completed"`
 	// Approval 表示写操作审批策略。
 	Approval ApprovalPolicy `json:"approval"`
+	// DebugBrowser 表示本机前端调试浏览器偏好。
+	DebugBrowser DebugBrowserSettings `json:"debug_browser"`
 }
 
 // SettingsStore 负责读写 agent 数据目录下的 settings.json。
@@ -99,6 +115,7 @@ func DefaultAgentSettings() AgentSettings {
 			TemplateImport: true,
 			GraceMinutes:   DefaultGraceMinutes,
 		},
+		DebugBrowser: DebugBrowserSettings{ProfileMode: "ephemeral"},
 	}
 }
 
@@ -135,6 +152,19 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	if settings.ArtifactKeepVersions < MinArtifactKeepVersions || settings.ArtifactKeepVersions > MaxArtifactKeepVersions {
 		return fmt.Errorf("artifact_keep_versions must be between %d and %d", MinArtifactKeepVersions, MaxArtifactKeepVersions)
 	}
+	if settings.DebugBrowser.ProfileMode != "" && settings.DebugBrowser.ProfileMode != "ephemeral" {
+		return fmt.Errorf("debug_browser.profile_mode must be ephemeral")
+	}
+	seenBrowsers := map[string]bool{}
+	for _, browser := range settings.DebugBrowser.Browsers {
+		if browser.ID == "" {
+			return fmt.Errorf("debug_browser.browsers[].id is required")
+		}
+		if seenBrowsers[browser.ID] {
+			return fmt.Errorf("debug_browser browser id %q is duplicated", browser.ID)
+		}
+		seenBrowsers[browser.ID] = true
+	}
 	return nil
 }
 
@@ -163,6 +193,9 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 	// 历史 settings.json 没有该字段时反序列化为 0，回填默认值，避免校验失败。
 	if settings.ArtifactKeepVersions == 0 {
 		settings.ArtifactKeepVersions = DefaultArtifactKeepVersions
+	}
+	if settings.DebugBrowser.ProfileMode == "" {
+		settings.DebugBrowser.ProfileMode = "ephemeral"
 	}
 	if err := ValidateAgentSettings(settings); err != nil {
 		return AgentSettings{}, err

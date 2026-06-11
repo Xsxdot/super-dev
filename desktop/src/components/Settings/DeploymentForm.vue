@@ -13,7 +13,7 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ControlMode, Deployment, LogConfig, LogKind, RuntimeConfig, RuntimeType } from '@/api/agent'
+import type { ControlMode, Deployment, LogConfig, LogKind, RuntimeConfig, RuntimeType, WebEntrypointConfig } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 import WorkDirInput from './WorkDirInput.vue'
@@ -173,7 +173,7 @@ function setLocation(location: Deployment['location']) {
     ? { type: 'command' as const, command: '' }
     : runtimeForMode(controlMode.value)
   const nextLogs = isDefaultLogForRuntime(logs.value, runtime.value) ? defaultLogsForRuntime(nextRuntime) : logs.value
-  patchRuntimeAndLogs(nextRuntime, nextLogs, { location })
+  patchRuntimeAndLogs(nextRuntime, nextLogs, { location, web: location === 'local' ? props.modelValue.web : undefined })
 }
 
 function setRuntimeType(type: RuntimeType) {
@@ -257,6 +257,24 @@ function toggleHost(id: string, checked: boolean) {
 
 function setEnv(env: Record<string, string>) {
   patchRuntime({ type: 'command', env_vars: env })
+}
+
+function patchWeb(partial: Partial<WebEntrypointConfig>) {
+  const current = props.modelValue.web ?? {
+    enabled: false,
+    url: '',
+    default_path: '/',
+    readiness: { type: 'http', timeout_seconds: 30 },
+    ai_debug: { enabled: false },
+  }
+  patch({
+    web: {
+      ...current,
+      ...partial,
+      readiness: { ...(current.readiness ?? { type: 'http', timeout_seconds: 30 }), ...(partial.readiness ?? {}) },
+      ai_debug: { ...(current.ai_debug ?? { enabled: false }), ...(partial.ai_debug ?? {}) },
+    },
+  })
 }
 </script>
 
@@ -431,6 +449,61 @@ function setEnv(env: Record<string, string>) {
           @input="setNginxDomain(($event.target as HTMLInputElement).value)"
         />
       </div>
+    </section>
+
+    <section v-if="modelValue.location === 'local'" class="dep-block">
+      <div class="dep-heading">{{ t('settings.deployment.webEntry') }}</div>
+      <label class="dep-choice">
+        <input
+          type="checkbox"
+          data-test="dep-web-enabled"
+          :checked="modelValue.web?.enabled ?? false"
+          @change="patchWeb({ enabled: ($event.target as HTMLInputElement).checked })"
+        />
+        {{ t('settings.deployment.webEntryEnabled') }}
+      </label>
+      <template v-if="modelValue.web?.enabled">
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.webUrl') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-web-url"
+            :value="modelValue.web?.url ?? ''"
+            placeholder="http://127.0.0.1:3000"
+            @input="patchWeb({ url: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.webDefaultPath') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-web-default-path"
+            :value="modelValue.web?.default_path ?? '/'"
+            @input="patchWeb({ default_path: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.webReadinessTimeout') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-web-readiness-timeout"
+            type="number"
+            min="1"
+            max="120"
+            :value="modelValue.web?.readiness?.timeout_seconds ?? 30"
+            @change="patchWeb({ readiness: { type: 'http', timeout_seconds: Number(($event.target as HTMLInputElement).value) } })"
+          />
+        </div>
+        <label class="dep-choice">
+          <input
+            type="checkbox"
+            data-test="dep-web-ai-debug"
+            :checked="modelValue.web?.ai_debug?.enabled ?? false"
+            @change="patchWeb({ ai_debug: { enabled: ($event.target as HTMLInputElement).checked } })"
+          />
+          {{ t('settings.deployment.webAIDebug') }}
+        </label>
+      </template>
     </section>
 
     <section class="dep-block">

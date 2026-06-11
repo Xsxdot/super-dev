@@ -81,6 +81,24 @@ type AgentClient interface {
 	DeployProjectPipeline(context.Context, string, string, PipelineDeployRequest) (model.Run, error)
 	// ValidateProjectPipeline 预览并校验已保存的项目级 pipeline。
 	ValidateProjectPipeline(context.Context, string, string, ProjectPipelinePreviewRequest) (ProjectPipelinePreview, error)
+	// ListDebugBrowsers 查询本机调试浏览器配置和可用性。
+	ListDebugBrowsers(context.Context) ([]DebugBrowser, error)
+	// ListBrowserTargets 查询可打开的本机前端调试目标。
+	ListBrowserTargets(context.Context) ([]BrowserTarget, error)
+	// OpenBrowserSession 创建本机前端浏览器调试会话。
+	OpenBrowserSession(context.Context, OpenBrowserSessionRequest, string) (BrowserSession, error)
+	// CloseBrowserSession 关闭由 SuperDev 创建的浏览器调试会话。
+	CloseBrowserSession(context.Context, string) error
+	// BrowserSnapshot 读取浏览器页面快照。
+	BrowserSnapshot(context.Context, BrowserSnapshotRequest) (BrowserSnapshot, error)
+	// BrowserClick 点击浏览器页面元素。
+	BrowserClick(context.Context, BrowserClickRequest) (BrowserActionResult, error)
+	// BrowserType 向浏览器页面元素输入文本。
+	BrowserType(context.Context, BrowserTypeRequest) (BrowserActionResult, error)
+	// BrowserScreenshot 截取浏览器页面。
+	BrowserScreenshot(context.Context, BrowserScreenshotRequest) (BrowserScreenshot, error)
+	// BrowserEvaluate 执行浏览器页面 JavaScript。
+	BrowserEvaluate(context.Context, BrowserEvaluateRequest) (BrowserEvaluateResult, error)
 	// ListPipelineRuns 查询项目级 pipeline 执行历史。
 	ListPipelineRuns(context.Context, string, string) ([]model.Run, error)
 	// ListPipelineArtifacts 查询项目级 pipeline 制品历史。
@@ -522,6 +540,64 @@ func (c *HTTPAgentClient) ValidateProjectPipeline(ctx context.Context, projectID
 	return out, c.post(ctx, path, req, &out)
 }
 
+// ListDebugBrowsers 查询本机调试浏览器配置和可用性。
+func (c *HTTPAgentClient) ListDebugBrowsers(ctx context.Context) ([]DebugBrowser, error) {
+	var out []DebugBrowser
+	return out, c.get(ctx, "/api/debug-browsers", &out)
+}
+
+// ListBrowserTargets 查询可打开的本机前端调试目标。
+func (c *HTTPAgentClient) ListBrowserTargets(ctx context.Context) ([]BrowserTarget, error) {
+	var out []BrowserTarget
+	return out, c.get(ctx, "/api/browser-targets", &out)
+}
+
+// OpenBrowserSession 创建本机前端浏览器调试会话。
+func (c *HTTPAgentClient) OpenBrowserSession(ctx context.Context, req OpenBrowserSessionRequest, approvalToken string) (BrowserSession, error) {
+	var out BrowserSession
+	return out, c.postWithApprovalToken(ctx, "/api/browser-sessions", req, approvalToken, &out)
+}
+
+// CloseBrowserSession 关闭由 SuperDev 创建的浏览器调试会话。
+func (c *HTTPAgentClient) CloseBrowserSession(ctx context.Context, id string) error {
+	return c.delete(ctx, "/api/browser-sessions/"+url.PathEscape(id), nil)
+}
+
+// BrowserSnapshot 读取浏览器页面快照。
+func (c *HTTPAgentClient) BrowserSnapshot(ctx context.Context, req BrowserSnapshotRequest) (BrowserSnapshot, error) {
+	var out BrowserSnapshot
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/snapshot"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserClick 点击浏览器页面元素。
+func (c *HTTPAgentClient) BrowserClick(ctx context.Context, req BrowserClickRequest) (BrowserActionResult, error) {
+	var out BrowserActionResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/click"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserType 向浏览器页面元素输入文本。
+func (c *HTTPAgentClient) BrowserType(ctx context.Context, req BrowserTypeRequest) (BrowserActionResult, error) {
+	var out BrowserActionResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/type"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserScreenshot 截取浏览器页面。
+func (c *HTTPAgentClient) BrowserScreenshot(ctx context.Context, req BrowserScreenshotRequest) (BrowserScreenshot, error) {
+	var out BrowserScreenshot
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/screenshot"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserEvaluate 执行浏览器页面 JavaScript。
+func (c *HTTPAgentClient) BrowserEvaluate(ctx context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
+	var out BrowserEvaluateResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/evaluate"
+	return out, c.post(ctx, path, req, &out)
+}
+
 // ListPipelineRuns 查询项目级 pipeline 执行历史。
 //
 // 参数：
@@ -588,6 +664,14 @@ func (c *HTTPAgentClient) get(ctx context.Context, path string, out any) error {
 
 func (c *HTTPAgentClient) post(ctx context.Context, path string, body any, out any) error {
 	return c.postWithApprovalToken(ctx, path, body, "", out)
+}
+
+func (c *HTTPAgentClient) delete(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, out)
 }
 
 func (c *HTTPAgentClient) postWithApprovalToken(ctx context.Context, path string, body any, approvalToken string, out any) error {

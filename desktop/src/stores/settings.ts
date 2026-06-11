@@ -11,7 +11,7 @@
 //   - 不直接渲染设置页
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, type AgentSettings, type ApprovalPolicy } from '@/api/agent'
+import { api, type AgentSettings, type ApprovalPolicy, type DebugBrowserSettings } from '@/api/agent'
 import {
   SUPPORTED_LOCALE_OPTIONS,
   currentLocale,
@@ -47,6 +47,10 @@ export const useSettingsStore = defineStore('settings', () => {
       pipeline_run: true,
       template_import: true,
       grace_minutes: 15,
+    },
+    debug_browser: {
+      profile_mode: 'ephemeral',
+      browsers: [],
     },
   })
   const hiddenServiceIds = ref<string[]>(loadHiddenServiceIds())
@@ -85,6 +89,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function saveApprovalPolicy(approval: ApprovalPolicy) {
     const saved = await api.putSettings({ approval })
+    agentSettings.value = saved
+  }
+
+  async function saveDebugBrowserSettings(debugBrowser: DebugBrowserSettings) {
+    const saved = await api.putSettings({ debug_browser: debugBrowser })
     agentSettings.value = saved
   }
 
@@ -129,6 +138,7 @@ export const useSettingsStore = defineStore('settings', () => {
     saveLogRetentionDays,
     saveArtifactKeepVersions,
     saveApprovalPolicy,
+    saveDebugBrowserSettings,
     setOnboardingCompleted,
     loadAutostart,
     setAutostart,

@@ -160,6 +160,7 @@ function normalizeDeployment(d: Deployment): Deployment {
     control_mode: inferControlMode(dep),
     runtime,
     logs: normalizeLogs(dep, runtime),
+    web: dep.web ? clone(dep.web) : undefined,
   }
 }
 
@@ -256,6 +257,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           env_file: runtime.type === 'command' ? runtime.env_file : dep.env_file,
           runtime,
           logs,
+          web: dep.web,
           read_only: controlMode === 'monitor' ? true : undefined,
           start_command: dep.start_command,
           stop_command: dep.stop_command,

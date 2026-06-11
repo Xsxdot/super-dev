@@ -25,6 +25,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/browsercontrol"
+	"github.com/xsxdot/super-dev/agent/browserdebug"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/debugsession"
@@ -149,6 +151,10 @@ type App struct {
 	operationAudit operation.AuditStore
 	// operationGrace 持久化项目级审批豁免窗口。
 	operationGrace operation.GraceStore
+	// browserDebug 管理由 SuperDev 创建的本机浏览器调试会话。
+	browserDebug *browserdebug.Manager
+	// browserControl 通过 Playwright 控制已创建的浏览器调试会话。
+	browserControl browsercontrol.Controller
 	// securityStore 持久化 agent 安全自举与长期 token 状态。
 	securityStore *security.Store
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
@@ -268,6 +274,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	operationApprovals := operation.NewApprovalFileStore(filepath.Join(cfg.DataDir, "operation-approvals.json"))
 	operationAudit := operation.NewAuditFileStore(filepath.Join(cfg.DataDir, "operation-audit.json"), 5000)
 	operationGrace := operation.NewGraceFileStore(filepath.Join(cfg.DataDir, "operation-grace.json"))
+	browserDebug := browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: browserdebug.NewChromiumLauncher(filepath.Join(cfg.DataDir, "browser-debug"), http.DefaultClient),
+	})
+	browserControl := browsercontrol.NewPlaywrightController(filepath.Join(cfg.DataDir, "playwright-driver"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
 	targetSource := agentTargetSource(remoteStore, agentStore)
 	tunnelTransport := nodetransport.NewTunnelTransport(tunnels, targetSource)
@@ -358,6 +368,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
 		operationGrace:              operationGrace,
+		browserDebug:                browserDebug,
+		browserControl:              browserControl,
 		securityStore:               securityStore,
 		nodeTransport:               nodeTransport,
 		nodeTransportProviders:      appNodeTransportProviders,
@@ -517,6 +529,19 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/debug-sessions/{id}", a.getDebugSession)
 	mux.HandleFunc("POST /api/debug-sessions/{id}/events", a.appendDebugSessionEvent)
 	mux.HandleFunc("POST /api/debug-sessions/{id}/close", a.closeDebugSession)
+
+	// Browser debug sessions（本机前端 Web entrypoint 调试）
+	mux.HandleFunc("GET /api/debug-browsers", a.listDebugBrowsers)
+	mux.HandleFunc("GET /api/browser-targets", a.listBrowserTargets)
+	mux.HandleFunc("POST /api/browser-sessions", a.openBrowserSession)
+	mux.HandleFunc("GET /api/browser-sessions", a.listBrowserSessions)
+	mux.HandleFunc("GET /api/browser-sessions/{id}", a.getBrowserSession)
+	mux.HandleFunc("DELETE /api/browser-sessions/{id}", a.closeBrowserSession)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/snapshot", a.browserSessionSnapshot)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/click", a.browserSessionClick)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/type", a.browserSessionType)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/screenshot", a.browserSessionScreenshot)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/evaluate", a.browserSessionEvaluate)
 
 	// Operation safety（本机写操作预检、审批与审计）
 	mux.HandleFunc("POST /api/operations/preflight", a.preflightOperation)

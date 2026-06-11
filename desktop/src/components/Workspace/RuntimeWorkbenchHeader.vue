@@ -10,20 +10,26 @@ RuntimeWorkbenchHeader：运行态工作区顶部状态栏。
   - 不改变 panel 布局树，仅展示布局动作入口
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Icon } from '@iconify/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { api, type BrowserSession } from '@/api/agent'
 import { MAX_PANEL_LEAVES, usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
+import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
+const operationApprovalStore = useOperationApprovalStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const appWindow = getCurrentWindow()
+const browserSession = ref<BrowserSession | null>(null)
+const browserError = ref<string | null>(null)
 
 const openDeploymentIds = computed(() => {
   const ids = new Set<string>()
@@ -77,6 +83,21 @@ function arrangeColumns() {
   persistActiveLayout()
 }
 
+async function openBrowserDebug() {
+  const deploymentId = primaryDeploymentInfo.value?.deployment.id
+  if (!deploymentId) return
+  browserError.value = null
+  browserSession.value = null
+  try {
+    browserSession.value = await api.openBrowserSession({ deployment_id: deploymentId, open_devtools: true }, undefined)
+  } catch (error) {
+    const captured = await operationApprovalStore.captureApprovalRequired(error)
+    browserError.value = captured
+      ? t('runtimeWorkbench.browserDebugApprovalRequired')
+      : error instanceof Error ? error.message : String(error)
+  }
+}
+
 function startWindowDrag(event: MouseEvent) {
   if (event.buttons !== 1) return
   void appWindow.startDragging().catch(() => undefined)
@@ -121,6 +142,23 @@ function startWindowDrag(event: MouseEvent) {
       >
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
+      <span v-if="browserSession" class="status-chip browser-session" data-test="browser-debug-session">
+        {{ browserSession.session_id }}
+      </span>
+      <span v-else-if="browserError" class="status-chip browser-error" data-test="browser-debug-error">
+        {{ browserError }}
+      </span>
+      <button
+        type="button"
+        class="layout-btn"
+        data-test="open-browser-debug"
+        :title="t('runtimeWorkbench.openBrowserDebug')"
+        :aria-label="t('runtimeWorkbench.openBrowserDebug')"
+        :disabled="!primaryDeploymentInfo"
+        @click="openBrowserDebug"
+      >
+        <Icon icon="lucide:bug" aria-hidden="true" />
+      </button>
       <button
         type="button"
         class="layout-btn"
@@ -230,6 +268,21 @@ function startWindowDrag(event: MouseEvent) {
   color: #58a6ff;
 }
 
+.status-chip.browser-session {
+  border-color: rgba(63, 185, 80, 0.28);
+  background: rgba(63, 185, 80, 0.08);
+  color: #7ce38b;
+}
+
+.status-chip.browser-error {
+  max-width: 220px;
+  overflow: hidden;
+  border-color: rgba(248, 81, 73, 0.32);
+  background: rgba(248, 81, 73, 0.08);
+  color: #ff7b72;
+  text-overflow: ellipsis;
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -253,9 +306,19 @@ function startWindowDrag(event: MouseEvent) {
   cursor: pointer;
 }
 
+.layout-btn :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+
 .layout-btn:hover {
   border-color: rgba(88, 166, 255, 0.45);
   color: var(--text-primary);
+}
+
+.layout-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .layout-btn.active {

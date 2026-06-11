@@ -54,6 +54,7 @@ type operationTargetRequest struct {
 	ServiceID    string                             `json:"service_id"`
 	ServiceName  string                             `json:"service_name"`
 	DeploymentID string                             `json:"deployment_id"`
+	Path         string                             `json:"path"`
 	TemplatePath string                             `json:"template_path"`
 	Project      *configchange.ProjectPatch         `json:"project,omitempty"`
 	Service      *configchange.ServicePatch         `json:"service,omitempty"`
@@ -233,6 +234,20 @@ func (a *App) planOperation(req operationTargetRequest) (operation.Plan, int, st
 			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
 		}
 		return plan, http.StatusOK, ""
+	case operation.OperationBrowserDebugOpen:
+		project, service, dep, status, msg := a.resolveOperationRuntimeTarget(req)
+		if status != http.StatusOK {
+			return operation.Plan{}, status, msg
+		}
+		_, targetURL, status, msg := a.resolveBrowserDebugTarget(dep, service, project, req.Path)
+		if status != http.StatusOK {
+			return operation.Plan{}, status, msg
+		}
+		plan, err := operation.PlanBrowserDebugOpen(project, service, dep, targetURL)
+		if err != nil {
+			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
+		}
+		return plan, http.StatusOK, ""
 	case operation.OperationTemplateImport:
 		plan, err := a.planTemplateImport(req.TemplatePath)
 		if err != nil {
@@ -351,6 +366,8 @@ func applyApprovalPolicy(plan operation.Plan, policy config.ApprovalPolicy) oper
 		plan.RequiresApproval = policy.PipelineRun
 	case operation.OperationTemplateImport:
 		plan.RequiresApproval = policy.TemplateImport
+	case operation.OperationBrowserDebugOpen:
+		plan.RequiresApproval = true
 	}
 	return plan
 }

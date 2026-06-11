@@ -139,7 +139,8 @@ func templateImportInputSchema() map[string]any {
 func previewOperationInputSchema() map[string]any {
 	schema := targetInputSchema()
 	properties := schema["properties"].(map[string]any)
-	properties["kind"] = map[string]any{"type": "string", "enum": []string{"runtime.start", "runtime.stop", "runtime.restart", "template.import"}}
+	properties["kind"] = map[string]any{"type": "string", "enum": []string{"runtime.start", "runtime.stop", "runtime.restart", "template.import", "browser_debug.open"}}
+	properties["path"] = map[string]any{"type": "string"}
 	properties["template_path"] = map[string]any{"type": "string"}
 	delete(properties, "approval_token")
 	delete(properties, "debug_session_id")
@@ -380,6 +381,97 @@ func closeDebugSessionInputSchema() map[string]any {
 			"summary":    map[string]any{"type": "string"},
 		},
 		"required": []string{"session_id"},
+	}
+}
+
+func openBrowserSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"deployment_id":         map[string]any{"type": "string"},
+			"browser_id":            map[string]any{"type": "string"},
+			"path":                  map[string]any{"type": "string"},
+			"open_devtools":         map[string]any{"type": "boolean"},
+			"approval_token":        map[string]any{"type": "string"},
+			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 300},
+			"debug_session_id":      map[string]any{"type": "string"},
+		},
+		"required": []string{"deployment_id"},
+	}
+}
+
+func closeBrowserSessionInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserSnapshotInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+			"max_text":   map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserClickInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id", "selector"},
+	}
+}
+
+func browserTypeInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"selector":   map[string]any{"type": "string"},
+			"text":       map[string]any{"type": "string"},
+			"fill":       map[string]any{"type": "boolean"},
+		},
+		"required": []string{"session_id", "selector", "text"},
+	}
+}
+
+func browserScreenshotInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"full_page":  map[string]any{"type": "boolean"},
+		},
+		"required": []string{"session_id"},
+	}
+}
+
+func browserEvaluateInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"expression": map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id", "expression"},
 	}
 }
 
@@ -663,6 +755,92 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"destructiveHint": true},
 			},
 			Handler: s.restartServiceTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_debug_browsers",
+				Title:       "List debug browsers",
+				Description: "Return local Chromium-compatible browsers configured for SuperDev frontend debugging.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listDebugBrowsersTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_browser_targets",
+				Title:       "List browser targets",
+				Description: "Return local frontend deployments configured with web entrypoints.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listBrowserTargetsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "open_browser_debug_session",
+				Title:       "Open browser debug session",
+				Description: "Open a local frontend deployment in an isolated debug browser and return CDP WebSocket endpoints.",
+				InputSchema: openBrowserSessionInputSchema(),
+			},
+			Handler: s.openBrowserDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "close_browser_debug_session",
+				Title:       "Close browser debug session",
+				Description: "Close a browser debug session created by SuperDev.",
+				InputSchema: closeBrowserSessionInputSchema(),
+				Annotations: map[string]any{"destructiveHint": true},
+			},
+			Handler: s.closeBrowserDebugSessionTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_snapshot",
+				Title:       "Browser snapshot",
+				Description: "Read a text snapshot from a browser debug session page.",
+				InputSchema: browserSnapshotInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.browserSnapshotTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_click",
+				Title:       "Browser click",
+				Description: "Click an element in a browser debug session page.",
+				InputSchema: browserClickInputSchema(),
+			},
+			Handler: s.browserClickTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_type",
+				Title:       "Browser type",
+				Description: "Type or fill text into an element in a browser debug session page.",
+				InputSchema: browserTypeInputSchema(),
+			},
+			Handler: s.browserTypeTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_screenshot",
+				Title:       "Browser screenshot",
+				Description: "Capture a PNG screenshot from a browser debug session page.",
+				InputSchema: browserScreenshotInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.browserScreenshotTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_evaluate",
+				Title:       "Browser evaluate",
+				Description: "Evaluate JavaScript in a browser debug session page and return the serializable result.",
+				InputSchema: browserEvaluateInputSchema(),
+			},
+			Handler: s.browserEvaluateTool,
 		},
 		{
 			Tool: Tool{

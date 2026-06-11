@@ -66,23 +66,24 @@ type ServicePatch struct {
 
 // DeploymentPatch 描述 deployment 的局部 upsert。
 type DeploymentPatch struct {
-	ID           string               `json:"id,omitempty"`
-	EnvName      string               `json:"env_name,omitempty"`
-	Location     model.DeployLocation `json:"location,omitempty"`
-	ControlMode  model.ControlMode    `json:"control_mode,omitempty"`
-	Runtime      *model.RuntimeConfig `json:"runtime,omitempty"`
-	Logs         *model.LogConfig     `json:"logs,omitempty"`
-	Command      string               `json:"command,omitempty"`
-	WorkDir      string               `json:"work_dir,omitempty"`
-	EnvFile      string               `json:"env_file,omitempty"`
-	Env          map[string]string    `json:"env,omitempty"`
-	HostIDs      []string             `json:"host_ids,omitempty"`
-	LogType      model.LogSourceType  `json:"log_type,omitempty"`
-	LogTarget    string               `json:"log_target,omitempty"`
-	ExtraArgs    []string             `json:"extra_args,omitempty"`
-	ReadOnly     *bool                `json:"read_only,omitempty"`
-	StartCommand string               `json:"start_command,omitempty"`
-	StopCommand  string               `json:"stop_command,omitempty"`
+	ID           string                     `json:"id,omitempty"`
+	EnvName      string                     `json:"env_name,omitempty"`
+	Location     model.DeployLocation       `json:"location,omitempty"`
+	ControlMode  model.ControlMode          `json:"control_mode,omitempty"`
+	Runtime      *model.RuntimeConfig       `json:"runtime,omitempty"`
+	Logs         *model.LogConfig           `json:"logs,omitempty"`
+	Web          *model.WebEntrypointConfig `json:"web,omitempty"`
+	Command      string                     `json:"command,omitempty"`
+	WorkDir      string                     `json:"work_dir,omitempty"`
+	EnvFile      string                     `json:"env_file,omitempty"`
+	Env          map[string]string          `json:"env,omitempty"`
+	HostIDs      []string                   `json:"host_ids,omitempty"`
+	LogType      model.LogSourceType        `json:"log_type,omitempty"`
+	LogTarget    string                     `json:"log_target,omitempty"`
+	ExtraArgs    []string                   `json:"extra_args,omitempty"`
+	ReadOnly     *bool                      `json:"read_only,omitempty"`
+	StartCommand string                     `json:"start_command,omitempty"`
+	StopCommand  string                     `json:"stop_command,omitempty"`
 }
 
 // ProjectPipelinePatch 描述项目级流水线的 upsert。

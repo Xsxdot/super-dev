@@ -260,6 +260,61 @@ func effectiveDeployLocation(dep model.Deployment) model.DeployLocation {
 	return dep.Location
 }
 
+// PlanBrowserDebugOpen 为本机前端浏览器调试会话生成安全预检计划。
+//
+// 参数：
+//   - project: deployment 所属项目
+//   - service: deployment 所属服务
+//   - dep: 解析后的 deployment
+//   - targetURL: 即将被调试浏览器打开的 loopback URL
+//
+// 返回：
+//   - 需要审批的浏览器调试 plan
+//   - deployment ID 或目标 URL 缺失时返回错误
+//
+// 注意：
+//   - 此函数只规划安全策略，不启动浏览器进程
+//   - v1 仅支持本机 deployment，远端目标会被标记为 denied
+func PlanBrowserDebugOpen(project model.Project, service model.Service, dep model.Deployment, targetURL string) (Plan, error) {
+	targetURL = trim(targetURL)
+	if dep.ID == "" || targetURL == "" {
+		return Plan{}, ErrInvalidOperation
+	}
+	now := time.Now().UTC()
+	plan := Plan{
+		ID:   newID("op"),
+		Kind: OperationBrowserDebugOpen,
+		Target: Target{
+			ProjectID:    project.ID,
+			ProjectName:  project.Name,
+			EnvName:      dep.EnvName,
+			ServiceID:    service.ID,
+			ServiceName:  service.Name,
+			DeploymentID: dep.ID,
+		},
+		TargetSummary:    fmt.Sprintf("%s/%s/%s", project.Name, dep.EnvName, service.Name),
+		RiskLevel:        RiskMedium,
+		RequiresApproval: true,
+		ExpectedEffects:  []string{fmt.Sprintf("open debug browser for %s", targetURL)},
+		Checks:           []Check{{Name: "target_resolved", Status: "passed", Message: "local frontend target resolved by agent"}},
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+	}
+	if effectiveDeployLocation(dep) != model.LocationLocal {
+		plan.Denied = true
+		plan.RiskLevel = RiskCritical
+		plan.Reasons = append(plan.Reasons, "browser debug v1 supports local deployments only")
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":             plan.Kind,
+		"target":           plan.Target,
+		"target_url":       targetURL,
+		"expected_effects": plan.ExpectedEffects,
+		"denied":           plan.Denied,
+	})
+	return plan, nil
+}
+
 // PlanTemplateImport 为用户模板导入生成安全预检计划。
 //
 // 参数：

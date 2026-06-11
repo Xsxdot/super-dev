@@ -11,6 +11,7 @@
 package configchange
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,6 +47,70 @@ func TestApplyChangeUpsertsServiceAndPreservesUnmentionedItems(t *testing.T) {
 	assert.Equal(t, "go run ./cmd/api", api.Deployments[0].Runtime.Command)
 	assert.NotEmpty(t, api.Deployments[0].ID)
 	assert.NotNil(t, findServiceForTest(updated, "worker"))
+}
+
+func TestServiceUpsertPreservesDeploymentWebConfig(t *testing.T) {
+	project := sampleProject()
+	change := ChangeRequest{
+		Kind:      KindServiceUpsert,
+		ProjectID: "p1",
+		Service: &ServicePatch{
+			ID:   "svc-api",
+			Name: "api",
+			Deployments: []DeploymentPatch{{
+				ID:       "dep-api-dev",
+				EnvName:  "dev",
+				Location: model.LocationLocal,
+				Runtime:  &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "pnpm dev"},
+				Logs:     &model.LogConfig{Type: model.LogKindProcess},
+				Web: &model.WebEntrypointConfig{
+					Enabled: true,
+					URL:     "http://127.0.0.1:3000",
+					AIDebug: model.WebAIDebugConfig{Enabled: true},
+				},
+			}},
+		},
+	}
+
+	updated, err := Apply(project, change)
+	require.NoError(t, err)
+	result := Validate(updated, change)
+
+	require.True(t, result.OK, result.Errors)
+	got := findServiceForTest(updated, "api").Deployments[0].Web
+	require.NotNil(t, got)
+	assert.Equal(t, "http://127.0.0.1:3000", got.URL)
+	assert.True(t, got.AIDebug.Enabled)
+}
+
+func TestServiceUpsertRejectsRemoteWebDebugV1(t *testing.T) {
+	project := sampleProject()
+	change := ChangeRequest{
+		Kind:      KindServiceUpsert,
+		ProjectID: "p1",
+		Service: &ServicePatch{
+			ID:   "svc-api",
+			Name: "api",
+			Deployments: []DeploymentPatch{{
+				ID:          "dep-api-dev",
+				EnvName:     "dev",
+				Location:    model.LocationRemote,
+				ControlMode: model.ControlModeMonitor,
+				Web: &model.WebEntrypointConfig{
+					Enabled: true,
+					URL:     "http://127.0.0.1:3000",
+					AIDebug: model.WebAIDebugConfig{Enabled: true},
+				},
+			}},
+		},
+	}
+
+	updated, err := Apply(project, change)
+	require.NoError(t, err)
+	result := Validate(updated, change)
+
+	assert.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "; "), "local deployments only")
 }
 
 func TestApplyChangeUpsertsProjectPipelineAndPreservesOthers(t *testing.T) {

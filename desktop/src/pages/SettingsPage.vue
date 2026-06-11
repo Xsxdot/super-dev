@@ -168,6 +168,11 @@ const artifactKeepVersions = computed({
     void settingsStore.saveArtifactKeepVersions(versions)
   },
 })
+
+function saveDefaultDebugBrowser(browserId: string) {
+  const current = settingsStore.agentSettings.debug_browser ?? { profile_mode: 'ephemeral', browsers: [] }
+  void settingsStore.saveDebugBrowserSettings({ ...current, default_browser_id: browserId })
+}
 </script>
 
 <template>
@@ -348,6 +353,27 @@ const artifactKeepVersions = computed({
                 :value="option.value"
               >
                 {{ option.label }}
+              </option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">{{ t('settings.general.debugBrowserTitle') }}</div>
+              <div class="settings-row-description">{{ t('settings.general.debugBrowserDesc') }}</div>
+            </div>
+            <select
+              class="settings-select debug-browser-select"
+              data-test="debug-browser-default"
+              :value="settingsStore.agentSettings.debug_browser?.default_browser_id ?? ''"
+              @change="saveDefaultDebugBrowser(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">{{ t('settings.general.debugBrowserNone') }}</option>
+              <option
+                v-for="browser in settingsStore.agentSettings.debug_browser?.browsers ?? []"
+                :key="browser.id"
+                :value="browser.id"
+              >
+                {{ browser.name }}
               </option>
             </select>
           </div>
@@ -573,6 +599,10 @@ const artifactKeepVersions = computed({
 
 .locale-select {
   min-width: 156px;
+}
+
+.debug-browser-select {
+  min-width: 172px;
 }
 
 .settings-switch input {

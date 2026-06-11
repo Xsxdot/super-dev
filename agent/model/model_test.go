@@ -21,6 +21,36 @@ func TestProjectEnvSelectedIDs(t *testing.T) {
 	assert.Empty(t, p.EnvSelectedServiceIDs)
 }
 
+func TestDeploymentWebConfigJSONRoundTrip(t *testing.T) {
+	dep := model.Deployment{
+		ID:       "dep-admin-dev",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Web: &model.WebEntrypointConfig{
+			Enabled:     true,
+			URL:         "http://127.0.0.1:3000",
+			DefaultPath: "/users",
+			Readiness: model.WebReadinessConfig{
+				Type:           model.WebReadinessHTTP,
+				TimeoutSeconds: 30,
+			},
+			AIDebug: model.WebAIDebugConfig{Enabled: true},
+		},
+	}
+
+	raw, err := json.Marshal(dep)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"web"`)
+	assert.Contains(t, string(raw), `"ai_debug"`)
+
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NotNil(t, got.Web)
+	assert.Equal(t, "http://127.0.0.1:3000", got.Web.URL)
+	assert.Equal(t, "/users", got.Web.DefaultPath)
+	assert.True(t, got.Web.AIDebug.Enabled)
+}
+
 func TestLogRuleTypes(t *testing.T) {
 	r := model.LogRule{Type: model.RuleTypeExclude, Logic: model.RuleLogicOR}
 	assert.Equal(t, "exclude", string(r.Type))

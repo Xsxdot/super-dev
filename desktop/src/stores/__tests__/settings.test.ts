@@ -67,6 +67,27 @@ describe('settingsStore', () => {
     expect(store.agentSettings.artifact_keep_versions).toBe(20)
   })
 
+  it('saveDebugBrowserSettings 持久化本机调试浏览器偏好', async () => {
+    const debugBrowser = {
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],
+    }
+    vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      sample_seeded: false,
+      onboarding_completed: false,
+      debug_browser: debugBrowser,
+    })
+    const store = useSettingsStore()
+
+    await store.saveDebugBrowserSettings(debugBrowser)
+
+    expect(agentApi.putSettings).toHaveBeenCalledWith({ debug_browser: debugBrowser })
+    expect(store.agentSettings.debug_browser?.default_browser_id).toBe('arc')
+  })
+
   it('setOnboardingCompleted patches only completion flag', async () => {
     vi.spyOn(agentApi, 'putSettings').mockResolvedValue({
       log_retention_days: 7,
