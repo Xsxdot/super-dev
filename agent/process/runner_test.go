@@ -72,6 +72,77 @@ func TestRunnerFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	assert.Contains(t, lines, "nvm-tool")
 }
 
+func TestRunner_ExitInfoOnFailureDrainsStderr(t *testing.T) {
+	exitCh := make(chan process.ExitInfo, 1)
+	r := process.NewRunner(process.RunnerConfig{
+		Command: "echo boom 1>&2; exit 3",
+		WorkDir: t.TempDir(),
+		OnLine:  func(_, _ string) {},
+		OnExit:  func(info process.ExitInfo) { exitCh <- info },
+	})
+	require.NoError(t, r.Start())
+
+	select {
+	case info := <-exitCh:
+		assert.Equal(t, process.ExitReasonExited, info.Reason)
+		assert.Equal(t, 3, info.ExitCode)
+		assert.Contains(t, info.StderrTail, "boom")
+	case <-time.After(5 * time.Second):
+		t.Fatal("onExit not called within 5s")
+	}
+}
+
+func TestRunner_OnLineMayBeNil(t *testing.T) {
+	exitCh := make(chan process.ExitInfo, 1)
+	r := process.NewRunner(process.RunnerConfig{
+		Command: "echo no-callback; exit 0",
+		WorkDir: t.TempDir(),
+		OnExit:  func(info process.ExitInfo) { exitCh <- info },
+	})
+	require.NoError(t, r.Start())
+
+	select {
+	case info := <-exitCh:
+		assert.Equal(t, 0, info.ExitCode)
+	case <-time.After(5 * time.Second):
+		t.Fatal("onExit not called")
+	}
+}
+
+func TestRunner_ProcessGroupAliveAfterExit(t *testing.T) {
+	r := process.NewRunner(process.RunnerConfig{
+		Command: "exit 0",
+		WorkDir: t.TempDir(),
+		OnLine:  func(_, _ string) {},
+	})
+	require.NoError(t, r.Start())
+
+	require.Eventually(t, func() bool {
+		return !r.IsRunning()
+	}, 3*time.Second, 20*time.Millisecond)
+	assert.False(t, r.ProcessGroupAlive())
+}
+
+func TestRunner_ProcessGroupAliveAfterShellExitsWithBackgroundChild(t *testing.T) {
+	exitCh := make(chan process.ExitInfo, 1)
+	r := process.NewRunner(process.RunnerConfig{
+		Command: "sleep 60 &",
+		WorkDir: t.TempDir(),
+		OnLine:  func(_, _ string) {},
+		OnExit:  func(info process.ExitInfo) { exitCh <- info },
+	})
+	require.NoError(t, r.Start())
+	defer r.Stop()
+
+	select {
+	case info := <-exitCh:
+		assert.Equal(t, 0, info.ExitCode)
+	case <-time.After(5 * time.Second):
+		t.Fatal("onExit not called")
+	}
+	assert.True(t, r.ProcessGroupAlive())
+}
+
 func TestRunnerStop(t *testing.T) {
 	r := process.NewRunner(process.RunnerConfig{
 		Command: "sleep 60",

@@ -12,6 +12,7 @@ package process
 
 import (
 	"bufio"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -33,22 +34,32 @@ type RunnerConfig struct {
 	EnvFile string
 	// OnLine 是逐行输出回调，line 为内容，stream 为 "stdout"/"stderr"。
 	OnLine func(line, stream string)
+	// OnExit 是进程退出后的回调；触发前 stdout/stderr scanner 已完成 drain。
+	OnExit func(info ExitInfo)
 }
 
 // Runner 封装单个子进程的生命周期。
 //
 // 线程安全：Start、Stop、IsRunning、PID 可并发调用。
 type Runner struct {
-	cfg      RunnerConfig
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	running  bool
-	exitCode int
+	cfg        RunnerConfig
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	running    bool
+	exitCode   int
+	exited     bool
+	exitInfo   ExitInfo
+	pgid       int
+	stderrTail *stderrRing
+	scanWG     sync.WaitGroup
 }
 
 // NewRunner 创建一个新的 Runner，尚未启动进程。
 func NewRunner(cfg RunnerConfig) *Runner {
-	return &Runner{cfg: cfg}
+	return &Runner{
+		cfg:        cfg,
+		stderrTail: newStderrRing(100),
+	}
 }
 
 // Start 启动子进程，并在后台 goroutine 中逐行读取 stdout/stderr。
@@ -79,28 +90,42 @@ func (r *Runner) Start() error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		r.exitInfo = ExitInfo{
+			Reason:     ExitReasonStartFailed,
+			ExitCode:   -1,
+			Error:      err.Error(),
+			StderrTail: r.stderrTail.tail(),
+		}
+		r.exited = true
 		return err
 	}
 	r.cmd = cmd
 	r.running = true
 	r.exitCode = 0
+	r.exited = false
+	r.pgid = cmd.Process.Pid
 
+	r.scanWG.Add(2)
 	go r.scanLines(bufio.NewScanner(stdout), "stdout")
 	go r.scanLines(bufio.NewScanner(stderr), "stderr")
-	// 等待进程退出后把状态复制到 Runner 自己的字段中。
-	// 不让其他 goroutine 直接读取 cmd.ProcessState，避免与 os/exec.Wait 内部写入竞态。
 	go func() {
-		_ = cmd.Wait()
-		exitCode := 0
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
-		}
+		waitErr := cmd.Wait()
+		r.scanWG.Wait()
+		info := buildExitInfo(cmd.ProcessState, waitErr, r.stderrTail.tail())
+
 		r.mu.Lock()
 		if r.cmd == cmd {
 			r.running = false
-			r.exitCode = exitCode
+			r.exitCode = info.ExitCode
+			r.exitInfo = info
+			r.exited = true
 		}
+		onExit := r.cfg.OnExit
 		r.mu.Unlock()
+
+		if onExit != nil {
+			onExit(info)
+		}
 	}()
 
 	return nil
@@ -114,9 +139,14 @@ func (r *Runner) Start() error {
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	cmd := r.cmd
+	pgid := r.pgid
 	r.mu.Unlock()
-	if cmd != nil && cmd.Process != nil {
+	if pgid > 0 {
 		// 负 PID 终止整个进程组，避免仅杀掉 sh 而 node 等子进程继续跑
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		return
+	}
+	if cmd != nil && cmd.Process != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
@@ -138,6 +168,23 @@ func (r *Runner) ExitCode() int {
 	return 0
 }
 
+// ExitInfo 返回最近一次启动失败或退出的结构化证据。
+//
+// 返回：
+//   - ExitInfo: 退出或启动失败证据
+//   - bool: 是否已有可用证据
+//
+// 注意：
+//   - 进程仍运行且尚未发生启动失败时，第二个返回值为 false
+func (r *Runner) ExitInfo() (ExitInfo, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.exited {
+		return ExitInfo{}, false
+	}
+	return r.exitInfo, true
+}
+
 // PID 返回子进程的 PID；进程未启动时返回 0。
 func (r *Runner) PID() int {
 	r.mu.Lock()
@@ -148,9 +195,66 @@ func (r *Runner) PID() int {
 	return 0
 }
 
+// ProcessGroupID 返回 Runner 启动的进程组 ID；进程未启动时返回 0。
+func (r *Runner) ProcessGroupID() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pgid
+}
+
+// ProcessGroupAlive 返回 Runner 所属进程组是否仍有进程存活。
+func (r *Runner) ProcessGroupAlive() bool {
+	return processGroupAlive(r.ProcessGroupID())
+}
+
 // scanLines 逐行读取 scanner 并调用 OnLine 回调。
 func (r *Runner) scanLines(scanner *bufio.Scanner, stream string) {
+	defer r.scanWG.Done()
 	for scanner.Scan() {
-		r.cfg.OnLine(scanner.Text(), stream)
+		line := scanner.Text()
+		if stream == "stderr" {
+			r.stderrTail.push(line)
+		}
+		if r.cfg.OnLine != nil {
+			r.cfg.OnLine(line, stream)
+		}
 	}
+}
+
+func buildExitInfo(state *os.ProcessState, err error, stderrTail []string) ExitInfo {
+	info := ExitInfo{
+		Reason:     ExitReasonExited,
+		StderrTail: stderrTail,
+	}
+	if err != nil {
+		info.Error = err.Error()
+	}
+	if state == nil {
+		info.ExitCode = -1
+		return info
+	}
+
+	info.ExitCode = state.ExitCode()
+	waitStatus, ok := state.Sys().(syscall.WaitStatus)
+	if !ok {
+		return info
+	}
+	if waitStatus.Signaled() {
+		info.Reason = ExitReasonSignaled
+		info.Signaled = true
+		info.Signal = waitStatus.Signal().String()
+		return info
+	}
+	if waitStatus.Exited() {
+		info.ExitCode = waitStatus.ExitStatus()
+	}
+	return info
+}
+
+func processGroupAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || err == syscall.EPERM
 }
