@@ -42,16 +42,39 @@ func TestDeploymentRuntimeEndpoint_AllowsDevLocalWithoutApproval(t *testing.T) {
 	assert.Equal(t, "starting", resp["status"])
 }
 
-func TestShouldStartDeploymentInDebugIgnoresConfigDuringPlan1(t *testing.T) {
-	dep := model.Deployment{
-		ID:          "dep-api-dev",
-		EnvName:     "dev",
-		Location:    model.LocationLocal,
-		ControlMode: model.ControlModeManaged,
-		CodeDebug:   &model.CodeDebugConfig{Policy: model.CodeDebugPolicyEnabled},
-	}
+func TestStartDeploymentModeDebugOnUnsupportedTargetErrors(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := operationAPIProject(true, false)
+	project.Services[0].Language = ""
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
 
-	assert.False(t, shouldStartDeploymentInDebug(dep))
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{"mode": "debug"}, http.StatusBadRequest)
+
+	assert.Equal(t, "debug_start_unavailable", resp["code"])
+	assert.Contains(t, resp["error"], "debug start not available")
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, "service language does not support code debug", data["reason"])
+}
+
+func TestResolveStartModeDefaults(t *testing.T) {
+	if m := resolveStartMode("", "start", false); m != startModeNormal {
+		t.Fatalf("start default = %q, want normal", m)
+	}
+	if m := resolveStartMode("", "restart", true); m != startModeDebug {
+		t.Fatalf("restart keep-current = %q, want debug", m)
+	}
+	if m := resolveStartMode("", "restart", false); m != startModeNormal {
+		t.Fatalf("restart non-debug = %q, want normal", m)
+	}
+	if m := resolveStartMode("debug", "start", false); m != startModeDebug {
+		t.Fatalf("explicit debug = %q, want debug", m)
+	}
 }
 
 func TestDeploymentRuntimeEndpoint_RequiresApprovalForNonDevLocal(t *testing.T) {
@@ -247,13 +270,13 @@ func TestRestart_AfterExternalKill_Succeeds(t *testing.T) {
 		WorkDir:  t.TempDir(),
 	}
 
-	require.NoError(t, app.startDeploymentRuntime(context.Background(), "proj-restart", dep))
+	require.NoError(t, app.startDeploymentRuntime(context.Background(), "proj-restart", dep, startModeNormal))
 	mgr := app.getOrCreateManager("proj-restart")
 	oldPGID := mgr.DeploymentPID(dep.ID)
 	require.NotZero(t, oldPGID)
 	require.NoError(t, syscall.Kill(-oldPGID, syscall.SIGKILL))
 
-	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep))
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep, startModeNormal))
 	require.Eventually(t, func() bool {
 		newPGID := mgr.DeploymentPID(dep.ID)
 		return mgr.IsDeploymentActive(dep.ID) && newPGID != 0 && newPGID != oldPGID
@@ -288,7 +311,7 @@ func TestControlEvents_RestartEmitsLifecycle(t *testing.T) {
 	ch := app.buf.Subscribe("control-events-restart")
 	defer app.buf.Unsubscribe("control-events-restart")
 
-	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-control", dep))
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-control", dep, startModeNormal))
 
 	events := collectControlEvents(t, ch, dep.ID, 4)
 	got := controlEventPhases(events)

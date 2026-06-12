@@ -398,7 +398,7 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 
 	for _, target := range toStart {
 		dep := target.Deployment
-		if err := a.startDeploymentRuntime(r.Context(), projectID, dep); err != nil {
+		if err := a.startDeploymentRuntime(r.Context(), projectID, dep, startModeNormal); err != nil {
 			a.appendOperationExecutionFailure(r, plan, approval, "failed to start deployment "+dep.ID+": "+err.Error())
 			jsonError(w, http.StatusInternalServerError, "failed to start deployment "+dep.ID+": "+err.Error())
 			return

@@ -12,6 +12,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,35 +26,35 @@ import (
 
 // startDeployment 处理 POST /api/deployments/{id}/start。
 func (a *App) startDeployment(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", "")
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", "", a.parseStartMode(r, "start"))
 }
 
 // stopDeployment 处理 POST /api/deployments/{id}/stop。
 func (a *App) stopDeployment(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", "")
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", "", startModeNormal)
 }
 
 // restartDeployment 处理 POST /api/deployments/{id}/restart。
 func (a *App) restartDeployment(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", "")
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", "", a.parseStartMode(r, "restart"))
 }
 
 // startDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/start。
 func (a *App) startDeploymentHost(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", r.PathValue("host_id"))
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStart, "starting", r.PathValue("host_id"), startModeNormal)
 }
 
 // stopDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/stop。
 func (a *App) stopDeploymentHost(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", r.PathValue("host_id"))
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeStop, "stopped", r.PathValue("host_id"), startModeNormal)
 }
 
 // restartDeploymentHost 处理 POST /api/deployments/{id}/hosts/{host_id}/restart。
 func (a *App) restartDeploymentHost(w http.ResponseWriter, r *http.Request) {
-	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", r.PathValue("host_id"))
+	a.controlDeploymentRuntime(w, r, operation.OperationRuntimeRestart, "starting", r.PathValue("host_id"), startModeNormal)
 }
 
-func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, kind string, okStatus string, hostID string) {
+func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, kind string, okStatus string, hostID string, mode startMode) {
 	depID := r.PathValue("id")
 	dep, svc, p, ok := a.findDeploymentWithService(depID)
 	if !ok {
@@ -76,27 +78,38 @@ func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, k
 		jsonError(w, http.StatusBadRequest, "invalid operation")
 		return
 	}
+	if mode == startModeDebug && (kind == operation.OperationRuntimeStart || kind == operation.OperationRuntimeRestart) {
+		if reason := a.codeDebugStartDeniedReason(p, svc, runDep); reason != "" {
+			jsonErrorCode(w, http.StatusBadRequest, "debug_start_unavailable", "debug start not available: "+reason, map[string]string{"reason": reason})
+			return
+		}
+	}
 	allowed, approval := a.authorizeOperation(w, r, plan)
 	if !allowed {
 		return
 	}
-	if err := a.runDeploymentRuntimeAction(r.Context(), p.ID, runDep, kind); err != nil {
+	if err := a.runDeploymentRuntimeAction(r.Context(), p.ID, runDep, kind, mode); err != nil {
 		action := runtimeActionLabel(kind)
 		a.appendOperationExecutionFailure(r, plan, approval, "failed to "+action+" deployment: "+err.Error())
+		var debugErr *debugStartDeniedError
+		if errors.As(err, &debugErr) {
+			jsonErrorCode(w, http.StatusBadRequest, "debug_start_unavailable", err.Error(), map[string]string{"reason": debugErr.Reason})
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, "failed to "+action+" deployment: "+err.Error())
 		return
 	}
 	jsonOK(w, map[string]string{"status": okStatus})
 }
 
-func (a *App) runDeploymentRuntimeAction(ctx context.Context, projectID string, dep model.Deployment, kind string) error {
+func (a *App) runDeploymentRuntimeAction(ctx context.Context, projectID string, dep model.Deployment, kind string, mode startMode) error {
 	switch kind {
 	case operation.OperationRuntimeStart:
-		return a.startDeploymentRuntime(ctx, projectID, dep)
+		return a.startDeploymentRuntime(ctx, projectID, dep, mode)
 	case operation.OperationRuntimeStop:
 		return a.stopDeploymentRuntime(ctx, projectID, dep)
 	case operation.OperationRuntimeRestart:
-		return a.restartDeploymentRuntime(ctx, projectID, dep)
+		return a.restartDeploymentRuntime(ctx, projectID, dep, mode)
 	default:
 		return operation.ErrInvalidOperation
 	}
@@ -115,10 +128,58 @@ func runtimeActionLabel(kind string) string {
 	}
 }
 
-// shouldStartDeploymentInDebug 在 Plan 2 引入 mode 参数后由调用方传入决定。
-// 本阶段保留普通启动路径，debug 启动不再由配置触发。
-func shouldStartDeploymentInDebug(dep model.Deployment) bool {
-	return false
+// startMode 表示一次启动动作使用普通 runtime 还是 Debug Runtime。
+type startMode string
+
+const (
+	startModeNormal startMode = "normal"
+	startModeDebug  startMode = "debug"
+)
+
+// resolveStartMode 决定本次启动的运行模式。
+//
+// 参数：
+//   - requested: HTTP body 显式传入的 mode（normal/debug/空）
+//   - action: start | restart
+//   - currentlyDebug: 该 deployment 当前是否处于 debug runtime
+//
+// 规则：显式优先；start 缺省 normal；restart 缺省保持当前模式（VS Code 调试栏 Restart 语义）。
+func resolveStartMode(requested string, action string, currentlyDebug bool) startMode {
+	switch strings.TrimSpace(requested) {
+	case string(startModeDebug):
+		return startModeDebug
+	case string(startModeNormal):
+		return startModeNormal
+	}
+	if action == "restart" && currentlyDebug {
+		return startModeDebug
+	}
+	return startModeNormal
+}
+
+// parseStartMode 从请求体解析 mode，并结合当前 debug 状态归一化。
+func (a *App) parseStartMode(r *http.Request, action string) startMode {
+	requested := ""
+	if r.Body != nil {
+		var body struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		requested = body.Mode
+	}
+	currentlyDebug := false
+	if rt, ok := a.codeDebug.RuntimeStatus(r.PathValue("id")); ok && rt.Alive {
+		currentlyDebug = true
+	}
+	return resolveStartMode(requested, action, currentlyDebug)
+}
+
+type debugStartDeniedError struct {
+	Reason string
+}
+
+func (e *debugStartDeniedError) Error() string {
+	return "debug start not available: " + e.Reason
 }
 
 func deploymentScopedToHost(dep model.Deployment, hostID string) (model.Deployment, error) {
@@ -156,22 +217,17 @@ func (a *App) emitControlEvent(depID, action, phase, detail string) {
 	})
 }
 
-func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment, mode startMode) error {
 	a.emitControlEvent(dep.ID, "start", "command_received", "")
 	a.emitControlEvent(dep.ID, "start", "reconciling", "")
-	if dep.Location == model.LocationRemote {
-		a.emitControlEvent(dep.ID, "start", "executing", "remote")
-		if err := a.newRemoteRuntimeController().Start(ctx, dep); err != nil {
-			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
-			return err
-		}
-		a.emitControlEvent(dep.ID, "start", "succeeded", "")
-		return nil
-	}
-	if shouldStartDeploymentInDebug(dep) {
+	if mode == startModeDebug {
 		_, svc, project, ok := a.findDeploymentWithService(dep.ID)
 		if !ok {
 			return fmt.Errorf("deployment %s not found", dep.ID)
+		}
+		if reason := a.codeDebugStartDeniedReason(project, svc, dep); reason != "" {
+			a.emitControlEvent(dep.ID, "start", "failed", reason)
+			return &debugStartDeniedError{Reason: reason}
 		}
 		a.emitControlEvent(dep.ID, "start", "executing", "debug runtime")
 		if _, err := a.codeDebug.StartRuntime(ctx, project, svc, dep, codedebug.OpenRequest{DeploymentID: dep.ID}); err != nil {
@@ -184,6 +240,15 @@ func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep 
 			return err
 		}
 		a.emitControlEvent(dep.ID, "start", "succeeded", "debug runtime")
+		return nil
+	}
+	if dep.Location == model.LocationRemote {
+		a.emitControlEvent(dep.ID, "start", "executing", "remote")
+		if err := a.newRemoteRuntimeController().Start(ctx, dep); err != nil {
+			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "start", "succeeded", "")
 		return nil
 	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
@@ -200,6 +265,21 @@ func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep 
 	}
 	a.emitControlEvent(dep.ID, "start", "succeeded", "")
 	return nil
+}
+
+// codeDebugStartDeniedReason 返回该 deployment 不可进入 debug 启动的原因，空表示可以。
+func (a *App) codeDebugStartDeniedReason(project model.Project, svc model.Service, dep model.Deployment) string {
+	plan, err := operation.PlanCodeDebugOpen(project, svc, dep, svc.Language)
+	if err != nil {
+		return "invalid debug target"
+	}
+	if plan.Denied {
+		if len(plan.Reasons) > 0 {
+			return plan.Reasons[0]
+		}
+		return "debug not allowed for this deployment"
+	}
+	return ""
 }
 
 func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
@@ -246,9 +326,29 @@ func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep m
 	return nil
 }
 
-func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment) error {
+func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment, mode startMode) error {
 	a.emitControlEvent(dep.ID, "restart", "command_received", "")
 	a.emitControlEvent(dep.ID, "restart", "reconciling", "")
+	if mode == startModeDebug {
+		_, svc, project, ok := a.findDeploymentWithService(dep.ID)
+		if !ok {
+			return fmt.Errorf("deployment %s not found", dep.ID)
+		}
+		if reason := a.codeDebugStartDeniedReason(project, svc, dep); reason != "" {
+			a.emitControlEvent(dep.ID, "restart", "failed", reason)
+			return &debugStartDeniedError{Reason: reason}
+		}
+		if err := a.stopDeploymentRuntime(ctx, projectID, dep); err != nil {
+			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+			return err
+		}
+		if err := a.startDeploymentRuntime(ctx, projectID, dep, startModeDebug); err != nil {
+			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "restart", "succeeded", "debug runtime")
+		return nil
+	}
 	if dep.Location == model.LocationRemote {
 		a.emitControlEvent(dep.ID, "restart", "executing", "remote")
 		if err := a.newRemoteRuntimeController().Restart(ctx, dep); err != nil {
@@ -256,18 +356,6 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 			return err
 		}
 		a.emitControlEvent(dep.ID, "restart", "succeeded", "")
-		return nil
-	}
-	if shouldStartDeploymentInDebug(dep) {
-		if err := a.stopDeploymentRuntime(ctx, projectID, dep); err != nil {
-			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
-			return err
-		}
-		if err := a.startDeploymentRuntime(ctx, projectID, dep); err != nil {
-			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
-			return err
-		}
-		a.emitControlEvent(dep.ID, "restart", "succeeded", "debug runtime")
 		return nil
 	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
