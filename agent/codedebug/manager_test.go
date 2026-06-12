@@ -233,6 +233,60 @@ func TestManagerCaptureAtRejectsBreakpointOutsideProjectRoot(t *testing.T) {
 	require.ErrorIs(t, err, ErrPathOutsideProject)
 }
 
+func TestCaptureAtCoexistsWithPump(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "main.go")
+	dap := &fakeDAP{
+		waitForStoppedViaSubscribe: true,
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     11,
+				"line":   42,
+				"source": map[string]any{"path": source},
+			}},
+		},
+		scopesResult: map[string]any{
+			"scopes": []map[string]any{{"variablesReference": 7}},
+		},
+		variablesResult: map[string]any{
+			"variables": []map[string]any{{"name": "answer", "value": "42"}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+	resultCh := make(chan captureAtResult, 1)
+
+	go func() {
+		result, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+			SessionID: session.ID,
+			Source:    "main.go",
+			Line:      42,
+			ThreadID:  1,
+			Timeout:   2 * time.Second,
+		})
+		resultCh <- captureAtResult{result: result, err: err}
+	}()
+
+	waitForPump(t, func() bool {
+		return dap.subscriberCount() >= 2
+	})
+	dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
+
+	select {
+	case got := <-resultCh:
+		require.NoError(t, got.err)
+		assert.Equal(t, float64(1), got.result["stopped"].(map[string]any)["threadId"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("CaptureAt did not return")
+	}
+
+	snap, ok := mgr.DebuggerSnapshot(session.DeploymentID)
+	require.True(t, ok)
+	assert.Equal(t, "paused", snap.State)
+	assert.Equal(t, 1, snap.ThreadID)
+	assert.Equal(t, source, snap.Source)
+	assert.Equal(t, 42, snap.Line)
+}
+
 func TestManagerVariablesSanitizesSecretsAndLimitsLongValues(t *testing.T) {
 	longValue := strings.Repeat("x", 2048)
 	dap := &fakeDAP{
@@ -473,16 +527,17 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 }
 
 type fakeDAP struct {
-	mu                     sync.Mutex
-	breakpointsSource      string
-	stackResult            map[string]any
-	scopesResult           map[string]any
-	variablesResult        map[string]any
-	evaluateResult         map[string]any
-	subs                   []chan map[string]any
-	disconnectCalls        int
-	configurationDoneCalls int
-	waitForStoppedCalls    int
+	mu                         sync.Mutex
+	breakpointsSource          string
+	stackResult                map[string]any
+	scopesResult               map[string]any
+	variablesResult            map[string]any
+	evaluateResult             map[string]any
+	subs                       []chan map[string]any
+	waitForStoppedViaSubscribe bool
+	disconnectCalls            int
+	configurationDoneCalls     int
+	waitForStoppedCalls        int
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
@@ -528,8 +583,28 @@ func (f *fakeDAP) Disconnect(context.Context) error {
 	f.disconnectCalls++
 	return nil
 }
-func (f *fakeDAP) WaitForStopped(context.Context) (map[string]any, error) {
+func (f *fakeDAP) WaitForStopped(ctx context.Context) (map[string]any, error) {
+	f.mu.Lock()
 	f.waitForStoppedCalls++
+	viaSubscribe := f.waitForStoppedViaSubscribe
+	f.mu.Unlock()
+	if viaSubscribe {
+		sub, cancel := f.Subscribe()
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case event, ok := <-sub:
+				if !ok {
+					return nil, ErrSessionClosed
+				}
+				if body, ok := stoppedBody(event); ok {
+					return body, nil
+				}
+			}
+		}
+	}
 	return map[string]any{"threadId": 1}, nil
 }
 func (f *fakeDAP) Subscribe() (<-chan map[string]any, func()) {
@@ -553,7 +628,24 @@ func (f *fakeDAP) Subscribe() (<-chan map[string]any, func()) {
 	}
 	return ch, cancel
 }
+func (f *fakeDAP) emit(event map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.subs {
+		sub <- event
+	}
+}
+func (f *fakeDAP) subscriberCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.subs)
+}
 func (f *fakeDAP) Close() error { return nil }
+
+type captureAtResult struct {
+	result map[string]any
+	err    error
+}
 
 func boolPtr(value bool) *bool {
 	return &value
