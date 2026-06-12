@@ -13,7 +13,18 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ControlMode, Deployment, LogConfig, LogKind, RuntimeConfig, RuntimeType, WebEntrypointConfig } from '@/api/agent'
+import type {
+  CodeDebugConfig,
+  CodeDebugProvider,
+  CodeDebugStartMode,
+  ControlMode,
+  Deployment,
+  LogConfig,
+  LogKind,
+  RuntimeConfig,
+  RuntimeType,
+  WebEntrypointConfig,
+} from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 import WorkDirInput from './WorkDirInput.vue'
@@ -72,6 +83,11 @@ const controlMode = computed<ControlMode>(() => {
   if (props.modelValue.read_only || props.modelValue.runtime?.type === 'external') return 'monitor'
   return 'managed'
 })
+const codeDebugAvailable = computed(() =>
+  props.modelValue.location === 'local' &&
+  controlMode.value === 'managed' &&
+  runtime.value.type === 'command',
+)
 
 function defaultLogsForRuntime(nextRuntime: RuntimeConfig): LogConfig {
   if (nextRuntime.type === 'systemd') return { type: 'journalctl', target: serviceLogTarget(nextRuntime.service_name) }
@@ -276,6 +292,40 @@ function patchWeb(partial: Partial<WebEntrypointConfig>) {
     },
   })
 }
+
+function inferredCodeDebugProvider(): CodeDebugProvider {
+  const command = (runtime.value.command ?? props.modelValue.command ?? '').trim()
+  if (command.startsWith('python') || command.includes(' python')) return 'python'
+  if (command.startsWith('node') || command.includes(' node')) return 'node'
+  return 'go'
+}
+
+function defaultCodeDebugConfig(): CodeDebugConfig {
+  return {
+    enabled: false,
+    provider: inferredCodeDebugProvider(),
+    mode: 'launch',
+    start_mode: 'normal',
+    keep_runtime_on_lease_close: false,
+    stop_on_entry: false,
+  }
+}
+
+function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
+  const current = props.modelValue.code_debug ?? defaultCodeDebugConfig()
+  const next: CodeDebugConfig = {
+    ...current,
+    ...partial,
+    mode: partial.mode ?? current.mode ?? 'launch',
+    provider: partial.provider ?? current.provider ?? inferredCodeDebugProvider(),
+    start_mode: partial.start_mode ?? current.start_mode ?? 'normal',
+  }
+  patch({ code_debug: next.enabled ? next : { ...next, enabled: false } })
+}
+
+function setCodeDebugStartMode(startMode: CodeDebugStartMode) {
+  patchCodeDebug({ enabled: true, start_mode: startMode })
+}
 </script>
 
 <template>
@@ -449,6 +499,94 @@ function patchWeb(partial: Partial<WebEntrypointConfig>) {
           @input="setNginxDomain(($event.target as HTMLInputElement).value)"
         />
       </div>
+    </section>
+
+    <section class="dep-block">
+      <div class="dep-heading">{{ t('settings.deployment.codeDebug') }}</div>
+      <template v-if="codeDebugAvailable">
+        <label class="dep-choice">
+          <input
+            type="checkbox"
+            data-test="dep-code-debug-enabled"
+            :checked="modelValue.code_debug?.enabled ?? false"
+            @change="patchCodeDebug({ enabled: ($event.target as HTMLInputElement).checked })"
+          />
+          {{ t('settings.deployment.codeDebugEnabled') }}
+        </label>
+
+        <template v-if="modelValue.code_debug?.enabled">
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebugProvider') }}</label>
+            <select
+              class="settings-select dep-input"
+              data-test="dep-code-debug-provider"
+              :value="modelValue.code_debug?.provider ?? inferredCodeDebugProvider()"
+              @change="patchCodeDebug({ provider: ($event.target as HTMLSelectElement).value as CodeDebugProvider })"
+            >
+              <option value="go">Go</option>
+              <option value="python">Python</option>
+              <option value="node">Node experimental</option>
+            </select>
+          </div>
+
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebugProgram') }}</label>
+            <input
+              class="settings-input dep-input"
+              data-test="dep-code-debug-program"
+              :placeholder="t('settings.deployment.codeDebugProgramPlaceholder')"
+              :value="modelValue.code_debug?.program ?? ''"
+              @input="patchCodeDebug({ program: ($event.target as HTMLInputElement).value })"
+            />
+          </div>
+
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebugStartMode') }}</label>
+            <div class="dep-location">
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-code-debug-start-normal"
+                  :checked="(modelValue.code_debug?.start_mode ?? 'normal') === 'normal'"
+                  @change="setCodeDebugStartMode('normal')"
+                /> {{ t('settings.deployment.codeDebugStartNormal') }}
+              </label>
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-code-debug-start-debug"
+                  :checked="modelValue.code_debug?.start_mode === 'debug'"
+                  @change="setCodeDebugStartMode('debug')"
+                /> {{ t('settings.deployment.codeDebugStartDebug') }}
+              </label>
+            </div>
+          </div>
+
+          <label class="dep-choice dep-field">
+            <input
+              type="checkbox"
+              data-test="dep-code-debug-keep-runtime"
+              :checked="modelValue.code_debug?.keep_runtime_on_lease_close ?? false"
+              @change="patchCodeDebug({ keep_runtime_on_lease_close: ($event.target as HTMLInputElement).checked })"
+            />
+            {{ t('settings.deployment.codeDebugKeepRuntime') }}
+          </label>
+
+          <label class="dep-choice dep-field">
+            <input
+              type="checkbox"
+              data-test="dep-code-debug-stop-on-entry"
+              :checked="modelValue.code_debug?.stop_on_entry ?? false"
+              @change="patchCodeDebug({ stop_on_entry: ($event.target as HTMLInputElement).checked })"
+            />
+            {{ t('settings.deployment.codeDebugStopOnEntry') }}
+          </label>
+          <p class="dep-help">{{ t('settings.deployment.codeDebugLeaseDesc') }}</p>
+        </template>
+      </template>
+      <p v-else data-test="dep-code-debug-unavailable" class="dep-help">
+        {{ t('settings.deployment.codeDebugUnavailable') }}
+      </p>
     </section>
 
     <section v-if="modelValue.location === 'local'" class="dep-block">

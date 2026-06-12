@@ -251,6 +251,47 @@ describe('DeploymentForm', () => {
     expect(withDebug.web?.ai_debug?.enabled).toBe(true)
   })
 
+  it('enables code debug for local managed command deployments', async () => {
+    const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+    await wrapper.get('[data-test="dep-code-debug-enabled"]').setValue(true)
+
+    const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(emitted.code_debug).toMatchObject({
+      enabled: true,
+      provider: 'go',
+      mode: 'launch',
+      start_mode: 'normal',
+      keep_runtime_on_lease_close: false,
+    })
+  })
+
+  it('updates code debug start mode and keep-runtime flag', async () => {
+    const dep = localDep()
+    dep.code_debug = { enabled: true, provider: 'go', mode: 'launch', start_mode: 'normal' }
+    const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
+
+    await wrapper.get('[data-test="dep-code-debug-start-debug"]').setValue(true)
+    const startModeUpdate = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    await wrapper.setProps({ modelValue: startModeUpdate })
+    await wrapper.get('[data-test="dep-code-debug-keep-runtime"]').setValue(true)
+
+    const emitted = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
+    expect(emitted.code_debug).toMatchObject({
+      enabled: true,
+      start_mode: 'debug',
+      keep_runtime_on_lease_close: true,
+    })
+  })
+
+  it('shows code debug unavailable copy for remote deployments', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },
+    })
+
+    expect(wrapper.find('[data-test="dep-code-debug-unavailable"]').exists()).toBe(true)
+  })
+
   it('only renders runtime and log controls', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: localDep(), hosts: [] },
