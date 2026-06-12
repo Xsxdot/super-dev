@@ -1224,6 +1224,8 @@ export const api = {
     }),
   getRuntimeStatus: (projectId: string) =>
     request<RuntimeStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/runtime-status`),
+  continueDeploymentDebug: (id: string) =>
+    request<void>(`/api/deployments/${encodeURIComponent(id)}/debug/continue`, { method: 'POST' }),
   listNodes: () => request<NodeStatus[]>('/api/nodes'),
   listAgents: () => request<AgentDTO[]>('/api/agents'),
   createAgent: (payload: AgentCreatePayload) =>

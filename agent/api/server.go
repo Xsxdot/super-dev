@@ -676,6 +676,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}/logs", a.fetchDeploymentLogs)
 	mux.HandleFunc("GET /api/deployments/{id}/search", a.searchDeploymentLogs)
 	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/continue", a.continueDeploymentDebug)
 
 	// Pipeline 模板与预览
 	mux.HandleFunc("GET /api/pipeline/reserved-variables", a.listPipelineReservedVariables)

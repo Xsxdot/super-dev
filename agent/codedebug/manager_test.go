@@ -124,6 +124,26 @@ func TestManagerDebuggerSnapshotMissing(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestContinueRuntimeContinuesDeploymentDAP(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr, session := openManagerTestSession(t, t.TempDir(), dap)
+
+	err := mgr.ContinueRuntime(context.Background(), session.DeploymentID, 7)
+
+	require.NoError(t, err)
+	calls, threadID := dap.continueSnapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, 7, threadID)
+}
+
+func TestContinueRuntimeMissingDeployment(t *testing.T) {
+	mgr := NewManager(ManagerOptions{})
+
+	err := mgr.ContinueRuntime(context.Background(), "missing", 1)
+
+	require.ErrorIs(t, err, ErrSessionNotFound)
+}
+
 func TestManagerCloseStopsAdapter(t *testing.T) {
 	closed := false
 	mgr := NewManager(ManagerOptions{
@@ -535,6 +555,8 @@ type fakeDAP struct {
 	evaluateResult             map[string]any
 	subs                       []chan map[string]any
 	waitForStoppedViaSubscribe bool
+	continueCalls              int
+	continueThreadID           int
 	disconnectCalls            int
 	configurationDoneCalls     int
 	waitForStoppedCalls        int
@@ -550,11 +572,17 @@ func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, _ []int) (map
 	f.breakpointsSource = source
 	return map[string]any{}, nil
 }
-func (f *fakeDAP) Continue(context.Context, int) error { return nil }
-func (f *fakeDAP) Pause(context.Context, int) error    { return nil }
-func (f *fakeDAP) Next(context.Context, int) error     { return nil }
-func (f *fakeDAP) StepIn(context.Context, int) error   { return nil }
-func (f *fakeDAP) StepOut(context.Context, int) error  { return nil }
+func (f *fakeDAP) Continue(_ context.Context, threadID int) error {
+	f.mu.Lock()
+	f.continueCalls++
+	f.continueThreadID = threadID
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeDAP) Pause(context.Context, int) error   { return nil }
+func (f *fakeDAP) Next(context.Context, int) error    { return nil }
+func (f *fakeDAP) StepIn(context.Context, int) error  { return nil }
+func (f *fakeDAP) StepOut(context.Context, int) error { return nil }
 func (f *fakeDAP) StackTrace(context.Context, int) (map[string]any, error) {
 	if f.stackResult != nil {
 		return f.stackResult, nil
@@ -639,6 +667,11 @@ func (f *fakeDAP) subscriberCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.subs)
+}
+func (f *fakeDAP) continueSnapshot() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.continueCalls, f.continueThreadID
 }
 func (f *fakeDAP) Close() error { return nil }
 

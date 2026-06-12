@@ -436,6 +436,35 @@ func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, th
 	return map[string]any{"session_id": sessionID, "action": action, "thread_id": threadID}, nil
 }
 
+// ContinueRuntime 对指定 deployment 的 debug runtime 直接发送 continue。
+//
+// 参数：
+//   - ctx: 请求上下文，用于取消 DAP 操作
+//   - deploymentID: 目标 deployment ID
+//   - threadID: 要继续的线程 ID
+//
+// 返回：
+//   - runtime 缺失或已停止时返回 ErrSessionNotFound
+//   - DAP continue 执行失败时返回底层错误
+//
+// 注意：
+//   - 这是用户级操作，不创建或校验 AI lease
+func (m *Manager) ContinueRuntime(ctx context.Context, deploymentID string, threadID int) error {
+	deploymentID = strings.TrimSpace(deploymentID)
+	m.mu.Lock()
+	record, ok := m.runtimes[deploymentID]
+	alive := ok && record.Alive
+	var dap DAP
+	if alive {
+		dap = record.dap
+	}
+	m.mu.Unlock()
+	if !alive {
+		return ErrSessionNotFound
+	}
+	return dap.Continue(ctx, threadID)
+}
+
 // StackTrace 读取指定线程的调用栈。
 func (m *Manager) StackTrace(ctx context.Context, sessionID string, threadID int) (map[string]any, error) {
 	_, runtime, err := m.sessionRuntime(sessionID)

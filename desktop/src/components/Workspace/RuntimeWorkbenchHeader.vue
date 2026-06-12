@@ -32,6 +32,7 @@ const { t } = useI18n()
 const appWindow = getCurrentWindow()
 const browserSession = ref<BrowserSession | null>(null)
 const browserError = ref<string | null>(null)
+const continueBusy = ref(false)
 
 const openDeploymentIds = computed(() => {
   const ids = new Set<string>()
@@ -160,6 +161,20 @@ async function onDebug() {
   await agentStore.startDeployment(deploymentId, 'debug')
 }
 
+async function onContinue() {
+  const info = primaryDeploymentInfo.value
+  const deploymentId = info?.deployment.id
+  const projectId = info?.service.project_id
+  if (!deploymentId || continueBusy.value) return
+  continueBusy.value = true
+  try {
+    await api.continueDeploymentDebug(deploymentId)
+    if (projectId) await runtimeStatusStore.refresh(projectId)
+  } finally {
+    continueBusy.value = false
+  }
+}
+
 function browserDebugErrorMessage(error: unknown): string {
   if (error instanceof AgentAPIError) {
     switch (error.code) {
@@ -232,7 +247,8 @@ function startWindowDrag(event: MouseEvent) {
         type="button"
         class="runtime-action-btn"
         data-test="debugger-continue"
-        disabled
+        :disabled="continueBusy"
+        @click="onContinue"
       >
         <Icon icon="lucide:step-forward" aria-hidden="true" />
         {{ t('runtimeWorkbench.continue') }}

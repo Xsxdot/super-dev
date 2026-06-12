@@ -295,6 +295,53 @@ func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
 	assert.True(t, runtime.Alive)
 }
 
+func TestContinueDeploymentDebugContinuesPausedRuntime(t *testing.T) {
+	dap := &fakeCodeDebugDAP{
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     1,
+				"line":   42,
+				"source": map[string]any{"path": "main.go"},
+			}},
+		},
+	}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITestWithDAP(dap)})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := codeDebugAPIProject(t.TempDir())
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	_, err = app.codeDebug.StartRuntime(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
+	require.NoError(t, err)
+	dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
+	waitForAPITest(t, func() bool {
+		snap, ok := app.codeDebug.DebuggerSnapshot("dep-api-dev")
+		return ok && snap.State == "paused"
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/continue", map[string]any{}, http.StatusOK)
+
+	assert.Equal(t, true, resp["continued"])
+	calls, threadID := dap.continueSnapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, 1, threadID)
+}
+
+func TestContinueDeploymentDebugReturns404WhenRuntimeMissing(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/missing/debug/continue", map[string]any{}, http.StatusNotFound)
+
+	assert.Equal(t, "debugger_not_active", resp["code"])
+}
+
 func codeDebugManagerForAPITest() *codedebug.Manager {
 	return codeDebugManagerForAPITestWithDAP(&fakeCodeDebugDAP{})
 }
@@ -337,9 +384,11 @@ func (codeDebugFailedSampler) Sample(context.Context, metrics.SampleTarget) (mod
 }
 
 type fakeCodeDebugDAP struct {
-	mu          sync.Mutex
-	subs        []chan map[string]any
-	stackResult map[string]any
+	mu               sync.Mutex
+	subs             []chan map[string]any
+	stackResult      map[string]any
+	continueCalls    int
+	continueThreadID int
 }
 
 func (f *fakeCodeDebugDAP) Initialize(context.Context) (map[string]any, error) {
@@ -350,11 +399,17 @@ func (f *fakeCodeDebugDAP) ConfigurationDone(context.Context) error      { retur
 func (f *fakeCodeDebugDAP) SetBreakpoints(context.Context, string, []int) (map[string]any, error) {
 	return map[string]any{}, nil
 }
-func (f *fakeCodeDebugDAP) Continue(context.Context, int) error { return nil }
-func (f *fakeCodeDebugDAP) Pause(context.Context, int) error    { return nil }
-func (f *fakeCodeDebugDAP) Next(context.Context, int) error     { return nil }
-func (f *fakeCodeDebugDAP) StepIn(context.Context, int) error   { return nil }
-func (f *fakeCodeDebugDAP) StepOut(context.Context, int) error  { return nil }
+func (f *fakeCodeDebugDAP) Continue(_ context.Context, threadID int) error {
+	f.mu.Lock()
+	f.continueCalls++
+	f.continueThreadID = threadID
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeCodeDebugDAP) Pause(context.Context, int) error   { return nil }
+func (f *fakeCodeDebugDAP) Next(context.Context, int) error    { return nil }
+func (f *fakeCodeDebugDAP) StepIn(context.Context, int) error  { return nil }
+func (f *fakeCodeDebugDAP) StepOut(context.Context, int) error { return nil }
 func (f *fakeCodeDebugDAP) StackTrace(context.Context, int) (map[string]any, error) {
 	if f.stackResult != nil {
 		return f.stackResult, nil
@@ -401,6 +456,11 @@ func (f *fakeCodeDebugDAP) emit(event map[string]any) {
 	for _, sub := range f.subs {
 		sub <- event
 	}
+}
+func (f *fakeCodeDebugDAP) continueSnapshot() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.continueCalls, f.continueThreadID
 }
 func (f *fakeCodeDebugDAP) Close() error { return nil }
 

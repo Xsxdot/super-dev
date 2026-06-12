@@ -17,7 +17,7 @@ import { usePanelStore, type PanelSplitNode } from '@/stores/panel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
 import { AgentAPIError, api } from '@/api/agent'
-import type { Project, Service } from '@/api/agent'
+import type { Project, RuntimeInstanceStatus, Service } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 
@@ -51,6 +51,32 @@ function makeProject(service: Service): Project {
     root_path: '/tmp/sample',
     services: [service],
     environments: [{ id: 'env-demo', name: 'demo', is_dev: true, order: 0 }],
+  }
+}
+
+function setRuntimeDebugger(debuggerStatus: RuntimeInstanceStatus['debugger']) {
+  useRuntimeStatusStore().statusByProject['proj-1'] = {
+    environments: [{
+      env_name: 'demo',
+      instances: [{
+        service_id: 'svc-api',
+        service_name: 'sample-api',
+        env_name: 'demo',
+        deployment_id: 'dep-api',
+        node_id: 'local',
+        node_name: 'MacBook-Pro.local',
+        is_local: true,
+        metrics: {
+          cpu_percent: null,
+          mem_bytes: null,
+          uptime_sec: null,
+          restarts: null,
+          health: 'running',
+          base: 'debug',
+        },
+        debugger: debuggerStatus,
+      }],
+    }],
   }
 }
 
@@ -234,37 +260,55 @@ describe('RuntimeWorkbenchHeader', () => {
     const service = makeService()
     useAgentStore().projects = [makeProject(service)]
     useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
-    useRuntimeStatusStore().statusByProject['proj-1'] = {
-      environments: [{
-        env_name: 'demo',
-        instances: [{
-          service_id: 'svc-api',
-          service_name: 'sample-api',
-          env_name: 'demo',
-          deployment_id: 'dep-api',
-          node_id: 'local',
-          node_name: 'MacBook-Pro.local',
-          is_local: true,
-          metrics: {
-            cpu_percent: null,
-            mem_bytes: null,
-            uptime_sec: null,
-            restarts: null,
-            health: 'running',
-            base: 'debug',
-          },
-          debugger: {
-            state: 'attached',
-            origin: 'launched',
-            language: 'go',
-          },
-        }],
-      }],
-    }
+    setRuntimeDebugger({
+      state: 'attached',
+      origin: 'launched',
+      language: 'go',
+    })
 
     const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
 
     expect(wrapper.find('[data-test="debugger-chip"]').exists()).toBe(true)
+  })
+
+  it('shows paused location in debugger chip', () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    setRuntimeDebugger({
+      state: 'paused',
+      origin: 'launched',
+      language: 'go',
+      paused_at: { source: 'main.go', line: 42 },
+    })
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    expect(wrapper.find('[data-test="debugger-chip"]').text()).toContain('main.go:42')
+  })
+
+  it('enables Continue when paused and calls deployment debug API', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const runtimeStore = useRuntimeStatusStore()
+    setRuntimeDebugger({
+      state: 'paused',
+      origin: 'launched',
+      language: 'go',
+      paused_at: { source: 'main.go', line: 42 },
+    })
+    const continueDeploymentDebug = vi.spyOn(api, 'continueDeploymentDebug').mockResolvedValue(undefined)
+    const refresh = vi.spyOn(runtimeStore, 'refresh').mockResolvedValue(undefined)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    const btn = wrapper.find('[data-test="debugger-continue"]')
+    expect(btn.attributes('disabled')).toBeUndefined()
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(continueDeploymentDebug).toHaveBeenCalledWith('dep-api')
+    expect(refresh).toHaveBeenCalledWith('proj-1')
   })
 
   it('disables browser debug when the active deployment is not running', async () => {

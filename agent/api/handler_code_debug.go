@@ -124,6 +124,28 @@ func (a *App) codeDebugContinue(w http.ResponseWriter, r *http.Request) {
 	a.codeDebugThreadAction(w, r, "continue")
 }
 
+func (a *App) continueDeploymentDebug(w http.ResponseWriter, r *http.Request) {
+	deploymentID := strings.TrimSpace(r.PathValue("id"))
+	if deploymentID == "" {
+		jsonError(w, http.StatusBadRequest, "deployment id is required")
+		return
+	}
+	snap, ok := a.codeDebug.DebuggerSnapshot(deploymentID)
+	if !ok {
+		jsonCodeError(w, http.StatusNotFound, "debugger_not_active", "no active debugger for deployment", nil)
+		return
+	}
+	threadID := snap.ThreadID
+	if threadID == 0 {
+		threadID = 1
+	}
+	if err := a.codeDebug.ContinueRuntime(r.Context(), deploymentID, threadID); err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	jsonOK(w, map[string]any{"deployment_id": deploymentID, "continued": true})
+}
+
 func (a *App) codeDebugPause(w http.ResponseWriter, r *http.Request) {
 	a.codeDebugThreadAction(w, r, "pause")
 }
