@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 覆盖 AI 默认使用的 debug_capture_at 和 debug_inspect
-//   - 验证 debug_capture_at schema 明确 session_id/deployment_id 二选一
+//   - 验证 debug_capture_at schema 使用 deployment_id 主语
 //
 // 边界：
 //   - 不连接真实 DAP adapter
@@ -42,21 +42,17 @@ func TestDebugInspectToolUsesCompositeClientCall(t *testing.T) {
 	}
 	server := NewServer(client)
 
-	result, err := server.callToolForTest(context.Background(), "debug_inspect", `{"session_id":"cds_1","thread_id":1}`)
+	result, err := server.callToolForTest(context.Background(), "debug_inspect", `{"deployment_id":"dep-api-dev","thread_id":1}`)
 
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "cds_1", client.lastInspect.SessionID)
+	assert.Equal(t, "dep-api-dev", client.lastInspect.DeploymentID)
 	assert.Contains(t, result.Content[0]["text"], "code debug inspect completed")
 }
 
-func TestDebugCaptureAtSchemaRequiresSessionOrDeployment(t *testing.T) {
+func TestDebugCaptureAtSchemaRequiresDeployment(t *testing.T) {
 	schema := debugCaptureAtInputSchema()
 
-	assert.Equal(t, []string{"source", "line"}, schema["required"])
-	require.Contains(t, schema, "oneOf")
-	oneOf := schema["oneOf"].([]map[string]any)
-	require.Len(t, oneOf, 2)
-	assert.Equal(t, []string{"session_id"}, oneOf[0]["required"])
-	assert.Equal(t, []string{"deployment_id"}, oneOf[1]["required"])
+	assert.Equal(t, []string{"deployment_id", "source", "line"}, schema["required"])
+	assert.NotContains(t, schema, "oneOf")
 }

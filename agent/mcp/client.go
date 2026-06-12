@@ -115,12 +115,6 @@ type AgentClient interface {
 	BrowserEvaluate(context.Context, BrowserEvaluateRequest) (BrowserEvaluateResult, error)
 	// ListCodeDebugTargets 查询可打开的本机代码调试目标。
 	ListCodeDebugTargets(context.Context) ([]CodeDebugTarget, error)
-	// ListCodeDebugSessions 查询代码调试会话列表。
-	ListCodeDebugSessions(context.Context) ([]CodeDebugSession, error)
-	// OpenCodeDebugSession 创建本机代码调试会话。
-	OpenCodeDebugSession(context.Context, OpenCodeDebugSessionRequest, string) (CodeDebugSession, error)
-	// CloseCodeDebugSession 关闭代码调试会话。
-	CloseCodeDebugSession(context.Context, string, *bool) error
 	// SetCodeDebugBreakpoints 按 deployment 设置代码调试断点。
 	SetCodeDebugBreakpoints(context.Context, DebugBreakpointRequest) (map[string]any, error)
 	// CodeDebugAction 按 deployment 执行非 evaluate 的代码调试动作。
@@ -684,27 +678,6 @@ func (c *HTTPAgentClient) BrowserEvaluate(ctx context.Context, req BrowserEvalua
 func (c *HTTPAgentClient) ListCodeDebugTargets(ctx context.Context) ([]CodeDebugTarget, error) {
 	var out []CodeDebugTarget
 	return out, c.get(ctx, "/api/code-debug-targets", &out)
-}
-
-// ListCodeDebugSessions 查询代码调试会话列表。
-func (c *HTTPAgentClient) ListCodeDebugSessions(ctx context.Context) ([]CodeDebugSession, error) {
-	var out []CodeDebugSession
-	return out, c.get(ctx, "/api/code-debug-sessions", &out)
-}
-
-// OpenCodeDebugSession 创建本机代码调试会话。
-func (c *HTTPAgentClient) OpenCodeDebugSession(ctx context.Context, req OpenCodeDebugSessionRequest, approvalToken string) (CodeDebugSession, error) {
-	var out CodeDebugSession
-	return out, c.postWithApprovalToken(ctx, "/api/code-debug-sessions", req, approvalToken, &out)
-}
-
-// CloseCodeDebugSession 关闭代码调试会话。
-func (c *HTTPAgentClient) CloseCodeDebugSession(ctx context.Context, sessionID string, stopRuntime *bool) error {
-	body := map[string]any{}
-	if stopRuntime != nil {
-		body["stop_runtime"] = *stopRuntime
-	}
-	return c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/close", body, nil)
 }
 
 // SetCodeDebugBreakpoints 按 deployment 设置代码调试断点。

@@ -20,100 +20,95 @@ import (
 )
 
 type fakeAgentClient struct {
-	projects                   []model.Project
-	hosts                      []HostReference
-	services                   []model.Service
-	rules                      []model.LogRule
-	logs                       LogsResponse
-	search                     LogSearchResponse
-	contextResp                LogContextResponse
-	contextQuery               url.Values
-	debugSessions              []DebugSession
-	debugSessionDetail         DebugSessionDetailResponse
-	createdDebugSession        DebugSessionCreateRequest
-	appendedSessionID          string
-	appendedEventRequest       DebugSessionAppendEventRequest
-	closedSessionID            string
-	stopCalled                 bool
-	stopCallCount              int
-	stopErrors                 []error
-	startedDeploymentID        string
-	stoppedDeploymentID        string
-	restartedDeploymentID      string
-	restartCallCount           int
-	restartErrors              []error
-	templatePreview            PipelineTemplatePreview
-	importedTemplate           PipelineTemplateSummary
-	importTemplateErrs         []error
-	importTemplateCallCount    int
-	importedTemplatePath       string
-	operationPlan              OperationPlan
-	operationApprovals         []OperationApproval
-	operationApprovalDetail    OperationApprovalDetail
-	operationApprovalDetails   []OperationApprovalDetail
-	getApprovalCallCount       int
-	operationAudit             OperationAuditList
-	configProject              model.Project
-	configPreview              ConfigChangePreview
-	configApplyErr             error
-	configApplyErrs            []error
-	configApplyCallCount       int
-	lastConfigChange           ConfigChangeRequest
-	lastApprovalToken          string
-	pipelineRun                model.Run
-	pipelineDeployErrs         []error
-	pipelineDeployCallCount    int
-	pipelineRuns               []model.Run
-	pipelineArtifacts          []model.ArtifactRef
-	pipelineLogs               []model.RunLogLine
-	pipelinePreview            ProjectPipelinePreview
-	pipelinePreviewErr         error
-	lastPipelineDeploy         PipelineDeployRequest
-	lastPipelinePreviewRequest ProjectPipelinePreviewRequest
-	lastPipelineLogQuery       url.Values
-	debugBrowsers              []DebugBrowser
-	browserTargets             []BrowserTarget
-	browserSession             BrowserSession
-	browserSnapshot            BrowserSnapshot
-	browserAction              BrowserActionResult
-	browserScreenshot          BrowserScreenshot
-	browserScreenshotErr       error
-	browserNavigation          BrowserNavigationResult
-	browserWait                BrowserWaitResult
-	browserConsoleLogs         BrowserConsoleLogsResult
-	browserNetworkRequests     BrowserNetworkRequestsResult
-	browserEvaluate            BrowserEvaluateResult
-	codeDebugTargets           []CodeDebugTarget
-	codeDebugSessions          []CodeDebugSession
-	codeDebugSession           CodeDebugSession
-	codeDebugActionResult      map[string]any
-	codeDebugEvaluateResult    map[string]any
-	codeDebugCaptureResult     map[string]any
-	codeDebugInspectResult     map[string]any
-	lastBrowserOpen            OpenBrowserSessionRequest
-	lastBrowserSnapshot        BrowserSnapshotRequest
-	lastBrowserClick           BrowserClickRequest
-	lastBrowserType            BrowserTypeRequest
-	lastBrowserScreenshot      BrowserScreenshotRequest
-	lastBrowserNavigate        BrowserNavigateRequest
-	lastBrowserReload          BrowserReloadRequest
-	lastBrowserWait            BrowserWaitForSelectorRequest
-	lastBrowserPress           BrowserPressKeyRequest
-	lastBrowserSelect          BrowserSelectOptionRequest
-	lastBrowserConsoleLogs     BrowserConsoleLogsRequest
-	lastBrowserNetworkRequests BrowserNetworkRequestsRequest
-	lastBrowserEvaluate        BrowserEvaluateRequest
-	closedBrowserSession       string
-	lastCodeDebugOpen          OpenCodeDebugSessionRequest
-	lastBreakpoint             DebugBreakpointRequest
-	lastDebugActionSessionID   string
-	lastDebugAction            string
-	lastDebugActionBody        map[string]any
-	lastEvaluate               DebugEvaluateRequest
-	lastCaptureAt              DebugCaptureAtRequest
-	lastInspect                DebugInspectRequest
-	closedCodeDebugSession     string
-	closedCodeDebugStopRuntime *bool
+	projects                    []model.Project
+	hosts                       []HostReference
+	services                    []model.Service
+	rules                       []model.LogRule
+	logs                        LogsResponse
+	search                      LogSearchResponse
+	contextResp                 LogContextResponse
+	contextQuery                url.Values
+	debugSessions               []DebugSession
+	debugSessionDetail          DebugSessionDetailResponse
+	createdDebugSession         DebugSessionCreateRequest
+	appendedSessionID           string
+	appendedEventRequest        DebugSessionAppendEventRequest
+	closedSessionID             string
+	stopCalled                  bool
+	stopCallCount               int
+	stopErrors                  []error
+	startedDeploymentID         string
+	stoppedDeploymentID         string
+	restartedDeploymentID       string
+	restartCallCount            int
+	restartErrors               []error
+	templatePreview             PipelineTemplatePreview
+	importedTemplate            PipelineTemplateSummary
+	importTemplateErrs          []error
+	importTemplateCallCount     int
+	importedTemplatePath        string
+	operationPlan               OperationPlan
+	operationApprovals          []OperationApproval
+	operationApprovalDetail     OperationApprovalDetail
+	operationApprovalDetails    []OperationApprovalDetail
+	getApprovalCallCount        int
+	operationAudit              OperationAuditList
+	configProject               model.Project
+	configPreview               ConfigChangePreview
+	configApplyErr              error
+	configApplyErrs             []error
+	configApplyCallCount        int
+	lastConfigChange            ConfigChangeRequest
+	lastApprovalToken           string
+	pipelineRun                 model.Run
+	pipelineDeployErrs          []error
+	pipelineDeployCallCount     int
+	pipelineRuns                []model.Run
+	pipelineArtifacts           []model.ArtifactRef
+	pipelineLogs                []model.RunLogLine
+	pipelinePreview             ProjectPipelinePreview
+	pipelinePreviewErr          error
+	lastPipelineDeploy          PipelineDeployRequest
+	lastPipelinePreviewRequest  ProjectPipelinePreviewRequest
+	lastPipelineLogQuery        url.Values
+	debugBrowsers               []DebugBrowser
+	browserTargets              []BrowserTarget
+	browserSession              BrowserSession
+	browserSnapshot             BrowserSnapshot
+	browserAction               BrowserActionResult
+	browserScreenshot           BrowserScreenshot
+	browserScreenshotErr        error
+	browserNavigation           BrowserNavigationResult
+	browserWait                 BrowserWaitResult
+	browserConsoleLogs          BrowserConsoleLogsResult
+	browserNetworkRequests      BrowserNetworkRequestsResult
+	browserEvaluate             BrowserEvaluateResult
+	codeDebugTargets            []CodeDebugTarget
+	codeDebugActionResult       map[string]any
+	codeDebugEvaluateResult     map[string]any
+	codeDebugCaptureResult      map[string]any
+	codeDebugInspectResult      map[string]any
+	lastBrowserOpen             OpenBrowserSessionRequest
+	lastBrowserSnapshot         BrowserSnapshotRequest
+	lastBrowserClick            BrowserClickRequest
+	lastBrowserType             BrowserTypeRequest
+	lastBrowserScreenshot       BrowserScreenshotRequest
+	lastBrowserNavigate         BrowserNavigateRequest
+	lastBrowserReload           BrowserReloadRequest
+	lastBrowserWait             BrowserWaitForSelectorRequest
+	lastBrowserPress            BrowserPressKeyRequest
+	lastBrowserSelect           BrowserSelectOptionRequest
+	lastBrowserConsoleLogs      BrowserConsoleLogsRequest
+	lastBrowserNetworkRequests  BrowserNetworkRequestsRequest
+	lastBrowserEvaluate         BrowserEvaluateRequest
+	closedBrowserSession        string
+	lastBreakpoint              DebugBreakpointRequest
+	lastDebugActionDeploymentID string
+	lastDebugAction             string
+	lastDebugActionBody         map[string]any
+	lastEvaluate                DebugEvaluateRequest
+	lastCaptureAt               DebugCaptureAtRequest
+	lastInspect                 DebugInspectRequest
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -388,29 +383,13 @@ func (f *fakeAgentClient) ListCodeDebugTargets(context.Context) ([]CodeDebugTarg
 	return f.codeDebugTargets, nil
 }
 
-func (f *fakeAgentClient) ListCodeDebugSessions(context.Context) ([]CodeDebugSession, error) {
-	return f.codeDebugSessions, nil
-}
-
-func (f *fakeAgentClient) OpenCodeDebugSession(_ context.Context, req OpenCodeDebugSessionRequest, approvalToken string) (CodeDebugSession, error) {
-	f.lastCodeDebugOpen = req
-	f.lastApprovalToken = approvalToken
-	return f.codeDebugSession, nil
-}
-
-func (f *fakeAgentClient) CloseCodeDebugSession(_ context.Context, sessionID string, stopRuntime *bool) error {
-	f.closedCodeDebugSession = sessionID
-	f.closedCodeDebugStopRuntime = stopRuntime
-	return nil
-}
-
 func (f *fakeAgentClient) SetCodeDebugBreakpoints(_ context.Context, req DebugBreakpointRequest) (map[string]any, error) {
 	f.lastBreakpoint = req
 	return f.codeDebugActionResult, nil
 }
 
-func (f *fakeAgentClient) CodeDebugAction(_ context.Context, sessionID string, action string, body map[string]any) (map[string]any, error) {
-	f.lastDebugActionSessionID = sessionID
+func (f *fakeAgentClient) CodeDebugAction(_ context.Context, deploymentID string, action string, body map[string]any) (map[string]any, error) {
+	f.lastDebugActionDeploymentID = deploymentID
 	f.lastDebugAction = action
 	f.lastDebugActionBody = body
 	return f.codeDebugActionResult, nil

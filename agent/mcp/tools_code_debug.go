@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 将 MCP 参数校验后转发给 agent code-debug HTTP API
-//   - 返回 AI 可消费的 session、断点、调用栈、变量和求值结果
+//   - 返回 AI 可消费的断点、调用栈、变量和求值结果
 //
 // 边界：
 //   - 不直接连接 DAP adapter
@@ -33,59 +33,15 @@ func (s *Server) listCodeDebugTargetsTool(ctx context.Context, args json.RawMess
 	return toolSuccess(summary, map[string]any{"targets": targets, "count": len(targets)}, nil, nil), nil
 }
 
-func (s *Server) openCodeDebugSessionTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	var req OpenCodeDebugSessionRequest
-	if err := decodeToolArgs(args, &req); err != nil {
-		return toolError("invalid_arguments", err.Error(), nil), nil
-	}
-	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
-	if req.DeploymentID == "" {
-		return toolError("invalid_arguments", "deployment_id is required", nil), nil
-	}
-	if req.ApprovalToken != "" {
-		session, err := s.client.OpenCodeDebugSession(ctx, req, req.ApprovalToken)
-		if err != nil {
-			return clientToolError(err), nil
-		}
-		return toolSuccess("code debug session opened", map[string]any{"session": session}, nil, nil), nil
-	}
-	wait := boundedApprovalWait(req.ApprovalWaitSeconds)
-	var session CodeDebugSession
-	err := s.callWithApproval(ctx, wait, func(ctx context.Context, token string) error {
-		var err error
-		session, err = s.client.OpenCodeDebugSession(ctx, req, token)
-		return err
-	})
-	if err != nil {
-		return clientToolError(err), nil
-	}
-	return toolSuccess("code debug session opened", map[string]any{"session": session}, nil, []string{"Set breakpoints before continuing when stop_on_entry is enabled."}), nil
-}
-
-func (s *Server) closeCodeDebugSessionTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	var req CloseCodeDebugSessionRequest
-	if err := decodeToolArgs(args, &req); err != nil {
-		return toolError("invalid_arguments", err.Error(), nil), nil
-	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
-	}
-	if err := s.client.CloseCodeDebugSession(ctx, req.SessionID, req.StopRuntime); err != nil {
-		return clientToolError(err), nil
-	}
-	return toolSuccess("code debug session closed", map[string]any{"session_id": req.SessionID}, nil, nil), nil
-}
-
 func (s *Server) setDebugBreakpointsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req DebugBreakpointRequest
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
 	req.Source = strings.TrimSpace(req.Source)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.Source == "" {
 		return toolError("invalid_arguments", "source is required", nil), nil
@@ -109,33 +65,33 @@ func (s *Server) debugPauseTool(ctx context.Context, args json.RawMessage) (Call
 }
 
 func (s *Server) debugStepOverTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	return s.debugThreadActionTool(ctx, args, "step-over", "code debug stepped over")
+	return s.debugThreadActionTool(ctx, args, "step_over", "code debug stepped over")
 }
 
 func (s *Server) debugStepInTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	return s.debugThreadActionTool(ctx, args, "step-in", "code debug stepped in")
+	return s.debugThreadActionTool(ctx, args, "step_in", "code debug stepped in")
 }
 
 func (s *Server) debugStepOutTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	return s.debugThreadActionTool(ctx, args, "step-out", "code debug stepped out")
+	return s.debugThreadActionTool(ctx, args, "step_out", "code debug stepped out")
 }
 
 func (s *Server) debugThreadActionTool(ctx context.Context, args json.RawMessage, action string, message string) (CallToolResult, error) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		ThreadID  int    `json:"thread_id"`
+		DeploymentID string `json:"deployment_id"`
+		ThreadID     int    `json:"thread_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.ThreadID <= 0 {
 		return toolError("invalid_arguments", "thread_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.SessionID, action, map[string]any{"thread_id": req.ThreadID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, action, map[string]any{"thread_id": req.ThreadID})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -144,20 +100,20 @@ func (s *Server) debugThreadActionTool(ctx context.Context, args json.RawMessage
 
 func (s *Server) debugStackTraceTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		ThreadID  int    `json:"thread_id"`
+		DeploymentID string `json:"deployment_id"`
+		ThreadID     int    `json:"thread_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.ThreadID <= 0 {
 		return toolError("invalid_arguments", "thread_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.SessionID, "stack", map[string]any{"thread_id": req.ThreadID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "stack", map[string]any{"thread_id": req.ThreadID})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -166,20 +122,20 @@ func (s *Server) debugStackTraceTool(ctx context.Context, args json.RawMessage) 
 
 func (s *Server) debugScopesTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		FrameID   int    `json:"frame_id"`
+		DeploymentID string `json:"deployment_id"`
+		FrameID      int    `json:"frame_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.FrameID <= 0 {
 		return toolError("invalid_arguments", "frame_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.SessionID, "scopes", map[string]any{"frame_id": req.FrameID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "scopes", map[string]any{"frame_id": req.FrameID})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -188,20 +144,20 @@ func (s *Server) debugScopesTool(ctx context.Context, args json.RawMessage) (Cal
 
 func (s *Server) debugVariablesTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
-		SessionID          string `json:"session_id"`
+		DeploymentID       string `json:"deployment_id"`
 		VariablesReference int    `json:"variables_reference"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.VariablesReference <= 0 {
 		return toolError("invalid_arguments", "variables_reference is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.SessionID, "variables", map[string]any{"variables_reference": req.VariablesReference})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "variables", map[string]any{"variables_reference": req.VariablesReference})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -213,11 +169,11 @@ func (s *Server) debugEvaluateTool(ctx context.Context, args json.RawMessage) (C
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
 	req.Expression = strings.TrimSpace(req.Expression)
 	req.Source = "debug_evaluate"
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.Expression == "" {
 		return toolError("invalid_arguments", "expression is required", nil), nil

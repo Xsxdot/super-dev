@@ -201,36 +201,8 @@ type CodeDebugTarget struct {
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
-// CodeDebugSession 描述由 SuperDev 创建的代码调试会话。
-type CodeDebugSession struct {
-	ID           string `json:"session_id"`
-	ProjectID    string `json:"project_id"`
-	DeploymentID string `json:"deployment_id"`
-	Provider     string `json:"provider"`
-	AdapterPort  int    `json:"adapter_port"`
-	ProcessID    int    `json:"process_id,omitempty"`
-	RuntimeState string `json:"runtime_state,omitempty"`
-	Alive        bool   `json:"alive"`
-	Closed       bool   `json:"closed,omitempty"`
-	Error        string `json:"error,omitempty"`
-}
-
-// OpenCodeDebugSessionRequest 描述打开代码调试会话的 MCP 请求。
-type OpenCodeDebugSessionRequest struct {
-	DeploymentID        string `json:"deployment_id"`
-	ApprovalToken       string `json:"approval_token,omitempty"`
-	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
-}
-
-// CloseCodeDebugSessionRequest 描述关闭代码调试会话的 MCP 请求。
-type CloseCodeDebugSessionRequest struct {
-	SessionID   string `json:"session_id"`
-	StopRuntime *bool  `json:"stop_runtime,omitempty"`
-}
-
 // DebugBreakpointRequest 描述代码调试断点设置请求。
 type DebugBreakpointRequest struct {
-	SessionID    string `json:"session_id,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
 	Source       string `json:"source"`
 	Lines        []int  `json:"lines"`
@@ -238,7 +210,6 @@ type DebugBreakpointRequest struct {
 
 // DebugEvaluateRequest 描述代码调试表达式求值请求。
 type DebugEvaluateRequest struct {
-	SessionID           string `json:"session_id"`
 	DeploymentID        string `json:"deployment_id,omitempty"`
 	Expression          string `json:"expression"`
 	FrameID             int    `json:"frame_id,omitempty"`
@@ -249,7 +220,6 @@ type DebugEvaluateRequest struct {
 
 // DebugCaptureAtRequest 描述 stop-at-line 并采集现场的复合请求。
 type DebugCaptureAtRequest struct {
-	SessionID           string   `json:"session_id,omitempty"`
 	DeploymentID        string   `json:"deployment_id,omitempty"`
 	Source              string   `json:"source"`
 	Line                int      `json:"line"`
@@ -261,9 +231,8 @@ type DebugCaptureAtRequest struct {
 	ApprovalWaitSeconds *int     `json:"approval_wait_seconds,omitempty"`
 }
 
-// DebugInspectRequest 描述读取已暂停代码调试会话现场的复合请求。
+// DebugInspectRequest 描述读取已暂停 deployment debug runtime 现场的复合请求。
 type DebugInspectRequest struct {
-	SessionID     string   `json:"session_id,omitempty"`
 	DeploymentID  string   `json:"deployment_id,omitempty"`
 	ThreadID      int      `json:"thread_id,omitempty"`
 	FrameID       int      `json:"frame_id,omitempty"`

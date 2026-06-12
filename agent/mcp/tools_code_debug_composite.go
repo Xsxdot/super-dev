@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 提供 AI 默认使用的高层调试入口
-//   - 将打开 session、断点、继续、调用栈、作用域和变量读取压成少量工具调用
+//   - 将 lease 解析、断点、继续、调用栈、作用域和变量读取压成少量工具调用
 //
 // 边界：
 //   - 不直接连接 DAP adapter
@@ -20,11 +20,10 @@ func (s *Server) debugCaptureAtTool(ctx context.Context, args json.RawMessage) (
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
 	req.Source = strings.TrimSpace(req.Source)
-	if req.SessionID == "" && req.DeploymentID == "" {
-		return toolError("invalid_arguments", "session_id or deployment_id is required", nil), nil
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	if req.Source == "" || req.Line <= 0 {
 		return toolError("invalid_arguments", "source and line are required", nil), nil
@@ -34,7 +33,7 @@ func (s *Server) debugCaptureAtTool(ctx context.Context, args json.RawMessage) (
 		if err != nil {
 			return clientToolError(err), nil
 		}
-		return toolSuccess("code debug capture completed", result, nil, []string{"Use debug_inspect for follow-up reads while the session remains paused."}), nil
+		return toolSuccess("code debug capture completed", result, nil, []string{"Use debug_inspect for follow-up reads while the deployment remains paused."}), nil
 	}
 	wait := boundedApprovalWait(req.ApprovalWaitSeconds)
 	var result map[string]any
@@ -54,9 +53,9 @@ func (s *Server) debugInspectTool(ctx context.Context, args json.RawMessage) (Ca
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
-	req.SessionID = strings.TrimSpace(req.SessionID)
-	if req.SessionID == "" {
-		return toolError("invalid_arguments", "session_id is required", nil), nil
+	req.DeploymentID = strings.TrimSpace(req.DeploymentID)
+	if req.DeploymentID == "" {
+		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
 	result, err := s.client.CodeDebugInspect(ctx, req)
 	if err != nil {
