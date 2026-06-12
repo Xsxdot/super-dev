@@ -145,6 +145,7 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 		Runtime:      patch.Runtime,
 		Logs:         patch.Logs,
 		Web:          patch.Web,
+		CodeDebug:    patch.CodeDebug,
 		Command:      patch.Command,
 		WorkDir:      patch.WorkDir,
 		EnvFile:      patch.EnvFile,
@@ -181,6 +182,9 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	}
 	if patch.Web != nil {
 		dep.Web = patch.Web
+	}
+	if patch.CodeDebug != nil {
+		dep.CodeDebug = patch.CodeDebug
 	}
 	if patch.Command != "" {
 		dep.Command = patch.Command

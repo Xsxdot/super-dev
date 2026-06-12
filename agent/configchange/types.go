@@ -73,6 +73,7 @@ type DeploymentPatch struct {
 	Runtime      *model.RuntimeConfig       `json:"runtime,omitempty"`
 	Logs         *model.LogConfig           `json:"logs,omitempty"`
 	Web          *model.WebEntrypointConfig `json:"web,omitempty"`
+	CodeDebug    *model.CodeDebugConfig     `json:"code_debug,omitempty"`
 	Command      string                     `json:"command,omitempty"`
 	WorkDir      string                     `json:"work_dir,omitempty"`
 	EnvFile      string                     `json:"env_file,omitempty"`

@@ -25,6 +25,28 @@ func TestGoProviderBuildsDelveDAPCommand(t *testing.T) {
 	assert.Equal(t, []string{"dap", "--listen=127.0.0.1:39001"}, cmd.Args)
 }
 
+func TestGoProviderPassesLaunchEnvToDelveAdapter(t *testing.T) {
+	provider := NewGoProvider()
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort: 39001,
+		Env:         map[string]string{"GOCACHE": "/tmp/superdev-gocache"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/superdev-gocache", cmd.Env["GOCACHE"])
+}
+
+func TestGoProviderStartsDelveInDebuggeeWorkingDir(t *testing.T) {
+	provider := NewGoProvider()
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort: 39001,
+		WorkingDir:  "/tmp/project/server",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/project/server", cmd.WorkDir)
+}
+
 func TestPythonProviderBuildsDebugpyAdapterCommand(t *testing.T) {
 	provider := NewPythonProvider("python3")
 	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 39002})

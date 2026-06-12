@@ -23,6 +23,7 @@ type AdapterCommand struct {
 	Name     string
 	Args     []string
 	Env      map[string]string
+	WorkDir  string
 }
 
 // Summary 返回不包含环境变量的 adapter 命令摘要。
@@ -64,6 +65,8 @@ func (GoProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
 		Provider: model.CodeDebugProviderGo,
 		Name:     "dlv",
 		Args:     []string{"dap", "--listen=127.0.0.1:" + strconv.Itoa(cfg.AdapterPort)},
+		Env:      copyEnv(cfg.Env),
+		WorkDir:  cfg.WorkingDir,
 	}, nil
 }
 
@@ -99,6 +102,7 @@ func (p PythonProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error)
 		Provider: model.CodeDebugProviderPython,
 		Name:     p.Python,
 		Args:     []string{"-m", "debugpy.adapter", "--host", "127.0.0.1", "--port", strconv.Itoa(cfg.AdapterPort)},
+		WorkDir:  cfg.WorkingDir,
 	}, nil
 }
 
@@ -134,6 +138,7 @@ func (NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
 		Name:     cfg.AdapterCommand,
 		Args:     cfg.AdapterArgs,
 		Env:      cfg.Env,
+		WorkDir:  cfg.WorkingDir,
 	}, nil
 }
 
@@ -146,4 +151,15 @@ func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 		"env":         cfg.Env,
 		"stopOnEntry": cfg.StopOnEntry,
 	}
+}
+
+func copyEnv(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
