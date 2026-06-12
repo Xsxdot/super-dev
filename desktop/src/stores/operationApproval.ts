@@ -224,7 +224,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
           await api.startDeploymentOnHost(target.deployment_id, target.host_id, token)
           return
         }
-        await api.startDeployment(target.deployment_id, token)
+        await api.startDeployment(target.deployment_id, undefined, token)
         return
       case 'runtime.stop':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
@@ -240,7 +240,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
           await api.restartDeploymentOnHost(target.deployment_id, target.host_id, token)
           return
         }
-        await api.restartDeployment(target.deployment_id, token)
+        await api.restartDeployment(target.deployment_id, undefined, token)
         return
       case 'runtime.start_selected':
         if (!target.project_id || !target.env_name) throw new Error('approved operation missing project or environment')

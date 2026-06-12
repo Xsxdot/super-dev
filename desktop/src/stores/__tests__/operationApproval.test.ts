@@ -162,7 +162,7 @@ describe('operationApproval store', () => {
     await store.approve('opa_1', 'ok')
 
     expect(api.getOperationApproval).toHaveBeenCalledWith('opa_1')
-    expect(api.startDeployment).toHaveBeenCalledWith('dep-prod', 'tok_1')
+    expect(api.startDeployment).toHaveBeenCalledWith('dep-prod', undefined, 'tok_1')
     expect(store.error).toBe('')
   })
 
@@ -278,8 +278,8 @@ describe('operationApproval store', () => {
     await store.approve('opa_1', 'ok')
 
     expect(approve).toHaveBeenCalledTimes(1)
-    expect(api.startDeployment).toHaveBeenNthCalledWith(1, 'dep-prod', 'tok_1')
-    expect(api.startDeployment).toHaveBeenNthCalledWith(2, 'dep-prod', 'tok_2')
+    expect(api.startDeployment).toHaveBeenNthCalledWith(1, 'dep-prod', undefined, 'tok_1')
+    expect(api.startDeployment).toHaveBeenNthCalledWith(2, 'dep-prod', undefined, 'tok_2')
     expect(store.notice).toBeNull()
     expect(store.error).toBe('')
   })

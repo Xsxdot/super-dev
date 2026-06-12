@@ -161,4 +161,20 @@ describe('operation approval api', () => {
       }),
     )
   })
+
+  it('sends debug mode in deployment start body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'starting' }),
+    } as Response)
+
+    await api.startDeployment('dep-dev', 'debug')
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/deployments/dep-dev/start'),
+      expect.objectContaining({
+        body: JSON.stringify({ mode: 'debug' }),
+      }),
+    )
+  })
 })

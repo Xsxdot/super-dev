@@ -22,6 +22,7 @@ export interface EnvMatrixCell {
   total: number
   healthy: number
   abnormal: number
+  debuggingCount: number
   health: MatrixHealth
   label: string
 }
@@ -75,7 +76,6 @@ const HEALTH_PRIORITY: Record<Health, number> = {
   unknown: 2,
   running: 1,
   healthy: 1,
-  'debug-running': 1,
 }
 
 function orderedEnvironments(project: Project): Array<{ name: string; isDev: boolean; order: number }> {
@@ -85,10 +85,10 @@ function orderedEnvironments(project: Project): Array<{ name: string; isDev: boo
   return configured.length > 0 ? configured : [{ name: 'default', isDev: false, order: 1 }]
 }
 
-function healthLabel(health: MatrixHealth, healthy: number, total: number): string {
+function healthLabel(health: MatrixHealth, healthy: number, total: number, debuggingCount: number): string {
   if (total === 0) return 'Not configured'
+  if (debuggingCount > 0 && (health === 'running' || health === 'healthy')) return `Debug ${debuggingCount}/${total}`
   if (health === 'running' || health === 'healthy') return `Running ${healthy}/${total}`
-  if (health === 'debug-running') return `Debug ${healthy}/${total}`
   const label = health.charAt(0).toUpperCase() + health.slice(1)
   return `${label} ${healthy}/${total}`
 }
@@ -110,9 +110,15 @@ function sum(values: number[]): number | null {
   return values.reduce((total, value) => total + value, 0)
 }
 
+function hasActiveDebugger(instance: RuntimeInstanceStatus): boolean {
+  const state = instance.debugger?.state
+  return state === 'attached' || state === 'paused'
+}
+
 function envCell(envName: string, instances: RuntimeInstanceStatus[]): EnvMatrixCell {
   const healthy = instances.filter(instance => !isAbnormalHealth(instance.metrics.health)).length
   const abnormal = instances.length - healthy
+  const debuggingCount = instances.filter(hasActiveDebugger).length
   const health = worstHealth(instances)
   return {
     envName,
@@ -120,8 +126,9 @@ function envCell(envName: string, instances: RuntimeInstanceStatus[]): EnvMatrix
     total: instances.length,
     healthy,
     abnormal,
+    debuggingCount,
     health,
-    label: healthLabel(health, healthy, instances.length),
+    label: healthLabel(health, healthy, instances.length, debuggingCount),
   }
 }
 

@@ -142,7 +142,7 @@ describe('buildServiceMatrix', () => {
     expect(server.instances).toHaveLength(3)
   })
 
-  it('labels debug-running instances as debug runtime', () => {
+  it('labels attached debugger instances without changing runtime health', () => {
     const matrix = buildServiceMatrix(project(), [
       inst({
         service_id: 'svc-server',
@@ -156,13 +156,19 @@ describe('buildServiceMatrix', () => {
           mem_bytes: 128 * 1024 * 1024,
           uptime_sec: 3600,
           restarts: 0,
-          health: 'debug-running',
+          health: 'running',
           base: 'debug',
+        },
+        debugger: {
+          state: 'attached',
+          origin: 'launched',
+          language: 'go',
         },
       }),
     ])
 
-    expect(matrix.rows[0].envs[0].health).toBe('debug-running')
+    expect(matrix.rows[0].envs[0].health).toBe('running')
+    expect(matrix.rows[0].envs[0].debuggingCount).toBe(1)
     expect(matrix.rows[0].envs[0].label).toBe('Debug 1/1')
   })
 })

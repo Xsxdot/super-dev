@@ -44,8 +44,4 @@ describe('runtimeMetrics', () => {
     expect(cpuBarWidth(28.4)).toBe(28.4)
     expect(cpuBarWidth(118)).toBe(100)
   })
-
-  it('treats debug-running as a healthy runtime state', () => {
-    expect(isAbnormalHealth('debug-running')).toBe(false)
-  })
 })

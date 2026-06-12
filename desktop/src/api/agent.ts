@@ -124,11 +124,34 @@ function postWithApprovalToken(approvalToken?: string): RequestInit {
   }
 }
 
+function postWithApprovalTokenAndBody(approvalToken?: string, body?: unknown): RequestInit {
+  return {
+    method: 'POST',
+    headers: approvalToken ? { 'X-SuperDev-Approval-Token': approvalToken } : undefined,
+    body: body == null ? undefined : JSON.stringify(body),
+  }
+}
+
 export type DeployLocation = 'local' | 'remote'
 export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
 export type ControlMode = 'monitor' | 'managed'
 export type LogKind = 'process' | 'journalctl' | 'macos_log' | 'docker' | 'nginx' | 'file_tail' | 'command'
-export type Health = 'running' | 'healthy' | 'debug-running' | 'restarting' | 'stopped' | 'failed' | 'unknown'
+export type Health = 'running' | 'healthy' | 'restarting' | 'stopped' | 'failed' | 'unknown'
+export type DebuggerState = 'none' | 'attached' | 'paused'
+export type DebuggerOrigin = 'launched' | 'attached'
+
+export interface PausedLocation {
+  source: string
+  line: number
+}
+
+export interface DebuggerStatus {
+  state: DebuggerState
+  language?: ServiceLanguage
+  origin?: DebuggerOrigin
+  lease_active?: boolean
+  paused_at?: PausedLocation
+}
 
 export interface InstanceMetrics {
   cpu_percent: number | null
@@ -149,6 +172,7 @@ export interface RuntimeInstanceStatus {
   is_local: boolean
   error?: string
   metrics: InstanceMetrics
+  debugger?: DebuggerStatus
 }
 
 export interface EnvRuntimeStatus {
@@ -1301,12 +1325,18 @@ export const api = {
   },
 
   // Deployment 进程控制
-  startDeployment: (id: string, approvalToken?: string) =>
-    request<void>(`/api/deployments/${encodeURIComponent(id)}/start`, postWithApprovalToken(approvalToken)),
+  startDeployment: (id: string, mode?: 'normal' | 'debug', approvalToken?: string) =>
+    request<void>(
+      `/api/deployments/${encodeURIComponent(id)}/start`,
+      postWithApprovalTokenAndBody(approvalToken, mode ? { mode } : undefined),
+    ),
   stopDeployment: (id: string, approvalToken?: string) =>
     request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, postWithApprovalToken(approvalToken)),
-  restartDeployment: (id: string, approvalToken?: string) =>
-    request<void>(`/api/deployments/${encodeURIComponent(id)}/restart`, postWithApprovalToken(approvalToken)),
+  restartDeployment: (id: string, mode?: 'normal' | 'debug', approvalToken?: string) =>
+    request<void>(
+      `/api/deployments/${encodeURIComponent(id)}/restart`,
+      postWithApprovalTokenAndBody(approvalToken, mode ? { mode } : undefined),
+    ),
   startDeploymentOnHost: (id: string, hostId: string, approvalToken?: string) =>
     request<void>(
       `/api/deployments/${encodeURIComponent(id)}/hosts/${encodeURIComponent(hostId)}/start`,
