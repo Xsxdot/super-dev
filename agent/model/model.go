@@ -62,7 +62,8 @@ type Service struct {
 	Required  bool   `json:"required"   yaml:"required"`
 	Order     int    `json:"order"      yaml:"order"`
 
-	// Language 描述服务主要实现语言，用于推导调试器适配。探测得出，可手动修正。
+	// Language 是服务的实现语言，属于服务的固有身份。导入/探测时确立，可手动修正。
+	// 调试器、（未来的）LSP、任务运行器等都是按此身份适配的下游消费者，language 不为任何单一消费者而存在。
 	Language ServiceLanguage `json:"language,omitempty" yaml:"language,omitempty"`
 
 	// Deployments 描述该服务在各环境的运行配置。
@@ -743,10 +744,11 @@ type WebAIDebugConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
-// ServiceLanguage 表示服务的主要实现语言，是调试器适配的依据。
+// ServiceLanguage 表示服务的实现语言，是服务的一等身份属性。
 //
-// 语言由项目目录标记文件探测得出，用户可在服务表单中修正。
-// debug provider 由语言推导，不再单独配置。
+// 由项目目录标记文件探测得出，用户可在服务表单中修正。
+// 各类语言相关能力（调试、未来的 LSP/格式化/任务运行）都按此身份适配；
+// debug provider 是其中一个消费者，由语言推导，不再单独配置。
 type ServiceLanguage string
 
 const (

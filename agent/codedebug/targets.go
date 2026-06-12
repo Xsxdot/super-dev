@@ -13,7 +13,8 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-// ProviderForLanguage 把服务语言映射到 codedebug provider key。
+// ProviderForLanguage 是 debug 这个消费者读取服务语言身份、映射到调试器 provider 的适配点。
+// 语言本身是 Service 的固有属性（model.Service.Language），不归 codedebug 所有。
 func ProviderForLanguage(lang model.ServiceLanguage) model.CodeDebugProvider {
 	switch lang {
 	case model.LanguageGo:
