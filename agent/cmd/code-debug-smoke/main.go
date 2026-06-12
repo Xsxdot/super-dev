@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ func main() {
 		printJSON("config", map[string]any{"ok": false, "message": "SUPERDEV_DEPLOYMENT_ID is required"})
 		os.Exit(1)
 	}
+	keepRuntime := os.Getenv("SUPERDEV_CODE_DEBUG_KEEP_RUNTIME") == "1"
 	client := &http.Client{Timeout: 15 * time.Second}
 	printJSON("target", map[string]any{"ok": true, "deployment_id": deploymentID})
 	session, err := postJSON[map[string]any](client, base+"/api/code-debug-sessions", map[string]any{"deployment_id": deploymentID})
@@ -38,8 +40,14 @@ func main() {
 	}
 	printJSON("open", map[string]any{"ok": true, "session": session})
 	if id, _ := session["session_id"].(string); id != "" {
-		_ = deleteURL(client, base+"/api/code-debug-sessions/"+id)
+		if err := closeDebugSession(client, base, id, keepRuntime); err != nil {
+			printJSON("close", map[string]any{"ok": false, "session_id": id, "message": err.Error()})
+			os.Exit(1)
+		}
 		printJSON("close", map[string]any{"ok": true, "session_id": id})
+		if keepRuntime {
+			emitRuntimeAfterClose(client, base, deploymentID)
+		}
 	}
 }
 
@@ -72,17 +80,51 @@ func postJSON[T any](client *http.Client, url string, body any) (T, error) {
 	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
-func deleteURL(client *http.Client, url string) error {
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+func getJSON[T any](client *http.Client, endpoint string) (T, error) {
+	var zero T
+	resp, err := client.Get(endpoint)
 	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
+		return zero, err
 	}
 	defer resp.Body.Close()
-	return nil
+	if resp.StatusCode >= 300 {
+		return zero, fmt.Errorf("http status %d", resp.StatusCode)
+	}
+	var out T
+	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
+func closeDebugSession(client *http.Client, base string, sessionID string, keepRuntime bool) error {
+	closeReq := map[string]any{}
+	if keepRuntime {
+		closeReq["stop_runtime"] = false
+	}
+	_, err := postJSON[map[string]any](
+		client,
+		strings.TrimRight(base, "/")+"/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/close",
+		closeReq,
+	)
+	return err
+}
+
+func emitRuntimeAfterClose(client *http.Client, base string, deploymentID string) {
+	payload := map[string]any{
+		"deployment_id": deploymentID,
+		"expected":      "debug-running",
+	}
+	targets, targetsErr := getJSON[[]map[string]any](client, strings.TrimRight(base, "/")+"/api/code-debug-targets")
+	if targetsErr != nil {
+		payload["targets_error"] = targetsErr.Error()
+	} else {
+		payload["targets"] = targets
+	}
+	sessions, sessionsErr := getJSON[[]map[string]any](client, strings.TrimRight(base, "/")+"/api/code-debug-sessions")
+	if sessionsErr != nil {
+		payload["sessions_error"] = sessionsErr.Error()
+	} else {
+		payload["sessions"] = sessions
+	}
+	printJSON("runtime_after_close", payload)
 }
 
 func printJSON(step string, data map[string]any) {
