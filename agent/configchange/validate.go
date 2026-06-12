@@ -137,36 +137,23 @@ func validateDeploymentWebConfig(dep model.Deployment) []string {
 }
 
 func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep model.Deployment) []string {
-	if dep.CodeDebug == nil || !dep.CodeDebug.Enabled {
+	if dep.CodeDebug == nil {
 		return nil
 	}
 	var errs []string
+	cfg := dep.CodeDebug
+	if !cfg.Policy.Valid() {
+		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug.policy must be auto, enabled, or disabled", serviceName, dep.EnvName))
+	}
 	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || deploymentRuntimeType(dep) != model.RuntimeTypeCommand {
 		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed command deployments only", serviceName, dep.EnvName))
 	}
-	switch dep.CodeDebug.Provider {
-	case "", model.CodeDebugProviderGo, model.CodeDebugProviderPython, model.CodeDebugProviderNode:
-	default:
-		errs = append(errs, "code_debug.provider must be go, python, or node")
-	}
-	switch dep.CodeDebug.Mode {
+	switch cfg.Mode {
 	case "", model.CodeDebugModeLaunch:
 	default:
 		errs = append(errs, "code_debug.mode must be launch")
 	}
-	switch dep.CodeDebug.StartMode {
-	case "", model.CodeDebugStartModeNormal, model.CodeDebugStartModeDebug:
-	default:
-		errs = append(errs, "code_debug.start_mode must be normal or debug")
-	}
-	provider := dep.CodeDebug.Provider
-	if provider == "" {
-		provider = codedebug.InferProvider(deploymentCommand(dep))
-	}
-	if provider == model.CodeDebugProviderNode && strings.TrimSpace(dep.CodeDebug.AdapterCommand) == "" {
-		errs = append(errs, "code_debug.adapter_command is required for experimental node provider")
-	}
-	if pathErr := validateCodeDebugProgramPath(projectRoot, provider, dep); pathErr != "" {
+	if pathErr := validateCodeDebugProgramPath(projectRoot, dep); pathErr != "" {
 		errs = append(errs, pathErr)
 	}
 	if pathErr := validateCodeDebugWorkingDirPath(projectRoot, dep); pathErr != "" {
@@ -175,21 +162,13 @@ func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep mode
 	return errs
 }
 
-func validateCodeDebugProgramPath(projectRoot string, provider model.CodeDebugProvider, dep model.Deployment) string {
+func validateCodeDebugProgramPath(projectRoot string, dep model.Deployment) string {
 	program := strings.TrimSpace(dep.CodeDebug.Program)
-	explicit := program != ""
-	if !explicit {
-		inferred, err := codedebug.DefaultProgramForProvider(provider, deploymentCommand(dep))
-		if err != nil {
-			if provider == model.CodeDebugProviderPython || provider == model.CodeDebugProviderNode {
-				return "code_debug.program is required when it cannot be inferred from a simple command"
-			}
-			return ""
-		}
-		program = inferred
+	if program == "" {
+		return ""
 	}
 	candidate := program
-	if !explicit && !filepath.IsAbs(program) {
+	if !filepath.IsAbs(program) {
 		if workingDir, err := resolvedCodeDebugWorkingDir(projectRoot, dep); err == nil && workingDir != "" {
 			candidate = filepath.Join(workingDir, program)
 		}

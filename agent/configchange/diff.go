@@ -174,9 +174,9 @@ func codeDebugSummary(cfg *model.CodeDebugConfig) map[string]any {
 	if cfg == nil {
 		return nil
 	}
-	out := map[string]any{"enabled": cfg.Enabled}
-	if cfg.Provider != "" {
-		out["provider"] = cfg.Provider
+	out := map[string]any{}
+	if cfg.Policy != "" {
+		out["policy"] = cfg.Policy
 	}
 	if cfg.Mode != "" {
 		out["mode"] = cfg.Mode
@@ -187,17 +187,11 @@ func codeDebugSummary(cfg *model.CodeDebugConfig) map[string]any {
 	if cfg.WorkingDir != "" {
 		out["working_dir"] = cfg.WorkingDir
 	}
-	if cfg.StartMode != "" {
-		out["start_mode"] = cfg.StartMode
-	}
-	if cfg.KeepRuntimeOnLeaseClose {
-		out["keep_runtime_on_lease_close"] = true
-	}
 	if len(cfg.Args) > 0 {
 		out["args"] = cfg.Args
 	}
 	if len(cfg.EnvVars) > 0 {
-		out["env_vars"] = "[redacted]"
+		out["env_vars"] = cfg.EnvVars
 	}
 	if cfg.AdapterCommand != "" {
 		out["adapter_command"] = cfg.AdapterCommand

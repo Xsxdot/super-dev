@@ -99,8 +99,7 @@ func TestServiceUpsertPreservesDeploymentCodeDebugConfig(t *testing.T) {
 				Runtime:     &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "go run ./cmd/api"},
 				Logs:        &model.LogConfig{Type: model.LogKindProcess},
 				CodeDebug: &model.CodeDebugConfig{
-					Enabled:     true,
-					Provider:    model.CodeDebugProviderGo,
+					Policy:      model.CodeDebugPolicyEnabled,
 					Mode:        model.CodeDebugModeLaunch,
 					StopOnEntry: true,
 				},
@@ -115,8 +114,7 @@ func TestServiceUpsertPreservesDeploymentCodeDebugConfig(t *testing.T) {
 	require.True(t, result.OK, result.Errors)
 	got := findServiceForTest(updated, "api").Deployments[0].CodeDebug
 	require.NotNil(t, got)
-	assert.True(t, got.Enabled)
-	assert.Equal(t, model.CodeDebugProviderGo, got.Provider)
+	assert.Equal(t, model.CodeDebugPolicyEnabled, got.Policy)
 	assert.Equal(t, model.CodeDebugModeLaunch, got.Mode)
 	assert.True(t, got.StopOnEntry)
 }
@@ -162,9 +160,8 @@ func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
 		StartCommand: "systemctl start api",
 		StopCommand:  "systemctl stop api",
 		CodeDebug: &model.CodeDebugConfig{
-			Enabled:  true,
-			Provider: model.CodeDebugProviderGo,
-			Mode:     model.CodeDebugModeLaunch,
+			Policy: model.CodeDebugPolicyEnabled,
+			Mode:   model.CodeDebugModeLaunch,
 		},
 	}
 
@@ -174,42 +171,34 @@ func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
 	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed command deployments only")
 }
 
-func TestValidateCodeDebugRejectsUnsupportedProvider(t *testing.T) {
+func TestValidateCodeDebugPolicy(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:  true,
-		Provider: model.CodeDebugProvider("ruby"),
-		Mode:     model.CodeDebugModeLaunch,
+		Policy: model.CodeDebugPolicy("bogus"),
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
 	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.provider must be go, python, or node")
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.policy must be auto, enabled, or disabled")
 }
 
-func TestValidateCodeDebugRejectsUnsupportedStartMode(t *testing.T) {
+func TestValidateCodeDebugValidPolicy(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:   true,
-		Provider:  model.CodeDebugProviderGo,
-		Mode:      model.CodeDebugModeLaunch,
-		StartMode: model.CodeDebugStartMode("always"),
+		Policy: model.CodeDebugPolicyDisabled,
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
-	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.start_mode must be normal or debug")
+	require.True(t, result.OK, result.Errors)
 }
 
 func TestValidateCodeDebugRejectsProgramOutsideProjectRoot(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:  true,
-		Provider: model.CodeDebugProviderPython,
-		Mode:     model.CodeDebugModeLaunch,
-		Program:  "../outside.py",
+		Mode:    model.CodeDebugModeLaunch,
+		Program: "../outside.py",
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
@@ -221,8 +210,6 @@ func TestValidateCodeDebugRejectsProgramOutsideProjectRoot(t *testing.T) {
 func TestValidateCodeDebugRejectsWorkingDirOutsideProjectRoot(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:    true,
-		Provider:   model.CodeDebugProviderGo,
 		Mode:       model.CodeDebugModeLaunch,
 		Program:    ".",
 		WorkingDir: "../outside",
@@ -234,35 +221,17 @@ func TestValidateCodeDebugRejectsWorkingDirOutsideProjectRoot(t *testing.T) {
 	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.working_dir must be inside project root")
 }
 
-func TestValidateCodeDebugAllowsInferredProgramRelativeToWorkingDir(t *testing.T) {
+func TestValidateCodeDebugAllowsOmittedProgram(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].Command = "python ../app.py"
 	project.Services[0].Deployments[0].WorkDir = "server"
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:  true,
-		Provider: model.CodeDebugProviderPython,
-		Mode:     model.CodeDebugModeLaunch,
+		Mode: model.CodeDebugModeLaunch,
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
 	require.True(t, result.OK, result.Errors)
-}
-
-func TestValidateCodeDebugRequiresNodeAdapterCommand(t *testing.T) {
-	project := sampleProject()
-	project.Services[0].Deployments[0].Command = "node server.js"
-	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:  true,
-		Provider: model.CodeDebugProviderNode,
-		Mode:     model.CodeDebugModeLaunch,
-		Program:  "server.js",
-	}
-
-	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
-
-	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.adapter_command is required for experimental node provider")
 }
 
 func TestApplyChangeUpsertsProjectPipelineAndPreservesOthers(t *testing.T) {
@@ -329,12 +298,9 @@ func TestDiffIncludesDeploymentCodeDebugChanges(t *testing.T) {
 	before := sampleProject()
 	after := sampleProject()
 	after.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Enabled:                 true,
-		Provider:                model.CodeDebugProviderGo,
-		Mode:                    model.CodeDebugModeLaunch,
-		StartMode:               model.CodeDebugStartModeDebug,
-		KeepRuntimeOnLeaseClose: true,
-		StopOnEntry:             true,
+		Policy:      model.CodeDebugPolicyEnabled,
+		Mode:        model.CodeDebugModeLaunch,
+		StopOnEntry: true,
 	}
 
 	diff := Diff(before, after)
@@ -343,14 +309,18 @@ func TestDiffIncludesDeploymentCodeDebugChanges(t *testing.T) {
 		Path:   "services[worker].deployments[dev].code_debug",
 		Before: map[string]any(nil),
 		After: map[string]any{
-			"enabled":                     true,
-			"provider":                    model.CodeDebugProviderGo,
-			"mode":                        model.CodeDebugModeLaunch,
-			"start_mode":                  model.CodeDebugStartModeDebug,
-			"keep_runtime_on_lease_close": true,
-			"stop_on_entry":               true,
+			"policy":        model.CodeDebugPolicyEnabled,
+			"mode":          model.CodeDebugModeLaunch,
+			"stop_on_entry": true,
 		},
 	})
+}
+
+func TestCodeDebugSummaryPolicy(t *testing.T) {
+	out := codeDebugSummary(&model.CodeDebugConfig{Policy: model.CodeDebugPolicyEnabled, Program: "./cmd/api"})
+	if out["policy"] != model.CodeDebugPolicyEnabled {
+		t.Fatalf("summary policy = %v", out["policy"])
+	}
 }
 
 func TestPlanConfigChangeRequiresApprovalAndHasStableFingerprint(t *testing.T) {
