@@ -209,6 +209,53 @@ func TestManagerOpenReusesExistingDebugRuntime(t *testing.T) {
 	assert.NotEqual(t, first.ID, second.ID)
 }
 
+func TestResolveLeaseReusesActive(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort: func() (int, error) { return 41003, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	first, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	got, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, first.ID, got.ID)
+}
+
+func TestResolveLeaseCreatesWhenRuntimeRunningNoLease(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort: func() (int, error) { return 41004, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	_, err := mgr.StartRuntime(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	got, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, dep.ID, got.DeploymentID)
+}
+
+func TestResolveLeaseRuntimeNotRunning(t *testing.T) {
+	mgr := NewManager(ManagerOptions{})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	_, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.ErrorIs(t, err, ErrRuntimeNotRunning)
+}
+
 func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	dap := &fakeDAP{}

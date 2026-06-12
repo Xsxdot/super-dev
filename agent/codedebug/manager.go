@@ -158,6 +158,35 @@ func (m *Manager) StartRuntime(ctx context.Context, project model.Project, servi
 	return m.startRuntimeFromConfig(ctx, cfg, provider)
 }
 
+// ResolveLease 按 deployment 解析或创建 AI lease。
+//
+// 返回：
+//   - session: 复用的或新建的 lease
+//   - created: 是否本次新建
+//   - err: runtime 不在时返回 ErrRuntimeNotRunning，不静默启动进程
+//
+// 规则：
+//   - 已有活跃 lease，直接复用
+//   - runtime 在跑且无 lease，通过 Open 创建新 lease
+//   - runtime 不在，返回 ErrRuntimeNotRunning
+func (m *Manager) ResolveLease(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, approvalToken string) (Session, bool, error) {
+	deploymentID := strings.TrimSpace(dep.ID)
+	if existing, ok := m.activeLeaseFor(deploymentID); ok {
+		return existing, false, nil
+	}
+	if runtime, ok := m.RuntimeStatus(deploymentID); !ok || !runtime.Alive {
+		return Session{}, false, ErrRuntimeNotRunning
+	}
+	session, err := m.Open(ctx, project, service, dep, OpenRequest{
+		DeploymentID:  deploymentID,
+		ApprovalToken: approvalToken,
+	})
+	if err != nil {
+		return Session{}, false, err
+	}
+	return session, true, nil
+}
+
 func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, provider Provider) (Runtime, error) {
 	m.mu.Lock()
 	if existing, ok := m.runtimes[cfg.Target.DeploymentID]; ok && existing.Alive {
@@ -312,6 +341,16 @@ func (m *Manager) DebuggerSnapshot(deploymentID string) (DebuggerSnapshot, bool)
 
 // LeaseActive 返回指定 deployment 是否存在活跃 AI lease。
 func (m *Manager) LeaseActive(deploymentID string) bool {
+	_, ok := m.activeLeaseFor(deploymentID)
+	return ok
+}
+
+// LeaseFor 只返回已存在的活跃 lease，不创建。
+func (m *Manager) LeaseFor(deploymentID string) (Session, bool) {
+	return m.activeLeaseFor(deploymentID)
+}
+
+func (m *Manager) activeLeaseFor(deploymentID string) (Session, bool) {
 	deploymentID = strings.TrimSpace(deploymentID)
 	m.mu.Lock()
 	closeFns := m.cleanupLocked(m.now().UTC())
@@ -319,10 +358,10 @@ func (m *Manager) LeaseActive(deploymentID string) bool {
 	defer m.mu.Unlock()
 	for _, session := range m.sessions {
 		if session.runtimeDeploymentID == deploymentID && session.Alive && !session.Closed {
-			return true
+			return sessionStatus(session), true
 		}
 	}
-	return false
+	return Session{}, false
 }
 
 // StopRuntime 停止 deployment 级 Debug Runtime，并关闭关联 AI lease。

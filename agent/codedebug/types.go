@@ -30,6 +30,7 @@ var (
 	ErrSessionNotFound    = errors.New("debug session not found")
 	ErrSessionClosed      = errors.New("debug session closed")
 	ErrEvaluateDenied     = errors.New("debug evaluate denied")
+	ErrRuntimeNotRunning  = errors.New("debug runtime not running for deployment")
 )
 
 const (
