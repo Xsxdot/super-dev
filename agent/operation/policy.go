@@ -321,7 +321,7 @@ func PlanBrowserDebugOpen(project model.Project, service model.Service, dep mode
 //   - project: deployment 所属项目
 //   - service: deployment 所属服务
 //   - dep: 解析后的 deployment
-//   - provider: 调试 provider 名称，仅用于说明和 fingerprint
+//   - lang: 服务主要实现语言，用于推导调试能力
 //
 // 返回：
 //   - 需要审批的代码调试 plan
@@ -329,13 +329,12 @@ func PlanBrowserDebugOpen(project model.Project, service model.Service, dep mode
 //
 // 注意：
 //   - 此函数只规划安全策略，不启动 adapter 或目标进程
-//   - v1 仅支持已启用 code_debug 的本机 managed command deployment
-func PlanCodeDebugOpen(project model.Project, service model.Service, dep model.Deployment, provider string) (Plan, error) {
+//   - v1 仅支持本机 managed command deployment，policy/语言/环境共同决定是否放行
+func PlanCodeDebugOpen(project model.Project, service model.Service, dep model.Deployment, lang model.ServiceLanguage) (Plan, error) {
 	if dep.ID == "" {
 		return Plan{}, ErrInvalidOperation
 	}
-	provider = trim(provider)
-	effectProvider := provider
+	effectProvider := string(lang)
 	if effectProvider == "" {
 		effectProvider = "configured"
 	}
@@ -359,20 +358,15 @@ func PlanCodeDebugOpen(project model.Project, service model.Service, dep model.D
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(DefaultPlanTTL),
 	}
-	if dep.CodeDebug == nil || !dep.CodeDebug.Enabled {
+	if reason := codeDebugDeniedReason(project, dep, lang); reason != "" {
 		plan.Denied = true
 		plan.RiskLevel = RiskCritical
-		plan.Reasons = append(plan.Reasons, "code debug is not enabled for deployment")
-	}
-	if effectiveDeployLocation(dep) != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || codeDebugRuntimeType(dep) != model.RuntimeTypeCommand {
-		plan.Denied = true
-		plan.RiskLevel = RiskCritical
-		plan.Reasons = append(plan.Reasons, "code debug v1 supports local managed command deployments only")
+		plan.Reasons = append(plan.Reasons, reason)
 	}
 	plan.Fingerprint = stableFingerprint(map[string]any{
 		"kind":             plan.Kind,
 		"target":           plan.Target,
-		"provider":         provider,
+		"language":         string(lang),
 		"expected_effects": plan.ExpectedEffects,
 		"denied":           plan.Denied,
 	})
@@ -431,6 +425,42 @@ func codeDebugRuntimeType(dep model.Deployment) model.RuntimeType {
 		return dep.Runtime.Type
 	}
 	return model.RuntimeTypeCommand
+}
+
+// codeDebugDeniedReason 返回拒绝代码调试的原因，空表示放行。
+// 与 codedebug 包 can_open 判定保持同语义：形态 + 语言 + policy/dev。
+func codeDebugDeniedReason(project model.Project, dep model.Deployment, lang model.ServiceLanguage) string {
+	if effectiveDeployLocation(dep) != model.LocationLocal ||
+		dep.EffectiveControlMode() != model.ControlModeManaged ||
+		codeDebugRuntimeType(dep) != model.RuntimeTypeCommand {
+		return "code debug supports local managed command deployments only"
+	}
+	policy := model.CodeDebugPolicyAuto
+	if dep.CodeDebug != nil {
+		policy = dep.CodeDebug.Policy.Effective()
+	}
+	if policy == model.CodeDebugPolicyDisabled {
+		return "code debug is disabled for this deployment"
+	}
+	if !lang.Known() {
+		return "service language does not support code debug"
+	}
+	if policy == model.CodeDebugPolicyEnabled {
+		return ""
+	}
+	if !envIsDev(project, dep.EnvName) {
+		return "code debug is only available in dev environments by default"
+	}
+	return ""
+}
+
+func envIsDev(project model.Project, envName string) bool {
+	for _, e := range project.Environments {
+		if e.Name == envName {
+			return e.IsDev
+		}
+	}
+	return false
 }
 
 // PlanTemplateImport 为用户模板导入生成安全预检计划。

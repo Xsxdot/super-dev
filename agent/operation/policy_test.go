@@ -162,13 +162,35 @@ func TestPlanBrowserDebugOpenRequiresApproval(t *testing.T) {
 	assert.Contains(t, plan.ExpectedEffects[0], "open debug browser")
 }
 
-func TestPlanCodeDebugOpenRequiresApprovalForLocalCommand(t *testing.T) {
-	project := operationProject(true, model.LocationLocal, false)
-	service := project.Services[0]
-	dep := service.Deployments[0]
-	dep.CodeDebug = &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo}
+func TestPlanCodeDebugOpenDisabledPolicy(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}}}
+	svc := model.Service{ID: "s1", Name: "api", Language: model.LanguageGo}
+	dep := model.Deployment{ID: "d1", EnvName: "dev", Location: model.LocationLocal,
+		ControlMode: model.ControlModeManaged, Command: "go run ./cmd/api",
+		CodeDebug: &model.CodeDebugConfig{Policy: model.CodeDebugPolicyDisabled}}
+	plan, err := PlanCodeDebugOpen(project, svc, dep, model.LanguageGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Denied {
+		t.Fatal("disabled policy must deny")
+	}
+}
 
-	plan, err := PlanCodeDebugOpen(project, service, dep, "go")
+func TestPlanCodeDebugOpenDevAllowed(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}}}
+	svc := model.Service{ID: "s1", Name: "api", Language: model.LanguageGo}
+	dep := model.Deployment{ID: "d1", EnvName: "dev", Location: model.LocationLocal,
+		ControlMode: model.ControlModeManaged, Command: "go run ./cmd/api"}
+	plan, err := PlanCodeDebugOpen(project, svc, dep, model.LanguageGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Denied {
+		t.Fatalf("dev go deployment must not be denied: %v", plan.Reasons)
+	}
 
 	require.NoError(t, err)
 	assert.Equal(t, OperationCodeDebugOpen, plan.Kind)
