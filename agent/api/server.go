@@ -583,6 +583,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/code-debug-sessions", a.openCodeDebugSession)
 	mux.HandleFunc("GET /api/code-debug-sessions/{id}", a.getCodeDebugSession)
 	mux.HandleFunc("DELETE /api/code-debug-sessions/{id}", a.closeCodeDebugSession)
+	mux.HandleFunc("POST /api/code-debug-sessions/{id}/close", a.closeCodeDebugSession)
 	mux.HandleFunc("POST /api/code-debug-sessions/{id}/breakpoints", a.setCodeDebugBreakpoints)
 	mux.HandleFunc("POST /api/code-debug-sessions/{id}/continue", a.codeDebugContinue)
 	mux.HandleFunc("POST /api/code-debug-sessions/{id}/pause", a.codeDebugPause)

@@ -45,6 +45,19 @@ func TestOpenCodeDebugSessionToolForwardsApprovalToken(t *testing.T) {
 	assert.Contains(t, result.Content[0]["text"], "code debug session opened")
 }
 
+func TestCloseCodeDebugSessionToolForwardsStopRuntime(t *testing.T) {
+	client := &fakeAgentClient{}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "close_code_debug_session", `{"session_id":"cds_1","stop_runtime":false}`)
+
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, "cds_1", client.closedCodeDebugSession)
+	require.NotNil(t, client.closedCodeDebugStopRuntime)
+	assert.False(t, *client.closedCodeDebugStopRuntime)
+}
+
 func TestSetDebugBreakpointsToolForwardsRequest(t *testing.T) {
 	client := &fakeAgentClient{codeDebugActionResult: map[string]any{"ok": true}}
 	server := NewServer(client)
@@ -93,4 +106,11 @@ func TestCodeDebugEvaluateSchemaIncludesApprovalFields(t *testing.T) {
 	assert.Contains(t, properties, "approval_token")
 	assert.Contains(t, properties, "approval_wait_seconds")
 	assert.Equal(t, []string{"session_id", "expression"}, schema["required"])
+}
+
+func TestCloseCodeDebugSessionSchemaIncludesStopRuntime(t *testing.T) {
+	schema := codeDebugSessionInputSchema()
+	properties := schema["properties"].(map[string]any)
+
+	assert.Contains(t, properties, "stop_runtime")
 }

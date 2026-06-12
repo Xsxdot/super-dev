@@ -26,7 +26,11 @@ func (a *App) listCodeDebugTargets(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	projects := append([]model.Project(nil), a.projects...)
 	a.mu.RUnlock()
-	jsonOK(w, codedebug.ListTargets(projects))
+	jsonOK(w, codedebug.ListTargets(
+		projects,
+		codedebug.WithRuntimeSnapshot(a.codeDebug.RuntimeStatus),
+		codedebug.WithLeaseActive(a.codeDebug.LeaseActive),
+	))
 }
 
 func (a *App) openCodeDebugSession(w http.ResponseWriter, r *http.Request) {
@@ -86,12 +90,27 @@ func (a *App) getCodeDebugSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) closeCodeDebugSession(w http.ResponseWriter, r *http.Request) {
-	stopRuntime := true
-	if err := a.codeDebug.Close(r.PathValue("id"), codedebug.CloseRequest{StopRuntime: &stopRuntime}); err != nil {
+	var req codedebug.CloseRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	session, ok := a.codeDebug.Status(r.PathValue("id"))
+	if !ok {
+		writeCodeDebugError(w, codedebug.ErrSessionNotFound)
+		return
+	}
+	if req.StopRuntime == nil {
+		stopRuntime := true
+		if dep, _, ok := a.findDeployment(session.DeploymentID); ok && dep.CodeDebug != nil {
+			stopRuntime = !dep.CodeDebug.KeepRuntimeOnLeaseClose
+		}
+		req.StopRuntime = &stopRuntime
+	}
+	if err := a.codeDebug.Close(r.PathValue("id"), req); err != nil {
 		writeCodeDebugError(w, err)
 		return
 	}
-	jsonOK(w, map[string]string{"session_id": r.PathValue("id")})
+	jsonOK(w, map[string]any{"session_id": r.PathValue("id"), "stop_runtime": req.StopRuntime})
 }
 
 func (a *App) setCodeDebugBreakpoints(w http.ResponseWriter, r *http.Request) {

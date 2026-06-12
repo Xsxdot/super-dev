@@ -16,6 +16,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,30 @@ func TestRuntimeStatusReportsDebugRunning(t *testing.T) {
 	require.Len(t, got.Environments[0].Instances, 1)
 	assert.Equal(t, model.HealthDebugRunning, got.Environments[0].Instances[0].Metrics.Health)
 	assert.Equal(t, "debug", got.Environments[0].Instances[0].Metrics.Base)
+}
+
+func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := codeDebugAPIProject(t.TempDir())
+	project.Services[0].Deployments[0].CodeDebug.KeepRuntimeOnLeaseClose = true
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	session, err := app.codeDebug.Open(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/code-debug-sessions/"+session.ID+"/close", strings.NewReader(`{"stop_runtime":false}`))
+	req.SetPathValue("id", session.ID)
+	rec := httptest.NewRecorder()
+
+	app.closeCodeDebugSession(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	runtime, ok := app.codeDebug.RuntimeStatus("dep-api-dev")
+	require.True(t, ok)
+	assert.True(t, runtime.Alive)
 }
 
 func codeDebugManagerForAPITest() *codedebug.Manager {

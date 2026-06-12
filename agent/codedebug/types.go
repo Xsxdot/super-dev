@@ -124,18 +124,24 @@ func adapterRemediationHint(code string, provider model.CodeDebugProvider) strin
 
 // Target 描述一个允许打开代码调试会话的本机 deployment。
 type Target struct {
-	ProjectID    string                  `json:"project_id"`
-	ProjectName  string                  `json:"project_name"`
-	RootPath     string                  `json:"root_path"`
-	ServiceID    string                  `json:"service_id"`
-	ServiceName  string                  `json:"service_name"`
-	DeploymentID string                  `json:"deployment_id"`
-	EnvName      string                  `json:"env_name"`
-	Provider     model.CodeDebugProvider `json:"provider"`
-	Experimental bool                    `json:"experimental,omitempty"`
-	Command      string                  `json:"command,omitempty"`
-	WorkDir      string                  `json:"work_dir,omitempty"`
-	Enabled      bool                    `json:"enabled"`
+	ProjectID               string                   `json:"project_id"`
+	ProjectName             string                   `json:"project_name"`
+	RootPath                string                   `json:"root_path"`
+	ServiceID               string                   `json:"service_id"`
+	ServiceName             string                   `json:"service_name"`
+	DeploymentID            string                   `json:"deployment_id"`
+	EnvName                 string                   `json:"env_name"`
+	Provider                model.CodeDebugProvider  `json:"provider"`
+	Experimental            bool                     `json:"experimental,omitempty"`
+	Command                 string                   `json:"command,omitempty"`
+	WorkDir                 string                   `json:"work_dir,omitempty"`
+	Enabled                 bool                     `json:"enabled"`
+	StartMode               model.CodeDebugStartMode `json:"start_mode,omitempty"`
+	KeepRuntimeOnLeaseClose bool                     `json:"keep_runtime_on_lease_close,omitempty"`
+	RuntimeState            RuntimeState             `json:"runtime_state,omitempty"`
+	LeaseActive             bool                     `json:"lease_active,omitempty"`
+	CanOpen                 bool                     `json:"can_open"`
+	UnavailableReason       string                   `json:"unavailable_reason,omitempty"`
 }
 
 // OpenRequest 描述创建代码调试会话的请求。

@@ -76,6 +76,41 @@ func TestListTargetsMarksNodeAsExperimental(t *testing.T) {
 	assert.True(t, targets[0].Experimental)
 }
 
+func TestListTargetsIncludesRuntimeAndLeaseState(t *testing.T) {
+	root := t.TempDir()
+	projects := []model.Project{{
+		ID: "p1", Name: "demo", RootPath: root,
+		Services: []model.Service{{
+			ID: "svc-api", Name: "api",
+			Deployments: []model.Deployment{{
+				ID: "dep-api-dev", EnvName: "dev", Location: model.LocationLocal,
+				Command: "go run ./cmd/api", WorkDir: root,
+				CodeDebug: &model.CodeDebugConfig{
+					Enabled:                 true,
+					Provider:                model.CodeDebugProviderGo,
+					StartMode:               model.CodeDebugStartModeDebug,
+					KeepRuntimeOnLeaseClose: true,
+				},
+			}},
+		}},
+	}}
+
+	targets := ListTargets(
+		projects,
+		WithRuntimeSnapshot(func(deploymentID string) (Runtime, bool) {
+			return Runtime{DeploymentID: deploymentID, State: RuntimeStateDebugRunning, Alive: true}, true
+		}),
+		WithLeaseActive(func(deploymentID string) bool { return deploymentID == "dep-api-dev" }),
+	)
+
+	require.Len(t, targets, 1)
+	assert.Equal(t, model.CodeDebugStartModeDebug, targets[0].StartMode)
+	assert.True(t, targets[0].KeepRuntimeOnLeaseClose)
+	assert.Equal(t, RuntimeStateDebugRunning, targets[0].RuntimeState)
+	assert.True(t, targets[0].LeaseActive)
+	assert.True(t, targets[0].CanOpen)
+}
+
 func TestResolvePathRejectsOutsideProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	_, err := ResolveInsideRoot(root, "../outside.go")

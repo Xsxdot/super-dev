@@ -633,6 +633,10 @@ func codeDebugSessionInputSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
+			"stop_runtime": map[string]any{
+				"type":        "boolean",
+				"description": "When true, also stop the Debug Runtime. When false, release the AI lease and keep the runtime when supported.",
+			},
 		},
 		"required": []string{"session_id"},
 	}

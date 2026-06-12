@@ -120,7 +120,7 @@ type AgentClient interface {
 	// OpenCodeDebugSession 创建本机代码调试会话。
 	OpenCodeDebugSession(context.Context, OpenCodeDebugSessionRequest, string) (CodeDebugSession, error)
 	// CloseCodeDebugSession 关闭代码调试会话。
-	CloseCodeDebugSession(context.Context, string) error
+	CloseCodeDebugSession(context.Context, string, *bool) error
 	// SetCodeDebugBreakpoints 设置代码调试断点。
 	SetCodeDebugBreakpoints(context.Context, DebugBreakpointRequest) (map[string]any, error)
 	// CodeDebugAction 执行非 evaluate 的代码调试动作。
@@ -699,8 +699,12 @@ func (c *HTTPAgentClient) OpenCodeDebugSession(ctx context.Context, req OpenCode
 }
 
 // CloseCodeDebugSession 关闭代码调试会话。
-func (c *HTTPAgentClient) CloseCodeDebugSession(ctx context.Context, sessionID string) error {
-	return c.delete(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID), nil)
+func (c *HTTPAgentClient) CloseCodeDebugSession(ctx context.Context, sessionID string, stopRuntime *bool) error {
+	body := map[string]any{}
+	if stopRuntime != nil {
+		body["stop_runtime"] = *stopRuntime
+	}
+	return c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/close", body, nil)
 }
 
 // SetCodeDebugBreakpoints 设置代码调试断点。

@@ -113,6 +113,7 @@ type fakeAgentClient struct {
 	lastCaptureAt              DebugCaptureAtRequest
 	lastInspect                DebugInspectRequest
 	closedCodeDebugSession     string
+	closedCodeDebugStopRuntime *bool
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -397,8 +398,9 @@ func (f *fakeAgentClient) OpenCodeDebugSession(_ context.Context, req OpenCodeDe
 	return f.codeDebugSession, nil
 }
 
-func (f *fakeAgentClient) CloseCodeDebugSession(_ context.Context, sessionID string) error {
+func (f *fakeAgentClient) CloseCodeDebugSession(_ context.Context, sessionID string, stopRuntime *bool) error {
 	f.closedCodeDebugSession = sessionID
+	f.closedCodeDebugStopRuntime = stopRuntime
 	return nil
 }
 

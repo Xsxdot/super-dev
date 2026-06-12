@@ -193,6 +193,27 @@ func TestHTTPAgentClientOpenCodeDebugSessionPostsApprovalToken(t *testing.T) {
 	assert.Equal(t, "cds_1", session.ID)
 }
 
+func ptrBool(v bool) *bool {
+	return &v
+}
+
+func TestHTTPAgentClientCloseCodeDebugSessionPostsStopRuntime(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/code-debug-sessions/cds_1/close", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": "cds_1"})
+	}))
+	defer srv.Close()
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+
+	err := client.CloseCodeDebugSession(context.Background(), "cds_1", ptrBool(false))
+
+	require.NoError(t, err)
+	assert.Equal(t, false, body["stop_runtime"])
+}
+
 func TestHTTPAgentClientCodeDebugEvaluatePostsApprovalToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/code-debug-sessions/cds_1/evaluate", r.URL.Path)

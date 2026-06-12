@@ -63,9 +63,7 @@ func (s *Server) openCodeDebugSessionTool(ctx context.Context, args json.RawMess
 }
 
 func (s *Server) closeCodeDebugSessionTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
-	var req struct {
-		SessionID string `json:"session_id"`
-	}
+	var req CloseCodeDebugSessionRequest
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
 	}
@@ -73,7 +71,7 @@ func (s *Server) closeCodeDebugSessionTool(ctx context.Context, args json.RawMes
 	if req.SessionID == "" {
 		return toolError("invalid_arguments", "session_id is required", nil), nil
 	}
-	if err := s.client.CloseCodeDebugSession(ctx, req.SessionID); err != nil {
+	if err := s.client.CloseCodeDebugSession(ctx, req.SessionID, req.StopRuntime); err != nil {
 		return clientToolError(err), nil
 	}
 	return toolSuccess("code debug session closed", map[string]any{"session_id": req.SessionID}, nil, nil), nil
