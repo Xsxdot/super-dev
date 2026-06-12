@@ -240,6 +240,17 @@ func (m *Manager) DeploymentPID(deploymentID string) int {
 	return m.PID(deploymentID)
 }
 
+// DeploymentPGID 返回 deployment 进程的进程组 ID（0 表示未运行或不可用）。
+func (m *Manager) DeploymentPGID(deploymentID string) int {
+	m.mu.Lock()
+	runner, ok := m.runners[deploymentID]
+	m.mu.Unlock()
+	if !ok || runner == nil {
+		return 0
+	}
+	return runner.ProcessGroupID()
+}
+
 // IsDeploymentActive 报告 deployment 是否已启动且未停止。
 func (m *Manager) IsDeploymentActive(deploymentID string) bool {
 	return m.IsActive(deploymentID)

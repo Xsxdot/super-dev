@@ -133,6 +133,26 @@ func TestManagerStartDeploymentSkipsAfterBackgroundedCommand(t *testing.T) {
 	mgr.StopDeployment("dep-bg")
 }
 
+func TestDeploymentPGIDReturnsGroup(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+	dep := model.Deployment{
+		ID:       "dep-pgid",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(dep))
+	t.Cleanup(func() { mgr.StopDeployment(dep.ID) })
+	time.Sleep(100 * time.Millisecond)
+
+	pid := mgr.DeploymentPID(dep.ID)
+	pgid := mgr.DeploymentPGID(dep.ID)
+	require.Greater(t, pid, 0)
+	require.Greater(t, pgid, 0)
+	assert.Equal(t, pid, pgid, "Runner starts deployments as process-group leaders")
+}
+
 func TestManager_FailureLogIncludesStderrTail(t *testing.T) {
 	var logsMu sync.Mutex
 	var logs []model.LogEntry

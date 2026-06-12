@@ -22,15 +22,17 @@ import (
 )
 
 var (
-	ErrTargetNotFound     = errors.New("debug target not found")
-	ErrTargetUnsupported  = errors.New("debug target unsupported")
-	ErrConfigInvalid      = errors.New("debug config invalid")
-	ErrAdapterUnavailable = errors.New("debug adapter unavailable")
-	ErrPathOutsideProject = errors.New("path outside project root")
-	ErrSessionNotFound    = errors.New("debug session not found")
-	ErrSessionClosed      = errors.New("debug session closed")
-	ErrEvaluateDenied     = errors.New("debug evaluate denied")
-	ErrRuntimeNotRunning  = errors.New("debug runtime not running for deployment")
+	ErrTargetNotFound         = errors.New("debug target not found")
+	ErrTargetUnsupported      = errors.New("debug target unsupported")
+	ErrConfigInvalid          = errors.New("debug config invalid")
+	ErrAdapterUnavailable     = errors.New("debug adapter unavailable")
+	ErrPathOutsideProject     = errors.New("path outside project root")
+	ErrSessionNotFound        = errors.New("debug session not found")
+	ErrSessionClosed          = errors.New("debug session closed")
+	ErrEvaluateDenied         = errors.New("debug evaluate denied")
+	ErrRuntimeNotRunning      = errors.New("debug runtime not running for deployment")
+	ErrAttachUnsupported      = errors.New("attach not supported for provider")
+	ErrAttachTargetUnresolved = errors.New("could not resolve debuggee process to attach")
 )
 
 const (
