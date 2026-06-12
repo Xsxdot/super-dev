@@ -161,6 +161,7 @@ function normalizeDeployment(d: Deployment): Deployment {
     runtime,
     logs: normalizeLogs(dep, runtime),
     web: dep.web ? clone(dep.web) : undefined,
+    code_debug: dep.code_debug ? clone(dep.code_debug) : undefined,
   }
 }
 
@@ -258,6 +259,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           runtime,
           logs,
           web: dep.web,
+          code_debug: dep.code_debug ? clone(dep.code_debug) : undefined,
           read_only: controlMode === 'monitor' ? true : undefined,
           start_command: dep.start_command,
           stop_command: dep.stop_command,
@@ -379,6 +381,22 @@ export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
           continue
         }
         errors.push(issue('config', 'validation.logTargetRequired', { service: s.name, env: d.env_name }))
+      }
+      const codeDebug = dep.code_debug
+      if (codeDebug?.enabled) {
+        const isLocalManagedCommand = dep.location === 'local' && dep.control_mode === 'managed' && dep.runtime?.type === 'command'
+        if (!isLocalManagedCommand) {
+          errors.push(issue('config', 'validation.codeDebugLocalCommandOnly', { service: s.name, env: d.env_name }))
+        }
+        if (codeDebug.provider && !['go', 'python', 'node'].includes(codeDebug.provider)) {
+          errors.push(issue('config', 'validation.codeDebugProviderInvalid', { service: s.name, env: d.env_name }))
+        }
+        if (codeDebug.start_mode && !['normal', 'debug'].includes(codeDebug.start_mode)) {
+          errors.push(issue('config', 'validation.codeDebugStartModeInvalid', { service: s.name, env: d.env_name }))
+        }
+        if (codeDebug.provider === 'node' && (codeDebug.adapter_command ?? '').trim() === '') {
+          errors.push(issue('config', 'validation.codeDebugNodeAdapterRequired', { service: s.name, env: d.env_name }))
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { projectToDraft, draftToPayload, validateDraft } from '@/lib/configDraft'
+import { projectToDraft, draftToPayload, validateDraft, validateDraftDetailed } from '@/lib/configDraft'
 import type { Project } from '@/api/agent'
 
 function makeProject(): Project {
@@ -129,6 +129,63 @@ describe('configDraft', () => {
       default_path: '/',
       ai_debug: { enabled: true },
     })
+  })
+
+  it('preserves deployment code debug config in setup payload', () => {
+    const project = makeProject()
+    project.services[0].deployments = [{
+      id: 'dep-api-dev',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: { type: 'command', command: 'go run ./cmd/server', working_dir: '/workspace/ai-hub/server' },
+      logs: { type: 'process' },
+      status: '',
+      code_debug: {
+        enabled: true,
+        provider: 'go',
+        mode: 'launch',
+        program: 'cmd/server',
+        start_mode: 'debug',
+        keep_runtime_on_lease_close: true,
+        stop_on_entry: false,
+      },
+    }]
+
+    const draft = projectToDraft(project)
+    const payload = draftToPayload(draft)
+
+    expect(payload.services[0].deployments[0].code_debug).toEqual({
+      enabled: true,
+      provider: 'go',
+      mode: 'launch',
+      program: 'cmd/server',
+      start_mode: 'debug',
+      keep_runtime_on_lease_close: true,
+      stop_on_entry: false,
+    })
+  })
+
+  it('reports code debug when enabled for unsupported deployment runtime', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments = [{
+      id: 'dep-api-prod',
+      env_name: 'prod',
+      location: 'remote',
+      control_mode: 'managed',
+      runtime: { type: 'systemd', service_name: 'api' },
+      logs: { type: 'journalctl', target: 'api.service' },
+      host_ids: ['host-1'],
+      status: '',
+      code_debug: { enabled: true, provider: 'go', start_mode: 'debug' },
+    }]
+
+    const issues = validateDraftDetailed(draft)
+
+    expect(issues).toContainEqual(expect.objectContaining({
+      scope: 'config',
+      key: 'validation.codeDebugLocalCommandOnly',
+    }))
   })
 
   it('projectToDraft 和 draftToPayload 保留 launchd runtime 与 macOS 日志', () => {

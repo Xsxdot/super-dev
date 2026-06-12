@@ -230,6 +230,25 @@ export interface WebEntrypointConfig {
   ai_debug?: WebAIDebugConfig
 }
 
+export type CodeDebugProvider = 'go' | 'python' | 'node'
+export type CodeDebugMode = 'launch'
+export type CodeDebugStartMode = 'normal' | 'debug'
+
+export interface CodeDebugConfig {
+  enabled: boolean
+  provider?: CodeDebugProvider
+  mode?: CodeDebugMode
+  program?: string
+  args?: string[]
+  working_dir?: string
+  env_vars?: Record<string, string>
+  adapter_command?: string
+  adapter_args?: string[]
+  stop_on_entry?: boolean
+  start_mode?: CodeDebugStartMode
+  keep_runtime_on_lease_close?: boolean
+}
+
 export interface PipelineEnvironment {
   variables?: Record<string, string>
 }
@@ -401,6 +420,7 @@ export interface Deployment {
   runtime?: RuntimeConfig
   logs?: LogConfig
   web?: WebEntrypointConfig
+  code_debug?: CodeDebugConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -786,6 +806,7 @@ export interface SetupDeployment {
   runtime?: RuntimeConfig
   logs?: LogConfig
   web?: WebEntrypointConfig
+  code_debug?: CodeDebugConfig
   command?: string
   work_dir?: string
   env?: Record<string, string>
