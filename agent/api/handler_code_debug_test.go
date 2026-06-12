@@ -229,6 +229,49 @@ func TestRuntimeStatusReportsDebuggerDimension(t *testing.T) {
 	assert.Equal(t, model.LanguageGo, inst.Debugger.Language)
 }
 
+func TestRuntimeStatusReportsPausedDebuggerAndFreezesHealth(t *testing.T) {
+	dap := &fakeCodeDebugDAP{
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     1,
+				"line":   42,
+				"source": map[string]any{"path": "main.go"},
+			}},
+		},
+	}
+	app, err := NewApp(AppConfig{
+		DataDir:                  t.TempDir(),
+		CodeDebugManagerOverride: codeDebugManagerForAPITestWithDAP(dap),
+		RuntimeMetricsSampler:    codeDebugFailedSampler{},
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := codeDebugAPIProject(t.TempDir())
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	_, err = app.codeDebug.StartRuntime(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
+	require.NoError(t, err)
+	dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
+	waitForAPITest(t, func() bool {
+		snap, ok := app.codeDebug.DebuggerSnapshot("dep-api-dev")
+		return ok && snap.State == "paused"
+	})
+
+	got := app.runtimeStatusService().Snapshot(context.Background(), project)
+
+	require.Len(t, got.Environments, 1)
+	require.Len(t, got.Environments[0].Instances, 1)
+	inst := got.Environments[0].Instances[0]
+	assert.Equal(t, model.HealthRunning, inst.Metrics.Health)
+	require.NotNil(t, inst.Debugger)
+	assert.Equal(t, model.DebuggerStatePaused, inst.Debugger.State)
+	require.NotNil(t, inst.Debugger.PausedAt)
+	assert.Equal(t, "main.go", inst.Debugger.PausedAt.Source)
+	assert.Equal(t, 42, inst.Debugger.PausedAt.Line)
+}
+
 func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
 	require.NoError(t, err)
@@ -253,11 +296,15 @@ func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
 }
 
 func codeDebugManagerForAPITest() *codedebug.Manager {
+	return codeDebugManagerForAPITestWithDAP(&fakeCodeDebugDAP{})
+}
+
+func codeDebugManagerForAPITestWithDAP(dap *fakeCodeDebugDAP) *codedebug.Manager {
 	return codedebug.NewManager(codedebug.ManagerOptions{
 		AdapterLaunch: func(context.Context, codedebug.AdapterCommand) (codedebug.AdapterProcess, error) {
 			return codedebug.AdapterProcess{PID: 1, Close: func() error { return nil }}, nil
 		},
-		Dial:        func(context.Context, string, time.Duration) (codedebug.DAP, error) { return &fakeCodeDebugDAP{}, nil },
+		Dial:        func(context.Context, string, time.Duration) (codedebug.DAP, error) { return dap, nil },
 		ReservePort: func() (int, error) { return 39001, nil },
 	})
 }
@@ -283,9 +330,16 @@ func (codeDebugRuntimeSampler) Sample(context.Context, metrics.SampleTarget) (mo
 	return model.InstanceMetrics{Health: model.HealthStopped, Base: "command"}, nil
 }
 
+type codeDebugFailedSampler struct{}
+
+func (codeDebugFailedSampler) Sample(context.Context, metrics.SampleTarget) (model.InstanceMetrics, error) {
+	return model.InstanceMetrics{Health: model.HealthFailed, Base: "debug"}, nil
+}
+
 type fakeCodeDebugDAP struct {
-	mu   sync.Mutex
-	subs []chan map[string]any
+	mu          sync.Mutex
+	subs        []chan map[string]any
+	stackResult map[string]any
 }
 
 func (f *fakeCodeDebugDAP) Initialize(context.Context) (map[string]any, error) {
@@ -302,6 +356,9 @@ func (f *fakeCodeDebugDAP) Next(context.Context, int) error     { return nil }
 func (f *fakeCodeDebugDAP) StepIn(context.Context, int) error   { return nil }
 func (f *fakeCodeDebugDAP) StepOut(context.Context, int) error  { return nil }
 func (f *fakeCodeDebugDAP) StackTrace(context.Context, int) (map[string]any, error) {
+	if f.stackResult != nil {
+		return f.stackResult, nil
+	}
 	return map[string]any{}, nil
 }
 func (f *fakeCodeDebugDAP) Scopes(context.Context, int) (map[string]any, error) {
@@ -338,4 +395,23 @@ func (f *fakeCodeDebugDAP) Subscribe() (<-chan map[string]any, func()) {
 	}
 	return ch, cancel
 }
+func (f *fakeCodeDebugDAP) emit(event map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.subs {
+		sub <- event
+	}
+}
 func (f *fakeCodeDebugDAP) Close() error { return nil }
+
+func waitForAPITest(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met in time")
+}

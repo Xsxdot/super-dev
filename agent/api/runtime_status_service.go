@@ -79,19 +79,27 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 	}
 	var debugger *model.DebuggerStatus
 	if runtime, ok := s.app.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
-		// debug runtime 在跑：health 仍按普通运行评估，调试态走独立维度。
-		if got.Health == model.HealthStopped {
-			got.Health = model.HealthRunning
-		}
 		origin := model.DebuggerOriginLaunched
 		if runtime.Origin == "attached" {
 			origin = model.DebuggerOriginAttached
 		}
+		state := model.DebuggerStateAttached
+		var pausedAt *model.PausedLocation
+		if snap, ok := s.app.codeDebug.DebuggerSnapshot(dep.ID); ok && snap.State == "paused" {
+			state = model.DebuggerStatePaused
+			pausedAt = &model.PausedLocation{Source: snap.Source, Line: snap.Line}
+			if got.Health == model.HealthFailed || got.Health == model.HealthStopped {
+				got.Health = model.HealthRunning
+			}
+		} else if got.Health == model.HealthStopped {
+			got.Health = model.HealthRunning
+		}
 		debugger = &model.DebuggerStatus{
-			State:       model.DebuggerStateAttached,
+			State:       state,
 			Language:    serviceLanguageFor(svc),
 			Origin:      origin,
 			LeaseActive: s.app.codeDebug.LeaseActive(dep.ID),
+			PausedAt:    pausedAt,
 		}
 	}
 	inst := model.InstanceStatus{
