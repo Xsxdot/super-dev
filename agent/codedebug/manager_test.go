@@ -11,8 +11,10 @@ package codedebug
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -42,6 +44,41 @@ func TestManagerOpenCreatesSessionWithFakeLauncher(t *testing.T) {
 	assert.Equal(t, "dep-api-dev", session.DeploymentID)
 	assert.Equal(t, 1234, session.ProcessID)
 	assert.Equal(t, 39001, session.AdapterPort)
+}
+
+func TestManagerOpenSendsConfigurationDoneAfterLaunch(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	_, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, dap.configurationDoneCalls)
+}
+
+func TestManagerOpenConsumesInitialStopWhenStopOnEntry(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.CodeDebug.StopOnEntry = true
+
+	_, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, dap.waitForStoppedCalls)
 }
 
 func TestManagerCloseStopsAdapter(t *testing.T) {
@@ -243,6 +280,24 @@ func TestDefaultAdapterLaunchMissingCommandReturnsStableUnavailableError(t *test
 	assert.Contains(t, strings.ToLower(info.Hint), "install")
 }
 
+func TestDefaultAdapterLaunchKeepsProcessAfterCallerContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	process, err := defaultAdapterLaunch(ctx, AdapterCommand{
+		Provider: model.CodeDebugProviderGo,
+		Name:     "sleep",
+		Args:     []string{"5"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = process.Close()
+	})
+
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	assert.NoError(t, signalProcessZero(process.PID))
+}
+
 func TestManagerOpenWrapsDialFailureAsStableConnectionError(t *testing.T) {
 	root := t.TempDir()
 	closed := false
@@ -313,6 +368,41 @@ func TestManagerLaunchConfigInfersNodeProgramFromSimpleCommand(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "server.js"), cfg.Program)
 }
 
+func TestManagerLaunchConfigUsesWorkingDirRelativeGoProgram(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(ManagerOptions{})
+	project, service, dep := managerTestTarget(root)
+	dep.WorkDir = filepath.Join(root, "server")
+	dep.Runtime = &model.RuntimeConfig{
+		Type:       model.RuntimeTypeCommand,
+		Command:    "go run ./cmd/server",
+		WorkingDir: dep.WorkDir,
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{
+		Enabled:  true,
+		Provider: model.CodeDebugProviderGo,
+		Program:  "server/cmd/server",
+	}
+
+	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, "./cmd/server", cfg.Program)
+	assert.Equal(t, filepath.Join(root, "server"), cfg.WorkingDir)
+}
+
+func TestManagerLaunchConfigKeepsDefaultGoProgramRelative(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(ManagerOptions{})
+	project, service, dep := managerTestTarget(root)
+	dep.CodeDebug.Program = ""
+
+	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, ".", cfg.Program)
+}
+
 func openManagerTestSession(t *testing.T, root string, dap DAP) (*Manager, Session) {
 	t.Helper()
 	mgr := NewManager(ManagerOptions{
@@ -343,16 +433,22 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 }
 
 type fakeDAP struct {
-	breakpointsSource string
-	stackResult       map[string]any
-	scopesResult      map[string]any
-	variablesResult   map[string]any
-	evaluateResult    map[string]any
-	disconnectCalls   int
+	breakpointsSource      string
+	stackResult            map[string]any
+	scopesResult           map[string]any
+	variablesResult        map[string]any
+	evaluateResult         map[string]any
+	disconnectCalls        int
+	configurationDoneCalls int
+	waitForStoppedCalls    int
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
 func (f *fakeDAP) Launch(context.Context, map[string]any) error       { return nil }
+func (f *fakeDAP) ConfigurationDone(context.Context) error {
+	f.configurationDoneCalls++
+	return nil
+}
 func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, _ []int) (map[string]any, error) {
 	f.breakpointsSource = source
 	return map[string]any{}, nil
@@ -391,10 +487,19 @@ func (f *fakeDAP) Disconnect(context.Context) error {
 	return nil
 }
 func (f *fakeDAP) WaitForStopped(context.Context) (map[string]any, error) {
+	f.waitForStoppedCalls++
 	return map[string]any{"threadId": 1}, nil
 }
 func (f *fakeDAP) Close() error { return nil }
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func signalProcessZero(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Signal(syscall.Signal(0))
 }

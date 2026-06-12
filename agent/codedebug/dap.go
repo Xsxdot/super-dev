@@ -295,6 +295,12 @@ func (c *DAPClient) Launch(ctx context.Context, args map[string]any) error {
 	return err
 }
 
+// ConfigurationDone 通知 adapter 断点等初始配置已经完成。
+func (c *DAPClient) ConfigurationDone(ctx context.Context) error {
+	_, err := c.Request(ctx, "configurationDone", nil)
+	return err
+}
+
 // SetBreakpoints 在指定源码路径设置断点。
 func (c *DAPClient) SetBreakpoints(ctx context.Context, source string, lines []int) (map[string]any, error) {
 	points := make([]map[string]any, 0, len(lines))

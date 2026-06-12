@@ -196,6 +196,7 @@ type CloseRequest struct {
 type DAP interface {
 	Initialize(context.Context) (map[string]any, error)
 	Launch(context.Context, map[string]any) error
+	ConfigurationDone(context.Context) error
 	SetBreakpoints(context.Context, string, []int) (map[string]any, error)
 	Continue(context.Context, int) error
 	Pause(context.Context, int) error

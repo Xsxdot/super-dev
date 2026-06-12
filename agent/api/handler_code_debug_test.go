@@ -286,6 +286,7 @@ func (f *fakeCodeDebugDAP) Initialize(context.Context) (map[string]any, error) {
 	return map[string]any{}, nil
 }
 func (f *fakeCodeDebugDAP) Launch(context.Context, map[string]any) error { return nil }
+func (f *fakeCodeDebugDAP) ConfigurationDone(context.Context) error      { return nil }
 func (f *fakeCodeDebugDAP) SetBreakpoints(context.Context, string, []int) (map[string]any, error) {
 	return map[string]any{}, nil
 }

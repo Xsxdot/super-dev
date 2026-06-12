@@ -195,6 +195,21 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
 	}
+	if err := dap.ConfigurationDone(ctx); err != nil {
+		_ = dap.Close()
+		_ = closeProcessIfPresent(closeProcess)
+		return Runtime{}, err
+	}
+	if cfg.StopOnEntry {
+		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := dap.WaitForStopped(waitCtx)
+		cancel()
+		if err != nil {
+			_ = dap.Close()
+			_ = closeProcessIfPresent(closeProcess)
+			return Runtime{}, err
+		}
+	}
 
 	now := m.now().UTC()
 	record := &runtimeRecord{
@@ -581,6 +596,9 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 	if err != nil {
 		return LaunchConfig{}, nil, err
 	}
+	if providerName == model.CodeDebugProviderGo {
+		programPath = goDAPProgramPath(workingDir, programPath)
+	}
 	env := mergeEnv(dep.Env, code.EnvVars)
 	stopOnEntry := code.StopOnEntry
 	if req.StopOnEntry != nil {
@@ -637,6 +655,25 @@ func resolveLaunchProgramPath(projectRoot, workingDir, program string, explicit 
 		base = projectRoot
 	}
 	return ResolveInsideRoot(projectRoot, filepath.Join(base, program))
+}
+
+func goDAPProgramPath(workingDir, resolvedProgram string) string {
+	workingDir = strings.TrimSpace(workingDir)
+	resolvedProgram = strings.TrimSpace(resolvedProgram)
+	if workingDir == "" || resolvedProgram == "" {
+		return resolvedProgram
+	}
+	// Delve treats absolute symlinked paths as outside the Go module in some
+	// workspace layouts, so keep SuperDev's root validation above and pass DAP
+	// a path relative to the configured cwd.
+	rel, err := filepath.Rel(workingDir, resolvedProgram)
+	if err != nil || rel == "" || filepath.IsAbs(rel) {
+		return resolvedProgram
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel
+	}
+	return "." + string(filepath.Separator) + rel
 }
 
 func (m *Manager) sessionRuntime(sessionID string) (*sessionRecord, *runtimeRecord, error) {
@@ -743,7 +780,13 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 	if strings.TrimSpace(cmd.Name) == "" {
 		return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, ErrAdapterUnavailable)
 	}
-	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	if err := ctx.Err(); err != nil {
+		return AdapterProcess{}, NewAdapterError(CodeAdapterStartFailed, cmd, err)
+	}
+	// Adapter lifetime is owned by Manager.Close/StopRuntime. Binding the OS
+	// process to an HTTP request context would kill Delve as soon as the open
+	// request returns, leaving the debuggee orphaned and future DAP calls broken.
+	c := exec.Command(cmd.Name, cmd.Args...)
 	if strings.TrimSpace(cmd.WorkDir) != "" {
 		c.Dir = strings.TrimSpace(cmd.WorkDir)
 	}
