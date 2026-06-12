@@ -187,9 +187,11 @@ type Runtime struct {
 	AdapterPort  int                     `json:"adapter_port"`
 	ProcessID    int                     `json:"process_id,omitempty"`
 	State        RuntimeState            `json:"state"`
-	Alive        bool                    `json:"alive"`
-	CreatedAt    time.Time               `json:"created_at"`
-	LastUsedAt   time.Time               `json:"last_used_at"`
+	// Origin 表示 runtime 由 launch 启动还是 attach 附加。launch=launched，attach=attached（Plan 5）。
+	Origin     string    `json:"origin,omitempty"`
+	Alive      bool      `json:"alive"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
 }
 
 // CloseRequest 描述关闭 AI lease 时是否同时停止 Debug Runtime。

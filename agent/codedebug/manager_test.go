@@ -81,6 +81,22 @@ func TestManagerOpenConsumesInitialStopWhenStopOnEntry(t *testing.T) {
 	assert.Equal(t, 1, dap.waitForStoppedCalls)
 }
 
+func TestStartRuntimeOriginLaunched(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	rt, err := mgr.StartRuntime(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, "launched", rt.Origin)
+}
+
 func TestManagerCloseStopsAdapter(t *testing.T) {
 	closed := false
 	mgr := NewManager(ManagerOptions{
