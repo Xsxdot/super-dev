@@ -824,7 +824,7 @@ func (p CodeDebugPolicy) Effective() CodeDebugPolicy {
 //   - 其余字段是 launch 入口/参数/adapter 的可选 override，缺省由探测与推导补齐
 //
 // 边界：
-//   - 不再声明 enabled/provider/start_mode/keep_runtime；provider 由 service.language 推导
+//   - 不再声明调试开关、provider 和运行态保留等旧配置；provider 由 service.language 推导
 //   - 不保存运行时 session ID
 type CodeDebugConfig struct {
 	Policy         CodeDebugPolicy   `json:"policy,omitempty" yaml:"policy,omitempty"`

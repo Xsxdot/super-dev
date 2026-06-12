@@ -183,24 +183,22 @@ type BrowserEvaluateResult struct {
 
 // CodeDebugTarget 描述可由 AI 打开的本机代码调试目标。
 type CodeDebugTarget struct {
-	ProjectID               string                   `json:"project_id"`
-	ProjectName             string                   `json:"project_name"`
-	RootPath                string                   `json:"root_path"`
-	ServiceID               string                   `json:"service_id"`
-	ServiceName             string                   `json:"service_name"`
-	DeploymentID            string                   `json:"deployment_id"`
-	EnvName                 string                   `json:"env_name"`
-	Provider                string                   `json:"provider"`
-	Experimental            bool                     `json:"experimental,omitempty"`
-	Command                 string                   `json:"command,omitempty"`
-	WorkDir                 string                   `json:"work_dir,omitempty"`
-	Enabled                 bool                     `json:"enabled"`
-	StartMode               model.CodeDebugStartMode `json:"start_mode,omitempty"`
-	KeepRuntimeOnLeaseClose bool                     `json:"keep_runtime_on_lease_close,omitempty"`
-	RuntimeState            string                   `json:"runtime_state,omitempty"`
-	LeaseActive             bool                     `json:"lease_active,omitempty"`
-	CanOpen                 bool                     `json:"can_open"`
-	UnavailableReason       string                   `json:"unavailable_reason,omitempty"`
+	ProjectID         string `json:"project_id"`
+	ProjectName       string `json:"project_name"`
+	RootPath          string `json:"root_path"`
+	ServiceID         string `json:"service_id"`
+	ServiceName       string `json:"service_name"`
+	DeploymentID      string `json:"deployment_id"`
+	EnvName           string `json:"env_name"`
+	Language          string `json:"language,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	Experimental      bool   `json:"experimental,omitempty"`
+	Command           string `json:"command,omitempty"`
+	WorkDir           string `json:"work_dir,omitempty"`
+	RuntimeState      string `json:"runtime_state,omitempty"`
+	LeaseActive       bool   `json:"lease_active,omitempty"`
+	CanOpen           bool   `json:"can_open"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 // CodeDebugSession 描述由 SuperDev 创建的代码调试会话。
@@ -220,7 +218,6 @@ type CodeDebugSession struct {
 // OpenCodeDebugSessionRequest 描述打开代码调试会话的 MCP 请求。
 type OpenCodeDebugSessionRequest struct {
 	DeploymentID        string `json:"deployment_id"`
-	Provider            string `json:"provider,omitempty"`
 	ApprovalToken       string `json:"approval_token,omitempty"`
 	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
 }
@@ -252,7 +249,6 @@ type DebugEvaluateRequest struct {
 type DebugCaptureAtRequest struct {
 	SessionID           string   `json:"session_id,omitempty"`
 	DeploymentID        string   `json:"deployment_id,omitempty"`
-	Provider            string   `json:"provider,omitempty"`
 	Source              string   `json:"source"`
 	Line                int      `json:"line"`
 	ThreadID            int      `json:"thread_id,omitempty"`

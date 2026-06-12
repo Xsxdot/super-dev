@@ -580,7 +580,6 @@ func debugCaptureAtInputSchema() map[string]any {
 		"properties": map[string]any{
 			"session_id":            map[string]any{"type": "string", "description": "Reuse an existing paused/open session. Provide either session_id OR deployment_id."},
 			"deployment_id":         map[string]any{"type": "string", "description": "Open a new session for this local managed command deployment. Provide either session_id OR deployment_id."},
-			"provider":              map[string]any{"type": "string", "enum": []string{"go", "python", "node"}},
 			"source":                map[string]any{"type": "string"},
 			"line":                  map[string]any{"type": "integer", "minimum": 1},
 			"thread_id":             map[string]any{"type": "integer", "minimum": 0},
@@ -619,7 +618,6 @@ func openCodeDebugSessionInputSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"deployment_id":         map[string]any{"type": "string"},
-			"provider":              map[string]any{"type": "string", "enum": []string{"go", "python", "node"}},
 			"approval_token":        map[string]any{"type": "string"},
 			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0},
 		},

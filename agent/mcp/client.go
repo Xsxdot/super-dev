@@ -760,7 +760,6 @@ func (c *HTTPAgentClient) CodeDebugCaptureAt(ctx context.Context, req DebugCaptu
 	if sessionID == "" {
 		opened, err := c.OpenCodeDebugSession(ctx, OpenCodeDebugSessionRequest{
 			DeploymentID:        req.DeploymentID,
-			Provider:            req.Provider,
 			ApprovalWaitSeconds: req.ApprovalWaitSeconds,
 		}, approvalToken)
 		if err != nil {
