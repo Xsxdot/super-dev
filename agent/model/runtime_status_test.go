@@ -53,3 +53,41 @@ func TestInstanceMetricsJSONUsesNullForUnknownNumbers(t *testing.T) {
 	assert.Nil(t, got.Environments[0].Instances[0].Metrics.CPUPercent)
 	assert.Equal(t, model.HealthRunning, got.Environments[0].Instances[0].Metrics.Health)
 }
+
+func TestDebuggerStatusSerialize(t *testing.T) {
+	st := model.InstanceStatus{
+		ServiceID:    "s1",
+		DeploymentID: "d1",
+		Metrics:      model.InstanceMetrics{Health: model.HealthRunning},
+		Debugger: &model.DebuggerStatus{
+			State:    model.DebuggerStateAttached,
+			Language: model.LanguageGo,
+			Origin:   model.DebuggerOriginLaunched,
+			PausedAt: &model.PausedLocation{Source: "main.go", Line: 42},
+		},
+	}
+	b, err := json.Marshal(st)
+	require.NoError(t, err)
+
+	var back model.InstanceStatus
+	require.NoError(t, json.Unmarshal(b, &back))
+	if back.Debugger == nil || back.Debugger.State != model.DebuggerStateAttached {
+		t.Fatalf("debugger not roundtripped: %s", b)
+	}
+	if back.Debugger.PausedAt == nil || back.Debugger.PausedAt.Line != 42 {
+		t.Fatal("paused location lost")
+	}
+}
+
+func TestInstanceStatusNoDebuggerOmitted(t *testing.T) {
+	b, err := json.Marshal(model.InstanceStatus{ServiceID: "s1"})
+	require.NoError(t, err)
+	if string(b) == "" {
+		t.Fatal("empty marshal")
+	}
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(b, &m))
+	if _, ok := m["debugger"]; ok {
+		t.Fatal("debugger should be omitted when nil")
+	}
+}

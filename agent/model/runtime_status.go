@@ -19,8 +19,6 @@ const (
 	HealthHealthy Health = "healthy"
 	// HealthRestarting 表示实例由运行基座接管并处于重启过程中。
 	HealthRestarting Health = "restarting"
-	// HealthDebugRunning 表示实例以 Debug Runtime 运行。
-	HealthDebugRunning Health = "debug-running"
 	// HealthStopped 表示实例已停止。
 	HealthStopped Health = "stopped"
 	// HealthFailed 表示实例运行基座报告失败。
@@ -28,6 +26,43 @@ const (
 	// HealthUnknown 表示实例状态无法确认。
 	HealthUnknown Health = "unknown"
 )
+
+// DebuggerState 表示实例上调试器的附着/暂停状态（与 Health 正交）。
+type DebuggerState string
+
+const (
+	// DebuggerStateNone 表示没有调试器附着。
+	DebuggerStateNone DebuggerState = "none"
+	// DebuggerStateAttached 表示调试器已附着但未暂停。
+	DebuggerStateAttached DebuggerState = "attached"
+	// DebuggerStatePaused 表示调试器已在某源码位置暂停。
+	DebuggerStatePaused DebuggerState = "paused"
+)
+
+// DebuggerOrigin 表示调试器如何接入：launch 启动 vs attach 附加。
+//
+// origin 决定停调试的语义：launched 需 stop/restart，attached 只 detach、进程照跑。
+type DebuggerOrigin string
+
+const (
+	DebuggerOriginLaunched DebuggerOrigin = "launched"
+	DebuggerOriginAttached DebuggerOrigin = "attached"
+)
+
+// PausedLocation 描述调试器暂停的源码位置。
+type PausedLocation struct {
+	Source string `json:"source"`
+	Line   int    `json:"line"`
+}
+
+// DebuggerStatus 描述实例上调试器的附着与暂停状态。
+type DebuggerStatus struct {
+	State       DebuggerState   `json:"state"`
+	Language    ServiceLanguage `json:"language,omitempty"`
+	Origin      DebuggerOrigin  `json:"origin,omitempty"`
+	LeaseActive bool            `json:"lease_active,omitempty"`
+	PausedAt    *PausedLocation `json:"paused_at,omitempty"`
+}
 
 // InstanceMetrics 表示单个服务实例的进程级运行指标。
 //
@@ -62,4 +97,6 @@ type InstanceStatus struct {
 	IsLocal      bool            `json:"is_local"`
 	Error        string          `json:"error,omitempty"`
 	Metrics      InstanceMetrics `json:"metrics"`
+	// Debugger 描述该实例上调试器的状态，nil 表示无调试器。与 Metrics.Health 正交。
+	Debugger *DebuggerStatus `json:"debugger,omitempty"`
 }
