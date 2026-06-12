@@ -77,6 +77,10 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 	if got.Health == model.HealthStopped && s.localDeploymentActive(projectID, dep.ID) {
 		got.Health = model.HealthRunning
 	}
+	if runtime, ok := s.app.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
+		got.Health = model.HealthDebugRunning
+		got.Base = "debug"
+	}
 	inst := model.InstanceStatus{
 		ServiceID:    svc.ID,
 		ServiceName:  svc.Name,
@@ -151,6 +155,11 @@ func (s *runtimeStatusService) hostsByID() map[string]model.Host {
 func (s *runtimeStatusService) sampleTarget(projectID string, dep model.Deployment) metrics.SampleTarget {
 	base := "process"
 	target := metrics.SampleTarget{DeploymentID: dep.ID, Base: base}
+	if runtime, ok := s.app.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
+		target.Base = "debug"
+		target.PGID = runtime.ProcessID
+		return target
+	}
 	if dep.Runtime != nil && dep.Runtime.Type != "" {
 		target.Base = string(dep.Runtime.Type)
 		switch dep.Runtime.Type {

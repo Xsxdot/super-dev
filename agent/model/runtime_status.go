@@ -19,6 +19,8 @@ const (
 	HealthHealthy Health = "healthy"
 	// HealthRestarting 表示实例由运行基座接管并处于重启过程中。
 	HealthRestarting Health = "restarting"
+	// HealthDebugRunning 表示实例以 Debug Runtime 运行。
+	HealthDebugRunning Health = "debug-running"
 	// HealthStopped 表示实例已停止。
 	HealthStopped Health = "stopped"
 	// HealthFailed 表示实例运行基座报告失败。

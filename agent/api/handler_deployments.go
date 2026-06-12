@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
@@ -114,6 +115,14 @@ func runtimeActionLabel(kind string) string {
 	}
 }
 
+func shouldStartDeploymentInDebug(dep model.Deployment) bool {
+	return dep.CodeDebug != nil &&
+		dep.CodeDebug.Enabled &&
+		dep.CodeDebug.StartMode == model.CodeDebugStartModeDebug &&
+		dep.Location == model.LocationLocal &&
+		dep.EffectiveControlMode() == model.ControlModeManaged
+}
+
 func deploymentScopedToHost(dep model.Deployment, hostID string) (model.Deployment, error) {
 	hostID = strings.TrimSpace(hostID)
 	if hostID == "" {
@@ -161,6 +170,24 @@ func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep 
 		a.emitControlEvent(dep.ID, "start", "succeeded", "")
 		return nil
 	}
+	if shouldStartDeploymentInDebug(dep) {
+		_, svc, project, ok := a.findDeploymentWithService(dep.ID)
+		if !ok {
+			return fmt.Errorf("deployment %s not found", dep.ID)
+		}
+		a.emitControlEvent(dep.ID, "start", "executing", "debug runtime")
+		if _, err := a.codeDebug.StartRuntime(ctx, project, svc, dep, codedebug.OpenRequest{DeploymentID: dep.ID}); err != nil {
+			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+			return err
+		}
+		a.pidStore.Set(dep.ID, a.codeDebugRuntimePID(dep.ID))
+		if err := a.pidStore.Flush(); err != nil {
+			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "start", "succeeded", "debug runtime")
+		return nil
+	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
 	mgr := a.getOrCreateManager(projectID)
 	a.emitControlEvent(dep.ID, "start", "executing", "")
@@ -194,6 +221,20 @@ func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep m
 		a.emitControlEvent(dep.ID, "stop", "succeeded", "")
 		return nil
 	}
+	if runtime, ok := a.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
+		a.emitControlEvent(dep.ID, "stop", "executing", "debug runtime")
+		if err := a.codeDebug.StopRuntime(dep.ID); err != nil {
+			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
+			return err
+		}
+		a.pidStore.Remove(dep.ID)
+		if err := a.pidStore.Flush(); err != nil {
+			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "stop", "succeeded", "debug runtime")
+		return nil
+	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
 	mgr := a.getOrCreateManager(projectID)
 	a.emitControlEvent(dep.ID, "stop", "executing", "")
@@ -219,6 +260,18 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 		a.emitControlEvent(dep.ID, "restart", "succeeded", "")
 		return nil
 	}
+	if shouldStartDeploymentInDebug(dep) {
+		if err := a.stopDeploymentRuntime(ctx, projectID, dep); err != nil {
+			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+			return err
+		}
+		if err := a.startDeploymentRuntime(ctx, projectID, dep); err != nil {
+			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
+			return err
+		}
+		a.emitControlEvent(dep.ID, "restart", "succeeded", "debug runtime")
+		return nil
+	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
 	mgr := a.getOrCreateManager(projectID)
 	a.emitControlEvent(dep.ID, "restart", "executing", "")
@@ -233,6 +286,14 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 	}
 	a.emitControlEvent(dep.ID, "restart", "succeeded", "")
 	return nil
+}
+
+func (a *App) codeDebugRuntimePID(depID string) int {
+	runtime, ok := a.codeDebug.RuntimeStatus(depID)
+	if !ok {
+		return 0
+	}
+	return runtime.ProcessID
 }
 
 // findDeployment 在所有项目的所有服务中按 deployment ID 查找。

@@ -86,7 +86,8 @@ func (a *App) getCodeDebugSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) closeCodeDebugSession(w http.ResponseWriter, r *http.Request) {
-	if err := a.codeDebug.Close(r.PathValue("id")); err != nil {
+	stopRuntime := true
+	if err := a.codeDebug.Close(r.PathValue("id"), codedebug.CloseRequest{StopRuntime: &stopRuntime}); err != nil {
 		writeCodeDebugError(w, err)
 		return
 	}

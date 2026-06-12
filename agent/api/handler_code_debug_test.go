@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/codedebug"
+	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
@@ -198,6 +199,31 @@ func TestWriteCodeDebugErrorIncludesAdapterRemediationData(t *testing.T) {
 	assert.NotEmpty(t, body["remediation_hint"])
 }
 
+func TestRuntimeStatusReportsDebugRunning(t *testing.T) {
+	app, err := NewApp(AppConfig{
+		DataDir:                  t.TempDir(),
+		CodeDebugManagerOverride: codeDebugManagerForAPITest(),
+		RuntimeMetricsSampler:    codeDebugRuntimeSampler{},
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := codeDebugAPIProject(t.TempDir())
+	project.Services[0].Deployments[0].CodeDebug.StartMode = model.CodeDebugStartModeDebug
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	_, err = app.codeDebug.StartRuntime(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
+	require.NoError(t, err)
+
+	got := app.runtimeStatusService().Snapshot(context.Background(), project)
+
+	require.Len(t, got.Environments, 1)
+	require.Len(t, got.Environments[0].Instances, 1)
+	assert.Equal(t, model.HealthDebugRunning, got.Environments[0].Instances[0].Metrics.Health)
+	assert.Equal(t, "debug", got.Environments[0].Instances[0].Metrics.Base)
+}
+
 func codeDebugManagerForAPITest() *codedebug.Manager {
 	return codedebug.NewManager(codedebug.ManagerOptions{
 		AdapterLaunch: func(context.Context, codedebug.AdapterCommand) (codedebug.AdapterProcess, error) {
@@ -221,6 +247,12 @@ func codeDebugAPIProject(root string) model.Project {
 			}},
 		}},
 	}
+}
+
+type codeDebugRuntimeSampler struct{}
+
+func (codeDebugRuntimeSampler) Sample(context.Context, metrics.SampleTarget) (model.InstanceMetrics, error) {
+	return model.InstanceMetrics{Health: model.HealthStopped, Base: "command"}, nil
 }
 
 type fakeCodeDebugDAP struct{}
