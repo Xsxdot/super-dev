@@ -75,6 +75,7 @@ const HEALTH_PRIORITY: Record<Health, number> = {
   unknown: 2,
   running: 1,
   healthy: 1,
+  'debug-running': 1,
 }
 
 function orderedEnvironments(project: Project): Array<{ name: string; isDev: boolean; order: number }> {
@@ -87,6 +88,7 @@ function orderedEnvironments(project: Project): Array<{ name: string; isDev: boo
 function healthLabel(health: MatrixHealth, healthy: number, total: number): string {
   if (total === 0) return 'Not configured'
   if (health === 'running' || health === 'healthy') return `Running ${healthy}/${total}`
+  if (health === 'debug-running') return `Debug ${healthy}/${total}`
   const label = health.charAt(0).toUpperCase() + health.slice(1)
   return `${label} ${healthy}/${total}`
 }

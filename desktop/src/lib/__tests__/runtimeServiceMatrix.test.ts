@@ -141,4 +141,28 @@ describe('buildServiceMatrix', () => {
     expect(server.memBytes).toBe(250 * 1024 * 1024)
     expect(server.instances).toHaveLength(3)
   })
+
+  it('labels debug-running instances as debug runtime', () => {
+    const matrix = buildServiceMatrix(project(), [
+      inst({
+        service_id: 'svc-server',
+        service_name: 'server',
+        env_name: 'prod',
+        node_id: 'local',
+        node_name: 'MacBook-Pro.local',
+        is_local: true,
+        metrics: {
+          cpu_percent: 1,
+          mem_bytes: 128 * 1024 * 1024,
+          uptime_sec: 3600,
+          restarts: 0,
+          health: 'debug-running',
+          base: 'debug',
+        },
+      }),
+    ])
+
+    expect(matrix.rows[0].envs[0].health).toBe('debug-running')
+    expect(matrix.rows[0].envs[0].label).toBe('Debug 1/1')
+  })
 })

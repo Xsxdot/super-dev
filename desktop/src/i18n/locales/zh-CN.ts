@@ -1279,6 +1279,7 @@ export default {
       noNodesConfigured: '未配置节点',
       selectServiceHint: '选择一个服务查看节点',
       health: '状态',
+      debugRunning: '调试运行中',
       uptime: 'UP',
       restarts: 'RE',
       productionRemote: '生产 / 远端',

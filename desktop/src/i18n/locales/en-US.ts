@@ -1279,6 +1279,7 @@ export default {
       noNodesConfigured: 'No nodes configured',
       selectServiceHint: 'Select a service to inspect nodes',
       health: 'Health',
+      debugRunning: 'Debug running',
       uptime: 'UP',
       restarts: 'RE',
       productionRemote: 'Production / Remote',

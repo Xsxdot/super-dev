@@ -128,7 +128,7 @@ export type DeployLocation = 'local' | 'remote'
 export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
 export type ControlMode = 'monitor' | 'managed'
 export type LogKind = 'process' | 'journalctl' | 'macos_log' | 'docker' | 'nginx' | 'file_tail' | 'command'
-export type Health = 'running' | 'healthy' | 'restarting' | 'stopped' | 'failed' | 'unknown'
+export type Health = 'running' | 'healthy' | 'debug-running' | 'restarting' | 'stopped' | 'failed' | 'unknown'
 
 export interface InstanceMetrics {
   cpu_percent: number | null
