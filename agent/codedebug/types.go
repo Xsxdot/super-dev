@@ -194,6 +194,14 @@ type Runtime struct {
 	LastUsedAt time.Time `json:"last_used_at"`
 }
 
+// DebuggerSnapshot 描述某 runtime 上调试器的实时运行态，由事件泵维护。
+type DebuggerSnapshot struct {
+	State    string
+	ThreadID int
+	Source   string
+	Line     int
+}
+
 // CloseRequest 描述关闭 AI lease 时是否同时停止 Debug Runtime。
 type CloseRequest struct {
 	StopRuntime *bool `json:"stop_runtime,omitempty"`
@@ -216,6 +224,7 @@ type DAP interface {
 	Evaluate(context.Context, string, int) (map[string]any, error)
 	Disconnect(context.Context) error
 	WaitForStopped(context.Context) (map[string]any, error)
+	Subscribe() (<-chan map[string]any, func())
 	Close() error
 }
 

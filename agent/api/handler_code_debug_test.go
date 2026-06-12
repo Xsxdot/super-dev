@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,7 +283,10 @@ func (codeDebugRuntimeSampler) Sample(context.Context, metrics.SampleTarget) (mo
 	return model.InstanceMetrics{Health: model.HealthStopped, Base: "command"}, nil
 }
 
-type fakeCodeDebugDAP struct{}
+type fakeCodeDebugDAP struct {
+	mu   sync.Mutex
+	subs []chan map[string]any
+}
 
 func (f *fakeCodeDebugDAP) Initialize(context.Context) (map[string]any, error) {
 	return map[string]any{}, nil
@@ -312,5 +316,26 @@ func (f *fakeCodeDebugDAP) Evaluate(context.Context, string, int) (map[string]an
 func (f *fakeCodeDebugDAP) Disconnect(context.Context) error { return nil }
 func (f *fakeCodeDebugDAP) WaitForStopped(context.Context) (map[string]any, error) {
 	return map[string]any{"threadId": 1}, nil
+}
+func (f *fakeCodeDebugDAP) Subscribe() (<-chan map[string]any, func()) {
+	f.mu.Lock()
+	ch := make(chan map[string]any, 16)
+	f.subs = append(f.subs, ch)
+	f.mu.Unlock()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			f.mu.Lock()
+			for i, sub := range f.subs {
+				if sub == ch {
+					f.subs = append(f.subs[:i], f.subs[i+1:]...)
+					close(ch)
+					break
+				}
+			}
+			f.mu.Unlock()
+		})
+	}
+	return ch, cancel
 }
 func (f *fakeCodeDebugDAP) Close() error { return nil }

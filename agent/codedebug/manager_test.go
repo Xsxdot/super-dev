@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -446,11 +447,13 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 }
 
 type fakeDAP struct {
+	mu                     sync.Mutex
 	breakpointsSource      string
 	stackResult            map[string]any
 	scopesResult           map[string]any
 	variablesResult        map[string]any
 	evaluateResult         map[string]any
+	subs                   []chan map[string]any
 	disconnectCalls        int
 	configurationDoneCalls int
 	waitForStoppedCalls    int
@@ -502,6 +505,27 @@ func (f *fakeDAP) Disconnect(context.Context) error {
 func (f *fakeDAP) WaitForStopped(context.Context) (map[string]any, error) {
 	f.waitForStoppedCalls++
 	return map[string]any{"threadId": 1}, nil
+}
+func (f *fakeDAP) Subscribe() (<-chan map[string]any, func()) {
+	f.mu.Lock()
+	ch := make(chan map[string]any, 16)
+	f.subs = append(f.subs, ch)
+	f.mu.Unlock()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			f.mu.Lock()
+			for i, sub := range f.subs {
+				if sub == ch {
+					f.subs = append(f.subs[:i], f.subs[i+1:]...)
+					close(ch)
+					break
+				}
+			}
+			f.mu.Unlock()
+		})
+	}
+	return ch, cancel
 }
 func (f *fakeDAP) Close() error { return nil }
 
