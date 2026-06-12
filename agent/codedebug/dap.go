@@ -327,6 +327,18 @@ func (c *DAPClient) Launch(ctx context.Context, args map[string]any) error {
 	return err
 }
 
+// Attach 发送 DAP attach 请求（附加到已运行进程）。
+func (c *DAPClient) Attach(ctx context.Context, args map[string]any) error {
+	_, err := c.Request(ctx, "attach", args)
+	return err
+}
+
+// Detach 断开 attach 调试器，但不终止被调试进程。
+func (c *DAPClient) Detach(ctx context.Context) error {
+	_, err := c.Request(ctx, "disconnect", map[string]any{"terminateDebuggee": false})
+	return err
+}
+
 // ConfigurationDone 通知 adapter 断点等初始配置已经完成。
 func (c *DAPClient) ConfigurationDone(ctx context.Context) error {
 	_, err := c.Request(ctx, "configurationDone", nil)

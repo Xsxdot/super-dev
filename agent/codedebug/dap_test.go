@@ -133,6 +133,73 @@ func TestDAPClientReceivesAsyncStoppedEvent(t *testing.T) {
 	assert.Equal(t, float64(1), body["threadId"])
 }
 
+func TestDAPClientAttachSendsRequest(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	done := make(chan map[string]any, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		require.NoError(t, acceptErr)
+		defer conn.Close()
+
+		msg := readDAPMessageForTest(t, conn)
+		done <- msg
+		writeDAPMessageForTest(t, conn, map[string]any{
+			"type":        "response",
+			"seq":         1,
+			"request_seq": msg["seq"],
+			"success":     true,
+			"command":     "attach",
+		})
+	}()
+
+	client, err := DialDAP(context.Background(), ln.Addr().String(), 2*time.Second)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Attach(context.Background(), map[string]any{"mode": "local", "processId": 1234}))
+	msg := <-done
+	assert.Equal(t, "attach", msg["command"])
+	args := msg["arguments"].(map[string]any)
+	assert.Equal(t, "local", args["mode"])
+	assert.Equal(t, float64(1234), args["processId"])
+}
+
+func TestDAPClientDetachDoesNotTerminateDebuggee(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	done := make(chan map[string]any, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		require.NoError(t, acceptErr)
+		defer conn.Close()
+
+		msg := readDAPMessageForTest(t, conn)
+		done <- msg
+		writeDAPMessageForTest(t, conn, map[string]any{
+			"type":        "response",
+			"seq":         1,
+			"request_seq": msg["seq"],
+			"success":     true,
+			"command":     "disconnect",
+		})
+	}()
+
+	client, err := DialDAP(context.Background(), ln.Addr().String(), 2*time.Second)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.Detach(context.Background()))
+	msg := <-done
+	assert.Equal(t, "disconnect", msg["command"])
+	args := msg["arguments"].(map[string]any)
+	assert.Equal(t, false, args["terminateDebuggee"])
+}
+
 func TestDAPClientSubscribeFanOut(t *testing.T) {
 	client := newTestDAPClient()
 	sub1, cancel1 := client.Subscribe()

@@ -611,6 +611,8 @@ type fakeDAP struct {
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
 func (f *fakeDAP) Launch(context.Context, map[string]any) error       { return nil }
+func (f *fakeDAP) Attach(context.Context, map[string]any) error       { return nil }
+func (f *fakeDAP) Detach(context.Context) error                       { return nil }
 func (f *fakeDAP) ConfigurationDone(context.Context) error {
 	f.configurationDoneCalls++
 	return nil
