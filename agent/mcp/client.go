@@ -121,15 +121,15 @@ type AgentClient interface {
 	OpenCodeDebugSession(context.Context, OpenCodeDebugSessionRequest, string) (CodeDebugSession, error)
 	// CloseCodeDebugSession 关闭代码调试会话。
 	CloseCodeDebugSession(context.Context, string, *bool) error
-	// SetCodeDebugBreakpoints 设置代码调试断点。
+	// SetCodeDebugBreakpoints 按 deployment 设置代码调试断点。
 	SetCodeDebugBreakpoints(context.Context, DebugBreakpointRequest) (map[string]any, error)
-	// CodeDebugAction 执行非 evaluate 的代码调试动作。
+	// CodeDebugAction 按 deployment 执行非 evaluate 的代码调试动作。
 	CodeDebugAction(context.Context, string, string, map[string]any) (map[string]any, error)
-	// CodeDebugEvaluate 执行代码调试表达式求值。
+	// CodeDebugEvaluate 按 deployment 执行代码调试表达式求值。
 	CodeDebugEvaluate(context.Context, DebugEvaluateRequest, string) (map[string]any, error)
-	// CodeDebugCaptureAt 执行 stop-at-line 复合采集。
+	// CodeDebugCaptureAt 按 deployment 执行 stop-at-line 复合采集。
 	CodeDebugCaptureAt(context.Context, DebugCaptureAtRequest, string) (map[string]any, error)
-	// CodeDebugInspect 执行已暂停会话复合读取。
+	// CodeDebugInspect 按 deployment 执行已暂停现场复合读取。
 	CodeDebugInspect(context.Context, DebugInspectRequest) (map[string]any, error)
 	// ListPipelineRuns 查询项目级 pipeline 执行历史。
 	ListPipelineRuns(context.Context, string, string) ([]model.Run, error)
@@ -707,42 +707,24 @@ func (c *HTTPAgentClient) CloseCodeDebugSession(ctx context.Context, sessionID s
 	return c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/close", body, nil)
 }
 
-// SetCodeDebugBreakpoints 设置代码调试断点。
+// SetCodeDebugBreakpoints 按 deployment 设置代码调试断点。
 func (c *HTTPAgentClient) SetCodeDebugBreakpoints(ctx context.Context, req DebugBreakpointRequest) (map[string]any, error) {
 	var out map[string]any
 	body := map[string]any{"source": req.Source, "lines": req.Lines}
-	return out, c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/breakpoints", body, &out)
+	return out, c.post(ctx, codeDebugDeploymentPath(req.DeploymentID, "breakpoints"), body, &out)
 }
 
-// CodeDebugAction 执行非 evaluate 的代码调试动作。
-func (c *HTTPAgentClient) CodeDebugAction(ctx context.Context, sessionID string, action string, body map[string]any) (map[string]any, error) {
+// CodeDebugAction 按 deployment 执行非 evaluate 的代码调试动作。
+func (c *HTTPAgentClient) CodeDebugAction(ctx context.Context, deploymentID string, action string, body map[string]any) (map[string]any, error) {
 	var out map[string]any
-	path := "/api/code-debug-sessions/" + url.PathEscape(sessionID) + "/" + strings.Trim(action, "/")
-	switch action {
-	case "stack":
-		q := url.Values{}
-		if threadID, ok := body["thread_id"]; ok {
-			q.Set("thread_id", fmt.Sprint(threadID))
-		}
-		return out, c.get(ctx, withQuery(path, q), &out)
-	case "scopes":
-		q := url.Values{}
-		if frameID, ok := body["frame_id"]; ok {
-			q.Set("frame_id", fmt.Sprint(frameID))
-		}
-		return out, c.get(ctx, withQuery(path, q), &out)
-	case "variables":
-		q := url.Values{}
-		if ref, ok := body["variables_reference"]; ok {
-			q.Set("variables_reference", fmt.Sprint(ref))
-		}
-		return out, c.get(ctx, withQuery(path, q), &out)
-	default:
-		return out, c.post(ctx, path, body, &out)
+	pathAction, err := codeDebugDeploymentAction(action)
+	if err != nil {
+		return nil, err
 	}
+	return out, c.post(ctx, codeDebugDeploymentPath(deploymentID, pathAction), body, &out)
 }
 
-// CodeDebugEvaluate 执行代码调试表达式求值。
+// CodeDebugEvaluate 按 deployment 执行代码调试表达式求值。
 func (c *HTTPAgentClient) CodeDebugEvaluate(ctx context.Context, req DebugEvaluateRequest, approvalToken string) (map[string]any, error) {
 	var out map[string]any
 	body := map[string]any{
@@ -750,24 +732,11 @@ func (c *HTTPAgentClient) CodeDebugEvaluate(ctx context.Context, req DebugEvalua
 		"frame_id":   req.FrameID,
 		"source":     req.Source,
 	}
-	return out, c.postWithApprovalToken(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/evaluate", body, approvalToken, &out)
+	return out, c.postWithApprovalToken(ctx, codeDebugDeploymentPath(req.DeploymentID, "evaluate"), body, approvalToken, &out)
 }
 
-// CodeDebugCaptureAt 执行 stop-at-line 复合采集。
+// CodeDebugCaptureAt 按 deployment 执行 stop-at-line 复合采集。
 func (c *HTTPAgentClient) CodeDebugCaptureAt(ctx context.Context, req DebugCaptureAtRequest, approvalToken string) (map[string]any, error) {
-	var session CodeDebugSession
-	sessionID := req.SessionID
-	if sessionID == "" {
-		opened, err := c.OpenCodeDebugSession(ctx, OpenCodeDebugSessionRequest{
-			DeploymentID:        req.DeploymentID,
-			ApprovalWaitSeconds: req.ApprovalWaitSeconds,
-		}, approvalToken)
-		if err != nil {
-			return nil, err
-		}
-		session = opened
-		sessionID = opened.ID
-	}
 	body := map[string]any{
 		"source":         req.Source,
 		"line":           req.Line,
@@ -777,19 +746,10 @@ func (c *HTTPAgentClient) CodeDebugCaptureAt(ctx context.Context, req DebugCaptu
 		"variable_names": req.VariableNames,
 	}
 	var out map[string]any
-	if err := c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(sessionID)+"/capture-at", body, &out); err != nil {
-		return nil, err
-	}
-	if session.ID != "" {
-		if out == nil {
-			out = map[string]any{}
-		}
-		out["session"] = session
-	}
-	return out, nil
+	return out, c.postWithApprovalToken(ctx, codeDebugDeploymentPath(req.DeploymentID, "capture"), body, approvalToken, &out)
 }
 
-// CodeDebugInspect 执行已暂停会话复合读取。
+// CodeDebugInspect 按 deployment 执行已暂停现场复合读取。
 func (c *HTTPAgentClient) CodeDebugInspect(ctx context.Context, req DebugInspectRequest) (map[string]any, error) {
 	var out map[string]any
 	body := map[string]any{
@@ -798,7 +758,34 @@ func (c *HTTPAgentClient) CodeDebugInspect(ctx context.Context, req DebugInspect
 		"max_variables":  req.MaxVariables,
 		"variable_names": req.VariableNames,
 	}
-	return out, c.post(ctx, "/api/code-debug-sessions/"+url.PathEscape(req.SessionID)+"/inspect", body, &out)
+	return out, c.post(ctx, codeDebugDeploymentPath(req.DeploymentID, "inspect"), body, &out)
+}
+
+func codeDebugDeploymentPath(deploymentID, action string) string {
+	return "/api/deployments/" + url.PathEscape(deploymentID) + "/debug/" + strings.Trim(action, "/")
+}
+
+func codeDebugDeploymentAction(action string) (string, error) {
+	switch strings.TrimSpace(action) {
+	case "continue":
+		return "continue-thread", nil
+	case "pause":
+		return "pause", nil
+	case "step_over":
+		return "step-over", nil
+	case "step_in":
+		return "step-in", nil
+	case "step_out":
+		return "step-out", nil
+	case "stack":
+		return "stack", nil
+	case "scopes":
+		return "scopes", nil
+	case "variables":
+		return "variables", nil
+	default:
+		return "", fmt.Errorf("unsupported code debug action %q", action)
+	}
 }
 
 // ListPipelineRuns 查询项目级 pipeline 执行历史。

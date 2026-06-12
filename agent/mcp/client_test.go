@@ -216,7 +216,7 @@ func TestHTTPAgentClientCloseCodeDebugSessionPostsStopRuntime(t *testing.T) {
 
 func TestHTTPAgentClientCodeDebugEvaluatePostsApprovalToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/code-debug-sessions/cds_1/evaluate", r.URL.Path)
+		assert.Equal(t, "/api/deployments/dep-api-dev/debug/evaluate", r.URL.Path)
 		assert.Equal(t, "tok_eval", r.Header.Get("X-SuperDev-Approval-Token"))
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
@@ -228,32 +228,49 @@ func TestHTTPAgentClientCodeDebugEvaluatePostsApprovalToken(t *testing.T) {
 
 	client := NewHTTPAgentClient(srv.URL, srv.Client())
 	result, err := client.CodeDebugEvaluate(context.Background(), DebugEvaluateRequest{
-		SessionID:  "cds_1",
-		Expression: "user.id",
-		FrameID:    1,
-		Source:     "debug_evaluate",
+		DeploymentID: "dep-api-dev",
+		Expression:   "user.id",
+		FrameID:      1,
+		Source:       "debug_evaluate",
 	}, "tok_eval")
 
 	require.NoError(t, err)
 	assert.Equal(t, "42", result["result"].(map[string]any)["value"])
 }
 
+func TestHTTPAgentClientCodeDebugCaptureByDeployment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/deployments/dep-api-dev/debug/capture", r.URL.Path)
+		assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "main.go", body["source"])
+		assert.Equal(t, float64(12), body["line"])
+		_ = json.NewEncoder(w).Encode(map[string]any{"deployment_id": "dep-api-dev", "stack": []any{map[string]any{"name": "main.main"}}})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPAgentClient(srv.URL, srv.Client())
+	result, err := client.CodeDebugCaptureAt(context.Background(), DebugCaptureAtRequest{
+		DeploymentID: "dep-api-dev",
+		Source:       "main.go",
+		Line:         12,
+	}, "tok_1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "dep-api-dev", result["deployment_id"])
+}
+
 func TestHTTPAgentClientCodeDebugCompositePaths(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/code-debug-sessions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/deployments/dep-api-dev/debug/capture", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "tok_1", r.Header.Get("X-SuperDev-Approval-Token"))
-		var body OpenCodeDebugSessionRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		assert.Equal(t, "dep-api-dev", body.DeploymentID)
-		_ = json.NewEncoder(w).Encode(CodeDebugSession{ID: "cds_1", DeploymentID: "dep-api-dev"})
-	})
-	mux.HandleFunc("POST /api/code-debug-sessions/cds_1/capture-at", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "main.go", body["source"])
 		_ = json.NewEncoder(w).Encode(map[string]any{"stack": []any{map[string]any{"name": "main.main"}}})
 	})
-	mux.HandleFunc("POST /api/code-debug-sessions/cds_1/inspect", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/deployments/dep-api-dev/debug/inspect", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, float64(1), body["thread_id"])
@@ -269,9 +286,9 @@ func TestHTTPAgentClientCodeDebugCompositePaths(t *testing.T) {
 		Line:         12,
 	}, "tok_1")
 	require.NoError(t, err)
-	assert.Equal(t, "dep-api-dev", capture["session"].(CodeDebugSession).DeploymentID)
+	assert.Contains(t, capture, "stack")
 
-	inspect, err := client.CodeDebugInspect(context.Background(), DebugInspectRequest{SessionID: "cds_1", ThreadID: 1})
+	inspect, err := client.CodeDebugInspect(context.Background(), DebugInspectRequest{DeploymentID: "dep-api-dev", ThreadID: 1})
 	require.NoError(t, err)
 	assert.Contains(t, inspect, "stack")
 }

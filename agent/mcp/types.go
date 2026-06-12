@@ -230,14 +230,16 @@ type CloseCodeDebugSessionRequest struct {
 
 // DebugBreakpointRequest 描述代码调试断点设置请求。
 type DebugBreakpointRequest struct {
-	SessionID string `json:"session_id"`
-	Source    string `json:"source"`
-	Lines     []int  `json:"lines"`
+	SessionID    string `json:"session_id,omitempty"`
+	DeploymentID string `json:"deployment_id,omitempty"`
+	Source       string `json:"source"`
+	Lines        []int  `json:"lines"`
 }
 
 // DebugEvaluateRequest 描述代码调试表达式求值请求。
 type DebugEvaluateRequest struct {
 	SessionID           string `json:"session_id"`
+	DeploymentID        string `json:"deployment_id,omitempty"`
 	Expression          string `json:"expression"`
 	FrameID             int    `json:"frame_id,omitempty"`
 	Source              string `json:"source,omitempty"`
@@ -261,7 +263,8 @@ type DebugCaptureAtRequest struct {
 
 // DebugInspectRequest 描述读取已暂停代码调试会话现场的复合请求。
 type DebugInspectRequest struct {
-	SessionID     string   `json:"session_id"`
+	SessionID     string   `json:"session_id,omitempty"`
+	DeploymentID  string   `json:"deployment_id,omitempty"`
 	ThreadID      int      `json:"thread_id,omitempty"`
 	FrameID       int      `json:"frame_id,omitempty"`
 	MaxVariables  int      `json:"max_variables,omitempty"`
