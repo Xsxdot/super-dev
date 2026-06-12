@@ -14,6 +14,7 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
 <script setup lang="ts">
 import { computed } from 'vue'
 import type {
+  CodeDebugConfig,
   ControlMode,
   Deployment,
   LogConfig,
@@ -102,6 +103,10 @@ function inferLogs(): LogConfig {
 }
 
 const logs = computed(() => inferLogs())
+const isLocalCommand = computed(() => {
+  const runtimeType = runtime.value.type || 'command'
+  return props.modelValue.location === 'local' && runtimeType === 'command'
+})
 const hostOptions = computed<HostOption[]>(() => {
   const seen = new Set<string>()
   const options: HostOption[] = props.hosts.map((host) => {
@@ -283,6 +288,11 @@ function patchWeb(partial: Partial<WebEntrypointConfig>) {
       ai_debug: { ...(current.ai_debug ?? { enabled: false }), ...(partial.ai_debug ?? {}) },
     },
   })
+}
+
+function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
+  const current = props.modelValue.code_debug ?? {}
+  patch({ code_debug: { ...current, ...partial } })
 }
 
 </script>
@@ -515,6 +525,55 @@ function patchWeb(partial: Partial<WebEntrypointConfig>) {
       </template>
     </section>
 
+    <section v-if="isLocalCommand" class="dep-block" data-test="code-debug-section">
+      <div class="dep-heading">{{ t('settings.deployment.codeDebug.title') }}</div>
+      <div class="dep-help">{{ t('settings.deployment.codeDebug.devDefaultHint') }}</div>
+
+      <div class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebug.policy') }}</label>
+        <select
+          class="settings-select dep-input"
+          data-test="code-debug-policy"
+          :value="modelValue.code_debug?.policy ?? 'auto'"
+          @change="patchCodeDebug({ policy: ($event.target as HTMLSelectElement).value as CodeDebugConfig['policy'] })"
+        >
+          <option value="auto">{{ t('settings.deployment.codeDebug.policyAuto') }}</option>
+          <option value="enabled" data-test="code-debug-policy-enabled">{{ t('settings.deployment.codeDebug.policyEnabled') }}</option>
+          <option value="disabled" data-test="code-debug-policy-disabled">{{ t('settings.deployment.codeDebug.policyDisabled') }}</option>
+        </select>
+      </div>
+
+      <div
+        v-if="(modelValue.code_debug?.policy ?? 'auto') === 'enabled'"
+        class="dep-warning"
+        data-test="code-debug-nondev-warning"
+      >
+        {{ t('settings.deployment.codeDebug.nonDevWarning') }}
+      </div>
+
+      <details class="dep-advanced">
+        <summary>{{ t('settings.deployment.codeDebug.overrides') }}</summary>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebug.program') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="code-debug-program"
+            :value="modelValue.code_debug?.program ?? ''"
+            @input="patchCodeDebug({ program: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+        <label class="dep-choice dep-field">
+          <input
+            type="checkbox"
+            data-test="code-debug-stop-on-entry"
+            :checked="modelValue.code_debug?.stop_on_entry ?? false"
+            @change="patchCodeDebug({ stop_on_entry: ($event.target as HTMLInputElement).checked })"
+          />
+          {{ t('settings.deployment.codeDebug.stopOnEntry') }}
+        </label>
+      </details>
+    </section>
+
     <section class="dep-block">
       <div class="dep-heading">{{ t('settings.deployment.logSource') }}</div>
       <div class="settings-field dep-field">
@@ -618,5 +677,20 @@ function patchWeb(partial: Partial<WebEntrypointConfig>) {
 }
 .dep-hint {
   color: var(--status-failed);
+}
+.dep-warning {
+  margin-top: 8px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.dep-advanced {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.dep-advanced summary {
+  cursor: pointer;
+  color: var(--text-secondary);
 }
 </style>

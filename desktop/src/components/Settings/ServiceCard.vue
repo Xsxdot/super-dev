@@ -12,7 +12,7 @@ ServiceCard：单个 service 在某个 env 下的配置卡片。
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
-import type { Deployment } from '@/api/agent'
+import type { Deployment, ServiceLanguage } from '@/api/agent'
 import type { ConfigDraftService } from '@/lib/configDraft'
 import DeploymentForm from './DeploymentForm.vue'
 
@@ -36,6 +36,10 @@ const defaultWorkDir = computed(() =>
 
 function patchService(partial: Partial<ConfigDraftService>) {
   emit('update:service', { ...props.service, ...partial })
+}
+
+function setLanguage(language: string) {
+  patchService({ language: language ? language as ServiceLanguage : undefined })
 }
 
 function enableDep() {
@@ -74,6 +78,19 @@ function removeDep() {
           type="checkbox" :checked="service.required"
           @change="patchService({ required: ($event.target as HTMLInputElement).checked })"
         /> {{ t('common.required') }}
+      </label>
+      <label class="svc-language">
+        <span>{{ t('settings.service.language') }}</span>
+        <select
+          data-test="service-language"
+          :value="service.language ?? ''"
+          @change="setLanguage(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">{{ t('settings.service.languageAuto') }}</option>
+          <option value="go">Go</option>
+          <option value="node">Node</option>
+          <option value="python">Python</option>
+        </select>
       </label>
       <button type="button" class="svc-remove" data-test="remove-service" @click="emit('remove')">{{ t('common.delete') }}</button>
     </header>
@@ -120,6 +137,21 @@ function removeDep() {
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+.svc-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.svc-language select {
+  height: 24px;
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
 }
 .svc-remove {
   padding: 3px 9px;

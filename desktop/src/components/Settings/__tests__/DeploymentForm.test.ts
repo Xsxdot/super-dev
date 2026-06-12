@@ -251,6 +251,27 @@ describe('DeploymentForm', () => {
     expect(withDebug.web?.ai_debug?.enabled).toBe(true)
   })
 
+  it('shows code debug section for local command deployment', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [] },
+    })
+
+    expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(true)
+  })
+
+  it('emits policy=disabled when user disables code debug', async () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [] },
+    })
+
+    await wrapper.find('[data-test="code-debug-policy"]').setValue('disabled')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.code_debug?.policy).toBe('disabled')
+  })
+
   it('only renders runtime and log controls', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: localDep(), hosts: [] },
