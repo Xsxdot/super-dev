@@ -105,11 +105,15 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 1. 先复现问题。
 2. 用 `tail_logs`、`search_logs`、`diagnose_service`、`analyze_trace_logs` 或 `summarize_error_window` 读取日志。
 3. 基于日志证据逐步二分到根因。
-4. 只有当日志无法推断运行时状态时，才打开代码调试会话，例如必须确认某个变量真实值、某一行的调用栈，或暂停 frame 上的分支状态。
+4. 只有当日志无法推断运行时状态时，才使用 deployment 主语的代码断点调试，例如必须确认某个变量真实值、某一行的调用栈，或暂停 frame 上的分支状态。
 
 确实需要代码调试时，优先使用复合工具：
 
-- `debug_capture_at`：停在 `file:line`，一次性采集 stack、scopes 和 variables。
-- `debug_inspect`：对已经暂停的 session 一次性读取现场。
+- 先确保服务以 debug 模式运行：`restart_service(deployment_id, mode="debug")`；已停止时用 `start_service(deployment_id, mode="debug")`。
+- `debug_capture_at(deployment_id, source, line)`：停在 `file:line`，一次性采集 stack、scopes 和 variables。
+- `debug_inspect(deployment_id)`：对已经暂停的 deployment 一次性读取现场。
+- 看完后用 `restart_service(deployment_id, mode="normal")` 回到普通运行。
 
 只有当复合工具不足时，才使用底层 DAP 工具（`set_debug_breakpoints`、`debug_continue`、`debug_step_*`、`debug_variables`、`debug_evaluate`）。`debug_evaluate` 需要审批，并按表达式级别审计；复合工具内部调用时也同样审计。
+
+不存在手动打开或关闭代码调试会话的工具；调试租约由 agent 内部解析、创建和空闲回收。若服务未以 debug 模式运行，调试工具会提示先 restart/start mode=debug，不会静默重启进程。
