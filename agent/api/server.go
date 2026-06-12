@@ -677,6 +677,18 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}/search", a.searchDeploymentLogs)
 	mux.HandleFunc("GET /ws/deployments/{id}/logs", a.wsDeploymentLogs)
 	mux.HandleFunc("POST /api/deployments/{id}/debug/continue", a.continueDeploymentDebug)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/capture", a.deploymentDebugCapture)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/inspect", a.deploymentDebugInspect)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/breakpoints", a.deploymentDebugBreakpoints)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/continue-thread", a.deploymentDebugContinueThread)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/pause", a.deploymentDebugPause)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/step-over", a.deploymentDebugStepOver)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/step-in", a.deploymentDebugStepIn)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/step-out", a.deploymentDebugStepOut)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/stack", a.deploymentDebugStack)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/scopes", a.deploymentDebugScopes)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/variables", a.deploymentDebugVariables)
+	mux.HandleFunc("POST /api/deployments/{id}/debug/evaluate", a.deploymentDebugEvaluate)
 
 	// Pipeline 模板与预览
 	mux.HandleFunc("GET /api/pipeline/reserved-variables", a.listPipelineReservedVariables)

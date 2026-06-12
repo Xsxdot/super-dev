@@ -342,6 +342,60 @@ func TestContinueDeploymentDebugReturns404WhenRuntimeMissing(t *testing.T) {
 	assert.Equal(t, "debugger_not_active", resp["code"])
 }
 
+func TestDeploymentDebugCaptureAutoLease(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	settings, err := app.settings.Load()
+	require.NoError(t, err)
+	settings.Approval.CodeDebugOpen = false
+	require.NoError(t, app.settings.Save(settings))
+	project := codeDebugAPIProject(t.TempDir())
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	_, err = app.codeDebug.StartRuntime(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
+	require.NoError(t, err)
+	_, ok := app.codeDebug.LeaseFor("dep-api-dev")
+	require.False(t, ok)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{
+		"source":    "main.go",
+		"line":      42,
+		"thread_id": 1,
+	}, http.StatusOK)
+
+	assert.Equal(t, true, resp["lease_created"])
+	_, ok = app.codeDebug.LeaseFor("dep-api-dev")
+	assert.True(t, ok)
+	assert.Contains(t, resp, "stack")
+	assert.Contains(t, resp, "scopes")
+	assert.Contains(t, resp, "variables")
+}
+
+func TestDeploymentDebugRuntimeNotRunning(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := codeDebugAPIProject(t.TempDir())
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{
+		"source":    "main.go",
+		"line":      42,
+		"thread_id": 1,
+	}, http.StatusConflict)
+
+	assert.Equal(t, "runtime_not_running", resp["code"])
+	assert.Contains(t, resp["error"], "mode=debug")
+}
+
 func codeDebugManagerForAPITest() *codedebug.Manager {
 	return codeDebugManagerForAPITestWithDAP(&fakeCodeDebugDAP{})
 }

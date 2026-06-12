@@ -13,6 +13,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,8 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
+
+var errLeaseUnavailable = errors.New("debug lease unavailable")
 
 func (a *App) listCodeDebugTargets(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
@@ -314,6 +317,323 @@ func (a *App) codeDebugInspect(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
+func (a *App) deploymentDebugCapture(w http.ResponseWriter, r *http.Request) {
+	var req codedebug.CaptureAtRequest
+	if err := decodeJSONPreserveBody(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	req.SessionID = session.ID
+	result, err := a.codeDebug.CaptureAt(r.Context(), req)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugInspect(w http.ResponseWriter, r *http.Request) {
+	var req codedebug.InspectRequest
+	if err := decodeJSONPreserveBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	req.SessionID = session.ID
+	result, err := a.codeDebug.Inspect(r.Context(), req)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugBreakpoints(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string `json:"source"`
+		Lines  []int  `json:"lines"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	result, err := a.codeDebug.SetBreakpoints(r.Context(), session.ID, req.Source, req.Lines)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugContinueThread(w http.ResponseWriter, r *http.Request) {
+	a.deploymentDebugThreadAction(w, r, "continue")
+}
+
+func (a *App) deploymentDebugPause(w http.ResponseWriter, r *http.Request) {
+	a.deploymentDebugThreadAction(w, r, "pause")
+}
+
+func (a *App) deploymentDebugStepOver(w http.ResponseWriter, r *http.Request) {
+	a.deploymentDebugThreadAction(w, r, "step_over")
+}
+
+func (a *App) deploymentDebugStepIn(w http.ResponseWriter, r *http.Request) {
+	a.deploymentDebugThreadAction(w, r, "step_in")
+}
+
+func (a *App) deploymentDebugStepOut(w http.ResponseWriter, r *http.Request) {
+	a.deploymentDebugThreadAction(w, r, "step_out")
+}
+
+func (a *App) deploymentDebugThreadAction(w http.ResponseWriter, r *http.Request, action string) {
+	var req struct {
+		ThreadID int `json:"thread_id"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	result, err := a.codeDebug.ThreadAction(r.Context(), session.ID, action, req.ThreadID)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugStack(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ThreadID int `json:"thread_id"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	result, err := a.codeDebug.StackTrace(r.Context(), session.ID, req.ThreadID)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugScopes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FrameID int `json:"frame_id"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	result, err := a.codeDebug.Scopes(r.Context(), session.ID, req.FrameID)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugVariables(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		VariablesReference int `json:"variables_reference"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, created, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	result, err := a.codeDebug.Variables(r.Context(), session.ID, req.VariablesReference)
+	if err != nil {
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	result["lease_created"] = created
+	jsonOK(w, result)
+}
+
+func (a *App) deploymentDebugEvaluate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Expression string `json:"expression"`
+		FrameID    int    `json:"frame_id"`
+		Source     string `json:"source"`
+	}
+	if err := decodeJSONPreserveBody(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.Expression) == "" {
+		jsonError(w, http.StatusBadRequest, "expression is required")
+		return
+	}
+	dep, svc, project, ok := a.findDeploymentDebugTarget(w, r)
+	if !ok {
+		return
+	}
+	session, _, err := a.resolveDebugLease(w, r, project, svc, dep)
+	if err != nil {
+		return
+	}
+	expressionHash := hashExpression(req.Expression)
+	plan, err := operation.PlanCodeDebugEvaluate(operation.CodeDebugEvaluateRequest{
+		ProjectID:      session.ProjectID,
+		DeploymentID:   session.DeploymentID,
+		DebugSessionID: session.ID,
+		ExpressionHash: expressionHash,
+	})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid operation")
+		return
+	}
+	auditData := map[string]any{
+		"expression_hash":   expressionHash,
+		"expression_length": len(req.Expression),
+		"source":            codeDebugEvaluateAuditSource(req.Source),
+	}
+	allowed, approval := a.authorizeOperation(w, r, plan)
+	if !allowed {
+		a.auditCodeDebugEvaluate(r.Context(), session.ID, session.DeploymentID, codedebug.ErrEvaluateDenied, auditData)
+		return
+	}
+	result, err := a.codeDebug.Evaluate(r.Context(), session.ID, req.Expression, req.FrameID)
+	if err == nil {
+		auditData["result_type"] = evaluateResultType(result["result"])
+	}
+	a.auditCodeDebugEvaluate(r.Context(), session.ID, session.DeploymentID, err, auditData)
+	if err != nil {
+		if approval != nil {
+			a.appendOperationExecutionFailure(r, plan, approval, "failed to evaluate code debug expression: "+err.Error())
+		}
+		writeCodeDebugError(w, err)
+		return
+	}
+	result = ensureCodeDebugResult(result)
+	result["deployment_id"] = dep.ID
+	jsonOK(w, result)
+}
+
+func (a *App) findDeploymentDebugTarget(w http.ResponseWriter, r *http.Request) (model.Deployment, model.Service, model.Project, bool) {
+	depID := strings.TrimSpace(r.PathValue("id"))
+	if depID == "" {
+		jsonError(w, http.StatusBadRequest, "deployment id is required")
+		return model.Deployment{}, model.Service{}, model.Project{}, false
+	}
+	dep, svc, project, ok := a.findDeploymentWithService(depID)
+	if !ok {
+		jsonCodeError(w, http.StatusNotFound, "debug_target_not_found", "debug target not found", nil)
+		return model.Deployment{}, model.Service{}, model.Project{}, false
+	}
+	return dep, svc, project, true
+}
+
+func (a *App) resolveDebugLease(w http.ResponseWriter, r *http.Request, project model.Project, svc model.Service, dep model.Deployment) (codedebug.Session, bool, error) {
+	if session, ok := a.codeDebug.LeaseFor(dep.ID); ok {
+		return session, false, nil
+	}
+	if runtime, ok := a.codeDebug.RuntimeStatus(dep.ID); !ok || !runtime.Alive {
+		jsonCodeError(w, http.StatusConflict, "runtime_not_running", "debug runtime not running; start it with mode=debug first", nil)
+		return codedebug.Session{}, false, errLeaseUnavailable
+	}
+	plan, err := operation.PlanCodeDebugOpen(project, svc, dep, svc.Language)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid operation")
+		return codedebug.Session{}, false, errLeaseUnavailable
+	}
+	allowed, approval := a.authorizeOperation(w, r, plan)
+	if !allowed {
+		return codedebug.Session{}, false, errLeaseUnavailable
+	}
+	session, created, err := a.codeDebug.ResolveLease(r.Context(), project, svc, dep, approvalTokenFromRequest(r))
+	if err != nil {
+		if approval != nil {
+			a.appendOperationExecutionFailure(r, plan, approval, "failed to resolve code debug lease: "+err.Error())
+		}
+		writeCodeDebugError(w, err)
+		return codedebug.Session{}, false, err
+	}
+	return session, created, nil
+}
+
+func ensureCodeDebugResult(result map[string]any) map[string]any {
+	if result == nil {
+		return map[string]any{}
+	}
+	return result
+}
+
 func writeCodeDebugError(w http.ResponseWriter, err error) {
 	if info, ok := codedebug.AdapterErrorDetails(err); ok {
 		status := http.StatusServiceUnavailable
@@ -342,6 +662,8 @@ func writeCodeDebugError(w http.ResponseWriter, err error) {
 		jsonCodeError(w, http.StatusNotFound, "debug_session_not_found", "debug session not found", nil)
 	case errors.Is(err, codedebug.ErrSessionClosed):
 		jsonCodeError(w, http.StatusGone, "debug_session_closed", "debug session closed", nil)
+	case errors.Is(err, codedebug.ErrRuntimeNotRunning):
+		jsonCodeError(w, http.StatusConflict, "runtime_not_running", "debug runtime not running; start it with mode=debug first", nil)
 	default:
 		jsonCodeError(w, http.StatusInternalServerError, "dap_request_failed", err.Error(), nil)
 	}
