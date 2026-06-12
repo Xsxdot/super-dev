@@ -11,16 +11,23 @@
   - 不直接执行运行态操作，审批后的续跑由 store 统一处理
 -->
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useSettingsStore } from '@/stores/settings'
 
 const { t } = useI18n()
 const store = useOperationApprovalStore()
+const settingsStore = useSettingsStore()
+const grantGrace = ref(false)
+const graceMinutes = computed(() => settingsStore.agentSettings.approval?.grace_minutes ?? 15)
+const canGrantGrace = computed(() => !!store.notice?.project_id && !store.notice?.approved)
 
 async function approveNotice() {
   const approvalID = store.notice?.approval_id
   if (!approvalID) return
-  await store.approve(approvalID, '')
+  await store.approve(approvalID, canGrantGrace.value && grantGrace.value ? { grantGrace: true } : '')
+  grantGrace.value = false
 }
 
 async function rejectNotice() {
@@ -33,13 +40,31 @@ async function rejectNotice() {
 <template>
   <aside v-if="store.notice" class="approval-notice" data-test="operation-approval-notice">
     <div class="notice-content">
-      <div class="notice-copy">
-        <strong>
-          {{ store.notice.approved ? t('settings.approvals.resumeFailedTitle') : t('settings.approvals.noticeTitle') }}
-        </strong>
-        <span>{{ store.notice.target_summary || store.notice.kind }}</span>
-      </div>
-      <div class="notice-actions">
+      <header class="notice-section notice-header" data-test="operation-approval-section-header">
+        <div class="notice-title">
+          <strong>
+            {{ store.notice.approved ? t('settings.approvals.resumeFailedTitle') : t('settings.approvals.noticeTitle') }}
+          </strong>
+          <span>{{ store.notice.kind }}</span>
+        </div>
+        <button type="button" class="notice-close" :title="t('common.close')" @click="store.clearNotice">
+          ×
+        </button>
+      </header>
+      <section class="notice-section notice-body" data-test="operation-approval-section-body">
+        <p>{{ store.notice.target_summary || store.notice.kind }}</p>
+        <label v-if="canGrantGrace" class="notice-grace">
+          <input
+            v-model="grantGrace"
+            type="checkbox"
+            data-test="operation-approval-grace"
+            :disabled="store.loading"
+          >
+          <span>{{ t('settings.approvals.grantGrace', { minutes: graceMinutes }) }}</span>
+        </label>
+        <p v-if="store.error" class="notice-error" data-test="operation-approval-error">{{ store.error }}</p>
+      </section>
+      <footer class="notice-section notice-actions" data-test="operation-approval-section-actions">
         <button
           type="button"
           class="notice-primary"
@@ -58,12 +83,8 @@ async function rejectNotice() {
         >
           {{ t('settings.approvals.reject') }}
         </button>
-        <button type="button" class="notice-close" :title="t('common.close')" @click="store.clearNotice">
-          ×
-        </button>
-      </div>
+      </footer>
     </div>
-    <p v-if="store.error" class="notice-error" data-test="operation-approval-error">{{ store.error }}</p>
   </aside>
 </template>
 
@@ -76,48 +97,87 @@ async function rejectNotice() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 14px;
-  max-width: min(420px, calc(100vw - 36px));
+  gap: 0;
+  width: min(360px, calc(100vw - 36px));
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
   background: var(--bg-elevated);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
-  padding: 12px;
+  padding: 0;
   color: var(--text-primary);
+  overflow: hidden;
 }
 .notice-content {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.notice-copy {
-  min-width: 0;
   display: grid;
-  gap: 3px;
-  flex: 1;
 }
-.notice-copy strong {
+.notice-section {
+  min-width: 0;
+  padding: 12px 14px;
+}
+.notice-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.14);
+}
+.notice-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.notice-title strong {
   font-size: 13px;
+  line-height: 1.35;
 }
-.notice-copy span {
+.notice-title span,
+.notice-body p {
   overflow: hidden;
   color: var(--text-secondary);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.notice-body {
+  display: grid;
+  gap: 10px;
+}
+.notice-body p {
+  margin: 0;
+  line-height: 1.45;
+}
 .notice-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  border-top: 1px solid rgba(139, 148, 158, 0.14);
+  background: rgba(255, 255, 255, 0.018);
+}
+.notice-grace {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.notice-grace input {
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
+  accent-color: var(--accent);
 }
 .notice-primary,
 .notice-danger,
 .notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   cursor: pointer;
+  line-height: 1;
 }
 .notice-primary:disabled,
 .notice-danger:disabled {
@@ -139,13 +199,13 @@ async function rejectNotice() {
 .notice-close {
   width: 28px;
   height: 28px;
+  flex: 0 0 28px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 18px;
-  line-height: 1;
 }
 .notice-error {
-  margin: -4px 0 0;
+  margin: 0;
   color: var(--danger);
   font-size: 12px;
   line-height: 1.4;
@@ -156,10 +216,7 @@ async function rejectNotice() {
     left: 12px;
     right: 12px;
     bottom: 12px;
-  }
-  .notice-content {
-    align-items: stretch;
-    flex-direction: column;
+    width: auto;
   }
   .notice-actions {
     justify-content: flex-end;

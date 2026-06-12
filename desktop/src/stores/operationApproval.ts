@@ -27,6 +27,7 @@ interface ApproveOptions {
 //   - approval_id: 待处理审批 ID
 //   - kind: operation 类型
 //   - target_summary: 用户可识别的目标摘要
+//   - project_id: 关联项目 ID，存在时可开启项目级免审窗口
 //   - approved: 审批已通过但续跑尚未成功
 //
 // 注意：
@@ -35,6 +36,7 @@ export interface OperationApprovalNotice {
   approval_id: string
   kind: string
   target_summary: string
+  project_id?: string
   approved?: boolean
 }
 
@@ -59,6 +61,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       approval_id: approval.id,
       kind: approval.plan.kind,
       target_summary: approval.plan.target_summary || approval.plan.target.deployment_id || approval.plan.target.template_path || '',
+      project_id: approval.plan.target.project_id,
     }
   }
 

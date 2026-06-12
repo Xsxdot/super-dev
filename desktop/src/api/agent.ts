@@ -537,6 +537,7 @@ export interface ApprovalPolicy {
   pipeline_upsert: boolean
   pipeline_run: boolean
   template_import: boolean
+  browser_debug_open: boolean
   grace_minutes: number
 }
 

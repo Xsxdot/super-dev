@@ -204,6 +204,22 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.text()).toContain('brs_1')
   })
 
+  it('disables browser debug when the active deployment is not running', async () => {
+    const service = makeService()
+    service.status = ''
+    service.deployments![0].status = ''
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const openBrowserSession = vi.spyOn(api, 'openBrowserSession').mockResolvedValue({} as any)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    const debugButton = wrapper.find('[data-test="open-browser-debug"]')
+    await debugButton.trigger('click')
+
+    expect(debugButton.attributes('disabled')).toBeDefined()
+    expect(openBrowserSession).not.toHaveBeenCalled()
+  })
+
   it('shows repair hint when debug browser is not configured', async () => {
     const service = makeService()
     useAgentStore().projects = [makeProject(service)]

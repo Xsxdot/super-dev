@@ -43,6 +43,7 @@ function defaultApprovalPolicy(): ApprovalPolicy {
     pipeline_upsert: true,
     pipeline_run: true,
     template_import: true,
+    browser_debug_open: true,
     grace_minutes: 15,
   }
 }
@@ -68,6 +69,7 @@ async function saveApprovalSettings() {
       pipeline_upsert: approvalForm.pipeline_upsert,
       pipeline_run: approvalForm.pipeline_run,
       template_import: approvalForm.template_import,
+      browser_debug_open: approvalForm.browser_debug_open,
       grace_minutes: approvalForm.grace_minutes,
     })
     saveMessageKind.value = 'success'
@@ -132,6 +134,10 @@ function shortFingerprint(approval: OperationApproval): string {
         <label class="policy-toggle">
           <input v-model="approvalForm.template_import" data-test="approval-switch-template-import" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.templateImport') }}</span>
+        </label>
+        <label class="policy-toggle">
+          <input v-model="approvalForm.browser_debug_open" data-test="approval-switch-browser-debug-open" type="checkbox" @change="clearSaveMessage">
+          <span>{{ t('settings.approvals.browserDebugOpen') }}</span>
         </label>
         <label class="policy-number">
           <span>{{ t('settings.approvals.graceMinutes') }}</span>

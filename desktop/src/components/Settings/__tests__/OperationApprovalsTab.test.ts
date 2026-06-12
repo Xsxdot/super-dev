@@ -108,6 +108,7 @@ describe('OperationApprovalsTab', () => {
         pipeline_upsert: true,
         pipeline_run: true,
         template_import: true,
+        browser_debug_open: true,
         grace_minutes: 15,
       },
     }
@@ -120,12 +121,14 @@ describe('OperationApprovalsTab', () => {
         pipeline_upsert: true,
         pipeline_run: true,
         template_import: true,
+        browser_debug_open: false,
         grace_minutes: 30,
       },
     } as any)
 
     const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
     await wrapper.find('[data-test="approval-switch-config-upsert"]').setValue(false)
+    await wrapper.find('[data-test="approval-switch-browser-debug-open"]').setValue(false)
     await wrapper.find('[data-test="approval-grace-minutes"]').setValue(30)
     await wrapper.find('[data-test="approval-settings-save"]').trigger('click')
 
@@ -135,6 +138,7 @@ describe('OperationApprovalsTab', () => {
         pipeline_upsert: true,
         pipeline_run: true,
         template_import: true,
+        browser_debug_open: false,
         grace_minutes: 30,
       },
     })
@@ -152,6 +156,7 @@ describe('OperationApprovalsTab', () => {
         pipeline_upsert: true,
         pipeline_run: true,
         template_import: true,
+        browser_debug_open: true,
         grace_minutes: 15,
       },
     }
@@ -164,6 +169,7 @@ describe('OperationApprovalsTab', () => {
         pipeline_upsert: true,
         pipeline_run: true,
         template_import: true,
+        browser_debug_open: true,
         grace_minutes: 15,
       },
     } as any)

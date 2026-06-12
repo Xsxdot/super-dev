@@ -68,6 +68,7 @@ const maximizeLabel = computed(() =>
     ? t('runtimeWorkbench.restore')
     : t('runtimeWorkbench.maximize'),
 )
+const canOpenBrowserDebug = computed(() => primaryDeploymentInfo.value?.deployment.status === 'running')
 
 function persistActiveLayout() {
   workspace.saveActiveLogWorkspaceLayout()
@@ -85,7 +86,7 @@ function arrangeColumns() {
 
 async function openBrowserDebug() {
   const deploymentId = primaryDeploymentInfo.value?.deployment.id
-  if (!deploymentId) return
+  if (!deploymentId || !canOpenBrowserDebug.value) return
   browserError.value = null
   browserSession.value = null
   try {
@@ -178,7 +179,7 @@ function startWindowDrag(event: MouseEvent) {
         data-test="open-browser-debug"
         :title="t('runtimeWorkbench.openBrowserDebug')"
         :aria-label="t('runtimeWorkbench.openBrowserDebug')"
-        :disabled="!primaryDeploymentInfo"
+        :disabled="!canOpenBrowserDebug"
         @click="openBrowserDebug"
       >
         <Icon icon="lucide:bug" aria-hidden="true" />
@@ -328,18 +329,24 @@ function startWindowDrag(event: MouseEvent) {
 }
 
 .layout-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
+  padding: 0;
   border: 1px solid rgba(139, 148, 158, 0.22);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.035);
   color: var(--text-secondary);
   cursor: pointer;
+  line-height: 1;
 }
 
 .layout-btn :deep(svg) {
   width: 15px;
   height: 15px;
+  flex-shrink: 0;
 }
 
 .layout-btn:hover {
