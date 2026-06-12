@@ -256,6 +256,89 @@ func TestResolveLeaseRuntimeNotRunning(t *testing.T) {
 	require.ErrorIs(t, err, ErrRuntimeNotRunning)
 }
 
+func TestAttachRuntimeSendsAttachConfigurationDoneAndDetach(t *testing.T) {
+	dap := &fakeDAP{}
+	adapterClosed := false
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9001, Close: func() error {
+				adapterClosed = true
+				return nil
+			}}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41005, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.Command = "./server"
+
+	rt, err := mgr.AttachRuntime(context.Background(), project, service, dep, attachTarget{processID: 4321})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Origin != "attached" {
+		t.Fatalf("attach runtime origin = %q, want attached", rt.Origin)
+	}
+	if rt.State != RuntimeStateDebugRunning {
+		t.Fatalf("state = %q", rt.State)
+	}
+	assert.Equal(t, 1, dap.attachCalls)
+	assert.Equal(t, 4321, dap.attachProcessID)
+	assert.Equal(t, 1, dap.configurationDoneCalls)
+
+	require.NoError(t, mgr.StopRuntime(dep.ID))
+	assert.Equal(t, 1, dap.detachCalls)
+	assert.Equal(t, 0, dap.disconnectCalls)
+	assert.True(t, adapterClosed)
+}
+
+func TestResolveLeaseAttachesRunningService(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9001, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41006, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{{pid: 100, comm: "go"}, {pid: 4321, comm: "api"}}
+		},
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	if err != nil {
+		t.Fatalf("should attach running service: %v", err)
+	}
+	if !created {
+		t.Fatal("attach should create a new lease")
+	}
+	// 此后该 deployment 应有 attached origin 的 runtime
+	rt, ok := mgr.RuntimeStatus(dep.ID)
+	if !ok || rt.Origin != "attached" {
+		t.Fatalf("expected attached runtime after ResolveLease, got ok=%v origin=%q", ok, rt.Origin)
+	}
+	assert.Equal(t, 4321, rt.ProcessID)
+}
+
+func TestResolveLeaseAttachUnsupportedReportsError(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 4321, 4321, deploymentID == "dep-api-dev"
+		},
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguagePython
+
+	_, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	if !errors.Is(err, ErrAttachUnsupported) {
+		t.Fatalf("python running service should not silently launch; got %v", err)
+	}
+}
+
 func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	dap := &fakeDAP{}
@@ -605,14 +688,30 @@ type fakeDAP struct {
 	continueCalls              int
 	continueThreadID           int
 	disconnectCalls            int
+	detachCalls                int
+	attachCalls                int
+	attachProcessID            int
 	configurationDoneCalls     int
 	waitForStoppedCalls        int
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
 func (f *fakeDAP) Launch(context.Context, map[string]any) error       { return nil }
-func (f *fakeDAP) Attach(context.Context, map[string]any) error       { return nil }
-func (f *fakeDAP) Detach(context.Context) error                       { return nil }
+func (f *fakeDAP) Attach(_ context.Context, args map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attachCalls++
+	if pid, ok := args["processId"].(int); ok {
+		f.attachProcessID = pid
+	}
+	return nil
+}
+func (f *fakeDAP) Detach(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.detachCalls++
+	return nil
+}
 func (f *fakeDAP) ConfigurationDone(context.Context) error {
 	f.configurationDoneCalls++
 	return nil

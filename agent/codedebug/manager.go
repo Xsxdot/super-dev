@@ -42,6 +42,19 @@ type DAPDialer func(context.Context, string, time.Duration) (DAP, error)
 // PortReservoir 预留一个本机端口给 adapter 监听。
 type PortReservoir func() (int, error)
 
+// RunningProcessProbe 返回某 deployment 普通运行态的进程信息。
+//
+// running=false 表示未以普通 runtime 运行（不能 attach，应提示 launch）。
+type RunningProcessProbe func(deploymentID string) (mainPID int, pgid int, running bool)
+
+// processGroupLister 枚举指定进程组内的进程。
+type processGroupLister func(pgid int) []procInfo
+
+// attachTarget 描述一次 attach 的目标进程。
+type attachTarget struct {
+	processID int
+}
+
 // ManagerOptions 描述代码调试 session 管理器依赖。
 type ManagerOptions struct {
 	AdapterLaunch AdapterLauncher
@@ -49,6 +62,10 @@ type ManagerOptions struct {
 	ReservePort   PortReservoir
 	SessionTTL    time.Duration
 	Now           func() time.Time
+	// RunningProcess 探测某 deployment 的普通运行态进程信息（用于 attach）。nil 表示不支持 attach。
+	RunningProcess RunningProcessProbe
+	// listProcessGroup 是包内测试 hook，用于替换 OS 进程组枚举；nil 时使用 OS ps 实现。
+	listProcessGroup processGroupLister
 }
 
 type runtimeRecord struct {
@@ -67,15 +84,17 @@ type sessionRecord struct {
 
 // Manager 管理由 SuperDev 创建的本机代码调试会话。
 type Manager struct {
-	mu       sync.Mutex
-	launch   AdapterLauncher
-	dial     DAPDialer
-	reserve  PortReservoir
-	ttl      time.Duration
-	now      func() time.Time
-	runtimes map[string]*runtimeRecord
-	sessions map[string]*sessionRecord
-	closed   map[string]Session
+	mu               sync.Mutex
+	launch           AdapterLauncher
+	dial             DAPDialer
+	reserve          PortReservoir
+	ttl              time.Duration
+	now              func() time.Time
+	runningProcess   RunningProcessProbe
+	listProcessGroup processGroupLister
+	runtimes         map[string]*runtimeRecord
+	sessions         map[string]*sessionRecord
+	closed           map[string]Session
 }
 
 // NewManager 创建代码调试 session 管理器。
@@ -102,15 +121,21 @@ func NewManager(opts ManagerOptions) *Manager {
 	if reserve == nil {
 		reserve = reserveLocalPort
 	}
+	listProcessGroup := opts.listProcessGroup
+	if listProcessGroup == nil {
+		listProcessGroup = listProcessGroupOS
+	}
 	return &Manager{
-		launch:   launch,
-		dial:     dial,
-		reserve:  reserve,
-		ttl:      ttl,
-		now:      now,
-		runtimes: map[string]*runtimeRecord{},
-		sessions: map[string]*sessionRecord{},
-		closed:   map[string]Session{},
+		launch:           launch,
+		dial:             dial,
+		reserve:          reserve,
+		ttl:              ttl,
+		now:              now,
+		runningProcess:   opts.RunningProcess,
+		listProcessGroup: listProcessGroup,
+		runtimes:         map[string]*runtimeRecord{},
+		sessions:         map[string]*sessionRecord{},
+		closed:           map[string]Session{},
 	}
 }
 
@@ -163,28 +188,27 @@ func (m *Manager) StartRuntime(ctx context.Context, project model.Project, servi
 // 返回：
 //   - session: 复用的或新建的 lease
 //   - created: 是否本次新建
-//   - err: runtime 不在时返回 ErrRuntimeNotRunning，不静默启动进程
+//   - err: runtime 和普通服务都不在时返回 ErrRuntimeNotRunning，不静默启动进程
 //
 // 规则：
 //   - 已有活跃 lease，直接复用
 //   - runtime 在跑且无 lease，通过 Open 创建新 lease
-//   - runtime 不在，返回 ErrRuntimeNotRunning
+//   - runtime 不在但普通服务运行中，优先 attach
+//   - attach 不可用时返回结构化错误，不静默 launch
 func (m *Manager) ResolveLease(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, approvalToken string) (Session, bool, error) {
 	deploymentID := strings.TrimSpace(dep.ID)
 	if existing, ok := m.activeLeaseFor(deploymentID); ok {
 		return existing, false, nil
 	}
-	if runtime, ok := m.RuntimeStatus(deploymentID); !ok || !runtime.Alive {
-		return Session{}, false, ErrRuntimeNotRunning
+	if runtime, ok := m.RuntimeStatus(deploymentID); ok && runtime.Alive {
+		return m.openLeaseOnRuntime(ctx, project, service, dep, approvalToken)
 	}
-	session, err := m.Open(ctx, project, service, dep, OpenRequest{
-		DeploymentID:  deploymentID,
-		ApprovalToken: approvalToken,
-	})
-	if err != nil {
+	if attached, err := m.tryAttachRunning(ctx, project, service, dep); err != nil {
 		return Session{}, false, err
+	} else if attached {
+		return m.openLeaseOnRuntime(ctx, project, service, dep, approvalToken)
 	}
-	return session, true, nil
+	return Session{}, false, ErrRuntimeNotRunning
 }
 
 func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, provider Provider) (Runtime, error) {
@@ -278,6 +302,149 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 	m.runtimes[cfg.Target.DeploymentID] = record
 	m.mu.Unlock()
 	return record.Runtime, nil
+}
+
+// AttachRuntime 对运行中进程起 dlv dap 并 attach，创建 attached 来源的 Debug Runtime。
+//
+// 参数：
+//   - ctx: 请求上下文，用于控制 adapter 启动和 DAP 初始化
+//   - project/service/dep: 目标 deployment 所属上下文
+//   - target: 已解析出的真实 debuggee 进程
+//
+// 返回：
+//   - 创建后的 Runtime，Origin 固定为 attached
+//   - attach 不可用、PID 无效或 adapter/DAP 失败时返回错误
+//
+// 注意：
+//   - close 时只断开 DAP 并关闭 adapter，不终止被调试的普通服务进程
+func (m *Manager) AttachRuntime(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, target attachTarget) (Runtime, error) {
+	cfg, provider, err := m.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	if err != nil {
+		return Runtime{}, err
+	}
+	if provider.AttachCapability() != AttachModePID {
+		return Runtime{}, ErrAttachUnsupported
+	}
+	if target.processID <= 0 {
+		return Runtime{}, ErrAttachTargetUnresolved
+	}
+	port, err := m.reserve()
+	if err != nil {
+		return Runtime{}, err
+	}
+	cfg.AdapterPort = port
+	cmd, err := provider.AdapterCommand(cfg)
+	if err != nil {
+		return Runtime{}, err
+	}
+	process, err := m.launch(ctx, cmd)
+	if err != nil {
+		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
+	}
+	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		_ = closeProcessIfPresent(process.Close)
+		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
+	}
+	if _, err := dap.Initialize(ctx); err != nil {
+		_ = dap.Close()
+		_ = closeProcessIfPresent(process.Close)
+		return Runtime{}, err
+	}
+	if err := dap.Attach(ctx, provider.AttachArguments(cfg, target.processID)); err != nil {
+		_ = dap.Close()
+		_ = closeProcessIfPresent(process.Close)
+		return Runtime{}, err
+	}
+	if err := dap.ConfigurationDone(ctx); err != nil {
+		_ = dap.Detach(ctx)
+		_ = dap.Close()
+		_ = closeProcessIfPresent(process.Close)
+		return Runtime{}, err
+	}
+	now := m.now().UTC()
+	store := &debuggerSnapshotStore{}
+	pump := newEventPump(dap, store)
+	pump.start(context.Background())
+	record := &runtimeRecord{
+		Runtime: Runtime{
+			ProjectID:    cfg.Target.ProjectID,
+			DeploymentID: cfg.Target.DeploymentID,
+			Provider:     cfg.Provider,
+			AdapterPort:  port,
+			ProcessID:    target.processID,
+			State:        RuntimeStateDebugRunning,
+			Origin:       "attached",
+			Alive:        true,
+			CreatedAt:    now,
+			LastUsedAt:   now,
+		},
+		rootPath:   cfg.Target.RootPath,
+		dap:        dap,
+		debugStore: store,
+		pump:       pump,
+	}
+	record.close = func() error {
+		if record.pump != nil {
+			record.pump.stop()
+		}
+		dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = dap.Detach(dctx)
+		_ = dap.Close()
+		return closeProcessIfPresent(process.Close)
+	}
+	m.mu.Lock()
+	m.runtimes[cfg.Target.DeploymentID] = record
+	m.mu.Unlock()
+	return record.Runtime, nil
+}
+
+// tryAttachRunning 在服务普通运行中且 provider 支持 pid-attach 时执行 attach。
+//
+// 返回 (true,nil)=已 attach；(false,nil)=不满足 attach 条件；
+// (false,err)=服务在运行但 attach 失败/不支持，不应静默降级 launch。
+func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, service model.Service, dep model.Deployment) (bool, error) {
+	if m.runningProcess == nil {
+		return false, nil
+	}
+	mainPID, pgid, running := m.runningProcess(dep.ID)
+	if !running {
+		return false, nil
+	}
+	providerName := ProviderForLanguage(service.Language)
+	provider, err := providerFor(providerName)
+	if err != nil {
+		return false, ErrAttachUnsupported
+	}
+	if provider.AttachCapability() != AttachModePID {
+		return false, ErrAttachUnsupported
+	}
+	pid, err := resolveGoDebuggeePID(goDebuggeeHints{
+		command:          debugDeploymentCommand(dep),
+		mainPID:          mainPID,
+		pgid:             pgid,
+		listProcessGroup: m.listProcessGroup,
+	})
+	if err != nil {
+		return false, err
+	}
+	if _, err := m.AttachRuntime(ctx, project, service, dep, attachTarget{processID: pid}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// openLeaseOnRuntime 在已存在的 debug runtime 上建 lease（不重启 debuggee）。
+func (m *Manager) openLeaseOnRuntime(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, approvalToken string) (Session, bool, error) {
+	session, err := m.Open(ctx, project, service, dep, OpenRequest{
+		DeploymentID:  strings.TrimSpace(dep.ID),
+		ApprovalToken: approvalToken,
+	})
+	if err != nil {
+		return Session{}, false, err
+	}
+	return session, true, nil
 }
 
 // List 返回当前已知 session 快照。
