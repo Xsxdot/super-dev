@@ -66,6 +66,27 @@ log_rules:
 	assert.Equal(t, model.StatusStopped, p.Services[0].Status)
 }
 
+func TestLoaderBackfillsServiceLanguage(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".superdev"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".superdev", "config.yaml"), []byte(`
+name: demo
+services:
+  - name: api
+    deployments:
+      - env: dev
+        location: local
+        control_mode: managed
+        command: go run ./cmd/api
+`), 0o644))
+
+	p, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	require.Len(t, p.Services, 1)
+	assert.Equal(t, model.LanguageGo, p.Services[0].Language)
+}
+
 func TestLoadProjectMissingFile(t *testing.T) {
 	loader := config.NewLoader(t.TempDir())
 	_, err := loader.Load()
@@ -135,7 +156,8 @@ func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
 			IsDev: true,
 		}},
 		Services: []model.Service{{
-			Name: "api",
+			Name:     "api",
+			Language: model.LanguageGo,
 			Deployments: []model.Deployment{{
 				EnvName:     "dev",
 				Location:    model.LocationLocal,
@@ -143,16 +165,13 @@ func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
 				Command:     "go run ./cmd/api",
 				WorkDir:     dir,
 				CodeDebug: &model.CodeDebugConfig{
-					Enabled:                 true,
-					Provider:                model.CodeDebugProviderGo,
-					Mode:                    model.CodeDebugModeLaunch,
-					Program:                 "./cmd/api",
-					Args:                    []string{"--port", "18080"},
-					WorkingDir:              ".",
-					EnvVars:                 map[string]string{"LOG_LEVEL": "debug"},
-					StartMode:               model.CodeDebugStartModeDebug,
-					KeepRuntimeOnLeaseClose: true,
-					StopOnEntry:             true,
+					Policy:      model.CodeDebugPolicyEnabled,
+					Mode:        model.CodeDebugModeLaunch,
+					Program:     "./cmd/api",
+					Args:        []string{"--port", "18080"},
+					WorkingDir:  ".",
+					EnvVars:     map[string]string{"LOG_LEVEL": "debug"},
+					StopOnEntry: true,
 				},
 			}},
 		}},
@@ -163,17 +182,15 @@ func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
 	loaded, err := loader.Load()
 	require.NoError(t, err)
 
+	assert.Equal(t, model.LanguageGo, loaded.Services[0].Language)
 	got := loaded.Services[0].Deployments[0].CodeDebug
 	require.NotNil(t, got)
-	assert.True(t, got.Enabled)
-	assert.Equal(t, model.CodeDebugProviderGo, got.Provider)
+	assert.Equal(t, model.CodeDebugPolicyEnabled, got.Policy)
 	assert.Equal(t, model.CodeDebugModeLaunch, got.Mode)
 	assert.Equal(t, "./cmd/api", got.Program)
 	assert.Equal(t, []string{"--port", "18080"}, got.Args)
 	assert.Equal(t, ".", got.WorkingDir)
 	assert.Equal(t, map[string]string{"LOG_LEVEL": "debug"}, got.EnvVars)
-	assert.Equal(t, model.CodeDebugStartModeDebug, got.StartMode)
-	assert.True(t, got.KeepRuntimeOnLeaseClose)
 	assert.True(t, got.StopOnEntry)
 }
 

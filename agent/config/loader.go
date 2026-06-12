@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/xsxdot/super-dev/agent/langdetect"
 	"github.com/xsxdot/super-dev/agent/model"
 	"gopkg.in/yaml.v3"
 )
@@ -69,7 +70,7 @@ func (l *Loader) Load() (model.Project, error) {
 		services[i] = serviceFromYAML(s, l.rootPath)
 	}
 
-	return model.Project{
+	project := model.Project{
 		ID:                    raw.ID,
 		Name:                  raw.Name,
 		RootPath:              l.rootPath,
@@ -78,7 +79,9 @@ func (l *Loader) Load() (model.Project, error) {
 		Services:              services,
 		Pipelines:             raw.Pipelines,
 		EnvSelectedServiceIDs: raw.EnvSelectedServiceIDs,
-	}, nil
+	}
+	backfillServiceLanguages(&project)
+	return project, nil
 }
 
 // Save 将 Project 序列化写入 .superdev/config.yaml。
@@ -223,6 +226,7 @@ type serviceYAML struct {
 	Name        string           `yaml:"name"`
 	Required    bool             `yaml:"required"`
 	Order       int              `yaml:"order"`
+	Language    string           `yaml:"language,omitempty"`
 	Deployments []deploymentYAML `yaml:"deployments,omitempty"`
 }
 
@@ -248,8 +252,46 @@ func serviceFromYAML(s serviceYAML, rootPath string) model.Service {
 		Name:        s.Name,
 		Order:       s.Order,
 		Required:    s.Required,
+		Language:    model.ServiceLanguage(s.Language),
 		Deployments: deploymentsFromYAML(s.Deployments, rootPath),
 	}
+}
+
+// backfillServiceLanguages 为未显式标注语言的 service 探测语言。
+//
+// 探测目录优先用 deployment 的 work_dir，回退到项目 RootPath。
+func backfillServiceLanguages(p *model.Project) {
+	for i := range p.Services {
+		svc := &p.Services[i]
+		if svc.Language != "" {
+			continue
+		}
+		dir, command := languageProbeHints(*svc, p.RootPath)
+		svc.Language = langdetect.Detect(dir, command)
+	}
+}
+
+func languageProbeHints(svc model.Service, rootPath string) (dir, command string) {
+	for _, dep := range svc.Deployments {
+		if dep.Location != model.LocationLocal {
+			continue
+		}
+		wd := dep.WorkDir
+		if dep.Runtime != nil && dep.Runtime.WorkingDir != "" {
+			wd = dep.Runtime.WorkingDir
+		}
+		cmd := dep.Command
+		if dep.Runtime != nil && dep.Runtime.Command != "" {
+			cmd = dep.Runtime.Command
+		}
+		if wd == "" {
+			wd = rootPath
+		} else if !filepath.IsAbs(wd) {
+			wd = filepath.Join(rootPath, wd)
+		}
+		return wd, cmd
+	}
+	return rootPath, ""
 }
 
 // deploymentsFromYAML 将 yaml deployments 列表转为 model.Deployment 列表。
@@ -320,6 +362,7 @@ func servicesToYAML(services []model.Service) []serviceYAML {
 			Name:        s.Name,
 			Order:       s.Order,
 			Required:    s.Required,
+			Language:    string(s.Language),
 			Deployments: deploymentsToYAML(s.Deployments),
 		}
 	}

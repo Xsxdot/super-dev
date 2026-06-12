@@ -209,7 +209,6 @@ func TestRuntimeStatusReportsDebugRunning(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	project := codeDebugAPIProject(t.TempDir())
-	project.Services[0].Deployments[0].CodeDebug.StartMode = model.CodeDebugStartModeDebug
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
@@ -230,7 +229,6 @@ func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	project := codeDebugAPIProject(t.TempDir())
-	project.Services[0].Deployments[0].CodeDebug.KeepRuntimeOnLeaseClose = true
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
@@ -264,11 +262,11 @@ func codeDebugAPIProject(root string) model.Project {
 		ID: "p1", Name: "demo", RootPath: root,
 		Environments: []model.Environment{{Name: "dev", IsDev: true}},
 		Services: []model.Service{{
-			ID: "svc-api", Name: "api",
+			ID: "svc-api", Name: "api", Language: model.LanguageGo,
 			Deployments: []model.Deployment{{
 				ID: "dep-api-dev", EnvName: "dev", Location: model.LocationLocal,
 				Command: "go run ./cmd/api", WorkDir: root,
-				CodeDebug: &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo, Program: "."},
+				CodeDebug: &model.CodeDebugConfig{Program: "."},
 			}},
 		}},
 	}

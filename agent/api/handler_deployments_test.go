@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
-	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/process"
@@ -43,26 +42,16 @@ func TestDeploymentRuntimeEndpoint_AllowsDevLocalWithoutApproval(t *testing.T) {
 	assert.Equal(t, "starting", resp["status"])
 }
 
-func TestStartDeploymentUsesDebugRuntimeWhenStartModeDebug(t *testing.T) {
-	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
-	require.NoError(t, err)
-	t.Cleanup(app.Close)
-	project := codeDebugAPIProject(t.TempDir())
-	project.Services[0].Deployments[0].CodeDebug.StartMode = model.CodeDebugStartModeDebug
-	app.mu.Lock()
-	app.appendProjectLocked(project)
-	app.mu.Unlock()
+func TestShouldStartDeploymentInDebugIgnoresConfigDuringPlan1(t *testing.T) {
+	dep := model.Deployment{
+		ID:          "dep-api-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		CodeDebug:   &model.CodeDebugConfig{Policy: model.CodeDebugPolicyEnabled},
+	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/deployments/dep-api-dev/start", nil)
-	req.SetPathValue("id", "dep-api-dev")
-	rec := httptest.NewRecorder()
-
-	app.startDeployment(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	runtime, ok := app.codeDebug.RuntimeStatus("dep-api-dev")
-	require.True(t, ok)
-	assert.Equal(t, codedebug.RuntimeStateDebugRunning, runtime.State)
+	assert.False(t, shouldStartDeploymentInDebug(dep))
 }
 
 func TestDeploymentRuntimeEndpoint_RequiresApprovalForNonDevLocal(t *testing.T) {

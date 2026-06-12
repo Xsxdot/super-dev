@@ -255,11 +255,7 @@ func (a *App) planOperation(req operationTargetRequest) (operation.Plan, int, st
 		if status != http.StatusOK {
 			return operation.Plan{}, status, msg
 		}
-		provider := ""
-		if dep.CodeDebug != nil {
-			provider = string(dep.CodeDebug.Provider)
-		}
-		plan, err := operation.PlanCodeDebugOpen(project, service, dep, provider)
+		plan, err := operation.PlanCodeDebugOpen(project, service, dep, service.Language)
 		if err != nil {
 			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
 		}

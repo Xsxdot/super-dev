@@ -115,12 +115,10 @@ func runtimeActionLabel(kind string) string {
 	}
 }
 
+// shouldStartDeploymentInDebug 在 Plan 2 引入 mode 参数后由调用方传入决定。
+// 本阶段保留普通启动路径，debug 启动不再由配置触发。
 func shouldStartDeploymentInDebug(dep model.Deployment) bool {
-	return dep.CodeDebug != nil &&
-		dep.CodeDebug.Enabled &&
-		dep.CodeDebug.StartMode == model.CodeDebugStartModeDebug &&
-		dep.Location == model.LocationLocal &&
-		dep.EffectiveControlMode() == model.ControlModeManaged
+	return false
 }
 
 func deploymentScopedToHost(dep model.Deployment, hostID string) (model.Deployment, error) {

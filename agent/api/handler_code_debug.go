@@ -49,14 +49,7 @@ func (a *App) openCodeDebugSession(w http.ResponseWriter, r *http.Request) {
 		jsonCodeError(w, http.StatusNotFound, "debug_target_not_found", "debug target not found", nil)
 		return
 	}
-	provider := ""
-	if dep.CodeDebug != nil {
-		provider = string(dep.CodeDebug.Provider)
-	}
-	if req.Provider != "" {
-		provider = strings.TrimSpace(req.Provider)
-	}
-	plan, err := operation.PlanCodeDebugOpen(project, svc, dep, provider)
+	plan, err := operation.PlanCodeDebugOpen(project, svc, dep, svc.Language)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid operation")
 		return
@@ -94,16 +87,13 @@ func (a *App) closeCodeDebugSession(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	session, ok := a.codeDebug.Status(r.PathValue("id"))
+	_, ok := a.codeDebug.Status(r.PathValue("id"))
 	if !ok {
 		writeCodeDebugError(w, codedebug.ErrSessionNotFound)
 		return
 	}
 	if req.StopRuntime == nil {
 		stopRuntime := true
-		if dep, _, ok := a.findDeployment(session.DeploymentID); ok && dep.CodeDebug != nil {
-			stopRuntime = !dep.CodeDebug.KeepRuntimeOnLeaseClose
-		}
 		req.StopRuntime = &stopRuntime
 	}
 	if err := a.codeDebug.Close(r.PathValue("id"), req); err != nil {
