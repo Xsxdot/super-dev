@@ -230,13 +230,13 @@ export interface WebEntrypointConfig {
   ai_debug?: WebAIDebugConfig
 }
 
+export type ServiceLanguage = 'go' | 'node' | 'python'
 export type CodeDebugProvider = 'go' | 'python' | 'node'
 export type CodeDebugMode = 'launch'
-export type CodeDebugStartMode = 'normal' | 'debug'
+export type CodeDebugPolicy = 'auto' | 'enabled' | 'disabled'
 
 export interface CodeDebugConfig {
-  enabled: boolean
-  provider?: CodeDebugProvider
+  policy?: CodeDebugPolicy
   mode?: CodeDebugMode
   program?: string
   args?: string[]
@@ -245,8 +245,6 @@ export interface CodeDebugConfig {
   adapter_command?: string
   adapter_args?: string[]
   stop_on_entry?: boolean
-  start_mode?: CodeDebugStartMode
-  keep_runtime_on_lease_close?: boolean
 }
 
 export interface PipelineEnvironment {
@@ -453,6 +451,7 @@ export interface Service {
   replicas?: number
   required: boolean
   order: number
+  language?: ServiceLanguage
   deployments?: Deployment[]
 }
 
@@ -827,6 +826,7 @@ export interface SetupServiceEntry {
   name: string
   required: boolean
   order: number
+  language?: ServiceLanguage
   deployments: SetupDeployment[]
 }
 

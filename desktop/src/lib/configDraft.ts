@@ -33,6 +33,7 @@ export interface ConfigDraftService {
   name: string
   required: boolean
   order: number
+  language?: Project['services'][number]['language']
   deployments: Deployment[]
 }
 
@@ -188,6 +189,7 @@ export function projectToDraft(p: Project): ConfigDraft {
       name: s.name,
       required: s.required,
       order: s.order,
+      language: s.language,
       deployments: (s.deployments ?? []).map(d => normalizeDeployment(d)),
     })),
     pipelines: (p.pipelines ?? []).map(pipeline => clone(pipeline)),
@@ -238,6 +240,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       name: s.name,
       required: s.required,
       order: s.order,
+      language: s.language,
       deployments: s.deployments.map<SetupDeployment>((d) => {
         const dep = normalizeDeployment(d)
         const runtime = dep.runtime!
@@ -383,20 +386,11 @@ export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
         errors.push(issue('config', 'validation.logTargetRequired', { service: s.name, env: d.env_name }))
       }
       const codeDebug = dep.code_debug
-      if (codeDebug?.enabled) {
-        const isLocalManagedCommand = dep.location === 'local' && dep.control_mode === 'managed' && dep.runtime?.type === 'command'
-        if (!isLocalManagedCommand) {
-          errors.push(issue('config', 'validation.codeDebugLocalCommandOnly', { service: s.name, env: d.env_name }))
-        }
-        if (codeDebug.provider && !['go', 'python', 'node'].includes(codeDebug.provider)) {
-          errors.push(issue('config', 'validation.codeDebugProviderInvalid', { service: s.name, env: d.env_name }))
-        }
-        if (codeDebug.start_mode && !['normal', 'debug'].includes(codeDebug.start_mode)) {
-          errors.push(issue('config', 'validation.codeDebugStartModeInvalid', { service: s.name, env: d.env_name }))
-        }
-        if (codeDebug.provider === 'node' && (codeDebug.adapter_command ?? '').trim() === '') {
-          errors.push(issue('config', 'validation.codeDebugNodeAdapterRequired', { service: s.name, env: d.env_name }))
-        }
+      if (codeDebug?.policy && !['auto', 'enabled', 'disabled'].includes(codeDebug.policy)) {
+        errors.push(issue('config', 'validation.codeDebugPolicyInvalid', { service: s.name, env: d.env_name }))
+      }
+      if (codeDebug && d.location !== 'local') {
+        errors.push(issue('config', 'validation.codeDebugLocalCommandOnly', { service: s.name, env: d.env_name }))
       }
     }
   }

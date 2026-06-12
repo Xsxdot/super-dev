@@ -142,12 +142,9 @@ describe('configDraft', () => {
       logs: { type: 'process' },
       status: '',
       code_debug: {
-        enabled: true,
-        provider: 'go',
+        policy: 'enabled',
         mode: 'launch',
         program: 'cmd/server',
-        start_mode: 'debug',
-        keep_runtime_on_lease_close: true,
         stop_on_entry: false,
       },
     }]
@@ -156,17 +153,14 @@ describe('configDraft', () => {
     const payload = draftToPayload(draft)
 
     expect(payload.services[0].deployments[0].code_debug).toEqual({
-      enabled: true,
-      provider: 'go',
+      policy: 'enabled',
       mode: 'launch',
       program: 'cmd/server',
-      start_mode: 'debug',
-      keep_runtime_on_lease_close: true,
       stop_on_entry: false,
     })
   })
 
-  it('reports code debug when enabled for unsupported deployment runtime', () => {
+  it('reports code debug for unsupported deployment runtime', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments = [{
       id: 'dep-api-prod',
@@ -177,7 +171,7 @@ describe('configDraft', () => {
       logs: { type: 'journalctl', target: 'api.service' },
       host_ids: ['host-1'],
       status: '',
-      code_debug: { enabled: true, provider: 'go', start_mode: 'debug' },
+      code_debug: { policy: 'enabled' },
     }]
 
     const issues = validateDraftDetailed(draft)
@@ -186,6 +180,15 @@ describe('configDraft', () => {
       scope: 'config',
       key: 'validation.codeDebugLocalCommandOnly',
     }))
+  })
+
+  it('flags invalid code_debug policy', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments[0].code_debug = { policy: 'bogus' as any }
+
+    const errors = validateDraftDetailed(draft)
+
+    expect(errors.some(e => e.key === 'validation.codeDebugPolicyInvalid')).toBe(true)
   })
 
   it('projectToDraft 和 draftToPayload 保留 launchd runtime 与 macOS 日志', () => {
