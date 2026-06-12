@@ -124,6 +124,13 @@ describe('settingsStore', () => {
     ])
   })
 
+  it('默认启用 code debug 操作审批', () => {
+    const store = useSettingsStore()
+
+    expect(store.agentSettings.approval?.code_debug_open).toBe(true)
+    expect(store.agentSettings.approval?.code_debug_evaluate).toBe(true)
+  })
+
   it('setLocale 更新 store 状态和 localStorage', () => {
     const store = useSettingsStore()
 

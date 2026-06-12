@@ -109,6 +109,8 @@ describe('OperationApprovalsTab', () => {
         pipeline_run: true,
         template_import: true,
         browser_debug_open: true,
+        code_debug_open: true,
+        code_debug_evaluate: true,
         grace_minutes: 15,
       },
     }
@@ -122,6 +124,8 @@ describe('OperationApprovalsTab', () => {
         pipeline_run: true,
         template_import: true,
         browser_debug_open: false,
+        code_debug_open: true,
+        code_debug_evaluate: true,
         grace_minutes: 30,
       },
     } as any)
@@ -139,9 +143,45 @@ describe('OperationApprovalsTab', () => {
         pipeline_run: true,
         template_import: true,
         browser_debug_open: false,
+        code_debug_open: true,
+        code_debug_evaluate: true,
         grace_minutes: 30,
       },
     })
+  })
+
+  it('saves code debug approval policy switches', async () => {
+    const approvalStore = useOperationApprovalStore()
+    vi.spyOn(approvalStore, 'loadPending').mockResolvedValue(undefined)
+    const settingsStore = useSettingsStore()
+    settingsStore.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      approval: {
+        config_upsert: true,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        browser_debug_open: true,
+        code_debug_open: true,
+        code_debug_evaluate: true,
+        grace_minutes: 15,
+      },
+    } as any
+    vi.spyOn(settingsStore, 'loadAgentSettings').mockResolvedValue(undefined)
+    const saveApprovalPolicy = vi.spyOn(settingsStore, 'saveApprovalPolicy').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    await wrapper.get('[data-test="approval-switch-code-debug-open"]').setValue(false)
+    await wrapper.get('[data-test="approval-switch-code-debug-evaluate"]').setValue(false)
+    await wrapper.get('[data-test="approval-settings-save"]').trigger('click')
+
+    expect(saveApprovalPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      code_debug_open: false,
+      code_debug_evaluate: false,
+    }))
   })
 
   it('shows a confirmation after saving approval policy', async () => {
@@ -157,6 +197,8 @@ describe('OperationApprovalsTab', () => {
         pipeline_run: true,
         template_import: true,
         browser_debug_open: true,
+        code_debug_open: true,
+        code_debug_evaluate: true,
         grace_minutes: 15,
       },
     }
@@ -170,6 +212,8 @@ describe('OperationApprovalsTab', () => {
         pipeline_run: true,
         template_import: true,
         browser_debug_open: true,
+        code_debug_open: true,
+        code_debug_evaluate: true,
         grace_minutes: 15,
       },
     } as any)

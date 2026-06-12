@@ -47,6 +47,8 @@ export const useSettingsStore = defineStore('settings', () => {
       pipeline_run: true,
       template_import: true,
       browser_debug_open: true,
+      code_debug_open: true,
+      code_debug_evaluate: true,
       grace_minutes: 15,
     },
     debug_browser: {

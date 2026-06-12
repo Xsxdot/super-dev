@@ -241,6 +241,8 @@ export default {
       pipelineRun: 'Pipeline runs',
       templateImport: 'Template import',
       browserDebugOpen: 'Open browser debug',
+      codeDebugOpen: 'Open code debug session',
+      codeDebugEvaluate: 'Evaluate in code debug session',
       graceMinutes: 'Grace window (minutes)',
     },
     debugBrowser: {

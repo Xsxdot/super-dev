@@ -558,6 +558,8 @@ export interface ApprovalPolicy {
   pipeline_run: boolean
   template_import: boolean
   browser_debug_open: boolean
+  code_debug_open: boolean
+  code_debug_evaluate: boolean
   grace_minutes: number
 }
 

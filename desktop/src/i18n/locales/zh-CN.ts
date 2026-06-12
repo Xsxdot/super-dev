@@ -241,6 +241,8 @@ export default {
       pipelineRun: '流水线运行',
       templateImport: '模板导入',
       browserDebugOpen: '打开浏览器调试',
+      codeDebugOpen: '打开代码调试会话',
+      codeDebugEvaluate: '代码调试会话中求值',
       graceMinutes: '免审窗口（分钟）',
     },
     debugBrowser: {
