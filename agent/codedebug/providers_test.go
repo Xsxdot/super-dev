@@ -62,3 +62,15 @@ func TestNodeProviderRequiresAdapterCommand(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrAdapterUnavailable)
 }
+
+func TestProviderAttachCapability(t *testing.T) {
+	if NewGoProvider().AttachCapability() != AttachModePID {
+		t.Fatal("Go should support pid-attach")
+	}
+	if NewPythonProvider("python3").AttachCapability() != AttachModeNone {
+		t.Fatal("Python attach is phase 2 (none for now)")
+	}
+	if NewNodeProvider().AttachCapability() != AttachModeNone {
+		t.Fatal("Node attach is phase 2 (none for now)")
+	}
+}

@@ -172,6 +172,18 @@ type LaunchConfig struct {
 	StopOnEntry    bool
 }
 
+// AttachMode 描述 provider 对运行中进程的附加能力档位。
+type AttachMode string
+
+const (
+	// AttachModeNone 不支持 attach，调试只能 launch。
+	AttachModeNone AttachMode = "none"
+	// AttachModePID 支持按进程 PID 直接附加（零预埋）。
+	AttachModePID AttachMode = "pid-attach"
+	// AttachModeListen 需 debug-ready 启动预埋监听端口后附加（二期）。
+	AttachModeListen AttachMode = "listen-attach"
+)
+
 // RuntimeState 描述 deployment 级 Debug Runtime 的当前状态。
 type RuntimeState string
 

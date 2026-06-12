@@ -48,6 +48,10 @@ func (c AdapterCommand) Summary() string {
 type Provider interface {
 	AdapterCommand(LaunchConfig) (AdapterCommand, error)
 	LaunchArguments(LaunchConfig) map[string]any
+	// AttachCapability 返回 provider 对运行中进程的附加能力档位。
+	AttachCapability() AttachMode
+	// AttachArguments 构造 DAP attach 请求参数（仅 AttachModePID/Listen 有效）。
+	AttachArguments(LaunchConfig, int) map[string]any
 }
 
 // GoProvider 构建 Delve DAP adapter 配置。
@@ -79,6 +83,18 @@ func (GoProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 		"args":        cfg.Args,
 		"env":         cfg.Env,
 		"stopOnEntry": cfg.StopOnEntry,
+	}
+}
+
+// AttachCapability 返回 Go 的附加档位：dlv 支持按 PID 本地附加。
+func (GoProvider) AttachCapability() AttachMode { return AttachModePID }
+
+// AttachArguments 构造 dlv DAP attach 请求参数（本地按 PID 附加）。
+func (GoProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]any {
+	return map[string]any{
+		"mode":      "local",
+		"processId": processID,
+		"cwd":       cfg.WorkingDir,
 	}
 }
 
@@ -118,6 +134,11 @@ func (PythonProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
+func (PythonProvider) AttachCapability() AttachMode { return AttachModeNone }
+func (PythonProvider) AttachArguments(LaunchConfig, int) map[string]any {
+	return nil
+}
+
 // NodeProvider 构建实验态 Node DAP adapter 配置。
 type NodeProvider struct{}
 
@@ -151,6 +172,11 @@ func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 		"env":         cfg.Env,
 		"stopOnEntry": cfg.StopOnEntry,
 	}
+}
+
+func (NodeProvider) AttachCapability() AttachMode { return AttachModeNone }
+func (NodeProvider) AttachArguments(LaunchConfig, int) map[string]any {
+	return nil
 }
 
 func copyEnv(in map[string]string) map[string]string {
