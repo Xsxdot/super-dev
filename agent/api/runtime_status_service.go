@@ -77,9 +77,22 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 	if got.Health == model.HealthStopped && s.localDeploymentActive(projectID, dep.ID) {
 		got.Health = model.HealthRunning
 	}
+	var debugger *model.DebuggerStatus
 	if runtime, ok := s.app.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
-		got.Health = model.HealthDebugRunning
-		got.Base = "debug"
+		// debug runtime 在跑：health 仍按普通运行评估，调试态走独立维度。
+		if got.Health == model.HealthStopped {
+			got.Health = model.HealthRunning
+		}
+		origin := model.DebuggerOriginLaunched
+		if runtime.Origin == "attached" {
+			origin = model.DebuggerOriginAttached
+		}
+		debugger = &model.DebuggerStatus{
+			State:       model.DebuggerStateAttached,
+			Language:    serviceLanguageFor(svc),
+			Origin:      origin,
+			LeaseActive: s.app.codeDebug.LeaseActive(dep.ID),
+		}
 	}
 	inst := model.InstanceStatus{
 		ServiceID:    svc.ID,
@@ -90,10 +103,17 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 		IsLocal:      true,
 		Metrics:      got,
 	}
+	inst.Debugger = debugger
 	if err != nil {
 		inst.Error = err.Error()
 	}
 	return inst
+}
+
+// serviceLanguageFor 读取服务的语言身份，供 debugger 状态展示。
+// language 是 Service 的固有属性，此处只是消费它，不为 debugger 而存在。
+func serviceLanguageFor(svc model.Service) model.ServiceLanguage {
+	return svc.Language
 }
 
 func (s *runtimeStatusService) localDeploymentActive(projectID, deploymentID string) bool {

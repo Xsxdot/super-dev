@@ -200,7 +200,7 @@ func TestWriteCodeDebugErrorIncludesAdapterRemediationData(t *testing.T) {
 	assert.NotEmpty(t, body["remediation_hint"])
 }
 
-func TestRuntimeStatusReportsDebugRunning(t *testing.T) {
+func TestRuntimeStatusReportsDebuggerDimension(t *testing.T) {
 	app, err := NewApp(AppConfig{
 		DataDir:                  t.TempDir(),
 		CodeDebugManagerOverride: codeDebugManagerForAPITest(),
@@ -220,8 +220,12 @@ func TestRuntimeStatusReportsDebugRunning(t *testing.T) {
 
 	require.Len(t, got.Environments, 1)
 	require.Len(t, got.Environments[0].Instances, 1)
-	assert.Equal(t, model.HealthDebugRunning, got.Environments[0].Instances[0].Metrics.Health)
-	assert.Equal(t, "debug", got.Environments[0].Instances[0].Metrics.Base)
+	inst := got.Environments[0].Instances[0]
+	assert.Equal(t, model.HealthRunning, inst.Metrics.Health)
+	require.NotNil(t, inst.Debugger)
+	assert.Equal(t, model.DebuggerStateAttached, inst.Debugger.State)
+	assert.Equal(t, model.DebuggerOriginLaunched, inst.Debugger.Origin)
+	assert.Equal(t, model.LanguageGo, inst.Debugger.Language)
 }
 
 func TestCloseCodeDebugSessionCanKeepRuntime(t *testing.T) {
