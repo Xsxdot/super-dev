@@ -53,9 +53,11 @@ type ManagerOptions struct {
 
 type runtimeRecord struct {
 	Runtime
-	rootPath string
-	dap      DAP
-	close    func() error
+	rootPath   string
+	dap        DAP
+	close      func() error
+	debugStore *debuggerSnapshotStore
+	pump       *eventPump
 }
 
 type sessionRecord struct {
@@ -200,11 +202,15 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
 	}
+	store := &debuggerSnapshotStore{}
+	pump := newEventPump(dap, store)
+	pump.start(context.Background())
 	if cfg.StopOnEntry {
 		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_, err := dap.WaitForStopped(waitCtx)
 		cancel()
 		if err != nil {
+			pump.stop()
 			_ = dap.Close()
 			_ = closeProcessIfPresent(closeProcess)
 			return Runtime{}, err
@@ -225,9 +231,12 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 			CreatedAt:    now,
 			LastUsedAt:   now,
 		},
-		rootPath: cfg.Target.RootPath,
-		dap:      dap,
+		rootPath:   cfg.Target.RootPath,
+		dap:        dap,
+		debugStore: store,
+		pump:       pump,
 		close: func() error {
+			pump.stop()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			_ = dap.Disconnect(ctx)
@@ -279,6 +288,26 @@ func (m *Manager) RuntimeStatus(deploymentID string) (Runtime, bool) {
 		return Runtime{}, false
 	}
 	return runtime.Runtime, true
+}
+
+// DebuggerSnapshot 返回指定 deployment 的 debugger 实时快照。
+//
+// 快照由 runtime 自己的事件泵维护；这里仅取出 store 指针后在 manager 锁外读取，
+// 避免 manager 生命周期锁和快照锁互相嵌套。
+func (m *Manager) DebuggerSnapshot(deploymentID string) (DebuggerSnapshot, bool) {
+	deploymentID = strings.TrimSpace(deploymentID)
+	m.mu.Lock()
+	record, ok := m.runtimes[deploymentID]
+	alive := ok && record.Alive && record.debugStore != nil
+	var store *debuggerSnapshotStore
+	if alive {
+		store = record.debugStore
+	}
+	m.mu.Unlock()
+	if !alive {
+		return DebuggerSnapshot{}, false
+	}
+	return store.get(), true
 }
 
 // LeaseActive 返回指定 deployment 是否存在活跃 AI lease。

@@ -98,6 +98,32 @@ func TestStartRuntimeOriginLaunched(t *testing.T) {
 	assert.Equal(t, "launched", rt.Origin)
 }
 
+func TestManagerDebuggerSnapshotDefaultsAttached(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	runtime, err := mgr.StartRuntime(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	snap, ok := mgr.DebuggerSnapshot(runtime.DeploymentID)
+	require.True(t, ok)
+	assert.Equal(t, "attached", snap.State)
+}
+
+func TestManagerDebuggerSnapshotMissing(t *testing.T) {
+	mgr := NewManager(ManagerOptions{})
+
+	_, ok := mgr.DebuggerSnapshot("nonexistent")
+
+	assert.False(t, ok)
+}
+
 func TestManagerCloseStopsAdapter(t *testing.T) {
 	closed := false
 	mgr := NewManager(ManagerOptions{
