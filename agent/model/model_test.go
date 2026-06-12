@@ -34,6 +34,33 @@ func TestServiceLanguageKnown(t *testing.T) {
 	}
 }
 
+func TestCodeDebugPolicyValues(t *testing.T) {
+	cases := []struct {
+		p    model.CodeDebugPolicy
+		want bool
+	}{
+		{model.CodeDebugPolicyAuto, true},
+		{model.CodeDebugPolicyEnabled, true},
+		{model.CodeDebugPolicyDisabled, true},
+		{model.CodeDebugPolicy("bogus"), false},
+		{model.CodeDebugPolicy(""), true},
+	}
+	for _, c := range cases {
+		if got := c.p.Valid(); got != c.want {
+			t.Fatalf("Valid(%q)=%v want %v", c.p, got, c.want)
+		}
+	}
+}
+
+func TestCodeDebugPolicyEffective(t *testing.T) {
+	if model.CodeDebugPolicy("").Effective() != model.CodeDebugPolicyAuto {
+		t.Fatal("empty policy should normalize to auto")
+	}
+	if model.CodeDebugPolicyDisabled.Effective() != model.CodeDebugPolicyDisabled {
+		t.Fatal("disabled stays disabled")
+	}
+}
+
 func TestProjectEnvSelectedIDs(t *testing.T) {
 	p := model.Project{Name: "myapp"}
 	assert.Empty(t, p.EnvSelectedServiceIDs)

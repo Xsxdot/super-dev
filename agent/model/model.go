@@ -785,38 +785,57 @@ const (
 	CodeDebugModeLaunch CodeDebugMode = "launch"
 )
 
-// CodeDebugStartMode 表示 deployment 普通 Start 动作使用 normal runtime 还是 Debug Runtime。
-type CodeDebugStartMode string
+// CodeDebugPolicy 描述某 deployment 的 AI 调试放行策略。
+//
+// 关闭调试是显式操作；开启不是——dev 环境默认放行。
+type CodeDebugPolicy string
 
 const (
-	// CodeDebugStartModeNormal 表示服务 Start 仍按普通 command runtime 启动。
-	CodeDebugStartModeNormal CodeDebugStartMode = "normal"
-	// CodeDebugStartModeDebug 表示服务 Start 使用 code_debug 配置启动 Debug Runtime。
-	CodeDebugStartModeDebug CodeDebugStartMode = "debug"
+	// CodeDebugPolicyAuto 缺省：随 Environment.IsDev 放行，非 dev 不放行。
+	CodeDebugPolicyAuto CodeDebugPolicy = "auto"
+	// CodeDebugPolicyEnabled 显式放行，用于非 dev 环境特批。
+	CodeDebugPolicyEnabled CodeDebugPolicy = "enabled"
+	// CodeDebugPolicyDisabled 显式关闭此 deployment 的 AI 调试。
+	CodeDebugPolicyDisabled CodeDebugPolicy = "disabled"
 )
 
-// CodeDebugConfig 描述本机代码调试能力配置。
+// Valid 返回 policy 是否为合法取值（空视为 auto，合法）。
+func (p CodeDebugPolicy) Valid() bool {
+	switch p {
+	case "", CodeDebugPolicyAuto, CodeDebugPolicyEnabled, CodeDebugPolicyDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Effective 把空 policy 归一化为 auto。
+func (p CodeDebugPolicy) Effective() CodeDebugPolicy {
+	if p == "" {
+		return CodeDebugPolicyAuto
+	}
+	return p
+}
+
+// CodeDebugConfig 描述本机代码调试能力的可选覆盖项。
 //
 // 职责：
-//   - 声明 deployment 是否允许 AI 打开代码调试会话
-//   - 保存语言 provider、入口程序、参数和 adapter 配置
+//   - policy 控制 AI 调试放行（缺省随 dev 环境）
+//   - 其余字段是 launch 入口/参数/adapter 的可选 override，缺省由探测与推导补齐
 //
 // 边界：
+//   - 不再声明 enabled/provider/start_mode/keep_runtime；provider 由 service.language 推导
 //   - 不保存运行时 session ID
-//   - 不改变普通 service 启停命令
 type CodeDebugConfig struct {
-	Enabled                 bool               `json:"enabled" yaml:"enabled"`
-	Provider                CodeDebugProvider  `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Mode                    CodeDebugMode      `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Program                 string             `json:"program,omitempty" yaml:"program,omitempty"`
-	Args                    []string           `json:"args,omitempty" yaml:"args,omitempty"`
-	WorkingDir              string             `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
-	EnvVars                 map[string]string  `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
-	AdapterCommand          string             `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
-	AdapterArgs             []string           `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
-	StartMode               CodeDebugStartMode `json:"start_mode,omitempty" yaml:"start_mode,omitempty"`
-	KeepRuntimeOnLeaseClose bool               `json:"keep_runtime_on_lease_close,omitempty" yaml:"keep_runtime_on_lease_close,omitempty"`
-	StopOnEntry             bool               `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
+	Policy         CodeDebugPolicy   `json:"policy,omitempty" yaml:"policy,omitempty"`
+	Mode           CodeDebugMode     `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Program        string            `json:"program,omitempty" yaml:"program,omitempty"`
+	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	WorkingDir     string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	EnvVars        map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
+	AdapterCommand string            `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
+	AdapterArgs    []string          `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
+	StopOnEntry    bool              `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
 }
 
 // Deployment 描述服务在某个环境下的一份具体实例。
