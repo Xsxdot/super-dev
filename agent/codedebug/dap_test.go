@@ -133,6 +133,42 @@ func TestDAPClientReceivesAsyncStoppedEvent(t *testing.T) {
 	assert.Equal(t, float64(1), body["threadId"])
 }
 
+func TestDAPClientSubscribeFanOut(t *testing.T) {
+	client := newTestDAPClient()
+	sub1, cancel1 := client.Subscribe()
+	defer cancel1()
+	sub2, cancel2 := client.Subscribe()
+	defer cancel2()
+
+	client.dispatchEvent(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
+
+	for i, ch := range []<-chan map[string]any{sub1, sub2} {
+		select {
+		case event := <-ch:
+			if event["event"] != "stopped" {
+				t.Fatalf("sub%d got %v", i+1, event["event"])
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("sub%d did not receive event", i+1)
+		}
+	}
+}
+
+func TestDAPClientSubscribeCancel(t *testing.T) {
+	client := newTestDAPClient()
+	sub, cancel := client.Subscribe()
+	cancel()
+
+	client.dispatchEvent(map[string]any{"event": "continued"})
+	select {
+	case _, ok := <-sub:
+		if ok {
+			t.Fatal("cancelled subscriber should not receive new events")
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestResponseBodyIncludesDAPErrorFormat(t *testing.T) {
 	_, err := responseBody("launch", map[string]any{
 		"type":    "response",
@@ -148,6 +184,10 @@ func TestResponseBodyIncludesDAPErrorFormat(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "build error details")
+}
+
+func newTestDAPClient() *DAPClient {
+	return &DAPClient{closed: make(chan struct{})}
 }
 
 func readDAPMessageForTest(t *testing.T, conn net.Conn) map[string]any {

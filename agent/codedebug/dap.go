@@ -33,8 +33,8 @@ var _ DAP = (*DAPClient)(nil)
 //     terminated）。如果只在某次 Request 的循环里被动读，continue 之后若不再
 //     发请求，stopped 事件就永远读不到；这正是断点调试最核心的时序。
 //   - 因此用单一 readLoop 协程独占读取 conn：response 按 request_seq 路由给
-//     对应的等待者，event 投递到 events channel。所有调用方并发安全，且不再
-//     有人直接读 conn。
+//     对应的等待者，event 扇出到每个订阅者。所有调用方并发安全，且不再有人
+//     直接读 conn。
 type DAPClient struct {
 	conn    net.Conn
 	seq     atomic.Int64
@@ -42,9 +42,12 @@ type DAPClient struct {
 
 	mu       sync.Mutex
 	pending  map[int]chan map[string]any
-	events   chan map[string]any
 	closed   chan struct{}
 	closeErr error
+
+	subMu       sync.Mutex
+	subscribers map[int]chan map[string]any
+	nextSubID   int
 }
 
 // DialDAP 建立到 DAP adapter 的 TCP 连接并启动独立读协程。
@@ -55,10 +58,10 @@ func DialDAP(ctx context.Context, addr string, timeout time.Duration) (*DAPClien
 		return nil, err
 	}
 	c := &DAPClient{
-		conn:    conn,
-		pending: make(map[int]chan map[string]any),
-		events:  make(chan map[string]any, 64),
-		closed:  make(chan struct{}),
+		conn:        conn,
+		pending:     make(map[int]chan map[string]any),
+		closed:      make(chan struct{}),
+		subscribers: map[int]chan map[string]any{},
 	}
 	go c.readLoop(bufio.NewReader(conn))
 	return c, nil
@@ -101,11 +104,50 @@ func (c *DAPClient) readLoop(r *bufio.Reader) {
 				ch <- msg
 			}
 		case "event":
-			select {
-			case c.events <- msg:
-			default:
-				// 事件通道满时丢弃新事件，避免阻塞唯一读协程拖死响应路由。
+			c.dispatchEvent(msg)
+		}
+	}
+}
+
+// Subscribe 注册一个 DAP 事件订阅者。
+//
+// 返回的通道只接收 event 消息；每个订阅者都有独立缓冲，事件泵和一次性等待
+// stopped 的调用方可以并存消费同一事件流，互不抢占。
+func (c *DAPClient) Subscribe() (<-chan map[string]any, func()) {
+	c.subMu.Lock()
+	if c.subscribers == nil {
+		c.subscribers = map[int]chan map[string]any{}
+	}
+	id := c.nextSubID
+	c.nextSubID++
+	ch := make(chan map[string]any, 64)
+	c.subscribers[id] = ch
+	c.subMu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			c.subMu.Lock()
+			if existing, ok := c.subscribers[id]; ok {
+				delete(c.subscribers, id)
+				close(existing)
 			}
+			c.subMu.Unlock()
+		})
+	}
+	return ch, cancel
+}
+
+// dispatchEvent 把 DAP event 扇出给所有订阅者。
+//
+// 单个订阅者来不及消费时只丢弃该订阅者的当前事件，避免阻塞唯一 readLoop。
+func (c *DAPClient) dispatchEvent(event map[string]any) {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	for _, ch := range c.subscribers {
+		select {
+		case ch <- event:
+		default:
 		}
 	}
 }
@@ -248,30 +290,20 @@ func intFromAny(v any) int {
 
 // WaitForStopped 等待 adapter 主动推送的 stopped 事件。
 //
-// 由独立读协程把事件喂进 c.events，因此 continue 之后无需再发任何请求。
+// 通过一次性订阅消费事件，与事件泵并存，两者各自拿到独立事件副本。
 func (c *DAPClient) WaitForStopped(ctx context.Context) (map[string]any, error) {
+	sub, cancel := c.Subscribe()
+	defer cancel()
 	for {
-		select {
-		case event := <-c.events:
-			if body, ok := stoppedBody(event); ok {
-				return body, nil
-			}
-			continue
-		default:
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-c.closed:
-			select {
-			case event := <-c.events:
-				if body, ok := stoppedBody(event); ok {
-					return body, nil
-				}
-			default:
-			}
 			return nil, fmt.Errorf("dap connection closed: %w", c.closeErr)
-		case event := <-c.events:
+		case event, ok := <-sub:
+			if !ok {
+				return nil, fmt.Errorf("dap subscription closed")
+			}
 			if body, ok := stoppedBody(event); ok {
 				return body, nil
 			}
