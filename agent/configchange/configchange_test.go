@@ -83,6 +83,44 @@ func TestServiceUpsertPreservesDeploymentWebConfig(t *testing.T) {
 	assert.True(t, got.AIDebug.Enabled)
 }
 
+func TestServiceUpsertPreservesDeploymentCodeDebugConfig(t *testing.T) {
+	project := sampleProject()
+	change := ChangeRequest{
+		Kind:      KindServiceUpsert,
+		ProjectID: "p1",
+		Service: &ServicePatch{
+			ID:   "svc-api",
+			Name: "api",
+			Deployments: []DeploymentPatch{{
+				ID:          "dep-api-dev",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Runtime:     &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "go run ./cmd/api"},
+				Logs:        &model.LogConfig{Type: model.LogKindProcess},
+				CodeDebug: &model.CodeDebugConfig{
+					Enabled:     true,
+					Provider:    model.CodeDebugProviderGo,
+					Mode:        model.CodeDebugModeLaunch,
+					StopOnEntry: true,
+				},
+			}},
+		},
+	}
+
+	updated, err := Apply(project, change)
+	require.NoError(t, err)
+	result := Validate(updated, change)
+
+	require.True(t, result.OK, result.Errors)
+	got := findServiceForTest(updated, "api").Deployments[0].CodeDebug
+	require.NotNil(t, got)
+	assert.True(t, got.Enabled)
+	assert.Equal(t, model.CodeDebugProviderGo, got.Provider)
+	assert.Equal(t, model.CodeDebugModeLaunch, got.Mode)
+	assert.True(t, got.StopOnEntry)
+}
+
 func TestServiceUpsertRejectsRemoteWebDebugV1(t *testing.T) {
 	project := sampleProject()
 	change := ChangeRequest{
@@ -148,6 +186,21 @@ func TestValidateCodeDebugRejectsUnsupportedProvider(t *testing.T) {
 
 	require.False(t, result.OK)
 	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.provider must be go, python, or node")
+}
+
+func TestValidateCodeDebugRejectsUnsupportedStartMode(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:   true,
+		Provider:  model.CodeDebugProviderGo,
+		Mode:      model.CodeDebugModeLaunch,
+		StartMode: model.CodeDebugStartMode("always"),
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.start_mode must be normal or debug")
 }
 
 func TestValidateCodeDebugRejectsProgramOutsideProjectRoot(t *testing.T) {
@@ -270,6 +323,34 @@ func TestDiffRedactsSecretValues(t *testing.T) {
 
 	assert.Contains(t, diff, DiffEntry{Path: "variables.API_TOKEN", Before: "[redacted]", After: "[redacted]"})
 	assert.Contains(t, diff, DiffEntry{Path: "variables.PUBLIC", Before: "old", After: "new-public"})
+}
+
+func TestDiffIncludesDeploymentCodeDebugChanges(t *testing.T) {
+	before := sampleProject()
+	after := sampleProject()
+	after.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
+		Enabled:                 true,
+		Provider:                model.CodeDebugProviderGo,
+		Mode:                    model.CodeDebugModeLaunch,
+		StartMode:               model.CodeDebugStartModeDebug,
+		KeepRuntimeOnLeaseClose: true,
+		StopOnEntry:             true,
+	}
+
+	diff := Diff(before, after)
+
+	assert.Contains(t, diff, DiffEntry{
+		Path:   "services[worker].deployments[dev].code_debug",
+		Before: map[string]any(nil),
+		After: map[string]any{
+			"enabled":                     true,
+			"provider":                    model.CodeDebugProviderGo,
+			"mode":                        model.CodeDebugModeLaunch,
+			"start_mode":                  model.CodeDebugStartModeDebug,
+			"keep_runtime_on_lease_close": true,
+			"stop_on_entry":               true,
+		},
+	})
 }
 
 func TestPlanConfigChangeRequiresApprovalAndHasStableFingerprint(t *testing.T) {

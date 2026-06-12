@@ -760,6 +760,16 @@ const (
 	CodeDebugModeLaunch CodeDebugMode = "launch"
 )
 
+// CodeDebugStartMode 表示 deployment 普通 Start 动作使用 normal runtime 还是 Debug Runtime。
+type CodeDebugStartMode string
+
+const (
+	// CodeDebugStartModeNormal 表示服务 Start 仍按普通 command runtime 启动。
+	CodeDebugStartModeNormal CodeDebugStartMode = "normal"
+	// CodeDebugStartModeDebug 表示服务 Start 使用 code_debug 配置启动 Debug Runtime。
+	CodeDebugStartModeDebug CodeDebugStartMode = "debug"
+)
+
 // CodeDebugConfig 描述本机代码调试能力配置。
 //
 // 职责：
@@ -770,16 +780,18 @@ const (
 //   - 不保存运行时 session ID
 //   - 不改变普通 service 启停命令
 type CodeDebugConfig struct {
-	Enabled        bool              `json:"enabled" yaml:"enabled"`
-	Provider       CodeDebugProvider `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Mode           CodeDebugMode     `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Program        string            `json:"program,omitempty" yaml:"program,omitempty"`
-	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
-	WorkingDir     string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
-	EnvVars        map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
-	AdapterCommand string            `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
-	AdapterArgs    []string          `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
-	StopOnEntry    bool              `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
+	Enabled                 bool               `json:"enabled" yaml:"enabled"`
+	Provider                CodeDebugProvider  `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Mode                    CodeDebugMode      `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Program                 string             `json:"program,omitempty" yaml:"program,omitempty"`
+	Args                    []string           `json:"args,omitempty" yaml:"args,omitempty"`
+	WorkingDir              string             `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	EnvVars                 map[string]string  `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
+	AdapterCommand          string             `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
+	AdapterArgs             []string           `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
+	StartMode               CodeDebugStartMode `json:"start_mode,omitempty" yaml:"start_mode,omitempty"`
+	KeepRuntimeOnLeaseClose bool               `json:"keep_runtime_on_lease_close,omitempty" yaml:"keep_runtime_on_lease_close,omitempty"`
+	StopOnEntry             bool               `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
 }
 
 // Deployment 描述服务在某个环境下的一份具体实例。

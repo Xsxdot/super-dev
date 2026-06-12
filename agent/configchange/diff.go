@@ -11,6 +11,7 @@ package configchange
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -128,6 +129,11 @@ func diffDeployments(serviceName string, before []model.Deployment, after []mode
 		if prev.Location != dep.Location {
 			out = append(out, DiffEntry{Path: path + ".location", Before: prev.Location, After: dep.Location})
 		}
+		beforeCodeDebug := codeDebugSummary(prev.CodeDebug)
+		afterCodeDebug := codeDebugSummary(dep.CodeDebug)
+		if !reflect.DeepEqual(beforeCodeDebug, afterCodeDebug) {
+			out = append(out, DiffEntry{Path: path + ".code_debug", Before: beforeCodeDebug, After: afterCodeDebug})
+		}
 	}
 	return out
 }
@@ -162,6 +168,47 @@ func serviceSummary(svc model.Service) map[string]any {
 
 func deploymentSummary(dep model.Deployment) map[string]any {
 	return map[string]any{"id": dep.ID, "env_name": dep.EnvName, "location": dep.Location, "control_mode": dep.EffectiveControlMode()}
+}
+
+func codeDebugSummary(cfg *model.CodeDebugConfig) map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	out := map[string]any{"enabled": cfg.Enabled}
+	if cfg.Provider != "" {
+		out["provider"] = cfg.Provider
+	}
+	if cfg.Mode != "" {
+		out["mode"] = cfg.Mode
+	}
+	if cfg.Program != "" {
+		out["program"] = cfg.Program
+	}
+	if cfg.WorkingDir != "" {
+		out["working_dir"] = cfg.WorkingDir
+	}
+	if cfg.StartMode != "" {
+		out["start_mode"] = cfg.StartMode
+	}
+	if cfg.KeepRuntimeOnLeaseClose {
+		out["keep_runtime_on_lease_close"] = true
+	}
+	if len(cfg.Args) > 0 {
+		out["args"] = cfg.Args
+	}
+	if len(cfg.EnvVars) > 0 {
+		out["env_vars"] = "[redacted]"
+	}
+	if cfg.AdapterCommand != "" {
+		out["adapter_command"] = cfg.AdapterCommand
+	}
+	if len(cfg.AdapterArgs) > 0 {
+		out["adapter_args"] = cfg.AdapterArgs
+	}
+	if cfg.StopOnEntry {
+		out["stop_on_entry"] = true
+	}
+	return out
 }
 
 func isSecretKey(key string) bool {

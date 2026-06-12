@@ -154,6 +154,11 @@ func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep mode
 	default:
 		errs = append(errs, "code_debug.mode must be launch")
 	}
+	switch dep.CodeDebug.StartMode {
+	case "", model.CodeDebugStartModeNormal, model.CodeDebugStartModeDebug:
+	default:
+		errs = append(errs, "code_debug.start_mode must be normal or debug")
+	}
 	provider := dep.CodeDebug.Provider
 	if provider == "" {
 		provider = codedebug.InferProvider(deploymentCommand(dep))

@@ -143,14 +143,16 @@ func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
 				Command:     "go run ./cmd/api",
 				WorkDir:     dir,
 				CodeDebug: &model.CodeDebugConfig{
-					Enabled:     true,
-					Provider:    model.CodeDebugProviderGo,
-					Mode:        model.CodeDebugModeLaunch,
-					Program:     "./cmd/api",
-					Args:        []string{"--port", "18080"},
-					WorkingDir:  ".",
-					EnvVars:     map[string]string{"LOG_LEVEL": "debug"},
-					StopOnEntry: true,
+					Enabled:                 true,
+					Provider:                model.CodeDebugProviderGo,
+					Mode:                    model.CodeDebugModeLaunch,
+					Program:                 "./cmd/api",
+					Args:                    []string{"--port", "18080"},
+					WorkingDir:              ".",
+					EnvVars:                 map[string]string{"LOG_LEVEL": "debug"},
+					StartMode:               model.CodeDebugStartModeDebug,
+					KeepRuntimeOnLeaseClose: true,
+					StopOnEntry:             true,
 				},
 			}},
 		}},
@@ -170,6 +172,8 @@ func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
 	assert.Equal(t, []string{"--port", "18080"}, got.Args)
 	assert.Equal(t, ".", got.WorkingDir)
 	assert.Equal(t, map[string]string{"LOG_LEVEL": "debug"}, got.EnvVars)
+	assert.Equal(t, model.CodeDebugStartModeDebug, got.StartMode)
+	assert.True(t, got.KeepRuntimeOnLeaseClose)
 	assert.True(t, got.StopOnEntry)
 }
 
