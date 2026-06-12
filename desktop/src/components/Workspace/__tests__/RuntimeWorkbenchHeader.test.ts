@@ -19,6 +19,7 @@ import { installTestI18n } from '@/test-utils/i18n'
 import { AgentAPIError, api } from '@/api/agent'
 import type { Project, Service } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 
 const windowApiMock = vi.hoisted(() => ({
   startDragging: vi.fn(),
@@ -33,6 +34,7 @@ function makeService(): Service {
     id: 'svc-api',
     project_id: 'proj-1',
     name: 'sample-api',
+    language: 'go',
     status: 'running',
     required: false,
     order: 1,
@@ -202,6 +204,67 @@ describe('RuntimeWorkbenchHeader', () => {
       open_devtools: true,
     }, undefined)
     expect(wrapper.text()).toContain('brs_1')
+  })
+
+  it('renders Run and Debug buttons for the active deployment', () => {
+    const service = makeService()
+    service.status = 'stopped'
+    service.deployments![0].status = 'stopped'
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    expect(wrapper.find('[data-test="run-deployment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="debug-deployment"]').exists()).toBe(true)
+  })
+
+  it('disables Debug when the deployment cannot open code debug', () => {
+    const service = makeService()
+    service.language = undefined
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    expect(wrapper.find('[data-test="debug-deployment"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows debugger chip when attached', () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    useRuntimeStatusStore().statusByProject['proj-1'] = {
+      environments: [{
+        env_name: 'demo',
+        instances: [{
+          service_id: 'svc-api',
+          service_name: 'sample-api',
+          env_name: 'demo',
+          deployment_id: 'dep-api',
+          node_id: 'local',
+          node_name: 'MacBook-Pro.local',
+          is_local: true,
+          metrics: {
+            cpu_percent: null,
+            mem_bytes: null,
+            uptime_sec: null,
+            restarts: null,
+            health: 'running',
+            base: 'debug',
+          },
+          debugger: {
+            state: 'attached',
+            origin: 'launched',
+            language: 'go',
+          },
+        }],
+      }],
+    }
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    expect(wrapper.find('[data-test="debugger-chip"]').exists()).toBe(true)
   })
 
   it('disables browser debug when the active deployment is not running', async () => {

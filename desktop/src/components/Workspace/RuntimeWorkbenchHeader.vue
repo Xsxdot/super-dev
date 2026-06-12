@@ -14,17 +14,19 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { AgentAPIError, api, type BrowserSession } from '@/api/agent'
+import { AgentAPIError, api, type BrowserSession, type RuntimeInstanceStatus } from '@/api/agent'
 import { MAX_PANEL_LEAVES, usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
 const bookmarkStore = useBookmarkStore()
 const operationApprovalStore = useOperationApprovalStore()
+const runtimeStatusStore = useRuntimeStatusStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const appWindow = getCurrentWindow()
@@ -45,6 +47,22 @@ const primaryDeploymentInfo = computed(() => {
   if (tab?.type === 'deployment') return agentStore.serviceForDeployment(tab.deploymentId)
   const firstDeploymentId = openDeploymentIds.value[0]
   return firstDeploymentId ? agentStore.serviceForDeployment(firstDeploymentId) : undefined
+})
+
+const primaryProject = computed(() => {
+  const projectId = primaryDeploymentInfo.value?.service.project_id
+  return projectId ? agentStore.projectById(projectId) : undefined
+})
+
+const primaryRuntimeInstance = computed<RuntimeInstanceStatus | undefined>(() => {
+  const info = primaryDeploymentInfo.value
+  if (!info) return undefined
+  const status = runtimeStatusStore.statusByProject[info.service.project_id]
+  for (const env of status?.environments ?? []) {
+    const found = env.instances.find(instance => instance.deployment_id === info.deployment.id)
+    if (found) return found
+  }
+  return undefined
 })
 
 const runtimeLabel = computed(() => {
@@ -69,6 +87,37 @@ const maximizeLabel = computed(() =>
     : t('runtimeWorkbench.maximize'),
 )
 const canOpenBrowserDebug = computed(() => primaryDeploymentInfo.value?.deployment.status === 'running')
+const canStart = computed(() => !!primaryDeploymentInfo.value)
+const debuggerStatus = computed(() => primaryRuntimeInstance.value?.debugger)
+const debuggerState = computed(() => debuggerStatus.value?.state ?? 'none')
+const debugUnavailableReason = computed(() => {
+  const info = primaryDeploymentInfo.value
+  if (!info) return t('runtimeWorkbench.debugUnavailableNoDeployment')
+  const dep = info.deployment
+  const runtimeType = dep.runtime?.type ?? 'command'
+  const controlMode = dep.control_mode ?? 'managed'
+  const policy = dep.code_debug?.policy ?? 'auto'
+  const env = primaryProject.value?.environments?.find(item => item.name === info.envName)
+  if (dep.location !== 'local' || runtimeType !== 'command' || controlMode !== 'managed') {
+    return t('runtimeWorkbench.debugUnavailableTarget')
+  }
+  if (!info.service.language) return t('runtimeWorkbench.debugUnavailableLanguage')
+  if (policy === 'disabled') return t('runtimeWorkbench.debugUnavailablePolicy')
+  if (policy !== 'enabled' && !env?.is_dev) return t('runtimeWorkbench.debugUnavailableEnv')
+  return ''
+})
+const canDebug = computed(() => canStart.value && !debugUnavailableReason.value)
+const debuggerChipLabel = computed(() => {
+  const status = debuggerStatus.value
+  if (!status || status.state === 'none') return ''
+  if (status.state === 'paused') {
+    const pausedAt = status.paused_at
+    return pausedAt
+      ? `${t('runtimeWorkbench.debuggerPaused')} @ ${pausedAt.source}:${pausedAt.line}`
+      : t('runtimeWorkbench.debuggerPaused')
+  }
+  return t('runtimeWorkbench.debuggerAttached')
+})
 
 function persistActiveLayout() {
   workspace.saveActiveLogWorkspaceLayout()
@@ -97,6 +146,18 @@ async function openBrowserDebug() {
       ? t('runtimeWorkbench.browserDebugApprovalRequired')
       : browserDebugErrorMessage(error)
   }
+}
+
+async function onRun() {
+  const deploymentId = primaryDeploymentInfo.value?.deployment.id
+  if (!deploymentId || !canStart.value) return
+  await agentStore.startDeployment(deploymentId, 'normal')
+}
+
+async function onDebug() {
+  const deploymentId = primaryDeploymentInfo.value?.deployment.id
+  if (!deploymentId || !canDebug.value) return
+  await agentStore.startDeployment(deploymentId, 'debug')
 }
 
 function browserDebugErrorMessage(error: unknown): string {
@@ -159,6 +220,46 @@ function startWindowDrag(event: MouseEvent) {
       >
         {{ t('runtimeWorkbench.panelCount', { open: panelStore.allLeaves.length, max: MAX_PANEL_LEAVES }) }}
       </span>
+      <span
+        v-if="debuggerState !== 'none'"
+        class="status-chip debugger"
+        data-test="debugger-chip"
+      >
+        {{ debuggerChipLabel }}
+      </span>
+      <button
+        v-if="debuggerState === 'paused'"
+        type="button"
+        class="runtime-action-btn"
+        data-test="debugger-continue"
+        disabled
+      >
+        <Icon icon="lucide:step-forward" aria-hidden="true" />
+        {{ t('runtimeWorkbench.continue') }}
+      </button>
+      <button
+        v-if="primaryDeploymentInfo"
+        type="button"
+        class="runtime-action-btn"
+        data-test="run-deployment"
+        :disabled="!canStart"
+        @click="onRun"
+      >
+        <Icon icon="lucide:play" aria-hidden="true" />
+        {{ t('runtimeWorkbench.run') }}
+      </button>
+      <button
+        v-if="primaryDeploymentInfo"
+        type="button"
+        class="runtime-action-btn"
+        data-test="debug-deployment"
+        :disabled="!canDebug"
+        :title="canDebug ? t('runtimeWorkbench.debug') : debugUnavailableReason"
+        @click="onDebug"
+      >
+        <Icon icon="lucide:bug" aria-hidden="true" />
+        {{ t('runtimeWorkbench.debug') }}
+      </button>
       <template v-if="browserSession">
         <span class="status-chip browser-session" data-test="browser-debug-session">
           {{ browserSession.session_id }}
@@ -293,6 +394,12 @@ function startWindowDrag(event: MouseEvent) {
   color: #58a6ff;
 }
 
+.status-chip.debugger {
+  border-color: rgba(163, 113, 247, 0.34);
+  background: rgba(163, 113, 247, 0.1);
+  color: #d2a8ff;
+}
+
 .status-chip.browser-session {
   border-color: rgba(63, 185, 80, 0.28);
   background: rgba(63, 185, 80, 0.08);
@@ -326,6 +433,40 @@ function startWindowDrag(event: MouseEvent) {
   color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.runtime-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(139, 148, 158, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.runtime-action-btn :deep(svg) {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.runtime-action-btn:hover {
+  border-color: rgba(88, 166, 255, 0.45);
+  color: var(--text-primary);
+}
+
+.runtime-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .layout-btn {

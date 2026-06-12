@@ -81,9 +81,9 @@ export const useAgentStore = defineStore('agent', () => {
     projects.value = projects.value.filter(p => p.id !== id)
   }
 
-  async function startDeployment(id: string) {
+  async function startDeployment(id: string, mode?: 'normal' | 'debug') {
     try {
-      await api.startDeployment(id)
+      await api.startDeployment(id, mode)
     } catch (err) {
       if (await captureApprovalRequired(err)) return
       throw err
@@ -101,9 +101,9 @@ export const useAgentStore = defineStore('agent', () => {
     logLifecycleStore.recordMarker(id, 'stop')
   }
 
-  async function restartDeployment(id: string) {
+  async function restartDeployment(id: string, mode?: 'normal' | 'debug') {
     try {
-      await api.restartDeployment(id)
+      await api.restartDeployment(id, mode)
     } catch (err) {
       if (await captureApprovalRequired(err)) return
       throw err
