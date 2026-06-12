@@ -603,10 +603,6 @@ func (a *App) resolveDebugLease(w http.ResponseWriter, r *http.Request, project 
 	if session, ok := a.codeDebug.LeaseFor(dep.ID); ok {
 		return session, false, nil
 	}
-	if runtime, ok := a.codeDebug.RuntimeStatus(dep.ID); !ok || !runtime.Alive {
-		jsonCodeError(w, http.StatusConflict, "runtime_not_running", "debug runtime not running; start it with mode=debug first", nil)
-		return codedebug.Session{}, false, errLeaseUnavailable
-	}
 	plan, err := operation.PlanCodeDebugOpen(project, svc, dep, svc.Language)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid operation")
@@ -618,10 +614,22 @@ func (a *App) resolveDebugLease(w http.ResponseWriter, r *http.Request, project 
 	}
 	session, created, err := a.codeDebug.ResolveLease(r.Context(), project, svc, dep, approvalTokenFromRequest(r))
 	if err != nil {
+		switch {
+		case errors.Is(err, codedebug.ErrAttachUnsupported):
+			jsonCodeError(w, http.StatusConflict, "attach_unsupported",
+				"this service's language cannot attach to a running process; restart it with mode=debug to debug", nil)
+		case errors.Is(err, codedebug.ErrAttachTargetUnresolved):
+			jsonCodeError(w, http.StatusConflict, "attach_target_unresolved",
+				"could not locate the running process to attach; restart with mode=debug", nil)
+		case errors.Is(err, codedebug.ErrRuntimeNotRunning):
+			jsonCodeError(w, http.StatusConflict, "runtime_not_running",
+				"debug runtime not running; start it with mode=debug first", nil)
+		default:
+			writeCodeDebugError(w, err)
+		}
 		if approval != nil {
 			a.appendOperationExecutionFailure(r, plan, approval, "failed to resolve code debug lease: "+err.Error())
 		}
-		writeCodeDebugError(w, err)
 		return codedebug.Session{}, false, err
 	}
 	return session, created, nil

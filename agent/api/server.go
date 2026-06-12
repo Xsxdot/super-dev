@@ -291,9 +291,25 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Launch:     browserdebug.NewChromiumLauncher(browserProfileRoot, http.DefaultClient),
 		SessionTTL: browserTTL,
 	})
+	var app *App
 	codeDebug := cfg.CodeDebugManagerOverride
 	if codeDebug == nil {
-		codeDebug = codedebug.NewManager(codedebug.ManagerOptions{SessionTTL: 30 * time.Minute})
+		codeDebug = codedebug.NewManager(codedebug.ManagerOptions{
+			SessionTTL: 30 * time.Minute,
+			RunningProcess: func(deploymentID string) (int, int, bool) {
+				if app == nil {
+					return 0, 0, false
+				}
+				app.mu.RLock()
+				defer app.mu.RUnlock()
+				for _, mgr := range app.managers {
+					if mgr != nil && mgr.IsDeploymentActive(deploymentID) {
+						return mgr.DeploymentPID(deploymentID), mgr.DeploymentPGID(deploymentID), true
+					}
+				}
+				return 0, 0, false
+			},
+		})
 	}
 	browserControl := browsercontrol.NewPlaywrightController(filepath.Join(cfg.DataDir, "playwright-driver"))
 	tunnels := tunnel.NewManager(tunnel.NewSSHDialer())
@@ -364,7 +380,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	logCleanupCtx, logCleanupCancel := context.WithCancel(context.Background())
 	logCleanupDone := make(chan struct{})
 
-	app := &App{
+	app = &App{
 		cfg:                         cfg,
 		projects:                    []model.Project{},
 		managers:                    map[string]*process.Manager{},

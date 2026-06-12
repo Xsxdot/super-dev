@@ -379,6 +379,10 @@ func TestDeploymentDebugRuntimeNotRunning(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
+	settings, err := app.settings.Load()
+	require.NoError(t, err)
+	settings.Approval.CodeDebugOpen = false
+	require.NoError(t, app.settings.Save(settings))
 	project := codeDebugAPIProject(t.TempDir())
 	app.mu.Lock()
 	app.appendProjectLocked(project)
@@ -396,6 +400,35 @@ func TestDeploymentDebugRuntimeNotRunning(t *testing.T) {
 	assert.Contains(t, resp["error"], "mode=debug")
 }
 
+func TestResolveLeaseAttachUnsupportedRemediation(t *testing.T) {
+	app, err := NewApp(AppConfig{
+		DataDir:                  t.TempDir(),
+		CodeDebugManagerOverride: codeDebugManagerForAPITestWithRunningProcess(&fakeCodeDebugDAP{}, 4321, 4321),
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	settings, err := app.settings.Load()
+	require.NoError(t, err)
+	settings.Approval.CodeDebugOpen = false
+	require.NoError(t, app.settings.Save(settings))
+	project := codeDebugAPIProject(t.TempDir())
+	project.Services[0].Language = model.LanguagePython
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{
+		"source":    "main.py",
+		"line":      42,
+		"thread_id": 1,
+	}, http.StatusConflict)
+
+	assert.Equal(t, "attach_unsupported", resp["code"])
+	assert.Contains(t, resp["error"], "mode=debug")
+}
+
 func codeDebugManagerForAPITest() *codedebug.Manager {
 	return codeDebugManagerForAPITestWithDAP(&fakeCodeDebugDAP{})
 }
@@ -407,6 +440,19 @@ func codeDebugManagerForAPITestWithDAP(dap *fakeCodeDebugDAP) *codedebug.Manager
 		},
 		Dial:        func(context.Context, string, time.Duration) (codedebug.DAP, error) { return dap, nil },
 		ReservePort: func() (int, error) { return 39001, nil },
+	})
+}
+
+func codeDebugManagerForAPITestWithRunningProcess(dap *fakeCodeDebugDAP, mainPID, pgid int) *codedebug.Manager {
+	return codedebug.NewManager(codedebug.ManagerOptions{
+		AdapterLaunch: func(context.Context, codedebug.AdapterCommand) (codedebug.AdapterProcess, error) {
+			return codedebug.AdapterProcess{PID: 1, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (codedebug.DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+		RunningProcess: func(string) (int, int, bool) {
+			return mainPID, pgid, true
+		},
 	})
 }
 
