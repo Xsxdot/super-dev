@@ -16,6 +16,24 @@ func TestServiceDefaults(t *testing.T) {
 	assert.Equal(t, model.StatusStopped, s.Status)
 }
 
+func TestServiceLanguageKnown(t *testing.T) {
+	cases := []struct {
+		lang model.ServiceLanguage
+		want bool
+	}{
+		{model.LanguageGo, true},
+		{model.LanguageNode, true},
+		{model.LanguagePython, true},
+		{model.ServiceLanguage("cobol"), false},
+		{model.ServiceLanguage(""), false},
+	}
+	for _, c := range cases {
+		if got := c.lang.Known(); got != c.want {
+			t.Fatalf("Known(%q)=%v, want %v", c.lang, got, c.want)
+		}
+	}
+}
+
 func TestProjectEnvSelectedIDs(t *testing.T) {
 	p := model.Project{Name: "myapp"}
 	assert.Empty(t, p.EnvSelectedServiceIDs)

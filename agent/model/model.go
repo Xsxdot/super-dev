@@ -62,6 +62,9 @@ type Service struct {
 	Required  bool   `json:"required"   yaml:"required"`
 	Order     int    `json:"order"      yaml:"order"`
 
+	// Language 描述服务主要实现语言，用于推导调试器适配。探测得出，可手动修正。
+	Language ServiceLanguage `json:"language,omitempty" yaml:"language,omitempty"`
+
 	// Deployments 描述该服务在各环境的运行配置。
 	Deployments []Deployment `json:"deployments,omitempty" yaml:"deployments,omitempty"`
 
@@ -738,6 +741,28 @@ type WebReadinessConfig struct {
 // WebAIDebugConfig 描述该 Web 入口是否允许 AI 创建浏览器调试会话。
 type WebAIDebugConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+// ServiceLanguage 表示服务的主要实现语言，是调试器适配的依据。
+//
+// 语言由项目目录标记文件探测得出，用户可在服务表单中修正。
+// debug provider 由语言推导，不再单独配置。
+type ServiceLanguage string
+
+const (
+	LanguageGo     ServiceLanguage = "go"
+	LanguageNode   ServiceLanguage = "node"
+	LanguagePython ServiceLanguage = "python"
+)
+
+// Known 返回该语言是否为当前已注册支持的调试语言。
+func (l ServiceLanguage) Known() bool {
+	switch l {
+	case LanguageGo, LanguageNode, LanguagePython:
+		return true
+	default:
+		return false
+	}
 }
 
 // CodeDebugProvider 表示代码调试会话使用的语言调试器。
