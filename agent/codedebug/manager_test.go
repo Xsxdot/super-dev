@@ -111,7 +111,6 @@ func TestManagerCloseLeaseCanKeepDebugRuntime(t *testing.T) {
 		ReservePort: func() (int, error) { return 41001, nil },
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
-	dep.CodeDebug.KeepRuntimeOnLeaseClose = true
 
 	session, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
 	require.NoError(t, err)
@@ -136,7 +135,6 @@ func TestManagerOpenReusesExistingDebugRuntime(t *testing.T) {
 		ReservePort: func() (int, error) { return 41002 + launchCount, nil },
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
-	dep.CodeDebug.KeepRuntimeOnLeaseClose = true
 
 	first, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
 	require.NoError(t, err)
@@ -329,7 +327,8 @@ func TestManagerLaunchConfigInfersPythonProgramFromSimpleCommand(t *testing.T) {
 	mgr := NewManager(ManagerOptions{})
 	project, service, dep := managerTestTarget(root)
 	dep.Command = "python ./app.py --port 8000"
-	dep.CodeDebug = &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderPython}
+	service.Language = model.LanguagePython
+	dep.CodeDebug = &model.CodeDebugConfig{}
 
 	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 
@@ -343,7 +342,8 @@ func TestManagerLaunchConfigInfersPythonProgramRelativeToWorkingDir(t *testing.T
 	project, service, dep := managerTestTarget(root)
 	dep.Command = "python app.py --port 8000"
 	dep.WorkDir = filepath.Join(root, "server")
-	dep.CodeDebug = &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderPython}
+	service.Language = model.LanguagePython
+	dep.CodeDebug = &model.CodeDebugConfig{}
 
 	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 
@@ -356,9 +356,8 @@ func TestManagerLaunchConfigInfersNodeProgramFromSimpleCommand(t *testing.T) {
 	mgr := NewManager(ManagerOptions{})
 	project, service, dep := managerTestTarget(root)
 	dep.Command = "node server.js --watch"
+	service.Language = model.LanguageNode
 	dep.CodeDebug = &model.CodeDebugConfig{
-		Enabled:        true,
-		Provider:       model.CodeDebugProviderNode,
 		AdapterCommand: "node-debug-adapter",
 	}
 
@@ -379,9 +378,7 @@ func TestManagerLaunchConfigUsesWorkingDirRelativeGoProgram(t *testing.T) {
 		WorkingDir: dep.WorkDir,
 	}
 	dep.CodeDebug = &model.CodeDebugConfig{
-		Enabled:  true,
-		Provider: model.CodeDebugProviderGo,
-		Program:  "server/cmd/server",
+		Program: "server/cmd/server",
 	}
 
 	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
@@ -425,9 +422,9 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 		Location:  model.LocationLocal,
 		Command:   "go run ./cmd/api",
 		WorkDir:   root,
-		CodeDebug: &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo, Program: "."},
+		CodeDebug: &model.CodeDebugConfig{Program: "."},
 	}
-	service := model.Service{ID: "svc-api", Name: "api", Deployments: []model.Deployment{dep}}
+	service := model.Service{ID: "svc-api", Name: "api", Language: model.LanguageGo, Deployments: []model.Deployment{dep}}
 	project := model.Project{ID: "p1", Name: "demo", RootPath: root, Services: []model.Service{service}}
 	return project, service, dep
 }

@@ -39,6 +39,14 @@ const (
 	CodeDAPConnectionFailed = "dap_connection_failed"
 )
 
+// 不可打开原因码，对 AI 与 UI 稳定。
+const (
+	ReasonLanguageUnsupported = "language_unsupported"
+	ReasonEnvNotDebuggable    = "env_not_debuggable"
+	ReasonDisabledByConfig    = "disabled_by_config"
+	ReasonAdapterUnavailable  = "adapter_unavailable"
+)
+
 // AdapterErrorInfo 描述 adapter 启动/连接失败时暴露给调用方的稳定错误信息。
 type AdapterErrorInfo struct {
 	Code     string                  `json:"code"`
@@ -122,32 +130,29 @@ func adapterRemediationHint(code string, provider model.CodeDebugProvider) strin
 	}
 }
 
-// Target 描述一个允许打开代码调试会话的本机 deployment。
+// Target 描述一个本机 command deployment 的调试可用性。
 type Target struct {
-	ProjectID               string                   `json:"project_id"`
-	ProjectName             string                   `json:"project_name"`
-	RootPath                string                   `json:"root_path"`
-	ServiceID               string                   `json:"service_id"`
-	ServiceName             string                   `json:"service_name"`
-	DeploymentID            string                   `json:"deployment_id"`
-	EnvName                 string                   `json:"env_name"`
-	Provider                model.CodeDebugProvider  `json:"provider"`
-	Experimental            bool                     `json:"experimental,omitempty"`
-	Command                 string                   `json:"command,omitempty"`
-	WorkDir                 string                   `json:"work_dir,omitempty"`
-	Enabled                 bool                     `json:"enabled"`
-	StartMode               model.CodeDebugStartMode `json:"start_mode,omitempty"`
-	KeepRuntimeOnLeaseClose bool                     `json:"keep_runtime_on_lease_close,omitempty"`
-	RuntimeState            RuntimeState             `json:"runtime_state,omitempty"`
-	LeaseActive             bool                     `json:"lease_active,omitempty"`
-	CanOpen                 bool                     `json:"can_open"`
-	UnavailableReason       string                   `json:"unavailable_reason,omitempty"`
+	ProjectID         string                  `json:"project_id"`
+	ProjectName       string                  `json:"project_name"`
+	RootPath          string                  `json:"root_path"`
+	ServiceID         string                  `json:"service_id"`
+	ServiceName       string                  `json:"service_name"`
+	DeploymentID      string                  `json:"deployment_id"`
+	EnvName           string                  `json:"env_name"`
+	Language          model.ServiceLanguage   `json:"language,omitempty"`
+	Provider          model.CodeDebugProvider `json:"provider,omitempty"`
+	Experimental      bool                    `json:"experimental,omitempty"`
+	Command           string                  `json:"command,omitempty"`
+	WorkDir           string                  `json:"work_dir,omitempty"`
+	RuntimeState      RuntimeState            `json:"runtime_state,omitempty"`
+	LeaseActive       bool                    `json:"lease_active,omitempty"`
+	CanOpen           bool                    `json:"can_open"`
+	UnavailableReason string                  `json:"unavailable_reason,omitempty"`
 }
 
 // OpenRequest 描述创建代码调试会话的请求。
 type OpenRequest struct {
 	DeploymentID  string `json:"deployment_id"`
-	Provider      string `json:"provider,omitempty"`
 	StopOnEntry   *bool  `json:"stop_on_entry,omitempty"`
 	ApprovalToken string `json:"-"`
 }

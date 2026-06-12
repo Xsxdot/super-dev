@@ -18,53 +18,141 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-func TestListTargetsIncludesOnlyEnabledLocalCommandDeployments(t *testing.T) {
-	root := t.TempDir()
+func TestListTargetsLanguageAndCanOpen(t *testing.T) {
 	projects := []model.Project{{
 		ID:       "p1",
 		Name:     "demo",
-		RootPath: root,
+		RootPath: "/tmp/demo",
+		Environments: []model.Environment{{
+			Name:  "dev",
+			IsDev: true,
+		}},
 		Services: []model.Service{{
-			ID:   "svc-api",
-			Name: "api",
-			Deployments: []model.Deployment{
-				{
-					ID:        "dep-api-dev",
-					EnvName:   "dev",
-					Location:  model.LocationLocal,
-					Command:   "go run ./cmd/api",
-					WorkDir:   root,
-					CodeDebug: &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo},
-				},
-				{
-					ID:        "dep-api-prod",
-					EnvName:   "prod",
-					Location:  model.LocationRemote,
-					CodeDebug: &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderGo},
-				},
-			},
+			ID:       "s1",
+			Name:     "api",
+			Language: model.LanguageGo,
+			Deployments: []model.Deployment{{
+				ID:          "d1",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "go run ./cmd/api",
+			}},
 		}},
 	}}
 
-	targets := ListTargets(projects)
+	got := ListTargets(projects)
+	if len(got) != 1 {
+		t.Fatalf("want 1 target, got %d", len(got))
+	}
+	if got[0].Provider != model.CodeDebugProviderGo {
+		t.Fatalf("provider = %q, want go", got[0].Provider)
+	}
+	if !got[0].CanOpen {
+		t.Fatalf("dev go deployment should be openable, reason=%q", got[0].UnavailableReason)
+	}
+}
 
-	require.Len(t, targets, 1)
-	assert.Equal(t, "dep-api-dev", targets[0].DeploymentID)
-	assert.Equal(t, model.CodeDebugProviderGo, targets[0].Provider)
-	assert.False(t, targets[0].Experimental)
-	assert.Equal(t, root, targets[0].RootPath)
+func TestListTargetsNonDevNotOpenable(t *testing.T) {
+	projects := []model.Project{{
+		ID:       "p1",
+		Name:     "demo",
+		RootPath: "/tmp/demo",
+		Environments: []model.Environment{{
+			Name:  "prod",
+			IsDev: false,
+		}},
+		Services: []model.Service{{
+			ID:       "s1",
+			Name:     "api",
+			Language: model.LanguageGo,
+			Deployments: []model.Deployment{{
+				ID:          "d1",
+				EnvName:     "prod",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "go run ./cmd/api",
+			}},
+		}},
+	}}
+	got := ListTargets(projects)
+	if len(got) != 1 {
+		t.Fatalf("want 1 target, got %d", len(got))
+	}
+	if got[0].CanOpen {
+		t.Fatal("non-dev deployment should not be openable by default")
+	}
+	if got[0].UnavailableReason != ReasonEnvNotDebuggable {
+		t.Fatalf("reason = %q, want %q", got[0].UnavailableReason, ReasonEnvNotDebuggable)
+	}
+}
+
+func TestListTargetsDisabledByConfig(t *testing.T) {
+	projects := []model.Project{{
+		ID:       "p1",
+		Name:     "demo",
+		RootPath: "/tmp/demo",
+		Environments: []model.Environment{{
+			Name:  "dev",
+			IsDev: true,
+		}},
+		Services: []model.Service{{
+			ID:       "s1",
+			Name:     "api",
+			Language: model.LanguageGo,
+			Deployments: []model.Deployment{{
+				ID:          "d1",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "go run ./cmd/api",
+				CodeDebug:   &model.CodeDebugConfig{Policy: model.CodeDebugPolicyDisabled},
+			}},
+		}},
+	}}
+	got := ListTargets(projects)
+	if got[0].CanOpen || got[0].UnavailableReason != ReasonDisabledByConfig {
+		t.Fatalf("disabled config should block: canOpen=%v reason=%q", got[0].CanOpen, got[0].UnavailableReason)
+	}
+}
+
+func TestListTargetsUnknownLanguage(t *testing.T) {
+	projects := []model.Project{{
+		ID:       "p1",
+		Name:     "demo",
+		RootPath: "/tmp/demo",
+		Environments: []model.Environment{{
+			Name:  "dev",
+			IsDev: true,
+		}},
+		Services: []model.Service{{
+			ID:   "s1",
+			Name: "api",
+			Deployments: []model.Deployment{{
+				ID:          "d1",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "./run.sh",
+			}},
+		}},
+	}}
+	got := ListTargets(projects)
+	if got[0].CanOpen || got[0].UnavailableReason != ReasonLanguageUnsupported {
+		t.Fatalf("unknown language should block: canOpen=%v reason=%q", got[0].CanOpen, got[0].UnavailableReason)
+	}
 }
 
 func TestListTargetsMarksNodeAsExperimental(t *testing.T) {
 	root := t.TempDir()
 	projects := []model.Project{{
 		ID: "p1", Name: "demo", RootPath: root,
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
 		Services: []model.Service{{
-			ID: "svc-web", Name: "web",
+			ID: "svc-web", Name: "web", Language: model.LanguageNode,
 			Deployments: []model.Deployment{{
 				ID: "dep-web-dev", EnvName: "dev", Location: model.LocationLocal,
-				Command: "node server.js", WorkDir: root,
-				CodeDebug: &model.CodeDebugConfig{Enabled: true, Provider: model.CodeDebugProviderNode},
+				Command: "node server.js", WorkDir: root, ControlMode: model.ControlModeManaged,
 			}},
 		}},
 	}}
@@ -80,17 +168,13 @@ func TestListTargetsIncludesRuntimeAndLeaseState(t *testing.T) {
 	root := t.TempDir()
 	projects := []model.Project{{
 		ID: "p1", Name: "demo", RootPath: root,
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
 		Services: []model.Service{{
-			ID: "svc-api", Name: "api",
+			ID: "svc-api", Name: "api", Language: model.LanguageGo,
 			Deployments: []model.Deployment{{
 				ID: "dep-api-dev", EnvName: "dev", Location: model.LocationLocal,
 				Command: "go run ./cmd/api", WorkDir: root,
-				CodeDebug: &model.CodeDebugConfig{
-					Enabled:                 true,
-					Provider:                model.CodeDebugProviderGo,
-					StartMode:               model.CodeDebugStartModeDebug,
-					KeepRuntimeOnLeaseClose: true,
-				},
+				ControlMode: model.ControlModeManaged,
 			}},
 		}},
 	}}
@@ -104,8 +188,6 @@ func TestListTargetsIncludesRuntimeAndLeaseState(t *testing.T) {
 	)
 
 	require.Len(t, targets, 1)
-	assert.Equal(t, model.CodeDebugStartModeDebug, targets[0].StartMode)
-	assert.True(t, targets[0].KeepRuntimeOnLeaseClose)
 	assert.Equal(t, RuntimeStateDebugRunning, targets[0].RuntimeState)
 	assert.True(t, targets[0].LeaseActive)
 	assert.True(t, targets[0].CanOpen)

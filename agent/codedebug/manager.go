@@ -554,20 +554,20 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (map[string]a
 }
 
 func (m *Manager) launchConfig(project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (LaunchConfig, Provider, error) {
-	if !isSupportedTarget(dep) {
+	if !IsSupportedTarget(dep) {
 		return LaunchConfig{}, nil, ErrTargetUnsupported
 	}
-	code := dep.CodeDebug
+	var code model.CodeDebugConfig
+	if dep.CodeDebug != nil {
+		code = *dep.CodeDebug
+	}
 	if code.Mode != "" && code.Mode != model.CodeDebugModeLaunch {
 		return LaunchConfig{}, nil, ErrTargetUnsupported
 	}
-	providerName := code.Provider
+	providerName := ProviderForLanguage(service.Language)
 	command := debugDeploymentCommand(dep)
-	if req.Provider != "" {
-		providerName = model.CodeDebugProvider(strings.TrimSpace(req.Provider))
-	}
 	if providerName == "" {
-		providerName = inferProvider(command)
+		return LaunchConfig{}, nil, ErrTargetUnsupported
 	}
 	provider, err := providerFor(providerName)
 	if err != nil {
@@ -612,11 +612,11 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 		ServiceName:  service.Name,
 		DeploymentID: dep.ID,
 		EnvName:      dep.EnvName,
+		Language:     service.Language,
 		Provider:     providerName,
 		Experimental: providerName == model.CodeDebugProviderNode,
 		Command:      command,
 		WorkDir:      debugDeploymentWorkDir(dep),
-		Enabled:      true,
 	}
 	return LaunchConfig{
 		Target:         target,
