@@ -109,8 +109,9 @@ func closeDebugSession(client *http.Client, base string, sessionID string, keepR
 
 func emitRuntimeAfterClose(client *http.Client, base string, deploymentID string) {
 	payload := map[string]any{
-		"deployment_id": deploymentID,
-		"expected":      "debug-running",
+		"deployment_id":           deploymentID,
+		"expected_debugger_state": "attached",
+		"expected_origin":         "launched",
 	}
 	targets, targetsErr := getJSON[[]map[string]any](client, strings.TrimRight(base, "/")+"/api/code-debug-targets")
 	if targetsErr != nil {
