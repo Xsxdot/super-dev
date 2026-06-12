@@ -160,6 +160,32 @@ type LaunchConfig struct {
 	StopOnEntry    bool
 }
 
+// RuntimeState 描述 deployment 级 Debug Runtime 的当前状态。
+type RuntimeState string
+
+const (
+	// RuntimeStateDebugRunning 表示 deployment 由 Debug Runtime 接管运行。
+	RuntimeStateDebugRunning RuntimeState = "debug-running"
+)
+
+// Runtime 描述可复用的 Debug Runtime。
+type Runtime struct {
+	ProjectID    string                  `json:"project_id"`
+	DeploymentID string                  `json:"deployment_id"`
+	Provider     model.CodeDebugProvider `json:"provider"`
+	AdapterPort  int                     `json:"adapter_port"`
+	ProcessID    int                     `json:"process_id,omitempty"`
+	State        RuntimeState            `json:"state"`
+	Alive        bool                    `json:"alive"`
+	CreatedAt    time.Time               `json:"created_at"`
+	LastUsedAt   time.Time               `json:"last_used_at"`
+}
+
+// CloseRequest 描述关闭 AI lease 时是否同时停止 Debug Runtime。
+type CloseRequest struct {
+	StopRuntime *bool `json:"stop_runtime,omitempty"`
+}
+
 // DAP 描述 manager 依赖的 Debug Adapter Protocol 操作集合。
 type DAP interface {
 	Initialize(context.Context) (map[string]any, error)
@@ -187,6 +213,7 @@ type Session struct {
 	Provider     model.CodeDebugProvider `json:"provider"`
 	AdapterPort  int                     `json:"adapter_port"`
 	ProcessID    int                     `json:"process_id,omitempty"`
+	RuntimeState RuntimeState            `json:"runtime_state,omitempty"`
 	CreatedAt    time.Time               `json:"created_at"`
 	LastUsedAt   time.Time               `json:"last_used_at"`
 	Alive        bool                    `json:"alive"`

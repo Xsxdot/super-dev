@@ -175,6 +175,9 @@ func responseBody(command string, msg map[string]any, ok bool) (map[string]any, 
 		return nil, fmt.Errorf("dap connection closed before response")
 	}
 	if success, _ := msg["success"].(bool); !success {
+		if detail := dapErrorDetail(msg); detail != "" {
+			return nil, fmt.Errorf("dap %s failed: %s", command, detail)
+		}
 		if message, _ := msg["message"].(string); message != "" {
 			return nil, fmt.Errorf("dap %s failed: %s", command, message)
 		}
@@ -184,6 +187,21 @@ func responseBody(command string, msg map[string]any, ok bool) (map[string]any, 
 		return respBody, nil
 	}
 	return map[string]any{}, nil
+}
+
+func dapErrorDetail(msg map[string]any) string {
+	body, _ := msg["body"].(map[string]any)
+	if len(body) == 0 {
+		return ""
+	}
+	errBody, _ := body["error"].(map[string]any)
+	if len(errBody) == 0 {
+		return ""
+	}
+	if format, _ := errBody["format"].(string); strings.TrimSpace(format) != "" {
+		return strings.TrimSpace(format)
+	}
+	return ""
 }
 
 // readMessage 解析一条 DAP 报文，Content-Length 头大小写不敏感。

@@ -59,9 +59,56 @@ func TestManagerCloseStopsAdapter(t *testing.T) {
 	session, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Close(session.ID))
+	require.NoError(t, mgr.Close(session.ID, CloseRequest{StopRuntime: boolPtr(true)}))
 
 	assert.True(t, closed)
+}
+
+func TestManagerCloseLeaseCanKeepDebugRuntime(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 42, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.CodeDebug.KeepRuntimeOnLeaseClose = true
+
+	session, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Close(session.ID, CloseRequest{StopRuntime: boolPtr(false)}))
+
+	assert.Equal(t, 0, dap.disconnectCalls)
+	runtime, ok := mgr.RuntimeStatus(dep.ID)
+	require.True(t, ok)
+	assert.True(t, runtime.Alive)
+	assert.Equal(t, dep.ID, runtime.DeploymentID)
+}
+
+func TestManagerOpenReusesExistingDebugRuntime(t *testing.T) {
+	launchCount := 0
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			launchCount++
+			return AdapterProcess{PID: 40 + launchCount, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort: func() (int, error) { return 41002 + launchCount, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.CodeDebug.KeepRuntimeOnLeaseClose = true
+
+	first, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Close(first.ID, CloseRequest{StopRuntime: boolPtr(false)}))
+	second, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, launchCount)
+	assert.NotEqual(t, first.ID, second.ID)
 }
 
 func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
@@ -301,6 +348,7 @@ type fakeDAP struct {
 	scopesResult      map[string]any
 	variablesResult   map[string]any
 	evaluateResult    map[string]any
+	disconnectCalls   int
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
@@ -338,8 +386,15 @@ func (f *fakeDAP) Evaluate(context.Context, string, int) (map[string]any, error)
 	}
 	return map[string]any{"result": "ok"}, nil
 }
-func (f *fakeDAP) Disconnect(context.Context) error { return nil }
+func (f *fakeDAP) Disconnect(context.Context) error {
+	f.disconnectCalls++
+	return nil
+}
 func (f *fakeDAP) WaitForStopped(context.Context) (map[string]any, error) {
 	return map[string]any{"threadId": 1}, nil
 }
 func (f *fakeDAP) Close() error { return nil }
+
+func boolPtr(value bool) *bool {
+	return &value
+}

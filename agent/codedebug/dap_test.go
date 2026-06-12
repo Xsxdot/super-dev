@@ -133,6 +133,23 @@ func TestDAPClientReceivesAsyncStoppedEvent(t *testing.T) {
 	assert.Equal(t, float64(1), body["threadId"])
 }
 
+func TestResponseBodyIncludesDAPErrorFormat(t *testing.T) {
+	_, err := responseBody("launch", map[string]any{
+		"type":    "response",
+		"success": false,
+		"command": "launch",
+		"message": "Failed to launch",
+		"body": map[string]any{
+			"error": map[string]any{
+				"format": "Failed to launch: build error details",
+			},
+		},
+	}, true)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build error details")
+}
+
 func readDAPMessageForTest(t *testing.T, conn net.Conn) map[string]any {
 	t.Helper()
 	reader := bufio.NewReader(conn)

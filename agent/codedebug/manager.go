@@ -51,11 +51,16 @@ type ManagerOptions struct {
 	Now           func() time.Time
 }
 
-type sessionRecord struct {
-	Session
+type runtimeRecord struct {
+	Runtime
 	rootPath string
 	dap      DAP
 	close    func() error
+}
+
+type sessionRecord struct {
+	Session
+	runtimeDeploymentID string
 }
 
 // Manager 管理由 SuperDev 创建的本机代码调试会话。
@@ -66,6 +71,7 @@ type Manager struct {
 	reserve  PortReservoir
 	ttl      time.Duration
 	now      func() time.Time
+	runtimes map[string]*runtimeRecord
 	sessions map[string]*sessionRecord
 	closed   map[string]Session
 }
@@ -100,6 +106,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		reserve:  reserve,
 		ttl:      ttl,
 		now:      now,
+		runtimes: map[string]*runtimeRecord{},
 		sessions: map[string]*sessionRecord{},
 		closed:   map[string]Session{},
 	}
@@ -111,50 +118,98 @@ func (m *Manager) Open(ctx context.Context, project model.Project, service model
 	if err != nil {
 		return Session{}, err
 	}
-	port, err := m.reserve()
+	runtime, err := m.startRuntimeFromConfig(ctx, cfg, provider)
 	if err != nil {
 		return Session{}, err
 	}
-	cfg.AdapterPort = port
-	cmd, err := provider.AdapterCommand(cfg)
-	if err != nil {
-		return Session{}, err
-	}
-	process, err := m.launch(ctx, cmd)
-	if err != nil {
-		return Session{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
-	}
-	closeProcess := process.Close
-	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
-	if err != nil {
-		_ = closeProcessIfPresent(closeProcess)
-		return Session{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
-	}
-	if _, err := dap.Initialize(ctx); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(closeProcess)
-		return Session{}, err
-	}
-	if err := dap.Launch(ctx, provider.LaunchArguments(cfg)); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(closeProcess)
-		return Session{}, err
-	}
-
 	now := m.now().UTC()
 	record := &sessionRecord{
 		Session: Session{
 			ID:           "cds_" + uuid.NewString(),
 			ProjectID:    project.ID,
 			DeploymentID: dep.ID,
-			Provider:     cfg.Provider,
-			AdapterPort:  port,
-			ProcessID:    process.PID,
+			Provider:     runtime.Provider,
+			AdapterPort:  runtime.AdapterPort,
+			ProcessID:    runtime.ProcessID,
+			RuntimeState: runtime.State,
 			CreatedAt:    now,
 			LastUsedAt:   now,
 			Alive:        true,
 		},
-		rootPath: project.RootPath,
+		runtimeDeploymentID: dep.ID,
+	}
+
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(now)
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	m.sessions[record.ID] = record
+	return record.Session, nil
+}
+
+// StartRuntime 启动或复用 deployment 级 Debug Runtime。
+func (m *Manager) StartRuntime(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (Runtime, error) {
+	cfg, provider, err := m.launchConfig(project, service, dep, req)
+	if err != nil {
+		return Runtime{}, err
+	}
+	return m.startRuntimeFromConfig(ctx, cfg, provider)
+}
+
+func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, provider Provider) (Runtime, error) {
+	m.mu.Lock()
+	if existing, ok := m.runtimes[cfg.Target.DeploymentID]; ok && existing.Alive {
+		existing.LastUsedAt = m.now().UTC()
+		runtime := existing.Runtime
+		m.mu.Unlock()
+		return runtime, nil
+	}
+	m.mu.Unlock()
+
+	port, err := m.reserve()
+	if err != nil {
+		return Runtime{}, err
+	}
+	cfg.AdapterPort = port
+	cmd, err := provider.AdapterCommand(cfg)
+	if err != nil {
+		return Runtime{}, err
+	}
+	process, err := m.launch(ctx, cmd)
+	if err != nil {
+		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
+	}
+	closeProcess := process.Close
+	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		_ = closeProcessIfPresent(closeProcess)
+		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
+	}
+	if _, err := dap.Initialize(ctx); err != nil {
+		_ = dap.Close()
+		_ = closeProcessIfPresent(closeProcess)
+		return Runtime{}, err
+	}
+	if err := dap.Launch(ctx, provider.LaunchArguments(cfg)); err != nil {
+		_ = dap.Close()
+		_ = closeProcessIfPresent(closeProcess)
+		return Runtime{}, err
+	}
+
+	now := m.now().UTC()
+	record := &runtimeRecord{
+		Runtime: Runtime{
+			ProjectID:    cfg.Target.ProjectID,
+			DeploymentID: cfg.Target.DeploymentID,
+			Provider:     cfg.Provider,
+			AdapterPort:  port,
+			ProcessID:    process.PID,
+			State:        RuntimeStateDebugRunning,
+			Alive:        true,
+			CreatedAt:    now,
+			LastUsedAt:   now,
+		},
+		rootPath: cfg.Target.RootPath,
 		dap:      dap,
 		close: func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -166,11 +221,9 @@ func (m *Manager) Open(ctx context.Context, project model.Project, service model
 	}
 
 	m.mu.Lock()
-	closeFns := m.cleanupLocked(now)
-	defer closeSessionFns(closeFns)
-	defer m.mu.Unlock()
-	m.sessions[record.ID] = record
-	return record.Session, nil
+	m.runtimes[cfg.Target.DeploymentID] = record
+	m.mu.Unlock()
+	return record.Runtime, nil
 }
 
 // List 返回当前已知 session 快照。
@@ -199,8 +252,61 @@ func (m *Manager) Status(id string) (Session, bool) {
 	return session, ok
 }
 
-// Close 关闭指定代码调试会话。
-func (m *Manager) Close(id string) error {
+// RuntimeStatus 返回 deployment 级 Debug Runtime 状态快照。
+func (m *Manager) RuntimeStatus(deploymentID string) (Runtime, bool) {
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(m.now().UTC())
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	runtime, ok := m.runtimes[strings.TrimSpace(deploymentID)]
+	if !ok {
+		return Runtime{}, false
+	}
+	return runtime.Runtime, true
+}
+
+// LeaseActive 返回指定 deployment 是否存在活跃 AI lease。
+func (m *Manager) LeaseActive(deploymentID string) bool {
+	deploymentID = strings.TrimSpace(deploymentID)
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(m.now().UTC())
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	for _, session := range m.sessions {
+		if session.runtimeDeploymentID == deploymentID && session.Alive && !session.Closed {
+			return true
+		}
+	}
+	return false
+}
+
+// StopRuntime 停止 deployment 级 Debug Runtime，并关闭关联 AI lease。
+func (m *Manager) StopRuntime(deploymentID string) error {
+	deploymentID = strings.TrimSpace(deploymentID)
+	m.mu.Lock()
+	runtime, ok := m.runtimes[deploymentID]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	runtime.Alive = false
+	closeFn := runtime.close
+	delete(m.runtimes, deploymentID)
+	for id, session := range m.sessions {
+		if session.runtimeDeploymentID != deploymentID {
+			continue
+		}
+		session.Alive = false
+		session.Closed = true
+		delete(m.sessions, id)
+		m.closed[id] = session.Session
+	}
+	m.mu.Unlock()
+	return closeProcessIfPresent(closeFn)
+}
+
+// Close 关闭指定代码调试会话，可选择同时停止 Debug Runtime。
+func (m *Manager) Close(id string, req CloseRequest) error {
 	m.mu.Lock()
 	record, ok := m.sessions[id]
 	if !ok {
@@ -213,20 +319,38 @@ func (m *Manager) Close(id string) error {
 	}
 	record.Closed = true
 	record.Alive = false
-	closeFn := record.close
 	delete(m.sessions, id)
 	m.closed[id] = record.Session
+	runtimeID := record.runtimeDeploymentID
+	stopRuntime := req.StopRuntime != nil && *req.StopRuntime
+	var closeFn func() error
+	if stopRuntime {
+		if runtime, ok := m.runtimes[runtimeID]; ok {
+			runtime.Alive = false
+			closeFn = runtime.close
+			delete(m.runtimes, runtimeID)
+		}
+		for sessionID, session := range m.sessions {
+			if session.runtimeDeploymentID != runtimeID {
+				continue
+			}
+			session.Closed = true
+			session.Alive = false
+			delete(m.sessions, sessionID)
+			m.closed[sessionID] = session.Session
+		}
+	}
 	m.mu.Unlock()
 	return closeProcessIfPresent(closeFn)
 }
 
 // SetBreakpoints 设置源码断点。
 func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, lines []int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	sourcePath, err := ResolveInsideRoot(record.rootPath, source)
+	sourcePath, err := ResolveInsideRoot(runtime.rootPath, source)
 	if err != nil {
 		return nil, err
 	}
@@ -238,26 +362,26 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 			return nil, err
 		}
 	}
-	return record.dap.SetBreakpoints(ctx, sourcePath, lines)
+	return runtime.dap.SetBreakpoints(ctx, sourcePath, lines)
 }
 
 // ThreadAction 执行 continue/pause/step 动作。
 func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, threadID int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	switch action {
 	case "continue":
-		err = record.dap.Continue(ctx, threadID)
+		err = runtime.dap.Continue(ctx, threadID)
 	case "pause":
-		err = record.dap.Pause(ctx, threadID)
+		err = runtime.dap.Pause(ctx, threadID)
 	case "step_over":
-		err = record.dap.Next(ctx, threadID)
+		err = runtime.dap.Next(ctx, threadID)
 	case "step_in":
-		err = record.dap.StepIn(ctx, threadID)
+		err = runtime.dap.StepIn(ctx, threadID)
 	case "step_out":
-		err = record.dap.StepOut(ctx, threadID)
+		err = runtime.dap.StepOut(ctx, threadID)
 	default:
 		return nil, ErrConfigInvalid
 	}
@@ -269,20 +393,20 @@ func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, th
 
 // StackTrace 读取指定线程的调用栈。
 func (m *Manager) StackTrace(ctx context.Context, sessionID string, threadID int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return record.dap.StackTrace(ctx, threadID)
+	return runtime.dap.StackTrace(ctx, threadID)
 }
 
 // Scopes 读取指定 frame 的 scopes。
 func (m *Manager) Scopes(ctx context.Context, sessionID string, frameID int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return record.dap.Scopes(ctx, frameID)
+	return runtime.dap.Scopes(ctx, frameID)
 }
 
 // Variables 读取指定 variablesReference 下的变量。
@@ -296,11 +420,11 @@ func (m *Manager) Variables(ctx context.Context, sessionID string, variablesRefe
 
 // Evaluate 在指定 frame 中求值。
 func (m *Manager) Evaluate(ctx context.Context, sessionID, expression string, frameID int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	result, err := record.dap.Evaluate(ctx, expression, frameID)
+	result, err := runtime.dap.Evaluate(ctx, expression, frameID)
 	if err != nil {
 		return nil, err
 	}
@@ -349,11 +473,11 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	record, err := m.record(req.SessionID)
+	_, runtime, err := m.sessionRuntime(req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	stopped, err := record.dap.WaitForStopped(waitCtx)
+	stopped, err := runtime.dap.WaitForStopped(waitCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -515,10 +639,10 @@ func resolveLaunchProgramPath(projectRoot, workingDir, program string, explicit 
 	return ResolveInsideRoot(projectRoot, filepath.Join(base, program))
 }
 
-func (m *Manager) record(sessionID string) (*sessionRecord, error) {
+func (m *Manager) sessionRuntime(sessionID string) (*sessionRecord, *runtimeRecord, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return nil, ErrSessionNotFound
+		return nil, nil, ErrSessionNotFound
 	}
 	m.mu.Lock()
 	closeFns := m.cleanupLocked(m.now().UTC())
@@ -526,21 +650,35 @@ func (m *Manager) record(sessionID string) (*sessionRecord, error) {
 	defer m.mu.Unlock()
 	record, ok := m.sessions[sessionID]
 	if !ok {
-		return nil, ErrSessionNotFound
+		return nil, nil, ErrSessionNotFound
 	}
 	if record.Closed {
+		return nil, nil, ErrSessionClosed
+	}
+	runtime, err := m.runtimeForSessionLocked(record)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := m.now().UTC()
+	record.LastUsedAt = now
+	runtime.LastUsedAt = now
+	return record, runtime, nil
+}
+
+func (m *Manager) runtimeForSessionLocked(record *sessionRecord) (*runtimeRecord, error) {
+	runtime, ok := m.runtimes[record.runtimeDeploymentID]
+	if !ok || !runtime.Alive {
 		return nil, ErrSessionClosed
 	}
-	record.LastUsedAt = m.now().UTC()
-	return record, nil
+	return runtime, nil
 }
 
 func (m *Manager) variablesRaw(ctx context.Context, sessionID string, variablesReference int) (map[string]any, error) {
-	record, err := m.record(sessionID)
+	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return record.dap.Variables(ctx, variablesReference)
+	return runtime.dap.Variables(ctx, variablesReference)
 }
 
 func (m *Manager) dialAdapter(ctx context.Context, addr string, timeout time.Duration) (DAP, error) {
@@ -581,9 +719,6 @@ func (m *Manager) cleanupLocked(now time.Time) []func() error {
 			if expired {
 				record.Error = "code debug session idle timeout"
 			}
-			if record.close != nil {
-				closeFns = append(closeFns, record.close)
-			}
 		}
 		delete(m.sessions, id)
 		m.closed[id] = record.Session
@@ -609,6 +744,9 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 		return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, ErrAdapterUnavailable)
 	}
 	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	if strings.TrimSpace(cmd.WorkDir) != "" {
+		c.Dir = strings.TrimSpace(cmd.WorkDir)
+	}
 	if len(cmd.Env) > 0 {
 		c.Env = append(c.Environ(), envPairs(cmd.Env)...)
 	}
