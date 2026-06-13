@@ -57,6 +57,7 @@ func resolveGoDebuggeePID(h goDebuggeeHints) (int, error) {
 
 func isGoRunCommand(command string) bool {
 	fields := strings.Fields(strings.TrimSpace(command))
+	fields = stripInlineEnvFields(fields)
 	if len(fields) < 2 {
 		return false
 	}
@@ -65,6 +66,34 @@ func isGoRunCommand(command string) bool {
 		head = head[idx+1:]
 	}
 	return head == "go" && fields[1] == "run"
+}
+
+func stripInlineEnvFields(fields []string) []string {
+	for len(fields) > 0 && isInlineEnvField(fields[0]) {
+		fields = fields[1:]
+	}
+	return fields
+}
+
+func isInlineEnvField(field string) bool {
+	idx := strings.Index(field, "=")
+	if idx <= 0 {
+		return false
+	}
+	return isShellVariableName(field[:idx])
+}
+
+func isShellVariableName(name string) bool {
+	for i, r := range name {
+		if r == '_' || ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') {
+			continue
+		}
+		if i > 0 && '0' <= r && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return name != ""
 }
 
 // listProcessGroupOS 用 ps 枚举某进程组内的进程（darwin/linux 通用）。

@@ -39,6 +39,23 @@ func TestResolveGoDebuggeePIDGoRunChild(t *testing.T) {
 	}
 }
 
+func TestResolveGoDebuggeePIDGoRunWithInlineEnvChild(t *testing.T) {
+	// 带内联环境变量的 go run 仍应进入进程组解析；主 PID 通常是 sh，不是真实 debuggee。
+	pid, err := resolveGoDebuggeePID(goDebuggeeHints{
+		command: "ENABLE=true go run ./cmd/api", mainPID: 100, pgid: 100,
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{
+				{pid: 100, comm: "sh"},
+				{pid: 101, comm: "go"},
+				{pid: 105, comm: "api"}, // go run 编译出的真实进程
+			}
+		},
+	})
+	if err != nil || pid != 105 {
+		t.Fatalf("go run with inline env should resolve to child debuggee: pid=%d err=%v", pid, err)
+	}
+}
+
 func TestResolveGoDebuggeePIDGoRunNoChild(t *testing.T) {
 	_, err := resolveGoDebuggeePID(goDebuggeeHints{
 		command: "go run ./cmd/api", mainPID: 100, pgid: 100,
@@ -48,6 +65,27 @@ func TestResolveGoDebuggeePIDGoRunNoChild(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("go run with no compiled child should error (not yet started)")
+	}
+}
+
+func TestIsGoRunCommandSkipsOnlyValidInlineEnvFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{name: "valid inline env", command: "ENABLE=true PORT=8080 /usr/local/bin/go run ./cmd/api", want: true},
+		{name: "dash is not env key", command: "--enable=true go run ./cmd/api", want: false},
+		{name: "slash is not env key", command: "config/path=true go run ./cmd/api", want: false},
+		{name: "dot is not env key", command: "config.path=true go run ./cmd/api", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGoRunCommand(tt.command); got != tt.want {
+				t.Fatalf("isGoRunCommand(%q)=%v, want %v", tt.command, got, tt.want)
+			}
+		})
 	}
 }
 
