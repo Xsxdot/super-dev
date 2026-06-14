@@ -566,6 +566,9 @@ type RuntimeType string
 const (
 	// RuntimeTypeCommand 表示本机或远程 shell 命令运行。
 	RuntimeTypeCommand RuntimeType = "command"
+	// RuntimeTypeLanguage 表示本地 managed dev 进程由 Language Runtime Provider
+	// 生成执行计划（command 的结构化继任者）。不覆盖 systemd/launchd/docker 等其他基座。
+	RuntimeTypeLanguage RuntimeType = "language"
 	// RuntimeTypeSystemd 表示由 systemd service 接管运行。
 	RuntimeTypeSystemd RuntimeType = "systemd"
 	// RuntimeTypeLaunchd 表示由 macOS launchd 接管运行。
@@ -618,19 +621,41 @@ const (
 //   - 不描述构建、传输、健康检查等部署过程
 //   - 不执行命令，仅作为配置模型
 type RuntimeConfig struct {
-	Type        RuntimeType       `json:"type" yaml:"type"`
-	Command     string            `json:"command,omitempty" yaml:"command,omitempty"`
-	WorkingDir  string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
-	EnvFile     string            `json:"env_file,omitempty" yaml:"env_file,omitempty"`
-	EnvVars     map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
-	ServiceName string            `json:"service_name,omitempty" yaml:"service_name,omitempty"`
-	ReleaseDir  string            `json:"release_dir,omitempty" yaml:"release_dir,omitempty"`
-	CurrentDir  string            `json:"current_dir,omitempty" yaml:"current_dir,omitempty"`
-	ExecStart   string            `json:"exec_start,omitempty" yaml:"exec_start,omitempty"`
-	Label       string            `json:"label,omitempty" yaml:"label,omitempty"`
-	PlistPath   string            `json:"plist_path,omitempty" yaml:"plist_path,omitempty"`
-	Container   string            `json:"container,omitempty" yaml:"container,omitempty"`
-	Domain      string            `json:"domain,omitempty" yaml:"domain,omitempty"`
+	Type       RuntimeType       `json:"type" yaml:"type"`
+	Command    string            `json:"command,omitempty" yaml:"command,omitempty"`
+	WorkingDir string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	EnvFile    string            `json:"env_file,omitempty" yaml:"env_file,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
+	// CWD 是 language runtime 的通用工作目录；语言 runtime 下优先于 WorkingDir。
+	CWD string `json:"cwd,omitempty" yaml:"cwd,omitempty"`
+	// Env 是 language runtime 下 Start/Debug/Attach 共享的环境变量；优先于 EnvVars。
+	Env map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	// Config 是由 service.language 判别 schema 的 provider-specific 配置（如 Go 的 program）。
+	Config      map[string]any `json:"config,omitempty" yaml:"config,omitempty"`
+	ServiceName string         `json:"service_name,omitempty" yaml:"service_name,omitempty"`
+	ReleaseDir  string         `json:"release_dir,omitempty" yaml:"release_dir,omitempty"`
+	CurrentDir  string         `json:"current_dir,omitempty" yaml:"current_dir,omitempty"`
+	ExecStart   string         `json:"exec_start,omitempty" yaml:"exec_start,omitempty"`
+	Label       string         `json:"label,omitempty" yaml:"label,omitempty"`
+	PlistPath   string         `json:"plist_path,omitempty" yaml:"plist_path,omitempty"`
+	Container   string         `json:"container,omitempty" yaml:"container,omitempty"`
+	Domain      string         `json:"domain,omitempty" yaml:"domain,omitempty"`
+}
+
+// EffectiveCWD 返回 language runtime 首选工作目录，兼容旧字段。
+func (r RuntimeConfig) EffectiveCWD() string {
+	if r.CWD != "" {
+		return r.CWD
+	}
+	return r.WorkingDir
+}
+
+// EffectiveEnv 返回 language runtime 首选环境变量，兼容旧字段。
+func (r RuntimeConfig) EffectiveEnv() map[string]string {
+	if r.Env != nil {
+		return r.Env
+	}
+	return r.EnvVars
 }
 
 // LogConfig 描述服务在某环境下的日志采集配置。

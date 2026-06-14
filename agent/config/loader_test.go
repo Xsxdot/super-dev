@@ -337,6 +337,42 @@ pipelines:
 	assert.Equal(t, "server", p.Pipelines[0].Roles["server_targets"].FromService)
 }
 
+func TestLoaderPreservesLanguageRuntimeConfig(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(`
+name: demo
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - name: api
+    language: go
+    deployments:
+      - env: dev
+        location: local
+        control_mode: managed
+        runtime:
+          type: language
+          cwd: ./server
+          env:
+            ENABLE: "true"
+          config:
+            program: ./cmd/server
+`), 0o644))
+
+	loader := config.NewLoader(dir)
+	project, err := loader.Load()
+	require.NoError(t, err)
+	rt := project.Services[0].Deployments[0].Runtime
+	require.NotNil(t, rt)
+	assert.Equal(t, model.RuntimeTypeLanguage, rt.Type)
+	assert.Equal(t, "./server", rt.CWD)
+	assert.Equal(t, map[string]string{"ENABLE": "true"}, rt.Env)
+	assert.Equal(t, "./cmd/server", rt.Config["program"])
+}
+
 func TestLoadNewFormatReadOnlyDeployment(t *testing.T) {
 	dir := t.TempDir()
 	superdevDir := filepath.Join(dir, ".superdev")

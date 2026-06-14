@@ -96,6 +96,75 @@ func TestDeploymentWebConfigJSONRoundTrip(t *testing.T) {
 	assert.True(t, got.Web.AIDebug.Enabled)
 }
 
+func TestRuntimeConfigLanguageFieldsRoundTrip(t *testing.T) {
+	dep := model.Deployment{
+		ID:          "dep-api-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type: model.RuntimeTypeLanguage,
+			CWD:  "./server",
+			Env:  map[string]string{"ENABLE": "true"},
+			Config: map[string]any{
+				"program":      "./cmd/server",
+				"program_args": []any{"--port", "8080"},
+			},
+		},
+	}
+
+	raw, err := json.Marshal(dep)
+	require.NoError(t, err)
+
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NotNil(t, got.Runtime)
+	assert.Equal(t, model.RuntimeTypeLanguage, got.Runtime.Type)
+	assert.Equal(t, "./server", got.Runtime.CWD)
+	assert.Equal(t, map[string]string{"ENABLE": "true"}, got.Runtime.Env)
+	assert.Equal(t, "./cmd/server", got.Runtime.Config["program"])
+}
+
+func TestRuntimeConfigEffectiveFieldsPreferLanguageNames(t *testing.T) {
+	rt := model.RuntimeConfig{
+		Type:       model.RuntimeTypeLanguage,
+		CWD:        "./server",
+		WorkingDir: "./legacy",
+		Env:        map[string]string{"NEW": "1"},
+		EnvVars:    map[string]string{"OLD": "1"},
+	}
+	assert.Equal(t, "./server", rt.EffectiveCWD())
+	assert.Equal(t, map[string]string{"NEW": "1"}, rt.EffectiveEnv())
+}
+
+func TestRuntimeConfigEffectiveFieldsFallbackToLegacyNames(t *testing.T) {
+	rt := model.RuntimeConfig{
+		Type:       model.RuntimeTypeLanguage,
+		WorkingDir: "./legacy",
+		EnvVars:    map[string]string{"OLD": "1"},
+	}
+	assert.Equal(t, "./legacy", rt.EffectiveCWD())
+	assert.Equal(t, map[string]string{"OLD": "1"}, rt.EffectiveEnv())
+}
+
+func TestRuntimeConfigNonLanguageRuntimeUnaffected(t *testing.T) {
+	rt := model.RuntimeConfig{
+		Type:        model.RuntimeTypeDocker,
+		Container:   "api-dev",
+		EnvFile:     ".env",
+		WorkingDir:  "./server",
+		ServiceName: "api",
+	}
+	raw, err := json.Marshal(rt)
+	require.NoError(t, err)
+	var got model.RuntimeConfig
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, model.RuntimeTypeDocker, got.Type)
+	assert.Empty(t, got.CWD)
+	assert.Nil(t, got.Env)
+	assert.Nil(t, got.Config)
+}
+
 func TestLogRuleTypes(t *testing.T) {
 	r := model.LogRule{Type: model.RuleTypeExclude, Logic: model.RuleLogicOR}
 	assert.Equal(t, "exclude", string(r.Type))
