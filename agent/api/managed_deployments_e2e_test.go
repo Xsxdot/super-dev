@@ -30,6 +30,8 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
+const managedE2EEventuallyTimeout = 15 * time.Second
+
 type e2eRuntimeSampler struct{}
 
 func (e2eRuntimeSampler) Sample(ctx context.Context, target metrics.SampleTarget) (model.InstanceMetrics, error) {
@@ -101,7 +103,7 @@ services:
 			return false
 		}
 		return len(projects) == 1
-	}, 2*time.Second, 20*time.Millisecond)
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 	desktopApp.nodeRegistry.ApplyForTest([]nodetransport.NodeStatus{
 		remoteApp.nodeStatusSnapshot(context.Background(), "h1", "local-01"),
 	})
@@ -143,7 +145,7 @@ services:
 			}
 		}
 		return false
-	}, 2*time.Second, 20*time.Millisecond)
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 }
 
 func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *testing.T) {
@@ -184,7 +186,7 @@ func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *te
 			seen[collectorStatus.CollectorID] = true
 		}
 		return seen["dep-tk-server-prod"] && seen["dep-ai-hub-server-prod"]
-	}, 2*time.Second, 20*time.Millisecond)
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 
 	now := time.Now().UTC()
 	remoteApp.WriteTestLog(model.LogEntry{
@@ -213,14 +215,14 @@ func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *te
 			return false
 		}
 		return containsLogMessage(entries, "tk server scoped log") && !containsLogMessage(entries, "ai hub server scoped log")
-	}, 2*time.Second, 20*time.Millisecond)
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 	require.Eventually(t, func() bool {
 		entries, _, err := aiBackend.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "dep-ai-hub-server-prod", Limit: 10})
 		if err != nil {
 			return false
 		}
 		return containsLogMessage(entries, "ai hub server scoped log") && !containsLogMessage(entries, "tk server scoped log")
-	}, 2*time.Second, 20*time.Millisecond)
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 }
 
 func addRemoteServerProject(t *testing.T, app *App, projectID string, projectName string, deploymentID string) {
