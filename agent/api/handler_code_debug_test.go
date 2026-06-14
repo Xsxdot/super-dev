@@ -343,7 +343,8 @@ func TestContinueDeploymentDebugReturns404WhenRuntimeMissing(t *testing.T) {
 }
 
 func TestDeploymentDebugCaptureAutoLease(t *testing.T) {
-	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
+	dap := &fakeCodeDebugDAP{autoStoppedOnPause: true, autoStoppedOnContinue: true}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITestWithDAP(dap)})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	settings, err := app.settings.Load()
@@ -484,11 +485,13 @@ func (codeDebugFailedSampler) Sample(context.Context, metrics.SampleTarget) (mod
 }
 
 type fakeCodeDebugDAP struct {
-	mu               sync.Mutex
-	subs             []chan map[string]any
-	stackResult      map[string]any
-	continueCalls    int
-	continueThreadID int
+	mu                    sync.Mutex
+	subs                  []chan map[string]any
+	stackResult           map[string]any
+	autoStoppedOnPause    bool
+	autoStoppedOnContinue bool
+	continueCalls         int
+	continueThreadID      int
 }
 
 func (f *fakeCodeDebugDAP) Initialize(context.Context) (map[string]any, error) {
@@ -505,10 +508,22 @@ func (f *fakeCodeDebugDAP) Continue(_ context.Context, threadID int) error {
 	f.mu.Lock()
 	f.continueCalls++
 	f.continueThreadID = threadID
+	autoStopped := f.autoStoppedOnContinue
 	f.mu.Unlock()
+	if autoStopped {
+		f.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": threadID}})
+	}
 	return nil
 }
-func (f *fakeCodeDebugDAP) Pause(context.Context, int) error   { return nil }
+func (f *fakeCodeDebugDAP) Pause(_ context.Context, threadID int) error {
+	f.mu.Lock()
+	autoStopped := f.autoStoppedOnPause
+	f.mu.Unlock()
+	if autoStopped {
+		f.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": threadID}})
+	}
+	return nil
+}
 func (f *fakeCodeDebugDAP) Next(context.Context, int) error    { return nil }
 func (f *fakeCodeDebugDAP) StepIn(context.Context, int) error  { return nil }
 func (f *fakeCodeDebugDAP) StepOut(context.Context, int) error { return nil }
