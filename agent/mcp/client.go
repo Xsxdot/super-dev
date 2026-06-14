@@ -67,6 +67,16 @@ type AgentClient interface {
 	PreviewConfigChange(context.Context, ConfigChangeRequest) (ConfigChangePreview, error)
 	// ApplyConfigChange 经 safe operation 授权后应用配置 upsert。
 	ApplyConfigChange(context.Context, ConfigChangeRequest, string) (ConfigChangePreview, error)
+	// ListLanguageRuntimeProviders 返回支持的语言运行 provider。
+	ListLanguageRuntimeProviders(context.Context) ([]string, error)
+	// DescribeLanguageRuntimeSchema 返回某语言的运行配置 schema。
+	DescribeLanguageRuntimeSchema(context.Context, string) (map[string]any, error)
+	// SuggestServiceRuntime 返回候选语言运行配置。
+	SuggestServiceRuntime(context.Context, string, map[string]any) (map[string]any, error)
+	// ValidateServiceRuntime 校验语言运行配置。
+	ValidateServiceRuntime(context.Context, string, map[string]any) (map[string]any, error)
+	// PreviewServiceExecution 返回语言运行执行计划预览。
+	PreviewServiceExecution(context.Context, string, map[string]any) (map[string]any, error)
 	// StartDeployment 请求 agent 启动 deployment。
 	StartDeployment(context.Context, string, string) error
 	// StopDeployment 请求 agent 停止 deployment。
@@ -462,6 +472,85 @@ func (c *HTTPAgentClient) PreviewConfigChange(ctx context.Context, req ConfigCha
 func (c *HTTPAgentClient) ApplyConfigChange(ctx context.Context, req ConfigChangeRequest, approvalToken string) (ConfigChangePreview, error) {
 	var out ConfigChangePreview
 	return out, c.postWithApprovalToken(ctx, "/api/config-changes/apply", req, approvalToken, &out)
+}
+
+// ListLanguageRuntimeProviders 返回支持的语言运行 provider。
+//
+// 参数：
+//   - ctx: 请求上下文
+//
+// 返回：
+//   - language provider 标识列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListLanguageRuntimeProviders(ctx context.Context) ([]string, error) {
+	var out struct {
+		Languages []string `json:"languages"`
+	}
+	err := c.get(ctx, "/api/language-runtime/providers", &out)
+	return out.Languages, err
+}
+
+// DescribeLanguageRuntimeSchema 返回某语言的运行配置 schema。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - language: 服务语言标识，例如 go
+//
+// 返回：
+//   - schema JSON 对象
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) DescribeLanguageRuntimeSchema(ctx context.Context, language string) (map[string]any, error) {
+	var out map[string]any
+	err := c.get(ctx, "/api/language-runtime/"+url.PathEscape(language)+"/schema", &out)
+	return out, err
+}
+
+// SuggestServiceRuntime 返回候选语言运行配置。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - language: 服务语言标识，例如 go
+//   - body: project_root/cwd 等 provider 输入
+//
+// 返回：
+//   - suggestions 响应对象
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) SuggestServiceRuntime(ctx context.Context, language string, body map[string]any) (map[string]any, error) {
+	var out map[string]any
+	err := c.post(ctx, "/api/language-runtime/"+url.PathEscape(language)+"/suggest", body, &out)
+	return out, err
+}
+
+// ValidateServiceRuntime 校验语言运行配置。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - language: 服务语言标识，例如 go
+//   - body: project_root/cwd/env/config 等 provider 输入
+//
+// 返回：
+//   - valid/diagnostics 响应对象
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ValidateServiceRuntime(ctx context.Context, language string, body map[string]any) (map[string]any, error) {
+	var out map[string]any
+	err := c.post(ctx, "/api/language-runtime/"+url.PathEscape(language)+"/validate", body, &out)
+	return out, err
+}
+
+// PreviewServiceExecution 返回语言运行执行计划预览。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - language: 服务语言标识，例如 go
+//   - body: project_root/cwd/env/config/intent/artifact_dir 等 provider 输入
+//
+// 返回：
+//   - preview/diagnostics 响应对象
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) PreviewServiceExecution(ctx context.Context, language string, body map[string]any) (map[string]any, error) {
+	var out map[string]any
+	err := c.post(ctx, "/api/language-runtime/"+url.PathEscape(language)+"/preview", body, &out)
+	return out, err
 }
 
 // StartDeployment 请求 agent 启动 deployment。

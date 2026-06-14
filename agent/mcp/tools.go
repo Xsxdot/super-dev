@@ -228,6 +228,53 @@ func projectConfigInputSchema() map[string]any {
 	}
 }
 
+func languageSchemaInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"language": map[string]any{"type": "string"},
+		},
+		"required": []string{"language"},
+	}
+}
+
+func languageRuntimeSuggestInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"language":     map[string]any{"type": "string"},
+			"project_root": map[string]any{"type": "string"},
+			"cwd":          map[string]any{"type": "string"},
+		},
+		"required": []string{"language", "project_root"},
+	}
+}
+
+func languageRuntimeConfigInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"language":     map[string]any{"type": "string"},
+			"project_root": map[string]any{"type": "string"},
+			"cwd":          map[string]any{"type": "string"},
+			"env":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"config":       map[string]any{"type": "object"},
+		},
+		"required": []string{"language", "project_root"},
+	}
+}
+
+func languageRuntimePreviewInputSchema() map[string]any {
+	schema := languageRuntimeConfigInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["intent"] = map[string]any{"type": "string", "enum": []string{"start_dev", "start_normal", "debug_launch", "attach"}}
+	properties["artifact_dir"] = map[string]any{"type": "string"}
+	return schema
+}
+
 func upsertServiceInputSchema() map[string]any {
 	schema := configChangeInputSchema()
 	delete(schema["properties"].(map[string]any), "kind")
@@ -831,6 +878,56 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.getProjectConfigTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_language_runtime_providers",
+				Title:       "List language runtime providers",
+				Description: "Return languages with runtime providers. Use before creating a language service so you can choose a supported provider.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listLanguageRuntimeProvidersTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "describe_language_runtime_schema",
+				Title:       "Describe language runtime schema",
+				Description: "Return the config field schema for a language runtime provider, such as go. Use before creating a service so you fill cwd/env/config fields instead of guessing a command string.",
+				InputSchema: languageSchemaInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.describeLanguageRuntimeSchemaTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "suggest_service_runtime",
+				Title:       "Suggest service runtime",
+				Description: "Suggest schema-shaped runtime config for a language service from project_root and cwd. Use the result as a draft, then validate it.",
+				InputSchema: languageRuntimeSuggestInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.suggestServiceRuntimeTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "validate_service_runtime",
+				Title:       "Validate service runtime",
+				Description: "Validate cwd/env/config for a language service and return diagnostics before upsert_service.",
+				InputSchema: languageRuntimeConfigInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.validateServiceRuntimeTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "preview_service_execution",
+				Title:       "Preview service execution",
+				Description: "Preview the execution plan for a language service intent without starting it. Use this to explain what start_dev/start_normal/debug_launch would run.",
+				InputSchema: languageRuntimePreviewInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.previewServiceExecutionTool,
 		},
 		{
 			Tool: Tool{

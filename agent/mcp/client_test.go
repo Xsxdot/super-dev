@@ -163,6 +163,56 @@ func TestHTTPAgentClientOperationApprovalLifecycle(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestHTTPAgentClientLanguageRuntimeLifecycle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/language-runtime/providers":
+			jsonOKForMCPClientTest(w, map[string]any{"languages": []string{"go"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/language-runtime/go/schema":
+			jsonOKForMCPClientTest(w, map[string]any{"language": "go", "fields": []any{map[string]any{"key": "program"}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/language-runtime/go/suggest":
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Equal(t, "/repo", body["project_root"])
+			jsonOKForMCPClientTest(w, map[string]any{"suggestions": []any{map[string]any{"label": "Go ."}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/language-runtime/go/validate":
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Equal(t, map[string]any{"program": "."}, body["config"])
+			jsonOKForMCPClientTest(w, map[string]any{"valid": true, "diagnostics": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/language-runtime/go/preview":
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Equal(t, "start_dev", body["intent"])
+			jsonOKForMCPClientTest(w, map[string]any{"preview": "go build && ./app"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	languages, err := client.ListLanguageRuntimeProviders(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"go"}, languages)
+
+	schema, err := client.DescribeLanguageRuntimeSchema(context.Background(), "go")
+	require.NoError(t, err)
+	assert.Equal(t, "go", schema["language"])
+
+	suggest, err := client.SuggestServiceRuntime(context.Background(), "go", map[string]any{"project_root": "/repo"})
+	require.NoError(t, err)
+	assert.Contains(t, suggest, "suggestions")
+
+	validate, err := client.ValidateServiceRuntime(context.Background(), "go", map[string]any{"config": map[string]any{"program": "."}})
+	require.NoError(t, err)
+	assert.Equal(t, true, validate["valid"])
+
+	preview, err := client.PreviewServiceExecution(context.Background(), "go", map[string]any{"intent": "start_dev"})
+	require.NoError(t, err)
+	assert.Equal(t, "go build && ./app", preview["preview"])
+}
+
 func TestHTTPAgentClientListCodeDebugTargets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/code-debug-targets", r.URL.Path)

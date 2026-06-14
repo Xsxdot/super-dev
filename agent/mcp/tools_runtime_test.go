@@ -88,6 +88,9 @@ type fakeAgentClient struct {
 	codeDebugEvaluateResult     map[string]any
 	codeDebugCaptureResult      map[string]any
 	codeDebugInspectResult      map[string]any
+	languageRuntimeProviders    []string
+	languageRuntimeSchema       map[string]any
+	languageRuntimeResponse     map[string]any
 	lastBrowserOpen             OpenBrowserSessionRequest
 	lastBrowserSnapshot         BrowserSnapshotRequest
 	lastBrowserClick            BrowserClickRequest
@@ -109,6 +112,9 @@ type fakeAgentClient struct {
 	lastEvaluate                DebugEvaluateRequest
 	lastCaptureAt               DebugCaptureAtRequest
 	lastInspect                 DebugInspectRequest
+	lastLanguageRuntimeMethod   string
+	lastLanguageRuntimeLanguage string
+	lastLanguageRuntimeBody     map[string]any
 }
 
 func (f *fakeAgentClient) ListProjects(context.Context) ([]model.Project, error) {
@@ -227,6 +233,43 @@ func (f *fakeAgentClient) ApplyConfigChange(_ context.Context, req ConfigChangeR
 		return ConfigChangePreview{}, f.configApplyErr
 	}
 	return f.configPreview, nil
+}
+
+func (f *fakeAgentClient) ListLanguageRuntimeProviders(context.Context) ([]string, error) {
+	if f.languageRuntimeProviders != nil {
+		return f.languageRuntimeProviders, nil
+	}
+	return []string{"go"}, nil
+}
+
+func (f *fakeAgentClient) DescribeLanguageRuntimeSchema(_ context.Context, language string) (map[string]any, error) {
+	f.lastLanguageRuntimeMethod = "describe"
+	f.lastLanguageRuntimeLanguage = language
+	if f.languageRuntimeSchema != nil {
+		return f.languageRuntimeSchema, nil
+	}
+	return map[string]any{"language": language}, nil
+}
+
+func (f *fakeAgentClient) SuggestServiceRuntime(_ context.Context, language string, body map[string]any) (map[string]any, error) {
+	f.lastLanguageRuntimeMethod = "suggest"
+	f.lastLanguageRuntimeLanguage = language
+	f.lastLanguageRuntimeBody = body
+	return f.languageRuntimeResponse, nil
+}
+
+func (f *fakeAgentClient) ValidateServiceRuntime(_ context.Context, language string, body map[string]any) (map[string]any, error) {
+	f.lastLanguageRuntimeMethod = "validate"
+	f.lastLanguageRuntimeLanguage = language
+	f.lastLanguageRuntimeBody = body
+	return f.languageRuntimeResponse, nil
+}
+
+func (f *fakeAgentClient) PreviewServiceExecution(_ context.Context, language string, body map[string]any) (map[string]any, error) {
+	f.lastLanguageRuntimeMethod = "preview"
+	f.lastLanguageRuntimeLanguage = language
+	f.lastLanguageRuntimeBody = body
+	return f.languageRuntimeResponse, nil
 }
 
 func (f *fakeAgentClient) StartDeployment(_ context.Context, id string, approvalToken string) error {
