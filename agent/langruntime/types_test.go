@@ -61,3 +61,15 @@ func TestRuntimeSchemaValidateRejectsUnsupportedFieldType(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "field mode type enum is unsupported")
 }
+
+func TestCommandSpecCarriesPreRun(t *testing.T) {
+	plan := langruntime.ExecutionPlan{
+		Command: &langruntime.CommandSpec{
+			PreRun:     &langruntime.CommandStep{Executable: "go", Args: []string{"build", "-o", "/out/api"}},
+			Executable: "/out/api",
+		},
+	}
+	require.NotNil(t, plan.Command.PreRun)
+	assert.Equal(t, "go", plan.Command.PreRun.Executable)
+	assert.Equal(t, "/out/api", plan.Command.Executable)
+}

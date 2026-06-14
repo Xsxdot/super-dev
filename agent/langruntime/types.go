@@ -191,10 +191,20 @@ type RuntimeConfigSuggestion struct {
 	Reason     string            `json:"reason,omitempty"`
 }
 
-// CommandSpec 描述由 process runner 直接拉起的进程（argv 形式，不拼 shell 字符串）。
-type CommandSpec struct {
+// CommandStep 是一个 argv 形式的命令步骤（不拼 shell）。
+type CommandStep struct {
 	Executable string   `json:"executable"`
 	Args       []string `json:"args,omitempty"`
+}
+
+// CommandSpec 描述由 process runner 拉起的进程。
+//
+// PreRun 非空时，启动层必须先同步执行 PreRun（如 go build），
+// 成功后才 exec 主进程；PreRun 失败即视为启动失败，其 stderr 作为编译错误上报。
+type CommandSpec struct {
+	PreRun     *CommandStep `json:"pre_run,omitempty"`
+	Executable string       `json:"executable"`
+	Args       []string     `json:"args,omitempty"`
 }
 
 // DebugSpec 携带 debug_launch 的语义参数；调试适配器命令仍由 codedebug provider 构造
@@ -230,8 +240,11 @@ type ExecutionPlan struct {
 
 // BuildPlanInput 是 BuildPlan 的输入；Config 必须先经 Normalize。
 type BuildPlanInput struct {
-	Intent      BuildIntent
-	Config      NormalizedRuntimeConfig
+	Intent BuildIntent
+	Config NormalizedRuntimeConfig
+	// ArtifactDir 是 build 产物的输出根目录（如 agent 数据目录下 run-bin/<deployment-id>）。
+	// 仅 build+exec 策略的语言使用；为空时 provider 回退到不落产物的策略或报 diagnostic。
+	ArtifactDir string
 	Target      AttachTarget // 仅 attach intent 使用
 	StopOnEntry bool         // 仅 debug_launch intent 使用
 }
