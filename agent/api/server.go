@@ -525,6 +525,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
+	mux.HandleFunc("GET /api/language-runtime/providers", a.listLanguageRuntimeProviders)
+	mux.HandleFunc("GET /api/language-runtime/{language}/schema", a.describeLanguageRuntimeSchema)
 	mux.HandleFunc("GET /api/nodes", a.listNodes)
 	mux.HandleFunc("GET /ws/nodes", a.wsNodes)
 	mux.HandleFunc("GET /ws/node-status", a.wsNodeStatus)
