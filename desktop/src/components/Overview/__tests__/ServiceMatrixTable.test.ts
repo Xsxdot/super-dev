@@ -42,10 +42,10 @@ function matrix(): ServiceMatrix {
           { nodeId: 'n2', nodeName: 'node-02', envName: 'prod', health: 'running' },
         ],
         envs: [
-          { envName: 'prod', instances: [], total: 5, healthy: 4, abnormal: 1, health: 'stopped', label: 'Stopped 4/5' },
+          { envName: 'prod', instances: [], total: 5, healthy: 4, abnormal: 1, debuggingCount: 0, health: 'stopped', label: 'Stopped 4/5' },
         ],
         devEnvs: [
-          { envName: 'dev', instances: [], total: 1, healthy: 0, abnormal: 1, health: 'stopped', label: 'Stopped 0/1' },
+          { envName: 'dev', instances: [], total: 1, healthy: 0, abnormal: 1, debuggingCount: 0, health: 'stopped', label: 'Stopped 0/1' },
         ],
       },
       {
@@ -58,7 +58,7 @@ function matrix(): ServiceMatrix {
         instances: [],
         nodeHealths: [],
         envs: [
-          { envName: 'prod', instances: [], total: 0, healthy: 0, abnormal: 0, health: 'not_configured', label: 'Not configured' },
+          { envName: 'prod', instances: [], total: 0, healthy: 0, abnormal: 0, debuggingCount: 0, health: 'not_configured', label: 'Not configured' },
         ],
         devEnvs: [],
       },

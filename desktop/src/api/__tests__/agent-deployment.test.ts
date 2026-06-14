@@ -162,19 +162,73 @@ describe('operation approval api', () => {
     )
   })
 
-  it('sends debug mode in deployment start body', async () => {
+  it('sends debug_launch intent in deployment start body', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ status: 'starting' }),
     } as Response)
 
-    await api.startDeployment('dep-dev', 'debug')
+    await api.startDeployment('dep-dev', 'debug_launch')
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/deployments/dep-dev/start'),
       expect.objectContaining({
-        body: JSON.stringify({ mode: 'debug' }),
+        body: JSON.stringify({ intent: 'debug_launch' }),
       }),
     )
+  })
+
+  it('sends start_normal intent in deployment restart body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'restarting' }),
+    } as Response)
+
+    await api.restartDeployment('dep-dev', 'start_normal')
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/deployments/dep-dev/restart'),
+      expect.objectContaining({
+        body: JSON.stringify({ intent: 'start_normal' }),
+      }),
+    )
+  })
+})
+
+describe('language runtime api', () => {
+  it('loads schema and validates runtime config', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ languages: ['go'] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ language: 'go', version: 1, title: { key: 'runtime.go.title', default: 'Go' }, fields: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ suggestions: [{ label: 'Go .', config: { program: '.' }, confidence: 'high' }] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ valid: true, diagnostics: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ preview: 'go build && ./app', diagnostics: [] }),
+      } as Response)
+
+    await expect(api.listLanguageRuntimeProviders()).resolves.toEqual({ languages: ['go'] })
+    await expect(api.describeLanguageRuntimeSchema('go')).resolves.toMatchObject({ language: 'go' })
+    await expect(api.suggestServiceRuntime('go', { project_root: '/repo', cwd: './server' })).resolves.toMatchObject({ suggestions: expect.any(Array) })
+    await expect(api.validateServiceRuntime('go', { project_root: '/repo', config: { program: '.' } })).resolves.toMatchObject({ valid: true })
+    await expect(api.previewServiceExecution('go', { project_root: '/repo', intent: 'start_dev', config: { program: '.' } })).resolves.toMatchObject({ preview: 'go build && ./app' })
+
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/api/language-runtime/providers'), expect.any(Object))
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, expect.stringContaining('/api/language-runtime/go/schema'), expect.any(Object))
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(3, expect.stringContaining('/api/language-runtime/go/suggest'), expect.objectContaining({ method: 'POST' }))
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(4, expect.stringContaining('/api/language-runtime/go/validate'), expect.objectContaining({ method: 'POST' }))
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(5, expect.stringContaining('/api/language-runtime/go/preview'), expect.objectContaining({ method: 'POST' }))
   })
 })

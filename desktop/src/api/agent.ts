@@ -133,7 +133,9 @@ function postWithApprovalTokenAndBody(approvalToken?: string, body?: unknown): R
 }
 
 export type DeployLocation = 'local' | 'remote'
-export type RuntimeType = 'command' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
+export type RuntimeType = 'command' | 'language' | 'systemd' | 'launchd' | 'docker' | 'nginx_static' | 'external'
+export type RuntimeIntent = 'start_dev' | 'start_normal' | 'debug_launch'
+export type RuntimePreviewIntent = RuntimeIntent | 'attach'
 export type ControlMode = 'monitor' | 'managed'
 export type LogKind = 'process' | 'journalctl' | 'macos_log' | 'docker' | 'nginx' | 'file_tail' | 'command'
 export type Health = 'running' | 'healthy' | 'restarting' | 'stopped' | 'failed' | 'unknown'
@@ -217,6 +219,9 @@ export interface RuntimeConfig {
   type: RuntimeType
   command?: string
   working_dir?: string
+  cwd?: string
+  env?: Record<string, string>
+  config?: Record<string, unknown>
   env_file?: string
   env_vars?: Record<string, string>
   service_name?: string
@@ -258,6 +263,47 @@ export type ServiceLanguage = 'go' | 'node' | 'python'
 export type CodeDebugProvider = 'go' | 'python' | 'node'
 export type CodeDebugMode = 'launch'
 export type CodeDebugPolicy = 'auto' | 'enabled' | 'disabled'
+
+export interface LocalizedText {
+  key: string
+  default: string
+  values?: Record<string, string>
+}
+
+export interface RuntimeSchemaField {
+  key: string
+  name: LocalizedText
+  desc: LocalizedText
+  type: 'string' | 'boolean' | 'number' | 'string_array'
+  required: boolean
+  default?: unknown
+  group?: string
+  order?: number
+}
+
+export interface RuntimeSchema {
+  language: ServiceLanguage
+  version: number
+  title: LocalizedText
+  description?: LocalizedText
+  fields: RuntimeSchemaField[]
+}
+
+export interface RuntimeDiagnostic {
+  severity: 'error' | 'warning' | 'info'
+  field?: string
+  code: string
+  message: string
+}
+
+export interface RuntimeSuggestion {
+  label: string
+  cwd?: string
+  env?: Record<string, string>
+  config: Record<string, unknown>
+  confidence: 'high' | 'medium' | 'low' | string
+  reason?: string
+}
 
 export interface CodeDebugConfig {
   policy?: CodeDebugPolicy
@@ -1320,6 +1366,27 @@ export const api = {
   listOperationAudit: (params?: { project_id?: string; kind?: string; approval_id?: string; since?: string; limit?: number }) =>
     request<OperationAuditList>(`/api/operation-audit${qs(params)}`),
 
+  // Language Runtime Provider
+  listLanguageRuntimeProviders: () =>
+    request<{ languages: ServiceLanguage[] }>('/api/language-runtime/providers'),
+  describeLanguageRuntimeSchema: (language: ServiceLanguage) =>
+    request<RuntimeSchema>(`/api/language-runtime/${encodeURIComponent(language)}/schema`),
+  suggestServiceRuntime: (language: ServiceLanguage, body: { project_root: string; cwd?: string }) =>
+    request<{ suggestions: RuntimeSuggestion[] }>(
+      `/api/language-runtime/${encodeURIComponent(language)}/suggest`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  validateServiceRuntime: (language: ServiceLanguage, body: { project_root: string; cwd?: string; env?: Record<string, string>; config?: Record<string, unknown> }) =>
+    request<{ valid: boolean; diagnostics: RuntimeDiagnostic[] }>(
+      `/api/language-runtime/${encodeURIComponent(language)}/validate`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  previewServiceExecution: (language: ServiceLanguage, body: { project_root: string; cwd?: string; env?: Record<string, string>; config?: Record<string, unknown>; intent?: RuntimePreviewIntent; artifact_dir?: string }) =>
+    request<{ preview?: string; diagnostics?: RuntimeDiagnostic[] }>(
+      `/api/language-runtime/${encodeURIComponent(language)}/preview`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
   // 服务
   listServices: (projectId?: string) => {
     const qs = projectId ? `?project_id=${projectId}` : ''
@@ -1327,17 +1394,17 @@ export const api = {
   },
 
   // Deployment 进程控制
-  startDeployment: (id: string, mode?: 'normal' | 'debug', approvalToken?: string) =>
+  startDeployment: (id: string, intent?: RuntimeIntent, approvalToken?: string) =>
     request<void>(
       `/api/deployments/${encodeURIComponent(id)}/start`,
-      postWithApprovalTokenAndBody(approvalToken, mode ? { mode } : undefined),
+      postWithApprovalTokenAndBody(approvalToken, intent ? { intent } : undefined),
     ),
   stopDeployment: (id: string, approvalToken?: string) =>
     request<void>(`/api/deployments/${encodeURIComponent(id)}/stop`, postWithApprovalToken(approvalToken)),
-  restartDeployment: (id: string, mode?: 'normal' | 'debug', approvalToken?: string) =>
+  restartDeployment: (id: string, intent?: RuntimeIntent, approvalToken?: string) =>
     request<void>(
       `/api/deployments/${encodeURIComponent(id)}/restart`,
-      postWithApprovalTokenAndBody(approvalToken, mode ? { mode } : undefined),
+      postWithApprovalTokenAndBody(approvalToken, intent ? { intent } : undefined),
     ),
   startDeploymentOnHost: (id: string, hostId: string, approvalToken?: string) =>
     request<void>(

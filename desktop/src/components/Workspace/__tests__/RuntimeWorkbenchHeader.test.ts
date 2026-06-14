@@ -234,8 +234,8 @@ describe('RuntimeWorkbenchHeader', () => {
 
   it('renders Run and Debug buttons for the active deployment', () => {
     const service = makeService()
-    service.status = 'stopped'
-    service.deployments![0].status = 'stopped'
+    service.status = ''
+    service.deployments![0].status = ''
     useAgentStore().projects = [makeProject(service)]
     useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
 

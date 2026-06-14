@@ -23,6 +23,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
       startDeployment: vi.fn().mockResolvedValue(undefined),
       stopDeployment: vi.fn().mockResolvedValue(undefined),
       restartDeployment: vi.fn().mockResolvedValue(undefined),
+      describeLanguageRuntimeSchema: vi.fn().mockResolvedValue({ language: 'go', version: 1, title: { key: 'runtime.go.title', default: 'Go' }, fields: [] }),
       listProjects: vi.fn().mockResolvedValue([]),
       listServices: vi.fn().mockResolvedValue([]),
       listOperationApprovals: vi.fn().mockResolvedValue([]),
@@ -65,6 +66,26 @@ describe('agent deployment lifecycle markers', () => {
     await agent.restartDeployment('dep-1')
 
     expect(lifecycle.getMarkers('dep-1').map(m => m.kind)).toEqual(['start', 'stop', 'restart'])
+  })
+
+  it('passes deployment start/restart intent through to the API', async () => {
+    const agent = useAgentStore()
+
+    await agent.startDeployment('dep-1', 'debug_launch')
+    await agent.restartDeployment('dep-1', 'start_normal')
+
+    expect(api.startDeployment).toHaveBeenCalledWith('dep-1', 'debug_launch')
+    expect(api.restartDeployment).toHaveBeenCalledWith('dep-1', 'start_normal')
+  })
+
+  it('caches language runtime schemas by language', async () => {
+    const agent = useAgentStore()
+
+    const first = await agent.describeLanguageRuntimeSchema('go')
+    const second = await agent.describeLanguageRuntimeSchema('go')
+
+    expect(first).toEqual(second)
+    expect(api.describeLanguageRuntimeSchema).toHaveBeenCalledTimes(1)
   })
 
   it('does not record a marker when the API call fails', async () => {

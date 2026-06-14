@@ -25,10 +25,10 @@ function row(): ServiceMatrixRow {
     memBytes: 132 * 1024 * 1024,
     nodeHealths: [],
     envs: [
-      { envName: 'prod', total: 1, healthy: 1, abnormal: 0, health: 'running', label: 'Running 1/1', instances: [] },
+      { envName: 'prod', total: 1, healthy: 1, abnormal: 0, debuggingCount: 0, health: 'running', label: 'Running 1/1', instances: [] },
     ],
     devEnvs: [
-      { envName: 'dev', total: 1, healthy: 0, abnormal: 1, health: 'stopped', label: 'Stopped 0/1', instances: [] },
+      { envName: 'dev', total: 1, healthy: 0, abnormal: 1, debuggingCount: 0, health: 'stopped', label: 'Stopped 0/1', instances: [] },
     ],
     instances: [
       {

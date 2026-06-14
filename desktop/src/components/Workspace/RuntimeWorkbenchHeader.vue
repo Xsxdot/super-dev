@@ -152,13 +152,13 @@ async function openBrowserDebug() {
 async function onRun() {
   const deploymentId = primaryDeploymentInfo.value?.deployment.id
   if (!deploymentId || !canStart.value) return
-  await agentStore.startDeployment(deploymentId, 'normal')
+  await agentStore.startDeployment(deploymentId, 'start_normal')
 }
 
 async function onDebug() {
   const deploymentId = primaryDeploymentInfo.value?.deployment.id
   if (!deploymentId || !canDebug.value) return
-  await agentStore.startDeployment(deploymentId, 'debug')
+  await agentStore.startDeployment(deploymentId, 'debug_launch')
 }
 
 async function onContinue() {

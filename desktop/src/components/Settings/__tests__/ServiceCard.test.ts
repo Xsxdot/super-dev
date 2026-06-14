@@ -6,7 +6,6 @@ import type { ConfigDraftService } from '@/lib/configDraft'
 function service(): ConfigDraftService {
   return {
     id: 'svc-api',
-    project_id: 'proj-1',
     name: 'api',
     required: true,
     order: 1,

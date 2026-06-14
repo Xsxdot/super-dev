@@ -2,13 +2,14 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, type Deployment, type Project, type Service } from '@/api/agent'
+import { api, type Deployment, type Project, type RuntimeIntent, type RuntimeSchema, type Service, type ServiceLanguage } from '@/api/agent'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 
 export const useAgentStore = defineStore('agent', () => {
   const projects = ref<Project[]>([])
   const connected = ref(false)
+  const languageRuntimeSchemas = ref<Partial<Record<ServiceLanguage, RuntimeSchema>>>({})
   const logLifecycleStore = useLogLifecycleStore()
   let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -81,9 +82,9 @@ export const useAgentStore = defineStore('agent', () => {
     projects.value = projects.value.filter(p => p.id !== id)
   }
 
-  async function startDeployment(id: string, mode?: 'normal' | 'debug') {
+  async function startDeployment(id: string, intent?: RuntimeIntent) {
     try {
-      await api.startDeployment(id, mode)
+      await api.startDeployment(id, intent)
     } catch (err) {
       if (await captureApprovalRequired(err)) return
       throw err
@@ -101,9 +102,9 @@ export const useAgentStore = defineStore('agent', () => {
     logLifecycleStore.recordMarker(id, 'stop')
   }
 
-  async function restartDeployment(id: string, mode?: 'normal' | 'debug') {
+  async function restartDeployment(id: string, intent?: RuntimeIntent) {
     try {
-      await api.restartDeployment(id, mode)
+      await api.restartDeployment(id, intent)
     } catch (err) {
       if (await captureApprovalRequired(err)) return
       throw err
@@ -139,6 +140,14 @@ export const useAgentStore = defineStore('agent', () => {
       throw err
     }
     logLifecycleStore.recordMarker(id, 'restart')
+  }
+
+  async function describeLanguageRuntimeSchema(language: ServiceLanguage) {
+    const cached = languageRuntimeSchemas.value[language]
+    if (cached) return cached
+    const schema = await api.describeLanguageRuntimeSchema(language)
+    languageRuntimeSchemas.value = { ...languageRuntimeSchemas.value, [language]: schema }
+    return schema
   }
 
   async function putEnvSelected(projectId: string, envName: string, names: string[]) {
@@ -276,6 +285,7 @@ export const useAgentStore = defineStore('agent', () => {
     startDeployment,
     stopDeployment,
     restartDeployment,
+    describeLanguageRuntimeSchema,
     startDeploymentOnHost,
     stopDeploymentOnHost,
     restartDeploymentOnHost,
