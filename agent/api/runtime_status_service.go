@@ -199,7 +199,7 @@ func (s *runtimeStatusService) sampleTarget(projectID string, dep model.Deployme
 			target.Label = dep.Runtime.Label
 		}
 	}
-	if target.Base == string(model.RuntimeTypeCommand) || target.Base == "process" {
+	if target.Base == string(model.RuntimeTypeCommand) || target.Base == string(model.RuntimeTypeLanguage) || target.Base == "process" {
 		s.app.reconcileLocalDeployment(projectID, dep.ID)
 		s.app.mu.RLock()
 		mgr := s.app.managers[projectID]

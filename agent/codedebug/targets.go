@@ -1,7 +1,7 @@
 // targets.go 从项目配置中提取本机代码调试目标及其可用性。
 //
 // 职责：
-//   - 列出所有符合形态（local managed command）的 deployment
+//   - 列出所有符合形态（local managed command/language）的 deployment
 //   - 由 service.language 推导 provider，计算 can_open 与不可用原因
 //
 // 边界：
@@ -9,9 +9,7 @@
 //   - adapter 可用性由后续 attach/launch 阶段报告
 package codedebug
 
-import (
-	"github.com/xsxdot/super-dev/agent/model"
-)
+import "github.com/xsxdot/super-dev/agent/model"
 
 // ProviderForLanguage 是 debug 这个消费者读取服务语言身份、映射到调试器 provider 的适配点。
 // 语言本身是 Service 的固有属性（model.Service.Language），不归 codedebug 所有。
@@ -102,12 +100,14 @@ func ListTargets(projects []model.Project, opts ...TargetListOption) []Target {
 	return targets
 }
 
-// isShapeSupported 只做形态判定：local + managed + command runtime。
+// isShapeSupported 只做形态判定：local + managed + command/language runtime。
 func isShapeSupported(dep model.Deployment) bool {
 	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged {
 		return false
 	}
-	if dep.Runtime != nil && dep.Runtime.Type != "" && dep.Runtime.Type != model.RuntimeTypeCommand {
+	if dep.Runtime != nil && dep.Runtime.Type != "" &&
+		dep.Runtime.Type != model.RuntimeTypeCommand &&
+		dep.Runtime.Type != model.RuntimeTypeLanguage {
 		return false
 	}
 	return true

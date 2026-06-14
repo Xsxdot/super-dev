@@ -432,8 +432,8 @@ func codeDebugRuntimeType(dep model.Deployment) model.RuntimeType {
 func codeDebugDeniedReason(project model.Project, dep model.Deployment, lang model.ServiceLanguage) string {
 	if effectiveDeployLocation(dep) != model.LocationLocal ||
 		dep.EffectiveControlMode() != model.ControlModeManaged ||
-		codeDebugRuntimeType(dep) != model.RuntimeTypeCommand {
-		return "code debug supports local managed command deployments only"
+		!codeDebugRuntimeSupported(dep) {
+		return "code debug supports local managed command/language deployments only"
 	}
 	policy := model.CodeDebugPolicyAuto
 	if dep.CodeDebug != nil {
@@ -452,6 +452,15 @@ func codeDebugDeniedReason(project model.Project, dep model.Deployment, lang mod
 		return "code debug is only available in dev environments by default"
 	}
 	return ""
+}
+
+func codeDebugRuntimeSupported(dep model.Deployment) bool {
+	switch codeDebugRuntimeType(dep) {
+	case model.RuntimeTypeCommand, model.RuntimeTypeLanguage:
+		return true
+	default:
+		return false
+	}
 }
 
 func envIsDev(project model.Project, envName string) bool {

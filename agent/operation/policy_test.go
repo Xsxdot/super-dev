@@ -200,6 +200,29 @@ func TestPlanCodeDebugOpenDevAllowed(t *testing.T) {
 	assert.Equal(t, dep.ID, plan.Target.DeploymentID)
 }
 
+func TestPlanCodeDebugOpenLanguageRuntimeAllowed(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}}}
+	svc := model.Service{ID: "s1", Name: "api", Language: model.LanguageGo}
+	dep := model.Deployment{
+		ID:          "d1",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Config: map[string]any{"program": "./cmd/api"},
+		},
+	}
+
+	plan, err := PlanCodeDebugOpen(project, svc, dep, model.LanguageGo)
+
+	require.NoError(t, err)
+	assert.False(t, plan.Denied)
+	assert.Equal(t, OperationCodeDebugOpen, plan.Kind)
+}
+
 func TestPlanCodeDebugEvaluateDoesNotStoreExpression(t *testing.T) {
 	plan, err := PlanCodeDebugEvaluate(CodeDebugEvaluateRequest{
 		ProjectID:      "p1",

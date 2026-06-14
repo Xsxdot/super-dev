@@ -647,6 +647,50 @@ func TestManagerLaunchConfigKeepsDefaultGoProgramRelative(t *testing.T) {
 	assert.Equal(t, ".", cfg.Program)
 }
 
+func TestLaunchConfigUsesLanguageRuntimePlan(t *testing.T) {
+	mgr := NewManager(ManagerOptions{})
+	project := model.Project{ID: "proj-lang", Name: "demo", RootPath: "/repo"}
+	service := model.Service{ID: "svc-api", Name: "api", Language: model.LanguageGo}
+	dep := model.Deployment{
+		ID:          "dep-api-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Env:    map[string]string{"ENABLE": "true"},
+			Config: map[string]any{"program": "./cmd/server", "program_args": []any{"--port", "8080"}},
+		},
+		// 旧 override 字段即使被手写进配置也必须被忽略（同源原则）
+		CodeDebug: &model.CodeDebugConfig{
+			Program:    "./wrong",
+			WorkingDir: "./wrong-dir",
+			EnvVars:    map[string]string{"WRONG": "1"},
+		},
+	}
+
+	cfg, provider, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+	assert.Equal(t, model.CodeDebugProviderGo, cfg.Provider)
+	assert.Equal(t, "/repo/server/cmd/server", cfg.Program)
+	assert.Equal(t, []string{"--port", "8080"}, cfg.Args)
+	assert.Equal(t, "/repo/server", cfg.WorkingDir)
+	assert.Equal(t, map[string]string{"ENABLE": "true"}, cfg.Env)
+}
+
+func TestAttachCommandHintLanguageRuntimeGo(t *testing.T) {
+	dep := model.Deployment{Runtime: &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		Config: map[string]any{"program": "./cmd/server"},
+	}}
+	assert.Equal(t, "go run ./cmd/server", attachCommandHint(dep))
+
+	flat := model.Deployment{Command: "./server"}
+	assert.Equal(t, "./server", attachCommandHint(flat))
+}
+
 func openManagerTestSession(t *testing.T, root string, dap DAP) (*Manager, Session) {
 	t.Helper()
 	mgr := NewManager(ManagerOptions{

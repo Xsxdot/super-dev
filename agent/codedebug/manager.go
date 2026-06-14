@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -421,7 +422,7 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		return false, ErrAttachUnsupported
 	}
 	pid, err := resolveGoDebuggeePID(goDebuggeeHints{
-		command:          debugDeploymentCommand(dep),
+		command:          attachCommandHint(dep),
 		mainPID:          mainPID,
 		pgid:             pgid,
 		listProcessGroup: m.listProcessGroup,
@@ -822,6 +823,9 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 	if !IsSupportedTarget(dep) {
 		return LaunchConfig{}, nil, ErrTargetUnsupported
 	}
+	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
+		return m.launchConfigFromLanguageRuntime(project, service, dep, req)
+	}
 	var code model.CodeDebugConfig
 	if dep.CodeDebug != nil {
 		code = *dep.CodeDebug
@@ -894,6 +898,78 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 		AdapterArgs:    append([]string{}, code.AdapterArgs...),
 		StopOnEntry:    stopOnEntry,
 	}, provider, nil
+}
+
+// launchConfigFromLanguageRuntime 由语言 provider 的 debug_launch plan 构造调试启动配置。
+//
+// 同源原则：cwd/env/program 全部来自 runtime 配置，code_debug 仅保留
+// policy/stop_on_entry/adapter override 等调试特有项，不再读 code_debug.program。
+func (m *Manager) launchConfigFromLanguageRuntime(project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (LaunchConfig, Provider, error) {
+	providerName := ProviderForLanguage(service.Language)
+	debugProvider, err := providerFor(providerName)
+	if err != nil {
+		return LaunchConfig{}, nil, err
+	}
+	runtimeProvider, ok := langruntime.Core().Provider(service.Language)
+	if !ok {
+		return LaunchConfig{}, nil, ErrTargetUnsupported
+	}
+	var code model.CodeDebugConfig
+	if dep.CodeDebug != nil {
+		code = *dep.CodeDebug
+	}
+	stopOnEntry := code.StopOnEntry
+	if req.StopOnEntry != nil {
+		stopOnEntry = *req.StopOnEntry
+	}
+	ctx := context.Background()
+	normalized, diagnostics, err := runtimeProvider.Normalize(ctx, langruntime.RuntimeConfigInput{
+		ProjectRoot: project.RootPath,
+		CWD:         dep.Runtime.EffectiveCWD(),
+		Env:         dep.Runtime.EffectiveEnv(),
+		Config:      dep.Runtime.Config,
+	})
+	if err != nil {
+		return LaunchConfig{}, nil, err
+	}
+	if langruntime.HasErrorDiagnostic(diagnostics) {
+		return LaunchConfig{}, nil, ErrConfigInvalid
+	}
+	plan, diagnostics, err := runtimeProvider.BuildPlan(ctx, langruntime.BuildPlanInput{
+		Intent:      langruntime.IntentDebugLaunch,
+		Config:      normalized,
+		StopOnEntry: stopOnEntry,
+	})
+	if err != nil {
+		return LaunchConfig{}, nil, err
+	}
+	if langruntime.HasErrorDiagnostic(diagnostics) || plan.Debug == nil {
+		return LaunchConfig{}, nil, ErrConfigInvalid
+	}
+	cfg := LaunchConfig{
+		Target: Target{
+			ProjectID:    project.ID,
+			ProjectName:  project.Name,
+			RootPath:     project.RootPath,
+			ServiceID:    service.ID,
+			ServiceName:  service.Name,
+			DeploymentID: dep.ID,
+			EnvName:      dep.EnvName,
+			Language:     service.Language,
+			Provider:     providerName,
+			Experimental: providerName == model.CodeDebugProviderNode,
+			WorkDir:      plan.WorkingDir,
+		},
+		Provider:       providerName,
+		Program:        plan.Debug.Program,
+		Args:           append([]string{}, plan.Debug.Args...),
+		WorkingDir:     plan.WorkingDir,
+		Env:            plan.Env,
+		AdapterCommand: strings.TrimSpace(code.AdapterCommand),
+		AdapterArgs:    append([]string{}, code.AdapterArgs...),
+		StopOnEntry:    plan.Debug.StopOnEntry,
+	}
+	return cfg, debugProvider, nil
 }
 
 // DefaultProgramForProvider 返回 provider 在未显式配置 program 时的默认 launch 入口。
@@ -1093,6 +1169,21 @@ func debugDeploymentCommand(dep model.Deployment) string {
 		return strings.TrimSpace(dep.Runtime.Command)
 	}
 	return strings.TrimSpace(dep.Command)
+}
+
+// attachCommandHint 返回用于 debuggee PID 解析的命令 hint。
+//
+// language runtime 没有 shell 命令字符串，但 Go provider 的启动形态固定是 go run，
+// 合成等价 hint 让 pidresolve 走进程组解析（真实 debuggee 是编译产物子进程）。
+func attachCommandHint(dep model.Deployment) string {
+	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
+		program := langruntime.StringValue(dep.Runtime.Config["program"])
+		if program == "" {
+			program = "."
+		}
+		return "go run " + program
+	}
+	return debugDeploymentCommand(dep)
 }
 
 func debugDeploymentWorkDir(dep model.Deployment) string {

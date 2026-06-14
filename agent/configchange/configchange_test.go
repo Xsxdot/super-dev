@@ -168,7 +168,31 @@ func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
 	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed command deployments only")
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed command/language deployments only")
+}
+
+func TestValidateCodeDebugAllowsLanguageRuntime(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguageGo
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-api-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Config: map[string]any{"program": "./cmd/api"},
+		},
+		CodeDebug: &model.CodeDebugConfig{
+			Policy: model.CodeDebugPolicyEnabled,
+			Mode:   model.CodeDebugModeLaunch,
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.True(t, result.OK, result.Errors)
 }
 
 func TestValidateCodeDebugPolicy(t *testing.T) {

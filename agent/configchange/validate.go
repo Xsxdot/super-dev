@@ -92,7 +92,7 @@ func validateDeployment(projectRoot, serviceName string, dep model.Deployment, e
 	} else if !envs[envName] {
 		errs = append(errs, fmt.Sprintf("service %s deployment references unknown environment %s", serviceName, envName))
 	}
-	if dep.Location == model.LocationLocal && dep.EffectiveControlMode() == model.ControlModeManaged && deploymentCommand(dep) == "" {
+	if dep.Location == model.LocationLocal && dep.EffectiveControlMode() == model.ControlModeManaged && deploymentNeedsCommand(dep) && deploymentCommand(dep) == "" {
 		errs = append(errs, fmt.Sprintf("service %s deployment %s local command is required", serviceName, envName))
 	}
 	if dep.Location == model.LocationRemote && dep.EffectiveControlMode() == model.ControlModeManaged && len(dep.HostIDs) == 0 {
@@ -145,8 +145,8 @@ func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep mode
 	if !cfg.Policy.Valid() {
 		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug.policy must be auto, enabled, or disabled", serviceName, dep.EnvName))
 	}
-	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || deploymentRuntimeType(dep) != model.RuntimeTypeCommand {
-		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed command deployments only", serviceName, dep.EnvName))
+	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || !codeDebugRuntimeSupported(dep) {
+		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed command/language deployments only", serviceName, dep.EnvName))
 	}
 	switch cfg.Mode {
 	case "", model.CodeDebugModeLaunch:
@@ -225,6 +225,19 @@ func deploymentRuntimeType(dep model.Deployment) model.RuntimeType {
 		return dep.Runtime.Type
 	}
 	return model.RuntimeTypeCommand
+}
+
+func deploymentNeedsCommand(dep model.Deployment) bool {
+	return deploymentRuntimeType(dep) != model.RuntimeTypeLanguage
+}
+
+func codeDebugRuntimeSupported(dep model.Deployment) bool {
+	switch deploymentRuntimeType(dep) {
+	case model.RuntimeTypeCommand, model.RuntimeTypeLanguage:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateProjectPipelines(project model.Project) []string {

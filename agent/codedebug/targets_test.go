@@ -53,6 +53,36 @@ func TestListTargetsLanguageAndCanOpen(t *testing.T) {
 	}
 }
 
+func TestListTargetsIncludesLanguageRuntime(t *testing.T) {
+	project := model.Project{
+		ID:           "proj-lang",
+		Name:         "demo",
+		RootPath:     "/repo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
+		Services: []model.Service{{
+			ID:       "svc-api",
+			Name:     "api",
+			Language: model.LanguageGo,
+			Deployments: []model.Deployment{{
+				ID:          "dep-api-dev",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    "./server",
+					Config: map[string]any{"program": "./cmd/server"},
+				},
+			}},
+		}},
+	}
+
+	targets := ListTargets([]model.Project{project})
+	require.Len(t, targets, 1)
+	assert.True(t, targets[0].CanOpen)
+	assert.Equal(t, model.CodeDebugProviderGo, targets[0].Provider)
+}
+
 func TestListTargetsNonDevNotOpenable(t *testing.T) {
 	projects := []model.Project{{
 		ID:       "p1",
