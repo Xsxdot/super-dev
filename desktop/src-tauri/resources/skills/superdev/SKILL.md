@@ -23,6 +23,18 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 
 配置远程主机前必须先调用 `list_hosts`。`host_ids` 只能填写 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`），不能填写 `hosts[].name`、SSH Host、机器名或用户口头描述。
 
+## AI 创建 language 服务标准流程
+
+创建 Go 等 `runtime.type="language"` 服务时，不要猜 `command`，必须按 provider schema 组配置：
+
+1. `list_language_runtime_providers` 确认语言受支持。
+2. `describe_language_runtime_schema(language)` 读取字段说明。
+3. `suggest_service_runtime(language, project_root, cwd)` 获取候选 `cwd/env/config`。
+4. 按 schema 组 `runtime: { type: "language", cwd, env, config }`。
+5. `validate_service_runtime` 处理 diagnostics，error 级别未清空前不要写配置。
+6. 按配置变更纪律走 `preview_config_change -> apply_config_change` 创建或更新服务。
+7. `preview_service_execution(intent="start_dev")` 给用户确认实际会运行什么。
+
 ## 总决策树
 
 | 用户意图 | 先做什么 | 继续阅读 |
@@ -83,6 +95,11 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `append_log_analysis_to_session` | 运行日志分析并追加到诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
 | `append_debug_session_note` | 把 AI 观察、假设、结论写入诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
 | `close_debug_session` | 关闭本地诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
+| `list_language_runtime_providers` | 列出支持 schema 驱动配置的 language runtime provider | 读 | 本页 |
+| `describe_language_runtime_schema` | 读取 language runtime 字段 schema，创建 language 服务前必用 | 读 | 本页 |
+| `suggest_service_runtime` | 基于项目目录建议 language runtime 的 `cwd/env/config` | 读 | 本页 |
+| `validate_service_runtime` | 校验 language runtime 配置并返回 diagnostics | 读 | 本页 |
+| `preview_service_execution` | 预览 language runtime 某个 intent 的执行计划，不启动进程 | 读 | 本页 |
 | `preview_config_change` | 预览项目、服务、pipeline 配置变更 | 读 | `references/safe-operations.md` |
 | `apply_config_change` | 应用已确认的配置变更 | 写 | `references/safe-operations.md` |
 | `preview_operation` | 为启动、停止、重启等操作生成可解释安全预检；不创建审批 | 读 | `references/safe-operations.md` |
@@ -109,11 +126,11 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 
 确实需要代码调试时，优先使用复合工具：
 
-- 先确保服务以 debug 模式运行：`restart_service(deployment_id, mode="debug")`；已停止时用 `start_service(deployment_id, mode="debug")`。
+- 先确保服务以 debug launch intent 运行：`restart_service(deployment_id, intent="debug_launch")`；已停止时用 `start_service(deployment_id, intent="debug_launch")`。
 - `debug_capture_at(deployment_id, source, line)`：停在 `file:line`，一次性采集 stack、scopes 和 variables。
 - `debug_inspect(deployment_id)`：对已经暂停的 deployment 一次性读取现场。
-- 看完后用 `restart_service(deployment_id, mode="normal")` 回到普通运行。
+- 看完后用 `restart_service(deployment_id, intent="start_normal")` 回到普通运行。
 
 只有当复合工具不足时，才使用底层 DAP 工具（`set_debug_breakpoints`、`debug_continue`、`debug_step_*`、`debug_variables`、`debug_evaluate`）。`debug_evaluate` 需要审批，并按表达式级别审计；复合工具内部调用时也同样审计。
 
-不存在手动打开或关闭代码调试会话的工具；调试租约由 agent 内部解析、创建和空闲回收。若服务未以 debug 模式运行，调试工具会提示先 restart/start mode=debug，不会静默重启进程。
+不存在手动打开或关闭代码调试会话的工具；调试租约由 agent 内部解析、创建和空闲回收。若服务未以 debug launch intent 运行，调试工具会提示先用 debug_launch intent 重启/启动，不会静默重启进程。
