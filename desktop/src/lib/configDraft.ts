@@ -103,6 +103,11 @@ function normalizeRuntime(d: Deployment): RuntimeConfig {
     if (source.domain !== undefined) runtime.domain = source.domain
     if (source.release_dir !== undefined) runtime.release_dir = source.release_dir
     if (source.current_dir !== undefined) runtime.current_dir = source.current_dir
+  } else if (runtime.type === 'language') {
+    if (source.cwd !== undefined) runtime.cwd = source.cwd
+    const env = stripEmptyEnvKeys(source.env)
+    if (env !== undefined) runtime.env = env
+    if (source.config !== undefined) runtime.config = clone(source.config)
   } else if (runtime.type === 'external') {
     if (d.logs?.type === 'journalctl' || d.log_type === 'journalctl' || d.log_target) {
       runtime.type = 'systemd'

@@ -104,6 +104,7 @@ function removeDep() {
         :model-value="dep"
         :hosts="hosts"
         :default-work-dir="defaultWorkDir"
+        :service-language="service.language"
         @update:model-value="updateDep"
       />
       <button type="button" class="dep-remove" @click="removeDep">{{ t('settings.service.removeEnvConfig') }}</button>

@@ -223,6 +223,40 @@ describe('configDraft', () => {
     expect(out.log_type).toBeUndefined()
   })
 
+  it('projectToDraft 和 draftToPayload 保留 language runtime 的 cwd/env/config', () => {
+    const p = makeProject()
+    p.services[0].language = 'go'
+    p.services[0].deployments![0] = {
+      id: 'd1',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: {
+        type: 'language',
+        cwd: './server',
+        env: { ENABLE_FEATURE: 'true', '': 'ignored' },
+        config: { program: './cmd/api', watch: true },
+      },
+      logs: { type: 'process' },
+      status: '',
+    }
+
+    const draft = projectToDraft(p)
+    const dep = draft.services[0].deployments[0]
+    expect(dep.runtime).toEqual({
+      type: 'language',
+      cwd: './server',
+      env: { ENABLE_FEATURE: 'true' },
+      config: { program: './cmd/api', watch: true },
+    })
+
+    const out = draftToPayload(draft).services[0].deployments[0]
+    expect(out.runtime).toEqual(dep.runtime)
+    expect(out.logs).toEqual({ type: 'process' })
+    expect(out.command).toBeUndefined()
+    expect(out.work_dir).toBeUndefined()
+  })
+
   it('projectToDraft 为 launchd 默认生成 macOS 日志目标', () => {
     const p = makeProject()
     p.services[0].deployments![0] = {

@@ -12,19 +12,24 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
   - 不暴露旧的 read_only / external / 自定义启停命令概念，仅做兼容输出
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type {
   CodeDebugConfig,
   ControlMode,
   Deployment,
   LogConfig,
   LogKind,
+  RuntimeDiagnostic,
   RuntimeConfig,
+  RuntimeSchema,
   RuntimeType,
+  ServiceLanguage,
   WebEntrypointConfig,
 } from '@/api/agent'
+import { api } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
+import SchemaFieldInput from './SchemaFieldInput.vue'
 import WorkDirInput from './WorkDirInput.vue'
 
 const props = defineProps<{
@@ -32,9 +37,17 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   /** 工作目录默认值，新建命令接管配置时自动填入 */
   defaultWorkDir?: string
+  /** service 级语言，用于选择并加载 language runtime provider schema */
+  serviceLanguage?: ServiceLanguage
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
 const { t } = useAppI18n()
+
+const languageSchema = ref<RuntimeSchema | null>(null)
+const languageSchemaLoading = ref(false)
+const languageSchemaError = ref('')
+const languageDiagnostics = ref<RuntimeDiagnostic[]>([])
+let languageSchemaRequestID = 0
 
 interface HostOption {
   id: string
@@ -107,6 +120,14 @@ const isLocalCommand = computed(() => {
   const runtimeType = runtime.value.type || 'command'
   return props.modelValue.location === 'local' && runtimeType === 'command'
 })
+const canUseLanguageRuntime = computed(() =>
+  props.modelValue.location === 'local' &&
+  controlMode.value === 'managed' &&
+  Boolean(props.serviceLanguage),
+)
+const languageSchemaFields = computed(() =>
+  [...(languageSchema.value?.fields ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key)),
+)
 const hostOptions = computed<HostOption[]>(() => {
   const seen = new Set<string>()
   const options: HostOption[] = props.hosts.map((host) => {
@@ -205,6 +226,10 @@ function setRuntimeType(type: RuntimeType) {
     base.container = runtime.value.container ?? logs.value.target
   } else if (type === 'nginx_static') {
     base.domain = runtime.value.domain ?? logs.value.target
+  } else if (type === 'language') {
+    base.cwd = runtime.value.cwd ?? runtime.value.working_dir ?? props.modelValue.work_dir ?? props.defaultWorkDir
+    base.env = runtime.value.env ?? runtime.value.env_vars ?? props.modelValue.env ?? {}
+    base.config = runtime.value.config ?? {}
   }
   patchRuntimeAndLogs(base, defaultLogsForRuntime(base))
 }
@@ -272,6 +297,18 @@ function setEnv(env: Record<string, string>) {
   patchRuntime({ type: 'command', env_vars: env })
 }
 
+function setLanguageEnv(env: Record<string, string>) {
+  patchRuntime({ type: 'language', env })
+}
+
+function setLanguageConfigValue(key: string, value: unknown) {
+  patchRuntime({ type: 'language', config: { ...(runtime.value.config ?? {}), [key]: value } })
+}
+
+function setLanguageCWD(cwd: string) {
+  patchRuntime({ type: 'language', cwd })
+}
+
 function patchWeb(partial: Partial<WebEntrypointConfig>) {
   const current = props.modelValue.web ?? {
     enabled: false,
@@ -294,6 +331,34 @@ function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
   const current = props.modelValue.code_debug ?? {}
   patch({ code_debug: { ...current, ...partial } })
 }
+
+watch(
+  () => [props.serviceLanguage, runtime.value.type] as const,
+  async ([language, runtimeType]) => {
+    const requestID = ++languageSchemaRequestID
+    languageSchemaError.value = ''
+    languageDiagnostics.value = []
+    if (runtimeType !== 'language' || !language) {
+      languageSchema.value = null
+      languageSchemaLoading.value = false
+      return
+    }
+
+    languageSchemaLoading.value = true
+    try {
+      const schema = await api.describeLanguageRuntimeSchema(language)
+      if (requestID !== languageSchemaRequestID) return
+      languageSchema.value = schema
+    } catch (error) {
+      if (requestID !== languageSchemaRequestID) return
+      languageSchema.value = null
+      languageSchemaError.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      if (requestID === languageSchemaRequestID) languageSchemaLoading.value = false
+    }
+  },
+  { immediate: true },
+)
 
 </script>
 
@@ -364,6 +429,7 @@ function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
           @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
         >
           <option v-if="controlMode === 'managed'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
+          <option v-if="canUseLanguageRuntime" value="language">{{ t('settings.deployment.languageRuntime') }}</option>
           <option value="systemd">{{ t('settings.deployment.systemdService') }}</option>
           <option v-if="controlMode === 'managed'" value="launchd">{{ t('settings.deployment.launchdService') }}</option>
           <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
@@ -411,6 +477,48 @@ function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
         </div>
         <div class="settings-field-label dep-label">{{ t('settings.deployment.envVars') }}</div>
         <EnvKeyValueEditor :model-value="runtime.env_vars ?? {}" @update:model-value="setEnv" />
+      </template>
+
+      <template v-else-if="runtime.type === 'language'">
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.workDir') }}</label>
+          <WorkDirInput
+            v-if="modelValue.location === 'local'"
+            data-test="dep-language-cwd"
+            :model-value="runtime.cwd"
+            @update:model-value="setLanguageCWD"
+          />
+          <input
+            v-else
+            class="settings-input dep-input"
+            data-test="dep-language-cwd"
+            :placeholder="t('settings.deployment.workDirPlaceholder')"
+            :value="runtime.cwd"
+            @input="setLanguageCWD(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <div class="settings-field-label dep-label dep-field">{{ t('settings.deployment.envVars') }}</div>
+        <EnvKeyValueEditor :model-value="runtime.env ?? {}" @update:model-value="setLanguageEnv" />
+
+        <div v-if="languageSchemaLoading" class="dep-help" data-test="dep-language-schema-loading">
+          {{ t('settings.deployment.languageSchemaLoading') }}
+        </div>
+        <div v-else-if="languageSchemaError" class="dep-warning" data-test="dep-language-schema-error">
+          {{ t('settings.deployment.languageSchemaLoadFailed') }}: {{ languageSchemaError }}
+        </div>
+        <div v-else-if="!serviceLanguage" class="dep-warning" data-test="dep-language-schema-missing">
+          {{ t('settings.deployment.languageSchemaMissing') }}
+        </div>
+        <div v-else class="language-schema-fields" data-test="dep-language-schema-fields">
+          <SchemaFieldInput
+            v-for="field in languageSchemaFields"
+            :key="field.key"
+            :field="field"
+            :value="(runtime.config ?? {})[field.key]"
+            :diagnostics="languageDiagnostics"
+            @update:value="setLanguageConfigValue(field.key, $event)"
+          />
+        </div>
       </template>
 
       <div v-else-if="runtime.type === 'systemd'" class="settings-field dep-field">

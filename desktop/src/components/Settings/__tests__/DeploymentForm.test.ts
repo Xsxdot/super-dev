@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { api, type Deployment, type RuntimeSchema } from '@/api/agent'
 import DeploymentForm from '@/components/Settings/DeploymentForm.vue'
-import type { Deployment } from '@/api/agent'
+import { installTestI18n } from '@/test-utils/i18n'
 
 function localDep(): Deployment {
   return {
@@ -28,7 +29,64 @@ function systemdRemoteDep(): Deployment {
   }
 }
 
+function languageDep(): Deployment {
+  return {
+    id: 'd1',
+    env_name: 'dev',
+    location: 'local',
+    control_mode: 'managed',
+    runtime: {
+      type: 'language',
+      cwd: './server',
+      env: { ENABLE_FEATURE: 'true' },
+      config: { program: './cmd/api' },
+    },
+    logs: { type: 'process' },
+    status: '',
+  }
+}
+
+function goRuntimeSchema(): RuntimeSchema {
+  return {
+    language: 'go',
+    version: 1,
+    title: {
+      key: 'runtime.go.title',
+      default: 'Go runtime',
+      values: { 'zh-CN': 'Go 运行时' },
+    },
+    fields: [
+      {
+        key: 'program',
+        name: {
+          key: 'runtime.go.program.name',
+          default: 'Go entry package',
+          values: { 'zh-CN': 'Go 入口包' },
+        },
+        desc: {
+          key: 'runtime.go.program.desc',
+          default: 'Main package used by go run.',
+          values: { 'zh-CN': '用于 go run 的 main 包' },
+        },
+        type: 'string',
+        required: true,
+      },
+      {
+        key: 'watch',
+        name: { key: 'runtime.go.watch.name', default: 'Watch files' },
+        desc: { key: 'runtime.go.watch.desc', default: 'Restart when files change.' },
+        type: 'boolean',
+        required: false,
+      },
+    ],
+  }
+}
+
 describe('DeploymentForm', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('local 时展示命令/工作目录输入', () => {
     const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
     expect(wrapper.find('[data-test="dep-command"]').exists()).toBe(true)
@@ -257,6 +315,50 @@ describe('DeploymentForm', () => {
     })
 
     expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(true)
+  })
+
+  it('renders language runtime schema fields and writes changes into runtime.config', async () => {
+    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: languageDep(), hosts: [], serviceLanguage: 'go' },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flushPromises()
+
+    expect(api.describeLanguageRuntimeSchema).toHaveBeenCalledWith('go')
+    expect(wrapper.text()).toContain('Go 入口包')
+    expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="schema-field-program"]').setValue('./cmd/worker')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.runtime).toMatchObject({
+      type: 'language',
+      cwd: './server',
+      env: { ENABLE_FEATURE: 'true' },
+      config: { program: './cmd/worker' },
+    })
+  })
+
+  it('offers language runtime for managed services with a known language', async () => {
+    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: localDep(), hosts: [], serviceLanguage: 'go' },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const options = wrapper.findAll('[data-test="dep-target-type"] option').map(option => option.attributes('value'))
+    expect(options).toContain('language')
+
+    await wrapper.find('[data-test="dep-target-type"]').setValue('language')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.runtime).toEqual({ type: 'language', cwd: '/tmp', env: {}, config: {} })
+    expect(last.logs).toEqual({ type: 'process' })
   })
 
   it('emits policy=disabled when user disables code debug', async () => {
