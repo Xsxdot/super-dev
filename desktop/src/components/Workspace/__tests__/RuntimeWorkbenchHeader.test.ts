@@ -232,7 +232,7 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.text()).toContain('brs_1')
   })
 
-  it('renders Run and Debug buttons for the active deployment', () => {
+  it('renders a single Start button plus a start options menu for the active deployment', async () => {
     const service = makeService()
     service.status = ''
     service.deployments![0].status = ''
@@ -241,19 +241,66 @@ describe('RuntimeWorkbenchHeader', () => {
 
     const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
 
-    expect(wrapper.find('[data-test="run-deployment"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="debug-deployment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="start-deployment"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="run-deployment"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="debug-deployment"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
+
+    expect(wrapper.find('[data-test="start-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="start-normal"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="start-debug"]').exists()).toBe(true)
   })
 
-  it('disables Debug when the deployment cannot open code debug', () => {
+  it('uses default start intent for the primary button and explicit intents from the menu', async () => {
+    const service = makeService()
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const startDeployment = vi.spyOn(useAgentStore(), 'startDeployment').mockResolvedValue(undefined)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+
+    await wrapper.find('[data-test="start-deployment"]').trigger('click')
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
+    await wrapper.find('[data-test="start-normal"]').trigger('click')
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
+    await wrapper.find('[data-test="start-debug"]').trigger('click')
+
+    expect(startDeployment).toHaveBeenNthCalledWith(1, 'dep-api', undefined)
+    expect(startDeployment).toHaveBeenNthCalledWith(2, 'dep-api', 'start_normal')
+    expect(startDeployment).toHaveBeenNthCalledWith(3, 'dep-api', 'debug_launch')
+  })
+
+  it('disables Attach debugger when the deployment cannot open code debug', async () => {
     const service = makeService()
     service.language = undefined
     useAgentStore().projects = [makeProject(service)]
     useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
 
     const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
 
-    expect(wrapper.find('[data-test="debug-deployment"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="start-debug"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('allows language runtime deployments to attach a debugger from the start menu', async () => {
+    const service = makeService()
+    service.deployments![0].runtime = {
+      type: 'language',
+      cwd: './server',
+      config: { program: './cmd/api' },
+    }
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const startDeployment = vi.spyOn(useAgentStore(), 'startDeployment').mockResolvedValue(undefined)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
+
+    expect(wrapper.find('[data-test="start-debug"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="start-debug"]').trigger('click')
+
+    expect(startDeployment).toHaveBeenCalledWith('dep-api', 'debug_launch')
   })
 
   it('shows debugger chip when attached', () => {

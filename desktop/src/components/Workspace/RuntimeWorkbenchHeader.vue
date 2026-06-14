@@ -14,7 +14,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { AgentAPIError, api, type BrowserSession, type RuntimeInstanceStatus } from '@/api/agent'
+import { AgentAPIError, api, type BrowserSession, type RuntimeInstanceStatus, type RuntimeIntent } from '@/api/agent'
 import { MAX_PANEL_LEAVES, usePanelStore } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
 import { useBookmarkStore } from '@/stores/bookmark'
@@ -33,6 +33,7 @@ const appWindow = getCurrentWindow()
 const browserSession = ref<BrowserSession | null>(null)
 const browserError = ref<string | null>(null)
 const continueBusy = ref(false)
+const startMenuOpen = ref(false)
 
 const openDeploymentIds = computed(() => {
   const ids = new Set<string>()
@@ -99,7 +100,7 @@ const debugUnavailableReason = computed(() => {
   const controlMode = dep.control_mode ?? 'managed'
   const policy = dep.code_debug?.policy ?? 'auto'
   const env = primaryProject.value?.environments?.find(item => item.name === info.envName)
-  if (dep.location !== 'local' || runtimeType !== 'command' || controlMode !== 'managed') {
+  if (dep.location !== 'local' || (runtimeType !== 'command' && runtimeType !== 'language') || controlMode !== 'managed') {
     return t('runtimeWorkbench.debugUnavailableTarget')
   }
   if (!info.service.language) return t('runtimeWorkbench.debugUnavailableLanguage')
@@ -149,15 +150,17 @@ async function openBrowserDebug() {
   }
 }
 
-async function onRun() {
+async function onStart(intent?: RuntimeIntent) {
   const deploymentId = primaryDeploymentInfo.value?.deployment.id
   if (!deploymentId || !canStart.value) return
-  await agentStore.startDeployment(deploymentId, 'start_normal')
+  startMenuOpen.value = false
+  await agentStore.startDeployment(deploymentId, intent)
 }
 
-async function onDebug() {
+async function onAttachDebugger() {
   const deploymentId = primaryDeploymentInfo.value?.deployment.id
   if (!deploymentId || !canDebug.value) return
+  startMenuOpen.value = false
   await agentStore.startDeployment(deploymentId, 'debug_launch')
 }
 
@@ -253,29 +256,48 @@ function startWindowDrag(event: MouseEvent) {
         <Icon icon="lucide:step-forward" aria-hidden="true" />
         {{ t('runtimeWorkbench.continue') }}
       </button>
-      <button
+      <div
         v-if="primaryDeploymentInfo"
-        type="button"
-        class="runtime-action-btn"
-        data-test="run-deployment"
-        :disabled="!canStart"
-        @click="onRun"
+        class="start-action-group"
       >
-        <Icon icon="lucide:play" aria-hidden="true" />
-        {{ t('runtimeWorkbench.run') }}
-      </button>
-      <button
-        v-if="primaryDeploymentInfo"
-        type="button"
-        class="runtime-action-btn"
-        data-test="debug-deployment"
-        :disabled="!canDebug"
-        :title="canDebug ? t('runtimeWorkbench.debug') : debugUnavailableReason"
-        @click="onDebug"
-      >
-        <Icon icon="lucide:bug" aria-hidden="true" />
-        {{ t('runtimeWorkbench.debug') }}
-      </button>
+        <button
+          type="button"
+          class="runtime-action-btn runtime-start-btn"
+          data-test="start-deployment"
+          :disabled="!canStart"
+          @click="onStart()"
+        >
+          <Icon icon="lucide:play" aria-hidden="true" />
+          {{ t('runtimeWorkbench.start') }}
+        </button>
+        <button
+          type="button"
+          class="layout-btn start-menu-toggle"
+          data-test="start-menu-toggle"
+          :title="t('runtimeWorkbench.startOptions')"
+          :aria-label="t('runtimeWorkbench.startOptions')"
+          :aria-expanded="startMenuOpen"
+          @click="startMenuOpen = !startMenuOpen"
+        >
+          <Icon icon="lucide:more-horizontal" aria-hidden="true" />
+        </button>
+        <div v-if="startMenuOpen" class="start-action-menu" data-test="start-menu">
+          <button type="button" data-test="start-normal" @click="onStart('start_normal')">
+            <Icon icon="lucide:play-circle" aria-hidden="true" />
+            {{ t('runtimeWorkbench.startNormally') }}
+          </button>
+          <button
+            type="button"
+            data-test="start-debug"
+            :disabled="!canDebug"
+            :title="canDebug ? t('runtimeWorkbench.attachDebugger') : debugUnavailableReason"
+            @click="onAttachDebugger"
+          >
+            <Icon icon="lucide:bug" aria-hidden="true" />
+            {{ t('runtimeWorkbench.attachDebugger') }}
+          </button>
+        </div>
+      </div>
       <template v-if="browserSession">
         <span class="status-chip browser-session" data-test="browser-debug-session">
           {{ browserSession.session_id }}
@@ -483,6 +505,68 @@ function startWindowDrag(event: MouseEvent) {
 .runtime-action-btn:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.start-action-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.runtime-start-btn {
+  min-width: 72px;
+}
+
+.start-menu-toggle {
+  width: 28px;
+  height: 30px;
+}
+
+.start-action-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 170px;
+  padding: 5px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  border-radius: 6px;
+  background: rgba(18, 31, 41, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.start-action-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.start-action-menu button:hover:not(:disabled) {
+  background: rgba(88, 166, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.start-action-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.start-action-menu :deep(svg) {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .layout-btn {
