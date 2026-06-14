@@ -90,8 +90,7 @@ func TestGoProviderNormalizeRejectsNonStringProgram(t *testing.T) {
 	assert.Equal(t, "program_type_invalid", diagnostics[0].Code)
 }
 
-func TestGoProviderStartDevEqualsStartNormalCommand(t *testing.T) {
-	// Go 的 debugger-ready 策略是 attach：start_dev 与 start_normal 的进程必须完全一致。
+func TestGoProviderStartDevBuildsThenExecs(t *testing.T) {
 	normalized := normalizeGoConfig(t, langruntime.RuntimeConfigInput{
 		ProjectRoot: "/repo",
 		CWD:         "./server",
@@ -101,19 +100,45 @@ func TestGoProviderStartDevEqualsStartNormalCommand(t *testing.T) {
 
 	for _, intent := range []langruntime.BuildIntent{langruntime.IntentStartDev, langruntime.IntentStartNormal} {
 		plan, diagnostics, err := langruntime.NewGoProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
-			Intent: intent,
-			Config: normalized,
+			Intent:      intent,
+			Config:      normalized,
+			ArtifactDir: "/data/run-bin/dep-api-dev",
 		})
 		require.NoError(t, err)
 		require.Empty(t, diagnostics)
 		require.NotNil(t, plan.Command, intent)
+		require.NotNil(t, plan.Command.PreRun, intent)
 		require.Nil(t, plan.Debug, intent)
-		assert.Equal(t, "go", plan.Command.Executable)
-		assert.Equal(t, []string{"run", "./cmd/server", "--port", "8080"}, plan.Command.Args)
+
+		// PreRun: go build -gcflags=all=-N -l -o <artifact> ./cmd/server
+		assert.Equal(t, "go", plan.Command.PreRun.Executable)
+		assert.Contains(t, plan.Command.PreRun.Args, "build")
+		assert.Contains(t, plan.Command.PreRun.Args, "all=-N -l")
+		artifact := "/data/run-bin/dep-api-dev/server"
+		assert.Contains(t, plan.Command.PreRun.Args, artifact)
+		assert.Contains(t, plan.Command.PreRun.Args, "./cmd/server")
+
+		// exec: <artifact> --port 8080
+		assert.Equal(t, artifact, plan.Command.Executable)
+		assert.Equal(t, []string{"--port", "8080"}, plan.Command.Args)
 		assert.Equal(t, "/repo/server", plan.WorkingDir)
 		assert.Equal(t, map[string]string{"ENABLE": "true"}, plan.Env)
-		assert.Equal(t, "ENABLE=true go run ./cmd/server --port 8080", plan.Preview)
 	}
+}
+
+func TestGoProviderStartDevRequiresArtifactDir(t *testing.T) {
+	normalized := normalizeGoConfig(t, langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "./server",
+		Config:      map[string]any{"program": "./cmd/server"},
+	})
+	_, diagnostics, err := langruntime.NewGoProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev,
+		Config: normalized,
+	})
+	require.NoError(t, err)
+	require.True(t, langruntime.HasErrorDiagnostic(diagnostics))
+	assert.Equal(t, "artifact_dir_required", diagnostics[0].Code)
 }
 
 func TestGoProviderDebugLaunchPlan(t *testing.T) {

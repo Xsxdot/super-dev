@@ -6,8 +6,8 @@
 //   - 由同一份配置生成四个 intent 的执行计划
 //
 // 边界：
-//   - debugger-ready 策略 = attach：start_dev 与 start_normal 完全相同，
-//     不在启动时附加任何调试预埋；调试保障来自 codedebug 的 pid-attach 链路
+//   - debugger-ready 策略 = attach：start_dev / start_normal 先 build 出调试二进制再 exec；
+//     调试保障来自 codedebug 的 pid-attach 链路
 //   - dlv 适配器命令由 codedebug 的 GoProvider 构造，这里只给语义参数
 package langruntime
 
@@ -64,7 +64,7 @@ func (GoProvider) RuntimeSchema(context.Context) RuntimeSchema {
 			{
 				Key:   "build_flags",
 				Name:  LocalizedText{Key: "runtime.go.buildFlags.name", Default: "Build flags", Values: map[string]string{"zh-CN": "构建参数"}},
-				Desc:  LocalizedText{Key: "runtime.go.buildFlags.desc", Default: "Flags passed to go run / dlv.", Values: map[string]string{"zh-CN": "传给 go run 或 dlv 的构建参数。"}},
+				Desc:  LocalizedText{Key: "runtime.go.buildFlags.desc", Default: "Flags passed to go build / dlv.", Values: map[string]string{"zh-CN": "传给 go build 或 dlv 的构建参数。"}},
 				Type:  FieldTypeStringArray,
 				Group: "advanced",
 				Order: 30,
@@ -141,16 +141,29 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 
 	switch input.Intent {
 	case IntentStartDev, IntentStartNormal:
-		// attach 策略：两个 intent 的进程完全一致，debugger-ready 体现为"随时可 attach"
-		commandArgs := append([]string{"run"}, buildFlags...)
-		commandArgs = append(commandArgs, program)
-		commandArgs = append(commandArgs, args...)
+		// build+exec 策略：先 go build 出带完整调试信息的二进制（-gcflags=all=-N -l 关闭内联和优化，
+		// 保证 attach 时源码断点可用），再 exec 产物。产物是普通进程，满足 DebugReadyByAttach。
+		if strings.TrimSpace(input.ArtifactDir) == "" {
+			return ExecutionPlan{}, []Diagnostic{{
+				Severity: SeverityError, Code: "artifact_dir_required",
+				Message: "Go start requires an artifact output dir for build+exec",
+			}}, nil
+		}
+		artifact := filepath.Join(input.ArtifactDir, goArtifactName(program))
+		buildArgs := []string{"build", "-gcflags", "all=-N -l"}
+		buildArgs = append(buildArgs, buildFlags...)
+		buildArgs = append(buildArgs, "-o", artifact, program)
 		return ExecutionPlan{
 			Intent:     input.Intent,
 			WorkingDir: cfg.CWD,
 			Env:        env,
-			Command:    &CommandSpec{Executable: "go", Args: commandArgs},
-			Preview:    PreviewCommand(env, "go", commandArgs...),
+			Command: &CommandSpec{
+				PreRun:     &CommandStep{Executable: "go", Args: buildArgs},
+				Executable: artifact,
+				Args:       args,
+			},
+			Preview: PreviewCommand(env, "go", buildArgs...) + " && " +
+				PreviewCommand(env, artifact, args...),
 		}, nil, nil
 	case IntentDebugLaunch:
 		return ExecutionPlan{
@@ -178,6 +191,15 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 			Message: fmt.Sprintf("unsupported Go runtime intent %s", input.Intent),
 		}}, nil
 	}
+}
+
+// goArtifactName 从 program 包路径推导产物文件名（basename，"." → 模块目录名占位 "app"）。
+func goArtifactName(program string) string {
+	base := filepath.Base(strings.TrimSpace(program))
+	if base == "" || base == "." || base == "/" {
+		return "app"
+	}
+	return base
 }
 
 // discoverGoMainPackages 在 cwd 的 . 与 ./cmd/* 下定位 main package。
