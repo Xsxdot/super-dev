@@ -1274,16 +1274,11 @@ func debugDeploymentCommand(dep model.Deployment) string {
 }
 
 // attachCommandHint 返回用于 debuggee PID 解析的命令 hint。
-//
-// language runtime 没有 shell 命令字符串，但 Go provider 的启动形态固定是 go run，
-// 合成等价 hint 让 pidresolve 走进程组解析（真实 debuggee 是编译产物子进程）。
 func attachCommandHint(dep model.Deployment) string {
 	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
-		program := langruntime.StringValue(dep.Runtime.Config["program"])
-		if program == "" {
-			program = "."
-		}
-		return "go run " + program
+		// build+exec：主进程直接是编译产物二进制，不再有 go 驱动子进程；
+		// 返回空让 resolveGoDebuggeePID 走"直接可执行"分支（mainPID 即 debuggee）。
+		return ""
 	}
 	return debugDeploymentCommand(dep)
 }

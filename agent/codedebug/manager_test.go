@@ -748,12 +748,13 @@ func TestLaunchConfigUsesLanguageRuntimePlan(t *testing.T) {
 	assert.Equal(t, map[string]string{"ENABLE": "true"}, cfg.Env)
 }
 
-func TestAttachCommandHintLanguageRuntimeGo(t *testing.T) {
+func TestAttachCommandHintLanguageRuntimeIsDirect(t *testing.T) {
 	dep := model.Deployment{Runtime: &model.RuntimeConfig{
 		Type:   model.RuntimeTypeLanguage,
 		Config: map[string]any{"program": "./cmd/server"},
 	}}
-	assert.Equal(t, "go run ./cmd/server", attachCommandHint(dep))
+	// language runtime 经 build+exec，主进程即 debuggee，hint 为空 → 走直接可执行分支。
+	assert.Equal(t, "", attachCommandHint(dep))
 
 	flat := model.Deployment{Command: "./server"}
 	assert.Equal(t, "./server", attachCommandHint(flat))
