@@ -72,19 +72,13 @@ curl -i -X POST "$SUPERDEV_AGENT_URL/api/deployments/dep-api-dev/restart" \
 Expected results:
 
 - Default start returns `{"status":"starting"}`.
+- The debug binary is written under `<DataDir>/run-bin/dep-api-dev/server` and is overwritten on restart instead of accumulating in the project tree.
 - Runtime status includes `health=running` and `base=language` for the deployment instance.
 - `intent=debug_launch` returns `{"status":"starting"}` and runtime status includes `base=debug` with `debugger.origin=launched`.
 - Legacy `mode=debug` returns HTTP 400 with an error telling callers to use `intent=start_dev`, `start_normal`, or `debug_launch`.
 
-## Attach Capture Note
+## Attach Source Breakpoints
 
-The deployment-subject capture endpoint can resolve the running Go process and start a Delve attach session, but `go run` may produce a temporary binary that Delve reports as stripped for source breakpoints:
-
-```json
-{
-  "code": "dap_request_failed",
-  "error": "breakpoint line 22 unverified: could not find file ..., binary is stripped"
-}
-```
-
-This is a Delve attach/source-mapping limitation for `go run` in Phase A, not a failure of language runtime start or `debug_launch`. Use `intent=debug_launch` for source-level breakpoint debugging until the Go provider grows a prebuilt debug-binary start strategy.
+start_dev builds a debug binary (`go build -gcflags="all=-N -l"`) under the agent
+data dir before exec, so the attach session can set source-level breakpoints.
+No `go run` temp-dir leakage, and incremental rebuilds are ~0.1s on a warm cache.
