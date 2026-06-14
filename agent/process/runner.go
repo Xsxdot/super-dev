@@ -12,8 +12,10 @@ package process
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -26,6 +28,8 @@ import (
 type RunnerConfig struct {
 	// Command 是 shell 命令字符串，通过 `sh -c` 执行。
 	Command string
+	// PreRun 非空时在主进程启动前同步执行，失败即视为启动失败。
+	PreRun *CommandStep
 	// Argv 非空时按 argv 直启（argv[0] 为可执行文件），绕过 sh -c；
 	// language runtime 的执行计划是结构化 argv，不拼 shell 字符串。
 	Argv []string
@@ -76,6 +80,18 @@ func NewRunner(cfg RunnerConfig) *Runner {
 func (r *Runner) Start() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.cfg.PreRun != nil && len(r.cfg.PreRun.Argv) > 0 {
+		pre := exec.Command(r.cfg.PreRun.Argv[0], r.cfg.PreRun.Argv[1:]...)
+		pre.Dir = r.cfg.WorkDir
+		pre.Env = execenv.Build(execenv.Options{WorkDir: r.cfg.WorkDir, Overrides: r.cfg.Env})
+		if out, err := pre.CombinedOutput(); err != nil {
+			output := strings.TrimSpace(string(out))
+			r.exitInfo = ExitInfo{Reason: ExitReasonStartFailed, ExitCode: -1, Error: output, StderrTail: r.stderrTail.tail()}
+			r.exited = true
+			return fmt.Errorf("pre-run failed: %s", output)
+		}
+	}
 
 	var cmd *exec.Cmd
 	if len(r.cfg.Argv) > 0 {

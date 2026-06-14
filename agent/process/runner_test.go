@@ -59,6 +59,31 @@ func TestRunnerStartArgvBypassesShell(t *testing.T) {
 	require.Contains(t, lines, "hello argv")
 }
 
+func TestRunnerRunsPreRunBeforeMain(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "built.txt")
+	done := make(chan process.ExitInfo, 1)
+	r := process.NewRunner(process.RunnerConfig{
+		PreRun: &process.CommandStep{Argv: []string{"sh", "-c", "echo built > " + marker}},
+		Argv:   []string{"cat", marker},
+		OnExit: func(info process.ExitInfo) { done <- info },
+	})
+	require.NoError(t, r.Start())
+	info := <-done
+	assert.Equal(t, 0, info.ExitCode)
+	data, _ := os.ReadFile(marker)
+	assert.Contains(t, string(data), "built")
+}
+
+func TestRunnerPreRunFailureIsStartFailure(t *testing.T) {
+	r := process.NewRunner(process.RunnerConfig{
+		PreRun: &process.CommandStep{Argv: []string{"sh", "-c", "echo compile error 1>&2; exit 1"}},
+		Argv:   []string{"echo", "should not run"},
+	})
+	err := r.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compile error")
+}
+
 func TestRunnerFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

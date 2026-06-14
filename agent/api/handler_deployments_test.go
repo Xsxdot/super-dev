@@ -13,6 +13,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -101,6 +102,8 @@ func TestResolveStartIntentRejectsLegacyModeValues(t *testing.T) {
 }
 
 func TestLanguageRuntimeProcessSpec(t *testing.T) {
+	dataDir := t.TempDir()
+	app := &App{cfg: AppConfig{DataDir: dataDir}}
 	project := model.Project{ID: "p", RootPath: "/repo"}
 	svc := model.Service{Language: model.LanguageGo}
 	dep := model.Deployment{
@@ -115,9 +118,12 @@ func TestLanguageRuntimeProcessSpec(t *testing.T) {
 		},
 	}
 
-	spec, err := languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
+	spec, err := app.languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"go", "run", "./cmd/server"}, spec.Argv)
+	artifact := filepath.Join(dataDir, "run-bin", "dep-api-dev", "server")
+	require.NotNil(t, spec.PreRun)
+	assert.Equal(t, []string{"go", "build", "-gcflags", "all=-N -l", "-o", artifact, "./cmd/server"}, spec.PreRun.Argv)
+	assert.Equal(t, []string{artifact}, spec.Argv)
 	assert.Equal(t, "/repo/server", spec.WorkDir)
 	assert.Equal(t, map[string]string{"ENABLE": "true"}, spec.Env)
 }
@@ -130,7 +136,8 @@ func TestLanguageRuntimeProcessSpecRejectsUnknownLanguage(t *testing.T) {
 		Location: model.LocationLocal,
 		Runtime:  &model.RuntimeConfig{Type: model.RuntimeTypeLanguage},
 	}
-	_, err := languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
+	app := &App{cfg: AppConfig{DataDir: t.TempDir()}}
+	_, err := app.languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
 	require.Error(t, err)
 }
 

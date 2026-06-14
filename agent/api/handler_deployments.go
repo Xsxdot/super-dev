@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -284,7 +286,7 @@ func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep 
 			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
 			return err
 		}
-		spec, err := languageRuntimeProcessSpec(project, svc, dep, intent)
+		spec, err := a.languageRuntimeProcessSpec(project, svc, dep, intent)
 		if err != nil {
 			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
 			return err
@@ -407,7 +409,7 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
 			return err
 		}
-		spec, err := languageRuntimeProcessSpec(project, svc, dep, intent)
+		spec, err := a.languageRuntimeProcessSpec(project, svc, dep, intent)
 		if err != nil {
 			a.emitControlEvent(dep.ID, "restart", "failed", err.Error())
 			return err
@@ -432,9 +434,9 @@ func (a *App) restartDeploymentRuntime(ctx context.Context, projectID string, de
 
 // languageRuntimeProcessSpec 由语言 provider 的 start plan 构造进程 spec。
 //
-// start_dev / start_normal 对 attach 策略语言（Go）生成相同的 argv；
+// start_dev / start_normal 的产物目录由 App 注入到 agent 数据目录；
 // intent 仍透传给 provider，为 prearm 语言（Phase C）保留分叉点。
-func languageRuntimeProcessSpec(project model.Project, svc model.Service, dep model.Deployment, intent startIntent) (process.ProcessSpec, error) {
+func (a *App) languageRuntimeProcessSpec(project model.Project, svc model.Service, dep model.Deployment, intent startIntent) (process.ProcessSpec, error) {
 	provider, ok := langruntime.Core().Provider(svc.Language)
 	if !ok {
 		return process.ProcessSpec{}, fmt.Errorf("no language runtime provider for %q", svc.Language)
@@ -456,18 +458,32 @@ func languageRuntimeProcessSpec(project model.Project, svc model.Service, dep mo
 	if langruntime.HasErrorDiagnostic(diagnostics) {
 		return process.ProcessSpec{}, fmt.Errorf("invalid language runtime config: %s", diagnostics[0].Message)
 	}
-	plan, diagnostics, err := provider.BuildPlan(ctx, langruntime.BuildPlanInput{Intent: buildIntent, Config: normalized})
+	artifactDir := filepath.Join(a.cfg.DataDir, "run-bin", dep.ID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		return process.ProcessSpec{}, fmt.Errorf("prepare artifact dir: %w", err)
+	}
+	plan, diagnostics, err := provider.BuildPlan(ctx, langruntime.BuildPlanInput{
+		Intent:      buildIntent,
+		Config:      normalized,
+		ArtifactDir: artifactDir,
+	})
 	if err != nil {
 		return process.ProcessSpec{}, err
 	}
 	if langruntime.HasErrorDiagnostic(diagnostics) || plan.Command == nil {
 		return process.ProcessSpec{}, fmt.Errorf("language runtime start plan unavailable")
 	}
-	return process.ProcessSpec{
+	spec := process.ProcessSpec{
 		Argv:    append([]string{plan.Command.Executable}, plan.Command.Args...),
 		WorkDir: plan.WorkingDir,
 		Env:     plan.Env,
-	}, nil
+	}
+	if plan.Command.PreRun != nil {
+		spec.PreRun = &process.CommandStep{
+			Argv: append([]string{plan.Command.PreRun.Executable}, plan.Command.PreRun.Args...),
+		}
+	}
+	return spec, nil
 }
 
 func (a *App) codeDebugRuntimePID(depID string) int {

@@ -68,10 +68,17 @@ func (m *Manager) SetRunID(id string) {
 // 日志采集）只需提供命令与运行环境，由 Manager 负责进程生命周期与日志归属。
 type ProcessSpec struct {
 	Command string
+	// PreRun 非空时在主进程启动前同步执行（如 go build）；失败即启动失败。
+	PreRun  *CommandStep
 	Argv    []string
 	WorkDir string
 	Env     map[string]string
 	EnvFile string
+}
+
+// CommandStep 是 argv 形式的前置步骤。
+type CommandStep struct {
+	Argv []string
 }
 
 // Stop 强制终止指定服务进程，并立即将状态置为 StatusStopped。
@@ -344,6 +351,7 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 	var r *Runner
 	r = NewRunner(RunnerConfig{
 		Command: spec.Command,
+		PreRun:  spec.PreRun,
 		Argv:    append([]string{}, spec.Argv...),
 		WorkDir: spec.WorkDir,
 		Env:     spec.Env,
