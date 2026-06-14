@@ -397,7 +397,7 @@ func TestDeploymentDebugRuntimeNotRunning(t *testing.T) {
 	}, http.StatusConflict)
 
 	assert.Equal(t, "runtime_not_running", resp["code"])
-	assert.Contains(t, resp["error"], "mode=debug")
+	assert.Contains(t, resp["error"], "intent=debug_launch")
 }
 
 func TestResolveLeaseAttachUnsupportedRemediation(t *testing.T) {
@@ -426,7 +426,7 @@ func TestResolveLeaseAttachUnsupportedRemediation(t *testing.T) {
 	}, http.StatusConflict)
 
 	assert.Equal(t, "attach_unsupported", resp["code"])
-	assert.Contains(t, resp["error"], "mode=debug")
+	assert.Contains(t, resp["error"], "intent=debug_launch")
 }
 
 func codeDebugManagerForAPITest() *codedebug.Manager {

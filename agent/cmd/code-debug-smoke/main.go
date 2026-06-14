@@ -81,8 +81,8 @@ func runAttachSmoke(client *http.Client, base string, deploymentID string) error
 	}
 	printJSON("target", map[string]any{"ok": true, "deployment_id": deploymentID, "target": target})
 
-	if _, err := postJSON[map[string]any](client, base+"/api/deployments/"+url.PathEscape(deploymentID)+"/start", map[string]any{"mode": "normal"}); err != nil {
-		return fmt.Errorf("start normal deployment: %w", err)
+	if _, err := postJSON[map[string]any](client, base+"/api/deployments/"+url.PathEscape(deploymentID)+"/start", map[string]any{}); err != nil {
+		return fmt.Errorf("start deployment: %w", err)
 	}
 	pidBefore, err := waitDeploymentPID(client, base, deploymentID, 5*time.Second)
 	if err != nil {

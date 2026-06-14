@@ -58,6 +58,35 @@ func TestManagerStartStopDeployment(t *testing.T) {
 	}
 }
 
+func TestManagerStartDeploymentSpecUsesArgv(t *testing.T) {
+	var entriesMu sync.Mutex
+	var entries []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) {
+		entriesMu.Lock()
+		entries = append(entries, e)
+		entriesMu.Unlock()
+	})
+	dep := model.Deployment{
+		ID:       "dep-argv",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Runtime:  &model.RuntimeConfig{Type: model.RuntimeTypeLanguage},
+	}
+
+	require.NoError(t, mgr.StartDeploymentSpec(dep, process.ProcessSpec{Argv: []string{"echo", "manager argv"}}))
+
+	require.Eventually(t, func() bool {
+		entriesMu.Lock()
+		defer entriesMu.Unlock()
+		for _, entry := range entries {
+			if entry.DeploymentID == "dep-argv" && entry.Message == "manager argv" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestManagerRestartDeploymentKeepsRunningStatus(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
 

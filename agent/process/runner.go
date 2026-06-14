@@ -26,6 +26,9 @@ import (
 type RunnerConfig struct {
 	// Command 是 shell 命令字符串，通过 `sh -c` 执行。
 	Command string
+	// Argv 非空时按 argv 直启（argv[0] 为可执行文件），绕过 sh -c；
+	// language runtime 的执行计划是结构化 argv，不拼 shell 字符串。
+	Argv []string
 	// WorkDir 是命令的工作目录；为空则继承父进程目录。
 	WorkDir string
 	// Env 是附加到进程环境变量的键值对。
@@ -74,7 +77,12 @@ func (r *Runner) Start() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	cmd := exec.Command("sh", "-c", r.cfg.Command)
+	var cmd *exec.Cmd
+	if len(r.cfg.Argv) > 0 {
+		cmd = exec.Command(r.cfg.Argv[0], r.cfg.Argv[1:]...)
+	} else {
+		cmd = exec.Command("sh", "-c", r.cfg.Command)
+	}
 	cmd.Dir = r.cfg.WorkDir
 	cmd.Env = execenv.Build(execenv.Options{WorkDir: r.cfg.WorkDir, Overrides: r.cfg.Env})
 	// 独立进程组，Stop 时可 SIGKILL 整组（含 sh -c 拉起的子进程）

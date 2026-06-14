@@ -42,7 +42,7 @@ func TestDeploymentRuntimeEndpoint_AllowsDevLocalWithoutApproval(t *testing.T) {
 	assert.Equal(t, "starting", resp["status"])
 }
 
-func TestStartDeploymentModeDebugOnUnsupportedTargetErrors(t *testing.T) {
+func TestStartDeploymentIntentDebugLaunchOnUnsupportedTargetErrors(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
@@ -54,7 +54,7 @@ func TestStartDeploymentModeDebugOnUnsupportedTargetErrors(t *testing.T) {
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 
-	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{"mode": "debug"}, http.StatusBadRequest)
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{"intent": "debug_launch"}, http.StatusBadRequest)
 
 	assert.Equal(t, "debug_start_unavailable", resp["code"])
 	assert.Contains(t, resp["error"], "debug start not available")
@@ -62,19 +62,76 @@ func TestStartDeploymentModeDebugOnUnsupportedTargetErrors(t *testing.T) {
 	assert.Equal(t, "service language does not support code debug", data["reason"])
 }
 
-func TestResolveStartModeDefaults(t *testing.T) {
-	if m := resolveStartMode("", "start", false); m != startModeNormal {
-		t.Fatalf("start default = %q, want normal", m)
+func TestStartDeploymentRejectsLegacyModeField(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(operationAPIProject(true, false))
+	app.mu.Unlock()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	legacyField := "mo" + "de"
+	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{legacyField: "debug"}, http.StatusBadRequest)
+
+	assert.Contains(t, resp["error"], "mode")
+}
+
+func TestResolveStartIntentDefaultsAndRestartKeepsDebug(t *testing.T) {
+	intent, err := resolveStartIntent("", "start", false)
+	require.NoError(t, err)
+	assert.Equal(t, intentStartDev, intent)
+
+	intent, err = resolveStartIntent("", "restart", true)
+	require.NoError(t, err)
+	assert.Equal(t, intentDebugLaunch, intent)
+
+	intent, err = resolveStartIntent("start_normal", "start", false)
+	require.NoError(t, err)
+	assert.Equal(t, intentStartNormal, intent)
+}
+
+func TestResolveStartIntentRejectsLegacyModeValues(t *testing.T) {
+	// 干净切：不允许 mode/intent 两套词汇并存
+	_, err := resolveStartIntent("debug", "start", false)
+	require.Error(t, err)
+	_, err = resolveStartIntent("normal", "start", false)
+	require.Error(t, err)
+}
+
+func TestLanguageRuntimeProcessSpec(t *testing.T) {
+	project := model.Project{ID: "p", RootPath: "/repo"}
+	svc := model.Service{Language: model.LanguageGo}
+	dep := model.Deployment{
+		ID:          "dep-api-dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Env:    map[string]string{"ENABLE": "true"},
+			Config: map[string]any{"program": "./cmd/server"},
+		},
 	}
-	if m := resolveStartMode("", "restart", true); m != startModeDebug {
-		t.Fatalf("restart keep-current = %q, want debug", m)
+
+	spec, err := languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"go", "run", "./cmd/server"}, spec.Argv)
+	assert.Equal(t, "/repo/server", spec.WorkDir)
+	assert.Equal(t, map[string]string{"ENABLE": "true"}, spec.Env)
+}
+
+func TestLanguageRuntimeProcessSpecRejectsUnknownLanguage(t *testing.T) {
+	project := model.Project{ID: "p", RootPath: "/repo"}
+	svc := model.Service{Language: model.LanguagePython} // Phase A 无 Python provider
+	dep := model.Deployment{
+		ID:       "dep-py-dev",
+		Location: model.LocationLocal,
+		Runtime:  &model.RuntimeConfig{Type: model.RuntimeTypeLanguage},
 	}
-	if m := resolveStartMode("", "restart", false); m != startModeNormal {
-		t.Fatalf("restart non-debug = %q, want normal", m)
-	}
-	if m := resolveStartMode("debug", "start", false); m != startModeDebug {
-		t.Fatalf("explicit debug = %q, want debug", m)
-	}
+	_, err := languageRuntimeProcessSpec(project, svc, dep, intentStartDev)
+	require.Error(t, err)
 }
 
 func TestDeploymentRuntimeEndpoint_RequiresApprovalForNonDevLocal(t *testing.T) {
@@ -270,13 +327,13 @@ func TestRestart_AfterExternalKill_Succeeds(t *testing.T) {
 		WorkDir:  t.TempDir(),
 	}
 
-	require.NoError(t, app.startDeploymentRuntime(context.Background(), "proj-restart", dep, startModeNormal))
+	require.NoError(t, app.startDeploymentRuntime(context.Background(), "proj-restart", dep, intentStartNormal))
 	mgr := app.getOrCreateManager("proj-restart")
 	oldPGID := mgr.DeploymentPID(dep.ID)
 	require.NotZero(t, oldPGID)
 	require.NoError(t, syscall.Kill(-oldPGID, syscall.SIGKILL))
 
-	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep, startModeNormal))
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep, intentStartNormal))
 	require.Eventually(t, func() bool {
 		newPGID := mgr.DeploymentPID(dep.ID)
 		return mgr.IsDeploymentActive(dep.ID) && newPGID != 0 && newPGID != oldPGID
@@ -311,7 +368,7 @@ func TestControlEvents_RestartEmitsLifecycle(t *testing.T) {
 	ch := app.buf.Subscribe("control-events-restart")
 	defer app.buf.Unsubscribe("control-events-restart")
 
-	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-control", dep, startModeNormal))
+	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-control", dep, intentStartNormal))
 
 	events := collectControlEvents(t, ch, dep.ID, 4)
 	got := controlEventPhases(events)

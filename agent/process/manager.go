@@ -68,6 +68,7 @@ func (m *Manager) SetRunID(id string) {
 // 日志采集）只需提供命令与运行环境，由 Manager 负责进程生命周期与日志归属。
 type ProcessSpec struct {
 	Command string
+	Argv    []string
 	WorkDir string
 	Env     map[string]string
 	EnvFile string
@@ -190,6 +191,20 @@ func (m *Manager) StartDeployment(dep model.Deployment) error {
 		return m.startLaunchdDeployment(dep)
 	}
 	if err := m.startByID(dep.ID, deploymentToSpec(dep)); err != nil {
+		return err
+	}
+	m.recordRuntime(dep.ID, runtimeTypeOf(dep))
+	return nil
+}
+
+// StartDeploymentSpec 以调用方提供的 ProcessSpec 启动 deployment（language runtime 用）。
+//
+// 与 StartDeployment 的区别：不从 deployment 扁平字段推导 spec；runtime 类型记录照旧。
+func (m *Manager) StartDeploymentSpec(dep model.Deployment, spec ProcessSpec) error {
+	if dep.IsReadOnly() {
+		return nil
+	}
+	if err := m.startByID(dep.ID, spec); err != nil {
 		return err
 	}
 	m.recordRuntime(dep.ID, runtimeTypeOf(dep))
@@ -329,6 +344,7 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 	var r *Runner
 	r = NewRunner(RunnerConfig{
 		Command: spec.Command,
+		Argv:    append([]string{}, spec.Argv...),
 		WorkDir: spec.WorkDir,
 		Env:     spec.Env,
 		EnvFile: spec.EnvFile,

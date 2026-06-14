@@ -617,13 +617,13 @@ func (a *App) resolveDebugLease(w http.ResponseWriter, r *http.Request, project 
 		switch {
 		case errors.Is(err, codedebug.ErrAttachUnsupported):
 			jsonCodeError(w, http.StatusConflict, "attach_unsupported",
-				"this service's language cannot attach to a running process; restart it with mode=debug to debug", nil)
+				"this service's language cannot attach to a running process; restart it with intent=debug_launch to debug", nil)
 		case errors.Is(err, codedebug.ErrAttachTargetUnresolved):
 			jsonCodeError(w, http.StatusConflict, "attach_target_unresolved",
-				"could not locate the running process to attach; restart with mode=debug", nil)
+				"could not locate the running process to attach; restart with intent=debug_launch", nil)
 		case errors.Is(err, codedebug.ErrRuntimeNotRunning):
 			jsonCodeError(w, http.StatusConflict, "runtime_not_running",
-				"debug runtime not running; start it with mode=debug first", nil)
+				"debug runtime not running; start it with intent=debug_launch first", nil)
 		default:
 			writeCodeDebugError(w, err)
 		}
@@ -671,7 +671,7 @@ func writeCodeDebugError(w http.ResponseWriter, err error) {
 	case errors.Is(err, codedebug.ErrSessionClosed):
 		jsonCodeError(w, http.StatusGone, "debug_session_closed", "debug session closed", nil)
 	case errors.Is(err, codedebug.ErrRuntimeNotRunning):
-		jsonCodeError(w, http.StatusConflict, "runtime_not_running", "debug runtime not running; start it with mode=debug first", nil)
+		jsonCodeError(w, http.StatusConflict, "runtime_not_running", "debug runtime not running; start it with intent=debug_launch first", nil)
 	default:
 		jsonCodeError(w, http.StatusInternalServerError, "dap_request_failed", err.Error(), nil)
 	}

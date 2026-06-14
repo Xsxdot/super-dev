@@ -23,7 +23,7 @@ SUPERDEV_DEPLOYMENT_ID=dep-api-dev \
 go run ./cmd/code-debug-smoke
 ```
 
-To verify lease close without stopping Debug Runtime:
+To verify lease close behavior while keeping Debug Runtime alive:
 
 ```bash
 cd /Users/xushixin/workspace/super-debug/agent
@@ -33,7 +33,7 @@ SUPERDEV_DEPLOYMENT_ID=dep_aihub_server_dev \
 go run ./cmd/code-debug-smoke
 ```
 
-The deployment should remain `debug-running` after `close_code_debug_session` when `code_debug.keep_runtime_on_lease_close=true`.
+The deployment should remain `debug-running` after the lease is closed with `SUPERDEV_CODE_DEBUG_KEEP_RUNTIME=1`.
 
 To verify attach-first debugging for an already running Go service:
 
@@ -48,7 +48,7 @@ SUPERDEV_CODE_DEBUG_THREAD_ID=1 \
 go run ./cmd/code-debug-smoke
 ```
 
-Attach smoke starts the deployment in normal mode, calls the deployment-subject debug capture endpoint, checks `debugger.origin=attached`, closes the lease with `stop_runtime=true` to detach, and checks that the normal service PID is unchanged.
+Attach smoke starts the deployment with the default `start_dev` intent, calls the deployment-subject debug capture endpoint, checks `debugger.origin=attached`, closes the lease with `stop_runtime=true` to detach, and checks that the service PID is unchanged.
 
 Attach prerequisites:
 

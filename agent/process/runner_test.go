@@ -39,6 +39,26 @@ func TestRunnerCapturesOutput(t *testing.T) {
 	assert.True(t, strings.Contains(strings.Join(lines, ""), "hello world"))
 }
 
+func TestRunnerStartArgvBypassesShell(t *testing.T) {
+	var lines []string
+	var mu sync.Mutex
+	done := make(chan struct{})
+	r := process.NewRunner(process.RunnerConfig{
+		Argv: []string{"echo", "hello argv"},
+		OnLine: func(line, stream string) {
+			mu.Lock()
+			lines = append(lines, line)
+			mu.Unlock()
+		},
+		OnExit: func(process.ExitInfo) { close(done) },
+	})
+	require.NoError(t, r.Start())
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	require.Contains(t, lines, "hello argv")
+}
+
 func TestRunnerFindsNVMToolWhenAgentPathIsMinimal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
