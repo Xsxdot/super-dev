@@ -71,7 +71,10 @@ type ManagerOptions struct {
 
 type runtimeRecord struct {
 	Runtime
-	rootPath   string
+	rootPath string
+	// sourceRoot 是断点源码路径的解析基准（已解析的工作目录，经 symlink 规范化）。
+	// language runtime 的 cwd 是子目录，源码相对 cwd 而非项目根；用 rootPath 会少算 cwd 层。
+	sourceRoot string
 	dap        DAP
 	close      func() error
 	debugStore *debuggerSnapshotStore
@@ -286,6 +289,7 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 			LastUsedAt:   now,
 		},
 		rootPath:   cfg.Target.RootPath,
+		sourceRoot: resolveSourceRoot(cfg.WorkingDir, cfg.Target.RootPath),
 		dap:        dap,
 		debugStore: store,
 		pump:       pump,
@@ -381,6 +385,7 @@ func (m *Manager) AttachRuntime(ctx context.Context, project model.Project, serv
 			LastUsedAt:   now,
 		},
 		rootPath:   cfg.Target.RootPath,
+		sourceRoot: resolveSourceRoot(cfg.WorkingDir, cfg.Target.RootPath),
 		dap:        dap,
 		debugStore: store,
 		pump:       pump,
@@ -602,7 +607,7 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 	if err != nil {
 		return nil, err
 	}
-	sourcePath, err := ResolveInsideRoot(runtime.rootPath, source)
+	sourcePath, err := ResolveInsideRoot(runtime.sourceRoot, source)
 	if err != nil {
 		return nil, err
 	}
@@ -1104,7 +1109,27 @@ func (m *Manager) validateCaptureSource(sessionID string, source string) (string
 	if err != nil {
 		return "", err
 	}
-	return ResolveInsideRoot(runtime.rootPath, source)
+	return ResolveInsideRoot(runtime.sourceRoot, source)
+}
+
+// resolveSourceRoot 计算断点源码的解析基准目录。
+//
+// 优先用已解析的工作目录（language runtime 的 cwd 是子目录，源码相对 cwd）；
+// 为空时回退项目根。并对结果做 symlink 规范化，使其与编译产物 DWARF 里记录的
+// 真实路径一致（macOS 下 /tmp 是 /private/tmp 的 symlink，go build 写真实路径，
+// 而 dlv 按字符串匹配源码路径，不规范化会导致 "could not find file"）。
+func resolveSourceRoot(workingDir, rootPath string) string {
+	root := strings.TrimSpace(workingDir)
+	if root == "" {
+		root = strings.TrimSpace(rootPath)
+	}
+	if root == "" {
+		return root
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		return resolved
+	}
+	return root
 }
 
 func (m *Manager) pauseForCaptureIfRunning(ctx context.Context, sessionID string, threadID int) (bool, error) {

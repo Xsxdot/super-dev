@@ -358,7 +358,49 @@ func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
 
 	_, err = mgr.SetBreakpoints(context.Background(), session.ID, "main.go", []int{9})
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "main.go"), dap.breakpointsSource)
+	// 断点路径会做 symlink 规范化以匹配 DWARF 真实路径，断言用规范化后的 root。
+	wantRoot, _ := filepath.EvalSymlinks(root)
+	assert.Equal(t, filepath.Join(wantRoot, "main.go"), dap.breakpointsSource)
+}
+
+// TestManagerSetBreakpointsResolvesAgainstWorkingDir 验证断点源码路径基于
+// 已解析的工作目录（cwd），而不是项目根。language runtime 的 cwd 是子目录
+// （如 ./server），断点源码相对 cwd，若用项目根会少算一层导致 dlv 找不到文件。
+func TestManagerSetBreakpointsResolvesAgainstWorkingDir(t *testing.T) {
+	root := t.TempDir()
+	serverDir := filepath.Join(root, "server")
+	require.NoError(t, os.MkdirAll(filepath.Join(serverDir, "cmd", "server"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(serverDir, "go.mod"), []byte("module demo\ngo 1.26\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(serverDir, "cmd", "server", "main.go"), []byte("package main\nfunc main() {}\n"), 0o644))
+
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39002, nil },
+	})
+	project, service, dep := managerTestTarget(root)
+	dep.Command = ""
+	dep.WorkDir = ""
+	dep.CodeDebug = nil
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    "./server",
+		Config: map[string]any{"program": "./cmd/server"},
+	}
+	service.Deployments = []model.Deployment{dep}
+	project.Services = []model.Service{service}
+
+	session, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	_, err = mgr.SetBreakpoints(context.Background(), session.ID, "cmd/server/main.go", []int{2})
+	require.NoError(t, err)
+	// 断点路径应基于 cwd（root/server），并对 symlink 规范化（macOS /tmp -> /private/tmp）。
+	wantDir, _ := filepath.EvalSymlinks(serverDir)
+	assert.Equal(t, filepath.Join(wantDir, "cmd", "server", "main.go"), dap.breakpointsSource)
 }
 
 func TestManagerCaptureAtRejectsBreakpointOutsideProjectRoot(t *testing.T) {
@@ -473,7 +515,8 @@ func TestCaptureAtIgnoresAlreadyRunningContinueError(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "main.go"), dap.breakpointsSource)
+	wantRoot, _ := filepath.EvalSymlinks(root)
+	assert.Equal(t, filepath.Join(wantRoot, "main.go"), dap.breakpointsSource)
 	assert.Equal(t, 1, dap.pauseCalls)
 	assert.Equal(t, 1, dap.continueCalls)
 	assert.Equal(t, map[string]any{"threadId": 1}, result["stopped"])
