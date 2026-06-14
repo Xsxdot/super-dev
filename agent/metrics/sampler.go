@@ -61,7 +61,7 @@ func (s *Sampler) Sample(ctx context.Context, target SampleTarget) (model.Instan
 		return s.sampleDocker(ctx, target)
 	case "launchd":
 		return s.sampleLaunchd(ctx, target)
-	case "process", "command", "":
+	case "process", "command", "language", "":
 		return s.sampleProcess(ctx, target)
 	default:
 		return unknownMetrics(target.Base), nil

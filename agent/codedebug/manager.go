@@ -738,10 +738,7 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 	if err := validatePositiveLine(req.Line); err != nil {
 		return nil, err
 	}
-	if _, err := m.SetBreakpoints(ctx, req.SessionID, req.Source, []int{req.Line}); err != nil {
-		return nil, err
-	}
-	if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil {
+	if _, err := m.validateCaptureSource(req.SessionID, req.Source); err != nil {
 		return nil, err
 	}
 	waitCtx := ctx
@@ -754,13 +751,31 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	pausedByCapture, err := m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	breakpoints, err := m.SetBreakpoints(ctx, req.SessionID, req.Source, []int{req.Line})
+	if err != nil {
+		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
+		return nil, err
+	}
+	if err := ensureCaptureBreakpointVerified(breakpoints, req.Line); err != nil {
+		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
+		return nil, err
+	}
 	_, runtime, err := m.sessionRuntime(req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	stopped, err := runtime.dap.WaitForStopped(waitCtx)
-	if err != nil {
+	stoppedSub, cancelStopped := runtime.dap.Subscribe()
+	defer cancelStopped()
+	if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
 		return nil, err
+	}
+	stopped, err := waitForStoppedEvent(waitCtx, stoppedSub)
+	if err != nil {
+		return nil, fmt.Errorf("wait for capture breakpoint failed: %w", err)
 	}
 	threadID := intFromAny(stopped["threadId"])
 	if threadID == 0 {
@@ -1082,6 +1097,93 @@ func (m *Manager) dialAdapter(ctx context.Context, addr string, timeout time.Dur
 func (m *Manager) threadContinue(ctx context.Context, sessionID string, threadID int) error {
 	_, err := m.ThreadAction(ctx, sessionID, "continue", threadID)
 	return err
+}
+
+func (m *Manager) validateCaptureSource(sessionID string, source string) (string, error) {
+	_, runtime, err := m.sessionRuntime(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return ResolveInsideRoot(runtime.rootPath, source)
+}
+
+func (m *Manager) pauseForCaptureIfRunning(ctx context.Context, sessionID string, threadID int) (bool, error) {
+	_, runtime, err := m.sessionRuntime(sessionID)
+	if err != nil {
+		return false, err
+	}
+	if runtime.debugStore != nil && runtime.debugStore.get().State == "paused" {
+		return false, nil
+	}
+	stoppedSub, cancelStopped := runtime.dap.Subscribe()
+	defer cancelStopped()
+	if err := runtime.dap.Pause(ctx, threadID); err != nil && !isAlreadyPausedDAPError(err) {
+		return false, err
+	}
+	if _, err := waitForStoppedEvent(ctx, stoppedSub); err != nil && !isAlreadyPausedDAPError(err) {
+		return false, fmt.Errorf("wait for capture pause failed: %w", err)
+	}
+	return true, nil
+}
+
+func (m *Manager) resumeCapturePause(sessionID string, threadID int, pausedByCapture bool) {
+	if !pausedByCapture {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = m.threadContinue(ctx, sessionID, threadID)
+}
+
+func waitForStoppedEvent(ctx context.Context, sub <-chan map[string]any) (map[string]any, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case event, ok := <-sub:
+			if !ok {
+				return nil, fmt.Errorf("dap subscription closed")
+			}
+			if body, ok := stoppedBody(event); ok {
+				return body, nil
+			}
+		}
+	}
+}
+
+func ensureCaptureBreakpointVerified(result map[string]any, line int) error {
+	breakpoints := asMapSlice(result["breakpoints"])
+	if len(breakpoints) == 0 {
+		return nil
+	}
+	for _, breakpoint := range breakpoints {
+		verified, hasVerified := breakpoint["verified"].(bool)
+		if !hasVerified || verified {
+			return nil
+		}
+		message, _ := breakpoint["message"].(string)
+		if message != "" {
+			return fmt.Errorf("breakpoint line %d unverified: %s", line, message)
+		}
+		return fmt.Errorf("breakpoint line %d unverified", line)
+	}
+	return nil
+}
+
+func isAlreadyRunningDAPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "debuggee is running") || strings.Contains(message, "already running")
+}
+
+func isAlreadyPausedDAPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "already paused") || strings.Contains(message, "already stopped")
 }
 
 func (m *Manager) cleanupLocked(now time.Time) []func() error {

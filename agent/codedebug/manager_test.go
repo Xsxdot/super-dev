@@ -420,6 +420,11 @@ func TestCaptureAtCoexistsWithPump(t *testing.T) {
 		return dap.subscriberCount() >= 2
 	})
 	dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
+	waitForPump(t, func() bool {
+		calls, _ := dap.continueSnapshot()
+		return calls >= 1 && dap.subscriberCount() >= 2
+	})
+	dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": float64(1)}})
 
 	select {
 	case got := <-resultCh:
@@ -435,6 +440,69 @@ func TestCaptureAtCoexistsWithPump(t *testing.T) {
 	assert.Equal(t, 1, snap.ThreadID)
 	assert.Equal(t, source, snap.Source)
 	assert.Equal(t, 42, snap.Line)
+}
+
+func TestCaptureAtIgnoresAlreadyRunningContinueError(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "main.go")
+	dap := &fakeDAP{
+		continueErr:           errors.New("debuggee is running"),
+		autoStoppedOnPause:    true,
+		autoStoppedOnContinue: true,
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     11,
+				"line":   20,
+				"source": map[string]any{"path": source},
+			}},
+		},
+		scopesResult: map[string]any{
+			"scopes": []map[string]any{{"variablesReference": 7}},
+		},
+		variablesResult: map[string]any{
+			"variables": []map[string]any{{"name": "answer", "value": "42"}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+
+	result, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+		SessionID: session.ID,
+		Source:    "main.go",
+		Line:      20,
+		ThreadID:  1,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "main.go"), dap.breakpointsSource)
+	assert.Equal(t, 1, dap.pauseCalls)
+	assert.Equal(t, 1, dap.continueCalls)
+	assert.Equal(t, map[string]any{"threadId": 1}, result["stopped"])
+}
+
+func TestCaptureAtReportsUnverifiedBreakpoint(t *testing.T) {
+	root := t.TempDir()
+	dap := &fakeDAP{
+		autoStoppedOnPause: true,
+		breakpointsResult: map[string]any{
+			"breakpoints": []map[string]any{{
+				"verified": false,
+				"line":     20,
+				"message":  "no code at line",
+			}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+
+	_, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+		SessionID: session.ID,
+		Source:    "main.go",
+		Line:      20,
+		ThreadID:  1,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "breakpoint line 20 unverified")
+	assert.Equal(t, 1, dap.continueCalls)
 }
 
 func TestManagerVariablesSanitizesSecretsAndLimitsLongValues(t *testing.T) {
@@ -723,14 +791,21 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 type fakeDAP struct {
 	mu                         sync.Mutex
 	breakpointsSource          string
+	breakpointsResult          map[string]any
 	stackResult                map[string]any
 	scopesResult               map[string]any
 	variablesResult            map[string]any
 	evaluateResult             map[string]any
 	subs                       []chan map[string]any
 	waitForStoppedViaSubscribe bool
+	pauseCalls                 int
+	pauseThreadID              int
+	pauseErr                   error
+	autoStoppedOnPause         bool
 	continueCalls              int
 	continueThreadID           int
+	continueErr                error
+	autoStoppedOnContinue      bool
 	disconnectCalls            int
 	detachCalls                int
 	attachCalls                int
@@ -762,16 +837,35 @@ func (f *fakeDAP) ConfigurationDone(context.Context) error {
 }
 func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, _ []int) (map[string]any, error) {
 	f.breakpointsSource = source
+	if f.breakpointsResult != nil {
+		return f.breakpointsResult, nil
+	}
 	return map[string]any{}, nil
 }
 func (f *fakeDAP) Continue(_ context.Context, threadID int) error {
 	f.mu.Lock()
 	f.continueCalls++
 	f.continueThreadID = threadID
+	err := f.continueErr
+	autoStopped := f.autoStoppedOnContinue
 	f.mu.Unlock()
-	return nil
+	if autoStopped {
+		f.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": threadID}})
+	}
+	return err
 }
-func (f *fakeDAP) Pause(context.Context, int) error   { return nil }
+func (f *fakeDAP) Pause(_ context.Context, threadID int) error {
+	f.mu.Lock()
+	f.pauseCalls++
+	f.pauseThreadID = threadID
+	err := f.pauseErr
+	autoStopped := f.autoStoppedOnPause
+	f.mu.Unlock()
+	if autoStopped {
+		f.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": threadID}})
+	}
+	return err
+}
 func (f *fakeDAP) Next(context.Context, int) error    { return nil }
 func (f *fakeDAP) StepIn(context.Context, int) error  { return nil }
 func (f *fakeDAP) StepOut(context.Context, int) error { return nil }
