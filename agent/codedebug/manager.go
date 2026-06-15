@@ -710,7 +710,12 @@ func (m *Manager) attachConfig(project model.Project, service model.Service, dep
 func nodeMainProcessIsNode(dep model.Deployment) bool {
 	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
 		_, escapeHatch := langruntime.EscapeHatchCommand(dep.Runtime.Config)
-		return !escapeHatch
+		if escapeHatch {
+			return false
+		}
+		// script 主路径实际启动的是 pnpm/npm/yarn wrapper；pnpm 可能自身也是
+		// node 进程，不能因为 comm=node 就把 wrapper 当成业务 debuggee。
+		return langruntime.StringValue(dep.Runtime.Config["script"]) == ""
 	}
 	fields := stripInlineEnvFields(strings.Fields(attachCommandHint(dep)))
 	if len(fields) == 0 {
