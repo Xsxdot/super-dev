@@ -133,11 +133,16 @@ code_debug:
   adapter_command: <path-to-js-debug-adapter>
 ```
 
-Expected:
+Signal mechanism verified on real node v23.11 (2026-06-15):
 
-- `start_dev` runs `node server.js` without `--inspect`.
-- Attach resolves the running node process, sends `SIGUSR1`, then starts js-debug and attaches by PID.
-- Breakpoints bind to `server.js`, and stack/variables are visible.
+- `start_dev` runs `node server.js` without `--inspect`; before any signal the process has no
+  inspector open and `node tick N` flows to stdout normally.
+- `kill -USR1 <pid>` makes node print `Debugger listening on ws://127.0.0.1:9229/<uuid>` to
+  **stderr** and stdout keeps flowing — confirming the `signal-then-attach` readiness premise.
+- Implication for codedebug: the inspector port/ws URL must be parsed from the node process
+  **stderr** after SIGUSR1 (unlike Python, whose port is in argv). Wiring the js-debug adapter
+  dial against that ws URL is pending a bundled js-debug adapter binary (`adapter_command`);
+  the readiness dispatch and PID resolution paths are unit-covered.
 
 ## Node Escape-Hatch Smoke
 
@@ -164,10 +169,11 @@ code_debug:
   adapter_command: <path-to-js-debug-adapter>
 ```
 
-Expected:
+Expected (pnpm child resolution is unit-covered; full DAP attach pending js-debug adapter):
 
 - `start_dev` runs `pnpm worker` verbatim.
-- Attach locates the `node` child in the pnpm process group, sends `SIGUSR1` to that child, then attaches.
+- Attach locates the `node` child in the pnpm process group (`resolveNodeDebuggeePID`), sends
+  `SIGUSR1` to that child, then attaches.
 - The pnpm parent is not used as the debuggee PID.
 
 ## Python Prearm Smoke
@@ -195,11 +201,23 @@ runtime:
     program: app.py
 ```
 
-Expected:
+Verified end-to-end against real debugpy 1.8.21 (2026-06-15):
 
-- `start_dev` runs `python -m debugpy --listen 127.0.0.1:<port> app.py`.
-- The command does not include `--wait-for-client`, so the process does not block waiting for a debugger.
-- Attach starts `debugpy.adapter` and sends a DAP attach request with `connect.host=127.0.0.1` and `connect.port=<port>`.
-- Breakpoints bind to `app.py`, and stack/variables are visible.
+- `start_dev` runs `python -m debugpy --listen 127.0.0.1:<port> app.py` (port allocated by
+  the agent and injected via `BuildPlanInput.DebugPort`).
+- The command does **not** include `--wait-for-client`: confirmed the process does not block —
+  `python tick 1` / `tick 2` kept flowing to stdout while the listener was up, proving listen-only
+  does not hijack the runner stdout pipeline.
+- A DAP client connecting with `connect.host=127.0.0.1, connect.port=<port>` (exactly what
+  `PythonProvider.AttachArguments` produces) set a breakpoint at `app.py:5` that came back
+  `verified=true`. Breakpoint binding requires a successful attach, so this proves the
+  prearm-listen attach path works against a live debuggee.
+- The agent recovers `<port>` at attach time by parsing `--listen host:port` from the running
+  process argv (`Manager.DeploymentArgv` → `parseListenPort`); no separate port store is needed.
+- Path sensitivity: both `/tmp/...` (symlink) and `/private/tmp/...` (real) breakpoint paths bound
+  verified=true — debugpy is more tolerant than dlv here, and the Phase A `sourceRoot`+EvalSymlinks
+  normalization covers it regardless.
 
-Known Phase C follow-up: the manager has a listen-attach path, but the normal process start path still needs a durable way to expose the allocated Python debug port to later attach requests. Unit coverage verifies the listen path directly; live end-to-end attach needs that runtime-state handoff plus `debugpy` installed.
+Note: `start_normal` (or any Python process started without `--listen`) is intentionally
+not attachable — `parseListenPort` returns 0 and the manager reports `ErrAttachUnsupported`
+rather than silently relaunching.
