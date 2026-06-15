@@ -728,15 +728,6 @@ watch(
 
       <details class="dep-advanced">
         <summary>{{ t('settings.deployment.codeDebug.overrides') }}</summary>
-        <div class="settings-field dep-field">
-          <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebug.program') }}</label>
-          <input
-            class="settings-input dep-input"
-            data-test="code-debug-program"
-            :value="modelValue.code_debug?.program ?? ''"
-            @input="patchCodeDebug({ program: ($event.target as HTMLInputElement).value })"
-          />
-        </div>
         <label class="dep-choice dep-field">
           <input
             type="checkbox"

@@ -726,7 +726,6 @@ export default {
         policyDisabled: 'Disabled',
         nonDevWarning: 'Enabling code debug outside dev allows AI to attach to this process. Confirm the target is safe.',
         overrides: 'Overrides',
-        program: 'Program',
         stopOnEntry: 'Stop on entry',
       },
       logSource: 'Log Source',

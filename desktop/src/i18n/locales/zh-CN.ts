@@ -726,7 +726,6 @@ export default {
         policyDisabled: '关闭',
         nonDevWarning: '在非 dev 环境放行调试会让 AI 能附加到该进程，请确认目标安全。',
         overrides: '覆盖项',
-        program: '入口程序',
         stopOnEntry: '启动后停在入口',
       },
       logSource: '日志来源',

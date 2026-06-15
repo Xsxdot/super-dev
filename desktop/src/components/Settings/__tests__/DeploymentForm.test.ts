@@ -317,6 +317,17 @@ describe('DeploymentForm', () => {
     expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(true)
   })
 
+  it('does not render the dead code_debug program input', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: { ...localDep(), code_debug: { policy: 'auto', program: '.' } },
+        hosts: [],
+      },
+    })
+
+    expect(wrapper.find('[data-test="code-debug-program"]').exists()).toBe(false)
+  })
+
   it('renders language runtime schema fields and writes changes into runtime.config', async () => {
     vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
 
