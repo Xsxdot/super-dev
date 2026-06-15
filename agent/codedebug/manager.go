@@ -56,6 +56,11 @@ type RunningProcessProbe func(deploymentID string) (mainPID int, pgid int, runni
 // 避免单独持久化端口。返回 nil/空表示拿不到 argv。
 type RunningProcessArgvProbe func(deploymentID string) []string
 
+// RunningProcessStderrProbe 返回某 deployment 普通运行态进程最近的 stderr 行。
+//
+// 供 Node 从 SIGUSR1 唤醒的 `Debugger listening on ws://...:port` 解析 inspector 端口。
+type RunningProcessStderrProbe func(deploymentID string) []string
+
 // processGroupLister 枚举指定进程组内的进程。
 type processGroupLister func(pgid int) []procInfo
 
@@ -79,6 +84,10 @@ type ManagerOptions struct {
 	// RunningProcessArgv 返回某 deployment 普通运行态主进程的启动 argv（用于 prearm-listen
 	// 语言从 `--listen host:port` 反解调试端口）。nil 或返回空表示无法获取，prearm attach 不可用。
 	RunningProcessArgv RunningProcessArgvProbe
+	// RunningProcessStderr 返回某 deployment 普通运行态进程最近的 stderr 行（用于 Node inspector 端口解析）。
+	RunningProcessStderr RunningProcessStderrProbe
+	// JSDebugServerPath 指向打包的 @vscode/js-debug standalone DAP server 入口。
+	JSDebugServerPath string
 	// listProcessGroup 是包内测试 hook，用于替换 OS 进程组枚举；nil 时使用 OS ps 实现。
 	listProcessGroup processGroupLister
 	// SignalProcess 是包内测试 hook，用于替换真实 syscall.Kill。
@@ -104,19 +113,21 @@ type sessionRecord struct {
 
 // Manager 管理由 SuperDev 创建的本机代码调试会话。
 type Manager struct {
-	mu               sync.Mutex
-	launch           AdapterLauncher
-	dial             DAPDialer
-	reserve          PortReservoir
-	ttl              time.Duration
-	now              func() time.Time
-	runningProcess     RunningProcessProbe
-	runningProcessArgv RunningProcessArgvProbe
-	listProcessGroup   processGroupLister
-	signalProcess    signalProcessFunc
-	runtimes         map[string]*runtimeRecord
-	sessions         map[string]*sessionRecord
-	closed           map[string]Session
+	mu                   sync.Mutex
+	launch               AdapterLauncher
+	dial                 DAPDialer
+	reserve              PortReservoir
+	ttl                  time.Duration
+	now                  func() time.Time
+	runningProcess       RunningProcessProbe
+	runningProcessArgv   RunningProcessArgvProbe
+	runningProcessStderr RunningProcessStderrProbe
+	jsDebugServerPath    string
+	listProcessGroup     processGroupLister
+	signalProcess        signalProcessFunc
+	runtimes             map[string]*runtimeRecord
+	sessions             map[string]*sessionRecord
+	closed               map[string]Session
 }
 
 // NewManager 创建代码调试 session 管理器。
@@ -152,18 +163,20 @@ func NewManager(opts ManagerOptions) *Manager {
 		signalProcess = signalProcessOS
 	}
 	return &Manager{
-		launch:           launch,
-		dial:             dial,
-		reserve:          reserve,
-		ttl:              ttl,
-		now:              now,
-		runningProcess:     opts.RunningProcess,
-		runningProcessArgv: opts.RunningProcessArgv,
-		listProcessGroup: listProcessGroup,
-		signalProcess:    signalProcess,
-		runtimes:         map[string]*runtimeRecord{},
-		sessions:         map[string]*sessionRecord{},
-		closed:           map[string]Session{},
+		launch:               launch,
+		dial:                 dial,
+		reserve:              reserve,
+		ttl:                  ttl,
+		now:                  now,
+		runningProcess:       opts.RunningProcess,
+		runningProcessArgv:   opts.RunningProcessArgv,
+		runningProcessStderr: opts.RunningProcessStderr,
+		jsDebugServerPath:    opts.JSDebugServerPath,
+		listProcessGroup:     listProcessGroup,
+		signalProcess:        signalProcess,
+		runtimes:             map[string]*runtimeRecord{},
+		sessions:             map[string]*sessionRecord{},
+		closed:               map[string]Session{},
 	}
 }
 
@@ -444,6 +457,24 @@ func (m *Manager) prearmListenPort(deploymentID string) int {
 	return parseListenPort(m.runningProcessArgv(deploymentID))
 }
 
+// waitInspectorPort 在 SIGUSR1 后轮询 deployment stderr，解析 Node inspector 端口。
+// 端口异步出现，最多等约 3s；超时返回 ErrAttachTargetUnresolved。
+func (m *Manager) waitInspectorPort(deploymentID string) (int, error) {
+	if m.runningProcessStderr == nil {
+		return 0, ErrAttachTargetUnresolved
+	}
+	deadline := m.now().Add(3 * time.Second)
+	for {
+		if port := parseInspectorPort(m.runningProcessStderr(deploymentID)); port > 0 {
+			return port, nil
+		}
+		if m.now().After(deadline) {
+			return 0, fmt.Errorf("%w: node inspector port not found in stderr", ErrAttachTargetUnresolved)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // parseListenPort 在 argv 中找 `--listen host:port`（或 `--listen=host:port`）并返回端口。
 func parseListenPort(argv []string) int {
 	for i, arg := range argv {
@@ -554,7 +585,7 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		return false, nil
 	}
 	providerName := ProviderForLanguage(service.Language)
-	provider, err := providerFor(providerName)
+	provider, err := m.providerFor(providerName)
 	if err != nil {
 		return false, ErrAttachUnsupported
 	}
@@ -590,8 +621,15 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 			return false, err
 		}
 		req.pid = pid
-		req.readiness = langruntime.ReadinessSignalAttach
-		req.signal = "SIGUSR1"
+		if err := m.signalProcess(pid, "SIGUSR1"); err != nil {
+			return false, fmt.Errorf("signal node debuggee: %w", err)
+		}
+		inspectorPort, perr := m.waitInspectorPort(dep.ID)
+		if perr != nil {
+			return false, perr
+		}
+		req.readiness = langruntime.ReadinessPrearmListen
+		req.port = inspectorPort
 	case model.LanguagePython:
 		// prearm-listen：进程以 `python -m debugpy --listen host:port` 常驻，端口写在 argv 里。
 		// 从 argv 反解端口直连，不发信号、不需独立端口存储。start_normal（无 --listen）的
@@ -1030,7 +1068,7 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 	if providerName == "" {
 		return LaunchConfig{}, nil, ErrTargetUnsupported
 	}
-	provider, err := providerFor(providerName)
+	provider, err := m.providerFor(providerName)
 	if err != nil {
 		return LaunchConfig{}, nil, err
 	}
@@ -1098,7 +1136,7 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 // policy/stop_on_entry/adapter override 等调试特有项，不再读 code_debug.program。
 func (m *Manager) launchConfigFromLanguageRuntime(project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (LaunchConfig, Provider, error) {
 	providerName := ProviderForLanguage(service.Language)
-	debugProvider, err := providerFor(providerName)
+	debugProvider, err := m.providerFor(providerName)
 	if err != nil {
 		return LaunchConfig{}, nil, err
 	}
@@ -1403,14 +1441,14 @@ func (m *Manager) cleanupLocked(now time.Time) []func() error {
 	return closeFns
 }
 
-func providerFor(provider model.CodeDebugProvider) (Provider, error) {
+func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error) {
 	switch provider {
 	case model.CodeDebugProviderGo:
 		return NewGoProvider(), nil
 	case model.CodeDebugProviderPython:
 		return NewPythonProvider("python3"), nil
 	case model.CodeDebugProviderNode:
-		return NewNodeProvider(), nil
+		return NewNodeProvider(m.jsDebugServerPath), nil
 	default:
 		return nil, ErrTargetUnsupported
 	}

@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 为 Go/Python 生成开箱可用 adapter 命令
-//   - 为 Node 生成显式配置的实验 adapter 命令
+//   - 为 Node 生成打包 js-debug standalone adapter 命令
 //   - 生成 DAP launch arguments
 //
 // 边界：
@@ -149,26 +149,38 @@ func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 	}
 }
 
-// NodeProvider 构建实验态 Node DAP adapter 配置。
-type NodeProvider struct{}
+// NodeProvider 用打包的 @vscode/js-debug standalone DAP server 调试 Node。
+type NodeProvider struct{ ServerPath string }
 
 // NewNodeProvider 创建 Node 代码调试 provider。
-func NewNodeProvider() NodeProvider { return NodeProvider{} }
+//
+// 参数：
+//   - serverPath: 指向打包的 dapDebugServer.js；为空表示 js-debug 未落地
+//
+// 返回：
+//   - NodeProvider 实例
+//
+// 注意：
+//   - serverPath 为空时 AdapterCommand 会返回 adapter unavailable
+func NewNodeProvider(serverPath string) NodeProvider { return NodeProvider{ServerPath: serverPath} }
 
-// AdapterCommand 返回用户显式配置的 Node DAP adapter 启动命令。
-func (NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
-	if cfg.AdapterCommand == "" {
+// AdapterCommand 返回 js-debug standalone DAP server 启动命令。
+func (p NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
+	if strings.TrimSpace(p.ServerPath) == "" {
 		return AdapterCommand{}, NewAdapterError(
 			CodeAdapterUnavailable,
 			AdapterCommand{Provider: model.CodeDebugProviderNode},
 			ErrAdapterUnavailable,
 		)
 	}
+	if cfg.AdapterPort == 0 {
+		return AdapterCommand{}, ErrConfigInvalid
+	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderNode,
-		Name:     cfg.AdapterCommand,
-		Args:     cfg.AdapterArgs,
-		Env:      cfg.Env,
+		Name:     "node",
+		Args:     []string{p.ServerPath, strconv.Itoa(cfg.AdapterPort), "127.0.0.1"},
+		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
 	}, nil
 }
@@ -176,6 +188,8 @@ func (NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
 // LaunchArguments 返回 Node DAP launch 请求参数。
 func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	return map[string]any{
+		"type":        "pwa-node",
+		"request":     "launch",
 		"program":     cfg.Program,
 		"cwd":         cfg.WorkingDir,
 		"args":        cfg.Args,
@@ -184,14 +198,20 @@ func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-// AttachCapability 返回 Node 的附加档位：SIGUSR1 打开 inspector 后按 PID 附加。
-func (NodeProvider) AttachCapability() AttachMode { return AttachModePID }
+// AttachCapability 返回 Node 的附加档位：js-debug 连接 SIGUSR1 打开的 inspector 端口。
+func (NodeProvider) AttachCapability() AttachMode { return AttachModeListen }
 
-// AttachArguments 构造 js-debug attach 参数：按 PID（经 SIGUSR1 已开 inspector）。
-func (NodeProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]any {
+// AttachArguments 构造 js-debug attach 参数：连接 Node inspector 端口。
+func (NodeProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
+	port := cfg.TargetPort
+	if port == 0 {
+		port = cfg.AdapterPort
+	}
 	return map[string]any{
-		"processId": processID,
-		"cwd":       cfg.WorkingDir,
+		"type":    "pwa-node",
+		"request": "attach",
+		"port":    port,
+		"cwd":     cfg.WorkingDir,
 	}
 }
 

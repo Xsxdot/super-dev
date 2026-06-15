@@ -295,7 +295,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 	codeDebug := cfg.CodeDebugManagerOverride
 	if codeDebug == nil {
 		codeDebug = codedebug.NewManager(codedebug.ManagerOptions{
-			SessionTTL: 30 * time.Minute,
+			SessionTTL:        30 * time.Minute,
+			JSDebugServerPath: codedebug.JSDebugServerPath(cfg.DataDir),
 			RunningProcess: func(deploymentID string) (int, int, bool) {
 				if app == nil {
 					return 0, 0, false
@@ -318,6 +319,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 				for _, mgr := range app.managers {
 					if mgr != nil && mgr.IsDeploymentActive(deploymentID) {
 						return mgr.DeploymentArgv(deploymentID)
+					}
+				}
+				return nil
+			},
+			RunningProcessStderr: func(deploymentID string) []string {
+				if app == nil {
+					return nil
+				}
+				app.mu.RLock()
+				defer app.mu.RUnlock()
+				for _, mgr := range app.managers {
+					if mgr != nil && mgr.IsDeploymentActive(deploymentID) {
+						return mgr.DeploymentStderrTail(deploymentID)
 					}
 				}
 				return nil

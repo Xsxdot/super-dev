@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestGoProviderBuildsDelveDAPCommand(t *testing.T) {
@@ -56,9 +55,18 @@ func TestPythonProviderBuildsDebugpyAdapterCommand(t *testing.T) {
 	assert.Equal(t, []string{"-m", "debugpy.adapter", "--host", "127.0.0.1", "--port", "39002"}, cmd.Args)
 }
 
-func TestNodeProviderRequiresAdapterCommand(t *testing.T) {
-	provider := NewNodeProvider()
-	_, err := provider.AdapterCommand(LaunchConfig{Provider: model.CodeDebugProviderNode})
+func TestNodeProviderAdapterCommandUsesBundledServer(t *testing.T) {
+	provider := NewNodeProvider("/data/js-debug/src/dapDebugServer.js")
+	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41020, WorkingDir: "/repo"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "node", cmd.Name)
+	assert.Equal(t, []string{"/data/js-debug/src/dapDebugServer.js", "41020", "127.0.0.1"}, cmd.Args)
+}
+
+func TestNodeProviderAdapterCommandMissingServer(t *testing.T) {
+	provider := NewNodeProvider("")
+	_, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41020})
 
 	require.ErrorIs(t, err, ErrAdapterUnavailable)
 }
@@ -70,8 +78,8 @@ func TestProviderAttachCapability(t *testing.T) {
 	if NewPythonProvider("python3").AttachCapability() != AttachModeListen {
 		t.Fatal("Python should support listen attach")
 	}
-	if NewNodeProvider().AttachCapability() != AttachModePID {
-		t.Fatal("Node should support pid attach")
+	if NewNodeProvider("/data/js-debug/src/dapDebugServer.js").AttachCapability() != AttachModeListen {
+		t.Fatal("Node should support listen attach")
 	}
 }
 
@@ -90,6 +98,11 @@ func TestPythonAttachArgumentsConnectsPort(t *testing.T) {
 	assert.Equal(t, "/repo", args["cwd"])
 }
 
-func TestNodeProviderSupportsPIDAttach(t *testing.T) {
-	assert.Equal(t, AttachModePID, NewNodeProvider().AttachCapability())
+func TestNodeProviderConnectAttachToInspectorPort(t *testing.T) {
+	provider := NewNodeProvider("/data/js-debug/src/dapDebugServer.js")
+	assert.Equal(t, AttachModeListen, provider.AttachCapability())
+	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo", TargetPort: 9229}, 0)
+	require.NotNil(t, args)
+	assert.Equal(t, 9229, args["port"])
+	assert.Equal(t, "attach", args["request"])
 }

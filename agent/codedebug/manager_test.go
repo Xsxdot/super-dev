@@ -332,6 +332,7 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 		sig string
 	}
 	mgr := NewManager(ManagerOptions{
+		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
 		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
 			return AdapterProcess{PID: 9002, Close: func() error { return nil }}, nil
 		},
@@ -348,6 +349,9 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 			signaled.sig = sig
 			return nil
 		},
+		RunningProcessStderr: func(deploymentID string) []string {
+			return []string{"Debugger listening on ws://127.0.0.1:9229/uuid"}
+		},
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	service.Language = model.LanguageNode
@@ -360,10 +364,62 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 	assert.True(t, created)
 	assert.Equal(t, 101, signaled.pid)
 	assert.Equal(t, "SIGUSR1", signaled.sig)
-	assert.Equal(t, 101, dap.attachProcessID)
+	assert.Equal(t, 9229, dap.attachConnectPort)
 	rt, ok := mgr.RuntimeStatus(dep.ID)
 	require.True(t, ok)
 	assert.Equal(t, 101, rt.ProcessID)
+}
+
+func TestResolveLeaseNodeParsesInspectorPortAfterSignal(t *testing.T) {
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9100, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41020, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{{pid: 100, comm: "node"}}
+		},
+		SignalProcess: func(int, string) error { return nil },
+		RunningProcessStderr: func(deploymentID string) []string {
+			return []string{"node tick 1", "Debugger listening on ws://127.0.0.1:9229/uuid"}
+		},
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguageNode
+	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js", AdapterCommand: "node-debug-adapter"}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, 9229, dap.attachConnectPort)
+}
+
+func TestResolveLeaseNodeNoInspectorPortReportsError(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{{pid: 100, comm: "node"}}
+		},
+		SignalProcess:        func(int, string) error { return nil },
+		RunningProcessStderr: func(deploymentID string) []string { return []string{"node tick 1"} },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguageNode
+	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js"}
+
+	_, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	if !errors.Is(err, ErrAttachTargetUnresolved) {
+		t.Fatalf("node without inspector port should report unresolved, got %v", err)
+	}
 }
 
 func TestResolveLeasePythonConnectsListenPortFromArgv(t *testing.T) {
@@ -456,12 +512,11 @@ func TestManagerSignalReadinessSendsSignalBeforeAttach(t *testing.T) {
 
 	_, err := mgr.attachWithReadiness(context.Background(), readinessRequest{
 		cfg: LaunchConfig{
-			Target:         Target{ProjectID: "p1", DeploymentID: "dep-node", RootPath: "/repo"},
-			Provider:       model.CodeDebugProviderNode,
-			WorkingDir:     "/repo",
-			AdapterCommand: "node-debug-adapter",
+			Target:     Target{ProjectID: "p1", DeploymentID: "dep-go", RootPath: "/repo"},
+			Provider:   model.CodeDebugProviderGo,
+			WorkingDir: "/repo",
 		},
-		provider:  NewNodeProvider(),
+		provider:  NewGoProvider(),
 		readiness: langruntime.ReadinessSignalAttach,
 		signal:    "SIGUSR1",
 		pid:       4321,
@@ -1037,6 +1092,9 @@ func (f *fakeDAP) Attach(_ context.Context, args map[string]any) error {
 		if port, ok := conn["port"].(int); ok {
 			f.attachConnectPort = port
 		}
+	}
+	if port, ok := args["port"].(int); ok {
+		f.attachConnectPort = port
 	}
 	return nil
 }
