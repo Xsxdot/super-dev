@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -899,7 +900,18 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 			return nil, err
 		}
 	}
-	return runtime.dap.SetBreakpoints(ctx, sourcePath, lines)
+	result, err := runtime.dap.SetBreakpoints(ctx, sourcePath, lines)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	// 暴露解析后的绝对路径，便于诊断 js-debug "Unbound breakpoint"：
+	// 当 js-debug 加载的脚本真实路径与此不一致时即为路径映射问题。
+	result["resolved_source"] = sourcePath
+	log.Printf("[SuperDev][codedebug] setBreakpoints session=%s source=%q resolved=%q sourceRoot=%q lines=%v", sessionID, source, sourcePath, runtime.sourceRoot, lines)
+	return result, nil
 }
 
 // ThreadAction 执行 continue/pause/step 动作。

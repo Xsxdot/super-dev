@@ -773,6 +773,40 @@ func TestManagerSetBreakpointsResolvesAgainstWorkingDir(t *testing.T) {
 	assert.Equal(t, filepath.Join(wantDir, "cmd", "server", "main.go"), dap.breakpointsSource)
 }
 
+func TestSetBreakpointsReportsResolvedSourcePath(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "server.js"), []byte("let n=0\n"), 0o644))
+
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39003, nil },
+	})
+	project, service, dep := managerTestTarget(root)
+	dep.Command = ""
+	dep.WorkDir = ""
+	dep.CodeDebug = nil
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "./server.js"},
+	}
+	service.Deployments = []model.Deployment{dep}
+	project.Services = []model.Service{service}
+
+	session, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	require.NoError(t, err)
+
+	body, err := mgr.SetBreakpoints(context.Background(), session.ID, "server.js", []int{1})
+	require.NoError(t, err)
+	got, _ := body["resolved_source"].(string)
+	want, _ := filepath.EvalSymlinks(filepath.Join(root, "server.js"))
+	assert.Equal(t, want, got)
+}
+
 func TestManagerCaptureAtRejectsBreakpointOutsideProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager(ManagerOptions{
