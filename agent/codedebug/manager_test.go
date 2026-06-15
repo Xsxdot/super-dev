@@ -366,10 +366,44 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 	assert.Equal(t, 101, rt.ProcessID)
 }
 
-func TestResolveLeaseAttachUnsupportedReportsError(t *testing.T) {
+func TestResolveLeasePythonConnectsListenPortFromArgv(t *testing.T) {
+	dap := &fakeDAP{}
+	signalCalled := false
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9003, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41011, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		// prearm 进程的 argv 自带 --listen 端口；attach 时从 argv 反解，不需独立存储。
+		RunningProcessArgv: func(deploymentID string) []string {
+			return []string{"python", "-m", "debugpy", "--listen", "127.0.0.1:5678", "app.py"}
+		},
+		SignalProcess: func(int, string) error { signalCalled = true; return nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguagePython
+	dep.CodeDebug = &model.CodeDebugConfig{Program: "app.py"}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.False(t, signalCalled, "prearm should connect to listen port, not signal")
+	assert.Equal(t, 5678, dap.attachConnectPort)
+}
+
+func TestResolveLeasePythonMissingListenPortReportsError(t *testing.T) {
 	mgr := NewManager(ManagerOptions{
 		RunningProcess: func(deploymentID string) (int, int, bool) {
 			return 4321, 4321, deploymentID == "dep-api-dev"
+		},
+		// 普通启动（start_normal，无 --listen）的 Python 进程不可 attach，不应静默 launch。
+		RunningProcessArgv: func(deploymentID string) []string {
+			return []string{"python", "app.py"}
 		},
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
@@ -377,7 +411,27 @@ func TestResolveLeaseAttachUnsupportedReportsError(t *testing.T) {
 
 	_, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
 	if !errors.Is(err, ErrAttachUnsupported) {
-		t.Fatalf("python running service should not silently launch; got %v", err)
+		t.Fatalf("python without listen port should report unsupported, not silently launch; got %v", err)
+	}
+}
+
+func TestParseListenPort(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want int
+	}{
+		{"space form host:port", []string{"python", "-m", "debugpy", "--listen", "127.0.0.1:5678", "app.py"}, 5678},
+		{"equals form host:port", []string{"python", "--listen=127.0.0.1:9001", "app.py"}, 9001},
+		{"port only", []string{"python", "--listen", "5678"}, 5678},
+		{"no listen", []string{"python", "app.py"}, 0},
+		{"listen without value", []string{"python", "--listen"}, 0},
+		{"nil argv", nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, parseListenPort(tc.argv))
+		})
 	}
 }
 

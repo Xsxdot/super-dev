@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,6 +50,12 @@ type PortReservoir func() (int, error)
 // running=false 表示未以普通 runtime 运行（不能 attach，应提示 launch）。
 type RunningProcessProbe func(deploymentID string) (mainPID int, pgid int, running bool)
 
+// RunningProcessArgvProbe 返回某 deployment 普通运行态主进程的启动 argv。
+//
+// 供 prearm-listen 语言从 argv 的 `--listen host:port` 反解调试端口——argv 即真相源，
+// 避免单独持久化端口。返回 nil/空表示拿不到 argv。
+type RunningProcessArgvProbe func(deploymentID string) []string
+
 // processGroupLister 枚举指定进程组内的进程。
 type processGroupLister func(pgid int) []procInfo
 
@@ -69,6 +76,9 @@ type ManagerOptions struct {
 	Now           func() time.Time
 	// RunningProcess 探测某 deployment 的普通运行态进程信息（用于 attach）。nil 表示不支持 attach。
 	RunningProcess RunningProcessProbe
+	// RunningProcessArgv 返回某 deployment 普通运行态主进程的启动 argv（用于 prearm-listen
+	// 语言从 `--listen host:port` 反解调试端口）。nil 或返回空表示无法获取，prearm attach 不可用。
+	RunningProcessArgv RunningProcessArgvProbe
 	// listProcessGroup 是包内测试 hook，用于替换 OS 进程组枚举；nil 时使用 OS ps 实现。
 	listProcessGroup processGroupLister
 	// SignalProcess 是包内测试 hook，用于替换真实 syscall.Kill。
@@ -100,8 +110,9 @@ type Manager struct {
 	reserve          PortReservoir
 	ttl              time.Duration
 	now              func() time.Time
-	runningProcess   RunningProcessProbe
-	listProcessGroup processGroupLister
+	runningProcess     RunningProcessProbe
+	runningProcessArgv RunningProcessArgvProbe
+	listProcessGroup   processGroupLister
 	signalProcess    signalProcessFunc
 	runtimes         map[string]*runtimeRecord
 	sessions         map[string]*sessionRecord
@@ -146,7 +157,8 @@ func NewManager(opts ManagerOptions) *Manager {
 		reserve:          reserve,
 		ttl:              ttl,
 		now:              now,
-		runningProcess:   opts.RunningProcess,
+		runningProcess:     opts.RunningProcess,
+		runningProcessArgv: opts.RunningProcessArgv,
 		listProcessGroup: listProcessGroup,
 		signalProcess:    signalProcess,
 		runtimes:         map[string]*runtimeRecord{},
@@ -419,6 +431,38 @@ func (m *Manager) attachByListenPort(ctx context.Context, cfg LaunchConfig, prov
 	})
 }
 
+// prearmListenPort 从 deployment 运行进程的 argv 反解 debugpy `--listen host:port` 端口。
+// 拿不到 argv 或 argv 不含 --listen 时返回 0（表示该进程不可 prearm attach）。
+func (m *Manager) prearmListenPort(deploymentID string) int {
+	if m.runningProcessArgv == nil {
+		return 0
+	}
+	return parseListenPort(m.runningProcessArgv(deploymentID))
+}
+
+// parseListenPort 在 argv 中找 `--listen host:port`（或 `--listen=host:port`）并返回端口。
+func parseListenPort(argv []string) int {
+	for i, arg := range argv {
+		value := ""
+		switch {
+		case arg == "--listen" && i+1 < len(argv):
+			value = argv[i+1]
+		case strings.HasPrefix(arg, "--listen="):
+			value = strings.TrimPrefix(arg, "--listen=")
+		default:
+			continue
+		}
+		// value 形如 host:port 或仅 port。
+		if idx := strings.LastIndex(value, ":"); idx >= 0 {
+			value = value[idx+1:]
+		}
+		if port, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && port > 0 {
+			return port
+		}
+	}
+	return 0
+}
+
 func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig, provider Provider, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
 	port, err := m.reserve()
 	if err != nil {
@@ -544,6 +588,16 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		req.pid = pid
 		req.readiness = langruntime.ReadinessSignalAttach
 		req.signal = "SIGUSR1"
+	case model.LanguagePython:
+		// prearm-listen：进程以 `python -m debugpy --listen host:port` 常驻，端口写在 argv 里。
+		// 从 argv 反解端口直连，不发信号、不需独立端口存储。start_normal（无 --listen）的
+		// Python 进程拿不到端口，按不可 attach 处理，不静默降级 launch。
+		port := m.prearmListenPort(dep.ID)
+		if port <= 0 {
+			return false, ErrAttachUnsupported
+		}
+		req.readiness = langruntime.ReadinessPrearmListen
+		req.port = port
 	default:
 		if provider.AttachCapability() != AttachModePID {
 			return false, ErrAttachUnsupported
