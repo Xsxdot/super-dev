@@ -217,7 +217,7 @@ runtime:
     script: dev
 ```
 
-Partially verified with node v23.11.0, pnpm 10.33.0, and js-debug v1.117.0 on 2026-06-15:
+Verified end-to-end with node v23.11.0, pnpm 10.33.0, and js-debug v1.117.0 on 2026-06-15:
 
 - `suggest_service_runtime(language=node, cwd=.)` returned
   `{package_manager: "pnpm", script: "dev"}` with reason `from package.json scripts`.
@@ -229,14 +229,16 @@ Partially verified with node v23.11.0, pnpm 10.33.0, and js-debug v1.117.0 on 20
   child-process resolution path to proceed.
 - `code-debug-smoke` attach reached an attached Node debug runtime:
   `runtime-status` reported `base=debug`, `debugger.origin=attached`, and `lease_active=true`.
-
-Not verified yet:
-
-- Breakpoint capture at `server.js:5` did not hit. The first capture failed with
-  `breakpoint line 5 unverified: Unbound breakpoint`; retrying with relative `server.js` waited for
-  the breakpoint and timed out, and `server.js:1` also returned `Unbound breakpoint`.
-- Therefore this smoke verifies script derivation, `pnpm run dev` startup, and attach-runtime
-  creation, but does **not** yet verify source breakpoint binding for the script-startup path.
+- The script-startup attach path hit `server.js:5` with `reason=breakpoint`, `threadId=0`, and
+  stack/source paths under `/private/tmp/super-debug-node-script-smoke/server.js`.
+- Diagnostic evidence from the failing run showed the agent sent
+  `/private/tmp/super-debug-node-script-smoke/server.js`, which matched the real child cwd plus
+  `node server.js`; the actual problem was that `SIGUSR1` landed on the pnpm wrapper process. pnpm
+  can itself appear as `comm=node`, so the old script-runtime attach target resolver treated the
+  wrapper as the debuggee and js-debug loaded the wrong process.
+- The fix makes Node script runtime attach skip the package-manager wrapper and signal the
+  `node server.js` child. After the fix, `lsof` showed the child owning `127.0.0.1:9229` while the
+  wrapper had no inspector socket, and breakpoint capture returned variables from the script frame.
 
 ## Python Prearm Smoke
 
