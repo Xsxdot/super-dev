@@ -23,11 +23,26 @@ func TestNodeProviderLanguageAndCapabilities(t *testing.T) {
 	assert.Equal(t, langruntime.DebugReadyBySignal, caps.DebugReady)
 }
 
-func TestNodeRuntimeSchemaHasProgram(t *testing.T) {
+func TestNodeRuntimeSchemaHasScriptAndPackageManager(t *testing.T) {
 	schema := langruntime.NewNodeProvider().RuntimeSchema(context.Background())
 	assert.Equal(t, model.LanguageNode, schema.Language)
 	require.NotEmpty(t, schema.Fields)
-	assert.Equal(t, "program", schema.Fields[0].Key)
+	fields := map[string]langruntime.RuntimeSchemaField{}
+	for _, field := range schema.Fields {
+		fields[field.Key] = field
+	}
+	for _, key := range []string{"package_manager", "script", "program"} {
+		require.Contains(t, fields, key)
+	}
+	assert.Equal(t, "basic", fields["package_manager"].Group)
+	assert.Equal(t, "basic", fields["script"].Group)
+	assert.Equal(t, "advanced", fields["program"].Group)
+	assert.Equal(t, "pnpm", fields["package_manager"].Default)
+	for _, field := range schema.Fields {
+		if field.Key == "" || field.Name.Default == "" || field.Desc.Default == "" {
+			t.Fatalf("field %q missing key/name/desc", field.Key)
+		}
+	}
 }
 
 func TestNodeSuggestReadsPackageJSONMain(t *testing.T) {
