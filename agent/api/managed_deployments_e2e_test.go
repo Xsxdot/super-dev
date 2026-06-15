@@ -28,6 +28,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/metrics"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/store"
 )
 
 const managedE2EEventuallyTimeout = 15 * time.Second
@@ -203,6 +204,14 @@ func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *te
 		Message:      "ai hub server scoped log",
 		Stream:       "stdout",
 	})
+	require.Eventually(t, func() bool {
+		entries, err := remoteApp.store.Fetch(store.FetchParams{Limit: 20})
+		if err != nil {
+			return false
+		}
+		return containsLogMessage(entries, "tk server scoped log") &&
+			containsLogMessage(entries, "ai hub server scoped log")
+	}, managedE2EEventuallyTimeout, 20*time.Millisecond)
 
 	tkBackend, ok := desktopApp.lookupBackend("dep-tk-server-prod")
 	require.True(t, ok)

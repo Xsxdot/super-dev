@@ -130,7 +130,7 @@ func TestLanguageRuntimeProcessSpec(t *testing.T) {
 
 func TestLanguageRuntimeProcessSpecRejectsUnknownLanguage(t *testing.T) {
 	project := model.Project{ID: "p", RootPath: "/repo"}
-	svc := model.Service{Language: model.LanguagePython} // Phase A 无 Python provider
+	svc := model.Service{Language: model.ServiceLanguage("ruby")}
 	dep := model.Deployment{
 		ID:       "dep-py-dev",
 		Location: model.LocationLocal,
