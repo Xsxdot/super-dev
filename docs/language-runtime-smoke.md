@@ -20,16 +20,19 @@ Node and Python debugger-ready smoke needs local debugger tooling:
 node --version
 pnpm --version
 python3 -c 'import debugpy, sys; print(sys.version.split()[0]); print(debugpy.__version__)'
-which js-debug-adapter || which vscode-js-debug
+test -f "$SUPERDEV_DATA_DIR/js-debug/src/dapDebugServer.js"
 ```
 
 Expected:
 
 - Node and pnpm are available for high-level and escape-hatch startup.
 - Python can import `debugpy`.
-- Node debug has an explicit js-debug adapter command available and configured through `code_debug.adapter_command`.
+- Node debug has `@vscode/js-debug` standalone extracted under the agent data dir:
+  `<DataDir>/js-debug/src/dapDebugServer.js`.
 
-On 2026-06-15 in this workspace, Node (`v23.11.0`) and pnpm (`10.33.0`) were available, but `debugpy` and a js-debug adapter command were not present. Full live DAP attach smoke therefore remains blocked on local tooling, while backend contract coverage is provided by:
+On 2026-06-15 in this workspace, Node (`v23.11.0`) and pnpm (`10.33.0`) were available. Node full attach was verified with `microsoft/vscode-js-debug` release `v1.117.0`, downloaded as `js-debug-dap-v1.117.0.tar.gz` and extracted so the agent data dir contained `js-debug/src/dapDebugServer.js`.
+
+Backend contract coverage:
 
 ```bash
 cd agent
@@ -129,20 +132,29 @@ runtime:
   cwd: .
   config:
     program: server.js
-code_debug:
-  adapter_command: <path-to-js-debug-adapter>
 ```
 
-Signal mechanism verified on real node v23.11 (2026-06-15):
+Verified end-to-end on real node v23.11 with js-debug v1.117.0 (2026-06-15):
 
 - `start_dev` runs `node server.js` without `--inspect`; before any signal the process has no
   inspector open and `node tick N` flows to stdout normally.
 - `kill -USR1 <pid>` makes node print `Debugger listening on ws://127.0.0.1:9229/<uuid>` to
-  **stderr** and stdout keeps flowing — confirming the `signal-then-attach` readiness premise.
-- Implication for codedebug: the inspector port/ws URL must be parsed from the node process
-  **stderr** after SIGUSR1 (unlike Python, whose port is in argv). Wiring the js-debug adapter
-  dial against that ws URL is pending a bundled js-debug adapter binary (`adapter_command`);
-  the readiness dispatch and PID resolution paths are unit-covered.
+  **stderr** and stdout keeps flowing.
+- The manager parses the inspector port from deployment stderr. If the stderr line is missed in
+  this environment, it falls back to default port `9229` only when that port was closed before
+  SIGUSR1 and opens afterwards.
+- The agent starts the bundled adapter as
+  `node <DataDir>/js-debug/src/dapDebugServer.js <adapterPort> 127.0.0.1`, attaches js-debug to
+  `127.0.0.1:<inspectorPort>`, and sets a source breakpoint through the DAP path.
+- js-debug standalone may answer the root attach by sending a reverse `startDebugging` request.
+  The real source-binding session is the child DAP connection opened with the request's
+  `__pendingTargetId`; breakpoints on the root session can stay provisional.
+- The smoke hit a breakpoint at `server.js:5`, reported `reason=breakpoint`, used js-debug
+  `threadId=0`, and returned stack/source data for the fixture path under `/private/tmp`.
+
+Smoke note: start the Node process and wait briefly before attaching. Sending `SIGUSR1` during
+Node's earliest startup window can terminate the process before Node installs its inspector signal
+handler. Product attach targets are already-running services; the smoke used a short pre-attach wait.
 
 ## Node Escape-Hatch Smoke
 
@@ -165,16 +177,22 @@ runtime:
   config:
     runtime_executable: pnpm
     runtime_args: ["worker"]
-code_debug:
-  adapter_command: <path-to-js-debug-adapter>
 ```
 
-Expected (pnpm child resolution is unit-covered; full DAP attach pending js-debug adapter):
+Verified end-to-end with pnpm 10.33.0 and js-debug v1.117.0 (2026-06-15):
 
 - `start_dev` runs `pnpm worker` verbatim.
-- Attach locates the `node` child in the pnpm process group (`resolveNodeDebuggeePID`), sends
-  `SIGUSR1` to that child, then attaches.
-- The pnpm parent is not used as the debuggee PID.
+- Attach locates the real `node server.js` child in the pnpm process group, sends `SIGUSR1` to
+  that child, parses the inspector port from the deployment stderr tail, and then attaches through
+  the bundled js-debug server.
+- The resolver deliberately skips the deployment main PID when the runtime config is an escape
+  hatch (`runtime_executable=pnpm`), even if the launcher process command name is also `node`.
+- The smoke hit the same `server.js:5` breakpoint with `reason=breakpoint` and js-debug
+  `threadId=0`.
+
+Restricted sandbox caveat: the pnpm smoke requires the agent to enumerate the process group with
+`ps`. In a sandbox where `/bin/ps` is denied, direct Node can still fall back to the main process,
+but the pnpm escape hatch should run the agent with permissions that allow process-group lookup.
 
 ## Python Prearm Smoke
 

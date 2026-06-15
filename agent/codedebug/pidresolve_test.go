@@ -87,13 +87,46 @@ func TestResolveNodeDebuggeePIDFindsChildUnderLauncher(t *testing.T) {
 func TestResolveNodeDebuggeePIDMainIsNode(t *testing.T) {
 	// 高层启动：主进程直接是 node。
 	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
-		mainPID: 200, pgid: 200,
+		mainPID:    200,
+		pgid:       200,
+		mainIsNode: true,
 		listProcessGroup: func(int) []procInfo {
 			return []procInfo{{pid: 200, comm: "node"}}
 		},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 200, pid)
+}
+
+func TestResolveNodeDebuggeePIDFallsBackToMainWhenProcessListUnavailable(t *testing.T) {
+	// 高层 Node runtime 的主进程就是 node；沙箱里 ps 不可用时仍可安全 signal 主 PID。
+	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID:    210,
+		pgid:       210,
+		mainIsNode: true,
+		listProcessGroup: func(int) []procInfo {
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 210, pid)
+}
+
+func TestResolveNodeDebuggeePIDSkipsLauncherNodeWhenMainIsNotNode(t *testing.T) {
+	// pnpm/npm 逃生口的 launcher 自身也可能是 node；真正 debuggee 是同进程组里的子 node。
+	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID:    220,
+		pgid:       220,
+		mainIsNode: false,
+		listProcessGroup: func(int) []procInfo {
+			return []procInfo{
+				{pid: 220, comm: "node"},
+				{pid: 221, comm: "node"},
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 221, pid)
 }
 
 func TestResolveNodeDebuggeePIDNoNodeChild(t *testing.T) {

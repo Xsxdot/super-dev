@@ -208,10 +208,15 @@ func (NodeProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 		port = cfg.AdapterPort
 	}
 	return map[string]any{
-		"type":    "pwa-node",
-		"request": "attach",
-		"port":    port,
-		"cwd":     cfg.WorkingDir,
+		"type":                     "pwa-node",
+		"request":                  "attach",
+		"address":                  "127.0.0.1",
+		"port":                     port,
+		"cwd":                      cfg.WorkingDir,
+		"rootPath":                 cfg.WorkingDir,
+		"__workspaceFolder":        cfg.WorkingDir,
+		"autoAttachChildProcesses": false,
+		"attachExistingChildren":   false,
 	}
 }
 

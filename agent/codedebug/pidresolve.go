@@ -60,6 +60,7 @@ func resolveGoDebuggeePID(h goDebuggeeHints) (int, error) {
 type nodeDebuggeeHints struct {
 	mainPID          int
 	pgid             int
+	mainIsNode       bool
 	listProcessGroup func(pgid int) []procInfo
 }
 
@@ -73,9 +74,15 @@ func resolveNodeDebuggeePID(h nodeDebuggeeHints) (int, error) {
 		return h.mainPID, nil
 	}
 	for _, p := range h.listProcessGroup(h.pgid) {
+		if p.pid == h.mainPID && !h.mainIsNode {
+			continue
+		}
 		if isNodeProcess(p.comm) && p.pid > 0 {
 			return p.pid, nil
 		}
+	}
+	if h.mainIsNode && h.mainPID > 0 {
+		return h.mainPID, nil
 	}
 	return 0, fmt.Errorf("%w: node child not found in process group %d", ErrAttachTargetUnresolved, h.pgid)
 }

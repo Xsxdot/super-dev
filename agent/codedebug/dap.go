@@ -48,6 +48,9 @@ type DAPClient struct {
 	subMu       sync.Mutex
 	subscribers map[int]chan map[string]any
 	nextSubID   int
+
+	requestSubscribers map[int]chan map[string]any
+	nextRequestSubID   int
 }
 
 // DialDAP 建立到 DAP adapter 的 TCP 连接并启动独立读协程。
@@ -58,10 +61,11 @@ func DialDAP(ctx context.Context, addr string, timeout time.Duration) (*DAPClien
 		return nil, err
 	}
 	c := &DAPClient{
-		conn:        conn,
-		pending:     make(map[int]chan map[string]any),
-		closed:      make(chan struct{}),
-		subscribers: map[int]chan map[string]any{},
+		conn:               conn,
+		pending:            make(map[int]chan map[string]any),
+		closed:             make(chan struct{}),
+		subscribers:        map[int]chan map[string]any{},
+		requestSubscribers: map[int]chan map[string]any{},
 	}
 	go c.readLoop(bufio.NewReader(conn))
 	return c, nil
@@ -105,6 +109,8 @@ func (c *DAPClient) readLoop(r *bufio.Reader) {
 			}
 		case "event":
 			c.dispatchEvent(msg)
+		case "request":
+			c.dispatchRequest(msg)
 		}
 	}
 }
@@ -138,6 +144,35 @@ func (c *DAPClient) Subscribe() (<-chan map[string]any, func()) {
 	return ch, cancel
 }
 
+// SubscribeRequests 注册 adapter 反向 DAP request 订阅者。
+//
+// js-debug standalone root session 会通过 startDebugging 反向请求要求客户端创建
+// 子 session；manager 订阅后负责建立第二条 DAP 连接。
+func (c *DAPClient) SubscribeRequests() (<-chan map[string]any, func()) {
+	c.subMu.Lock()
+	if c.requestSubscribers == nil {
+		c.requestSubscribers = map[int]chan map[string]any{}
+	}
+	id := c.nextRequestSubID
+	c.nextRequestSubID++
+	ch := make(chan map[string]any, 16)
+	c.requestSubscribers[id] = ch
+	c.subMu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			c.subMu.Lock()
+			if existing, ok := c.requestSubscribers[id]; ok {
+				delete(c.requestSubscribers, id)
+				close(existing)
+			}
+			c.subMu.Unlock()
+		})
+	}
+	return ch, cancel
+}
+
 // dispatchEvent 把 DAP event 扇出给所有订阅者。
 //
 // 单个订阅者来不及消费时只丢弃该订阅者的当前事件，避免阻塞唯一 readLoop。
@@ -150,6 +185,43 @@ func (c *DAPClient) dispatchEvent(event map[string]any) {
 		default:
 		}
 	}
+}
+
+func (c *DAPClient) dispatchRequest(request map[string]any) {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	for _, ch := range c.requestSubscribers {
+		select {
+		case ch <- request:
+		default:
+		}
+	}
+}
+
+// RespondToRequest 回复 adapter 发来的反向 DAP request。
+func (c *DAPClient) RespondToRequest(ctx context.Context, request map[string]any, success bool, body map[string]any) error {
+	command, _ := request["command"].(string)
+	resp := map[string]any{
+		"type":        "response",
+		"seq":         int(c.seq.Add(1)),
+		"request_seq": intFromAny(request["seq"]),
+		"command":     command,
+		"success":     success,
+	}
+	if body != nil {
+		resp["body"] = body
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.writeMu.Lock()
+	_, err = fmt.Fprintf(c.conn, "Content-Length: %d\r\n\r\n%s", len(raw), raw)
+	c.writeMu.Unlock()
+	return err
 }
 
 // Initialize 发送 DAP initialize 请求并返回 adapter capabilities。

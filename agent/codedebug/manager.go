@@ -402,6 +402,13 @@ type readinessRequest struct {
 	port      int
 }
 
+const defaultNodeInspectorPort = 9229
+
+type nodeInspectorFallback struct {
+	port    int
+	enabled bool
+}
+
 // attachWithReadiness 按 readiness 把进程带到「可建立 DAP 连接」状态：
 //   - signal-then-attach：发信号唤醒 inspector，再走 PID attach
 //   - prearm-listen：直连进程自带的 listen 端口
@@ -459,8 +466,11 @@ func (m *Manager) prearmListenPort(deploymentID string) int {
 
 // waitInspectorPort 在 SIGUSR1 后轮询 deployment stderr，解析 Node inspector 端口。
 // 端口异步出现，最多等约 3s；超时返回 ErrAttachTargetUnresolved。
-func (m *Manager) waitInspectorPort(deploymentID string) (int, error) {
+func (m *Manager) waitInspectorPort(deploymentID string, fallback nodeInspectorFallback) (int, error) {
 	if m.runningProcessStderr == nil {
+		if fallback.enabled && tcpPortOpen(fallback.port) {
+			return fallback.port, nil
+		}
 		return 0, ErrAttachTargetUnresolved
 	}
 	deadline := m.now().Add(3 * time.Second)
@@ -468,11 +478,26 @@ func (m *Manager) waitInspectorPort(deploymentID string) (int, error) {
 		if port := parseInspectorPort(m.runningProcessStderr(deploymentID)); port > 0 {
 			return port, nil
 		}
+		if fallback.enabled && tcpPortOpen(fallback.port) {
+			return fallback.port, nil
+		}
 		if m.now().After(deadline) {
 			return 0, fmt.Errorf("%w: node inspector port not found in stderr", ErrAttachTargetUnresolved)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func tcpPortOpen(port int) bool {
+	if port <= 0 {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // parseListenPort 在 argv 中找 `--listen host:port`（或 `--listen=host:port`）并返回端口。
@@ -522,20 +547,31 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
 	}
-	if err := dap.Attach(ctx, attachArgs(cfg)); err != nil {
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(cfg.Provider, dap)
+	if cancelRequestSub != nil {
+		defer cancelRequestSub()
+	}
+	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
 	}
-	if err := dap.ConfigurationDone(ctx); err != nil {
-		_ = dap.Detach(ctx)
-		_ = dap.Close()
-		_ = closeProcessIfPresent(process.Close)
-		return Runtime{}, err
+	runtimeDAP := dap
+	rootDAP := dap
+	if cfg.Provider == model.CodeDebugProviderNode {
+		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		if err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(process.Close)
+			return Runtime{}, err
+		}
+		if childDAP != nil {
+			runtimeDAP = childDAP
+		}
 	}
 	now := m.now().UTC()
 	store := &debuggerSnapshotStore{}
-	pump := newEventPump(dap, store)
+	pump := newEventPump(runtimeDAP, store)
 	pump.start(context.Background())
 	record := &runtimeRecord{
 		Runtime: Runtime{
@@ -552,7 +588,7 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		},
 		rootPath:   cfg.Target.RootPath,
 		sourceRoot: resolveSourceRoot(cfg.WorkingDir, cfg.Target.RootPath),
-		dap:        dap,
+		dap:        runtimeDAP,
 		debugStore: store,
 		pump:       pump,
 	}
@@ -562,8 +598,11 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		}
 		dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = dap.Detach(dctx)
-		_ = dap.Close()
+		_ = runtimeDAP.Detach(dctx)
+		_ = runtimeDAP.Close()
+		if rootDAP != runtimeDAP {
+			_ = rootDAP.Close()
+		}
 		return closeProcessIfPresent(process.Close)
 	}
 	m.mu.Lock()
@@ -615,16 +654,21 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
 			mainPID:          mainPID,
 			pgid:             pgid,
+			mainIsNode:       nodeMainProcessIsNode(dep),
 			listProcessGroup: m.listProcessGroup,
 		})
 		if err != nil {
 			return false, err
 		}
 		req.pid = pid
+		defaultInspectorAlreadyOpen := tcpPortOpen(defaultNodeInspectorPort)
 		if err := m.signalProcess(pid, "SIGUSR1"); err != nil {
 			return false, fmt.Errorf("signal node debuggee: %w", err)
 		}
-		inspectorPort, perr := m.waitInspectorPort(dep.ID)
+		inspectorPort, perr := m.waitInspectorPort(dep.ID, nodeInspectorFallback{
+			port:    defaultNodeInspectorPort,
+			enabled: !defaultInspectorAlreadyOpen,
+		})
 		if perr != nil {
 			return false, perr
 		}
@@ -649,6 +693,18 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		return false, err
 	}
 	return true, nil
+}
+
+func nodeMainProcessIsNode(dep model.Deployment) bool {
+	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
+		_, escapeHatch := langruntime.EscapeHatchCommand(dep.Runtime.Config)
+		return !escapeHatch
+	}
+	fields := stripInlineEnvFields(strings.Fields(attachCommandHint(dep)))
+	if len(fields) == 0 {
+		return false
+	}
+	return isNodeProcess(fields[0])
 }
 
 // openLeaseOnRuntime 在已存在的 debug runtime 上建 lease（不重启 debuggee）。
@@ -927,6 +983,135 @@ func (m *Manager) Evaluate(ctx context.Context, sessionID, expression string, fr
 	return sanitizeDAPMap(result), nil
 }
 
+func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
+	sub, cancelSub := dap.Subscribe()
+	defer cancelSub()
+	attachCtx, cancelAttach := context.WithCancel(ctx)
+	defer cancelAttach()
+	attachErr := make(chan error, 1)
+	go func() {
+		attachErr <- dap.Attach(attachCtx, args)
+	}()
+	configurationDone := false
+	sendConfigurationDone := func() error {
+		if configurationDone {
+			return nil
+		}
+		// js-debug 在 attach 后先发 initialized，并等 configurationDone 后才回 attach response。
+		// 旧 adapter 通常先回 attach；两种时序都在这里归一。
+		if err := dap.ConfigurationDone(ctx); err != nil {
+			cancelAttach()
+			return err
+		}
+		configurationDone = true
+		return nil
+	}
+	for {
+		select {
+		case err := <-attachErr:
+			if err != nil {
+				return err
+			}
+			return sendConfigurationDone()
+		case event, ok := <-sub:
+			if !ok {
+				sub = nil
+				continue
+			}
+			if isDAPInitializedEvent(event) {
+				if err := sendConfigurationDone(); err != nil {
+					return err
+				}
+			}
+		case <-ctx.Done():
+			cancelAttach()
+			return ctx.Err()
+		}
+	}
+}
+
+func isDAPInitializedEvent(event map[string]any) bool {
+	name, _ := event["event"].(string)
+	return name == "initialized"
+}
+
+type reverseRequestDAP interface {
+	SubscribeRequests() (<-chan map[string]any, func())
+	RespondToRequest(context.Context, map[string]any, bool, map[string]any) error
+}
+
+func subscribeJSDebugRequests(provider model.CodeDebugProvider, dap DAP) (<-chan map[string]any, func()) {
+	if provider != model.CodeDebugProviderNode {
+		return nil, nil
+	}
+	reverse, ok := dap.(reverseRequestDAP)
+	if !ok {
+		return nil, nil
+	}
+	return reverse.SubscribeRequests()
+}
+
+func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, requests <-chan map[string]any, adapterPort int) (DAP, error) {
+	if requests == nil {
+		return nil, nil
+	}
+	reverse, ok := root.(reverseRequestDAP)
+	if !ok {
+		return nil, nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, nil
+		case request, ok := <-requests:
+			if !ok {
+				return nil, nil
+			}
+			if command, _ := request["command"].(string); command != "startDebugging" {
+				continue
+			}
+			attachArgs, ok := jsDebugChildAttachArguments(request)
+			if !ok {
+				return nil, fmt.Errorf("js-debug startDebugging request missing child attach configuration")
+			}
+			if err := reverse.RespondToRequest(ctx, request, true, map[string]any{}); err != nil {
+				return nil, err
+			}
+			child, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", adapterPort), 5*time.Second)
+			if err != nil {
+				return nil, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: model.CodeDebugProviderNode}, err)
+			}
+			if _, err := child.Initialize(ctx); err != nil {
+				_ = child.Close()
+				return nil, err
+			}
+			if err := attachAndConfigure(ctx, child, attachArgs); err != nil {
+				_ = child.Close()
+				return nil, err
+			}
+			return child, nil
+		}
+	}
+}
+
+func jsDebugChildAttachArguments(request map[string]any) (map[string]any, bool) {
+	args, _ := request["arguments"].(map[string]any)
+	if len(args) == 0 {
+		return nil, false
+	}
+	configuration, _ := args["configuration"].(map[string]any)
+	if len(configuration) == 0 {
+		return nil, false
+	}
+	out := make(map[string]any, len(configuration))
+	for k, v := range configuration {
+		out[k] = v
+	}
+	return out, true
+}
+
 // CaptureAtRequest 描述 stop-at-line 并采集现场的复合请求。
 type CaptureAtRequest struct {
 	SessionID     string        `json:"session_id"`
@@ -956,6 +1141,12 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 	if _, err := m.validateCaptureSource(req.SessionID, req.Source); err != nil {
 		return nil, err
 	}
+	_, runtime, err := m.sessionRuntime(req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	nodeCapture := runtime.Provider == model.CodeDebugProviderNode
+	nodeWasPaused := nodeCapture && runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
 	waitCtx := ctx
 	timeout := req.Timeout
 	if timeout == 0 && req.TimeoutMS > 0 {
@@ -966,10 +1157,15 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	pausedByCapture, err := m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
-	if err != nil {
-		return nil, err
+	pausedByCapture := false
+	if !nodeCapture {
+		pausedByCapture, err = m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
+		if err != nil {
+			return nil, err
+		}
 	}
+	stoppedSub, cancelStopped := runtime.dap.Subscribe()
+	defer cancelStopped()
 	breakpoints, err := m.SetBreakpoints(ctx, req.SessionID, req.Source, []int{req.Line})
 	if err != nil {
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
@@ -979,14 +1175,18 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
 	}
-	_, runtime, err := m.sessionRuntime(req.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	stoppedSub, cancelStopped := runtime.dap.Subscribe()
-	defer cancelStopped()
-	if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
-		return nil, err
+	if !nodeCapture {
+		if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
+			return nil, err
+		}
+	} else if nodeWasPaused {
+		threadID := runtime.debugStore.get().ThreadID
+		if threadID == 0 {
+			threadID = req.ThreadID
+		}
+		if err := m.threadContinue(ctx, req.SessionID, threadID); err != nil && !isAlreadyRunningDAPError(err) {
+			return nil, err
+		}
 	}
 	stopped, err := waitForStoppedEvent(waitCtx, stoppedSub)
 	if err != nil {
