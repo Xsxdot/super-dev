@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { api, type Deployment, type RuntimeSchema } from '@/api/agent'
+import { api, type Deployment, type RuntimeSchema, type ServiceLanguage } from '@/api/agent'
 import DeploymentForm from '@/components/Settings/DeploymentForm.vue'
 import { installTestI18n } from '@/test-utils/i18n'
 
@@ -80,6 +80,109 @@ function goRuntimeSchema(): RuntimeSchema {
       },
     ],
   }
+}
+
+function nodeRuntimeSchema(): RuntimeSchema {
+  return {
+    language: 'node',
+    version: 1,
+    title: { key: 'runtime.node.title', default: 'Node.js' },
+    fields: [
+      {
+        key: 'package_manager',
+        name: { key: 'runtime.node.packageManager.name', default: 'Package manager' },
+        desc: { key: 'runtime.node.packageManager.desc', default: 'pnpm, npm or yarn; used to run the script.' },
+        type: 'string',
+        required: false,
+        default: 'pnpm',
+        group: 'basic',
+        order: 10,
+      },
+      {
+        key: 'script',
+        name: { key: 'runtime.node.script.name', default: 'Script' },
+        desc: { key: 'runtime.node.script.desc', default: 'package.json script to run, e.g. dev.' },
+        type: 'string',
+        required: false,
+        group: 'basic',
+        order: 20,
+      },
+      {
+        key: 'program',
+        name: { key: 'runtime.node.program.name', default: 'Entry file' },
+        desc: { key: 'runtime.node.program.desc', default: 'Run a JS file directly instead of a script, e.g. src/index.js.' },
+        type: 'string',
+        required: false,
+        group: 'advanced',
+        order: 30,
+      },
+      {
+        key: 'program_args',
+        name: { key: 'runtime.node.programArgs.name', default: 'Program arguments' },
+        desc: { key: 'runtime.node.programArgs.desc', default: 'Arguments passed to the application.' },
+        type: 'string_array',
+        required: false,
+        group: 'advanced',
+        order: 40,
+      },
+      {
+        key: 'node_args',
+        name: { key: 'runtime.node.nodeArgs.name', default: 'Node arguments' },
+        desc: { key: 'runtime.node.nodeArgs.desc', default: 'Arguments passed to the node binary (before the entry file).' },
+        type: 'string_array',
+        required: false,
+        group: 'advanced',
+        order: 50,
+      },
+    ],
+  }
+}
+
+function pythonRuntimeSchema(): RuntimeSchema {
+  return {
+    language: 'python',
+    version: 1,
+    title: { key: 'runtime.python.title', default: 'Python' },
+    fields: [
+      {
+        key: 'program',
+        name: { key: 'runtime.python.program.name', default: 'Entry file' },
+        desc: { key: 'runtime.python.program.desc', default: 'Python entry to start and debug, e.g. main.py. Mutually exclusive with module.' },
+        type: 'string',
+        required: false,
+        group: 'basic',
+        order: 10,
+      },
+      {
+        key: 'module',
+        name: { key: 'runtime.python.module.name', default: 'Module (-m)' },
+        desc: { key: 'runtime.python.module.desc', default: 'Run as python -m <module>. Mutually exclusive with program.' },
+        type: 'string',
+        required: false,
+        group: 'basic',
+        order: 20,
+      },
+      {
+        key: 'program_args',
+        name: { key: 'runtime.python.programArgs.name', default: 'Program arguments' },
+        desc: { key: 'runtime.python.programArgs.desc', default: 'Arguments passed to the application.' },
+        type: 'string_array',
+        required: false,
+        group: 'advanced',
+        order: 30,
+      },
+    ],
+  }
+}
+
+function runtimeSchemaForLanguage(language: ServiceLanguage): RuntimeSchema {
+  if (language === 'node') return nodeRuntimeSchema()
+  if (language === 'python') return pythonRuntimeSchema()
+  return goRuntimeSchema()
+}
+
+function mockLanguageRuntimeSchemas() {
+  return vi.spyOn(api, 'describeLanguageRuntimeSchema').mockImplementation(async language => runtimeSchemaForLanguage(language))
 }
 
 describe('DeploymentForm', () => {
@@ -354,7 +457,7 @@ describe('DeploymentForm', () => {
   })
 
   it('renders escape-hatch fields and writes runtime_executable', async () => {
-    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+    mockLanguageRuntimeSchemas()
 
     const wrapper = mount(DeploymentForm, {
       props: {
@@ -377,7 +480,7 @@ describe('DeploymentForm', () => {
   })
 
   it('shows override notice when escape hatch is set', async () => {
-    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+    mockLanguageRuntimeSchemas()
 
     const wrapper = mount(DeploymentForm, {
       props: {
@@ -390,6 +493,39 @@ describe('DeploymentForm', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="dep-escape-override-notice"]').exists()).toBe(true)
+  })
+
+  it('renders node package_manager and script fields', async () => {
+    mockLanguageRuntimeSchemas()
+
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: { ...languageDep(), runtime: { type: 'language', config: {} } },
+        hosts: [],
+        serviceLanguage: 'node',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="schema-field-package_manager"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="schema-field-script"]').exists()).toBe(true)
+  })
+
+  it('renders python program field', async () => {
+    mockLanguageRuntimeSchemas()
+
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: { ...languageDep(), runtime: { type: 'language', config: {} } },
+        hosts: [],
+        serviceLanguage: 'python',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="schema-field-program"]').exists()).toBe(true)
   })
 
   it('offers language runtime for managed services with a known language', async () => {
