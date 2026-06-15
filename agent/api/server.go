@@ -309,6 +309,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 				}
 				return 0, 0, false
 			},
+			RunningProcessArgv: func(deploymentID string) []string {
+				if app == nil {
+					return nil
+				}
+				app.mu.RLock()
+				defer app.mu.RUnlock()
+				for _, mgr := range app.managers {
+					if mgr != nil && mgr.IsDeploymentActive(deploymentID) {
+						return mgr.DeploymentArgv(deploymentID)
+					}
+				}
+				return nil
+			},
 		})
 	}
 	browserControl := browsercontrol.NewPlaywrightController(filepath.Join(cfg.DataDir, "playwright-driver"))

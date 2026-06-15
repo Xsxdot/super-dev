@@ -278,6 +278,18 @@ func (m *Manager) IsDeploymentActive(deploymentID string) bool {
 	return m.IsActive(deploymentID)
 }
 
+// DeploymentArgv 返回 deployment 进程的启动 argv 副本（用于 prearm 语言从 --listen 反解端口）；
+// 未运行或非 argv 直启时返回 nil。
+func (m *Manager) DeploymentArgv(deploymentID string) []string {
+	m.mu.Lock()
+	runner, ok := m.runners[deploymentID]
+	m.mu.Unlock()
+	if !ok || runner == nil {
+		return nil
+	}
+	return runner.Argv()
+}
+
 // StartProcess 以指定 id 为键启动一个进程，是不绑定 deployment 概念的低阶启动入口。
 //
 // 供 collector 等内部子系统直接启动采集进程使用；日志以 id 作为 DeploymentID 归属。

@@ -219,6 +219,14 @@ func (r *Runner) PID() int {
 	return 0
 }
 
+// Argv 返回 Runner 的启动参数副本（argv[0] 为可执行文件）；非 argv 直启时返回 nil。
+func (r *Runner) Argv() []string {
+	if len(r.cfg.Argv) == 0 {
+		return nil
+	}
+	return append([]string{}, r.cfg.Argv...)
+}
+
 // ProcessGroupID 返回 Runner 启动的进程组 ID；进程未启动时返回 0。
 func (r *Runner) ProcessGroupID() int {
 	r.mu.Lock()
