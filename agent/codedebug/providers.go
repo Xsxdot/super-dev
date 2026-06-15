@@ -134,9 +134,15 @@ func (PythonProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-func (PythonProvider) AttachCapability() AttachMode { return AttachModeNone }
-func (PythonProvider) AttachArguments(LaunchConfig, int) map[string]any {
-	return nil
+// AttachCapability 返回 Python 的附加档位：debugpy 进程已预埋 listen 端口后直连。
+func (PythonProvider) AttachCapability() AttachMode { return AttachModeListen }
+
+// AttachArguments 构造 debugpy attach 请求参数：connect 到进程自带的 --listen 端口。
+func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
+	return map[string]any{
+		"connect": map[string]any{"host": "127.0.0.1", "port": cfg.AdapterPort},
+		"cwd":     cfg.WorkingDir,
+	}
 }
 
 // NodeProvider 构建实验态 Node DAP adapter 配置。
@@ -174,9 +180,15 @@ func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-func (NodeProvider) AttachCapability() AttachMode { return AttachModeNone }
-func (NodeProvider) AttachArguments(LaunchConfig, int) map[string]any {
-	return nil
+// AttachCapability 返回 Node 的附加档位：SIGUSR1 打开 inspector 后按 PID 附加。
+func (NodeProvider) AttachCapability() AttachMode { return AttachModePID }
+
+// AttachArguments 构造 js-debug attach 参数：按 PID（经 SIGUSR1 已开 inspector）。
+func (NodeProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]any {
+	return map[string]any{
+		"processId": processID,
+		"cwd":       cfg.WorkingDir,
+	}
 }
 
 func copyEnv(in map[string]string) map[string]string {

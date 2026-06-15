@@ -67,10 +67,29 @@ func TestProviderAttachCapability(t *testing.T) {
 	if NewGoProvider().AttachCapability() != AttachModePID {
 		t.Fatal("Go should support pid-attach")
 	}
-	if NewPythonProvider("python3").AttachCapability() != AttachModeNone {
-		t.Fatal("Python attach is phase 2 (none for now)")
+	if NewPythonProvider("python3").AttachCapability() != AttachModeListen {
+		t.Fatal("Python should support listen attach")
 	}
-	if NewNodeProvider().AttachCapability() != AttachModeNone {
-		t.Fatal("Node attach is phase 2 (none for now)")
+	if NewNodeProvider().AttachCapability() != AttachModePID {
+		t.Fatal("Node should support pid attach")
 	}
+}
+
+func TestPythonProviderSupportsListenAttach(t *testing.T) {
+	assert.Equal(t, AttachModeListen, NewPythonProvider("python").AttachCapability())
+}
+
+func TestPythonAttachArgumentsConnectsPort(t *testing.T) {
+	provider := NewPythonProvider("python")
+	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo", AdapterPort: 5678}, 0)
+	require.NotNil(t, args)
+	conn, _ := args["connect"].(map[string]any)
+	require.NotNil(t, conn)
+	assert.Equal(t, "127.0.0.1", conn["host"])
+	assert.Equal(t, 5678, conn["port"])
+	assert.Equal(t, "/repo", args["cwd"])
+}
+
+func TestNodeProviderSupportsPIDAttach(t *testing.T) {
+	assert.Equal(t, AttachModePID, NewNodeProvider().AttachCapability())
 }
