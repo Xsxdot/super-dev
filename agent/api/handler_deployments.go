@@ -462,11 +462,20 @@ func (a *App) languageRuntimeProcessSpec(project model.Project, svc model.Servic
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		return process.ProcessSpec{}, fmt.Errorf("prepare artifact dir: %w", err)
 	}
-	plan, diagnostics, err := provider.BuildPlan(ctx, langruntime.BuildPlanInput{
+	buildInput := langruntime.BuildPlanInput{
 		Intent:      buildIntent,
 		Config:      normalized,
 		ArtifactDir: artifactDir,
-	})
+	}
+	// prearm-listen 语言（Python）start_dev 需要空闲调试端口预埋 debugpy --listen。
+	if provider.Capabilities().DebugReady == langruntime.DebugReadyByPrearm {
+		port, err := codedebug.AllocateFreePort()
+		if err != nil {
+			return process.ProcessSpec{}, fmt.Errorf("allocate debug port: %w", err)
+		}
+		buildInput.DebugPort = port
+	}
+	plan, diagnostics, err := provider.BuildPlan(ctx, buildInput)
 	if err != nil {
 		return process.ProcessSpec{}, err
 	}
