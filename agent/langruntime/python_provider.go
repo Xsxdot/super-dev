@@ -14,6 +14,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
@@ -112,6 +113,102 @@ func (PythonProvider) Normalize(_ context.Context, input RuntimeConfigInput) (No
 		Env:         CopyStringMap(input.Env),
 		Config:      config,
 	}, nil, nil
+}
+
+// BuildPlan 由 normalized 配置生成 Python 执行计划；start_dev 预埋 debugpy listen。
+func (PythonProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionPlan, []Diagnostic, error) {
+	cfg := input.Config
+	env := CopyStringMap(cfg.Env)
+	debugger := &DebuggerSpec{Adapter: model.CodeDebugProviderPython, Readiness: ReadinessPrearmListen}
+
+	if step, ok := EscapeHatchCommand(cfg.Config); ok {
+		switch input.Intent {
+		case IntentStartDev, IntentStartNormal:
+			// 逃生口原样执行；是否真能连上 debugpy 由 codedebug attach 阶段诊断。
+			return ExecutionPlan{
+				Intent:     input.Intent,
+				WorkingDir: cfg.CWD,
+				Env:        env,
+				Command:    &CommandSpec{Executable: step.Executable, Args: step.Args},
+				Debugger:   debugger,
+				Preview:    PreviewCommand(env, step.Executable, step.Args...),
+			}, nil, nil
+		}
+	}
+
+	_, targetArgs := pythonTarget(cfg.Config)
+	programArgs := StringSliceValue(cfg.Config["program_args"])
+
+	switch input.Intent {
+	case IntentStartDev:
+		// prearm：dev 默认 debugpy --listen 常驻，不带 --wait-for-client，避免阻塞业务启动。
+		if input.DebugPort <= 0 {
+			return ExecutionPlan{}, []Diagnostic{{
+				Severity: SeverityError, Code: "debug_port_required",
+				Message: "Python prearm start_dev requires an allocated debug port",
+			}}, nil
+		}
+		listen := "127.0.0.1:" + strconv.Itoa(input.DebugPort)
+		args := append([]string{"-m", "debugpy", "--listen", listen}, targetArgs...)
+		args = append(args, programArgs...)
+		debugger.Port = input.DebugPort
+		return ExecutionPlan{
+			Intent:     IntentStartDev,
+			WorkingDir: cfg.CWD,
+			Env:        env,
+			Command:    &CommandSpec{Executable: "python", Args: args},
+			Debugger:   debugger,
+			Preview:    PreviewCommand(env, "python", args...),
+		}, nil, nil
+	case IntentStartNormal:
+		args := append([]string{}, targetArgs...)
+		args = append(args, programArgs...)
+		return ExecutionPlan{
+			Intent:     IntentStartNormal,
+			WorkingDir: cfg.CWD,
+			Env:        env,
+			Command:    &CommandSpec{Executable: "python", Args: args},
+			Debugger:   debugger,
+			Preview:    PreviewCommand(env, "python", args...),
+		}, nil, nil
+	case IntentDebugLaunch:
+		previewArgs := append([]string{"-m", "debugpy"}, targetArgs...)
+		return ExecutionPlan{
+			Intent:     IntentDebugLaunch,
+			WorkingDir: cfg.CWD,
+			Env:        env,
+			Debug: &DebugSpec{
+				Provider:    model.CodeDebugProviderPython,
+				Program:     ResolveRuntimePath(cfg.CWD, StringValue(cfg.Config["program"])),
+				Args:        programArgs,
+				StopOnEntry: input.StopOnEntry,
+			},
+			Debugger: debugger,
+			Preview:  PreviewCommand(env, "python", previewArgs...),
+		}, nil, nil
+	case IntentAttach:
+		return ExecutionPlan{
+			Intent:     IntentAttach,
+			WorkingDir: cfg.CWD,
+			Attach:     &AttachSpec{Provider: model.CodeDebugProviderPython, Mode: "listen"},
+			Debugger:   debugger,
+			Preview:    "debugpy listen attach",
+		}, nil, nil
+	default:
+		return ExecutionPlan{}, []Diagnostic{{
+			Severity: SeverityError, Code: "intent_unsupported",
+			Message: "unsupported Python runtime intent " + string(input.Intent),
+		}}, nil
+	}
+}
+
+// pythonTarget 返回 python 的启动目标 argv：module 优先 -m <module>，否则 <program>。
+func pythonTarget(config map[string]any) (target string, argv []string) {
+	if module := StringValue(config["module"]); module != "" {
+		return module, []string{"-m", module}
+	}
+	program := StringValue(config["program"])
+	return program, []string{program}
 }
 
 func fileExists(path string) bool {

@@ -26,6 +26,11 @@ func TestCoreRegistersNode(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestCoreRegistersPython(t *testing.T) {
+	_, ok := langruntime.Core().Provider(model.LanguagePython)
+	assert.True(t, ok)
+}
+
 func TestRegistryListsLanguagesInStableOrder(t *testing.T) {
 	reg := langruntime.NewRegistry()
 	reg.Register(langruntime.NewGoProvider())
