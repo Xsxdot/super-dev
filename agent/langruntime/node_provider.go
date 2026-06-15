@@ -117,6 +117,15 @@ func (NodeProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Norm
 			}}, nil
 		}
 	}
+	_, hasEscape := EscapeHatchCommand(config)
+	_, hasScript := config["script"]
+	_, hasProgram := config["program"]
+	if !hasEscape && !hasScript && !hasProgram {
+		return NormalizedRuntimeConfig{}, []Diagnostic{{
+			Severity: SeverityError, Field: "script", Code: "node_entry_required",
+			Message: "Node runtime needs a script, a program entry, or a custom command",
+		}}, nil
+	}
 	return NormalizedRuntimeConfig{
 		ProjectRoot: input.ProjectRoot,
 		CWD:         ResolveRuntimeCWD(input.ProjectRoot, input.CWD),
@@ -182,6 +191,12 @@ func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Executio
 			Preview:    PreviewCommand(env, "node", args...),
 		}, nil, nil
 	case IntentDebugLaunch:
+		if program == "" {
+			return ExecutionPlan{}, []Diagnostic{{
+				Severity: SeverityError, Code: "debug_launch_needs_program",
+				Message: "debug launch needs a JS program entry; attach a running script instead, or set program",
+			}}, nil
+		}
 		previewArgs := append([]string{}, nodeArgs...)
 		previewArgs = append(previewArgs, program)
 		return ExecutionPlan{

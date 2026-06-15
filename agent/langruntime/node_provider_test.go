@@ -73,6 +73,30 @@ func TestNodeNormalizeRejectsNonStringProgram(t *testing.T) {
 	assert.Equal(t, langruntime.SeverityError, diagnostics[0].Severity)
 }
 
+func TestNodeNormalizeRequiresEntry(t *testing.T) {
+	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		Config: map[string]any{},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "node_entry_required"), "diagnostics=%v", diagnostics)
+}
+
+func TestNodeNormalizeScriptOK(t *testing.T) {
+	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		Config: map[string]any{"script": "dev"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestNodeNormalizeEscapeHatchOK(t *testing.T) {
+	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		Config: map[string]any{"runtime_executable": "make"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
 func TestNodeBuildPlanStartDevPlainNode(t *testing.T) {
 	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{"program": "src/index.js"}}
 	plan, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
@@ -126,6 +150,15 @@ func TestNodeBuildPlanProgramStillWorks(t *testing.T) {
 	assert.Equal(t, []string{"src/index.js"}, plan.Command.Args)
 }
 
+func TestNodeBuildPlanScriptDebugLaunchNeedsProgram(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/app", Config: map[string]any{"script": "dev"}}
+	_, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentDebugLaunch, Config: cfg,
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "debug_launch_needs_program"), "diagnostics=%v", diagnostics)
+}
+
 func TestNodeBuildPlanEscapeHatchPnpm(t *testing.T) {
 	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{
 		"runtime_executable": "pnpm", "runtime_args": []any{"worker"},
@@ -158,4 +191,13 @@ func writeFile(path, content string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func hasDiag(diagnostics []langruntime.Diagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }
