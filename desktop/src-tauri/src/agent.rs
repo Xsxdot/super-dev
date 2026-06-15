@@ -1,6 +1,7 @@
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread::sleep;
@@ -15,6 +16,9 @@ const AGENT_HEALTH_ENDPOINT: &str = "/api/exec/health";
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const AGENT_PORT_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const JS_DEBUG_DIR_NAME: &str = "js-debug";
+const JS_DEBUG_SERVER_RELATIVE_PATH: [&str; 2] = ["src", "dapDebugServer.js"];
+const JS_DEBUG_VERSION_FILE: &str = ".superdev-version";
 
 #[derive(Debug, PartialEq, Eq)]
 enum ProbeOutcome {
@@ -86,6 +90,13 @@ impl AgentProcess {
             AgentPortState::StartSidecar => {}
         }
 
+        let data_dir_path = PathBuf::from(&data_dir);
+        if let Some(resource_dir) = resolve_resource_dir(app) {
+            if let Err(err) = sync_js_debug_resource(&resource_dir, &data_dir_path) {
+                eprintln!("[SuperDev] 同步 js-debug 资源失败: {err}");
+            }
+        }
+
         let mut args = vec![
             "--addr".to_string(),
             addr.to_string(),
@@ -135,6 +146,23 @@ impl AgentProcess {
     }
 }
 
+fn js_debug_server_path(root: &Path) -> PathBuf {
+    root.join(JS_DEBUG_SERVER_RELATIVE_PATH[0])
+        .join(JS_DEBUG_SERVER_RELATIVE_PATH[1])
+}
+
+fn resolve_resource_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        return Some(resource_dir);
+    }
+    if cfg!(debug_assertions) {
+        return std::env::current_dir()
+            .ok()
+            .map(|dir| dir.join("src-tauri").join("resources"));
+    }
+    None
+}
+
 fn resolve_agent_install_dir(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir.join("agent-install");
@@ -153,6 +181,69 @@ fn resolve_agent_install_dir(app: &AppHandle) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn sync_js_debug_resource(resource_dir: &Path, data_dir: &Path) -> Result<(), String> {
+    let source = resource_dir.join(JS_DEBUG_DIR_NAME);
+    if !js_debug_server_path(&source).is_file() {
+        return Ok(());
+    }
+    let target = data_dir.join(JS_DEBUG_DIR_NAME);
+    if js_debug_server_path(&target).is_file() && js_debug_versions_match(&source, &target)? {
+        return Ok(());
+    }
+
+    fs::create_dir_all(data_dir).map_err(|err| format!("创建 agent data dir 失败: {err}"))?;
+    let tmp = data_dir.join("js-debug.tmp");
+    remove_path_if_exists(&tmp)?;
+    copy_dir_recursive(&source, &tmp)?;
+    remove_path_if_exists(&target)?;
+    fs::rename(&tmp, &target).map_err(|err| format!("替换 js-debug 资源失败: {err}"))?;
+    Ok(())
+}
+
+fn js_debug_versions_match(source: &Path, target: &Path) -> Result<bool, String> {
+    let source_version = source.join(JS_DEBUG_VERSION_FILE);
+    let target_version = target.join(JS_DEBUG_VERSION_FILE);
+    if !source_version.is_file() || !target_version.is_file() {
+        return Ok(false);
+    }
+    let source = fs::read_to_string(&source_version)
+        .map_err(|err| format!("读取 js-debug 资源版本失败: {err}"))?;
+    let target = fs::read_to_string(&target_version)
+        .map_err(|err| format!("读取已安装 js-debug 版本失败: {err}"))?;
+    Ok(source == target)
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            fs::remove_dir_all(path).map_err(|err| format!("删除旧 js-debug 目录失败: {err}"))
+        }
+        Ok(_) => fs::remove_file(path).map_err(|err| format!("删除旧 js-debug 文件失败: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("检查 js-debug 路径失败: {err}")),
+    }
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|err| format!("创建 js-debug 目录失败: {err}"))?;
+    for entry in fs::read_dir(source).map_err(|err| format!("读取 js-debug 资源目录失败: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("读取 js-debug 资源项失败: {err}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("读取 js-debug 资源项类型失败: {err}"))?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path)
+                .map_err(|err| format!("复制 js-debug 资源文件失败: {err}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn wait_for_compatible_agent(addr: &str, timeout: Duration) -> Result<(), String> {
@@ -356,8 +447,24 @@ fn probe_endpoint(addr: &str, endpoint: &'static str, timeout: Duration) -> Endp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::net::TcpListener;
+    use std::path::PathBuf;
     use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "superdev-agent-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir temp test dir");
+        dir
+    }
 
     fn serve_statuses(statuses: Vec<(&'static str, u16)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake agent");
@@ -391,6 +498,32 @@ mod tests {
         let outcome = probe_agent_health(&addr, Duration::from_secs(1));
 
         assert_eq!(outcome, ProbeOutcome::Compatible);
+    }
+
+    #[test]
+    fn sync_js_debug_resource_copies_standalone_server_into_data_dir() {
+        let root = temp_test_dir("js-debug-sync");
+        let resource_dir = root.join("resources");
+        let data_dir = root.join("data");
+        let source_server = resource_dir
+            .join("js-debug")
+            .join("src")
+            .join("dapDebugServer.js");
+        fs::create_dir_all(source_server.parent().expect("source parent")).expect("mkdir source");
+        fs::write(&source_server, "console.log('js-debug');").expect("write source");
+
+        sync_js_debug_resource(&resource_dir, &data_dir).expect("sync js-debug");
+
+        let target_server = data_dir
+            .join("js-debug")
+            .join("src")
+            .join("dapDebugServer.js");
+        assert_eq!(
+            fs::read_to_string(target_server).expect("read target"),
+            "console.log('js-debug');"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp test dir");
     }
 
     #[test]

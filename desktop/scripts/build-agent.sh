@@ -5,7 +5,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
-RESOURCE_DIR="$ROOT/src-tauri/resources/agent-install"
+RESOURCE_ROOT="$ROOT/src-tauri/resources"
+RESOURCE_DIR="$RESOURCE_ROOT/agent-install"
+JS_DEBUG_VERSION="${JS_DEBUG_VERSION:-1.117.0}"
+JS_DEBUG_RESOURCE_DIR="$RESOURCE_ROOT/js-debug"
+JS_DEBUG_CACHE_DIR="$ROOT/src-tauri/target/js-debug-cache"
+JS_DEBUG_ARCHIVE="$JS_DEBUG_CACHE_DIR/js-debug-dap-v$JS_DEBUG_VERSION.tar.gz"
+JS_DEBUG_URL="https://github.com/microsoft/vscode-js-debug/releases/download/v$JS_DEBUG_VERSION/js-debug-dap-v$JS_DEBUG_VERSION.tar.gz"
 DEV_OUT_DIR="$ROOT/src-tauri/target/debug"
 TARGET="$(rustc --print host-tuple)"
 OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
@@ -55,6 +61,39 @@ sync_dev_sidecar() {
   chmod +x "$DEV_OUT_DIR/$name"
 }
 
+prepare_js_debug() {
+  local server="$JS_DEBUG_RESOURCE_DIR/src/dapDebugServer.js"
+  local version_file="$JS_DEBUG_RESOURCE_DIR/.superdev-version"
+  if [[ -f "$server" ]] && [[ -s "$server" ]] && [[ -f "$version_file" ]] && [[ "$(cat "$version_file")" == "$JS_DEBUG_VERSION" ]]; then
+    printf '# Generated js-debug resources are written here by desktop/scripts/build-agent.sh.\n' > "$JS_DEBUG_RESOURCE_DIR/.gitkeep"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "build-agent: curl not found; install curl or pre-populate $JS_DEBUG_RESOURCE_DIR" >&2
+    exit 1
+  fi
+
+  mkdir -p "$JS_DEBUG_CACHE_DIR"
+  if [[ ! -f "$JS_DEBUG_ARCHIVE" ]] || [[ ! -s "$JS_DEBUG_ARCHIVE" ]]; then
+    echo "build-agent: downloading js-debug v$JS_DEBUG_VERSION -> $JS_DEBUG_ARCHIVE"
+    curl -fsSL "$JS_DEBUG_URL" -o "$JS_DEBUG_ARCHIVE"
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/superdev-js-debug.XXXXXX")"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  tar -xzf "$JS_DEBUG_ARCHIVE" -C "$tmp_dir"
+  if [[ ! -f "$tmp_dir/js-debug/src/dapDebugServer.js" ]]; then
+    echo "build-agent: js-debug archive missing js-debug/src/dapDebugServer.js" >&2
+    exit 1
+  fi
+  rm -rf "$JS_DEBUG_RESOURCE_DIR"
+  mkdir -p "$(dirname "$JS_DEBUG_RESOURCE_DIR")"
+  cp -R "$tmp_dir/js-debug" "$JS_DEBUG_RESOURCE_DIR"
+  printf '# Generated js-debug resources are written here by desktop/scripts/build-agent.sh.\n' > "$JS_DEBUG_RESOURCE_DIR/.gitkeep"
+  printf '%s\n' "$JS_DEBUG_VERSION" > "$JS_DEBUG_RESOURCE_DIR/.superdev-version"
+}
+
 GO_BIN="${GO_BIN:-}"
 if [[ -z "$GO_BIN" ]]; then
   if command -v go >/dev/null 2>&1; then
@@ -81,6 +120,7 @@ echo "build-agent: compiling sample -> $OUT_SAMPLE"
 sync_dev_sidecar "$OUT_AGENT" "superdev-agent"
 sync_dev_sidecar "$OUT_MCP" "superdev-mcp"
 sync_dev_sidecar "$OUT_SAMPLE" "superdev-sample"
+prepare_js_debug
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   mkdir -p "$RESOURCE_DIR"

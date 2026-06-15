@@ -43,6 +43,8 @@ docs/MONETIZATION.md
 
 # Generated remote agent install artifacts
 desktop/src-tauri/resources/agent-install/superdev-agent-*
+desktop/src-tauri/resources/js-debug/*
+!desktop/src-tauri/resources/js-debug/.gitkeep
 
 # Local bundled desktop binaries
 desktop/src-tauri/binaries/superdev-*-aarch64-apple-darwin

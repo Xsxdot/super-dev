@@ -17,6 +17,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 mkdir -p \
   "$TMP_DIR/desktop/scripts" \
   "$TMP_DIR/desktop/src-tauri/binaries" \
+  "$TMP_DIR/desktop/src-tauri/resources/js-debug" \
   "$TMP_DIR/desktop/src-tauri/target/debug" \
   "$TMP_DIR/agent" \
   "$TMP_DIR/bin"
@@ -63,6 +64,52 @@ printf 'fake binary\n' > "$out"
 EOF
 chmod +x "$TMP_DIR/bin/go"
 
+cat > "$TMP_DIR/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      out="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ "$out" == "" ]]; then
+  echo "fake curl: missing -o" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$out")"
+printf 'fake js-debug archive\n' > "$out"
+EOF
+chmod +x "$TMP_DIR/bin/curl"
+
+cat > "$TMP_DIR/bin/tar" <<'EOF'
+#!/usr/bin/env bash
+dest=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C)
+      dest="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ "$dest" == "" ]]; then
+  echo "fake tar: missing -C" >&2
+  exit 1
+fi
+mkdir -p "$dest/js-debug/src"
+printf 'fake dap server\n' > "$dest/js-debug/src/dapDebugServer.js"
+EOF
+chmod +x "$TMP_DIR/bin/tar"
+
 touch "$TMP_DIR/agent/main.go"
 sleep 1
 for name in superdev-agent superdev-mcp superdev-sample; do
@@ -96,3 +143,9 @@ for name in superdev-agent superdev-mcp superdev-sample; do
     exit 1
   fi
 done
+
+js_debug_server="$TMP_DIR/desktop/src-tauri/resources/js-debug/src/dapDebugServer.js"
+if [[ ! -f "$js_debug_server" ]]; then
+  echo "expected js-debug standalone server to be prepared: $js_debug_server" >&2
+  exit 1
+fi
