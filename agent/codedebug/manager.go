@@ -350,7 +350,11 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 	return record.Runtime, nil
 }
 
-// AttachRuntime 对运行中进程起 dlv dap 并 attach，创建 attached 来源的 Debug Runtime。
+// AttachRuntime 是「按已解析 PID 直接 pid-attach」的低层原语，固定走 attach-pid。
+//
+// 契约：调用方必须已自行解析出 debuggee PID 并确认目标支持 pid-attach（如 Go）。
+// 它不按语言派生 readiness——Node 的 signal、Python 的 prearm 必须走 tryAttachRunning
+// 的 readiness 派生路径，不要把它们路由到这里，否则会错误地按 PID attach。
 //
 // 参数：
 //   - ctx: 请求上下文，用于控制 adapter 启动和 DAP 初始化
