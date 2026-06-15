@@ -41,6 +41,29 @@ func TestNodeSuggestReadsPackageJSONMain(t *testing.T) {
 	assert.Equal(t, "src/index.js", out[0].Config["program"])
 }
 
+func TestNodeSuggestReadsScripts(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, writeFile(filepath.Join(root, "package.json"), `{"scripts":{"build":"x","dev":"vite","start":"node ."}}`))
+	out, err := langruntime.NewNodeProvider().SuggestConfig(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: root,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out)
+	assert.Equal(t, "pnpm", out[0].Config["package_manager"])
+	assert.Equal(t, "dev", out[0].Config["script"])
+}
+
+func TestNodeSuggestFallsBackToMainWhenNoScripts(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, writeFile(filepath.Join(root, "package.json"), `{"main":"app.js"}`))
+	out, err := langruntime.NewNodeProvider().SuggestConfig(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: root,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out)
+	assert.Equal(t, "app.js", out[0].Config["program"])
+}
+
 func TestNodeNormalizeRejectsNonStringProgram(t *testing.T) {
 	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
 		ProjectRoot: "/repo", Config: map[string]any{"program": 42},

@@ -1,8 +1,8 @@
 // node_provider.go 实现 Node 的 Language Runtime Provider。
 //
 // 职责：
-//   - Node RuntimeSchema（program/program_args/node_args，v1 最小集）
-//   - 扫描 package.json main 给配置建议
+//   - Node RuntimeSchema（script/program/program_args/node_args，v1 最小集）
+//   - 扫描 package.json scripts/main 给配置建议
 //   - 校验并归一化 Node 运行配置
 //
 // 边界：
@@ -69,25 +69,37 @@ func (NodeProvider) RuntimeSchema(context.Context) RuntimeSchema {
 	}
 }
 
-// SuggestConfig 扫描 package.json main 字段，给出 Node 入口建议。
+// SuggestConfig 扫描 package.json scripts/main 字段，给出 Node 入口建议。
 func (NodeProvider) SuggestConfig(_ context.Context, input RuntimeConfigInput) ([]RuntimeConfigSuggestion, error) {
 	cwd := ResolveRuntimeCWD(input.ProjectRoot, input.CWD)
-	main := readPackageJSONMain(filepath.Join(cwd, "package.json"))
+	pkgPath := filepath.Join(cwd, "package.json")
+	scripts := readPackageJSONScripts(pkgPath)
+	if script := pickDefaultScript(scripts); script != "" {
+		pm := detectPackageManager(cwd)
+		return []RuntimeConfigSuggestion{{
+			Label:      "Node " + pm + " run " + script,
+			CWD:        input.CWD,
+			Config:     map[string]any{"package_manager": pm, "script": script},
+			Confidence: "high",
+			Reason:     "from package.json scripts",
+		}}, nil
+	}
+	main := readPackageJSONMain(pkgPath)
 	if main == "" {
 		return []RuntimeConfigSuggestion{{
 			Label:      "Node index.js",
 			CWD:        input.CWD,
 			Config:     map[string]any{"program": "index.js"},
 			Confidence: "low",
-			Reason:     "no package.json main found, defaulting to index.js",
+			Reason:     "no package.json scripts or main found, defaulting to index.js",
 		}}, nil
 	}
 	return []RuntimeConfigSuggestion{{
 		Label:      "Node " + main,
 		CWD:        input.CWD,
 		Config:     map[string]any{"program": main},
-		Confidence: "high",
-		Reason:     "package.json main entry",
+		Confidence: "medium",
+		Reason:     "package.json main entry (no scripts)",
 	}}, nil
 }
 
@@ -195,4 +207,43 @@ func readPackageJSONMain(path string) string {
 		return ""
 	}
 	return pkg.Main
+}
+
+// readPackageJSONScripts 读取 package.json 的 scripts 名列表，保序无所谓（我们按优先级挑）。
+func readPackageJSONScripts(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(data, &pkg) != nil {
+		return nil
+	}
+	return pkg.Scripts
+}
+
+// pickDefaultScript 按 dev > start > serve > 任意 的优先级挑一个默认 script。
+func pickDefaultScript(scripts map[string]string) string {
+	for _, name := range []string{"dev", "start", "serve"} {
+		if _, ok := scripts[name]; ok {
+			return name
+		}
+	}
+	for name := range scripts {
+		return name
+	}
+	return ""
+}
+
+// detectPackageManager 按 lockfile 推断包管理器，缺省 pnpm。
+func detectPackageManager(cwd string) string {
+	if _, err := os.Stat(filepath.Join(cwd, "yarn.lock")); err == nil {
+		return "yarn"
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "package-lock.json")); err == nil {
+		return "npm"
+	}
+	return "pnpm"
 }
