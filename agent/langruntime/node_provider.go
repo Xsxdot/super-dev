@@ -113,6 +113,76 @@ func (NodeProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Norm
 	}, nil, nil
 }
 
+// BuildPlan 由 normalized 配置生成 Node 执行计划；debug-ready 通过 SIGUSR1 进入 inspector。
+func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionPlan, []Diagnostic, error) {
+	cfg := input.Config
+	env := CopyStringMap(cfg.Env)
+	debugger := &DebuggerSpec{Adapter: model.CodeDebugProviderNode, Readiness: ReadinessSignalAttach, Signal: "SIGUSR1"}
+
+	if step, ok := EscapeHatchCommand(cfg.Config); ok {
+		switch input.Intent {
+		case IntentStartDev, IntentStartNormal:
+			return ExecutionPlan{
+				Intent:     input.Intent,
+				WorkingDir: cfg.CWD,
+				Env:        env,
+				Command:    &CommandSpec{Executable: step.Executable, Args: step.Args},
+				Debugger:   debugger,
+				Preview:    PreviewCommand(env, step.Executable, step.Args...),
+			}, nil, nil
+		}
+	}
+
+	program := StringValue(cfg.Config["program"])
+	nodeArgs := StringSliceValue(cfg.Config["node_args"])
+	programArgs := StringSliceValue(cfg.Config["program_args"])
+
+	switch input.Intent {
+	case IntentStartDev, IntentStartNormal:
+		// node 参数必须位于入口文件之前，否则会被业务程序当成普通参数。
+		args := append([]string{}, nodeArgs...)
+		args = append(args, program)
+		args = append(args, programArgs...)
+		return ExecutionPlan{
+			Intent:     input.Intent,
+			WorkingDir: cfg.CWD,
+			Env:        env,
+			Command:    &CommandSpec{Executable: "node", Args: args},
+			Debugger:   debugger,
+			Preview:    PreviewCommand(env, "node", args...),
+		}, nil, nil
+	case IntentDebugLaunch:
+		previewArgs := append([]string{}, nodeArgs...)
+		previewArgs = append(previewArgs, program)
+		return ExecutionPlan{
+			Intent:     IntentDebugLaunch,
+			WorkingDir: cfg.CWD,
+			Env:        env,
+			Debug: &DebugSpec{
+				Provider:    model.CodeDebugProviderNode,
+				Program:     ResolveRuntimePath(cfg.CWD, program),
+				Args:        programArgs,
+				StopOnEntry: input.StopOnEntry,
+			},
+			Debugger: debugger,
+			Preview:  PreviewCommand(env, "node", previewArgs...),
+		}, nil, nil
+	case IntentAttach:
+		return ExecutionPlan{
+			Intent:     IntentAttach,
+			WorkingDir: cfg.CWD,
+			Attach:     &AttachSpec{Provider: model.CodeDebugProviderNode, Mode: "pid"},
+			Debugger:   debugger,
+			Preview:    "node --inspect (via SIGUSR1) attach",
+		}, nil, nil
+	default:
+		return ExecutionPlan{}, []Diagnostic{{
+			Severity: SeverityError, Code: "intent_unsupported",
+			Message: "unsupported Node runtime intent " + string(input.Intent),
+		}}, nil
+	}
+}
+
 func readPackageJSONMain(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

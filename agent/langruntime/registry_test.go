@@ -21,6 +21,11 @@ func TestCoreRegistryHasGoProvider(t *testing.T) {
 	assert.Equal(t, langruntime.DebugReadyByAttach, provider.Capabilities().DebugReady)
 }
 
+func TestCoreRegistersNode(t *testing.T) {
+	_, ok := langruntime.Core().Provider(model.LanguageNode)
+	assert.True(t, ok)
+}
+
 func TestRegistryListsLanguagesInStableOrder(t *testing.T) {
 	reg := langruntime.NewRegistry()
 	reg.Register(langruntime.NewGoProvider())

@@ -56,6 +56,7 @@ func (r *Registry) Languages() []model.ServiceLanguage {
 var core = func() *Registry {
 	r := NewRegistry()
 	r.Register(NewGoProvider())
+	r.Register(NewNodeProvider())
 	return r
 }()
 

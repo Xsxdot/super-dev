@@ -50,6 +50,48 @@ func TestNodeNormalizeRejectsNonStringProgram(t *testing.T) {
 	assert.Equal(t, langruntime.SeverityError, diagnostics[0].Severity)
 }
 
+func TestNodeBuildPlanStartDevPlainNode(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{"program": "src/index.js"}}
+	plan, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg,
+	})
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	require.NotNil(t, plan.Command)
+	assert.Equal(t, "node", plan.Command.Executable)
+	assert.Equal(t, []string{"src/index.js"}, plan.Command.Args)
+	require.NotNil(t, plan.Debugger)
+	assert.Equal(t, langruntime.ReadinessSignalAttach, plan.Debugger.Readiness)
+	assert.Equal(t, "SIGUSR1", plan.Debugger.Signal)
+}
+
+func TestNodeBuildPlanEscapeHatchPnpm(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{
+		"runtime_executable": "pnpm", "runtime_args": []any{"worker"},
+	}}
+	plan, _, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, plan.Command)
+	assert.Equal(t, "pnpm", plan.Command.Executable)
+	assert.Equal(t, []string{"worker"}, plan.Command.Args)
+	// 逃生口仍声明 signal readiness（attach 时发信号给 node 子进程）。
+	require.NotNil(t, plan.Debugger)
+	assert.Equal(t, langruntime.ReadinessSignalAttach, plan.Debugger.Readiness)
+}
+
+func TestNodeBuildPlanNodeArgsBeforeProgram(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{
+		"program": "app.js", "node_args": []any{"--enable-source-maps"}, "program_args": []any{"--port", "9000"},
+	}}
+	plan, _, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartNormal, Config: cfg,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--enable-source-maps", "app.js", "--port", "9000"}, plan.Command.Args)
+}
+
 func writeFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
