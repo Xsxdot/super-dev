@@ -438,6 +438,71 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 	assert.Equal(t, 101, rt.ProcessID)
 }
 
+func TestResolveLeaseNodeScriptRuntimeAttachesWithoutProgram(t *testing.T) {
+	rootDAP := &fakeDAP{
+		attachWaitsForConfigurationDone: true,
+		emitInitializedOnAttach:         true,
+		emitStartDebuggingAfterAttach:   true,
+	}
+	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	dialCount := 0
+	var signaled struct {
+		pid int
+		sig string
+	}
+	mgr := NewManager(ManagerOptions{
+		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9004, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41010, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{{pid: 100, comm: "pnpm"}, {pid: 101, comm: "node"}}
+		},
+		SignalProcess: func(pid int, sig string) error {
+			signaled.pid = pid
+			signaled.sig = sig
+			return nil
+		},
+		RunningProcessStderr: func(deploymentID string) []string {
+			return []string{"Debugger listening on ws://127.0.0.1:9229/uuid"}
+		},
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguageNode
+	dep.Command = ""
+	dep.CodeDebug = nil
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"package_manager": "pnpm", "script": "dev"},
+	}
+	service.Deployments = []model.Deployment{dep}
+	project.Services = []model.Service{service}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, 101, signaled.pid)
+	assert.Equal(t, "SIGUSR1", signaled.sig)
+	assert.Equal(t, 9229, rootDAP.attachConnectPort)
+	assert.Equal(t, "pending-node-target", childDAP.attachPendingTargetID)
+	rt, ok := mgr.RuntimeStatus(dep.ID)
+	require.True(t, ok)
+	assert.Equal(t, "attached", rt.Origin)
+}
+
 func TestResolveLeaseNodeParsesInspectorPortAfterSignal(t *testing.T) {
 	dap := &fakeDAP{}
 	mgr := NewManager(ManagerOptions{

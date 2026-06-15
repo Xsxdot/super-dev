@@ -207,12 +207,16 @@ func (m *Manager) Open(ctx context.Context, project model.Project, service model
 	if err != nil {
 		return Session{}, err
 	}
+	return m.createSessionForRuntime(runtime), nil
+}
+
+func (m *Manager) createSessionForRuntime(runtime Runtime) Session {
 	now := m.now().UTC()
 	record := &sessionRecord{
 		Session: Session{
 			ID:           "cds_" + uuid.NewString(),
-			ProjectID:    project.ID,
-			DeploymentID: dep.ID,
+			ProjectID:    runtime.ProjectID,
+			DeploymentID: runtime.DeploymentID,
 			Provider:     runtime.Provider,
 			AdapterPort:  runtime.AdapterPort,
 			ProcessID:    runtime.ProcessID,
@@ -221,7 +225,7 @@ func (m *Manager) Open(ctx context.Context, project model.Project, service model
 			LastUsedAt:   now,
 			Alive:        true,
 		},
-		runtimeDeploymentID: dep.ID,
+		runtimeDeploymentID: runtime.DeploymentID,
 	}
 
 	m.mu.Lock()
@@ -229,7 +233,7 @@ func (m *Manager) Open(ctx context.Context, project model.Project, service model
 	defer closeSessionFns(closeFns)
 	defer m.mu.Unlock()
 	m.sessions[record.ID] = record
-	return record.Session, nil
+	return record.Session
 }
 
 // StartRuntime 启动或复用 deployment 级 Debug Runtime。
@@ -628,7 +632,7 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 	if err != nil {
 		return false, ErrAttachUnsupported
 	}
-	cfg, _, err := m.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	cfg, _, err := m.attachConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 	if err != nil {
 		return false, err
 	}
@@ -695,6 +699,13 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 	return true, nil
 }
 
+func (m *Manager) attachConfig(project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (LaunchConfig, Provider, error) {
+	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
+		return m.attachConfigFromLanguageRuntime(project, service, dep, req)
+	}
+	return m.launchConfig(project, service, dep, req)
+}
+
 func nodeMainProcessIsNode(dep model.Deployment) bool {
 	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
 		_, escapeHatch := langruntime.EscapeHatchCommand(dep.Runtime.Config)
@@ -709,6 +720,9 @@ func nodeMainProcessIsNode(dep model.Deployment) bool {
 
 // openLeaseOnRuntime 在已存在的 debug runtime 上建 lease（不重启 debuggee）。
 func (m *Manager) openLeaseOnRuntime(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, approvalToken string) (Session, bool, error) {
+	if runtime, ok := m.RuntimeStatus(dep.ID); ok && runtime.Alive {
+		return m.createSessionForRuntime(runtime), true, nil
+	}
 	session, err := m.Open(ctx, project, service, dep, OpenRequest{
 		DeploymentID:  strings.TrimSpace(dep.ID),
 		ApprovalToken: approvalToken,
@@ -1400,6 +1414,64 @@ func (m *Manager) launchConfigFromLanguageRuntime(project model.Project, service
 		StopOnEntry:    plan.Debug.StopOnEntry,
 	}
 	return cfg, debugProvider, nil
+}
+
+// attachConfigFromLanguageRuntime 构造运行中 language runtime 的 attach 配置。
+//
+// script-based Node 只能 attach 到已经运行的子进程；它没有 debug_launch 所需的
+// program 入口，但 listen attach 只依赖 cwd/env/provider 和 inspector 端口。
+func (m *Manager) attachConfigFromLanguageRuntime(project model.Project, service model.Service, dep model.Deployment, req OpenRequest) (LaunchConfig, Provider, error) {
+	providerName := ProviderForLanguage(service.Language)
+	debugProvider, err := m.providerFor(providerName)
+	if err != nil {
+		return LaunchConfig{}, nil, err
+	}
+	runtimeProvider, ok := langruntime.Core().Provider(service.Language)
+	if !ok {
+		return LaunchConfig{}, nil, ErrTargetUnsupported
+	}
+	var code model.CodeDebugConfig
+	if dep.CodeDebug != nil {
+		code = *dep.CodeDebug
+	}
+	stopOnEntry := code.StopOnEntry
+	if req.StopOnEntry != nil {
+		stopOnEntry = *req.StopOnEntry
+	}
+	ctx := context.Background()
+	normalized, diagnostics, err := runtimeProvider.Normalize(ctx, langruntime.RuntimeConfigInput{
+		ProjectRoot: project.RootPath,
+		CWD:         dep.Runtime.EffectiveCWD(),
+		Env:         dep.Runtime.EffectiveEnv(),
+		Config:      dep.Runtime.Config,
+	})
+	if err != nil {
+		return LaunchConfig{}, nil, err
+	}
+	if langruntime.HasErrorDiagnostic(diagnostics) {
+		return LaunchConfig{}, nil, ErrConfigInvalid
+	}
+	return LaunchConfig{
+		Target: Target{
+			ProjectID:    project.ID,
+			ProjectName:  project.Name,
+			RootPath:     project.RootPath,
+			ServiceID:    service.ID,
+			ServiceName:  service.Name,
+			DeploymentID: dep.ID,
+			EnvName:      dep.EnvName,
+			Language:     service.Language,
+			Provider:     providerName,
+			Experimental: providerName == model.CodeDebugProviderNode,
+			WorkDir:      normalized.CWD,
+		},
+		Provider:       providerName,
+		WorkingDir:     normalized.CWD,
+		Env:            normalized.Env,
+		AdapterCommand: strings.TrimSpace(code.AdapterCommand),
+		AdapterArgs:    append([]string{}, code.AdapterArgs...),
+		StopOnEntry:    stopOnEntry,
+	}, debugProvider, nil
 }
 
 // DefaultProgramForProvider 返回 provider 在未显式配置 program 时的默认 launch 入口。
