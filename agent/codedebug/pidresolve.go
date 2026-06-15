@@ -1,8 +1,9 @@
-// pidresolve.go 解析 Go 服务的真实 debuggee PID。
+// pidresolve.go 解析语言服务的真实 debuggee PID。
 //
 // 职责：
 //   - 直接可执行命令：debuggee 即 deployment 主进程
 //   - `go run`：真实 debuggee 是编译后在同进程组内 exec 的子进程，需在进程组里定位
+//   - `pnpm/npm` 启动 Node：真实 debuggee 是同进程组内的 node 子进程
 //
 // 边界：
 //   - 不杀进程、不附加，只定位 PID
@@ -53,6 +54,39 @@ func resolveGoDebuggeePID(h goDebuggeeHints) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("%w: go run child not found in process group %d", ErrAttachTargetUnresolved, h.pgid)
+}
+
+// nodeDebuggeeHints 描述定位 node debuggee 进程所需信息。
+type nodeDebuggeeHints struct {
+	mainPID          int
+	pgid             int
+	listProcessGroup func(pgid int) []procInfo
+}
+
+// resolveNodeDebuggeePID 定位真正的 node 进程：
+// 高层启动时 mainPID 即 node；逃生口（pnpm/npm 包一层）时 node 是进程组里的子进程。
+func resolveNodeDebuggeePID(h nodeDebuggeeHints) (int, error) {
+	if h.listProcessGroup == nil || h.pgid <= 0 {
+		if h.mainPID <= 0 {
+			return 0, ErrAttachTargetUnresolved
+		}
+		return h.mainPID, nil
+	}
+	for _, p := range h.listProcessGroup(h.pgid) {
+		if isNodeProcess(p.comm) && p.pid > 0 {
+			return p.pid, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: node child not found in process group %d", ErrAttachTargetUnresolved, h.pgid)
+}
+
+func isNodeProcess(comm string) bool {
+	comm = strings.TrimSpace(comm)
+	if idx := strings.LastIndex(comm, "/"); idx >= 0 {
+		comm = comm[idx+1:]
+	}
+	comm = strings.ToLower(comm)
+	return comm == "node"
 }
 
 func isGoRunCommand(command string) bool {

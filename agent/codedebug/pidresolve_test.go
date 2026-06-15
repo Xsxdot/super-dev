@@ -68,6 +68,44 @@ func TestResolveGoDebuggeePIDGoRunNoChild(t *testing.T) {
 	}
 }
 
+func TestResolveNodeDebuggeePIDFindsChildUnderLauncher(t *testing.T) {
+	// pnpm(父,pid=100) -> node(子,pid=101)，同一进程组。
+	procs := []procInfo{
+		{pid: 100, comm: "pnpm"},
+		{pid: 101, comm: "node"},
+	}
+	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID: 100, pgid: 100,
+		listProcessGroup: func(int) []procInfo {
+			return procs
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 101, pid)
+}
+
+func TestResolveNodeDebuggeePIDMainIsNode(t *testing.T) {
+	// 高层启动：主进程直接是 node。
+	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID: 200, pgid: 200,
+		listProcessGroup: func(int) []procInfo {
+			return []procInfo{{pid: 200, comm: "node"}}
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 200, pid)
+}
+
+func TestResolveNodeDebuggeePIDNoNodeChild(t *testing.T) {
+	_, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID: 300, pgid: 300,
+		listProcessGroup: func(int) []procInfo {
+			return []procInfo{{pid: 300, comm: "pnpm"}}
+		},
+	})
+	require.Error(t, err)
+}
+
 func TestIsGoRunCommandSkipsOnlyValidInlineEnvFields(t *testing.T) {
 	tests := []struct {
 		name    string
