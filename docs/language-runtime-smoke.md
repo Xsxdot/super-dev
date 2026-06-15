@@ -194,6 +194,50 @@ Restricted sandbox caveat: the pnpm smoke requires the agent to enumerate the pr
 `ps`. In a sandbox where `/bin/ps` is denied, direct Node can still fall back to the main process,
 but the pnpm escape hatch should run the agent with permissions that allow process-group lookup.
 
+## Node Script Smoke
+
+Fixture:
+
+```json
+{
+  "scripts": {
+    "dev": "node server.js"
+  }
+}
+```
+
+Runtime config:
+
+```yaml
+runtime:
+  type: language
+  cwd: .
+  config:
+    package_manager: pnpm
+    script: dev
+```
+
+Partially verified with node v23.11.0, pnpm 10.33.0, and js-debug v1.117.0 on 2026-06-15:
+
+- `suggest_service_runtime(language=node, cwd=.)` returned
+  `{package_manager: "pnpm", script: "dev"}` with reason `from package.json scripts`.
+- `preview_service_execution(intent=start_dev)` returned `pnpm run dev`.
+- `start_dev` ran `pnpm run dev`; process logs showed pnpm invoking `node server.js` and
+  `node tick N` flowing to stdout.
+- A sandboxed agent could start the process, but Node child attach could not complete there because
+  `/bin/ps` was denied. Running the same isolated smoke agent outside the sandbox allowed the pnpm
+  child-process resolution path to proceed.
+- `code-debug-smoke` attach reached an attached Node debug runtime:
+  `runtime-status` reported `base=debug`, `debugger.origin=attached`, and `lease_active=true`.
+
+Not verified yet:
+
+- Breakpoint capture at `server.js:5` did not hit. The first capture failed with
+  `breakpoint line 5 unverified: Unbound breakpoint`; retrying with relative `server.js` waited for
+  the breakpoint and timed out, and `server.js:1` also returned `Unbound breakpoint`.
+- Therefore this smoke verifies script derivation, `pnpm run dev` startup, and attach-runtime
+  creation, but does **not** yet verify source breakpoint binding for the script-startup path.
+
 ## Python Prearm Smoke
 
 Fixture:
