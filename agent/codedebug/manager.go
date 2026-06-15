@@ -19,7 +19,6 @@ import (
 	"net"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/super-dev/agent/execenv"
 	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
 )
@@ -308,26 +308,41 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
 	}
-	if err := dap.Launch(ctx, provider.LaunchArguments(cfg)); err != nil {
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(cfg.Provider, dap)
+	if cancelRequestSub != nil {
+		defer cancelRequestSub()
+	}
+	if err := launchAndConfigure(ctx, dap, provider.LaunchArguments(cfg)); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
 	}
-	if err := dap.ConfigurationDone(ctx); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(closeProcess)
-		return Runtime{}, err
+	runtimeDAP := dap
+	rootDAP := dap
+	if cfg.Provider == model.CodeDebugProviderNode {
+		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		if err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(closeProcess)
+			return Runtime{}, err
+		}
+		if childDAP != nil {
+			runtimeDAP = childDAP
+		}
 	}
 	store := &debuggerSnapshotStore{}
-	pump := newEventPump(dap, store)
+	pump := newEventPump(runtimeDAP, store)
 	pump.start(context.Background())
 	if cfg.StopOnEntry {
 		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := dap.WaitForStopped(waitCtx)
+		_, err := runtimeDAP.WaitForStopped(waitCtx)
 		cancel()
 		if err != nil {
 			pump.stop()
-			_ = dap.Close()
+			_ = runtimeDAP.Close()
+			if rootDAP != runtimeDAP {
+				_ = rootDAP.Close()
+			}
 			_ = closeProcessIfPresent(closeProcess)
 			return Runtime{}, err
 		}
@@ -349,15 +364,18 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		},
 		rootPath:   cfg.Target.RootPath,
 		sourceRoot: resolveSourceRoot(cfg.WorkingDir, cfg.Target.RootPath),
-		dap:        dap,
+		dap:        runtimeDAP,
 		debugStore: store,
 		pump:       pump,
 		close: func() error {
 			pump.stop()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			_ = dap.Disconnect(ctx)
-			_ = dap.Close()
+			_ = runtimeDAP.Disconnect(ctx)
+			_ = runtimeDAP.Close()
+			if rootDAP != runtimeDAP {
+				_ = rootDAP.Close()
+			}
 			return closeProcessIfPresent(closeProcess)
 		},
 	}
@@ -429,10 +447,30 @@ func (m *Manager) attachWithReadiness(ctx context.Context, req readinessRequest)
 		}
 		return m.attachByPID(ctx, req.cfg, req.provider, req.pid)
 	case langruntime.ReadinessPrearmListen:
+		// debuggee 预埋的端口若本身就是 DAP 服务（Python debugpy --listen），直连即可；
+		// 若只是待 adapter 连接的目标端口（Node inspector），仍走 adapter-spawn。
+		if req.provider.AttachCapability() == AttachModeDirectDAP {
+			return m.attachByDirectDAP(ctx, req.cfg, req.provider, req.port, req.pid)
+		}
 		return m.attachByListenPort(ctx, req.cfg, req.provider, req.port, req.pid)
 	default:
 		return m.attachByPID(ctx, req.cfg, req.provider, req.pid)
 	}
+}
+
+// attachByDirectDAP 直连被调试进程预埋的 DAP 服务端口（如 debugpy --listen），
+// 不另起 adapter 进程：targetPort 即 DAP 端点，dial 后直接 Initialize+attach。
+func (m *Manager) attachByDirectDAP(ctx context.Context, cfg LaunchConfig, provider Provider, targetPort int, processID int) (Runtime, error) {
+	if provider.AttachCapability() != AttachModeDirectDAP {
+		return Runtime{}, ErrAttachUnsupported
+	}
+	if targetPort <= 0 {
+		return Runtime{}, ErrAttachTargetUnresolved
+	}
+	cfg.TargetPort = targetPort
+	return m.attachRuntimeDirect(ctx, cfg, provider, targetPort, processID, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, processID)
+	})
 }
 
 func (m *Manager) attachByPID(ctx context.Context, cfg LaunchConfig, provider Provider, processID int) (Runtime, error) {
@@ -609,6 +647,63 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 			_ = rootDAP.Close()
 		}
 		return closeProcessIfPresent(process.Close)
+	}
+	m.mu.Lock()
+	m.runtimes[cfg.Target.DeploymentID] = record
+	m.mu.Unlock()
+	return record.Runtime, nil
+}
+
+// attachRuntimeDirect 直连 debuggee 预埋的 DAP 端口（targetPort），不另起 adapter 进程。
+//
+// 与 attachRuntimeWithConfig 的区别：
+//   - 不 reserve 端口、不 spawn adapter（debuggee 自身即 DAP 服务，如 debugpy --listen）
+//   - dial 的是 targetPort 本身；close 时只断开 DAP，绝不杀 debuggee（普通 dev 进程）
+func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, provider Provider, targetPort int, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
+	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", targetPort), 5*time.Second)
+	if err != nil {
+		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: cfg.Provider}, err)
+	}
+	if _, err := dap.Initialize(ctx); err != nil {
+		_ = dap.Close()
+		return Runtime{}, err
+	}
+	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
+		_ = dap.Close()
+		return Runtime{}, err
+	}
+	now := m.now().UTC()
+	store := &debuggerSnapshotStore{}
+	pump := newEventPump(dap, store)
+	pump.start(context.Background())
+	record := &runtimeRecord{
+		Runtime: Runtime{
+			ProjectID:    cfg.Target.ProjectID,
+			DeploymentID: cfg.Target.DeploymentID,
+			Provider:     cfg.Provider,
+			AdapterPort:  targetPort,
+			ProcessID:    processID,
+			State:        RuntimeStateDebugRunning,
+			Origin:       "attached",
+			Alive:        true,
+			CreatedAt:    now,
+			LastUsedAt:   now,
+		},
+		rootPath:   cfg.Target.RootPath,
+		sourceRoot: resolveSourceRoot(cfg.WorkingDir, cfg.Target.RootPath),
+		dap:        dap,
+		debugStore: store,
+		pump:       pump,
+	}
+	record.close = func() error {
+		if record.pump != nil {
+			record.pump.stop()
+		}
+		dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = dap.Detach(dctx)
+		_ = dap.Close()
+		return nil
 	}
 	m.mu.Lock()
 	m.runtimes[cfg.Target.DeploymentID] = record
@@ -1061,6 +1156,53 @@ func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error
 	}
 }
 
+func launchAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
+	sub, cancelSub := dap.Subscribe()
+	defer cancelSub()
+	launchCtx, cancelLaunch := context.WithCancel(ctx)
+	defer cancelLaunch()
+	launchErr := make(chan error, 1)
+	go func() {
+		launchErr <- dap.Launch(launchCtx, args)
+	}()
+	configurationDone := false
+	sendConfigurationDone := func() error {
+		if configurationDone {
+			return nil
+		}
+		// js-debug 的 launch 与 attach 一样，会先发 initialized，并等 configurationDone 后才回 launch response。
+		// Go/debugpy 通常先回 launch；两种时序都在这里归一。
+		if err := dap.ConfigurationDone(ctx); err != nil {
+			cancelLaunch()
+			return err
+		}
+		configurationDone = true
+		return nil
+	}
+	for {
+		select {
+		case err := <-launchErr:
+			if err != nil {
+				return err
+			}
+			return sendConfigurationDone()
+		case event, ok := <-sub:
+			if !ok {
+				sub = nil
+				continue
+			}
+			if isDAPInitializedEvent(event) {
+				if err := sendConfigurationDone(); err != nil {
+					return err
+				}
+			}
+		case <-ctx.Done():
+			cancelLaunch()
+			return ctx.Err()
+		}
+	}
+}
+
 func isDAPInitializedEvent(event map[string]any) bool {
 	name, _ := event["event"].(string)
 	return name == "initialized"
@@ -1103,9 +1245,9 @@ func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, reque
 			if command, _ := request["command"].(string); command != "startDebugging" {
 				continue
 			}
-			attachArgs, ok := jsDebugChildAttachArguments(request)
+			childRequest, childArgs, ok := jsDebugChildRequest(request)
 			if !ok {
-				return nil, fmt.Errorf("js-debug startDebugging request missing child attach configuration")
+				return nil, fmt.Errorf("js-debug startDebugging request missing child configuration")
 			}
 			if err := reverse.RespondToRequest(ctx, request, true, map[string]any{}); err != nil {
 				return nil, err
@@ -1118,7 +1260,7 @@ func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, reque
 				_ = child.Close()
 				return nil, err
 			}
-			if err := attachAndConfigure(ctx, child, attachArgs); err != nil {
+			if err := runJSDebugChildRequest(ctx, child, childRequest, childArgs); err != nil {
 				_ = child.Close()
 				return nil, err
 			}
@@ -1127,20 +1269,32 @@ func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, reque
 	}
 }
 
-func jsDebugChildAttachArguments(request map[string]any) (map[string]any, bool) {
+func runJSDebugChildRequest(ctx context.Context, child DAP, request string, args map[string]any) error {
+	switch strings.TrimSpace(request) {
+	case "launch":
+		return launchAndConfigure(ctx, child, args)
+	case "", "attach":
+		return attachAndConfigure(ctx, child, args)
+	default:
+		return fmt.Errorf("unsupported js-debug child request %q", request)
+	}
+}
+
+func jsDebugChildRequest(request map[string]any) (string, map[string]any, bool) {
 	args, _ := request["arguments"].(map[string]any)
 	if len(args) == 0 {
-		return nil, false
+		return "", nil, false
 	}
+	requestType, _ := args["request"].(string)
 	configuration, _ := args["configuration"].(map[string]any)
 	if len(configuration) == 0 {
-		return nil, false
+		return "", nil, false
 	}
 	out := make(map[string]any, len(configuration))
 	for k, v := range configuration {
 		out[k] = v
 	}
-	return out, true
+	return requestType, out, true
 }
 
 // CaptureAtRequest 描述 stop-at-line 并采集现场的复合请求。
@@ -1287,78 +1441,7 @@ func (m *Manager) launchConfig(project model.Project, service model.Service, dep
 	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLanguage {
 		return m.launchConfigFromLanguageRuntime(project, service, dep, req)
 	}
-	var code model.CodeDebugConfig
-	if dep.CodeDebug != nil {
-		code = *dep.CodeDebug
-	}
-	if code.Mode != "" && code.Mode != model.CodeDebugModeLaunch {
-		return LaunchConfig{}, nil, ErrTargetUnsupported
-	}
-	providerName := ProviderForLanguage(service.Language)
-	command := debugDeploymentCommand(dep)
-	if providerName == "" {
-		return LaunchConfig{}, nil, ErrTargetUnsupported
-	}
-	provider, err := m.providerFor(providerName)
-	if err != nil {
-		return LaunchConfig{}, nil, err
-	}
-	workingDir := strings.TrimSpace(code.WorkingDir)
-	if workingDir == "" {
-		workingDir = debugDeploymentWorkDir(dep)
-	}
-	if workingDir == "" {
-		workingDir = project.RootPath
-	}
-	workingDir, err = ResolveInsideRoot(project.RootPath, workingDir)
-	if err != nil {
-		return LaunchConfig{}, nil, err
-	}
-	program := strings.TrimSpace(code.Program)
-	programExplicit := program != ""
-	if !programExplicit {
-		program, err = DefaultProgramForProvider(providerName, command)
-		if err != nil {
-			return LaunchConfig{}, nil, err
-		}
-	}
-	programPath, err := resolveLaunchProgramPath(project.RootPath, workingDir, program, programExplicit)
-	if err != nil {
-		return LaunchConfig{}, nil, err
-	}
-	if providerName == model.CodeDebugProviderGo {
-		programPath = goDAPProgramPath(workingDir, programPath)
-	}
-	env := mergeEnv(dep.Env, code.EnvVars)
-	stopOnEntry := code.StopOnEntry
-	if req.StopOnEntry != nil {
-		stopOnEntry = *req.StopOnEntry
-	}
-	target := Target{
-		ProjectID:    project.ID,
-		ProjectName:  project.Name,
-		RootPath:     project.RootPath,
-		ServiceID:    service.ID,
-		ServiceName:  service.Name,
-		DeploymentID: dep.ID,
-		EnvName:      dep.EnvName,
-		Language:     service.Language,
-		Provider:     providerName,
-		Experimental: providerName == model.CodeDebugProviderNode,
-		Command:      command,
-		WorkDir:      debugDeploymentWorkDir(dep),
-	}
-	return LaunchConfig{
-		Target:         target,
-		Provider:       providerName,
-		Program:        programPath,
-		Args:           append([]string{}, code.Args...),
-		WorkingDir:     workingDir,
-		Env:            env,
-		AdapterCommand: strings.TrimSpace(code.AdapterCommand),
-		AdapterArgs:    append([]string{}, code.AdapterArgs...),
-		StopOnEntry:    stopOnEntry,
-	}, provider, nil
+	return LaunchConfig{}, nil, ErrTargetUnsupported
 }
 
 // launchConfigFromLanguageRuntime 由语言 provider 的 debug_launch plan 构造调试启动配置。
@@ -1489,51 +1572,6 @@ func (m *Manager) attachConfigFromLanguageRuntime(project model.Project, service
 		AdapterArgs:    append([]string{}, code.AdapterArgs...),
 		StopOnEntry:    stopOnEntry,
 	}, debugProvider, nil
-}
-
-// DefaultProgramForProvider 返回 provider 在未显式配置 program 时的默认 launch 入口。
-func DefaultProgramForProvider(provider model.CodeDebugProvider, command string) (string, error) {
-	switch provider {
-	case model.CodeDebugProviderGo:
-		return ".", nil
-	case model.CodeDebugProviderPython, model.CodeDebugProviderNode:
-		if program, ok := inferProgramFromSimpleCommand(provider, command); ok {
-			return program, nil
-		}
-		return "", ErrConfigInvalid
-	default:
-		return "", ErrTargetUnsupported
-	}
-}
-
-func resolveLaunchProgramPath(projectRoot, workingDir, program string, explicit bool) (string, error) {
-	if explicit || filepath.IsAbs(program) {
-		return ResolveInsideRoot(projectRoot, program)
-	}
-	base := strings.TrimSpace(workingDir)
-	if base == "" {
-		base = projectRoot
-	}
-	return ResolveInsideRoot(projectRoot, filepath.Join(base, program))
-}
-
-func goDAPProgramPath(workingDir, resolvedProgram string) string {
-	workingDir = strings.TrimSpace(workingDir)
-	resolvedProgram = strings.TrimSpace(resolvedProgram)
-	if workingDir == "" || resolvedProgram == "" {
-		return resolvedProgram
-	}
-	// Delve treats absolute symlinked paths as outside the Go module in some
-	// workspace layouts, so keep SuperDev's root validation above and pass DAP
-	// a path relative to the configured cwd.
-	rel, err := filepath.Rel(workingDir, resolvedProgram)
-	if err != nil || rel == "" || filepath.IsAbs(rel) {
-		return resolvedProgram
-	}
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return rel
-	}
-	return "." + string(filepath.Separator) + rel
 }
 
 func (m *Manager) sessionRuntime(sessionID string) (*sessionRecord, *runtimeRecord, error) {
@@ -1753,13 +1791,21 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 	// Adapter lifetime is owned by Manager.Close/StopRuntime. Binding the OS
 	// process to an HTTP request context would kill Delve as soon as the open
 	// request returns, leaving the debuggee orphaned and future DAP calls broken.
-	c := exec.Command(cmd.Name, cmd.Args...)
+	//
+	// adapter 命令（如 python3 -m debugpy.adapter / dlv dap）必须用补齐并叠加
+	// deployment runtime.env 后的 PATH 解析可执行：Go exec.Command 在构造时即用
+	// agent 自身 PATH 做 LookPath，之后设 c.Env 不会改变已选中的二进制，会导致
+	// 解析到缺少 debugpy 的系统 python3，adapter 起不来、DAP 连接被拒。
+	adapterEnv := execenv.Build(execenv.Options{WorkDir: cmd.WorkDir, Overrides: cmd.Env})
+	exe, lookErr := execenv.LookPath(cmd.Name, adapterEnv)
+	if lookErr != nil {
+		return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, lookErr)
+	}
+	c := exec.Command(exe, cmd.Args...)
 	if strings.TrimSpace(cmd.WorkDir) != "" {
 		c.Dir = strings.TrimSpace(cmd.WorkDir)
 	}
-	if len(cmd.Env) > 0 {
-		c.Env = append(c.Environ(), envPairs(cmd.Env)...)
-	}
+	c.Env = adapterEnv
 	if err := c.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, err)
@@ -1808,45 +1854,15 @@ func attachCommandHint(dep model.Deployment) string {
 }
 
 func debugDeploymentWorkDir(dep model.Deployment) string {
-	if dep.Runtime != nil && strings.TrimSpace(dep.Runtime.WorkingDir) != "" {
-		return strings.TrimSpace(dep.Runtime.WorkingDir)
-	}
-	return strings.TrimSpace(dep.WorkDir)
-}
-
-func inferProgramFromSimpleCommand(provider model.CodeDebugProvider, command string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) < 2 {
-		return "", false
-	}
-	if !commandExecutableMatchesProvider(provider, fields[0]) {
-		return "", false
-	}
-	for _, field := range fields {
-		if strings.ContainsAny(field, "|&;<>") {
-			return "", false
+	if dep.Runtime != nil {
+		if dep.Runtime.Type == model.RuntimeTypeLanguage && strings.TrimSpace(dep.Runtime.EffectiveCWD()) != "" {
+			return strings.TrimSpace(dep.Runtime.EffectiveCWD())
+		}
+		if strings.TrimSpace(dep.Runtime.WorkingDir) != "" {
+			return strings.TrimSpace(dep.Runtime.WorkingDir)
 		}
 	}
-	program := strings.TrimSpace(fields[1])
-	if program == "" || strings.HasPrefix(program, "-") {
-		return "", false
-	}
-	return program, true
-}
-
-func commandExecutableMatchesProvider(provider model.CodeDebugProvider, executable string) bool {
-	executable = strings.TrimSpace(executable)
-	if idx := strings.LastIndex(executable, "/"); idx >= 0 {
-		executable = executable[idx+1:]
-	}
-	switch provider {
-	case model.CodeDebugProviderPython:
-		return executable == "python" || executable == "python3"
-	case model.CodeDebugProviderNode:
-		return executable == "node"
-	default:
-		return false
-	}
+	return strings.TrimSpace(dep.WorkDir)
 }
 
 func reserveLocalPort() (int, error) {
@@ -1856,33 +1872,6 @@ func reserveLocalPort() (int, error) {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port, nil
-}
-
-func envPairs(env map[string]string) []string {
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, key+"="+env[key])
-	}
-	return out
-}
-
-func mergeEnv(base map[string]string, override map[string]string) map[string]string {
-	if len(base) == 0 && len(override) == 0 {
-		return nil
-	}
-	out := map[string]string{}
-	for key, value := range base {
-		out[key] = value
-	}
-	for key, value := range override {
-		out[key] = value
-	}
-	return out
 }
 
 func sessionStatus(record *sessionRecord) Session {

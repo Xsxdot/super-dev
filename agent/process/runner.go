@@ -81,10 +81,19 @@ func (r *Runner) Start() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	runEnv := execenv.Build(execenv.Options{WorkDir: r.cfg.WorkDir, Overrides: r.cfg.Env})
+
 	if r.cfg.PreRun != nil && len(r.cfg.PreRun.Argv) > 0 {
-		pre := exec.Command(r.cfg.PreRun.Argv[0], r.cfg.PreRun.Argv[1:]...)
+		// 用补齐/覆盖后的 PATH 解析可执行，避免 exec.Command 用 agent 自身 PATH 选错二进制。
+		preExe, err := execenv.LookPath(r.cfg.PreRun.Argv[0], runEnv)
+		if err != nil {
+			r.exitInfo = ExitInfo{Reason: ExitReasonStartFailed, ExitCode: -1, Error: err.Error(), StderrTail: r.stderrTail.tail()}
+			r.exited = true
+			return fmt.Errorf("pre-run failed: %w", err)
+		}
+		pre := exec.Command(preExe, r.cfg.PreRun.Argv[1:]...)
 		pre.Dir = r.cfg.WorkDir
-		pre.Env = execenv.Build(execenv.Options{WorkDir: r.cfg.WorkDir, Overrides: r.cfg.Env})
+		pre.Env = runEnv
 		if out, err := pre.CombinedOutput(); err != nil {
 			output := strings.TrimSpace(string(out))
 			r.exitInfo = ExitInfo{Reason: ExitReasonStartFailed, ExitCode: -1, Error: output, StderrTail: r.stderrTail.tail()}
@@ -95,12 +104,19 @@ func (r *Runner) Start() error {
 
 	var cmd *exec.Cmd
 	if len(r.cfg.Argv) > 0 {
-		cmd = exec.Command(r.cfg.Argv[0], r.cfg.Argv[1:]...)
+		// 同样用补齐/覆盖后的 PATH 解析主命令可执行（Go exec.Command 不会用 cmd.Env 的 PATH 做 LookPath）。
+		exe, err := execenv.LookPath(r.cfg.Argv[0], runEnv)
+		if err != nil {
+			r.exitInfo = ExitInfo{Reason: ExitReasonStartFailed, ExitCode: -1, Error: err.Error(), StderrTail: r.stderrTail.tail()}
+			r.exited = true
+			return err
+		}
+		cmd = exec.Command(exe, r.cfg.Argv[1:]...)
 	} else {
 		cmd = exec.Command("sh", "-c", r.cfg.Command)
 	}
 	cmd.Dir = r.cfg.WorkDir
-	cmd.Env = execenv.Build(execenv.Options{WorkDir: r.cfg.WorkDir, Overrides: r.cfg.Env})
+	cmd.Env = runEnv
 	// 独立进程组，Stop 时可 SIGKILL 整组（含 sh -c 拉起的子进程）
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 

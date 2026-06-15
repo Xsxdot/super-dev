@@ -55,6 +55,19 @@ func TestPythonProviderBuildsDebugpyAdapterCommand(t *testing.T) {
 	assert.Equal(t, []string{"-m", "debugpy.adapter", "--host", "127.0.0.1", "--port", "39002"}, cmd.Args)
 }
 
+func TestPythonProviderAdapterPropagatesEnv(t *testing.T) {
+	provider := NewPythonProvider("python3")
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort: 39003,
+		WorkingDir:  "/proj",
+		Env:         map[string]string{"PATH": "/proj/.venv/bin:/usr/bin"},
+	})
+	require.NoError(t, err)
+	// adapter 必须带上 deployment 的 env（含指向 venv 的 PATH），否则 debugpy.adapter
+	// 会用系统 python3（无 debugpy）启动失败。
+	assert.Equal(t, "/proj/.venv/bin:/usr/bin", cmd.Env["PATH"])
+}
+
 func TestNodeProviderAdapterCommandUsesBundledServer(t *testing.T) {
 	provider := NewNodeProvider("/data/js-debug/src/dapDebugServer.js")
 	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41020, WorkingDir: "/repo"})
@@ -75,26 +88,26 @@ func TestProviderAttachCapability(t *testing.T) {
 	if NewGoProvider().AttachCapability() != AttachModePID {
 		t.Fatal("Go should support pid-attach")
 	}
-	if NewPythonProvider("python3").AttachCapability() != AttachModeListen {
-		t.Fatal("Python should support listen attach")
+	if NewPythonProvider("python3").AttachCapability() != AttachModeDirectDAP {
+		t.Fatal("Python debugpy --listen exposes DAP directly; should be direct-dap")
 	}
 	if NewNodeProvider("/data/js-debug/src/dapDebugServer.js").AttachCapability() != AttachModeListen {
 		t.Fatal("Node should support listen attach")
 	}
 }
 
-func TestPythonProviderSupportsListenAttach(t *testing.T) {
-	assert.Equal(t, AttachModeListen, NewPythonProvider("python").AttachCapability())
+func TestPythonProviderUsesDirectDAP(t *testing.T) {
+	assert.Equal(t, AttachModeDirectDAP, NewPythonProvider("python").AttachCapability())
 }
 
-func TestPythonAttachArgumentsConnectsPort(t *testing.T) {
+func TestPythonAttachArgumentsAreConnectless(t *testing.T) {
+	// 直连 debugpy --listen 端口时，DAP attach 不需要 connect 字段
+	// （我们已经连到了它的 DAP 服务）；带 connect 反而触发 adapter 角色错位、attach 超时。
 	provider := NewPythonProvider("python")
-	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo", AdapterPort: 5678}, 0)
+	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo", TargetPort: 5678}, 0)
 	require.NotNil(t, args)
-	conn, _ := args["connect"].(map[string]any)
-	require.NotNil(t, conn)
-	assert.Equal(t, "127.0.0.1", conn["host"])
-	assert.Equal(t, 5678, conn["port"])
+	_, hasConnect := args["connect"]
+	assert.False(t, hasConnect, "direct-dap attach must not include connect")
 	assert.Equal(t, "/repo", args["cwd"])
 }
 

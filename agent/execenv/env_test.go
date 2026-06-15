@@ -85,3 +85,32 @@ func envKeyCount(env []string, key string) int {
 	}
 	return count
 }
+
+func TestLookPathResolvesAgainstBuiltEnvPATH(t *testing.T) {
+	// 一个只存在于 override PATH 里的可执行，不在 agent 自身 PATH 中。
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "python")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
+
+	env := BuildFrom([]string{"PATH=/nonexistent-system-only"}, Options{Overrides: map[string]string{"PATH": dir}})
+	got, err := LookPath("python", env)
+	require.NoError(t, err)
+	resolved, _ := filepath.EvalSymlinks(got)
+	want, _ := filepath.EvalSymlinks(bin)
+	assert.Equal(t, want, resolved)
+}
+
+func TestLookPathReturnsErrorWhenAbsent(t *testing.T) {
+	env := BuildFrom([]string{"PATH=/nonexistent-system-only"}, Options{})
+	_, err := LookPath("definitely-not-a-real-binary-xyz", env)
+	assert.Error(t, err)
+}
+
+func TestLookPathPassesThroughPathWithSlash(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tool")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
+	got, err := LookPath(bin, BuildFrom([]string{"PATH=/usr/bin"}, Options{}))
+	require.NoError(t, err)
+	assert.Equal(t, bin, got)
+}

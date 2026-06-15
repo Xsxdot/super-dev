@@ -77,6 +77,47 @@ func BuildFrom(base []string, opts Options) []string {
 	return out
 }
 
+// LookPath 在给定环境（Build/BuildFrom 的产物）的 PATH 中解析可执行文件，返回绝对路径。
+//
+// 参数：
+//   - file: 可执行名（如 "python"）或带路径分隔符的路径
+//   - env: Build/BuildFrom 返回的环境变量列表，其 PATH 决定查找范围
+//
+// 返回：
+//   - 解析后的可执行路径与错误
+//
+// 注意：
+//   - 解决 Go os/exec 的陷阱：exec.Command 在构造时即用「当前进程 PATH」做 LookPath，
+//     之后再设 cmd.Env 不会改变已选中的二进制。子进程若依赖 override/补齐后的 PATH
+//     （如指向 venv 的 python），必须先用本函数解析出绝对路径再交给 exec.Command。
+//   - file 含路径分隔符时按原样返回（沿用 exec.LookPath 语义），由调用方/OS 校验可执行性。
+func LookPath(file string, env []string) (string, error) {
+	if strings.ContainsRune(file, os.PathListSeparator) || strings.ContainsAny(file, "/") {
+		return file, nil
+	}
+	parsed, _ := parseEnv(env)
+	pathValue := parsed["PATH"]
+	if strings.TrimSpace(pathValue) == "" {
+		pathValue = fallbackSystemPath
+	}
+	for _, dir := range splitPath(pathValue) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, file)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", &execNotFoundError{file: file}
+}
+
+type execNotFoundError struct{ file string }
+
+func (e *execNotFoundError) Error() string {
+	return "executable file not found in $PATH: " + e.file
+}
+
 func parseEnv(items []string) (map[string]string, []string) {
 	env := make(map[string]string, len(items))
 	order := make([]string, 0, len(items))

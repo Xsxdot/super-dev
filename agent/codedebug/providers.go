@@ -118,6 +118,7 @@ func (p PythonProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error)
 		Provider: model.CodeDebugProviderPython,
 		Name:     p.Python,
 		Args:     []string{"-m", "debugpy.adapter", "--host", "127.0.0.1", "--port", strconv.Itoa(cfg.AdapterPort)},
+		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
 	}, nil
 }
@@ -134,18 +135,19 @@ func (PythonProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-// AttachCapability 返回 Python 的附加档位：debugpy 进程已预埋 listen 端口后直连。
-func (PythonProvider) AttachCapability() AttachMode { return AttachModeListen }
+// AttachCapability 返回 Python 的附加档位：debugpy `--listen` 端口本身即完整 DAP 服务，
+// DAP 客户端直连该端口即可，无需另起 debugpy.adapter 进程（否则 adapter 与服务角色错位、
+// attach 超时 "Timed out waiting for debug server to connect"）。
+func (PythonProvider) AttachCapability() AttachMode { return AttachModeDirectDAP }
 
-// AttachArguments 构造 debugpy attach 请求参数：connect 到进程自带的 --listen 端口。
+// AttachArguments 构造 debugpy attach 请求参数。
+//
+// 注意：
+//   - 直连 `--listen` 端口时已经连到了 debugpy 的 DAP 服务本身，attach 不带 connect；
+//     带 connect 会让 debugpy 以为还要再连一个远端 server，导致握手超时。
 func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
-	targetPort := cfg.TargetPort
-	if targetPort == 0 {
-		targetPort = cfg.AdapterPort
-	}
 	return map[string]any{
-		"connect": map[string]any{"host": "127.0.0.1", "port": targetPort},
-		"cwd":     cfg.WorkingDir,
+		"cwd": cfg.WorkingDir,
 	}
 }
 

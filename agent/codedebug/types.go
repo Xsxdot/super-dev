@@ -133,7 +133,7 @@ func adapterRemediationHint(code string, provider model.CodeDebugProvider) strin
 	}
 }
 
-// Target 描述一个本机 command deployment 的调试可用性。
+// Target 描述一个本机 language runtime deployment 的调试可用性。
 type Target struct {
 	ProjectID         string                  `json:"project_id"`
 	ProjectName       string                  `json:"project_name"`
@@ -184,7 +184,11 @@ const (
 	// AttachModePID 支持按进程 PID 直接附加（零预埋）。
 	AttachModePID AttachMode = "pid-attach"
 	// AttachModeListen 需 debug-ready 启动预埋监听端口后附加（二期）。
+	// 监听端口是「待 adapter 连接的目标」（如 Node inspector），需先起独立 adapter 再连。
 	AttachModeListen AttachMode = "listen-attach"
+	// AttachModeDirectDAP 表示被调试进程预埋的监听端口本身就是一个完整 DAP 服务
+	// （如 Python `debugpy --listen`），DAP 客户端直连该端口即可，无需另起 adapter 进程。
+	AttachModeDirectDAP AttachMode = "direct-dap"
 )
 
 // RuntimeState 描述 deployment 级 Debug Runtime 的当前状态。

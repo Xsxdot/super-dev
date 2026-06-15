@@ -66,6 +66,75 @@ func TestManagerOpenSendsConfigurationDoneAfterLaunch(t *testing.T) {
 	assert.Equal(t, 1, dap.configurationDoneCalls)
 }
 
+func TestManagerOpenCompletesWhenLaunchWaitsForConfigurationDone(t *testing.T) {
+	dap := &fakeDAP{
+		launchWaitsForConfigurationDone: true,
+		emitInitializedOnLaunch:         true,
+	}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 39001, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := mgr.Open(ctx, project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, dap.configurationDoneCalls)
+}
+
+func TestManagerOpenUsesJSDebugChildSessionFromLaunchStartDebugging(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "server.js"), []byte("let n = 0\nsetInterval(() => { n += 1 }, 500)\n"), 0o644))
+	rootDAP := &fakeDAP{
+		launchWaitsForConfigurationDone: true,
+		emitInitializedOnLaunch:         true,
+		emitStartDebuggingAfterLaunch:   true,
+	}
+	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	dialCount := 0
+	mgr := NewManager(ManagerOptions{
+		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9006, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41012, nil },
+	})
+	project, service, dep := managerTestTarget(root)
+	service.Language = model.LanguageNode
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "server.js"},
+	}
+	service.Deployments = []model.Deployment{dep}
+	project.Services = []model.Service{service}
+
+	_, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, dialCount)
+	assert.True(t, rootDAP.respondedStartDebugging)
+	assert.Equal(t, "pending-node-target", childDAP.launchPendingTargetID)
+	mgr.mu.Lock()
+	record := mgr.runtimes[dep.ID]
+	mgr.mu.Unlock()
+	require.NotNil(t, record)
+	assert.Same(t, childDAP, record.dap)
+}
+
 func TestManagerOpenConsumesInitialStopWhenStopOnEntry(t *testing.T) {
 	dap := &fakeDAP{}
 	mgr := NewManager(ManagerOptions{
@@ -390,7 +459,7 @@ func TestResolveLeaseAttachesRunningService(t *testing.T) {
 	if !ok || rt.Origin != "attached" {
 		t.Fatalf("expected attached runtime after ResolveLease, got ok=%v origin=%q", ok, rt.Origin)
 	}
-	assert.Equal(t, 4321, rt.ProcessID)
+	assert.Equal(t, 100, rt.ProcessID)
 }
 
 func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
@@ -423,8 +492,13 @@ func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	service.Language = model.LanguageNode
-	dep.Command = "pnpm worker"
-	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js", AdapterCommand: "node-debug-adapter"}
+	dep.Command = ""
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"package_manager": "pnpm", "script": "worker"},
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{AdapterCommand: "node-debug-adapter"}
 
 	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
 
@@ -585,8 +659,13 @@ func TestResolveLeaseNodeParsesInspectorPortAfterSignal(t *testing.T) {
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	service.Language = model.LanguageNode
-	dep.Command = "node server.js"
-	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js", AdapterCommand: "node-debug-adapter"}
+	dep.Command = ""
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "server.js"},
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{AdapterCommand: "node-debug-adapter"}
 
 	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
 
@@ -608,8 +687,13 @@ func TestResolveLeaseNodeNoInspectorPortReportsError(t *testing.T) {
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	service.Language = model.LanguageNode
-	dep.Command = "node server.js"
-	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js"}
+	dep.Command = ""
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "server.js"},
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{}
 
 	_, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
 	if !errors.Is(err, ErrAttachTargetUnresolved) {
@@ -620,11 +704,17 @@ func TestResolveLeaseNodeNoInspectorPortReportsError(t *testing.T) {
 func TestResolveLeasePythonConnectsListenPortFromArgv(t *testing.T) {
 	dap := &fakeDAP{}
 	signalCalled := false
+	adapterLaunched := false
+	var dialAddr string
 	mgr := NewManager(ManagerOptions{
 		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			adapterLaunched = true
 			return AdapterProcess{PID: 9003, Close: func() error { return nil }}, nil
 		},
-		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		Dial: func(_ context.Context, addr string, _ time.Duration) (DAP, error) {
+			dialAddr = addr
+			return dap, nil
+		},
 		ReservePort: func() (int, error) { return 41011, nil },
 		RunningProcess: func(deploymentID string) (int, int, bool) {
 			return 100, 100, deploymentID == "dep-api-dev"
@@ -637,14 +727,22 @@ func TestResolveLeasePythonConnectsListenPortFromArgv(t *testing.T) {
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	service.Language = model.LanguagePython
-	dep.CodeDebug = &model.CodeDebugConfig{Program: "app.py"}
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "app.py"},
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{}
 
 	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
 
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.False(t, signalCalled, "prearm should connect to listen port, not signal")
-	assert.Equal(t, 5678, dap.attachConnectPort)
+	// debugpy --listen 端口本身即 DAP 服务：直连该端口，不另起 adapter，attach 不带 connect。
+	assert.False(t, adapterLaunched, "python prearm must not spawn a separate adapter")
+	assert.Equal(t, "127.0.0.1:5678", dialAddr, "must dial the debuggee listen port directly")
+	assert.Equal(t, 0, dap.attachConnectPort, "direct-dap attach must not carry connect port")
 }
 
 func TestResolveLeasePythonMissingListenPortReportsError(t *testing.T) {
@@ -741,11 +839,17 @@ func TestManagerSignalReadinessSendsSignalBeforeAttach(t *testing.T) {
 func TestManagerPrearmReadinessConnectsPortNoSignal(t *testing.T) {
 	dap := &fakeDAP{}
 	signalCalled := false
+	adapterLaunched := false
+	var dialAddr string
 	mgr := NewManager(ManagerOptions{
 		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			adapterLaunched = true
 			return AdapterProcess{PID: 9101, Close: func() error { return nil }}, nil
 		},
-		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		Dial: func(_ context.Context, addr string, _ time.Duration) (DAP, error) {
+			dialAddr = addr
+			return dap, nil
+		},
 		ReservePort: func() (int, error) { return 41008, nil },
 		SignalProcess: func(int, string) error {
 			signalCalled = true
@@ -766,7 +870,10 @@ func TestManagerPrearmReadinessConnectsPortNoSignal(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, signalCalled, "prearm should connect to listen port, not signal")
-	assert.Equal(t, 5678, dap.attachConnectPort)
+	// 直连 debugpy --listen 端口，不另起 adapter，attach 不带 connect。
+	assert.False(t, adapterLaunched, "python prearm must not spawn a separate adapter")
+	assert.Equal(t, "127.0.0.1:5678", dialAddr, "must dial the debuggee listen port directly")
+	assert.Equal(t, 0, dap.attachConnectPort, "direct-dap attach must not carry connect port")
 }
 
 func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
@@ -1184,82 +1291,60 @@ func TestManagerOpenWrapsDialFailureAsStableConnectionError(t *testing.T) {
 	assert.True(t, closed)
 }
 
-func TestManagerLaunchConfigInfersPythonProgramFromSimpleCommand(t *testing.T) {
+func TestManagerLaunchConfigRejectsLegacyPythonCommandRuntime(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager(ManagerOptions{})
 	project, service, dep := managerTestTarget(root)
-	dep.Command = "python ./app.py --port 8000"
 	service.Language = model.LanguagePython
-	dep.CodeDebug = &model.CodeDebugConfig{}
+	dep.Runtime = &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "python ./app.py --port 8000"}
 
-	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	_, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "app.py"), cfg.Program)
+	require.ErrorIs(t, err, ErrTargetUnsupported)
 }
 
-func TestManagerLaunchConfigInfersPythonProgramRelativeToWorkingDir(t *testing.T) {
+func TestManagerLaunchConfigRejectsLegacyCommandWorkingDir(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager(ManagerOptions{})
 	project, service, dep := managerTestTarget(root)
-	dep.Command = "python app.py --port 8000"
-	dep.WorkDir = filepath.Join(root, "server")
 	service.Language = model.LanguagePython
-	dep.CodeDebug = &model.CodeDebugConfig{}
-
-	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
-
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "server", "app.py"), cfg.Program)
-}
-
-func TestManagerLaunchConfigInfersNodeProgramFromSimpleCommand(t *testing.T) {
-	root := t.TempDir()
-	mgr := NewManager(ManagerOptions{})
-	project, service, dep := managerTestTarget(root)
-	dep.Command = "node server.js --watch"
-	service.Language = model.LanguageNode
-	dep.CodeDebug = &model.CodeDebugConfig{
-		AdapterCommand: "node-debug-adapter",
+	dep.Runtime = &model.RuntimeConfig{
+		Type:       model.RuntimeTypeCommand,
+		Command:    "python app.py --port 8000",
+		WorkingDir: filepath.Join(root, "server"),
 	}
 
-	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	_, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "server.js"), cfg.Program)
+	require.ErrorIs(t, err, ErrTargetUnsupported)
 }
 
-func TestManagerLaunchConfigUsesWorkingDirRelativeGoProgram(t *testing.T) {
+func TestManagerLaunchConfigRejectsLegacyNodeCommandRuntime(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager(ManagerOptions{})
 	project, service, dep := managerTestTarget(root)
-	dep.WorkDir = filepath.Join(root, "server")
+	service.Language = model.LanguageNode
+	dep.Runtime = &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "node server.js --watch"}
+	dep.CodeDebug = &model.CodeDebugConfig{AdapterCommand: "node-debug-adapter"}
+
+	_, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.ErrorIs(t, err, ErrTargetUnsupported)
+}
+
+func TestManagerLaunchConfigRejectsLegacyGoCommandRuntime(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(ManagerOptions{})
+	project, service, dep := managerTestTarget(root)
 	dep.Runtime = &model.RuntimeConfig{
 		Type:       model.RuntimeTypeCommand,
 		Command:    "go run ./cmd/server",
-		WorkingDir: dep.WorkDir,
-	}
-	dep.CodeDebug = &model.CodeDebugConfig{
-		Program: "server/cmd/server",
+		WorkingDir: filepath.Join(root, "server"),
 	}
 
-	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
+	_, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 
-	require.NoError(t, err)
-	assert.Equal(t, "./cmd/server", cfg.Program)
-	assert.Equal(t, filepath.Join(root, "server"), cfg.WorkingDir)
-}
-
-func TestManagerLaunchConfigKeepsDefaultGoProgramRelative(t *testing.T) {
-	root := t.TempDir()
-	mgr := NewManager(ManagerOptions{})
-	project, service, dep := managerTestTarget(root)
-	dep.CodeDebug.Program = ""
-
-	cfg, _, err := mgr.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
-
-	require.NoError(t, err)
-	assert.Equal(t, ".", cfg.Program)
+	require.ErrorIs(t, err, ErrTargetUnsupported)
 }
 
 func TestLaunchConfigUsesLanguageRuntimePlan(t *testing.T) {
@@ -1277,11 +1362,9 @@ func TestLaunchConfigUsesLanguageRuntimePlan(t *testing.T) {
 			Env:    map[string]string{"ENABLE": "true"},
 			Config: map[string]any{"program": "./cmd/server", "program_args": []any{"--port", "8080"}},
 		},
-		// 旧 override 字段即使被手写进配置也必须被忽略（同源原则）
+		// code_debug 只保留调试策略和 adapter override，启动入口由 runtime.config 提供。
 		CodeDebug: &model.CodeDebugConfig{
-			Program:    "./wrong",
-			WorkingDir: "./wrong-dir",
-			EnvVars:    map[string]string{"WRONG": "1"},
+			AdapterCommand: "dlv",
 		},
 	}
 
@@ -1293,6 +1376,7 @@ func TestLaunchConfigUsesLanguageRuntimePlan(t *testing.T) {
 	assert.Equal(t, []string{"--port", "8080"}, cfg.Args)
 	assert.Equal(t, "/repo/server", cfg.WorkingDir)
 	assert.Equal(t, map[string]string{"ENABLE": "true"}, cfg.Env)
+	assert.Equal(t, "dlv", cfg.AdapterCommand)
 }
 
 func TestAttachCommandHintLanguageRuntimeIsDirect(t *testing.T) {
@@ -1324,12 +1408,16 @@ func openManagerTestSession(t *testing.T, root string, dap DAP) (*Manager, Sessi
 
 func managerTestTarget(root string) (model.Project, model.Service, model.Deployment) {
 	dep := model.Deployment{
-		ID:        "dep-api-dev",
-		EnvName:   "dev",
-		Location:  model.LocationLocal,
-		Command:   "go run ./cmd/api",
-		WorkDir:   root,
-		CodeDebug: &model.CodeDebugConfig{Program: "."},
+		ID:          "dep-api-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "."},
+		},
+		CodeDebug: &model.CodeDebugConfig{},
 	}
 	service := model.Service{ID: "svc-api", Name: "api", Language: model.LanguageGo, Deployments: []model.Deployment{dep}}
 	project := model.Project{ID: "p1", Name: "demo", RootPath: root, Services: []model.Service{service}}
@@ -1362,6 +1450,11 @@ type fakeDAP struct {
 	attachProcessID                 int
 	attachConnectPort               int
 	attachPendingTargetID           string
+	launchCalls                     int
+	launchPendingTargetID           string
+	launchWaitsForConfigurationDone bool
+	emitInitializedOnLaunch         bool
+	emitStartDebuggingAfterLaunch   bool
 	attachWaitsForConfigurationDone bool
 	emitInitializedOnAttach         bool
 	emitStartDebuggingAfterAttach   bool
@@ -1374,7 +1467,35 @@ type fakeDAP struct {
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
-func (f *fakeDAP) Launch(context.Context, map[string]any) error       { return nil }
+func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
+	f.mu.Lock()
+	f.launchCalls++
+	if pendingTargetID, ok := args["__pendingTargetId"].(string); ok {
+		f.launchPendingTargetID = pendingTargetID
+	}
+	waitForConfigurationDone := f.launchWaitsForConfigurationDone
+	if waitForConfigurationDone && f.configurationDoneCh == nil {
+		f.configurationDoneCh = make(chan struct{})
+	}
+	ch := f.configurationDoneCh
+	emitInitialized := f.emitInitializedOnLaunch
+	emitStartDebugging := f.emitStartDebuggingAfterLaunch
+	f.mu.Unlock()
+	if emitInitialized {
+		f.emit(map[string]any{"event": "initialized", "body": map[string]any{}})
+	}
+	if waitForConfigurationDone {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if emitStartDebugging {
+		f.emitStartDebuggingRequest("launch")
+	}
+	return nil
+}
 func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 	f.mu.Lock()
 	f.attachCalls++
@@ -1411,19 +1532,7 @@ func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 		}
 	}
 	if emitStartDebugging {
-		f.emitRequest(map[string]any{
-			"type":    "request",
-			"seq":     7,
-			"command": "startDebugging",
-			"arguments": map[string]any{
-				"request": "attach",
-				"configuration": map[string]any{
-					"type":              "pwa-node",
-					"name":              "Remote Process [0]",
-					"__pendingTargetId": "pending-node-target",
-				},
-			},
-		})
+		f.emitStartDebuggingRequest("attach")
 	}
 	return nil
 }
@@ -1599,6 +1708,25 @@ func (f *fakeDAP) emitRequest(request map[string]any) {
 	for _, sub := range f.requestSubs {
 		sub <- request
 	}
+}
+
+func (f *fakeDAP) emitStartDebuggingRequest(request string) {
+	if request == "" {
+		request = "attach"
+	}
+	f.emitRequest(map[string]any{
+		"type":    "request",
+		"seq":     7,
+		"command": "startDebugging",
+		"arguments": map[string]any{
+			"request": request,
+			"configuration": map[string]any{
+				"type":              "pwa-node",
+				"name":              "Remote Process [0]",
+				"__pendingTargetId": "pending-node-target",
+			},
+		},
+	})
 }
 
 func (f *fakeDAP) subscriberCount() int {
