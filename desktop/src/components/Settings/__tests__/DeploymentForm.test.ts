@@ -342,6 +342,45 @@ describe('DeploymentForm', () => {
     })
   })
 
+  it('renders escape-hatch fields and writes runtime_executable', async () => {
+    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: { ...languageDep(), runtime: { type: 'language', config: {} } },
+        hosts: [],
+        serviceLanguage: 'node',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+    await flushPromises()
+
+    const executable = wrapper.find('[data-test="dep-escape-executable"]')
+    expect(executable.exists()).toBe(true)
+
+    await executable.setValue('pnpm')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    const last = emitted![emitted!.length - 1][0] as Deployment
+    expect(last.runtime?.config?.runtime_executable).toBe('pnpm')
+  })
+
+  it('shows override notice when escape hatch is set', async () => {
+    vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: { ...languageDep(), runtime: { type: 'language', config: { runtime_executable: 'make' } } },
+        hosts: [],
+        serviceLanguage: 'node',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="dep-escape-override-notice"]').exists()).toBe(true)
+  })
+
   it('offers language runtime for managed services with a known language', async () => {
     vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
 

@@ -305,6 +305,37 @@ function setLanguageConfigValue(key: string, value: unknown) {
   patchRuntime({ type: 'language', config: { ...(runtime.value.config ?? {}), [key]: value } })
 }
 
+const escapeExecutable = computed(() => String((runtime.value.config ?? {}).runtime_executable ?? ''))
+const escapeArgs = computed(() => {
+  const value = (runtime.value.config ?? {}).runtime_args
+  return Array.isArray(value) ? value.map((item: unknown) => String(item)) : []
+})
+const hasEscapeHatch = computed(() => escapeExecutable.value.trim() !== '')
+
+function setEscapeExecutable(value: string) {
+  setLanguageConfigValue('runtime_executable', value)
+}
+
+function setEscapeArgs(args: string[]) {
+  setLanguageConfigValue('runtime_args', args)
+}
+
+function addEscapeArg() {
+  setEscapeArgs([...escapeArgs.value, ''])
+}
+
+function updateEscapeArg(index: number, value: string) {
+  const next = [...escapeArgs.value]
+  next[index] = value
+  setEscapeArgs(next)
+}
+
+function removeEscapeArg(index: number) {
+  const next = [...escapeArgs.value]
+  next.splice(index, 1)
+  setEscapeArgs(next)
+}
+
 function setLanguageCWD(cwd: string) {
   patchRuntime({ type: 'language', cwd })
 }
@@ -519,6 +550,42 @@ watch(
             @update:value="setLanguageConfigValue(field.key, $event)"
           />
         </div>
+
+        <details class="dep-advanced" data-test="dep-escape-hatch">
+          <summary>{{ t('settings.deployment.escapeHatchTitle') }}</summary>
+          <div class="dep-help">{{ t('settings.deployment.escapeHatchHint') }}</div>
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.escapeHatchExecutable') }}</label>
+            <input
+              class="settings-input dep-input"
+              data-test="dep-escape-executable"
+              :value="escapeExecutable"
+              @input="setEscapeExecutable(($event.target as HTMLInputElement).value)"
+            />
+          </div>
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.escapeHatchArgs') }}</label>
+            <div class="schema-array">
+              <div v-for="(item, index) in escapeArgs" :key="index" class="schema-array-row">
+                <input
+                  class="settings-input dep-input"
+                  :data-test="`dep-escape-arg-${index}`"
+                  :value="item"
+                  @input="updateEscapeArg(index, ($event.target as HTMLInputElement).value)"
+                />
+                <button type="button" class="settings-btn settings-btn-danger" :data-test="`dep-escape-arg-remove-${index}`" @click="removeEscapeArg(index)">
+                  {{ t('common.remove') }}
+                </button>
+              </div>
+              <button type="button" class="settings-btn settings-btn-secondary" data-test="dep-escape-arg-add" @click="addEscapeArg">
+                {{ t('common.add') }}
+              </button>
+            </div>
+          </div>
+          <div v-if="hasEscapeHatch" class="dep-warning" data-test="dep-escape-override-notice">
+            {{ t('settings.deployment.escapeHatchOverrideNotice') }}
+          </div>
+        </details>
       </template>
 
       <div v-else-if="runtime.type === 'systemd'" class="settings-field dep-field">
