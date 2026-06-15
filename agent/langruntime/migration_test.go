@@ -51,3 +51,37 @@ func TestPreviewCommandMigrationReportsEnvFile(t *testing.T) {
 	require.NotEmpty(t, preview.Diagnostics)
 	assert.Equal(t, "env_file_requires_apply_flow", preview.Diagnostics[0].Code)
 }
+
+func TestPreviewNodeMigrationPlainNode(t *testing.T) {
+	preview := langruntime.PreviewCommandMigration(model.LanguageNode, model.RuntimeConfig{
+		Type: model.RuntimeTypeCommand, Command: "node src/index.js", WorkingDir: "./web",
+	})
+	require.True(t, preview.Convertible)
+	assert.Equal(t, "src/index.js", preview.Runtime.Config["program"])
+}
+
+func TestPreviewNodeMigrationPnpmUsesEscapeHatch(t *testing.T) {
+	preview := langruntime.PreviewCommandMigration(model.LanguageNode, model.RuntimeConfig{
+		Type: model.RuntimeTypeCommand, Command: "pnpm worker", WorkingDir: "./worker",
+	})
+	require.True(t, preview.Convertible)
+	// 两层模型：pnpm 不是 program，进第二层逃生口。
+	assert.Equal(t, "pnpm", preview.Runtime.Config["runtime_executable"])
+	assert.Equal(t, []string{"worker"}, preview.Runtime.Config["runtime_args"])
+}
+
+func TestPreviewPythonMigrationProgram(t *testing.T) {
+	preview := langruntime.PreviewCommandMigration(model.LanguagePython, model.RuntimeConfig{
+		Type: model.RuntimeTypeCommand, Command: "python app.py",
+	})
+	require.True(t, preview.Convertible)
+	assert.Equal(t, "app.py", preview.Runtime.Config["program"])
+}
+
+func TestPreviewPythonMigrationModule(t *testing.T) {
+	preview := langruntime.PreviewCommandMigration(model.LanguagePython, model.RuntimeConfig{
+		Type: model.RuntimeTypeCommand, Command: "python -m myapp.server",
+	})
+	require.True(t, preview.Convertible)
+	assert.Equal(t, "myapp.server", preview.Runtime.Config["module"])
+}

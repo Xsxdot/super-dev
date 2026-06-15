@@ -39,6 +39,10 @@ func PreviewCommandMigration(language model.ServiceLanguage, rt model.RuntimeCon
 	switch language {
 	case model.LanguageGo:
 		return previewGoCommandMigration(rt)
+	case model.LanguageNode:
+		return previewNodeCommandMigration(rt)
+	case model.LanguagePython:
+		return previewPythonCommandMigration(rt)
 	default:
 		return MigrationPreview{Runtime: rt, Diagnostics: []Diagnostic{{
 			Severity: SeverityInfo, Field: "language", Code: "language_migration_unsupported",
@@ -58,6 +62,67 @@ func previewGoCommandMigration(rt model.RuntimeConfig) MigrationPreview {
 	config := map[string]any{"program": fields[2]}
 	if len(fields) > 3 {
 		config["program_args"] = append([]string{}, fields[3:]...)
+	}
+	return MigrationPreview{
+		Convertible: true,
+		Runtime: model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    rt.WorkingDir,
+			Env:    mergeStringMaps(rt.EnvVars, env),
+			Config: config,
+		},
+	}
+}
+
+func previewNodeCommandMigration(rt model.RuntimeConfig) MigrationPreview {
+	env, fields := splitInlineEnvFields(strings.Fields(strings.TrimSpace(rt.Command)))
+	if len(fields) == 0 {
+		return unconvertible(rt, "command", "node_command_empty", "empty command")
+	}
+	base := commandBaseName(fields[0])
+	config := map[string]any{}
+	if base == "node" && len(fields) >= 2 {
+		config["program"] = fields[1]
+		if len(fields) > 2 {
+			config["program_args"] = append([]string{}, fields[2:]...)
+		}
+	} else {
+		// Node 生态常见 pnpm/npm/yarn 包裹启动；保留 runner 语义进入第二层逃生口。
+		config[ConfigKeyRuntimeExecutable] = base
+		if len(fields) > 1 {
+			config[ConfigKeyRuntimeArgs] = append([]string{}, fields[1:]...)
+		}
+	}
+	return MigrationPreview{
+		Convertible: true,
+		Runtime: model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    rt.WorkingDir,
+			Env:    mergeStringMaps(rt.EnvVars, env),
+			Config: config,
+		},
+	}
+}
+
+func previewPythonCommandMigration(rt model.RuntimeConfig) MigrationPreview {
+	env, fields := splitInlineEnvFields(strings.Fields(strings.TrimSpace(rt.Command)))
+	if len(fields) < 2 || !isPythonExecutable(fields[0]) {
+		return unconvertible(rt, "command", "python_command_unsupported", "only python <file> or python -m <module> can be converted")
+	}
+	config := map[string]any{}
+	if fields[1] == "-m" {
+		if len(fields) < 3 {
+			return unconvertible(rt, "command", "python_module_missing", "python -m requires a module name")
+		}
+		config["module"] = fields[2]
+		if len(fields) > 3 {
+			config["program_args"] = append([]string{}, fields[3:]...)
+		}
+	} else {
+		config["program"] = fields[1]
+		if len(fields) > 2 {
+			config["program_args"] = append([]string{}, fields[2:]...)
+		}
 	}
 	return MigrationPreview{
 		Convertible: true,
@@ -94,6 +159,24 @@ func containsShellFeature(command string) bool {
 		}
 	}
 	return false
+}
+
+func commandBaseName(command string) string {
+	if idx := strings.LastIndex(command, "/"); idx >= 0 {
+		return command[idx+1:]
+	}
+	return command
+}
+
+func isPythonExecutable(command string) bool {
+	base := commandBaseName(command)
+	return base == "python" || base == "python3" || strings.HasPrefix(base, "python3.")
+}
+
+func unconvertible(rt model.RuntimeConfig, field, code, message string) MigrationPreview {
+	return MigrationPreview{Runtime: rt, Diagnostics: []Diagnostic{{
+		Severity: SeverityWarning, Field: field, Code: code, Message: message,
+	}}}
 }
 
 func mergeStringMaps(a, b map[string]string) map[string]string {
