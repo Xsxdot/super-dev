@@ -148,9 +148,27 @@ func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Executio
 	program := StringValue(cfg.Config["program"])
 	nodeArgs := StringSliceValue(cfg.Config["node_args"])
 	programArgs := StringSliceValue(cfg.Config["program_args"])
+	script := StringValue(cfg.Config["script"])
+	packageManager := StringValue(cfg.Config["package_manager"])
+	if packageManager == "" {
+		packageManager = "pnpm"
+	}
 
 	switch input.Intent {
 	case IntentStartDev, IntentStartNormal:
+		if script != "" {
+			// 第一层 · script 主路径：<pm> run <script>，真正的 node 是子进程，
+			// debug-ready 走 Phase C 已实现并 smoke 过的 pnpm 子进程解析路径。
+			args := []string{"run", script}
+			return ExecutionPlan{
+				Intent:     input.Intent,
+				WorkingDir: cfg.CWD,
+				Env:        env,
+				Command:    &CommandSpec{Executable: packageManager, Args: args},
+				Debugger:   debugger,
+				Preview:    PreviewCommand(env, packageManager, args...),
+			}, nil, nil
+		}
 		// node 参数必须位于入口文件之前，否则会被业务程序当成普通参数。
 		args := append([]string{}, nodeArgs...)
 		args = append(args, program)

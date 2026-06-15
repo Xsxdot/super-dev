@@ -88,6 +88,44 @@ func TestNodeBuildPlanStartDevPlainNode(t *testing.T) {
 	assert.Equal(t, "SIGUSR1", plan.Debugger.Signal)
 }
 
+func TestNodeBuildPlanScriptStartDev(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/app", Config: map[string]any{
+		"package_manager": "pnpm",
+		"script":          "dev",
+	}}
+	plan, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg,
+	})
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	require.NotNil(t, plan.Command)
+	assert.Equal(t, "pnpm", plan.Command.Executable)
+	assert.Equal(t, []string{"run", "dev"}, plan.Command.Args)
+}
+
+func TestNodeBuildPlanScriptDefaultsPnpm(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/app", Config: map[string]any{"script": "dev"}}
+	plan, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg,
+	})
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	require.NotNil(t, plan.Command)
+	assert.Equal(t, "pnpm", plan.Command.Executable)
+}
+
+func TestNodeBuildPlanProgramStillWorks(t *testing.T) {
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/app", Config: map[string]any{"program": "src/index.js"}}
+	plan, diagnostics, err := langruntime.NewNodeProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg,
+	})
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	require.NotNil(t, plan.Command)
+	assert.Equal(t, "node", plan.Command.Executable)
+	assert.Equal(t, []string{"src/index.js"}, plan.Command.Args)
+}
+
 func TestNodeBuildPlanEscapeHatchPnpm(t *testing.T) {
 	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{
 		"runtime_executable": "pnpm", "runtime_args": []any{"worker"},
