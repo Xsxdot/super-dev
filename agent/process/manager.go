@@ -290,6 +290,18 @@ func (m *Manager) DeploymentArgv(deploymentID string) []string {
 	return runner.Argv()
 }
 
+// DeploymentStderrTail 返回 deployment 进程最近的 stderr 行（用于运行时就绪信号解析）；
+// 未运行时返回 nil。
+func (m *Manager) DeploymentStderrTail(deploymentID string) []string {
+	m.mu.Lock()
+	runner, ok := m.runners[deploymentID]
+	m.mu.Unlock()
+	if !ok || runner == nil {
+		return nil
+	}
+	return runner.StderrTail()
+}
+
 // StartProcess 以指定 id 为键启动一个进程，是不绑定 deployment 概念的低阶启动入口。
 //
 // 供 collector 等内部子系统直接启动采集进程使用；日志以 id 作为 DeploymentID 归属。

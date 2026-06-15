@@ -227,6 +227,11 @@ func (r *Runner) Argv() []string {
 	return append([]string{}, r.cfg.Argv...)
 }
 
+// StderrTail 返回最近若干行 stderr 副本，用于上层解析运行时就绪信号。
+func (r *Runner) StderrTail() []string {
+	return r.stderrTail.tail()
+}
+
 // ProcessGroupID 返回 Runner 启动的进程组 ID；进程未启动时返回 0。
 func (r *Runner) ProcessGroupID() int {
 	r.mu.Lock()

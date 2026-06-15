@@ -137,6 +137,23 @@ func TestRunner_ExitInfoOnFailureDrainsStderr(t *testing.T) {
 	}
 }
 
+func TestRunnerStderrTailExposed(t *testing.T) {
+	r := process.NewRunner(process.RunnerConfig{
+		Argv: []string{"sh", "-c", "echo to-stderr 1>&2; sleep 0.2"},
+	})
+	require.NoError(t, r.Start())
+	t.Cleanup(r.Stop)
+
+	assert.Eventually(t, func() bool {
+		for _, line := range r.StderrTail() {
+			if strings.Contains(line, "to-stderr") {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 50*time.Millisecond)
+}
+
 func TestRunner_OnLineMayBeNil(t *testing.T) {
 	exitCh := make(chan process.ExitInfo, 1)
 	r := process.NewRunner(process.RunnerConfig{
