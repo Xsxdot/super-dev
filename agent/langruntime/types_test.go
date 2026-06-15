@@ -73,3 +73,15 @@ func TestCommandSpecCarriesPreRun(t *testing.T) {
 	assert.Equal(t, "go", plan.Command.PreRun.Executable)
 	assert.Equal(t, "/out/api", plan.Command.Executable)
 }
+
+func TestEscapeHatchConfigKeys(t *testing.T) {
+	// 逃生口 key 是稳定常量，provider 与 migration 共用。
+	assert.Equal(t, "runtime_executable", langruntime.ConfigKeyRuntimeExecutable)
+	assert.Equal(t, "runtime_args", langruntime.ConfigKeyRuntimeArgs)
+}
+
+func TestDebuggerSpecZeroValueIsInert(t *testing.T) {
+	var spec langruntime.DebuggerSpec
+	assert.Empty(t, spec.Adapter)
+	assert.Empty(t, spec.Readiness)
+}

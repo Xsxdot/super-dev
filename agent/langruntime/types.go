@@ -41,6 +41,13 @@ const (
 	IntentAttach BuildIntent = "attach"
 )
 
+const (
+	// ConfigKeyRuntimeExecutable 是第二层启动逃生口：用户直接给运行器（如 pnpm/npm/make），provider 不推导、原样执行。
+	ConfigKeyRuntimeExecutable = "runtime_executable"
+	// ConfigKeyRuntimeArgs 是逃生口运行器参数（如 ["run", "dev"]）。
+	ConfigKeyRuntimeArgs = "runtime_args"
+)
+
 // DebugReadyStrategy 声明该语言如何达成 debugger-ready 契约。
 type DebugReadyStrategy string
 
@@ -53,6 +60,15 @@ const (
 	DebugReadyByPrearm DebugReadyStrategy = "prearm"
 	// DebugReadyNone 暂无不重启即可调试的手段，start_dev 照常启动并外显 Normal。
 	DebugReadyNone DebugReadyStrategy = "none"
+)
+
+const (
+	// ReadinessAttachPID 表示已运行进程可直接按 PID attach。
+	ReadinessAttachPID = "attach-pid"
+	// ReadinessSignalAttach 表示 attach 前需要先给目标进程发信号打开调试端口。
+	ReadinessSignalAttach = "signal-then-attach"
+	// ReadinessPrearmListen 表示进程启动时已预埋 listen 端口，attach 时直连。
+	ReadinessPrearmListen = "prearm-listen"
 )
 
 // Capabilities 描述 provider 的能力声明。
@@ -222,6 +238,14 @@ type AttachSpec struct {
 	Mode     string                  `json:"mode"` // pid
 }
 
+// DebuggerSpec 声明用哪个调试器、怎么到达可连接状态。纯数据，无行为。
+type DebuggerSpec struct {
+	Adapter   model.CodeDebugProvider `json:"adapter"`
+	Readiness string                  `json:"readiness"`
+	Port      int                     `json:"port,omitempty"`
+	Signal    string                  `json:"signal,omitempty"`
+}
+
 // AttachTarget 描述一次 attach 的目标。
 type AttachTarget struct {
 	PID int `json:"pid,omitempty"`
@@ -235,6 +259,7 @@ type ExecutionPlan struct {
 	Command    *CommandSpec      `json:"command,omitempty"` // start_dev / start_normal
 	Debug      *DebugSpec        `json:"debug,omitempty"`   // debug_launch
 	Attach     *AttachSpec       `json:"attach,omitempty"`  // attach
+	Debugger   *DebuggerSpec     `json:"debugger,omitempty"`
 	Preview    string            `json:"preview"`
 }
 
@@ -245,6 +270,9 @@ type BuildPlanInput struct {
 	// ArtifactDir 是 build 产物的输出根目录（如 agent 数据目录下 run-bin/<deployment-id>）。
 	// 仅 build+exec 策略的语言使用；为空时 provider 回退到不落产物的策略或报 diagnostic。
 	ArtifactDir string
+	// DebugPort 是启动层为 prearm-listen 语言分配的空闲端口（Python debugpy --listen）。
+	// 仅 prearm 语言在 start_dev/start_normal 使用；为空时 prearm provider 出 diagnostic。
+	DebugPort int
 	Target      AttachTarget // 仅 attach intent 使用
 	StopOnEntry bool         // 仅 debug_launch intent 使用
 }
