@@ -126,6 +126,39 @@ func TestGoProviderStartDevBuildsThenExecs(t *testing.T) {
 	}
 }
 
+func TestGoBuildPlanEscapeHatchExecutesVerbatim(t *testing.T) {
+	p := langruntime.NewGoProvider()
+	cfg := langruntime.NormalizedRuntimeConfig{
+		CWD: "/repo/server",
+		Config: map[string]any{
+			"runtime_executable": "make",
+			"runtime_args":       []any{"run"},
+		},
+	}
+	plan, diagnostics, err := p.BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg, ArtifactDir: "/data/x",
+	})
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	// 逃生口：原样执行 make run，不 go build。
+	require.NotNil(t, plan.Command)
+	assert.Nil(t, plan.Command.PreRun)
+	assert.Equal(t, "make", plan.Command.Executable)
+	assert.Equal(t, []string{"run"}, plan.Command.Args)
+}
+
+func TestGoBuildPlanStartDevDeclaresAttachReadiness(t *testing.T) {
+	p := langruntime.NewGoProvider()
+	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{"program": "."}}
+	plan, _, err := p.BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent: langruntime.IntentStartDev, Config: cfg, ArtifactDir: "/data/x",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, plan.Debugger)
+	assert.Equal(t, model.CodeDebugProviderGo, plan.Debugger.Adapter)
+	assert.Equal(t, langruntime.ReadinessAttachPID, plan.Debugger.Readiness)
+}
+
 func TestGoProviderStartDevRequiresArtifactDir(t *testing.T) {
 	normalized := normalizeGoConfig(t, langruntime.RuntimeConfigInput{
 		ProjectRoot: "/repo",

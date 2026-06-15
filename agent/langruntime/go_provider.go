@@ -134,10 +134,28 @@ func (GoProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Normal
 // BuildPlan 由 normalized 配置生成执行计划；不重复校验。
 func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionPlan, []Diagnostic, error) {
 	cfg := input.Config
+	env := CopyStringMap(cfg.Env)
+	goDebugger := &DebuggerSpec{Adapter: model.CodeDebugProviderGo, Readiness: ReadinessAttachPID}
+
+	// 第二层逃生口：用户给了运行器（如 make/脚本），原样执行，不 go build。
+	// debug-ready 仍是 attach-pid；若逃生口产物不可调试，由 codedebug attach 链路给出诊断。
+	if step, ok := EscapeHatchCommand(cfg.Config); ok {
+		switch input.Intent {
+		case IntentStartDev, IntentStartNormal:
+			return ExecutionPlan{
+				Intent:     input.Intent,
+				WorkingDir: cfg.CWD,
+				Env:        env,
+				Command:    &CommandSpec{Executable: step.Executable, Args: step.Args},
+				Debugger:   goDebugger,
+				Preview:    PreviewCommand(env, step.Executable, step.Args...),
+			}, nil, nil
+		}
+	}
+
 	program := StringValue(cfg.Config["program"])
 	args := StringSliceValue(cfg.Config["program_args"])
 	buildFlags := StringSliceValue(cfg.Config["build_flags"])
-	env := CopyStringMap(cfg.Env)
 
 	switch input.Intent {
 	case IntentStartDev, IntentStartNormal:
@@ -162,6 +180,7 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 				Executable: artifact,
 				Args:       args,
 			},
+			Debugger: goDebugger,
 			Preview: PreviewCommand(env, "go", buildArgs...) + " && " +
 				PreviewCommand(env, artifact, args...),
 		}, nil, nil
@@ -183,6 +202,7 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 			Intent:     IntentAttach,
 			WorkingDir: cfg.CWD,
 			Attach:     &AttachSpec{Provider: model.CodeDebugProviderGo, Mode: "pid"},
+			Debugger:   goDebugger,
 			Preview:    "dlv dap attach <pid>",
 		}, nil, nil
 	default:
