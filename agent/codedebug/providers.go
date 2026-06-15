@@ -139,8 +139,12 @@ func (PythonProvider) AttachCapability() AttachMode { return AttachModeListen }
 
 // AttachArguments 构造 debugpy attach 请求参数：connect 到进程自带的 --listen 端口。
 func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
+	targetPort := cfg.TargetPort
+	if targetPort == 0 {
+		targetPort = cfg.AdapterPort
+	}
 	return map[string]any{
-		"connect": map[string]any{"host": "127.0.0.1", "port": cfg.AdapterPort},
+		"connect": map[string]any{"host": "127.0.0.1", "port": targetPort},
 		"cwd":     cfg.WorkingDir,
 	}
 }

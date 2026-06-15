@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,9 @@ type RunningProcessProbe func(deploymentID string) (mainPID int, pgid int, runni
 // processGroupLister 枚举指定进程组内的进程。
 type processGroupLister func(pgid int) []procInfo
 
+// signalProcessFunc 给运行中进程发送信号；测试可替换以避免触碰真实进程。
+type signalProcessFunc func(pid int, signal string) error
+
 // attachTarget 描述一次 attach 的目标进程。
 type attachTarget struct {
 	processID int
@@ -67,6 +71,8 @@ type ManagerOptions struct {
 	RunningProcess RunningProcessProbe
 	// listProcessGroup 是包内测试 hook，用于替换 OS 进程组枚举；nil 时使用 OS ps 实现。
 	listProcessGroup processGroupLister
+	// SignalProcess 是包内测试 hook，用于替换真实 syscall.Kill。
+	SignalProcess func(pid int, signal string) error
 }
 
 type runtimeRecord struct {
@@ -96,6 +102,7 @@ type Manager struct {
 	now              func() time.Time
 	runningProcess   RunningProcessProbe
 	listProcessGroup processGroupLister
+	signalProcess    signalProcessFunc
 	runtimes         map[string]*runtimeRecord
 	sessions         map[string]*sessionRecord
 	closed           map[string]Session
@@ -129,6 +136,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	if listProcessGroup == nil {
 		listProcessGroup = listProcessGroupOS
 	}
+	signalProcess := opts.SignalProcess
+	if signalProcess == nil {
+		signalProcess = signalProcessOS
+	}
 	return &Manager{
 		launch:           launch,
 		dial:             dial,
@@ -137,9 +148,27 @@ func NewManager(opts ManagerOptions) *Manager {
 		now:              now,
 		runningProcess:   opts.RunningProcess,
 		listProcessGroup: listProcessGroup,
+		signalProcess:    signalProcess,
 		runtimes:         map[string]*runtimeRecord{},
 		sessions:         map[string]*sessionRecord{},
 		closed:           map[string]Session{},
+	}
+}
+
+func signalProcessOS(pid int, signal string) error {
+	return syscall.Kill(pid, signalToSyscall(signal))
+}
+
+func signalToSyscall(signal string) syscall.Signal {
+	switch strings.TrimSpace(strings.ToUpper(signal)) {
+	case "SIGUSR1", "USR1":
+		return syscall.SIGUSR1
+	case "SIGTERM", "TERM":
+		return syscall.SIGTERM
+	case "SIGINT", "INT":
+		return syscall.SIGINT
+	default:
+		return syscall.SIGUSR1
 	}
 }
 
@@ -327,12 +356,70 @@ func (m *Manager) AttachRuntime(ctx context.Context, project model.Project, serv
 	if err != nil {
 		return Runtime{}, err
 	}
+	return m.attachWithReadiness(ctx, readinessRequest{
+		cfg:       cfg,
+		provider:  provider,
+		readiness: langruntime.ReadinessAttachPID,
+		pid:       target.processID,
+	})
+}
+
+type readinessRequest struct {
+	cfg       LaunchConfig
+	provider  Provider
+	readiness string
+	signal    string
+	pid       int
+	port      int
+}
+
+// attachWithReadiness 按 readiness 把进程带到「可建立 DAP 连接」状态：
+//   - signal-then-attach：发信号唤醒 inspector，再走 PID attach
+//   - prearm-listen：直连进程自带的 listen 端口
+//   - attach-pid：直接 PID attach（Go 现状）
+func (m *Manager) attachWithReadiness(ctx context.Context, req readinessRequest) (Runtime, error) {
+	switch req.readiness {
+	case langruntime.ReadinessSignalAttach:
+		if req.pid <= 0 {
+			return Runtime{}, ErrAttachTargetUnresolved
+		}
+		if err := m.signalProcess(req.pid, req.signal); err != nil {
+			return Runtime{}, fmt.Errorf("signal debuggee: %w", err)
+		}
+		return m.attachByPID(ctx, req.cfg, req.provider, req.pid)
+	case langruntime.ReadinessPrearmListen:
+		return m.attachByListenPort(ctx, req.cfg, req.provider, req.port, req.pid)
+	default:
+		return m.attachByPID(ctx, req.cfg, req.provider, req.pid)
+	}
+}
+
+func (m *Manager) attachByPID(ctx context.Context, cfg LaunchConfig, provider Provider, processID int) (Runtime, error) {
 	if provider.AttachCapability() != AttachModePID {
 		return Runtime{}, ErrAttachUnsupported
 	}
-	if target.processID <= 0 {
+	if processID <= 0 {
 		return Runtime{}, ErrAttachTargetUnresolved
 	}
+	return m.attachRuntimeWithConfig(ctx, cfg, provider, processID, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, processID)
+	})
+}
+
+func (m *Manager) attachByListenPort(ctx context.Context, cfg LaunchConfig, provider Provider, targetPort int, processID int) (Runtime, error) {
+	if provider.AttachCapability() != AttachModeListen {
+		return Runtime{}, ErrAttachUnsupported
+	}
+	if targetPort <= 0 {
+		return Runtime{}, ErrAttachTargetUnresolved
+	}
+	cfg.TargetPort = targetPort
+	return m.attachRuntimeWithConfig(ctx, cfg, provider, processID, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, processID)
+	})
+}
+
+func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig, provider Provider, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
 	port, err := m.reserve()
 	if err != nil {
 		return Runtime{}, err
@@ -356,7 +443,7 @@ func (m *Manager) AttachRuntime(ctx context.Context, project model.Project, serv
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
 	}
-	if err := dap.Attach(ctx, provider.AttachArguments(cfg, target.processID)); err != nil {
+	if err := dap.Attach(ctx, attachArgs(cfg)); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
@@ -377,7 +464,7 @@ func (m *Manager) AttachRuntime(ctx context.Context, project model.Project, serv
 			DeploymentID: cfg.Target.DeploymentID,
 			Provider:     cfg.Provider,
 			AdapterPort:  port,
-			ProcessID:    target.processID,
+			ProcessID:    processID,
 			State:        RuntimeStateDebugRunning,
 			Origin:       "attached",
 			Alive:        true,
@@ -423,19 +510,46 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 	if err != nil {
 		return false, ErrAttachUnsupported
 	}
-	if provider.AttachCapability() != AttachModePID {
-		return false, ErrAttachUnsupported
-	}
-	pid, err := resolveGoDebuggeePID(goDebuggeeHints{
-		command:          attachCommandHint(dep),
-		mainPID:          mainPID,
-		pgid:             pgid,
-		listProcessGroup: m.listProcessGroup,
-	})
+	cfg, _, err := m.launchConfig(project, service, dep, OpenRequest{DeploymentID: dep.ID})
 	if err != nil {
 		return false, err
 	}
-	if _, err := m.AttachRuntime(ctx, project, service, dep, attachTarget{processID: pid}); err != nil {
+	req := readinessRequest{
+		cfg:       cfg,
+		provider:  provider,
+		readiness: langruntime.ReadinessAttachPID,
+		pid:       mainPID,
+	}
+	switch service.Language {
+	case model.LanguageGo:
+		pid, err := resolveGoDebuggeePID(goDebuggeeHints{
+			command:          attachCommandHint(dep),
+			mainPID:          mainPID,
+			pgid:             pgid,
+			listProcessGroup: m.listProcessGroup,
+		})
+		if err != nil {
+			return false, err
+		}
+		req.pid = pid
+	case model.LanguageNode:
+		pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+			mainPID:          mainPID,
+			pgid:             pgid,
+			listProcessGroup: m.listProcessGroup,
+		})
+		if err != nil {
+			return false, err
+		}
+		req.pid = pid
+		req.readiness = langruntime.ReadinessSignalAttach
+		req.signal = "SIGUSR1"
+	default:
+		if provider.AttachCapability() != AttachModePID {
+			return false, ErrAttachUnsupported
+		}
+	}
+	if _, err := m.attachWithReadiness(ctx, req); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -324,6 +325,47 @@ func TestResolveLeaseAttachesRunningService(t *testing.T) {
 	assert.Equal(t, 4321, rt.ProcessID)
 }
 
+func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
+	dap := &fakeDAP{}
+	var signaled struct {
+		pid int
+		sig string
+	}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9002, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41009, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		listProcessGroup: func(pgid int) []procInfo {
+			return []procInfo{{pid: 100, comm: "pnpm"}, {pid: 101, comm: "node"}}
+		},
+		SignalProcess: func(pid int, sig string) error {
+			signaled.pid = pid
+			signaled.sig = sig
+			return nil
+		},
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguageNode
+	dep.Command = "pnpm worker"
+	dep.CodeDebug = &model.CodeDebugConfig{Program: "server.js", AdapterCommand: "node-debug-adapter"}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, 101, signaled.pid)
+	assert.Equal(t, "SIGUSR1", signaled.sig)
+	assert.Equal(t, 101, dap.attachProcessID)
+	rt, ok := mgr.RuntimeStatus(dep.ID)
+	require.True(t, ok)
+	assert.Equal(t, 101, rt.ProcessID)
+}
+
 func TestResolveLeaseAttachUnsupportedReportsError(t *testing.T) {
 	mgr := NewManager(ManagerOptions{
 		RunningProcess: func(deploymentID string) (int, int, bool) {
@@ -337,6 +379,75 @@ func TestResolveLeaseAttachUnsupportedReportsError(t *testing.T) {
 	if !errors.Is(err, ErrAttachUnsupported) {
 		t.Fatalf("python running service should not silently launch; got %v", err)
 	}
+}
+
+func TestManagerSignalReadinessSendsSignalBeforeAttach(t *testing.T) {
+	dap := &fakeDAP{}
+	var signaled struct {
+		pid int
+		sig string
+	}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9100, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41007, nil },
+		SignalProcess: func(pid int, sig string) error {
+			signaled.pid = pid
+			signaled.sig = sig
+			return nil
+		},
+	})
+
+	_, err := mgr.attachWithReadiness(context.Background(), readinessRequest{
+		cfg: LaunchConfig{
+			Target:         Target{ProjectID: "p1", DeploymentID: "dep-node", RootPath: "/repo"},
+			Provider:       model.CodeDebugProviderNode,
+			WorkingDir:     "/repo",
+			AdapterCommand: "node-debug-adapter",
+		},
+		provider:  NewNodeProvider(),
+		readiness: langruntime.ReadinessSignalAttach,
+		signal:    "SIGUSR1",
+		pid:       4321,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 4321, signaled.pid)
+	assert.Equal(t, "SIGUSR1", signaled.sig)
+	assert.Equal(t, 4321, dap.attachProcessID)
+}
+
+func TestManagerPrearmReadinessConnectsPortNoSignal(t *testing.T) {
+	dap := &fakeDAP{}
+	signalCalled := false
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9101, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41008, nil },
+		SignalProcess: func(int, string) error {
+			signalCalled = true
+			return nil
+		},
+	})
+
+	_, err := mgr.attachWithReadiness(context.Background(), readinessRequest{
+		cfg: LaunchConfig{
+			Target:     Target{ProjectID: "p1", DeploymentID: "dep-python", RootPath: "/repo"},
+			Provider:   model.CodeDebugProviderPython,
+			WorkingDir: "/repo",
+		},
+		provider:  NewPythonProvider("python"),
+		readiness: langruntime.ReadinessPrearmListen,
+		port:      5678,
+	})
+
+	require.NoError(t, err)
+	assert.False(t, signalCalled, "prearm should connect to listen port, not signal")
+	assert.Equal(t, 5678, dap.attachConnectPort)
 }
 
 func TestManagerSetBreakpointsRejectsOutsideProjectRoot(t *testing.T) {
@@ -854,6 +965,7 @@ type fakeDAP struct {
 	detachCalls                int
 	attachCalls                int
 	attachProcessID            int
+	attachConnectPort          int
 	configurationDoneCalls     int
 	waitForStoppedCalls        int
 }
@@ -866,6 +978,11 @@ func (f *fakeDAP) Attach(_ context.Context, args map[string]any) error {
 	f.attachCalls++
 	if pid, ok := args["processId"].(int); ok {
 		f.attachProcessID = pid
+	}
+	if conn, ok := args["connect"].(map[string]any); ok {
+		if port, ok := conn["port"].(int); ok {
+			f.attachConnectPort = port
+		}
 	}
 	return nil
 }

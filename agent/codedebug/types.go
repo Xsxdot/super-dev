@@ -171,6 +171,7 @@ type LaunchConfig struct {
 	AdapterCommand string
 	AdapterArgs    []string
 	AdapterPort    int
+	TargetPort     int
 	StopOnEntry    bool
 }
 
