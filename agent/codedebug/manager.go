@@ -1783,6 +1783,8 @@ func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error
 		return NewPythonProvider("python3"), nil
 	case model.CodeDebugProviderNode:
 		return NewNodeProvider(m.jsDebugServerPath), nil
+	case model.CodeDebugProviderNative:
+		return NewNativeDebugProvider(""), nil
 	default:
 		return nil, ErrTargetUnsupported
 	}

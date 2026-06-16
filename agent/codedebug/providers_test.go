@@ -84,6 +84,22 @@ func TestNodeProviderAdapterCommandMissingServer(t *testing.T) {
 	require.ErrorIs(t, err, ErrAdapterUnavailable)
 }
 
+func TestNativeDebugProviderUsesLldbDap(t *testing.T) {
+	provider := NewNativeDebugProvider("")
+	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41030, WorkingDir: "/repo"})
+	require.NoError(t, err)
+	assert.Equal(t, "lldb-dap", cmd.Name)
+	assert.Equal(t, []string{"--port", "41030"}, cmd.Args)
+	assert.Equal(t, AttachModePID, provider.AttachCapability())
+	assert.False(t, provider.UsesReverseRequestChildSession())
+}
+
+func TestNativeDebugAttachArgumentsCarryPid(t *testing.T) {
+	provider := NewNativeDebugProvider("")
+	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo"}, 4321)
+	assert.Equal(t, 4321, args["pid"])
+}
+
 func TestProviderAttachCapability(t *testing.T) {
 	if NewGoProvider().AttachCapability() != AttachModePID {
 		t.Fatal("Go should support pid-attach")

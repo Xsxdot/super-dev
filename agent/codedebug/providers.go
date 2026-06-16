@@ -235,6 +235,58 @@ func (NodeProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 // UsesReverseRequestChildSession 报告 js-debug 用 root -> child 两段式会话拓扑。
 func (NodeProvider) UsesReverseRequestChildSession() bool { return true }
 
+// NativeDebugProvider 用 lldb-dap 调试 Rust/C/C++（attach-pid，与 Go 同构）。
+//
+// 注意：
+//   - Path 为空时用系统 PATH 上的 lldb-dap；非空时用注入路径（为以后打包 CodeLLDB 留口子）
+type NativeDebugProvider struct{ Path string }
+
+// NewNativeDebugProvider 创建原生调试 provider；path 为空回退系统 lldb-dap。
+func NewNativeDebugProvider(path string) NativeDebugProvider {
+	if path == "" {
+		path = "lldb-dap"
+	}
+	return NativeDebugProvider{Path: path}
+}
+
+// AdapterCommand 返回 lldb-dap DAP server 启动命令。
+func (p NativeDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
+	if cfg.AdapterPort == 0 {
+		return AdapterCommand{}, ErrConfigInvalid
+	}
+	return AdapterCommand{
+		Provider: model.CodeDebugProviderNative,
+		Name:     p.Path,
+		Args:     []string{"--port", strconv.Itoa(cfg.AdapterPort)},
+		Env:      copyEnv(cfg.Env),
+		WorkDir:  cfg.WorkingDir,
+	}, nil
+}
+
+// LaunchArguments 返回 lldb-dap launch 请求参数。
+func (NativeDebugProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
+	return map[string]any{
+		"program":     cfg.Program,
+		"cwd":         cfg.WorkingDir,
+		"args":        cfg.Args,
+		"stopOnEntry": cfg.StopOnEntry,
+	}
+}
+
+// AttachCapability 返回原生系附加档位：lldb 按 PID 本地附加。
+func (NativeDebugProvider) AttachCapability() AttachMode { return AttachModePID }
+
+// AttachArguments 构造 lldb-dap attach 参数（本地按 PID）。
+func (NativeDebugProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]any {
+	return map[string]any{
+		"pid": processID,
+		"cwd": cfg.WorkingDir,
+	}
+}
+
+// UsesReverseRequestChildSession 报告 lldb-dap 是单会话拓扑。
+func (NativeDebugProvider) UsesReverseRequestChildSession() bool { return false }
+
 func copyEnv(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
