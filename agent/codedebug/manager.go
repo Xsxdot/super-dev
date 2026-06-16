@@ -308,7 +308,7 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
 	}
-	requestSub, cancelRequestSub := subscribeJSDebugRequests(cfg.Provider, dap)
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
@@ -319,7 +319,8 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 	}
 	runtimeDAP := dap
 	rootDAP := dap
-	if cfg.Provider == model.CodeDebugProviderNode {
+	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
+	if provider.UsesReverseRequestChildSession() {
 		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
 		if err != nil {
 			_ = rootDAP.Close()
@@ -590,7 +591,7 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
 	}
-	requestSub, cancelRequestSub := subscribeJSDebugRequests(cfg.Provider, dap)
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
@@ -601,7 +602,8 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 	}
 	runtimeDAP := dap
 	rootDAP := dap
-	if cfg.Provider == model.CodeDebugProviderNode {
+	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
+	if provider.UsesReverseRequestChildSession() {
 		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
 		if err != nil {
 			_ = rootDAP.Close()
@@ -1213,8 +1215,8 @@ type reverseRequestDAP interface {
 	RespondToRequest(context.Context, map[string]any, bool, map[string]any) error
 }
 
-func subscribeJSDebugRequests(provider model.CodeDebugProvider, dap DAP) (<-chan map[string]any, func()) {
-	if provider != model.CodeDebugProviderNode {
+func subscribeJSDebugRequests(provider Provider, dap DAP) (<-chan map[string]any, func()) {
+	if provider == nil || !provider.UsesReverseRequestChildSession() {
 		return nil, nil
 	}
 	reverse, ok := dap.(reverseRequestDAP)
@@ -1330,8 +1332,13 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	nodeCapture := runtime.Provider == model.CodeDebugProviderNode
-	nodeWasPaused := nodeCapture && runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
+	runtimeProvider, err := m.providerFor(runtime.Provider)
+	if err != nil {
+		return nil, err
+	}
+	// 仅 js-debug 拓扑需要跳过 pause 并复用已有暂停态；以能力查询代替语言硬编码。
+	reverseRequestCapture := runtimeProvider.UsesReverseRequestChildSession()
+	reverseRequestWasPaused := reverseRequestCapture && runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
 	waitCtx := ctx
 	timeout := req.Timeout
 	if timeout == 0 && req.TimeoutMS > 0 {
@@ -1343,7 +1350,7 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		defer cancel()
 	}
 	pausedByCapture := false
-	if !nodeCapture {
+	if !reverseRequestCapture {
 		pausedByCapture, err = m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
 		if err != nil {
 			return nil, err
@@ -1360,11 +1367,11 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
 	}
-	if !nodeCapture {
+	if !reverseRequestCapture {
 		if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
 			return nil, err
 		}
-	} else if nodeWasPaused {
+	} else if reverseRequestWasPaused {
 		threadID := runtime.debugStore.get().ThreadID
 		if threadID == 0 {
 			threadID = req.ThreadID
