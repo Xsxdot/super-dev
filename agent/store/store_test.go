@@ -56,6 +56,82 @@ func TestAppendBatchUpsertsByFoldKey(t *testing.T) {
 	assert.Equal(t, ts.Add(time.Second), got[0].Timestamp)
 }
 
+// TestAppendBatchDoesNotFoldAcrossRuns 回归用例：同 deployment、相同 fold_key，
+// 但 run_id 不同（如 agent 重启后的新会话）时不得折叠，必须各自落新行。
+//
+// 防回归对象：历史 bug——fold_key 单列唯一 + 进程内自增计数器重启归零，
+// 导致重启后新日志撞历史 fold_key 被 UPDATE 进旧行，实时日志卡死。
+func TestAppendBatchDoesNotFoldAcrossRuns(t *testing.T) {
+	s := newTestStore(t)
+	ts := time.Now().UTC()
+
+	// run 1 与 run 2 复用同一 fold_key（模拟计数器重启归零后重发）。
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "run-1", Timestamp: ts, Level: "INFO", Message: "old-content", Stream: "stdout", FoldKey: "f1", RepeatCount: 1},
+	}))
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "run-2", Timestamp: ts.Add(time.Second), Level: "INFO", Message: "new-content", Stream: "stdout", FoldKey: "f1", RepeatCount: 1},
+	}))
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "A"})
+	require.NoError(t, err)
+	// 两次属于不同 run，复合唯一键 (run_id, fold_key) 不冲突，必须是两行。
+	require.Len(t, got, 2)
+	// Fetch 按 id ASC 返回；run-2 的新内容应作为独立新行存在，未被折叠进 run-1 旧行。
+	assert.Equal(t, "run-2", got[1].RunID)
+	assert.Equal(t, "new-content", got[1].Message)
+}
+
+// TestNewMigratesLegacySingleColumnFoldIndex 回归用例：旧生产库带单列唯一索引
+// idx_fold_key 且已有历史日志时，store.New 必须把唯一约束迁移为 (run_id, fold_key) 复合，
+// 清空与新维度不兼容的历史脏数据，并保证后续跨 run 同 fold_key 不再被误折叠。
+func TestNewMigratesLegacySingleColumnFoldIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/logs.db"
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE log_entries (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			deployment_id TEXT     NOT NULL,
+			run_id        TEXT     NOT NULL,
+			timestamp     DATETIME NOT NULL,
+			level         TEXT     NOT NULL,
+			message       TEXT     NOT NULL,
+			stream        TEXT     NOT NULL,
+			repeat_count  INTEGER  NOT NULL DEFAULT 1,
+			fold_key      TEXT     NOT NULL DEFAULT ''
+		);
+		CREATE UNIQUE INDEX idx_fold_key ON log_entries(fold_key) WHERE fold_key != '';
+		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key)
+			VALUES ('A', 'old-run', '2026-06-15 00:00:00 +0000 UTC', 'INFO', 'stale', 'stdout', 1, 'f1');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// 迁移完成后的可观测行为：历史脏数据被清空 + 旧单列唯一约束失效，
+	// 跨 run 复用同 fold_key 不再被折叠，各自落新行（索引名是实现细节，只断言行为）。
+	ts := time.Now().UTC()
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "run-1", Timestamp: ts, Level: "INFO", Message: "c1", Stream: "stdout", FoldKey: "f1", RepeatCount: 1},
+	}))
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "A", RunID: "run-2", Timestamp: ts.Add(time.Second), Level: "INFO", Message: "c2", Stream: "stdout", FoldKey: "f1", RepeatCount: 1},
+	}))
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "A"})
+	require.NoError(t, err)
+	// 只有迁移后写入的 run-1/run-2 两行；历史 old-run 的 stale 行已被清空。
+	require.Len(t, got, 2)
+	for _, e := range got {
+		assert.NotEqual(t, "old-run", e.RunID, "legacy dirty data should be wiped on migration")
+	}
+}
+
 func TestNewMigratesExistingLogEntriesBeforeCreatingFoldIndex(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/logs.db"

@@ -43,8 +43,20 @@ type foldTracker struct {
 
 var foldKeySeq uint64
 
-func nextFoldKey() string {
-	return "f" + strconv.FormatUint(atomic.AddUint64(&foldKeySeq, 1), 36)
+// nextFoldKey 生成本次折叠段的 fold_key。
+//
+// 必须带 runID 维度：foldKeySeq 是进程内自增计数器，agent 重启会归零，
+// 若不带 run 维度，重启后新会话重发的序号会与历史 fold_key 撞键；
+// 而 fold_key 是落库 upsert 的冲突键，撞键会让新日志被 UPDATE 进重启前的旧行，
+// 表现为「实时日志卡在重启前不刷新」。带上 runID 后跨 run/跨重启永不撞键。
+//
+// runID 为空时退化为纯序号（仅理论兜底，正常链路 LogEntry.RunID 必非空）。
+func nextFoldKey(runID string) string {
+	seq := strconv.FormatUint(atomic.AddUint64(&foldKeySeq, 1), 36)
+	if runID == "" {
+		return "f" + seq
+	}
+	return "f" + runID + ":" + seq
 }
 
 // newFoldTracker 创建折叠跟踪器。
@@ -74,7 +86,7 @@ func (t *foldTracker) observe(e model.LogEntry) (emit *model.LogEntry, inc *fold
 		return nil, &foldIncrement{DeploymentID: e.DeploymentID, FoldKey: lane.foldKey, RepeatCount: lane.repeatCount}
 	}
 
-	key := nextFoldKey()
+	key := nextFoldKey(e.RunID)
 	row := e
 	row.RepeatCount = 1
 	row.FoldKey = key

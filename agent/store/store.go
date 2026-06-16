@@ -248,8 +248,53 @@ func ensureLogEntriesFoldColumns(db *sql.DB) error {
 			return err
 		}
 	}
-	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fold_key ON log_entries(fold_key) WHERE fold_key != ''`)
+	// fold_key 折叠 upsert 的冲突键必须带 run_id 维度。
+	// 旧库用的是单列 idx_fold_key（仅 fold_key 唯一），会导致 agent 重启后新会话
+	// 的 fold_key 与历史撞键、新日志被 UPDATE 进旧行（实时日志卡死）。
+	// 这里把唯一约束迁移为 (run_id, fold_key) 复合：drop 旧索引、清空历史折叠脏数据、建复合唯一索引。
+	if err := migrateFoldKeyUniqueIndex(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateFoldKeyUniqueIndex 将 fold_key 唯一约束从单列迁移为 (run_id, fold_key) 复合。
+//
+// 注意：
+//   - 旧的单列 idx_fold_key 必须先 drop，否则历史 fold_key 仍会跨 run 误撞
+//   - 历史日志的 fold_key 是旧自增空间的产物，与新 (run_id, fold_key) 语义不兼容，
+//     直接清空 log_entries（过往日志可丢弃），避免新旧 fold_key 混在一张表里产生歧义
+func migrateFoldKeyUniqueIndex(db *sql.DB) error {
+	hasComposite, err := indexExists(db, "idx_run_fold_key")
+	if err != nil {
+		return err
+	}
+	if hasComposite {
+		return nil
+	}
+	// 旧单列唯一索引存在则先删除，让冲突键彻底切到复合维度。
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_fold_key`); err != nil {
+		return err
+	}
+	// 清空历史折叠脏数据：旧 fold_key 属于已废弃的自增空间，保留会与新 run 维度冲突键混淆。
+	if _, err := db.Exec(`DELETE FROM log_entries`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_run_fold_key ON log_entries(run_id, fold_key) WHERE fold_key != ''`)
 	return err
+}
+
+// indexExists 报告指定名称的索引是否已存在于库中。
+func indexExists(db *sql.DB, name string) (bool, error) {
+	var found string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func ensurePipelineRunLogsHostNameColumn(db *sql.DB) error {
@@ -295,10 +340,12 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 	if err != nil {
 		return err
 	}
+	// 折叠 upsert 的冲突键是 (run_id, fold_key)：同一 run 内同 fold_key 累加计数，
+	// 不同 run（含 agent 重启后的新会话）的同 fold_key 互不干扰，各自落新行。
 	stmt, err := tx.Prepare(`
 		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(fold_key) WHERE fold_key != '' DO UPDATE SET
+		ON CONFLICT(run_id, fold_key) WHERE fold_key != '' DO UPDATE SET
 			repeat_count = excluded.repeat_count,
 			timestamp    = excluded.timestamp
 	`)
