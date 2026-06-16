@@ -34,6 +34,24 @@ func TestServiceLanguageKnown(t *testing.T) {
 	}
 }
 
+func TestNewLanguagesAreKnown(t *testing.T) {
+	for _, l := range []model.ServiceLanguage{model.LanguageJava, model.LanguageKotlin, model.LanguageRust, model.LanguageCpp} {
+		if !l.Known() {
+			t.Fatalf("language %s should be known", l)
+		}
+	}
+}
+
+func TestNewCodeDebugProvidersDefined(t *testing.T) {
+	got := []model.CodeDebugProvider{model.CodeDebugProviderJVM, model.CodeDebugProviderNative}
+	want := []model.CodeDebugProvider{"jvm", "native"}
+	for i := range got {
+		if string(got[i]) != string(want[i]) {
+			t.Fatalf("provider %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
 func TestCodeDebugPolicyValues(t *testing.T) {
 	cases := []struct {
 		p    model.CodeDebugPolicy

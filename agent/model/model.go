@@ -780,12 +780,19 @@ const (
 	LanguageGo     ServiceLanguage = "go"
 	LanguageNode   ServiceLanguage = "node"
 	LanguagePython ServiceLanguage = "python"
+	// JVM 系：Java 与 Kotlin 共用 JVM 运行/调试链路。
+	LanguageJava   ServiceLanguage = "java"
+	LanguageKotlin ServiceLanguage = "kotlin"
+	// 原生系：Rust 与 C/C++ 共用 lldb attach-pid 链路。
+	LanguageRust ServiceLanguage = "rust"
+	LanguageCpp  ServiceLanguage = "cpp"
 )
 
 // Known 返回该语言是否为当前已注册支持的调试语言。
 func (l ServiceLanguage) Known() bool {
 	switch l {
-	case LanguageGo, LanguageNode, LanguagePython:
+	case LanguageGo, LanguageNode, LanguagePython,
+		LanguageJava, LanguageKotlin, LanguageRust, LanguageCpp:
 		return true
 	default:
 		return false
@@ -802,6 +809,10 @@ const (
 	CodeDebugProviderPython CodeDebugProvider = "python"
 	// CodeDebugProviderNode 表示使用 Node DAP adapter 调试 Node 服务。
 	CodeDebugProviderNode CodeDebugProvider = "node"
+	// CodeDebugProviderJVM 表示用 java-debug/JDWP 调试 JVM 系（Java/Kotlin）服务。
+	CodeDebugProviderJVM CodeDebugProvider = "jvm"
+	// CodeDebugProviderNative 表示用 lldb-dap 调试原生系（Rust/C/C++）服务。
+	CodeDebugProviderNative CodeDebugProvider = "native"
 )
 
 // CodeDebugMode 表示代码调试会话的启动方式。
