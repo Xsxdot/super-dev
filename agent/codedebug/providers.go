@@ -238,15 +238,13 @@ func (NodeProvider) UsesReverseRequestChildSession() bool { return true }
 // NativeDebugProvider 用 lldb-dap 调试 Rust/C/C++（attach-pid，与 Go 同构）。
 //
 // 注意：
-//   - Path 为空时用系统 PATH 上的 lldb-dap；非空时用注入路径（为以后打包 CodeLLDB 留口子）
+//   - Path 非空时使用构造器注入路径；否则允许 deployment 的 adapter_command 覆盖
+//   - 两者都为空时才回退系统 PATH 上的 lldb-dap，为以后打包 CodeLLDB 留口子
 type NativeDebugProvider struct{ Path string }
 
-// NewNativeDebugProvider 创建原生调试 provider；path 为空回退系统 lldb-dap。
+// NewNativeDebugProvider 创建原生调试 provider；path 非空时作为全局注入命令。
 func NewNativeDebugProvider(path string) NativeDebugProvider {
-	if path == "" {
-		path = "lldb-dap"
-	}
-	return NativeDebugProvider{Path: path}
+	return NativeDebugProvider{Path: strings.TrimSpace(path)}
 }
 
 // AdapterCommand 返回 lldb-dap DAP server 启动命令。
@@ -254,12 +252,21 @@ func (p NativeDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, e
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
 	}
+	command := strings.TrimSpace(p.Path)
+	if command == "" {
+		command = strings.TrimSpace(cfg.AdapterCommand)
+	}
+	if command == "" {
+		command = "lldb-dap"
+	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderNative,
-		Name:     p.Path,
-		Args:     []string{"--port", strconv.Itoa(cfg.AdapterPort)},
-		Env:      copyEnv(cfg.Env),
-		WorkDir:  cfg.WorkingDir,
+		Name:     command,
+		// lldb-dap 的 TCP server 形态用 --connection listen://host:port；
+		// --port 不是 Xcode/LLVM 当前发布版支持的参数，使用它会让 adapter 直接退出。
+		Args:    []string{"--connection", "listen://127.0.0.1:" + strconv.Itoa(cfg.AdapterPort)},
+		Env:     copyEnv(cfg.Env),
+		WorkDir: cfg.WorkingDir,
 	}, nil
 }
 
@@ -278,10 +285,15 @@ func (NativeDebugProvider) AttachCapability() AttachMode { return AttachModePID 
 
 // AttachArguments 构造 lldb-dap attach 参数（本地按 PID）。
 func (NativeDebugProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]any {
-	return map[string]any{
+	args := map[string]any{
 		"pid": processID,
 		"cwd": cfg.WorkingDir,
 	}
+	if strings.TrimSpace(cfg.Program) != "" {
+		// lldb-dap 的 attach 配置中 program 可帮助 adapter 在 attach 前解析符号与绑定断点。
+		args["program"] = cfg.Program
+	}
+	return args
 }
 
 // UsesReverseRequestChildSession 报告 lldb-dap 是单会话拓扑。

@@ -462,6 +462,50 @@ func TestResolveLeaseAttachesRunningService(t *testing.T) {
 	assert.Equal(t, 100, rt.ProcessID)
 }
 
+func TestResolveLeaseNativeAttachCarriesProgram(t *testing.T) {
+	root := t.TempDir()
+	dap := &fakeDAP{}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9002, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41009, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 4321, 4321, deploymentID == "dep-rust-dev"
+		},
+	})
+	dep := model.Deployment{
+		ID:          "dep-rust-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "target/debug/app"},
+		},
+	}
+	service := model.Service{ID: "rust", Name: "rust", Language: model.LanguageRust, Deployments: []model.Deployment{dep}}
+	project := model.Project{ID: "p1", Name: "native", RootPath: root, Services: []model.Service{service}}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, 4321, dap.attachProcessID)
+	assert.Equal(t, filepath.Join(root, "target/debug/app"), dap.attachProgram)
+}
+
+func TestAwaitAttachResultBeforeConfigurationReturnsReadyError(t *testing.T) {
+	ch := make(chan error, 1)
+	ch <- errors.New("dap attach failed: no such process")
+
+	err, done := awaitAttachResultBeforeConfiguration(context.Background(), ch)
+
+	assert.True(t, done)
+	assert.EqualError(t, err, "dap attach failed: no such process")
+}
+
 func TestResolveLeaseNodeSignalsResolvedChildBeforeAttach(t *testing.T) {
 	dap := &fakeDAP{}
 	var signaled struct {
@@ -1450,6 +1494,7 @@ type fakeDAP struct {
 	attachCalls                     int
 	attachProcessID                 int
 	attachConnectPort               int
+	attachProgram                   string
 	attachPendingTargetID           string
 	launchCalls                     int
 	launchPendingTargetID           string
@@ -1502,6 +1547,12 @@ func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 	f.attachCalls++
 	if pid, ok := args["processId"].(int); ok {
 		f.attachProcessID = pid
+	}
+	if pid, ok := args["pid"].(int); ok {
+		f.attachProcessID = pid
+	}
+	if program, ok := args["program"].(string); ok {
+		f.attachProgram = program
 	}
 	if conn, ok := args["connect"].(map[string]any); ok {
 		if port, ok := conn["port"].(int); ok {

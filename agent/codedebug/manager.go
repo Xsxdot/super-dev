@@ -1162,6 +1162,12 @@ func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error
 				continue
 			}
 			if isDAPInitializedEvent(event) {
+				if err, done := awaitAttachResultBeforeConfiguration(ctx, attachErr); done {
+					if err != nil {
+						return err
+					}
+					return sendConfigurationDone()
+				}
 				if err := sendConfigurationDone(); err != nil {
 					return err
 				}
@@ -1170,6 +1176,19 @@ func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error
 			cancelAttach()
 			return ctx.Err()
 		}
+	}
+}
+
+func awaitAttachResultBeforeConfiguration(ctx context.Context, attachErr <-chan error) (error, bool) {
+	timer := time.NewTimer(20 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case err := <-attachErr:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	case <-ctx.Done():
+		return ctx.Err(), true
 	}
 }
 
@@ -1573,6 +1592,7 @@ func (m *Manager) attachConfigFromLanguageRuntime(project model.Project, service
 	if langruntime.HasErrorDiagnostic(diagnostics) {
 		return LaunchConfig{}, nil, ErrConfigInvalid
 	}
+	program, args := attachDebugProgram(ctx, runtimeProvider, normalized, stopOnEntry, debugProvider.AttachCapability())
 	return LaunchConfig{
 		Target: Target{
 			ProjectID:    project.ID,
@@ -1588,12 +1608,29 @@ func (m *Manager) attachConfigFromLanguageRuntime(project model.Project, service
 			WorkDir:      normalized.CWD,
 		},
 		Provider:       providerName,
+		Program:        program,
+		Args:           args,
 		WorkingDir:     normalized.CWD,
 		Env:            normalized.Env,
 		AdapterCommand: strings.TrimSpace(code.AdapterCommand),
 		AdapterArgs:    append([]string{}, code.AdapterArgs...),
 		StopOnEntry:    stopOnEntry,
 	}, debugProvider, nil
+}
+
+func attachDebugProgram(ctx context.Context, provider langruntime.Provider, normalized langruntime.NormalizedRuntimeConfig, stopOnEntry bool, attachMode AttachMode) (string, []string) {
+	if attachMode != AttachModePID {
+		return "", nil
+	}
+	plan, diagnostics, err := provider.BuildPlan(ctx, langruntime.BuildPlanInput{
+		Intent:      langruntime.IntentDebugLaunch,
+		Config:      normalized,
+		StopOnEntry: stopOnEntry,
+	})
+	if err != nil || langruntime.HasErrorDiagnostic(diagnostics) || plan.Debug == nil {
+		return "", nil
+	}
+	return plan.Debug.Program, append([]string{}, plan.Debug.Args...)
 }
 
 func (m *Manager) sessionRuntime(sessionID string) (*sessionRecord, *runtimeRecord, error) {

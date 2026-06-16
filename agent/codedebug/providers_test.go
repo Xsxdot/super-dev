@@ -90,15 +90,29 @@ func TestNativeDebugProviderUsesLldbDap(t *testing.T) {
 	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41030, WorkingDir: "/repo"})
 	require.NoError(t, err)
 	assert.Equal(t, "lldb-dap", cmd.Name)
-	assert.Equal(t, []string{"--port", "41030"}, cmd.Args)
+	assert.Equal(t, []string{"--connection", "listen://127.0.0.1:41030"}, cmd.Args)
 	assert.Equal(t, AttachModePID, provider.AttachCapability())
 	assert.False(t, provider.UsesReverseRequestChildSession())
 }
 
+func TestNativeDebugProviderUsesConfiguredAdapterCommand(t *testing.T) {
+	provider := NewNativeDebugProvider("")
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort:    41031,
+		AdapterCommand: "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap",
+		WorkingDir:     "/repo",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap", cmd.Name)
+	assert.Equal(t, []string{"--connection", "listen://127.0.0.1:41031"}, cmd.Args)
+}
+
 func TestNativeDebugAttachArgumentsCarryPid(t *testing.T) {
 	provider := NewNativeDebugProvider("")
-	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo"}, 4321)
+	args := provider.AttachArguments(LaunchConfig{Program: "/repo/target/debug/app", WorkingDir: "/repo"}, 4321)
 	assert.Equal(t, 4321, args["pid"])
+	assert.Equal(t, "/repo/target/debug/app", args["program"])
 }
 
 func TestJVMDebugProviderConnectsJdwpPort(t *testing.T) {
