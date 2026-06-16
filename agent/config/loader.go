@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/xsxdot/super-dev/agent/langdetect"
+	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
 	"gopkg.in/yaml.v3"
 )
@@ -277,12 +278,25 @@ func languageProbeHints(svc model.Service, rootPath string) (dir, command string
 			continue
 		}
 		wd := dep.WorkDir
-		if dep.Runtime != nil && dep.Runtime.WorkingDir != "" {
-			wd = dep.Runtime.WorkingDir
-		}
 		cmd := dep.Command
-		if dep.Runtime != nil && dep.Runtime.Command != "" {
-			cmd = dep.Runtime.Command
+		if dep.Runtime != nil {
+			if dep.Runtime.Type == model.RuntimeTypeLanguage {
+				if dep.Runtime.EffectiveCWD() != "" {
+					wd = dep.Runtime.EffectiveCWD()
+				}
+				if hint := languageRuntimeCommandHint(dep.Runtime); hint != "" {
+					cmd = hint
+				} else if dep.Runtime.Command != "" {
+					cmd = dep.Runtime.Command
+				}
+			} else {
+				if dep.Runtime.WorkingDir != "" {
+					wd = dep.Runtime.WorkingDir
+				}
+				if dep.Runtime.Command != "" {
+					cmd = dep.Runtime.Command
+				}
+			}
 		}
 		if wd == "" {
 			wd = rootPath
@@ -292,6 +306,25 @@ func languageProbeHints(svc model.Service, rootPath string) (dir, command string
 		return wd, cmd
 	}
 	return rootPath, ""
+}
+
+func languageRuntimeCommandHint(rt *model.RuntimeConfig) string {
+	if rt == nil {
+		return ""
+	}
+	if _, ok := rt.Config["node_args"]; ok {
+		return "node"
+	}
+	if langruntime.StringValue(rt.Config["script"]) != "" || langruntime.StringValue(rt.Config["package_manager"]) != "" {
+		return "node"
+	}
+	if module := langruntime.StringValue(rt.Config["module"]); module != "" {
+		return "python -m " + module
+	}
+	if _, ok := rt.Config["build_flags"]; ok {
+		return "go"
+	}
+	return langruntime.StringValue(rt.Config[langruntime.ConfigKeyRuntimeExecutable])
 }
 
 // deploymentsFromYAML 将 yaml deployments 列表转为 model.Deployment 列表。

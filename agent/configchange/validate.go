@@ -13,10 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 
-	"github.com/xsxdot/super-dev/agent/codedebug"
+	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -78,13 +77,13 @@ func validateServices(project model.Project) []string {
 		}
 		seen[name] = true
 		for _, dep := range svc.Deployments {
-			errs = append(errs, validateDeployment(project.RootPath, name, dep, envs)...)
+			errs = append(errs, validateDeployment(project.RootPath, name, svc.Language, dep, envs)...)
 		}
 	}
 	return errs
 }
 
-func validateDeployment(projectRoot, serviceName string, dep model.Deployment, envs map[string]bool) []string {
+func validateDeployment(projectRoot, serviceName string, language model.ServiceLanguage, dep model.Deployment, envs map[string]bool) []string {
 	var errs []string
 	envName := strings.TrimSpace(dep.EnvName)
 	if envName == "" {
@@ -101,8 +100,54 @@ func validateDeployment(projectRoot, serviceName string, dep model.Deployment, e
 	if dep.EffectiveControlMode() == model.ControlModeMonitor && (dep.StartCommand != "" || dep.StopCommand != "") {
 		errs = append(errs, fmt.Sprintf("service %s deployment %s monitor mode cannot declare start or stop commands", serviceName, envName))
 	}
+	errs = append(errs, validateDeploymentLanguageRuntimeConfig(projectRoot, serviceName, language, dep)...)
 	errs = append(errs, validateDeploymentWebConfig(dep)...)
-	errs = append(errs, validateDeploymentCodeDebugConfig(projectRoot, serviceName, dep)...)
+	errs = append(errs, validateDeploymentCodeDebugConfig(serviceName, dep)...)
+	return errs
+}
+
+func validateDeploymentLanguageRuntimeConfig(projectRoot, serviceName string, language model.ServiceLanguage, dep model.Deployment) []string {
+	if deploymentRuntimeType(dep) != model.RuntimeTypeLanguage || dep.Runtime == nil {
+		return nil
+	}
+	var errs []string
+	if dep.Location == model.LocationLocal && dep.EffectiveControlMode() == model.ControlModeManaged {
+		trimmedLanguage := model.ServiceLanguage(strings.TrimSpace(string(language)))
+		switch {
+		case trimmedLanguage == "":
+			errs = append(errs, fmt.Sprintf("service %s language is required for local managed language runtime", serviceName))
+		case !trimmedLanguage.Known():
+			errs = append(errs, fmt.Sprintf("service %s language %s is unsupported for local managed language runtime", serviceName, trimmedLanguage))
+		case trimmedLanguage == model.LanguagePython:
+			program := langruntime.StringValue(dep.Runtime.Config["program"])
+			module := langruntime.StringValue(dep.Runtime.Config["module"])
+			_, hasEscape := langruntime.EscapeHatchCommand(dep.Runtime.Config)
+			if program == "" && module == "" && !hasEscape {
+				errs = append(errs, fmt.Sprintf("service %s python runtime requires program, module, or runtime_executable", serviceName))
+			}
+		}
+	}
+
+	cwd, err := langruntime.ResolveRuntimeCWDInsideProject(projectRoot, dep.Runtime.EffectiveCWD())
+	if err != nil {
+		if errors.Is(err, langruntime.ErrRuntimePathOutsideProject) {
+			errs = append(errs, "runtime.cwd must be inside project root")
+		} else {
+			errs = append(errs, "runtime.cwd requires a valid project root")
+		}
+		return errs
+	}
+	program := langruntime.StringValue(dep.Runtime.Config["program"])
+	if program == "" {
+		return errs
+	}
+	if _, err := langruntime.ResolveRuntimePathInsideProject(projectRoot, cwd, program); err != nil {
+		if errors.Is(err, langruntime.ErrRuntimePathOutsideProject) {
+			errs = append(errs, "runtime.config.program must be inside project root")
+		} else {
+			errs = append(errs, "runtime.config.program requires a valid project root")
+		}
+	}
 	return errs
 }
 
@@ -136,7 +181,7 @@ func validateDeploymentWebConfig(dep model.Deployment) []string {
 	return errs
 }
 
-func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep model.Deployment) []string {
+func validateDeploymentCodeDebugConfig(serviceName string, dep model.Deployment) []string {
 	if dep.CodeDebug == nil {
 		return nil
 	}
@@ -146,78 +191,14 @@ func validateDeploymentCodeDebugConfig(projectRoot, serviceName string, dep mode
 		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug.policy must be auto, enabled, or disabled", serviceName, dep.EnvName))
 	}
 	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged || !codeDebugRuntimeSupported(dep) {
-		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed command/language deployments only", serviceName, dep.EnvName))
+		errs = append(errs, fmt.Sprintf("service %s deployment %s code_debug supports local managed language runtime deployments only", serviceName, dep.EnvName))
 	}
 	switch cfg.Mode {
 	case "", model.CodeDebugModeLaunch:
 	default:
 		errs = append(errs, "code_debug.mode must be launch")
 	}
-	if pathErr := validateCodeDebugProgramPath(projectRoot, dep); pathErr != "" {
-		errs = append(errs, pathErr)
-	}
-	if pathErr := validateCodeDebugWorkingDirPath(projectRoot, dep); pathErr != "" {
-		errs = append(errs, pathErr)
-	}
 	return errs
-}
-
-func validateCodeDebugProgramPath(projectRoot string, dep model.Deployment) string {
-	program := strings.TrimSpace(dep.CodeDebug.Program)
-	if program == "" {
-		return ""
-	}
-	candidate := program
-	if !filepath.IsAbs(program) {
-		if workingDir, err := resolvedCodeDebugWorkingDir(projectRoot, dep); err == nil && workingDir != "" {
-			candidate = filepath.Join(workingDir, program)
-		}
-	}
-	if err := validateCodeDebugPathInsideRoot(projectRoot, candidate); err != nil {
-		if errors.Is(err, codedebug.ErrPathOutsideProject) {
-			return "code_debug.program must be inside project root"
-		}
-		return "code_debug.program requires a valid project root"
-	}
-	return ""
-}
-
-func validateCodeDebugWorkingDirPath(projectRoot string, dep model.Deployment) string {
-	workingDir := codeDebugWorkingDir(dep)
-	if workingDir == "" {
-		return ""
-	}
-	if err := validateCodeDebugPathInsideRoot(projectRoot, workingDir); err != nil {
-		if errors.Is(err, codedebug.ErrPathOutsideProject) {
-			return "code_debug.working_dir must be inside project root"
-		}
-		return "code_debug.working_dir requires a valid project root"
-	}
-	return ""
-}
-
-func resolvedCodeDebugWorkingDir(projectRoot string, dep model.Deployment) (string, error) {
-	workingDir := codeDebugWorkingDir(dep)
-	if workingDir == "" {
-		return projectRoot, nil
-	}
-	return codedebug.ResolveInsideRoot(projectRoot, workingDir)
-}
-
-func codeDebugWorkingDir(dep model.Deployment) string {
-	workingDir := strings.TrimSpace(dep.CodeDebug.WorkingDir)
-	if workingDir != "" {
-		return workingDir
-	}
-	if dep.Runtime != nil && strings.TrimSpace(dep.Runtime.WorkingDir) != "" {
-		return strings.TrimSpace(dep.Runtime.WorkingDir)
-	}
-	return strings.TrimSpace(dep.WorkDir)
-}
-
-func validateCodeDebugPathInsideRoot(projectRoot, value string) error {
-	_, err := codedebug.ResolveInsideRoot(projectRoot, value)
-	return err
 }
 
 func deploymentRuntimeType(dep model.Deployment) model.RuntimeType {
@@ -232,12 +213,7 @@ func deploymentNeedsCommand(dep model.Deployment) bool {
 }
 
 func codeDebugRuntimeSupported(dep model.Deployment) bool {
-	switch deploymentRuntimeType(dep) {
-	case model.RuntimeTypeCommand, model.RuntimeTypeLanguage:
-		return true
-	default:
-		return false
-	}
+	return deploymentRuntimeType(dep) == model.RuntimeTypeLanguage
 }
 
 func validateProjectPipelines(project model.Project) []string {

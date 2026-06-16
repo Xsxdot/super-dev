@@ -308,10 +308,6 @@ export interface RuntimeSuggestion {
 export interface CodeDebugConfig {
   policy?: CodeDebugPolicy
   mode?: CodeDebugMode
-  program?: string
-  args?: string[]
-  working_dir?: string
-  env_vars?: Record<string, string>
   adapter_command?: string
   adapter_args?: string[]
   stop_on_entry?: boolean

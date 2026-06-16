@@ -62,11 +62,12 @@ type setupRequest struct {
 // ID 为空表示新增 service（后端分配 ID）；ID 存在表示更新；
 // 现有 service 不在请求列表中则被删除（删除逻辑在 putProjectSetup）。
 type setupServiceEntry struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Required    bool               `json:"required"`
-	Order       int                `json:"order"`
-	Deployments []model.Deployment `json:"deployments"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Language    model.ServiceLanguage `json:"language"`
+	Required    bool                  `json:"required"`
+	Order       int                   `json:"order"`
+	Deployments []model.Deployment    `json:"deployments"`
 }
 
 // putProjectSetup 处理 PUT /api/projects/{id}/setup。
@@ -159,6 +160,7 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		svc := existing[entry.ID] // ID 为空时为零值 Service（新增）
 		svc.ID = entry.ID
 		svc.Name = entry.Name
+		svc.Language = model.ServiceLanguage(strings.TrimSpace(string(entry.Language)))
 		svc.Required = entry.Required
 		svc.Order = entry.Order
 		svc.Deployments = deps

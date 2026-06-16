@@ -201,7 +201,7 @@ func configChangeInputSchema() map[string]any {
 			"project":          map[string]any{"type": "object"},
 			"service": map[string]any{
 				"type":        "object",
-				"description": "Service config. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
+				"description": "Service config. Set service.language (go, node, python) as the service implementation language; it is required for local managed runtime.type=language deployments. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
 			},
 			"pipeline": map[string]any{
 				"type": "object",
@@ -625,7 +625,7 @@ func debugCaptureAtInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"deployment_id":         map[string]any{"type": "string", "description": "Local managed command deployment to debug. The agent resolves or creates the internal lease."},
+			"deployment_id":         map[string]any{"type": "string", "description": "Local managed language runtime deployment to debug. The agent resolves or creates the internal lease."},
 			"source":                map[string]any{"type": "string"},
 			"line":                  map[string]any{"type": "integer", "minimum": 1},
 			"thread_id":             map[string]any{"type": "integer", "minimum": 0},
@@ -961,7 +961,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "upsert_service",
 				Title:       "Upsert service",
-				Description: "Create or edit one service and its deployments through the local agent.",
+				Description: "Create or edit one service and its deployments through the local agent. Set service.language when using local managed runtime.type=language.",
 				InputSchema: upsertServiceInputSchema(),
 			},
 			Handler: s.upsertServiceTool,
@@ -1228,7 +1228,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "list_code_debug_targets",
 				Title:       "List code debug targets",
-				Description: "List local managed command deployments that can use last-resort code debugging. Node targets are experimental.",
+				Description: "List local managed language runtime deployments that can use last-resort code debugging. Node targets are experimental.",
 				InputSchema: emptyInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},

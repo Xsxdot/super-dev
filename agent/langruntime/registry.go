@@ -61,5 +61,5 @@ var core = func() *Registry {
 	return r
 }()
 
-// Core 返回内置 provider 注册表（Phase A 仅 Go；Phase C 加 Node/Python）。
+// Core 返回内置 provider 注册表。
 func Core() *Registry { return core }

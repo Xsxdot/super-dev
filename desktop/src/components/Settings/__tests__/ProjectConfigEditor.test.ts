@@ -97,11 +97,12 @@ describe('ProjectConfigEditor', () => {
 
   it('新启用服务环境时保存 runtime/logs 配置', async () => {
     const { api } = await import('@/api/agent')
-    const wrapper = mountProjectConfigEditor(project())
+    const p = project()
+    p.services[0].language = 'node'
+    const wrapper = mountProjectConfigEditor(p)
     await new Promise(r => setTimeout(r))
 
     await wrapper.find('[data-test="enable-dep"]').trigger('click')
-    await wrapper.find('[data-test="dep-command"]').setValue('npm run dev')
     await wrapper.find('[data-test="config-save"]').trigger('click')
     await new Promise(r => setTimeout(r))
 
@@ -111,7 +112,11 @@ describe('ProjectConfigEditor', () => {
           deployments: expect.arrayContaining([
             expect.objectContaining({
               control_mode: 'managed',
-              runtime: expect.objectContaining({ type: 'command', command: 'npm run dev' }),
+              runtime: expect.objectContaining({
+                type: 'language',
+                cwd: '/tmp/demo/web',
+                config: expect.objectContaining({ package_manager: 'pnpm', script: 'dev' }),
+              }),
               logs: expect.objectContaining({ type: 'process' }),
             }),
           ]),

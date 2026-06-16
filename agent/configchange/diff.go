@@ -181,18 +181,6 @@ func codeDebugSummary(cfg *model.CodeDebugConfig) map[string]any {
 	if cfg.Mode != "" {
 		out["mode"] = cfg.Mode
 	}
-	if cfg.Program != "" {
-		out["program"] = cfg.Program
-	}
-	if cfg.WorkingDir != "" {
-		out["working_dir"] = cfg.WorkingDir
-	}
-	if len(cfg.Args) > 0 {
-		out["args"] = cfg.Args
-	}
-	if len(cfg.EnvVars) > 0 {
-		out["env_vars"] = cfg.EnvVars
-	}
 	if cfg.AdapterCommand != "" {
 		out["adapter_command"] = cfg.AdapterCommand
 	}

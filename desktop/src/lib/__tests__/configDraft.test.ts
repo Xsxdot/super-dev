@@ -145,8 +145,11 @@ describe('configDraft', () => {
         policy: 'enabled',
         mode: 'launch',
         program: 'cmd/server',
+        args: ['--dev'],
+        working_dir: 'server',
+        env_vars: { DEBUG: '1' },
         stop_on_entry: false,
-      },
+      } as any,
     }]
 
     const draft = projectToDraft(project)
@@ -155,7 +158,6 @@ describe('configDraft', () => {
     expect(payload.services[0].deployments[0].code_debug).toEqual({
       policy: 'enabled',
       mode: 'launch',
-      program: 'cmd/server',
       stop_on_entry: false,
     })
   })

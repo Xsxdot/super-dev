@@ -2,14 +2,15 @@
 
 ## Scope
 
-This smoke verifies local command deployment code debug sessions through the agent API. It does not run remote, systemd, launchd, or Docker scenarios.
+This smoke verifies local managed language runtime code debug sessions through the agent API. It does not run remote, systemd, launchd, command, or Docker scenarios.
 
 Code debug is a last-resort path. Use logs and diagnosis tools first, then use breakpoint debugging only when runtime state cannot be inferred from logs.
 
 ## Requirements
 
 - SuperDev agent is running.
-- A local deployment has `code_debug.enabled=true`.
+- A local managed deployment uses `runtime.type=language` and the service has `language` set.
+- `code_debug.policy` is `auto` in a dev environment or explicitly `enabled`.
 - Go targets need `dlv` available on `PATH`.
 - Python targets need `debugpy` available to the configured Python interpreter.
 - Node targets are experimental and need `code_debug.adapter_command` configured.
@@ -52,7 +53,7 @@ Attach smoke starts the deployment with the default `start_dev` intent, calls th
 
 Attach prerequisites:
 
-- The deployment is a local Go command deployment with a dev build that keeps symbols.
+- The deployment is a local Go language runtime deployment with a dev build that keeps symbols.
 - `dlv` is available on `PATH`.
 - On macOS, developer tools attach permission is enabled (`DevToolsSecurity -enable`) or the first attach prompt has been accepted.
 - `SUPERDEV_CODE_DEBUG_SOURCE` and `SUPERDEV_CODE_DEBUG_LINE` point to a line that the running service will hit before `SUPERDEV_CODE_DEBUG_TIMEOUT_MS` expires.

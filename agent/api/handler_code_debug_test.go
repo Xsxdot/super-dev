@@ -465,8 +465,13 @@ func codeDebugAPIProject(root string) model.Project {
 			ID: "svc-api", Name: "api", Language: model.LanguageGo,
 			Deployments: []model.Deployment{{
 				ID: "dep-api-dev", EnvName: "dev", Location: model.LocationLocal,
-				Command: "go run ./cmd/api", WorkDir: root,
-				CodeDebug: &model.CodeDebugConfig{Program: "."},
+				ControlMode: model.ControlModeManaged,
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "."},
+				},
+				CodeDebug: &model.CodeDebugConfig{},
 			}},
 		}},
 	}

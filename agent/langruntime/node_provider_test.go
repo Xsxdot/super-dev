@@ -96,6 +96,26 @@ func TestNodeNormalizeRequiresEntry(t *testing.T) {
 	assert.True(t, hasDiag(diagnostics, "node_entry_required"), "diagnostics=%v", diagnostics)
 }
 
+func TestNodeNormalizeRejectsCWDOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "../outside",
+		Config:      map[string]any{"script": "dev"},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "runtime_cwd_outside_project"), "diagnostics=%v", diagnostics)
+}
+
+func TestNodeNormalizeRejectsProgramOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "./web",
+		Config:      map[string]any{"program": "../../outside/server.js"},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "runtime_program_outside_project"), "diagnostics=%v", diagnostics)
+}
+
 func TestNodeNormalizeScriptOK(t *testing.T) {
 	_, diagnostics, err := langruntime.NewNodeProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
 		Config: map[string]any{"script": "dev"},

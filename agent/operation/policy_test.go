@@ -167,7 +167,12 @@ func TestPlanCodeDebugOpenDisabledPolicy(t *testing.T) {
 		Environments: []model.Environment{{Name: "dev", IsDev: true}}}
 	svc := model.Service{ID: "s1", Name: "api", Language: model.LanguageGo}
 	dep := model.Deployment{ID: "d1", EnvName: "dev", Location: model.LocationLocal,
-		ControlMode: model.ControlModeManaged, Command: "go run ./cmd/api",
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "./cmd/api"},
+		},
 		CodeDebug: &model.CodeDebugConfig{Policy: model.CodeDebugPolicyDisabled}}
 	plan, err := PlanCodeDebugOpen(project, svc, dep, model.LanguageGo)
 	if err != nil {
@@ -183,7 +188,12 @@ func TestPlanCodeDebugOpenDevAllowed(t *testing.T) {
 		Environments: []model.Environment{{Name: "dev", IsDev: true}}}
 	svc := model.Service{ID: "s1", Name: "api", Language: model.LanguageGo}
 	dep := model.Deployment{ID: "d1", EnvName: "dev", Location: model.LocationLocal,
-		ControlMode: model.ControlModeManaged, Command: "go run ./cmd/api"}
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "./cmd/api"},
+		}}
 	plan, err := PlanCodeDebugOpen(project, svc, dep, model.LanguageGo)
 	if err != nil {
 		t.Fatal(err)

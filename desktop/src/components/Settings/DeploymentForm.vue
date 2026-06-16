@@ -28,6 +28,7 @@ import type {
 } from '@/api/agent'
 import { api } from '@/api/agent'
 import { useAppI18n } from '@/i18n/useAppI18n'
+import { defaultLanguageRuntime, defaultManagedRuntime } from '@/lib/languageRuntimeDefaults'
 import EnvKeyValueEditor from './EnvKeyValueEditor.vue'
 import SchemaFieldInput from './SchemaFieldInput.vue'
 import WorkDirInput from './WorkDirInput.vue'
@@ -85,7 +86,9 @@ function inferRuntime(): RuntimeConfig {
   if (props.modelValue.log_type === 'journalctl' || props.modelValue.logs?.type === 'journalctl' || props.modelValue.log_target) {
     return { type: 'systemd', service_name: serviceNameFromLogTarget(props.modelValue.logs?.target ?? props.modelValue.log_target) }
   }
-  return props.modelValue.location === 'local' ? { type: 'command', command: '' } : { type: 'systemd' }
+  return props.modelValue.location === 'local' && controlMode.value === 'managed'
+    ? defaultManagedRuntime(props.serviceLanguage, props.defaultWorkDir)
+    : { type: 'systemd' }
 }
 
 const runtime = computed(() => inferRuntime())
@@ -116,9 +119,9 @@ function inferLogs(): LogConfig {
 }
 
 const logs = computed(() => inferLogs())
-const isLocalCommand = computed(() => {
+const isLocalLanguageRuntime = computed(() => {
   const runtimeType = runtime.value.type || 'command'
-  return props.modelValue.location === 'local' && runtimeType === 'command'
+  return props.modelValue.location === 'local' && runtimeType === 'language'
 })
 const canUseLanguageRuntime = computed(() =>
   props.modelValue.location === 'local' &&
@@ -191,7 +194,9 @@ function patchLogs(partial: Partial<LogConfig>) {
 
 function runtimeForMode(mode: ControlMode): RuntimeConfig {
   if (mode === 'managed' && (runtime.value.type === 'nginx_static' || runtime.value.type === 'external')) {
-    return props.modelValue.location === 'local' ? { type: 'command', command: '' } : { type: 'systemd' }
+    return props.modelValue.location === 'local'
+      ? defaultManagedRuntime(props.serviceLanguage, props.defaultWorkDir)
+      : { type: 'systemd' }
   }
   return runtime.value.type === 'external' ? { type: 'systemd' } : runtime.value
 }
@@ -203,8 +208,8 @@ function setControlMode(mode: ControlMode) {
 }
 
 function setLocation(location: Deployment['location']) {
-  const nextRuntime = location === 'local' && controlMode.value === 'managed' && runtime.value.type !== 'command' && runtime.value.type !== 'launchd'
-    ? { type: 'command' as const, command: '' }
+  const nextRuntime = location === 'local' && controlMode.value === 'managed' && runtime.value.type !== 'language' && runtime.value.type !== 'command' && runtime.value.type !== 'launchd'
+    ? defaultManagedRuntime(props.serviceLanguage, props.defaultWorkDir)
     : runtimeForMode(controlMode.value)
   const nextLogs = isDefaultLogForRuntime(logs.value, runtime.value) ? defaultLogsForRuntime(nextRuntime) : logs.value
   patchRuntimeAndLogs(nextRuntime, nextLogs, { location, web: location === 'local' ? props.modelValue.web : undefined })
@@ -227,9 +232,13 @@ function setRuntimeType(type: RuntimeType) {
   } else if (type === 'nginx_static') {
     base.domain = runtime.value.domain ?? logs.value.target
   } else if (type === 'language') {
-    base.cwd = runtime.value.cwd ?? runtime.value.working_dir ?? props.modelValue.work_dir ?? props.defaultWorkDir
-    base.env = runtime.value.env ?? runtime.value.env_vars ?? props.modelValue.env ?? {}
-    base.config = runtime.value.config ?? {}
+    const defaults = defaultLanguageRuntime(
+      props.serviceLanguage,
+      runtime.value.cwd ?? runtime.value.working_dir ?? props.modelValue.work_dir ?? props.defaultWorkDir,
+    )
+    base.cwd = runtime.value.cwd ?? defaults?.cwd ?? runtime.value.working_dir ?? props.modelValue.work_dir ?? props.defaultWorkDir
+    base.env = runtime.value.env ?? runtime.value.env_vars ?? props.modelValue.env ?? defaults?.env ?? {}
+    base.config = { ...(defaults?.config ?? {}), ...(runtime.value.config ?? {}) }
   }
   patchRuntimeAndLogs(base, defaultLogsForRuntime(base))
 }
@@ -459,8 +468,8 @@ watch(
           :value="runtime.type"
           @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
         >
-          <option v-if="controlMode === 'managed'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
-          <option v-if="canUseLanguageRuntime" value="language">{{ t('settings.deployment.languageRuntime') }}</option>
+          <option v-if="canUseLanguageRuntime || runtime.type === 'language'" value="language">{{ t('settings.deployment.languageRuntime') }}</option>
+          <option v-if="controlMode === 'managed' && runtime.type === 'command'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
           <option value="systemd">{{ t('settings.deployment.systemdService') }}</option>
           <option v-if="controlMode === 'managed'" value="launchd">{{ t('settings.deployment.launchdService') }}</option>
           <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
@@ -700,7 +709,7 @@ watch(
       </template>
     </section>
 
-    <section v-if="isLocalCommand" class="dep-block" data-test="code-debug-section">
+    <section v-if="isLocalLanguageRuntime" class="dep-block" data-test="code-debug-section">
       <div class="dep-heading">{{ t('settings.deployment.codeDebug.title') }}</div>
       <div class="dep-help">{{ t('settings.deployment.codeDebug.devDefaultHint') }}</div>
 

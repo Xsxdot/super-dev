@@ -848,21 +848,18 @@ func (p CodeDebugPolicy) Effective() CodeDebugPolicy {
 //
 // 职责：
 //   - policy 控制 AI 调试放行（缺省随 dev 环境）
-//   - 其余字段是 launch 入口/参数/adapter 的可选 override，缺省由探测与推导补齐
+//   - adapter 字段只覆盖 DAP adapter 行为，启动入口统一来自 language runtime
 //
 // 边界：
 //   - 不再声明调试开关、provider 和运行态保留等旧配置；provider 由 service.language 推导
+//   - 不保存 program/args/working_dir/env_vars，避免 code_debug 成为第二套启动入口
 //   - 不保存运行时 session ID
 type CodeDebugConfig struct {
-	Policy         CodeDebugPolicy   `json:"policy,omitempty" yaml:"policy,omitempty"`
-	Mode           CodeDebugMode     `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Program        string            `json:"program,omitempty" yaml:"program,omitempty"`
-	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
-	WorkingDir     string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
-	EnvVars        map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`
-	AdapterCommand string            `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
-	AdapterArgs    []string          `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
-	StopOnEntry    bool              `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
+	Policy         CodeDebugPolicy `json:"policy,omitempty" yaml:"policy,omitempty"`
+	Mode           CodeDebugMode   `json:"mode,omitempty" yaml:"mode,omitempty"`
+	AdapterCommand string          `json:"adapter_command,omitempty" yaml:"adapter_command,omitempty"`
+	AdapterArgs    []string        `json:"adapter_args,omitempty" yaml:"adapter_args,omitempty"`
+	StopOnEntry    bool            `json:"stop_on_entry,omitempty" yaml:"stop_on_entry,omitempty"`
 }
 
 // Deployment 描述服务在某个环境下的一份具体实例。

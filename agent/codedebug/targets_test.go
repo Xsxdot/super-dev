@@ -1,7 +1,7 @@
 // Package codedebug 验证代码调试目标解析。
 //
 // 职责：
-//   - 确认只有本机 managed command deployment 会进入可调试目标
+//   - 确认只有本机 managed language runtime deployment 会进入可调试目标
 //   - 确认程序路径和断点路径被限制在项目根目录内
 //
 // 边界：
@@ -36,7 +36,11 @@ func TestListTargetsLanguageAndCanOpen(t *testing.T) {
 				EnvName:     "dev",
 				Location:    model.LocationLocal,
 				ControlMode: model.ControlModeManaged,
-				Command:     "go run ./cmd/api",
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
 			}},
 		}},
 	}}
@@ -83,6 +87,29 @@ func TestListTargetsIncludesLanguageRuntime(t *testing.T) {
 	assert.Equal(t, model.CodeDebugProviderGo, targets[0].Provider)
 }
 
+func TestListTargetsSkipsLegacyCommandRuntime(t *testing.T) {
+	project := model.Project{
+		ID:           "proj-command",
+		Name:         "demo",
+		RootPath:     "/repo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
+		Services: []model.Service{{
+			ID:       "svc-api",
+			Name:     "api",
+			Language: model.LanguageGo,
+			Deployments: []model.Deployment{{
+				ID:          "dep-api-dev",
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Runtime:     &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "go run ./cmd/api"},
+			}},
+		}},
+	}
+
+	assert.Empty(t, ListTargets([]model.Project{project}))
+}
+
 func TestListTargetsNonDevNotOpenable(t *testing.T) {
 	projects := []model.Project{{
 		ID:       "p1",
@@ -101,7 +128,11 @@ func TestListTargetsNonDevNotOpenable(t *testing.T) {
 				EnvName:     "prod",
 				Location:    model.LocationLocal,
 				ControlMode: model.ControlModeManaged,
-				Command:     "go run ./cmd/api",
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
 			}},
 		}},
 	}}
@@ -135,8 +166,12 @@ func TestListTargetsDisabledByConfig(t *testing.T) {
 				EnvName:     "dev",
 				Location:    model.LocationLocal,
 				ControlMode: model.ControlModeManaged,
-				Command:     "go run ./cmd/api",
-				CodeDebug:   &model.CodeDebugConfig{Policy: model.CodeDebugPolicyDisabled},
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
+				CodeDebug: &model.CodeDebugConfig{Policy: model.CodeDebugPolicyDisabled},
 			}},
 		}},
 	}}
@@ -163,7 +198,11 @@ func TestListTargetsUnknownLanguage(t *testing.T) {
 				EnvName:     "dev",
 				Location:    model.LocationLocal,
 				ControlMode: model.ControlModeManaged,
-				Command:     "./run.sh",
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
 			}},
 		}},
 	}}
@@ -181,8 +220,12 @@ func TestListTargetsMarksNodeAsExperimental(t *testing.T) {
 		Services: []model.Service{{
 			ID: "svc-web", Name: "web", Language: model.LanguageNode,
 			Deployments: []model.Deployment{{
-				ID: "dep-web-dev", EnvName: "dev", Location: model.LocationLocal,
-				Command: "node server.js", WorkDir: root, ControlMode: model.ControlModeManaged,
+				ID: "dep-web-dev", EnvName: "dev", Location: model.LocationLocal, ControlMode: model.ControlModeManaged,
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "server.js"},
+				},
 			}},
 		}},
 	}}
@@ -203,8 +246,12 @@ func TestListTargetsIncludesRuntimeAndLeaseState(t *testing.T) {
 			ID: "svc-api", Name: "api", Language: model.LanguageGo,
 			Deployments: []model.Deployment{{
 				ID: "dep-api-dev", EnvName: "dev", Location: model.LocationLocal,
-				Command: "go run ./cmd/api", WorkDir: root,
 				ControlMode: model.ControlModeManaged,
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
 			}},
 		}},
 	}}

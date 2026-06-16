@@ -412,9 +412,17 @@ describe('DeploymentForm', () => {
     expect(withDebug.web?.ai_debug?.enabled).toBe(true)
   })
 
-  it('shows code debug section for local command deployment', () => {
+  it('does not show code debug section for local command deployment', () => {
     const wrapper = mount(DeploymentForm, {
       props: { modelValue: localDep(), hosts: [] },
+    })
+
+    expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(false)
+  })
+
+  it('shows code debug section for local language runtime deployment', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: languageDep(), hosts: [], serviceLanguage: 'go' },
     })
 
     expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(true)
@@ -423,7 +431,7 @@ describe('DeploymentForm', () => {
   it('does not render the dead code_debug program input', () => {
     const wrapper = mount(DeploymentForm, {
       props: {
-        modelValue: { ...localDep(), code_debug: { policy: 'auto', program: '.' } },
+        modelValue: { ...localDep(), code_debug: { policy: 'auto', program: '.' } as any },
         hosts: [],
       },
     })
@@ -442,7 +450,7 @@ describe('DeploymentForm', () => {
 
     expect(api.describeLanguageRuntimeSchema).toHaveBeenCalledWith('go')
     expect(wrapper.text()).toContain('Go 入口包')
-    expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="code-debug-section"]').exists()).toBe(true)
 
     await wrapper.get('[data-test="schema-field-program"]').setValue('./cmd/worker')
 
@@ -543,13 +551,36 @@ describe('DeploymentForm', () => {
 
     const emitted = wrapper.emitted('update:modelValue')
     const last = emitted![emitted!.length - 1][0] as Deployment
-    expect(last.runtime).toEqual({ type: 'language', cwd: '/tmp', env: {}, config: {} })
+    expect(last.runtime).toEqual({ type: 'language', cwd: '/tmp', env: {}, config: { program: '.' } })
     expect(last.logs).toEqual({ type: 'process' })
+  })
+
+  it('defaults blank local managed deployments to language runtime when service language is known', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: {
+          id: 'd1',
+          env_name: 'dev',
+          location: 'local',
+          control_mode: 'managed',
+          logs: { type: 'process' },
+          status: '',
+        },
+        hosts: [],
+        serviceLanguage: 'node',
+        defaultWorkDir: '/repo/web',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect((wrapper.find('[data-test="dep-target-type"]').element as HTMLSelectElement).value).toBe('language')
+    expect(wrapper.find('[data-test="dep-command"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-language-cwd"]').exists()).toBe(true)
   })
 
   it('emits policy=disabled when user disables code debug', async () => {
     const wrapper = mount(DeploymentForm, {
-      props: { modelValue: localDep(), hosts: [] },
+      props: { modelValue: languageDep(), hosts: [], serviceLanguage: 'go' },
     })
 
     await wrapper.find('[data-test="code-debug-policy"]').setValue('disabled')

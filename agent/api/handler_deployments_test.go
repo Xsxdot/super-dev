@@ -60,7 +60,7 @@ func TestStartDeploymentIntentDebugLaunchOnUnsupportedTargetErrors(t *testing.T)
 	assert.Equal(t, "debug_start_unavailable", resp["code"])
 	assert.Contains(t, resp["error"], "debug start not available")
 	data := resp["data"].(map[string]any)
-	assert.Equal(t, "service language does not support code debug", data["reason"])
+	assert.Equal(t, "code debug supports local managed language runtime deployments only", data["reason"])
 }
 
 func TestStartDeploymentRejectsLegacyModeField(t *testing.T) {

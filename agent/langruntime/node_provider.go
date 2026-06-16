@@ -142,9 +142,18 @@ func (NodeProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Norm
 			Message: "Node runtime needs a script, a program entry, or a custom command",
 		}}, nil
 	}
+	cwd, err := ResolveRuntimeCWDInsideProject(input.ProjectRoot, input.CWD)
+	if err != nil {
+		return NormalizedRuntimeConfig{}, []Diagnostic{runtimeCwdDiagnostic(err)}, nil
+	}
+	if program := StringValue(config["program"]); program != "" {
+		if _, err := ResolveRuntimePathInsideProject(input.ProjectRoot, cwd, program); err != nil {
+			return NormalizedRuntimeConfig{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+		}
+	}
 	return NormalizedRuntimeConfig{
 		ProjectRoot: input.ProjectRoot,
-		CWD:         ResolveRuntimeCWD(input.ProjectRoot, input.CWD),
+		CWD:         cwd,
 		Env:         CopyStringMap(input.Env),
 		Config:      config,
 	}, nil, nil
@@ -215,13 +224,17 @@ func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Executio
 		}
 		previewArgs := append([]string{}, nodeArgs...)
 		previewArgs = append(previewArgs, program)
+		programPath, err := ResolveRuntimePathInsideProject(cfg.ProjectRoot, cfg.CWD, program)
+		if err != nil {
+			return ExecutionPlan{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+		}
 		return ExecutionPlan{
 			Intent:     IntentDebugLaunch,
 			WorkingDir: cfg.CWD,
 			Env:        env,
 			Debug: &DebugSpec{
 				Provider:    model.CodeDebugProviderNode,
-				Program:     ResolveRuntimePath(cfg.CWD, program),
+				Program:     programPath,
 				Args:        programArgs,
 				StopOnEntry: input.StopOnEntry,
 			},

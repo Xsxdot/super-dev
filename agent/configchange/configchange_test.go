@@ -11,6 +11,7 @@
 package configchange
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -47,6 +48,53 @@ func TestApplyChangeUpsertsServiceAndPreservesUnmentionedItems(t *testing.T) {
 	assert.Equal(t, "go run ./cmd/api", api.Deployments[0].Runtime.Command)
 	assert.NotEmpty(t, api.Deployments[0].ID)
 	assert.NotNil(t, findServiceForTest(updated, "worker"))
+}
+
+func TestApplyChangeUpsertsServiceLanguageForExistingAndNewServices(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguageGo
+
+	updateExisting := ChangeRequest{
+		Kind: KindServiceUpsert,
+		Service: &ServicePatch{
+			ID:       "svc-worker",
+			Name:     "worker",
+			Language: ptrLanguage(model.LanguageNode),
+		},
+	}
+	updated, err := Apply(project, updateExisting)
+	require.NoError(t, err)
+	assert.Equal(t, model.LanguageNode, findServiceForTest(updated, "worker").Language)
+
+	addNew := ChangeRequest{
+		Kind: KindServiceUpsert,
+		Service: &ServicePatch{
+			Name:     "api",
+			Language: ptrLanguage(model.LanguagePython),
+		},
+	}
+	updated, err = Apply(updated, addNew)
+	require.NoError(t, err)
+	assert.Equal(t, model.LanguagePython, findServiceForTest(updated, "api").Language)
+}
+
+func TestApplyChangeClearsServiceLanguageWhenExplicitlyEmpty(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguageGo
+	var change ChangeRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"kind": "config.service.upsert",
+		"service": {
+			"id": "svc-worker",
+			"name": "worker",
+			"language": ""
+		}
+	}`), &change))
+
+	updated, err := Apply(project, change)
+
+	require.NoError(t, err)
+	assert.Empty(t, findServiceForTest(updated, "worker").Language)
 }
 
 func TestServiceUpsertPreservesDeploymentWebConfig(t *testing.T) {
@@ -89,15 +137,20 @@ func TestServiceUpsertPreservesDeploymentCodeDebugConfig(t *testing.T) {
 		Kind:      KindServiceUpsert,
 		ProjectID: "p1",
 		Service: &ServicePatch{
-			ID:   "svc-api",
-			Name: "api",
+			ID:       "svc-api",
+			Name:     "api",
+			Language: ptrLanguage(model.LanguageGo),
 			Deployments: []DeploymentPatch{{
 				ID:          "dep-api-dev",
 				EnvName:     "dev",
 				Location:    model.LocationLocal,
 				ControlMode: model.ControlModeManaged,
-				Runtime:     &model.RuntimeConfig{Type: model.RuntimeTypeCommand, Command: "go run ./cmd/api"},
-				Logs:        &model.LogConfig{Type: model.LogKindProcess},
+				Runtime: &model.RuntimeConfig{
+					Type:   model.RuntimeTypeLanguage,
+					CWD:    ".",
+					Config: map[string]any{"program": "./cmd/api"},
+				},
+				Logs: &model.LogConfig{Type: model.LogKindProcess},
 				CodeDebug: &model.CodeDebugConfig{
 					Policy:      model.CodeDebugPolicyEnabled,
 					Mode:        model.CodeDebugModeLaunch,
@@ -149,7 +202,7 @@ func TestServiceUpsertRejectsRemoteWebDebugV1(t *testing.T) {
 	assert.Contains(t, strings.Join(result.Errors, "; "), "local deployments only")
 }
 
-func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
+func TestValidateCodeDebugRequiresLocalManagedLanguageRuntime(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0] = model.Deployment{
 		ID:           "dep-api-dev",
@@ -168,7 +221,7 @@ func TestValidateCodeDebugRequiresLocalManagedCommand(t *testing.T) {
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
 	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed command/language deployments only")
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed language runtime deployments only")
 }
 
 func TestValidateCodeDebugAllowsLanguageRuntime(t *testing.T) {
@@ -195,6 +248,110 @@ func TestValidateCodeDebugAllowsLanguageRuntime(t *testing.T) {
 	require.True(t, result.OK, result.Errors)
 }
 
+func TestValidateLanguageRuntimeRequiresServiceLanguage(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Config: map[string]any{"program": "./cmd/worker"},
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "service worker language is required for local managed language runtime")
+}
+
+func TestValidateLanguageRuntimeRejectsUnsupportedServiceLanguage(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.ServiceLanguage("ruby")
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Config: map[string]any{"program": "./cmd/worker"},
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "service worker language ruby is unsupported for local managed language runtime")
+}
+
+func TestValidateLanguageRuntimeRejectsCWDOutsideProjectRoot(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguageGo
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "../outside",
+			Config: map[string]any{"program": "./cmd/worker"},
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "runtime.cwd must be inside project root")
+}
+
+func TestValidateLanguageRuntimeRejectsProgramOutsideProjectRoot(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguageNode
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./web",
+			Config: map[string]any{"program": "../../outside/server.js"},
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "runtime.config.program must be inside project root")
+}
+
+func TestValidateLanguageRuntimeRejectsPythonWithoutEntry(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Language = model.LanguagePython
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    "./server",
+			Config: map[string]any{},
+		},
+	}
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "service worker python runtime requires program, module, or runtime_executable")
+}
+
 func TestValidateCodeDebugPolicy(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
@@ -209,8 +366,20 @@ func TestValidateCodeDebugPolicy(t *testing.T) {
 
 func TestValidateCodeDebugValidPolicy(t *testing.T) {
 	project := sampleProject()
-	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Policy: model.CodeDebugPolicyDisabled,
+	project.Services[0].Language = model.LanguageGo
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "./worker"},
+		},
+		CodeDebug: &model.CodeDebugConfig{
+			Policy: model.CodeDebugPolicyDisabled,
+		},
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
@@ -218,39 +387,34 @@ func TestValidateCodeDebugValidPolicy(t *testing.T) {
 	require.True(t, result.OK, result.Errors)
 }
 
-func TestValidateCodeDebugRejectsProgramOutsideProjectRoot(t *testing.T) {
+func TestValidateCodeDebugRejectsCommandRuntime(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Mode:    model.CodeDebugModeLaunch,
-		Program: "../outside.py",
+		Policy: model.CodeDebugPolicyDisabled,
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
 
 	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.program must be inside project root")
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed language runtime deployments only")
 }
 
-func TestValidateCodeDebugRejectsWorkingDirOutsideProjectRoot(t *testing.T) {
+func TestValidateCodeDebugAllowsLanguageRuntimeWithoutCodeDebugProgramOverride(t *testing.T) {
 	project := sampleProject()
-	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Mode:       model.CodeDebugModeLaunch,
-		Program:    ".",
-		WorkingDir: "../outside",
-	}
-
-	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
-
-	require.False(t, result.OK)
-	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug.working_dir must be inside project root")
-}
-
-func TestValidateCodeDebugAllowsOmittedProgram(t *testing.T) {
-	project := sampleProject()
-	project.Services[0].Deployments[0].Command = "python ../app.py"
-	project.Services[0].Deployments[0].WorkDir = "server"
-	project.Services[0].Deployments[0].CodeDebug = &model.CodeDebugConfig{
-		Mode: model.CodeDebugModeLaunch,
+	project.Services[0].Language = model.LanguageGo
+	project.Services[0].Deployments[0] = model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Runtime: &model.RuntimeConfig{
+			Type:   model.RuntimeTypeLanguage,
+			CWD:    ".",
+			Config: map[string]any{"program": "./worker"},
+		},
+		CodeDebug: &model.CodeDebugConfig{
+			Mode: model.CodeDebugModeLaunch,
+		},
 	}
 
 	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
@@ -341,7 +505,7 @@ func TestDiffIncludesDeploymentCodeDebugChanges(t *testing.T) {
 }
 
 func TestCodeDebugSummaryPolicy(t *testing.T) {
-	out := codeDebugSummary(&model.CodeDebugConfig{Policy: model.CodeDebugPolicyEnabled, Program: "./cmd/api"})
+	out := codeDebugSummary(&model.CodeDebugConfig{Policy: model.CodeDebugPolicyEnabled, AdapterCommand: "dlv"})
 	if out["policy"] != model.CodeDebugPolicyEnabled {
 		t.Fatalf("summary policy = %v", out["policy"])
 	}
@@ -420,5 +584,9 @@ func findPipelineForTest(project model.Project, id string) model.ProjectPipeline
 }
 
 func ptrBool(v bool) *bool {
+	return &v
+}
+
+func ptrLanguage(v model.ServiceLanguage) *model.ServiceLanguage {
 	return &v
 }

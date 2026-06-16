@@ -25,6 +25,7 @@ import type {
   LogKind,
   LogSourceType,
   ControlMode,
+  CodeDebugConfig,
 } from '@/api/agent'
 import { i18n } from '@/i18n'
 
@@ -158,6 +159,17 @@ function normalizeLogs(d: Deployment, runtime: RuntimeConfig): LogConfig {
   return logs
 }
 
+function normalizeCodeDebug(config?: CodeDebugConfig): CodeDebugConfig | undefined {
+  if (!config) return undefined
+  const out: CodeDebugConfig = {}
+  if (config.policy !== undefined) out.policy = config.policy
+  if (config.mode !== undefined) out.mode = config.mode
+  if (config.adapter_command !== undefined) out.adapter_command = config.adapter_command
+  if (config.adapter_args !== undefined) out.adapter_args = [...config.adapter_args]
+  if (config.stop_on_entry !== undefined) out.stop_on_entry = config.stop_on_entry
+  return Object.keys(out).length ? out : undefined
+}
+
 function normalizeDeployment(d: Deployment): Deployment {
   const dep = clone(d)
   const runtime = normalizeRuntime(dep)
@@ -167,7 +179,7 @@ function normalizeDeployment(d: Deployment): Deployment {
     runtime,
     logs: normalizeLogs(dep, runtime),
     web: dep.web ? clone(dep.web) : undefined,
-    code_debug: dep.code_debug ? clone(dep.code_debug) : undefined,
+    code_debug: normalizeCodeDebug(dep.code_debug),
   }
 }
 
@@ -267,7 +279,7 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           runtime,
           logs,
           web: dep.web,
-          code_debug: dep.code_debug ? clone(dep.code_debug) : undefined,
+          code_debug: normalizeCodeDebug(dep.code_debug),
           read_only: controlMode === 'monitor' ? true : undefined,
           start_command: dep.start_command,
           stop_command: dep.stop_command,
@@ -394,7 +406,7 @@ export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
       if (codeDebug?.policy && !['auto', 'enabled', 'disabled'].includes(codeDebug.policy)) {
         errors.push(issue('config', 'validation.codeDebugPolicyInvalid', { service: s.name, env: d.env_name }))
       }
-      if (codeDebug && d.location !== 'local') {
+      if (codeDebug && (d.location !== 'local' || dep.control_mode !== 'managed' || dep.runtime?.type !== 'language')) {
         errors.push(issue('config', 'validation.codeDebugLocalCommandOnly', { service: s.name, env: d.env_name }))
       }
     }

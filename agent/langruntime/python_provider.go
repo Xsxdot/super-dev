@@ -107,9 +107,27 @@ func (PythonProvider) Normalize(_ context.Context, input RuntimeConfigInput) (No
 			}
 		}
 	}
+	program := StringValue(config["program"])
+	module := StringValue(config["module"])
+	_, hasEscape := EscapeHatchCommand(config)
+	if !hasEscape && program == "" && module == "" {
+		return NormalizedRuntimeConfig{}, []Diagnostic{{
+			Severity: SeverityError, Field: "program", Code: "python_entry_required",
+			Message: "Python runtime needs a program, a module, or a custom runtime executable",
+		}}, nil
+	}
+	cwd, err := ResolveRuntimeCWDInsideProject(input.ProjectRoot, input.CWD)
+	if err != nil {
+		return NormalizedRuntimeConfig{}, []Diagnostic{runtimeCwdDiagnostic(err)}, nil
+	}
+	if program != "" {
+		if _, err := ResolveRuntimePathInsideProject(input.ProjectRoot, cwd, program); err != nil {
+			return NormalizedRuntimeConfig{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+		}
+	}
 	return NormalizedRuntimeConfig{
 		ProjectRoot: input.ProjectRoot,
-		CWD:         ResolveRuntimeCWD(input.ProjectRoot, input.CWD),
+		CWD:         cwd,
 		Env:         CopyStringMap(input.Env),
 		Config:      config,
 	}, nil, nil
@@ -173,13 +191,24 @@ func (PythonProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Execut
 		}, nil, nil
 	case IntentDebugLaunch:
 		previewArgs := append([]string{"-m", "debugpy"}, targetArgs...)
+		program := StringValue(cfg.Config["program"])
+		if program == "" {
+			return ExecutionPlan{}, []Diagnostic{{
+				Severity: SeverityError, Field: "program", Code: "python_debug_program_required",
+				Message: "Python debug launch needs a program entry; attach a running module instead, or set program",
+			}}, nil
+		}
+		programPath, err := ResolveRuntimePathInsideProject(cfg.ProjectRoot, cfg.CWD, program)
+		if err != nil {
+			return ExecutionPlan{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+		}
 		return ExecutionPlan{
 			Intent:     IntentDebugLaunch,
 			WorkingDir: cfg.CWD,
 			Env:        env,
 			Debug: &DebugSpec{
 				Provider:    model.CodeDebugProviderPython,
-				Program:     ResolveRuntimePath(cfg.CWD, StringValue(cfg.Config["program"])),
+				Program:     programPath,
 				Args:        programArgs,
 				StopOnEntry: input.StopOnEntry,
 			},

@@ -42,6 +42,53 @@ func TestPythonSuggestFindsMainPy(t *testing.T) {
 	assert.Equal(t, "main.py", out[0].Config["program"])
 }
 
+func TestPythonNormalizeRequiresEntry(t *testing.T) {
+	_, diagnostics, err := langruntime.NewPythonProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		Config:      map[string]any{},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "python_entry_required"), "diagnostics=%v", diagnostics)
+}
+
+func TestPythonNormalizeAllowsModule(t *testing.T) {
+	_, diagnostics, err := langruntime.NewPythonProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		Config:      map[string]any{"module": "myapp.server"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestPythonNormalizeAllowsEscapeHatch(t *testing.T) {
+	_, diagnostics, err := langruntime.NewPythonProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		Config:      map[string]any{"runtime_executable": "make"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestPythonNormalizeRejectsCWDOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewPythonProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "../outside",
+		Config:      map[string]any{"program": "main.py"},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "runtime_cwd_outside_project"), "diagnostics=%v", diagnostics)
+}
+
+func TestPythonNormalizeRejectsProgramOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewPythonProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "./server",
+		Config:      map[string]any{"program": "../../outside/main.py"},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasDiag(diagnostics, "runtime_program_outside_project"), "diagnostics=%v", diagnostics)
+}
+
 func TestPythonStartDevPrearmListen(t *testing.T) {
 	cfg := langruntime.NormalizedRuntimeConfig{CWD: "/repo", Config: map[string]any{"program": "main.py"}}
 	plan, diagnostics, err := langruntime.NewPythonProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
@@ -87,4 +134,25 @@ func TestPythonModuleMode(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"-m", "myapp.server"}, plan.Command.Args)
+}
+
+func TestPythonDebugLaunchRequiresProgram(t *testing.T) {
+	for name, config := range map[string]map[string]any{
+		"module":       {"module": "myapp.server"},
+		"escape_hatch": {"runtime_executable": "make"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := langruntime.NormalizedRuntimeConfig{
+				ProjectRoot: "/repo",
+				CWD:         "/repo",
+				Config:      config,
+			}
+			_, diagnostics, err := langruntime.NewPythonProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+				Intent: langruntime.IntentDebugLaunch,
+				Config: cfg,
+			})
+			require.NoError(t, err)
+			assert.True(t, hasDiag(diagnostics, "python_debug_program_required"), "diagnostics=%v", diagnostics)
+		})
+	}
 }

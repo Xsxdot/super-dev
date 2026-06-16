@@ -329,7 +329,7 @@ func PlanBrowserDebugOpen(project model.Project, service model.Service, dep mode
 //
 // 注意：
 //   - 此函数只规划安全策略，不启动 adapter 或目标进程
-//   - v1 仅支持本机 managed command deployment，policy/语言/环境共同决定是否放行
+//   - v1 仅支持本机 managed language runtime deployment，policy/语言/环境共同决定是否放行
 func PlanCodeDebugOpen(project model.Project, service model.Service, dep model.Deployment, lang model.ServiceLanguage) (Plan, error) {
 	if dep.ID == "" {
 		return Plan{}, ErrInvalidOperation
@@ -433,7 +433,7 @@ func codeDebugDeniedReason(project model.Project, dep model.Deployment, lang mod
 	if effectiveDeployLocation(dep) != model.LocationLocal ||
 		dep.EffectiveControlMode() != model.ControlModeManaged ||
 		!codeDebugRuntimeSupported(dep) {
-		return "code debug supports local managed command/language deployments only"
+		return "code debug supports local managed language runtime deployments only"
 	}
 	policy := model.CodeDebugPolicyAuto
 	if dep.CodeDebug != nil {
@@ -455,12 +455,7 @@ func codeDebugDeniedReason(project model.Project, dep model.Deployment, lang mod
 }
 
 func codeDebugRuntimeSupported(dep model.Deployment) bool {
-	switch codeDebugRuntimeType(dep) {
-	case model.RuntimeTypeCommand, model.RuntimeTypeLanguage:
-		return true
-	default:
-		return false
-	}
+	return codeDebugRuntimeType(dep) == model.RuntimeTypeLanguage
 }
 
 func envIsDev(project model.Project, envName string) bool {

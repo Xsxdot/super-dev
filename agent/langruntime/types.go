@@ -48,6 +48,13 @@ const (
 	ConfigKeyRuntimeArgs = "runtime_args"
 )
 
+var (
+	// ErrRuntimeProjectRootRequired 表示需要项目根目录才能安全解析 language runtime 路径。
+	ErrRuntimeProjectRootRequired = errors.New("runtime project root required")
+	// ErrRuntimePathOutsideProject 表示 language runtime 的用户路径逃出了项目根目录。
+	ErrRuntimePathOutsideProject = errors.New("runtime path outside project root")
+)
+
 // DebugReadyStrategy 声明该语言如何达成 debugger-ready 契约。
 type DebugReadyStrategy string
 
@@ -272,7 +279,7 @@ type BuildPlanInput struct {
 	ArtifactDir string
 	// DebugPort 是启动层为 prearm-listen 语言分配的空闲端口（Python debugpy --listen）。
 	// 仅 prearm 语言在 start_dev/start_normal 使用；为空时 prearm provider 出 diagnostic。
-	DebugPort int
+	DebugPort   int
 	Target      AttachTarget // 仅 attach intent 使用
 	StopOnEntry bool         // 仅 debug_launch intent 使用
 }
@@ -299,6 +306,30 @@ func ResolveRuntimeCWD(projectRoot string, cwd string) string {
 	return filepath.Clean(filepath.Join(projectRoot, cwd))
 }
 
+// ResolveRuntimeCWDInsideProject 把 cwd 解析到项目根内，拒绝相对路径或绝对路径逃逸。
+func ResolveRuntimeCWDInsideProject(projectRoot string, cwd string) (string, error) {
+	root := cleanRuntimeRoot(projectRoot)
+	if root == "" {
+		if strings.TrimSpace(cwd) == "" {
+			return ResolveRuntimeCWD(projectRoot, cwd), nil
+		}
+		return "", ErrRuntimeProjectRootRequired
+	}
+	candidate := root
+	cwd = strings.TrimSpace(cwd)
+	if cwd != "" {
+		if filepath.IsAbs(cwd) {
+			candidate = filepath.Clean(cwd)
+		} else {
+			candidate = filepath.Clean(filepath.Join(root, cwd))
+		}
+	}
+	if err := ensureRuntimePathInsideRoot(root, candidate); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
 // ResolveRuntimePath 把相对路径解析为基于工作目录的绝对路径。
 func ResolveRuntimePath(workDir string, path string) string {
 	path = strings.TrimSpace(path)
@@ -306,6 +337,70 @@ func ResolveRuntimePath(workDir string, path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(filepath.Join(workDir, path))
+}
+
+// ResolveRuntimePathInsideProject 把用户路径解析到项目根内，拒绝逃逸项目根目录。
+func ResolveRuntimePathInsideProject(projectRoot string, workDir string, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	root := cleanRuntimeRoot(projectRoot)
+	if root == "" {
+		return ResolveRuntimePath(workDir, path), nil
+	}
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		workDir = root
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(workDir, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if err := ensureRuntimePathInsideRoot(root, candidate); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func cleanRuntimeRoot(projectRoot string) string {
+	root := filepath.Clean(strings.TrimSpace(projectRoot))
+	if root == "." || root == "" {
+		return ""
+	}
+	return root
+}
+
+func ensureRuntimePathInsideRoot(root string, candidate string) error {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ErrRuntimePathOutsideProject
+	}
+	return nil
+}
+
+func runtimeCwdDiagnostic(err error) Diagnostic {
+	code := "runtime_cwd_invalid"
+	message := "runtime cwd requires a valid project root"
+	if errors.Is(err, ErrRuntimePathOutsideProject) {
+		code = "runtime_cwd_outside_project"
+		message = "runtime cwd must be inside project root"
+	}
+	return Diagnostic{Severity: SeverityError, Field: "cwd", Code: code, Message: message}
+}
+
+func runtimeProgramDiagnostic(field string, err error) Diagnostic {
+	code := "runtime_program_invalid"
+	message := "runtime program requires a valid project root"
+	if errors.Is(err, ErrRuntimePathOutsideProject) {
+		code = "runtime_program_outside_project"
+		message = "runtime program must be inside project root"
+	}
+	return Diagnostic{Severity: SeverityError, Field: field, Code: code, Message: message}
 }
 
 // StringValue 从 any 中提取去空格字符串，非字符串返回空。

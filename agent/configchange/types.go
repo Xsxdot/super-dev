@@ -57,11 +57,12 @@ type ProjectPatch struct {
 
 // ServicePatch 描述 service 的局部 upsert。
 type ServicePatch struct {
-	ID          string            `json:"id,omitempty"`
-	Name        string            `json:"name,omitempty"`
-	Required    *bool             `json:"required,omitempty"`
-	Order       *int              `json:"order,omitempty"`
-	Deployments []DeploymentPatch `json:"deployments,omitempty"`
+	ID          string                 `json:"id,omitempty"`
+	Name        string                 `json:"name,omitempty"`
+	Language    *model.ServiceLanguage `json:"language,omitempty"`
+	Required    *bool                  `json:"required,omitempty"`
+	Order       *int                   `json:"order,omitempty"`
+	Deployments []DeploymentPatch      `json:"deployments,omitempty"`
 }
 
 // DeploymentPatch 描述 deployment 的局部 upsert。

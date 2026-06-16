@@ -123,9 +123,16 @@ func (GoProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Normal
 	if StringValue(config["program"]) == "" {
 		config["program"] = "."
 	}
+	cwd, err := ResolveRuntimeCWDInsideProject(input.ProjectRoot, input.CWD)
+	if err != nil {
+		return NormalizedRuntimeConfig{}, []Diagnostic{runtimeCwdDiagnostic(err)}, nil
+	}
+	if _, err := ResolveRuntimePathInsideProject(input.ProjectRoot, cwd, StringValue(config["program"])); err != nil {
+		return NormalizedRuntimeConfig{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+	}
 	return NormalizedRuntimeConfig{
 		ProjectRoot: input.ProjectRoot,
-		CWD:         ResolveRuntimeCWD(input.ProjectRoot, input.CWD),
+		CWD:         cwd,
 		Env:         CopyStringMap(input.Env),
 		Config:      config,
 	}, nil, nil
@@ -185,13 +192,17 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 				PreviewCommand(env, artifact, args...),
 		}, nil, nil
 	case IntentDebugLaunch:
+		programPath, err := ResolveRuntimePathInsideProject(cfg.ProjectRoot, cfg.CWD, program)
+		if err != nil {
+			return ExecutionPlan{}, []Diagnostic{runtimeProgramDiagnostic("program", err)}, nil
+		}
 		return ExecutionPlan{
 			Intent:     IntentDebugLaunch,
 			WorkingDir: cfg.CWD,
 			Env:        env,
 			Debug: &DebugSpec{
 				Provider:    model.CodeDebugProviderGo,
-				Program:     ResolveRuntimePath(cfg.CWD, program),
+				Program:     programPath,
 				Args:        args,
 				StopOnEntry: input.StopOnEntry,
 			},

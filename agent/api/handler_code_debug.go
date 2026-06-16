@@ -1,7 +1,7 @@
 // handler_code_debug.go 实现本机代码调试 HTTP API。
 //
 // 职责：
-//   - 列出可调试的本机 command deployment
+//   - 列出可调试的本机 language runtime deployment
 //   - 创建、控制和关闭代码调试会话
 //   - 接入 operation 审批链路
 //

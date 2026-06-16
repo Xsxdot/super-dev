@@ -48,6 +48,19 @@ func TestConfigChangeSchemaDocumentsCanonicalHostIDs(t *testing.T) {
 	assert.Contains(t, service["description"], "not host name")
 }
 
+func TestServiceUpsertSchemaDocumentsLanguageRuntimeContract(t *testing.T) {
+	server := NewServer(&fakeAgentClient{})
+	tool := server.tools["upsert_service"].Tool
+	schema := tool.InputSchema
+	properties := schema["properties"].(map[string]any)
+	service := properties["service"].(map[string]any)
+
+	assert.Contains(t, tool.Description, "service.language")
+	assert.Contains(t, tool.Description, "runtime.type=language")
+	assert.Contains(t, service["description"], "service.language")
+	assert.Contains(t, service["description"], "required for local managed runtime.type=language")
+}
+
 func TestUpsertProjectPipelinePassesApprovalToken(t *testing.T) {
 	client := &fakeAgentClient{configPreview: ConfigChangePreview{Kind: "config.pipeline.upsert", Validation: ConfigChangeValidation{OK: true}}}
 	server := NewServer(client)

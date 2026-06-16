@@ -90,6 +90,27 @@ func TestGoProviderNormalizeRejectsNonStringProgram(t *testing.T) {
 	assert.Equal(t, "program_type_invalid", diagnostics[0].Code)
 }
 
+func TestGoProviderNormalizeRejectsCWDOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewGoProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "../outside",
+	})
+	require.NoError(t, err)
+	require.True(t, langruntime.HasErrorDiagnostic(diagnostics))
+	assert.Equal(t, "runtime_cwd_outside_project", diagnostics[0].Code)
+}
+
+func TestGoProviderNormalizeRejectsProgramOutsideProjectRoot(t *testing.T) {
+	_, diagnostics, err := langruntime.NewGoProvider().Normalize(context.Background(), langruntime.RuntimeConfigInput{
+		ProjectRoot: "/repo",
+		CWD:         "./server",
+		Config:      map[string]any{"program": "../../outside"},
+	})
+	require.NoError(t, err)
+	require.True(t, langruntime.HasErrorDiagnostic(diagnostics))
+	assert.Equal(t, "runtime_program_outside_project", diagnostics[0].Code)
+}
+
 func TestGoProviderStartDevBuildsThenExecs(t *testing.T) {
 	normalized := normalizeGoConfig(t, langruntime.RuntimeConfigInput{
 		ProjectRoot: "/repo",

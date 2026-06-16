@@ -254,6 +254,11 @@ describe('RuntimeWorkbenchHeader', () => {
 
   it('uses default start intent for the primary button and explicit intents from the menu', async () => {
     const service = makeService()
+    service.deployments![0].runtime = {
+      type: 'language',
+      cwd: './server',
+      config: { program: './cmd/api' },
+    }
     useAgentStore().projects = [makeProject(service)]
     useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
     const startDeployment = vi.spyOn(useAgentStore(), 'startDeployment').mockResolvedValue(undefined)
@@ -283,7 +288,7 @@ describe('RuntimeWorkbenchHeader', () => {
     expect(wrapper.find('[data-test="start-debug"]').attributes('disabled')).toBeDefined()
   })
 
-  it('allows language runtime deployments to attach a debugger from the start menu', async () => {
+  it('allows language runtime deployments to start with debugger from the start menu', async () => {
     const service = makeService()
     service.deployments![0].runtime = {
       type: 'language',
@@ -301,6 +306,27 @@ describe('RuntimeWorkbenchHeader', () => {
     await wrapper.find('[data-test="start-debug"]').trigger('click')
 
     expect(startDeployment).toHaveBeenCalledWith('dep-api', 'debug_launch')
+  })
+
+  it('disables debug launch for node script language runtimes', async () => {
+    const service = makeService()
+    service.language = 'node'
+    service.deployments![0].runtime = {
+      type: 'language',
+      cwd: './web',
+      config: { package_manager: 'pnpm', script: 'dev' },
+    }
+    useAgentStore().projects = [makeProject(service)]
+    useWorkspaceStore().openDeployment('dep-api', 'sample-api · demo')
+    const startDeployment = vi.spyOn(useAgentStore(), 'startDeployment').mockResolvedValue(undefined)
+
+    const wrapper = mount(RuntimeWorkbenchHeader, { global: { plugins: [installTestI18n('en-US')] } })
+    await wrapper.find('[data-test="start-menu-toggle"]').trigger('click')
+
+    expect(wrapper.find('[data-test="start-debug"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="start-debug"]').trigger('click')
+
+    expect(startDeployment).not.toHaveBeenCalled()
   })
 
   it('shows debugger chip when attached', () => {

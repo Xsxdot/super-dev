@@ -91,6 +91,9 @@ func applyService(project model.Project, patch *ServicePatch) model.Project {
 	if strings.TrimSpace(patch.Name) != "" {
 		svc.Name = strings.TrimSpace(patch.Name)
 	}
+	if patch.Language != nil {
+		svc.Language = model.ServiceLanguage(strings.TrimSpace(string(*patch.Language)))
+	}
 	if patch.Required != nil {
 		svc.Required = *patch.Required
 	}

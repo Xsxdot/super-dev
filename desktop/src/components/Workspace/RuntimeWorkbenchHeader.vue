@@ -21,6 +21,7 @@ import { useBookmarkStore } from '@/stores/bookmark'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useRuntimeStatusStore } from '@/stores/runtimeStatus'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { languageRuntimeSupportsDebugLaunch } from '@/lib/languageRuntimeDefaults'
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
@@ -100,10 +101,11 @@ const debugUnavailableReason = computed(() => {
   const controlMode = dep.control_mode ?? 'managed'
   const policy = dep.code_debug?.policy ?? 'auto'
   const env = primaryProject.value?.environments?.find(item => item.name === info.envName)
-  if (dep.location !== 'local' || (runtimeType !== 'command' && runtimeType !== 'language') || controlMode !== 'managed') {
+  if (dep.location !== 'local' || runtimeType !== 'language' || controlMode !== 'managed') {
     return t('runtimeWorkbench.debugUnavailableTarget')
   }
   if (!info.service.language) return t('runtimeWorkbench.debugUnavailableLanguage')
+  if (!languageRuntimeSupportsDebugLaunch(info.service.language, dep.runtime)) return t('runtimeWorkbench.debugUnavailableLaunchConfig')
   if (policy === 'disabled') return t('runtimeWorkbench.debugUnavailablePolicy')
   if (policy !== 'enabled' && !env?.is_dev) return t('runtimeWorkbench.debugUnavailableEnv')
   return ''
@@ -290,11 +292,11 @@ function startWindowDrag(event: MouseEvent) {
             type="button"
             data-test="start-debug"
             :disabled="!canDebug"
-            :title="canDebug ? t('runtimeWorkbench.attachDebugger') : debugUnavailableReason"
+            :title="canDebug ? t('runtimeWorkbench.startWithDebugger') : debugUnavailableReason"
             @click="onAttachDebugger"
           >
             <Icon icon="lucide:bug" aria-hidden="true" />
-            {{ t('runtimeWorkbench.attachDebugger') }}
+            {{ t('runtimeWorkbench.startWithDebugger') }}
           </button>
         </div>
       </div>

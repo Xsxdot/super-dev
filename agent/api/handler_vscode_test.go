@@ -165,6 +165,94 @@ func TestPutProjectSetup_AddsNewService(t *testing.T) {
 	assert.Equal(t, webSvcID, web.ID, "保留的 service 应沿用原 ID")
 }
 
+func TestPutProjectSetupPersistsServiceLanguageForExistingAndNewServices(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "myapp")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	require.Len(t, created.Services, 1)
+	webSvcID := created.Services[0].ID
+
+	setupBody, err := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services": []map[string]any{
+			{"id": webSvcID, "name": "web", "language": "node", "required": false, "order": 0, "deployments": []any{}},
+			{"id": "", "name": "worker", "language": "python", "required": true, "order": 1, "deployments": []any{}},
+		},
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	var updated model.Project
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
+	require.Len(t, updated.Services, 2)
+	web := findServiceByNameForSetupTest(updated.Services, "web")
+	worker := findServiceByNameForSetupTest(updated.Services, "worker")
+	require.NotNil(t, web)
+	require.NotNil(t, worker)
+	assert.Equal(t, model.LanguageNode, web.Language)
+	assert.Equal(t, model.LanguagePython, worker.Language)
+
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	loadedWeb := findServiceByNameForSetupTest(loaded.Services, "web")
+	loadedWorker := findServiceByNameForSetupTest(loaded.Services, "worker")
+	require.NotNil(t, loadedWeb)
+	require.NotNil(t, loadedWorker)
+	assert.Equal(t, model.LanguageNode, loadedWeb.Language)
+	assert.Equal(t, model.LanguagePython, loadedWorker.Language)
+
+	clearBody, err := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services": []map[string]any{
+			{"id": web.ID, "name": "web", "required": false, "order": 0, "deployments": []any{}},
+			{"id": worker.ID, "name": "worker", "language": "", "required": true, "order": 1, "deployments": []any{}},
+		},
+	})
+	require.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(clearBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	clearResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer clearResp.Body.Close()
+	require.Equal(t, http.StatusOK, clearResp.StatusCode)
+
+	var cleared model.Project
+	require.NoError(t, json.NewDecoder(clearResp.Body).Decode(&cleared))
+	clearedWeb := findServiceByNameForSetupTest(cleared.Services, "web")
+	clearedWorker := findServiceByNameForSetupTest(cleared.Services, "worker")
+	require.NotNil(t, clearedWeb)
+	require.NotNil(t, clearedWorker)
+	assert.Empty(t, clearedWeb.Language)
+	assert.Empty(t, clearedWorker.Language)
+
+	loaded, err = config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	loadedWeb = findServiceByNameForSetupTest(loaded.Services, "web")
+	loadedWorker = findServiceByNameForSetupTest(loaded.Services, "worker")
+	require.NotNil(t, loadedWeb)
+	require.NotNil(t, loadedWorker)
+	assert.Empty(t, loadedWeb.Language)
+	assert.Empty(t, loadedWorker.Language)
+}
+
 // TestPutProjectSetup_AppliesEnvironmentsAndDeployments 验证 PUT /api/projects/{id}/setup
 // 正确写入 environments 和 service deployments，并分配 ID。
 func TestPutProjectSetup_AppliesEnvironmentsAndDeployments(t *testing.T) {
@@ -375,4 +463,13 @@ func TestPutProjectSetup_DeletesAbsentService(t *testing.T) {
 	var updated model.Project
 	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
 	assert.Len(t, updated.Services, 0, "未出现在请求中的 service 应被删除")
+}
+
+func findServiceByNameForSetupTest(services []model.Service, name string) *model.Service {
+	for i := range services {
+		if services[i].Name == name {
+			return &services[i]
+		}
+	}
+	return nil
 }

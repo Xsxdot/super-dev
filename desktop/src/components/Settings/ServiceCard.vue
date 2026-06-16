@@ -14,6 +14,7 @@ import { computed } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Deployment, ServiceLanguage } from '@/api/agent'
 import type { ConfigDraftService } from '@/lib/configDraft'
+import { defaultManagedRuntime } from '@/lib/languageRuntimeDefaults'
 import DeploymentForm from './DeploymentForm.vue'
 
 const props = defineProps<{
@@ -48,7 +49,7 @@ function enableDep() {
     env_name: props.envName,
     location: 'local',
     control_mode: 'managed',
-    runtime: { type: 'command', command: '', working_dir: defaultWorkDir.value },
+    runtime: defaultManagedRuntime(props.service.language, defaultWorkDir.value),
     logs: { type: 'process' },
     status: '',
   }

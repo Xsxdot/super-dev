@@ -1,7 +1,7 @@
 // targets.go 从项目配置中提取本机代码调试目标及其可用性。
 //
 // 职责：
-//   - 列出所有符合形态（local managed command/language）的 deployment
+//   - 列出所有符合形态（local managed language runtime）的 deployment
 //   - 由 service.language 推导 provider，计算 can_open 与不可用原因
 //
 // 边界：
@@ -100,14 +100,12 @@ func ListTargets(projects []model.Project, opts ...TargetListOption) []Target {
 	return targets
 }
 
-// isShapeSupported 只做形态判定：local + managed + command/language runtime。
+// isShapeSupported 只做形态判定：local + managed + language runtime。
 func isShapeSupported(dep model.Deployment) bool {
 	if dep.Location != model.LocationLocal || dep.EffectiveControlMode() != model.ControlModeManaged {
 		return false
 	}
-	if dep.Runtime != nil && dep.Runtime.Type != "" &&
-		dep.Runtime.Type != model.RuntimeTypeCommand &&
-		dep.Runtime.Type != model.RuntimeTypeLanguage {
+	if dep.Runtime == nil || dep.Runtime.Type != model.RuntimeTypeLanguage {
 		return false
 	}
 	return true
