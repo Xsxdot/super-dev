@@ -58,6 +58,10 @@ var core = func() *Registry {
 	r.Register(NewGoProvider())
 	r.Register(NewNodeProvider())
 	r.Register(NewPythonProvider())
+	r.Register(NewJVMProvider(model.LanguageJava))
+	r.Register(NewJVMProvider(model.LanguageKotlin))
+	r.Register(NewNativeProvider(model.LanguageRust))
+	r.Register(NewNativeProvider(model.LanguageCpp))
 	return r
 }()
 

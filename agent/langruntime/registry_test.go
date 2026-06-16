@@ -31,6 +31,22 @@ func TestCoreRegistersPython(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestCoreRegistersAllLanguages(t *testing.T) {
+	for _, language := range []model.ServiceLanguage{
+		model.LanguageGo,
+		model.LanguageNode,
+		model.LanguagePython,
+		model.LanguageJava,
+		model.LanguageKotlin,
+		model.LanguageRust,
+		model.LanguageCpp,
+	} {
+		if _, ok := langruntime.Core().Provider(language); !ok {
+			t.Fatalf("language %s not registered", language)
+		}
+	}
+}
+
 func TestRegistryListsLanguagesInStableOrder(t *testing.T) {
 	reg := langruntime.NewRegistry()
 	reg.Register(langruntime.NewGoProvider())
