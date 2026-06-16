@@ -772,6 +772,7 @@ func TestParseListenPort(t *testing.T) {
 	}{
 		{"space form host:port", []string{"python", "-m", "debugpy", "--listen", "127.0.0.1:5678", "app.py"}, 5678},
 		{"equals form host:port", []string{"python", "--listen=127.0.0.1:9001", "app.py"}, 9001},
+		{"jdwp agentlib address", []string{"java", "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005", "App"}, 5005},
 		{"port only", []string{"python", "--listen", "5678"}, 5678},
 		{"no listen", []string{"python", "app.py"}, 0},
 		{"listen without value", []string{"python", "--listen"}, 0},

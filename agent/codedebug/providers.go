@@ -287,6 +287,77 @@ func (NativeDebugProvider) AttachArguments(cfg LaunchConfig, processID int) map[
 // UsesReverseRequestChildSession 报告 lldb-dap 是单会话拓扑。
 func (NativeDebugProvider) UsesReverseRequestChildSession() bool { return false }
 
+// JVMDebugProvider 用 Java debug adapter 调试 JVM（attach 连 JDWP 端口）。
+//
+// 注意：
+//   - 当前官方 java-debug 是 JDT LS plugin，不是可直接 java -cp 启动的 standalone adapter
+//   - command 为空时允许 cfg.AdapterCommand 注入一个 wrapper；wrapper 需启动 DAP server 并监听传入端口
+type JVMDebugProvider struct{ Command string }
+
+// NewJVMDebugProvider 创建 JVM 调试 provider；command 为空时依赖 LaunchConfig.AdapterCommand。
+func NewJVMDebugProvider(command string) JVMDebugProvider {
+	return JVMDebugProvider{Command: strings.TrimSpace(command)}
+}
+
+// AdapterCommand 启动外部 JVM DAP server wrapper。
+func (p JVMDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
+	command := strings.TrimSpace(p.Command)
+	if command == "" {
+		command = strings.TrimSpace(cfg.AdapterCommand)
+	}
+	if command == "" {
+		return AdapterCommand{}, NewAdapterError(
+			CodeAdapterUnavailable,
+			AdapterCommand{Provider: model.CodeDebugProviderJVM},
+			ErrAdapterUnavailable,
+		)
+	}
+	if cfg.AdapterPort == 0 {
+		return AdapterCommand{}, ErrConfigInvalid
+	}
+	args := append([]string{}, cfg.AdapterArgs...)
+	// java-debug 现行交付形态依赖 JDT LS 启动 DAP server；这里把端口交给用户 wrapper，
+	// 由 wrapper 执行 vscode.java.startDebugSession 等宿主逻辑后监听该端口。
+	args = append(args, strconv.Itoa(cfg.AdapterPort))
+	return AdapterCommand{
+		Provider: model.CodeDebugProviderJVM,
+		Name:     command,
+		Args:     args,
+		Env:      copyEnv(cfg.Env),
+		WorkDir:  cfg.WorkingDir,
+	}, nil
+}
+
+// LaunchArguments 返回 JVM DAP launch 请求参数。
+func (JVMDebugProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
+	return map[string]any{
+		"mainClass":   cfg.Program,
+		"cwd":         cfg.WorkingDir,
+		"args":        cfg.Args,
+		"stopOnEntry": cfg.StopOnEntry,
+	}
+}
+
+// AttachCapability 返回 JVM 附加档位：java-debug/JDT LS DAP server 连接 JDWP 端口。
+func (JVMDebugProvider) AttachCapability() AttachMode { return AttachModeListen }
+
+// AttachArguments 构造 java-debug attach 参数：连 JDWP server 端口。
+func (JVMDebugProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
+	port := cfg.TargetPort
+	if port == 0 {
+		port = cfg.AdapterPort
+	}
+	return map[string]any{
+		"request":  "attach",
+		"hostName": "127.0.0.1",
+		"port":     port,
+		"cwd":      cfg.WorkingDir,
+	}
+}
+
+// UsesReverseRequestChildSession 报告 JVM adapter 是单会话拓扑。
+func (JVMDebugProvider) UsesReverseRequestChildSession() bool { return false }
+
 func copyEnv(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil

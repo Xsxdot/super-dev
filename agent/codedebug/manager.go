@@ -553,6 +553,8 @@ func parseListenPort(argv []string) int {
 			value = argv[i+1]
 		case strings.HasPrefix(arg, "--listen="):
 			value = strings.TrimPrefix(arg, "--listen=")
+		case strings.HasPrefix(arg, "-agentlib:jdwp=") || strings.HasPrefix(arg, "-Xrunjdwp:"):
+			value = jdwpAddressValue(arg)
 		default:
 			continue
 		}
@@ -565,6 +567,19 @@ func parseListenPort(argv []string) int {
 		}
 	}
 	return 0
+}
+
+func jdwpAddressValue(arg string) string {
+	const key = "address="
+	idx := strings.Index(arg, key)
+	if idx < 0 {
+		return ""
+	}
+	value := arg[idx+len(key):]
+	if comma := strings.Index(value, ","); comma >= 0 {
+		value = value[:comma]
+	}
+	return strings.TrimSpace(value)
 }
 
 func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig, provider Provider, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
@@ -1785,6 +1800,8 @@ func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error
 		return NewNodeProvider(m.jsDebugServerPath), nil
 	case model.CodeDebugProviderNative:
 		return NewNativeDebugProvider(""), nil
+	case model.CodeDebugProviderJVM:
+		return NewJVMDebugProvider(""), nil
 	default:
 		return nil, ErrTargetUnsupported
 	}

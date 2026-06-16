@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestGoProviderBuildsDelveDAPCommand(t *testing.T) {
@@ -98,6 +99,38 @@ func TestNativeDebugAttachArgumentsCarryPid(t *testing.T) {
 	provider := NewNativeDebugProvider("")
 	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo"}, 4321)
 	assert.Equal(t, 4321, args["pid"])
+}
+
+func TestJVMDebugProviderConnectsJdwpPort(t *testing.T) {
+	provider := NewJVMDebugProvider("")
+	assert.Equal(t, AttachModeListen, provider.AttachCapability())
+	assert.False(t, provider.UsesReverseRequestChildSession())
+	args := provider.AttachArguments(LaunchConfig{WorkingDir: "/repo", TargetPort: 5005}, 0)
+	assert.Equal(t, 5005, args["port"])
+	assert.Equal(t, "attach", args["request"])
+	assert.Equal(t, "127.0.0.1", args["hostName"])
+}
+
+func TestJVMDebugProviderRequiresExternalDebugServer(t *testing.T) {
+	provider := NewJVMDebugProvider("")
+	_, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41040})
+	require.ErrorIs(t, err, ErrAdapterUnavailable)
+	info, ok := AdapterErrorDetails(err)
+	require.True(t, ok)
+	assert.Equal(t, model.CodeDebugProviderJVM, info.Provider)
+}
+
+func TestJVMDebugProviderUsesConfiguredAdapterCommand(t *testing.T) {
+	provider := NewJVMDebugProvider("")
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort:    41040,
+		AdapterCommand: "jdtls-debug-wrapper",
+		AdapterArgs:    []string{"--workspace", "/repo"},
+		WorkingDir:     "/repo",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "jdtls-debug-wrapper", cmd.Name)
+	assert.Equal(t, []string{"--workspace", "/repo", "41040"}, cmd.Args)
 }
 
 func TestProviderAttachCapability(t *testing.T) {

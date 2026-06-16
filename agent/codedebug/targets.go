@@ -21,6 +21,10 @@ func ProviderForLanguage(lang model.ServiceLanguage) model.CodeDebugProvider {
 		return model.CodeDebugProviderPython
 	case model.LanguageNode:
 		return model.CodeDebugProviderNode
+	case model.LanguageJava, model.LanguageKotlin:
+		return model.CodeDebugProviderJVM
+	case model.LanguageRust, model.LanguageCpp:
+		return model.CodeDebugProviderNative
 	default:
 		return ""
 	}

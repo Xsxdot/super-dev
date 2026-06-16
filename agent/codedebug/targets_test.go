@@ -57,6 +57,20 @@ func TestListTargetsLanguageAndCanOpen(t *testing.T) {
 	}
 }
 
+func TestProviderForNewLanguages(t *testing.T) {
+	cases := map[model.ServiceLanguage]model.CodeDebugProvider{
+		model.LanguageJava:   model.CodeDebugProviderJVM,
+		model.LanguageKotlin: model.CodeDebugProviderJVM,
+		model.LanguageRust:   model.CodeDebugProviderNative,
+		model.LanguageCpp:    model.CodeDebugProviderNative,
+	}
+	for language, want := range cases {
+		if got := ProviderForLanguage(language); got != want {
+			t.Fatalf("%s provider = %s, want %s", language, got, want)
+		}
+	}
+}
+
 func TestListTargetsIncludesLanguageRuntime(t *testing.T) {
 	project := model.Project{
 		ID:           "proj-lang",

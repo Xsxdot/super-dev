@@ -128,6 +128,10 @@ func adapterRemediationHint(code string, provider model.CodeDebugProvider) strin
 		return "Install debugpy with `python3 -m pip install debugpy` and ensure `python3` is on PATH."
 	case model.CodeDebugProviderNode:
 		return "Configure code_debug.adapter_command for the experimental Node provider and ensure it is executable."
+	case model.CodeDebugProviderJVM:
+		return "Configure code_debug.adapter_command with a wrapper that starts a JDT LS/java-debug DAP server on the supplied port."
+	case model.CodeDebugProviderNative:
+		return "Install lldb-dap (Xcode/LLVM) and ensure `lldb-dap` is on PATH."
 	default:
 		return "Install or configure the requested debug adapter and ensure it is on PATH."
 	}
