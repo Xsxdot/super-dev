@@ -96,6 +96,18 @@ func TestProviderAttachCapability(t *testing.T) {
 	}
 }
 
+func TestUsesReverseRequestChildSession(t *testing.T) {
+	if !NewNodeProvider("/x/dapDebugServer.js").UsesReverseRequestChildSession() {
+		t.Fatal("Node uses js-debug reverse-request child session")
+	}
+	if NewGoProvider().UsesReverseRequestChildSession() {
+		t.Fatal("Go is single-session")
+	}
+	if NewPythonProvider("python3").UsesReverseRequestChildSession() {
+		t.Fatal("Python is single-session")
+	}
+}
+
 func TestPythonProviderUsesDirectDAP(t *testing.T) {
 	assert.Equal(t, AttachModeDirectDAP, NewPythonProvider("python").AttachCapability())
 }

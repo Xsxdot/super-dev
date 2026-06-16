@@ -52,6 +52,10 @@ type Provider interface {
 	AttachCapability() AttachMode
 	// AttachArguments 构造 DAP attach 请求参数（仅 AttachModePID/Listen 有效）。
 	AttachArguments(LaunchConfig, int) map[string]any
+	// UsesReverseRequestChildSession 报告该 adapter 是否走 js-debug 那套
+	// "root session 收 reverse request 再 spawn child session" 的两段式拓扑。
+	// 仅 Node(js-debug) 为 true；Go/Python 等单会话 adapter 为 false。
+	UsesReverseRequestChildSession() bool
 }
 
 // GoProvider 构建 Delve DAP adapter 配置。
@@ -97,6 +101,9 @@ func (GoProvider) AttachArguments(cfg LaunchConfig, processID int) map[string]an
 		"cwd":       cfg.WorkingDir,
 	}
 }
+
+// UsesReverseRequestChildSession 报告 Go/dlv 是单会话拓扑，不需要子会话。
+func (GoProvider) UsesReverseRequestChildSession() bool { return false }
 
 // PythonProvider 构建 debugpy adapter 配置。
 type PythonProvider struct{ Python string }
@@ -150,6 +157,9 @@ func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 		"cwd": cfg.WorkingDir,
 	}
 }
+
+// UsesReverseRequestChildSession 报告 debugpy 是单会话拓扑，不需要子会话。
+func (PythonProvider) UsesReverseRequestChildSession() bool { return false }
 
 // NodeProvider 用打包的 @vscode/js-debug standalone DAP server 调试 Node。
 type NodeProvider struct{ ServerPath string }
@@ -221,6 +231,9 @@ func (NodeProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 		"attachExistingChildren":   false,
 	}
 }
+
+// UsesReverseRequestChildSession 报告 js-debug 用 root -> child 两段式会话拓扑。
+func (NodeProvider) UsesReverseRequestChildSession() bool { return true }
 
 func copyEnv(in map[string]string) map[string]string {
 	if len(in) == 0 {
