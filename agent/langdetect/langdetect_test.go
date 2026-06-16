@@ -44,6 +44,37 @@ func TestDetectMarkerBeatsCommand(t *testing.T) {
 	}
 }
 
+func TestDetectNewLanguagesByMarker(t *testing.T) {
+	cases := map[string]model.ServiceLanguage{
+		"pom.xml":          model.LanguageJava,
+		"build.gradle":     model.LanguageJava,
+		"build.gradle.kts": model.LanguageKotlin,
+		"Cargo.toml":       model.LanguageRust,
+		"CMakeLists.txt":   model.LanguageCpp,
+	}
+	for marker, want := range cases {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, marker), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := Detect(dir, ""); got != want {
+			t.Fatalf("%s -> %s, want %s", marker, got, want)
+		}
+	}
+}
+
+func TestDetectNewLanguagesByCommand(t *testing.T) {
+	cases := map[string]model.ServiceLanguage{
+		"java -jar app.jar": model.LanguageJava,
+		"cargo run":         model.LanguageRust,
+	}
+	for command, want := range cases {
+		if got := Detect("", command); got != want {
+			t.Fatalf("%q -> %s, want %s", command, got, want)
+		}
+	}
+}
+
 func TestDetectUnknown(t *testing.T) {
 	dir := t.TempDir()
 	if got := Detect(dir, "./run.sh"); got != model.ServiceLanguage("") {

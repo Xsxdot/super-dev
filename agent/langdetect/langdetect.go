@@ -23,6 +23,11 @@ var markerFiles = map[model.ServiceLanguage][]string{
 	model.LanguageGo:     {"go.mod"},
 	model.LanguageNode:   {"package.json"},
 	model.LanguagePython: {"pyproject.toml", "requirements.txt", "setup.py"},
+	// Kotlin 优先于 Java：build.gradle.kts 是 Kotlin 强信号，故固定顺序里先判 Kotlin。
+	model.LanguageKotlin: {"build.gradle.kts"},
+	model.LanguageJava:   {"pom.xml", "build.gradle"},
+	model.LanguageRust:   {"Cargo.toml"},
+	model.LanguageCpp:    {"CMakeLists.txt"},
 }
 
 // Detect 探测目录语言。标记文件优先，command 前缀兜底，都判不出返回空。
@@ -42,8 +47,16 @@ func detectByMarker(dir string) model.ServiceLanguage {
 	if dir == "" {
 		return ""
 	}
-	// 固定探测顺序，保证多标记并存时结果稳定：go > node > python。
-	for _, lang := range []model.ServiceLanguage{model.LanguageGo, model.LanguageNode, model.LanguagePython} {
+	// 固定探测顺序，保证多标记并存时结果稳定；Kotlin marker 必须早于 Java。
+	for _, lang := range []model.ServiceLanguage{
+		model.LanguageGo,
+		model.LanguageNode,
+		model.LanguagePython,
+		model.LanguageKotlin,
+		model.LanguageJava,
+		model.LanguageRust,
+		model.LanguageCpp,
+	} {
 		for _, name := range markerFiles[lang] {
 			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 				return lang
@@ -69,6 +82,11 @@ func detectByCommand(command string) model.ServiceLanguage {
 		return model.LanguageNode
 	case "python", "python3":
 		return model.LanguagePython
+	case "java", "kotlin":
+		// 命令行无法可靠区分 Kotlin 字节码产物，统一归 JVM/Java 链路。
+		return model.LanguageJava
+	case "cargo":
+		return model.LanguageRust
 	default:
 		return ""
 	}
