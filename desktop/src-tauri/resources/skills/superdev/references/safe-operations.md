@@ -2,9 +2,11 @@
 
 ## 读写分离
 
-只读工具不会改变运行态或配置：`list_projects`、`get_project`、`list_hosts`、`get_runtime_snapshot`、`list_services`、`tail_logs`、`search_logs`、`get_log_context`、`diagnose_service`、`analyze_trace_logs`、`summarize_error_window`、`list_language_runtime_providers`、`describe_language_runtime_schema`、`suggest_service_runtime`、`validate_service_runtime`、`preview_service_execution`、`preview_config_change`、`preview_operation`、`list_operation_approvals`、`list_operation_audit`。
+只读工具不会改变运行态或配置：`list_projects`、`get_project`、`list_hosts`、`get_runtime_snapshot`、`list_services`、`tail_logs`、`search_logs`、`get_log_context`、`diagnose_service`、`analyze_trace_logs`、`summarize_error_window`、`preview_config_change`、`preview_operation`、`list_operation_approvals`、`list_operation_audit`、`list_browser_targets`、`list_debug_browsers`、`browser_snapshot`、`browser_screenshot`、`browser_console_logs`、`browser_network_requests`。
 
-写工具会改变配置、本地记录、运行态或模板库：`apply_config_change`、`upsert_project_config`、`upsert_service`、`upsert_project_pipeline`、`start_service`、`stop_service`、`restart_service`、`import_pipeline_template`、`deploy_project_pipeline`。
+写工具会改变配置、本地记录、运行态或模板库：`apply_config_change`、`upsert_project_config`、`upsert_service`、`upsert_project_pipeline`、`start_service`、`stop_service`、`restart_service`、`import_pipeline_template`、`deploy_project_pipeline`、`open_browser_debug_session`、`close_browser_debug_session`、`browser_click`、`browser_type`、`browser_select_option`、`browser_press_key`、`browser_wait_for_selector`、`browser_navigate`、`browser_reload`、`browser_evaluate`。
+
+浏览器调试的审批与审计模型与服务写操作一致：只有 `open_browser_debug_session` 走审批门，开启后会话内控制动作不再逐次审批；`browser_*` 控制动作（click/type/navigate/evaluate 等）落持久化审计，详见 `references/browser-debug.md`。
 
 ## 统一审批模型：直接调用，自动等待
 
@@ -55,6 +57,24 @@ probe_project_config 或 get_project_config
 - 用户确认 diff 后才调用 `apply_config_change`。
 - 不直接调用底层 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`，除非用户明确要求绕过安全流程并理解风险。
 
+### 新建 Go/Node/Python 受管语言服务：先查 provider schema，别猜命令串
+
+新建一个语言运行时服务、或排查「这个服务配置该填什么」时，**先读 provider schema 照字段填，不要拼一条 shell 命令串**：
+
+1. `list_language_runtime_providers` 看支持哪些语言。
+2. `describe_language_runtime_schema` 拿该语言的字段 schema。
+3. 照字段组装配置，再走上面的 `preview_config_change -> apply_config_change`。
+
+provider 是**两层启动模型**——高层语义字段优先，表达不了再用底层逃生口：
+
+- **第一层 · 高层字段（优先）**：
+  - Go：`program`（main package，如 `./cmd/server` 或 `.`）、`program_args`、`build_flags`
+  - Node：`package_manager`（`pnpm`/`npm`/`yarn`，默认 pnpm）+ `script`（package.json 里的 script，如 `dev`）为主路径；或 `program`（直接跑某个 JS 文件，如 `src/index.js`）、`node_args`、`program_args`
+  - Python：`program`（入口文件，如 `main.py`）**或** `module`（`python -m <module>`，二选一）、`program_args`
+- **第二层 · 逃生口（高层表达不了时才用）**：`runtime_executable` + `runtime_args`，由 agent 原样执行你给的运行器（如 `make` / 任意脚本），provider 不推导、不拼 shell。debug-ready 注入与这层正交，仍按语言策略生效。
+
+这些服务跑起来后若要做代码断点调试，见 `references/code-debug.md`。
+
 ## 运行态与 pipeline 执行
 
 启动、停止、重启 deployment，以及 `deploy_project_pipeline`、`import_pipeline_template`，都走统一审批模型，直接调用即可：
@@ -68,6 +88,23 @@ probe_project_config 或 get_project_config
 
 - `preview_operation` 只生成确定性安全预检计划，不会创建 pending approval。
 - `get_operation_approval` 只有在用户批准后才返回 one-time token；自动等待路径中由 MCP 内部调用，正常无需你手动调。
+
+### 你改完代码后，何时必须 restart_service
+
+见 SKILL.md「第零·五纪律」。要点在这里展开为可执行判断：
+
+1. 你用 Edit/Write 改了一个**已被 SuperDev 接管**的服务的源码后，先判断这次改的部分在当前 deployment 下会不会自动热更新。
+2. **会热更新就不要重启**：前端 dev server、带 `air`/`nodemon`/`reflex` 等热重载封装的后端、开了 reload 的解释型进程。多余的重启会打断热更新、清空内存态。
+3. **不会热更新就改完落盘主动重启**：编译型语言改源码（Go/Rust/Java/C++/C# 等）、改配置/环境变量/依赖清单/启动参数、无热重载的常驻进程。
+4. **编译型先确认重启会重新构建**：`restart_service` 是否含 build 取决于该 deployment 的启动命令或 pipeline。不确定时先 `get_runtime_snapshot`/`list_services` 看运行方式，或读项目配置；若重启不含构建，明确告诉用户「要先构建再重启」，不要默默重启旧产物。
+5. 重启同样走审批模型，直接调用 `restart_service` 即可；**禁止**为了让改动生效而 shell `kill` + 重新拉起进程（会变成孤儿进程，见第零纪律）。
+6. 重启后 `tail_logs` / `diagnose_service` 确认服务正常起来，再请用户验证。
+
+向用户解释时可以说：
+
+```text
+这处是 Go 代码（编译型），改完不会热更新。我会重启服务（如重启不含构建会先构建）让改动生效，重启需要时你批准一下，起来后请验证。
+```
 
 ## Skill 应该如何向用户解释
 

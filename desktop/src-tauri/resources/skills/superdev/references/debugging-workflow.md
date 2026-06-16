@@ -15,27 +15,6 @@
 | 用户给了 trace_id、request_id，或问题跨服务 | `analyze_trace_logs` | 对照时间线、服务跨度、状态码、错误片段形成假设 |
 | 用户说“过去十分钟都在报错吗” | `summarize_error_window` | 统计错误类型、频率、时间窗，不替代日志上下文 |
 
-## 代码断点调试（最后手段）
-
-先用日志和 diagnose 工具；只有当运行态无法从日志推断时才用断点调试。
-
-调试以 **deployment 为主语**，无需手动开关会话：
-
-1. 确保服务以 debug launch intent 在跑：`restart_service(deployment_id, intent="debug_launch")`
-   （服务已普通运行时用 restart；已停止用 `start_service(deployment_id, intent="debug_launch")`）。
-2. 直接对该 deployment 调试，传 `deployment_id` 即可：
-   - `debug_capture_at(deployment_id, source, line)`：设断点、运行到该行、返回现场。
-   - `debug_inspect(deployment_id)`：读当前暂停现场的栈、作用域和变量。
-   - `debug_continue` / `debug_step_over` / `debug_evaluate(deployment_id, ...)`：低层动作。
-   首次调用会自动建立调试租约（一次审批），无需 open session。
-3. 看完恢复：`restart_service(deployment_id, intent="start_normal")` 回到普通运行。
-
-注意：
-
-- 不存在手动打开或关闭代码调试会话的工具；租约由 agent 内部管理，空闲自动回收。
-- `debug_evaluate` 仍逐次审批（可读进程内状态）。
-- 若服务未以 debug launch intent 运行，调试工具会报错并提示先用 debug_launch intent 重启/启动，不会静默重启你的进程。
-
 ## 调试会话生命周期
 
 多步排查、需要留痕、可能交接、或用户明确要求记录时，开启 debug session：

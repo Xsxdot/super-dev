@@ -1,6 +1,6 @@
 ---
 name: superdev
-description: 涉及本地或远端服务的启动/重启/停止、查看服务日志、排查服务为何没起来或为何报错、诊断故障、管理调试会话、修改项目/服务配置、或执行 pipeline 部署/回滚时使用——即便用户没说"SuperDev"四个字。只要项目可能已接入 SuperDev，这类请求就应通过 SuperDev 工具完成，而不是用 shell 自己 npm run dev / go run / tail 日志。涵盖"先确认接管状态再动手"的总纪律、排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、pipeline 部署。
+description: 涉及本地或远端服务的启动/重启/停止、查看服务日志、排查服务为何没起来或为何报错、诊断故障、管理调试会话、调试本机前端页面(打开浏览器/点击/输入/截图/读 console/network)、对 Go/Node/Python 受管服务做代码断点调试(停在某行看调用栈和变量)、新建受管语言运行时服务(查 provider 与配置 schema)、修改项目/服务配置、或执行 pipeline 部署/回滚时使用——即便用户没说"SuperDev"四个字。只要项目可能已接入 SuperDev，这类请求就应通过 SuperDev 工具完成，而不是用 shell 自己 npm run dev / go run / tail 日志，也不是自己另起浏览器去点页面。涵盖"先确认接管状态再动手"的总纪律、排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、本机前端浏览器调试、pipeline 部署。
 ---
 
 # SuperDev MCP 使用指南
@@ -23,25 +23,17 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 
 配置远程主机前必须先调用 `list_hosts`。`host_ids` 只能填写 `list_hosts` 返回的非本机主机 `hosts[].id`（`is_self=false`），不能填写 `hosts[].name`、SSH Host、机器名或用户口头描述。
 
-## AI 创建 language 服务标准流程
-
-创建 Go 等 `runtime.type="language"` 服务时，不要猜 `command`，必须按 provider schema 组配置：
-
-1. `list_language_runtime_providers` 确认语言受支持。
-2. `describe_language_runtime_schema(language)` 读取字段说明。
-3. `suggest_service_runtime(language, project_root, cwd)` 获取候选 `cwd/env/config`。
-4. 按 schema 组 `runtime: { type: "language", cwd, env, config }`。
-5. `validate_service_runtime` 处理 diagnostics，error 级别未清空前不要写配置。
-6. 按配置变更纪律走 `preview_config_change -> apply_config_change` 创建或更新服务。
-7. `preview_service_execution(intent="start_dev")` 给用户确认实际会运行什么。
-
 ## 总决策树
 
 | 用户意图 | 先做什么 | 继续阅读 |
 | --- | --- | --- |
 | 把服务跑起来 / 重启 / 停掉（哪怕没提 SuperDev） | 先 `list_services` 看该项目是否已被 SuperDev 接管；已接管则走 `start_service`/`restart_service`/`stop_service`，不要 shell 自己起 | 本页「第零纪律」 |
+| 我（AI）刚改了被接管服务的代码，且改的是不热更新的部分 | 改动落盘后主动 `restart_service`（编译型先确认 deployment 会重新编译），再让用户验证 | 本页「第零·五纪律」 |
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
+| 调试本机前端页面（点击/输入/截图/读 console，哪怕没提 SuperDev） | `list_browser_targets` 找 deployment → `open_browser_debug_session`（走审批）→ `browser_snapshot` 取 selector → 控制工具 | `references/browser-debug.md` |
+| 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
+| 新建 Go/Node/Python 受管语言服务、不知配置填什么 | `list_language_runtime_providers` → `describe_language_runtime_schema` 照字段填，别猜命令串，再 preview→apply | `references/safe-operations.md` |
 | 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
 | 启动、停止、重启服务、部署/回滚 pipeline、导入模板 | 可选 `preview_operation`，直接调用写工具并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
@@ -64,13 +56,36 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 
 只有当 `list_services` 明确显示该项目未被 SuperDev 接管、或用户明确要求绕过时，才用其他方式。
 
-## 五条硬纪律
+**前端调试同理**：用户让你「看看这个本机前端页面 / 点一下按钮 / 截个图 / 看控制台报错」时，先 `list_browser_targets` 确认该 deployment 是否开启 AI 调试；开启了就走 `open_browser_debug_session` + `browser_*` 控制工具，**不要自己另起浏览器、不要用别的浏览器自动化工具去点本机页面**。SuperDev 的浏览器调试受审批门保护、会话受 TTL 管理、控制动作落审计——绕过它就丢了这些保障。详见 `references/browser-debug.md`。
+
+## 第零·五纪律：你改完不热更新的代码，必须主动重启让改动生效
+
+这条紧跟第零纪律，针对的是**你（AI）自己改了代码之后**的场景，而不是用户开口让你重启。
+
+当你用 Edit/Write 改动了一个**已被 SuperDev 接管**的服务的源码，改完后**不要默认改动已经生效**。先判断这次改的东西在当前 deployment 下会不会自动热更新：
+
+- **会热更新，不要重启**：前端 dev server（Vite/webpack-dev-server 等）、带 `air`/`nodemon`/`reflex`/`gin` 等热重载封装的后端、解释型语言改源码（Python/Node 直跑且开了 reload）——这些改完保存即生效。**多此一举地重启反而打断热更新、清空内存态、拖慢用户**。
+- **不会热更新，改完落盘就主动 `restart_service`**，再让用户验证：
+  - 编译型语言改源码：Go / Rust / Java / C++ / C# 等——跑的是旧二进制，不重新构建并重启，用户测到的永远是旧行为。
+  - 改了配置文件、环境变量、依赖清单（go.mod / package.json 依赖 / requirements.txt 等）、启动参数——多数服务只在启动时读一次。
+  - 任何明确没有热重载的常驻进程。
+
+**编译型语言要多看一步**：`restart_service` 是否会重新编译，取决于该 deployment 的启动命令/ pipeline 是「先 build 再 run」还是「直接 run 已有产物」。不确定时先 `get_runtime_snapshot` / `list_services` 看 deployment 的运行方式，或读项目配置确认；如果重启不含构建，要明确告诉用户「需要先构建，再重启」而不是默默重启一个旧产物。
+
+**为什么这条重要**（理解了才不会忘）：
+- 改完编译型代码不重启就让用户验证，是**最隐蔽的浪费**：现象和你的改动对不上，你会误以为改动没生效，于是反复改对的代码、追错方向，用户也跟着空跑几轮。
+- 重启同样走 SuperDev：`restart_service` 受审批模型保护、运行态可见。**不要为了"让改动生效"而 shell 自己 `kill` 进程再 `go run` 重拉**——那就退化成第零纪律里的孤儿进程问题了。
+
+操作链：改码落盘 →（编译型先确认会重新构建）→ `restart_service` → `tail_logs` / `diagnose_service` 确认起来了 → 再请用户验证。重启工具的审批与续跑细节见 `references/safe-operations.md`。
+
+## 六条硬纪律
 
 1. **服务启停与看日志走 SuperDev**（见上「第零纪律」）：动手前先 `list_services` 确认接管状态，已接管就不要 shell 自己起服务/看日志。
-2. 没收集证据前不下根因。
-3. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
-4. 所有写工具直接调用即可；需要审批时统一由 MCP 等待桌面端批准并自动续跑。不要先查审批再手动传 token——那会浪费多轮调用。只有显式关闭等待（`approval_wait_seconds=0`）时才回到手动流程。
-5. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
+2. **改完不热更新的代码主动重启**（见上「第零·五纪律」）：你改了被接管服务的源码后，若改动不会自动热更新（编译型语言、配置/依赖/启动参数、无热重载的常驻进程），改完落盘就 `restart_service`（编译型先确认会重新构建）再让用户验证；会热更新的（前端 dev server、air/nodemon 等）不要画蛇添足地重启。
+3. 没收集证据前不下根因。
+4. 写配置必须 `preview_config_change → apply_config_change`，不要直接调用 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`。
+5. 所有写工具直接调用即可；需要审批时统一由 MCP 等待桌面端批准并自动续跑。不要先查审批再手动传 token——那会浪费多轮调用。只有显式关闭等待（`approval_wait_seconds=0`）时才回到手动流程。
+6. 只读诊断、日志、调试会话工具不会改变运行态或配置；写工具必须向用户说明影响面。
 
 写操作的审批对你无感：直接调用 → 需要审批时 MCP 自动等待并续跑 → 仅超时/被拒才返回失败。批量写操作时可提示用户在审批弹窗勾选「项目级免审窗口」，后续同项目操作将自动通过。
 
@@ -95,11 +110,6 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `append_log_analysis_to_session` | 运行日志分析并追加到诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
 | `append_debug_session_note` | 把 AI 观察、假设、结论写入诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
 | `close_debug_session` | 关闭本地诊断会话 | 读写本地记录 | `references/debugging-workflow.md` |
-| `list_language_runtime_providers` | 列出支持 schema 驱动配置的 language runtime provider | 读 | 本页 |
-| `describe_language_runtime_schema` | 读取 language runtime 字段 schema，创建 language 服务前必用 | 读 | 本页 |
-| `suggest_service_runtime` | 基于项目目录建议 language runtime 的 `cwd/env/config` | 读 | 本页 |
-| `validate_service_runtime` | 校验 language runtime 配置并返回 diagnostics | 读 | 本页 |
-| `preview_service_execution` | 预览 language runtime 某个 intent 的执行计划，不启动进程 | 读 | 本页 |
 | `preview_config_change` | 预览项目、服务、pipeline 配置变更 | 读 | `references/safe-operations.md` |
 | `apply_config_change` | 应用已确认的配置变更 | 写 | `references/safe-operations.md` |
 | `preview_operation` | 为启动、停止、重启等操作生成可解释安全预检；不创建审批 | 读 | `references/safe-operations.md` |
@@ -114,23 +124,19 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `list_pipeline_runs` | 列出 pipeline 运行历史 | 读 | `references/pipeline.md` |
 | `read_pipeline_run_logs` | 读取 pipeline run 日志 | 读 | `references/pipeline.md` |
 | `list_pipeline_artifacts` | 查看 pipeline 产物历史 | 读 | `references/pipeline.md` |
-
-### 代码断点调试决策线
-
-断点级代码调试只作为最后兜底手段。默认路径仍然是：
-
-1. 先复现问题。
-2. 用 `tail_logs`、`search_logs`、`diagnose_service`、`analyze_trace_logs` 或 `summarize_error_window` 读取日志。
-3. 基于日志证据逐步二分到根因。
-4. 只有当日志无法推断运行时状态时，才使用 deployment 主语的代码断点调试，例如必须确认某个变量真实值、某一行的调用栈，或暂停 frame 上的分支状态。
-
-确实需要代码调试时，优先使用复合工具：
-
-- 先确保服务以 debug launch intent 运行：`restart_service(deployment_id, intent="debug_launch")`；已停止时用 `start_service(deployment_id, intent="debug_launch")`。
-- `debug_capture_at(deployment_id, source, line)`：停在 `file:line`，一次性采集 stack、scopes 和 variables。
-- `debug_inspect(deployment_id)`：对已经暂停的 deployment 一次性读取现场。
-- 看完后用 `restart_service(deployment_id, intent="start_normal")` 回到普通运行。
-
-只有当复合工具不足时，才使用底层 DAP 工具（`set_debug_breakpoints`、`debug_continue`、`debug_step_*`、`debug_variables`、`debug_evaluate`）。`debug_evaluate` 需要审批，并按表达式级别审计；复合工具内部调用时也同样审计。
-
-不存在手动打开或关闭代码调试会话的工具；调试租约由 agent 内部解析、创建和空闲回收。若服务未以 debug launch intent 运行，调试工具会提示先用 debug_launch intent 重启/启动，不会静默重启进程。
+| `list_browser_targets` | 列出可调试的本机前端 deployment | 读 | `references/browser-debug.md` |
+| `list_debug_browsers` | 列出本机已配置调试浏览器及可用性 | 读 | `references/browser-debug.md` |
+| `open_browser_debug_session` | 打开隔离调试浏览器加载本机前端，返回 CDP 端点 | 写，需审批 | `references/browser-debug.md` |
+| `close_browser_debug_session` | 关闭浏览器调试会话 | 写 | `references/browser-debug.md` |
+| `browser_snapshot` | 读页面结构与稳定 selector（操作前先取 selector） | 读 | `references/browser-debug.md` |
+| `browser_click` / `browser_type` / `browser_select_option` / `browser_press_key` | 在调试页面上交互 | 写，落审计 | `references/browser-debug.md` |
+| `browser_wait_for_selector` | 等待元素出现/可见/隐藏 | 写，落审计 | `references/browser-debug.md` |
+| `browser_navigate` / `browser_reload` | 同源整页导航 / 刷新 | 写，落审计 | `references/browser-debug.md` |
+| `browser_console_logs` / `browser_network_requests` | 读页面 console / 网络诊断信号 | 读 | `references/browser-debug.md` |
+| `browser_screenshot` | 截图（默认 viewport） | 读 | `references/browser-debug.md` |
+| `browser_evaluate` | 执行页面 JS（默认关，需用户开 `allow_evaluate`，全程审计） | 写，落审计 | `references/browser-debug.md` |
+| `list_code_debug_targets` | 列出可做代码断点调试的本地受管语言运行时（Node experimental） | 读 | `references/code-debug.md` |
+| `debug_capture_at` | 代码调试主入口：attach 运行中进程，停在某行返回栈/作用域/变量 | 写，需审批 | `references/code-debug.md` |
+| `set_debug_breakpoints` / `debug_continue` | 低层 DAP escape hatch：设断点 / 继续线程 | 写 | `references/code-debug.md` |
+| `list_language_runtime_providers` | 列出有 runtime provider 的语言（建语言服务前看） | 读 | `references/safe-operations.md` |
+| `describe_language_runtime_schema` | 读某语言 provider 配置字段 schema（照字段填，别猜命令串） | 读 | `references/safe-operations.md` |
