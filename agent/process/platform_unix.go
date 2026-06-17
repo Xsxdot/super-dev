@@ -32,8 +32,8 @@ func trackProcessGroup(cmd *exec.Cmd) (*groupRef, error) {
 	return &groupRef{pgid: cmd.Process.Pid}, nil
 }
 
-// shellCommand 返回 Unix 下包裹任意命令字符串的 sh -c 形式。
-func shellCommand(command string) (string, []string) {
+// ShellCommand 返回 Unix 下包裹任意命令字符串的 sh -c 形式。
+func ShellCommand(command string) (string, []string) {
 	return "sh", []string{"-c", command}
 }
 

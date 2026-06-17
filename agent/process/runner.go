@@ -26,7 +26,7 @@ import (
 //
 // OnLine 回调在每条输出行到达时被调用，stream 为 "stdout" 或 "stderr"。
 type RunnerConfig struct {
-	// Command 是 shell 命令字符串，通过 `sh -c` 执行。
+	// Command 是 shell 命令字符串，通过平台 shell 执行。
 	Command string
 	// PreRun 非空时在主进程启动前同步执行，失败即视为启动失败。
 	PreRun *CommandStep
@@ -113,7 +113,7 @@ func (r *Runner) Start() error {
 		}
 		cmd = exec.Command(exe, r.cfg.Argv[1:]...)
 	} else {
-		shName, shArgs := shellCommand(r.cfg.Command)
+		shName, shArgs := ShellCommand(r.cfg.Command)
 		cmd = exec.Command(shName, shArgs...)
 	}
 	cmd.Dir = r.cfg.WorkDir
