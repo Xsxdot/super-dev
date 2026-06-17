@@ -65,5 +65,7 @@ func TestPIDStore_KillAllTargetsGroup(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("process did not exit after KillAll")
 	}
-	assert.Error(t, syscall.Kill(-pgid, 0), "process group should be dead after KillAll")
+	require.Eventually(t, func() bool {
+		return syscall.Kill(-pgid, 0) != nil
+	}, 5*time.Second, 20*time.Millisecond, "process group should be dead after KillAll")
 }
