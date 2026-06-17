@@ -86,6 +86,45 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
+func TestInstallerInstallsWindowsAgent(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-windows-amd64.exe")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{
+		outputs: []string{
+			"Microsoft Windows [Version 10.0.20348.0]\n",
+			"AMD64\n",
+			`C:\Users\dev\AppData\Local\Temp` + "\n",
+		},
+		failCommands: map[string][]error{
+			"uname -s": {errors.New("uname is not recognized")},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	result, err := inst.InstallWithOptions(context.Background(), installerTestHost("win1", "10.0.0.3", "dev", 22, 57019), ServiceOptions{
+		BindAddress:    "0.0.0.0",
+		Port:           57019,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.OK)
+	assert.Equal(t, "windows/amd64", result.Platform)
+	assert.Equal(t, []string{binary + "->C:/Users/dev/AppData/Local/Temp/superdev-agent-windows-amd64.exe"}, remote.uploads)
+	assert.Contains(t, remote.commands, "cmd /c ver")
+	assert.Contains(t, remote.commands, "cmd /c echo %PROCESSOR_ARCHITECTURE%")
+	assert.Contains(t, remote.commands, "cmd /c echo %TEMP%")
+	assert.Contains(t, remote.commands, `cmd /c if not exist "C:\ProgramData\SuperDev\Agent" mkdir "C:\ProgramData\SuperDev\Agent"`)
+	assert.Contains(t, remote.commands, `cmd /c copy /Y "C:\Users\dev\AppData\Local\Temp\superdev-agent-windows-amd64.exe" "C:\ProgramData\SuperDev\Agent\superdev-agent.exe"`)
+	assert.Contains(t, remote.commands, `cmd /c del /F /Q "C:\ProgramData\SuperDev\Agent\data\security.json" 2>NUL`)
+	assert.Contains(t, remote.commands, `cmd /c schtasks /Run /TN SuperDevAgent`)
+	assert.Contains(t, remote.commands, installerVerifyCommand(57019))
+}
+
 func TestInstallerResetsSecurityStateWhenBootstrappingLinuxAgent(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
