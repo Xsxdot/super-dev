@@ -1542,7 +1542,7 @@ func (m *Manager) launchConfigFromLanguageRuntime(project model.Project, service
 			EnvName:      dep.EnvName,
 			Language:     service.Language,
 			Provider:     providerName,
-			Experimental: providerName == model.CodeDebugProviderNode,
+			Experimental: providerIsExperimental(providerName),
 			WorkDir:      plan.WorkingDir,
 		},
 		Provider:       providerName,
@@ -1604,7 +1604,7 @@ func (m *Manager) attachConfigFromLanguageRuntime(project model.Project, service
 			EnvName:      dep.EnvName,
 			Language:     service.Language,
 			Provider:     providerName,
-			Experimental: providerName == model.CodeDebugProviderNode,
+			Experimental: providerIsExperimental(providerName),
 			WorkDir:      normalized.CWD,
 		},
 		Provider:       providerName,
@@ -1841,6 +1841,24 @@ func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error
 		return NewJVMDebugProvider(""), nil
 	default:
 		return nil, ErrTargetUnsupported
+	}
+}
+
+// providerIsExperimental 报告该调试 provider 是否为实验性档位。
+//
+// 实验性 = 不开箱即用、需用户自备 / 配置 adapter 才能调试：
+//   - Node：依赖打包的 js-debug，且 script 模式 attach 行为仍在收敛
+//   - JVM：官方 java-debug 是 JDT LS plugin，没有 standalone adapter，
+//     必须由用户把 JDT LS/java-debug 启动器配进 code_debug.adapter_command
+//
+// 以能力归类代替语言硬编码：新增「需自备 adapter」的语言只需在此登记，
+// list_code_debug_targets 不必再叠 == ProviderX 判断。
+func providerIsExperimental(provider model.CodeDebugProvider) bool {
+	switch provider {
+	case model.CodeDebugProviderNode, model.CodeDebugProviderJVM:
+		return true
+	default:
+		return false
 	}
 }
 

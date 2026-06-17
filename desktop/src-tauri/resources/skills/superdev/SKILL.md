@@ -1,6 +1,6 @@
 ---
 name: superdev
-description: 涉及本地或远端服务的启动/重启/停止、查看服务日志、排查服务为何没起来或为何报错、诊断故障、管理调试会话、调试本机前端页面(打开浏览器/点击/输入/截图/读 console/network)、对 Go/Node/Python 受管服务做代码断点调试(停在某行看调用栈和变量)、新建受管语言运行时服务(查 provider 与配置 schema)、修改项目/服务配置、或执行 pipeline 部署/回滚时使用——即便用户没说"SuperDev"四个字。只要项目可能已接入 SuperDev，这类请求就应通过 SuperDev 工具完成，而不是用 shell 自己 npm run dev / go run / tail 日志，也不是自己另起浏览器去点页面。涵盖"先确认接管状态再动手"的总纪律、排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、本机前端浏览器调试、pipeline 部署。
+description: 涉及本地或远端服务的启动/重启/停止、查看服务日志、排查服务为何没起来或为何报错、诊断故障、管理调试会话、调试本机前端页面(打开浏览器/点击/输入/截图/读 console/network)、对受管语言服务(Go/Node/Python/Java/Kotlin/Rust/C++)做代码断点调试(停在某行看调用栈和变量)、新建受管语言运行时服务(查 provider 与配置 schema)、修改项目/服务配置、或执行 pipeline 部署/回滚时使用——即便用户没说"SuperDev"四个字。只要项目可能已接入 SuperDev，这类请求就应通过 SuperDev 工具完成，而不是用 shell 自己 npm run dev / go run / tail 日志，也不是自己另起浏览器去点页面。涵盖"先确认接管状态再动手"的总纪律、排障主流程、日志工具选型、安全操作纪律(preview->apply、审批门禁)、调试会话生命周期、本机前端浏览器调试、pipeline 部署。
 ---
 
 # SuperDev MCP 使用指南
@@ -32,8 +32,8 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
 | 调试本机前端页面（点击/输入/截图/读 console，哪怕没提 SuperDev） | `list_browser_targets` 找 deployment → `open_browser_debug_session`（走审批）→ `browser_snapshot` 取 selector → 控制工具 | `references/browser-debug.md` |
-| 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
-| 新建 Go/Node/Python 受管语言服务、不知配置填什么 | `list_language_runtime_providers` → `describe_language_runtime_schema` 照字段填，别猜命令串，再 preview→apply | `references/safe-operations.md` |
+| 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python/Rust/C++/Java/Kotlin） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
+| 新建受管语言运行时服务（Go/Node/Python/Java/Kotlin/Rust/C++）、不知配置填什么 | `list_language_runtime_providers` → `describe_language_runtime_schema` 照字段填，别猜命令串，再 preview→apply | `references/safe-operations.md` |
 | 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
 | 启动、停止、重启服务、部署/回滚 pipeline、导入模板 | 可选 `preview_operation`，直接调用写工具并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
@@ -135,7 +135,7 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `browser_console_logs` / `browser_network_requests` | 读页面 console / 网络诊断信号 | 读 | `references/browser-debug.md` |
 | `browser_screenshot` | 截图（默认 viewport） | 读 | `references/browser-debug.md` |
 | `browser_evaluate` | 执行页面 JS（默认关，需用户开 `allow_evaluate`，全程审计） | 写，落审计 | `references/browser-debug.md` |
-| `list_code_debug_targets` | 列出可做代码断点调试的本地受管语言运行时（Node experimental） | 读 | `references/code-debug.md` |
+| `list_code_debug_targets` | 列出可做代码断点调试的本地受管语言运行时（Node、Java/Kotlin experimental） | 读 | `references/code-debug.md` |
 | `debug_capture_at` | 代码调试主入口：attach 运行中进程，停在某行返回栈/作用域/变量 | 写，需审批 | `references/code-debug.md` |
 | `set_debug_breakpoints` / `debug_continue` | 低层 DAP escape hatch：设断点 / 继续线程 | 写 | `references/code-debug.md` |
 | `list_language_runtime_providers` | 列出有 runtime provider 的语言（建语言服务前看） | 读 | `references/safe-operations.md` |

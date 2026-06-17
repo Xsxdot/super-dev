@@ -57,7 +57,7 @@ probe_project_config 或 get_project_config
 - 用户确认 diff 后才调用 `apply_config_change`。
 - 不直接调用底层 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`，除非用户明确要求绕过安全流程并理解风险。
 
-### 新建 Go/Node/Python 受管语言服务：先查 provider schema，别猜命令串
+### 新建受管语言运行时服务：先查 provider schema，别猜命令串
 
 新建一个语言运行时服务、或排查「这个服务配置该填什么」时，**先读 provider schema 照字段填，不要拼一条 shell 命令串**：
 
@@ -71,9 +71,11 @@ provider 是**两层启动模型**——高层语义字段优先，表达不了�
   - Go：`program`（main package，如 `./cmd/server` 或 `.`）、`program_args`、`build_flags`
   - Node：`package_manager`（`pnpm`/`npm`/`yarn`，默认 pnpm）+ `script`（package.json 里的 script，如 `dev`）为主路径；或 `program`（直接跑某个 JS 文件，如 `src/index.js`）、`node_args`、`program_args`
   - Python：`program`（入口文件，如 `main.py`）**或** `module`（`python -m <module>`，二选一）、`program_args`
+  - Java / Kotlin：`program`（全限定主类或 jar）、`classpath`、`vm_args`、`program_args`
+  - Rust / C / C++：`program`（已构建二进制路径，如 `target/debug/app`）、`build`（可选构建器，如 `cargo`/`make`）、`build_args`、`program_args`
 - **第二层 · 逃生口（高层表达不了时才用）**：`runtime_executable` + `runtime_args`，由 agent 原样执行你给的运行器（如 `make` / 任意脚本），provider 不推导、不拼 shell。debug-ready 注入与这层正交，仍按语言策略生效。
 
-这些服务跑起来后若要做代码断点调试，见 `references/code-debug.md`。
+这些服务跑起来后若要做代码断点调试，见 `references/code-debug.md`（其中 Java/Kotlin 是 experimental，需自备并配置 DAP adapter）。
 
 ## 运行态与 pipeline 执行
 

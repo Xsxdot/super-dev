@@ -251,6 +251,22 @@ func TestListTargetsMarksNodeAsExperimental(t *testing.T) {
 	assert.True(t, targets[0].Experimental)
 }
 
+// JVM 与 Node 同属「需自备/配置 adapter」的实验性档位；Go/Python/Native 开箱即用，非实验性。
+func TestProviderIsExperimental(t *testing.T) {
+	experimental := map[model.CodeDebugProvider]bool{
+		model.CodeDebugProviderNode:   true,
+		model.CodeDebugProviderJVM:    true,
+		model.CodeDebugProviderGo:     false,
+		model.CodeDebugProviderPython: false,
+		model.CodeDebugProviderNative: false,
+	}
+	for provider, want := range experimental {
+		if got := providerIsExperimental(provider); got != want {
+			t.Fatalf("providerIsExperimental(%s) = %v, want %v", provider, got, want)
+		}
+	}
+}
+
 func TestListTargetsIncludesRuntimeAndLeaseState(t *testing.T) {
 	root := t.TempDir()
 	projects := []model.Project{{
