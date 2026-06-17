@@ -1,19 +1,20 @@
 // Package installer installs the SuperDev remote agent on SSH hosts.
 //
 // 职责：
-//   - 检测远端 macOS/Linux 平台与 CPU 架构
+//   - 检测远端 macOS/Linux/Windows 平台与 CPU 架构
 //   - 解析随桌面包携带的 agent 二进制
 //   - 编排上传、系统级安装、自启配置和启动验证
 //
 // 边界：
 //   - 不持久化 Host 或安装历史
 //   - 不管理 SSH 隧道生命周期
-//   - 不提供 Windows 安装能力
+//   - Windows 通过 OpenSSH + schtasks 管理 agent，不走 WinRM
 package installer
 
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"path"
@@ -177,15 +178,7 @@ func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, ser
 	}
 	defer remote.Close() //nolint:errcheck
 
-	osName, err := remote.Run(ctx, "uname -s")
-	if err != nil {
-		return Result{}, stageErr("detect_os", err)
-	}
-	machine, err := remote.Run(ctx, "uname -m")
-	if err != nil {
-		return Result{}, stageErr("detect_arch", err)
-	}
-	platform, err := NormalizePlatform(trimOutput(osName), trimOutput(machine))
+	platform, err := detectPlatform(ctx, remote)
 	if err != nil {
 		return Result{}, stageErr("detect_platform", err)
 	}
@@ -194,7 +187,10 @@ func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, ser
 		return Result{}, stageErr("resolve_binary", err)
 	}
 
-	remoteTmp := "/tmp/" + platform.BinaryName()
+	remoteTmp, err := remoteTempPath(ctx, remote, platform)
+	if err != nil {
+		return Result{}, stageErr("detect_temp", err)
+	}
 	if err := remote.Upload(ctx, localBinary, remoteTmp); err != nil {
 		return Result{}, stageErr("upload", err)
 	}
@@ -234,11 +230,11 @@ func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData b
 	}
 	defer remote.Close() //nolint:errcheck
 
-	osName, err := remote.Run(ctx, "uname -s")
+	normalizedOS, err := detectOS(ctx, remote)
 	if err != nil {
-		return UninstallResult{}, stageErr("detect_os", err)
+		return UninstallResult{}, stageErr("detect_platform", err)
 	}
-	if err := uninstallCommands(ctx, remote, strings.ToLower(trimOutput(osName)), removeData); err != nil {
+	if err := uninstallCommands(ctx, remote, normalizedOS, removeData); err != nil {
 		return UninstallResult{}, err
 	}
 	return UninstallResult{
@@ -268,11 +264,10 @@ func (i *Installer) Restart(ctx context.Context, host model.Host) (RestartResult
 	}
 	defer remote.Close() //nolint:errcheck
 
-	osName, err := remote.Run(ctx, "uname -s")
+	normalizedOS, err := detectOS(ctx, remote)
 	if err != nil {
-		return RestartResult{}, stageErr("detect_os", err)
+		return RestartResult{}, stageErr("detect_platform", err)
 	}
-	normalizedOS := strings.ToLower(trimOutput(osName))
 	mode, err := restartCommands(ctx, remote, normalizedOS)
 	if err != nil {
 		return RestartResult{}, err
@@ -309,15 +304,7 @@ func (i *Installer) UpdateBinary(ctx context.Context, host model.Host) (UpdateRe
 	}
 	defer remote.Close() //nolint:errcheck
 
-	osName, err := remote.Run(ctx, "uname -s")
-	if err != nil {
-		return UpdateResult{}, stageErr("detect_os", err)
-	}
-	machine, err := remote.Run(ctx, "uname -m")
-	if err != nil {
-		return UpdateResult{}, stageErr("detect_arch", err)
-	}
-	platform, err := NormalizePlatform(trimOutput(osName), trimOutput(machine))
+	platform, err := detectPlatform(ctx, remote)
 	if err != nil {
 		return UpdateResult{}, stageErr("detect_platform", err)
 	}
@@ -326,7 +313,10 @@ func (i *Installer) UpdateBinary(ctx context.Context, host model.Host) (UpdateRe
 		return UpdateResult{}, stageErr("resolve_binary", err)
 	}
 
-	remoteTmp := "/tmp/" + platform.BinaryName()
+	remoteTmp, err := remoteTempPath(ctx, remote, platform)
+	if err != nil {
+		return UpdateResult{}, stageErr("detect_temp", err)
+	}
 	if err := remote.Upload(ctx, localBinary, remoteTmp); err != nil {
 		return UpdateResult{}, stageErr("upload", err)
 	}
@@ -351,6 +341,99 @@ func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOption
 	return opts
 }
 
+func detectPlatform(ctx context.Context, remote Remote) (Platform, error) {
+	osName, err := remote.Run(ctx, "uname -s")
+	if err == nil {
+		machine, archErr := remote.Run(ctx, "uname -m")
+		if archErr != nil {
+			return Platform{}, archErr
+		}
+		platform, normErr := NormalizePlatform(trimOutput(osName), trimOutput(machine))
+		if normErr == nil {
+			log.Printf("[installer] detected platform=%s", platform.String())
+			return platform, nil
+		}
+		log.Printf("[installer] uname platform unsupported os=%q: %v", trimOutput(osName), normErr)
+	} else {
+		log.Printf("[installer] uname os detection failed, trying windows fallback: %v", err)
+	}
+	return detectWindowsPlatform(ctx, remote, err)
+}
+
+func detectOS(ctx context.Context, remote Remote) (string, error) {
+	osName, err := remote.Run(ctx, "uname -s")
+	if err == nil {
+		osValue, normErr := normalizeOSName(trimOutput(osName))
+		if normErr == nil {
+			log.Printf("[installer] detected os=%s", osValue)
+			return osValue, nil
+		}
+		log.Printf("[installer] uname os unsupported os=%q: %v", trimOutput(osName), normErr)
+	} else {
+		log.Printf("[installer] uname os detection failed, trying windows fallback: %v", err)
+	}
+	platform, winErr := detectWindowsPlatform(ctx, remote, err)
+	if winErr != nil {
+		return "", winErr
+	}
+	return platform.OS, nil
+}
+
+func detectWindowsPlatform(ctx context.Context, remote Remote, previous error) (Platform, error) {
+	out, err := remote.Run(ctx, "cmd /c ver")
+	if err != nil {
+		if previous != nil {
+			return Platform{}, fmt.Errorf("unix detection failed: %v; windows detection failed: %w", previous, err)
+		}
+		return Platform{}, err
+	}
+	if !strings.Contains(strings.ToLower(out), "windows") {
+		return Platform{}, fmt.Errorf("unsupported os %q", trimOutput(out))
+	}
+	arch, err := remote.Run(ctx, "cmd /c echo %PROCESSOR_ARCHITECTURE%")
+	if err != nil {
+		return Platform{}, err
+	}
+	platform, err := NormalizePlatform("windows_nt", trimOutput(arch))
+	if err != nil {
+		return Platform{}, err
+	}
+	log.Printf("[installer] detected platform=%s", platform.String())
+	return platform, nil
+}
+
+func normalizeOSName(osName string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		return "darwin", nil
+	case "linux":
+		return "linux", nil
+	case "windows", "windows_nt":
+		return "windows", nil
+	default:
+		if strings.Contains(strings.ToLower(osName), "windows") {
+			return "windows", nil
+		}
+		return "", fmt.Errorf("unsupported os %q", strings.TrimSpace(osName))
+	}
+}
+
+func remoteTempPath(ctx context.Context, remote Remote, platform Platform) (string, error) {
+	if platform.OS != "windows" {
+		return "/tmp/" + platform.BinaryName(), nil
+	}
+	out, err := remote.Run(ctx, "cmd /c echo %TEMP%")
+	if err != nil {
+		return "", err
+	}
+	tempDir := strings.TrimSpace(out)
+	if tempDir == "" || strings.Contains(tempDir, "%TEMP%") {
+		tempDir = `C:\Windows\Temp`
+	}
+	// scp over Windows OpenSSH accepts slash-separated absolute paths more consistently.
+	return strings.TrimRight(strings.ReplaceAll(tempDir, `\`, "/"), "/") + "/" + platform.BinaryName(), nil
+}
+
 func bindHostFromDirectAddress(address string) string {
 	address = strings.TrimSpace(address)
 	if strings.Contains(address, "://") {
@@ -366,6 +449,12 @@ func bindHostFromDirectAddress(address string) string {
 }
 
 func installCommands(ctx context.Context, remote Remote, platform Platform, remoteTmp string, opts ServiceOptions) (installMode, error) {
+	if platform.OS == "windows" {
+		if err := installWindowsScheduledTask(ctx, remote, remoteTmp, opts); err != nil {
+			return "", err
+		}
+		return installModeSystem, nil
+	}
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
 		if platform.OS == "darwin" && shouldUseMacOSUserLaunchAgent(err) {
 			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, opts); err != nil {
@@ -440,9 +529,49 @@ func updateBinaryCommands(ctx context.Context, remote Remote, platform Platform,
 			return "", stageErr("replace_binary", err)
 		}
 		return restartCommands(ctx, remote, "darwin")
+	case "windows":
+		if err := replaceWindowsBinary(ctx, remote, remoteTmp); err != nil {
+			return "", err
+		}
+		return restartCommands(ctx, remote, "windows")
 	default:
 		return "", stageErr("replace_binary", fmt.Errorf("unsupported os %q", platform.OS))
 	}
+}
+
+func installWindowsScheduledTask(ctx context.Context, remote Remote, remoteTmp string, opts ServiceOptions) error {
+	if err := replaceWindowsBinary(ctx, remote, remoteTmp); err != nil {
+		return err
+	}
+	commands := []string{
+		windowsResetSecurityStateCommand(opts),
+		`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
+		`cmd /c schtasks /Create /TN SuperDevAgent /SC ONSTART /RU SYSTEM /TR ` + windowsQuote(windowsAgentCommand(opts)) + ` /F`,
+		`cmd /c schtasks /Run /TN SuperDevAgent`,
+	}
+	for _, cmd := range commands {
+		if strings.TrimSpace(cmd) == "" {
+			continue
+		}
+		if _, err := remote.Run(ctx, cmd); err != nil {
+			return stageErr("install_windows_task", err)
+		}
+	}
+	return nil
+}
+
+func replaceWindowsBinary(ctx context.Context, remote Remote, remoteTmp string) error {
+	commands := []string{
+		`cmd /c if not exist "C:\ProgramData\SuperDev\Agent" mkdir "C:\ProgramData\SuperDev\Agent"`,
+		`cmd /c if not exist "C:\ProgramData\SuperDev\Agent\data" mkdir "C:\ProgramData\SuperDev\Agent\data"`,
+		`cmd /c copy /Y ` + windowsQuote(windowsCommandPath(remoteTmp)) + ` "C:\ProgramData\SuperDev\Agent\superdev-agent.exe"`,
+	}
+	for _, cmd := range commands {
+		if _, err := remote.Run(ctx, cmd); err != nil {
+			return stageErr("replace_binary", err)
+		}
+	}
+	return nil
 }
 
 func updateMacOSUserLaunchAgentBinary(ctx context.Context, remote Remote, remoteTmp string) error {
@@ -462,6 +591,30 @@ func resetSecurityStateCommand(prefix string, securityPath string, opts ServiceO
 		return ""
 	}
 	return prefix + "rm -f " + shellQuote(securityPath)
+}
+
+func windowsResetSecurityStateCommand(opts ServiceOptions) string {
+	if strings.TrimSpace(opts.BootstrapToken) == "" {
+		return ""
+	}
+	return `cmd /c del /F /Q "C:\ProgramData\SuperDev\Agent\data\security.json" 2>NUL`
+}
+
+func windowsAgentCommand(opts ServiceOptions) string {
+	args := []string{windowsQuote(`C:\ProgramData\SuperDev\Agent\superdev-agent.exe`)}
+	for _, arg := range opts.commandArgs() {
+		args = append(args, windowsQuote(arg))
+	}
+	args = append(args, windowsQuote("--data"), windowsQuote(`C:\ProgramData\SuperDev\Agent\data`))
+	return strings.Join(args, " ")
+}
+
+func windowsCommandPath(value string) string {
+	return strings.ReplaceAll(value, "/", `\`)
+}
+
+func windowsQuote(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 }
 
 func uninstallCommands(ctx context.Context, remote Remote, osName string, removeData bool) error {
@@ -497,6 +650,20 @@ func uninstallCommands(ctx context.Context, remote Remote, osName string, remove
 				return stageErr("uninstall_launchd", err)
 			}
 		}
+	case "windows":
+		commands := []string{
+			`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
+			`cmd /c schtasks /Delete /TN SuperDevAgent /F 2>NUL || exit /b 0`,
+			`cmd /c del /F /Q "C:\ProgramData\SuperDev\Agent\superdev-agent.exe" 2>NUL`,
+		}
+		if removeData {
+			commands = append(commands, `cmd /c rmdir /S /Q "C:\ProgramData\SuperDev\Agent" 2>NUL`)
+		}
+		for _, cmd := range commands {
+			if _, err := remote.Run(ctx, cmd); err != nil {
+				return stageErr("uninstall_windows_task", err)
+			}
+		}
 	default:
 		return stageErr("uninstall_service", fmt.Errorf("unsupported os %q", osName))
 	}
@@ -518,6 +685,16 @@ func restartCommands(ctx context.Context, remote Remote, osName string) (install
 				return installModeUserLaunchAgent, nil
 			}
 			return "", stageErr("restart_launchd", err)
+		}
+	case "windows":
+		commands := []string{
+			`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
+			`cmd /c schtasks /Run /TN SuperDevAgent`,
+		}
+		for _, cmd := range commands {
+			if _, err := remote.Run(ctx, cmd); err != nil {
+				return "", stageErr("restart_windows_task", err)
+			}
 		}
 	default:
 		return "", stageErr("restart_service", fmt.Errorf("unsupported os %q", osName))

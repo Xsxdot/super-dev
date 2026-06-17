@@ -33,16 +33,20 @@ func (p Platform) String() string {
 // BinaryName 返回该平台的远端 agent 文件名。
 //
 // 返回：
-//   - 形如 superdev-agent-linux-amd64 的文件名
+//   - 形如 superdev-agent-linux-amd64 的文件名；Windows 带 .exe 后缀
 func (p Platform) BinaryName() string {
-	return "superdev-agent-" + p.OS + "-" + p.Arch
+	name := "superdev-agent-" + p.OS + "-" + p.Arch
+	if p.OS == "windows" {
+		name += ".exe"
+	}
+	return name
 }
 
-// NormalizePlatform 将 uname 输出归一化成受支持的平台。
+// NormalizePlatform 将远端 OS/arch 探测输出归一化成受支持的平台。
 //
 // 参数：
-//   - osName: `uname -s` 输出
-//   - machine: `uname -m` 输出
+//   - osName: `uname -s`、`cmd /c ver` 或等价 OS 输出
+//   - machine: `uname -m` 或 `%PROCESSOR_ARCHITECTURE%` 输出
 //
 // 返回：
 //   - 支持的安装平台
@@ -54,13 +58,20 @@ func NormalizePlatform(osName, machine string) (Platform, error) {
 		osValue = "darwin"
 	case "linux":
 		osValue = "linux"
+	case "windows", "windows_nt", "mingw64_nt", "msys", "cygwin_nt":
+		osValue = "windows"
 	default:
-		return Platform{}, fmt.Errorf("unsupported os %q", strings.TrimSpace(osName))
+		if strings.HasPrefix(osValue, "mingw64_nt-") || strings.HasPrefix(osValue, "msys_nt-") ||
+			strings.HasPrefix(osValue, "cygwin_nt-") || strings.Contains(osValue, "windows") {
+			osValue = "windows"
+		} else {
+			return Platform{}, fmt.Errorf("unsupported os %q", strings.TrimSpace(osName))
+		}
 	}
 
 	arch := strings.ToLower(strings.TrimSpace(machine))
 	switch arch {
-	case "x86_64", "amd64":
+	case "x86_64", "amd64", "amd64 ":
 		arch = "amd64"
 	case "arm64", "aarch64":
 		arch = "arm64"
