@@ -18,9 +18,12 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/execenv"
 )
+
+const outputDrainTimeout = 250 * time.Millisecond
 
 // RunnerConfig 是 Runner 的启动配置。
 //
@@ -41,7 +44,7 @@ type RunnerConfig struct {
 	EnvFile string
 	// OnLine 是逐行输出回调，line 为内容，stream 为 "stdout"/"stderr"。
 	OnLine func(line, stream string)
-	// OnExit 是进程退出后的回调；触发前 stdout/stderr scanner 已完成 drain。
+	// OnExit 是进程退出后的回调；触发前 stdout/stderr scanner 已完成 drain 或到达后台子进程保护超时。
 	OnExit func(info ExitInfo)
 }
 
@@ -157,9 +160,9 @@ func (r *Runner) Start() error {
 	go r.scanLines(bufio.NewScanner(stdout), "stdout")
 	go r.scanLines(bufio.NewScanner(stderr), "stderr")
 	go func() {
-		waitErr := cmd.Wait()
-		r.scanWG.Wait()
-		info := buildExitInfo(cmd.ProcessState, waitErr, r.stderrTail.tail())
+		state, waitErr := cmd.Process.Wait()
+		r.drainOutput(stdout, stderr)
+		info := buildExitInfo(state, waitErr, r.stderrTail.tail())
 
 		r.mu.Lock()
 		if r.cmd == cmd {
@@ -282,6 +285,23 @@ func (r *Runner) ProcessGroupAlive() bool {
 		return r.group.alive()
 	}
 	return false
+}
+
+func (r *Runner) drainOutput(stdout, stderr interface{ Close() error }) {
+	done := make(chan struct{})
+	go func() {
+		r.scanWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(outputDrainTimeout):
+		// shell 命令可能后台化子进程并让它继承 stdout/stderr；关闭读端可避免 OnExit 被后台子进程卡住。
+		_ = stdout.Close()
+		_ = stderr.Close()
+		<-done
+	}
 }
 
 // scanLines 逐行读取 scanner 并调用 OnLine 回调。
