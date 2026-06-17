@@ -32,7 +32,7 @@ EOF
 cat > "$TMP_DIR/bin/rustc" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "--print" && "$2" == "host-tuple" ]]; then
-  echo "test-target"
+  echo "${BUILD_AGENT_TEST_TARGET:-test-target}"
   exit 0
 fi
 exit 1
@@ -140,6 +140,25 @@ for name in superdev-agent superdev-mcp superdev-sample; do
   dev_copy="$TMP_DIR/desktop/src-tauri/target/debug/$name"
   if [[ "$(cat "$dev_copy")" != "fake binary" ]]; then
     echo "expected dev sidecar copy to be refreshed: $dev_copy" >&2
+    exit 1
+  fi
+done
+
+: > "$BUILD_AGENT_TEST_LOG"
+BUILD_AGENT_TEST_TARGET="x86_64-pc-windows-msvc" bash "$TMP_DIR/desktop/scripts/build-agent.sh"
+
+for name in superdev-agent superdev-mcp superdev-sample; do
+  windows_sidecar="$TMP_DIR/desktop/src-tauri/binaries/$name-x86_64-pc-windows-msvc.exe"
+  if ! grep -qx "$windows_sidecar" "$BUILD_AGENT_TEST_LOG"; then
+    echo "expected windows sidecar rebuild with .exe suffix: $windows_sidecar" >&2
+    echo "actual go calls:" >&2
+    cat "$BUILD_AGENT_TEST_LOG" >&2
+    exit 1
+  fi
+
+  windows_dev_copy="$TMP_DIR/desktop/src-tauri/target/debug/$name.exe"
+  if [[ "$(cat "$windows_dev_copy")" != "fake binary" ]]; then
+    echo "expected windows dev sidecar copy to be refreshed: $windows_dev_copy" >&2
     exit 1
   fi
 done
