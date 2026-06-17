@@ -13,8 +13,8 @@ import "testing"
 
 // TestShellCommand 验证两平台都能给出可执行的 shell 包裹命令。
 func TestShellCommand(t *testing.T) {
-	name, args := shellCommand("echo hi")
+	name, args := ShellCommand("echo hi")
 	if name == "" || len(args) == 0 {
-		t.Fatalf("shellCommand returned empty: name=%q args=%v", name, args)
+		t.Fatalf("ShellCommand returned empty: name=%q args=%v", name, args)
 	}
 }

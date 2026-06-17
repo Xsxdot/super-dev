@@ -13,11 +13,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 
 	"github.com/xsxdot/super-dev/agent/execenv"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/process"
 )
 
 // LocalCommand runs a shell command on the agent host.
@@ -68,7 +70,9 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	cmdText := withString(step.With, "cmd", "command")
 	ctx.LogLine(cmdText, model.StreamCommand)
 	workDir := withString(step.With, "workDir", "work_dir", "workdir")
-	cmd := exec.CommandContext(ctx.Context, "sh", "-c", cmdText)
+	name, args := process.ShellCommand(cmdText)
+	log.Printf("[pipeline] executing local command step=%s workdir=%q shell=%s command=%q", step.Name, workDir, name, cmdText)
+	cmd := exec.CommandContext(ctx.Context, name, args...)
 	cmd.Dir = workDir
 	cmd.Env = execenv.Build(execenv.Options{WorkDir: workDir, Overrides: reservedEnv(ctx)})
 	stdout, err := cmd.StdoutPipe()
@@ -80,6 +84,7 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 		return err
 	}
 	if err := cmd.Start(); err != nil {
+		log.Printf("[pipeline] start local command failed step=%s workdir=%q command=%q: %v", step.Name, workDir, cmdText, err)
 		return err
 	}
 	done := make(chan struct{}, 2)
@@ -96,10 +101,13 @@ func (p *LocalCommand) Execute(ctx *pipeline.RunContext, step model.Step, _ []pi
 	if err := cmd.Wait(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			log.Printf("[pipeline] local command exited nonzero step=%s workdir=%q command=%q code=%d", step.Name, workDir, cmdText, exitErr.ExitCode())
 			return pipeline.CommandExitError{Command: cmdText, Code: exitErr.ExitCode(), Label: "local command"}
 		}
+		log.Printf("[pipeline] local command failed step=%s workdir=%q command=%q: %v", step.Name, workDir, cmdText, err)
 		return fmt.Errorf("local command failed: %w", err)
 	}
+	log.Printf("[pipeline] local command exited step=%s workdir=%q command=%q code=0", step.Name, workDir, cmdText)
 	return nil
 }
 

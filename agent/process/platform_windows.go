@@ -42,8 +42,8 @@ func trackProcessGroup(cmd *exec.Cmd) (*groupRef, error) {
 	return &groupRef{job: job, pid: cmd.Process.Pid}, nil
 }
 
-// shellCommand 返回 Windows 下包裹任意命令字符串的 cmd /c 形式。
-func shellCommand(command string) (string, []string) {
+// ShellCommand 返回 Windows 下包裹任意命令字符串的 cmd /c 形式。
+func ShellCommand(command string) (string, []string) {
 	return "cmd", []string{"/c", command}
 }
 

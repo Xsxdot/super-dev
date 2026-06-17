@@ -17,10 +17,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sync"
 
 	"github.com/xsxdot/super-dev/agent/execenv"
+	"github.com/xsxdot/super-dev/agent/process"
 )
 
 const (
@@ -90,7 +92,9 @@ func (e *Executor) Execute(ctx context.Context, req CommandRequest, emit func(Me
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
+	name, args := process.ShellCommand(req.Command)
+	log.Printf("[remoteexec] executing command workdir=%q shell=%s command=%q", req.WorkDir, name, req.Command)
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = req.WorkDir
 	cmd.Env = execenv.Build(execenv.Options{WorkDir: req.WorkDir})
 
@@ -103,6 +107,7 @@ func (e *Executor) Execute(ctx context.Context, req CommandRequest, emit func(Me
 		return err
 	}
 	if err := cmd.Start(); err != nil {
+		log.Printf("[remoteexec] start command failed workdir=%q command=%q: %v", req.WorkDir, req.Command, err)
 		return err
 	}
 
@@ -128,12 +133,15 @@ func (e *Executor) Execute(ctx context.Context, req CommandRequest, emit func(Me
 	}
 	waitErr := cmd.Wait()
 	if scanErr != nil {
+		log.Printf("[remoteexec] scan command output failed workdir=%q command=%q: %v", req.WorkDir, req.Command, scanErr)
 		return scanErr
 	}
 	code, err := commandExitCode(waitErr)
 	if err != nil {
+		log.Printf("[remoteexec] command wait failed workdir=%q command=%q: %v", req.WorkDir, req.Command, err)
 		return err
 	}
+	log.Printf("[remoteexec] command exited workdir=%q command=%q code=%d", req.WorkDir, req.Command, code)
 	return safeEmit(Message{Type: MessageExit, ExitCode: code})
 }
 
