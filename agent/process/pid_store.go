@@ -11,9 +11,9 @@ package process
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"sync"
-	"syscall"
 )
 
 // PIDStore 持久化 deploymentID → PGID 映射，用于 superdev 重启时清理孤儿进程。
@@ -71,12 +71,15 @@ func (s *PIDStore) LoadAll() map[string]int {
 // 在 superdev 启动时调用，确保上次运行遗留的子进程全部终止。
 func (s *PIDStore) KillAll() {
 	pgids := s.LoadAll()
+	log.Printf("[process] killing stale process groups count=%d", len(pgids))
 	for _, pgid := range pgids {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		// 兼容旧数据：历史文件里可能存的是普通 PID，而不是 Setpgid 后的 PGID。
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		killStaleGroup(pgid)
 	}
-	_ = os.WriteFile(s.path, []byte("{}"), 0o600)
+	if err := os.WriteFile(s.path, []byte("{}"), 0o600); err != nil {
+		log.Printf("[process] clear pid store failed path=%q: %v", s.path, err)
+	} else {
+		log.Printf("[process] cleared pid store path=%q", s.path)
+	}
 	s.mu.Lock()
 	s.pgids = map[string]int{}
 	s.mu.Unlock()

@@ -39,6 +39,17 @@ func TestPIDStoreRemove(t *testing.T) {
 	assert.Empty(t, pgids)
 }
 
+func TestPIDStoreKillAllClearsFile(t *testing.T) {
+	dir := t.TempDir()
+	ps := process.NewPIDStore(filepath.Join(dir, "pids.json"))
+	ps.Set("dep-missing", 999999)
+	require.NoError(t, ps.Flush())
+
+	ps.KillAll()
+
+	assert.Empty(t, ps.LoadAll())
+}
+
 func TestPIDStoreKillAll(t *testing.T) {
 	dir := t.TempDir()
 	ps := process.NewPIDStore(filepath.Join(dir, "pids.json"))
