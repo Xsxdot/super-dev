@@ -5,16 +5,16 @@
 <h1 align="center">SuperDev</h1>
 
 <p align="center">
-  <strong>An AI-native runtime collaboration layer.</strong><br />
-  <strong>Give AI the same runtime you see: services, logs, deployments, approvals.</strong><br />
-  Let developers and AI share services, logs, deployments, and approval context in one real environment.
+  <strong>Your AI writes code — but in the real environment it's blind and handcuffed.</strong><br />
+  <strong>SuperDev gives it the full workbench: See (runtime + logs), Inspect (breakpoint debugging), Operate (browser + deploys).</strong><br />
+  Across every local and remote project, in one place.
 </p>
 
 <p align="center">
   <a href="https://gosuper.dev/"><strong>gosuper.dev</strong></a> ·
   <a href="#why-superdev">Why</a> ·
+  <a href="#see-inspect-operate">See · Inspect · Operate</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="https://gosuper.dev/#demo">Demo</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
@@ -39,23 +39,31 @@
 
 ## Why SuperDev
 
-AI coding tools can read code, edit code, and run commands. But code collaboration only answers "what is in the repository." Real development depends on the runtime state that exists right now: which services are already running, which ports are occupied, which logs belong to the current feature, which pipeline just shipped, and which remote deployment is failing.
+AI coding tools can read, edit, and run code. But that only answers "what's in the repo." Real development happens in the runtime: which services are up, which ports are taken, which logs belong to this feature, where a bug actually is, and whether the frontend you just changed even renders.
 
-When AI cannot see that runtime state, it starts another service, competes for ports, and creates a shadow environment. Each conversation feels like a restart. AI cannot continuously follow a feature from local debugging, through log changes and pipeline runs, to a production error.
+A human developer has a full toolbox for this — a process list, a log viewer, a debugger that stops on a line, a browser to click through the UI. Your AI has almost none of it. It writes the code, then goes blind: it can't see the running service, can't step through the bug, can't tell if the page broke. So it guesses, restarts services it can't see, and asks you to paste logs.
 
-SuperDev brings local services, remote hosts, logs, pipelines, ingress, and approval context into one local-first source of truth, then exposes it to Claude Code, Codex, Cursor, and other coding agents through MCP. AI stops guessing from outside the repository and starts collaborating inside the same real development scene.
+SuperDev gives AI the same workbench you use — **See, Inspect, Operate** — over one source of runtime truth that the desktop app and AI share, across every local and remote project.
 
-## First Goal: Shared Runtime Collaboration
+## See, Inspect, Operate
 
-SuperDev is not just diagnostics or remote control for AI. Its first goal is a new kind of collaboration: developers and AI agents working over the same runtime state.
+A human developer doesn't just read code — they watch it run, stop it mid-flight to inspect state, and drive the UI to confirm it works. SuperDev gives AI all three.
 
-That means AI sees the services you already started instead of starting another copy. It reads the same logs instead of asking you to paste fragments. It understands the current deployment, pipeline, ingress, and approval context instead of treating a production error as isolated text.
+### 👁 See — runtime and logs
 
-When AI and humans share runtime state, collaboration becomes continuous. A feature can be followed across services, logs, deployments, and edge state. A production error can be traced through the system that produced it. Real-environment actions can still stay behind preflight checks, human approval, one-time tokens, and audit logs.
+AI sees the services already running (no shadow copies, no port contention), and reads the same live/historical logs you do — cross-service search, context lookup, folding, bookmarks — instead of asking you to paste fragments. Diagnostics give deterministic evidence; AI owns the root-cause reasoning.
+
+### 🔬 Inspect — breakpoint debugging
+
+When logs aren't enough, AI attaches to a running managed process (no restart, same pid), stops on a source line, and reads the call stack, scopes, and variables in one call. Default support covers **Go, Python, Rust, C/C++**; **experimental support covers Node and Java/Kotlin** (bring your own / configured adapter). Exposed over MCP as `list_code_debug_targets` and `debug_capture_at`.
+
+### 🎮 Operate — browser and deploys
+
+AI changes the frontend, then verifies it itself: navigate, click, type, screenshot, read console logs and network requests, and (when authorized) evaluate JS in the page — driven through Playwright. For shipping, AI runs the same DAG pipelines you do. Every real-environment action stays behind preflight, approval, one-time tokens, and audit.
 
 ## Highlights
 
-Two things are the core — **shared runtime** and **safe operations**. They are what set SuperDev apart from code-layer tools; everything else exists to serve them.
+See / Inspect / Operate is what AI does. Two things make it trustworthy and continuous — **one shared source of runtime truth** and **safe operations**. Everything below serves those.
 
 ### 🤝 Shared runtime, no competing services
 
@@ -71,6 +79,7 @@ Two things are the core — **shared runtime** and **safe operations**. They are
 - Runtime writes call `start/stop/restart` directly; when approval is required, MCP waits for desktop approval by default and resumes with a one-time token.
 - Approval tokens are bound to an operation fingerprint, expire quickly, are single-use, and cannot be reused for a different target.
 - Approvals, rejections, executions, and failures are recorded locally for audit.
+- Browser control (navigate / click / evaluate) runs under the same model: `open` requests approval, `evaluate` is gated by a trust toggle rather than per-call prompts, and control actions are redacted in the audit log.
 
 ### Capabilities built around those two
 
@@ -78,6 +87,8 @@ Two things are the core — **shared runtime** and **safe operations**. They are
 | --- | --- |
 | **Unified runtime console** | See local processes, Launchd jobs, systemd services, Docker containers, and remote-host deployments in one model; choose managed control or monitor-only; desktop UI and MCP share one source of truth. |
 | **Logs & diagnostics** | Live / historical logs, cross-service search, context lookup, filter rules, split panels, synchronized recording, bookmark ranges, repeated-log folding. Diagnostics give deterministic evidence; AI owns the root-cause reasoning. |
+| **AI breakpoint debugging** | When logs aren't enough, AI attaches to a running managed process (no restart, same pid), stops on a source line, and reads call stack / scopes / variables in one call. Default support: Go, Python, Rust, C/C++. Experimental (bring/configure adapter): Node, Java/Kotlin. Exposed over MCP as `list_code_debug_targets` / `debug_capture_at`. |
+| **Browser control** | AI drives the running frontend through Playwright: `browser_navigate` / `browser_click` / `browser_type` / `browser_screenshot` / `browser_console_logs` / `browser_network_requests` / `browser_evaluate`, plus snapshot, reload, wait-for-selector, press-key, select-option. Verifies its own UI changes; control actions stay under approval + redacted audit. |
 | **Production-minded pipelines** | DAG pipelines, reusable templates, variables, artifacts, run history, replayable run logs; built-in Go / Node / Python / Java / Rust / PHP / Vue+Go templates; systemd uses a release/current layout, rollback reuses the same path. |
 | **Declarative ingress** | Pipelines deliver artifacts repeatedly; Ingress converges long-lived edge state: domains, DNS, reverse proxy, HTTPS, managed certs. Supports nginx, manual DNS, Cloudflare, Aliyun, ACME DNS-01, and orphan detection. |
 
@@ -147,7 +158,7 @@ Ingress examples live in `examples/ingress/` and cover manual DNS, Cloudflare, A
 
 SuperDev is approaching its first open-source release. The current focus is macOS desktop usage and local-first workflows.
 
-- Available: Tauri desktop app, Go local agent, MCP server, SuperDev skill, multi-service logs, operation approvals, pipeline templates, ingress, and zero-touch onboarding.
+- Available: Tauri desktop app, Go local agent, MCP server, SuperDev skill, multi-service logs, breakpoint debugging (Go/Python/Rust/C++ by default; Node and Java/Kotlin experimental), browser control (Playwright-driven), operation approvals, pipeline templates, ingress, and zero-touch onboarding.
 - Near term: verified release packaging, final README screenshots, more pipeline templates, a smoother remote agent / tunnel experience, and a richer release walkthrough.
 - Principle: local-first by default. AI can participate in operations, but writes must remain preflighted, approved, token-bound, and auditable.
 
