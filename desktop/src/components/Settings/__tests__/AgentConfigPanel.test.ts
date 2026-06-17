@@ -128,6 +128,7 @@ describe('AgentConfigPanel', () => {
     expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', {
       method: 'generated_command',
       controller_url: 'http://127.0.0.1:57017',
+      release_base_url: 'https://github.com/Xsxdot/super-dev/releases/download/v0.1.1',
       remote_agent_port: 57019,
       transport_type: 'tunnel',
       token_ttl_minutes: 30,
@@ -212,6 +213,7 @@ describe('AgentConfigPanel', () => {
     expect(store.generateInstallCommand).toHaveBeenCalledWith('h1', {
       method: 'generated_command',
       controller_url: 'http://controller:57017',
+      release_base_url: 'https://github.com/Xsxdot/super-dev/releases/download/v0.1.1',
       remote_agent_port: 57017,
       transport_type: 'direct',
       token_ttl_minutes: 30,

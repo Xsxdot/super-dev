@@ -29,6 +29,7 @@ func TestNormalizePlatform(t *testing.T) {
 		{name: "darwin arm64", osName: "Darwin", machine: "arm64", want: Platform{OS: "darwin", Arch: "arm64"}},
 		{name: "linux amd64", osName: "Linux", machine: "amd64", want: Platform{OS: "linux", Arch: "amd64"}},
 		{name: "linux arm64", osName: "Linux", machine: "aarch64", want: Platform{OS: "linux", Arch: "arm64"}},
+		{name: "windows amd64", osName: "Windows_NT", machine: "x86_64", want: Platform{OS: "windows", Arch: "amd64"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,6 +58,13 @@ func TestResolveBinary(t *testing.T) {
 	got, err := ResolveBinary(dir, Platform{OS: "linux", Arch: "amd64"})
 	require.NoError(t, err)
 	assert.Equal(t, path, got)
+}
+
+func TestNormalizePlatformWindowsBinaryName(t *testing.T) {
+	p, err := NormalizePlatform("MINGW64_NT-10.0", "AMD64")
+	require.NoError(t, err)
+	assert.Equal(t, Platform{OS: "windows", Arch: "amd64"}, p)
+	assert.Equal(t, "superdev-agent-windows-amd64.exe", p.BinaryName())
 }
 
 func TestResolveBinaryMissingDirectory(t *testing.T) {

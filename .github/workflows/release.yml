@@ -1,20 +1,19 @@
-# CI verifies the portable checks that contributors can reproduce locally.
-# Release packaging, code signing, and notarization stay in the documented
-# release process until the repository has the required GitHub secrets.
-name: CI
+# Release builds downloadable SuperDev agent and desktop assets.
+# PR CI uploads temporary artifacts; this workflow publishes versioned GitHub
+# Release assets when a v* tag is pushed.
+name: Release
 
 on:
-  pull_request:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  agent:
-    name: Go agent
+  agent-binaries:
+    name: Agent binaries
     runs-on: ubuntu-latest
 
     steps:
@@ -27,66 +26,32 @@ jobs:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
 
-      - name: Run Go tests
-        working-directory: agent
-        run: go test ./...
-
-  agent-windows:
-    name: Go agent (Windows)
-    runs-on: windows-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
-
-      - name: Build Go agent
-        working-directory: agent
-        run: go build ./...
-
-      - name: Run Windows platform tests
-        working-directory: agent
-        run: |
-          go test ./process -run TestJobObjectKillsChildTree -count=1
-          go test ./codedebug -run TestNodeAttachWindowsUsesPrearm -count=1
-          go test ./installer -run 'TestNormalizePlatformWindowsBinaryName|TestInstallerInstallsWindowsAgent' -count=1
-          go test ./langruntime -run 'TestNodePrearmArgsForWindows|TestNodePrearmEnvForWindows|TestNodeDebuggerSpecForPlatform' -count=1
-
-  desktop:
-    name: Desktop web checks
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Verify version metadata
         run: node scripts/check-version.mjs
 
-      - name: Install desktop dependencies
-        working-directory: desktop
-        run: pnpm install --frozen-lockfile
+      - name: Build remote agent binaries
+        run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
-      - name: Build desktop web bundle
-        working-directory: desktop
-        run: pnpm build
+      - name: Collect agent release assets
+        run: |
+          mkdir -p release-assets/agent
+          cp scripts/install-agent.sh release-assets/agent/
+          cp desktop/src-tauri/resources/agent-install/superdev-agent-* release-assets/agent/
 
-      - name: Run desktop tests
-        working-directory: desktop
-        run: pnpm test
+      - name: Upload agent release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-agent-binaries
+          if-no-files-found: error
+          path: release-assets/agent/*
 
   desktop-linux:
     name: Desktop Linux package
@@ -118,6 +83,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
       - name: Install desktop dependencies
         working-directory: desktop
         run: pnpm install --frozen-lockfile
@@ -125,23 +93,14 @@ jobs:
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
-      - name: Upload remote agent binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: superdev-agent-binaries
-          if-no-files-found: error
-          path: |
-            scripts/install-agent.sh
-            desktop/src-tauri/resources/agent-install/superdev-agent-*
-
       - name: Build Tauri Linux packages
         working-directory: desktop
         run: pnpm tauri build
 
-      - name: Upload Linux desktop packages
+      - name: Upload Linux desktop release assets
         uses: actions/upload-artifact@v4
         with:
-          name: superdev-desktop-linux
+          name: release-desktop-linux
           if-no-files-found: error
           path: |
             desktop/src-tauri/target/release/bundle/**/*.AppImage
@@ -173,6 +132,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
       - name: Install desktop dependencies
         working-directory: desktop
         run: pnpm install --frozen-lockfile
@@ -184,10 +146,10 @@ jobs:
         working-directory: desktop
         run: pnpm tauri build
 
-      - name: Upload macOS desktop packages
+      - name: Upload macOS desktop release assets
         uses: actions/upload-artifact@v4
         with:
-          name: superdev-desktop-macos
+          name: release-desktop-macos
           if-no-files-found: error
           path: |
             desktop/src-tauri/target/release/bundle/**/*.dmg
@@ -218,6 +180,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
       - name: Install desktop dependencies
         working-directory: desktop
         run: pnpm install --frozen-lockfile
@@ -226,25 +191,48 @@ jobs:
         shell: bash
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
-      - name: Verify Windows sidecar names
-        shell: bash
-        run: |
-          target="$(rustc --print host-tuple)"
-          for name in superdev-agent superdev-mcp superdev-sample; do
-            test -f "desktop/src-tauri/binaries/$name-$target.exe"
-            test -f "desktop/src-tauri/target/debug/$name.exe"
-          done
-          test -f desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe
-
       - name: Build Tauri Windows packages
         working-directory: desktop
         run: pnpm tauri build
 
-      - name: Upload Windows desktop packages
+      - name: Upload Windows desktop release assets
         uses: actions/upload-artifact@v4
         with:
-          name: superdev-desktop-windows
+          name: release-desktop-windows
           if-no-files-found: error
           path: |
             desktop/src-tauri/target/release/bundle/**/*.msi
             desktop/src-tauri/target/release/bundle/**/*.exe
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - agent-binaries
+      - desktop-linux
+      - desktop-macos
+      - desktop-windows
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          tmp="$(mktemp)"
+          (cd release-assets && find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 shasum -a 256) > "$tmp"
+          mv "$tmp" release-assets/checksums.txt
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --notes "Automated SuperDev release assets for $GITHUB_REF_NAME."
+          fi
+          mapfile -d '' files < <(find release-assets -type f -print0)
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

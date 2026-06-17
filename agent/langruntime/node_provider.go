@@ -6,7 +6,7 @@
 //   - 校验并归一化 Node 运行配置
 //
 // 边界：
-//   - debugger-ready 策略 = signal：start_dev 普通启动，attach 时 codedebug 发 SIGUSR1
+//   - debugger-ready 策略：Unix 走 SIGUSR1，Windows 走启动时 --inspect prearm
 //   - js-debug adapter 命令由 codedebug 构造，这里只声明 provider 能力
 package langruntime
 
@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
@@ -28,8 +30,11 @@ func NewNodeProvider() NodeProvider { return NodeProvider{} }
 // Language 返回 node。
 func (NodeProvider) Language() model.ServiceLanguage { return model.LanguageNode }
 
-// Capabilities 声明 Node 的能力：debugger-ready 通过 SIGUSR1 惰性打开 inspector。
+// Capabilities 声明 Node 的能力：Unix 通过 SIGUSR1，Windows 通过 --inspect prearm。
 func (NodeProvider) Capabilities() Capabilities {
+	if runtime.GOOS == "windows" {
+		return Capabilities{DebugReady: DebugReadyByPrearm, DebugLaunch: true, StopOnEntry: true}
+	}
 	return Capabilities{DebugReady: DebugReadyBySignal, DebugLaunch: true, StopOnEntry: true}
 }
 
@@ -159,22 +164,23 @@ func (NodeProvider) Normalize(_ context.Context, input RuntimeConfigInput) (Norm
 	}, nil, nil
 }
 
-// BuildPlan 由 normalized 配置生成 Node 执行计划；debug-ready 通过 SIGUSR1 进入 inspector。
+// BuildPlan 由 normalized 配置生成 Node 执行计划；Unix 通过 SIGUSR1，Windows 通过 --inspect prearm。
 func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionPlan, []Diagnostic, error) {
 	cfg := input.Config
 	env := CopyStringMap(cfg.Env)
-	debugger := &DebuggerSpec{Adapter: model.CodeDebugProviderNode, Readiness: ReadinessSignalAttach, Signal: "SIGUSR1"}
+	debugger := nodeDebuggerSpec(runtime.GOOS)
 
 	if step, ok := EscapeHatchCommand(cfg.Config); ok {
 		switch input.Intent {
 		case IntentStartDev, IntentStartNormal:
+			commandEnv := nodePrearmEnv(runtime.GOOS, env)
 			return ExecutionPlan{
 				Intent:     input.Intent,
 				WorkingDir: cfg.CWD,
-				Env:        env,
+				Env:        commandEnv,
 				Command:    &CommandSpec{Executable: step.Executable, Args: step.Args},
 				Debugger:   debugger,
-				Preview:    PreviewCommand(env, step.Executable, step.Args...),
+				Preview:    PreviewCommand(commandEnv, step.Executable, step.Args...),
 			}, nil, nil
 		}
 	}
@@ -192,19 +198,20 @@ func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Executio
 	case IntentStartDev, IntentStartNormal:
 		if script != "" {
 			// 第一层 · script 主路径：<pm> run <script>，真正的 node 是子进程，
-			// debug-ready 走 Phase C 已实现并 smoke 过的 pnpm 子进程解析路径。
+			// Windows 无 SIGUSR1，通过 NODE_OPTIONS 让子 node 启动即打开 inspector。
+			commandEnv := nodePrearmEnv(runtime.GOOS, env)
 			args := []string{"run", script}
 			return ExecutionPlan{
 				Intent:     input.Intent,
 				WorkingDir: cfg.CWD,
-				Env:        env,
+				Env:        commandEnv,
 				Command:    &CommandSpec{Executable: packageManager, Args: args},
 				Debugger:   debugger,
-				Preview:    PreviewCommand(env, packageManager, args...),
+				Preview:    PreviewCommand(commandEnv, packageManager, args...),
 			}, nil, nil
 		}
 		// node 参数必须位于入口文件之前，否则会被业务程序当成普通参数。
-		args := append([]string{}, nodeArgs...)
+		args := nodePrearmArgs(runtime.GOOS, nodeArgs)
 		args = append(args, program)
 		args = append(args, programArgs...)
 		return ExecutionPlan{
@@ -255,6 +262,48 @@ func (NodeProvider) BuildPlan(_ context.Context, input BuildPlanInput) (Executio
 			Message: "unsupported Node runtime intent " + string(input.Intent),
 		}}, nil
 	}
+}
+
+func nodeDebuggerSpec(goos string) *DebuggerSpec {
+	if goos == "windows" {
+		return &DebuggerSpec{Adapter: model.CodeDebugProviderNode, Readiness: ReadinessPrearmListen}
+	}
+	return &DebuggerSpec{Adapter: model.CodeDebugProviderNode, Readiness: ReadinessSignalAttach, Signal: "SIGUSR1"}
+}
+
+func nodePrearmArgs(goos string, nodeArgs []string) []string {
+	args := append([]string{}, nodeArgs...)
+	if goos != "windows" || hasNodeInspectFlag(args) {
+		return args
+	}
+	// Windows 没有 SIGUSR1，直启 node 时必须在入口文件前预埋 inspector。
+	return append([]string{"--inspect=0"}, args...)
+}
+
+func nodePrearmEnv(goos string, env map[string]string) map[string]string {
+	out := CopyStringMap(env)
+	if goos != "windows" {
+		return out
+	}
+	if hasNodeInspectFlag(strings.Fields(out["NODE_OPTIONS"])) {
+		return out
+	}
+	if strings.TrimSpace(out["NODE_OPTIONS"]) == "" {
+		out["NODE_OPTIONS"] = "--inspect=0"
+		return out
+	}
+	out["NODE_OPTIONS"] = strings.TrimSpace(out["NODE_OPTIONS"]) + " --inspect=0"
+	return out
+}
+
+func hasNodeInspectFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--inspect" || arg == "--inspect-brk" ||
+			strings.HasPrefix(arg, "--inspect=") || strings.HasPrefix(arg, "--inspect-brk=") {
+			return true
+		}
+	}
+	return false
 }
 
 func readPackageJSONMain(path string) string {

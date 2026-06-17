@@ -872,6 +872,30 @@ func TestParseListenPort(t *testing.T) {
 	}
 }
 
+func TestParseInspectPort(t *testing.T) {
+	cases := []struct {
+		name        string
+		argv        []string
+		wantPort    int
+		wantPresent bool
+	}{
+		{"equals port", []string{"node", "--inspect=12345", "server.js"}, 12345, true},
+		{"equals host port", []string{"node", "--inspect=127.0.0.1:9230", "server.js"}, 9230, true},
+		{"space port", []string{"node", "--inspect", "9231", "server.js"}, 9231, true},
+		{"default port", []string{"node", "--inspect", "server.js"}, defaultNodeInspectorPort, true},
+		{"inspect zero", []string{"node", "--inspect=0", "server.js"}, 0, true},
+		{"inspect brk", []string{"node", "--inspect-brk=9232", "server.js"}, 9232, true},
+		{"missing", []string{"node", "server.js"}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPort, gotPresent := parseInspectPort(tc.argv)
+			assert.Equal(t, tc.wantPort, gotPort)
+			assert.Equal(t, tc.wantPresent, gotPresent)
+		})
+	}
+}
+
 func TestWaitInspectorPortFallsBackToOpenedDefaultPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

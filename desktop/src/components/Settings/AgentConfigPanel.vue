@@ -92,6 +92,7 @@ const securityForm = reactive({
 
 const installForm = reactive({
   controllerURL: 'http://127.0.0.1:57017',
+  releaseBaseURL: __SUPERDEV_RELEASE_BASE_URL__,
   tokenTTLMinutes: 30,
 })
 
@@ -334,6 +335,7 @@ async function generateInstallCommand() {
     installResult.value = await agentsStore.generateInstallCommand(agent.host_id, {
       method: 'generated_command',
       controller_url: installForm.controllerURL.trim(),
+      release_base_url: installForm.releaseBaseURL.trim() || undefined,
       remote_agent_port: bindPort.value,
       transport_type: installTransportType.value,
       token_ttl_minutes: Number(installForm.tokenTTLMinutes) || 30,
@@ -779,6 +781,10 @@ onBeforeUnmount(() => {
                     <div class="settings-field">
                       <label class="settings-field-label">{{ t('settings.agents.controllerURL') }}</label>
                       <input v-model="installForm.controllerURL" class="settings-input" data-test="agent-install-controller-url" />
+                    </div>
+                    <div class="settings-field">
+                      <label class="settings-field-label">{{ t('settings.agents.releaseBaseURL') }}</label>
+                      <input v-model="installForm.releaseBaseURL" class="settings-input" data-test="agent-install-release-base-url" />
                     </div>
                     <div class="settings-field small-field">
                       <label class="settings-field-label">{{ t('settings.agents.tokenTTL') }}</label>

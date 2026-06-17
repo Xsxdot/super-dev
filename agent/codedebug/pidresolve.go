@@ -12,8 +12,6 @@ package codedebug
 
 import (
 	"fmt"
-	"os/exec"
-	"strconv"
 	"strings"
 )
 
@@ -93,6 +91,7 @@ func isNodeProcess(comm string) bool {
 		comm = comm[idx+1:]
 	}
 	comm = strings.ToLower(comm)
+	comm = strings.TrimSuffix(comm, ".exe")
 	return comm == "node"
 }
 
@@ -135,36 +134,4 @@ func isShellVariableName(name string) bool {
 		return false
 	}
 	return name != ""
-}
-
-// listProcessGroupOS 用 ps 枚举某进程组内的进程（darwin/linux 通用）。
-func listProcessGroupOS(pgid int) []procInfo {
-	if pgid <= 0 {
-		return nil
-	}
-	out, err := exec.Command("ps", "-axo", "pid=,pgid=,comm=").Output()
-	if err != nil {
-		return nil
-	}
-	var procs []procInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 3 {
-			continue
-		}
-		pid, convErr := strconv.Atoi(fields[0])
-		if convErr != nil {
-			continue
-		}
-		procPGID, convErr := strconv.Atoi(fields[1])
-		if convErr != nil || procPGID != pgid {
-			continue
-		}
-		comm := fields[2]
-		if idx := strings.LastIndex(comm, "/"); idx >= 0 {
-			comm = comm[idx+1:]
-		}
-		procs = append(procs, procInfo{pid: pid, comm: comm})
-	}
-	return procs
 }

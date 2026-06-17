@@ -16,11 +16,11 @@ SuperDev 的语言 provider 用不同方式让普通 dev 进程「可被事后�
 
 | 语言 | 策略 | 含义 |
 | --- | --- | --- |
-| Go | `attach`（attach-pid） | 进程天然可事后 attach，`start_dev` 零额外动作；调试时 dlv 按 PID attach。 |
-| Rust / C / C++ | `attach`（attach-pid） | 与 Go 同构：`start_dev` 先构建带调试信息的二进制（cargo/make 作为 PreRun）再 exec，得到普通进程；调试时 lldb-dap 按 PID attach。需系统装 `lldb-dap`（Xcode/LLVM）。 |
-| Node | `signal`（signal-then-attach） | `start_dev` 普通启动；attach 时 SuperDev 给目标进程发 `SIGUSR1` 惰性打开 inspector，再用打包的 js-debug adapter 连上。**inspector 开在真正的 `node` 子进程上，不是 `pnpm`/`npm` 包装进程上**。 |
-| Python | `prearm`（prearm-listen） | `start_dev` 启动时即 `python -m debugpy --listen <port>` 预埋（不带 `--wait-for-client`，不阻塞业务）；attach 时 DAP 客户端**直连**该 listen 端口（debugpy 的 listen 口本身就是完整 DAP 服务，无需另起 adapter）。 |
-| Java / Kotlin | `prearm`（prearm-listen，**experimental**） | `start_dev` 注入 `-agentlib:jdwp=...,server=y,suspend=n,address=127.0.0.1:<port>` 预埋 JDWP listen（不阻塞业务）。**但 JVM 没有 debugpy 那样的独立 DAP adapter**：官方 java-debug 是 Eclipse JDT LS 的 plugin，必须由一个 JDT LS/java-debug 启动器把它拉起成 DAP server。用户须把该启动器命令配进 `code_debug.adapter_command`，否则 attach 报 `adapter_unavailable`。 |
+| Go | `attach`（attach-pid） | 进程天然可事后 attach，`start_dev` 零额外动作；调试时 dlv 按 PID attach。Windows 上进程枚举走 Win32_Process/tasklist 语义，仍是同一 PID attach。 |
+| Rust / C / C++ | `attach`（attach-pid） | 与 Go 同构：`start_dev` 先构建带调试信息的二进制（cargo/make 作为 PreRun）再 exec，得到普通进程；调试时 lldb-dap 按 PID attach。需系统装 `lldb-dap`（Xcode/LLVM/Windows LLVM）。 |
+| Node | Unix: `signal`；Windows: `prearm` | Unix attach 时 SuperDev 给真实 `node` 进程发 `SIGUSR1` 惰性打开 inspector；Windows 没有 SIGUSR1，`start_dev` 会预埋 `--inspect`/`NODE_OPTIONS=--inspect=0`，attach 时从 argv/stderr 解析 inspector 端口。**inspector 开在真正的 `node` 子进程上，不是 `pnpm`/`npm` 包装进程上**。 |
+| Python | `prearm`（prearm-listen） | `start_dev` 启动时即 `python -m debugpy --listen <port>` 预埋（不带 `--wait-for-client`，不阻塞业务）；attach 时 DAP 客户端**直连**该 listen 端口（debugpy 的 listen 口本身就是完整 DAP 服务，无需另起 adapter）。该策略不依赖 POSIX signal，Windows/Unix 同构。 |
+| Java / Kotlin | `prearm`（prearm-listen，**experimental**） | `start_dev` 注入 `-agentlib:jdwp=...,server=y,suspend=n,address=127.0.0.1:<port>` 预埋 JDWP listen（不阻塞业务），Windows/Unix 同构。**但 JVM 没有 debugpy 那样的独立 DAP adapter**：官方 java-debug 是 Eclipse JDT LS 的 plugin，必须由一个 JDT LS/java-debug 启动器把它拉起成 DAP server。用户须把该启动器命令配进 `code_debug.adapter_command`，否则 attach 报 `adapter_unavailable`。 |
 
 含义：
 - Go/Rust/C++/Python/Node **开箱即用**（Node 的 js-debug 已随客户端打包；lldb-dap/dlv/debugpy 走系统依赖，缺失时报 `adapter_unavailable` 并附 remediation_hint 告知装什么）。

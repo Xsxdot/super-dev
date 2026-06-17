@@ -162,6 +162,14 @@ SuperDev is approaching its first open-source release. The current focus is macO
 - Near term: verified release packaging, final README screenshots, more pipeline templates, a smoother remote agent / tunnel experience, and a richer release walkthrough.
 - Principle: local-first by default. AI can participate in operations, but writes must remain preflighted, approved, token-bound, and auditable.
 
+## Platform Support
+
+| Platform | Local desktop app | Remote agent install target | Go/Python/Rust/C/C++ debugging | Node debugging | JVM debugging |
+| --- | --- | --- | --- | --- | --- |
+| macOS (`darwin`) | Supported with Tauri sidecars. | `superdev-agent-darwin-amd64` and `superdev-agent-darwin-arm64`. | Supported by the default attach flow when the language debugger is installed. | Experimental attach via `SIGUSR1` inspector activation. | Experimental; bring or configure the JVM adapter. |
+| Linux | Covered by `desktop-linux` CI packaging. | `superdev-agent-linux-amd64` and `superdev-agent-linux-arm64`. | Supported by the default attach flow when the language debugger is installed. | Experimental attach via `SIGUSR1` inspector activation. | Experimental; bring or configure the JVM adapter. |
+| Windows | Covered by `desktop-windows` CI packaging with `.exe` sidecars. | `superdev-agent-windows-amd64.exe`. | Supported by the default attach flow when the matching debugger toolchain is available. | Experimental prearm flow using `--inspect=0` instead of Unix signals. | Experimental; bring or configure the JVM adapter. |
+
 ## Development
 
 ```bash

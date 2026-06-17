@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +41,7 @@ const (
 type agentInstallCommandRequest struct {
 	Method          string              `json:"method"`
 	ControllerURL   string              `json:"controller_url"`
+	ReleaseBaseURL  string              `json:"release_base_url"`
 	BindAddress     string              `json:"bind_address"`
 	RemoteAgentPort int                 `json:"remote_agent_port"`
 	TransportType   model.TransportType `json:"transport_type"`
@@ -59,6 +61,7 @@ type agentInstallTokenRecord struct {
 	BootstrapToken  string
 	HostID          string
 	ControllerURL   string
+	ReleaseBaseURL  string
 	TransportType   model.TransportType
 	BindAddress     string
 	RemoteAgentPort int
@@ -79,6 +82,7 @@ type agentInstallSession struct {
 func prepareAgentInstallSessionRequest(agent model.Agent, req agentInstallCommandRequest) (agentInstallCommandRequest, error) {
 	applyAgentInstallDefaultsFromAgent(&req, agent)
 	req.ControllerURL = strings.TrimSpace(req.ControllerURL)
+	req.ReleaseBaseURL = strings.TrimSpace(req.ReleaseBaseURL)
 	req.BindAddress = strings.TrimSpace(req.BindAddress)
 	if req.BindAddress == "" {
 		req.BindAddress = defaultAgentInstallBindAddress
@@ -112,6 +116,7 @@ func newAgentInstallSession(hostID string, req agentInstallCommandRequest, now t
 			BootstrapToken:  bootstrapToken,
 			HostID:          hostID,
 			ControllerURL:   req.ControllerURL,
+			ReleaseBaseURL:  req.ReleaseBaseURL,
 			TransportType:   req.TransportType,
 			BindAddress:     req.BindAddress,
 			RemoteAgentPort: req.RemoteAgentPort,
@@ -121,20 +126,7 @@ func newAgentInstallSession(hostID string, req agentInstallCommandRequest, now t
 }
 
 func agentInstallCommandResultFromSession(hostID string, session agentInstallSession) agentInstallCommandResult {
-	scriptURL := fmt.Sprintf(
-		"%s/api/agents/install.sh?token=%s",
-		strings.TrimRight(session.Request.ControllerURL, "/"),
-		url.QueryEscape(session.InstallToken),
-	)
-	command := fmt.Sprintf(
-		"curl -fsSL %s | bash -s -- --host-id %s --transport %s --bind-address %s --port %d --bootstrap-token %s --require-auth",
-		shellQuote(scriptURL),
-		shellArg(hostID),
-		shellArg(string(session.Request.TransportType)),
-		shellArg(session.Request.BindAddress),
-		session.Request.RemoteAgentPort,
-		shellArg(session.Token.BootstrapToken),
-	)
+	command := agentInstallCommandLine(hostID, session)
 	return agentInstallCommandResult{
 		Response: agentInstallCommandResponse{
 			Command:        command,
@@ -144,6 +136,33 @@ func agentInstallCommandResultFromSession(hostID string, session agentInstallSes
 		},
 		Token: session.Token,
 	}
+}
+
+func agentInstallCommandLine(hostID string, session agentInstallSession) string {
+	args := fmt.Sprintf(
+		"--host-id %s --transport %s --bind-address %s --port %d --bootstrap-token %s --require-auth",
+		shellArg(hostID),
+		shellArg(string(session.Request.TransportType)),
+		shellArg(session.Request.BindAddress),
+		session.Request.RemoteAgentPort,
+		shellArg(session.Token.BootstrapToken),
+	)
+	if session.Request.ReleaseBaseURL != "" {
+		baseURL := strings.TrimRight(session.Request.ReleaseBaseURL, "/")
+		scriptURL := baseURL + "/install-agent.sh"
+		return fmt.Sprintf(
+			"curl -fsSL %s | bash -s -- --binary-base-url %s %s",
+			shellQuote(scriptURL),
+			shellArg(baseURL),
+			args,
+		)
+	}
+	scriptURL := fmt.Sprintf(
+		"%s/api/agents/install.sh?token=%s",
+		strings.TrimRight(session.Request.ControllerURL, "/"),
+		url.QueryEscape(session.InstallToken),
+	)
+	return fmt.Sprintf("curl -fsSL %s | bash -s -- %s", shellQuote(scriptURL), args)
 }
 
 func agentRestartCommand() string {
@@ -203,6 +222,7 @@ func (a *App) generateAgentInstallCommand(w http.ResponseWriter, r *http.Request
 		return
 	}
 	a.rememberAgentInstallToken(result.Token)
+	log.Printf("[SuperDev] generated agent install command host=%s transport=%s release=%t expires_at=%s", host.ID, result.Token.TransportType, result.Token.ReleaseBaseURL != "", result.Response.ExpiresAt)
 	jsonOK(w, result.Response)
 }
 
@@ -275,12 +295,22 @@ func normalizeAgentInstallCommandRequest(req agentInstallCommandRequest) (agentI
 		return agentInstallCommandRequest{}, errors.New("unsupported install method")
 	}
 	req.ControllerURL = strings.TrimSpace(req.ControllerURL)
-	if req.ControllerURL == "" {
-		return agentInstallCommandRequest{}, errors.New("controller_url is required")
+	req.ReleaseBaseURL = strings.TrimSpace(req.ReleaseBaseURL)
+	if req.ControllerURL == "" && req.ReleaseBaseURL == "" {
+		return agentInstallCommandRequest{}, errors.New("controller_url or release_base_url is required")
 	}
-	parsedURL, err := url.Parse(req.ControllerURL)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return agentInstallCommandRequest{}, errors.New("controller_url must be a valid absolute URL")
+	if req.ControllerURL != "" {
+		parsedURL, err := url.Parse(req.ControllerURL)
+		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+			return agentInstallCommandRequest{}, errors.New("controller_url must be a valid absolute URL")
+		}
+	}
+	if req.ReleaseBaseURL != "" {
+		parsedURL, err := url.Parse(req.ReleaseBaseURL)
+		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+			return agentInstallCommandRequest{}, errors.New("release_base_url must be a valid absolute URL")
+		}
+		req.ReleaseBaseURL = strings.TrimRight(req.ReleaseBaseURL, "/")
 	}
 	req.BindAddress = strings.TrimSpace(req.BindAddress)
 	if req.BindAddress == "" {
