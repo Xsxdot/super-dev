@@ -110,6 +110,24 @@ printf 'fake dap server\n' > "$dest/js-debug/src/dapDebugServer.js"
 EOF
 chmod +x "$TMP_DIR/bin/tar"
 
+cat > "$TMP_DIR/bin/stat" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "-c" && "$2" == "%Y" ]]; then
+  case "$3" in
+    *agent-install*) echo 200 ;;
+    *) echo 100 ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "-f" ]]; then
+  echo "  File: $3"
+  exit 0
+fi
+echo "fake stat: unsupported args $*" >&2
+exit 1
+EOF
+chmod +x "$TMP_DIR/bin/stat"
+
 touch "$TMP_DIR/agent/main.go"
 sleep 1
 for name in superdev-agent superdev-mcp superdev-sample; do
@@ -162,6 +180,16 @@ for name in superdev-agent superdev-mcp superdev-sample; do
     exit 1
   fi
 done
+
+BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
+: > "$BUILD_AGENT_TEST_LOG"
+BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
+
+if grep -q '/agent-install/' "$BUILD_AGENT_TEST_LOG"; then
+  echo "expected remote install binaries to be skipped when fake GNU stat marks them newer" >&2
+  cat "$BUILD_AGENT_TEST_LOG" >&2
+  exit 1
+fi
 
 js_debug_server="$TMP_DIR/desktop/src-tauri/resources/js-debug/src/dapDebugServer.js"
 if [[ ! -f "$js_debug_server" ]]; then

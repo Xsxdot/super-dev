@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package process verifies manager reconciliation against OS process groups.
 //
 // 职责：
