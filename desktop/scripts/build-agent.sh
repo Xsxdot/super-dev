@@ -14,10 +14,14 @@ JS_DEBUG_ARCHIVE="$JS_DEBUG_CACHE_DIR/js-debug-dap-v$JS_DEBUG_VERSION.tar.gz"
 JS_DEBUG_URL="https://github.com/microsoft/vscode-js-debug/releases/download/v$JS_DEBUG_VERSION/js-debug-dap-v$JS_DEBUG_VERSION.tar.gz"
 DEV_OUT_DIR="$ROOT/src-tauri/target/debug"
 TARGET="$(rustc --print host-tuple)"
-OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
-OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET"
-OUT_SAMPLE="$OUT_DIR/superdev-sample-$TARGET"
-BUILD_REMOTE_INSTALL=0
+HOST_BIN_SUFFIX=""
+if [[ "$TARGET" == *windows* ]]; then
+  HOST_BIN_SUFFIX=".exe"
+fi
+OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET$HOST_BIN_SUFFIX"
+OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET$HOST_BIN_SUFFIX"
+OUT_SAMPLE="$OUT_DIR/superdev-sample-$TARGET$HOST_BIN_SUFFIX"
+BUILD_REMOTE_INSTALL="${BUILD_REMOTE_INSTALL:-0}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -42,10 +46,10 @@ needs_build() {
     return 0
   fi
   local bin_mtime
-  bin_mtime=$(stat -f '%m' "$out" 2>/dev/null || stat -c '%Y' "$out")
+  bin_mtime=$(stat -c '%Y' "$out" 2>/dev/null || stat -f '%m' "$out")
   local f mtime
   while IFS= read -r -d '' f; do
-    mtime=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f")
+    mtime=$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f")
     if [[ "$mtime" -gt "$bin_mtime" ]]; then
       return 0
     fi
@@ -117,9 +121,9 @@ echo "build-agent: compiling mcp -> $OUT_MCP"
 echo "build-agent: compiling sample -> $OUT_SAMPLE"
 (cd "$AGENT_SRC" && "$GO_BIN" build -o "$OUT_SAMPLE" ./cmd/superdev-sample)
 
-sync_dev_sidecar "$OUT_AGENT" "superdev-agent"
-sync_dev_sidecar "$OUT_MCP" "superdev-mcp"
-sync_dev_sidecar "$OUT_SAMPLE" "superdev-sample"
+sync_dev_sidecar "$OUT_AGENT" "superdev-agent$HOST_BIN_SUFFIX"
+sync_dev_sidecar "$OUT_MCP" "superdev-mcp$HOST_BIN_SUFFIX"
+sync_dev_sidecar "$OUT_SAMPLE" "superdev-sample$HOST_BIN_SUFFIX"
 prepare_js_debug
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
@@ -129,10 +133,15 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
     "darwin arm64"
     "linux amd64"
     "linux arm64"
+    "windows amd64"
   )
   for target in "${targets[@]}"; do
     read -r goos goarch <<<"$target"
-    remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch"
+    suffix=""
+    if [[ "$goos" == "windows" ]]; then
+      suffix=".exe"
+    fi
+    remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch$suffix"
     if needs_build "$remote_out"; then
       echo "build-agent: compiling remote agent -> $remote_out"
       (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)

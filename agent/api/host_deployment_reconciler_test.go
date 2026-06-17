@@ -15,12 +15,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
@@ -97,6 +99,44 @@ func TestHostDeploymentReconcilerReconcilePutsFullDesiredBody(t *testing.T) {
 	assert.Equal(t, model.LocationLocal, received[0].Location)
 	assert.Equal(t, "dep-remote", received[0].DeploymentID)
 	assert.Equal(t, model.LogKindCommand, received[0].Logs.Type)
+}
+
+func TestHostDeploymentReconcilerSerializesSameHostReconciles(t *testing.T) {
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(managedReconcileProject("proj-one", "dep-one"))
+	app.mu.Unlock()
+	transport := newBlockingManagedDeploymentTransport()
+	reconciler := NewHostDeploymentReconciler(app, transport, time.Hour)
+
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- reconciler.Reconcile(context.Background(), "h1")
+	}()
+	firstBody := receiveManagedDeploymentBody(t, transport.firstStarted)
+	require.Len(t, firstBody, 1)
+
+	app.mu.Lock()
+	app.appendProjectLocked(managedReconcileProject("proj-two", "dep-two"))
+	app.mu.Unlock()
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- reconciler.Reconcile(context.Background(), "h1")
+	}()
+
+	// 旧请求仍在传输层时，后续同 host 的完整清单不能抢先发送；
+	// 否则旧清单若最后抵达远端，会把新 deployment 覆盖掉。
+	select {
+	case body := <-transport.secondStarted:
+		t.Fatalf("second reconcile entered transport before first completed with %d deployments", len(body))
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(transport.releaseFirst)
+	require.NoError(t, <-firstErr)
+	secondBody := receiveManagedDeploymentBody(t, transport.secondStarted)
+	require.Len(t, secondBody, 2)
+	require.NoError(t, <-secondErr)
 }
 
 func TestHostDeploymentReconcilerRunHandlesConnectedEventAndTick(t *testing.T) {
@@ -214,4 +254,85 @@ func TestGetHostManagedDeploymentsStatusProxiesRemoteState(t *testing.T) {
 	assert.Equal(t, 1, got.DesiredCollectorCount)
 	require.NotNil(t, got.Remote)
 	assert.Equal(t, 1, got.Remote.CollectorCount)
+}
+
+func managedReconcileProject(projectID, deploymentID string) model.Project {
+	return model.Project{
+		ID: projectID, Name: projectID,
+		Services: []model.Service{{
+			ID: "svc-" + projectID, ProjectID: projectID, Name: "api",
+			Deployments: []model.Deployment{{
+				ID: deploymentID, EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"h1"},
+				Logs: &model.LogConfig{Type: model.LogKindCommand, Command: "printf log"},
+			}},
+		}},
+	}
+}
+
+type blockingManagedDeploymentTransport struct {
+	mu            sync.Mutex
+	calls         int
+	firstStarted  chan []model.ManagedDeployment
+	secondStarted chan []model.ManagedDeployment
+	releaseFirst  chan struct{}
+}
+
+func newBlockingManagedDeploymentTransport() *blockingManagedDeploymentTransport {
+	return &blockingManagedDeploymentTransport{
+		firstStarted:  make(chan []model.ManagedDeployment, 1),
+		secondStarted: make(chan []model.ManagedDeployment, 1),
+		releaseFirst:  make(chan struct{}),
+	}
+}
+
+func (t *blockingManagedDeploymentTransport) Do(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	if hostID != "h1" {
+		return nodetransport.NodeResponse{}, nodetransport.ErrHostUnreachable
+	}
+	var body []model.ManagedDeployment
+	if req.Body != nil {
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nodetransport.NodeResponse{}, err
+		}
+	}
+	t.mu.Lock()
+	t.calls++
+	call := t.calls
+	t.mu.Unlock()
+	if call == 1 {
+		t.firstStarted <- body
+		select {
+		case <-ctx.Done():
+			return nodetransport.NodeResponse{}, ctx.Err()
+		case <-t.releaseFirst:
+		}
+	} else {
+		t.secondStarted <- body
+	}
+	return nodetransport.NodeResponse{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+}
+
+func (t *blockingManagedDeploymentTransport) Stream(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (t *blockingManagedDeploymentTransport) SubscribeNodes(context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (t *blockingManagedDeploymentTransport) Covers() []string {
+	return []string{"h1"}
+}
+
+func receiveManagedDeploymentBody(t *testing.T, ch <-chan []model.ManagedDeployment) []model.ManagedDeployment {
+	t.Helper()
+	select {
+	case body := <-ch:
+		return body
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for managed deployment reconcile request")
+		return nil
+	}
 }

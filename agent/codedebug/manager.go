@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -178,23 +177,6 @@ func NewManager(opts ManagerOptions) *Manager {
 		runtimes:             map[string]*runtimeRecord{},
 		sessions:             map[string]*sessionRecord{},
 		closed:               map[string]Session{},
-	}
-}
-
-func signalProcessOS(pid int, signal string) error {
-	return syscall.Kill(pid, signalToSyscall(signal))
-}
-
-func signalToSyscall(signal string) syscall.Signal {
-	switch strings.TrimSpace(strings.ToUpper(signal)) {
-	case "SIGUSR1", "USR1":
-		return syscall.SIGUSR1
-	case "SIGTERM", "TERM":
-		return syscall.SIGTERM
-	case "SIGINT", "INT":
-		return syscall.SIGINT
-	default:
-		return syscall.SIGUSR1
 	}
 }
 
@@ -508,7 +490,8 @@ func (m *Manager) prearmListenPort(deploymentID string) int {
 	return parseListenPort(m.runningProcessArgv(deploymentID))
 }
 
-// waitInspectorPort 在 SIGUSR1 后轮询 deployment stderr，解析 Node inspector 端口。
+// waitInspectorPort 轮询 deployment stderr，解析 Node inspector 端口。
+// Unix 路径在 SIGUSR1 后调用；Windows prearm 路径在启动时已写 stderr。
 // 端口异步出现，最多等约 3s；超时返回 ErrAttachTargetUnresolved。
 func (m *Manager) waitInspectorPort(deploymentID string, fallback nodeInspectorFallback) (int, error) {
 	if m.runningProcessStderr == nil {
@@ -777,20 +760,9 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		if err != nil {
 			return false, err
 		}
-		req.pid = pid
-		defaultInspectorAlreadyOpen := tcpPortOpen(defaultNodeInspectorPort)
-		if err := m.signalProcess(pid, "SIGUSR1"); err != nil {
-			return false, fmt.Errorf("signal node debuggee: %w", err)
+		if err := m.fillNodeAttach(&req, dep, pid); err != nil {
+			return false, err
 		}
-		inspectorPort, perr := m.waitInspectorPort(dep.ID, nodeInspectorFallback{
-			port:    defaultNodeInspectorPort,
-			enabled: !defaultInspectorAlreadyOpen,
-		})
-		if perr != nil {
-			return false, perr
-		}
-		req.readiness = langruntime.ReadinessPrearmListen
-		req.port = inspectorPort
 	case model.LanguagePython, model.LanguageJava, model.LanguageKotlin:
 		// prearm-listen：Python debugpy 与 JVM JDWP 都在 start_dev 时把监听端口写入 argv。
 		// attach 时从 argv 反解端口直连/交给 adapter，不发信号、不按 PID 误附加。

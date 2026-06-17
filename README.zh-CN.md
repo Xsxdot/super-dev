@@ -149,6 +149,14 @@ SuperDev 正处于第一版开源发布前夜，当前主要面向 macOS 桌面�
 - 近期：更完整的 release 打包、正式 README 截图、更多 pipeline 模板、更稳的远端 agent / tunnel 体验、更完整的发布演示。
 - 原则：本地优先，不把控制面强行放到云上；AI 可以参与操作，但写操作必须可预检、可批准、可审计。
 
+## 平台支持
+
+| 平台 | 本地桌面端 | 远端 agent 安装目标 | Go/Python/Rust/C/C++ 调试 | Node 调试 | JVM 调试 |
+| --- | --- | --- | --- | --- | --- |
+| macOS (`darwin`) | 支持，随 Tauri sidecar 打包。 | `superdev-agent-darwin-amd64` 与 `superdev-agent-darwin-arm64`。 | 安装对应语言调试器后走默认 attach 流程。 | experimental，通过 `SIGUSR1` 打开 inspector。 | experimental，需自备或配置 JVM adapter。 |
+| Linux | `desktop-linux` CI 覆盖打包。 | `superdev-agent-linux-amd64` 与 `superdev-agent-linux-arm64`。 | 安装对应语言调试器后走默认 attach 流程。 | experimental，通过 `SIGUSR1` 打开 inspector。 | experimental，需自备或配置 JVM adapter。 |
+| Windows | `desktop-windows` CI 覆盖打包，并使用 `.exe` sidecar。 | `superdev-agent-windows-amd64.exe`。 | 对应调试工具链可用时走默认 attach 流程。 | experimental，使用预注入 `--inspect=0`，不依赖 Unix signal。 | experimental，需自备或配置 JVM adapter。 |
+
 ## 开发
 
 ```bash

@@ -1013,6 +1013,7 @@ export interface AgentConfigUpdatePayload {
 export interface AgentInstallCommandPayload {
   method?: 'generated_command'
   controller_url: string
+  release_base_url?: string
   bind_address?: string
   remote_agent_port?: number
   transport_type?: TransportType

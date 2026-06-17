@@ -60,6 +60,41 @@ func TestGenerateAgentInstallCommandBindsHostAndParameters(t *testing.T) {
 	assert.NotContains(t, resp.Body.String(), `"bootstrap_token"`)
 }
 
+func TestGenerateAgentInstallCommandUsesReleaseInstallScriptAndBinaryBaseURL(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	hostResp := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{"name":"ali-01","tags":[]}`))
+	require.Equal(t, http.StatusOK, hostResp.Code)
+	hostID := decodeHostID(t, hostResp.Body.Bytes())
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: hostID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{{
+			Type:   model.TransportTypeDirect,
+			Direct: &model.DirectParams{Address: "100.117.127.123:57021"},
+		}}},
+		Config:   model.AgentConfig{ListenAddress: "100.117.127.123", ListenPort: 57021},
+		Security: model.AgentSecurity{TLS: model.AgentTLSSpec{Mode: model.AgentTLSModeAuto}},
+	})
+	require.NoError(t, err)
+
+	releaseBaseURL := "https://github.com/Xsxdot/super-dev/releases/download/v0.1.1"
+	body := `{"method":"generated_command","controller_url":"http://127.0.0.1:57017","release_base_url":"` + releaseBaseURL + `","transport_type":"direct","token_ttl_minutes":30}`
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install-command", bytes.NewBufferString(body))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), "curl -fsSL")
+	assert.Contains(t, resp.Body.String(), releaseBaseURL+"/install-agent.sh")
+	assert.Contains(t, resp.Body.String(), "--binary-base-url "+releaseBaseURL)
+	assert.NotContains(t, resp.Body.String(), "127.0.0.1:57017/api/agents/install.sh")
+	record, found := app.latestInstallTokenForHost(hostID)
+	require.True(t, found)
+	assert.Equal(t, releaseBaseURL, record.ReleaseBaseURL)
+	assert.Equal(t, model.TransportTypeDirect, record.TransportType)
+	assert.NotEmpty(t, record.BootstrapToken)
+}
+
 func TestGenerateAgentInstallCommandDefaultsBindAddressFromDirectChain(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
