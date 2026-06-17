@@ -41,6 +41,11 @@ const {
 const serviceQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const selectedProjectId = ref<string | null>(null)
+const PROJECT_RECENT_KEY = 'superdev.sidebar_project_recent.v1'
+const PROJECT_PINNED_KEY = 'superdev.sidebar_project_pinned.v1'
+const VISIBLE_PROJECT_CHIP_COUNT = 3
+const recentProjectIds = ref(readStoredProjectIds(PROJECT_RECENT_KEY))
+const pinnedProjectIds = ref(readStoredProjectIds(PROJECT_PINNED_KEY))
 const step1ApprovedSample = ref(false)
 const legacyDismissPending = ref(
   localStorage.getItem(COMPLETED_STEPS_KEY) === null && localStorage.getItem(DISMISSED_KEY) === null,
@@ -50,6 +55,34 @@ const selectedProject = computed(() =>
   ?? agentStore.projects[0]
   ?? null,
 )
+const orderedProjects = computed(() => {
+  const projectsById = new Map(agentStore.projects.map(project => [project.id, project]))
+  const seen = new Set<string>()
+  const ordered: typeof agentStore.projects = []
+  const pushProject = (projectId: string) => {
+    if (seen.has(projectId)) return
+    const project = projectsById.get(projectId)
+    if (!project) return
+    seen.add(projectId)
+    ordered.push(project)
+  }
+
+  for (const projectId of pinnedProjectIds.value) pushProject(projectId)
+  for (const projectId of recentProjectIds.value) pushProject(projectId)
+  for (const project of agentStore.projects) pushProject(project.id)
+  return ordered
+})
+const visibleProjects = computed(() => {
+  const visible = orderedProjects.value.slice(0, VISIBLE_PROJECT_CHIP_COUNT)
+  const current = selectedProject.value
+  if (!current || visible.some(project => project.id === current.id)) return visible
+
+  // 当前项目必须留在 chips 中，否则从“更多”切换后用户会看不到自己刚选中的上下文。
+  if (visible.length >= VISIBLE_PROJECT_CHIP_COUNT) {
+    return [...visible.slice(0, VISIBLE_PROJECT_CHIP_COUNT - 1), current]
+  }
+  return [...visible, current]
+})
 
 watch(
   () => agentStore.projects.map(project => project.id),
@@ -58,8 +91,9 @@ watch(
       selectedProjectId.value = null
       return
     }
+    normalizeProjectPreferences(projectIds)
     if (!selectedProjectId.value || !projectIds.includes(selectedProjectId.value)) {
-      selectedProjectId.value = projectIds[0]
+      selectedProjectId.value = firstAvailableProjectId(projectIds)
     }
   },
   { immediate: true },
@@ -91,6 +125,15 @@ function openDeployment(payload: { deploymentId: string; title: string }) {
 function selectProject(projectId: string) {
   selectedProjectId.value = projectId
   serviceQuery.value = ''
+  recordProjectOpen(projectId)
+}
+
+function toggleProjectPin(projectId: string) {
+  const current = pinnedProjectIds.value
+  pinnedProjectIds.value = current.includes(projectId)
+    ? current.filter(id => id !== projectId)
+    : [projectId, ...current]
+  persistProjectIds(PROJECT_PINNED_KEY, pinnedProjectIds.value)
 }
 
 function openProjectSearch(projectId: string) {
@@ -146,6 +189,47 @@ function servicesForEnv(services: Service[], envName: string): Service[] {
     .filter(svc => !query || svc.name.toLowerCase().includes(query))
 }
 
+function readStoredProjectIds(key: string): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function persistProjectIds(key: string, ids: string[]) {
+  localStorage.setItem(key, JSON.stringify(ids))
+}
+
+function normalizeProjectPreferences(projectIds: string[]) {
+  const valid = new Set(projectIds)
+  const normalizedPinned = pinnedProjectIds.value.filter(id => valid.has(id))
+  const normalizedRecent = recentProjectIds.value.filter(id => valid.has(id))
+  if (normalizedPinned.length !== pinnedProjectIds.value.length) {
+    pinnedProjectIds.value = normalizedPinned
+    persistProjectIds(PROJECT_PINNED_KEY, normalizedPinned)
+  }
+  if (normalizedRecent.length !== recentProjectIds.value.length) {
+    recentProjectIds.value = normalizedRecent
+    persistProjectIds(PROJECT_RECENT_KEY, normalizedRecent)
+  }
+}
+
+function firstAvailableProjectId(projectIds: string[]): string {
+  const recent = recentProjectIds.value.find(id => projectIds.includes(id))
+  return recent ?? projectIds[0]
+}
+
+function recordProjectOpen(projectId: string) {
+  const valid = new Set(agentStore.projects.map(project => project.id))
+  recentProjectIds.value = [
+    projectId,
+    ...recentProjectIds.value.filter(id => id !== projectId),
+  ].filter(id => valid.has(id)).slice(0, 20)
+  persistProjectIds(PROJECT_RECENT_KEY, recentProjectIds.value)
+}
+
 /**
  * openDeploymentIdSet 返回当前日志工作区已打开的 deploymentId 集合，
  * 让项目 tab 分栏和独立 deployment tab 都能正确高亮侧边栏行。
@@ -188,7 +272,10 @@ onBeforeUnmount(() => {
         <ProjectHeader
           :project="selectedProject"
           :projects="agentStore.projects"
+          :visible-projects="visibleProjects"
+          :pinned-project-ids="pinnedProjectIds"
           @select-project="selectProject"
+          @toggle-pin="toggleProjectPin"
           @add-project="addProject"
         />
         <div class="sidebar-project-shell" data-test="sidebar-project-shell">
@@ -218,11 +305,11 @@ onBeforeUnmount(() => {
           </div>
           <!-- 按环境分组展示有 deployment 的 service 行 -->
           <EnvGroup
-            v-for="(env, index) in selectedProject.environments ?? []"
+            v-for="env in selectedProject.environments ?? []"
             :key="env.id || env.name"
             :env-name="env.name"
             :is-dev="env.is_dev"
-            :initially-expanded="env.is_dev || index === 0"
+            :initially-expanded="true"
             :project-id="selectedProject.id"
             :services="servicesForEnv(selectedProject.services, env.name)"
             :selected-service-ids="openDeploymentIdSet()"

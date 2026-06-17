@@ -77,6 +77,32 @@ function projectWithService(id: string, name: string, serviceName: string, envNa
   }
 }
 
+function projectWithEnvironments(id: string): Project {
+  return {
+    id,
+    name: 'Multi Env',
+    root_path: `/tmp/${id}`,
+    services: [{
+      id: 'svc-api',
+      project_id: id,
+      name: 'api',
+      status: 'running',
+      required: false,
+      order: 1,
+      deployments: [
+        { id: 'dep-api-dev', env_name: 'dev', location: 'local', status: 'running' },
+        { id: 'dep-api-demo', env_name: 'demo', location: 'local', status: 'running' },
+        { id: 'dep-api-prod', env_name: 'prod', location: 'local', status: 'running' },
+      ],
+    }],
+    environments: [
+      { id: 'env-dev', name: 'dev', is_dev: true, order: 1 },
+      { id: 'env-demo', name: 'demo', is_dev: false, order: 2 },
+      { id: 'env-prod', name: 'prod', is_dev: false, order: 3 },
+    ],
+  }
+}
+
 describe('SidebarView', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -131,7 +157,7 @@ describe('SidebarView', () => {
     expect(wrapper.text()).not.toContain('Evidence')
   })
 
-  it('侧边栏以项目选择器展示当前项目，切换后只显示该项目服务', async () => {
+  it('侧边栏以项目 chips 展示当前项目，单击 chip 后只显示该项目服务', async () => {
     const agent = useAgentStore()
     agent.projects = [
       projectWithService('proj-1', 'SuperDev Sample', 'sample-api'),
@@ -142,14 +168,13 @@ describe('SidebarView', () => {
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    expect(wrapper.find('[data-test="project-selector"]').text()).toContain('SuperDev Sample')
+    expect(wrapper.find('[data-test="project-chip-proj-1"]').text()).toContain('SS')
     expect(wrapper.text()).toContain('sample-api')
     expect(wrapper.text()).not.toContain('server')
 
-    await wrapper.find('[data-test="project-selector"]').trigger('click')
-    await wrapper.find('[data-test="project-option-proj-2"]').trigger('click')
+    await wrapper.find('[data-test="project-chip-proj-2"]').trigger('click')
 
-    expect(wrapper.find('[data-test="project-selector"]').text()).toContain('TK')
+    expect(wrapper.find('[data-test="project-chip-proj-2"]').classes()).toContain('selected')
     expect(wrapper.text()).toContain('server')
     expect(wrapper.text()).not.toContain('sample-api')
   })
@@ -171,16 +196,21 @@ describe('SidebarView', () => {
     wrapper.unmount()
   })
 
-  it('项目选择菜单点击外部后关闭', async () => {
+  it('更多项目菜单点击外部后关闭', async () => {
     const agent = useAgentStore()
-    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+    agent.projects = [
+      projectWithService('proj-1', 'Demo', 'sample-api'),
+      projectWithService('proj-2', 'TK', 'server'),
+      projectWithService('proj-3', 'Mall Admin', 'admin'),
+      projectWithService('proj-4', 'Worker', 'worker'),
+    ]
 
     const wrapper = mount(SidebarView, {
       attachTo: document.body,
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    await wrapper.find('[data-test="project-selector"]').trigger('click')
+    await wrapper.find('[data-test="project-more"]').trigger('click')
     expect(wrapper.find('[data-test="project-menu"]').exists()).toBe(true)
 
     document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
@@ -198,10 +228,52 @@ describe('SidebarView', () => {
       global: { plugins: [installTestI18n('en-US')] },
     })
 
-    await wrapper.find('[data-test="project-selector"]').trigger('click')
+    await wrapper.find('[data-test="project-more"]').trigger('click')
 
     expect(wrapper.find('[data-test="project-overview-menu"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="project-menu"]').text()).not.toContain('Project overview')
+  })
+
+  it('项目 chips 保留更多和新增项目入口', () => {
+    const agent = useAgentStore()
+    agent.projects = [
+      projectWithService('proj-1', 'SuperDev Sample', 'sample-api'),
+      projectWithService('proj-2', 'TK', 'server'),
+      projectWithService('proj-3', 'Mall Admin', 'admin'),
+    ]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('[data-test="project-more"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sidebar-add-project"]').exists()).toBe(true)
+  })
+
+  it('项目 chips 按 pin 优先，其余按上次打开顺序展示', async () => {
+    const agent = useAgentStore()
+    agent.projects = [
+      projectWithService('proj-1', 'SuperDev Sample', 'sample-api'),
+      projectWithService('proj-2', 'TK', 'server'),
+      projectWithService('proj-3', 'Mall Admin', 'admin'),
+      projectWithService('proj-4', 'Local Browser Worker', 'worker'),
+    ]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="project-chip-proj-3"]').trigger('click')
+    await wrapper.find('[data-test="project-chip-proj-2"]').trigger('click')
+    await wrapper.find('[data-test="project-more"]').trigger('click')
+    await wrapper.find('[data-test="project-pin-proj-4"]').trigger('click')
+
+    const chips = wrapper.findAll('[data-test^="project-chip-"]').map(item => item.attributes('data-test'))
+    expect(chips.slice(0, 3)).toEqual([
+      'project-chip-proj-4',
+      'project-chip-proj-2',
+      'project-chip-proj-3',
+    ])
   })
 
   it('项目概览横栏位于拖拽分栏提示之前', () => {
@@ -230,6 +302,17 @@ describe('SidebarView', () => {
 
     expect(wrapper.find('[data-test="env-group-rows"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="env-service-row"]').text()).toContain('sample-api')
+  })
+
+  it('所有环境默认展开', () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithEnvironments('proj-1')]
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.findAll('[data-test="env-group-rows"]')).toHaveLength(3)
   })
 
   it('搜索服务时只保留匹配的 service 行', async () => {

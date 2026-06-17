@@ -27,15 +27,17 @@ import {
 } from '@/lib/deploymentNodeStatus'
 import type { Deployment, RuntimeInstanceStatus, Service } from '@/api/agent'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   envName: string
   isDev: boolean
-  initiallyExpanded?: boolean
+  initiallyExpanded?: boolean | null
   projectId: string
   services: Service[]
   // selectedServiceIds 语义为「已在面板打开的 deploymentId 集合」，用于行高亮。
   selectedServiceIds: Set<string>
-}>()
+}>(), {
+  initiallyExpanded: null,
+})
 
 const emit = defineEmits<{
   'open-deployment': [payload: { deploymentId: string; title: string }]
@@ -63,8 +65,8 @@ async function onCheckChange(svc: Service) {
   await agentStore.putEnvSelected(props.projectId, props.envName, next)
 }
 
-// dev 环境和父组件指定的首个环境默认展开，避免没有可拖拽服务行。
-const expanded = ref(props.initiallyExpanded || props.isDev)
+// 初始展开状态由父组件按当前产品策略决定；未传入时仍兼容旧的 dev 默认展开。
+const expanded = ref(props.initiallyExpanded ?? props.isDev)
 const expandedDeploymentNodes = ref<Set<string>>(new Set())
 
 function toggleExpanded() {
