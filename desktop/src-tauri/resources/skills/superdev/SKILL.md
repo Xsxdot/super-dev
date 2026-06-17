@@ -126,12 +126,13 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `list_pipeline_artifacts` | 查看 pipeline 产物历史 | 读 | `references/pipeline.md` |
 | `list_browser_targets` | 列出可调试的本机前端 deployment | 读 | `references/browser-debug.md` |
 | `list_debug_browsers` | 列出本机已配置调试浏览器及可用性 | 读 | `references/browser-debug.md` |
-| `open_browser_debug_session` | 打开隔离调试浏览器加载本机前端，返回 CDP 端点 | 写，需审批 | `references/browser-debug.md` |
+| `open_browser_debug_session` | 打开或复用隔离调试浏览器加载本机前端，返回 CDP 端点 | 写，首次新开需审批 | `references/browser-debug.md` |
 | `close_browser_debug_session` | 关闭浏览器调试会话 | 写 | `references/browser-debug.md` |
 | `browser_snapshot` | 读页面结构与稳定 selector（操作前先取 selector） | 读 | `references/browser-debug.md` |
 | `browser_click` / `browser_type` / `browser_select_option` / `browser_press_key` | 在调试页面上交互 | 写，落审计 | `references/browser-debug.md` |
 | `browser_wait_for_selector` | 等待元素出现/可见/隐藏 | 写，落审计 | `references/browser-debug.md` |
 | `browser_navigate` / `browser_reload` | 同源整页导航 / 刷新 | 写，落审计 | `references/browser-debug.md` |
+| `browser_set_viewport` | 设置页面 viewport 尺寸 | 写，落审计 | `references/browser-debug.md` |
 | `browser_console_logs` / `browser_network_requests` | 读页面 console / 网络诊断信号 | 读 | `references/browser-debug.md` |
 | `browser_screenshot` | 截图（默认 viewport） | 读 | `references/browser-debug.md` |
 | `browser_evaluate` | 执行页面 JS（默认关，需用户开 `allow_evaluate`，全程审计） | 写，落审计 | `references/browser-debug.md` |

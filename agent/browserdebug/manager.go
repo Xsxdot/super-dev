@@ -13,6 +13,7 @@ package browserdebug
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -21,20 +22,24 @@ import (
 
 // OpenResolvedRequest 是 API 层完成 deployment/browser 解析后的打开请求。
 type OpenResolvedRequest struct {
-	Browser      BrowserRecord
-	Target       Target
-	TargetURL    string
-	OpenDevtools bool
-	ProfileMode  string
+	Browser        BrowserRecord
+	Target         Target
+	TargetURL      string
+	OpenDevtools   bool
+	ProfileMode    string
+	ViewportWidth  int
+	ViewportHeight int
 }
 
 // LaunchRequest 描述底层浏览器进程启动参数。
 type LaunchRequest struct {
-	Browser      BrowserRecord
-	TargetURL    string
-	OpenDevtools bool
-	ProfileMode  string
-	ProfileScope string
+	Browser        BrowserRecord
+	TargetURL      string
+	OpenDevtools   bool
+	ProfileMode    string
+	ProfileScope   string
+	ViewportWidth  int
+	ViewportHeight int
 }
 
 // LaunchResult 描述底层浏览器启动后的 CDP 发现结果。
@@ -93,7 +98,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	}
 }
 
-// Open 创建一个新的浏览器调试会话。
+// Open 创建或复用一个浏览器调试会话。
 func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, error) {
 	if req.Browser.ID == "" || req.Browser.ExecutablePath == "" {
 		return Session{}, fmt.Errorf("browser is not configured")
@@ -101,21 +106,36 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 	if !req.Browser.Available {
 		return Session{}, fmt.Errorf("browser executable is unavailable")
 	}
+	now := m.now().UTC()
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(now)
+	if record, ok := m.findReusableLocked(req, true); ok {
+		session := m.touchRecordLocked(record, now)
+		m.mu.Unlock()
+		closeSessionFns(closeFns)
+		log.Printf("[SuperDev] reusing debug browser session session=%s deployment=%s browser=%s target=%s", session.ID, session.DeploymentID, session.BrowserID, session.TargetURL)
+		return session, nil
+	}
+	m.mu.Unlock()
+	closeSessionFns(closeFns)
+
 	if m.launch == nil {
 		return Session{}, fmt.Errorf("browser launcher is not configured")
 	}
 	result, err := m.launch(ctx, LaunchRequest{
-		Browser:      req.Browser,
-		TargetURL:    req.TargetURL,
-		OpenDevtools: req.OpenDevtools,
-		ProfileMode:  req.ProfileMode,
+		Browser:        req.Browser,
+		TargetURL:      req.TargetURL,
+		OpenDevtools:   req.OpenDevtools,
+		ProfileMode:    req.ProfileMode,
+		ViewportWidth:  req.ViewportWidth,
+		ViewportHeight: req.ViewportHeight,
 		// deployment 级隔离可避免两个本机服务复用同一端口时共享登录态。
 		ProfileScope: req.Target.DeploymentID,
 	})
 	if err != nil {
 		return Session{}, err
 	}
-	now := m.now().UTC()
+	now = m.now().UTC()
 	record := &SessionRecord{
 		Session: Session{
 			ID:           "brs_" + uuid.NewString(),
@@ -136,11 +156,51 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 		close:     result.Close,
 	}
 	m.mu.Lock()
-	closeFns := m.cleanupLocked(now)
+	closeFns = m.cleanupLocked(now)
 	defer closeSessionFns(closeFns)
 	defer m.mu.Unlock()
 	m.sessions[record.ID] = record
 	return record.Session, nil
+}
+
+// FindReusable 返回同一 deployment 和 browser 的存活调试会话。
+//
+// 参数：
+//   - req: 已解析的打开请求，用于匹配 deployment 与 browser
+//
+// 返回：
+//   - 可复用 session 快照，并刷新 LastUsedAt
+//   - 是否存在可复用 session
+//
+// 注意：
+//   - 不要求 target URL 相同；调用方可在复用后导航到目标 path
+//   - 不创建浏览器进程
+func (m *Manager) FindReusable(req OpenResolvedRequest) (Session, bool) {
+	now := m.now().UTC()
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(now)
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	record, ok := m.findReusableLocked(req, false)
+	if !ok {
+		return Session{}, false
+	}
+	return m.touchRecordLocked(record, now), true
+}
+
+// UpdateTargetURL 更新 session 当前目标 URL，供复用会话导航后同步状态。
+func (m *Manager) UpdateTargetURL(id string, targetURL string) (Session, bool) {
+	now := m.now().UTC()
+	m.mu.Lock()
+	closeFns := m.cleanupLocked(now)
+	defer closeSessionFns(closeFns)
+	defer m.mu.Unlock()
+	record, ok := m.sessions[id]
+	if !ok || record.Closed {
+		return Session{}, false
+	}
+	record.TargetURL = targetURL
+	return m.touchRecordLocked(record, now), true
 }
 
 // List 返回当前已知 session 快照。
@@ -248,6 +308,36 @@ func (m *Manager) cleanupLocked(now time.Time) []func() error {
 		m.closed[id] = record.Session
 	}
 	return closeFns
+}
+
+func (m *Manager) findReusableLocked(req OpenResolvedRequest, requireSameTarget bool) (*SessionRecord, bool) {
+	for _, record := range m.sessions {
+		if reusableSessionMatches(record, req, requireSameTarget) {
+			return record, true
+		}
+	}
+	return nil, false
+}
+
+func (m *Manager) touchRecordLocked(record *SessionRecord, now time.Time) Session {
+	record.LastUsedAt = now
+	return sessionStatus(record)
+}
+
+func reusableSessionMatches(record *SessionRecord, req OpenResolvedRequest, requireSameTarget bool) bool {
+	if record == nil || record.Closed {
+		return false
+	}
+	if record.DeploymentID != req.Target.DeploymentID || record.BrowserID != req.Browser.ID {
+		return false
+	}
+	if record.alive != nil && !record.alive() {
+		return false
+	}
+	if requireSameTarget && !targetURLMatches(record.TargetURL, req.TargetURL) {
+		return false
+	}
+	return true
 }
 
 func sessionStatus(record *SessionRecord) Session {

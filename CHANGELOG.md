@@ -6,6 +6,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-17
+
+### Added
+
+- Added Playwright-backed local browser debugging for SuperDev-managed frontend deployments, including browser discovery, isolated debug sessions, page snapshots, screenshots, console and network inspection, click/type/navigation/viewport controls, evaluate gating, audit records, and ephemeral or persistent isolated profiles.
+- Added desktop settings for AI browser debugging, including Chromium-compatible browser detection, default browser selection, evaluate safety controls, profile mode, and session TTL.
+- Added deployment-scoped code debugging with DAP capture-at-line support, paused-location snapshots, breakpoint/continue escape hatches, approval-aware MCP tools, and smoke documentation.
+- Added schema-driven managed language runtime providers for Go, Node, Python, Java/Kotlin, Rust, C, and C++, with API and MCP provider/schema/suggest/validate/preview endpoints.
+- Added desktop runtime UX for Run/Debug actions, debugger status, code debug policy configuration, language runtime config forms, browser-debug approval controls, and the sidebar getting-started guide.
+- Added bundled js-debug resources, browser/code debug smoke docs, language runtime smoke docs, and SuperDev skill guidance for browser debugging, code debugging, and language runtime service creation.
+
+### Changed
+
+- Reframed the English and Chinese READMEs around the See / Inspect / Operate workflow, added the demo link, and updated the public capability descriptions for browser control and breakpoint debugging.
+- Shifted code debugging from explicit debug sessions to deployment-scoped targets, made `service.language` a first-class runtime identity, and simplified code debug configuration around policy and overrides.
+- Split service runtime health from debugger status so paused or debug-attached runtimes no longer overload service health.
+- Improved runtime/process management with process-group reconciliation, stderr ring buffers, exit evidence, runtime lifecycle events, and run-scoped folded logs.
+- Strengthened operation safety docs and MCP schemas for browser-debug and code-debug approval previews, evaluate auditing, and safe service/config workflows.
+- Changed project licensing metadata to Apache-2.0 and added NOTICE coverage.
+- Updated repository, agent runtime, desktop package, Tauri, and Cargo metadata to version `0.1.2`.
+
+### Fixed
+
+- Fixed Go, Node, and Python debug attach flows, including source-path normalization, working-directory-relative Delve programs, package-manager child process attach, Node inspector port discovery, and Python prearmed listen attach.
+- Fixed JVM and native debug attach behavior by marking JVM support experimental, wiring JDWP prearmed listen runtimes, and aligning native attach with `lldb-dap`.
+- Fixed local process state drift by reconciling managed services before runtime controls and retaining exit evidence for failures.
+- Fixed getting-started flow issues around completed intro steps and keeping the onboarding popover inside the viewport.
+
 ## [0.1.1] - 2026-06-10
 
 ### Added

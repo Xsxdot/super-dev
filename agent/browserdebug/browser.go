@@ -67,11 +67,13 @@ type Target struct {
 
 // OpenRequest 描述创建浏览器调试会话的请求。
 type OpenRequest struct {
-	DeploymentID  string `json:"deployment_id"`
-	BrowserID     string `json:"browser_id,omitempty"`
-	Path          string `json:"path,omitempty"`
-	OpenDevtools  *bool  `json:"open_devtools,omitempty"`
-	ApprovalToken string `json:"-"`
+	DeploymentID   string `json:"deployment_id"`
+	BrowserID      string `json:"browser_id,omitempty"`
+	Path           string `json:"path,omitempty"`
+	OpenDevtools   *bool  `json:"open_devtools,omitempty"`
+	ViewportWidth  int    `json:"viewport_width,omitempty"`
+	ViewportHeight int    `json:"viewport_height,omitempty"`
+	ApprovalToken  string `json:"-"`
 }
 
 // Session 描述由 SuperDev 创建的浏览器调试会话。

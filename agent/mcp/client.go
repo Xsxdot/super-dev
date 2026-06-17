@@ -123,6 +123,8 @@ type AgentClient interface {
 	BrowserNetworkRequests(context.Context, BrowserNetworkRequestsRequest) (BrowserNetworkRequestsResult, error)
 	// BrowserEvaluate 执行浏览器页面 JavaScript。
 	BrowserEvaluate(context.Context, BrowserEvaluateRequest) (BrowserEvaluateResult, error)
+	// BrowserSetViewport 更新浏览器页面 viewport 尺寸。
+	BrowserSetViewport(context.Context, BrowserSetViewportRequest) (BrowserViewportResult, error)
 	// ListCodeDebugTargets 查询可打开的本机代码调试目标。
 	ListCodeDebugTargets(context.Context) ([]CodeDebugTarget, error)
 	// SetCodeDebugBreakpoints 按 deployment 设置代码调试断点。
@@ -760,6 +762,13 @@ func (c *HTTPAgentClient) BrowserNetworkRequests(ctx context.Context, req Browse
 func (c *HTTPAgentClient) BrowserEvaluate(ctx context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
 	var out BrowserEvaluateResult
 	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/evaluate"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// BrowserSetViewport 更新浏览器页面 viewport 尺寸。
+func (c *HTTPAgentClient) BrowserSetViewport(ctx context.Context, req BrowserSetViewportRequest) (BrowserViewportResult, error) {
+	var out BrowserViewportResult
+	path := "/api/browser-sessions/" + url.PathEscape(req.SessionID) + "/set-viewport"
 	return out, c.post(ctx, path, req, &out)
 }
 

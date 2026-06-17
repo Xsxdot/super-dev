@@ -83,6 +83,7 @@ type fakeAgentClient struct {
 	browserConsoleLogs          BrowserConsoleLogsResult
 	browserNetworkRequests      BrowserNetworkRequestsResult
 	browserEvaluate             BrowserEvaluateResult
+	browserViewport             BrowserViewportResult
 	codeDebugTargets            []CodeDebugTarget
 	codeDebugActionResult       map[string]any
 	codeDebugEvaluateResult     map[string]any
@@ -104,6 +105,7 @@ type fakeAgentClient struct {
 	lastBrowserConsoleLogs      BrowserConsoleLogsRequest
 	lastBrowserNetworkRequests  BrowserNetworkRequestsRequest
 	lastBrowserEvaluate         BrowserEvaluateRequest
+	lastBrowserSetViewport      BrowserSetViewportRequest
 	closedBrowserSession        string
 	lastBreakpoint              DebugBreakpointRequest
 	lastDebugActionDeploymentID string
@@ -420,6 +422,11 @@ func (f *fakeAgentClient) BrowserNetworkRequests(_ context.Context, req BrowserN
 func (f *fakeAgentClient) BrowserEvaluate(_ context.Context, req BrowserEvaluateRequest) (BrowserEvaluateResult, error) {
 	f.lastBrowserEvaluate = req
 	return f.browserEvaluate, nil
+}
+
+func (f *fakeAgentClient) BrowserSetViewport(_ context.Context, req BrowserSetViewportRequest) (BrowserViewportResult, error) {
+	f.lastBrowserSetViewport = req
+	return f.browserViewport, nil
 }
 
 func (f *fakeAgentClient) ListCodeDebugTargets(context.Context) ([]CodeDebugTarget, error) {

@@ -61,6 +61,21 @@ func TestOpenBrowserDebugSessionTool(t *testing.T) {
 	assert.Contains(t, result.Content[0]["text"], "browser debug session opened")
 }
 
+func TestOpenBrowserDebugSessionToolForwardsViewport(t *testing.T) {
+	client := &fakeAgentClient{
+		browserSession: BrowserSession{ID: "brs_1", DeploymentID: "dep-admin-dev"},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "open_browser_debug_session", `{"deployment_id":"dep-admin-dev","viewport_width":1478,"viewport_height":1000,"approval_token":"tok_1"}`)
+
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, 1478, client.lastBrowserOpen.ViewportWidth)
+	assert.Equal(t, 1000, client.lastBrowserOpen.ViewportHeight)
+	assert.Contains(t, result.Content[0]["text"], "browser debug session opened")
+}
+
 func TestCloseBrowserDebugSessionTool(t *testing.T) {
 	client := &fakeAgentClient{}
 	server := NewServer(client)

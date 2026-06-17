@@ -12,6 +12,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -254,4 +255,50 @@ func (s *Server) browserEvaluateTool(ctx context.Context, args json.RawMessage) 
 		return clientToolError(err), nil
 	}
 	return toolSuccess("browser evaluate completed", map[string]any{"result": result}, nil, nil), nil
+}
+
+func (s *Server) browserSetViewportTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
+	var req BrowserSetViewportRequest
+	if err := decodeToolArgs(args, &req); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
+		return toolError("invalid_arguments", "session_id is required", nil), nil
+	}
+	if err := validateRequiredViewport(req.Width, req.Height); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
+	result, err := s.client.BrowserSetViewport(ctx, req)
+	if err != nil {
+		return clientToolError(err), nil
+	}
+	return toolSuccess("browser viewport updated", map[string]any{"result": result}, nil, nil), nil
+}
+
+func validateOptionalViewport(width int, height int) error {
+	if width == 0 && height == 0 {
+		return nil
+	}
+	if width == 0 || height == 0 {
+		return fmt.Errorf("viewport_width and viewport_height must be provided together")
+	}
+	return validateViewportDimensions(width, height)
+}
+
+func validateRequiredViewport(width int, height int) error {
+	if width == 0 || height == 0 {
+		return fmt.Errorf("width and height are required")
+	}
+	return validateViewportDimensions(width, height)
+}
+
+func validateViewportDimensions(width int, height int) error {
+	if width < 320 || width > 10000 {
+		return fmt.Errorf("width must be between 320 and 10000")
+	}
+	if height < 240 || height > 10000 {
+		return fmt.Errorf("height must be between 240 and 10000")
+	}
+	return nil
 }

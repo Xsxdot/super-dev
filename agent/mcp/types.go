@@ -181,6 +181,13 @@ type BrowserEvaluateResult struct {
 	Result    any    `json:"result"`
 }
 
+// BrowserViewportResult 描述页面 viewport 更新后的尺寸。
+type BrowserViewportResult struct {
+	SessionID string `json:"session_id"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+}
+
 // CodeDebugTarget 描述可由 AI 打开的本机代码调试目标。
 type CodeDebugTarget struct {
 	ProjectID         string `json:"project_id"`
@@ -367,12 +374,21 @@ type BrowserEvaluateRequest struct {
 	Expression string `json:"expression"`
 }
 
+// BrowserSetViewportRequest 描述页面 viewport 尺寸更新请求。
+type BrowserSetViewportRequest struct {
+	SessionID string `json:"session_id"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+}
+
 // OpenBrowserSessionRequest 描述打开浏览器调试会话的 MCP 请求。
 type OpenBrowserSessionRequest struct {
 	DeploymentID        string `json:"deployment_id"`
 	BrowserID           string `json:"browser_id,omitempty"`
 	Path                string `json:"path,omitempty"`
 	OpenDevtools        *bool  `json:"open_devtools,omitempty"`
+	ViewportWidth       int    `json:"viewport_width,omitempty"`
+	ViewportHeight      int    `json:"viewport_height,omitempty"`
 	ApprovalToken       string `json:"approval_token,omitempty"`
 	ApprovalWaitSeconds *int   `json:"approval_wait_seconds,omitempty"`
 	DebugSessionID      string `json:"debug_session_id,omitempty"`

@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/browsercontrol"
 	"github.com/xsxdot/super-dev/agent/browserdebug"
 	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -128,6 +129,86 @@ func TestOpenBrowserSessionRequiresApprovalThenLaunches(t *testing.T) {
 	assert.Equal(t, "arc", session.BrowserID)
 	assert.Equal(t, "ws://127.0.0.1:9222/devtools/page/page-1", session.PageWS)
 	assert.Equal(t, 1, launches)
+}
+
+func TestOpenBrowserSessionReusesExistingBrowserAndNavigatesWithoutNewApproval(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(browserDebugAPIProject())
+	app.mu.Unlock()
+	saveDebugBrowserSettingsForTest(t, app)
+	control := &fakeBrowserControl{
+		navigation: browsercontrol.NavigationResult{URL: "http://127.0.0.1:3000/settings", Title: "Settings"},
+	}
+	app.browserControl = control
+
+	launches := 0
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(_ context.Context, req browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			launches++
+			assert.Equal(t, "http://127.0.0.1:3000/users", req.TargetURL)
+			return browserLaunchResultForTest(), nil
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", map[string]any{"path": "/users"})
+
+	first := postJSONWithHeadersForTest[browserdebug.Session](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+		"path":          "/users",
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusOK)
+
+	second := postJSONForTest[browserdebug.Session](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+		"path":          "/settings",
+	}, http.StatusOK)
+
+	assert.Equal(t, first.ID, second.ID)
+	assert.Equal(t, "http://127.0.0.1:3000/settings", second.TargetURL)
+	assert.Equal(t, "http://127.0.0.1:3000/settings", control.lastNavigate.URL)
+	assert.Equal(t, 1, launches)
+	approvals := getJSONForTest[[]operation.Approval](t, srv.URL+"/api/operation-approvals", http.StatusOK)
+	require.Len(t, approvals, 1)
+}
+
+func TestOpenBrowserSessionAppliesRequestedViewport(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(browserDebugAPIProject())
+	app.mu.Unlock()
+	saveDebugBrowserSettingsForTest(t, app)
+	control := &fakeBrowserControl{
+		viewport: browsercontrol.ViewportResult{Width: 1478, Height: 1000},
+	}
+	app.browserControl = control
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(_ context.Context, req browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			assert.Equal(t, 1478, req.ViewportWidth)
+			assert.Equal(t, 1000, req.ViewportHeight)
+			return browserLaunchResultForTest(), nil
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", map[string]any{
+		"viewport_width":  1478,
+		"viewport_height": 1000,
+	})
+
+	session := postJSONWithHeadersForTest[browserdebug.Session](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id":   "dep-admin-dev",
+		"viewport_width":  1478,
+		"viewport_height": 1000,
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusOK)
+
+	assert.Equal(t, session.ID, control.lastSession.ID)
+	assert.Equal(t, 1478, control.lastViewport.Width)
+	assert.Equal(t, 1000, control.lastViewport.Height)
 }
 
 func TestOpenBrowserSessionWaitsForReadinessBeforeLaunch(t *testing.T) {

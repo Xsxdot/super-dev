@@ -383,6 +383,28 @@ func (c *PlaywrightController) Evaluate(ctx context.Context, session SessionRef,
 	return out, err
 }
 
+// SetViewport 更新当前目标页面的 viewport 尺寸。
+func (c *PlaywrightController) SetViewport(ctx context.Context, session SessionRef, req ViewportRequest) (ViewportResult, error) {
+	if req.Width < 320 || req.Width > 10000 {
+		return ViewportResult{}, NewControlError(CodeInvalidArgument, "width must be between 320 and 10000", nil)
+	}
+	if req.Height < 240 || req.Height > 10000 {
+		return ViewportResult{}, NewControlError(CodeInvalidArgument, "height must be between 240 and 10000", nil)
+	}
+	out := ViewportResult{SessionID: session.ID, Width: req.Width, Height: req.Height}
+	err := c.withPage(ctx, session, func(page playwright.Page) error {
+		if err := page.SetViewportSize(req.Width, req.Height); err != nil {
+			return err
+		}
+		if actual := page.ViewportSize(); actual != nil {
+			out.Width = actual.Width
+			out.Height = actual.Height
+		}
+		return nil
+	})
+	return out, err
+}
+
 func resolveNavigateURL(session SessionRef, req NavigateRequest) (string, error) {
 	base, err := url.Parse(strings.TrimSpace(session.TargetURL))
 	if err != nil || base.Scheme == "" || base.Host == "" {

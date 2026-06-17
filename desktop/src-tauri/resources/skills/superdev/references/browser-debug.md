@@ -13,8 +13,8 @@
 
 1. **`list_browser_targets`**：列出可调试的本机前端 deployment，拿到 `deployment_id`。为空说明没有 deployment 开启 `ai_debug`，提示用户去配置，别硬开。
 2. **`list_debug_browsers`**（可选）：看本机配了哪些 Chromium 兼容浏览器（Arc/Chrome/Edge）、哪个 `available`。用户没配过浏览器时 `open` 会失败，提示去设置页「一键检测」或手动添加。
-3. **`open_browser_debug_session`**（写操作，走审批）：传 `deployment_id`，可选 `browser_id`、`path`、`open_devtools`。返回 `session_id` + CDP 端点。**这是唯一的审批门**——批准一次，本会话内的后续控制动作不再逐次审批。
-4. **控制动作**：先 `browser_snapshot` 拿页面结构和稳定 selector，再 `browser_click`/`browser_type`/`browser_wait_for_selector`/`browser_press_key`/`browser_select_option` 操作，用 `browser_console_logs`/`browser_network_requests` 取诊断信号，必要时 `browser_screenshot`。
+3. **`open_browser_debug_session`**（写操作，首次新开浏览器时走审批）：传 `deployment_id`，可选 `browser_id`、`path`、`open_devtools`、`viewport_width`、`viewport_height`。返回 `session_id` + CDP 端点。已有同 deployment + browser 的活跃 session 时会复用现有 Chrome：目标 URL 相同则直接返回，不同 path 则在原浏览器里同源导航后返回，避免反复打开多个 Chrome 实例。**这是唯一的审批门**——批准一次，本会话内的后续控制动作不再逐次审批。
+4. **控制动作**：先 `browser_snapshot` 拿页面结构和稳定 selector；需要桌面/移动宽度核对时用 `browser_set_viewport`；再 `browser_click`/`browser_type`/`browser_wait_for_selector`/`browser_press_key`/`browser_select_option` 操作，用 `browser_console_logs`/`browser_network_requests` 取诊断信号，必要时 `browser_screenshot`。
 5. **`close_browser_debug_session`**：用完关掉，释放浏览器进程和连接。即使忘了关，session 有 idle TTL（默认 30 分钟）会自动回收。
 
 ## 选 selector：先 snapshot，别瞎猜
@@ -29,6 +29,12 @@ snapshot 默认只返回可见、可交互元素（上限 100 个），并对含
 - 它是**整页重载**，会丢失 SPA 内存状态。**SPA 内部跳转不要用 navigate**——优先用 `browser_click` 触发真实交互完成路由跳转。
 - `browser_reload` 同理，是整页刷新。
 
+## viewport：打开时指定，过程中也可切换
+
+- 桌面截图或响应式 QA 优先在 `open_browser_debug_session` 里传 `viewport_width` + `viewport_height`，例如 `1478 x 1000`。两者必须同时提供。
+- 已打开的会话需要切桌面/移动宽度时，用 `browser_set_viewport`，再截图或 snapshot。它直接走 SuperDev 控制层，不需要 `browser_evaluate`，也不需要 AI 自己连接 CDP 端口。
+- 尺寸范围：宽度 `320..10000`，高度 `240..10000`。
+
 ## evaluate：默认关、需用户开、且全程审计
 
 `browser_evaluate` 执行任意页面 JS，是这套工具里**唯一能读取 `localStorage`/`document.cookie` 的能力**，因此被单独管控：
@@ -41,7 +47,7 @@ snapshot 默认只返回可见、可交互元素（上限 100 个），并对含
 
 SuperDev 是对外产品，浏览器调试是工具集中唯一能触达页面凭证的能力，所以会改变页面状态或读高风险数据的动作都落持久化审计（kind `browser_debug.control`，仅留痕、不额外拦你）：
 
-- `click`/`type`/`navigate`/`reload`/`press_key`/`select_option`：记 session、deployment、selector/path、成功或失败码。`type` 只记输入长度，**不记输入明文**。
+- `click`/`type`/`navigate`/`reload`/`press_key`/`select_option`/`set_viewport`：记 session、deployment、selector/path/尺寸、成功或失败码。`type` 只记输入长度，**不记输入明文**。
 - `evaluate`：记表达式 hash、长度、结果类型，**不记明文与返回值**。
 - 只读动作（`snapshot`/`screenshot`/`console_logs`/`network_requests`）不审计。
 
@@ -53,7 +59,7 @@ SuperDev 是对外产品，浏览器调试是工具集中唯一能触达页面�
 | --- | --- | --- |
 | `list_browser_targets` | 列出可调试的本机前端 deployment | 读 |
 | `list_debug_browsers` | 列出本机已配置调试浏览器及可用性 | 读 |
-| `open_browser_debug_session` | 打开隔离调试浏览器加载 deployment，返回 CDP 端点 | 写，走审批 |
+| `open_browser_debug_session` | 打开或复用隔离调试浏览器加载 deployment，返回 CDP 端点 | 写，首次新开走审批 |
 | `close_browser_debug_session` | 关闭调试会话，释放进程与连接 | 写 |
 | `browser_snapshot` | 读页面标题/文本/结构化可交互元素与稳定 selector | 读 |
 | `browser_click` | 点击元素 | 写，审计 |
@@ -63,6 +69,7 @@ SuperDev 是对外产品，浏览器调试是工具集中唯一能触达页面�
 | `browser_select_option` | 选择下拉项 | 写，审计 |
 | `browser_navigate` | 同源整页导航 | 写，审计 |
 | `browser_reload` | 整页刷新 | 写，审计 |
+| `browser_set_viewport` | 设置页面 viewport 尺寸 | 写，审计 |
 | `browser_console_logs` | 读最近 console 日志 | 读 |
 | `browser_network_requests` | 读最近网络请求摘要 | 读 |
 | `browser_screenshot` | 截图（默认 viewport，超限返回 too_large） | 读 |

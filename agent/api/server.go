@@ -624,6 +624,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/browser-sessions/{id}/console-logs", a.browserSessionConsoleLogs)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/network-requests", a.browserSessionNetworkRequests)
 	mux.HandleFunc("POST /api/browser-sessions/{id}/evaluate", a.browserSessionEvaluate)
+	mux.HandleFunc("POST /api/browser-sessions/{id}/set-viewport", a.browserSessionSetViewport)
 
 	// Code debug sessions（本机后端代码调试）
 	mux.HandleFunc("GET /api/code-debug-targets", a.listCodeDebugTargets)

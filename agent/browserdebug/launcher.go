@@ -78,9 +78,12 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		if req.OpenDevtools {
 			args = append(args, "--auto-open-devtools-for-tabs")
 		}
+		if req.ViewportWidth > 0 && req.ViewportHeight > 0 {
+			args = append(args, fmt.Sprintf("--window-size=%d,%d", req.ViewportWidth, req.ViewportHeight))
+		}
 		args = append(args, "--new-window")
 		args = append(args, req.TargetURL)
-		log.Printf("[SuperDev] opening debug browser target=%s browser=%s profile_mode=%s profile_dir=%s", req.TargetURL, req.Browser.ID, profileModeForLaunch(req.ProfileMode), profileDir)
+		log.Printf("[SuperDev] opening debug browser target=%s browser=%s profile_mode=%s profile_dir=%s viewport=%dx%d", req.TargetURL, req.Browser.ID, profileModeForLaunch(req.ProfileMode), profileDir, req.ViewportWidth, req.ViewportHeight)
 		cmd := exec.Command(req.Browser.ExecutablePath, args...)
 		if err := cmd.Start(); err != nil {
 			cleanupProfileDir(profileDir, removeProfileOnClose)
@@ -111,7 +114,7 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		result.Alive = func() bool {
 			return !exited.Load()
 		}
-		log.Printf("[SuperDev] debug browser opened target=%s browser=%s pid=%d port=%d profile_mode=%s", req.TargetURL, req.Browser.ID, result.ProcessID, result.DebugPort, profileModeForLaunch(req.ProfileMode))
+		log.Printf("[SuperDev] debug browser opened target=%s browser=%s pid=%d port=%d profile_mode=%s viewport=%dx%d", req.TargetURL, req.Browser.ID, result.ProcessID, result.DebugPort, profileModeForLaunch(req.ProfileMode), req.ViewportWidth, req.ViewportHeight)
 		result.Close = func() error {
 			select {
 			case <-done:
@@ -297,6 +300,21 @@ func isUsableFallbackPage(rawURL string) bool {
 	default:
 		return false
 	}
+}
+
+// TargetURLMatches 比较两个目标 URL 是否指向同一个页面。
+//
+// 参数：
+//   - candidate: 已有 session 记录中的 URL
+//   - expected: 本次请求解析出的 URL
+//
+// 返回：
+//   - 规范化后是否相同
+//
+// 注意：
+//   - 空 path 会按 "/" 处理，fragment 不参与比较
+func TargetURLMatches(candidate string, expected string) bool {
+	return targetURLMatches(candidate, expected)
 }
 
 func targetURLMatches(candidate string, expected string) bool {

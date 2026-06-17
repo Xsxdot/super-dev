@@ -46,6 +46,9 @@ func (s *Server) openBrowserDebugSessionTool(ctx context.Context, args json.RawM
 	if req.DeploymentID == "" {
 		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
+	if err := validateOptionalViewport(req.ViewportWidth, req.ViewportHeight); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
 	if req.ApprovalToken != "" {
 		session, err := s.client.OpenBrowserSession(ctx, req, req.ApprovalToken)
 		if err != nil {
