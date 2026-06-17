@@ -46,10 +46,10 @@ needs_build() {
     return 0
   fi
   local bin_mtime
-  bin_mtime=$(stat -f '%m' "$out" 2>/dev/null || stat -c '%Y' "$out")
+  bin_mtime=$(stat -c '%Y' "$out" 2>/dev/null || stat -f '%m' "$out")
   local f mtime
   while IFS= read -r -d '' f; do
-    mtime=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f")
+    mtime=$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f")
     if [[ "$mtime" -gt "$bin_mtime" ]]; then
       return 0
     fi
