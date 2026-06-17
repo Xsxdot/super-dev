@@ -37,7 +37,7 @@ func TestManager_ReconcileDetectsDeadProcess(t *testing.T) {
 	mgr.runners["dep-y"] = &Runner{
 		cmd:        cmd,
 		running:    true,
-		pgid:       pgid,
+		group:      &groupRef{pgid: pgid},
 		stderrTail: newStderrRing(100),
 	}
 	mgr.status["dep-y"] = model.StatusRunning
@@ -92,7 +92,7 @@ func TestManager_ReconcileAllReturnsOnlyCorrectedResults(t *testing.T) {
 	mgr.runners["dep-dead"] = &Runner{
 		cmd:        dead,
 		running:    true,
-		pgid:       deadPGID,
+		group:      &groupRef{pgid: deadPGID},
 		stderrTail: newStderrRing(100),
 	}
 	mgr.status["dep-dead"] = model.StatusRunning

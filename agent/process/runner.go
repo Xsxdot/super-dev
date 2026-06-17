@@ -13,11 +13,11 @@ package process
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/xsxdot/super-dev/agent/execenv"
 )
@@ -56,7 +56,7 @@ type Runner struct {
 	exitCode   int
 	exited     bool
 	exitInfo   ExitInfo
-	pgid       int
+	group      *groupRef
 	stderrTail *stderrRing
 	scanWG     sync.WaitGroup
 }
@@ -113,12 +113,12 @@ func (r *Runner) Start() error {
 		}
 		cmd = exec.Command(exe, r.cfg.Argv[1:]...)
 	} else {
-		cmd = exec.Command("sh", "-c", r.cfg.Command)
+		shName, shArgs := shellCommand(r.cfg.Command)
+		cmd = exec.Command(shName, shArgs...)
 	}
 	cmd.Dir = r.cfg.WorkDir
 	cmd.Env = runEnv
-	// 独立进程组，Stop 时可 SIGKILL 整组（含 sh -c 拉起的子进程）
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureSysProcAttr(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -129,7 +129,9 @@ func (r *Runner) Start() error {
 		return err
 	}
 
+	log.Printf("[process] starting process workdir=%q argv=%v command=%q", r.cfg.WorkDir, r.cfg.Argv, r.cfg.Command)
 	if err := cmd.Start(); err != nil {
+		log.Printf("[process] start process failed workdir=%q argv=%v command=%q: %v", r.cfg.WorkDir, r.cfg.Argv, r.cfg.Command, err)
 		r.exitInfo = ExitInfo{
 			Reason:     ExitReasonStartFailed,
 			ExitCode:   -1,
@@ -143,7 +145,13 @@ func (r *Runner) Start() error {
 	r.running = true
 	r.exitCode = 0
 	r.exited = false
-	r.pgid = cmd.Process.Pid
+	group, gerr := trackProcessGroup(cmd)
+	if gerr != nil {
+		// 进程已启动但未能纳入进程组时继续运行，Stop 再降级杀主进程。
+		log.Printf("[process] track group failed pid=%d: %v", cmd.Process.Pid, gerr)
+	}
+	r.group = group
+	log.Printf("[process] started pid=%d argv=%v command=%q", cmd.Process.Pid, r.cfg.Argv, r.cfg.Command)
 
 	r.scanWG.Add(2)
 	go r.scanLines(bufio.NewScanner(stdout), "stdout")
@@ -171,7 +179,7 @@ func (r *Runner) Start() error {
 	return nil
 }
 
-// Stop 向子进程发送 SIGKILL 强制终止。
+// Stop 终止子进程及其整个进程组。
 //
 // 注意：
 //   - 进程已退出时调用为空操作
@@ -179,15 +187,23 @@ func (r *Runner) Start() error {
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	cmd := r.cmd
-	pgid := r.pgid
+	group := r.group
 	r.mu.Unlock()
-	if pgid > 0 {
-		// 负 PID 终止整个进程组，避免仅杀掉 sh 而 node 等子进程继续跑
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	if group != nil {
+		if err := group.kill(); err != nil {
+			log.Printf("[process] stop group failed id=%d: %v", group.id(), err)
+		} else {
+			log.Printf("[process] stopped group id=%d", group.id())
+		}
 		return
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// 无进程组引用时的兜底：直接杀主进程，避免 Start 后 track 失败导致 Stop 空转。
+		if err := cmd.Process.Kill(); err != nil {
+			log.Printf("[process] stop pid failed pid=%d: %v", cmd.Process.Pid, err)
+		} else {
+			log.Printf("[process] stopped pid=%d (no group)", cmd.Process.Pid)
+		}
 	}
 }
 
@@ -252,12 +268,20 @@ func (r *Runner) StderrTail() []string {
 func (r *Runner) ProcessGroupID() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.pgid
+	if r.group != nil {
+		return r.group.id()
+	}
+	return 0
 }
 
 // ProcessGroupAlive 返回 Runner 所属进程组是否仍有进程存活。
 func (r *Runner) ProcessGroupAlive() bool {
-	return processGroupAlive(r.ProcessGroupID())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.group != nil {
+		return r.group.alive()
+	}
+	return false
 }
 
 // scanLines 逐行读取 scanner 并调用 OnLine 回调。
@@ -287,27 +311,12 @@ func buildExitInfo(state *os.ProcessState, err error, stderrTail []string) ExitI
 		return info
 	}
 
-	info.ExitCode = state.ExitCode()
-	waitStatus, ok := state.Sys().(syscall.WaitStatus)
-	if !ok {
-		return info
-	}
-	if waitStatus.Signaled() {
+	signaled, signal, exitCode := signaledInfo(state)
+	info.ExitCode = exitCode
+	if signaled {
 		info.Reason = ExitReasonSignaled
 		info.Signaled = true
-		info.Signal = waitStatus.Signal().String()
-		return info
-	}
-	if waitStatus.Exited() {
-		info.ExitCode = waitStatus.ExitStatus()
+		info.Signal = signal
 	}
 	return info
-}
-
-func processGroupAlive(pgid int) bool {
-	if pgid <= 0 {
-		return false
-	}
-	err := syscall.Kill(-pgid, 0)
-	return err == nil || err == syscall.EPERM
 }
