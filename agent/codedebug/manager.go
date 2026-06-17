@@ -791,10 +791,10 @@ func (m *Manager) tryAttachRunning(ctx context.Context, project model.Project, s
 		}
 		req.readiness = langruntime.ReadinessPrearmListen
 		req.port = inspectorPort
-	case model.LanguagePython:
-		// prearm-listen：进程以 `python -m debugpy --listen host:port` 常驻，端口写在 argv 里。
-		// 从 argv 反解端口直连，不发信号、不需独立端口存储。start_normal（无 --listen）的
-		// Python 进程拿不到端口，按不可 attach 处理，不静默降级 launch。
+	case model.LanguagePython, model.LanguageJava, model.LanguageKotlin:
+		// prearm-listen：Python debugpy 与 JVM JDWP 都在 start_dev 时把监听端口写入 argv。
+		// attach 时从 argv 反解端口直连/交给 adapter，不发信号、不按 PID 误附加。
+		// start_normal（无 listen 参数）的进程拿不到端口，按不可 attach 处理，不静默降级 launch。
 		port := m.prearmListenPort(dep.ID)
 		if port <= 0 {
 			return false, ErrAttachUnsupported

@@ -808,6 +808,49 @@ func TestResolveLeasePythonMissingListenPortReportsError(t *testing.T) {
 	}
 }
 
+func TestResolveLeaseJVMConnectsJDWPListenPortFromArgv(t *testing.T) {
+	dap := &fakeDAP{}
+	signalCalled := false
+	var launched AdapterCommand
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(_ context.Context, cmd AdapterCommand) (AdapterProcess, error) {
+			launched = cmd
+			return AdapterProcess{PID: 9004, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41012, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 1234, 1234, deploymentID == "dep-api-dev"
+		},
+		// JVM start_dev embeds the allocated JDWP port in argv; attach must reuse that
+		// prearmed port instead of treating JVM like a plain PID attach target.
+		RunningProcessArgv: func(deploymentID string) []string {
+			return []string{"java", "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005", "-cp", "build/classes", "App"}
+		},
+		SignalProcess: func(int, string) error { signalCalled = true; return nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	service.Language = model.LanguageJava
+	dep.Runtime = &model.RuntimeConfig{
+		Type: model.RuntimeTypeLanguage,
+		CWD:  ".",
+		Config: map[string]any{
+			"program":   "App",
+			"classpath": "build/classes",
+		},
+	}
+	dep.CodeDebug = &model.CodeDebugConfig{AdapterCommand: "jvm-debug-wrapper"}
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.False(t, signalCalled, "JVM prearm should not signal the process")
+	assert.Equal(t, model.CodeDebugProviderJVM, launched.Provider)
+	assert.Equal(t, "jvm-debug-wrapper", launched.Name)
+	assert.Equal(t, 5005, dap.attachConnectPort, "JVM attach should connect adapter to the JDWP port")
+}
+
 func TestParseListenPort(t *testing.T) {
 	cases := []struct {
 		name string
