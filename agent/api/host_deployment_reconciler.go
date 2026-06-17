@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
@@ -33,6 +34,8 @@ type HostDeploymentReconciler struct {
 	app       *App
 	transport nodetransport.NodeTransport
 	interval  time.Duration
+	mu        sync.Mutex
+	hostLocks map[string]*sync.Mutex
 }
 
 // NewHostDeploymentReconciler 创建 HostDeploymentReconciler。
@@ -52,6 +55,7 @@ func NewHostDeploymentReconciler(app *App, transport nodetransport.NodeTransport
 		app:       app,
 		transport: transport,
 		interval:  interval,
+		hostLocks: map[string]*sync.Mutex{},
 	}
 }
 
@@ -80,10 +84,16 @@ func (r *HostDeploymentReconciler) DesiredForHost(hostID string) []model.Managed
 //   - host 未连接时返回 nil
 //   - URL 构造、序列化、HTTP 请求或远端非 2xx 响应失败时返回错误
 func (r *HostDeploymentReconciler) Reconcile(ctx context.Context, hostID string) error {
-	body, err := json.Marshal(r.DesiredForHost(hostID))
+	hostLock := r.lockForHost(hostID)
+	hostLock.Lock()
+	defer hostLock.Unlock()
+
+	desired := r.DesiredForHost(hostID)
+	body, err := json.Marshal(desired)
 	if err != nil {
 		return err
 	}
+	log.Printf("[SuperDev] reconciling managed deployments host=%s desired=%d", hostID, len(desired))
 	resp, err := r.transport.Do(ctx, hostID, nodetransport.NodeRequest{
 		Method: http.MethodPut,
 		Path:   "/api/managed-deployments",
@@ -94,6 +104,7 @@ func (r *HostDeploymentReconciler) Reconcile(ctx context.Context, hostID string)
 	})
 	if err != nil {
 		if errors.Is(err, nodetransport.ErrHostUnreachable) {
+			log.Printf("[SuperDev] skipped managed deployment reconcile host=%s: unreachable", hostID)
 			return nil
 		}
 		return err
@@ -102,7 +113,20 @@ func (r *HostDeploymentReconciler) Reconcile(ctx context.Context, hostID string)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("managed deployment reconcile returned %d for host %s", resp.StatusCode, hostID)
 	}
+	log.Printf("[SuperDev] managed deployment reconcile completed host=%s desired=%d status=%d", hostID, len(desired), resp.StatusCode)
 	return nil
+}
+
+func (r *HostDeploymentReconciler) lockForHost(hostID string) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hostLocks == nil {
+		r.hostLocks = map[string]*sync.Mutex{}
+	}
+	if _, ok := r.hostLocks[hostID]; !ok {
+		r.hostLocks[hostID] = &sync.Mutex{}
+	}
+	return r.hostLocks[hostID]
 }
 
 // ReconcileAll 对所有含 remote deployment 的 host 执行 reconcile。
