@@ -5,14 +5,16 @@
 <h1 align="center">SuperDev</h1>
 
 <p align="center">
-  <strong>让 AI 和你共享同一份运行态：服务、日志、部署、审批。</strong>
+  <strong>你的 AI 会改代码，但它在真实环境里又盲又瘸。</strong><br />
+  <strong>SuperDev 给它一套完整工作台：看（运行态 + 日志）、查（断点调试）、操（浏览器 + 部署）。</strong><br />
+  跨本地与远端的所有项目，一个地方。
 </p>
 
 <p align="center">
   <a href="https://gosuper.dev/"><strong>官网 gosuper.dev</strong></a> ·
   <a href="#为什么是-superdev">为什么</a> ·
+  <a href="#看--查--操">看 · 查 · 操</a> ·
   <a href="#快速开始">快速开始</a> ·
-  <a href="https://gosuper.dev/#demo">演示</a> ·
   <a href="#核心架构">架构</a> ·
   <a href="./README.md">English</a>
 </p>
@@ -37,23 +39,32 @@
 
 ## 为什么是 SuperDev
 
-AI 编程工具已经能读代码、改代码、跑命令，但代码协作只解决了“AI 知道仓库里有什么”。真正开发时，最难的是“AI 不知道你此刻正在运行什么”：哪些服务已经启动，哪个端口正在被使用，哪段日志对应当前功能，哪次 pipeline 刚刚发布，哪个远端 deployment 正在出错。
+AI 编程工具已经能读代码、改代码、跑命令，但这只解决了「仓库里有什么」。真正的开发发生在运行态：哪些服务在跑、哪个端口被占、哪段日志属于当前功能、bug 究竟卡在哪一行、你刚改的前端到底渲染没渲染。
 
-如果 AI 看不到这些运行态，它就会另起服务、抢占端口、制造一套影子环境；每次对话都像从零开始，无法持续追踪某一项功能从本地调试、日志变化、部署流水线到线上错误的完整生命线。
+人类开发者有一整套工具应对这些——进程列表、日志面板、能停在某一行的调试器、点点点验证 UI 的浏览器。你的 AI 几乎一样都没有。它改完代码就「瞎」了：看不到正在跑的服务、没法单步追 bug、不知道页面崩没崩。于是它只能猜，另起一套它看不见的服务，再让你复制粘贴日志。
 
-SuperDev 把本地服务、远端主机、日志、pipeline、ingress 和审批上下文收敛成一份本地优先的事实源，并通过 MCP 暴露给 Claude Code、Codex、Cursor 等智能体。AI 不再站在代码仓库外猜测，而是和你进入同一个真实开发现场。
+SuperDev 把你用的这套工作台——**看、查、操**——交给 AI，建立在桌面端与 AI 共享的同一份运行态事实源之上，覆盖本地与远端的每一个项目。
 
-## 第一目标：与 AI 共享运行态
+## 看 · 查 · 操
 
-SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标是建立一种真正的协作：让开发者和 AI 在同一份运行态上工作。
+人类开发者不只是读代码——他们看着代码运行、在执行中途停下来检查状态、驱动 UI 确认它真能用。SuperDev 把这三件事都给了 AI。
 
-这意味着 AI 先看见你已经启动的服务，而不是再启动一套；先读取同一段日志，而不是让你复制粘贴；先理解当前 deployment、pipeline、ingress 和审批上下文，而不是把线上错误当成孤立文本来猜。
+### 👁 看 — 运行态与日志
 
-当 AI 和人共享运行态，协作才会连续：一个功能可以被持续跟踪，一次线上错误可以沿着服务、日志、部署和入口状态被追到源头，真实环境里的操作也可以在预检、审批、一次性 token 和审计之下完成。
+AI 看见已经在跑的服务（不再起影子副本、不再抢端口），读你读的同一份实时/历史日志——跨服务搜索、上下文定位、折叠、书签——而不是让你贴片段。诊断给确定性证据，根因推理由 AI 自己完成。
+
+### 🔬 查 — 断点调试
+
+日志不够时，AI attach 到正在跑的受管进程（不重启、同 pid），停在某一行，一次调用读出调用栈、作用域和变量。**开箱即用：Go、Python、Rust、C/C++**；
+**实验性：Node 与 Java/Kotlin**（需自备 / 配置 adapter）。通过 MCP 暴露为 `list_code_debug_targets` 和 `debug_capture_at`。
+
+### 🎮 操 — 浏览器与部署
+
+AI 改完前端，自己验证：导航、点击、输入、截图、读 console 日志和 network 请求，并在授权时在页面里执行 JS——全部经 Playwright 驱动。要发布时，AI 跑你跑的同一套 DAG 流水线。所有真实环境操作都在预检、审批、一次性 token 和审计之下。
 
 ## 高光功能
 
-两件核心的事——**共享运行态**和**安全操作**——是 SuperDev 区别于代码层工具的根本；其余能力都围绕它们展开。
+看 / 查 / 操是 AI 做的事。两件事让它可信且连续——**同一份运行态事实源**和**安全操作**。下面的一切都为这两点服务。
 
 ### 🤝 共享运行态，不抢占用户服务
 
@@ -69,6 +80,7 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 - 运行态写操作直接调用 `start/stop/restart`；需要审批时 MCP 默认等待桌面端批准，并用一次性 token 自动续跑。
 - 审批 token 与具体 operation fingerprint 绑定，短期有效、一次性使用、不可换目标复用。
 - 审批、拒绝、执行和失败都会进入本地审计记录。
+- 浏览器控制（导航 / 点击 / evaluate）走同一套模型：`open` 走审批，`evaluate` 由信任开关授信而非逐次弹审批，控制动作在审计里脱敏。
 
 ### 围绕这两点的能力
 
@@ -76,6 +88,8 @@ SuperDev 不是诊断工具，也不是 AI 运维遥控器。它的第一目标�
 | --- | --- |
 | **多服务运行态控制台** | 统一查看本地进程、Launchd、systemd、Docker、远程主机上的 service / deployment；支持 managed control 与 monitor-only 两种模式；桌面端与 MCP 共享同一份运行态模型。 |
 | **日志聚合与诊断** | 实时 / 历史日志、跨服务搜索、上下文查看、规则过滤、面板分栏、同步录制、书签区间、折叠重复日志。诊断只给确定性证据，根因推理留给 AI。 |
+| **AI 代码断点调试** | 日志看不出根因时，AI attach 到正在跑的受管进程（不重启、不换 pid），停在某一行源码，一次拿到调用栈 / 作用域 / 变量。默认支持：Go、Python、Rust、C/C++。实验性（需自备 / 配置 adapter）：Node、Java/Kotlin。经 MCP 暴露为 `list_code_debug_targets` / `debug_capture_at`。 |
+| **浏览器控制** | AI 通过 Playwright 驱动正在运行的前端：`browser_navigate` / `browser_click` / `browser_type` / `browser_screenshot` / `browser_console_logs` / `browser_network_requests` / `browser_evaluate`，并支持 snapshot、reload、wait-for-selector、press-key、select-option。AI 自己验证 UI 改动；控制动作仍在审批和脱敏审计之下。 |
 | **生产级 pipeline 底座** | DAG pipeline、模板组合、变量系统、artifact、run history、run log replay；内置 Go / Node / Python / Java / Rust / PHP / Vue+Go 模板；systemd 采用 release/current 结构，回滚复用同一条路径。 |
 | **Ingress 声明式入口** | pipeline 管“反复投递产物”，Ingress 管“长期存在的入口状态”：域名、DNS、反向代理、HTTPS、证书托管。支持 nginx、manual DNS、Cloudflare、Aliyun、ACME DNS-01 与 orphan detection。 |
 
@@ -145,7 +159,7 @@ Ingress 示例位于 `examples/ingress/`，覆盖 manual DNS、Cloudflare、Aliy
 
 SuperDev 正处于第一版开源发布前夜，当前主要面向 macOS 桌面端和本地优先工作流。
 
-- 已有：Tauri 桌面端、Go local agent、MCP server、SuperDev skill、多服务日志、operation approvals、pipeline 模板、ingress 子系统、零操作 onboarding。
+- 已有：Tauri 桌面端、Go local agent、MCP server、SuperDev skill、多服务日志、断点调试（Go/Python/Rust/C++ 默认支持；Node 与 Java/Kotlin experimental）、浏览器控制（Playwright 驱动）、operation approvals、pipeline 模板、ingress 子系统、零操作 onboarding。
 - 近期：更完整的 release 打包、正式 README 截图、更多 pipeline 模板、更稳的远端 agent / tunnel 体验、更完整的发布演示。
 - 原则：本地优先，不把控制面强行放到云上；AI 可以参与操作，但写操作必须可预检、可批准、可审计。
 
