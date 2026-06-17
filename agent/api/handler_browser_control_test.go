@@ -146,6 +146,10 @@ func TestBrowserControlActionsForwardRequests(t *testing.T) {
 	evaluated := postJSONForTest[browsercontrol.EvaluateResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/evaluate", map[string]any{
 		"expression": "() => ({ ok: true })",
 	}, http.StatusOK)
+	viewport := postJSONForTest[browsercontrol.ViewportResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/set-viewport", map[string]any{
+		"width":  1478,
+		"height": 1000,
+	}, http.StatusOK)
 
 	assert.True(t, click.OK)
 	assert.True(t, typed.OK)
@@ -175,6 +179,10 @@ func TestBrowserControlActionsForwardRequests(t *testing.T) {
 	require.Len(t, requests.Requests, 1)
 	assert.Equal(t, "() => ({ ok: true })", control.lastEvaluate.Expression)
 	assert.Equal(t, map[string]any{"ok": true}, evaluated.Result)
+	assert.Equal(t, 1478, control.lastViewport.Width)
+	assert.Equal(t, 1000, control.lastViewport.Height)
+	assert.Equal(t, 1478, viewport.Width)
+	assert.Equal(t, 1000, viewport.Height)
 }
 
 func TestBrowserEvaluateDisabledByDefault(t *testing.T) {
@@ -305,6 +313,25 @@ func TestBrowserTypeAuditOmitsTypedText(t *testing.T) {
 	assert.NotContains(t, mustMarshalString(t, event), "hunter2")
 }
 
+func TestBrowserSetViewportAuditRecordsDimensions(t *testing.T) {
+	app, sessionID := newBrowserControlTestApp(t)
+	app.browserControl = &fakeBrowserControl{viewport: browsercontrol.ViewportResult{Width: 1478, Height: 1000}}
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	postJSONForTest[browsercontrol.ViewportResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/set-viewport", map[string]any{
+		"width":  1478,
+		"height": 1000,
+	}, http.StatusOK)
+
+	events := browserControlAuditEvents(t, app)
+	require.Len(t, events, 1)
+	event := events[0]
+	assert.Equal(t, "browser_debug.set_viewport", event.Summary)
+	assert.EqualValues(t, 1478, event.Data["width"])
+	assert.EqualValues(t, 1000, event.Data["height"])
+}
+
 func browserControlAuditEvents(t *testing.T, app *App) []operation.AuditEvent {
 	t.Helper()
 	events, err := app.operationAudit.List(context.Background(), operation.AuditFilter{Kind: operation.OperationBrowserDebugControl})
@@ -359,6 +386,7 @@ type fakeBrowserControl struct {
 	lastConsole    browsercontrol.ConsoleLogsRequest
 	lastNetwork    browsercontrol.NetworkRequestsRequest
 	lastEvaluate   browsercontrol.EvaluateRequest
+	lastViewport   browsercontrol.ViewportRequest
 	snapshot       browsercontrol.Snapshot
 	action         browsercontrol.ActionResult
 	screenshot     browsercontrol.Screenshot
@@ -367,6 +395,7 @@ type fakeBrowserControl struct {
 	consoleLogs    browsercontrol.ConsoleLogsResult
 	network        browsercontrol.NetworkRequestsResult
 	evaluate       browsercontrol.EvaluateResult
+	viewport       browsercontrol.ViewportResult
 	screenshotErr  error
 }
 
@@ -455,4 +484,17 @@ func (f *fakeBrowserControl) Evaluate(_ context.Context, session browsercontrol.
 	f.lastEvaluate = req
 	f.evaluate.SessionID = session.ID
 	return f.evaluate, nil
+}
+
+func (f *fakeBrowserControl) SetViewport(_ context.Context, session browsercontrol.SessionRef, req browsercontrol.ViewportRequest) (browsercontrol.ViewportResult, error) {
+	f.lastSession = session
+	f.lastViewport = req
+	f.viewport.SessionID = session.ID
+	if f.viewport.Width == 0 {
+		f.viewport.Width = req.Width
+	}
+	if f.viewport.Height == 0 {
+		f.viewport.Height = req.Height
+	}
+	return f.viewport, nil
 }

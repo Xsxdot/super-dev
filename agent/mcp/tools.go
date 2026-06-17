@@ -440,6 +440,8 @@ func openBrowserSessionInputSchema() map[string]any {
 			"browser_id":            map[string]any{"type": "string"},
 			"path":                  map[string]any{"type": "string"},
 			"open_devtools":         map[string]any{"type": "boolean"},
+			"viewport_width":        map[string]any{"type": "integer", "minimum": 320, "maximum": 10000},
+			"viewport_height":       map[string]any{"type": "integer", "minimum": 240, "maximum": 10000},
 			"approval_token":        map[string]any{"type": "string"},
 			"approval_wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 300},
 			"debug_session_id":      map[string]any{"type": "string"},
@@ -617,6 +619,19 @@ func browserEvaluateInputSchema() map[string]any {
 			"expression": map[string]any{"type": "string"},
 		},
 		"required": []string{"session_id", "expression"},
+	}
+}
+
+func browserSetViewportInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"width":      map[string]any{"type": "integer", "minimum": 320, "maximum": 10000},
+			"height":     map[string]any{"type": "integer", "minimum": 240, "maximum": 10000},
+		},
+		"required": []string{"session_id", "width", "height"},
 	}
 }
 
@@ -1204,6 +1219,15 @@ func defaultTools(s *Server) []registeredTool {
 				InputSchema: browserEvaluateInputSchema(),
 			},
 			Handler: s.browserEvaluateTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "browser_set_viewport",
+				Title:       "Browser set viewport",
+				Description: "Set the viewport size for a browser debug session page before snapshot or screenshot checks.",
+				InputSchema: browserSetViewportInputSchema(),
+			},
+			Handler: s.browserSetViewportTool,
 		},
 		{
 			Tool: Tool{

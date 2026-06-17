@@ -94,6 +94,26 @@ func TestBrowserScreenshotTool(t *testing.T) {
 	assert.Contains(t, result.Content[0]["text"], "browser screenshot captured")
 }
 
+func TestBrowserSetViewportTool(t *testing.T) {
+	client := &fakeAgentClient{
+		browserViewport: BrowserViewportResult{
+			SessionID: "brs_1",
+			Width:     1478,
+			Height:    1000,
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "browser_set_viewport", `{"session_id":"brs_1","width":1478,"height":1000}`)
+
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, "brs_1", client.lastBrowserSetViewport.SessionID)
+	assert.Equal(t, 1478, client.lastBrowserSetViewport.Width)
+	assert.Equal(t, 1000, client.lastBrowserSetViewport.Height)
+	assert.Contains(t, result.Content[0]["text"], "browser viewport updated")
+}
+
 func TestBrowserScreenshotToolReturnsStructuredAgentError(t *testing.T) {
 	client := &fakeAgentClient{
 		browserScreenshotErr: AgentError{

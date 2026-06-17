@@ -89,7 +89,7 @@ AI 改完前端，自己验证：导航、点击、输入、截图、读 console
 | **多服务运行态控制台** | 统一查看本地进程、Launchd、systemd、Docker、远程主机上的 service / deployment；支持 managed control 与 monitor-only 两种模式；桌面端与 MCP 共享同一份运行态模型。 |
 | **日志聚合与诊断** | 实时 / 历史日志、跨服务搜索、上下文查看、规则过滤、面板分栏、同步录制、书签区间、折叠重复日志。诊断只给确定性证据，根因推理留给 AI。 |
 | **AI 代码断点调试** | 日志看不出根因时，AI attach 到正在跑的受管进程（不重启、不换 pid），停在某一行源码，一次拿到调用栈 / 作用域 / 变量。默认支持：Go、Python、Rust、C/C++。实验性（需自备 / 配置 adapter）：Node、Java/Kotlin。经 MCP 暴露为 `list_code_debug_targets` / `debug_capture_at`。 |
-| **浏览器控制** | AI 通过 Playwright 驱动正在运行的前端：`browser_navigate` / `browser_click` / `browser_type` / `browser_screenshot` / `browser_console_logs` / `browser_network_requests` / `browser_evaluate`，并支持 snapshot、reload、wait-for-selector、press-key、select-option。AI 自己验证 UI 改动；控制动作仍在审批和脱敏审计之下。 |
+| **浏览器控制** | AI 通过 Playwright 驱动正在运行的前端：`browser_navigate` / `browser_click` / `browser_type` / `browser_screenshot` / `browser_set_viewport` / `browser_console_logs` / `browser_network_requests` / `browser_evaluate`，并支持 snapshot、reload、wait-for-selector、press-key、select-option。AI 自己验证 UI 改动；控制动作仍在审批和脱敏审计之下。 |
 | **生产级 pipeline 底座** | DAG pipeline、模板组合、变量系统、artifact、run history、run log replay；内置 Go / Node / Python / Java / Rust / PHP / Vue+Go 模板；systemd 采用 release/current 结构，回滚复用同一条路径。 |
 | **Ingress 声明式入口** | pipeline 管“反复投递产物”，Ingress 管“长期存在的入口状态”：域名、DNS、反向代理、HTTPS、证书托管。支持 nginx、manual DNS、Cloudflare、Aliyun、ACME DNS-01 与 orphan detection。 |
 

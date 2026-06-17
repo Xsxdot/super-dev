@@ -10,8 +10,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -51,6 +53,10 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if err := validateOptionalBrowserViewport(req.ViewportWidth, req.ViewportHeight); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	dep, svc, project, ok := a.findDeploymentWithService(strings.TrimSpace(req.DeploymentID))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "deployment not found")
@@ -64,6 +70,27 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 	browser, profileMode, status, msg := a.resolveDebugBrowser(req.BrowserID)
 	if status != http.StatusOK {
 		jsonError(w, status, msg)
+		return
+	}
+	openDevtools := true
+	if req.OpenDevtools != nil {
+		openDevtools = *req.OpenDevtools
+	}
+	openReq := browserdebug.OpenResolvedRequest{
+		Browser:        browser,
+		Target:         target,
+		TargetURL:      targetURL,
+		OpenDevtools:   openDevtools,
+		ProfileMode:    profileMode,
+		ViewportWidth:  req.ViewportWidth,
+		ViewportHeight: req.ViewportHeight,
+	}
+	if session, ok := a.browserDebug.FindReusable(openReq); ok {
+		session, handled := a.reuseBrowserSession(w, r, session, targetURL, req.Path, req.ViewportWidth, req.ViewportHeight)
+		if !handled {
+			return
+		}
+		jsonOK(w, session)
 		return
 	}
 	plan, err := operation.PlanBrowserDebugOpen(project, svc, dep, targetURL)
@@ -83,17 +110,15 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		jsonErrorCode(w, http.StatusServiceUnavailable, "web_entrypoint_not_ready", err.Error(), map[string]any{"target_url": targetURL})
 		return
 	}
-	openDevtools := true
-	if req.OpenDevtools != nil {
-		openDevtools = *req.OpenDevtools
+	if session, ok := a.browserDebug.FindReusable(openReq); ok {
+		session, handled := a.reuseBrowserSession(w, r, session, targetURL, req.Path, req.ViewportWidth, req.ViewportHeight)
+		if !handled {
+			return
+		}
+		jsonOK(w, session)
+		return
 	}
-	session, err := a.browserDebug.Open(r.Context(), browserdebug.OpenResolvedRequest{
-		Browser:      browser,
-		Target:       target,
-		TargetURL:    targetURL,
-		OpenDevtools: openDevtools,
-		ProfileMode:  profileMode,
-	})
+	session, err := a.browserDebug.Open(r.Context(), openReq)
 	if err != nil {
 		if browserDebugLaunchErrorCode(err) == browsercontrol.CodeCDPConnectionFailed {
 			jsonErrorCode(w, http.StatusInternalServerError, browsercontrol.CodeCDPConnectionFailed, err.Error(), nil)
@@ -102,7 +127,74 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := a.setBrowserSessionViewport(r.Context(), session, req.ViewportWidth, req.ViewportHeight); err != nil {
+		_ = a.browserDebug.Close(session.ID)
+		jsonBrowserControlError(w, err)
+		return
+	}
 	jsonOK(w, session)
+}
+
+func (a *App) reuseBrowserSession(w http.ResponseWriter, r *http.Request, session browserdebug.Session, targetURL string, targetPath string, viewportWidth int, viewportHeight int) (browserdebug.Session, bool) {
+	if !browserdebug.TargetURLMatches(session.TargetURL, targetURL) {
+		log.Printf("[SuperDev] navigating reused debug browser session=%s deployment=%s browser=%s from=%s to=%s", session.ID, session.DeploymentID, session.BrowserID, session.TargetURL, targetURL)
+		navigation, err := a.browserControl.Navigate(r.Context(), browserSessionRef(session), browsercontrol.NavigateRequest{URL: targetURL})
+		a.auditBrowserControl(r.Context(), "navigate", session.ID, session.DeploymentID, err, map[string]any{
+			"url":  targetURL,
+			"path": targetPath,
+		})
+		if err != nil {
+			jsonBrowserControlError(w, err)
+			return browserdebug.Session{}, false
+		}
+		if updated, ok := a.browserDebug.UpdateTargetURL(session.ID, navigation.URL); ok {
+			session = updated
+		} else {
+			session.TargetURL = navigation.URL
+		}
+	}
+	if err := a.setBrowserSessionViewport(r.Context(), session, viewportWidth, viewportHeight); err != nil {
+		jsonBrowserControlError(w, err)
+		return browserdebug.Session{}, false
+	}
+	return session, true
+}
+
+func (a *App) setBrowserSessionViewport(ctx context.Context, session browserdebug.Session, width int, height int) error {
+	if width == 0 && height == 0 {
+		return nil
+	}
+	viewportReq := browsercontrol.ViewportRequest{Width: width, Height: height}
+	_, err := a.browserControl.SetViewport(ctx, browserSessionRef(session), viewportReq)
+	a.auditBrowserControl(ctx, "set_viewport", session.ID, session.DeploymentID, err, map[string]any{
+		"width":  width,
+		"height": height,
+	})
+	return err
+}
+
+func browserSessionRef(session browserdebug.Session) browsercontrol.SessionRef {
+	return browsercontrol.SessionRef{
+		ID:        session.ID,
+		TargetURL: session.TargetURL,
+		BrowserWS: session.BrowserWS,
+	}
+}
+
+func validateOptionalBrowserViewport(width int, height int) error {
+	if width == 0 && height == 0 {
+		return nil
+	}
+	if width == 0 || height == 0 {
+		return errors.New("viewport_width and viewport_height must be provided together")
+	}
+	if width < 320 || width > 10000 {
+		return errors.New("viewport_width must be between 320 and 10000")
+	}
+	if height < 240 || height > 10000 {
+		return errors.New("viewport_height must be between 240 and 10000")
+	}
+	return nil
 }
 
 func browserDebugLaunchErrorCode(err error) string {

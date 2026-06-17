@@ -192,6 +192,19 @@ type EvaluateResult struct {
 	Result    any    `json:"result"`
 }
 
+// ViewportRequest 描述页面 viewport 尺寸更新请求。
+type ViewportRequest struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// ViewportResult 描述页面 viewport 更新后的尺寸。
+type ViewportResult struct {
+	SessionID string `json:"session_id"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+}
+
 // ActionResult 描述无额外负载的浏览器控制动作结果。
 type ActionResult struct {
 	SessionID string `json:"session_id"`
@@ -212,4 +225,5 @@ type Controller interface {
 	ConsoleLogs(context.Context, SessionRef, ConsoleLogsRequest) (ConsoleLogsResult, error)
 	NetworkRequests(context.Context, SessionRef, NetworkRequestsRequest) (NetworkRequestsResult, error)
 	Evaluate(context.Context, SessionRef, EvaluateRequest) (EvaluateResult, error)
+	SetViewport(context.Context, SessionRef, ViewportRequest) (ViewportResult, error)
 }

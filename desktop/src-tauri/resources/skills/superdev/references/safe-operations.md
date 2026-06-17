@@ -4,9 +4,9 @@
 
 只读工具不会改变运行态或配置：`list_projects`、`get_project`、`list_hosts`、`get_runtime_snapshot`、`list_services`、`tail_logs`、`search_logs`、`get_log_context`、`diagnose_service`、`analyze_trace_logs`、`summarize_error_window`、`preview_config_change`、`preview_operation`、`list_operation_approvals`、`list_operation_audit`、`list_browser_targets`、`list_debug_browsers`、`browser_snapshot`、`browser_screenshot`、`browser_console_logs`、`browser_network_requests`。
 
-写工具会改变配置、本地记录、运行态或模板库：`apply_config_change`、`upsert_project_config`、`upsert_service`、`upsert_project_pipeline`、`start_service`、`stop_service`、`restart_service`、`import_pipeline_template`、`deploy_project_pipeline`、`open_browser_debug_session`、`close_browser_debug_session`、`browser_click`、`browser_type`、`browser_select_option`、`browser_press_key`、`browser_wait_for_selector`、`browser_navigate`、`browser_reload`、`browser_evaluate`。
+写工具会改变配置、本地记录、运行态或模板库：`apply_config_change`、`upsert_project_config`、`upsert_service`、`upsert_project_pipeline`、`start_service`、`stop_service`、`restart_service`、`import_pipeline_template`、`deploy_project_pipeline`、`open_browser_debug_session`、`close_browser_debug_session`、`browser_click`、`browser_type`、`browser_select_option`、`browser_press_key`、`browser_wait_for_selector`、`browser_navigate`、`browser_reload`、`browser_set_viewport`、`browser_evaluate`。
 
-浏览器调试的审批与审计模型与服务写操作一致：只有 `open_browser_debug_session` 走审批门，开启后会话内控制动作不再逐次审批；`browser_*` 控制动作（click/type/navigate/evaluate 等）落持久化审计，详见 `references/browser-debug.md`。
+浏览器调试的审批与审计模型与服务写操作一致：只有 `open_browser_debug_session` 走审批门，开启后会话内控制动作不再逐次审批；`browser_*` 控制动作（click/type/navigate/set_viewport/evaluate 等）落持久化审计，详见 `references/browser-debug.md`。
 
 ## 统一审批模型：直接调用，自动等待
 

@@ -277,6 +277,28 @@ func (a *App) browserSessionEvaluate(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
+func (a *App) browserSessionSetViewport(w http.ResponseWriter, r *http.Request) {
+	session, deploymentID, ok := a.browserControlSessionContext(w, r)
+	if !ok {
+		return
+	}
+	var req browsercontrol.ViewportRequest
+	if err := decodeBrowserControlBody(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := a.browserControl.SetViewport(r.Context(), session, req)
+	a.auditBrowserControl(r.Context(), "set_viewport", session.ID, deploymentID, err, map[string]any{
+		"width":  req.Width,
+		"height": req.Height,
+	})
+	if err != nil {
+		jsonBrowserControlError(w, err)
+		return
+	}
+	jsonOK(w, result)
+}
+
 // evaluateResultType 返回 evaluate 结果的粗粒度类型，用于审计但不暴露结果值。
 func evaluateResultType(result any) string {
 	switch result.(type) {

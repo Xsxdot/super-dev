@@ -136,6 +136,41 @@ func TestChromiumLauncherUsesFreshProfileSafeStartupFlags(t *testing.T) {
 	assert.Equal(t, targetURL, args[len(args)-1])
 }
 
+func TestChromiumLauncherAddsWindowSizeWhenViewportRequested(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			_, _ = fmt.Fprintf(w, `[{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/page-1"}]`, targetURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	browserPath := filepath.Join(dir, "fake-browser")
+	writeFakeChromium(t, browserPath, serverPort(t, cdp.URL), argsPath)
+
+	launcher := NewChromiumLauncher(t.TempDir(), cdp.Client())
+	result, err := launcher(context.Background(), LaunchRequest{
+		Browser:        BrowserRecord{ID: "fake", Name: "Fake Browser", ExecutablePath: browserPath, Available: true},
+		TargetURL:      targetURL,
+		ViewportWidth:  1478,
+		ViewportHeight: 1000,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, result.Close()) }()
+
+	argsBytes, err := os.ReadFile(argsPath)
+	require.NoError(t, err)
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	assert.Contains(t, args, "--window-size=1478,1000")
+}
+
 func TestChromiumLauncherPersistentProfileReusesStableDirectory(t *testing.T) {
 	targetURL := "http://127.0.0.1:3000/"
 	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
