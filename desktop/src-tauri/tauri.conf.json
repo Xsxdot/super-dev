@@ -1,6 +1,6 @@
 {
   "productName": "SuperDev",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "identifier": "dev.superdev.app",
   "build": {
     "beforeDevCommand": "bash scripts/build-agent.sh --remote-install && pnpm dev",

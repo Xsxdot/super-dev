@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-17
+
+### Added
+
+- Published SuperDev's first official release line with versioned GitHub Release automation for downloadable agent binaries and macOS, Linux, and Windows desktop packages.
+- Added cross-platform remote agent release assets and an install script path that resolves from the versioned GitHub Release instead of a localhost-only development endpoint.
+- Added sidebar project chips with pinned and recent ordering, plus a compact current-project context line for faster switching across multiple projects.
+
+### Changed
+
+- Expanded all sidebar environment groups by default from the main sidebar so deployments are immediately visible after project selection.
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.0`.
+
+### Fixed
+
+- Fixed the Agent settings page blanking after creating a new Agent when the backend runtime health snapshot is still empty.
+- Preserved the legacy `dev` default-expanded behavior for standalone `EnvGroup` consumers while allowing the sidebar to explicitly control expansion.
+
 ## [0.1.2] - 2026-06-17
 
 ### Added
