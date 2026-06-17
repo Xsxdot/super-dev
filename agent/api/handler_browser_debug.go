@@ -61,7 +61,7 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, status, msg)
 		return
 	}
-	browser, status, msg := a.resolveDebugBrowser(req.BrowserID)
+	browser, profileMode, status, msg := a.resolveDebugBrowser(req.BrowserID)
 	if status != http.StatusOK {
 		jsonError(w, status, msg)
 		return
@@ -92,6 +92,7 @@ func (a *App) openBrowserSession(w http.ResponseWriter, r *http.Request) {
 		Target:       target,
 		TargetURL:    targetURL,
 		OpenDevtools: openDevtools,
+		ProfileMode:  profileMode,
 	})
 	if err != nil {
 		if browserDebugLaunchErrorCode(err) == browsercontrol.CodeCDPConnectionFailed {
@@ -191,26 +192,26 @@ func (a *App) resolveBrowserDebugTarget(dep model.Deployment, svc model.Service,
 	return target, targetURL, http.StatusOK, ""
 }
 
-func (a *App) resolveDebugBrowser(requestedBrowserID string) (browserdebug.BrowserRecord, int, string) {
+func (a *App) resolveDebugBrowser(requestedBrowserID string) (browserdebug.BrowserRecord, string, int, string) {
 	settings, err := a.settings.Load()
 	if err != nil {
-		return browserdebug.BrowserRecord{}, http.StatusInternalServerError, err.Error()
+		return browserdebug.BrowserRecord{}, "", http.StatusInternalServerError, err.Error()
 	}
 	browserID := strings.TrimSpace(requestedBrowserID)
 	if browserID == "" {
 		browserID = strings.TrimSpace(settings.DebugBrowser.DefaultBrowserID)
 	}
 	if browserID == "" {
-		return browserdebug.BrowserRecord{}, http.StatusBadRequest, "debug browser is not configured"
+		return browserdebug.BrowserRecord{}, "", http.StatusBadRequest, "debug browser is not configured"
 	}
 	for _, browser := range browserdebug.BrowsersFromSettings(settings.DebugBrowser) {
 		if browser.ID != browserID {
 			continue
 		}
 		if !browser.Available {
-			return browserdebug.BrowserRecord{}, http.StatusBadRequest, "browser executable is unavailable"
+			return browserdebug.BrowserRecord{}, "", http.StatusBadRequest, "browser executable is unavailable"
 		}
-		return browser, http.StatusOK, ""
+		return browser, settings.DebugBrowser.ProfileMode, http.StatusOK, ""
 	}
-	return browserdebug.BrowserRecord{}, http.StatusNotFound, "debug browser not found"
+	return browserdebug.BrowserRecord{}, "", http.StatusNotFound, "debug browser not found"
 }

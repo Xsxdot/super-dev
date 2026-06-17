@@ -150,6 +150,9 @@ func TestValidateArtifactKeepVersionsRange(t *testing.T) {
 func TestValidateDebugBrowserSettings(t *testing.T) {
 	s := config.DefaultAgentSettings()
 	s.DebugBrowser.ProfileMode = "persistent"
+	require.NoError(t, config.ValidateAgentSettings(s))
+
+	s.DebugBrowser.ProfileMode = "shared"
 	require.Error(t, config.ValidateAgentSettings(s))
 
 	s.DebugBrowser.ProfileMode = "ephemeral"

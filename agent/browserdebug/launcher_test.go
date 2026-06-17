@@ -136,6 +136,47 @@ func TestChromiumLauncherUsesFreshProfileSafeStartupFlags(t *testing.T) {
 	assert.Equal(t, targetURL, args[len(args)-1])
 }
 
+func TestChromiumLauncherPersistentProfileReusesStableDirectory(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			_, _ = fmt.Fprintf(w, `[{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/page-1"}]`, targetURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	browserPath := filepath.Join(dir, "fake-browser")
+	writeFakeChromium(t, browserPath, serverPort(t, cdp.URL), argsPath)
+
+	profileRoot := filepath.Join(t.TempDir(), "profiles")
+	launcher := NewChromiumLauncher(profileRoot, cdp.Client())
+	result, err := launcher(context.Background(), LaunchRequest{
+		Browser:      BrowserRecord{ID: "arc/browser", Name: "Arc", ExecutablePath: browserPath, Available: true},
+		TargetURL:    targetURL,
+		ProfileMode:  ProfileModePersistent,
+		ProfileScope: "dep/admin dev",
+	})
+	require.NoError(t, err)
+
+	argsBytes, err := os.ReadFile(argsPath)
+	require.NoError(t, err)
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	persistentDir := filepath.Join(profileRoot, "persistent", "arc-browser", "dep-admin-dev")
+	assert.Contains(t, args, "--user-data-dir="+persistentDir)
+	assert.Equal(t, persistentDir, result.ProfileDir)
+
+	require.NoError(t, result.Close())
+	_, err = os.Stat(persistentDir)
+	require.NoError(t, err)
+}
+
 func TestDiscoverCDPPrefersEquivalentTargetURLOverFirstPage(t *testing.T) {
 	targetURL := "http://127.0.0.1:3000"
 	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -25,6 +25,7 @@ type OpenResolvedRequest struct {
 	Target       Target
 	TargetURL    string
 	OpenDevtools bool
+	ProfileMode  string
 }
 
 // LaunchRequest 描述底层浏览器进程启动参数。
@@ -32,6 +33,8 @@ type LaunchRequest struct {
 	Browser      BrowserRecord
 	TargetURL    string
 	OpenDevtools bool
+	ProfileMode  string
+	ProfileScope string
 }
 
 // LaunchResult 描述底层浏览器启动后的 CDP 发现结果。
@@ -101,7 +104,14 @@ func (m *Manager) Open(ctx context.Context, req OpenResolvedRequest) (Session, e
 	if m.launch == nil {
 		return Session{}, fmt.Errorf("browser launcher is not configured")
 	}
-	result, err := m.launch(ctx, LaunchRequest{Browser: req.Browser, TargetURL: req.TargetURL, OpenDevtools: req.OpenDevtools})
+	result, err := m.launch(ctx, LaunchRequest{
+		Browser:      req.Browser,
+		TargetURL:    req.TargetURL,
+		OpenDevtools: req.OpenDevtools,
+		ProfileMode:  req.ProfileMode,
+		// deployment 级隔离可避免两个本机服务复用同一端口时共享登录态。
+		ProfileScope: req.Target.DeploymentID,
+	})
 	if err != nil {
 		return Session{}, err
 	}

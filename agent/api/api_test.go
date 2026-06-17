@@ -223,7 +223,7 @@ func TestSettingsRoundTripDebugBrowser(t *testing.T) {
 	body := `{
 	  "debug_browser": {
 	    "default_browser_id": "arc",
-	    "profile_mode": "ephemeral",
+	    "profile_mode": "persistent",
 	    "browsers": [
 	      {"id":"arc","name":"Arc","executable_path":"/Applications/Arc.app/Contents/MacOS/Arc"}
 	    ]
@@ -242,6 +242,7 @@ func TestSettingsRoundTripDebugBrowser(t *testing.T) {
 	var settings config.AgentSettings
 	require.NoError(t, json.Unmarshal(raw, &settings))
 	assert.Equal(t, "arc", settings.DebugBrowser.DefaultBrowserID)
+	assert.Equal(t, "persistent", settings.DebugBrowser.ProfileMode)
 	require.Len(t, settings.DebugBrowser.Browsers, 1)
 	assert.Equal(t, "/Applications/Arc.app/Contents/MacOS/Arc", settings.DebugBrowser.Browsers[0].ExecutablePath)
 }

@@ -7,7 +7,7 @@
 - 用户说「帮我看看这个前端页面」「按钮点了没反应」「页面白屏 / 报错」「这个表单提交不了」「看看控制台有没有报错」「截个图看看」——且目标是**本机正在跑的前端 deployment**。
 - 先决条件：该 deployment 在 SuperDev 里配置了 `web` 入口且开启了 `ai_debug`。用 `list_browser_targets` 能列出来的才可调试。
 
-**不适用**：远端前端、tunnel 页面、任意公网网站。这套只开 loopback（`localhost`/`127.0.0.1`/`::1`）本机地址，不复用用户真实浏览器 profile。要控制用户真实浏览器/公网站点是另一套工具，不在 SuperDev 范围。
+**不适用**：远端前端、tunnel 页面、任意公网网站。这套只开 loopback（`localhost`/`127.0.0.1`/`::1`）本机地址，不复用用户真实浏览器 profile。设置页可在默认临时 profile 与 SuperDev 专属的持久隔离 profile 之间切换；持久隔离模式只复用 SuperDev 数据目录下的登录态。要控制用户真实浏览器/公网站点是另一套工具，不在 SuperDev 范围。
 
 ## 标准流程
 

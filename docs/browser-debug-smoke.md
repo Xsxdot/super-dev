@@ -3,7 +3,7 @@
 ## 前置条件
 
 1. 已启动 SuperDev desktop 或 agent dev server。
-2. 已在设置页配置 Arc/Chrome，并设置为默认调试浏览器。
+2. 已在设置页配置 Arc/Chrome，并设置为默认调试浏览器。需要复用登录态时，将「登录态保存」切到「持久隔离」。
 3. 已有一个 local web deployment，`web.enabled=true`，`web.ai_debug.enabled=true`，`web.url` 是 `localhost`、`127.0.0.1` 或 `::1`。
 4. 前端服务已启动并 readiness 可访问。
 5. 被测页面至少暴露一个可见、可用的 textbox，用于验证 `browser_type`。

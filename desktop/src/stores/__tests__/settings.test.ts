@@ -11,7 +11,7 @@
  */
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { api as agentApi } from '@/api/agent'
+import { api as agentApi, type DebugBrowserSettings } from '@/api/agent'
 import { LOCALE_STORAGE_KEY, setLocale } from '@/i18n'
 import { useSettingsStore } from '../settings'
 
@@ -68,7 +68,7 @@ describe('settingsStore', () => {
   })
 
   it('saveDebugBrowserSettings 持久化本机调试浏览器偏好', async () => {
-    const debugBrowser = {
+    const debugBrowser: DebugBrowserSettings = {
       default_browser_id: 'arc',
       profile_mode: 'ephemeral',
       browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],

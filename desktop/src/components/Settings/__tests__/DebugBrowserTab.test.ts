@@ -95,6 +95,27 @@ describe('DebugBrowserTab', () => {
     )
   })
 
+  it('可切换调试浏览器 profile 模式', async () => {
+    const settings = useSettingsStore()
+    settings.agentSettings = baseSettings({
+      default_browser_id: 'arc',
+      profile_mode: 'ephemeral',
+      allow_evaluate: false,
+      session_ttl_minutes: 30,
+      browsers: [{ id: 'arc', name: 'Arc', executable_path: '/Applications/Arc.app/Contents/MacOS/Arc' }],
+    })
+    vi.spyOn(settings, 'loadAgentSettings').mockResolvedValue(undefined)
+    vi.spyOn(settings, 'saveDebugBrowserSettings').mockResolvedValue(undefined)
+
+    const wrapper = mountTab()
+    await nextTick()
+    await wrapper.find('[data-test="debug-browser-profile-persistent"]').trigger('click')
+
+    expect(settings.saveDebugBrowserSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ profile_mode: 'persistent' }),
+    )
+  })
+
   it('为设置卡片和 evaluate 开关提供本组件内的布局样式', async () => {
     const settings = useSettingsStore()
     settings.agentSettings = baseSettings({

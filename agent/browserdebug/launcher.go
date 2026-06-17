@@ -1,13 +1,13 @@
 // launcher.go 启动 Chromium 兼容浏览器并发现 CDP endpoint。
 //
 // 职责：
-//   - 创建临时浏览器 profile
+//   - 按配置创建临时或持久浏览器 profile
 //   - 传入 Chromium remote debugging 参数启动浏览器
 //   - 读取 DevToolsActivePort 并查询 CDP metadata
 //
 // 边界：
 //   - 不解析 SuperDev deployment
-//   - 不持久化 session
+//   - 不复用用户真实浏览器 profile
 package browserdebug
 
 import (
@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,13 @@ import (
 
 const devToolsPortTimeout = 15 * time.Second
 const cdpTargetTimeout = 5 * time.Second
+
+const (
+	// ProfileModeEphemeral 表示每个调试 session 使用新的临时 Chromium user data dir。
+	ProfileModeEphemeral = "ephemeral"
+	// ProfileModePersistent 表示复用 SuperDev 数据目录下的隔离 Chromium user data dir。
+	ProfileModePersistent = "persistent"
+)
 
 type versionResponse struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
@@ -53,9 +61,9 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		if err := os.MkdirAll(profileRoot, 0o755); err != nil {
 			return LaunchResult{}, fmt.Errorf("create browser profile root: %w", err)
 		}
-		profileDir, err := os.MkdirTemp(profileRoot, "session-*")
+		profileDir, removeProfileOnClose, err := profileDirForLaunch(profileRoot, req)
 		if err != nil {
-			return LaunchResult{}, fmt.Errorf("create browser profile: %w", err)
+			return LaunchResult{}, err
 		}
 		args := []string{
 			"--remote-debugging-port=0",
@@ -72,9 +80,11 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		}
 		args = append(args, "--new-window")
 		args = append(args, req.TargetURL)
+		log.Printf("[SuperDev] opening debug browser target=%s browser=%s profile_mode=%s profile_dir=%s", req.TargetURL, req.Browser.ID, profileModeForLaunch(req.ProfileMode), profileDir)
 		cmd := exec.Command(req.Browser.ExecutablePath, args...)
 		if err := cmd.Start(); err != nil {
-			_ = os.RemoveAll(profileDir)
+			cleanupProfileDir(profileDir, removeProfileOnClose)
+			log.Printf("[SuperDev] debug browser launch failed target=%s browser=%s error=%v", req.TargetURL, req.Browser.ID, err)
 			return LaunchResult{}, fmt.Errorf("launch browser: %w", err)
 		}
 		var exited atomic.Bool
@@ -86,12 +96,14 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		}()
 		port, err := waitDevToolsPort(ctx, filepath.Join(profileDir, "DevToolsActivePort"))
 		if err != nil {
-			cleanupStartedBrowser(cmd, done, profileDir)
+			cleanupStartedBrowser(cmd, done, profileDir, removeProfileOnClose)
+			log.Printf("[SuperDev] debug browser did not expose DevTools target=%s browser=%s error=%v", req.TargetURL, req.Browser.ID, err)
 			return LaunchResult{}, err
 		}
 		result, err := discoverCDP(ctx, httpClient, port, req.TargetURL)
 		if err != nil {
-			cleanupStartedBrowser(cmd, done, profileDir)
+			cleanupStartedBrowser(cmd, done, profileDir, removeProfileOnClose)
+			log.Printf("[SuperDev] debug browser CDP discovery failed target=%s browser=%s error=%v", req.TargetURL, req.Browser.ID, err)
 			return LaunchResult{}, err
 		}
 		result.ProcessID = cmd.Process.Pid
@@ -99,28 +111,88 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		result.Alive = func() bool {
 			return !exited.Load()
 		}
+		log.Printf("[SuperDev] debug browser opened target=%s browser=%s pid=%d port=%d profile_mode=%s", req.TargetURL, req.Browser.ID, result.ProcessID, result.DebugPort, profileModeForLaunch(req.ProfileMode))
 		result.Close = func() error {
 			select {
 			case <-done:
 			default:
 				if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-					_ = os.RemoveAll(profileDir)
+					cleanupProfileDir(profileDir, removeProfileOnClose)
+					log.Printf("[SuperDev] debug browser close failed target=%s browser=%s pid=%d error=%v", req.TargetURL, req.Browser.ID, result.ProcessID, err)
 					return err
 				}
 				<-done
 			}
-			return os.RemoveAll(profileDir)
+			cleanupProfileDir(profileDir, removeProfileOnClose)
+			log.Printf("[SuperDev] debug browser closed target=%s browser=%s pid=%d profile_mode=%s", req.TargetURL, req.Browser.ID, result.ProcessID, profileModeForLaunch(req.ProfileMode))
+			return nil
 		}
 		return result, nil
 	}
 }
 
-func cleanupStartedBrowser(cmd *exec.Cmd, done <-chan error, profileDir string) {
+func profileDirForLaunch(profileRoot string, req LaunchRequest) (string, bool, error) {
+	switch profileModeForLaunch(req.ProfileMode) {
+	case ProfileModeEphemeral:
+		profileDir, err := os.MkdirTemp(profileRoot, "session-*")
+		if err != nil {
+			return "", false, fmt.Errorf("create browser profile: %w", err)
+		}
+		return profileDir, true, nil
+	case ProfileModePersistent:
+		profileDir := filepath.Join(profileRoot, "persistent", safeProfileComponent(req.Browser.ID), safeProfileComponent(req.ProfileScope))
+		if err := os.MkdirAll(profileDir, 0o755); err != nil {
+			return "", false, fmt.Errorf("create persistent browser profile: %w", err)
+		}
+		return profileDir, false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported browser profile mode %q", req.ProfileMode)
+	}
+}
+
+func profileModeForLaunch(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return ProfileModeEphemeral
+	}
+	return mode
+}
+
+func safeProfileComponent(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if allowed {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "default"
+	}
+	return out
+}
+
+func cleanupStartedBrowser(cmd *exec.Cmd, done <-chan error, profileDir string, removeProfile bool) {
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()
 		<-done
 	}
-	_ = os.RemoveAll(profileDir)
+	cleanupProfileDir(profileDir, removeProfile)
+}
+
+func cleanupProfileDir(profileDir string, removeProfile bool) {
+	if removeProfile {
+		_ = os.RemoveAll(profileDir)
+	}
 }
 
 func waitDevToolsPort(ctx context.Context, path string) (int, error) {

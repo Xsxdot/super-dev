@@ -636,7 +636,7 @@ export interface DebugBrowserConfig {
 
 export interface DebugBrowserSettings {
   default_browser_id?: string
-  profile_mode?: 'ephemeral' | string
+  profile_mode?: 'ephemeral' | 'persistent'
   allow_evaluate?: boolean
   session_ttl_minutes?: number
   browsers?: DebugBrowserConfig[]

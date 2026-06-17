@@ -18,6 +18,10 @@ import (
 )
 
 const (
+	// DebugBrowserProfileModeEphemeral 表示每个浏览器调试 session 使用临时 profile。
+	DebugBrowserProfileModeEphemeral = "ephemeral"
+	// DebugBrowserProfileModePersistent 表示浏览器调试 session 复用 SuperDev 管理的隔离持久 profile。
+	DebugBrowserProfileModePersistent = "persistent"
 	// DefaultLogRetentionDays 是日志保留天数的默认值。
 	DefaultLogRetentionDays = 7
 	// MinLogRetentionDays 是允许的最小日志保留天数。
@@ -130,7 +134,7 @@ func DefaultAgentSettings() AgentSettings {
 			GraceMinutes:      DefaultGraceMinutes,
 		},
 		DebugBrowser: DebugBrowserSettings{
-			ProfileMode:       "ephemeral",
+			ProfileMode:       DebugBrowserProfileModeEphemeral,
 			AllowEvaluate:     false,
 			SessionTTLMinutes: DefaultDebugBrowserSessionTTLMinutes,
 		},
@@ -170,8 +174,10 @@ func ValidateAgentSettings(settings AgentSettings) error {
 	if settings.ArtifactKeepVersions < MinArtifactKeepVersions || settings.ArtifactKeepVersions > MaxArtifactKeepVersions {
 		return fmt.Errorf("artifact_keep_versions must be between %d and %d", MinArtifactKeepVersions, MaxArtifactKeepVersions)
 	}
-	if settings.DebugBrowser.ProfileMode != "" && settings.DebugBrowser.ProfileMode != "ephemeral" {
-		return fmt.Errorf("debug_browser.profile_mode must be ephemeral")
+	if settings.DebugBrowser.ProfileMode != "" &&
+		settings.DebugBrowser.ProfileMode != DebugBrowserProfileModeEphemeral &&
+		settings.DebugBrowser.ProfileMode != DebugBrowserProfileModePersistent {
+		return fmt.Errorf("debug_browser.profile_mode must be %s or %s", DebugBrowserProfileModeEphemeral, DebugBrowserProfileModePersistent)
 	}
 	if settings.DebugBrowser.SessionTTLMinutes < MinDebugBrowserSessionTTLMinutes || settings.DebugBrowser.SessionTTLMinutes > MaxDebugBrowserSessionTTLMinutes {
 		return fmt.Errorf("debug_browser.session_ttl_minutes must be between %d and %d", MinDebugBrowserSessionTTLMinutes, MaxDebugBrowserSessionTTLMinutes)
@@ -216,7 +222,7 @@ func (s *SettingsStore) Load() (AgentSettings, error) {
 		settings.ArtifactKeepVersions = DefaultArtifactKeepVersions
 	}
 	if settings.DebugBrowser.ProfileMode == "" {
-		settings.DebugBrowser.ProfileMode = "ephemeral"
+		settings.DebugBrowser.ProfileMode = DebugBrowserProfileModeEphemeral
 	}
 	if settings.DebugBrowser.SessionTTLMinutes == 0 {
 		settings.DebugBrowser.SessionTTLMinutes = DefaultDebugBrowserSessionTTLMinutes

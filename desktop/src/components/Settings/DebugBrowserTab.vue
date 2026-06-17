@@ -22,6 +22,7 @@ import type { DebugBrowserConfig, DebugBrowserSettings } from '@/api/agent'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
+type DebugBrowserProfileMode = 'ephemeral' | 'persistent'
 
 const draftName = ref('')
 const draftPath = ref('')
@@ -138,6 +139,14 @@ function setDefault(id: string) {
 
 function saveEvaluate(allow: boolean) {
   save({ ...current(), allow_evaluate: allow })
+}
+
+function currentProfileMode(): DebugBrowserProfileMode {
+  return current().profile_mode === 'persistent' ? 'persistent' : 'ephemeral'
+}
+
+function saveProfileMode(mode: DebugBrowserProfileMode) {
+  save({ ...current(), profile_mode: mode })
 }
 
 function saveTTL(value: string | number) {
@@ -263,6 +272,34 @@ function saveTTL(value: string | number) {
 
     <section class="settings-card dbt-card">
       <h2 class="dbt-section-title dbt-security-title">{{ t('settings.debugBrowser.securityTitle') }}</h2>
+
+      <label class="dbt-option">
+        <span class="dbt-option-icon" aria-hidden="true"><i class="ti ti-user-shield" /></span>
+        <span class="dbt-option-text">
+          <span class="dbt-option-title">{{ t('settings.debugBrowser.profileTitle') }}</span>
+          <span class="dbt-option-desc">{{ t('settings.debugBrowser.profileDesc') }}</span>
+        </span>
+        <span class="dbt-segmented" role="group" :aria-label="t('settings.debugBrowser.profileTitle')">
+          <button
+            type="button"
+            class="dbt-segmented-btn"
+            :class="{ 'dbt-segmented-btn-active': currentProfileMode() === 'ephemeral' }"
+            data-test="debug-browser-profile-ephemeral"
+            @click="saveProfileMode('ephemeral')"
+          >
+            {{ t('settings.debugBrowser.profileEphemeral') }}
+          </button>
+          <button
+            type="button"
+            class="dbt-segmented-btn"
+            :class="{ 'dbt-segmented-btn-active': currentProfileMode() === 'persistent' }"
+            data-test="debug-browser-profile-persistent"
+            @click="saveProfileMode('persistent')"
+          >
+            {{ t('settings.debugBrowser.profilePersistent') }}
+          </button>
+        </span>
+      </label>
 
       <label class="dbt-option" :class="{ 'dbt-option-warning': true }">
         <span class="dbt-option-icon dbt-option-icon-warning" aria-hidden="true"><i class="ti ti-code" /></span>
@@ -472,6 +509,7 @@ function saveTTL(value: string | number) {
   align-items: center;
   gap: 12px;
   padding: 14px 0;
+  flex-wrap: wrap;
 }
 
 .dbt-option + .dbt-option {
@@ -555,6 +593,38 @@ function saveTTL(value: string | number) {
 
 .dbt-switch input:focus-visible + span {
   box-shadow: 0 0 0 2px var(--control-focus, rgba(31, 111, 235, 0.35));
+}
+
+.dbt-segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  padding: 2px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: var(--bg-primary, #0d1117);
+  flex-shrink: 0;
+}
+
+.dbt-segmented-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #8b949e);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dbt-segmented-btn-active {
+  background: var(--accent-soft, rgba(88, 166, 255, 0.16));
+  color: var(--accent, #58a6ff);
+}
+
+.dbt-segmented-btn:focus-visible {
+  outline: 2px solid var(--control-focus, rgba(31, 111, 235, 0.35));
+  outline-offset: 1px;
 }
 
 .dbt-ttl {
