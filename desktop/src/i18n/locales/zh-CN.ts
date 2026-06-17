@@ -472,6 +472,7 @@ export default {
       installRestartCheckFailed: '重启后仍未检测到 Agent，请确认远端服务已启动。',
       generatedCommandPhaseHint: '在远端机器执行命令后，回到这里检查启动状态。',
       controllerURL: '控制端 URL',
+      releaseBaseURL: 'Release 基础 URL',
       bindAddress: '绑定地址',
       remotePort: '远端端口',
       tokenTTL: 'Token TTL',

@@ -472,6 +472,7 @@ export default {
       installRestartCheckFailed: 'Agent was still not detected after restart. Confirm the remote service is running.',
       generatedCommandPhaseHint: 'Run the command on the remote host, then return here to check startup.',
       controllerURL: 'Controller URL',
+      releaseBaseURL: 'Release base URL',
       bindAddress: 'Bind address',
       remotePort: 'Remote port',
       tokenTTL: 'Token TTL',
