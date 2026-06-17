@@ -33,8 +33,32 @@ export interface AgentStageView {
   opensPanel: boolean
 }
 
+const knownAgentHealth: Record<AgentRuntime['health'], true> = {
+  unknown: true,
+  healthy: true,
+  unreachable: true,
+  'version-mismatch': true,
+  'auth-failed': true,
+  'pending-bootstrap': true,
+}
+
+// runtime health may be empty immediately after creating an Agent, before
+// NodeRegistry has produced the first probe snapshot. Treat that as unknown
+// so render paths never pass an undefined translation key to vue-i18n.
+function normalizeAgentHealth(health: AgentRuntime['health'] | string | undefined): AgentRuntime['health'] {
+  return knownAgentHealth[health as AgentRuntime['health']] ? health as AgentRuntime['health'] : 'unknown'
+}
+
+// runtimeFor returns the freshest Agent runtime snapshot with defensive
+// normalization for newly-created rows that have not been probed yet.
 export function runtimeFor(agent: AgentDTO, node?: NodeStatus): AgentRuntime {
-  return node?.agent ?? agent.runtime
+  const runtime = node?.agent ?? agent.runtime
+  return {
+    ...runtime,
+    health: normalizeAgentHealth(runtime?.health),
+    installed: Boolean(runtime?.installed),
+    reachable: Boolean(runtime?.reachable),
+  }
 }
 
 export function agentStage(agent: AgentDTO, node?: NodeStatus): AgentStage {

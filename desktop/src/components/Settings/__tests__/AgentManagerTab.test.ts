@@ -170,6 +170,18 @@ describe('AgentManagerTab', () => {
     }))
   })
 
+  it('renders a newly created agent while the backend health snapshot is still empty', async () => {
+    const { wrapper } = await mountPage([agent({
+      host_id: 'h2',
+      host_name: 'jp',
+      runtime: { installed: false, health: '' as AgentDTO['runtime']['health'], reachable: false },
+    })])
+
+    expect(wrapper.find('[data-test="agent-row"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="agent-primary-h2"]').text()).toContain('安装')
+    expect(wrapper.text()).toContain('未知')
+  })
+
   it('renders degraded route summary from nodeStore and expandable chain details', async () => {
     const { wrapper } = await mountPage([agent({
       runtime: { installed: true, health: 'healthy', reachable: true },
