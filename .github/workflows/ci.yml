@@ -31,6 +31,28 @@ jobs:
         working-directory: agent
         run: go test ./...
 
+  agent-windows:
+    name: Go agent (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Build Go agent
+        working-directory: agent
+        run: go build ./...
+
+      - name: Run Go tests
+        working-directory: agent
+        run: go test ./... -count=1
+
   desktop:
     name: Desktop web checks
     runs-on: ubuntu-latest
@@ -100,5 +122,52 @@ jobs:
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
       - name: Build Tauri Linux packages
+        working-directory: desktop
+        run: pnpm tauri build
+
+  desktop-windows:
+    name: Desktop Windows package
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build remote agents and sidecars
+        shell: bash
+        run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
+
+      - name: Verify Windows sidecar names
+        shell: bash
+        run: |
+          target="$(rustc --print host-tuple)"
+          for name in superdev-agent superdev-mcp superdev-sample; do
+            test -f "desktop/src-tauri/binaries/$name-$target.exe"
+            test -f "desktop/src-tauri/target/debug/$name.exe"
+          done
+          test -f desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe
+
+      - name: Build Tauri Windows packages
         working-directory: desktop
         run: pnpm tauri build
