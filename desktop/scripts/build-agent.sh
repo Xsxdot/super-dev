@@ -17,7 +17,7 @@ TARGET="$(rustc --print host-tuple)"
 OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET"
 OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET"
 OUT_SAMPLE="$OUT_DIR/superdev-sample-$TARGET"
-BUILD_REMOTE_INSTALL=0
+BUILD_REMOTE_INSTALL="${BUILD_REMOTE_INSTALL:-0}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -129,10 +129,15 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
     "darwin arm64"
     "linux amd64"
     "linux arm64"
+    "windows amd64"
   )
   for target in "${targets[@]}"; do
     read -r goos goarch <<<"$target"
-    remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch"
+    suffix=""
+    if [[ "$goos" == "windows" ]]; then
+      suffix=".exe"
+    fi
+    remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch$suffix"
     if needs_build "$remote_out"; then
       echo "build-agent: compiling remote agent -> $remote_out"
       (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
