@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -178,23 +177,6 @@ func NewManager(opts ManagerOptions) *Manager {
 		runtimes:             map[string]*runtimeRecord{},
 		sessions:             map[string]*sessionRecord{},
 		closed:               map[string]Session{},
-	}
-}
-
-func signalProcessOS(pid int, signal string) error {
-	return syscall.Kill(pid, signalToSyscall(signal))
-}
-
-func signalToSyscall(signal string) syscall.Signal {
-	switch strings.TrimSpace(strings.ToUpper(signal)) {
-	case "SIGUSR1", "USR1":
-		return syscall.SIGUSR1
-	case "SIGTERM", "TERM":
-		return syscall.SIGTERM
-	case "SIGINT", "INT":
-		return syscall.SIGINT
-	default:
-		return syscall.SIGUSR1
 	}
 }
 

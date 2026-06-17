@@ -84,6 +84,21 @@ func TestResolveNodeDebuggeePIDFindsChildUnderLauncher(t *testing.T) {
 	require.Equal(t, 101, pid)
 }
 
+func TestResolveNodeDebuggeePIDFindsWindowsNodeExe(t *testing.T) {
+	// Windows 进程枚举返回 node.exe；解析逻辑应与 Unix 的 node 名称等价。
+	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
+		mainPID: 100, pgid: 100,
+		listProcessGroup: func(int) []procInfo {
+			return []procInfo{
+				{pid: 100, comm: "pnpm.exe"},
+				{pid: 101, comm: "node.exe"},
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 101, pid)
+}
+
 func TestResolveNodeDebuggeePIDMainIsNode(t *testing.T) {
 	// 高层启动：主进程直接是 node。
 	pid, err := resolveNodeDebuggeePID(nodeDebuggeeHints{
