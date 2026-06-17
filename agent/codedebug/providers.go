@@ -90,7 +90,8 @@ func (GoProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-// AttachCapability 返回 Go 的附加档位：dlv 支持按 PID 本地附加。
+// AttachCapability 返回 Go 的附加档位：dlv 支持按 PID 本地附加；Windows 通过 tasklist
+// 解析进程树后仍走同一 attach-pid 语义。
 func (GoProvider) AttachCapability() AttachMode { return AttachModePID }
 
 // AttachArguments 构造 dlv DAP attach 请求参数（本地按 PID 附加）。
@@ -143,6 +144,7 @@ func (PythonProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 }
 
 // AttachCapability 返回 Python 的附加档位：debugpy `--listen` 端口本身即完整 DAP 服务，
+// 该 prearm-listen 策略不依赖 POSIX signal，Windows 与 Unix 同构。
 // DAP 客户端直连该端口即可，无需另起 debugpy.adapter 进程（否则 adapter 与服务角色错位、
 // attach 超时 "Timed out waiting for debug server to connect"）。
 func (PythonProvider) AttachCapability() AttachMode { return AttachModeDirectDAP }
@@ -210,7 +212,8 @@ func (NodeProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 	}
 }
 
-// AttachCapability 返回 Node 的附加档位：js-debug 连接 SIGUSR1 打开的 inspector 端口。
+// AttachCapability 返回 Node 的附加档位：js-debug 连接 Node inspector 端口。
+// Unix attach 先 SIGUSR1 惰性打开 inspector；Windows 启动时预埋 --inspect，再直接连接。
 func (NodeProvider) AttachCapability() AttachMode { return AttachModeListen }
 
 // AttachArguments 构造 js-debug attach 参数：连接 Node inspector 端口。
@@ -235,7 +238,8 @@ func (NodeProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 // UsesReverseRequestChildSession 报告 js-debug 用 root -> child 两段式会话拓扑。
 func (NodeProvider) UsesReverseRequestChildSession() bool { return true }
 
-// NativeDebugProvider 用 lldb-dap 调试 Rust/C/C++（attach-pid，与 Go 同构）。
+// NativeDebugProvider 用 lldb-dap 调试 Rust/C/C++（attach-pid，与 Go 同构；Windows
+// 进程枚举走 tasklist/Win32_Process 近似进程树）。
 //
 // 注意：
 //   - Path 非空时使用构造器注入路径；否则允许 deployment 的 adapter_command 覆盖
