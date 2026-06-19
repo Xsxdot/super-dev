@@ -547,6 +547,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/rules", a.getProjectRules)
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
 	mux.HandleFunc("GET /api/projects/{id}/config", a.getProjectConfig)
+	mux.HandleFunc("GET /api/debug-credentials", a.debugCredentials)
 	mux.HandleFunc("POST /api/config-changes/preview", a.previewConfigChange)
 	mux.HandleFunc("POST /api/config-changes/apply", a.applyConfigChange)
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
