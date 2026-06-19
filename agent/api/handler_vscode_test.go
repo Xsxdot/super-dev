@@ -499,6 +499,67 @@ func TestPutProjectSetupPreservesDebugCredentials(t *testing.T) {
 	assert.Equal(t, "svc-key", loaded.Services[0].DebugCredentials[0].Value)
 }
 
+func TestPutProjectSetupPreservesAINotesAndAuthHints(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "demo")
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	setupBody, err := json.Marshal(map[string]any{
+		"ai_note":   "project note",
+		"auth_hint": "project auth",
+		"environments": []map[string]any{{
+			"name": "dev", "is_dev": true, "order": 0,
+			"ai_note": "env note", "auth_hint": "env auth",
+		}},
+		"services": []map[string]any{{
+			"id": created.Services[0].ID, "name": "web", "required": false, "order": 0,
+			"ai_note": "service note", "auth_hint": "service auth",
+			"deployments": []map[string]any{{
+				"env_name": "dev",
+				"location": "local",
+				"runtime":  map[string]any{"type": "command", "command": "go run ."},
+				"logs":     map[string]any{"type": "process"},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	var updated model.Project
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
+	assert.Equal(t, "project note", updated.AINote)
+	assert.Equal(t, "project auth", updated.AuthHint)
+	require.Len(t, updated.Environments, 1)
+	assert.Equal(t, "env note", updated.Environments[0].AINote)
+	assert.Equal(t, "env auth", updated.Environments[0].AuthHint)
+	require.Len(t, updated.Services, 1)
+	assert.Equal(t, "service note", updated.Services[0].AINote)
+	assert.Equal(t, "service auth", updated.Services[0].AuthHint)
+
+	loaded, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	assert.Equal(t, "project note", loaded.AINote)
+	assert.Equal(t, "project auth", loaded.AuthHint)
+	assert.Equal(t, "env note", loaded.Environments[0].AINote)
+	assert.Equal(t, "env auth", loaded.Environments[0].AuthHint)
+	assert.Equal(t, "service note", loaded.Services[0].AINote)
+	assert.Equal(t, "service auth", loaded.Services[0].AuthHint)
+}
+
 // TestPutProjectSetup_DeletesAbsentService 验证请求中不出现的 service 被删除（未运行时）。
 func TestPutProjectSetup_DeletesAbsentService(t *testing.T) {
 	srv, _ := newTestApp(t)

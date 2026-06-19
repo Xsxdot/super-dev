@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - GET /api/projects/{id}/vscode-launch：读取项目 .vscode/launch.json 返回可导入列表
-//   - PUT /api/projects/{id}/setup：写入 environments、services、debug_credentials，刷新内存
+//   - PUT /api/projects/{id}/setup：写入 environments、services、debug_credentials 和 AI guidance，刷新内存
 //
 // 边界：
 //   - setup 全量替换 environments 与 services（按 service ID diff：空 ID 新增、命中更新、缺席删除）
@@ -52,6 +52,8 @@ func (a *App) getVscodeLaunch(w http.ResponseWriter, r *http.Request) {
 
 // setupRequest 是 PUT /api/projects/{id}/setup 的请求体结构（全量项目配置）。
 type setupRequest struct {
+	AINote           string                  `json:"ai_note"`
+	AuthHint         string                  `json:"auth_hint"`
 	Variables        map[string]string       `json:"variables"`
 	DebugCredentials []model.DebugCredential `json:"debug_credentials"`
 	Environments     []model.Environment     `json:"environments"`
@@ -69,6 +71,8 @@ type setupServiceEntry struct {
 	Language         model.ServiceLanguage   `json:"language"`
 	Required         bool                    `json:"required"`
 	Order            int                     `json:"order"`
+	AINote           string                  `json:"ai_note"`
+	AuthHint         string                  `json:"auth_hint"`
 	DebugCredentials []model.DebugCredential `json:"debug_credentials"`
 	Deployments      []model.Deployment      `json:"deployments"`
 }
@@ -76,7 +80,7 @@ type setupServiceEntry struct {
 // putProjectSetup 处理 PUT /api/projects/{id}/setup。
 //
 // 用请求体中的 environments 替换项目的 environments，
-// 并按 service ID 匹配替换对应 service 的 deployments。
+// 并按 service ID 匹配替换对应 service 的 deployments、debug_credentials 和 AI guidance 字段。
 // 写入完成后通过 loader.Save 持久化，并返回更新后的项目。
 //
 // 注意：
@@ -137,6 +141,8 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	candidate := a.projects[idx]
+	candidate.AINote = req.AINote
+	candidate.AuthHint = req.AuthHint
 	candidate.Variables = req.Variables
 	if candidate.Variables == nil {
 		candidate.Variables = map[string]string{}
@@ -167,6 +173,8 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		svc.Language = model.ServiceLanguage(strings.TrimSpace(string(entry.Language)))
 		svc.Required = entry.Required
 		svc.Order = entry.Order
+		svc.AINote = entry.AINote
+		svc.AuthHint = entry.AuthHint
 		svc.DebugCredentials = entry.DebugCredentials
 		svc.Deployments = deps
 		newServices = append(newServices, svc)
@@ -195,12 +203,27 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
-	serviceCredentialCount := 0
+	envAINoteCount, envAuthHintCount := 0, 0
+	for _, env := range project.Environments {
+		if env.AINote != "" {
+			envAINoteCount++
+		}
+		if env.AuthHint != "" {
+			envAuthHintCount++
+		}
+	}
+	serviceAINoteCount, serviceAuthHintCount, serviceCredentialCount := 0, 0, 0
 	for _, service := range project.Services {
+		if service.AINote != "" {
+			serviceAINoteCount++
+		}
+		if service.AuthHint != "" {
+			serviceAuthHintCount++
+		}
 		serviceCredentialCount += len(service.DebugCredentials)
 	}
-	log.Printf("[SuperDev] setup saved project=%s envs=%d services=%d project_debug_credentials=%d service_debug_credentials=%d",
-		project.Name, len(project.Environments), len(project.Services), len(project.DebugCredentials), serviceCredentialCount)
+	log.Printf("[SuperDev] setup saved project=%s envs=%d services=%d project_ai_note=%t project_auth_hint=%t env_ai_notes=%d env_auth_hints=%d service_ai_notes=%d service_auth_hints=%d project_debug_credentials=%d service_debug_credentials=%d",
+		project.Name, len(project.Environments), len(project.Services), project.AINote != "", project.AuthHint != "", envAINoteCount, envAuthHintCount, serviceAINoteCount, serviceAuthHintCount, len(project.DebugCredentials), serviceCredentialCount)
 	a.reconcileProjectsAsync(before, project)
 
 	jsonOK(w, project)

@@ -53,14 +53,19 @@ const (
 // Deployment，真正的运行配置（命令、工作目录、环境变量、启停方式等）
 // 全部落在 Deployment 上，由 EnvName 区分环境。
 //
-// YAML 字段来自配置文件（如 superdev.yaml），运行时字段（Status、PID）
-// 不参与序列化，仅在内存中维护。
+// YAML 字段来自配置文件（如 superdev.yaml），运行时字段不参与序列化，
+// 仅在内存中维护。
 type Service struct {
 	ID        string `json:"id"         yaml:"id"`
 	ProjectID string `json:"project_id" yaml:"-"`
 	Name      string `json:"name"       yaml:"name"`
 	Required  bool   `json:"required"   yaml:"required"`
 	Order     int    `json:"order"      yaml:"order"`
+
+	// AINote 是 AI 可见的非敏感运行说明，会出现在普通配置和运行快照中。
+	AINote string `json:"ai_note,omitempty" yaml:"ai_note,omitempty"`
+	// AuthHint 是 AI 可见的非敏感鉴权提示，仅用于说明登录、换 token 等流程。
+	AuthHint string `json:"auth_hint,omitempty" yaml:"auth_hint,omitempty"`
 
 	// Language 是服务的实现语言，属于服务的固有身份。导入/探测时确立，可手动修正。
 	// 调试器、（未来的）LSP、任务运行器等都是按此身份适配的下游消费者，language 不为任何单一消费者而存在。
@@ -71,6 +76,11 @@ type Service struct {
 
 	// DebugCredentials 是服务级专属调试凭据(如某服务自己的 api-key)，同 name 覆盖项目级。
 	DebugCredentials []DebugCredential `json:"debug_credentials,omitempty" yaml:"debug_credentials,omitempty"`
+
+	// HasDebugCredentials 表示该服务存在可通过 get_debug_credentials 获取的调试凭据。
+	HasDebugCredentials bool `json:"has_debug_credentials,omitempty" yaml:"-"`
+	// DebugCredentialHints 是可进入普通快照的非敏感凭据元信息，不包含 value。
+	DebugCredentialHints []DebugCredentialHint `json:"debug_credential_hints,omitempty" yaml:"-"`
 
 	// 运行时字段，不持久化到配置文件。
 	Status ServiceStatus `json:"status"        yaml:"-"`
@@ -95,6 +105,19 @@ type DebugCredential struct {
 // MergedDebugCredential 是合并后的凭据，附带来源标记，供 AI 知道凭据出处。
 type MergedDebugCredential struct {
 	DebugCredential
+	Source string `json:"source"` // "project" | "service"
+}
+
+// DebugCredentialHint 是可暴露给 MCP 普通快照的非敏感凭据提示。
+//
+// 职责：
+//   - 告诉 AI 有哪些凭据名称和用途可用，以便主动调用 get_debug_credentials
+//
+// 边界：
+//   - 不包含 Value、token、密码或任何 secret 明文
+type DebugCredentialHint struct {
+	Name   string `json:"name"`
+	Desc   string `json:"desc,omitempty"`
 	Source string `json:"source"` // "project" | "service"
 }
 
@@ -139,9 +162,17 @@ type Project struct {
 	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments []Environment     `json:"environments,omitempty"`
 	Services     []Service         `json:"services"             yaml:"services"`
+	// AINote 是 AI 可见的非敏感项目说明，会出现在普通配置和运行快照中。
+	AINote string `json:"ai_note,omitempty" yaml:"ai_note,omitempty"`
+	// AuthHint 是 AI 可见的非敏感鉴权提示，仅用于说明登录、换 token 等流程。
+	AuthHint string `json:"auth_hint,omitempty" yaml:"auth_hint,omitempty"`
 	// DebugCredentials 是项目级公共调试凭据(如全系统通用的登录测试账号)，供 AI 取明文使用。
 	DebugCredentials []DebugCredential `json:"debug_credentials,omitempty" yaml:"debug_credentials,omitempty"`
-	Pipelines        []ProjectPipeline `json:"pipelines,omitempty" yaml:"pipelines,omitempty"`
+	// HasDebugCredentials 表示该项目存在可通过 get_debug_credentials 获取的调试凭据。
+	HasDebugCredentials bool `json:"has_debug_credentials,omitempty" yaml:"-"`
+	// DebugCredentialHints 是可进入普通快照的非敏感凭据元信息，不包含 value。
+	DebugCredentialHints []DebugCredentialHint `json:"debug_credential_hints,omitempty" yaml:"-"`
+	Pipelines            []ProjectPipeline     `json:"pipelines,omitempty" yaml:"pipelines,omitempty"`
 	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
 	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表，
 	// 从而实现 env 级隔离的选中状态。
@@ -786,10 +817,14 @@ type ProjectPipeline struct {
 // 环境名由用户自由定义（dev / staging / prod ...），不做枚举约束。
 // IsDev 为 true 时侧边栏默认展开该分组，其余折叠。
 type Environment struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	IsDev bool   `json:"is_dev"`
-	Order int    `json:"order"`
+	ID    string `json:"id" yaml:"id,omitempty"`
+	Name  string `json:"name" yaml:"name"`
+	IsDev bool   `json:"is_dev" yaml:"is_dev"`
+	Order int    `json:"order" yaml:"order"`
+	// AINote 是 AI 可见的非敏感环境说明，会出现在普通配置和运行快照中。
+	AINote string `json:"ai_note,omitempty" yaml:"ai_note,omitempty"`
+	// AuthHint 是 AI 可见的非敏感鉴权提示，仅用于说明登录、换 token 等流程。
+	AuthHint string `json:"auth_hint,omitempty" yaml:"auth_hint,omitempty"`
 }
 
 const (

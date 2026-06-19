@@ -55,6 +55,8 @@ func (l *Loader) Load() (model.Project, error) {
 	var raw struct {
 		ID                    string                  `yaml:"id,omitempty"`
 		Name                  string                  `yaml:"name"`
+		AINote                string                  `yaml:"ai_note,omitempty"`
+		AuthHint              string                  `yaml:"auth_hint,omitempty"`
 		Variables             map[string]string       `yaml:"variables,omitempty"`
 		DebugCredentials      []model.DebugCredential `yaml:"debug_credentials,omitempty"`
 		Environments          []envYAML               `yaml:"environments"`
@@ -76,6 +78,8 @@ func (l *Loader) Load() (model.Project, error) {
 		ID:                    raw.ID,
 		Name:                  raw.Name,
 		RootPath:              l.rootPath,
+		AINote:                raw.AINote,
+		AuthHint:              raw.AuthHint,
 		Variables:             raw.Variables,
 		DebugCredentials:      raw.DebugCredentials,
 		Environments:          envs,
@@ -92,7 +96,7 @@ func (l *Loader) Load() (model.Project, error) {
 // 注意：
 //   - 若配置文件已存在，会保留其中的 log_rules 字段，避免覆盖
 //   - 若 .superdev 目录不存在，会自动创建
-//   - Service 的运行时字段（Status、PID）不会被写入
+//   - Service 的运行时字段不会被写入
 func (l *Loader) Save(p model.Project) error {
 	dir := filepath.Dir(l.configPath())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -114,6 +118,12 @@ func (l *Loader) Save(p model.Project) error {
 	}
 	if len(p.DebugCredentials) > 0 {
 		raw["debug_credentials"] = p.DebugCredentials
+	}
+	if p.AINote != "" {
+		raw["ai_note"] = p.AINote
+	}
+	if p.AuthHint != "" {
+		raw["auth_hint"] = p.AuthHint
 	}
 	if len(p.EnvSelectedServiceIDs) > 0 {
 		raw["env_selected_service_ids"] = p.EnvSelectedServiceIDs
@@ -195,10 +205,12 @@ func resolveWorkDir(workingDir, rootPath string) string {
 
 // envYAML 对应 yaml 中的 environments 条目。
 type envYAML struct {
-	ID    string `yaml:"id,omitempty"`
-	Name  string `yaml:"name"`
-	IsDev bool   `yaml:"is_dev"`
-	Order int    `yaml:"order"`
+	ID       string `yaml:"id,omitempty"`
+	Name     string `yaml:"name"`
+	IsDev    bool   `yaml:"is_dev"`
+	Order    int    `yaml:"order"`
+	AINote   string `yaml:"ai_note,omitempty"`
+	AuthHint string `yaml:"auth_hint,omitempty"`
 }
 
 // deploymentYAML 对应 yaml 中的 deployments 条目。
@@ -235,6 +247,8 @@ type serviceYAML struct {
 	Name             string                  `yaml:"name"`
 	Required         bool                    `yaml:"required"`
 	Order            int                     `yaml:"order"`
+	AINote           string                  `yaml:"ai_note,omitempty"`
+	AuthHint         string                  `yaml:"auth_hint,omitempty"`
 	Language         string                  `yaml:"language,omitempty"`
 	DebugCredentials []model.DebugCredential `yaml:"debug_credentials,omitempty"`
 	Deployments      []deploymentYAML        `yaml:"deployments,omitempty"`
@@ -245,10 +259,12 @@ func envsFromYAML(raw []envYAML) []model.Environment {
 	out := make([]model.Environment, len(raw))
 	for i, e := range raw {
 		out[i] = model.Environment{
-			ID:    e.ID,
-			Name:  e.Name,
-			IsDev: e.IsDev,
-			Order: e.Order,
+			ID:       e.ID,
+			Name:     e.Name,
+			IsDev:    e.IsDev,
+			Order:    e.Order,
+			AINote:   e.AINote,
+			AuthHint: e.AuthHint,
 		}
 	}
 	return out
@@ -262,6 +278,8 @@ func serviceFromYAML(s serviceYAML, rootPath string) model.Service {
 		Name:             s.Name,
 		Order:            s.Order,
 		Required:         s.Required,
+		AINote:           s.AINote,
+		AuthHint:         s.AuthHint,
 		Language:         model.ServiceLanguage(s.Language),
 		DebugCredentials: s.DebugCredentials,
 		Deployments:      deploymentsFromYAML(s.Deployments, rootPath),
@@ -408,6 +426,8 @@ func servicesToYAML(services []model.Service) []serviceYAML {
 			Name:             s.Name,
 			Order:            s.Order,
 			Required:         s.Required,
+			AINote:           s.AINote,
+			AuthHint:         s.AuthHint,
 			Language:         string(s.Language),
 			DebugCredentials: s.DebugCredentials,
 			Deployments:      deploymentsToYAML(s.Deployments),
@@ -462,10 +482,12 @@ func envsToYAML(envs []model.Environment) []envYAML {
 	out := make([]envYAML, len(envs))
 	for i, e := range envs {
 		out[i] = envYAML{
-			ID:    e.ID,
-			Name:  e.Name,
-			IsDev: e.IsDev,
-			Order: e.Order,
+			ID:       e.ID,
+			Name:     e.Name,
+			IsDev:    e.IsDev,
+			Order:    e.Order,
+			AINote:   e.AINote,
+			AuthHint: e.AuthHint,
 		}
 	}
 	return out

@@ -906,3 +906,72 @@ func TestSaveAndReloadPreservesDebugCredentials(t *testing.T) {
 	require.Len(t, loaded.Services[0].DebugCredentials, 1)
 	assert.Equal(t, "svc-key", loaded.Services[0].DebugCredentials[0].Value)
 }
+
+func TestLoadAINotesAndAuthHints(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(`
+name: hinted
+ai_note: project note
+auth_hint: project auth
+environments:
+  - name: dev
+    is_dev: true
+    order: 0
+    ai_note: env note
+    auth_hint: env auth
+services:
+  - name: web
+    ai_note: service note
+    auth_hint: service auth
+`), 0o644))
+
+	project, err := config.NewLoader(dir).Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, "project note", project.AINote)
+	assert.Equal(t, "project auth", project.AuthHint)
+	require.Len(t, project.Environments, 1)
+	assert.Equal(t, "env note", project.Environments[0].AINote)
+	assert.Equal(t, "env auth", project.Environments[0].AuthHint)
+	require.Len(t, project.Services, 1)
+	assert.Equal(t, "service note", project.Services[0].AINote)
+	assert.Equal(t, "service auth", project.Services[0].AuthHint)
+}
+
+func TestSaveAndReloadPreservesAINotesAndAuthHints(t *testing.T) {
+	dir := t.TempDir()
+	project := model.Project{
+		Name:     "hinted",
+		RootPath: dir,
+		AINote:   "project note",
+		AuthHint: "project auth",
+		Environments: []model.Environment{{
+			Name: "dev", IsDev: true, AINote: "env note", AuthHint: "env auth",
+		}},
+		Services: []model.Service{{
+			Name: "web", AINote: "service note", AuthHint: "service auth",
+		}},
+	}
+
+	require.NoError(t, config.NewLoader(dir).Save(project))
+	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "ai_note: project note")
+	assert.Contains(t, string(data), "auth_hint: project auth")
+	assert.Contains(t, string(data), "ai_note: env note")
+	assert.Contains(t, string(data), "auth_hint: service auth")
+
+	loaded, err := config.NewLoader(dir).Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, "project note", loaded.AINote)
+	assert.Equal(t, "project auth", loaded.AuthHint)
+	require.Len(t, loaded.Environments, 1)
+	assert.Equal(t, "env note", loaded.Environments[0].AINote)
+	assert.Equal(t, "env auth", loaded.Environments[0].AuthHint)
+	require.Len(t, loaded.Services, 1)
+	assert.Equal(t, "service note", loaded.Services[0].AINote)
+	assert.Equal(t, "service auth", loaded.Services[0].AuthHint)
+}
