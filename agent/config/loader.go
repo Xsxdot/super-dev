@@ -221,6 +221,9 @@ type deploymentYAML struct {
 	Logs         *model.LogConfig           `yaml:"logs,omitempty"`
 	Web          *model.WebEntrypointConfig `yaml:"web,omitempty"`
 	CodeDebug    *model.CodeDebugConfig     `yaml:"code_debug,omitempty"`
+	StartOnBoot  bool                       `yaml:"start_on_boot,omitempty"`
+	DependsOn    []string                   `yaml:"depends_on,omitempty"`
+	Readiness    *model.ReadinessProbe      `yaml:"readiness,omitempty"`
 	ReadOnly     bool                       `yaml:"read_only,omitempty"`
 	StartCommand string                     `yaml:"start_command,omitempty"`
 	StopCommand  string                     `yaml:"stop_command,omitempty"`
@@ -359,6 +362,9 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			Logs:         d.Logs,
 			Web:          d.Web,
 			CodeDebug:    d.CodeDebug,
+			StartOnBoot:  d.StartOnBoot,
+			DependsOn:    d.DependsOn,
+			Readiness:    d.Readiness,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,
@@ -438,6 +444,9 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			Logs:         d.Logs,
 			Web:          d.Web,
 			CodeDebug:    d.CodeDebug,
+			StartOnBoot:  d.StartOnBoot,
+			DependsOn:    d.DependsOn,
+			Readiness:    d.Readiness,
 			ReadOnly:     d.ReadOnly,
 			StartCommand: d.StartCommand,
 			StopCommand:  d.StopCommand,

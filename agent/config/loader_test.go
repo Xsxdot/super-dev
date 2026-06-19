@@ -688,6 +688,55 @@ services:
 	assert.Contains(t, saved, "timeout_seconds: 5")
 }
 
+func TestLoadAndSavePreservesDeploymentAutostartFields(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+
+	yaml := `
+name: autostart-demo
+environments:
+  - name: dev
+    is_dev: true
+services:
+  - id: server
+    name: server
+    deployments:
+      - id: dep-server-dev
+        env: dev
+        location: local
+        control_mode: managed
+        start_on_boot: true
+        depends_on:
+          - database
+        readiness:
+          type: http
+          target: http://127.0.0.1:18080/ready
+          timeout_seconds: 12
+`
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(yaml), 0o644))
+
+	loader := config.NewLoader(dir)
+	project, err := loader.Load()
+	require.NoError(t, err)
+	dep := project.Services[0].Deployments[0]
+	assert.True(t, dep.StartOnBoot)
+	assert.Equal(t, []string{"database"}, dep.DependsOn)
+	require.NotNil(t, dep.Readiness)
+	assert.Equal(t, "http", dep.Readiness.Type)
+	assert.Equal(t, "http://127.0.0.1:18080/ready", dep.Readiness.Target)
+	assert.Equal(t, 12, dep.Readiness.TimeoutSeconds)
+
+	require.NoError(t, loader.Save(project))
+	reloaded, err := loader.Load()
+	require.NoError(t, err)
+	reloadedDep := reloaded.Services[0].Deployments[0]
+	assert.True(t, reloadedDep.StartOnBoot)
+	assert.Equal(t, []string{"database"}, reloadedDep.DependsOn)
+	require.NotNil(t, reloadedDep.Readiness)
+	assert.Equal(t, "http://127.0.0.1:18080/ready", reloadedDep.Readiness.Target)
+}
+
 func TestSaveAndReloadPreservesControlModeAndCustomLogCommands(t *testing.T) {
 	dir := t.TempDir()
 	p := model.Project{

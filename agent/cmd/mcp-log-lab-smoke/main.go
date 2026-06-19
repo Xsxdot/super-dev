@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,8 +32,9 @@ import (
 )
 
 const (
-	projectName   = "mcp-log-lab"
-	targetTraceID = "mcp-lab-target"
+	projectName          = "mcp-log-lab"
+	autostartProjectName = "autostart-smoke"
+	targetTraceID        = "mcp-lab-target"
 )
 
 type smokeConfig struct {
@@ -40,6 +42,7 @@ type smokeConfig struct {
 	mcpBin    string
 	workspace string
 	keepData  bool
+	mode      string
 }
 
 type agentProcess struct {
@@ -92,11 +95,23 @@ func parseFlags() smokeConfig {
 	flag.StringVar(&cfg.mcpBin, "mcp-bin", "", "path to superdev-mcp binary")
 	flag.StringVar(&cfg.workspace, "workspace", "", "path to super-debug workspace")
 	flag.BoolVar(&cfg.keepData, "keep-data", false, "keep temporary data directory")
+	flag.StringVar(&cfg.mode, "mode", "log-lab", "smoke mode: log-lab or autostart")
 	flag.Parse()
 	return cfg
 }
 
 func run(ctx context.Context, cfg smokeConfig) error {
+	switch cfg.mode {
+	case "", "log-lab":
+		return runLogLab(ctx, cfg)
+	case "autostart":
+		return runAutostartSmoke(ctx, cfg)
+	default:
+		return fmt.Errorf("unknown smoke mode %q", cfg.mode)
+	}
+}
+
+func runLogLab(ctx context.Context, cfg smokeConfig) error {
 	if cfg.agentBin == "" {
 		return errors.New("--agent-bin is required")
 	}
@@ -315,6 +330,107 @@ func run(ctx context.Context, cfg smokeConfig) error {
 
 	cleanupDeployments(ctx, mcp)
 	pass("cleanup")
+	return nil
+}
+
+func runAutostartSmoke(ctx context.Context, cfg smokeConfig) error {
+	if cfg.agentBin == "" {
+		return errors.New("--agent-bin is required")
+	}
+	if cfg.mcpBin == "" {
+		return errors.New("--mcp-bin is required")
+	}
+	agentBin, err := filepath.Abs(cfg.agentBin)
+	if err != nil {
+		return err
+	}
+	mcpBin, err := filepath.Abs(cfg.mcpBin)
+	if err != nil {
+		return err
+	}
+	dataDir, err := os.MkdirTemp("", "superdev-autostart-smoke-*")
+	if err != nil {
+		return fmt.Errorf("create temp data dir: %w", err)
+	}
+	if cfg.keepData {
+		fmt.Println("INFO keeping data dir", dataDir)
+	} else {
+		defer os.RemoveAll(dataDir)
+	}
+
+	projectRoot := filepath.Join(dataDir, "project", autostartProjectName)
+	readyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fileExists(filepath.Join(projectRoot, "ready.flag")) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+	}))
+	defer readyServer.Close()
+
+	if err := writeAutostartProject(projectRoot, readyServer.URL); err != nil {
+		return err
+	}
+	if err := writeProjectRegistry(dataDir, []string{projectRoot}); err != nil {
+		return err
+	}
+
+	agent, err := startAgent(ctx, agentBin, dataDir)
+	if err != nil {
+		return err
+	}
+	defer agent.close()
+
+	mcp, err := startMCP(ctx, mcpBin, agent.baseURL)
+	if err != nil {
+		return err
+	}
+	defer mcp.close()
+	defer cleanupAutostartDeployments(context.Background(), mcp)
+
+	if err := assertProjectNamedVisible(ctx, mcp, autostartProjectName); err != nil {
+		return err
+	}
+	pass("autostart list_projects")
+
+	if err := assertAutostartReadinessGate(ctx, mcp, agent.logs); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "ready.flag"), []byte("ready\n"), 0o600); err != nil {
+		return fmt.Errorf("release readiness gate: %w", err)
+	}
+	pass("autostart readiness dependency gate")
+
+	if err := waitForDeploymentStatusInProject(ctx, mcp, autostartProjectName, "server-dev", "running"); err != nil {
+		return err
+	}
+	if err := waitForDeploymentStatusInProject(ctx, mcp, autostartProjectName, "worker-dev", "running"); err != nil {
+		return err
+	}
+	pass("autostart running statuses")
+
+	if got, err := currentDeploymentStatus(ctx, mcp, autostartProjectName, "plain-dev"); err != nil {
+		return err
+	} else if got != "stopped" {
+		return fmt.Errorf("plain-dev should not autostart, got %q", got)
+	}
+	pass("non-autostart remains stopped")
+
+	if _, err := mcp.callTool(ctx, "start_service", map[string]any{"deployment_id": "plain-dev"}); err != nil {
+		return fmt.Errorf("manual start plain-dev: %w", err)
+	}
+	if err := waitForDeploymentStatusInProject(ctx, mcp, autostartProjectName, "plain-dev", "running"); err != nil {
+		return err
+	}
+	pass("manual start regression")
+
+	if err := assertAutostartProcessLogs(ctx, mcp, agent.logs); err != nil {
+		return err
+	}
+	pass("autostart log evidence")
+
+	cleanupAutostartDeployments(ctx, mcp)
+	pass("autostart cleanup")
 	return nil
 }
 
@@ -598,7 +714,41 @@ func assertServicesVisible(ctx context.Context, mcp *mcpClient) error {
 	return nil
 }
 
+func assertProjectNamedVisible(ctx context.Context, mcp *mcpClient, name string) error {
+	payload, err := mcp.callTool(ctx, "list_projects", map[string]any{})
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(fmt.Sprint(payload), name) {
+		return fmt.Errorf("list_projects did not contain %s", name)
+	}
+	return nil
+}
+
+func assertAutostartReadinessGate(ctx context.Context, mcp *mcpClient, agentLogs *bytes.Buffer) error {
+	var lastServer, lastWorker string
+	var lastPayload map[string]any
+	_, err := waitForPayload(ctx, 15*time.Second, func() (map[string]any, bool, error) {
+		payload, err := mcp.callTool(ctx, "list_services", map[string]any{"project_name": autostartProjectName})
+		if err != nil {
+			return nil, false, err
+		}
+		server := deploymentStatus(payload, "server-dev")
+		worker := deploymentStatus(payload, "worker-dev")
+		lastServer, lastWorker, lastPayload = server, worker, payload
+		return payload, server == "starting" && worker == "stopped", nil
+	})
+	if err != nil {
+		return fmt.Errorf("wait for readiness gate: %w; last server=%q worker=%q payload=%v agent_logs=%s", err, lastServer, lastWorker, lastPayload, agentLogs.String())
+	}
+	return nil
+}
+
 func waitForDeploymentStatus(ctx context.Context, mcp *mcpClient, deploymentID, want string) error {
+	return waitForDeploymentStatusInProject(ctx, mcp, projectName, deploymentID, want)
+}
+
+func waitForDeploymentStatusInProject(ctx context.Context, mcp *mcpClient, projectName, deploymentID, want string) error {
 	_, err := waitForPayload(ctx, 15*time.Second, func() (map[string]any, bool, error) {
 		payload, err := mcp.callTool(ctx, "list_services", map[string]any{"project_name": projectName})
 		if err != nil {
@@ -608,6 +758,58 @@ func waitForDeploymentStatus(ctx context.Context, mcp *mcpClient, deploymentID, 
 	})
 	if err != nil {
 		return fmt.Errorf("wait for %s status %s: %w", deploymentID, want, err)
+	}
+	return nil
+}
+
+func currentDeploymentStatus(ctx context.Context, mcp *mcpClient, projectName, deploymentID string) (string, error) {
+	payload, err := mcp.callTool(ctx, "list_services", map[string]any{"project_name": projectName})
+	if err != nil {
+		return "", err
+	}
+	return deploymentStatus(payload, deploymentID), nil
+}
+
+func assertAutostartProcessLogs(ctx context.Context, mcp *mcpClient, agentLogs *bytes.Buffer) error {
+	if _, err := waitForPayload(ctx, 15*time.Second, func() (map[string]any, bool, error) {
+		payload, err := mcp.callTool(ctx, "tail_logs", map[string]any{
+			"deployment_id":       "worker-dev",
+			"limit":               20,
+			"apply_project_rules": false,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		return payload, strings.Contains(fmt.Sprint(payload), "worker-started"), nil
+	}); err != nil {
+		return fmt.Errorf("tail worker logs: %w", err)
+	}
+
+	if _, err := waitForPayload(ctx, 15*time.Second, func() (map[string]any, bool, error) {
+		payload, err := mcp.callTool(ctx, "search_logs", map[string]any{
+			"project_name": autostartProjectName,
+			"q":            "worker-started",
+			"limit":        20,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		return payload, firstLogID(payload) > 0, nil
+	}); err != nil {
+		return fmt.Errorf("search worker logs: %w", err)
+	}
+
+	text := agentLogs.String()
+	for _, needle := range []string{
+		"[SuperDev] autostart: scanning projects for start_on_boot services",
+		"[SuperDev] autostart starting: dep=server-dev service=server",
+		"[SuperDev] autostart dependency ready: dep=worker-dev service=server dependency=server-dev",
+		"[SuperDev] autostart starting: dep=worker-dev service=worker",
+		"[SuperDev] autostart: done",
+	} {
+		if !strings.Contains(text, needle) {
+			return fmt.Errorf("agent logs missing %q; logs: %s", needle, text)
+		}
 	}
 	return nil
 }
@@ -826,11 +1028,110 @@ func writeSmokeTemplate(dir string, id string) (string, error) {
 	return path, nil
 }
 
+func writeProjectRegistry(dataDir string, roots []string) error {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(roots)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, "projects.json"), data, 0o600)
+}
+
+func writeAutostartProject(projectRoot, readinessURL string) error {
+	configDir := filepath.Join(projectRoot, ".superdev")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return err
+	}
+	config := fmt.Sprintf(`name: %s
+environments:
+  - name: dev
+    is_dev: true
+    order: 1
+env_selected_service_ids:
+  dev:
+    - server
+    - worker
+    - plain
+services:
+  - id: server
+    name: server
+    required: true
+    order: 1
+    deployments:
+      - id: server-dev
+        env: dev
+        location: local
+        control_mode: managed
+        start_on_boot: true
+        readiness:
+          type: http
+          target: %q
+          timeout_seconds: 30
+        command: "sh -c 'echo server-started; sleep 60'"
+        working_dir: .
+        runtime:
+          type: command
+          command: "sh -c 'echo server-started; sleep 60'"
+          working_dir: .
+        logs:
+          type: process
+  - id: worker
+    name: worker
+    required: true
+    order: 2
+    deployments:
+      - id: worker-dev
+        env: dev
+        location: local
+        control_mode: managed
+        start_on_boot: true
+        depends_on:
+          - server
+        command: "sh -c 'echo worker-started; sleep 60'"
+        working_dir: .
+        runtime:
+          type: command
+          command: "sh -c 'echo worker-started; sleep 60'"
+          working_dir: .
+        logs:
+          type: process
+  - id: plain
+    name: plain
+    required: false
+    order: 3
+    deployments:
+      - id: plain-dev
+        env: dev
+        location: local
+        control_mode: managed
+        command: "sh -c 'echo plain-started; sleep 60'"
+        working_dir: .
+        runtime:
+          type: command
+          command: "sh -c 'echo plain-started; sleep 60'"
+          working_dir: .
+        logs:
+          type: process
+`, autostartProjectName, readinessURL)
+	return os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(config), 0o600)
+}
+
 func cleanupDeployments(ctx context.Context, mcp *mcpClient) {
 	if mcp == nil {
 		return
 	}
 	for _, depID := range []string{"api-dev", "worker-dev", "noisy-dev", "crasher-dev", "approval-prod-check"} {
+		_, _ = mcp.callTool(ctx, "stop_service", map[string]any{"deployment_id": depID})
+	}
+}
+
+func cleanupAutostartDeployments(ctx context.Context, mcp *mcpClient) {
+	if mcp == nil {
+		return
+	}
+	for _, depID := range []string{"server-dev", "worker-dev", "plain-dev"} {
 		_, _ = mcp.callTool(ctx, "stop_service", map[string]any{"deployment_id": depID})
 	}
 }
@@ -934,8 +1235,12 @@ func deploymentStatus(payload map[string]any, deploymentID string) string {
 			}
 			if deployment["id"] == deploymentID {
 				if status, ok := deployment["status"].(string); ok {
+					if status == "" {
+						return "stopped"
+					}
 					return status
 				}
+				return "stopped"
 			}
 		}
 	}
