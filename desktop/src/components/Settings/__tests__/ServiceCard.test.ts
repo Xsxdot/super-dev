@@ -114,4 +114,17 @@ describe('ServiceCard', () => {
       desc: '服务 API key',
     }])
   })
+
+  it('emits service AI guidance edits', async () => {
+    const wrapper = mount(ServiceCard, {
+      props: { service: service(), envName: 'dev', hosts: [] },
+    })
+
+    await wrapper.find('[data-test="service-ai-note"]').setValue('服务说明')
+    await wrapper.find('[data-test="service-auth-hint"]').setValue('POST /api/login')
+
+    const last = wrapper.emitted('update:service')!.at(-1)![0] as ConfigDraftService
+    expect(last.ai_note).toBe('服务说明')
+    expect(last.auth_hint).toBe('POST /api/login')
+  })
 })

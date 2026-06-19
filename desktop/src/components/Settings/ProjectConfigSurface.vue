@@ -19,6 +19,7 @@ import { api, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue, type ConfigDraft, type ConfigDraftService } from '@/lib/configDraft'
 import type { ProjectConfigSurfaceState } from '@/stores/workspace'
+import AIGuidanceFields from './AIGuidanceFields.vue'
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
@@ -266,6 +267,16 @@ async function save() {
       <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
       <section class="config-env-shell">
+        <AIGuidanceFields
+          class="project-ai-guidance"
+          :title="t('settings.aiGuidance.projectTitle')"
+          :hint="t('settings.aiGuidance.projectHint')"
+          :ai-note="draft.ai_note"
+          :auth-hint="draft.auth_hint"
+          test-prefix="project"
+          @update:ai-note="draft.ai_note = $event"
+          @update:auth-hint="draft.auth_hint = $event"
+        />
         <EnvTabBar
           :environments="draft.environments"
           :active="activeEnv"
@@ -300,6 +311,16 @@ async function save() {
           <button type="button" class="env-delete" data-test="env-remove-active" @click="removeEnv(currentEnv.name)">
             {{ t('settings.env.delete') }}
           </button>
+          <AIGuidanceFields
+            class="env-ai-guidance"
+            :title="t('settings.aiGuidance.envTitle')"
+            :hint="t('settings.aiGuidance.envHint')"
+            :ai-note="currentEnv.ai_note"
+            :auth-hint="currentEnv.auth_hint"
+            test-prefix="env"
+            @update:ai-note="currentEnv.ai_note = $event"
+            @update:auth-hint="currentEnv.auth_hint = $event"
+          />
         </div>
         <DebugCredentialEditor
           v-if="currentEnv?.is_dev"
@@ -383,6 +404,9 @@ async function save() {
 .config-env-shell {
   padding: 12px 14px 14px;
 }
+.project-ai-guidance {
+  margin-bottom: 12px;
+}
 .env-project-credentials {
   margin-top: 12px;
 }
@@ -395,6 +419,9 @@ async function save() {
 }
 .env-name-field {
   margin: 0;
+}
+.env-ai-guidance {
+  grid-column: 1 / -1;
 }
 .env-dev-toggle {
   display: inline-flex;

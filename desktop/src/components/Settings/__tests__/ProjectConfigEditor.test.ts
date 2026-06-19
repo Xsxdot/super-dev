@@ -177,6 +177,30 @@ describe('ProjectConfigEditor', () => {
     }))
   })
 
+  it('保存项目和环境 AI 指引字段', async () => {
+    const { api } = await import('@/api/agent')
+    const p = project()
+    const wrapper = mountProjectConfigEditor(p)
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="project-ai-note"]').setValue('项目说明')
+    await wrapper.find('[data-test="project-auth-hint"]').setValue('先调用 /api/login')
+    await wrapper.find('[data-test="env-ai-note"]').setValue('dev 可写 smoke test')
+    await wrapper.find('[data-test="env-auth-hint"]').setValue('使用 test_login 换 token')
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      ai_note: '项目说明',
+      auth_hint: '先调用 /api/login',
+      environments: [expect.objectContaining({
+        name: 'dev',
+        ai_note: 'dev 可写 smoke test',
+        auth_hint: '使用 test_login 换 token',
+      })],
+    }))
+  })
+
   it('同一项目轮询刷新不会覆盖未保存的本地草稿', async () => {
     const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))

@@ -10,11 +10,12 @@ ServiceCard：单个 service 在某个 env 下的配置卡片。
   - 变更整份 service 草稿向上 emit
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Deployment, ServiceLanguage } from '@/api/agent'
 import type { ConfigDraftService } from '@/lib/configDraft'
 import { defaultManagedRuntime } from '@/lib/languageRuntimeDefaults'
+import AIGuidanceFields from './AIGuidanceFields.vue'
 import DeploymentForm from './DeploymentForm.vue'
 import DebugCredentialEditor from './DebugCredentialEditor.vue'
 
@@ -33,13 +34,23 @@ const emit = defineEmits<{
 }>()
 const { t } = useAppI18n()
 
+const latestService = ref<ConfigDraftService>(props.service)
 const dep = computed(() => props.service.deployments.find(d => d.env_name === props.envName))
 const defaultWorkDir = computed(() =>
   props.projectPath && props.service.name ? `${props.projectPath}/${props.service.name}` : ''
 )
 
+watch(
+  () => props.service,
+  value => {
+    latestService.value = value
+  },
+)
+
 function patchService(partial: Partial<ConfigDraftService>) {
-  emit('update:service', { ...props.service, ...partial })
+  const next = { ...latestService.value, ...partial }
+  latestService.value = next
+  emit('update:service', next)
 }
 
 function setLanguage(language: string) {
@@ -113,6 +124,16 @@ function removeDep() {
         @update:model-value="updateDep"
       >
         <template #side-top>
+          <AIGuidanceFields
+            class="service-ai-guidance-panel"
+            :title="t('settings.aiGuidance.serviceTitle')"
+            :hint="t('settings.aiGuidance.serviceHint')"
+            :ai-note="service.ai_note"
+            :auth-hint="service.auth_hint"
+            test-prefix="service"
+            @update:ai-note="patchService({ ai_note: $event })"
+            @update:auth-hint="patchService({ auth_hint: $event })"
+          />
           <!-- 服务级凭据只属于配置编辑；overview/list 不渲染该明文字段。 -->
           <DebugCredentialEditor
             :model-value="service.debug_credentials ?? []"
@@ -211,6 +232,9 @@ function removeDep() {
 }
 .service-credential-panel {
   margin: 0;
+}
+.service-ai-guidance-panel {
+  margin-bottom: 12px;
 }
 .svc-danger-row {
   display: flex;
