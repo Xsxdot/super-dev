@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ type Manager struct {
 	generations  map[string]uint64 // 每次 Start/Stop 递增，防止旧退出回调覆盖新进程状态
 	runtimes     map[string]model.RuntimeType
 	launchdDeps  map[string]model.Deployment
+	readiness    map[string]*model.ReadinessProbe
 	backgrounded map[string]bool
 	onLog        func(model.LogEntry)
 	runID        string
@@ -48,6 +50,7 @@ func NewManager(onLog func(model.LogEntry)) *Manager {
 		generations:  map[string]uint64{},
 		runtimes:     map[string]model.RuntimeType{},
 		launchdDeps:  map[string]model.Deployment{},
+		readiness:    map[string]*model.ReadinessProbe{},
 		backgrounded: map[string]bool{},
 		onLog:        onLog,
 	}
@@ -93,6 +96,7 @@ func (m *Manager) Stop(serviceID string) {
 	delete(m.runners, serviceID)
 	delete(m.runtimes, serviceID)
 	delete(m.launchdDeps, serviceID)
+	delete(m.readiness, serviceID)
 	delete(m.backgrounded, serviceID)
 	m.mu.Unlock()
 	if r != nil {
@@ -157,6 +161,17 @@ func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 	m.mu.Unlock()
 }
 
+// setReadiness 登记 deployment 的就绪探测配置。nil 表示「进程起来即就绪」。
+func (m *Manager) setReadiness(id string, p *model.ReadinessProbe) {
+	m.mu.Lock()
+	if p == nil {
+		delete(m.readiness, id)
+	} else {
+		m.readiness[id] = p
+	}
+	m.mu.Unlock()
+}
+
 // emitLog 通过 onLog 回调发送一条系统日志，level 为 "ERROR"/"INFO" 等。
 func (m *Manager) emitLog(id, level, stream, message string) {
 	m.mu.Lock()
@@ -194,6 +209,7 @@ func (m *Manager) StartDeployment(dep model.Deployment) error {
 	if dep.IsReadOnly() {
 		return nil
 	}
+	m.setReadiness(dep.ID, dep.Readiness)
 	if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeLaunchd {
 		return m.startLaunchdDeployment(dep)
 	}
@@ -211,6 +227,7 @@ func (m *Manager) StartDeploymentSpec(dep model.Deployment, spec ProcessSpec) er
 	if dep.IsReadOnly() {
 		return nil
 	}
+	m.setReadiness(dep.ID, dep.Readiness)
 	if err := m.startByID(dep.ID, spec); err != nil {
 		return err
 	}
@@ -235,6 +252,7 @@ func (m *Manager) StopDeployment(deploymentID string) {
 		delete(m.runners, deploymentID)
 		delete(m.runtimes, deploymentID)
 		delete(m.launchdDeps, deploymentID)
+		delete(m.readiness, deploymentID)
 		delete(m.backgrounded, deploymentID)
 		m.mu.Unlock()
 		if r != nil {
@@ -307,6 +325,7 @@ func (m *Manager) DeploymentStderrTail(deploymentID string) []string {
 // 供 collector 等内部子系统直接启动采集进程使用；日志以 id 作为 DeploymentID 归属。
 // 与 StartDeployment 共用 startByID 底座与同一 runners 命名空间。
 func (m *Manager) StartProcess(id string, spec ProcessSpec) error {
+	m.setReadiness(id, nil)
 	return m.startByID(id, spec)
 }
 
@@ -413,6 +432,7 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 			delete(m.runners, id)
 			delete(m.runtimes, id)
 			delete(m.launchdDeps, id)
+			delete(m.readiness, id)
 			delete(m.backgrounded, id)
 			m.status[id] = model.StatusFailed
 		}
@@ -422,10 +442,48 @@ func (m *Manager) startByID(id string, spec ProcessSpec) error {
 	}
 
 	if r.ProcessGroupAlive() {
-		m.setStatus(id, model.StatusRunning)
+		m.mu.Lock()
+		probe := m.readiness[id]
+		m.mu.Unlock()
+		if probe == nil {
+			// 无就绪探针：维持既有行为，进程组存活即视为运行中。
+			m.setStatus(id, model.StatusRunning)
+		} else {
+			// 有探针：保持 starting，异步探测通过才转 running，超时转 failed。
+			// gen 防止探测期间发生 stop/restart 导致回写到新一代进程。
+			log.Printf("[SuperDev] readiness probe started: dep=%s type=%s target=%s", id, probe.Type, probe.Target)
+			go m.awaitReadiness(id, gen, probe)
+		}
 	}
 
 	return nil
+}
+
+// awaitReadiness 异步等待 deployment 就绪，把状态从 starting 翻为 running / failed。
+//
+// 注意：
+//   - 仅当 generation 未变（期间无 stop/restart）时才回写状态，避免污染新一代进程
+//   - 进程在探测期间已死则不强行翻 running，交由 handleRunnerExit 处理
+func (m *Manager) awaitReadiness(id string, gen uint64, probe *model.ReadinessProbe) {
+	err := ProbeReady(context.Background(), probe)
+	if m.generation(id) != gen {
+		return // 期间发生了 stop/restart，丢弃本次结果。
+	}
+	if err != nil {
+		m.setStatus(id, model.StatusFailed)
+		m.emitLog(id, "ERROR", "stderr", "就绪探测失败: "+err.Error())
+		log.Printf("[SuperDev] readiness probe failed: dep=%s cause=%v", id, err)
+		return
+	}
+	m.mu.Lock()
+	r := m.runners[id]
+	m.mu.Unlock()
+	if r == nil || !r.ProcessGroupAlive() {
+		// 探测通过但进程已退出：状态交由 handleRunnerExit 决定，这里不覆盖。
+		return
+	}
+	m.setStatus(id, model.StatusRunning)
+	log.Printf("[SuperDev] readiness probe passed, now running: dep=%s", id)
 }
 
 // handleRunnerExit 处理 Runner 的唯一 Wait 结果。
@@ -445,7 +503,9 @@ func (m *Manager) handleRunnerExit(id string, r *Runner, gen uint64, info ExitIn
 		return
 	}
 	if groupAlive {
-		m.status[id] = model.StatusRunning
+		if m.readiness[id] == nil {
+			m.status[id] = model.StatusRunning
+		}
 		m.backgrounded[id] = true
 		m.mu.Unlock()
 		return
@@ -453,6 +513,7 @@ func (m *Manager) handleRunnerExit(id string, r *Runner, gen uint64, info ExitIn
 	delete(m.runners, id)
 	delete(m.runtimes, id)
 	delete(m.launchdDeps, id)
+	delete(m.readiness, id)
 	delete(m.backgrounded, id)
 	failed = info.ExitCode != 0 || info.Signaled
 	if failed {

@@ -1,6 +1,8 @@
 package process_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,6 +255,57 @@ func TestManagerStartDeployment(t *testing.T) {
 	mgr.StopDeployment("dep-1")
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-1"))
+}
+
+func TestStartDeploymentStaysStartingUntilReady(t *testing.T) {
+	ready := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+
+	mgr := process.NewManager(func(e model.LogEntry) {})
+	dep := model.Deployment{
+		ID:          "dep-ready",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+		Readiness:   &model.ReadinessProbe{Type: "http", Target: srv.URL, TimeoutSeconds: 5},
+	}
+	t.Cleanup(func() { mgr.StopDeployment(dep.ID) })
+
+	require.NoError(t, mgr.StartDeployment(dep))
+	time.Sleep(700 * time.Millisecond)
+	require.Equal(t, model.StatusStarting, mgr.DeploymentStatus(dep.ID))
+
+	close(ready)
+	require.Eventually(t, func() bool {
+		return mgr.DeploymentStatus(dep.ID) == model.StatusRunning
+	}, 3*time.Second, 100*time.Millisecond)
+}
+
+func TestStartDeploymentNoReadinessRunsImmediately(t *testing.T) {
+	mgr := process.NewManager(func(e model.LogEntry) {})
+	dep := model.Deployment{
+		ID:          "dep-plain",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+	}
+	t.Cleanup(func() { mgr.StopDeployment(dep.ID) })
+
+	require.NoError(t, mgr.StartDeployment(dep))
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, model.StatusRunning, mgr.DeploymentStatus(dep.ID))
 }
 
 func TestManagerRestartDeployment(t *testing.T) {
