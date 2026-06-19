@@ -796,3 +796,64 @@ log_rules:
 	require.Len(t, rules, 1)
 	assert.Equal(t, "no ping", rules[0].Name)
 }
+
+func TestLoadDebugCredentials(t *testing.T) {
+	dir := t.TempDir()
+	superdevDir := filepath.Join(dir, ".superdev")
+	require.NoError(t, os.MkdirAll(superdevDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(superdevDir, "config.yaml"), []byte(`
+name: debugcred
+debug_credentials:
+  - name: test_login
+    value: demo/demo123
+    desc: login test account
+services:
+  - name: web
+    debug_credentials:
+      - name: api_key
+        value: svc-key
+        desc: service api key
+`), 0o644))
+
+	project, err := config.NewLoader(dir).Load()
+
+	require.NoError(t, err)
+	require.Len(t, project.DebugCredentials, 1)
+	assert.Equal(t, "test_login", project.DebugCredentials[0].Name)
+	assert.Equal(t, "demo/demo123", project.DebugCredentials[0].Value)
+	require.Len(t, project.Services, 1)
+	require.Len(t, project.Services[0].DebugCredentials, 1)
+	assert.Equal(t, "api_key", project.Services[0].DebugCredentials[0].Name)
+	assert.Equal(t, "svc-key", project.Services[0].DebugCredentials[0].Value)
+}
+
+func TestSaveAndReloadPreservesDebugCredentials(t *testing.T) {
+	dir := t.TempDir()
+	project := model.Project{
+		Name:     "debugcred",
+		RootPath: dir,
+		DebugCredentials: []model.DebugCredential{
+			{Name: "test_login", Value: "demo/demo123", Desc: "login test account"},
+		},
+		Services: []model.Service{{
+			Name: "web",
+			DebugCredentials: []model.DebugCredential{
+				{Name: "api_key", Value: "svc-key", Desc: "service api key"},
+			},
+		}},
+	}
+
+	require.NoError(t, config.NewLoader(dir).Save(project))
+	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "debug_credentials:")
+
+	loaded, err := config.NewLoader(dir).Load()
+
+	require.NoError(t, err)
+	require.Len(t, loaded.DebugCredentials, 1)
+	assert.Equal(t, "demo/demo123", loaded.DebugCredentials[0].Value)
+	require.Len(t, loaded.Services, 1)
+	require.Len(t, loaded.Services[0].DebugCredentials, 1)
+	assert.Equal(t, "svc-key", loaded.Services[0].DebugCredentials[0].Value)
+}

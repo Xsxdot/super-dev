@@ -56,6 +56,7 @@ func (l *Loader) Load() (model.Project, error) {
 		ID                    string                  `yaml:"id,omitempty"`
 		Name                  string                  `yaml:"name"`
 		Variables             map[string]string       `yaml:"variables,omitempty"`
+		DebugCredentials      []model.DebugCredential `yaml:"debug_credentials,omitempty"`
 		Environments          []envYAML               `yaml:"environments"`
 		Services              []serviceYAML           `yaml:"services"`
 		Pipelines             []model.ProjectPipeline `yaml:"pipelines,omitempty"`
@@ -76,6 +77,7 @@ func (l *Loader) Load() (model.Project, error) {
 		Name:                  raw.Name,
 		RootPath:              l.rootPath,
 		Variables:             raw.Variables,
+		DebugCredentials:      raw.DebugCredentials,
 		Environments:          envs,
 		Services:              services,
 		Pipelines:             raw.Pipelines,
@@ -109,6 +111,9 @@ func (l *Loader) Save(p model.Project) error {
 	}
 	if len(p.Variables) > 0 {
 		raw["variables"] = p.Variables
+	}
+	if len(p.DebugCredentials) > 0 {
+		raw["debug_credentials"] = p.DebugCredentials
 	}
 	if len(p.EnvSelectedServiceIDs) > 0 {
 		raw["env_selected_service_ids"] = p.EnvSelectedServiceIDs
@@ -223,12 +228,13 @@ type deploymentYAML struct {
 
 // serviceYAML 对应 yaml 文件中服务条目，仅作为 deployment 的逻辑分组。
 type serviceYAML struct {
-	ID          string           `yaml:"id,omitempty"`
-	Name        string           `yaml:"name"`
-	Required    bool             `yaml:"required"`
-	Order       int              `yaml:"order"`
-	Language    string           `yaml:"language,omitempty"`
-	Deployments []deploymentYAML `yaml:"deployments,omitempty"`
+	ID               string                  `yaml:"id,omitempty"`
+	Name             string                  `yaml:"name"`
+	Required         bool                    `yaml:"required"`
+	Order            int                     `yaml:"order"`
+	Language         string                  `yaml:"language,omitempty"`
+	DebugCredentials []model.DebugCredential `yaml:"debug_credentials,omitempty"`
+	Deployments      []deploymentYAML        `yaml:"deployments,omitempty"`
 }
 
 // envsFromYAML 将 yaml envs 转为 model.Environment 列表。
@@ -249,12 +255,13 @@ func envsFromYAML(raw []envYAML) []model.Environment {
 // 运行配置全部在 deployments 上，Service 本身只承载分组元信息。
 func serviceFromYAML(s serviceYAML, rootPath string) model.Service {
 	return model.Service{
-		ID:          s.ID,
-		Name:        s.Name,
-		Order:       s.Order,
-		Required:    s.Required,
-		Language:    model.ServiceLanguage(s.Language),
-		Deployments: deploymentsFromYAML(s.Deployments, rootPath),
+		ID:               s.ID,
+		Name:             s.Name,
+		Order:            s.Order,
+		Required:         s.Required,
+		Language:         model.ServiceLanguage(s.Language),
+		DebugCredentials: s.DebugCredentials,
+		Deployments:      deploymentsFromYAML(s.Deployments, rootPath),
 	}
 }
 
@@ -391,12 +398,13 @@ func servicesToYAML(services []model.Service) []serviceYAML {
 	out := make([]serviceYAML, len(services))
 	for i, s := range services {
 		out[i] = serviceYAML{
-			ID:          s.ID,
-			Name:        s.Name,
-			Order:       s.Order,
-			Required:    s.Required,
-			Language:    string(s.Language),
-			Deployments: deploymentsToYAML(s.Deployments),
+			ID:               s.ID,
+			Name:             s.Name,
+			Order:            s.Order,
+			Required:         s.Required,
+			Language:         string(s.Language),
+			DebugCredentials: s.DebugCredentials,
+			Deployments:      deploymentsToYAML(s.Deployments),
 		}
 	}
 	return out
