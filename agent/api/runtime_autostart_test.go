@@ -219,6 +219,36 @@ func TestAutostartStartsLocalManagedDeployments(t *testing.T) {
 	}
 }
 
+func TestStartAutostartOnceRunsInBackground(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	dep := model.Deployment{
+		ID:          "dep-server-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		StartOnBoot: true,
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+	}
+	app.projects = []model.Project{{
+		ID:       "proj-a",
+		Services: []model.Service{{ID: "svc-server", Name: "server", Deployments: []model.Deployment{dep}}},
+	}}
+	mgr := app.getOrCreateManager("proj-a")
+	t.Cleanup(func() { mgr.StopDeployment(dep.ID) })
+
+	started := time.Now()
+	app.startAutostartOnce()
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("startAutostartOnce blocked for %s", elapsed)
+	}
+
+	waitForDeploymentStatus(t, mgr, dep.ID, model.StatusRunning)
+}
+
 func waitForDeploymentStatus(t *testing.T, mgr interface {
 	DeploymentStatus(string) model.ServiceStatus
 }, deploymentID string, want model.ServiceStatus) {

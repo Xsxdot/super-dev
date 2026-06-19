@@ -259,6 +259,17 @@ func (a *App) runAutostart() {
 	log.Printf("[SuperDev] autostart: done")
 }
 
+// startAutostartOnce 在后台触发一次 autostart，不阻塞 agent 主启动流程。
+//
+// 注意：延迟 500ms 是为了让启动期的项目配置、manager map 和 pidStore 初始化先完成，
+// 避免 autostart 与启动序列中的注册项目加载/运行态对账发生竞态。
+func (a *App) startAutostartOnce() {
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		a.runAutostart()
+	}()
+}
+
 // dependencySkipped 报告 dep 是否有依赖已被跳过（上游失败传播）。
 func (a *App) dependencySkipped(dep model.Deployment, skipped map[string]bool) bool {
 	for _, d := range dep.DependsOn {

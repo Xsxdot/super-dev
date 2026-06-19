@@ -776,6 +776,7 @@ func (a *App) Start(addr string) error {
 	a.loadRegisteredProjects()
 	a.loadManagedDeployments()
 	a.startProcessReconcileLoop()
+	a.startAutostartOnce()
 	a.startManagedDeploymentReconciler()
 	server := &http.Server{Addr: addr, Handler: a.Handler()}
 	tlsConfig, enabled, err := a.tlsConfigForListen()
