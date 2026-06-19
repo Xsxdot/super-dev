@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - GET /api/projects/{id}/vscode-launch：读取项目 .vscode/launch.json 返回可导入列表
-//   - PUT /api/projects/{id}/setup：写入 environments 和 service deployments，刷新内存
+//   - PUT /api/projects/{id}/setup：写入 environments、services、debug_credentials，刷新内存
 //
 // 边界：
 //   - setup 全量替换 environments 与 services（按 service ID diff：空 ID 新增、命中更新、缺席删除）
@@ -11,6 +11,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -51,10 +52,11 @@ func (a *App) getVscodeLaunch(w http.ResponseWriter, r *http.Request) {
 
 // setupRequest 是 PUT /api/projects/{id}/setup 的请求体结构（全量项目配置）。
 type setupRequest struct {
-	Variables    map[string]string       `json:"variables"`
-	Environments []model.Environment     `json:"environments"`
-	Services     []setupServiceEntry     `json:"services"`
-	Pipelines    []model.ProjectPipeline `json:"pipelines"`
+	Variables        map[string]string       `json:"variables"`
+	DebugCredentials []model.DebugCredential `json:"debug_credentials"`
+	Environments     []model.Environment     `json:"environments"`
+	Services         []setupServiceEntry     `json:"services"`
+	Pipelines        []model.ProjectPipeline `json:"pipelines"`
 }
 
 // setupServiceEntry 描述单个 service 的全量配置。
@@ -62,12 +64,13 @@ type setupRequest struct {
 // ID 为空表示新增 service（后端分配 ID）；ID 存在表示更新；
 // 现有 service 不在请求列表中则被删除（删除逻辑在 putProjectSetup）。
 type setupServiceEntry struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Language    model.ServiceLanguage `json:"language"`
-	Required    bool                  `json:"required"`
-	Order       int                   `json:"order"`
-	Deployments []model.Deployment    `json:"deployments"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Language         model.ServiceLanguage   `json:"language"`
+	Required         bool                    `json:"required"`
+	Order            int                     `json:"order"`
+	DebugCredentials []model.DebugCredential `json:"debug_credentials"`
+	Deployments      []model.Deployment      `json:"deployments"`
 }
 
 // putProjectSetup 处理 PUT /api/projects/{id}/setup。
@@ -138,6 +141,7 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	if candidate.Variables == nil {
 		candidate.Variables = map[string]string{}
 	}
+	candidate.DebugCredentials = req.DebugCredentials
 	candidate.Environments = req.Environments
 	candidate.Pipelines = req.Pipelines
 	if candidate.Pipelines == nil {
@@ -163,6 +167,7 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		svc.Language = model.ServiceLanguage(strings.TrimSpace(string(entry.Language)))
 		svc.Required = entry.Required
 		svc.Order = entry.Order
+		svc.DebugCredentials = entry.DebugCredentials
 		svc.Deployments = deps
 		newServices = append(newServices, svc)
 	}
@@ -186,9 +191,16 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 
 	loader := config.NewLoader(project.RootPath)
 	if err := loader.Save(project); err != nil {
+		log.Printf("[SuperDev] setup save failed project=%s root=%s error=%v", project.Name, project.RootPath, err)
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
+	serviceCredentialCount := 0
+	for _, service := range project.Services {
+		serviceCredentialCount += len(service.DebugCredentials)
+	}
+	log.Printf("[SuperDev] setup saved project=%s envs=%d services=%d project_debug_credentials=%d service_debug_credentials=%d",
+		project.Name, len(project.Environments), len(project.Services), len(project.DebugCredentials), serviceCredentialCount)
 	a.reconcileProjectsAsync(before, project)
 
 	jsonOK(w, project)
