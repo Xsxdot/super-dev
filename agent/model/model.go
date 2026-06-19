@@ -92,6 +92,42 @@ type DebugCredential struct {
 	Desc  string `json:"desc"  yaml:"desc"`  // 一句自然语言说明用途，AI 据此正确使用
 }
 
+// MergedDebugCredential 是合并后的凭据，附带来源标记，供 AI 知道凭据出处。
+type MergedDebugCredential struct {
+	DebugCredential
+	Source string `json:"source"` // "project" | "service"
+}
+
+// MergeDebugCredentials 合并项目级与服务级调试凭据。
+//
+// 参数：
+//   - project: 项目级凭据
+//   - service: 服务级凭据
+//
+// 返回：
+//   - 合并结果；同 Name 时服务级覆盖项目级，并标记 Source
+//
+// 注意：
+//   - 保持项目级先于服务级追加的顺序，覆盖时原地替换值与来源
+func MergeDebugCredentials(project, service []DebugCredential) []MergedDebugCredential {
+	out := make([]MergedDebugCredential, 0, len(project)+len(service))
+	indexByName := map[string]int{}
+	for _, c := range project {
+		indexByName[c.Name] = len(out)
+		out = append(out, MergedDebugCredential{DebugCredential: c, Source: "project"})
+	}
+	// 同 name 服务级覆盖：命中则原地替换，否则追加，保证调用方看到更具体的凭据。
+	for _, c := range service {
+		if idx, ok := indexByName[c.Name]; ok {
+			out[idx] = MergedDebugCredential{DebugCredential: c, Source: "service"}
+			continue
+		}
+		indexByName[c.Name] = len(out)
+		out = append(out, MergedDebugCredential{DebugCredential: c, Source: "service"})
+	}
+	return out
+}
+
 // Project 表示一个开发项目，包含多个服务定义。
 //
 // Environments 定义该项目的运行环境列表，每个 Service 的 Deployment

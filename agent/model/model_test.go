@@ -753,3 +753,35 @@ func TestDeploymentCommandPresenceDoesNotControlReadOnly(t *testing.T) {
 	}
 	assert.False(t, withCommands.IsReadOnly())
 }
+
+func TestMergeDebugCredentialsServiceOverridesProject(t *testing.T) {
+	project := []model.DebugCredential{
+		{Name: "test_login", Value: "proj-pass", Desc: "项目级登录"},
+		{Name: "shared", Value: "proj-shared", Desc: "公共"},
+	}
+	service := []model.DebugCredential{
+		{Name: "test_login", Value: "svc-pass", Desc: "服务级登录"},
+		{Name: "api_key", Value: "svc-key", Desc: "服务 api-key"},
+	}
+
+	merged := model.MergeDebugCredentials(project, service)
+
+	byName := map[string]model.MergedDebugCredential{}
+	for _, c := range merged {
+		byName[c.Name] = c
+	}
+	// 同 name 服务级覆盖，避免 AI 拿到过期的项目默认凭据。
+	assert.Equal(t, "svc-pass", byName["test_login"].Value)
+	assert.Equal(t, "service", byName["test_login"].Source)
+	// 仅项目级保留并标 source。
+	assert.Equal(t, "proj-shared", byName["shared"].Value)
+	assert.Equal(t, "project", byName["shared"].Source)
+	// 仅服务级凭据正常追加。
+	assert.Equal(t, "svc-key", byName["api_key"].Value)
+	assert.Equal(t, "service", byName["api_key"].Source)
+	assert.Len(t, merged, 3)
+}
+
+func TestMergeDebugCredentialsNilSafe(t *testing.T) {
+	assert.Empty(t, model.MergeDebugCredentials(nil, nil))
+}
