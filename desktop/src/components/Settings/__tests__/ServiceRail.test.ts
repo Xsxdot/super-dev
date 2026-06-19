@@ -4,7 +4,7 @@ import ServiceRail from '@/components/Settings/ServiceRail.vue'
 import type { ConfigDraftService } from '@/lib/configDraft'
 
 function svc(id: string, name: string, extra?: Partial<ConfigDraftService>): ConfigDraftService {
-  return { id, name, required: false, order: 0, deployments: [], ...extra }
+  return { id, name, required: false, order: 0, debug_credentials: [], deployments: [], ...extra }
 }
 
 describe('ServiceRail', () => {

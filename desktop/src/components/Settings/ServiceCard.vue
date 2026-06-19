@@ -16,6 +16,7 @@ import type { Deployment, ServiceLanguage } from '@/api/agent'
 import type { ConfigDraftService } from '@/lib/configDraft'
 import { defaultManagedRuntime } from '@/lib/languageRuntimeDefaults'
 import DeploymentForm from './DeploymentForm.vue'
+import DebugCredentialEditor from './DebugCredentialEditor.vue'
 
 const props = defineProps<{
   service: ConfigDraftService
@@ -95,6 +96,15 @@ function removeDep() {
       </label>
       <button type="button" class="svc-remove" data-test="remove-service" @click="emit('remove')">{{ t('common.delete') }}</button>
     </header>
+
+    <!-- 服务级凭据只属于配置编辑；overview/list 不渲染该明文字段。 -->
+    <DebugCredentialEditor
+      :model-value="service.debug_credentials ?? []"
+      data-test="service-debug-credentials"
+      :title="t('settings.debugCredentials.serviceTitle')"
+      :hint="t('settings.debugCredentials.serviceHint')"
+      @update:model-value="patchService({ debug_credentials: $event })"
+    />
 
     <div v-if="!dep" class="svc-empty">
       {{ t('settings.service.unconfigured') }}

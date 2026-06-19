@@ -21,6 +21,7 @@ import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidation
 import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
+import DebugCredentialEditor from './DebugCredentialEditor.vue'
 
 const props = defineProps<{ project: Project; isNew?: boolean }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
@@ -110,7 +111,14 @@ function toggleDev(name: string) {
 }
 
 function addService() {
-  const newSvc: ConfigDraftService = { id: '', name: '', required: false, order: draft.value.services.length, deployments: [] }
+  const newSvc: ConfigDraftService = {
+    id: '',
+    name: '',
+    required: false,
+    order: draft.value.services.length,
+    debug_credentials: [],
+    deployments: [],
+  }
   draft.value.services.push(newSvc)
   activeServiceId.value = String(draft.value.services.length - 1)
 }
@@ -177,6 +185,14 @@ async function save() {
           @rename-env="renameEnv"
           @toggle-dev="toggleDev"
           @start-rename="renamingEnv = $event"
+        />
+
+        <!-- 配置页允许编辑明文；普通运行视图仍不展示 debug_credentials。 -->
+        <DebugCredentialEditor
+          v-model="draft.debug_credentials"
+          data-test="project-debug-credentials"
+          :title="t('settings.debugCredentials.projectTitle')"
+          :hint="t('settings.debugCredentials.projectHint')"
         />
 
         <!-- 双栏：左侧服务列表，右侧当前服务配置 -->

@@ -4,7 +4,7 @@ import ServiceList from '@/components/Settings/ServiceList.vue'
 import type { ConfigDraftService } from '@/lib/configDraft'
 
 function svc(): ConfigDraftService {
-  return { id: 's1', name: 'web', required: false, order: 0, deployments: [] }
+  return { id: 's1', name: 'web', required: false, order: 0, debug_credentials: [], deployments: [] }
 }
 
 describe('ServiceList', () => {

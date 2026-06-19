@@ -162,6 +162,53 @@ describe('configDraft', () => {
     })
   })
 
+  it('preserves project and service debug credentials through draft payload conversion', () => {
+    const project = makeProject()
+    project.debug_credentials = [
+      { name: 'test_login', value: 'demo/demo123', desc: '项目级测试登录账号' },
+    ]
+    project.services[0].debug_credentials = [
+      { name: 'api_key', value: 'svc-key', desc: '服务 API key' },
+    ]
+
+    const draft = projectToDraft(project)
+    const payload = draftToPayload(draft)
+
+    expect(draft.debug_credentials).toEqual([
+      { name: 'test_login', value: 'demo/demo123', desc: '项目级测试登录账号' },
+    ])
+    expect(draft.services[0].debug_credentials).toEqual([
+      { name: 'api_key', value: 'svc-key', desc: '服务 API key' },
+    ])
+    expect(payload.debug_credentials).toEqual([
+      { name: 'test_login', value: 'demo/demo123', desc: '项目级测试登录账号' },
+    ])
+    expect(payload.services[0].debug_credentials).toEqual([
+      { name: 'api_key', value: 'svc-key', desc: '服务 API key' },
+    ])
+  })
+
+  it('omits debug credentials with empty names from setup payload', () => {
+    const draft = projectToDraft(makeProject())
+    draft.debug_credentials = [
+      { name: '', value: 'ignored', desc: '未命名项目凭据' },
+      { name: 'test_login', value: 'demo/demo123', desc: '测试登录' },
+    ]
+    draft.services[0].debug_credentials = [
+      { name: '   ', value: 'ignored', desc: '未命名服务凭据' },
+      { name: 'api_key', value: 'svc-key', desc: '服务 API key' },
+    ]
+
+    const payload = draftToPayload(draft)
+
+    expect(payload.debug_credentials).toEqual([
+      { name: 'test_login', value: 'demo/demo123', desc: '测试登录' },
+    ])
+    expect(payload.services[0].debug_credentials).toEqual([
+      { name: 'api_key', value: 'svc-key', desc: '服务 API key' },
+    ])
+  })
+
   it('reports code debug for unsupported deployment runtime', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments = [{

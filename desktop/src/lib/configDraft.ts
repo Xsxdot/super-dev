@@ -26,6 +26,7 @@ import type {
   LogSourceType,
   ControlMode,
   CodeDebugConfig,
+  DebugCredential,
 } from '@/api/agent'
 import { i18n } from '@/i18n'
 
@@ -35,12 +36,14 @@ export interface ConfigDraftService {
   required: boolean
   order: number
   language?: Project['services'][number]['language']
+  debug_credentials: DebugCredential[]
   deployments: Deployment[]
 }
 
 export interface ConfigDraft {
   variables: Record<string, string>
   environments: Environment[]
+  debug_credentials: DebugCredential[]
   services: ConfigDraftService[]
   pipelines: ProjectPipeline[]
 }
@@ -201,12 +204,14 @@ export function projectToDraft(p: Project): ConfigDraft {
   return {
     variables: { ...(p.variables ?? {}) },
     environments: (p.environments ?? []).map(e => ({ ...e })),
+    debug_credentials: (p.debug_credentials ?? []).map(c => ({ ...c })),
     services: (p.services ?? []).map(s => ({
       id: s.id,
       name: s.name,
       required: s.required,
       order: s.order,
       language: s.language,
+      debug_credentials: (s.debug_credentials ?? []).map(c => ({ ...c })),
       deployments: (s.deployments ?? []).map(d => normalizeDeployment(d)),
     })),
     pipelines: (p.pipelines ?? []).map(pipeline => clone(pipeline)),
@@ -231,6 +236,12 @@ function stripEmptyEnvKeys(env?: Record<string, string>): Record<string, string>
   return Object.keys(out).length ? out : undefined
 }
 
+function optionalDebugCredentials(credentials: DebugCredential[]): DebugCredential[] | undefined {
+  // 空名称无法被 MCP 合并/覆盖语义识别，保存时按 env 空 key 一样忽略。
+  const named = credentials.filter(c => c.name.trim() !== '').map(c => ({ ...c }))
+  return named.length ? named : undefined
+}
+
 /**
  * draftToPayload 把草稿拍平为后端 SetupPayload。
  *
@@ -252,12 +263,14 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       is_dev: e.is_dev,
       order: e.order,
     })),
+    debug_credentials: optionalDebugCredentials(draft.debug_credentials),
     services: draft.services.map(s => ({
       id: s.id,
       name: s.name,
       required: s.required,
       order: s.order,
       language: s.language,
+      debug_credentials: optionalDebugCredentials(s.debug_credentials),
       deployments: s.deployments.map<SetupDeployment>((d) => {
         const dep = normalizeDeployment(d)
         const runtime = dep.runtime!

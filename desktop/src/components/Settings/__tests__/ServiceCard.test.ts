@@ -10,6 +10,7 @@ function service(): ConfigDraftService {
     required: true,
     order: 1,
     language: 'go',
+    debug_credentials: [],
     deployments: [{
       id: 'dep-api-dev',
       env_name: 'dev',
@@ -79,5 +80,24 @@ describe('ServiceCard', () => {
       env: {},
       config: {},
     })
+  })
+
+  it('emits service debug credential edits', async () => {
+    const wrapper = mount(ServiceCard, {
+      props: { service: service(), envName: 'dev', hosts: [] },
+    })
+
+    await wrapper.find('[data-test="service-debug-credentials"] [data-test="debug-credential-add"]').trigger('click')
+    const row = wrapper.find('[data-test="service-debug-credentials"] [data-test="debug-credential-row"]')
+    await row.find('[data-test="debug-credential-name"]').setValue('api_key')
+    await row.find('[data-test="debug-credential-value"]').setValue('svc-key')
+    await row.find('[data-test="debug-credential-desc"]').setValue('服务 API key')
+
+    const last = wrapper.emitted('update:service')!.at(-1)![0] as ConfigDraftService
+    expect(last.debug_credentials).toEqual([{
+      name: 'api_key',
+      value: 'svc-key',
+      desc: '服务 API key',
+    }])
   })
 })

@@ -22,7 +22,8 @@ function project(): Project {
   return {
     id: 'p1', name: 'demo', root_path: '/tmp/demo', env_selected_service_ids: {},
     environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
-    services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', required: false, order: 0, deployments: [] }],
+    debug_credentials: [],
+    services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', required: false, order: 0, deployments: [], debug_credentials: [] }],
   }
 }
 
@@ -93,6 +94,28 @@ describe('ProjectConfigEditor', () => {
       services: expect.any(Array),
     }))
     expect(wrapper.emitted('saved')).toBeTruthy()
+  })
+
+  it('保存项目级调试凭据输入', async () => {
+    const { api } = await import('@/api/agent')
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="project-debug-credentials"] [data-test="debug-credential-add"]').trigger('click')
+    const row = wrapper.find('[data-test="project-debug-credentials"] [data-test="debug-credential-row"]')
+    await row.find('[data-test="debug-credential-name"]').setValue('test_login')
+    await row.find('[data-test="debug-credential-value"]').setValue('demo/demo123')
+    await row.find('[data-test="debug-credential-desc"]').setValue('项目级测试登录')
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      debug_credentials: [{
+        name: 'test_login',
+        value: 'demo/demo123',
+        desc: '项目级测试登录',
+      }],
+    }))
   })
 
   it('新启用服务环境时保存 runtime/logs 配置', async () => {

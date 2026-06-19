@@ -313,6 +313,17 @@ export interface CodeDebugConfig {
   stop_on_entry?: boolean
 }
 
+// DebugCredential 是专供 AI 调试取用的明文凭据。
+//
+// 注意：
+//   - 只在项目配置编辑和 MCP get_debug_credentials 出口使用
+//   - 不应在普通服务列表、overview 或运行快照中展示
+export interface DebugCredential {
+  name: string
+  value: string
+  desc: string
+}
+
 export interface PipelineEnvironment {
   variables?: Record<string, string>
 }
@@ -519,6 +530,7 @@ export interface Service {
   order: number
   language?: ServiceLanguage
   deployments?: Deployment[]
+  debug_credentials?: DebugCredential[]
 }
 
 export interface Project {
@@ -527,6 +539,7 @@ export interface Project {
   root_path: string
   variables?: Record<string, string>
   services: Service[]
+  debug_credentials?: DebugCredential[]
   pipelines?: ProjectPipeline[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
@@ -893,6 +906,7 @@ export interface SetupServiceEntry {
   required: boolean
   order: number
   language?: ServiceLanguage
+  debug_credentials?: DebugCredential[]
   deployments: SetupDeployment[]
 }
 
@@ -900,6 +914,7 @@ export interface SetupPayload {
   variables?: Record<string, string>
   environments: Array<{ id?: string; name: string; is_dev: boolean; order: number }>
   services: SetupServiceEntry[]
+  debug_credentials?: DebugCredential[]
   pipelines?: ProjectPipeline[]
 }
 
