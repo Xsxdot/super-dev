@@ -68,6 +68,22 @@ const activeServiceIndex = computed<number>(() => {
   return isNaN(n) ? 0 : n
 })
 
+function hasLocalManagedDeployment(service: ConfigDraftService, envName: string) {
+  const dep = service.deployments.find(d => d.env_name === envName)
+  if (!dep) return false
+  const mode = dep.control_mode ?? (dep.read_only ? 'monitor' : 'managed')
+  return dep.location === 'local' && mode === 'managed'
+}
+
+const activeSiblingServices = computed(() => {
+  const current = activeService.value
+  if (!current) return []
+  return draft.value.services
+    .filter(service => service !== current && Boolean(service.id))
+    .filter(service => hasLocalManagedDeployment(service, activeEnv.value))
+    .map(service => ({ id: service.id, name: service.name || service.id }))
+})
+
 function addEnv() {
   const base = 'env'
   let name = base
@@ -215,6 +231,7 @@ async function save() {
                 :env-name="activeEnv"
                 :hosts="hosts"
                 :project-path="project.root_path"
+                :sibling-services="activeSiblingServices"
                 @update:service="updateService(activeServiceIndex, $event)"
                 @remove="removeService(activeServiceIndex)"
               />

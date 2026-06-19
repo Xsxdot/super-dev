@@ -19,6 +19,7 @@ import type {
   Deployment,
   LogConfig,
   LogKind,
+  ReadinessProbe,
   RuntimeDiagnostic,
   RuntimeConfig,
   RuntimeSchema,
@@ -40,6 +41,8 @@ const props = defineProps<{
   defaultWorkDir?: string
   /** service 级语言，用于选择并加载 language runtime provider schema */
   serviceLanguage?: ServiceLanguage
+  /** 同项目同 env 下可作为启动依赖的兄弟服务 */
+  siblingServices?: Array<{ id: string; name: string }>
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Deployment] }>()
 const { t } = useAppI18n()
@@ -119,6 +122,7 @@ function inferLogs(): LogConfig {
 }
 
 const logs = computed(() => inferLogs())
+const isLocalManaged = computed(() => props.modelValue.location === 'local' && controlMode.value === 'managed')
 const isLocalLanguageRuntime = computed(() => {
   const runtimeType = runtime.value.type || 'command'
   return props.modelValue.location === 'local' && runtimeType === 'language'
@@ -148,6 +152,10 @@ const hostOptions = computed<HostOption[]>(() => {
   }
   return options
 })
+const readinessType = computed(() => props.modelValue.readiness?.type ?? '')
+const availableDeps = computed(() =>
+  (props.siblingServices ?? []).filter(s => !(props.modelValue.depends_on ?? []).includes(s.id)),
+)
 
 function legacyLogType(kind?: LogKind) {
   if (kind === 'journalctl' || kind === 'docker') return kind
@@ -300,6 +308,48 @@ function toggleHost(id: string, checked: boolean) {
   if (checked) set.add(id)
   else set.delete(id)
   patch({ host_ids: [...set] })
+}
+
+/** siblingName 用 service ID 反查显示名；悬空依赖保留 ID 方便用户定位配置问题。 */
+function siblingName(id: string) {
+  return props.siblingServices?.find(s => s.id === id)?.name ?? id
+}
+
+/** addDep 只写 service ID，避免服务改名导致依赖关系失效。 */
+function addDep(id: string) {
+  if (!id || (props.modelValue.depends_on ?? []).includes(id)) return
+  patch({ depends_on: [...(props.modelValue.depends_on ?? []), id] })
+}
+
+/** removeDep 从当前 deployment 的启动依赖中移除一个 service ID。 */
+function removeDep(id: string) {
+  patch({ depends_on: (props.modelValue.depends_on ?? []).filter(depID => depID !== id) })
+}
+
+function readinessWithDefaults(partial: Partial<ReadinessProbe> = {}): ReadinessProbe {
+  return {
+    type: props.modelValue.readiness?.type ?? 'http',
+    target: props.modelValue.readiness?.target ?? '',
+    timeout_seconds: props.modelValue.readiness?.timeout_seconds ?? 30,
+    ...partial,
+  }
+}
+
+/** setReadinessType 空值表示沿用旧语义：进程起来即就绪。 */
+function setReadinessType(type: string) {
+  if (!type) {
+    patch({ readiness: undefined })
+    return
+  }
+  patch({ readiness: readinessWithDefaults({ type: type as ReadinessProbe['type'] }) })
+}
+
+function setReadinessTarget(target: string) {
+  patch({ readiness: readinessWithDefaults({ target }) })
+}
+
+function setReadinessTimeout(timeout: number) {
+  patch({ readiness: readinessWithDefaults({ timeout_seconds: timeout > 0 ? timeout : 30 }) })
 }
 
 function setEnv(env: Record<string, string>) {
@@ -654,6 +704,76 @@ watch(
       </div>
     </section>
 
+    <!-- 自启和就绪门只对本机接管进程生效；远端/监控模式不拥有启动状态机。 -->
+    <section v-if="isLocalManaged" class="dep-block">
+      <div class="dep-heading">{{ t('settings.deployment.startReadiness') }}</div>
+
+      <div class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.dependsOn') }}</label>
+        <div class="dep-chips" data-test="dep-depends-on">
+          <span v-for="id in (modelValue.depends_on ?? [])" :key="id" class="dep-chip">
+            {{ siblingName(id) }}
+            <button type="button" class="dep-chip-remove" :aria-label="t('common.delete')" @click="removeDep(id)">×</button>
+          </span>
+          <select
+            v-if="availableDeps.length"
+            class="settings-select dep-dependency-select"
+            data-test="dep-add-dependency"
+            @change="addDep(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
+          >
+            <option value="">{{ t('settings.deployment.addDependency') }}</option>
+            <option v-for="s in availableDeps" :key="s.id" :value="s.id">{{ s.name }}</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-field dep-field">
+        <label class="settings-field-label dep-label">{{ t('settings.deployment.readiness') }}</label>
+        <div class="dep-readiness">
+          <select
+            class="settings-select"
+            data-test="dep-readiness-type"
+            :value="readinessType"
+            @change="setReadinessType(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ t('settings.deployment.readinessProcess') }}</option>
+            <option value="http">HTTP</option>
+            <option value="tcp">TCP</option>
+          </select>
+          <input
+            v-if="readinessType"
+            class="settings-input"
+            data-test="dep-readiness-target"
+            :placeholder="readinessType === 'http' ? 'http://127.0.0.1:9100/' : '127.0.0.1:9100'"
+            :value="modelValue.readiness?.target ?? ''"
+            @input="setReadinessTarget(($event.target as HTMLInputElement).value)"
+          />
+          <input
+            v-if="readinessType"
+            class="settings-input dep-readiness-timeout"
+            data-test="dep-readiness-timeout"
+            type="number"
+            min="1"
+            :value="modelValue.readiness?.timeout_seconds ?? 30"
+            @input="setReadinessTimeout(Number(($event.target as HTMLInputElement).value))"
+          />
+        </div>
+      </div>
+    </section>
+
+    <section v-if="isLocalManaged" class="dep-block">
+      <div class="dep-heading">{{ t('settings.deployment.autostart') }}</div>
+      <label class="dep-choice">
+        <input
+          type="checkbox"
+          data-test="dep-start-on-boot"
+          :checked="modelValue.start_on_boot ?? false"
+          @change="patch({ start_on_boot: ($event.target as HTMLInputElement).checked })"
+        />
+        {{ t('settings.deployment.startOnBoot') }}
+      </label>
+    </section>
+
     <section v-if="modelValue.location === 'local'" class="dep-block">
       <div class="dep-heading">{{ t('settings.deployment.webEntry') }}</div>
       <label class="dep-choice">
@@ -859,6 +979,50 @@ watch(
   font-size: 11px;
   line-height: 1.5;
 }
+.dep-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+.dep-chip-remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0;
+}
+.dep-chip-remove:hover {
+  color: var(--status-failed);
+}
+.dep-dependency-select {
+  width: auto;
+  min-width: 160px;
+}
+.dep-readiness {
+  display: grid;
+  grid-template-columns: minmax(120px, 150px) minmax(160px, 1fr) 76px;
+  gap: 8px;
+  align-items: center;
+}
+.dep-readiness-timeout {
+  text-align: right;
+}
 .dep-advanced {
   margin-top: 8px;
   color: var(--text-secondary);
@@ -867,5 +1031,10 @@ watch(
 .dep-advanced summary {
   cursor: pointer;
   color: var(--text-secondary);
+}
+@media (max-width: 720px) {
+  .dep-readiness {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

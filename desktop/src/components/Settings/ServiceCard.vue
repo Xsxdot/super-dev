@@ -24,6 +24,8 @@ const props = defineProps<{
   hosts: Array<{ id: string; name: string }>
   /** 项目根目录，用于新建 deployment 时自动填入工作目录默认值 */
   projectPath?: string
+  /** 同 env 下可被当前 service 依赖的本机接管服务 */
+  siblingServices?: Array<{ id: string; name: string }>
 }>()
 const emit = defineEmits<{
   'update:service': [ConfigDraftService]
@@ -116,6 +118,7 @@ function removeDep() {
         :hosts="hosts"
         :default-work-dir="defaultWorkDir"
         :service-language="service.language"
+        :sibling-services="siblingServices ?? []"
         @update:model-value="updateDep"
       />
       <button type="button" class="dep-remove" @click="removeDep">{{ t('settings.service.removeEnvConfig') }}</button>

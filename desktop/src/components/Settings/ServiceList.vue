@@ -12,7 +12,7 @@ import type { ConfigDraftService } from '@/lib/configDraft'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import ServiceCard from './ServiceCard.vue'
 
-defineProps<{
+const props = defineProps<{
   services: ConfigDraftService[]
   envName: string
   hosts: Array<{ id: string; name: string }>
@@ -23,6 +23,20 @@ const emit = defineEmits<{
   'add-service': []
 }>()
 const { t } = useAppI18n()
+
+function hasLocalManagedDeployment(service: ConfigDraftService) {
+  const dep = service.deployments.find(d => d.env_name === props.envName)
+  if (!dep) return false
+  const mode = dep.control_mode ?? (dep.read_only ? 'monitor' : 'managed')
+  return dep.location === 'local' && mode === 'managed'
+}
+
+function siblingServicesFor(service: ConfigDraftService) {
+  return props.services
+    .filter(candidate => candidate !== service && Boolean(candidate.id))
+    .filter(hasLocalManagedDeployment)
+    .map(candidate => ({ id: candidate.id, name: candidate.name || candidate.id }))
+}
 </script>
 
 <template>
@@ -30,6 +44,7 @@ const { t } = useAppI18n()
     <ServiceCard
       v-for="(svc, i) in services" :key="svc.id || i"
       :service="svc" :env-name="envName" :hosts="hosts"
+      :sibling-services="siblingServicesFor(svc)"
       @update:service="emit('update-service', i, $event)"
       @remove="emit('remove-service', i)"
     />

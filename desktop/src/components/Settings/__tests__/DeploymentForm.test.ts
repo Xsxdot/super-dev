@@ -211,6 +211,33 @@ describe('DeploymentForm', () => {
     expect(last.runtime?.command).toBe('npm run dev')
   })
 
+  it('local managed 时显示开机自启开关与依赖多选', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: localDep(),
+        hosts: [],
+        siblingServices: [{ id: 'svc-server', name: 'server' }],
+      },
+    })
+
+    expect(wrapper.find('[data-test="dep-start-on-boot"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dep-depends-on"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="dep-readiness-type"]').exists()).toBe(true)
+  })
+
+  it('remote 时不显示开机自启块', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: systemdRemoteDep(),
+        hosts: [],
+        siblingServices: [],
+      },
+    })
+
+    expect(wrapper.find('[data-test="dep-start-on-boot"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="dep-depends-on"]').exists()).toBe(false)
+  })
+
   it('local 时渲染 runtime.env_vars 环境变量编辑器', () => {
     const dep = {
       id: 'd1',
