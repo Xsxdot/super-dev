@@ -4,6 +4,7 @@
  * 职责：
  *   - projectToDraft：把 Project 深拷贝成可编辑草稿
  *   - draftToPayload：把草稿拍平为后端 SetupPayload（忽略空 key 的 env 变量）
+ *   - 保留 ai_note/auth_hint 等非密钥 AI guidance 字段
  *   - validateDraft：保存前校验，返回错误信息数组（空数组 = 通过）
  *
  * 边界：
@@ -36,6 +37,8 @@ export interface ConfigDraftService {
   required: boolean
   order: number
   language?: Project['services'][number]['language']
+  ai_note?: string
+  auth_hint?: string
   debug_credentials: DebugCredential[]
   deployments: Deployment[]
 }
@@ -43,6 +46,8 @@ export interface ConfigDraftService {
 export interface ConfigDraft {
   variables: Record<string, string>
   environments: Environment[]
+  ai_note: string
+  auth_hint: string
   debug_credentials: DebugCredential[]
   services: ConfigDraftService[]
   pipelines: ProjectPipeline[]
@@ -204,6 +209,8 @@ export function projectToDraft(p: Project): ConfigDraft {
   return {
     variables: { ...(p.variables ?? {}) },
     environments: (p.environments ?? []).map(e => ({ ...e })),
+    ai_note: p.ai_note ?? '',
+    auth_hint: p.auth_hint ?? '',
     debug_credentials: (p.debug_credentials ?? []).map(c => ({ ...c })),
     services: (p.services ?? []).map(s => ({
       id: s.id,
@@ -211,6 +218,8 @@ export function projectToDraft(p: Project): ConfigDraft {
       required: s.required,
       order: s.order,
       language: s.language,
+      ai_note: s.ai_note,
+      auth_hint: s.auth_hint,
       debug_credentials: (s.debug_credentials ?? []).map(c => ({ ...c })),
       deployments: (s.deployments ?? []).map(d => normalizeDeployment(d)),
     })),
@@ -242,6 +251,11 @@ function optionalDebugCredentials(credentials: DebugCredential[]): DebugCredenti
   return named.length ? named : undefined
 }
 
+function optionalTrimmedText(value?: string): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? value : undefined
+}
+
 /**
  * draftToPayload 把草稿拍平为后端 SetupPayload。
  *
@@ -262,7 +276,11 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       name: e.name,
       is_dev: e.is_dev,
       order: e.order,
+      ai_note: optionalTrimmedText(e.ai_note),
+      auth_hint: optionalTrimmedText(e.auth_hint),
     })),
+    ai_note: optionalTrimmedText(draft.ai_note),
+    auth_hint: optionalTrimmedText(draft.auth_hint),
     debug_credentials: optionalDebugCredentials(draft.debug_credentials),
     services: draft.services.map(s => ({
       id: s.id,
@@ -270,6 +288,8 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       required: s.required,
       order: s.order,
       language: s.language,
+      ai_note: optionalTrimmedText(s.ai_note),
+      auth_hint: optionalTrimmedText(s.auth_hint),
       debug_credentials: optionalDebugCredentials(s.debug_credentials),
       deployments: s.deployments.map<SetupDeployment>((d) => {
         const dep = normalizeDeployment(d)

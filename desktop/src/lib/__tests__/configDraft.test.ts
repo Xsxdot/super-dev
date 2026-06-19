@@ -243,6 +243,27 @@ describe('configDraft', () => {
     ])
   })
 
+  it('preserves AI guidance hints through draft payload conversion', () => {
+    const project = makeProject()
+    project.ai_note = 'project note'
+    project.auth_hint = 'project auth'
+    project.environments![0].ai_note = 'env note'
+    project.environments![0].auth_hint = 'env auth'
+    project.services[0].ai_note = 'service note'
+    project.services[0].auth_hint = 'service auth'
+
+    const draft = projectToDraft(project)
+    const payload = draftToPayload(draft)
+
+    expect(draft.ai_note).toBe('project note')
+    expect(draft.auth_hint).toBe('project auth')
+    expect(draft.environments[0]).toMatchObject({ ai_note: 'env note', auth_hint: 'env auth' })
+    expect(draft.services[0]).toMatchObject({ ai_note: 'service note', auth_hint: 'service auth' })
+    expect(payload).toMatchObject({ ai_note: 'project note', auth_hint: 'project auth' })
+    expect(payload.environments[0]).toMatchObject({ ai_note: 'env note', auth_hint: 'env auth' })
+    expect(payload.services[0]).toMatchObject({ ai_note: 'service note', auth_hint: 'service auth' })
+  })
+
   it('reports code debug for unsupported deployment runtime', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments = [{

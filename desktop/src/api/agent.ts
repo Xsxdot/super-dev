@@ -331,6 +331,12 @@ export interface DebugCredential {
   desc: string
 }
 
+export interface DebugCredentialHint {
+  name: string
+  desc?: string
+  source: 'project' | 'service'
+}
+
 export interface PipelineEnvironment {
   variables?: Record<string, string>
 }
@@ -529,6 +535,8 @@ export interface Environment {
   name: string
   is_dev: boolean
   order: number
+  ai_note?: string
+  auth_hint?: string
 }
 
 export interface Service {
@@ -544,6 +552,10 @@ export interface Service {
   language?: ServiceLanguage
   deployments?: Deployment[]
   debug_credentials?: DebugCredential[]
+  has_debug_credentials?: boolean
+  debug_credential_hints?: DebugCredentialHint[]
+  ai_note?: string
+  auth_hint?: string
 }
 
 export interface Project {
@@ -553,6 +565,10 @@ export interface Project {
   variables?: Record<string, string>
   services: Service[]
   debug_credentials?: DebugCredential[]
+  has_debug_credentials?: boolean
+  debug_credential_hints?: DebugCredentialHint[]
+  ai_note?: string
+  auth_hint?: string
   pipelines?: ProjectPipeline[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
@@ -925,13 +941,17 @@ export interface SetupServiceEntry {
   required: boolean
   order: number
   language?: ServiceLanguage
+  ai_note?: string
+  auth_hint?: string
   debug_credentials?: DebugCredential[]
   deployments: SetupDeployment[]
 }
 
 export interface SetupPayload {
   variables?: Record<string, string>
-  environments: Array<{ id?: string; name: string; is_dev: boolean; order: number }>
+  environments: Array<{ id?: string; name: string; is_dev: boolean; order: number; ai_note?: string; auth_hint?: string }>
+  ai_note?: string
+  auth_hint?: string
   services: SetupServiceEntry[]
   debug_credentials?: DebugCredential[]
   pipelines?: ProjectPipeline[]
