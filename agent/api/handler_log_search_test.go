@@ -10,6 +10,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/store"
 )
@@ -123,6 +125,43 @@ func TestLogSearchAPIUsesDeploymentIDs(t *testing.T) {
 	assert.Equal(t, "dep-api", body.Items[0].DeploymentID)
 	assert.Equal(t, "dep-worker", body.Items[1].DeploymentID)
 	assert.Equal(t, map[string]int{"dep-api": 1, "dep-worker": 1}, body.DeploymentCounts)
+}
+
+func TestLogSearchAPIUsesDeploymentBackends(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-api",
+			ProjectID: "proj-1",
+			Name:      "api",
+			Deployments: []model.Deployment{
+				{ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-1"}},
+			},
+		},
+	}
+	base := recentLogBase()
+	backend := &searchLogBackend{
+		entries: []model.LogEntry{
+			{ID: 77, DeploymentID: "dep-remote", RunID: "run-remote", Timestamp: base, Level: "INFO", Message: "remote needle", Stream: "stdout"},
+		},
+	}
+	app.SetBackendForTest("dep-remote", backend)
+
+	resp, err := http.Get(srv.URL + "/api/log-search?project=proj-1&q=needle")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logSearchResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, logbackend.SearchQuery{
+		Text:          "needle",
+		DeploymentIDs: []string{"dep-remote"},
+		Limit:         defaultSearchLimit,
+	}, backend.query)
+	require.Len(t, body.Items, 1)
+	assert.Equal(t, "dep-remote", body.Items[0].DeploymentID)
+	assert.Equal(t, map[string]int{"dep-remote": 1}, body.DeploymentCounts)
 }
 
 func TestLogSearchAPIPagesAfterCursor(t *testing.T) {
@@ -253,4 +292,27 @@ func TestLogContextPageAPI(t *testing.T) {
 	assert.True(t, body.HasMore)
 	require.Len(t, body.Items, 1)
 	assert.Equal(t, "api near", body.Items[0].Message)
+}
+
+type searchLogBackend struct {
+	query   logbackend.SearchQuery
+	entries []model.LogEntry
+	next    logbackend.Cursor
+	hasMore bool
+	err     error
+}
+
+func (b *searchLogBackend) Query(ctx context.Context, f logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
+	return nil, logbackend.Cursor{}, nil
+}
+
+func (b *searchLogBackend) Search(ctx context.Context, q logbackend.SearchQuery) ([]model.LogEntry, logbackend.Cursor, bool, error) {
+	b.query = q
+	return b.entries, b.next, b.hasMore, b.err
+}
+
+func (b *searchLogBackend) Subscribe(ctx context.Context, opts logbackend.SubscribeOptions) logbackend.LogStream {
+	ch := make(chan model.LogEntry)
+	close(ch)
+	return logbackend.LogStream{Ch: ch, Cancel: func() {}}
 }

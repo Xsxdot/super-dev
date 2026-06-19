@@ -2,21 +2,25 @@
 //
 // 职责：
 //   - 解析日志搜索和上下文查询参数
-//   - 在查询 Store 前收敛到项目服务范围
+//   - 在查询日志后端前收敛到项目服务范围
 //   - 返回桌面端排障看板需要的原始日志数据
 //
 // 边界：
 //   - 不应用项目日志过滤规则
 //   - 不为 UI 时间栅格做格式化或分组
-//   - 不暴露 Store 内部实现细节，只返回 HTTP 响应 DTO
+//   - 不暴露 Store 或远端后端内部实现细节，只返回 HTTP 响应 DTO
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/store"
 )
@@ -51,6 +55,12 @@ type logContextPageResponse struct {
 	HasMore      bool                       `json:"has_more"`
 }
 
+type projectLogSearchScope struct {
+	all    []string
+	local  []string
+	remote []string
+}
+
 // searchLogs 处理 GET /api/log-search，按项目服务集合搜索历史日志。
 func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -62,13 +72,15 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var deploymentIDs []string
+	var scope projectLogSearchScope
 	if projectID != "" {
 		var ok bool
-		deploymentIDs, ok = a.projectDeploymentIDs(projectID, q["deployment"])
+		scope, ok = a.projectLogSearchScope(projectID, q["deployment"])
 		if !ok {
 			jsonError(w, http.StatusNotFound, "project not found")
 			return
 		}
+		deploymentIDs = scope.all
 	} else {
 		// 无 project 时直接使用 deployment 列表,用于远端 collector 虚拟部署查询。
 		deploymentIDs = q["deployment"]
@@ -80,21 +92,40 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 
 	limit := parseBoundedInt(q.Get("limit"), defaultSearchLimit, maxSearchLimit)
 	var cursorTime *time.Time
-	var cursorID int64
+	cursorIDText := strings.TrimSpace(q.Get("cursor_id"))
 	if rawCursorTime := q.Get("cursor_time"); rawCursorTime != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, rawCursorTime)
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, "cursor_time is invalid")
 			return
 		}
-		cursorID, err = strconv.ParseInt(q.Get("cursor_id"), 10, 64)
-		if err != nil || cursorID <= 0 {
+		if cursorIDText == "" {
 			jsonError(w, http.StatusBadRequest, "cursor_id is required")
 			return
 		}
 		cursorTime = &parsed
 	} else if q.Get("cursor_id") != "" {
 		jsonError(w, http.StatusBadRequest, "cursor_time is required")
+		return
+	}
+
+	if projectID != "" && len(scope.remote) > 0 {
+		resp, err := a.searchProjectLogs(r.Context(), queryText, limit, cursorTime, cursorIDText, scope)
+		if errors.Is(err, errInvalidCursorID) {
+			jsonError(w, http.StatusBadRequest, "cursor_id is required")
+			return
+		}
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to search logs: "+err.Error())
+			return
+		}
+		jsonOK(w, resp)
+		return
+	}
+
+	cursorID, err := parseStoreCursorID(cursorTime, cursorIDText)
+	if errors.Is(err, errInvalidCursorID) {
+		jsonError(w, http.StatusBadRequest, "cursor_id is required")
 		return
 	}
 	result, err := a.store.Search(store.SearchParams{
@@ -115,6 +146,119 @@ func (a *App) searchLogs(w http.ResponseWriter, r *http.Request) {
 		DeploymentCounts: result.DeploymentCounts,
 		HasMore:          result.HasMore,
 	})
+}
+
+var errInvalidCursorID = errors.New("invalid cursor id")
+
+func parseStoreCursorID(cursorTime *time.Time, cursorIDText string) (int64, error) {
+	if cursorTime == nil {
+		return 0, nil
+	}
+	cursorID, err := strconv.ParseInt(cursorIDText, 10, 64)
+	if err != nil || cursorID <= 0 {
+		return 0, errInvalidCursorID
+	}
+	return cursorID, nil
+}
+
+func (a *App) searchProjectLogs(ctx context.Context, queryText string, limit int, cursorTime *time.Time, cursorIDText string, scope projectLogSearchScope) (logSearchResponse, error) {
+	items := []model.LogEntry{}
+	counts := map[string]int{}
+	total := 0
+	hasMore := false
+
+	if len(scope.local) > 0 {
+		cursorID, err := parseStoreCursorID(cursorTime, cursorIDText)
+		if err != nil {
+			return logSearchResponse{}, err
+		}
+		result, err := a.store.Search(store.SearchParams{
+			DeploymentIDs: scope.local,
+			Query:         queryText,
+			Limit:         limit,
+			CursorTime:    cursorTime,
+			CursorID:      cursorID,
+		})
+		if err != nil {
+			return logSearchResponse{}, err
+		}
+		items = append(items, result.Entries...)
+		for deploymentID, count := range result.DeploymentCounts {
+			counts[deploymentID] += count
+			total += count
+		}
+		hasMore = hasMore || result.HasMore
+	}
+
+	remote, err := a.searchDeploymentBackends(ctx, scope.remote, queryText, limit, cursorTime, cursorIDText)
+	if err != nil {
+		return logSearchResponse{}, err
+	}
+	items = append(items, remote.Items...)
+	for deploymentID, count := range remote.DeploymentCounts {
+		counts[deploymentID] += count
+		total += count
+	}
+	hasMore = hasMore || remote.HasMore
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Timestamp.Equal(items[j].Timestamp) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Timestamp.Before(items[j].Timestamp)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+		hasMore = true
+	}
+
+	return logSearchResponse{
+		Query:            queryText,
+		Total:            total,
+		Items:            items,
+		DeploymentCounts: counts,
+		HasMore:          hasMore,
+	}, nil
+}
+
+func (a *App) searchDeploymentBackends(ctx context.Context, deploymentIDs []string, queryText string, limit int, cursorTime *time.Time, cursorIDText string) (logSearchResponse, error) {
+	items := []model.LogEntry{}
+	counts := map[string]int{}
+	hasMore := false
+
+	cursor := logbackend.Cursor{ID: cursorIDText}
+	if cursorTime != nil {
+		cursor.Time = *cursorTime
+	}
+	for _, deploymentID := range deploymentIDs {
+		backend, ok := a.lookupBackend(deploymentID)
+		if !ok {
+			return logSearchResponse{}, errors.New("log backend not found for deployment " + deploymentID)
+		}
+		entries, _, childHasMore, err := backend.Search(ctx, logbackend.SearchQuery{
+			Text:          queryText,
+			DeploymentIDs: []string{deploymentID},
+			Limit:         limit,
+			Cursor:        cursor,
+		})
+		if err != nil {
+			return logSearchResponse{}, err
+		}
+		for i := range entries {
+			// 远端 agent 可能返回 collector 内部归属 ID；项目搜索的展示维度必须稳定为中心侧 deployment ID。
+			entries[i].DeploymentID = deploymentID
+		}
+		items = append(items, entries...)
+		counts[deploymentID] += len(entries)
+		hasMore = hasMore || childHasMore
+	}
+	return logSearchResponse{
+		Query:            queryText,
+		Total:            len(items),
+		Items:            items,
+		DeploymentCounts: counts,
+		HasMore:          hasMore,
+	}, nil
 }
 
 // fetchLogContext 处理 GET /api/logs/context，按目标日志时间拉取跨服务上下文。
@@ -230,14 +374,20 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 //   - 收敛后的 deployment ID 列表
 //   - 项目是否存在
 func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]string, bool) {
+	scope, ok := a.projectLogSearchScope(projectID, requested)
+	return scope.all, ok
+}
+
+func (a *App) projectLogSearchScope(projectID string, requested []string) (projectLogSearchScope, bool) {
 	a.mu.RLock()
 	project, ok := a.findProject(projectID)
 	a.mu.RUnlock()
 	if !ok {
-		return nil, false
+		return projectLogSearchScope{}, false
 	}
 
 	aliases := map[string][]string{}
+	remoteByID := map[string]bool{}
 	allIDs := make([]string, 0, len(project.Services))
 	for _, service := range project.Services {
 		if len(service.Deployments) == 0 {
@@ -250,6 +400,7 @@ func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]stri
 		serviceDeploymentIDs := make([]string, 0, len(service.Deployments))
 		for _, deployment := range service.Deployments {
 			aliases[deployment.ID] = []string{deployment.ID}
+			remoteByID[deployment.ID] = deployment.Location == model.LocationRemote
 			serviceDeploymentIDs = append(serviceDeploymentIDs, deployment.ID)
 			allIDs = append(allIDs, deployment.ID)
 		}
@@ -257,7 +408,7 @@ func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]stri
 		aliases[service.ID] = serviceDeploymentIDs
 	}
 	if len(requested) == 0 {
-		return allIDs, true
+		return splitLogSearchScope(allIDs, remoteByID), true
 	}
 
 	ids := make([]string, 0, len(requested))
@@ -272,7 +423,19 @@ func (a *App) projectDeploymentIDs(projectID string, requested []string) ([]stri
 			ids = append(ids, deploymentID)
 		}
 	}
-	return ids, true
+	return splitLogSearchScope(ids, remoteByID), true
+}
+
+func splitLogSearchScope(ids []string, remoteByID map[string]bool) projectLogSearchScope {
+	scope := projectLogSearchScope{all: ids}
+	for _, id := range ids {
+		if remoteByID[id] {
+			scope.remote = append(scope.remote, id)
+		} else {
+			scope.local = append(scope.local, id)
+		}
+	}
+	return scope
 }
 
 func parseBoundedInt(raw string, fallback int, max int) int {
