@@ -34,7 +34,7 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | 调试本机前端页面（点击/输入/截图/读 console，哪怕没提 SuperDev） | `list_browser_targets` 找 deployment → `open_browser_debug_session`（走审批）→ `browser_snapshot` 取 selector → 控制工具 | `references/browser-debug.md` |
 | 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python/Rust/C++/Java/Kotlin） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
 | 新建受管语言运行时服务（Go/Node/Python/Java/Kotlin/Rust/C++）、不知配置填什么 | `list_language_runtime_providers` → `describe_language_runtime_schema` 照字段填，别猜命令串，再 preview→apply | `references/safe-operations.md` |
-| 改项目、服务、deployment、pipeline 配置 | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
+| 改项目、服务、deployment、pipeline 配置（含 `start_on_boot` / `depends_on` / `readiness`） | 先读现状，再 preview，再直接 apply（需审批时自动等待续跑） | `references/safe-operations.md` |
 | 启动、停止、重启服务、部署/回滚 pipeline、导入模板 | 可选 `preview_operation`，直接调用写工具并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
 | 记录一次排查过程 | 建立 debug session，过程中追加分析和观察 | `references/debugging-workflow.md` |

@@ -309,8 +309,9 @@ pub fn install_mcp_for_paths_with_skill(
     // hook 注册失败不阻断整体安装：降级后仍有 skill description 兜底触发。
     let hook_path = kind.session_hook_path(home);
     let session_hook = if skill_target.join("hooks").join("session-start").is_file() {
-        install_session_hook(kind, &hook_path, &skill_target)
-            .unwrap_or_else(|err| SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err))
+        install_session_hook(kind, &hook_path, &skill_target).unwrap_or_else(|err| {
+            SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err)
+        })
     } else {
         SessionHookOutcome::failed(
             &hook_path,
@@ -1729,8 +1730,12 @@ command = "gh"
 
     #[test]
     fn merge_hook_claude_appends_nested_entry_with_matcher() {
-        let merged = merge_session_hook(None, AgentKind::ClaudeCode, "\"/skills/superdev/hooks/run-hook.cmd\" session-start")
-            .expect("merge");
+        let merged = merge_session_hook(
+            None,
+            AgentKind::ClaudeCode,
+            "\"/skills/superdev/hooks/run-hook.cmd\" session-start",
+        )
+        .expect("merge");
         let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
 
         assert!(merged.changed);
@@ -1746,14 +1751,21 @@ command = "gh"
 
     #[test]
     fn merge_hook_cursor_appends_flat_entry_lowercase_event() {
-        let merged = merge_session_hook(None, AgentKind::Cursor, "\"/skills/superdev/hooks/run-hook.cmd\" session-start")
-            .expect("merge");
+        let merged = merge_session_hook(
+            None,
+            AgentKind::Cursor,
+            "\"/skills/superdev/hooks/run-hook.cmd\" session-start",
+        )
+        .expect("merge");
         let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
 
         // Cursor 用小写 sessionStart 且扁平结构（无 matcher 包裹）。
         let arr = parsed["hooks"]["sessionStart"].as_array().expect("array");
         assert_eq!(arr.len(), 1);
-        assert!(arr[0]["command"].as_str().expect("cmd").contains(HOOK_MARKER));
+        assert!(arr[0]["command"]
+            .as_str()
+            .expect("cmd")
+            .contains(HOOK_MARKER));
         assert!(arr[0].get("matcher").is_none());
     }
 
@@ -1767,25 +1779,36 @@ command = "gh"
   },
   "theme": "dark"
 }"#;
-        let merged = merge_session_hook(Some(existing), AgentKind::ClaudeCode, "\"/x/skills/superdev/hooks/run-hook.cmd\" session-start")
-            .expect("merge");
+        let merged = merge_session_hook(
+            Some(existing),
+            AgentKind::ClaudeCode,
+            "\"/x/skills/superdev/hooks/run-hook.cmd\" session-start",
+        )
+        .expect("merge");
         let parsed: serde_json::Value = serde_json::from_str(&merged.content).expect("json");
 
         assert!(merged.changed);
         assert_eq!(parsed["theme"], "dark");
         // 用户原有的两类 hook 都还在
-        assert_eq!(parsed["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "echo guard");
+        assert_eq!(
+            parsed["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "echo guard"
+        );
         let ss = parsed["hooks"]["SessionStart"].as_array().expect("array");
         assert_eq!(ss.len(), 2, "应在保留用户原条目的基础上追加");
         assert_eq!(ss[0]["hooks"][0]["command"], "echo mine");
-        assert!(ss[1]["hooks"][0]["command"].as_str().expect("cmd").contains(HOOK_MARKER));
+        assert!(ss[1]["hooks"][0]["command"]
+            .as_str()
+            .expect("cmd")
+            .contains(HOOK_MARKER));
     }
 
     #[test]
     fn merge_hook_is_idempotent() {
         let cmd = "\"/x/skills/superdev/hooks/run-hook.cmd\" session-start";
         let first = merge_session_hook(None, AgentKind::ClaudeCode, cmd).expect("first");
-        let second = merge_session_hook(Some(&first.content), AgentKind::ClaudeCode, cmd).expect("second");
+        let second =
+            merge_session_hook(Some(&first.content), AgentKind::ClaudeCode, cmd).expect("second");
 
         assert!(!second.changed, "已存在 SuperDev hook 时不应再次追加");
         assert_eq!(first.content, second.content);
@@ -1808,7 +1831,8 @@ command = "gh"
             .expect("seed");
 
         // 安装
-        let installed = install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install");
+        let installed =
+            install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install");
         assert!(installed.installed);
         assert!(!installed.already_present);
         assert!(!installed.needs_trust);
@@ -1816,7 +1840,8 @@ command = "gh"
         assert!(session_hook_status(AgentKind::ClaudeCode, &hook_path));
 
         // 再装一次 -> 幂等
-        let again = install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install2");
+        let again =
+            install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install2");
         assert!(!again.installed);
         assert!(again.already_present);
 
@@ -1826,10 +1851,14 @@ command = "gh"
         assert!(!session_hook_status(AgentKind::ClaudeCode, &hook_path));
         let after: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_path).expect("read")).expect("json");
-        assert_eq!(after["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "echo keep");
+        assert_eq!(
+            after["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "echo keep"
+        );
 
         // 再卸载 -> 没有可移除项，返回 false
-        let removed_again = remove_session_hook(AgentKind::ClaudeCode, &hook_path).expect("remove2");
+        let removed_again =
+            remove_session_hook(AgentKind::ClaudeCode, &hook_path).expect("remove2");
         assert!(!removed_again);
     }
 
@@ -1840,7 +1869,8 @@ command = "gh"
         fs::create_dir_all(skill_dir.join("hooks")).expect("mkdir");
         let hook_path = dir.join("hooks.json");
 
-        let installed = install_session_hook(AgentKind::Codex, &hook_path, &skill_dir).expect("install");
+        let installed =
+            install_session_hook(AgentKind::Codex, &hook_path, &skill_dir).expect("install");
         assert!(installed.installed);
         assert!(installed.needs_trust, "Codex 需要用户手动信任 hook");
     }
@@ -2175,6 +2205,10 @@ mod path_tests {
             ("debugging-workflow.md", "create_debug_session"),
             ("log-tools.md", "get_log_context"),
             ("safe-operations.md", "apply_config_change"),
+            ("safe-operations.md", "start_on_boot"),
+            ("safe-operations.md", "depends_on"),
+            ("safe-operations.md", "readiness"),
+            ("safe-operations.md", "service ID"),
             ("pipeline.md", "read_pipeline_run_logs"),
         ];
         for (file, phrase) in required_refs {

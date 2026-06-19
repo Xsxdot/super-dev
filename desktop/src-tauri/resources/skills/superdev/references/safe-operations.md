@@ -57,6 +57,34 @@ probe_project_config 或 get_project_config
 - 用户确认 diff 后才调用 `apply_config_change`。
 - 不直接调用底层 `upsert_project_config`、`upsert_service`、`upsert_project_pipeline`，除非用户明确要求绕过安全流程并理解风险。
 
+### 开机自启、依赖和就绪探测
+
+给 deployment 配置自启或依赖时，仍然属于配置变更：先读现状，写入前走 `preview_config_change`，确认后再 `apply_config_change`。
+
+- `start_on_boot: true` 只对 `location: local` 且 `control_mode: managed` 的 deployment 生效；远端、只监控或只读 deployment 会被 agent 忽略。
+- `depends_on` 填同项目、同环境内被依赖的 **service ID** 列表，不填 service name、deployment ID 或展示名。存 service ID 是为了服务改名后依赖仍稳定。
+- `readiness` 描述这个 deployment 何时算就绪；目前支持 `type: http`（`target` 为 URL，2xx/3xx 视为 ready）和 `type: tcp`（`target` 为 `host:port`）。`timeout_seconds` 为空或 <=0 时使用默认等待时间。
+- 有 `readiness` 时，服务会保持 `starting`，直到探测通过才进入 `running`；依赖它的服务会等到它 `running` 后再启动。没有 `readiness` 时，进程起来即视为就绪。
+- 手动 `start_service` 一个带 `depends_on` 的 deployment 时，SuperDev 会级联启动未运行的依赖并等待就绪；不要用 shell 自己先把依赖拉起来。
+- 应用配置后，用 `list_services` 验证 `starting` / `running` 状态，用 `tail_logs`、`search_logs` 或 `diagnose_service` 查看对应 deployment 的运行证据。agent 自身的 autostart 审计日志不一定在 deployment 日志里，不要只靠搜索 `[SuperDev] autostart` 判断成功。
+
+示例片段：
+
+```yaml
+deployments:
+  - id: worker-dev
+    env: dev
+    location: local
+    control_mode: managed
+    start_on_boot: true
+    depends_on:
+      - server
+    readiness:
+      type: http
+      target: http://127.0.0.1:8080/ready
+      timeout_seconds: 30
+```
+
 ### 新建受管语言运行时服务：先查 provider schema，别猜命令串
 
 新建一个语言运行时服务、或排查「这个服务配置该填什么」时，**先读 provider schema 照字段填，不要拼一条 shell 命令串**：
