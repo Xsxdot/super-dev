@@ -1113,6 +1113,12 @@ fn default_capability_sections() -> Vec<McpCapabilitySection> {
                     "读",
                     "references/debugging-workflow.md",
                 ),
+                capability_tool(
+                    "get_debug_credentials",
+                    "取项目/服务的调试凭据明文，用于 AI 合法登录或鉴权",
+                    "读",
+                    "SKILL.md",
+                ),
             ],
         },
         McpCapabilitySection {
@@ -2104,6 +2110,12 @@ SUPERDEV_AGENT_URL = "http://127.0.0.1:57017"
             .summary_sections
             .iter()
             .any(|section| section.id == "runtime" && section.title.contains("运行")));
+        assert!(docs.summary_sections.iter().any(|section| {
+            section
+                .tools
+                .iter()
+                .any(|tool| tool.name == "get_debug_credentials" && tool.reference == "SKILL.md")
+        }));
         assert!(docs.documents.iter().any(|doc| {
             doc.id == "skill" && doc.title == "SKILL.md" && doc.content.contains("# SuperDev")
         }));
@@ -2197,6 +2209,8 @@ mod path_tests {
             "is_self=false",
             "preview_operation → get_operation_approval",
             "deploy_project_pipeline",
+            "get_debug_credentials",
+            "AI 调试凭据纪律",
         ] {
             assert!(skill.contains(phrase), "SKILL.md missing phrase: {phrase}");
         }

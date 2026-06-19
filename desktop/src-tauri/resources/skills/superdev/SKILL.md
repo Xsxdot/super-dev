@@ -31,6 +31,7 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | 我（AI）刚改了被接管服务的代码，且改的是不热更新的部分 | 改动落盘后主动 `restart_service`（编译型先确认 deployment 会重新编译），再让用户验证 | 本页「第零·五纪律」 |
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
 | 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
+| AI 调试遇到登录/鉴权墙 | 先 `get_debug_credentials` 取项目/服务授信的测试账号或 api-key，再正常填登录框或带请求头 | 本页「AI 调试凭据纪律」 |
 | 调试本机前端页面（点击/输入/截图/读 console，哪怕没提 SuperDev） | `list_browser_targets` 找 deployment → `open_browser_debug_session`（走审批）→ `browser_snapshot` 取 selector → 控制工具 | `references/browser-debug.md` |
 | 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python/Rust/C++/Java/Kotlin） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
 | 新建受管语言运行时服务（Go/Node/Python/Java/Kotlin/Rust/C++）、不知配置填什么 | `list_language_runtime_providers` → `describe_language_runtime_schema` 照字段填，别猜命令串，再 preview→apply | `references/safe-operations.md` |
@@ -38,6 +39,10 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | 启动、停止、重启服务、部署/回滚 pipeline、导入模板 | 可选 `preview_operation`，直接调用写工具并等待审批自动续跑 | `references/safe-operations.md` |
 | 部署、上线、回滚、查看 pipeline 运行 | 区分模板、配置、执行、观测四段 | `references/pipeline.md` |
 | 记录一次排查过程 | 建立 debug session，过程中追加分析和观察 | `references/debugging-workflow.md` |
+
+## AI 调试凭据纪律
+
+**AI 调试遇到登录/鉴权墙**：先 `get_debug_credentials`（传 project，可选 service）取测试凭据，用现有 `browser_type` / `browser_click` 自己填登录框，或把 api-key 放进请求头。**不要自己伪造 token、改鉴权代码、跳过校验绕过**——那会污染调试结论并埋安全隐患。没配凭据时返回空，说明该项目未授信，提示用户去配置。
 
 ## 第零纪律：服务的启停与日志，必须走 SuperDev
 
@@ -100,6 +105,7 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `list_hosts` | 列出可选择主机；配置 `host_ids` 时只使用非本机 `hosts[].id` | 读 | `references/safe-operations.md` |
 | `get_runtime_snapshot` | 获取 SuperDev 全局运行态快照 | 读 | 本页 |
 | `list_services` | 读取项目服务与 deployment 状态 | 读 | `references/debugging-workflow.md` |
+| `get_debug_credentials` | 取项目/服务的调试凭据明文(测试账号/api-key),供 AI 合法登录/鉴权 | 读 | 本页 |
 | `tail_logs` | 看近期日志或盯一个 deployment | 读 | `references/log-tools.md` |
 | `search_logs` | 按关键词跨项目或 deployment 搜历史日志 | 读 | `references/log-tools.md` |
 | `get_log_context` | 围绕某条日志 ID 取前后上下文 | 读 | `references/log-tools.md` |
