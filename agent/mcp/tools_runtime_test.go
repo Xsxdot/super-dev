@@ -523,6 +523,64 @@ func TestRuntimeSnapshotSummarizesProjectsAndServices(t *testing.T) {
 	assert.Contains(t, body.Summary, "1 project")
 }
 
+func TestRuntimeSnapshotAddsDebugCredentialGuidance(t *testing.T) {
+	project := sampleProject()
+	project.DebugCredentials = []model.DebugCredential{{Name: "login", Value: "secret", Desc: "登录"}}
+	client := &fakeAgentClient{
+		projects: []model.Project{project},
+		services: []model.Service{sampleService("api", model.StatusRunning, "dep-api-dev")},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "get_runtime_snapshot", `{}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	payload := result.StructuredContent.(toolPayload)
+	assert.Contains(t, payload.NextActions, "Debug credentials are configured. For authenticated API checks, call get_debug_credentials with project_id/project_name and optional service_id/service_name instead of fabricating tokens.")
+}
+
+func TestListServicesIncludesMergedDebugCredentialHints(t *testing.T) {
+	project := sampleProject()
+	project.DebugCredentials = []model.DebugCredential{
+		{Name: "shared_login", Value: "project-secret", Desc: "项目默认登录"},
+		{Name: "project_only", Value: "project-only-secret", Desc: "项目专用"},
+	}
+	service := sampleService("api", model.StatusRunning, "dep-api-dev")
+	service.ProjectID = project.ID
+	service.DebugCredentials = []model.DebugCredential{
+		{Name: "shared_login", Value: "service-secret", Desc: "服务覆盖登录"},
+		{Name: "service_only", Value: "service-only-secret", Desc: "服务专用"},
+	}
+	client := &fakeAgentClient{
+		projects: []model.Project{project},
+		services: []model.Service{service},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "list_services", `{"project_id":"p1"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	payload := result.StructuredContent.(toolPayload)
+	data := payload.Data.(map[string]any)
+	services := data["services"].([]model.Service)
+	require.Len(t, services, 1)
+	got := services[0]
+	assert.Nil(t, got.DebugCredentials)
+	assert.True(t, got.HasDebugCredentials)
+	require.Len(t, got.DebugCredentialHints, 3)
+	assert.Equal(t, []model.DebugCredentialHint{
+		{Name: "shared_login", Desc: "服务覆盖登录", Source: "service"},
+		{Name: "project_only", Desc: "项目专用", Source: "project"},
+		{Name: "service_only", Desc: "服务专用", Source: "service"},
+	}, got.DebugCredentialHints)
+	for _, hint := range got.DebugCredentialHints {
+		assert.NotContains(t, hint.Name, "secret")
+		assert.NotContains(t, hint.Desc, "secret")
+	}
+}
+
 func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
 	client := &fakeAgentClient{
 		hosts: []HostReference{
@@ -571,6 +629,16 @@ func TestRestartServiceCallsResolvedDeployment(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Equal(t, "dep-api-prod", client.restartedDeploymentID)
+}
+
+func TestStartServiceAmbiguousTargetSanitizesCredentialCandidates(t *testing.T) {
+	client := &fakeAgentClient{projects: []model.Project{sampleProjectWithDebugCredentials()}}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "start_service", `{"project_name":"demo","service_name":"api"}`)
+
+	require.NoError(t, err)
+	assertAmbiguousCredentialCandidatesSanitized(t, result)
 }
 
 func TestRestartServiceWaitsForApprovalAndRetriesWithToken(t *testing.T) {
@@ -682,4 +750,43 @@ func TestRestartServiceCanDisableApprovalWait(t *testing.T) {
 	assert.Equal(t, 1, client.restartCallCount)
 	assert.Equal(t, 0, client.getApprovalCallCount)
 	assert.Equal(t, "", client.lastApprovalToken)
+}
+
+func sampleProjectWithDebugCredentials() model.Project {
+	project := sampleProject()
+	project.DebugCredentials = []model.DebugCredential{
+		{Name: "shared_login", Value: "project-secret", Desc: "项目默认登录"},
+	}
+	project.Services[0].DebugCredentials = []model.DebugCredential{
+		{Name: "shared_login", Value: "service-secret", Desc: "服务覆盖登录"},
+		{Name: "service_only", Value: "service-only-secret", Desc: "服务专用"},
+	}
+	return project
+}
+
+func assertAmbiguousCredentialCandidatesSanitized(t *testing.T, result CallToolResult) {
+	t.Helper()
+
+	require.True(t, result.IsError)
+	payload := result.StructuredContent.(toolErrorPayload)
+	assert.Equal(t, "env_required", payload.Code)
+	resolveErr := payload.Data.(*resolveError)
+	require.Len(t, resolveErr.Candidates, 2)
+	for _, candidate := range resolveErr.Candidates {
+		assert.Nil(t, candidate.Project.DebugCredentials)
+		assert.True(t, candidate.Project.HasDebugCredentials)
+		assert.Equal(t, []model.DebugCredentialHint{
+			{Name: "shared_login", Desc: "项目默认登录", Source: "project"},
+		}, candidate.Project.DebugCredentialHints)
+		assert.Nil(t, candidate.Service.DebugCredentials)
+		assert.True(t, candidate.Service.HasDebugCredentials)
+		assert.Equal(t, []model.DebugCredentialHint{
+			{Name: "shared_login", Desc: "服务覆盖登录", Source: "service"},
+			{Name: "service_only", Desc: "服务专用", Source: "service"},
+		}, candidate.Service.DebugCredentialHints)
+		for _, hint := range candidate.Service.DebugCredentialHints {
+			assert.NotContains(t, hint.Name, "secret")
+			assert.NotContains(t, hint.Desc, "secret")
+		}
+	}
 }

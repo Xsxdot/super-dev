@@ -851,7 +851,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "get_debug_credentials",
 				Title:       "Get debug credentials",
-				Description: "Return plaintext debug credentials (test login/password, service api-key) for AI to log in or authenticate legitimately during debugging instead of fabricating tokens or bypassing auth. project_id|project_name required; pass service to merge project+service level (service overrides). Read-only, not approval-gated.",
+				Description: "Return plaintext debug credentials (test login/password, service api-key) for AI to log in or authenticate legitimately during debugging. Call this when has_debug_credentials/debug_credential_hints are visible and authenticated API testing is needed. Use auth_hint and credential desc to choose the right credential; do not fabricate tokens or bypass auth. project_id|project_name required; pass service to merge project+service level (service overrides). Read-only, not approval-gated.",
 				InputSchema: debugCredentialsInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},

@@ -55,7 +55,18 @@ func TestGetDebugCredentialsToolRequiresProjectSelector(t *testing.T) {
 	assert.Equal(t, "invalid_arguments", payload.Code)
 }
 
-func TestSanitizeServiceStripsDebugCredentials(t *testing.T) {
+func TestGetDebugCredentialsToolDescriptionMentionsCredentialHints(t *testing.T) {
+	server := NewServer(&fakeAgentClient{})
+	tool, ok := server.tools["get_debug_credentials"]
+	require.True(t, ok)
+
+	assert.Contains(t, tool.Tool.Description, "has_debug_credentials/debug_credential_hints")
+	assert.Contains(t, tool.Tool.Description, "auth_hint")
+	assert.Contains(t, tool.Tool.Description, "desc")
+	assert.Contains(t, tool.Tool.Description, "do not fabricate tokens")
+}
+
+func TestSanitizeServiceExposesCredentialHintsWithoutValues(t *testing.T) {
 	svc := model.Service{
 		ID:               "s1",
 		DebugCredentials: []model.DebugCredential{{Name: "x", Value: "secret", Desc: "d"}},
@@ -64,15 +75,33 @@ func TestSanitizeServiceStripsDebugCredentials(t *testing.T) {
 	got := sanitizeService(svc)
 
 	assert.Nil(t, got.DebugCredentials)
+	assert.True(t, got.HasDebugCredentials)
+	require.Len(t, got.DebugCredentialHints, 1)
+	assert.Equal(t, model.DebugCredentialHint{Name: "x", Desc: "d", Source: "service"}, got.DebugCredentialHints[0])
+	assert.NotContains(t, got.DebugCredentialHints[0].Name, "secret")
+	assert.NotContains(t, got.DebugCredentialHints[0].Desc, "secret")
 }
 
-func TestSanitizeProjectStripsDebugCredentials(t *testing.T) {
+func TestSanitizeProjectExposesCredentialHintsWithoutValues(t *testing.T) {
 	project := model.Project{
-		ID:               "p1",
-		DebugCredentials: []model.DebugCredential{{Name: "x", Value: "secret", Desc: "d"}},
+		ID:       "p1",
+		AINote:   "Use seeded login",
+		AuthHint: "Prefer session cookie",
+		DebugCredentials: []model.DebugCredential{{
+			Name:  "project_login",
+			Value: "secret",
+			Desc:  "登录",
+		}},
 	}
 
 	got := sanitizeProject(project)
 
+	assert.Equal(t, "Use seeded login", got.AINote)
+	assert.Equal(t, "Prefer session cookie", got.AuthHint)
 	assert.Nil(t, got.DebugCredentials)
+	assert.True(t, got.HasDebugCredentials)
+	require.Len(t, got.DebugCredentialHints, 1)
+	assert.Equal(t, model.DebugCredentialHint{Name: "project_login", Desc: "登录", Source: "project"}, got.DebugCredentialHints[0])
+	assert.NotContains(t, got.DebugCredentialHints[0].Name, "secret")
+	assert.NotContains(t, got.DebugCredentialHints[0].Desc, "secret")
 }

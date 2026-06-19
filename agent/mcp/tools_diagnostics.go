@@ -30,6 +30,7 @@ func (s *Server) diagnoseServiceTool(ctx context.Context, args json.RawMessage) 
 	}
 	target, errResp := resolveDeploymentTarget(projects, req)
 	if errResp != nil {
+		errResp = sanitizeResolveError(errResp)
 		return toolError(errResp.Code, errResp.Message, errResp), nil
 	}
 	services, err := s.client.ListServices(ctx)

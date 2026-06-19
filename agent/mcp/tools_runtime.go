@@ -97,16 +97,20 @@ func (s *Server) runtimeSnapshotTool(ctx context.Context, args json.RawMessage) 
 	}
 	data := map[string]any{
 		"projects":      sanitizeProjects(projects),
-		"services":      sanitizeServices(services),
+		"services":      sanitizeServicesWithProjects(services, projects),
 		"project_count": len(projects),
 		"service_count": len(services),
 		"status_counts": statusCounts,
+	}
+	nextActions := []string{"Use list_services for detailed runtime state or diagnose_service for one failing deployment."}
+	if hasAnyDebugCredentials(projects, services) {
+		nextActions = append(nextActions, "Debug credentials are configured. For authenticated API checks, call get_debug_credentials with project_id/project_name and optional service_id/service_name instead of fabricating tokens.")
 	}
 	return toolSuccess(
 		fmt.Sprintf("%d project(s), %d service(s)", len(projects), len(services)),
 		data,
 		nil,
-		[]string{"Use list_services for detailed runtime state or diagnose_service for one failing deployment."},
+		nextActions,
 	), nil
 }
 
@@ -145,7 +149,7 @@ func (s *Server) listServicesTool(ctx context.Context, args json.RawMessage) (Ca
 		}
 		services = filtered
 	}
-	services = sanitizeServices(services)
+	services = sanitizeServicesWithProjects(services, projects)
 	return toolSuccess(
 		fmt.Sprintf("%d service(s)", len(services)),
 		map[string]any{"services": services, "count": len(services)},
@@ -270,6 +274,7 @@ func (s *Server) resolveControlTarget(ctx context.Context, args json.RawMessage)
 	}
 	target, errResp := resolveDeploymentTarget(projects, req)
 	if errResp != nil {
+		errResp = sanitizeResolveError(errResp)
 		return resolvedTarget{}, req, toolError(errResp.Code, errResp.Message, errResp), nil
 	}
 	return target, req, CallToolResult{}, nil
@@ -345,9 +350,12 @@ func sanitizeProjects(projects []model.Project) []model.Project {
 
 func sanitizeProject(project model.Project) model.Project {
 	project.Variables = redactSecretMap(project.Variables)
+	projectCredentials := project.DebugCredentials
+	project.HasDebugCredentials = len(project.DebugCredentials) > 0
+	project.DebugCredentialHints = debugCredentialHints(model.MergeDebugCredentials(project.DebugCredentials, nil))
 	project.DebugCredentials = nil // 调试凭据明文不在快照里渲染，唯一出口是 get_debug_credentials。
 	for i, svc := range project.Services {
-		project.Services[i] = sanitizeService(svc)
+		project.Services[i] = sanitizeServiceWithProjectCredentials(svc, projectCredentials)
 	}
 	return project
 }
@@ -361,11 +369,65 @@ func sanitizeServices(services []model.Service) []model.Service {
 }
 
 func sanitizeService(service model.Service) model.Service {
+	return sanitizeServiceWithProjectCredentials(service, nil)
+}
+
+func sanitizeServicesWithProjects(services []model.Service, projects []model.Project) []model.Service {
+	credentialsByProjectID := map[string][]model.DebugCredential{}
+	for _, project := range projects {
+		credentialsByProjectID[project.ID] = project.DebugCredentials
+	}
+	out := make([]model.Service, len(services))
+	for i, service := range services {
+		out[i] = sanitizeServiceWithProjectCredentials(service, credentialsByProjectID[service.ProjectID])
+	}
+	return out
+}
+
+func sanitizeServiceWithProjectCredentials(service model.Service, projectCredentials []model.DebugCredential) model.Service {
+	merged := model.MergeDebugCredentials(projectCredentials, service.DebugCredentials)
+	service.HasDebugCredentials = len(merged) > 0
+	service.DebugCredentialHints = debugCredentialHints(merged)
 	service.DebugCredentials = nil // 调试凭据明文不在服务快照里渲染，避免 list_services 泄漏。
 	for i, dep := range service.Deployments {
 		service.Deployments[i] = sanitizeDeployment(dep)
 	}
 	return service
+}
+
+func debugCredentialHints(credentials []model.MergedDebugCredential) []model.DebugCredentialHint {
+	if len(credentials) == 0 {
+		return nil
+	}
+	hints := make([]model.DebugCredentialHint, 0, len(credentials))
+	for _, credential := range credentials {
+		// 普通 MCP 快照只暴露名称、说明和来源；Value 只允许经 get_debug_credentials 明确读取。
+		hints = append(hints, model.DebugCredentialHint{
+			Name:   credential.Name,
+			Desc:   credential.Desc,
+			Source: credential.Source,
+		})
+	}
+	return hints
+}
+
+func hasAnyDebugCredentials(projects []model.Project, services []model.Service) bool {
+	for _, project := range projects {
+		if len(project.DebugCredentials) > 0 {
+			return true
+		}
+		for _, service := range project.Services {
+			if len(service.DebugCredentials) > 0 {
+				return true
+			}
+		}
+	}
+	for _, service := range services {
+		if len(service.DebugCredentials) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeDeployment(dep model.Deployment) model.Deployment {
@@ -379,10 +441,30 @@ func sanitizeDeployment(dep model.Deployment) model.Deployment {
 }
 
 func sanitizeTarget(target resolvedTarget) resolvedTarget {
+	projectCredentials := target.Project.DebugCredentials
 	target.Project = sanitizeProject(target.Project)
-	target.Service = sanitizeService(target.Service)
+	target.Service = sanitizeServiceWithProjectCredentials(target.Service, projectCredentials)
 	target.Deployment = sanitizeDeployment(target.Deployment)
 	return target
+}
+
+func sanitizeResolveError(errResp *resolveError) *resolveError {
+	if errResp == nil {
+		return nil
+	}
+	out := &resolveError{
+		Code:    errResp.Code,
+		Message: errResp.Message,
+	}
+	if len(errResp.Candidates) == 0 {
+		return out
+	}
+	out.Candidates = make([]resolvedTarget, len(errResp.Candidates))
+	for i, candidate := range errResp.Candidates {
+		// 候选目标会进入 structured error data，必须与普通快照一样只暴露非敏感 hints。
+		out.Candidates[i] = sanitizeTarget(candidate)
+	}
+	return out
 }
 
 func serviceStatusKey(status model.ServiceStatus) string {

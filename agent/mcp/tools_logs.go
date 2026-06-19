@@ -45,6 +45,7 @@ func (s *Server) tailLogsTool(ctx context.Context, args json.RawMessage) (CallTo
 	}
 	target, errResp := resolveDeploymentTarget(projects, req.targetArgs)
 	if errResp != nil {
+		errResp = sanitizeResolveError(errResp)
 		return toolError(errResp.Code, errResp.Message, errResp), nil
 	}
 
@@ -238,7 +239,7 @@ func (s *Server) resolveProjectForLogs(ctx context.Context, projectID, projectNa
 		if projectName != "" && project.Name != projectName {
 			continue
 		}
-		matches = append(matches, project)
+		matches = append(matches, sanitizeProject(project))
 	}
 	if len(matches) == 0 {
 		return model.Project{}, toolError("project_not_found", "project not found", nil), false

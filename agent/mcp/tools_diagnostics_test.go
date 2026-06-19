@@ -37,3 +37,13 @@ func TestDiagnoseServiceAggregatesStatusAndRecentErrors(t *testing.T) {
 	assert.NotEmpty(t, data["evidence"])
 	assert.NotEmpty(t, data["hints"])
 }
+
+func TestDiagnoseServiceAmbiguousTargetSanitizesCredentialCandidates(t *testing.T) {
+	client := &fakeAgentClient{projects: []model.Project{sampleProjectWithDebugCredentials()}}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "diagnose_service", `{"project_name":"demo","service_name":"api"}`)
+
+	require.NoError(t, err)
+	assertAmbiguousCredentialCandidatesSanitized(t, result)
+}
