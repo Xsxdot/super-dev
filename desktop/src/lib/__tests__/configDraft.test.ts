@@ -131,6 +131,40 @@ describe('configDraft', () => {
     })
   })
 
+  it('preserves deployment autostart fields through draft payload conversion', () => {
+    const project = makeProject()
+    project.services[0].deployments![0] = {
+      id: 'dep-worker-dev',
+      env_name: 'dev',
+      location: 'local',
+      control_mode: 'managed',
+      runtime: { type: 'command', command: 'npm run worker' },
+      logs: { type: 'process' },
+      status: '',
+      start_on_boot: true,
+      depends_on: ['svc-server'],
+      readiness: { type: 'http', target: 'http://127.0.0.1:9100/', timeout_seconds: 20 },
+    }
+
+    const draft = projectToDraft(project)
+    const payload = draftToPayload(draft)
+
+    expect(draft.services[0].deployments[0].start_on_boot).toBe(true)
+    expect(draft.services[0].deployments[0].depends_on).toEqual(['svc-server'])
+    expect(draft.services[0].deployments[0].readiness).toEqual({
+      type: 'http',
+      target: 'http://127.0.0.1:9100/',
+      timeout_seconds: 20,
+    })
+    expect(payload.services[0].deployments[0].start_on_boot).toBe(true)
+    expect(payload.services[0].deployments[0].depends_on).toEqual(['svc-server'])
+    expect(payload.services[0].deployments[0].readiness).toEqual({
+      type: 'http',
+      target: 'http://127.0.0.1:9100/',
+      timeout_seconds: 20,
+    })
+  })
+
   it('preserves deployment code debug config in setup payload', () => {
     const project = makeProject()
     project.services[0].deployments = [{

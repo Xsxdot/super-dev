@@ -247,6 +247,13 @@ export interface WebReadinessConfig {
   timeout_seconds?: number
 }
 
+/** 就绪探测配置：本服务何时算「起来了」。 */
+export interface ReadinessProbe {
+  type: 'http' | 'tcp'
+  target: string
+  timeout_seconds?: number
+}
+
 export interface WebAIDebugConfig {
   enabled: boolean
 }
@@ -496,6 +503,12 @@ export interface Deployment {
   logs?: LogConfig
   web?: WebEntrypointConfig
   code_debug?: CodeDebugConfig
+  /** 是否随 SuperDev 启动自动拉起（仅 local + managed 生效）。 */
+  start_on_boot?: boolean
+  /** 启动前需先就绪的同项目服务 ID 列表。 */
+  depends_on?: string[]
+  /** 本服务何时算就绪，供依赖它的服务等待。 */
+  readiness?: ReadinessProbe
   command?: string
   work_dir?: string
   env?: Record<string, string>
@@ -887,6 +900,12 @@ export interface SetupDeployment {
   logs?: LogConfig
   web?: WebEntrypointConfig
   code_debug?: CodeDebugConfig
+  /** 是否随 SuperDev 启动自动拉起（仅 local + managed 生效）。 */
+  start_on_boot?: boolean
+  /** 启动前需先就绪的同项目服务 ID 列表。 */
+  depends_on?: string[]
+  /** 本服务何时算就绪，供依赖它的服务等待。 */
+  readiness?: ReadinessProbe
   command?: string
   work_dir?: string
   env?: Record<string, string>
