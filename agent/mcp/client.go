@@ -33,6 +33,8 @@ type AgentClient interface {
 	ListHosts(context.Context) ([]HostReference, error)
 	// ListServices 拉取所有服务及其 deployment 运行态。
 	ListServices(context.Context) ([]model.Service, error)
+	// GetDebugCredentials 拉取项目/服务的合并调试凭据(明文，专供 AI 调试取用)。
+	GetDebugCredentials(context.Context, url.Values) ([]model.MergedDebugCredential, error)
 	// ProjectRules 拉取项目日志过滤规则。
 	ProjectRules(context.Context, string) ([]model.LogRule, error)
 	// FetchDeploymentLogs 拉取 deployment 日志分页。
@@ -220,6 +222,20 @@ func (c *HTTPAgentClient) ListHosts(ctx context.Context) ([]HostReference, error
 func (c *HTTPAgentClient) ListServices(ctx context.Context) ([]model.Service, error) {
 	var out []model.Service
 	return out, c.get(ctx, "/api/services", &out)
+}
+
+// GetDebugCredentials 拉取合并后的调试凭据。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - q: query 参数(project_id/project_name 必填其一,service_id/service_name 可选)
+//
+// 返回：
+//   - 合并后的明文凭据列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) GetDebugCredentials(ctx context.Context, q url.Values) ([]model.MergedDebugCredential, error) {
+	var out []model.MergedDebugCredential
+	return out, c.get(ctx, withQuery("/api/debug-credentials", q), &out)
 }
 
 // ProjectRules 拉取项目日志过滤规则。
