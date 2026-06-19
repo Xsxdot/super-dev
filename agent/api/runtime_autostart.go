@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 const autostartDepTimeout = 60 * time.Second
@@ -125,6 +127,11 @@ func (a *App) eachAutostartCandidate(fn func(projectID, serviceID string, dep mo
 
 // lookupDeployment 在指定项目、指定 env 内，按 service ID 找到其 deployment。
 func (a *App) lookupDeployment(projectID, serviceID, envName string) (model.Deployment, bool) {
+	_, dep, ok := a.lookupDeploymentWithService(projectID, serviceID, envName)
+	return dep, ok
+}
+
+func (a *App) lookupDeploymentWithService(projectID, serviceID, envName string) (model.Service, model.Deployment, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	for _, project := range a.projects {
@@ -137,14 +144,14 @@ func (a *App) lookupDeployment(projectID, serviceID, envName string) (model.Depl
 			}
 			for _, dep := range service.Deployments {
 				if dep.EnvName == envName {
-					return dep, true
+					return service, dep, true
 				}
 			}
-			return model.Deployment{}, false
+			return model.Service{}, model.Deployment{}, false
 		}
-		return model.Deployment{}, false
+		return model.Service{}, model.Deployment{}, false
 	}
-	return model.Deployment{}, false
+	return model.Service{}, model.Deployment{}, false
 }
 
 // findDeploymentByServiceID 是依赖解析入口，保持调用点表达 depends_on 存 service ID 的语义。
@@ -158,9 +165,11 @@ func (a *App) findDeploymentByServiceID(projectID, serviceID, envName string) (m
 //   - projectID: dep 所属项目（依赖只解析同项目同 env）
 //   - dep: 待启动的 deployment，其 DependsOn 是 service ID 列表
 //   - ready: 单次编排周期内的就绪缓存（serviceID->true），避免对同一被依赖者重复等待
+//   - autoStart: true 表示手动启动语义，依赖未运行时先级联启动再等待；
+//     false 表示 autostart 语义，编排器已按拓扑序启动依赖，这里只等待
 //
 // 返回：所有依赖就绪返回 nil；任一依赖无法解析或超时未就绪返回 error（带上下文）。
-func (a *App) resolveAndWaitDeps(projectID string, dep model.Deployment, ready map[string]bool) error {
+func (a *App) resolveAndWaitDeps(projectID string, dep model.Deployment, ready map[string]bool, autoStart bool) error {
 	for _, depSvcID := range dep.DependsOn {
 		if ready[depSvcID] {
 			continue
@@ -170,8 +179,15 @@ func (a *App) resolveAndWaitDeps(projectID string, dep model.Deployment, ready m
 			log.Printf("[SuperDev] autostart dependency missing: dep=%s service=%s env=%s", dep.ID, depSvcID, dep.EnvName)
 			return fmt.Errorf("依赖服务 %s 在项目 %s/env=%s 内未找到", depSvcID, projectID, dep.EnvName)
 		}
-		log.Printf("[SuperDev] autostart waiting dependency: dep=%s waits-for-service=%s waits-for-dep=%s", dep.ID, depSvcID, depDep.ID)
 		mgr := a.getOrCreateManager(projectID)
+		if autoStart && mgr.DeploymentStatus(depDep.ID) != model.StatusRunning {
+			// 手动启动与开机自启语义不同：手动启动目标服务时，未就绪依赖需要一并拉起。
+			log.Printf("[SuperDev] manual start cascading dependency: dep=%s -> %s service=%s", dep.ID, depDep.ID, depSvcID)
+			if err := a.startDeploymentRuntime(context.Background(), projectID, depDep, intentStartNormal); err != nil {
+				return fmt.Errorf("级联启动依赖服务 %s 失败: %w", depSvcID, err)
+			}
+		}
+		log.Printf("[SuperDev] autostart waiting dependency: dep=%s waits-for-service=%s waits-for-dep=%s", dep.ID, depSvcID, depDep.ID)
 		deadline := time.Now().Add(autostartDepTimeout)
 		for {
 			if mgr.DeploymentStatus(depDep.ID) == model.StatusRunning {
@@ -243,7 +259,7 @@ func (a *App) runAutostart() {
 				skipped[svcID] = true
 				continue
 			}
-			if err := a.resolveAndWaitDeps(projectID, dep, ready); err != nil {
+			if err := a.resolveAndWaitDeps(projectID, dep, ready, false); err != nil {
 				log.Printf("[SuperDev] autostart dependency not ready, skipping: dep=%s service=%s cause=%v", dep.ID, svcID, err)
 				skipped[svcID] = true
 				continue
@@ -268,6 +284,69 @@ func (a *App) startAutostartOnce() {
 		time.Sleep(500 * time.Millisecond)
 		a.runAutostart()
 	}()
+}
+
+type cascadeStartDependency struct {
+	ServiceID    string
+	ServiceName  string
+	DeploymentID string
+	EnvName      string
+}
+
+// deploymentRuntimeStatus 返回 deployment 当前运行态；没有 manager 时按 stopped 处理。
+func (a *App) deploymentRuntimeStatus(projectID, deploymentID string) model.ServiceStatus {
+	a.mu.RLock()
+	mgr := a.managers[projectID]
+	a.mu.RUnlock()
+	if mgr == nil {
+		return model.StatusStopped
+	}
+	return mgr.DeploymentStatus(deploymentID)
+}
+
+// cascadeStartDependencies 返回手动启动 dep 时需要连带启动的直接依赖。
+func (a *App) cascadeStartDependencies(projectID string, dep model.Deployment) []cascadeStartDependency {
+	out := make([]cascadeStartDependency, 0, len(dep.DependsOn))
+	for _, depSvcID := range dep.DependsOn {
+		svc, depDep, ok := a.lookupDeploymentWithService(projectID, depSvcID, dep.EnvName)
+		if !ok {
+			continue
+		}
+		if a.deploymentRuntimeStatus(projectID, depDep.ID) == model.StatusRunning {
+			continue
+		}
+		out = append(out, cascadeStartDependency{
+			ServiceID:    svc.ID,
+			ServiceName:  svc.Name,
+			DeploymentID: depDep.ID,
+			EnvName:      depDep.EnvName,
+		})
+	}
+	return out
+}
+
+// annotateStartPlanWithCascade 把级联依赖写入 operation plan 的可读检查项。
+func (a *App) annotateStartPlanWithCascade(plan operation.Plan, projectID string, dep model.Deployment) operation.Plan {
+	cascade := a.cascadeStartDependencies(projectID, dep)
+	if len(cascade) == 0 {
+		return plan
+	}
+	items := make([]string, 0, len(cascade))
+	for _, item := range cascade {
+		name := item.ServiceName
+		if name == "" {
+			name = item.ServiceID
+		}
+		items = append(items, fmt.Sprintf("%s(%s)", name, item.DeploymentID))
+	}
+	sort.Strings(items)
+	log.Printf("[SuperDev] preview start: dep=%s cascade-deps=%v", dep.ID, items)
+	plan.Checks = append(plan.Checks, operation.Check{
+		Name:    "cascade_dependencies",
+		Status:  "passed",
+		Message: "will cascade start dependencies: " + strings.Join(items, ", "),
+	})
+	return plan
 }
 
 // dependencySkipped 报告 dep 是否有依赖已被跳过（上游失败传播）。

@@ -235,6 +235,9 @@ func (a *App) planOperation(req operationTargetRequest) (operation.Plan, int, st
 		if err != nil {
 			return operation.Plan{}, http.StatusBadRequest, "invalid operation"
 		}
+		if req.Kind == operation.OperationRuntimeStart {
+			plan = a.annotateStartPlanWithCascade(plan, project.ID, dep)
+		}
 		return plan, http.StatusOK, ""
 	case operation.OperationBrowserDebugOpen:
 		project, service, dep, status, msg := a.resolveOperationRuntimeTarget(req)

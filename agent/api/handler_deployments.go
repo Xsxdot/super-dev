@@ -92,6 +92,9 @@ func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, k
 		jsonError(w, http.StatusBadRequest, "invalid operation")
 		return
 	}
+	if kind == operation.OperationRuntimeStart && strings.TrimSpace(hostID) == "" {
+		plan = a.annotateStartPlanWithCascade(plan, p.ID, dep)
+	}
 	if intent == intentDebugLaunch && (kind == operation.OperationRuntimeStart || kind == operation.OperationRuntimeRestart) {
 		if reason := a.codeDebugStartDeniedReason(p, svc, runDep); reason != "" {
 			jsonErrorCode(w, http.StatusBadRequest, "debug_start_unavailable", "debug start not available: "+reason, map[string]string{"reason": reason})
@@ -245,6 +248,12 @@ func (a *App) emitControlEvent(depID, action, phase, detail string) {
 func (a *App) startDeploymentRuntime(ctx context.Context, projectID string, dep model.Deployment, intent startIntent) error {
 	a.emitControlEvent(dep.ID, "start", "command_received", "")
 	a.emitControlEvent(dep.ID, "start", "reconciling", "")
+	if len(dep.DependsOn) > 0 {
+		if err := a.resolveAndWaitDeps(projectID, dep, map[string]bool{}, true); err != nil {
+			a.emitControlEvent(dep.ID, "start", "failed", err.Error())
+			return err
+		}
+	}
 	if intent == intentDebugLaunch {
 		_, svc, project, ok := a.findDeploymentWithService(dep.ID)
 		if !ok {

@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 func TestTopoSortRespectsDeps(t *testing.T) {
@@ -144,7 +147,7 @@ func TestResolveAndWaitDepsUsesRunningDependency(t *testing.T) {
 	waitForDeploymentStatus(t, mgr, serverDep.ID, model.StatusRunning)
 
 	ready := map[string]bool{}
-	if err := app.resolveAndWaitDeps("proj-a", workerDep, ready); err != nil {
+	if err := app.resolveAndWaitDeps("proj-a", workerDep, ready, false); err != nil {
 		t.Fatalf("resolve deps: %v", err)
 	}
 	if !ready["svc-server"] {
@@ -160,7 +163,7 @@ func TestResolveAndWaitDepsErrorsOnMissingDependency(t *testing.T) {
 	app.projects = []model.Project{{ID: "proj-a"}}
 	dep := model.Deployment{ID: "dep-worker-dev", EnvName: "dev", DependsOn: []string{"svc-missing"}}
 
-	if err := app.resolveAndWaitDeps("proj-a", dep, map[string]bool{}); err == nil {
+	if err := app.resolveAndWaitDeps("proj-a", dep, map[string]bool{}, false); err == nil {
 		t.Fatal("expected missing dependency error")
 	}
 }
@@ -247,6 +250,83 @@ func TestStartAutostartOnceRunsInBackground(t *testing.T) {
 	}
 
 	waitForDeploymentStatus(t, mgr, dep.ID, model.StatusRunning)
+}
+
+func TestRuntimeStartPlanIncludesCascadeDependencies(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	serverDep := model.Deployment{ID: "dep-server-dev", EnvName: "dev", Location: model.LocationLocal, ControlMode: model.ControlModeManaged}
+	workerDep := model.Deployment{ID: "dep-worker-dev", EnvName: "dev", Location: model.LocationLocal, ControlMode: model.ControlModeManaged, DependsOn: []string{"svc-server"}}
+	app.projects = []model.Project{{
+		ID:           "proj-a",
+		Name:         "demo",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
+		Services: []model.Service{
+			{ID: "svc-server", Name: "server", Deployments: []model.Deployment{serverDep}},
+			{ID: "svc-worker", Name: "worker", Deployments: []model.Deployment{workerDep}},
+		},
+	}}
+
+	plan, status, msg := app.planOperation(operationTargetRequest{Kind: operation.OperationRuntimeStart, DeploymentID: workerDep.ID})
+	if status != 200 {
+		t.Fatalf("plan status=%d msg=%s", status, msg)
+	}
+	var joined strings.Builder
+	for _, check := range plan.Checks {
+		joined.WriteString(check.Name)
+		joined.WriteString(":")
+		joined.WriteString(check.Message)
+		joined.WriteByte('\n')
+	}
+	if !strings.Contains(joined.String(), "dep-server-dev") {
+		t.Fatalf("plan did not mention cascade dependency: %s", joined.String())
+	}
+}
+
+func TestStartDeploymentRuntimeCascadesDependencies(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	serverDep := model.Deployment{
+		ID:          "dep-server-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+	}
+	workerDep := model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		DependsOn:   []string{"svc-server"},
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+	}
+	app.projects = []model.Project{{
+		ID:   "proj-a",
+		Name: "demo",
+		Services: []model.Service{
+			{ID: "svc-server", Name: "server", Deployments: []model.Deployment{serverDep}},
+			{ID: "svc-worker", Name: "worker", Deployments: []model.Deployment{workerDep}},
+		},
+	}}
+	mgr := app.getOrCreateManager("proj-a")
+	t.Cleanup(func() {
+		mgr.StopDeployment(serverDep.ID)
+		mgr.StopDeployment(workerDep.ID)
+	})
+
+	if err := app.startDeploymentRuntime(context.Background(), "proj-a", workerDep, intentStartNormal); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+
+	waitForDeploymentStatus(t, mgr, serverDep.ID, model.StatusRunning)
+	waitForDeploymentStatus(t, mgr, workerDep.ID, model.StatusRunning)
 }
 
 func waitForDeploymentStatus(t *testing.T, mgr interface {
