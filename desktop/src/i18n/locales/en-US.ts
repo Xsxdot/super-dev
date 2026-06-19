@@ -48,7 +48,7 @@ export default {
     },
     status: {
       running: 'Running',
-      starting: 'Starting...',
+      starting: 'Starting',
       failed: 'Exited',
       stopped: 'Not started',
       stopping: 'Stopped',

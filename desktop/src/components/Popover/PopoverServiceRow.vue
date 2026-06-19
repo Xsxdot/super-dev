@@ -24,11 +24,11 @@ const isActive = computed(() =>
   deploymentStatus.value === 'running' || deploymentStatus.value === 'starting'
 )
 
-const statusColor = computed(() => {
-  if (deploymentStatus.value === 'running') return '#3fb950'
-  if (deploymentStatus.value === 'starting') return '#d29922'
-  if (deploymentStatus.value === 'failed') return '#f85149'
-  return '#6e7681'
+const statusClass = computed(() => {
+  if (deploymentStatus.value === 'running') return 'status-running'
+  if (deploymentStatus.value === 'starting') return 'status-starting'
+  if (deploymentStatus.value === 'failed') return 'status-failed'
+  return 'status-stopped'
 })
 
 const statusLabel = computed(() => {
@@ -83,11 +83,11 @@ async function onRestart() {
       @click.stop="onCheckChange"
       class="svc-checkbox"
     />
-    <span class="status-dot" :style="{ background: statusColor }" />
+    <span class="status-dot" :class="statusClass" />
     <span class="svc-name" :class="{ dimmed: !isActive && deploymentStatus !== '' }">
       {{ service.name }}
     </span>
-    <span class="status-label" :style="{ color: statusColor }">
+    <span class="status-label" :class="statusClass">
       {{ statusLabel }}
     </span>
     <div class="row-actions" v-if="hovered">
@@ -127,6 +127,10 @@ async function onRestart() {
   border-radius: 50%;
   flex-shrink: 0;
 }
+.status-dot.status-running { background: var(--status-running); }
+.status-dot.status-starting { background: var(--status-starting); }
+.status-dot.status-failed { background: var(--status-failed); }
+.status-dot.status-stopped { background: var(--text-tertiary); }
 
 .svc-name {
   flex: 1;
@@ -143,6 +147,10 @@ async function onRestart() {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.status-label.status-running { color: var(--status-running); }
+.status-label.status-starting { color: var(--status-starting); }
+.status-label.status-failed { color: var(--status-failed); }
+.status-label.status-stopped { color: var(--text-tertiary); }
 
 .row-actions {
   display: flex;

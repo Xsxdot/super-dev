@@ -18,7 +18,7 @@ import { useAgentStore } from '@/stores/agent'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Project, Service } from '@/api/agent'
 
-function serviceWithDevDeployment(): Service {
+function serviceWithDevDeployment(status: '' | 'starting' | 'running' | 'failed' = 'running'): Service {
   return {
     id: 'svc-api',
     project_id: 'proj-1',
@@ -31,7 +31,7 @@ function serviceWithDevDeployment(): Service {
         id: 'dep-api-dev',
         env_name: 'dev',
         location: 'local',
-        status: 'running',
+        status,
       },
     ],
   }
@@ -79,5 +79,19 @@ describe('PopoverServiceStatus', () => {
 
     const dotStyle = wrapper.find('.left-service-row .status-dot').attributes('style') ?? ''
     expect(dotStyle).toContain('rgb(63, 185, 80)')
+  })
+
+  it('把 starting 渲染为独立状态文案和样式类', () => {
+    const p = project([serviceWithDevDeployment('starting')])
+    useAgentStore().projects = [p]
+
+    const wrapper = mount(PopoverServicePanel, {
+      props: { project: p },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    const label = wrapper.get('.status-label')
+    expect(label.text()).toBe('Starting')
+    expect(label.classes()).toContain('status-starting')
   })
 })

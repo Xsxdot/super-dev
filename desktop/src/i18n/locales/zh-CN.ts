@@ -48,7 +48,7 @@ export default {
     },
     status: {
       running: '运行中',
-      starting: '启动中...',
+      starting: '启动中',
       failed: '已退出',
       stopped: '未启动',
       stopping: '停止',
