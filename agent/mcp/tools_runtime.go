@@ -345,6 +345,7 @@ func sanitizeProjects(projects []model.Project) []model.Project {
 
 func sanitizeProject(project model.Project) model.Project {
 	project.Variables = redactSecretMap(project.Variables)
+	project.DebugCredentials = nil // 调试凭据明文不在快照里渲染，唯一出口是 get_debug_credentials。
 	for i, svc := range project.Services {
 		project.Services[i] = sanitizeService(svc)
 	}
@@ -360,6 +361,7 @@ func sanitizeServices(services []model.Service) []model.Service {
 }
 
 func sanitizeService(service model.Service) model.Service {
+	service.DebugCredentials = nil // 调试凭据明文不在服务快照里渲染，避免 list_services 泄漏。
 	for i, dep := range service.Deployments {
 		service.Deployments[i] = sanitizeDeployment(dep)
 	}

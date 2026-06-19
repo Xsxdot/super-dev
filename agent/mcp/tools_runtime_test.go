@@ -23,6 +23,8 @@ type fakeAgentClient struct {
 	projects                    []model.Project
 	hosts                       []HostReference
 	services                    []model.Service
+	debugCredentials            []model.MergedDebugCredential
+	lastDebugCredentialsQuery   url.Values
 	rules                       []model.LogRule
 	logs                        LogsResponse
 	search                      LogSearchResponse
@@ -129,6 +131,11 @@ func (f *fakeAgentClient) ListHosts(context.Context) ([]HostReference, error) {
 
 func (f *fakeAgentClient) ListServices(context.Context) ([]model.Service, error) {
 	return f.services, nil
+}
+
+func (f *fakeAgentClient) GetDebugCredentials(_ context.Context, q url.Values) ([]model.MergedDebugCredential, error) {
+	f.lastDebugCredentialsQuery = q
+	return f.debugCredentials, nil
 }
 
 func (f *fakeAgentClient) ProjectRules(context.Context, string) ([]model.LogRule, error) {

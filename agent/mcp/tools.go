@@ -64,6 +64,19 @@ func projectInputSchema() map[string]any {
 	}
 }
 
+func debugCredentialsInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"project_id":   map[string]any{"type": "string"},
+			"project_name": map[string]any{"type": "string"},
+			"service_id":   map[string]any{"type": "string"},
+			"service_name": map[string]any{"type": "string"},
+		},
+	}
+}
+
 func tailLogsInputSchema() map[string]any {
 	schema := targetInputSchema()
 	properties := schema["properties"].(map[string]any)
@@ -833,6 +846,16 @@ func defaultTools(s *Server) []registeredTool {
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.listServicesTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "get_debug_credentials",
+				Title:       "Get debug credentials",
+				Description: "Return plaintext debug credentials (test login/password, service api-key) for AI to log in or authenticate legitimately during debugging instead of fabricating tokens or bypassing auth. project_id|project_name required; pass service to merge project+service level (service overrides). Read-only, not approval-gated.",
+				InputSchema: debugCredentialsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.getDebugCredentialsTool,
 		},
 		{
 			Tool: Tool{
