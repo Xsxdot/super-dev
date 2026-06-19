@@ -66,6 +66,7 @@ func (s *Server) previewConfigChangeTool(ctx context.Context, args json.RawMessa
 	if err != nil {
 		return clientToolError(err), nil
 	}
+	preview = sanitizeConfigChangePreview(preview)
 	return toolSuccess(
 		"config change previewed",
 		map[string]any{"preview": preview},
@@ -132,8 +133,15 @@ func (s *Server) applyConfigChangeFromRequest(ctx context.Context, req ConfigCha
 		s.appendConfigToolObservation(ctx, req.DebugSessionID, req.Kind, "config change failed", err)
 		return clientToolError(err), nil
 	}
+	preview = sanitizeConfigChangePreview(preview)
 	s.appendConfigToolObservation(ctx, req.DebugSessionID, req.Kind, "config change applied", nil)
 	return toolSuccess("config change applied", map[string]any{"preview": preview}, nil, nil), nil
+}
+
+func sanitizeConfigChangePreview(preview ConfigChangePreview) ConfigChangePreview {
+	// preview.Project 会进入 MCP structured content，复用普通快照边界避免泄漏调试凭据明文。
+	preview.Project = sanitizeProject(preview.Project)
+	return preview
 }
 
 func decodeConfigChangeArgs(args json.RawMessage) (ConfigChangeRequest, CallToolResult, bool) {

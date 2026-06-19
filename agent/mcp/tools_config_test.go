@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestPreviewConfigChangeToolReturnsDiffAndPlan(t *testing.T) {
@@ -34,6 +35,28 @@ func TestPreviewConfigChangeToolReturnsDiffAndPlan(t *testing.T) {
 	assert.False(t, result.IsError)
 	payload := result.StructuredContent.(toolPayload)
 	assert.Equal(t, "op_cfg", payload.Data.(map[string]any)["preview"].(ConfigChangePreview).Plan.ID)
+}
+
+func TestPreviewConfigChangeSanitizesDebugCredentials(t *testing.T) {
+	client := &fakeAgentClient{configPreview: configChangePreviewWithDebugCredentials()}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "preview_config_change", `{"kind":"config.service.upsert","project_id":"p1","service":{"name":"api"}}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assertConfigChangePreviewDebugCredentialsSanitized(t, result)
+}
+
+func TestApplyConfigChangeSanitizesDebugCredentials(t *testing.T) {
+	client := &fakeAgentClient{configPreview: configChangePreviewWithDebugCredentials()}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "apply_config_change", `{"kind":"config.service.upsert","project_id":"p1","approval_token":"tok_cfg","service":{"name":"api"}}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assertConfigChangePreviewDebugCredentialsSanitized(t, result)
 }
 
 func TestConfigChangeSchemaDocumentsCanonicalHostIDs(t *testing.T) {
@@ -113,4 +136,65 @@ func TestApplyConfigChangeWaitsForApproval(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Equal(t, 2, client.configApplyCallCount)
 	assert.Equal(t, "tok_cfg", client.lastApprovalToken)
+}
+
+func configChangePreviewWithDebugCredentials() ConfigChangePreview {
+	return ConfigChangePreview{
+		Kind:       "config.service.upsert",
+		Validation: ConfigChangeValidation{OK: true},
+		Project: model.Project{
+			ID:       "p1",
+			Name:     "Debuggable",
+			AINote:   "Use seeded login",
+			AuthHint: "Exchange login for session cookie",
+			DebugCredentials: []model.DebugCredential{{
+				Name:  "project_login",
+				Value: "project-secret-value",
+				Desc:  "Project login",
+			}},
+			Services: []model.Service{{
+				ID:       "svc-api",
+				Name:     "api",
+				AINote:   "Use service override",
+				AuthHint: "Send service bearer token",
+				DebugCredentials: []model.DebugCredential{{
+					Name:  "service_token",
+					Value: "service-secret-value",
+					Desc:  "Service token",
+				}},
+			}},
+		},
+	}
+}
+
+func assertConfigChangePreviewDebugCredentialsSanitized(t *testing.T, result CallToolResult) {
+	t.Helper()
+
+	payload := result.StructuredContent.(toolPayload)
+	preview := payload.Data.(map[string]any)["preview"].(ConfigChangePreview)
+	project := preview.Project
+	assert.Equal(t, "Use seeded login", project.AINote)
+	assert.Equal(t, "Exchange login for session cookie", project.AuthHint)
+	assert.Empty(t, project.DebugCredentials)
+	assert.True(t, project.HasDebugCredentials)
+	require.Len(t, project.DebugCredentialHints, 1)
+	assert.Equal(t, model.DebugCredentialHint{Name: "project_login", Desc: "Project login", Source: "project"}, project.DebugCredentialHints[0])
+
+	require.Len(t, project.Services, 1)
+	service := project.Services[0]
+	assert.Equal(t, "Use service override", service.AINote)
+	assert.Equal(t, "Send service bearer token", service.AuthHint)
+	assert.Empty(t, service.DebugCredentials)
+	assert.True(t, service.HasDebugCredentials)
+	require.Len(t, service.DebugCredentialHints, 2)
+	assert.Equal(t, []model.DebugCredentialHint{
+		{Name: "project_login", Desc: "Project login", Source: "project"},
+		{Name: "service_token", Desc: "Service token", Source: "service"},
+	}, service.DebugCredentialHints)
+	for _, hint := range append(project.DebugCredentialHints, service.DebugCredentialHints...) {
+		assert.NotContains(t, hint.Name, "project-secret-value")
+		assert.NotContains(t, hint.Desc, "project-secret-value")
+		assert.NotContains(t, hint.Name, "service-secret-value")
+		assert.NotContains(t, hint.Desc, "service-secret-value")
+	}
 }
