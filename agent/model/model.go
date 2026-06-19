@@ -69,9 +69,27 @@ type Service struct {
 	// Deployments 描述该服务在各环境的运行配置。
 	Deployments []Deployment `json:"deployments,omitempty" yaml:"deployments,omitempty"`
 
+	// DebugCredentials 是服务级专属调试凭据(如某服务自己的 api-key)，同 name 覆盖项目级。
+	DebugCredentials []DebugCredential `json:"debug_credentials,omitempty" yaml:"debug_credentials,omitempty"`
+
 	// 运行时字段，不持久化到配置文件。
 	Status ServiceStatus `json:"status"        yaml:"-"`
 	PID    int           `json:"pid,omitempty" yaml:"-"`
+}
+
+// DebugCredential 是专供 AI 调试取用的凭据(测试账号/密码、服务自定义 api-key 等)。
+//
+// 职责：
+//   - 承载一条供 AI 读取明文使用的调试凭据
+//
+// 边界：
+//   - 与给进程启动用的 RuntimeConfig.Env/EnvVars 相反：env 对 AI 脱敏，本类型对 AI 明文返回
+//   - 不在 list_services / 运行态快照中渲染，明文唯一出口是 get_debug_credentials 工具
+//   - 安全语义：写入即视为对 AI 授信，不另设开关；不想授信则不填/删除
+type DebugCredential struct {
+	Name  string `json:"name"  yaml:"name"`  // 标识，如 "test_login" / "internal_api_key"
+	Value string `json:"value" yaml:"value"` // 明文值
+	Desc  string `json:"desc"  yaml:"desc"`  // 一句自然语言说明用途，AI 据此正确使用
 }
 
 // Project 表示一个开发项目，包含多个服务定义。
@@ -85,7 +103,9 @@ type Project struct {
 	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments []Environment     `json:"environments,omitempty"`
 	Services     []Service         `json:"services"             yaml:"services"`
-	Pipelines    []ProjectPipeline `json:"pipelines,omitempty" yaml:"pipelines,omitempty"`
+	// DebugCredentials 是项目级公共调试凭据(如全系统通用的登录测试账号)，供 AI 取明文使用。
+	DebugCredentials []DebugCredential `json:"debug_credentials,omitempty" yaml:"debug_credentials,omitempty"`
+	Pipelines        []ProjectPipeline `json:"pipelines,omitempty" yaml:"pipelines,omitempty"`
 	// EnvSelectedServiceIDs 按环境名存储该环境下用户选中要启动的服务名列表。
 	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表，
 	// 从而实现 env 级隔离的选中状态。
