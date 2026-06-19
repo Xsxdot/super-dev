@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +221,77 @@ func TestAutostartStartsLocalManagedDeployments(t *testing.T) {
 	waitForDeploymentStatus(t, mgr, workerDep.ID, model.StatusRunning)
 	if got := mgr.DeploymentStatus(remoteDep.ID); got != model.StatusStopped {
 		t.Fatalf("remote deployment should be skipped, got %q", got)
+	}
+}
+
+func TestAutostartWaitsForDependencyReadinessBeforeStartingDownstream(t *testing.T) {
+	ready := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	serverDep := model.Deployment{
+		ID:          "dep-server-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		StartOnBoot: true,
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+		Readiness:   &model.ReadinessProbe{Type: "http", Target: srv.URL, TimeoutSeconds: 5},
+	}
+	workerDep := model.Deployment{
+		ID:          "dep-worker-dev",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		StartOnBoot: true,
+		DependsOn:   []string{"svc-server"},
+		Command:     "sleep 5",
+		WorkDir:     t.TempDir(),
+	}
+	app.projects = []model.Project{{
+		ID: "proj-a",
+		Services: []model.Service{
+			{ID: "svc-server", Name: "server", Deployments: []model.Deployment{serverDep}},
+			{ID: "svc-worker", Name: "worker", Deployments: []model.Deployment{workerDep}},
+		},
+	}}
+	mgr := app.getOrCreateManager("proj-a")
+	t.Cleanup(func() {
+		mgr.StopDeployment(serverDep.ID)
+		mgr.StopDeployment(workerDep.ID)
+	})
+
+	done := make(chan struct{})
+	go func() {
+		app.runAutostart()
+		close(done)
+	}()
+
+	waitForDeploymentStatus(t, mgr, serverDep.ID, model.StatusStarting)
+	time.Sleep(700 * time.Millisecond)
+	if got := mgr.DeploymentStatus(workerDep.ID); got != model.StatusStopped {
+		t.Fatalf("worker should wait for server readiness before starting, got %q", got)
+	}
+
+	close(ready)
+	waitForDeploymentStatus(t, mgr, serverDep.ID, model.StatusRunning)
+	waitForDeploymentStatus(t, mgr, workerDep.ID, model.StatusRunning)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("autostart did not finish after dependency readiness passed")
 	}
 }
 
