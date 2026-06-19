@@ -225,6 +225,24 @@ describe('DeploymentForm', () => {
     expect(wrapper.find('[data-test="dep-readiness-type"]').exists()).toBe(true)
   })
 
+  it('按配置 mock 分成运行主列和调试侧列卡片', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: {
+        modelValue: languageDep(),
+        hosts: [],
+        serviceLanguage: 'go',
+        siblingServices: [{ id: 'svc-server', name: 'server' }],
+      },
+    })
+
+    expect(wrapper.find('[data-test="deployment-layout-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-main-column"] [data-test="runtime-target-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-main-column"] [data-test="runtime-args-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="startup-readiness-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="debug-entry-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="log-source-panel"]').exists()).toBe(true)
+  })
+
   it('remote 时不显示开机自启块', () => {
     const wrapper = mount(DeploymentForm, {
       props: {
@@ -423,12 +441,15 @@ describe('DeploymentForm', () => {
       props: { modelValue: localDep(), hosts: [] },
     })
 
+    expect(wrapper.find('[data-test="debug-entry-section"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="dep-web-enabled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="web-entry-fields"]').exists()).toBe(false)
     await wrapper.find('[data-test="dep-web-enabled"]').setValue(true)
     const enabled = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
     expect(enabled.web?.enabled).toBe(true)
 
     await wrapper.setProps({ modelValue: enabled })
+    expect(wrapper.find('[data-test="web-entry-fields"]').exists()).toBe(true)
     await wrapper.find('[data-test="dep-web-url"]').setValue('http://127.0.0.1:3000')
     const withURL = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
     expect(withURL.web?.url).toBe('http://127.0.0.1:3000')
@@ -437,6 +458,17 @@ describe('DeploymentForm', () => {
     await wrapper.find('[data-test="dep-web-ai-debug"]').setValue(true)
     const withDebug = wrapper.emitted('update:modelValue')!.at(-1)![0] as Deployment
     expect(withDebug.web?.ai_debug?.enabled).toBe(true)
+  })
+
+  it('把本机语言运行时的代码调试和 Web 入口收在调试与入口分组', () => {
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: languageDep(), hosts: [], serviceLanguage: 'go' },
+    })
+
+    const group = wrapper.find('[data-test="debug-entry-section"]')
+    expect(group.exists()).toBe(true)
+    expect(group.find('[data-test="code-debug-section"]').exists()).toBe(true)
+    expect(group.find('[data-test="dep-web-enabled"]').exists()).toBe(true)
   })
 
   it('does not show code debug section for local command deployment', () => {
@@ -489,6 +521,29 @@ describe('DeploymentForm', () => {
       env: { ENABLE_FEATURE: 'true' },
       config: { program: './cmd/worker' },
     })
+  })
+
+  it('does not refetch language runtime schema on equivalent deployment prop updates', async () => {
+    const describe = vi.spyOn(api, 'describeLanguageRuntimeSchema').mockResolvedValue(goRuntimeSchema())
+    const initial = languageDep()
+
+    const wrapper = mount(DeploymentForm, {
+      props: { modelValue: initial, hosts: [], serviceLanguage: 'go' },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await flushPromises()
+
+    expect(describe).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({
+      modelValue: {
+        ...initial,
+        runtime: { ...(initial.runtime ?? {}) } as Deployment['runtime'],
+      },
+    })
+    await flushPromises()
+
+    expect(describe).toHaveBeenCalledTimes(1)
   })
 
   it('renders escape-hatch fields and writes runtime_executable', async () => {

@@ -99,20 +99,11 @@ function removeDep() {
       <button type="button" class="svc-remove" data-test="remove-service" @click="emit('remove')">{{ t('common.delete') }}</button>
     </header>
 
-    <!-- 服务级凭据只属于配置编辑；overview/list 不渲染该明文字段。 -->
-    <DebugCredentialEditor
-      :model-value="service.debug_credentials ?? []"
-      data-test="service-debug-credentials"
-      :title="t('settings.debugCredentials.serviceTitle')"
-      :hint="t('settings.debugCredentials.serviceHint')"
-      @update:model-value="patchService({ debug_credentials: $event })"
-    />
-
     <div v-if="!dep" class="svc-empty">
       {{ t('settings.service.unconfigured') }}
       <button type="button" class="enable-btn" data-test="enable-dep" @click="enableDep">{{ t('settings.service.enable') }}</button>
     </div>
-    <div v-else class="svc-dep">
+    <div v-else class="svc-dep" data-test="service-config-grid">
       <DeploymentForm
         :model-value="dep"
         :hosts="hosts"
@@ -120,8 +111,22 @@ function removeDep() {
         :service-language="service.language"
         :sibling-services="siblingServices ?? []"
         @update:model-value="updateDep"
-      />
-      <button type="button" class="dep-remove" @click="removeDep">{{ t('settings.service.removeEnvConfig') }}</button>
+      >
+        <template #side-top>
+          <!-- 服务级凭据只属于配置编辑；overview/list 不渲染该明文字段。 -->
+          <DebugCredentialEditor
+            :model-value="service.debug_credentials ?? []"
+            class="service-credential-panel"
+            data-test="service-debug-credentials"
+            :title="t('settings.debugCredentials.serviceTitle')"
+            :hint="t('settings.debugCredentials.serviceHint')"
+            @update:model-value="patchService({ debug_credentials: $event })"
+          />
+        </template>
+      </DeploymentForm>
+      <div class="svc-danger-row">
+        <button type="button" class="dep-remove" data-test="remove-env-config" @click="removeDep">{{ t('settings.service.removeEnvConfig') }}</button>
+      </div>
     </div>
   </article>
 </template>
@@ -129,21 +134,26 @@ function removeDep() {
 <style scoped>
 .service-card {
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  padding: 10px 12px;
+  border-radius: 8px;
   margin-bottom: 10px;
+  overflow: hidden;
+  background: rgba(8, 13, 20, 0.72);
 }
 .svc-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-secondary);
+  background: rgba(16, 24, 35, 0.72);
 }
 .svc-name {
   flex: 1;
-  padding: 4px 8px;
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--bg-secondary);
+  min-width: 180px;
+  padding: 7px 10px;
+  font-size: 18px;
+  font-weight: 650;
+  background: transparent;
   border: 1px solid var(--border-secondary);
   color: var(--text-primary);
   outline: none;
@@ -162,40 +172,71 @@ function removeDep() {
   white-space: nowrap;
 }
 .svc-language select {
-  height: 24px;
+  min-width: 82px;
+  height: 32px;
   border: 1px solid var(--border-secondary);
   background: var(--bg-secondary);
   color: var(--text-primary);
   font-size: 11px;
 }
 .svc-remove {
-  padding: 3px 9px;
+  padding: 7px 11px;
   background: transparent;
   border: 1px solid var(--border-secondary);
+  border-radius: 6px;
   color: var(--status-failed);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 650;
 }
 .svc-empty {
-  margin-top: 8px;
+  padding: 18px;
   font-size: 12px;
   color: var(--text-tertiary);
 }
 .enable-btn {
   margin-left: 8px;
-  padding: 2px 10px;
+  padding: 6px 10px;
   background: var(--accent);
+  border-radius: 6px;
   border: none;
   color: #fff;
   cursor: pointer;
   font-size: 11px;
 }
+.svc-dep {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+.service-credential-panel {
+  margin: 0;
+}
+.svc-danger-row {
+  display: flex;
+  justify-content: flex-end;
+}
 .dep-remove {
-  padding: 2px 8px;
+  padding: 9px 14px;
   background: transparent;
-  border: none;
+  border: 1px solid rgba(255, 87, 87, 0.28);
+  border-radius: 6px;
   color: var(--status-failed);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.svc-dep :deep(.service-credential-panel) {
+  border-top: 0;
+  margin-top: 0;
+}
+@media (max-width: 760px) {
+  .svc-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .svc-name {
+    width: 100%;
+  }
 }
 </style>

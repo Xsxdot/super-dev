@@ -21,6 +21,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
     api: {
       ...actual.api,
       listProjects: vi.fn(),
+      listHosts: vi.fn().mockResolvedValue([]),
     },
   }
 })
@@ -100,6 +101,26 @@ describe('ProjectOverviewPage', () => {
 
     expect(wrapper.find('[data-test="project-ingress-tab"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('入口配置')
+  })
+
+  it('switches to project config as a top-level overview tab', async () => {
+    const agent = useAgentStore()
+    agent.projects = [{
+      id: 'p1',
+      name: 'demo',
+      root_path: '/tmp/demo',
+      services: [{ id: 's1', project_id: 'p1', name: 'web', status: '', required: false, order: 0, deployments: [], debug_credentials: [] }],
+      pipelines: [],
+      environments: [{ id: 'e1', name: 'dev', is_dev: true, order: 0 }],
+    }]
+
+    const wrapper = mount(ProjectOverviewPage, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="overview-edit-config"]').exists()).toBe(false)
+    await wrapper.find('[data-test="overview-tab-config"]').trigger('click')
+
+    expect(wrapper.find('[data-test="project-config-surface"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="env-settings"]').text()).toContain('设为开发环境')
   })
 
   it('loads projects when opened directly by route', async () => {

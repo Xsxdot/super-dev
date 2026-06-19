@@ -199,7 +199,7 @@ describe('SettingsPage', () => {
     expect(agent.putEnvSelected).toHaveBeenCalledWith('proj-1', 'dev', [])
   })
 
-  it('项目页可从编辑配置旁打开流水线编辑器', async () => {
+  it('项目页不再展示项目配置和流水线编辑入口', async () => {
     const agent = useAgentStore()
     agent.projects = [project([service('svc-web', 'web')])]
     const settings = useSettingsStore()
@@ -209,15 +209,13 @@ describe('SettingsPage', () => {
     const wrapper = mountSettingsPage()
     await wrapper.find('[data-test="settings-tab-projects"]').trigger('click')
 
-    expect(wrapper.find('[data-test="setup-project-proj-1"]').exists()).toBe(true)
-    const button = wrapper.find('[data-test="pipeline-project-proj-1"]')
-    expect(button.exists()).toBe(true)
-
-    await button.trigger('click')
-    expect(wrapper.text()).toContain('编辑流水线 · Deploy')
+    expect(wrapper.find('[data-test="setup-project-proj-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-project-proj-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="select-start-svc-web"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="toggle-hidden-svc-web"]').exists()).toBe(true)
   })
 
-  it('renders projects as shared settings cards without changing actions', async () => {
+  it('renders projects as shared settings cards with local preference actions', async () => {
     const agent = useAgentStore()
     agent.projects = [project([service('svc-api', 'api', true), service('svc-worker', 'worker')])]
     const settings = useSettingsStore()
@@ -231,9 +229,9 @@ describe('SettingsPage', () => {
     expect(wrapper.find('.settings-card').exists()).toBe(true)
     expect(wrapper.find('.service-row .service-main').exists()).toBe(true)
     expect(wrapper.find('.service-row .inline-check').text()).toContain('快捷启动')
-    expect(wrapper.find('[data-test="setup-project-proj-1"]').classes()).toContain('settings-btn')
-    expect(wrapper.find('[data-test="pipeline-project-proj-1"]').classes()).toContain('settings-btn')
     expect(wrapper.find('[data-test="toggle-hidden-svc-worker"]').classes()).toContain('settings-btn')
+    expect(wrapper.find('[data-test="setup-project-proj-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="pipeline-project-proj-1"]').exists()).toBe(false)
   })
 
   it('支持从 query 直达主机管理 tab', async () => {

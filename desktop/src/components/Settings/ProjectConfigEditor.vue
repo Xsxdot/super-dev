@@ -1,181 +1,23 @@
 <!--
-ProjectConfigEditor：项目运行配置编辑器外壳。
+ProjectConfigEditor：项目运行配置编辑器 modal 外壳。
 
 职责：
-  - 持有项目配置草稿（深拷贝自 project），全程本地编辑
-  - env 横向 tab 切换、增删改名
-  - 双栏：左侧 ServiceRail 列表，右侧 ServiceCard 单服务配置
-  - 保存：校验 → 拍平为 SetupPayload → PUT /setup → reloadProject → emit saved
-  - 取消：丢弃草稿 → emit cancel
+  - 提供 settings modal 的遮罩、标题和宽屏容器
+  - 复用 ProjectConfigSurface 完成配置草稿、校验和保存
+  - 将保存/取消事件透传给父层
+
 边界：
-  - 不编辑项目级流水线（由 ProjectPipelineEditor 负责）
-  - 不负责新建项目的落地（由父层在 saved 后处理 registry）
-  - 删除运行中 service 的最终守卫在后端
+  - 不持有配置草稿
+  - 不实现配置表单细节
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api, type Project } from '@/api/agent'
-import { useAgentStore } from '@/stores/agent'
-import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue, type ConfigDraftService } from '@/lib/configDraft'
-import EnvTabBar from './EnvTabBar.vue'
-import ServiceRail from './ServiceRail.vue'
-import ServiceCard from './ServiceCard.vue'
-import DebugCredentialEditor from './DebugCredentialEditor.vue'
+import type { Project } from '@/api/agent'
+import ProjectConfigSurface from './ProjectConfigSurface.vue'
 
-const props = defineProps<{ project: Project; isNew?: boolean }>()
+defineProps<{ project: Project; isNew?: boolean }>()
 const emit = defineEmits<{ saved: [Project]; cancel: [] }>()
-
-const agentStore = useAgentStore()
 const { t } = useI18n()
-const draft = ref(projectToDraft(props.project))
-const activeEnv = ref('')
-const activeServiceId = ref('')
-const renamingEnv = ref('')
-const hosts = ref<Array<{ id: string; name: string }>>([])
-const errors = ref<string[]>([])
-const saving = ref(false)
-const saveError = ref<string | null>(null)
-
-onMounted(async () => {
-  const envs = draft.value.environments
-  activeEnv.value = (envs.find(e => e.is_dev) ?? envs[0])?.name ?? ''
-  // 默认选中第一个服务
-  const first = draft.value.services[0]
-  activeServiceId.value = first?.id || (draft.value.services.length > 0 ? '0' : '')
-  try {
-    const list = await api.listHosts()
-    hosts.value = list.filter(h => !h.is_self).map(h => ({ id: h.id, name: h.name }))
-  } catch {
-    hosts.value = []
-  }
-})
-
-const currentServices = computed(() => draft.value.services)
-
-// activeService：优先按 id 匹配，id 为空时按索引字符串匹配
-const activeService = computed<ConfigDraftService | null>(() => {
-  const byId = draft.value.services.find(s => s.id && s.id === activeServiceId.value)
-  if (byId) return byId
-  const n = Number(activeServiceId.value)
-  return isNaN(n) ? draft.value.services[0] ?? null : draft.value.services[n] ?? null
-})
-
-const activeServiceIndex = computed<number>(() => {
-  const byId = draft.value.services.findIndex(s => s.id && s.id === activeServiceId.value)
-  if (byId >= 0) return byId
-  const n = Number(activeServiceId.value)
-  return isNaN(n) ? 0 : n
-})
-
-function hasLocalManagedDeployment(service: ConfigDraftService, envName: string) {
-  const dep = service.deployments.find(d => d.env_name === envName)
-  if (!dep) return false
-  const mode = dep.control_mode ?? (dep.read_only ? 'monitor' : 'managed')
-  return dep.location === 'local' && mode === 'managed'
-}
-
-const activeSiblingServices = computed(() => {
-  const current = activeService.value
-  if (!current) return []
-  return draft.value.services
-    .filter(service => service !== current && Boolean(service.id))
-    .filter(service => hasLocalManagedDeployment(service, activeEnv.value))
-    .map(service => ({ id: service.id, name: service.name || service.id }))
-})
-
-function addEnv() {
-  const base = 'env'
-  let name = base
-  let n = 1
-  const taken = new Set(draft.value.environments.map(e => e.name))
-  while (taken.has(name)) name = `${base}${n++}`
-  draft.value.environments.push({ id: '', name, is_dev: false, order: draft.value.environments.length })
-  activeEnv.value = name
-  renamingEnv.value = name // 新增后立即进入改名态
-}
-
-function removeEnv(name: string) {
-  draft.value.environments = draft.value.environments.filter(e => e.name !== name)
-  for (const s of draft.value.services) {
-    s.deployments = s.deployments.filter(d => d.env_name !== name)
-  }
-  if (activeEnv.value === name) {
-    activeEnv.value = draft.value.environments[0]?.name ?? ''
-  }
-}
-
-function renameEnv(oldName: string, newName: string) {
-  const env = draft.value.environments.find(e => e.name === oldName)
-  if (!env) return
-  // 重名时拒绝
-  if (draft.value.environments.some(e => e.name === newName)) return
-  env.name = newName
-  // 同步所有 deployment 的 env_name 引用，否则 deployment 和环境脱钩
-  for (const s of draft.value.services) {
-    for (const d of s.deployments) {
-      if (d.env_name === oldName) d.env_name = newName
-    }
-  }
-  if (activeEnv.value === oldName) activeEnv.value = newName
-  renamingEnv.value = ''
-}
-
-function toggleDev(name: string) {
-  const env = draft.value.environments.find(e => e.name === name)
-  if (env) env.is_dev = !env.is_dev
-}
-
-function addService() {
-  const newSvc: ConfigDraftService = {
-    id: '',
-    name: '',
-    required: false,
-    order: draft.value.services.length,
-    debug_credentials: [],
-    deployments: [],
-  }
-  draft.value.services.push(newSvc)
-  activeServiceId.value = String(draft.value.services.length - 1)
-}
-
-function updateService(i: number, svc: ConfigDraftService) {
-  draft.value.services[i] = svc
-}
-
-function removeService(i: number) {
-  draft.value.services.splice(i, 1)
-  // 删除后选中前一个或第一个
-  const next = draft.value.services[i] ?? draft.value.services[i - 1] ?? draft.value.services[0]
-  if (next) {
-    activeServiceId.value = next.id || String(draft.value.services.indexOf(next))
-  } else {
-    activeServiceId.value = ''
-  }
-}
-
-function configValidationErrors(): string[] {
-  // 项目级流水线已拆到独立编辑器，配置保存只拦截环境/服务/运行日志相关错误。
-  return validateDraftDetailed(draft.value)
-    .filter(error => error.scope === 'config')
-    .map(formatValidationIssue)
-}
-
-async function save() {
-  errors.value = configValidationErrors()
-  if (errors.value.length) return
-  saving.value = true
-  saveError.value = null
-  try {
-    const updated = await api.putProjectSetup(props.project.id, draftToPayload(draft.value))
-    await agentStore.reloadProject(props.project.id)
-    emit('saved', updated)
-  } catch (e) {
-    saveError.value = e instanceof Error ? e.message : t('common.saveFailed')
-  } finally {
-    saving.value = false
-  }
-}
 </script>
 
 <template>
@@ -186,98 +28,27 @@ async function save() {
       </div>
 
       <div class="settings-modal-body editor-content">
-        <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
-          <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
-        </ul>
-        <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
-
-        <EnvTabBar
-          :environments="draft.environments"
-          :active="activeEnv"
-          :renamingEnv="renamingEnv"
-          @update:active="activeEnv = $event"
-          @add-env="addEnv"
-          @remove-env="removeEnv"
-          @rename-env="renameEnv"
-          @toggle-dev="toggleDev"
-          @start-rename="renamingEnv = $event"
+        <ProjectConfigSurface
+          :project="project"
+          :is-new="isNew"
+          @saved="emit('saved', $event)"
+          @cancel="emit('cancel')"
         />
-
-        <!-- 配置页允许编辑明文；普通运行视图仍不展示 debug_credentials。 -->
-        <DebugCredentialEditor
-          v-model="draft.debug_credentials"
-          data-test="project-debug-credentials"
-          :title="t('settings.debugCredentials.projectTitle')"
-          :hint="t('settings.debugCredentials.projectHint')"
-        />
-
-        <!-- 双栏：左侧服务列表，右侧当前服务配置 -->
-        <div class="editor-columns">
-          <div class="editor-left">
-            <ServiceRail
-              :services="currentServices"
-              :activeId="activeServiceId"
-              :envName="activeEnv"
-              @select="activeServiceId = $event"
-              @add="addService"
-              @remove="removeService"
-            />
-          </div>
-          <div class="editor-right">
-            <template v-if="activeService">
-              <ServiceCard
-                data-test="service-card"
-                :service="activeService"
-                :env-name="activeEnv"
-                :hosts="hosts"
-                :project-path="project.root_path"
-                :sibling-services="activeSiblingServices"
-                @update:service="updateService(activeServiceIndex, $event)"
-                @remove="removeService(activeServiceIndex)"
-              />
-            </template>
-            <div v-else class="editor-empty">{{ t('settings.service.addPrompt') }}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-modal-footer editor-actions">
-        <button type="button" class="settings-btn" data-test="config-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button type="button" class="settings-btn settings-btn-primary" data-test="config-save" :disabled="saving" @click="save">
-          {{ saving ? t('common.loading') : t('common.save') }}
-        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.editor-body {
+  display: flex;
+  flex-direction: column;
+}
 .editor-content {
-  display: grid;
-  gap: 12px;
-}
-.err-list {
-  margin: 0;
-  list-style: none;
-}
-.editor-columns {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 16px;
-  border-top: 1px solid var(--border-secondary);
-  padding-top: 12px;
-  min-height: 320px;
-}
-.editor-left {
-  border-right: 1px solid var(--border-secondary);
-  padding-right: 12px;
-}
-.editor-right {
-  min-width: 0;
-}
-.editor-empty {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  padding: 20px 0;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>

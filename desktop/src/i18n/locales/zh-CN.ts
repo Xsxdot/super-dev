@@ -549,8 +549,14 @@ export default {
     },
     env: {
       dev: '开发环境',
+      name: '环境名称',
+      setDev: '设为开发环境',
+      delete: '删除环境',
       rename: '重命名',
       add: '新增环境',
+    },
+    config: {
+      projectScope: '项目级配置',
     },
     service: {
       unconfigured: '未配置',
@@ -564,6 +570,7 @@ export default {
       languageAuto: '自动',
     },
     debugCredentials: {
+      shortTitle: 'AI 调试凭据',
       projectTitle: '项目级 AI 调试凭据',
       projectHint: '供 AI 调试登录或调用测试环境使用；普通服务列表不会展示明文。',
       serviceTitle: '服务级 AI 调试凭据',
@@ -690,6 +697,10 @@ export default {
       remoteHost: '远程主机',
       noHosts: '还没有主机，请先在「主机管理」添加',
       missingHost: '未注册主机：{id}',
+      runtimeTarget: '运行目标',
+      runtimeTargetHint: '当前服务在该环境的节点、接管方式和运行目录',
+      runtimeArgs: '运行参数',
+      languageRuntimeArgs: '{language} 运行参数',
       serviceControl: '服务控制',
       monitor: '监控',
       managed: '接管启停',
@@ -742,6 +753,7 @@ export default {
       webDefaultPath: '默认路径',
       webReadinessTimeout: '就绪超时',
       webAIDebug: '允许 AI 调试会话',
+      debugEntry: '调试与入口',
       codeDebug: {
         title: 'AI 代码调试',
         devDefaultHint: 'dev 环境默认允许 AI 代码调试；关闭是显式操作。',
@@ -1175,6 +1187,7 @@ export default {
     openOverviewForProject: '打开「{name}」项目概览',
     runtime: '运行状态',
     pipelines: '流水线',
+    config: '配置',
     projectNotFound: '项目不存在',
     ingress: {
       tab: '入口配置',

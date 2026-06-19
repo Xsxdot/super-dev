@@ -21,6 +21,7 @@ const overviewTabsPath = `${process.cwd()}/src/components/Overview/OverviewTabs.
 const pipelinesTabPath = `${process.cwd()}/src/components/Overview/PipelinesTab.vue`
 const pipelineRowPath = `${process.cwd()}/src/components/Overview/PipelineRow.vue`
 const projectPipelineEditorPath = `${process.cwd()}/src/components/Settings/ProjectPipelineEditor.vue`
+const projectConfigSurfacePath = `${process.cwd()}/src/components/Settings/ProjectConfigSurface.vue`
 const pipelineWizardPath = `${process.cwd()}/src/components/Settings/PipelineTemplateWizard.vue`
 const singlePipelineFormPath = `${process.cwd()}/src/components/Settings/SingleProjectPipelineForm.vue`
 
@@ -46,6 +47,10 @@ function pipelineRowSource() {
 
 function projectPipelineEditorSource() {
   return readFileSync(projectPipelineEditorPath, 'utf8') as string
+}
+
+function projectConfigSurfaceSource() {
+  return readFileSync(projectConfigSurfacePath, 'utf8') as string
 }
 
 function pipelineWizardSource() {
@@ -159,8 +164,18 @@ describe('settings style contract', () => {
   it('keeps project overview tabs compact in the page header', () => {
     const source = overviewTabsSource()
 
-    expectRule(source, '\\.overview-tabs', ['width:\\s*min\\(330px,\\s*100%\\);', 'height:\\s*44px;', 'padding:\\s*3px;'])
+    expectRule(source, '\\.overview-tabs', ['width:\\s*min\\(430px,\\s*100%\\);', 'height:\\s*44px;', 'padding:\\s*3px;'])
     expectRule(source, '\\.overview-tabs button', ['height:\\s*36px;', 'padding:\\s*0 12px;', 'font-size:\\s*13px;', 'font-weight:\\s*650;'])
+  })
+
+  it('keeps embedded project config full-width and top-aligned in the overview page', () => {
+    const source = projectConfigSurfaceSource()
+
+    expectRule(source, '\\.config-scroll', ['align-content:\\s*start;', 'grid-auto-rows:\\s*max-content;'])
+    expectRule(source, '\\.project-config-surface\\.embedded \\.config-scroll', ['padding:\\s*18px 22px 0;'])
+    expectRule(source, '\\.project-config-surface\\.embedded \\.config-actions', ['padding:\\s*14px 22px 18px;'])
+    expect(source).not.toContain('width: min(1386px')
+    expect(source).not.toContain('margin: 0 auto;')
   })
 
   it('keeps pipeline editor form typography aligned with settings controls', () => {

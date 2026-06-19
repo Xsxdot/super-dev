@@ -61,7 +61,66 @@ describe('ProjectConfigEditor', () => {
     const wrapper = mountProjectConfigEditor(project())
     await new Promise(r => setTimeout(r))
     expect(wrapper.find('[data-test="env-tab"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="project-config-scope"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="project-debug-credentials"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="service-card"]').exists()).toBe(true)
+  })
+
+  it('dev 环境默认展示项目级 AI 调试凭据，切到非 dev 后隐藏', async () => {
+    const p = project()
+    p.environments!.push({ id: 'e2', name: 'prod', is_dev: false, order: 1 })
+    const wrapper = mountProjectConfigEditor(p)
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="project-debug-credentials"]').exists()).toBe(true)
+
+    await wrapper.findAll('[data-test="env-tab"]')[1].trigger('click')
+
+    expect(wrapper.find('[data-test="project-debug-credentials"]').exists()).toBe(false)
+  })
+
+  it('在环境设置中展示并保存 is_dev', async () => {
+    const { api } = await import('@/api/agent')
+    const p = project()
+    p.environments!.push({ id: 'e2', name: 'prod', is_dev: false, order: 1 })
+    const wrapper = mountProjectConfigEditor(p)
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.findAll('[data-test="env-tab"]')[1].trigger('click')
+    const devToggle = wrapper.find('[data-test="env-is-dev"]')
+    expect(devToggle.exists()).toBe(true)
+    expect((devToggle.element as HTMLInputElement).checked).toBe(false)
+
+    await devToggle.setValue(true)
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      environments: expect.arrayContaining([
+        expect.objectContaining({ name: 'prod', is_dev: true }),
+      ]),
+    }))
+  })
+
+  it('通过环境设置改名时同步 deployment 归属', async () => {
+    const { api } = await import('@/api/agent')
+    const p = projectWithDeployment()
+    const wrapper = mountProjectConfigEditor(p)
+    await new Promise(r => setTimeout(r))
+
+    const nameInput = wrapper.find('[data-test="env-name-input"]')
+    expect(nameInput.exists()).toBe(true)
+    await nameInput.setValue('local')
+    await nameInput.trigger('blur')
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      environments: [expect.objectContaining({ name: 'local' })],
+      services: [expect.objectContaining({
+        deployments: [expect.objectContaining({ env_name: 'local' })],
+      })],
+    }))
   })
 
   it('校验失败时阻止保存并展示错误', async () => {
@@ -116,6 +175,23 @@ describe('ProjectConfigEditor', () => {
         desc: '项目级测试登录',
       }],
     }))
+  })
+
+  it('同一项目轮询刷新不会覆盖未保存的本地草稿', async () => {
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="project-debug-credentials"] [data-test="debug-credential-add"]').trigger('click')
+    await wrapper
+      .find('[data-test="project-debug-credentials"] [data-test="debug-credential-name"]')
+      .setValue('draft_login')
+
+    const refreshed = project()
+    refreshed.name = 'demo refreshed'
+    await wrapper.setProps({ project: refreshed })
+
+    expect(wrapper.get('[data-test="project-debug-credentials"] [data-test="debug-credential-name"]').element)
+      .toHaveProperty('value', 'draft_login')
   })
 
   it('新启用服务环境时保存 runtime/logs 配置', async () => {

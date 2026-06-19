@@ -20,19 +20,31 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { computed } from 'vue'
+import type { ProjectOverviewState } from '@/stores/workspace'
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
 
-const overviewProject = computed(() => {
+const activeOverviewTab = computed(() => {
   const tab = workspace.activeTab
-  return tab?.type === 'overview' ? agentStore.projectById(tab.projectId) : null
+  return tab?.type === 'overview' ? tab : null
+})
+
+const overviewProject = computed(() => {
+  const tab = activeOverviewTab.value
+  return tab ? agentStore.projectById(tab.projectId) : null
 })
 
 const isRuntimeTab = computed(() =>
   workspace.activeTab?.type === 'project' || workspace.activeTab?.type === 'deployment',
 )
+
+function updateOverviewState(state: ProjectOverviewState) {
+  const tab = activeOverviewTab.value
+  if (!tab) return
+  workspace.updateProjectOverviewState(tab.id, state)
+}
 </script>
 
 <template>
@@ -60,11 +72,14 @@ const isRuntimeTab = computed(() =>
       v-else-if="workspace.activeTab.type === 'nodes'"
     />
     <ProjectOverviewPane
-      v-else-if="workspace.activeTab.type === 'overview' && overviewProject"
+      v-else-if="activeOverviewTab && overviewProject"
+      :key="activeOverviewTab.id"
       :project="overviewProject"
+      :state="activeOverviewTab.overviewState"
       compact
+      @update:state="updateOverviewState"
     />
-    <div v-else-if="workspace.activeTab.type === 'overview'" class="workspace-empty">
+    <div v-else-if="activeOverviewTab" class="workspace-empty">
       <div>{{ t('overview.projectNotFound') }}</div>
     </div>
   </div>

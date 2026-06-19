@@ -6,6 +6,7 @@
   - 管理项目列表中的本地展示偏好和启动选择
 
 边界：
+  - 不承载已有项目的运行配置编辑，项目概览页负责项目级配置
   - 不直接读写 MCP 配置文件，MCP 管理由专用 Tauri command 完成
   - 不直接启动或停止服务
 -->
@@ -30,7 +31,6 @@ import DebugBrowserTab from '@/components/Settings/DebugBrowserTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
-import ProjectPipelineEditor from '@/components/Settings/ProjectPipelineEditor.vue'
 import type { SupportedLocale } from '@/i18n'
 import type {
   PipelineTemplateDetail,
@@ -74,7 +74,6 @@ onMounted(() => {
   void operationApprovalStore.loadPending()
 })
 
-const pipelineEditorProject = ref<Project | null>(null)
 const templateModalOpen = ref(false)
 const selectedTemplate = ref<PipelineTemplateSummary | null>(null)
 const templateDetailLoading = ref(false)
@@ -84,18 +83,9 @@ const {
   editorProject,
   editorIsNew,
   addProject,
-  openExistingProjectEditor,
   closeEditor,
   onEditorSaved,
 } = useAddProjectFlow()
-
-function openPipelineEditor(project: Project) {
-  pipelineEditorProject.value = project
-}
-
-function onPipelineEditorSaved() {
-  pipelineEditorProject.value = null
-}
 
 async function importPipelineTemplate() {
   const selected = await open({
@@ -432,20 +422,6 @@ const artifactKeepVersions = computed({
               </div>
               <div class="project-actions">
                 <span>{{ t('common.serviceCount', { count: project.services.length }) }}</span>
-                <button
-                  class="settings-btn settings-btn-secondary"
-                  :data-test="`setup-project-${project.id}`"
-                  @click="openExistingProjectEditor(project)"
-                >
-                  {{ t('settings.projects.editConfig') }}
-                </button>
-                <button
-                  class="settings-btn settings-btn-secondary"
-                  :data-test="`pipeline-project-${project.id}`"
-                  @click="openPipelineEditor(project)"
-                >
-                  {{ t('settings.projects.editPipeline') }}
-                </button>
                 <button class="settings-btn settings-btn-danger" @click="deleteProject(project)">{{ t('common.delete') }}</button>
               </div>
             </header>
@@ -521,14 +497,6 @@ const artifactKeepVersions = computed({
       :is-new="editorIsNew"
       @saved="onEditorSaved"
       @cancel="closeEditor"
-    />
-    <ProjectPipelineEditor
-      v-if="pipelineEditorProject"
-      :project="pipelineEditorProject"
-      :pipeline-templates="pipelineTemplateStore.templates"
-      :on-import-template="importPipelineTemplate"
-      @saved="onPipelineEditorSaved"
-      @cancel="pipelineEditorProject = null"
     />
     <TemplateContentModal
       :open="templateModalOpen"

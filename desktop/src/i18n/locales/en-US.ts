@@ -549,8 +549,14 @@ export default {
     },
     env: {
       dev: 'Development environment',
+      name: 'Environment name',
+      setDev: 'Set as development environment',
+      delete: 'Delete Environment',
       rename: 'Rename',
       add: 'Add Environment',
+    },
+    config: {
+      projectScope: 'Project Config',
     },
     service: {
       unconfigured: 'Not configured',
@@ -564,6 +570,7 @@ export default {
       languageAuto: 'Auto',
     },
     debugCredentials: {
+      shortTitle: 'AI debug credentials',
       projectTitle: 'Project AI Debug Credentials',
       projectHint: 'For AI login or test-environment calls; plaintext is not shown in normal service lists.',
       serviceTitle: 'Service AI Debug Credentials',
@@ -690,6 +697,10 @@ export default {
       remoteHost: 'Remote Host',
       noHosts: 'No hosts yet. Add one in Hosts first.',
       missingHost: 'Unregistered host: {id}',
+      runtimeTarget: 'Runtime Target',
+      runtimeTargetHint: 'Node, control mode, and runtime directory for this service in the selected environment',
+      runtimeArgs: 'Runtime Arguments',
+      languageRuntimeArgs: '{language} Runtime Arguments',
       serviceControl: 'Service Control',
       monitor: 'Monitor',
       managed: 'Managed Start/Stop',
@@ -742,6 +753,7 @@ export default {
       webDefaultPath: 'Default path',
       webReadinessTimeout: 'Readiness timeout',
       webAIDebug: 'Allow AI debug session',
+      debugEntry: 'Debug & Entry',
       codeDebug: {
         title: 'AI code debug',
         devDefaultHint: 'Dev environments allow AI code debug by default; disabling it is explicit.',
@@ -1175,6 +1187,7 @@ export default {
     openOverviewForProject: '{name} overview',
     runtime: 'Runtime',
     pipelines: 'Pipelines',
+    config: 'Config',
     projectNotFound: 'Project not found',
     ingress: {
       tab: 'Ingress',

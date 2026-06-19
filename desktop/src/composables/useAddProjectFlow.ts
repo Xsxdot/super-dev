@@ -2,8 +2,8 @@
  * 桌面端添加项目流程。
  *
  * 职责：
- *   - 统一执行选择目录、注册项目、导入 VS Code launch 配置、打开项目配置编辑器
- *   - 向调用方暴露项目配置编辑器状态和打开/关闭方法
+ *   - 统一执行选择目录、注册项目、导入 VS Code launch 配置、打开新项目配置编辑器
+ *   - 向调用方暴露新项目配置编辑器状态和打开/关闭方法
  *
  * 边界：
  *   - 不保存项目配置草稿，保存由 ProjectConfigEditor 负责
@@ -26,7 +26,6 @@ function emptyProjectHasNoServices(project: Project): boolean {
  * 返回：
  *   - editorProject/editorIsNew: ProjectConfigEditor 的渲染状态
  *   - addProject: 打开目录选择器并初始化新项目配置草稿
- *   - openExistingProjectEditor: 打开已有项目配置编辑器
  *   - closeEditor/onEditorSaved: 关闭编辑器的事件处理函数
  *
  * 注意：
@@ -85,11 +84,6 @@ export function useAddProjectFlow() {
     }))
   }
 
-  function openExistingProjectEditor(project: Project) {
-    editorProject.value = project
-    editorIsNew.value = false
-  }
-
   function closeEditor() {
     editorProject.value = null
     editorIsNew.value = false
@@ -117,7 +111,6 @@ export function useAddProjectFlow() {
     editorProject,
     editorIsNew,
     addProject,
-    openExistingProjectEditor,
     closeEditor,
     onEditorSaved,
   }

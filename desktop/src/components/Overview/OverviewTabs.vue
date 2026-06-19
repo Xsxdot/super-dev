@@ -2,7 +2,7 @@
 OverviewTabs：项目概览页的顶层视图切换。
 
 职责：
-  - 在运行状态、流水线和入口配置之间切换
+  - 在运行状态、流水线、入口配置和项目配置之间切换
   - 暴露稳定 data-test 供组件测试定位
 
 边界：
@@ -12,7 +12,7 @@ OverviewTabs：项目概览页的顶层视图切换。
 <script setup lang="ts">
 import { useAppI18n } from '@/i18n/useAppI18n'
 
-type OverviewTab = 'runtime' | 'pipelines' | 'ingress'
+type OverviewTab = 'runtime' | 'pipelines' | 'ingress' | 'config'
 
 defineProps<{ modelValue: OverviewTab }>()
 const emit = defineEmits<{ 'update:modelValue': [OverviewTab] }>()
@@ -45,14 +45,22 @@ const { t } = useAppI18n()
     >
       {{ t('overview.ingress.tab') }}
     </button>
+    <button
+      type="button"
+      data-test="overview-tab-config"
+      :class="{ active: modelValue === 'config' }"
+      @click="emit('update:modelValue', 'config')"
+    >
+      {{ t('overview.config') }}
+    </button>
   </div>
 </template>
 
 <style scoped>
 .overview-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  width: min(330px, 100%);
+  grid-template-columns: repeat(4, 1fr);
+  width: min(430px, 100%);
   height: 44px;
   gap: 0;
   padding: 3px;

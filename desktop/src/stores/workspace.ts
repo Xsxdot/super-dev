@@ -12,6 +12,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { api, type LogContextPageDirection, type LogEntry, type SearchLogsParams } from '@/api/agent'
+import type { ConfigDraft } from '@/lib/configDraft'
 import { useAgentStore } from './agent'
 import {
   createDeploymentPanelRoot,
@@ -43,6 +44,23 @@ export interface ProjectOverviewWorkspaceTab {
   type: 'overview'
   projectId: string
   title: string
+  overviewState: ProjectOverviewState
+}
+
+export type ProjectOverviewSubtab = 'runtime' | 'pipelines' | 'ingress' | 'config'
+
+export interface ProjectConfigSurfaceState {
+  draft: ConfigDraft
+  activeEnv: string
+  activeServiceId: string
+  renamingEnv: string
+  errors: string[]
+  saveError: string | null
+}
+
+export interface ProjectOverviewState {
+  activeTab: ProjectOverviewSubtab
+  config?: ProjectConfigSurfaceState
 }
 
 export interface NodesWorkspaceTab {
@@ -114,6 +132,7 @@ function makeProjectOverviewTab(projectId: string, title: string): ProjectOvervi
     type: 'overview',
     projectId,
     title,
+    overviewState: { activeTab: 'runtime' },
   }
 }
 
@@ -227,6 +246,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     runtimeWorkspaceMaximized.value = false
     activeTabId.value = tab.id
     return tab
+  }
+
+  function updateProjectOverviewState(tabId: string, state: ProjectOverviewState) {
+    const tab = tabs.value.find(
+      (candidate): candidate is ProjectOverviewWorkspaceTab => candidate.type === 'overview' && candidate.id === tabId,
+    )
+    if (!tab) return
+    tab.overviewState = state
   }
 
   function openNodesTab(): NodesWorkspaceTab {
@@ -571,6 +598,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     // ensureProjectTab 作为 deployment 多面板容器 tab 的入口保留，供后续在项目 tab 中拖入多个 deployment 分栏使用。
     ensureProjectTab,
     openProjectOverview,
+    updateProjectOverviewState,
     openNodesTab,
     openSearch,
     openDeployment,

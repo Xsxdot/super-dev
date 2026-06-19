@@ -24,6 +24,20 @@ function service(): ConfigDraftService {
 }
 
 describe('ServiceCard', () => {
+  it('renders the deployment editor as the mock-style two column service surface', () => {
+    const wrapper = mount(ServiceCard, {
+      props: { service: service(), envName: 'dev', hosts: [], projectPath: '/repo' },
+    })
+
+    expect(wrapper.find('[data-test="service-config-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-layout-grid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-main-column"] [data-test="runtime-target-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="service-debug-credentials"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="startup-readiness-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deployment-side-column"] [data-test="log-source-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="remove-env-config"]').exists()).toBe(true)
+  })
+
   it('emits service language changes from the service identity area', async () => {
     const wrapper = mount(ServiceCard, {
       props: { service: service(), envName: 'dev', hosts: [] },

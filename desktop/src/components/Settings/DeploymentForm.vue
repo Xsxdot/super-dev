@@ -5,6 +5,7 @@ DeploymentForm：单份 deployment 的服务环境配置表单。
   - 编辑服务实例所在节点（本机 / 远程主机列表）
   - 用“监控 / 接管启停”表达 agent 对运行态的能力边界
   - 配置运行态目标（systemd / launchd / docker / command / nginx）和日志来源
+  - 配置本机服务的调试入口（AI 代码调试 / Web 入口）
   - 支持日志文件 tail 与自定义日志命令
 
 边界：
@@ -155,6 +156,17 @@ const hostOptions = computed<HostOption[]>(() => {
 const readinessType = computed(() => props.modelValue.readiness?.type ?? '')
 const availableDeps = computed(() =>
   (props.siblingServices ?? []).filter(s => !(props.modelValue.depends_on ?? []).includes(s.id)),
+)
+const serviceLanguageLabel = computed(() => {
+  if (props.serviceLanguage === 'go') return 'Go'
+  if (props.serviceLanguage === 'node') return 'Node'
+  if (props.serviceLanguage === 'python') return 'Python'
+  return ''
+})
+const runtimeArgsTitle = computed(() =>
+  serviceLanguageLabel.value
+    ? t('settings.deployment.languageRuntimeArgs', { language: serviceLanguageLabel.value })
+    : t('settings.deployment.runtimeArgs'),
 )
 
 function legacyLogType(kind?: LogKind) {
@@ -423,7 +435,7 @@ function patchCodeDebug(partial: Partial<CodeDebugConfig>) {
 }
 
 watch(
-  () => [props.serviceLanguage, runtime.value.type] as const,
+  [() => props.serviceLanguage, () => runtime.value.type],
   async ([language, runtimeType]) => {
     const requestID = ++languageSchemaRequestID
     languageSchemaError.value = ''
@@ -453,81 +465,95 @@ watch(
 </script>
 
 <template>
-  <div class="dep-form">
-    <section class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.node') }}</div>
-      <div class="dep-location">
-        <label class="dep-choice">
-          <input
-            type="radio"
-            data-test="dep-location-local"
-            :checked="modelValue.location === 'local'"
-            @change="setLocation('local')"
-          /> {{ t('settings.deployment.local') }}
-        </label>
-        <label class="dep-choice">
-          <input
-            type="radio"
-            data-test="dep-location-remote"
-            :checked="modelValue.location === 'remote'"
-            @change="setLocation('remote')"
-          /> {{ t('settings.deployment.remoteHost') }}
-        </label>
-      </div>
-      <div v-if="modelValue.location === 'remote'" class="dep-hosts">
-        <div v-if="hostOptions.length === 0" class="dep-hint">{{ t('settings.deployment.noHosts') }}</div>
-        <label v-for="h in hostOptions" v-else :key="h.id" class="dep-host" :class="{ 'dep-host-missing': h.missing }">
-          <input
-            type="checkbox"
-            :checked="(modelValue.host_ids ?? []).includes(h.id)"
-            @change="toggleHost(h.id, ($event.target as HTMLInputElement).checked)"
-          /> {{ h.name }}
-        </label>
-      </div>
-    </section>
+  <div class="dep-form" data-test="deployment-layout-grid">
+    <div class="dep-column dep-main-column" data-test="deployment-main-column">
+      <section class="dep-panel dep-runtime-target" data-test="runtime-target-panel">
+        <div class="dep-heading">{{ t('settings.deployment.runtimeTarget') }}</div>
+        <div class="dep-help">{{ t('settings.deployment.runtimeTargetHint') }}</div>
 
-    <section class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.serviceControl') }}</div>
-      <div class="dep-location">
-        <label class="dep-choice">
-          <input
-            type="radio"
-            data-test="dep-control-monitor"
-            :checked="controlMode === 'monitor'"
-            @change="setControlMode('monitor')"
-          /> {{ t('settings.deployment.monitor') }}
-        </label>
-        <label class="dep-choice">
-          <input
-            type="radio"
-            data-test="dep-control-managed"
-            :checked="controlMode === 'managed'"
-            @change="setControlMode('managed')"
-          /> {{ t('settings.deployment.managed') }}
-        </label>
-      </div>
-      <div class="dep-help">
-        {{ controlMode === 'monitor' ? t('settings.deployment.monitorDesc') : t('settings.deployment.managedDesc') }}
-      </div>
+        <div class="dep-target-grid">
+          <div class="dep-target-cell">
+            <div class="settings-field-label dep-label">{{ t('settings.deployment.node') }}</div>
+            <div class="dep-location">
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-location-local"
+                  :checked="modelValue.location === 'local'"
+                  @change="setLocation('local')"
+                /> {{ t('settings.deployment.local') }}
+              </label>
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-location-remote"
+                  :checked="modelValue.location === 'remote'"
+                  @change="setLocation('remote')"
+                /> {{ t('settings.deployment.remoteHost') }}
+              </label>
+            </div>
+          </div>
 
-      <div class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ controlMode === 'monitor' ? t('settings.deployment.monitorTarget') : t('settings.deployment.managedMode') }}</label>
-        <select
-          class="settings-select dep-input"
-          data-test="dep-target-type"
-          :value="runtime.type"
-          @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
-        >
-          <option v-if="canUseLanguageRuntime || runtime.type === 'language'" value="language">{{ t('settings.deployment.languageRuntime') }}</option>
-          <option v-if="controlMode === 'managed' && runtime.type === 'command'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
-          <option value="systemd">{{ t('settings.deployment.systemdService') }}</option>
-          <option v-if="controlMode === 'managed'" value="launchd">{{ t('settings.deployment.launchdService') }}</option>
-          <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
-          <option v-if="controlMode === 'monitor'" value="nginx_static">{{ t('settings.deployment.nginxStatic') }}</option>
-        </select>
-      </div>
+          <div class="dep-target-cell">
+            <div class="settings-field-label dep-label">{{ t('settings.deployment.serviceControl') }}</div>
+            <div class="dep-location">
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-control-monitor"
+                  :checked="controlMode === 'monitor'"
+                  @change="setControlMode('monitor')"
+                /> {{ t('settings.deployment.monitor') }}
+              </label>
+              <label class="dep-choice">
+                <input
+                  type="radio"
+                  data-test="dep-control-managed"
+                  :checked="controlMode === 'managed'"
+                  @change="setControlMode('managed')"
+                /> {{ t('settings.deployment.managed') }}
+              </label>
+            </div>
+          </div>
+        </div>
 
-      <template v-if="runtime.type === 'command'">
+        <div v-if="modelValue.location === 'remote'" class="dep-hosts">
+          <div v-if="hostOptions.length === 0" class="dep-hint">{{ t('settings.deployment.noHosts') }}</div>
+          <label v-for="h in hostOptions" v-else :key="h.id" class="dep-host" :class="{ 'dep-host-missing': h.missing }">
+            <input
+              type="checkbox"
+              :checked="(modelValue.host_ids ?? []).includes(h.id)"
+              @change="toggleHost(h.id, ($event.target as HTMLInputElement).checked)"
+            /> {{ h.name }}
+          </label>
+        </div>
+
+        <div class="dep-help">
+          {{ controlMode === 'monitor' ? t('settings.deployment.monitorDesc') : t('settings.deployment.managedDesc') }}
+        </div>
+
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ controlMode === 'monitor' ? t('settings.deployment.monitorTarget') : t('settings.deployment.managedMode') }}</label>
+          <select
+            class="settings-select dep-input"
+            data-test="dep-target-type"
+            :value="runtime.type"
+            @change="setRuntimeType(($event.target as HTMLSelectElement).value as RuntimeType)"
+          >
+            <option v-if="canUseLanguageRuntime || runtime.type === 'language'" value="language">{{ t('settings.deployment.languageRuntime') }}</option>
+            <option v-if="controlMode === 'managed' && runtime.type === 'command'" value="command">{{ t('settings.deployment.runtimeCommand') }}</option>
+            <option value="systemd">{{ t('settings.deployment.systemdService') }}</option>
+            <option v-if="controlMode === 'managed'" value="launchd">{{ t('settings.deployment.launchdService') }}</option>
+            <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
+            <option v-if="controlMode === 'monitor'" value="nginx_static">{{ t('settings.deployment.nginxStatic') }}</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="dep-panel dep-runtime-args" data-test="runtime-args-panel">
+        <div class="dep-heading">{{ runtimeArgsTitle }}</div>
+
+        <template v-if="runtime.type === 'command'">
         <div class="settings-field dep-field">
           <label class="settings-field-label dep-label">{{ t('settings.deployment.startCommand') }}</label>
           <input
@@ -567,9 +593,9 @@ watch(
         </div>
         <div class="settings-field-label dep-label">{{ t('settings.deployment.envVars') }}</div>
         <EnvKeyValueEditor :model-value="runtime.env_vars ?? {}" @update:model-value="setEnv" />
-      </template>
+        </template>
 
-      <template v-else-if="runtime.type === 'language'">
+        <template v-else-if="runtime.type === 'language'">
         <div class="settings-field dep-field">
           <label class="settings-field-label dep-label">{{ t('settings.deployment.workDir') }}</label>
           <WorkDirInput
@@ -645,9 +671,9 @@ watch(
             {{ t('settings.deployment.escapeHatchOverrideNotice') }}
           </div>
         </details>
-      </template>
+        </template>
 
-      <div v-else-if="runtime.type === 'systemd'" class="settings-field dep-field">
+        <div v-else-if="runtime.type === 'systemd'" class="settings-field dep-field">
         <label class="settings-field-label dep-label">{{ t('settings.deployment.serviceName') }}</label>
         <input
           class="settings-input dep-input"
@@ -656,9 +682,9 @@ watch(
           :value="runtime.service_name"
           @input="setSystemdServiceName(($event.target as HTMLInputElement).value)"
         />
-      </div>
+        </div>
 
-      <template v-else-if="runtime.type === 'launchd'">
+        <template v-else-if="runtime.type === 'launchd'">
         <div class="settings-field dep-field">
           <label class="settings-field-label dep-label">{{ t('settings.deployment.launchdLabel') }}</label>
           <input
@@ -679,9 +705,9 @@ watch(
             @input="setLaunchdPlistPath(($event.target as HTMLInputElement).value)"
           />
         </div>
-      </template>
+        </template>
 
-      <div v-else-if="runtime.type === 'docker'" class="settings-field dep-field">
+        <div v-else-if="runtime.type === 'docker'" class="settings-field dep-field">
         <label class="settings-field-label dep-label">{{ t('settings.deployment.containerName') }}</label>
         <input
           class="settings-input dep-input"
@@ -690,9 +716,9 @@ watch(
           :value="runtime.container"
           @input="setDockerContainer(($event.target as HTMLInputElement).value)"
         />
-      </div>
+        </div>
 
-      <div v-else-if="runtime.type === 'nginx_static'" class="settings-field dep-field">
+        <div v-else-if="runtime.type === 'nginx_static'" class="settings-field dep-field">
         <label class="settings-field-label dep-label">{{ t('settings.deployment.siteDomain') }}</label>
         <input
           class="settings-input dep-input"
@@ -701,253 +727,300 @@ watch(
           :value="runtime.domain"
           @input="setNginxDomain(($event.target as HTMLInputElement).value)"
         />
-      </div>
-    </section>
-
-    <!-- 自启和就绪门只对本机接管进程生效；远端/监控模式不拥有启动状态机。 -->
-    <section v-if="isLocalManaged" class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.startReadiness') }}</div>
-
-      <div class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.dependsOn') }}</label>
-        <div class="dep-chips" data-test="dep-depends-on">
-          <span v-for="id in (modelValue.depends_on ?? [])" :key="id" class="dep-chip">
-            {{ siblingName(id) }}
-            <button type="button" class="dep-chip-remove" :aria-label="t('common.delete')" @click="removeDep(id)">×</button>
-          </span>
-          <select
-            v-if="availableDeps.length"
-            class="settings-select dep-dependency-select"
-            data-test="dep-add-dependency"
-            @change="addDep(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
-          >
-            <option value="">{{ t('settings.deployment.addDependency') }}</option>
-            <option v-for="s in availableDeps" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
         </div>
-      </div>
+      </section>
+    </div>
 
-      <div class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.readiness') }}</label>
-        <div class="dep-readiness">
-          <select
-            class="settings-select"
-            data-test="dep-readiness-type"
-            :value="readinessType"
-            @change="setReadinessType(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="">{{ t('settings.deployment.readinessProcess') }}</option>
-            <option value="http">HTTP</option>
-            <option value="tcp">TCP</option>
-          </select>
-          <input
-            v-if="readinessType"
-            class="settings-input"
-            data-test="dep-readiness-target"
-            :placeholder="readinessType === 'http' ? 'http://127.0.0.1:9100/' : '127.0.0.1:9100'"
-            :value="modelValue.readiness?.target ?? ''"
-            @input="setReadinessTarget(($event.target as HTMLInputElement).value)"
-          />
-          <input
-            v-if="readinessType"
-            class="settings-input dep-readiness-timeout"
-            data-test="dep-readiness-timeout"
-            type="number"
-            min="1"
-            :value="modelValue.readiness?.timeout_seconds ?? 30"
-            @input="setReadinessTimeout(Number(($event.target as HTMLInputElement).value))"
-          />
-        </div>
-      </div>
-    </section>
+    <aside class="dep-column dep-side-column" data-test="deployment-side-column">
+      <slot name="side-top" />
 
-    <section v-if="isLocalManaged" class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.autostart') }}</div>
-      <label class="dep-choice">
-        <input
-          type="checkbox"
-          data-test="dep-start-on-boot"
-          :checked="modelValue.start_on_boot ?? false"
-          @change="patch({ start_on_boot: ($event.target as HTMLInputElement).checked })"
-        />
-        {{ t('settings.deployment.startOnBoot') }}
-      </label>
-    </section>
+      <!-- 自启和就绪门只对本机接管进程生效；远端/监控模式不拥有启动状态机。 -->
+      <section v-if="isLocalManaged" class="dep-panel" data-test="startup-readiness-panel">
+        <div class="dep-heading">{{ t('settings.deployment.startReadiness') }}</div>
 
-    <section v-if="modelValue.location === 'local'" class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.webEntry') }}</div>
-      <label class="dep-choice">
-        <input
-          type="checkbox"
-          data-test="dep-web-enabled"
-          :checked="modelValue.web?.enabled ?? false"
-          @change="patchWeb({ enabled: ($event.target as HTMLInputElement).checked })"
-        />
-        {{ t('settings.deployment.webEntryEnabled') }}
-      </label>
-      <template v-if="modelValue.web?.enabled">
         <div class="settings-field dep-field">
-          <label class="settings-field-label dep-label">{{ t('settings.deployment.webUrl') }}</label>
-          <input
-            class="settings-input dep-input"
-            data-test="dep-web-url"
-            :value="modelValue.web?.url ?? ''"
-            placeholder="http://127.0.0.1:3000"
-            @input="patchWeb({ url: ($event.target as HTMLInputElement).value })"
-          />
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.dependsOn') }}</label>
+          <div class="dep-chips" data-test="dep-depends-on">
+            <span v-for="id in (modelValue.depends_on ?? [])" :key="id" class="dep-chip">
+              {{ siblingName(id) }}
+              <button type="button" class="dep-chip-remove" :aria-label="t('common.delete')" @click="removeDep(id)">×</button>
+            </span>
+            <select
+              v-if="availableDeps.length"
+              class="settings-select dep-dependency-select"
+              data-test="dep-add-dependency"
+              @change="addDep(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
+            >
+              <option value="">{{ t('settings.deployment.addDependency') }}</option>
+              <option v-for="s in availableDeps" :key="s.id" :value="s.id">{{ s.name }}</option>
+            </select>
+          </div>
         </div>
+
         <div class="settings-field dep-field">
-          <label class="settings-field-label dep-label">{{ t('settings.deployment.webDefaultPath') }}</label>
-          <input
-            class="settings-input dep-input"
-            data-test="dep-web-default-path"
-            :value="modelValue.web?.default_path ?? '/'"
-            @input="patchWeb({ default_path: ($event.target as HTMLInputElement).value })"
-          />
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.readiness') }}</label>
+          <div class="dep-readiness">
+            <select
+              class="settings-select"
+              data-test="dep-readiness-type"
+              :value="readinessType"
+              @change="setReadinessType(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">{{ t('settings.deployment.readinessProcess') }}</option>
+              <option value="http">HTTP</option>
+              <option value="tcp">TCP</option>
+            </select>
+            <input
+              v-if="readinessType"
+              class="settings-input"
+              data-test="dep-readiness-target"
+              :placeholder="readinessType === 'http' ? 'http://127.0.0.1:9100/' : '127.0.0.1:9100'"
+              :value="modelValue.readiness?.target ?? ''"
+              @input="setReadinessTarget(($event.target as HTMLInputElement).value)"
+            />
+            <input
+              v-if="readinessType"
+              class="settings-input dep-readiness-timeout"
+              data-test="dep-readiness-timeout"
+              type="number"
+              min="1"
+              :value="modelValue.readiness?.timeout_seconds ?? 30"
+              @input="setReadinessTimeout(Number(($event.target as HTMLInputElement).value))"
+            />
+          </div>
         </div>
-        <div class="settings-field dep-field">
-          <label class="settings-field-label dep-label">{{ t('settings.deployment.webReadinessTimeout') }}</label>
-          <input
-            class="settings-input dep-input"
-            data-test="dep-web-readiness-timeout"
-            type="number"
-            min="1"
-            max="120"
-            :value="modelValue.web?.readiness?.timeout_seconds ?? 30"
-            @change="patchWeb({ readiness: { type: 'http', timeout_seconds: Number(($event.target as HTMLInputElement).value) } })"
-          />
-        </div>
-        <label class="dep-choice">
-          <input
-            type="checkbox"
-            data-test="dep-web-ai-debug"
-            :checked="modelValue.web?.ai_debug?.enabled ?? false"
-            @change="patchWeb({ ai_debug: { enabled: ($event.target as HTMLInputElement).checked } })"
-          />
-          {{ t('settings.deployment.webAIDebug') }}
-        </label>
-      </template>
-    </section>
 
-    <section v-if="isLocalLanguageRuntime" class="dep-block" data-test="code-debug-section">
-      <div class="dep-heading">{{ t('settings.deployment.codeDebug.title') }}</div>
-      <div class="dep-help">{{ t('settings.deployment.codeDebug.devDefaultHint') }}</div>
-
-      <div class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebug.policy') }}</label>
-        <select
-          class="settings-select dep-input"
-          data-test="code-debug-policy"
-          :value="modelValue.code_debug?.policy ?? 'auto'"
-          @change="patchCodeDebug({ policy: ($event.target as HTMLSelectElement).value as CodeDebugConfig['policy'] })"
-        >
-          <option value="auto">{{ t('settings.deployment.codeDebug.policyAuto') }}</option>
-          <option value="enabled" data-test="code-debug-policy-enabled">{{ t('settings.deployment.codeDebug.policyEnabled') }}</option>
-          <option value="disabled" data-test="code-debug-policy-disabled">{{ t('settings.deployment.codeDebug.policyDisabled') }}</option>
-        </select>
-      </div>
-
-      <div
-        v-if="(modelValue.code_debug?.policy ?? 'auto') === 'enabled'"
-        class="dep-warning"
-        data-test="code-debug-nondev-warning"
-      >
-        {{ t('settings.deployment.codeDebug.nonDevWarning') }}
-      </div>
-
-      <details class="dep-advanced">
-        <summary>{{ t('settings.deployment.codeDebug.overrides') }}</summary>
         <label class="dep-choice dep-field">
           <input
             type="checkbox"
-            data-test="code-debug-stop-on-entry"
-            :checked="modelValue.code_debug?.stop_on_entry ?? false"
-            @change="patchCodeDebug({ stop_on_entry: ($event.target as HTMLInputElement).checked })"
+            data-test="dep-start-on-boot"
+            :checked="modelValue.start_on_boot ?? false"
+            @change="patch({ start_on_boot: ($event.target as HTMLInputElement).checked })"
           />
-          {{ t('settings.deployment.codeDebug.stopOnEntry') }}
+          {{ t('settings.deployment.startOnBoot') }}
         </label>
-      </details>
-    </section>
+      </section>
 
-    <section class="dep-block">
-      <div class="dep-heading">{{ t('settings.deployment.logSource') }}</div>
-      <div class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.sourceType') }}</label>
-        <select
-          class="settings-select dep-input"
-          data-test="dep-log-type"
-          :value="logs.type"
-          @change="setLogKind(($event.target as HTMLSelectElement).value as LogKind)"
-        >
-          <option value="process">{{ t('settings.deployment.processOutput') }}</option>
-          <option value="journalctl">journalctl</option>
-          <option value="macos_log">macOS log stream</option>
-          <option value="docker">docker logs</option>
-          <option value="nginx">{{ t('settings.deployment.nginxLogs') }}</option>
-          <option value="file_tail">{{ t('settings.deployment.fileTail') }}</option>
-          <option value="command">{{ t('settings.deployment.customLogCommand') }}</option>
-        </select>
-      </div>
+      <section v-if="modelValue.location === 'local'" class="dep-panel dep-debug-entry" data-test="debug-entry-section">
+        <div class="dep-heading">{{ t('settings.deployment.debugEntry') }}</div>
 
-      <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.logTarget') }}</label>
-        <input
-          class="settings-input dep-input"
-          data-test="dep-log-target"
-          :placeholder="t('settings.deployment.logTargetPlaceholder')"
-          :value="logs.target"
-          @input="patchLogs({ target: ($event.target as HTMLInputElement).value })"
-        />
-      </div>
+        <div v-if="isLocalLanguageRuntime" class="dep-subblock" data-test="code-debug-section">
+          <div class="dep-subheading">{{ t('settings.deployment.codeDebug.title') }}</div>
+          <div class="dep-help">{{ t('settings.deployment.codeDebug.devDefaultHint') }}</div>
 
-      <div v-else-if="logs.type === 'file_tail'" class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.logFilePath') }}</label>
-        <input
-          class="settings-input dep-input"
-          data-test="dep-log-path"
-          :placeholder="t('settings.deployment.logFilePlaceholder')"
-          :value="logs.path"
-          @input="patchLogs({ path: ($event.target as HTMLInputElement).value })"
-        />
-      </div>
+          <div class="settings-field dep-field">
+            <label class="settings-field-label dep-label">{{ t('settings.deployment.codeDebug.policy') }}</label>
+            <select
+              class="settings-select dep-input"
+              data-test="code-debug-policy"
+              :value="modelValue.code_debug?.policy ?? 'auto'"
+              @change="patchCodeDebug({ policy: ($event.target as HTMLSelectElement).value as CodeDebugConfig['policy'] })"
+            >
+              <option value="auto">{{ t('settings.deployment.codeDebug.policyAuto') }}</option>
+              <option value="enabled" data-test="code-debug-policy-enabled">{{ t('settings.deployment.codeDebug.policyEnabled') }}</option>
+              <option value="disabled" data-test="code-debug-policy-disabled">{{ t('settings.deployment.codeDebug.policyDisabled') }}</option>
+            </select>
+          </div>
 
-      <div v-else-if="logs.type === 'command'" class="settings-field dep-field">
-        <label class="settings-field-label dep-label">{{ t('settings.deployment.logCommand') }}</label>
-        <input
-          class="settings-input dep-input"
-          data-test="dep-log-command"
-          :placeholder="t('settings.deployment.logCommandPlaceholder')"
-          :value="logs.command"
-          @input="patchLogs({ command: ($event.target as HTMLInputElement).value })"
-        />
-      </div>
-    </section>
+          <div
+            v-if="(modelValue.code_debug?.policy ?? 'auto') === 'enabled'"
+            class="dep-warning"
+            data-test="code-debug-nondev-warning"
+          >
+            {{ t('settings.deployment.codeDebug.nonDevWarning') }}
+          </div>
+
+          <details class="dep-advanced">
+            <summary>{{ t('settings.deployment.codeDebug.overrides') }}</summary>
+            <label class="dep-choice dep-field">
+              <input
+                type="checkbox"
+                data-test="code-debug-stop-on-entry"
+                :checked="modelValue.code_debug?.stop_on_entry ?? false"
+                @change="patchCodeDebug({ stop_on_entry: ($event.target as HTMLInputElement).checked })"
+              />
+              {{ t('settings.deployment.codeDebug.stopOnEntry') }}
+            </label>
+          </details>
+        </div>
+
+        <div class="dep-subblock dep-web-entry" data-test="web-entry-section">
+          <div class="dep-subheading">{{ t('settings.deployment.webEntry') }}</div>
+          <label class="dep-choice dep-field">
+            <input
+              type="checkbox"
+              data-test="dep-web-enabled"
+              :checked="modelValue.web?.enabled ?? false"
+              @change="patchWeb({ enabled: ($event.target as HTMLInputElement).checked })"
+            />
+            {{ t('settings.deployment.webEntryEnabled') }}
+          </label>
+          <div v-if="modelValue.web?.enabled" class="dep-web-fields" data-test="web-entry-fields">
+            <div class="settings-field dep-field">
+              <label class="settings-field-label dep-label">{{ t('settings.deployment.webUrl') }}</label>
+              <input
+                class="settings-input dep-input"
+                data-test="dep-web-url"
+                :value="modelValue.web?.url ?? ''"
+                placeholder="http://127.0.0.1:3000"
+                @input="patchWeb({ url: ($event.target as HTMLInputElement).value })"
+              />
+            </div>
+            <div class="settings-field dep-field">
+              <label class="settings-field-label dep-label">{{ t('settings.deployment.webDefaultPath') }}</label>
+              <input
+                class="settings-input dep-input"
+                data-test="dep-web-default-path"
+                :value="modelValue.web?.default_path ?? '/'"
+                @input="patchWeb({ default_path: ($event.target as HTMLInputElement).value })"
+              />
+            </div>
+            <div class="settings-field dep-field">
+              <label class="settings-field-label dep-label">{{ t('settings.deployment.webReadinessTimeout') }}</label>
+              <input
+                class="settings-input dep-input"
+                data-test="dep-web-readiness-timeout"
+                type="number"
+                min="1"
+                max="120"
+                :value="modelValue.web?.readiness?.timeout_seconds ?? 30"
+                @change="patchWeb({ readiness: { type: 'http', timeout_seconds: Number(($event.target as HTMLInputElement).value) } })"
+              />
+            </div>
+            <label class="dep-choice">
+              <input
+                type="checkbox"
+                data-test="dep-web-ai-debug"
+                :checked="modelValue.web?.ai_debug?.enabled ?? false"
+                @change="patchWeb({ ai_debug: { enabled: ($event.target as HTMLInputElement).checked } })"
+              />
+              {{ t('settings.deployment.webAIDebug') }}
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="dep-panel" data-test="log-source-panel">
+        <div class="dep-heading">{{ t('settings.deployment.logSource') }}</div>
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.sourceType') }}</label>
+          <select
+            class="settings-select dep-input"
+            data-test="dep-log-type"
+            :value="logs.type"
+            @change="setLogKind(($event.target as HTMLSelectElement).value as LogKind)"
+          >
+            <option value="process">{{ t('settings.deployment.processOutput') }}</option>
+            <option value="journalctl">journalctl</option>
+            <option value="macos_log">macOS log stream</option>
+            <option value="docker">docker logs</option>
+            <option value="nginx">{{ t('settings.deployment.nginxLogs') }}</option>
+            <option value="file_tail">{{ t('settings.deployment.fileTail') }}</option>
+            <option value="command">{{ t('settings.deployment.customLogCommand') }}</option>
+          </select>
+        </div>
+
+        <div v-if="logs.type === 'journalctl' || logs.type === 'macos_log' || logs.type === 'docker' || logs.type === 'nginx'" class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.logTarget') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-log-target"
+            :placeholder="t('settings.deployment.logTargetPlaceholder')"
+            :value="logs.target"
+            @input="patchLogs({ target: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+
+        <div v-else-if="logs.type === 'file_tail'" class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.logFilePath') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-log-path"
+            :placeholder="t('settings.deployment.logFilePlaceholder')"
+            :value="logs.path"
+            @input="patchLogs({ path: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+
+        <div v-else-if="logs.type === 'command'" class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.logCommand') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-log-command"
+            :placeholder="t('settings.deployment.logCommandPlaceholder')"
+            :value="logs.command"
+            @input="patchLogs({ command: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+      </section>
+    </aside>
   </div>
 </template>
 
 <style scoped>
 .dep-form {
-  padding: 6px 0 2px;
+  display: grid;
+  grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 0.95fr);
+  gap: 18px;
+  padding: 0;
 }
-.dep-block {
-  padding: 10px 0;
-  border-top: 1px solid var(--border-secondary);
+.dep-column {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
 }
-.dep-block:first-child {
-  border-top: 0;
-  padding-top: 4px;
+.dep-panel {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  background: rgba(13, 20, 30, 0.76);
+}
+.dep-runtime-args {
+  display: grid;
+  gap: 4px;
 }
 .dep-heading {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--text-primary);
+}
+.dep-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.dep-target-cell {
+  min-width: 0;
+}
+.dep-debug-entry {
+  display: grid;
+  gap: 10px;
+}
+.dep-subblock {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.dep-subblock:first-of-type {
+  border-top: 0;
+}
+.dep-subheading {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+.dep-web-fields {
+  display: grid;
+  gap: 2px;
 }
 .dep-location,
 .dep-hosts {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 14px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 .dep-choice,
 .dep-host {
@@ -961,7 +1034,7 @@ watch(
   color: var(--warning);
 }
 .dep-field {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .dep-help,
 .dep-hint {
@@ -1016,7 +1089,7 @@ watch(
 }
 .dep-readiness {
   display: grid;
-  grid-template-columns: minmax(120px, 150px) minmax(160px, 1fr) 76px;
+  grid-template-columns: minmax(120px, 170px) minmax(0, 1fr) 76px;
   gap: 8px;
   align-items: center;
 }
@@ -1033,6 +1106,10 @@ watch(
   color: var(--text-secondary);
 }
 @media (max-width: 720px) {
+  .dep-form,
+  .dep-target-grid {
+    grid-template-columns: 1fr;
+  }
   .dep-readiness {
     grid-template-columns: 1fr;
   }

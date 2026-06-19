@@ -2,35 +2,55 @@
 项目概览嵌入面板
 
 职责：
-  - 在 workspace tab 或独立路由中展示项目运行状态、流水线、入口配置
-  - 复用 RuntimeStatusTab、PipelinesTab、ProjectIngressTab
+  - 在 workspace tab 或独立路由中展示项目运行状态、流水线、入口配置和项目配置
+  - 复用 RuntimeStatusTab、PipelinesTab、ProjectIngressTab、ProjectConfigSurface
 
 边界：
   - 不读取路由参数
   - 不直接启动或停止服务，运行态操作交给子组件和 store
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
 import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
 import PipelinesTab from '@/components/Overview/PipelinesTab.vue'
 import ProjectIngressTab from '@/components/Overview/ProjectIngressTab.vue'
+import ProjectConfigSurface from '@/components/Settings/ProjectConfigSurface.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import type { Project } from '@/api/agent'
+import type { ProjectConfigSurfaceState, ProjectOverviewState, ProjectOverviewSubtab } from '@/stores/workspace'
 
-type OverviewTab = 'runtime' | 'pipelines' | 'ingress'
-
-defineProps<{
+const props = defineProps<{
   project: Project
   compact?: boolean
+  state?: ProjectOverviewState
 }>()
+const emit = defineEmits<{ 'update:state': [ProjectOverviewState] }>()
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
 const { t } = useAppI18n()
-const activeTab = ref<OverviewTab>('runtime')
+const localState = ref<ProjectOverviewState>({ activeTab: 'runtime' })
+const overviewState = computed(() => props.state ?? localState.value)
+const activeTab = computed<ProjectOverviewSubtab>({
+  get: () => overviewState.value.activeTab,
+  set: activeTab => patchOverviewState({ activeTab }),
+})
+
+function patchOverviewState(patch: Partial<ProjectOverviewState>) {
+  const next = { ...overviewState.value, ...patch }
+  if (props.state) {
+    emit('update:state', next)
+    return
+  }
+  localState.value = next
+}
+
+function updateConfigState(config: ProjectConfigSurfaceState) {
+  patchOverviewState({ config })
+}
 
 function openInstanceLogs(deploymentId: string) {
   const info = agentStore.serviceForDeployment(deploymentId)
@@ -45,7 +65,9 @@ function openInstanceLogs(deploymentId: string) {
         <div class="overview-kicker">{{ t('overview.title') }}</div>
         <h1>{{ project.name }}</h1>
       </div>
-      <OverviewTabs v-model="activeTab" />
+      <div class="overview-head-actions">
+        <OverviewTabs v-model="activeTab" />
+      </div>
     </header>
     <RuntimeStatusTab
       v-if="activeTab === 'runtime'"
@@ -54,7 +76,14 @@ function openInstanceLogs(deploymentId: string) {
       @open-logs="openInstanceLogs"
     />
     <PipelinesTab v-else-if="activeTab === 'pipelines'" :project="project" />
-    <ProjectIngressTab v-else :project="project" />
+    <ProjectIngressTab v-else-if="activeTab === 'ingress'" :project="project" />
+    <ProjectConfigSurface
+      v-else
+      :project="props.project"
+      :state="overviewState.config"
+      embedded
+      @update:state="updateConfigState"
+    />
   </section>
 </template>
 
@@ -84,6 +113,12 @@ function openInstanceLogs(deploymentId: string) {
 .overview-title-group {
   min-width: 0;
 }
+.overview-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .overview-kicker {
   color: var(--text-tertiary);
   font-size: 12px;
@@ -104,6 +139,10 @@ function openInstanceLogs(deploymentId: string) {
 }
 @media (max-width: 640px) {
   .overview-pane-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .overview-head-actions {
     align-items: stretch;
     flex-direction: column;
   }
