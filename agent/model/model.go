@@ -820,6 +820,25 @@ type WebReadinessConfig struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
 }
 
+// ReadinessProbe 描述如何探测一个 deployment 是否已就绪。
+//
+// 职责：
+//   - 声明「本服务何时算起来了」，供编排器在放行依赖它的服务前等待
+//   - 同时驱动 starting→running 的状态转换
+//
+// 边界：
+//   - 不复用 WebReadinessConfig：那是「浏览器打开前等前端入口」的专用语义，
+//     与「后台服务监听端口了吗」会各自演化，绑死会互相掣肘
+//   - 首版只支持 http / tcp；为空表示「进程起来即就绪」
+type ReadinessProbe struct {
+	// Type 为 "http" 或 "tcp"。
+	Type string `json:"type" yaml:"type"`
+	// Target：http 时为 URL；tcp 时为 host:port。
+	Target string `json:"target" yaml:"target"`
+	// TimeoutSeconds 为就绪等待上限，<=0 时编排器按默认 30s 处理。
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
+}
+
 // WebAIDebugConfig 描述该 Web 入口是否允许 AI 创建浏览器调试会话。
 type WebAIDebugConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
@@ -956,6 +975,19 @@ type Deployment struct {
 	Web *WebEntrypointConfig `json:"web,omitempty" yaml:"web,omitempty"`
 	// CodeDebug 描述该 deployment 是否允许 AI 打开本机代码调试会话。
 	CodeDebug *CodeDebugConfig `json:"code_debug,omitempty" yaml:"code_debug,omitempty"`
+
+	// StartOnBoot 标记该 deployment 是否在 agent 启动时自动拉起。
+	// 仅对 location=local + control_mode=managed 生效；其余取值被编排器忽略。
+	StartOnBoot bool `json:"start_on_boot,omitempty" yaml:"start_on_boot,omitempty"`
+
+	// DependsOn 声明启动本 deployment 前需先就绪的服务（同项目内 service ID 列表）。
+	// 编排器据此拓扑排序，在当前 env 内把 service ID 解析成对应 deployment。
+	// 存 ID 而非 name：ID 是稳定主键，免疫改名导致的悬空引用。
+	DependsOn []string `json:"depends_on,omitempty" yaml:"depends_on,omitempty"`
+
+	// Readiness 描述「本 deployment 何时算就绪」，供依赖它的服务等待，
+	// 也用于驱动 starting→running。为空时进程拉起且未立即退出即视为就绪。
+	Readiness *ReadinessProbe `json:"readiness,omitempty" yaml:"readiness,omitempty"`
 
 	// location=local 时使用
 	Command string            `json:"command,omitempty"`

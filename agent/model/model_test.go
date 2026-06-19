@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -112,6 +113,41 @@ func TestDeploymentWebConfigJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:3000", got.Web.URL)
 	assert.Equal(t, "/users", got.Web.DefaultPath)
 	assert.True(t, got.Web.AIDebug.Enabled)
+}
+
+func TestDeploymentAutostartFieldsRoundTrip(t *testing.T) {
+	dep := model.Deployment{
+		ID:          "dep-1",
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		StartOnBoot: true,
+		DependsOn:   []string{"svc-server"},
+		Readiness: &model.ReadinessProbe{
+			Type:           "http",
+			Target:         "http://127.0.0.1:9100/",
+			TimeoutSeconds: 20,
+		},
+	}
+	raw, err := json.Marshal(dep)
+	require.NoError(t, err)
+
+	var got model.Deployment
+	require.NoError(t, json.Unmarshal(raw, &got))
+	if !got.StartOnBoot || len(got.DependsOn) != 1 || got.DependsOn[0] != "svc-server" {
+		t.Fatalf("autostart fields lost: %+v", got)
+	}
+	if got.Readiness == nil || got.Readiness.Type != "http" || got.Readiness.TimeoutSeconds != 20 {
+		t.Fatalf("readiness lost: %+v", got.Readiness)
+	}
+}
+
+func TestDeploymentOmitsAutostartWhenZero(t *testing.T) {
+	raw, err := json.Marshal(model.Deployment{ID: "d", EnvName: "dev", Location: model.LocationLocal})
+	require.NoError(t, err)
+	if bytes.Contains(raw, []byte("start_on_boot")) || bytes.Contains(raw, []byte("depends_on")) || bytes.Contains(raw, []byte("readiness")) {
+		t.Fatalf("zero-value autostart fields must be omitted: %s", raw)
+	}
 }
 
 func TestRuntimeConfigLanguageFieldsRoundTrip(t *testing.T) {
