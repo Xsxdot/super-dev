@@ -30,6 +30,18 @@ describe('logEngine without client-side folding', () => {
     expect(first.id).not.toBe(second.id)
   })
 
+  it('keeps live log id stable for the same source payload', () => {
+    const first = base({ id: '0', source_id: 'node-a', message: 'same live' })
+    const second = base({ id: '0', source_id: 'node-a', message: 'same live' })
+
+    expect(first.id).toBe(second.id)
+  })
+
+  it('prefers source-scoped row id when database id exists', () => {
+    const entry = base({ id: '42', source_id: 'node-x' })
+    expect(entry.id).toBe('node-x:42')
+  })
+
   it('appends a new entry event', () => {
     const list: DisplayLogEntry[] = []
     applyEvent(list, { entry: base({ id: '1', fold_key: 'k1', repeat_count: 1 }) })

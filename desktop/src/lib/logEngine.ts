@@ -1,8 +1,5 @@
 import type { LogEntry } from '@/api/agent'
 
-const SYNTHETIC_LOG_ID_START = 1_000_000_000_000
-let nextSyntheticLogId = SYNTHETIC_LOG_ID_START
-
 /** Client-side fields added during ingest (not from agent API). */
 export interface DisplayLogEntry extends LogEntry {
   repeat_count: number
@@ -19,13 +16,27 @@ export interface LogEventIncrement {
 
 export type LogEvent = LogEventNew | LogEventIncrement
 
+// djb2 字符串 hash，给无 rowid 的实时日志生成稳定短 id。
+function hashString(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  }
+  return (h >>> 0).toString(36)
+}
+
+// displayLogId 为日志生成稳定渲染 id。
+//
+// 有真实 rowid（落库后/历史/重连 replay）时用 source_id:id；
+// 实时 WebSocket 日志 rowid 为 0，用 来源+时间戳+stream+内容 的 hash。
+// 跨进程重启/重连对同一条日志幂等，供书签去重与 anchor 复位。
 function displayLogId(log: LogEntry): string {
   const rawID = String(log.id ?? '')
   if (rawID !== '' && rawID !== '0') {
     return log.source_id ? `${log.source_id}:${rawID}` : rawID
   }
-  // 实时 WebSocket 日志尚未写入 SQLite，后端 id 为 0；前端补稳定 id 供渲染和书签去重。
-  return `synthetic-${nextSyntheticLogId++}`
+  const seed = `${log.source_id ?? ''}|${log.deployment_id}|${log.timestamp}|${log.stream ?? ''}|${log.message}`
+  return `live-${hashString(seed)}`
 }
 
 /**
