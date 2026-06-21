@@ -73,5 +73,27 @@ describe('logOrder', () => {
       expect(logs).toHaveLength(2)
       expect(logs.find(log => log.id === 'b')?.message).toBe('updated')
     })
+
+    it('重复 id 更新时间戳后仍保持实时区排序', () => {
+      const logs = [
+        entry('a', '2024-01-01T00:00:01.000Z'),
+        entry('b', '2024-01-01T00:00:02.000Z', 'old'),
+        entry('c', '2024-01-01T00:00:03.000Z'),
+      ]
+      appendLive(logs, entry('b', '2024-01-01T00:00:04.000Z', 'updated'))
+
+      expect(logs.map(log => log.id)).toEqual(['a', 'c', 'b'])
+      expect(logs[2].message).toBe('updated')
+    })
+
+    it('只在实时区范围内重排，不改动历史前缀', () => {
+      const logs = [
+        entry('history', '2024-01-01T00:00:00.000Z'),
+        entry('b', '2024-01-01T00:00:02.000Z'),
+      ]
+      appendLive(logs, entry('a', '2024-01-01T00:00:01.000Z'), 1)
+
+      expect(logs.map(log => log.id)).toEqual(['history', 'a', 'b'])
+    })
   })
 })

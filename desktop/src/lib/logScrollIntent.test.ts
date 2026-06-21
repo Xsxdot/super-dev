@@ -41,6 +41,15 @@ describe('ScrollIntentMachine', () => {
     expect(scrollToId).toHaveBeenCalledWith('log-42')
   })
 
+  it('settleHistoryAnchor 清掉锚点，后续无新锚点时不复用旧 id', () => {
+    const scrollToId = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToLogId: scrollToId })
+    m.beginHistoryAnchor('log-42')
+    m.settleHistoryAnchor()
+    m.settleHistoryAnchor()
+    expect(scrollToId).toHaveBeenCalledTimes(1)
+  })
+
   it('beginTimeAlign 暂停 follow 并对齐', () => {
     const scrollToId = vi.fn()
     const m = new ScrollIntentMachine({ scrollToLogId: scrollToId })

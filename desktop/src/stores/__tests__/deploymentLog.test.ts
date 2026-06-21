@@ -136,12 +136,21 @@ describe('useDeploymentLogStore', () => {
     const store = useDeploymentLogStore()
     expect(store.refCountOf('unknown')).toBe(0)
   })
+
+  it('不暴露测试专用写入 API 到生产 store surface', () => {
+    const store = useDeploymentLogStore()
+    expect('_ingestLive' in store).toBe(false)
+    expect('_ingestHistory' in store).toBe(false)
+    expect('_seedForTest' in store).toBe(false)
+    expect('_trimHistoryHead' in store).toBe(false)
+  })
 })
 
 describe('log ingestion', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     MockWebSocket.instances = []
+    vi.clearAllMocks()
   })
 
   it('inserts logs in sorted order by timestamp+id', () => {
@@ -181,13 +190,15 @@ describe('log ingestion', () => {
     expect(store.getLogs('dep-invalid-time').map(l => l.id)).toEqual(['x:1', 'x:2', 'x:3'])
   })
 
-  it('历史区超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', () => {
+  it('历史区超出 MAX_LOGS 时截断到不超过 MAX_LOGS 条', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-trim')
 
-    // 历史裁剪只移除历史头部，实时尾部由 Task 4 的分区语义保留。
-    for (let i = 1; i <= 5001; i++) {
-      store._ingestHistory('dep-trim', {
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({
+      items: Array.from({ length: 5001 }, (_, index) => {
+        const i = index + 1
+        return {
         id: String(i),
         timestamp: `2024-01-01T00:00:${String(i).padStart(5, '0')}Z`,
         message: `msg-${i}`,
@@ -195,32 +206,112 @@ describe('log ingestion', () => {
         deployment_id: '',
         run_id: '',
         stream: 'stdout',
-      } as any)
-    }
+        }
+      }),
+    })
+
+    await store.loadMoreHistory('dep-trim', 5001)
 
     expect(store.getLogs('dep-trim').length).toBeLessThanOrEqual(5000)
   }, 30000)
 
-  it('实时日志走 appendLive 追加，窗口内乱序不插到历史区上方', () => {
+  it('实时区超出 MAX_LOGS 时也会裁剪，避免 live-only 会话无限增长', () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-live-trim')
+    const ws = MockWebSocket.instances[0]
+
+    for (let i = 1; i <= 5001; i++) {
+      ws.onmessage?.({ data: JSON.stringify({
+        id: '0',
+        deployment_id: 'dep-live-trim',
+        run_id: '',
+        timestamp: `2024-01-01T00:00:${String(i).padStart(5, '0')}Z`,
+        level: 'INFO',
+        message: `live-${i}`,
+        stream: 'stdout',
+      }) })
+    }
+
+    expect(store.getLogs('dep-live-trim').length).toBeLessThanOrEqual(5000)
+  }, 30000)
+
+  it('重复的无 rowid 实时日志不互相覆盖', () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-live-duplicate')
+    const ws = MockWebSocket.instances[0]
+    const raw = {
+      id: '0',
+      deployment_id: 'dep-live-duplicate',
+      run_id: '',
+      timestamp: '2024-01-01T00:00:01Z',
+      level: 'INFO',
+      message: 'same payload',
+      stream: 'stdout',
+    }
+
+    ws.onmessage?.({ data: JSON.stringify(raw) })
+    ws.onmessage?.({ data: JSON.stringify(raw) })
+
+    expect(store.getLogs('dep-live-duplicate')).toHaveLength(2)
+  })
+
+  it('实时日志走 appendLive 追加，窗口内乱序不插到历史区上方', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-live-partition')
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({
+      items: [{ id: '10', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:00Z', level: 'INFO', message: 'history', stream: 'stdout' }],
+    })
+    await store.loadMoreHistory('dep-live-partition', 1)
+    const ws = MockWebSocket.instances[0]
 
-    store._ingestHistory('dep-live-partition', { id: '10', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:00Z', level: 'INFO', message: 'history', stream: 'stdout' } as any)
-    store._ingestLive('dep-live-partition', { id: '0', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:02Z', level: 'INFO', message: 'b', stream: 'stdout' } as any)
-    store._ingestLive('dep-live-partition', { id: '0', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:01Z', level: 'INFO', message: 'a', stream: 'stdout' } as any)
+    ws.onmessage?.({ data: JSON.stringify({ id: '0', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:02Z', level: 'INFO', message: 'b', stream: 'stdout' }) })
+    ws.onmessage?.({ data: JSON.stringify({ id: '0', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:01Z', level: 'INFO', message: 'a', stream: 'stdout' }) })
 
     expect(store.getLogs('dep-live-partition').map(log => log.message)).toEqual(['history', 'a', 'b'])
   })
 
-  it('裁剪只裁历史头部，保留 fold 映射', () => {
+  it('裁剪只裁历史头部，保留 fold 映射用于增量 miss 判定', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-fold-trim')
+    const events: string[] = []
+    window.addEventListener('superdev:log-panel', (event) => {
+      events.push((event as CustomEvent).detail.event)
+    })
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({
+      items: Array.from({ length: 5001 }, (_, index) => {
+        const i = index + 1
+        return {
+          id: String(i),
+          deployment_id: 'dep-fold-trim',
+          run_id: '',
+          timestamp: `2024-01-01T00:00:${String(i).padStart(5, '0')}Z`,
+          level: 'INFO',
+          message: `msg-${i}`,
+          stream: 'stdout',
+          repeat_count: i === 1 ? 5 : 1,
+          fold_key: i === 1 ? 'fk-1' : undefined,
+        }
+      }),
+    })
+    await store.loadMoreHistory('dep-fold-trim', 5001)
+    const ws = MockWebSocket.instances[0]
 
-    store._seedForTest('dep-fold-trim', { foldKey: 'fk-1', repeatCount: 5 })
-    store._trimHistoryHead('dep-fold-trim', 1)
+    ws.onmessage?.({ data: JSON.stringify({
+      id: '0',
+      deployment_id: 'dep-fold-trim',
+      run_id: '',
+      timestamp: '',
+      level: '',
+      message: '',
+      stream: '',
+      repeat_count: 6,
+      fold_key: 'fk-1',
+    }) })
 
-    expect(store._trimmedFoldKeysForTest('dep-fold-trim').get('fk-1')).toBe(5)
-  })
+    expect(events).not.toContain('log_store.increment_miss')
+  }, 30000)
 })
 
 describe('loadMoreHistory', () => {

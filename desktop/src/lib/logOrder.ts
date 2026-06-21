@@ -55,31 +55,45 @@ export const LIVE_REORDER_WINDOW = 32
  * appendLive 把一条实时日志追加进实时区。
  *
  * 参数：
- *   - logs: 实时区有序数组（尾部为最新）
+ *   - logs: 包含历史前缀 + 实时区后缀的数组
  *   - entry: 待追加的实时日志
+ *   - startIndex: 实时区起点，历史前缀不参与重排
  *
  * 行为：
  *   - 重复 id 原地覆盖
  *   - 时间戳 >= 尾部则直接 push
  *   - 否则只在最后 LIVE_REORDER_WINDOW 条内二分插入；早于窗口起点则放尾
  */
-export function appendLive(logs: DisplayLogEntry[], entry: DisplayLogEntry): void {
-  const existing = logs.findIndex(item => item.id === entry.id)
+export function appendLive(logs: DisplayLogEntry[], entry: DisplayLogEntry, startIndex = 0): void {
+  const start = Math.max(0, Math.min(startIndex, logs.length))
+  let existing = -1
+  for (let i = start; i < logs.length; i++) {
+    if (logs[i].id === entry.id) {
+      existing = i
+      break
+    }
+  }
   if (existing >= 0) {
-    logs[existing] = entry
+    logs.splice(existing, 1)
+    insertLiveSorted(logs, entry, start)
     return
   }
-  if (logs.length === 0 || compareLogs(logs[logs.length - 1], entry) <= 0) {
+  if (logs.length === start || compareLogs(logs[logs.length - 1], entry) <= 0) {
     logs.push(entry)
     return
   }
-  const windowStart = Math.max(0, logs.length - LIVE_REORDER_WINDOW)
+  const windowStart = Math.max(start, logs.length - LIVE_REORDER_WINDOW)
   // 早于窗口起点的迟到日志：放尾部，不回溯，避免可视区上方插队。
-  if (windowStart > 0 && compareLogs(logs[windowStart], entry) > 0) {
+  if (windowStart > start && compareLogs(logs[windowStart], entry) > 0) {
     logs.push(entry)
     return
   }
-  let lo = windowStart
+  insertLiveSorted(logs, entry, windowStart)
+}
+
+// insertLiveSorted 在给定范围内做二分插入；重复 id 替换后用全 live 区间重排。
+function insertLiveSorted(logs: DisplayLogEntry[], entry: DisplayLogEntry, start: number): void {
+  let lo = start
   let hi = logs.length
   while (lo < hi) {
     const mid = (lo + hi) >>> 1

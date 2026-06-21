@@ -67,7 +67,9 @@ export class ScrollIntentMachine {
 
   // settleHistoryAnchor：历史加载完成后用稳定 id 复位，避免按 index 偏移算错。
   settleHistoryAnchor() {
-    if (this.anchorLogId) this.cb.scrollToLogId?.(this.anchorLogId)
+    const anchor = this.anchorLogId
+    this.anchorLogId = null
+    if (anchor) this.cb.scrollToLogId?.(anchor)
   }
 
   // beginTimeAlign：被动面板被对齐到目标日志，暂停 follow，单向不回广播。

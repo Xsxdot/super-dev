@@ -36,6 +36,7 @@ interface DeploymentSession {
   discontinuous: boolean
   liveStartIndex: number
   trimmedFoldKeys: Map<string, number>
+  liveIdState: Map<string, { active: number; nextOrdinal: number }>
 }
 
 export interface LoadHistoryResult {
@@ -68,6 +69,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       discontinuous: false,
       liveStartIndex: 0,
       trimmedFoldKeys: new Map(),
+      liveIdState: new Map(),
     }
   }
 
@@ -83,23 +85,76 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     }))
   }
 
-  // trimHistoryHead 只裁历史区头部，并保留被裁 fold_key 的最后计数。
-  function trimHistoryHead(session: DeploymentSession, count: number) {
-    const removable = Math.min(count, session.liveStartIndex)
+  function liveBaseId(id: string): string | null {
+    if (!id.startsWith('live-')) return null
+    return id.replace(/#\d+$/, '')
+  }
+
+  function rawHasDatabaseId(raw: LogEntry): boolean {
+    const rawID = String(raw.id ?? '')
+    return rawID !== '' && rawID !== '0'
+  }
+
+  // ensureUniqueLiveId 在同一活跃缓冲内给无 rowid 实时日志消歧，避免相同 payload 互相覆盖。
+  function ensureUniqueLiveId(session: DeploymentSession, raw: LogEntry, entry: DisplayLogEntry) {
+    if (rawHasDatabaseId(raw)) return
+    const baseId = entry.id
+    const state = session.liveIdState.get(baseId) ?? { active: 0, nextOrdinal: 1 }
+    const ordinal = state.nextOrdinal
+    state.active++
+    state.nextOrdinal++
+    session.liveIdState.set(baseId, state)
+    if (ordinal <= 1) return
+    entry.id = `${baseId}#${ordinal}`
+    diagnostic('log_store.live_id_collision', {
+      deploymentId: raw.deployment_id,
+      baseId,
+      ordinal,
+    })
+  }
+
+  function releaseLiveId(session: DeploymentSession, entry: DisplayLogEntry) {
+    const baseId = liveBaseId(entry.id)
+    if (!baseId) return
+    const state = session.liveIdState.get(baseId)
+    if (!state) return
+    state.active--
+    if (state.active <= 0) session.liveIdState.delete(baseId)
+  }
+
+  function trimHead(session: DeploymentSession, count: number) {
+    const removable = Math.min(count, session.logs.length)
     if (removable <= 0) return 0
     const removed = session.logs.splice(0, removable)
     for (const entry of removed) {
       if (entry.fold_key) session.trimmedFoldKeys.set(entry.fold_key, entry.repeat_count)
+      releaseLiveId(session, entry)
     }
     session.liveStartIndex = Math.max(0, session.liveStartIndex - removed.length)
     return removed.length
   }
 
-  // trimIfNeeded 超出 MAX_LOGS 时只裁历史区头部，避免实时尾部被裁导致“最新日志被吞”。
+  // trimHistoryHead 只裁历史区头部，并保留被裁 fold_key 的最后计数。
+  function trimHistoryHead(session: DeploymentSession, count: number) {
+    const removable = Math.min(count, session.liveStartIndex)
+    return trimHead(session, removable)
+  }
+
+  // trimIfNeeded 先裁历史头部；历史不足时再裁实时头部，保证 live-only 会话也有内存上限。
   function trimIfNeeded(session: DeploymentSession) {
     if (session.logs.length <= MAX_LOGS) return
-    const removed = trimHistoryHead(session, TRIM_BATCH)
-    diagnostic('log_store.trim', { removed, kept: session.logs.length, liveStartIndex: session.liveStartIndex })
+    const target = Math.max(TRIM_BATCH, session.logs.length - MAX_LOGS)
+    const historyRemoved = trimHistoryHead(session, target)
+    let liveRemoved = 0
+    if (session.logs.length > MAX_LOGS) {
+      liveRemoved = trimHead(session, Math.max(TRIM_BATCH, session.logs.length - MAX_LOGS))
+    }
+    diagnostic('log_store.trim', {
+      historyRemoved,
+      liveRemoved,
+      kept: session.logs.length,
+      liveStartIndex: session.liveStartIndex,
+    })
   }
 
   /**
@@ -130,9 +185,8 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
    */
   function ingestLive(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
     const entry = toDisplayEntry(raw)
-    const live = session.logs.slice(session.liveStartIndex)
-    appendLive(live, entry)
-    session.logs.splice(session.liveStartIndex, session.logs.length - session.liveStartIndex, ...live)
+    ensureUniqueLiveId(session, raw, entry)
+    appendLive(session.logs, entry, session.liveStartIndex)
     trimIfNeeded(session)
     bumpRevision()
     touchSessions()
@@ -347,36 +401,5 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     hasMoreHistory,
     isLoadingMore,
     refCountOf,
-    _ingestLive: (id: string, raw: LogEntry) => {
-      const session = sessions.value.get(id)
-      if (session) ingestLive(session, raw)
-    },
-    _ingestHistory: (id: string, raw: LogEntry) => {
-      const session = sessions.value.get(id)
-      if (session) ingestHistory(session, raw)
-    },
-    // _seedForTest 直接塞一条带 fold_key 的历史行，免去构造完整 LogEntry。
-    _seedForTest: (id: string, { foldKey, repeatCount }: { foldKey: string; repeatCount: number }) => {
-      const session = sessions.value.get(id)
-      if (!session) return
-      session.logs.unshift({
-        id: `seed-${foldKey}`,
-        deployment_id: id,
-        run_id: '',
-        timestamp: '2026-06-21T00:00:00Z',
-        level: 'INFO',
-        message: 'seed',
-        stream: 'stdout',
-        repeat_count: repeatCount,
-        fold_key: foldKey,
-      } as DisplayLogEntry)
-      session.liveStartIndex++
-    },
-    _trimHistoryHead: (id: string, count: number) => {
-      const session = sessions.value.get(id)
-      if (!session) return
-      trimHistoryHead(session, count)
-    },
-    _trimmedFoldKeysForTest: (id: string) => sessions.value.get(id)?.trimmedFoldKeys ?? new Map<string, number>(),
   }
 })
