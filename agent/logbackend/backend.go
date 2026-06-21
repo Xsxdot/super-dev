@@ -11,10 +11,14 @@ package logbackend
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+// ErrLogContextNotFound 表示后端找不到指定上下文锚点日志。
+var ErrLogContextNotFound = errors.New("log context anchor not found")
 
 // QueryFilter 定义历史日志拉取的过滤和分页参数。
 type QueryFilter struct {
@@ -41,6 +45,24 @@ type SearchQuery struct {
 	// From / To 时间范围过滤；零值表示不限制。
 	From time.Time
 	To   time.Time
+}
+
+// ContextQuery 定义围绕单条日志拉取上下文的参数。
+type ContextQuery struct {
+	// TargetID 是目标日志在对应后端中的 ID。
+	TargetID int64
+	// DeploymentID 是调用方视角的 deployment ID，用于后端过滤或回填展示归属。
+	DeploymentID string
+	// Before/After 是锚点前后的时间窗口。
+	Before time.Duration
+	After  time.Duration
+}
+
+// ContextResult 表示单 deployment 后端返回的上下文日志。
+type ContextResult struct {
+	TargetID   int64
+	AnchorTime time.Time
+	Items      []model.LogEntry
 }
 
 // Cursor 表示分页游标，由 (Time, ID) 确定唯一位置。
@@ -87,6 +109,11 @@ type LogReader interface {
 	// 实现方在 Cancel 调用后应关闭 LogStream.Ch。
 	// ctx 取消和 Cancel 调用均可停止流；实现方应同时响应两者。
 	Subscribe(ctx context.Context, opts SubscribeOptions) LogStream
+}
+
+// ContextReader 是可按日志 ID 拉取上下文的可选后端能力。
+type ContextReader interface {
+	Context(ctx context.Context, q ContextQuery) (ContextResult, error)
 }
 
 // LogBackend 抽象「一个 Deployment 的所有日志能力」。

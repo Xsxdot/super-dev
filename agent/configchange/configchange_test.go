@@ -224,6 +224,21 @@ func TestValidateCodeDebugRequiresLocalManagedLanguageRuntime(t *testing.T) {
 	assert.Contains(t, strings.Join(result.Errors, "\n"), "code_debug supports local managed language runtime deployments only")
 }
 
+func TestValidateRejectsDuplicateDeploymentEnvWithinService(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments = append(project.Services[0].Deployments, model.Deployment{
+		ID:       "dep-worker-dev-duplicate",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "go run ./worker-alt",
+	})
+
+	result := Validate(project, ChangeRequest{Kind: KindServiceUpsert})
+
+	require.False(t, result.OK)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "service worker deployment env_name must be unique: dev")
+}
+
 func TestValidateCodeDebugAllowsLanguageRuntime(t *testing.T) {
 	project := sampleProject()
 	project.Services[0].Language = model.LanguageGo

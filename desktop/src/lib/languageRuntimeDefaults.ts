@@ -21,6 +21,9 @@ export function defaultLanguageRuntime(language?: ServiceLanguage, defaultWorkDi
   if (language === 'go') return { ...base, config: { program: '.' } }
   if (language === 'node') return { ...base, config: { package_manager: 'pnpm', script: 'dev' } }
   if (language === 'python') return { ...base, config: { program: 'main.py' } }
+  if (language === 'java' || language === 'kotlin') return { ...base, config: { classpath: 'build/classes' } }
+  if (language === 'rust') return { ...base, config: { program: 'target/debug/app', build: 'cargo' } }
+  if (language === 'cpp') return { ...base, config: { program: 'build/app' } }
   return undefined
 }
 
@@ -39,7 +42,8 @@ export function languageRuntimeSupportsDebugLaunch(language: ServiceLanguage | u
   // 逃生口只保证启动，不保证 provider 能构造 DAP launch 配置。
   if (nonEmptyString(config.runtime_executable)) return false
   if (language === 'go') return true
-  if (language === 'node') return nonEmptyString(config.program)
-  if (language === 'python') return nonEmptyString(config.program)
+  if (language === 'node' || language === 'python' || language === 'java' || language === 'kotlin' || language === 'rust' || language === 'cpp') {
+    return nonEmptyString(config.program)
+  }
   return false
 }

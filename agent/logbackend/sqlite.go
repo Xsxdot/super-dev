@@ -12,6 +12,7 @@ package logbackend
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -28,8 +29,9 @@ type SQLiteBackend struct {
 }
 
 var (
-	_ LogReader = (*SQLiteBackend)(nil)
-	_ LogWriter = (*SQLiteBackend)(nil)
+	_ LogReader     = (*SQLiteBackend)(nil)
+	_ LogWriter     = (*SQLiteBackend)(nil)
+	_ ContextReader = (*SQLiteBackend)(nil)
 )
 
 // NewSQLiteBackend 创建 SQLiteBackend。
@@ -130,6 +132,35 @@ func (b *SQLiteBackend) Search(ctx context.Context, q SearchQuery) ([]model.LogE
 		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return result.Entries, next, result.HasMore, nil
+}
+
+// Context 以指定日志为锚点，从 SQLite 拉取单 deployment 上下文。
+//
+// 参数：
+//   - ctx: 上下文（当前实现未使用，保留以满足接口契约）
+//   - q: 目标日志 ID、deployment ID 和前后时间窗口
+//
+// 返回：
+//   - 目标日志时间和同 deployment 上下文日志
+//   - 找不到目标日志时返回 ErrLogContextNotFound
+func (b *SQLiteBackend) Context(_ context.Context, q ContextQuery) (ContextResult, error) {
+	result, err := b.store.FetchContext(store.ContextParams{
+		TargetID:      q.TargetID,
+		DeploymentIDs: []string{q.DeploymentID},
+		Before:        q.Before,
+		After:         q.After,
+	})
+	if errors.Is(err, store.ErrLogEntryNotFound) {
+		return ContextResult{}, ErrLogContextNotFound
+	}
+	if err != nil {
+		return ContextResult{}, err
+	}
+	return ContextResult{
+		TargetID:   result.TargetID,
+		AnchorTime: result.AnchorTime,
+		Items:      result.ItemsByDeployment[q.DeploymentID],
+	}, nil
 }
 
 // Subscribe 订阅实时日志流，可先回放最近日志并按 Since 锚点去重。

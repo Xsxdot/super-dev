@@ -8,11 +8,15 @@ import { useAgentStore } from '@/stores/agent'
 import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
+import { useLogEvidenceStore } from '@/stores/logEvidence'
+import { usePanelStore } from '@/stores/panel'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
+import LogContextMenu from './LogContextMenu.vue'
+import PinNotePopover from './PinNotePopover.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import LogLifecycleSeparatorRow from './LogLifecycleSeparatorRow.vue'
 import {
@@ -21,7 +25,10 @@ import {
   type DeploymentNodeIssueKind,
   type DeploymentNodeState,
 } from '@/lib/deploymentNodeStatus'
+import { formatLogWithCursor, nearestLogIndexByCursorTime } from '@/lib/logEvidenceFormat'
+import { logEvidenceDiagnostic } from '@/lib/logEvidenceDiagnostics'
 import type { DisplayLogEntry } from '@/lib/logEngine'
+import type { EvidencePin } from '@/stores/logEvidence'
 import type { PanelSource } from '@/stores/panel'
 import {
   makeDisplayItems,
@@ -34,6 +41,7 @@ import {
 const INITIAL_HISTORY_LIMIT = 200
 const INCREMENTAL_HISTORY_LIMIT = 80
 const HISTORY_PREFETCH_START_INDEX = 30
+const FILTERED_HISTORY_BACKFILL_MAX_PAGES = 6
 const LOG_VIRTUAL_OVERSCAN = 12
 
 const props = defineProps<{
@@ -48,6 +56,8 @@ const agentStore = useAgentStore()
 const deploymentLogStore = useDeploymentLogStore()
 const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const logLifecycleStore = useLogLifecycleStore()
+const evidenceStore = useLogEvidenceStore()
+const panelStore = usePanelStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
 const { t } = useI18n()
@@ -62,6 +72,11 @@ const initialHistoryBoundary = ref<HistoryBoundary | null>(null)
 const activeSelectionEntryId = ref<number | null>(null)
 const activeSelectionText = ref<string | null>(null)
 const activeSelectionRect = ref<DOMRect | null>(null)
+const flashLogId = ref<string | null>(null)
+const timeAnchorLogId = ref<string | null>(null)
+const contextMenu = ref<{ x: number; y: number; log: DisplayLogEntry } | null>(null)
+const editingPinId = ref<string | null>(null)
+const pinNotePopoverStyle = ref<Record<string, string>>({ left: '14px', top: '44px' })
 
 const markerStartId = ref('')
 const markerEndId = ref('')
@@ -87,6 +102,14 @@ function deploymentIdFromSource(source: PanelSource | null | undefined): string 
 const currentDeploymentInfo = computed(() => {
   const deploymentId = deploymentIdFromSource(props.source)
   return deploymentId ? agentStore.serviceForDeployment(deploymentId) : undefined
+})
+
+const evidenceSourceKey = computed(() => deploymentIdFromSource(props.source) ?? props.panelId)
+
+const evidenceTrackLabel = computed(() => {
+  const deploymentId = deploymentIdFromSource(props.source)
+  const info = deploymentId ? agentStore.serviceForDeployment(deploymentId) : undefined
+  return info ? `${info.service.name} · ${info.envName}` : (deploymentId ?? props.panelId)
 })
 
 const currentNodeStatus = computed(() => {
@@ -146,6 +169,7 @@ onMounted(() => {
   const deploymentId = deploymentIdFromSource(props.source)
   if (deploymentId) void subscribeDeployment(deploymentId)
   if (props.projectId) void filterStore.loadProjectRules(props.projectId)
+  registerEvidenceTrack()
   refreshDisplayImmediately()
   scrollToBottom()
 })
@@ -158,6 +182,7 @@ watch(
     historyLoadToken++
     initialHistoryBoundary.value = null
     if (deploymentId) void subscribeDeployment(deploymentId)
+    registerEvidenceTrack()
     isFollowing.value = true
     newLogCount.value = 0
     refreshDisplayImmediately()
@@ -174,6 +199,7 @@ watch(
 onUnmounted(() => {
   const deploymentId = deploymentIdFromSource(props.source)
   if (deploymentId) deploymentLogStore.unsubscribe(deploymentId)
+  evidenceStore.unregisterTrack(props.panelId)
   historyLoadToken++
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
@@ -254,7 +280,9 @@ function scheduleDisplayRefresh() {
     displayRefreshTimer = null
     const oldCount = entryCount(cachedDisplay.value.items)
     makeLogDisplay()
-    applyItemsCountChange(oldCount, entryCount(cachedDisplay.value.items))
+    const newCount = entryCount(cachedDisplay.value.items)
+    applyItemsCountChange(oldCount, newCount)
+    settleVirtualizerAfterCountChange(oldCount, newCount)
   }, 32)
 }
 
@@ -266,8 +294,9 @@ function refreshDisplayImmediately() {
   const oldCount = entryCount(cachedDisplay.value.items)
   nextTick(() => {
     makeLogDisplay()
-    applyItemsCountChange(oldCount, entryCount(cachedDisplay.value.items))
-    if (isFollowing.value) pinToBottomIfFollowing()
+    const newCount = entryCount(cachedDisplay.value.items)
+    applyItemsCountChange(oldCount, newCount)
+    settleVirtualizerAfterCountChange(oldCount, newCount)
   })
 }
 
@@ -294,6 +323,70 @@ function isHighlighted(log: DisplayLogEntry): boolean {
   if (bm.state === 'recording') return ts >= bm.startTime
   if (bm.state === 'done' && bm.endTime) return ts >= bm.startTime && ts <= bm.endTime
   return false
+}
+
+function registerEvidenceTrack() {
+  evidenceStore.registerTrack({
+    trackId: props.panelId,
+    panelId: props.panelId,
+    trackLabel: evidenceTrackLabel.value,
+    sourceKey: evidenceSourceKey.value,
+    getLogs: () => filteredLogs.value,
+    jumpToLog,
+    alignToTime,
+  })
+}
+
+function evidencePinFor(log: DisplayLogEntry) {
+  return evidenceStore.pinFor(props.panelId, evidenceSourceKey.value, log.id)
+}
+
+function toggleEvidencePin(log: DisplayLogEntry) {
+  const existing = evidencePinFor(log)
+  if (existing?.note.trim() && !window.confirm(t('panel.evidence.confirmRemoveNotedPin'))) return
+  evidenceStore.togglePin({
+    panelId: props.panelId,
+    trackId: props.panelId,
+    trackLabel: evidenceTrackLabel.value,
+    sourceKey: evidenceSourceKey.value,
+    log,
+  })
+  if (evidenceStore.timeSyncEnabled) {
+    evidenceStore.alignOtherTracksToLog(props.panelId, log)
+  }
+}
+
+const editingPin = computed(() =>
+  editingPinId.value ? evidenceStore.pins.find(pin => pin.id === editingPinId.value) ?? null : null,
+)
+
+function openPinNotePopover(pin: EvidencePin, event?: MouseEvent) {
+  editingPinId.value = pin.id
+  if (event) {
+    const width = 276
+    const height = 150
+    // 备注弹层跟随点击点，并夹在 viewport 内；否则在长日志/抽屉覆盖时会像“没反应”。
+    const left = Math.max(8, Math.min(event.clientX + 8, window.innerWidth - width))
+    const top = Math.max(8, Math.min(event.clientY + 8, window.innerHeight - height))
+    pinNotePopoverStyle.value = { left: `${left}px`, top: `${top}px` }
+  }
+  logEvidenceDiagnostic('debug', 'pin.note.open', {
+    panelId: props.panelId,
+    trackId: pin.trackId,
+    pinId: pin.id,
+    pinLabel: pin.label,
+  })
+}
+
+function closePinNotePopover() {
+  editingPinId.value = null
+}
+
+function savePinNote(note: string) {
+  const pinId = editingPinId.value
+  if (!pinId) return
+  evidenceStore.updateNote(pinId, note)
+  editingPinId.value = null
 }
 
 // serviceNameFor 通过日志的 deployment_id 反查所属 service 名，反查不到时显示截断的 id。
@@ -381,6 +474,42 @@ function measureVirtualizer() {
   virtualizer.value.measure()
 }
 
+function logPanelDiagnostic(level: 'debug' | 'info' | 'warn', event: string, context: Record<string, unknown>) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('superdev:log-panel', {
+    detail: {
+      scope: 'log-panel',
+      level,
+      event,
+      at: new Date().toISOString(),
+      panelId: props.panelId,
+      ...context,
+    },
+  }))
+}
+
+function settleVirtualizerAfterCountChange(oldCount: number, newCount: number) {
+  if (oldCount === newCount) return
+  nextTick(() => {
+    const rangeStart = virtualizer.value.range?.startIndex ?? 0
+    measureVirtualizer()
+    logPanelDiagnostic('debug', 'virtualizer.count_change', {
+      oldCount,
+      newCount,
+      rangeStart,
+      following: isFollowing.value,
+    })
+    if (isFollowing.value) {
+      // 过滤规则既可能增加也可能减少可见行；follow 模式必须贴到新底部，避免停在旧 range 的空白区。
+      pinToBottomIfFollowing()
+      return
+    }
+    if (newCount > 0 && rangeStart >= displayItems.value.length) {
+      virtualizer.value.scrollToIndex(displayItems.value.length - 1, { align: 'end' })
+    }
+  })
+}
+
 async function scrollToBottom() {
   programmaticScroll = true
   await nextTick()
@@ -425,7 +554,6 @@ function pinToBottomIfFollowing() {
 function applyItemsCountChange(oldCount: number, newCount: number) {
   if (isFollowing.value) {
     newLogCount.value = 0
-    if (newCount > oldCount) pinToBottomIfFollowing()
   } else {
     newLogCount.value += Math.max(0, newCount - oldCount)
   }
@@ -455,36 +583,62 @@ function onWheel(e: WheelEvent) {
   if (e.deltaY < 0) {
     isFollowing.value = false
     cancelScrollRetries()
+    const rangeStart = virtualizer.value.range?.startIndex ?? 0
+    if (rangeStart < HISTORY_PREFETCH_START_INDEX || displayItems.value.length < HISTORY_PREFETCH_START_INDEX) {
+      void tryLoadMoreHistory()
+    }
   }
 }
 
 async function tryLoadMoreHistory() {
   if (props.source?.type === 'deployment') {
-    if (!deploymentLogStore.hasMoreHistory(props.source.deploymentId)) return
+    const deploymentId = props.source.deploymentId
+    if (!deploymentLogStore.hasMoreHistory(deploymentId)) return
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
     // 快速滚动时 range 可能短暂为空；按 0 补偿可以让重新测量后的窗口回到顶部附近。
     const prevStart = virtualizer.value.range?.startIndex ?? 0
     const prevCount = displayItems.value.length
+    let loadedPages = 0
     try {
-      await deploymentLogStore.loadMoreHistory(props.source.deploymentId, INCREMENTAL_HISTORY_LIMIT)
-      if (displayRefreshTimer) {
-        clearTimeout(displayRefreshTimer)
-        displayRefreshTimer = null
+      while (deploymentLogStore.hasMoreHistory(deploymentId) && loadedPages < FILTERED_HISTORY_BACKFILL_MAX_PAGES) {
+        loadedPages++
+        const result = await deploymentLogStore.loadMoreHistory(deploymentId, INCREMENTAL_HISTORY_LIMIT)
+        if (displayRefreshTimer) {
+          clearTimeout(displayRefreshTimer)
+          displayRefreshTimer = null
+        }
+        const beforeVisibleCount = displayItems.value.length
+        makeLogDisplay()
+        await nextTick()
+        const afterVisibleCount = displayItems.value.length
+        logPanelDiagnostic('debug', 'history.backfill.page', {
+          deploymentId,
+          loadedPages,
+          rawAdded: result.added,
+          visibleAdded: afterVisibleCount - beforeVisibleCount,
+          hasMoreHistory: deploymentLogStore.hasMoreHistory(deploymentId),
+        })
+        // 过滤条件可能把整页历史都隐藏掉；继续向上找，避免用户在无滚动条时卡住。
+        if (result.added <= 0 || afterVisibleCount > beforeVisibleCount) break
       }
-      makeLogDisplay()
-      await nextTick()
-      const added = displayItems.value.length - prevCount
-      if (added > 0) {
+      const visibleAdded = displayItems.value.length - prevCount
+      if (visibleAdded > 0) {
         programmaticScroll = true
         measureVirtualizer()
-        virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+        virtualizer.value.scrollToIndex(prevStart + visibleAdded, { align: 'start' })
         setTimeout(() => {
           measureVirtualizer()
-          virtualizer.value.scrollToIndex(prevStart + added, { align: 'start' })
+          virtualizer.value.scrollToIndex(prevStart + visibleAdded, { align: 'start' })
         }, 0)
         setTimeout(() => { programmaticScroll = false }, 80)
       }
+      logPanelDiagnostic('debug', 'history.backfill.done', {
+        deploymentId,
+        loadedPages,
+        visibleAdded,
+        hasMoreHistory: deploymentLogStore.hasMoreHistory(deploymentId),
+      })
     } finally {
       isLoadingHistory.value = false
     }
@@ -519,6 +673,125 @@ function fillChipFromSelection() {
   toolbarRef.value?.fillChipInput(text)
   clearLogSelection()
   window.getSelection()?.removeAllRanges()
+}
+
+function openLogContextMenu(event: MouseEvent, log: DisplayLogEntry) {
+  contextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    log,
+  }
+}
+
+function closeLogContextMenu() {
+  contextMenu.value = null
+}
+
+async function copyTextToClipboard(text: string, event: string, log: DisplayLogEntry) {
+  try {
+    await navigator.clipboard.writeText(text)
+    logEvidenceDiagnostic('info', event, {
+      panelId: props.panelId,
+      trackId: props.panelId,
+      deploymentId: log.deployment_id,
+      cursorTime: log.timestamp,
+      cursorId: log.id,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    logEvidenceDiagnostic('error', `${event}.failure`, {
+      panelId: props.panelId,
+      trackId: props.panelId,
+      deploymentId: log.deployment_id,
+      cursorTime: log.timestamp,
+      cursorId: log.id,
+      error: message,
+    })
+    window.alert(t('panel.evidence.copyFailed', { message }))
+  }
+}
+
+async function copyContextLog() {
+  if (!contextMenu.value) return
+  const log = contextMenu.value.log
+  await copyTextToClipboard(log.message, 'log.copy.success', log)
+  closeLogContextMenu()
+}
+
+async function copyContextLogWithCursor() {
+  if (!contextMenu.value) return
+  const log = contextMenu.value.log
+  await copyTextToClipboard(formatLogWithCursor(log), 'log.copy_with_cursor.success', log)
+  closeLogContextMenu()
+}
+
+function addContextPin() {
+  if (!contextMenu.value) return
+  toggleEvidencePin(contextMenu.value.log)
+  closeLogContextMenu()
+}
+
+function removeContextPin() {
+  if (!contextMenu.value) return
+  const pin = evidencePinFor(contextMenu.value.log)
+  if (pin?.note.trim() && !window.confirm(t('panel.evidence.confirmRemoveNotedPin'))) return
+  if (pin) evidenceStore.removePin(pin.id)
+  closeLogContextMenu()
+}
+
+function alignOtherPanesFromContext() {
+  if (!contextMenu.value) return
+  evidenceStore.alignOtherTracksToLog(props.panelId, contextMenu.value.log)
+  closeLogContextMenu()
+}
+
+function displayIndexOfLog(logId: string): number {
+  return displayItems.value.findIndex(item => item.kind === 'entry' && item.log.id === logId)
+}
+
+async function jumpToLog(logId: string): Promise<boolean> {
+  const index = displayIndexOfLog(logId)
+  if (index < 0) return false
+  // 程序化滚动不能被 onScroll 当作用户离开 live-follow，否则跳转会破坏追踪状态。
+  programmaticScroll = true
+  await nextTick()
+  virtualizer.value.scrollToIndex(index, { align: 'center' })
+  flashLogId.value = logId
+  window.setTimeout(() => {
+    if (flashLogId.value === logId) flashLogId.value = null
+    programmaticScroll = false
+  }, 900)
+  return true
+}
+
+async function alignToTime(cursorTime: string, cursorId: string): Promise<boolean> {
+  const logIndex = nearestLogIndexByCursorTime(filteredLogs.value, cursorTime, cursorId)
+  if (logIndex < 0) {
+    logEvidenceDiagnostic('warn', 'time_sync.align.miss', { panelId: props.panelId, trackId: props.panelId, cursorTime, cursorId })
+    return false
+  }
+  const target = filteredLogs.value[logIndex]
+  const displayIndex = displayIndexOfLog(target.id)
+  if (displayIndex < 0) {
+    // 日志可能已在 store 中但未进入当前过滤后的虚拟列表，保留软失败便于抽屉继续展示快照。
+    logEvidenceDiagnostic('warn', 'time_sync.align.not_rendered', { panelId: props.panelId, trackId: props.panelId, cursorTime, cursorId })
+    return false
+  }
+  programmaticScroll = true
+  await nextTick()
+  virtualizer.value.scrollToIndex(displayIndex, { align: 'center' })
+  timeAnchorLogId.value = target.id
+  window.setTimeout(() => {
+    programmaticScroll = false
+  }, 80)
+  logEvidenceDiagnostic('info', 'time_sync.align.success', {
+    panelId: props.panelId,
+    trackId: props.panelId,
+    deploymentId: target.deployment_id,
+    cursorTime: target.timestamp,
+    cursorId: target.id,
+  })
+  return true
 }
 
 const selectionButtonStyle = computed(() => {
@@ -657,7 +930,13 @@ function toggleNode(hostId: string) {
               :log="(displayItems[vRow.index] as any).log"
               :service-name="serviceNameFor((displayItems[vRow.index] as any).log)"
               :highlighted="isHighlighted((displayItems[vRow.index] as any).log)"
+              :evidence-pin="evidencePinFor((displayItems[vRow.index] as any).log)"
+              :evidence-flash="flashLogId === (displayItems[vRow.index] as any).log.id"
+              :time-anchor="timeAnchorLogId === (displayItems[vRow.index] as any).log.id"
               @selection-change="(t, r) => onLogSelection((displayItems[vRow.index] as any).log.id, t, r)"
+              @toggle-pin="toggleEvidencePin"
+              @edit-pin="openPinNotePopover"
+              @row-context-menu="openLogContextMenu"
             />
           </template>
         </div>
@@ -673,6 +952,28 @@ function toggleNode(hostId: string) {
       >
         +
       </button>
+
+      <LogContextMenu
+        v-if="contextMenu"
+        :x="contextMenu.x"
+        :y="contextMenu.y"
+        :has-pin="!!evidencePinFor(contextMenu.log)"
+        :can-align="panelStore.allLeaves.length > 1"
+        @copy-log="copyContextLog"
+        @copy-log-with-cursor="copyContextLogWithCursor"
+        @add-pin="addContextPin"
+        @remove-pin="removeContextPin"
+        @align-time="alignOtherPanesFromContext"
+        @close="closeLogContextMenu"
+      />
+      <PinNotePopover
+        v-if="editingPin"
+        class="pin-note-popover-instance"
+        :style="pinNotePopoverStyle"
+        :pin="editingPin"
+        @save="savePinNote"
+        @close="closePinNotePopover"
+      />
     </div>
 
     <Transition name="fade">

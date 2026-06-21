@@ -24,6 +24,26 @@ function service(): ConfigDraftService {
 }
 
 describe('ServiceCard', () => {
+  it('offers every Agent language runtime provider language in service identity', () => {
+    const wrapper = mount(ServiceCard, {
+      props: { service: service(), envName: 'dev', hosts: [] },
+    })
+
+    const options = wrapper.findAll('[data-test="service-language"] option')
+
+    expect(options.map(option => option.attributes('value') ?? '')).toEqual([
+      '',
+      'go',
+      'node',
+      'python',
+      'java',
+      'kotlin',
+      'rust',
+      'cpp',
+    ])
+    expect(options.at(-1)?.text()).toBe('C/C++')
+  })
+
   it('renders the deployment editor as the mock-style two column service surface', () => {
     const wrapper = mount(ServiceCard, {
       props: { service: service(), envName: 'dev', hosts: [], projectPath: '/repo' },
@@ -49,6 +69,19 @@ describe('ServiceCard', () => {
     expect(emitted).toBeTruthy()
     const last = emitted![emitted!.length - 1][0] as ConfigDraftService
     expect(last.language).toBe('python')
+  })
+
+  it('persists C/C++ as the canonical cpp service language', async () => {
+    const wrapper = mount(ServiceCard, {
+      props: { service: service(), envName: 'dev', hosts: [] },
+    })
+
+    await wrapper.find('[data-test="service-language"]').setValue('cpp')
+
+    const emitted = wrapper.emitted('update:service')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as ConfigDraftService
+    expect(last.language).toBe('cpp')
   })
 
   it('enables a new local managed deployment with language runtime defaults', async () => {

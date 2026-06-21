@@ -13,6 +13,7 @@ package noderegistry
 
 import (
 	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -230,6 +231,18 @@ func (r *Registry) applyBatch(source int, batch []nodetransport.NodeStatus, now 
 		}
 		if status.UpdatedAt.IsZero() {
 			status.UpdatedAt = now
+		}
+		// 兜底：节点状态帧是「整条替换」语义，而上报侧的 Deployments 来自实时
+		// 采集（runtime Snapshot），会因瞬时超时/纳管集合抖动短缺。若直接覆盖，
+		// 一帧的瞬时短缺就会被前端如实渲染成「服务消失」，造成节点中心服务数
+		// 6→1→6 跳变。这里只在「节点仍可达、但 deployment 条目数比上一帧减少」
+		// 时判定为不完整帧，保留上一帧已知的 Deployments，避免抹掉真实存在的服务。
+		// 节点真正不可达（reachable=false）时不兜底——那种短缺是真实的。
+		if prev, ok := r.nodes[status.HostID]; ok && status.Reachable &&
+			len(status.Deployments) < len(prev.Deployments) {
+			log.Printf("[SuperDev] node %s: incomplete status frame (deployments %d < last %d), keeping last known deployments",
+				status.HostID, len(status.Deployments), len(prev.Deployments))
+			status.Deployments = prev.Deployments
 		}
 		r.nodes[status.HostID] = status
 		r.lastSeen[status.HostID] = now

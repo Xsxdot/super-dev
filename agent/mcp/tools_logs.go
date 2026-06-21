@@ -25,6 +25,11 @@ import (
 )
 
 const defaultLogToolLimit = 200
+const maxTailScanPages = 25
+const defaultFollowDuration = 5 * time.Second
+const maxFollowDuration = 30 * time.Second
+const defaultFollowPollInterval = time.Second
+const minFollowPollInterval = 100 * time.Millisecond
 
 func (s *Server) tailLogsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
@@ -50,45 +55,91 @@ func (s *Server) tailLogsTool(ctx context.Context, args json.RawMessage) (CallTo
 	}
 
 	limit := logToolLimit(req.Limit)
-	query := url.Values{}
-	query.Set("limit", strconv.Itoa(limit))
-	if req.RunID != "" {
-		query.Set("run", req.RunID)
-	}
-	if req.Before > 0 {
-		query.Set("before", strconv.FormatInt(req.Before, 10))
-	}
-	resp, err := s.client.FetchDeploymentLogs(ctx, target.Deployment.ID, query)
-	if err != nil {
-		return clientToolError(err), nil
-	}
-
-	entries := resp.Items
+	var since *time.Time
 	filtersApplied := []string{}
 	if req.Level != "" {
-		entries = filterLogLevel(entries, req.Level)
 		filtersApplied = append(filtersApplied, "level")
 	}
 	if req.Since != "" {
-		since, err := parseSince(req.Since)
+		parsed, err := parseSince(req.Since)
 		if err != nil {
 			return toolError("invalid_arguments", "since must be RFC3339 time or duration", nil), nil
 		}
-		entries = filterLogSince(entries, since)
+		since = &parsed
 		filtersApplied = append(filtersApplied, "since")
 	}
 	applyRules := true
 	if req.ApplyProjectRules != nil {
 		applyRules = *req.ApplyProjectRules
 	}
+	var rules []model.LogRule
 	if applyRules {
-		rules, err := s.client.ProjectRules(ctx, target.Project.ID)
+		rules, err = s.client.ProjectRules(ctx, target.Project.ID)
 		if err != nil {
 			return clientToolError(err), nil
 		}
-		entries = applyLogRules(entries, rules)
 		filtersApplied = append(filtersApplied, "project_rules")
 	}
+
+	entries := []model.LogEntry{}
+	var next any
+	scanPages := 0
+	scanTruncated := false
+	before := ""
+	if req.Before > 0 {
+		before = strconv.FormatInt(req.Before, 10)
+	}
+	scanFiltered := req.Level != "" || since != nil
+	for {
+		scanPages++
+		query := url.Values{}
+		// 筛选场景要多拿一页再筛，否则 limit=1 时很容易只扫到一条非目标日志。
+		pageLimit := limit
+		if scanFiltered && pageLimit < defaultLogToolLimit {
+			pageLimit = defaultLogToolLimit
+		}
+		query.Set("limit", strconv.Itoa(pageLimit))
+		if req.RunID != "" {
+			query.Set("run", req.RunID)
+		}
+		if before != "" {
+			query.Set("before", before)
+		}
+		resp, err := s.client.FetchDeploymentLogs(ctx, target.Deployment.ID, query)
+		if err != nil {
+			return clientToolError(err), nil
+		}
+		page := resp.Items
+		next = resp.Next
+
+		filtered := page
+		if req.Level != "" {
+			filtered = filterLogLevel(filtered, req.Level)
+		}
+		if since != nil {
+			filtered = filterLogSince(filtered, *since)
+		}
+		if applyRules {
+			filtered = applyLogRules(filtered, rules)
+		}
+		entries = append(entries, filtered...)
+		if len(entries) >= limit {
+			entries = entries[:limit]
+			break
+		}
+		if !scanFiltered || resp.Next.ID == "" {
+			break
+		}
+		if since != nil && pageStartsBefore(page, *since) {
+			break
+		}
+		if scanPages >= maxTailScanPages {
+			scanTruncated = true
+			break
+		}
+		before = resp.Next.ID
+	}
+
 	entries, truncated := truncateLogEntries(entries, limit)
 	data := map[string]any{
 		"target":          sanitizeTarget(target),
@@ -96,13 +147,110 @@ func (s *Server) tailLogsTool(ctx context.Context, args json.RawMessage) (CallTo
 		"count":           len(entries),
 		"truncated":       truncated,
 		"filters_applied": filtersApplied,
-		"next":            resp.Next,
+		"next":            next,
+		"scan_pages":      scanPages,
+		"scan_truncated":  scanTruncated,
 	}
 	return toolSuccess(
 		fmt.Sprintf("%d log line(s)", len(entries)),
 		data,
 		nil,
 		[]string{"Use search_logs for historical keyword search or get_log_context around a specific log ID."},
+	), nil
+}
+
+func (s *Server) followLogsTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
+	var req struct {
+		targetArgs
+		Limit             int    `json:"limit"`
+		Level             string `json:"level"`
+		DurationMS        int    `json:"duration_ms"`
+		PollIntervalMS    int    `json:"poll_interval_ms"`
+		ApplyProjectRules *bool  `json:"apply_project_rules"`
+	}
+	if err := decodeToolArgs(args, &req); err != nil {
+		return toolError("invalid_arguments", err.Error(), nil), nil
+	}
+	projects, err := s.client.ListProjects(ctx)
+	if err != nil {
+		return clientToolError(err), nil
+	}
+	target, errResp := resolveDeploymentTarget(projects, req.targetArgs)
+	if errResp != nil {
+		errResp = sanitizeResolveError(errResp)
+		return toolError(errResp.Code, errResp.Message, errResp), nil
+	}
+
+	limit := logToolLimit(req.Limit)
+	duration := boundedFollowDuration(req.DurationMS)
+	pollInterval := boundedFollowPollInterval(req.PollIntervalMS)
+	applyRules := true
+	if req.ApplyProjectRules != nil {
+		applyRules = *req.ApplyProjectRules
+	}
+	var rules []model.LogRule
+	if applyRules {
+		rules, err = s.client.ProjectRules(ctx, target.Project.ID)
+		if err != nil {
+			return clientToolError(err), nil
+		}
+	}
+
+	deadline := time.Now().Add(duration)
+	entries := make([]model.LogEntry, 0, limit)
+	seen := map[string]bool{}
+	polls := 0
+	for {
+		polls++
+		query := url.Values{}
+		query.Set("limit", strconv.Itoa(limit))
+		resp, err := s.client.FetchDeploymentLogs(ctx, target.Deployment.ID, query)
+		if err != nil {
+			return clientToolError(err), nil
+		}
+		page := resp.Items
+		if req.Level != "" {
+			page = filterLogLevel(page, req.Level)
+		}
+		if applyRules {
+			page = applyLogRules(page, rules)
+		}
+		for _, entry := range page {
+			key := logEntryIdentity(entry)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			entries = append(entries, entry)
+			if len(entries) >= limit {
+				break
+			}
+		}
+		if len(entries) >= limit || !time.Now().Before(deadline) {
+			break
+		}
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return clientToolError(ctx.Err()), nil
+		case <-timer.C:
+		}
+	}
+
+	data := map[string]any{
+		"target":           sanitizeTarget(target),
+		"entries":          entries,
+		"count":            len(entries),
+		"duration_ms":      int(duration / time.Millisecond),
+		"poll_interval_ms": int(pollInterval / time.Millisecond),
+		"polls":            polls,
+	}
+	return toolSuccess(
+		fmt.Sprintf("%d followed log line(s)", len(entries)),
+		data,
+		nil,
+		[]string{"Use search_logs or summarize_error_window for historical errors outside the follow window."},
 	), nil
 }
 
@@ -126,6 +274,19 @@ func (s *Server) searchLogsTool(ctx context.Context, args json.RawMessage) (Call
 	query.Set("q", req.Q)
 	if req.DeploymentID != "" {
 		query.Add("deployment", req.DeploymentID)
+	}
+	if req.DeploymentID != "" && req.ProjectID == "" && req.ProjectName == "" {
+		projects, err := s.client.ListProjects(ctx)
+		if err != nil {
+			return clientToolError(err), nil
+		}
+		project, result, found := resolveProjectByDeployment(projects, req.DeploymentID)
+		if !found && result.IsError {
+			return result, nil
+		}
+		if found {
+			query.Set("project", project.ID)
+		}
 	}
 	if req.ProjectID != "" || req.ProjectName != "" {
 		project, result, ok := s.resolveProjectForLogs(ctx, req.ProjectID, req.ProjectName)
@@ -171,6 +332,26 @@ func (s *Server) searchLogsTool(ctx context.Context, args json.RawMessage) (Call
 	), nil
 }
 
+func resolveProjectByDeployment(projects []model.Project, deploymentID string) (model.Project, CallToolResult, bool) {
+	matches := make([]model.Project, 0, 1)
+	for _, project := range projects {
+		for _, service := range project.Services {
+			for _, deployment := range service.Deployments {
+				if deployment.ID == deploymentID {
+					matches = append(matches, sanitizeProject(project))
+				}
+			}
+		}
+	}
+	if len(matches) == 0 {
+		return model.Project{}, CallToolResult{}, false
+	}
+	if len(matches) > 1 {
+		return model.Project{}, toolError("ambiguous_project", "deployment belongs to multiple projects; specify project_id", matches), false
+	}
+	return matches[0], CallToolResult{}, true
+}
+
 func (s *Server) getLogContextTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
 		ID           int64  `json:"id"`
@@ -187,15 +368,23 @@ func (s *Server) getLogContextTool(ctx context.Context, args json.RawMessage) (C
 	if req.ID <= 0 {
 		return toolError("invalid_arguments", "id is required", nil), nil
 	}
-	project, result, ok := s.resolveProjectForLogs(ctx, req.ProjectID, req.ProjectName)
-	if !ok {
-		return result, nil
-	}
 	query := url.Values{}
-	query.Set("project", project.ID)
 	query.Set("id", strconv.FormatInt(req.ID, 10))
+	filtersApplied := []string{"id"}
+	if req.ProjectID != "" || req.ProjectName != "" {
+		project, result, ok := s.resolveProjectForLogs(ctx, req.ProjectID, req.ProjectName)
+		if !ok {
+			return result, nil
+		}
+		query.Set("project", project.ID)
+		filtersApplied = append(filtersApplied, "project")
+	}
 	if req.DeploymentID != "" {
 		query.Add("deployment", req.DeploymentID)
+		filtersApplied = append(filtersApplied, "deployment")
+	}
+	if query.Get("project") == "" && req.DeploymentID == "" {
+		return toolError("invalid_arguments", "project_id, project_name, or deployment_id is required", nil), nil
 	}
 	if req.BeforeMS > 0 {
 		query.Set("before_ms", strconv.Itoa(req.BeforeMS))
@@ -213,7 +402,7 @@ func (s *Server) getLogContextTool(ctx context.Context, args json.RawMessage) (C
 		"context":         resp,
 		"count":           count,
 		"truncated":       truncated,
-		"filters_applied": []string{"project", "id"},
+		"filters_applied": filtersApplied,
 	}
 	return toolSuccess(
 		fmt.Sprintf("%d context log line(s)", count),
@@ -283,6 +472,47 @@ func filterLogSince(entries []model.LogEntry, since time.Time) []model.LogEntry 
 		}
 	}
 	return out
+}
+
+func pageStartsBefore(entries []model.LogEntry, since time.Time) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.Timestamp.IsZero() {
+			return entry.Timestamp.Before(since)
+		}
+	}
+	return false
+}
+
+func boundedFollowDuration(ms int) time.Duration {
+	if ms <= 0 {
+		return defaultFollowDuration
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d > maxFollowDuration {
+		return maxFollowDuration
+	}
+	return d
+}
+
+func boundedFollowPollInterval(ms int) time.Duration {
+	if ms <= 0 {
+		return defaultFollowPollInterval
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < minFollowPollInterval {
+		return minFollowPollInterval
+	}
+	return d
+}
+
+func logEntryIdentity(entry model.LogEntry) string {
+	if entry.ID > 0 {
+		return entry.DeploymentID + "#" + strconv.FormatInt(entry.ID, 10)
+	}
+	return entry.DeploymentID + "#" + entry.Timestamp.Format(time.RFC3339Nano) + "#" + entry.Message
 }
 
 func truncateContextItems(items map[string][]model.LogEntry, limit int) (map[string][]model.LogEntry, int, bool) {

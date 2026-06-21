@@ -2,15 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { save } from '@tauri-apps/plugin-dialog'
 import { usePanelStore, type PanelLeafNode } from '@/stores/panel'
 import { useAgentStore } from '@/stores/agent'
-import { useBookmarkStore } from '@/stores/bookmark'
-import { useDeploymentLogStore } from '@/stores/deploymentLog'
 import { useDeploymentNodeSelectionStore } from '@/stores/deploymentNodeSelection'
-import { useFilterStore } from '@/stores/filter'
+import { useLogEvidenceStore } from '@/stores/logEvidence'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import OperationApprovalPopover from '@/components/OperationApprovalPopover.vue'
+import EvidenceDrawer from '@/components/Evidence/EvidenceDrawer.vue'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
 import {
@@ -20,17 +18,14 @@ import {
   type DeploymentNodeState,
 } from '@/lib/deploymentNodeStatus'
 import { AGENT_HOST } from '@/api/agent'
-import type { Deployment, LogEntry } from '@/api/agent'
-import type { SyncBookmarkCapture, SyncBookmarkPanel } from '@/stores/bookmark'
+import type { Deployment } from '@/api/agent'
 
 const agentHost = AGENT_HOST
 
 const panelStore = usePanelStore()
 const agentStore = useAgentStore()
-const bookmarkStore = useBookmarkStore()
-const deploymentLogStore = useDeploymentLogStore()
 const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
-const filterStore = useFilterStore()
+const evidenceStore = useLogEvidenceStore()
 const operationApprovalStore = useOperationApprovalStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
@@ -150,119 +145,6 @@ async function restartChecked() {
 
 async function stopChecked() {
   await Promise.all(checkedServiceIds.value.map(id => agentStore.stopDeployment(id)))
-}
-
-// 日志录制：底层仍使用同步书签能力，展示层统一为用户可理解的日志录制。
-const syncEnabled = computed(() => bookmarkStore.syncEnabled)
-const syncRecording = computed(() => bookmarkStore.syncRecording)
-const hasSyncOutput = computed(() => bookmarkStore.hasSyncOutput)
-
-function syncPanels(): SyncBookmarkPanel[] {
-  return panelStore.allLeaves
-    .filter(leaf => leaf.source || leaf.serviceId)
-    .map(leaf => ({
-      panelId: leaf.id,
-      serviceId: leafDeploymentId(leaf),
-      source: leaf.source,
-    }))
-}
-
-function refreshSyncPanelIds() {
-  bookmarkStore.syncPanelIds = new Set(syncPanels().map(panel => panel.panelId))
-}
-
-function toggleSync() {
-  const nextEnabled = !bookmarkStore.syncEnabled
-  bookmarkStore.setSyncEnabled(nextEnabled)
-  if (nextEnabled) {
-    refreshSyncPanelIds()
-  }
-}
-
-watch(
-  () => panelStore.allLeaves.map(leaf => `${leaf.id}:${JSON.stringify(leaf.source)}`).join('|'),
-  () => {
-    if (bookmarkStore.syncEnabled && !syncRecording.value) refreshSyncPanelIds()
-  },
-)
-
-function visibleLogsForLeaf(leaf: PanelLeafNode): LogEntry[] {
-  const deploymentId = leafDeploymentId(leaf)
-  if (deploymentId) return deploymentLogStore.getLogs(deploymentId)
-  return []
-}
-
-function syncCaptures(): SyncBookmarkCapture[] {
-  return [...bookmarkStore.syncPanelIds].map((panelId) => {
-    const leaf = panelStore.allLeaves.find(item => item.id === panelId)
-    const bm = bookmarkStore.getBookmark(panelId)
-    // filter 的项目规则键需要 projectId：通过 deployment 反查所属项目。
-    const projectId = leaf
-      ? agentStore.serviceForDeployment(leafDeploymentId(leaf) ?? '')?.service.project_id ?? null
-      : null
-    const captureLogs = leaf
-      ? filterStore.applyFilters(panelId, projectId, visibleLogsForLeaf(leaf))
-      : undefined
-    return {
-      panelId,
-      captureLogs,
-      capturedIds: bm ? new Set(bm.lockedLogs.map(log => log.id)) : undefined,
-    }
-  })
-}
-
-function toggleSyncRecord() {
-  if (syncRecording.value) {
-    bookmarkStore.endSyncBookmark(syncCaptures())
-  } else {
-    const panels = syncPanels()
-    if (panels.length === 0) {
-      window.alert(t('bottomBar.noSyncPanels'))
-      return
-    }
-    bookmarkStore.startSyncBookmark(panels)
-    bookmarkStore.setSyncEnabled(true)
-  }
-}
-
-async function copySyncBookmarks() {
-  const text = bookmarkStore.formatSyncBookmarks()
-  if (!text.trim()) {
-    window.alert(t('bottomBar.noSyncCopy'))
-    return
-  }
-  await navigator.clipboard.writeText(text)
-}
-
-function resolveExportPath(selected: string, defaultName: string): string {
-  if (/\.(log|txt)$/i.test(selected)) return selected
-  const sep = selected.includes('\\') ? '\\' : '/'
-  return selected.endsWith(sep) ? `${selected}${defaultName}` : `${selected}${sep}${defaultName}`
-}
-
-async function exportSyncBookmarks() {
-  const text = bookmarkStore.formatSyncBookmarks()
-  if (!text.trim()) {
-    window.alert(t('bottomBar.noSyncExport'))
-    return
-  }
-
-  const defaultName = `superdev-sync-${Date.now()}.log`
-  const selected = await save({
-    defaultPath: defaultName,
-    title: t('bottomBar.exportTitle'),
-    filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
-  })
-  if (!selected) return
-
-  const filePath = resolveExportPath(selected, defaultName)
-  try {
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-    await writeTextFile(filePath, text)
-  } catch (err) {
-    console.error('[SuperDev] export sync bookmark failed:', err)
-    window.alert(t('common.exportFailed', { message: err instanceof Error ? err.message : String(err) }))
-  }
 }
 
 const statusColor = (status: string) => {
@@ -427,43 +309,18 @@ onBeforeUnmount(() => {
     </section>
 
     <section class="bottom-group evidence-group" data-test="bottom-evidence">
-      <label class="sync-label">
-        <input
-          data-test="sync-toggle"
-          type="checkbox"
-          :checked="syncEnabled"
-          @change="toggleSync"
-        />
-        <span>{{ t('bottomBar.syncRecording') }}</span>
-      </label>
+      <span class="group-label">{{ t('bottomBar.evidence') }}</span>
+      <!-- 旧 bookmark 同步录制仍保留在 store 中兼容，BottomBar 的可见入口迁移为 Evidence 工作台。 -->
       <button
-        v-if="syncEnabled"
-        data-test="sync-record"
-        class="sync-record-btn"
-        :class="{ recording: syncRecording }"
-        :title="syncRecording ? t('bottomBar.stopRecord') : t('bottomBar.record')"
-        @click="toggleSyncRecord"
+        type="button"
+        data-test="bottom-evidence-open"
+        class="evidence-open-btn"
+        :aria-expanded="evidenceStore.drawerOpen"
+        @click="evidenceStore.setDrawerOpen(!evidenceStore.drawerOpen)"
       >
-        {{ syncRecording ? '⏹' : '⏺' }}
+        {{ t('bottomBar.evidencePins', { count: evidenceStore.pins.length }) }}
       </button>
-      <template v-if="syncEnabled && hasSyncOutput && !syncRecording">
-        <button
-          data-test="sync-copy"
-          class="sync-icon-btn sync-copy-btn"
-          :title="t('bottomBar.copy')"
-          @click="copySyncBookmarks"
-        >
-          ⎘
-        </button>
-        <button
-          data-test="sync-export"
-          class="sync-icon-btn sync-export-btn"
-          :title="t('bottomBar.export')"
-          @click="exportSyncBookmarks"
-        >
-          ↑
-        </button>
-      </template>
+      <EvidenceDrawer v-if="evidenceStore.drawerOpen" />
     </section>
 
     <section
@@ -616,6 +473,7 @@ onBeforeUnmount(() => {
 .node-chip,
 .action-btn,
 .sync-label,
+.evidence-open-btn,
 .sync-record-btn,
 .sync-icon-btn,
 .agent-status,
@@ -766,6 +624,21 @@ onBeforeUnmount(() => {
 .sync-icon-btn:hover {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
+}
+
+.evidence-open-btn {
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid rgba(88, 166, 255, 0.28);
+  background: rgba(88, 166, 255, 0.08);
+  color: #58a6ff;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.evidence-open-btn:hover {
+  background: rgba(88, 166, 255, 0.14);
 }
 
 .log-display-group {

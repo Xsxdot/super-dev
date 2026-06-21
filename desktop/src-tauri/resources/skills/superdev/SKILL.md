@@ -30,7 +30,7 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | 把服务跑起来 / 重启 / 停掉（哪怕没提 SuperDev） | 先 `list_services` 看该项目是否已被 SuperDev 接管；已接管则走 `start_service`/`restart_service`/`stop_service`，不要 shell 自己起 | 本页「第零纪律」 |
 | 我（AI）刚改了被接管服务的代码，且改的是不热更新的部分 | 改动落盘后主动 `restart_service`（编译型先确认 deployment 会重新编译），再让用户验证 | 本页「第零·五纪律」 |
 | 服务挂了、报错、为什么慢 | `list_services` 定位 deployment，然后 `diagnose_service` 采证 | `references/debugging-workflow.md` |
-| 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
+| 看日志、查某个错误 | 按已知信息选择 `tail_logs` / `follow_logs` / `search_logs` / `get_log_context` | `references/log-tools.md` |
 | AI 调试遇到登录/鉴权墙 | 先 `get_debug_credentials` 取项目/服务授信的测试账号或 api-key，再正常填登录框或带请求头 | 本页「AI 调试凭据纪律」 |
 | 调试本机前端页面（点击/输入/截图/读 console，哪怕没提 SuperDev） | `list_browser_targets` 找 deployment → `open_browser_debug_session`（走审批）→ `browser_snapshot` 取 selector → 控制工具 | `references/browser-debug.md` |
 | 日志/诊断都定位不到，要停在某行源码看栈和变量（Go/Node/Python/Rust/C++/Java/Kotlin） | 确认服务在跑 → `list_code_debug_targets` → `debug_capture_at`（attach 运行中进程，不重启） | `references/code-debug.md` |
@@ -106,7 +106,8 @@ description: 涉及本地或远端服务的启动/重启/停止、查看服务�
 | `get_runtime_snapshot` | 获取 SuperDev 全局运行态快照 | 读 | 本页 |
 | `list_services` | 读取项目服务与 deployment 状态 | 读 | `references/debugging-workflow.md` |
 | `get_debug_credentials` | 取项目/服务的调试凭据明文(测试账号/api-key),供 AI 合法登录/鉴权 | 读 | 本页 |
-| `tail_logs` | 看近期日志或盯一个 deployment | 读 | `references/log-tools.md` |
+| `tail_logs` | 看近期有限日志快照；带 `level/since` 时会有限翻页扫描 | 读 | `references/log-tools.md` |
+| `follow_logs` | 短时轮询观察 deployment 新日志，模拟有限 `tail -f` | 读 | `references/log-tools.md` |
 | `search_logs` | 按关键词跨项目或 deployment 搜历史日志 | 读 | `references/log-tools.md` |
 | `get_log_context` | 围绕某条日志 ID 取前后上下文 | 读 | `references/log-tools.md` |
 | `diagnose_service` | 采集单个 deployment 的状态和近期日志证据 | 读 | `references/debugging-workflow.md` |

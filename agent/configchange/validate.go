@@ -76,7 +76,15 @@ func validateServices(project model.Project) []string {
 			errs = append(errs, "service name must be unique: "+name)
 		}
 		seen[name] = true
+		deploymentEnvs := map[string]bool{}
 		for _, dep := range svc.Deployments {
+			envName := strings.TrimSpace(dep.EnvName)
+			if envName != "" {
+				if deploymentEnvs[envName] {
+					errs = append(errs, fmt.Sprintf("service %s deployment env_name must be unique: %s", name, envName))
+				}
+				deploymentEnvs[envName] = true
+			}
 			errs = append(errs, validateDeployment(project.RootPath, name, svc.Language, dep, envs)...)
 		}
 	}

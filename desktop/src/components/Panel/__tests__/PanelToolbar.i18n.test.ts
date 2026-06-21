@@ -2,17 +2,19 @@
  * PanelToolbar i18n 测试日志面板工具栏文案。
  *
  * 职责：
- *   - 验证英文 locale 下过滤、规则和日志录制操作文案来自 i18n
+ *   - 验证英文 locale 下过滤、规则和 Time sync 操作文案来自 i18n
  *
  * 边界：
  *   - 不测试过滤 store 的持久规则逻辑
  */
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import PanelToolbar from '../PanelToolbar.vue'
 import { installTestI18n } from '@/test-utils/i18n'
 import { useFilterStore } from '@/stores/filter'
+import { useLogEvidenceStore } from '@/stores/logEvidence'
+import { usePanelStore } from '@/stores/panel'
 
 describe('PanelToolbar i18n', () => {
   beforeEach(() => {
@@ -33,10 +35,10 @@ describe('PanelToolbar i18n', () => {
     expect(wrapper.text()).toContain('Exclude')
     expect(wrapper.find('.chip-input').attributes('placeholder')).toBe('Filter keywords, press Enter to add')
     expect(wrapper.find('.rules-btn').attributes('title')).toBe('Manage filter rules')
-    expect(wrapper.find('.bookmark-btn.start').attributes('title')).toBe('Start log recording')
+    expect(wrapper.find('.bookmark-btn.start').exists()).toBe(false)
   })
 
-  it('紧凑模式保留过滤、规则和书签核心操作', () => {
+  it('紧凑模式保留过滤和规则操作但不再显示书签按钮', () => {
     const filterStore = useFilterStore()
     filterStore.addChip('panel-1', 'timeout', 'include')
 
@@ -52,6 +54,28 @@ describe('PanelToolbar i18n', () => {
     expect(wrapper.find('.chip-input').exists()).toBe(true)
     expect(wrapper.find('.rules-btn').exists()).toBe(true)
     expect(wrapper.find('.save-rule-btn').attributes('title')).toBe('Save as Rule')
-    expect(wrapper.find('.bookmark-btn.start').exists()).toBe(true)
+    expect(wrapper.find('.bookmark-btn.start').exists()).toBe(false)
+  })
+
+  it('多分栏时渲染 Time sync 控制并写入 evidence store', async () => {
+    const panelStore = usePanelStore()
+    const evidenceStore = useLogEvidenceStore()
+    panelStore.splitLeaf(panelStore.root.id, 'h', null, null, 'second')
+    const setTimeSyncEnabled = vi.spyOn(evidenceStore, 'setTimeSyncEnabled')
+
+    const wrapper = mount(PanelToolbar, {
+      props: { panelId: 'panel-1', projectId: 'proj-1', source: null },
+      global: {
+        plugins: [installTestI18n('en-US')],
+        stubs: { RuleManagerModal: { template: '<div />' } },
+      },
+    })
+
+    expect(wrapper.find('[data-test="time-sync-toggle"]').text()).toContain('Time sync')
+    expect(wrapper.find('[data-test="time-sync-toggle"]').attributes('title')).toBe('Align split panes by log time')
+
+    await wrapper.find('[data-test="time-sync-toggle"]').trigger('click')
+
+    expect(setTimeSyncEnabled).toHaveBeenCalledWith(true)
   })
 })

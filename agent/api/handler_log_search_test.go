@@ -260,6 +260,71 @@ func TestLogContextAPI(t *testing.T) {
 	assert.Len(t, body.ItemsByDeployment["svc-c"], 0)
 }
 
+func TestLogContextAPIAllowsDeploymentWithoutProject(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	base := recentLogBase()
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{DeploymentID: "collector-1", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "collector target", Stream: "stderr"},
+		{DeploymentID: "collector-1", RunID: "run-1", Timestamp: base.Add(100 * time.Millisecond), Level: "INFO", Message: "collector after", Stream: "stdout"},
+	}))
+	search, err := app.store.Search(store.SearchParams{DeploymentIDs: []string{"collector-1"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+
+	resp, err := http.Get(srv.URL + "/api/logs/context?deployment=collector-1&id=" + strconv.FormatInt(search.Entries[0].ID, 10))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, search.Entries[0].ID, body.TargetID)
+	assert.Len(t, body.ItemsByDeployment["collector-1"], 2)
+}
+
+func TestLogContextAPIUsesDeploymentBackendWhenStoreMisses(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-api",
+			ProjectID: "proj-1",
+			Name:      "api",
+			Deployments: []model.Deployment{
+				{ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-1"}},
+			},
+		},
+	}
+	base := recentLogBase()
+	backend := &searchLogBackend{
+		contextResult: logbackend.ContextResult{
+			TargetID:   77,
+			AnchorTime: base,
+			Items: []model.LogEntry{
+				{ID: 76, DeploymentID: "collector-internal", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "before", Stream: "stdout"},
+				{ID: 77, DeploymentID: "collector-internal", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
+			},
+		},
+	}
+	app.SetBackendForTest("dep-remote", backend)
+
+	resp, err := http.Get(srv.URL + "/api/logs/context?project=proj-1&deployment=dep-remote&id=77&before_ms=1000&after_ms=1000")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, int64(77), body.TargetID)
+	assert.Equal(t, base, body.AnchorTime)
+	assert.Equal(t, logbackend.ContextQuery{
+		TargetID:     77,
+		DeploymentID: "dep-remote",
+		Before:       time.Second,
+		After:        time.Second,
+	}, backend.contextQuery)
+	require.Len(t, body.ItemsByDeployment["dep-remote"], 2)
+	assert.Equal(t, "dep-remote", body.ItemsByDeployment["dep-remote"][0].DeploymentID)
+}
+
 func TestLogContextPageAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := recentLogBase()
@@ -295,11 +360,14 @@ func TestLogContextPageAPI(t *testing.T) {
 }
 
 type searchLogBackend struct {
-	query   logbackend.SearchQuery
-	entries []model.LogEntry
-	next    logbackend.Cursor
-	hasMore bool
-	err     error
+	query         logbackend.SearchQuery
+	entries       []model.LogEntry
+	next          logbackend.Cursor
+	hasMore       bool
+	err           error
+	contextQuery  logbackend.ContextQuery
+	contextResult logbackend.ContextResult
+	contextErr    error
 }
 
 func (b *searchLogBackend) Query(ctx context.Context, f logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
@@ -309,6 +377,11 @@ func (b *searchLogBackend) Query(ctx context.Context, f logbackend.QueryFilter) 
 func (b *searchLogBackend) Search(ctx context.Context, q logbackend.SearchQuery) ([]model.LogEntry, logbackend.Cursor, bool, error) {
 	b.query = q
 	return b.entries, b.next, b.hasMore, b.err
+}
+
+func (b *searchLogBackend) Context(ctx context.Context, q logbackend.ContextQuery) (logbackend.ContextResult, error) {
+	b.contextQuery = q
+	return b.contextResult, b.contextErr
 }
 
 func (b *searchLogBackend) Subscribe(ctx context.Context, opts logbackend.SubscribeOptions) logbackend.LogStream {

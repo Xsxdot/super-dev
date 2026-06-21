@@ -3,6 +3,7 @@
 // 职责：
 //   - Query：调远端 GET /api/logs，转换为 LogBackend.Query 语义
 //   - Search：调远端 GET /api/log-search，转换为 LogBackend.Search 语义
+//   - Context：优先调远端 GET /api/logs/context，旧远端不支持时退回日志页裁剪
 //   - Subscribe：连接远端 GET /ws/logs WebSocket，转发实时日志
 //
 // 边界：
@@ -24,7 +25,10 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-const remoteRequestTimeout = 3 * time.Second
+const (
+	remoteRequestTimeout       = 3 * time.Second
+	remoteContextFallbackLimit = 5000
+)
 
 // RemoteAgentBackend 通过节点传输读取远端 agent 的日志。
 type RemoteAgentBackend struct {
@@ -130,6 +134,107 @@ func (b *RemoteAgentBackend) Search(ctx context.Context, q SearchQuery) ([]model
 		next = Cursor{Time: last.Timestamp, ID: encodeSQLiteCursor(last.ID)}
 	}
 	return payload.Items, next, payload.HasMore, nil
+}
+
+// Context 从远端 /api/logs/context 拉取单 deployment 上下文。
+func (b *RemoteAgentBackend) Context(ctx context.Context, q ContextQuery) (ContextResult, error) {
+	params := url.Values{}
+	params.Set("deployment", b.deploymentID)
+	params.Set("id", strconv.FormatInt(q.TargetID, 10))
+	if q.Before > 0 {
+		params.Set("before_ms", strconv.FormatInt(q.Before.Milliseconds(), 10))
+	}
+	if q.After > 0 {
+		params.Set("after_ms", strconv.FormatInt(q.After.Milliseconds(), 10))
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)
+	defer cancel()
+	resp, err := b.transport.Do(reqCtx, b.hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/logs/context",
+		Query:  params,
+	})
+	if err != nil {
+		return ContextResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return b.contextFromLogPage(ctx, q)
+	}
+	if resp.StatusCode/100 != 2 {
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusMethodNotAllowed {
+			return b.contextFromLogPage(ctx, q)
+		}
+		return ContextResult{}, fmt.Errorf("remote /api/logs/context returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		TargetID          int64                       `json:"target_id"`
+		AnchorTime        time.Time                   `json:"anchor_time"`
+		ItemsByDeployment map[string][]model.LogEntry `json:"items_by_deployment"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return ContextResult{}, err
+	}
+	return ContextResult{
+		TargetID:   payload.TargetID,
+		AnchorTime: payload.AnchorTime,
+		Items:      payload.ItemsByDeployment[b.deploymentID],
+	}, nil
+}
+
+func (b *RemoteAgentBackend) contextFromLogPage(ctx context.Context, q ContextQuery) (ContextResult, error) {
+	params := url.Values{}
+	params.Set("deployment", b.deploymentID)
+	params.Set("limit", strconv.Itoa(remoteContextFallbackLimit))
+	// 旧远端没有 context API，只支持 before 游标；向 targetID 后方多取一段，
+	// 让同一时间窗口内 target 之后的日志也有机会进入裁剪集合。
+	params.Set("before", strconv.FormatInt(q.TargetID+remoteContextFallbackLimit, 10))
+
+	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)
+	defer cancel()
+	resp, err := b.transport.Do(reqCtx, b.hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/logs",
+		Query:  params,
+	})
+	if err != nil {
+		return ContextResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return ContextResult{}, fmt.Errorf("remote /api/logs fallback returned %d", resp.StatusCode)
+	}
+	var entries []model.LogEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return ContextResult{}, err
+	}
+
+	targetIndex := -1
+	for i, entry := range entries {
+		if entry.ID == q.TargetID {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return ContextResult{}, ErrLogContextNotFound
+	}
+	anchor := entries[targetIndex].Timestamp
+	lower := anchor.Add(-q.Before)
+	upper := anchor.Add(q.After)
+	items := make([]model.LogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Timestamp.Before(lower) || entry.Timestamp.After(upper) {
+			continue
+		}
+		items = append(items, entry)
+	}
+	return ContextResult{
+		TargetID:   q.TargetID,
+		AnchorTime: anchor,
+		Items:      items,
+	}, nil
 }
 
 // Subscribe 连接远端 /ws/logs WebSocket，转发实时日志。

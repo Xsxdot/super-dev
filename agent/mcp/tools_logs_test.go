@@ -12,6 +12,7 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,44 @@ func TestTailLogsAppliesExcludeRule(t *testing.T) {
 	body := result.StructuredContent.(toolPayload)
 	data := body.Data.(map[string]any)
 	assert.Equal(t, 1, data["count"])
+}
+
+func TestTailLogsLevelSinceScansOlderPages(t *testing.T) {
+	base := time.Now().UTC().Add(-time.Minute)
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		logPages: map[string]LogsResponse{
+			"": {
+				Items: []model.LogEntry{
+					{ID: 101, DeploymentID: "dep-api-prod", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "request completed"},
+				},
+				Next: struct {
+					Time string `json:"time,omitempty"`
+					ID   string `json:"id,omitempty"`
+				}{Time: base.Format(time.RFC3339Nano), ID: "100"},
+			},
+			"100": {
+				Items: []model.LogEntry{
+					{ID: 99, DeploymentID: "dep-api-prod", Timestamp: base, Level: "ERROR", Message: "older page failure"},
+				},
+			},
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "tail_logs", `{"deployment_id":"dep-api-prod","limit":1,"level":"error","since":"2h"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	body := result.StructuredContent.(toolPayload)
+	data := body.Data.(map[string]any)
+	assert.Equal(t, 1, data["count"])
+	entries := data["entries"].([]model.LogEntry)
+	require.Len(t, entries, 1)
+	assert.Equal(t, int64(99), entries[0].ID)
+	require.Len(t, client.fetchLogQueries, 2)
+	assert.Empty(t, client.fetchLogQueries[0].Get("before"))
+	assert.Equal(t, "100", client.fetchLogQueries[1].Get("before"))
 }
 
 func TestTailLogsAmbiguousTargetSanitizesCredentialCandidates(t *testing.T) {
@@ -69,6 +108,24 @@ func TestSearchLogsAmbiguousProjectSanitizesCredentialCandidates(t *testing.T) {
 	assertAmbiguousProjectCredentialCandidatesSanitized(t, result)
 }
 
+func TestSearchLogsAddsProjectWhenOnlyDeploymentIsProvided(t *testing.T) {
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		search: LogSearchResponse{
+			Query: "panic",
+			Items: []model.LogEntry{{ID: 1, DeploymentID: "dep-api-prod", Level: "ERROR", Message: "panic"}},
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "search_logs", `{"deployment_id":"dep-api-prod","q":"panic"}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, "p1", client.searchQuery.Get("project"))
+	assert.Equal(t, []string{"dep-api-prod"}, client.searchQuery["deployment"])
+}
+
 func TestGetLogContextCallsAgentWithProjectAndID(t *testing.T) {
 	client := &fakeAgentClient{projects: []model.Project{sampleProject()}}
 	server := NewServer(client)
@@ -78,6 +135,46 @@ func TestGetLogContextCallsAgentWithProjectAndID(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Equal(t, "42", client.contextQuery.Get("id"))
+}
+
+func TestGetLogContextAllowsDeploymentOnly(t *testing.T) {
+	client := &fakeAgentClient{
+		contextResp: LogContextResponse{
+			TargetID: 42,
+			ItemsByDeployment: map[string][]model.LogEntry{
+				"dep-api-prod": {{ID: 42, DeploymentID: "dep-api-prod", Level: "ERROR", Message: "boom"}},
+			},
+		},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "get_log_context", `{"deployment_id":"dep-api-prod","id":42}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Equal(t, "42", client.contextQuery.Get("id"))
+	assert.Empty(t, client.contextQuery.Get("project"))
+	assert.Equal(t, []string{"dep-api-prod"}, client.contextQuery["deployment"])
+}
+
+func TestFollowLogsFetchesFiniteRecentWindow(t *testing.T) {
+	base := time.Now().UTC()
+	client := &fakeAgentClient{
+		projects: []model.Project{sampleProject()},
+		logs: LogsResponse{Items: []model.LogEntry{
+			{ID: 1, DeploymentID: "dep-api-dev", Timestamp: base, Level: "INFO", Message: "ready"},
+		}},
+	}
+	server := NewServer(client)
+
+	result, err := server.callToolForTest(context.Background(), "follow_logs", `{"deployment_id":"dep-api-dev","duration_ms":1,"poll_interval_ms":1,"limit":10}`)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	body := result.StructuredContent.(toolPayload)
+	data := body.Data.(map[string]any)
+	assert.Equal(t, 1, data["count"])
+	assert.GreaterOrEqual(t, len(client.fetchLogQueries), 1)
 }
 
 func TestGetLogContextAmbiguousProjectSanitizesCredentialCandidates(t *testing.T) {

@@ -82,6 +82,32 @@ func nodeStatus(hostID, name string, reachable bool) nodetransport.NodeStatus {
 	}
 }
 
+// nodeStatusWithDeployments 构造一个带指定数量 deployment 实例的可达节点帧，
+// 用于验证「不完整帧不应抹掉已知服务条目」的兜底逻辑。
+func nodeStatusWithDeployments(hostID, name string, deploymentIDs ...string) nodetransport.NodeStatus {
+	status := nodeStatus(hostID, name, true)
+	insts := make([]model.InstanceStatus, 0, len(deploymentIDs))
+	for _, depID := range deploymentIDs {
+		insts = append(insts, model.InstanceStatus{
+			DeploymentID: depID,
+			ServiceID:    depID,
+			ServiceName:  depID,
+			NodeID:       hostID,
+			Metrics:      model.InstanceMetrics{Health: model.HealthRunning},
+		})
+	}
+	status.Deployments = insts
+	return status
+}
+
+func deploymentIDsOf(status nodetransport.NodeStatus) []string {
+	out := make([]string, 0, len(status.Deployments))
+	for _, inst := range status.Deployments {
+		out = append(out, inst.DeploymentID)
+	}
+	return out
+}
+
 func snapshotByHost(snapshot []nodetransport.NodeStatus) map[string]nodetransport.NodeStatus {
 	out := map[string]nodetransport.NodeStatus{}
 	for _, status := range snapshot {
@@ -212,4 +238,83 @@ func TestRegistryIgnoresFramesOutsideTransportCovers(t *testing.T) {
 		_, ok := reg.SnapshotOf("h2")
 		return ok
 	}, 100*time.Millisecond, 10*time.Millisecond)
+}
+
+// TestRegistryKeepsDeploymentsOnIncompleteReachableFrame 复现「节点中心服务数
+// 6→1→6 跳变」：先收到带 3 个 deployment 的完整帧，再收到一个 reachable=true
+// 但 deployment 数骤减的不完整帧（实时采集瞬时短缺）。Registry 应保留上一帧
+// 已知的 deployment 列表，避免把瞬时短缺渲染成「服务消失」。
+func TestRegistryKeepsDeploymentsOnIncompleteReachableFrame(t *testing.T) {
+	tr := newFakeTransport("h1")
+	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{StaleAfter: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg.Start(ctx)
+
+	// 完整帧：3 个服务。
+	tr.ch <- []nodetransport.NodeStatus{nodeStatusWithDeployments("h1", "local-01", "d1", "d2", "d3")}
+	require.Eventually(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && len(got.Deployments) == 3
+	}, time.Second, 10*time.Millisecond)
+
+	// 不完整帧：reachable 仍为 true，但只剩 1 个 deployment。
+	tr.ch <- []nodetransport.NodeStatus{nodeStatusWithDeployments("h1", "local-01", "d1")}
+
+	// 保留上一帧的 3 个服务，不应回退到 1。
+	require.Never(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && len(got.Deployments) != 3
+	}, 200*time.Millisecond, 10*time.Millisecond)
+
+	got, ok := reg.SnapshotOf("h1")
+	require.True(t, ok)
+	assert.ElementsMatch(t, []string{"d1", "d2", "d3"}, deploymentIDsOf(got))
+}
+
+// TestRegistryAcceptsCompleteDeploymentFrame 确认兜底不会卡住正常更新：
+// 当新帧 deployment 数不少于上一帧时，应正常覆盖（含服务上线带来的增长）。
+func TestRegistryAcceptsCompleteDeploymentFrame(t *testing.T) {
+	tr := newFakeTransport("h1")
+	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{StaleAfter: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg.Start(ctx)
+
+	tr.ch <- []nodetransport.NodeStatus{nodeStatusWithDeployments("h1", "local-01", "d1", "d2")}
+	require.Eventually(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && len(got.Deployments) == 2
+	}, time.Second, 10*time.Millisecond)
+
+	// 新增一个服务，数量增长，应正常覆盖为 3。
+	tr.ch <- []nodetransport.NodeStatus{nodeStatusWithDeployments("h1", "local-01", "d1", "d2", "d3")}
+	require.Eventually(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && len(got.Deployments) == 3
+	}, time.Second, 10*time.Millisecond)
+}
+
+// TestRegistryDropsDeploymentsWhenNodeUnreachable 确认兜底只针对 reachable 帧：
+// 节点真正变为 unreachable 时，deployments 应正常清空/更新，不被旧值粘住。
+func TestRegistryDropsDeploymentsWhenNodeUnreachable(t *testing.T) {
+	tr := newFakeTransport("h1")
+	reg := noderegistry.New([]nodetransport.NodeTransport{tr}, noderegistry.Options{StaleAfter: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg.Start(ctx)
+
+	tr.ch <- []nodetransport.NodeStatus{nodeStatusWithDeployments("h1", "local-01", "d1", "d2", "d3")}
+	require.Eventually(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && len(got.Deployments) == 3
+	}, time.Second, 10*time.Millisecond)
+
+	// 节点不可达：deployments 短缺是真实的，应如实反映。
+	unreachable := nodeStatus("h1", "local-01", false)
+	tr.ch <- []nodetransport.NodeStatus{unreachable}
+	require.Eventually(t, func() bool {
+		got, ok := reg.SnapshotOf("h1")
+		return ok && !got.Reachable && len(got.Deployments) == 0
+	}, time.Second, 10*time.Millisecond)
 }

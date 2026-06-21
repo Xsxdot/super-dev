@@ -27,7 +27,10 @@ type fakeAgentClient struct {
 	lastDebugCredentialsQuery   url.Values
 	rules                       []model.LogRule
 	logs                        LogsResponse
+	logPages                    map[string]LogsResponse
+	fetchLogQueries             []url.Values
 	search                      LogSearchResponse
+	searchQuery                 url.Values
 	contextResp                 LogContextResponse
 	contextQuery                url.Values
 	debugSessions               []DebugSession
@@ -142,11 +145,24 @@ func (f *fakeAgentClient) ProjectRules(context.Context, string) ([]model.LogRule
 	return f.rules, nil
 }
 
-func (f *fakeAgentClient) FetchDeploymentLogs(context.Context, string, url.Values) (LogsResponse, error) {
+func (f *fakeAgentClient) FetchDeploymentLogs(_ context.Context, _ string, q url.Values) (LogsResponse, error) {
+	copied := url.Values{}
+	for key, values := range q {
+		copied[key] = append([]string{}, values...)
+	}
+	f.fetchLogQueries = append(f.fetchLogQueries, copied)
+	if f.logPages != nil {
+		return f.logPages[q.Get("before")], nil
+	}
 	return f.logs, nil
 }
 
-func (f *fakeAgentClient) SearchLogs(context.Context, url.Values) (LogSearchResponse, error) {
+func (f *fakeAgentClient) SearchLogs(_ context.Context, q url.Values) (LogSearchResponse, error) {
+	copied := url.Values{}
+	for key, values := range q {
+		copied[key] = append([]string{}, values...)
+	}
+	f.searchQuery = copied
 	return f.search, nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/configchange"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/vscode"
 )
@@ -184,6 +185,11 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	// 填充空 ID，并防止本项目新建 deployment 复用其他项目的运行态身份。
 	used := a.projectIdentitySetLocked(idx)
 	assignIDsAvoiding(&candidate, &used)
+	if validation := configchange.Validate(candidate, configchange.ChangeRequest{Kind: configchange.KindProjectUpsert}); !validation.OK {
+		a.mu.Unlock()
+		jsonError(w, http.StatusBadRequest, strings.Join(validation.Errors, "; "))
+		return
+	}
 	if errs := remoteHostReferenceErrors(candidate, knownHosts); len(errs) > 0 {
 		a.mu.Unlock()
 		jsonError(w, http.StatusBadRequest, strings.Join(errs, "; "))

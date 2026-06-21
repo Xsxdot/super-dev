@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { save } from '@tauri-apps/plugin-dialog'
 import { useFilterStore } from '@/stores/filter'
-import { useBookmarkStore } from '@/stores/bookmark'
+import { useLogEvidenceStore } from '@/stores/logEvidence'
+import { usePanelStore } from '@/stores/panel'
 import type { PanelSource } from '@/stores/panel'
 import RuleManagerModal from './RuleManagerModal.vue'
 const props = defineProps<{
@@ -13,24 +13,15 @@ const props = defineProps<{
   compact?: boolean
 }>()
 
-const emit = defineEmits<{
-  endBookmark: []
-}>()
-
 const filterStore = useFilterStore()
-const bookmarkStore = useBookmarkStore()
+const evidenceStore = useLogEvidenceStore()
+const panelStore = usePanelStore()
 const { t } = useI18n()
-
-// 当前面板订阅的 deployment 日志键（deployment 单源）。
-const deploymentId = computed(() =>
-  props.source?.type === 'deployment' ? props.source.deploymentId : null,
-)
 
 const chipInput = ref('')
 const showRules = ref(false)
 const rulesInitialMode = ref<'list' | 'current'>('list')
 const panel = computed(() => filterStore.getPanel(props.panelId))
-const bookmark = computed(() => bookmarkStore.getBookmark(props.panelId))
 const rules = computed(() => props.projectId ? (filterStore.projectRules[props.projectId] ?? []) : [])
 
 function submitChip() {
@@ -39,13 +30,6 @@ function submitChip() {
     filterStore.addChip(props.panelId, p, panel.value.nextChipType)
   }
   chipInput.value = ''
-}
-
-function startBookmark() {
-  bookmarkStore.startBookmark(props.panelId, deploymentId.value)
-}
-function endBookmark() {
-  emit('endBookmark')
 }
 
 function fillChipInput(text: string) {
@@ -58,46 +42,6 @@ function openRuleManager(mode: 'list' | 'current') {
   if (!props.projectId) return
   rulesInitialMode.value = mode
   showRules.value = true
-}
-
-function clearBookmark() {
-  bookmarkStore.clearBookmark(props.panelId)
-}
-async function copyBookmark() {
-  const text = bookmarkStore.formatBookmark(props.panelId)
-  if (!text.trim()) return
-  await navigator.clipboard.writeText(text)
-}
-
-function resolveExportPath(selected: string, defaultName: string): string {
-  if (/\.(log|txt)$/i.test(selected)) return selected
-  const sep = selected.includes('\\') ? '\\' : '/'
-  return selected.endsWith(sep) ? `${selected}${defaultName}` : `${selected}${sep}${defaultName}`
-}
-
-async function exportBookmark() {
-  const text = bookmarkStore.formatBookmark(props.panelId)
-  if (!text.trim()) {
-    window.alert(t('panel.bookmark.noExport'))
-    return
-  }
-
-  const defaultName = `superdev-log-${Date.now()}.log`
-  const selected = await save({
-    defaultPath: defaultName,
-    title: t('panel.bookmark.exportTitle'),
-    filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
-  })
-  if (!selected) return
-
-  const filePath = resolveExportPath(selected, defaultName)
-  try {
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-    await writeTextFile(filePath, text)
-  } catch (err) {
-    console.error('[SuperDev] export bookmark failed:', err)
-    window.alert(t('common.exportFailed', { message: err instanceof Error ? err.message : String(err) }))
-  }
 }
 </script>
 
@@ -205,21 +149,18 @@ async function exportBookmark() {
 
     <div class="divider" />
 
-    <!-- 书签区 -->
-    <template v-if="!bookmark || bookmark.state === 'idle'">
-      <button class="bookmark-btn start" :title="t('panel.bookmark.start')" @click="startBookmark">⏺</button>
-    </template>
-    <template v-else-if="bookmark.state === 'recording'">
-      <span class="record-count">● {{ t('panel.bookmark.count', { count: bookmark.lockedLogs.length }) }}</span>
-      <button class="bookmark-btn stop" :title="t('panel.bookmark.stop')" @click="endBookmark">⏹</button>
-    </template>
-    <template v-else>
-      <span class="done-count">{{ t('panel.bookmark.count', { count: bookmark.lockedLogs.length }) }}</span>
-      <button class="icon-btn" :title="t('common.copy')" @click="copyBookmark">⎘</button>
-      <button class="icon-btn" :title="t('common.export')" @click="exportBookmark">↑</button>
-      <button class="icon-btn" :title="t('common.clear')" @click="clearBookmark">✕</button>
-      <button class="bookmark-btn start" :title="t('panel.bookmark.restart')" @click="startBookmark">⏺</button>
-    </template>
+    <!-- 多分栏时才显示 Time sync；单栏没有同步对象，显示开关会制造无效状态。 -->
+    <button
+      v-if="panelStore.allLeaves.length > 1"
+      type="button"
+      class="time-sync-btn"
+      data-test="time-sync-toggle"
+      :class="{ active: evidenceStore.timeSyncEnabled }"
+      :title="t('panel.evidence.timeSyncTitle')"
+      @click="evidenceStore.setTimeSyncEnabled(!evidenceStore.timeSyncEnabled)"
+    >
+      {{ t('panel.evidence.timeSync') }}
+    </button>
   </div>
 </template>
 
@@ -414,6 +355,30 @@ async function exportBookmark() {
 }
 .save-rule-icon {
   display: none;
+}
+
+.time-sync-btn {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  border-radius: 5px;
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.time-sync-btn.active {
+  border-color: rgba(54, 207, 201, 0.36);
+  background: rgba(54, 207, 201, 0.1);
+  color: #36cfc9;
+}
+
+.time-sync-btn:hover {
+  border-color: rgba(88, 166, 255, 0.45);
+  color: var(--text-primary);
 }
 
 .bookmark-btn {

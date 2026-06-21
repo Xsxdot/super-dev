@@ -105,6 +105,10 @@ function removeDep() {
           <option value="go">Go</option>
           <option value="node">Node</option>
           <option value="python">Python</option>
+          <option value="java">Java</option>
+          <option value="kotlin">Kotlin</option>
+          <option value="rust">Rust</option>
+          <option value="cpp">C/C++</option>
         </select>
       </label>
       <button type="button" class="svc-remove" data-test="remove-service" @click="emit('remove')">{{ t('common.delete') }}</button>

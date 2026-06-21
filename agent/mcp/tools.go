@@ -89,6 +89,17 @@ func tailLogsInputSchema() map[string]any {
 	return schema
 }
 
+func followLogsInputSchema() map[string]any {
+	schema := targetInputSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["limit"] = map[string]any{"type": "integer", "minimum": 1}
+	properties["level"] = map[string]any{"type": "string"}
+	properties["duration_ms"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 30000}
+	properties["poll_interval_ms"] = map[string]any{"type": "integer", "minimum": 1}
+	properties["apply_project_rules"] = map[string]any{"type": "boolean"}
+	return schema
+}
+
 func searchLogsInputSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -1378,11 +1389,21 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "tail_logs",
 				Title:       "Tail logs",
-				Description: "Fetch recent deployment logs and optionally apply project log rules.",
+				Description: "Fetch a finite recent deployment log page and optionally scan older pages for level/since filters.",
 				InputSchema: tailLogsInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},
 			Handler: s.tailLogsTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "follow_logs",
+				Title:       "Follow logs",
+				Description: "Poll recent deployment logs for a bounded duration; use for short tail -f style observation.",
+				InputSchema: followLogsInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.followLogsTool,
 		},
 		{
 			Tool: Tool{
@@ -1398,7 +1419,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "get_log_context",
 				Title:       "Get log context",
-				Description: "Fetch cross-service log context around one log entry.",
+				Description: "Fetch log context around one log entry by project or deployment.",
 				InputSchema: logContextInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},

@@ -266,8 +266,8 @@ export interface WebEntrypointConfig {
   ai_debug?: WebAIDebugConfig
 }
 
-export type ServiceLanguage = 'go' | 'node' | 'python'
-export type CodeDebugProvider = 'go' | 'python' | 'node'
+export type ServiceLanguage = 'go' | 'node' | 'python' | 'java' | 'kotlin' | 'rust' | 'cpp'
+export type CodeDebugProvider = 'go' | 'python' | 'node' | 'jvm' | 'native'
 export type CodeDebugMode = 'launch'
 export type CodeDebugPolicy = 'auto' | 'enabled' | 'disabled'
 

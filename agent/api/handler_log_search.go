@@ -265,30 +265,47 @@ func (a *App) searchDeploymentBackends(ctx context.Context, deploymentIDs []stri
 func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	projectID := q.Get("project")
-	if projectID == "" {
-		jsonError(w, http.StatusBadRequest, "project is required")
-		return
-	}
 	targetID, err := strconv.ParseInt(q.Get("id"), 10, 64)
 	if err != nil || targetID <= 0 {
 		jsonError(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	deploymentIDs, ok := a.projectDeploymentIDs(projectID, q["deployment"])
+	deploymentIDs, status, ok := a.logContextDeploymentIDs(projectID, q["deployment"])
 	if !ok {
-		jsonError(w, http.StatusNotFound, "project not found")
+		if status == http.StatusBadRequest {
+			jsonError(w, status, "project or deployment is required")
+			return
+		}
+		jsonError(w, status, "project not found")
 		return
 	}
 	beforeMS := parseBoundedInt(q.Get("before_ms"), defaultContextMS, maxContextMS)
 	afterMS := parseBoundedInt(q.Get("after_ms"), defaultContextMS, maxContextMS)
+	before := time.Duration(beforeMS) * time.Millisecond
+	after := time.Duration(afterMS) * time.Millisecond
 
 	result, err := a.store.FetchContext(store.ContextParams{
 		TargetID:      targetID,
 		DeploymentIDs: deploymentIDs,
-		Before:        time.Duration(beforeMS) * time.Millisecond,
-		After:         time.Duration(afterMS) * time.Millisecond,
+		Before:        before,
+		After:         after,
 	})
 	if errors.Is(err, store.ErrLogEntryNotFound) {
+		if len(deploymentIDs) == 1 {
+			backendResult, backendErr := a.fetchBackendLogContext(r.Context(), deploymentIDs[0], targetID, before, after)
+			if backendErr == nil {
+				jsonOK(w, logContextResponse{
+					TargetID:          backendResult.TargetID,
+					AnchorTime:        backendResult.AnchorTime,
+					ItemsByDeployment: map[string][]model.LogEntry{deploymentIDs[0]: backendResult.Items},
+				})
+				return
+			}
+			if !errors.Is(backendErr, logbackend.ErrLogContextNotFound) {
+				jsonError(w, http.StatusInternalServerError, "failed to fetch backend log context: "+backendErr.Error())
+				return
+			}
+		}
 		jsonError(w, http.StatusNotFound, "log entry not found")
 		return
 	}
@@ -301,6 +318,45 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		AnchorTime:        result.AnchorTime,
 		ItemsByDeployment: result.ItemsByDeployment,
 	})
+}
+
+func (a *App) logContextDeploymentIDs(projectID string, requested []string) ([]string, int, bool) {
+	if projectID != "" {
+		deploymentIDs, ok := a.projectDeploymentIDs(projectID, requested)
+		if !ok {
+			return nil, http.StatusNotFound, false
+		}
+		return deploymentIDs, http.StatusOK, true
+	}
+	if len(requested) == 0 {
+		return nil, http.StatusBadRequest, false
+	}
+	return requested, http.StatusOK, true
+}
+
+func (a *App) fetchBackendLogContext(ctx context.Context, deploymentID string, targetID int64, before time.Duration, after time.Duration) (logbackend.ContextResult, error) {
+	backend, ok := a.lookupBackend(deploymentID)
+	if !ok {
+		return logbackend.ContextResult{}, logbackend.ErrLogContextNotFound
+	}
+	contextBackend, ok := backend.(logbackend.ContextReader)
+	if !ok {
+		return logbackend.ContextResult{}, logbackend.ErrLogContextNotFound
+	}
+	result, err := contextBackend.Context(ctx, logbackend.ContextQuery{
+		TargetID:     targetID,
+		DeploymentID: deploymentID,
+		Before:       before,
+		After:        after,
+	})
+	if err != nil {
+		return logbackend.ContextResult{}, err
+	}
+	for i := range result.Items {
+		// 远端 collector 返回的是远端内部 collector ID；中心侧上下文必须稳定显示为项目 deployment ID。
+		result.Items[i].DeploymentID = deploymentID
+	}
+	return result, nil
 }
 
 // fetchLogContextPage 处理 GET /api/logs/context/page，按单服务时间游标继续读取上下文。

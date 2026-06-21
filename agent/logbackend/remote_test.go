@@ -126,6 +126,85 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 	assert.Equal(t, "error occurred", got[0].Message)
 }
 
+func TestRemoteAgentBackend_ContextReturnsDeploymentEntries(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/logs/context", r.URL.Path)
+		assert.Equal(t, "svc-1", r.URL.Query().Get("deployment"))
+		assert.Equal(t, "42", r.URL.Query().Get("id"))
+		assert.Equal(t, "1000", r.URL.Query().Get("before_ms"))
+		assert.Equal(t, "2000", r.URL.Query().Get("after_ms"))
+		resp := struct {
+			TargetID          int64                       `json:"target_id"`
+			AnchorTime        time.Time                   `json:"anchor_time"`
+			ItemsByDeployment map[string][]model.LogEntry `json:"items_by_deployment"`
+		}{
+			TargetID:   42,
+			AnchorTime: now,
+			ItemsByDeployment: map[string][]model.LogEntry{
+				"svc-1": {{ID: 42, DeploymentID: "svc-1", Timestamp: now, Message: "target", Stream: "stderr"}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{baseURL: srv.URL})
+	got, err := b.Context(context.Background(), logbackend.ContextQuery{
+		TargetID: 42,
+		Before:   time.Second,
+		After:    2 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), got.TargetID)
+	assert.Equal(t, now, got.AnchorTime)
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "target", got.Items[0].Message)
+}
+
+func TestRemoteAgentBackend_ContextFallsBackToLogsForOldRemote(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	var sawContext bool
+	var sawLogs bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/logs/context":
+			sawContext = true
+			http.Error(w, "project is required", http.StatusBadRequest)
+		case "/api/logs":
+			sawLogs = true
+			assert.Equal(t, "svc-1", r.URL.Query().Get("deployment"))
+			assert.NotEmpty(t, r.URL.Query().Get("before"))
+			entries := []model.LogEntry{
+				{ID: 41, DeploymentID: "svc-1", Timestamp: now.Add(-500 * time.Millisecond), Message: "before"},
+				{ID: 42, DeploymentID: "svc-1", Timestamp: now, Message: "target"},
+				{ID: 43, DeploymentID: "svc-1", Timestamp: now.Add(500 * time.Millisecond), Message: "after"},
+				{ID: 44, DeploymentID: "svc-1", Timestamp: now.Add(3 * time.Second), Message: "outside"},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(entries)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{baseURL: srv.URL})
+	got, err := b.Context(context.Background(), logbackend.ContextQuery{
+		TargetID: 42,
+		Before:   time.Second,
+		After:    time.Second,
+	})
+	require.NoError(t, err)
+	assert.True(t, sawContext)
+	assert.True(t, sawLogs)
+	assert.Equal(t, int64(42), got.TargetID)
+	assert.Equal(t, now, got.AnchorTime)
+	require.Len(t, got.Items, 3)
+	assert.Equal(t, []int64{41, 42, 43}, []int64{got.Items[0].ID, got.Items[1].ID, got.Items[2].ID})
+}
+
 func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	now := time.Now().Truncate(time.Millisecond)
 	entry := model.LogEntry{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "live", Stream: "stdout"}

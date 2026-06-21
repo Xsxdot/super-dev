@@ -4,7 +4,8 @@
 
 | 你的处境 | 使用工具 | 输入前提 |
 | --- | --- | --- |
-| 只想看最近发生了什么，或盯一个服务 | `tail_logs` | project/service/deployment 至少能定位一个 |
+| 只想看最近一页发生了什么 | `tail_logs` | project/service/deployment 至少能定位一个 |
+| 想像 `tail -f` 一样短时观察新日志 | `follow_logs` | project/service/deployment 至少能定位一个，设置有限 `duration_ms` |
 | 知道关键词，要跨服务找特定错误 | `search_logs` | `q` 必填，可加 project/deployment 限定 |
 | 已锁定某条日志，想看前后上下文 | `get_log_context` | 日志 `id` 必填 |
 | 要分析请求链路或 trace | `analyze_trace_logs` | trace_id/request_id 或明确时间窗 |
@@ -18,9 +19,20 @@
 - 验证重启、部署、配置变更后的即时结果。
 - 配合 `apply_project_rules` 应用项目日志规则。
 
-输出特点：近期日志列表，适合观察时间顺序和单服务局部上下文。
+输出特点：有限的近期日志快照，适合观察时间顺序和单服务局部上下文。它不是无限 `tail -f`；MCP 调用必须返回，所以只会返回一批结果。传入 `level` 或 `since` 时，工具会向前翻页扫描有限窗口，避免只筛第一页导致漏掉刚在上一页的错误。
 
-常见误用：用 `tail_logs` 做历史关键词搜索。已知关键词时改用 `search_logs`。
+常见误用：用 `tail_logs` 做历史关键词搜索或长时间盯日志。已知关键词时改用 `search_logs`；查某个时间窗错误时改用 `summarize_error_window`；需要短时跟随新日志时用 `follow_logs`。
+
+## `follow_logs`
+
+典型场景：
+
+- 重启、部署、配置变更后，短时间观察是否继续出新日志。
+- 用户明确说“盯一下日志”“看接下来几秒有没有报错”。
+
+输出特点：在有限 `duration_ms` 内轮询近期日志并去重返回，模拟短时 `tail -f`。它仍然不是无限流，避免 MCP 工具调用长时间不结束。
+
+常见误用：用 `follow_logs` 查历史错误。历史错误、订单号、trace、request_id 仍应使用 `search_logs` 或 `summarize_error_window`。
 
 ## `search_logs`
 

@@ -414,6 +414,18 @@ describe('configDraft', () => {
     expect(validateDraft(draft).some(e => e.includes('服务名'))).toBe(true)
   })
 
+  it('validateDraft：同一 service 下 deployment env_name 重复报错', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments.push({
+      ...draft.services[0].deployments[0],
+      id: 'd2',
+      command: 'go run ./alt',
+      runtime: { type: 'command', command: 'go run ./alt' },
+    })
+
+    expect(validateDraft(draft).some(e => e.includes('同一环境只能配置一个部署'))).toBe(true)
+  })
+
   it('validateDraft：local deployment 命令为空报错', () => {
     const draft = projectToDraft(makeProject())
     draft.services[0].deployments[0].runtime!.command = ''

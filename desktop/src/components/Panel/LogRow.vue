@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { DisplayLogEntry } from '@/lib/logEngine'
+import type { EvidencePin } from '@/stores/logEvidence'
+import LogPinBadge from './LogPinBadge.vue'
 import SelectableLogText from './SelectableLogText.vue'
 
 const props = defineProps<{
   log: DisplayLogEntry
   serviceName: string
   highlighted: boolean
+  evidencePin?: EvidencePin | null
+  evidenceFlash?: boolean
+  timeAnchor?: boolean
 }>()
 
 const emit = defineEmits<{
   'selection-change': [text: string | null, rect: DOMRect | null]
+  'toggle-pin': [log: DisplayLogEntry]
+  'edit-pin': [pin: EvidencePin, event: MouseEvent]
+  'row-context-menu': [event: MouseEvent, log: DisplayLogEntry]
 }>()
 
 const SERVICE_COLORS = ['#58a6ff', '#bc8cff', '#f78166', '#ffa657', '#7ce38b', '#39d353', '#a5d6ff', '#ff7b72']
@@ -29,6 +37,8 @@ const levelColor = computed(() => {
 })
 
 const rowBg = computed(() => {
+  if (props.evidenceFlash) return 'rgba(88,166,255,0.18)'
+  if (props.timeAnchor) return 'rgba(54,207,201,0.12)'
   if (props.highlighted) {
     if (props.log.level === 'ERROR') return 'rgba(248,81,73,0.15)'
     if (props.log.level === 'WARN') return 'rgba(210,153,34,0.10)'
@@ -53,7 +63,22 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
 </script>
 
 <template>
-  <div class="log-row" :style="{ background: rowBg }" :data-log-id="log.id">
+  <div
+    class="log-row"
+    :class="{ 'has-pin': !!evidencePin, 'is-time-anchor': !!timeAnchor }"
+    :style="{ background: rowBg }"
+    :data-log-id="log.id"
+    @dblclick.stop="emit('toggle-pin', log)"
+    @contextmenu.prevent="emit('row-context-menu', $event, log)"
+  >
+    <!-- 固定宽度的 pin slot 避免打钉后虚拟列表行宽变化造成视觉抖动。 -->
+    <span class="pin-slot" data-test="log-pin-slot">
+      <LogPinBadge
+        v-if="evidencePin"
+        :pin="evidencePin"
+        @edit="(pin, event) => emit('edit-pin', pin, event)"
+      />
+    </span>
     <span class="ts">{{ time }}</span>
     <span class="svc" :style="{ color: serviceColor(serviceName) }">[{{ serviceName }}]</span>
     <span class="level" :style="{ color: levelColor }">{{ log.level.padEnd(5) }}</span>
@@ -65,7 +90,7 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
 <style scoped>
 .log-row {
   display: grid;
-  grid-template-columns: 76px minmax(98px, 150px) 58px minmax(0, 1fr) auto;
+  grid-template-columns: 30px 76px minmax(98px, 150px) 58px minmax(0, 1fr) auto;
   align-items: start;
   column-gap: 8px;
   padding: 2px 8px;
@@ -75,6 +100,24 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
   line-height: 1.58;
   white-space: pre-wrap;
   word-break: break-word;
+}
+:deep(.selectable-msg) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.log-row.has-pin {
+  box-shadow: inset 2px 0 0 rgba(88, 166, 255, 0.45);
+}
+.log-row.is-time-anchor {
+  outline: 1px solid rgba(54, 207, 201, 0.22);
+}
+.pin-slot {
+  width: 30px;
+  min-width: 30px;
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 .ts {
   color: var(--text-tertiary);
@@ -95,5 +138,31 @@ const repeatCount = computed(() => props.log.repeat_count ?? 1)
   padding: 0 4px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.06);
+}
+
+@container (max-width: 520px) {
+  .log-row {
+    grid-template-columns: 30px 70px 50px minmax(0, 1fr) auto;
+    column-gap: 6px;
+    padding: 2px 6px;
+    font-size: 10.5px;
+  }
+
+  .svc {
+    display: none;
+  }
+}
+
+@container (max-width: 380px) {
+  .log-row {
+    grid-template-columns: 28px 62px 42px minmax(0, 1fr) auto;
+    column-gap: 5px;
+    font-size: 10px;
+  }
+
+  .pin-slot {
+    width: 28px;
+    min-width: 28px;
+  }
 }
 </style>

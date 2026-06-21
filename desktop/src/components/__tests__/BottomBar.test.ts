@@ -3,11 +3,11 @@
  *
  * 职责：
  *   - 验证底部栏面板服务默认选中
- *   - 验证日志录制可开始、停止并产出可复制/导出的同步书签
+ *   - 验证证据入口可显示 pin 数并打开证据抽屉
  *
  * 边界：
  *   - 不测试 Tauri 文件对话框真实行为
- *   - 不建立 WebSocket 连接，日志通过 deploymentLogStore 直接注入
+ *   - 不建立 WebSocket 连接
  */
 import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
@@ -16,12 +16,10 @@ import { nextTick } from 'vue'
 import BottomBar from '../BottomBar.vue'
 import { api as agentApi } from '../../api/agent'
 import { useAgentStore } from '../../stores/agent'
-import { useBookmarkStore } from '../../stores/bookmark'
-import { useDeploymentLogStore } from '../../stores/deploymentLog'
+import { useLogEvidenceStore } from '../../stores/logEvidence'
 import { useOperationApprovalStore } from '../../stores/operationApproval'
 import { usePanelStore } from '../../stores/panel'
 import { useDeploymentNodeSelectionStore } from '../../stores/deploymentNodeSelection'
-import { toDisplayEntry } from '../../lib/logEngine'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { LogEntry, Project, Service } from '../../api/agent'
 
@@ -171,62 +169,44 @@ describe('BottomBar', () => {
 
 
 
-  it('日志录制开始时登记面板和服务，停止后显示复制导出入口', async () => {
+  it('证据入口显示 pin 数并打开悬浮抽屉', async () => {
     const { wrapper, panelStore, apiDep } = await mountBottomBarWithServices()
-    const bookmarkStore = useBookmarkStore()
-    const deploymentLogStore = useDeploymentLogStore()
+    const evidenceStore = useLogEvidenceStore()
     const apiPanel = panelStore.allLeaves.find(leaf => leaf.serviceId === apiDep)!
 
-    await wrapper.find('[data-test="sync-toggle"]').setValue(true)
-    await wrapper.find('[data-test="sync-record"]').trigger('click')
-
-    expect(bookmarkStore.syncPanelIds.has(apiPanel.id)).toBe(true)
-    expect(bookmarkStore.getBookmark(apiPanel.id)?.serviceId).toBe(apiDep)
-    expect(bookmarkStore.syncRecording).toBe(true)
-    expect(wrapper.find('[data-test="sync-copy"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="sync-export"]').exists()).toBe(false)
-
-    const start = bookmarkStore.getBookmark(apiPanel.id)!.startTime!
-    const ts = new Date(start.getTime() + 1000).toISOString()
-    deploymentLogStore.sessions.set(apiDep, {
-      refCount: 1,
-      ws: null,
-      logs: [toDisplayEntry(makeLog(apiDep, 'sync captured', ts))],
-      hasMoreHistory: true,
-      oldestCursor: null,
-      loadingMoreHistory: false,
-      lastSeen: null,
-      reconnectAttempts: 0,
-      discontinuous: false,
+    evidenceStore.addPin({
+      panelId: apiPanel.id,
+      trackId: apiPanel.id,
+      trackLabel: 'api · dev',
+      sourceKey: apiDep,
+      log: makeLog(apiDep, 'sync captured', '2026-06-20T10:00:00.000Z'),
     })
-    vi.advanceTimersByTime(5000)
+    await nextTick()
 
-    await wrapper.find('[data-test="sync-record"]').trigger('click')
+    expect(wrapper.find('[data-test="bottom-evidence-open"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="sync-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="sync-record"]').exists()).toBe(false)
 
-    expect(bookmarkStore.syncRecording).toBe(false)
-    expect(bookmarkStore.getBookmark(apiPanel.id)?.lockedLogs.map(l => l.message)).toEqual([
-      'sync captured',
-    ])
-    expect(wrapper.find('[data-test="sync-copy"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="sync-export"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="sync-copy"]').text()).not.toContain('Copy')
-    expect(wrapper.find('[data-test="sync-export"]').text()).not.toContain('Export')
+    await wrapper.find('[data-test="bottom-evidence-open"]').trigger('click')
+
+    expect(evidenceStore.drawerOpen).toBe(true)
+    expect(wrapper.find('[data-test="evidence-drawer"]').exists()).toBe(true)
   })
 
-  it('渲染统一后的日志录制文案', async () => {
+  it('渲染统一后的证据文案', async () => {
     const { wrapper: zhWrapper } = await mountBottomBarWithServices()
 
     expect(zhWrapper.text()).toContain('打开的部署')
-    expect(zhWrapper.text()).toContain('日志录制')
+    expect(zhWrapper.text()).toContain('证据')
     expect(zhWrapper.text()).not.toContain('同步录制')
-    expect(zhWrapper.text()).not.toContain('同步证据采集')
+    expect(zhWrapper.text()).not.toContain('日志录制')
 
     const { wrapper: enWrapper } = await mountBottomBarWithServices('en-US')
 
     expect(enWrapper.text()).toContain('Open Deployments')
-    expect(enWrapper.text()).toContain('Log Recording')
+    expect(enWrapper.text()).toContain('Evidence')
     expect(enWrapper.text()).not.toContain('Sync Recording')
-    expect(enWrapper.text()).not.toContain('Sync Evidence Capture')
+    expect(enWrapper.text()).not.toContain('Log Recording')
     expect(enWrapper.text()).toContain('Restart')
     expect(enWrapper.text()).toContain('Stop')
   })
@@ -256,17 +236,15 @@ describe('BottomBar', () => {
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
   })
 
-  it('uses bookmark store as the shared sync enabled source', async () => {
+  it('不再渲染旧的同步录制控件', async () => {
     const { wrapper } = await mountBottomBarWithServices()
-    const bookmarkStore = useBookmarkStore()
 
-    expect(bookmarkStore.syncEnabled).toBe(false)
-
-    await wrapper.find('[data-test="sync-toggle"]').setValue(true)
-    expect(bookmarkStore.syncEnabled).toBe(true)
-
-    await wrapper.find('[data-test="sync-toggle"]').setValue(false)
-    expect(bookmarkStore.syncEnabled).toBe(false)
+    expect(wrapper.find('[data-test="bottom-evidence"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="bottom-evidence-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sync-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="sync-record"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="sync-copy"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="sync-export"]').exists()).toBe(false)
   })
 
   it('renders bottom bar as grouped runtime action clusters', async () => {

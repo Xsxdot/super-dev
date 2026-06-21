@@ -409,7 +409,16 @@ export function validateDraftDetailed(draft: ConfigDraft): ValidationIssue[] {
     }
 
     // 校验每个部署配置
+    const depEnvNames = new Set<string>()
     for (const d of s.deployments) {
+      const envName = d.env_name.trim()
+      if (envName !== '') {
+        if (depEnvNames.has(envName)) {
+          errors.push(issue('config', 'validation.deploymentEnvDuplicate', { service: s.name, env: envName }))
+        } else {
+          depEnvNames.add(envName)
+        }
+      }
       const dep = normalizeDeployment(d)
       const command = (dep.runtime?.command ?? '').trim()
       if (dep.control_mode === 'managed' && dep.runtime?.type === 'command' && command === '') {
