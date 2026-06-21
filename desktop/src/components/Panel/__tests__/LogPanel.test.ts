@@ -908,4 +908,57 @@ describe('LogPanel', () => {
     expect(evidenceStore.pins[0]?.note).toBe('need agent check this spike')
     expect(wrapper.find('[data-test="pin-note-popover"]').exists()).toBe(false)
   })
+
+  it('idle 状态下实时新日志到达不主动 measure 或滚动（防止把用户视口拉走）', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    const logs = [makeLog(1), makeLog(2)]
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue(logs)
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-idle-live',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // 用户向上滚离开底部 → 进入 idle
+    const el = wrapper.find('.log-list').element
+    Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
+    await wrapper.find('.log-list').trigger('scroll')
+
+    // 清掉进入 idle 过程中的调用，只观察「之后实时日志到达」的影响
+    virtualizerMock.measure.mockClear()
+    virtualizerMock.scrollToIndex.mockClear()
+
+    // 实时新日志到达：追加一条并 bump revision，触发 commitDisplay('content')
+    logs.push(makeLog(3))
+    deploymentLogStore.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve, 60)) // 越过 32ms 防抖
+    await nextTick()
+
+    // idle 下实时增量不得主动 measure / 滚动，否则视口被持续拉走
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled()
+    expect(virtualizerMock.measure).not.toHaveBeenCalled()
+  })
 })

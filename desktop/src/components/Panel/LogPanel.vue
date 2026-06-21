@@ -553,7 +553,12 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
   const newCount = entryCount(cachedDisplay.value.items)
   applyItemsCountChange(oldCount, newCount)
   nextTick(() => {
-    measureVirtualizer()
+    // 仅在需要重排布局时主动 measure：过滤重建（可见行集合整体改变），
+    // 或 follow-bottom 即将贴底。idle/anchor/align 下主动 measure 会触发 tanstack
+    // 的 _scrollToOffset 修正，配合实时高频到达持续扰动视口（“一直在滚动”）——
+    // 这种增量由每行的 measureElement 自然处理，无需主动全量 measure。
+    const needMeasure = kind === 'filter' || scrollMachine.intent === 'follow-bottom'
+    if (needMeasure) measureVirtualizer()
     if (kind === 'filter') {
       scrollMachine.onFilterRebuild({ oldCount, newCount })
     } else {
