@@ -86,6 +86,17 @@ describe('filterStore', () => {
     expect(result.filteredCount).toBe(3)
   })
 
+  it('applyFiltersIncremental 只过滤新增尾部条目并追加', () => {
+    const store = useFilterStore()
+    store.addChip('p1', 'keep', 'include')
+    const prev = [makeLog('keep this', 1)]
+    const newTail = [makeLog('drop', 2), makeLog('keep also', 3)]
+
+    const result = store.applyFiltersIncremental('p1', null, prev, newTail)
+
+    expect(result.map(log => log.message)).toEqual(['keep this', 'keep also'])
+  })
+
   it('createRule 新增项目规则并持久化', async () => {
     const store = useFilterStore()
     store.projectRules['proj-1'] = []

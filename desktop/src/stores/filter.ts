@@ -176,31 +176,19 @@ export const useFilterStore = defineStore('filter', () => {
     await saveProjectRules(projectId, next)
   }
 
-  // 核心过滤函数：先应用 LogRule，再应用 chip，并返回最终被隐藏的数量。
-  function applyFiltersWithStats<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): FilterResult<T> {
-    let result = logs
-
-    // 应用项目级 LogRule
+  // matchesFilters 判定单条日志是否通过当前项目规则 + 面板 chip。
+  // 抽出供增量过滤复用，避免实时高频日志触发整缓冲全量 .filter。
+  function matchesFilters(panelId: string, projectId: string | null, log: LogEntry): boolean {
     const rules = projectId ? (projectRules.value[projectId] ?? []) : []
-    const enabledRules = rules.filter(r => r.enabled)
-
-    for (const rule of enabledRules) {
-      if (rule.type === 'include') {
-        result = result.filter(log =>
-          rule.logic === 'and'
-            ? rule.keywords.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-            : rule.keywords.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-        )
-      } else {
-        result = result.filter(log =>
-          rule.logic === 'and'
-            ? !rule.keywords.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-            : !rule.keywords.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-        )
+    for (const rule of rules.filter(r => r.enabled)) {
+      const hit = rule.logic === 'and'
+        ? rule.keywords.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+        : rule.keywords.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+      if (rule.type === 'include' ? !hit : hit) {
+        return false
       }
     }
 
-    // 应用面板临时 chip
     const panel = panelFilters.value[panelId]
     if (panel && panel.chips.length > 0) {
       const includes = panel.chips.filter(c => c.type === 'include').map(c => c.keyword)
@@ -208,25 +196,49 @@ export const useFilterStore = defineStore('filter', () => {
       const logic = panel.logic
 
       if (includes.length > 0) {
-        result = result.filter(log =>
-          logic === 'and'
-            ? includes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-            : includes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-        )
+        const hit = logic === 'and'
+          ? includes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+          : includes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+        if (!hit) return false
       }
       if (excludes.length > 0) {
-        result = result.filter(log =>
-          logic === 'and'
-            ? !excludes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-            : !excludes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
-        )
+        const hit = logic === 'and'
+          ? excludes.every(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+          : excludes.some(kw => log.message.toLowerCase().includes(kw.toLowerCase()))
+        if (hit) return false
       }
     }
+    return true
+  }
+
+  // 核心过滤函数：先应用 LogRule，再应用 chip，并返回最终被隐藏的数量。
+  function applyFiltersWithStats<T extends LogEntry>(panelId: string, projectId: string | null, logs: T[]): FilterResult<T> {
+    const result = logs.filter(log => matchesFilters(panelId, projectId, log))
 
     return {
       logs: result,
       filteredCount: logs.length - result.length,
     }
+  }
+
+  /**
+   * applyFiltersIncremental 只过滤新增尾部条目并追加到已过滤列表。
+   *
+   * 参数：
+   *   - prevFiltered: 上一帧已过滤的展示列表
+   *   - newTail: 本次新追加的实时日志（未过滤）
+   *
+   * 返回：prevFiltered + 通过过滤的 newTail
+   */
+  function applyFiltersIncremental<T extends LogEntry>(
+    panelId: string,
+    projectId: string | null,
+    prevFiltered: T[],
+    newTail: T[],
+  ): T[] {
+    if (newTail.length === 0) return prevFiltered
+    const passed = newTail.filter(log => matchesFilters(panelId, projectId, log))
+    return passed.length === 0 ? prevFiltered : [...prevFiltered, ...passed]
   }
 
   // 核心过滤函数：先应用 LogRule，再应用 chip
@@ -252,7 +264,9 @@ export const useFilterStore = defineStore('filter', () => {
     deleteRule,
     savePanelChipsAsRule,
     toggleRule,
+    matchesFilters,
     applyFiltersWithStats,
+    applyFiltersIncremental,
     applyFilters,
   }
 })
