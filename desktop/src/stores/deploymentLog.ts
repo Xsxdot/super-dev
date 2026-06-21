@@ -158,22 +158,32 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
   }
 
   /**
-   * ingestHistory 将历史日志插入历史前缀，实时后缀保持原位。
+   * ingestHistoryBatch 将一页历史日志批量插入历史前缀，实时后缀保持原位。
    *
    * 注意：
+   *   - 批量页只替换历史前缀一次，避免大页历史逐条 slice/splice 导致 O(n²) 卡顿
    *   - 历史区严格按时间戳有序，用于向上翻页和 anchor 复位
    *   - 不把已有实时日志重新归入历史区，避免分区边界乱跳
    */
-  function ingestHistory(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
-    const entry = toDisplayEntry(raw)
+  function ingestHistoryBatch(session: DeploymentSession, raws: LogEntry[]): DisplayLogEntry[] {
+    if (raws.length === 0) return []
+    const entries = raws.map(toDisplayEntry)
     const history = session.logs.slice(0, session.liveStartIndex)
-    insertSorted(history, entry)
+    // API 可能返回新到旧或旧到新；统一经 insertSorted 合并，确保同 id 替换且顺序稳定。
+    for (const entry of entries) {
+      insertSorted(history, entry)
+    }
     session.logs.splice(0, session.liveStartIndex, ...history)
     session.liveStartIndex = history.length
     trimIfNeeded(session)
     bumpRevision()
     touchSessions()
-    return entry
+    diagnostic('log_store.history_batch_ingest', {
+      added: raws.length,
+      kept: session.logs.length,
+      liveStartIndex: session.liveStartIndex,
+    })
+    return entries
   }
 
   /**
@@ -330,11 +340,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         before: session.oldestCursor?.id,
       })
       const entries = page.items
-      // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
-      for (let i = entries.length - 1; i >= 0; i--) {
-        ingestHistory(session, entries[i])
-      }
-      const displayEntries = entries.map(toDisplayEntry)
+      const displayEntries = ingestHistoryBatch(session, entries)
       if (page.next?.id) {
         session.oldestCursor = { time: page.next.time ?? entries[0]?.timestamp ?? '', id: page.next.id }
       } else if (entries.length > 0) {
