@@ -961,4 +961,49 @@ describe('LogPanel', () => {
     expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled()
     expect(virtualizerMock.measure).not.toHaveBeenCalled()
   })
+
+  it('follow-bottom 状态下被过滤/折叠的新日志（可见行不变）不主动 measure（防止视口上跳）', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    // 可见行固定为 2 条；模拟「被过滤掉/折叠增量」——getLogs 不变，仅 revision 自增
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2)])
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-follow-fold',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // 保持在底部（follow-bottom，默认态），清掉初始化期间的调用
+    virtualizerMock.measure.mockClear()
+    virtualizerMock.scrollToIndex.mockClear()
+
+    // 被过滤/折叠的新日志到达：可见行集合不变，仅 revision 自增
+    deploymentLogStore.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve, 60)) // 越过 32ms 防抖
+    await nextTick()
+
+    // 可见行未变 → 不需要贴底，也就不该 measure（否则 _scrollToOffset 把视口上带）
+    expect(virtualizerMock.measure).not.toHaveBeenCalled()
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled()
+  })
 })

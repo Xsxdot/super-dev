@@ -554,10 +554,15 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
   applyItemsCountChange(oldCount, newCount)
   nextTick(() => {
     // 仅在需要重排布局时主动 measure：过滤重建（可见行集合整体改变），
-    // 或 follow-bottom 即将贴底。idle/anchor/align 下主动 measure 会触发 tanstack
-    // 的 _scrollToOffset 修正，配合实时高频到达持续扰动视口（“一直在滚动”）——
-    // 这种增量由每行的 measureElement 自然处理，无需主动全量 measure。
-    const needMeasure = kind === 'filter' || scrollMachine.intent === 'follow-bottom'
+    // 或 follow-bottom 且可见行真正增长（即将贴底）。
+    // 主动 measure 会触发 tanstack 的 _scrollToOffset 修正——
+    //   - idle/anchor/align 下持续 measure → 视口被持续拉走（“一直在滚动”）；
+    //   - follow 下可见行不变时 measure（被过滤的新日志/折叠增量），没有后续贴底动作
+    //     抵消，_scrollToOffset 会把视口往上带一点（“没新行却上跳”）。
+    // 可见行不变的增量由每行 measureElement 自然处理，无需主动全量 measure。
+    const needMeasure =
+      kind === 'filter' ||
+      (scrollMachine.intent === 'follow-bottom' && newCount > oldCount)
     if (needMeasure) measureVirtualizer()
     if (kind === 'filter') {
       scrollMachine.onFilterRebuild({ oldCount, newCount })
