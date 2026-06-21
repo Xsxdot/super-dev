@@ -127,6 +127,8 @@ func (p productionHostAgentInstaller) UpdateBinary(ctx context.Context, host mod
 type App struct {
 	cfg                    AppConfig
 	mu                     sync.RWMutex
+	closeOnce              sync.Once
+	closeFn                func() // 仅供包内测试注入，生产环境 nil 时执行真实清理。
 	projects               []model.Project
 	managers               map[string]*process.Manager // projectID → manager
 	buf                    *logbuf.Buffer
@@ -496,10 +498,23 @@ func agentTargetSource(hostStore *remote.Store, agentStore *remote.AgentStore) n
 	}
 }
 
-// Close 停止 Buffer 的 flush goroutine 并关闭 Store 数据库连接，释放所有资源。
+// Close 释放 App 持有的全部资源并停止所有托管服务进程。
 //
-// 应在 App 不再使用时调用，通常配合 defer 或测试 Cleanup 使用。
+// 注意：
+//   - 退出路径可能从信号 handler 与 main 的 defer 同时触发，故用 sync.Once 保证清理只执行一次。
+//   - 清理包含 procMgr.StopAll()，会停掉本进程托管的所有服务进程组，避免退出后遗留孤儿。
 func (a *App) Close() {
+	a.closeOnce.Do(func() {
+		if a.closeFn != nil {
+			a.closeFn()
+			return
+		}
+		a.doClose()
+	})
+}
+
+// doClose 执行真实的资源释放，仅由 Close 经 sync.Once 调用一次。
+func (a *App) doClose() {
 	if a.nodeRegistryCancel != nil {
 		a.nodeRegistryCancel()
 	}
@@ -519,7 +534,9 @@ func (a *App) Close() {
 		<-a.logCleanupDone
 	}
 	if a.procMgr != nil {
+		log.Printf("[SuperDev] shutdown: stopping all managed services")
 		a.procMgr.StopAll()
+		log.Printf("[SuperDev] shutdown: all managed services stopped")
 	}
 	if closer, ok := a.browserControl.(interface{ Close() error }); ok {
 		_ = closer.Close()
