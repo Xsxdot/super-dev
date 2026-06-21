@@ -835,6 +835,7 @@ export interface SearchLogsParams {
 export interface FetchLogContextParams {
   project: string
   id: string
+  target_deployment?: string
   deployment?: string[]
   before_ms?: number
   after_ms?: number
@@ -1541,6 +1542,7 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('project', params.project)
     qs.set('id', String(params.id))
+    if (params.target_deployment) qs.set('target_deployment', params.target_deployment)
     for (const deploymentId of params.deployment ?? []) qs.append('deployment', deploymentId)
     if (params.before_ms) qs.set('before_ms', String(params.before_ms))
     if (params.after_ms) qs.set('after_ms', String(params.after_ms))

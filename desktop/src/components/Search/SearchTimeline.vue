@@ -15,6 +15,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
 import { splitSearchHighlight } from '@/lib/searchHighlight'
+import type { LogEntry } from '@/api/agent'
 
 const props = defineProps<{ tabId: string }>()
 
@@ -51,9 +52,18 @@ function messageParts(message: string) {
   return splitSearchHighlight(message, tab.value?.query ?? '')
 }
 
-function select(entryId: string) {
+function entryKey(entry: LogEntry): string {
+  return `${entry.deployment_id}:${entry.id}`
+}
+
+function isSelected(entry: LogEntry): boolean {
+  return tab.value?.selectedLogId === entry.id
+    && (!tab.value.selectedLogDeploymentId || tab.value.selectedLogDeploymentId === entry.deployment_id)
+}
+
+function select(entry: LogEntry) {
   if (!tab.value) return
-  void workspace.loadContext(tab.value.id, entryId)
+  void workspace.loadContext(tab.value.id, entry)
 }
 
 function handleScroll(event: Event) {
@@ -66,13 +76,14 @@ function handleScroll(event: Event) {
 }
 
 watch(
-  () => tab.value?.selectedLogId,
-  async selectedLogId => {
+  () => [tab.value?.selectedLogId, tab.value?.selectedLogDeploymentId] as const,
+  async ([selectedLogId, selectedDeploymentId]) => {
     if (!selectedLogId) return
     await nextTick()
-    timelineEl.value
-      ?.querySelector(`[data-entry-id="${selectedLogId}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
+    const selector = selectedDeploymentId
+      ? `[data-entry-key="${selectedDeploymentId}:${selectedLogId}"]`
+      : `[data-entry-id="${selectedLogId}"]`
+    timelineEl.value?.querySelector(selector)?.scrollIntoView({ block: 'nearest' })
   },
 )
 </script>
@@ -81,12 +92,13 @@ watch(
   <div ref="timelineEl" class="timeline" @scroll="handleScroll">
     <button
       v-for="entry in visibleResults"
-      :key="entry.id"
+      :key="entryKey(entry)"
       class="timeline-row"
-      :class="{ selected: tab?.selectedLogId === entry.id }"
+      :class="{ selected: isSelected(entry) }"
       data-test="search-hit-row"
       :data-entry-id="entry.id"
-      @click="select(entry.id)"
+      :data-entry-key="entryKey(entry)"
+      @click="select(entry)"
     >
       <span class="time">{{ timeLabel(entry.timestamp) }}</span>
       <span class="service" data-test="search-hit-service">{{ serviceName(entry.deployment_id) }}</span>

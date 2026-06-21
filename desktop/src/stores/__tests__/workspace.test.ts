@@ -199,6 +199,37 @@ describe('workspaceStore', () => {
     expect(tab.results.map(entry => entry.message)).toEqual(['first', 'second'])
   })
 
+  it('loadMoreSearchResults 保留不同服务中的相同日志 ID', async () => {
+    const api = service('svc-api', 'api')
+    const worker = service('svc-worker', 'worker')
+    useAgentStore().projects = [project([api, worker])]
+    vi.spyOn(agentApi, 'searchLogs')
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 2,
+        items: [log(1, 'svc-api', 'api hit', '2026-05-20T22:41:32.000Z')],
+        deployment_counts: { 'svc-api': 1, 'svc-worker': 1 },
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        query: 'trace-8f21',
+        total: 2,
+        items: [log(1, 'svc-worker', 'worker hit', '2026-05-20T22:41:33.000Z')],
+        deployment_counts: { 'svc-api': 1, 'svc-worker': 1 },
+        has_more: false,
+      })
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+
+    await workspace.runSearch(tab.id, 'trace-8f21')
+    await workspace.loadMoreSearchResults(tab.id)
+
+    expect(tab.results.map(entry => `${entry.deployment_id}:${entry.id}:${entry.message}`)).toEqual([
+      'svc-api:1:api hit',
+      'svc-worker:1:worker hit',
+    ])
+  })
+
   it('隐藏占满首屏的服务后自动补齐可见服务命中', async () => {
     const logger = service('svc-logger', 'logger')
     const server = service('svc-server', 'server')
@@ -253,15 +284,44 @@ describe('workspaceStore', () => {
     workspace.pinService(tab.id, 'svc-api')
     workspace.hideService(tab.id, 'svc-billing')
 
-    await workspace.loadContext(tab.id, '9')
+    await workspace.loadContext(tab.id, log(9, 'svc-worker', 'target'))
 
     expect(agentApi.fetchLogContext).toHaveBeenCalledWith({
       project: 'proj-1',
       id: '9',
+      target_deployment: 'svc-worker',
       deployment: ['svc-api', 'svc-worker'],
     })
     expect(tab.contextByService['svc-api'].map(entry => entry.message)).toEqual(['old api'])
     expect(tab.contextByService['svc-worker'].map(entry => entry.message)).toEqual(['new worker'])
+  })
+
+  it('loadContext 失败时保留搜索结果并记录错误', async () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    vi.spyOn(agentApi, 'fetchLogContext').mockRejectedValue(new Error('log entry not found'))
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.status = 'results'
+    tab.results = [log(9, 'svc-api', 'target')]
+    tab.serviceCounts = { 'svc-api': 1 }
+    tab.selectedLogId = '1'
+    tab.selectedLogDeploymentId = 'svc-api'
+    tab.contextAnchorTime = '2026-05-20T22:40:32.000Z'
+    tab.contextByService = { 'svc-api': [log(1, 'svc-api', 'old context')] }
+    tab.hasMoreBeforeByService = { 'svc-api': true }
+    tab.hasMoreAfterByService = { 'svc-api': true }
+
+    await expect(workspace.loadContext(tab.id, '9')).resolves.toBeUndefined()
+
+    expect(tab.status).toBe('results')
+    expect(tab.selectedLogId).toBeNull()
+    expect(tab.selectedLogDeploymentId).toBeNull()
+    expect(tab.contextAnchorTime).toBeNull()
+    expect(tab.contextByService).toEqual({})
+    expect(tab.hasMoreBeforeByService).toEqual({})
+    expect(tab.hasMoreAfterByService).toEqual({})
+    expect(tab.error).toBe('log entry not found')
   })
 
   it('loadMoreContext 按可见服务独立游标向上补充上下文', async () => {

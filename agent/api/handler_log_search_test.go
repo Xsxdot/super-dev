@@ -325,6 +325,122 @@ func TestLogContextAPIUsesDeploymentBackendWhenStoreMisses(t *testing.T) {
 	assert.Equal(t, "dep-remote", body.ItemsByDeployment["dep-remote"][0].DeploymentID)
 }
 
+func TestLogContextAPIUsesDeploymentBackendWhenProjectScopeHasManyDeployments(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-local",
+			ProjectID: "proj-1",
+			Name:      "local",
+			Deployments: []model.Deployment{
+				{ID: "dep-local", EnvName: "dev", Location: model.LocationLocal},
+			},
+		},
+		{
+			ID:        "svc-remote",
+			ProjectID: "proj-1",
+			Name:      "remote",
+			Deployments: []model.Deployment{
+				{ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-1"}},
+			},
+		},
+	}
+	base := recentLogBase()
+	require.NoError(t, app.store.AppendBatch([]model.LogEntry{
+		{DeploymentID: "dep-local", RunID: "run-local", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "local peer context", Stream: "stdout"},
+	}))
+	backend := &searchLogBackend{
+		contextResult: logbackend.ContextResult{
+			TargetID:   77,
+			AnchorTime: base,
+			Items: []model.LogEntry{
+				{ID: 76, DeploymentID: "collector-internal", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "remote before", Stream: "stdout"},
+				{ID: 77, DeploymentID: "collector-internal", Timestamp: base, Level: "ERROR", Message: "remote target", Stream: "stderr"},
+			},
+		},
+	}
+	app.SetBackendForTest("dep-remote", backend)
+
+	resp, err := http.Get(srv.URL + "/api/logs/context?project=proj-1&id=77&before_ms=2000&after_ms=2000")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, int64(77), body.TargetID)
+	assert.Equal(t, base, body.AnchorTime)
+	assert.Equal(t, logbackend.ContextQuery{
+		TargetID:     77,
+		DeploymentID: "dep-remote",
+		Before:       2 * time.Second,
+		After:        2 * time.Second,
+	}, backend.contextQuery)
+	assert.Equal(t, []string{"local peer context"}, messagesFromModelLogs(body.ItemsByDeployment["dep-local"]))
+	assert.Equal(t, []string{"remote before", "remote target"}, messagesFromModelLogs(body.ItemsByDeployment["dep-remote"]))
+	assert.Equal(t, "dep-remote", body.ItemsByDeployment["dep-remote"][0].DeploymentID)
+}
+
+func TestLogContextAPIUsesTargetDeploymentWhenRemoteIDsOverlap(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-alpha",
+			ProjectID: "proj-1",
+			Name:      "alpha",
+			Deployments: []model.Deployment{
+				{ID: "dep-alpha", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-1"}},
+			},
+		},
+		{
+			ID:        "svc-beta",
+			ProjectID: "proj-1",
+			Name:      "beta",
+			Deployments: []model.Deployment{
+				{ID: "dep-beta", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-2"}},
+			},
+		},
+	}
+	base := recentLogBase()
+	alpha := &searchLogBackend{
+		contextResult: logbackend.ContextResult{
+			TargetID:   77,
+			AnchorTime: base,
+			Items: []model.LogEntry{
+				{ID: 77, DeploymentID: "collector-alpha", Timestamp: base, Level: "ERROR", Message: "alpha target", Stream: "stderr"},
+			},
+		},
+	}
+	beta := &searchLogBackend{
+		contextResult: logbackend.ContextResult{
+			TargetID:   77,
+			AnchorTime: base,
+			Items: []model.LogEntry{
+				{ID: 77, DeploymentID: "collector-beta", Timestamp: base, Level: "ERROR", Message: "beta target", Stream: "stderr"},
+			},
+		},
+	}
+	app.SetBackendForTest("dep-alpha", alpha)
+	app.SetBackendForTest("dep-beta", beta)
+
+	query := url.Values{}
+	query.Set("project", "proj-1")
+	query.Add("deployment", "dep-alpha")
+	query.Add("deployment", "dep-beta")
+	query.Set("target_deployment", "dep-beta")
+	query.Set("id", "77")
+	resp, err := http.Get(srv.URL + "/api/logs/context?" + query.Encode())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, logbackend.ContextQuery{TargetID: 77, DeploymentID: "dep-beta", Before: 30 * time.Second, After: 30 * time.Second}, beta.contextQuery)
+	assert.Empty(t, alpha.contextQuery)
+	assert.Equal(t, []string{"beta target"}, messagesFromModelLogs(body.ItemsByDeployment["dep-beta"]))
+}
+
 func TestLogContextPageAPI(t *testing.T) {
 	app, srv := newSearchTestServer(t)
 	base := recentLogBase()
@@ -359,15 +475,76 @@ func TestLogContextPageAPI(t *testing.T) {
 	assert.Equal(t, "api near", body.Items[0].Message)
 }
 
+func TestLogContextPageAPIUsesDeploymentBackend(t *testing.T) {
+	app, srv := newSearchTestServer(t)
+	app.projects[0].Services = []model.Service{
+		{
+			ID:        "svc-remote",
+			ProjectID: "proj-1",
+			Name:      "remote",
+			Deployments: []model.Deployment{
+				{ID: "dep-remote", EnvName: "prod", Location: model.LocationRemote, HostIDs: []string{"host-1"}},
+			},
+		},
+	}
+	base := recentLogBase()
+	backend := &searchLogBackend{
+		contextPageResult: logbackend.ContextPageResult{
+			Entries: []model.LogEntry{
+				{ID: 40, DeploymentID: "collector-internal", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "remote older", Stream: "stdout"},
+			},
+			HasMore: true,
+		},
+	}
+	app.SetBackendForTest("dep-remote", backend)
+	query := url.Values{}
+	query.Set("project", "proj-1")
+	query.Set("deployment", "dep-remote")
+	query.Set("direction", string(store.ContextPageBefore))
+	query.Set("cursor_time", base.Format(time.RFC3339Nano))
+	query.Set("cursor_id", "77")
+	query.Set("limit", "1")
+
+	resp, err := http.Get(srv.URL + "/api/logs/context/page?" + query.Encode())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body logContextPageResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, logbackend.ContextPageQuery{
+		DeploymentID: "dep-remote",
+		Cursor:       logbackend.Cursor{Time: base, ID: "77"},
+		Direction:    logbackend.ContextPageBefore,
+		Limit:        1,
+	}, backend.contextPageQuery)
+	assert.Equal(t, "dep-remote", body.DeploymentID)
+	assert.True(t, body.HasMore)
+	require.Len(t, body.Items, 1)
+	assert.Equal(t, "dep-remote", body.Items[0].DeploymentID)
+	assert.Equal(t, "remote older", body.Items[0].Message)
+}
+
 type searchLogBackend struct {
-	query         logbackend.SearchQuery
-	entries       []model.LogEntry
-	next          logbackend.Cursor
-	hasMore       bool
-	err           error
-	contextQuery  logbackend.ContextQuery
-	contextResult logbackend.ContextResult
-	contextErr    error
+	query             logbackend.SearchQuery
+	entries           []model.LogEntry
+	next              logbackend.Cursor
+	hasMore           bool
+	err               error
+	contextQuery      logbackend.ContextQuery
+	contextResult     logbackend.ContextResult
+	contextErr        error
+	contextPageQuery  logbackend.ContextPageQuery
+	contextPageResult logbackend.ContextPageResult
+	contextPageErr    error
+}
+
+func messagesFromModelLogs(entries []model.LogEntry) []string {
+	messages := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		messages = append(messages, entry.Message)
+	}
+	return messages
 }
 
 func (b *searchLogBackend) Query(ctx context.Context, f logbackend.QueryFilter) ([]model.LogEntry, logbackend.Cursor, error) {
@@ -382,6 +559,11 @@ func (b *searchLogBackend) Search(ctx context.Context, q logbackend.SearchQuery)
 func (b *searchLogBackend) Context(ctx context.Context, q logbackend.ContextQuery) (logbackend.ContextResult, error) {
 	b.contextQuery = q
 	return b.contextResult, b.contextErr
+}
+
+func (b *searchLogBackend) ContextPage(ctx context.Context, q logbackend.ContextPageQuery) (logbackend.ContextPageResult, error) {
+	b.contextPageQuery = q
+	return b.contextPageResult, b.contextPageErr
 }
 
 func (b *searchLogBackend) Subscribe(ctx context.Context, opts logbackend.SubscribeOptions) logbackend.LogStream {

@@ -14,6 +14,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -279,32 +280,32 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, status, "project not found")
 		return
 	}
+	targetDeploymentID := strings.TrimSpace(q.Get("target_deployment"))
+	if targetDeploymentID != "" && !containsString(deploymentIDs, targetDeploymentID) {
+		jsonError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
 	beforeMS := parseBoundedInt(q.Get("before_ms"), defaultContextMS, maxContextMS)
 	afterMS := parseBoundedInt(q.Get("after_ms"), defaultContextMS, maxContextMS)
 	before := time.Duration(beforeMS) * time.Millisecond
 	after := time.Duration(afterMS) * time.Millisecond
 
 	result, err := a.store.FetchContext(store.ContextParams{
-		TargetID:      targetID,
-		DeploymentIDs: deploymentIDs,
-		Before:        before,
-		After:         after,
+		TargetID:           targetID,
+		TargetDeploymentID: targetDeploymentID,
+		DeploymentIDs:      deploymentIDs,
+		Before:             before,
+		After:              after,
 	})
 	if errors.Is(err, store.ErrLogEntryNotFound) {
-		if len(deploymentIDs) == 1 {
-			backendResult, backendErr := a.fetchBackendLogContext(r.Context(), deploymentIDs[0], targetID, before, after)
-			if backendErr == nil {
-				jsonOK(w, logContextResponse{
-					TargetID:          backendResult.TargetID,
-					AnchorTime:        backendResult.AnchorTime,
-					ItemsByDeployment: map[string][]model.LogEntry{deploymentIDs[0]: backendResult.Items},
-				})
-				return
-			}
-			if !errors.Is(backendErr, logbackend.ErrLogContextNotFound) {
-				jsonError(w, http.StatusInternalServerError, "failed to fetch backend log context: "+backendErr.Error())
-				return
-			}
+		backendContext, found, backendErr := a.fetchBackendLogContextForScope(r.Context(), deploymentIDs, targetDeploymentID, targetID, before, after)
+		if backendErr != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to fetch backend log context: "+backendErr.Error())
+			return
+		}
+		if found {
+			jsonOK(w, backendContext)
+			return
 		}
 		jsonError(w, http.StatusNotFound, "log entry not found")
 		return
@@ -318,6 +319,57 @@ func (a *App) fetchLogContext(w http.ResponseWriter, r *http.Request) {
 		AnchorTime:        result.AnchorTime,
 		ItemsByDeployment: result.ItemsByDeployment,
 	})
+}
+
+func (a *App) fetchBackendLogContextForScope(ctx context.Context, deploymentIDs []string, targetDeploymentID string, targetID int64, before time.Duration, after time.Duration) (logContextResponse, bool, error) {
+	targetDeploymentIDs := deploymentIDs
+	if targetDeploymentID != "" {
+		// The anchor deployment is explicit; the broader deployment list is only the peer context scope.
+		targetDeploymentIDs = []string{targetDeploymentID}
+	}
+	for _, deploymentID := range targetDeploymentIDs {
+		backendResult, err := a.fetchBackendLogContext(ctx, deploymentID, targetID, before, after)
+		if errors.Is(err, logbackend.ErrLogContextNotFound) {
+			continue
+		}
+		if err != nil {
+			return logContextResponse{}, false, fmt.Errorf("%s: %w", deploymentID, err)
+		}
+		itemsByDeployment, err := a.contextItemsAroundBackendAnchor(backendResult.AnchorTime, deploymentIDs, before, after)
+		if err != nil {
+			return logContextResponse{}, false, err
+		}
+		itemsByDeployment[deploymentID] = backendResult.Items
+		return logContextResponse{
+			TargetID:          backendResult.TargetID,
+			AnchorTime:        backendResult.AnchorTime,
+			ItemsByDeployment: itemsByDeployment,
+		}, true, nil
+	}
+	return logContextResponse{}, false, nil
+}
+
+func (a *App) contextItemsAroundBackendAnchor(anchorTime time.Time, deploymentIDs []string, before time.Duration, after time.Duration) (map[string][]model.LogEntry, error) {
+	itemsByDeployment := make(map[string][]model.LogEntry, len(deploymentIDs))
+	for _, deploymentID := range deploymentIDs {
+		itemsByDeployment[deploymentID] = []model.LogEntry{}
+	}
+	storeContext, err := a.store.FetchContextAt(store.ContextAtParams{
+		AnchorTime:    anchorTime,
+		DeploymentIDs: deploymentIDs,
+		Before:        before,
+		After:         after,
+	})
+	if errors.Is(err, store.ErrLogEntryNotFound) {
+		return itemsByDeployment, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for deploymentID, entries := range storeContext.ItemsByDeployment {
+		itemsByDeployment[deploymentID] = entries
+	}
+	return itemsByDeployment, nil
 }
 
 func (a *App) logContextDeploymentIDs(projectID string, requested []string) ([]string, int, bool) {
@@ -398,13 +450,7 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := parseBoundedInt(q.Get("limit"), defaultPageLimit, maxPageLimit)
-	result, err := a.store.FetchContextPage(store.ContextPageParams{
-		DeploymentID: deploymentIDs[0],
-		CursorTime:   cursorTime,
-		CursorID:     cursorID,
-		Direction:    direction,
-		Limit:        limit,
-	})
+	result, err := a.fetchLogContextPageForDeployment(r.Context(), deploymentIDs[0], cursorTime, cursorID, direction, limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch log context page: "+err.Error())
 		return
@@ -417,6 +463,34 @@ func (a *App) fetchLogContextPage(w http.ResponseWriter, r *http.Request) {
 		Direction:    direction,
 		Items:        result.Entries,
 		HasMore:      result.HasMore,
+	})
+}
+
+func (a *App) fetchLogContextPageForDeployment(ctx context.Context, deploymentID string, cursorTime time.Time, cursorID int64, direction store.ContextPageDirection, limit int) (store.ContextPageResult, error) {
+	if backend, ok := a.lookupBackend(deploymentID); ok {
+		if pageBackend, ok := backend.(logbackend.ContextPageReader); ok {
+			result, err := pageBackend.ContextPage(ctx, logbackend.ContextPageQuery{
+				DeploymentID: deploymentID,
+				Cursor:       logbackend.Cursor{Time: cursorTime, ID: strconv.FormatInt(cursorID, 10)},
+				Direction:    logbackend.ContextPageDirection(direction),
+				Limit:        limit,
+			})
+			if err != nil {
+				return store.ContextPageResult{}, err
+			}
+			for i := range result.Entries {
+				// Backends may use collector-internal IDs; the desktop UI groups by the center-side deployment ID.
+				result.Entries[i].DeploymentID = deploymentID
+			}
+			return store.ContextPageResult{Entries: result.Entries, HasMore: result.HasMore}, nil
+		}
+	}
+	return a.store.FetchContextPage(store.ContextPageParams{
+		DeploymentID: deploymentID,
+		CursorTime:   cursorTime,
+		CursorID:     cursorID,
+		Direction:    direction,
+		Limit:        limit,
 	})
 }
 

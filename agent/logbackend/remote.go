@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -183,6 +184,49 @@ func (b *RemoteAgentBackend) Context(ctx context.Context, q ContextQuery) (Conte
 	}, nil
 }
 
+// ContextPage 从远端 /api/logs/context/page 继续读取单 deployment 上下文。
+func (b *RemoteAgentBackend) ContextPage(ctx context.Context, q ContextPageQuery) (ContextPageResult, error) {
+	params := url.Values{}
+	params.Set("deployment", b.deploymentID)
+	params.Set("direction", string(q.Direction))
+	params.Set("cursor_time", q.Cursor.Time.Format(time.RFC3339Nano))
+	params.Set("cursor_id", strconv.FormatInt(decodeSQLiteCursor(q.Cursor.ID), 10))
+	if q.Limit > 0 {
+		params.Set("limit", strconv.Itoa(q.Limit))
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)
+	defer cancel()
+	resp, err := b.transport.Do(reqCtx, b.hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/logs/context/page",
+		Query:  params,
+	})
+	if err != nil {
+		return ContextPageResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusMethodNotAllowed {
+		return b.contextPageFromLogPage(ctx, q)
+	}
+	if resp.StatusCode/100 != 2 {
+		return ContextPageResult{}, fmt.Errorf("remote /api/logs/context/page returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		DeploymentID string               `json:"deployment_id"`
+		Direction    ContextPageDirection `json:"direction"`
+		Items        []model.LogEntry     `json:"items"`
+		HasMore      bool                 `json:"has_more"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return ContextPageResult{}, err
+	}
+	if payload.Items == nil {
+		payload.Items = []model.LogEntry{}
+	}
+	return ContextPageResult{Entries: payload.Items, HasMore: payload.HasMore}, nil
+}
+
 func (b *RemoteAgentBackend) contextFromLogPage(ctx context.Context, q ContextQuery) (ContextResult, error) {
 	params := url.Values{}
 	params.Set("deployment", b.deploymentID)
@@ -235,6 +279,97 @@ func (b *RemoteAgentBackend) contextFromLogPage(ctx context.Context, q ContextQu
 		AnchorTime: anchor,
 		Items:      items,
 	}, nil
+}
+
+func (b *RemoteAgentBackend) contextPageFromLogPage(ctx context.Context, q ContextPageQuery) (ContextPageResult, error) {
+	result := ContextPageResult{Entries: []model.LogEntry{}}
+	if q.Cursor.Time.IsZero() || q.Cursor.ID == "" {
+		return result, nil
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	cursorID := decodeSQLiteCursor(q.Cursor.ID)
+	if cursorID <= 0 {
+		return result, nil
+	}
+
+	params := url.Values{}
+	params.Set("deployment", b.deploymentID)
+	params.Set("limit", strconv.Itoa(remoteContextFallbackLimit))
+	beforeID := cursorID
+	if q.Direction == ContextPageAfter {
+		// 旧远端只有 before 游标；向后读时扩大 before 上界，再按时间/ID 裁出 cursor 之后的行。
+		beforeID = cursorID + remoteContextFallbackLimit
+	} else if q.Direction != ContextPageBefore {
+		return result, fmt.Errorf("invalid context page direction: %s", q.Direction)
+	}
+	params.Set("before", strconv.FormatInt(beforeID, 10))
+
+	reqCtx, cancel := context.WithTimeout(ctx, remoteRequestTimeout)
+	defer cancel()
+	resp, err := b.transport.Do(reqCtx, b.hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/logs",
+		Query:  params,
+	})
+	if err != nil {
+		return ContextPageResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return ContextPageResult{}, fmt.Errorf("remote /api/logs page fallback returned %d", resp.StatusCode)
+	}
+	var entries []model.LogEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return ContextPageResult{}, err
+	}
+	filtered := make([]model.LogEntry, 0, len(entries))
+	for _, entry := range entries {
+		cmp := compareLogCursor(entry, q.Cursor.Time, cursorID)
+		if q.Direction == ContextPageBefore && cmp < 0 {
+			filtered = append(filtered, entry)
+		}
+		if q.Direction == ContextPageAfter && cmp > 0 {
+			filtered = append(filtered, entry)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+			return filtered[i].ID < filtered[j].ID
+		}
+		return filtered[i].Timestamp.Before(filtered[j].Timestamp)
+	})
+	if q.Direction == ContextPageBefore && len(filtered) > limit+1 {
+		filtered = filtered[len(filtered)-(limit+1):]
+	}
+	if len(filtered) > limit {
+		result.HasMore = true
+		if q.Direction == ContextPageBefore {
+			filtered = filtered[len(filtered)-limit:]
+		} else {
+			filtered = filtered[:limit]
+		}
+	}
+	result.Entries = filtered
+	return result, nil
+}
+
+func compareLogCursor(entry model.LogEntry, cursorTime time.Time, cursorID int64) int {
+	if entry.Timestamp.Before(cursorTime) {
+		return -1
+	}
+	if entry.Timestamp.After(cursorTime) {
+		return 1
+	}
+	if entry.ID < cursorID {
+		return -1
+	}
+	if entry.ID > cursorID {
+		return 1
+	}
+	return 0
 }
 
 // Subscribe 连接远端 /ws/logs WebSocket，转发实时日志。

@@ -41,14 +41,7 @@ const visibleResults = computed(() => {
 })
 
 const filterChips = computed(() => [
-  t('search.filters.all'),
-  t('search.filters.errors'),
-  t('search.filters.warnings'),
-  'API',
-  'Worker',
-  t('search.filters.last24h'),
-  'Regex',
-  'Case',
+  { label: t('search.filters.all'), active: true },
 ])
 
 watch(tab, (localValue) => {
@@ -67,7 +60,10 @@ function submit() {
 
 function selectedResultIndex(): number {
   if (!tab.value || tab.value.selectedLogId === null) return -1
-  return visibleResults.value.findIndex(entry => entry.id === tab.value!.selectedLogId)
+  return visibleResults.value.findIndex(entry =>
+    entry.id === tab.value!.selectedLogId
+    && (!tab.value!.selectedLogDeploymentId || entry.deployment_id === tab.value!.selectedLogDeploymentId),
+  )
 }
 
 function goToRelativeHit(offset: number) {
@@ -79,7 +75,7 @@ function goToRelativeHit(offset: number) {
       : Math.min(visibleResults.value.length - 1, Math.max(0, currentIndex + offset))
   const next = visibleResults.value[nextIndex]
   if (!next) return
-  void workspace.loadContext(tab.value.id, next.id)
+  void workspace.loadContext(tab.value.id, next)
 }
 </script>
 
@@ -138,12 +134,13 @@ function goToRelativeHit(offset: number) {
         <div class="filter-chips" aria-label="search filters">
           <button
             v-for="chip in filterChips"
-            :key="chip"
+            :key="chip.label"
             class="filter-chip"
+            :class="{ active: chip.active }"
             data-test="search-filter-chip"
             type="button"
           >
-            {{ chip }}
+            {{ chip.label }}
           </button>
         </div>
       </div>
@@ -289,12 +286,12 @@ function goToRelativeHit(offset: number) {
   white-space: nowrap;
   cursor: pointer;
 }
-.filter-chip:first-child {
+.filter-chip.active {
   color: #58a6ff;
   border-color: rgba(88, 166, 255, 0.38);
   background: rgba(88, 166, 255, 0.09);
 }
-.filter-chip:hover {
+.filter-chip:hover:not(:disabled) {
   color: var(--text-secondary);
   background: var(--bg-overlay);
 }

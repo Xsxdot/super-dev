@@ -489,6 +489,25 @@ describe('SearchServiceColumns', () => {
     expect(loadMore).toHaveBeenCalledWith(tab.id, 'before')
   })
 
+  it('上下文请求失败时在右侧空态展示错误', () => {
+    const api = service('svc-api', 'api')
+    useAgentStore().projects = [project([api])]
+    const workspace = useWorkspaceStore()
+    const tab = workspace.openSearch('proj-1')
+    tab.status = 'results'
+    tab.serviceCounts = { 'svc-api': 1 }
+    tab.contextAnchorTime = '2026-05-20T22:41:32.000Z'
+    tab.contextByService = { 'svc-api': [log(1, 'svc-api', 'stale context')] }
+    tab.error = 'log entry not found'
+
+    const wrapper = mount(SearchServiceColumns, {
+      props: { tabId: tab.id },
+    })
+
+    expect(wrapper.find('.columns-empty').text()).toContain('log entry not found')
+    expect(wrapper.find('.columns-empty').classes()).toContain('error')
+  })
+
   it('右侧滚动到命中日志时同步左侧选中项', async () => {
     const api = service('svc-api', 'api')
     useAgentStore().projects = [project([api])]

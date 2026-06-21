@@ -205,6 +205,46 @@ func TestRemoteAgentBackend_ContextFallsBackToLogsForOldRemote(t *testing.T) {
 	assert.Equal(t, []int64{41, 42, 43}, []int64{got.Items[0].ID, got.Items[1].ID, got.Items[2].ID})
 }
 
+func TestRemoteAgentBackend_ContextPageUsesRemoteContextPageAPI(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/logs/context/page", r.URL.Path)
+		assert.Equal(t, "svc-1", r.URL.Query().Get("deployment"))
+		assert.Equal(t, "before", r.URL.Query().Get("direction"))
+		assert.Equal(t, now.Format(time.RFC3339Nano), r.URL.Query().Get("cursor_time"))
+		assert.Equal(t, "42", r.URL.Query().Get("cursor_id"))
+		assert.Equal(t, "2", r.URL.Query().Get("limit"))
+		resp := struct {
+			DeploymentID string                          `json:"deployment_id"`
+			Direction    logbackend.ContextPageDirection `json:"direction"`
+			Items        []model.LogEntry                `json:"items"`
+			HasMore      bool                            `json:"has_more"`
+		}{
+			DeploymentID: "svc-1",
+			Direction:    logbackend.ContextPageBefore,
+			Items: []model.LogEntry{
+				{ID: 40, DeploymentID: "svc-1", Timestamp: now.Add(-2 * time.Second), Message: "older"},
+				{ID: 41, DeploymentID: "svc-1", Timestamp: now.Add(-time.Second), Message: "near"},
+			},
+			HasMore: true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	b := logbackend.NewRemoteAgentBackend("host-1", "svc-1", &mockNodeTransport{baseURL: srv.URL})
+	got, err := b.ContextPage(context.Background(), logbackend.ContextPageQuery{
+		DeploymentID: "dep-center",
+		Cursor:       logbackend.Cursor{Time: now, ID: "42"},
+		Direction:    logbackend.ContextPageBefore,
+		Limit:        2,
+	})
+	require.NoError(t, err)
+	assert.True(t, got.HasMore)
+	assert.Equal(t, []string{"older", "near"}, []string{got.Entries[0].Message, got.Entries[1].Message})
+}
+
 func TestRemoteAgentBackend_SubscribeReceivesLiveEntries(t *testing.T) {
 	now := time.Now().Truncate(time.Millisecond)
 	entry := model.LogEntry{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "live", Stream: "stdout"}

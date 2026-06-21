@@ -88,8 +88,12 @@ const allContextEntries = computed(() => {
 
 const selectedEntry = computed<LogEntry | null>(() => {
   if (!tab.value || tab.value.selectedLogId === null) return null
-  return allContextEntries.value.find(entry => entry.id === tab.value!.selectedLogId)
-    ?? tab.value.results.find(entry => entry.id === tab.value!.selectedLogId)
+  const selectedDeploymentId = tab.value.selectedLogDeploymentId
+  const matchesSelected = (entry: LogEntry) =>
+    entry.id === tab.value!.selectedLogId
+    && (!selectedDeploymentId || entry.deployment_id === selectedDeploymentId)
+  return allContextEntries.value.find(matchesSelected)
+    ?? tab.value.results.find(matchesSelected)
     ?? null
 })
 
@@ -115,10 +119,10 @@ const nearbySignals = computed(() => {
     entry.level === 'WARN'
     || entry.level === 'ERROR'
     || /timeout|retry|latency/i.test(entry.message)
-    || entry.id === selectedEntry.value?.id,
+    || isSelectedEntry(entry),
   )
   const deduped = new Map<string, LogEntry>()
-  for (const entry of signals) deduped.set(entry.id, entry)
+  for (const entry of signals) deduped.set(entryKey(entry), entry)
   return [...deduped.values()].slice(0, 4)
 })
 
@@ -231,7 +235,20 @@ function serviceName(deploymentId: string): string {
 }
 
 function entryKey(entry: LogEntry): string {
-  return entry.id
+  return `${entry.deployment_id}:${entry.id}`
+}
+
+function selectedLogKey(): string | null {
+  if (!tab.value?.selectedLogId) return null
+  return tab.value.selectedLogDeploymentId
+    ? `${tab.value.selectedLogDeploymentId}:${tab.value.selectedLogId}`
+    : tab.value.selectedLogId
+}
+
+function isSelectedEntry(entry: LogEntry): boolean {
+  if (!tab.value?.selectedLogId) return false
+  return entry.id === tab.value.selectedLogId
+    && (!tab.value.selectedLogDeploymentId || entry.deployment_id === tab.value.selectedLogDeploymentId)
 }
 
 function timeLabel(entry: LogEntry): string {
@@ -253,7 +270,7 @@ function entryLevelClass(level: string): string {
 function minimapTickClass(entry: LogEntry): string[] {
   return [
     entryLevelClass(entry.level),
-    entry.id === selectedEntry.value?.id ? 'current' : '',
+    isSelectedEntry(entry) ? 'current' : '',
   ].filter(Boolean)
 }
 
@@ -306,8 +323,9 @@ function suppressScrollSelection(logId: string) {
 
 async function togglePin(serviceId: string) {
   if (!tab.value) return
-  if (tab.value.selectedLogId !== null) {
-    suppressScrollSelection(tab.value.selectedLogId)
+  const currentSelectedKey = selectedLogKey()
+  if (currentSelectedKey !== null) {
+    suppressScrollSelection(currentSelectedKey)
   }
   if (tab.value.pinnedServiceIds.includes(serviceId)) {
     workspace.unpinService(tab.value.id, serviceId)
@@ -362,35 +380,40 @@ function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirectio
   const currentTab = tab.value
   if (!currentTab || !localTab.value) return
   const hidden = new Set(currentTab.hiddenServiceIds)
-  const resultIds = new Set(
+  const resultKeys = new Set(
     currentTab.results
       .filter(entry => !hidden.has(entry.deployment_id))
-      .map(entry => entry.id),
+      .map(entryKey),
   )
-  if (resultIds.size === 0) return
+  if (resultKeys.size === 0) return
 
   const viewport = el.getBoundingClientRect()
   const viewportCenter = viewport.top + (viewport.bottom - viewport.top) / 2
-  const visibleCandidates: Array<{ id: string; center: number; distance: number }> = []
+  const visibleCandidates: Array<{ id: string; deploymentId: string; key: string; center: number; distance: number }> = []
 
   const entryEls = Array.from(el.querySelectorAll<HTMLElement>('.context-entry'))
   for (const entryEl of entryEls) {
     const entryId = entryEl.dataset.entryId
-    if (!entryId) continue
-    if (!resultIds.has(entryId)) continue
+    const deploymentId = entryEl.dataset.deploymentId
+    const key = entryEl.dataset.entryKey
+    if (!entryId || !deploymentId || !key) continue
+    if (!resultKeys.has(key)) continue
     const rect = entryEl.getBoundingClientRect()
     if (rect.bottom < viewport.top || rect.top > viewport.bottom) continue
     const entryCenter = rect.top + (rect.bottom - rect.top) / 2
     visibleCandidates.push({
       id: entryId,
+      deploymentId,
+      key,
       center: entryCenter,
       distance: Math.abs(entryCenter - viewportCenter),
     })
   }
 
   if (visibleCandidates.length === 0) return
-  const currentCandidate = visibleCandidates.find(item => item.id === currentTab.selectedLogId)
-  let candidate: { id: string; center: number; distance: number } | null = null
+  const currentKey = selectedLogKey()
+  const currentCandidate = visibleCandidates.find(item => item.key === currentKey)
+  let candidate: { id: string; deploymentId: string; key: string; center: number; distance: number } | null = null
   if (direction === 'down' && currentTab.selectedLogId !== null) {
     const below = currentCandidate
       ? visibleCandidates.filter(item => item.center > currentCandidate.center)
@@ -413,8 +436,8 @@ function syncSelectedResultFromScroll(el: HTMLElement, direction: ScrollDirectio
     visibleCandidates[0],
   )
   if (!candidate) return
-  if (workspace.selectSearchResult(currentTab.id, candidate.id)) {
-    selectedFromColumnsScrollId.value = candidate.id
+  if (workspace.selectSearchResult(currentTab.id, candidate.id, candidate.deploymentId)) {
+    selectedFromColumnsScrollId.value = candidate.key
   }
 }
 
@@ -437,18 +460,20 @@ function handleScroll(event: Event) {
 }
 
 watch(
-  () => tab.value?.selectedLogId,
-  async selectedLogId => {
+  () => [tab.value?.selectedLogId, tab.value?.selectedLogDeploymentId] as const,
+  async ([selectedLogId, selectedDeploymentId]) => {
     if (!selectedLogId) return
-    if (selectedFromColumnsScrollId.value === selectedLogId) {
+    const key = selectedDeploymentId ? `${selectedDeploymentId}:${selectedLogId}` : selectedLogId
+    if (selectedFromColumnsScrollId.value === key) {
       selectedFromColumnsScrollId.value = null
       return
     }
-    suppressScrollSelection(selectedLogId)
+    suppressScrollSelection(key)
     await nextTick()
-    columnsEl.value
-      ?.querySelector(`[data-entry-id="${selectedLogId}"]`)
-      ?.scrollIntoView({ block: 'center', inline: 'nearest' })
+    const selector = selectedDeploymentId
+      ? `[data-entry-key="${selectedDeploymentId}:${selectedLogId}"]`
+      : `[data-entry-id="${selectedLogId}"]`
+    columnsEl.value?.querySelector(selector)?.scrollIntoView({ block: 'center', inline: 'nearest' })
   },
 )
 
@@ -460,7 +485,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="tab?.contextAnchorTime" class="context-workbench">
+  <div v-if="tab?.contextAnchorTime && !tab?.error" class="context-workbench">
     <section class="context-main">
       <header class="context-header">
         <div class="context-title-block">
@@ -537,8 +562,9 @@ onBeforeUnmount(() => {
                             v-for="entry in cellEntries(bucket, cellServiceId)"
                             :key="entryKey(entry)"
                             class="context-entry"
-                            :class="{ target: entry.id === tab.selectedLogId, related: entry.deployment_id !== selectedEntry?.deployment_id && entry.message.includes(searchQuery) }"
+                            :class="{ target: isSelectedEntry(entry), related: entry.deployment_id !== selectedEntry?.deployment_id && entry.message.includes(searchQuery) }"
                             :data-entry-id="entry.id"
+                            :data-deployment-id="entry.deployment_id"
                             :data-entry-key="entryKey(entry)"
                           >
                             <span class="entry-time">{{ timeLabel(entry) }}</span>
@@ -616,8 +642,9 @@ onBeforeUnmount(() => {
                         v-for="entry in cellEntries(bucket, serviceId)"
                         :key="entryKey(entry)"
                         class="context-entry"
-                        :class="{ target: entry.id === tab.selectedLogId, related: entry.deployment_id !== selectedEntry?.deployment_id && entry.message.includes(searchQuery) }"
+                        :class="{ target: isSelectedEntry(entry), related: entry.deployment_id !== selectedEntry?.deployment_id && entry.message.includes(searchQuery) }"
                         :data-entry-id="entry.id"
+                        :data-deployment-id="entry.deployment_id"
                         :data-entry-key="entryKey(entry)"
                       >
                         <span class="entry-time">{{ timeLabel(entry) }}</span>
@@ -645,8 +672,9 @@ onBeforeUnmount(() => {
                         v-for="entry in cellEntries(bucket, mirrorServiceId)"
                         :key="entryKey(entry)"
                         class="context-entry"
-                        :class="{ target: entry.id === tab.selectedLogId }"
+                        :class="{ target: isSelectedEntry(entry) }"
                         :data-entry-id="entry.id"
+                        :data-deployment-id="entry.deployment_id"
                         :data-entry-key="entryKey(entry)"
                       >
                         <span class="entry-time">{{ timeLabel(entry) }}</span>
@@ -718,8 +746,8 @@ onBeforeUnmount(() => {
       </div>
     </aside>
   </div>
-  <div v-else class="columns-empty">
-    {{ t('search.selectHitForContext') }}
+  <div v-else class="columns-empty" :class="{ error: Boolean(tab?.error) }">
+    {{ tab?.error ?? t('search.selectHitForContext') }}
   </div>
 </template>
 
@@ -1135,5 +1163,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+.columns-empty.error {
+  color: #ff7b72;
 }
 </style>

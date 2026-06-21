@@ -58,11 +58,39 @@ type ContextQuery struct {
 	After  time.Duration
 }
 
+// ContextPageDirection 表示上下文游标分页方向。
+type ContextPageDirection string
+
+const (
+	// ContextPageBefore 表示查询游标之前的更早日志。
+	ContextPageBefore ContextPageDirection = "before"
+	// ContextPageAfter 表示查询游标之后的更新日志。
+	ContextPageAfter ContextPageDirection = "after"
+)
+
+// ContextPageQuery 定义上下文日志的单 deployment 游标分页参数。
+type ContextPageQuery struct {
+	// DeploymentID 是调用方视角的 deployment ID，用于后端过滤或回填展示归属。
+	DeploymentID string
+	// Cursor 用 Time + ID 锚定当前位置。
+	Cursor Cursor
+	// Direction 控制读取更早还是更新日志。
+	Direction ContextPageDirection
+	// Limit 返回条数上限；0 时实现方使用自身默认值。
+	Limit int
+}
+
 // ContextResult 表示单 deployment 后端返回的上下文日志。
 type ContextResult struct {
 	TargetID   int64
 	AnchorTime time.Time
 	Items      []model.LogEntry
+}
+
+// ContextPageResult 表示单 deployment 后端返回的上下文分页日志。
+type ContextPageResult struct {
+	Entries []model.LogEntry
+	HasMore bool
 }
 
 // Cursor 表示分页游标，由 (Time, ID) 确定唯一位置。
@@ -114,6 +142,11 @@ type LogReader interface {
 // ContextReader 是可按日志 ID 拉取上下文的可选后端能力。
 type ContextReader interface {
 	Context(ctx context.Context, q ContextQuery) (ContextResult, error)
+}
+
+// ContextPageReader 是可按时间和 ID 游标继续读取上下文的可选后端能力。
+type ContextPageReader interface {
+	ContextPage(ctx context.Context, q ContextPageQuery) (ContextPageResult, error)
 }
 
 // LogBackend 抽象「一个 Deployment 的所有日志能力」。

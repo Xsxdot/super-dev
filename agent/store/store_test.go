@@ -374,6 +374,80 @@ func TestFetchContextReturnsProjectServicesAroundTargetTime(t *testing.T) {
 	assert.Equal(t, []string{"billing after"}, messagesOf(got.ItemsByDeployment["svc-c"]))
 }
 
+func TestFetchContextAtReturnsProjectServicesAroundAnchorTime(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "api before", Stream: "stdout"},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "worker after", Stream: "stdout"},
+		{DeploymentID: "svc-c", RunID: "run-1", Timestamp: base.Add(2 * time.Minute), Level: "INFO", Message: "outside window", Stream: "stdout"},
+	}))
+
+	got, err := s.FetchContextAt(store.ContextAtParams{
+		AnchorTime:    base,
+		DeploymentIDs: []string{"svc-a", "svc-b", "svc-c"},
+		Before:        2 * time.Second,
+		After:         2 * time.Second,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, base, got.AnchorTime)
+	assert.Equal(t, []string{"api before"}, messagesOf(got.ItemsByDeployment["svc-a"]))
+	assert.Equal(t, []string{"worker after"}, messagesOf(got.ItemsByDeployment["svc-b"]))
+	assert.Empty(t, got.ItemsByDeployment["svc-c"])
+}
+
+func TestFetchContextUsesTargetDeploymentOutsideContextScope(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "svc-anchor", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target anchor", Stream: "stderr"},
+		{DeploymentID: "svc-peer", RunID: "run-1", Timestamp: base.Add(500 * time.Millisecond), Level: "INFO", Message: "peer context", Stream: "stdout"},
+	}))
+	search, err := s.Search(store.SearchParams{DeploymentIDs: []string{"svc-anchor"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+
+	got, err := s.FetchContext(store.ContextParams{
+		TargetID:           search.Entries[0].ID,
+		TargetDeploymentID: "svc-anchor",
+		DeploymentIDs:      []string{"svc-peer"},
+		Before:             time.Second,
+		After:              time.Second,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, search.Entries[0].ID, got.TargetID)
+	assert.Equal(t, base, got.AnchorTime)
+	assert.Equal(t, []string{"peer context"}, messagesOf(got.ItemsByDeployment["svc-peer"]))
+	_, hasAnchorContext := got.ItemsByDeployment["svc-anchor"]
+	assert.False(t, hasAnchorContext)
+}
+
+func TestFetchContextLimitsWindowEntriesPerDeployment(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
+	require.NoError(t, s.AppendBatch([]model.LogEntry{
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "older", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-time.Second), Level: "INFO", Message: "near before", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "near after", Stream: "stdout"},
+	}))
+	search, err := s.Search(store.SearchParams{DeploymentIDs: []string{"svc-a"}, Query: "target", Limit: 1})
+	require.NoError(t, err)
+
+	got, err := s.FetchContext(store.ContextParams{
+		TargetID:           search.Entries[0].ID,
+		TargetDeploymentID: "svc-a",
+		DeploymentIDs:      []string{"svc-a"},
+		Before:             3 * time.Second,
+		After:              3 * time.Second,
+		LimitPerDeployment: 2,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"near before", "target"}, messagesOf(got.ItemsByDeployment["svc-a"]))
+}
+
 func TestFetchContextRejectsTargetOutsideServiceSet(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()

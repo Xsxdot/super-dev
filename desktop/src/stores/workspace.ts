@@ -80,6 +80,7 @@ export interface SearchWorkspaceTab {
   serviceCounts: Record<string, number>
   hiddenServiceIds: string[]
   selectedLogId: string | null
+  selectedLogDeploymentId: string | null
   contextAnchorTime: string | null
   contextByService: Record<string, LogEntry[]>
   pinnedServiceIds: string[]
@@ -156,6 +157,7 @@ function makeSearchTab(projectId: string, title: string): SearchWorkspaceTab {
     serviceCounts: {},
     hiddenServiceIds: [],
     selectedLogId: null,
+    selectedLogDeploymentId: null,
     contextAnchorTime: null,
     contextByService: {},
     pinnedServiceIds: [],
@@ -173,14 +175,18 @@ function compareLogs(a: LogEntry, b: LogEntry): number {
   if (timeDiff !== 0) return timeDiff
   if (a.id < b.id) return -1
   if (a.id > b.id) return 1
-  return 0
+  return a.deployment_id.localeCompare(b.deployment_id)
+}
+
+function logKey(entry: LogEntry): string {
+  return `${entry.deployment_id}:${entry.id}`
 }
 
 function mergeLogs(existing: LogEntry[], incoming: LogEntry[]): LogEntry[] {
-  const byID = new Map<string, LogEntry>()
-  for (const entry of existing) byID.set(entry.id, entry)
-  for (const entry of incoming) byID.set(entry.id, entry)
-  return [...byID.values()].sort(compareLogs)
+  const byKey = new Map<string, LogEntry>()
+  for (const entry of existing) byKey.set(logKey(entry), entry)
+  for (const entry of incoming) byKey.set(logKey(entry), entry)
+  return [...byKey.values()].sort(compareLogs)
 }
 
 export const useWorkspaceStore = defineStore('workspace', () => {
@@ -383,6 +389,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tab.results.filter(entry => visible.has(entry.deployment_id)).sort(compareLogs)
   }
 
+  function clearSearchContext(tab: SearchWorkspaceTab) {
+    tab.selectedLogId = null
+    tab.selectedLogDeploymentId = null
+    tab.contextAnchorTime = null
+    tab.contextByService = {}
+    tab.hasMoreBeforeByService = {}
+    tab.hasMoreAfterByService = {}
+  }
+
   function canLoadMoreSearchResults(tabId: string): boolean {
     const tab = searchTab(tabId)
     if (!tab || !tab.query || tab.loadingMoreResults) return false
@@ -421,15 +436,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tab.pinnedServiceIds = tab.pinnedServiceIds.filter(id => id !== serviceId)
   }
 
-  function selectSearchResult(tabId: string, logId: string): boolean {
+  function selectSearchResult(tabId: string, logId: string, deploymentId?: string): boolean {
     const tab = searchTab(tabId)
-    if (!tab || tab.selectedLogId === logId) return false
+    if (!tab) return false
     const hidden = new Set(tab.hiddenServiceIds)
-    const exists = tab.results.some(
-      entry => entry.id === logId && !hidden.has(entry.deployment_id),
-    )
-    if (!exists) return false
+    const selected = deploymentId
+      ? tab.results.find(entry =>
+        entry.id === logId
+        && entry.deployment_id === deploymentId
+        && !hidden.has(entry.deployment_id),
+      )
+      : tab.results.find(entry => entry.id === logId && !hidden.has(entry.deployment_id))
+    if (!selected) return false
+    if (tab.selectedLogId === selected.id && tab.selectedLogDeploymentId === selected.deployment_id) {
+      return false
+    }
     tab.selectedLogId = logId
+    tab.selectedLogDeploymentId = selected.deployment_id
     return true
   }
 
@@ -445,11 +468,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const result = await api.searchLogs({ project: tab.projectId, q: trimmed })
       tab.results = result.items
       tab.serviceCounts = result.deployment_counts
-      tab.selectedLogId = null
-      tab.contextAnchorTime = null
-      tab.contextByService = {}
-      tab.hasMoreBeforeByService = {}
-      tab.hasMoreAfterByService = {}
+      clearSearchContext(tab)
       tab.loadingMoreResults = false
       tab.status = result.items.length ? 'results' : 'emptyResults'
     } catch (err) {
@@ -458,22 +477,35 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function loadContext(tabId: string, logId: string) {
+  async function loadContext(tabId: string, target: LogEntry | string) {
     const tab = searchTab(tabId)
     if (!tab) return
     const visibleServices = visibleContextServiceIds(tab)
-    const result = await api.fetchLogContext({
-      project: tab.projectId,
-      id: logId,
-      deployment: visibleServices,
-    })
-    tab.selectedLogId = result.target_id
-    tab.contextAnchorTime = result.anchor_time
-    for (const serviceId of visibleServices) {
-      if (tab.pinnedServiceIds.includes(serviceId)) continue
-      tab.contextByService[serviceId] = result.items_by_deployment[serviceId] ?? []
-      tab.hasMoreBeforeByService[serviceId] = true
-      tab.hasMoreAfterByService[serviceId] = true
+    const targetID = typeof target === 'string' ? target : target.id
+    const targetDeploymentID = typeof target === 'string'
+      ? tab.results.find(entry => entry.id === target)?.deployment_id
+      : target.deployment_id
+    tab.error = null
+    try {
+      const result = await api.fetchLogContext({
+        project: tab.projectId,
+        id: targetID,
+        target_deployment: targetDeploymentID,
+        deployment: visibleServices,
+      })
+      tab.selectedLogId = result.target_id
+      tab.selectedLogDeploymentId = targetDeploymentID ?? null
+      tab.contextAnchorTime = result.anchor_time
+      for (const serviceId of visibleServices) {
+        if (tab.pinnedServiceIds.includes(serviceId)) continue
+        tab.contextByService[serviceId] = result.items_by_deployment[serviceId] ?? []
+        tab.hasMoreBeforeByService[serviceId] = true
+        tab.hasMoreAfterByService[serviceId] = true
+      }
+    } catch (err) {
+      // A failed anchor lookup must not leave the previous trace visible as if it matched the new hit.
+      clearSearchContext(tab)
+      tab.error = err instanceof Error ? err.message : String(err)
     }
   }
 

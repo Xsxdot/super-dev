@@ -92,15 +92,8 @@ describe('SearchPage i18n', () => {
     expect(wrapper.find('[data-test="search-hit-count"]').text()).toBe('2 / 76 hits')
     expect(wrapper.find('[data-test="search-prev-hit"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="search-next-hit"]').exists()).toBe(true)
-    expect(wrapper.findAll('[data-test="search-filter-chip"]').map(chip => chip.text())).toEqual([
-      'All',
-      'Errors',
-      'Warnings',
-      'API',
-      'Worker',
-      'Time: last 24h',
-      'Regex',
-      'Case',
-    ])
+    const chips = wrapper.findAll('[data-test="search-filter-chip"]')
+    expect(chips.map(chip => chip.text())).toEqual(['All'])
+    expect(chips[0].attributes('disabled')).toBeUndefined()
   })
 })

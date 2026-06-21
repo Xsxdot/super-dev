@@ -29,9 +29,10 @@ type SQLiteBackend struct {
 }
 
 var (
-	_ LogReader     = (*SQLiteBackend)(nil)
-	_ LogWriter     = (*SQLiteBackend)(nil)
-	_ ContextReader = (*SQLiteBackend)(nil)
+	_ LogReader         = (*SQLiteBackend)(nil)
+	_ LogWriter         = (*SQLiteBackend)(nil)
+	_ ContextReader     = (*SQLiteBackend)(nil)
+	_ ContextPageReader = (*SQLiteBackend)(nil)
 )
 
 // NewSQLiteBackend 创建 SQLiteBackend。
@@ -161,6 +162,21 @@ func (b *SQLiteBackend) Context(_ context.Context, q ContextQuery) (ContextResul
 		AnchorTime: result.AnchorTime,
 		Items:      result.ItemsByDeployment[q.DeploymentID],
 	}, nil
+}
+
+// ContextPage 按时间和 ID 游标从 SQLite 拉取单 deployment 的上下文分页。
+func (b *SQLiteBackend) ContextPage(_ context.Context, q ContextPageQuery) (ContextPageResult, error) {
+	result, err := b.store.FetchContextPage(store.ContextPageParams{
+		DeploymentID: q.DeploymentID,
+		CursorTime:   q.Cursor.Time,
+		CursorID:     decodeSQLiteCursor(q.Cursor.ID),
+		Direction:    store.ContextPageDirection(q.Direction),
+		Limit:        q.Limit,
+	})
+	if err != nil {
+		return ContextPageResult{}, err
+	}
+	return ContextPageResult{Entries: result.Entries, HasMore: result.HasMore}, nil
 }
 
 // Subscribe 订阅实时日志流，可先回放最近日志并按 Since 锚点去重。

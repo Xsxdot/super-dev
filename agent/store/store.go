@@ -24,6 +24,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const defaultContextLimitPerDeployment = 1000
+
 // ErrLogEntryNotFound 表示目标日志不存在，或不属于允许查询的部署集合。
 var ErrLogEntryNotFound = sql.ErrNoRows
 
@@ -70,10 +72,21 @@ type SearchResult struct {
 
 // ContextParams 定义以某条日志为锚点的跨部署上下文查询参数。
 type ContextParams struct {
-	TargetID      int64
-	DeploymentIDs []string
-	Before        time.Duration
-	After         time.Duration
+	TargetID           int64
+	TargetDeploymentID string
+	DeploymentIDs      []string
+	Before             time.Duration
+	After              time.Duration
+	LimitPerDeployment int
+}
+
+// ContextAtParams 定义以已知锚点时间拉取跨部署上下文的查询参数。
+type ContextAtParams struct {
+	AnchorTime         time.Time
+	DeploymentIDs      []string
+	Before             time.Duration
+	After              time.Duration
+	LimitPerDeployment int
 }
 
 // ContextPageDirection 表示上下文游标分页的方向。
@@ -546,26 +559,21 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 //   - 按 deployment_id 分组的日志上下文
 //   - 目标日志不存在或不属于 DeploymentIDs 时返回 ErrLogEntryNotFound
 func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
-	result := ContextResult{
-		TargetID:          p.TargetID,
-		ItemsByDeployment: map[string][]model.LogEntry{},
-	}
+	result := ContextResult{TargetID: p.TargetID, ItemsByDeployment: map[string][]model.LogEntry{}}
 	if p.TargetID <= 0 || len(p.DeploymentIDs) == 0 {
 		return result, ErrLogEntryNotFound
 	}
-	if p.Before <= 0 {
-		p.Before = 30 * time.Second
-	}
-	if p.After <= 0 {
-		p.After = 30 * time.Second
-	}
 
-	targetQuery := fmt.Sprintf(
-		"SELECT timestamp FROM log_entries WHERE id = ? AND deployment_id IN (%s)",
-		placeholders(len(p.DeploymentIDs)),
-	)
+	targetQuery := "SELECT timestamp FROM log_entries WHERE id = ?"
 	args := []any{p.TargetID}
-	args = appendDeploymentArgs(args, p.DeploymentIDs)
+	if p.TargetDeploymentID != "" {
+		// TargetDeploymentID identifies the selected log; DeploymentIDs remains the context scope.
+		targetQuery += " AND deployment_id = ?"
+		args = append(args, p.TargetDeploymentID)
+	} else {
+		targetQuery = fmt.Sprintf("%s AND deployment_id IN (%s)", targetQuery, placeholders(len(p.DeploymentIDs)))
+		args = appendDeploymentArgs(args, p.DeploymentIDs)
+	}
 	if err := s.db.QueryRow(targetQuery, args...).Scan(&result.AnchorTime); err != nil {
 		if err == sql.ErrNoRows {
 			return result, ErrLogEntryNotFound
@@ -573,33 +581,101 @@ func (s *Store) FetchContext(p ContextParams) (ContextResult, error) {
 		return result, err
 	}
 
-	for _, deploymentID := range p.DeploymentIDs {
-		result.ItemsByDeployment[deploymentID] = []model.LogEntry{}
+	return s.fetchContextWindow(p.TargetID, result.AnchorTime, p.DeploymentIDs, p.Before, p.After, p.LimitPerDeployment)
+}
+
+// FetchContextAt 以已知锚点时间拉取指定部署集合在时间窗口内的日志。
+//
+// 参数：
+//   - p: AnchorTime 为上下文中心时间，DeploymentIDs 限定部署集合，Before/After 控制时间窗口
+//
+// 返回：
+//   - 按 deployment_id 分组的日志上下文
+//   - 锚点时间为空或部署集合为空时返回 ErrLogEntryNotFound
+func (s *Store) FetchContextAt(p ContextAtParams) (ContextResult, error) {
+	result := ContextResult{AnchorTime: p.AnchorTime, ItemsByDeployment: map[string][]model.LogEntry{}}
+	if p.AnchorTime.IsZero() || len(p.DeploymentIDs) == 0 {
+		return result, ErrLogEntryNotFound
+	}
+	return s.fetchContextWindow(0, p.AnchorTime, p.DeploymentIDs, p.Before, p.After, p.LimitPerDeployment)
+}
+
+func (s *Store) fetchContextWindow(targetID int64, anchorTime time.Time, deploymentIDs []string, before time.Duration, after time.Duration, limitPerDeployment int) (ContextResult, error) {
+	result := ContextResult{
+		TargetID:          targetID,
+		AnchorTime:        anchorTime,
+		ItemsByDeployment: map[string][]model.LogEntry{},
+	}
+	if before <= 0 {
+		before = 30 * time.Second
+	}
+	if after <= 0 {
+		after = 30 * time.Second
+	}
+	if limitPerDeployment <= 0 {
+		limitPerDeployment = defaultContextLimitPerDeployment
 	}
 
-	from := result.AnchorTime.Add(-p.Before)
-	to := result.AnchorTime.Add(p.After)
-	contextQuery := fmt.Sprintf(`
+	from := result.AnchorTime.Add(-before)
+	to := result.AnchorTime.Add(after)
+	beforeLimit := limitPerDeployment / 2
+	afterLimit := limitPerDeployment - beforeLimit
+	for _, deploymentID := range deploymentIDs {
+		result.ItemsByDeployment[deploymentID] = []model.LogEntry{}
+		if beforeLimit > 0 {
+			beforeEntries, err := s.fetchContextHalfWindow(deploymentID, from, result.AnchorTime, beforeLimit, true)
+			if err != nil {
+				return result, err
+			}
+			result.ItemsByDeployment[deploymentID] = append(result.ItemsByDeployment[deploymentID], beforeEntries...)
+		}
+		if afterLimit > 0 {
+			afterEntries, err := s.fetchContextHalfWindow(deploymentID, result.AnchorTime, to, afterLimit, false)
+			if err != nil {
+				return result, err
+			}
+			result.ItemsByDeployment[deploymentID] = append(result.ItemsByDeployment[deploymentID], afterEntries...)
+		}
+	}
+	return result, nil
+}
+
+func (s *Store) fetchContextHalfWindow(deploymentID string, from time.Time, to time.Time, limit int, beforeAnchor bool) ([]model.LogEntry, error) {
+	comparator := "timestamp >= ? AND timestamp < ?"
+	order := "DESC"
+	if !beforeAnchor {
+		comparator = "timestamp >= ? AND timestamp <= ?"
+		order = "ASC"
+	}
+	query := fmt.Sprintf(`
 		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key
 		FROM log_entries
-		WHERE deployment_id IN (%s) AND timestamp >= ? AND timestamp <= ?
-		ORDER BY timestamp ASC, id ASC
-	`, placeholders(len(p.DeploymentIDs)))
-	contextArgs := appendDeploymentArgs([]any{}, p.DeploymentIDs)
-	contextArgs = append(contextArgs, from, to)
-	rows, err := s.db.Query(contextQuery, contextArgs...)
+		WHERE deployment_id = ? AND %s
+		ORDER BY timestamp %s, id %s
+		LIMIT ?
+	`, comparator, order, order)
+	rows, err := s.db.Query(query, deploymentID, from, to, limit)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 	defer rows.Close()
+	entries := []model.LogEntry{}
 	for rows.Next() {
 		var e model.LogEntry
 		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
-			return result, err
+			return nil, err
 		}
-		result.ItemsByDeployment[e.DeploymentID] = append(result.ItemsByDeployment[e.DeploymentID], e)
+		entries = append(entries, e)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if beforeAnchor {
+		for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+			entries[i], entries[j] = entries[j], entries[i]
+		}
+	}
+	return entries, nil
 }
 
 // FetchContextPage 按部署和时间游标继续读取上下文日志。
