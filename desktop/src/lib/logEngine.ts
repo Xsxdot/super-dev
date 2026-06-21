@@ -61,16 +61,17 @@ export function toDisplayEntry(log: LogEntry): DisplayLogEntry {
  *
  * 前端不计算折叠签名，只认后端给的 fold_key。
  */
-export function applyEvent(entries: DisplayLogEntry[], ev: LogEvent): void {
+export function applyEvent(entries: DisplayLogEntry[], ev: LogEvent): boolean {
   if ('entry' in ev) {
     entries.push(ev.entry)
-    return
+    return true
   }
   const { deployment_id, fold_key, repeat_count } = ev.increment
   for (let i = entries.length - 1; i >= 0; i--) {
     if (entries[i].deployment_id === deployment_id && entries[i].fold_key === fold_key) {
       entries[i] = { ...entries[i], repeat_count }
-      return
+      return true
     }
   }
+  return false
 }

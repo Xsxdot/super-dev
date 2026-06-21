@@ -75,7 +75,7 @@ export function appendLive(logs: DisplayLogEntry[], entry: DisplayLogEntry): voi
   }
   const windowStart = Math.max(0, logs.length - LIVE_REORDER_WINDOW)
   // 早于窗口起点的迟到日志：放尾部，不回溯，避免可视区上方插队。
-  if (compareLogs(logs[windowStart], entry) > 0) {
+  if (windowStart > 0 && compareLogs(logs[windowStart], entry) > 0) {
     logs.push(entry)
     return
   }

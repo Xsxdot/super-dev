@@ -12,7 +12,7 @@ import { defineStore } from 'pinia'
 import { markRaw, ref } from 'vue'
 import { api, deploymentWsUrl, type LogEntry } from '@/api/agent'
 import { applyEvent, toDisplayEntry, type DisplayLogEntry } from '@/lib/logEngine'
-import { insertSorted } from '@/lib/logOrder'
+import { appendLive, insertSorted } from '@/lib/logOrder'
 
 const MAX_LOGS = 5000
 const TRIM_BATCH = 500
@@ -34,6 +34,8 @@ interface DeploymentSession {
   lastSeen: LogCursor | null
   reconnectAttempts: number
   discontinuous: boolean
+  liveStartIndex: number
+  trimmedFoldKeys: Map<string, number>
 }
 
 export interface LoadHistoryResult {
@@ -64,6 +66,8 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       lastSeen: null,
       reconnectAttempts: 0,
       discontinuous: false,
+      liveStartIndex: 0,
+      trimmedFoldKeys: new Map(),
     }
   }
 
@@ -71,34 +75,83 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return { time: log.timestamp, id: String(log.id ?? '') }
   }
 
+  // diagnostic 通过 superdev:log-panel 事件打点，非 console.log，便于 tail_logs 复盘。
+  function diagnostic(event: string, ctx: Record<string, unknown>) {
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent('superdev:log-panel', {
+      detail: { scope: 'log-store', level: 'debug', event, at: new Date().toISOString(), ...ctx },
+    }))
+  }
+
+  // trimHistoryHead 只裁历史区头部，并保留被裁 fold_key 的最后计数。
+  function trimHistoryHead(session: DeploymentSession, count: number) {
+    const removable = Math.min(count, session.liveStartIndex)
+    if (removable <= 0) return 0
+    const removed = session.logs.splice(0, removable)
+    for (const entry of removed) {
+      if (entry.fold_key) session.trimmedFoldKeys.set(entry.fold_key, entry.repeat_count)
+    }
+    session.liveStartIndex = Math.max(0, session.liveStartIndex - removed.length)
+    return removed.length
+  }
+
+  // trimIfNeeded 超出 MAX_LOGS 时只裁历史区头部，避免实时尾部被裁导致“最新日志被吞”。
+  function trimIfNeeded(session: DeploymentSession) {
+    if (session.logs.length <= MAX_LOGS) return
+    const removed = trimHistoryHead(session, TRIM_BATCH)
+    diagnostic('log_store.trim', { removed, kept: session.logs.length, liveStartIndex: session.liveStartIndex })
+  }
+
   /**
-   * ingestEntry 将原始日志条目转换并按时间顺序插入 session 的日志缓冲。
+   * ingestHistory 将历史日志插入历史前缀，实时后缀保持原位。
    *
    * 注意：
-   *   - 使用 insertSorted 二分插入，避免每次全量重建 Map + 全排序（O(n log n)）
-   *   - 使用 id 做去重，避免 WebSocket 重连导致重复消息
-   *   - 同 id 的日志以新内容覆盖旧内容
-   *   - 超出 MAX_LOGS 时裁剪最早的条目，防止内存无限增长
+   *   - 历史区严格按时间戳有序，用于向上翻页和 anchor 复位
+   *   - 不把已有实时日志重新归入历史区，避免分区边界乱跳
    */
-  function ingestEntry(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
+  function ingestHistory(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
     const entry = toDisplayEntry(raw)
-    insertSorted(session.logs, entry)
-    if (session.logs.length > MAX_LOGS) {
-      session.logs.splice(0, TRIM_BATCH)
-    }
+    const history = session.logs.slice(0, session.liveStartIndex)
+    insertSorted(history, entry)
+    session.logs.splice(0, session.liveStartIndex, ...history)
+    session.liveStartIndex = history.length
+    trimIfNeeded(session)
+    bumpRevision()
+    touchSessions()
+    return entry
+  }
+
+  /**
+   * ingestLive 将实时日志追加进实时后缀。
+   *
+   * 注意：
+   *   - 仅在实时区尾部做有限乱序纠正，超窗迟到日志不回插到可视区上方
+   *   - 历史前缀不参与 appendLive，避免历史/实时互相重排
+   */
+  function ingestLive(session: DeploymentSession, raw: LogEntry): DisplayLogEntry {
+    const entry = toDisplayEntry(raw)
+    const live = session.logs.slice(session.liveStartIndex)
+    appendLive(live, entry)
+    session.logs.splice(session.liveStartIndex, session.logs.length - session.liveStartIndex, ...live)
+    trimIfNeeded(session)
     bumpRevision()
     touchSessions()
     return entry
   }
 
   function applyIncrement(session: DeploymentSession, raw: LogEntry) {
-    applyEvent(session.logs, {
+    const foldKey = raw.fold_key ?? ''
+    const hit = applyEvent(session.logs, {
       increment: {
         deployment_id: raw.deployment_id,
-        fold_key: raw.fold_key ?? '',
+        fold_key: foldKey,
         repeat_count: raw.repeat_count ?? 1,
       },
     })
+    // miss 分两种：被裁剪的折叠行是预期；其他 miss 需要 diagnostic 辅助定位乱序/丢包。
+    if (!hit && !session.trimmedFoldKeys.has(foldKey)) {
+      diagnostic('log_store.increment_miss', { deploymentId: raw.deployment_id, foldKey })
+    }
     bumpRevision()
     touchSessions()
   }
@@ -119,7 +172,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         if (raw.message === '' && raw.fold_key) {
           applyIncrement(s, raw)
         } else {
-          ingestEntry(s, raw)
+          ingestLive(s, raw)
           s.lastSeen = cursorFromLog(raw)
         }
         s.reconnectAttempts = 0
@@ -223,11 +276,11 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         before: session.oldestCursor?.id,
       })
       const entries = page.items
-      const displayEntries = entries.map(toDisplayEntry)
       // 倒序插入：最新的先入，insertSorted 追加到末尾性能最优
       for (let i = entries.length - 1; i >= 0; i--) {
-        ingestEntry(session, entries[i])
+        ingestHistory(session, entries[i])
       }
+      const displayEntries = entries.map(toDisplayEntry)
       if (page.next?.id) {
         session.oldestCursor = { time: page.next.time ?? entries[0]?.timestamp ?? '', id: page.next.id }
       } else if (entries.length > 0) {
@@ -236,7 +289,10 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       session.hasMoreHistory = entries.length >= limit
       return { added: entries.length, entries: displayEntries }
     } catch (err) {
-      console.error('Failed to load deployment log history', err)
+      diagnostic('log_store.history_load_failed', {
+        deploymentId,
+        message: err instanceof Error ? err.message : String(err),
+      })
       return { added: 0, entries: [] }
     } finally {
       session.loadingMoreHistory = false
@@ -291,5 +347,36 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     hasMoreHistory,
     isLoadingMore,
     refCountOf,
+    _ingestLive: (id: string, raw: LogEntry) => {
+      const session = sessions.value.get(id)
+      if (session) ingestLive(session, raw)
+    },
+    _ingestHistory: (id: string, raw: LogEntry) => {
+      const session = sessions.value.get(id)
+      if (session) ingestHistory(session, raw)
+    },
+    // _seedForTest 直接塞一条带 fold_key 的历史行，免去构造完整 LogEntry。
+    _seedForTest: (id: string, { foldKey, repeatCount }: { foldKey: string; repeatCount: number }) => {
+      const session = sessions.value.get(id)
+      if (!session) return
+      session.logs.unshift({
+        id: `seed-${foldKey}`,
+        deployment_id: id,
+        run_id: '',
+        timestamp: '2026-06-21T00:00:00Z',
+        level: 'INFO',
+        message: 'seed',
+        stream: 'stdout',
+        repeat_count: repeatCount,
+        fold_key: foldKey,
+      } as DisplayLogEntry)
+      session.liveStartIndex++
+    },
+    _trimHistoryHead: (id: string, count: number) => {
+      const session = sessions.value.get(id)
+      if (!session) return
+      trimHistoryHead(session, count)
+    },
+    _trimmedFoldKeysForTest: (id: string) => sessions.value.get(id)?.trimmedFoldKeys ?? new Map<string, number>(),
   }
 })
