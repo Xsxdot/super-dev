@@ -14,7 +14,9 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/xsxdot/super-dev/agent/api"
 )
@@ -46,14 +48,73 @@ func main() {
 	if err != nil {
 		log.Fatal("create app:", err)
 	}
-	defer app.Close()
 
-	log.Printf("SuperDev agent listening on %s", *addr)
-	log.Fatal(app.Start(*addr))
+	// 监听 SIGTERM/SIGINT：桌面端退出会先发 SIGTERM，agent 借此主动停掉所有
+	// 托管服务（app.Close 内含 procMgr.StopAll）再退出，避免遗留孤儿进程。
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("SuperDev agent listening on %s", *addr)
+		errCh <- app.Start(*addr)
+	}()
+
+	notifyCh := make(chan struct{}, 1)
+	go func() {
+		<-sigCh
+		notifyCh <- struct{}{}
+	}()
+
+	reason, startErr := waitForShutdown(notifyCh, errCh)
+	switch reason {
+	case shutdownBySignal:
+		log.Printf("SuperDev agent received shutdown signal, stopping managed services")
+	case shutdownByServerExit:
+		log.Printf("SuperDev agent server exited: %v", startErr)
+	}
+
+	app.Close()
+	log.Printf("SuperDev agent stopped")
+
+	if reason == shutdownByServerExit && startErr != nil {
+		os.Exit(1)
+	}
 }
 
 // defaultDataDir 返回默认的数据目录路径（~/.superdev）。
 func defaultDataDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".superdev")
+}
+
+// shutdownReason 标识 agent 退出的触发来源，用于日志归因与退出码决策。
+type shutdownReason int
+
+const (
+	// shutdownBySignal 表示收到 SIGTERM/SIGINT，由桌面端退出或用户主动停止触发。
+	shutdownBySignal shutdownReason = iota
+	// shutdownByServerExit 表示 HTTP server 自行返回（多为监听失败）。
+	shutdownByServerExit
+)
+
+// waitForShutdown 阻塞等待「收到退出信号」或「server 退出」中先到的一个。
+//
+// 参数：
+//   - sigCh: 收到退出信号时会有一个事件；
+//   - errCh: server 退出时投递其返回值（可能为 nil）。
+//
+// 返回：
+//   - reason: 触发退出的来源；
+//   - err: 仅 server 退出路径携带其原始错误，信号路径恒为 nil。
+//
+// 注意：两个事件可能几乎同时到达，select 任取其一即可，后续 app.Close 幂等。
+func waitForShutdown(sigCh <-chan struct{}, errCh <-chan error) (shutdownReason, error) {
+	select {
+	case <-sigCh:
+		return shutdownBySignal, nil
+	case err := <-errCh:
+		return shutdownByServerExit, err
+	}
 }
