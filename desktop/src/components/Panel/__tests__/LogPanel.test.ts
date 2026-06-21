@@ -970,7 +970,7 @@ describe('LogPanel', () => {
     // 可见行固定为 2 条；模拟「被过滤掉/折叠增量」——getLogs 不变，仅 revision 自增
     vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2)])
 
-    const wrapper = mount(LogPanel, {
+    mount(LogPanel, {
       props: {
         panelId: 'panel-follow-fold',
         projectId: null,
