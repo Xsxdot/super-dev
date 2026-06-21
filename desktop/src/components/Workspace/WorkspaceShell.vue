@@ -18,12 +18,14 @@ import NodeCenterView from '@/components/NodeCenter/NodeCenterView.vue'
 import RuntimeWorkbenchHeader from './RuntimeWorkbenchHeader.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useLogEvidenceStore } from '@/stores/logEvidence'
 import { useAppI18n } from '@/i18n/useAppI18n'
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import type { ProjectOverviewState } from '@/stores/workspace'
 
 const agentStore = useAgentStore()
 const workspace = useWorkspaceStore()
+const evidenceStore = useLogEvidenceStore()
 const { t } = useAppI18n()
 
 const activeOverviewTab = computed(() => {
@@ -38,6 +40,12 @@ const overviewProject = computed(() => {
 
 const isRuntimeTab = computed(() =>
   workspace.activeTab?.type === 'project' || workspace.activeTab?.type === 'deployment',
+)
+
+watch(
+  () => workspace.activeTabId,
+  tabId => evidenceStore.setActiveWorkspaceTab(tabId),
+  { immediate: true },
 )
 
 function updateOverviewState(state: ProjectOverviewState) {

@@ -27,6 +27,7 @@ export const SAME_TIME_CANDIDATE_WINDOW_MS = 5000
 export type EvidenceScopeMode = 'current' | 'selected' | 'all'
 
 export interface EvidencePin {
+  workspaceTabId: string
   id: string
   panelId: string
   trackId: string
@@ -42,6 +43,7 @@ export interface EvidencePin {
 }
 
 export interface AddEvidencePinInput {
+  workspaceTabId?: string | null
   panelId: string
   trackId: string
   trackLabel: string
@@ -55,6 +57,7 @@ export interface TogglePinResult {
 }
 
 export interface EvidenceTrackRegistration {
+  workspaceTabId?: string | null
   trackId: string
   panelId: string
   trackLabel: string
@@ -80,6 +83,14 @@ function pinIdentity(input: Pick<AddEvidencePinInput, 'trackId' | 'sourceKey' | 
   return `${input.trackId}:${input.sourceKey}:${String(input.log.id ?? '')}`
 }
 
+function workspaceTabIdOrDefault(tabId: string | null | undefined): string {
+  return tabId ?? 'default'
+}
+
+function trackRegistryKey(workspaceTabId: string, trackId: string): string {
+  return `${workspaceTabId}:${trackId}`
+}
+
 function ms(timestamp: string): number {
   const value = new Date(timestamp).getTime()
   return Number.isFinite(value) ? value : 0
@@ -102,31 +113,48 @@ function makePinId(): string {
 export const useLogEvidenceStore = defineStore('logEvidence', () => {
   const pins = ref<EvidencePin[]>([])
   const drawerOpen = ref(false)
+  const activeWorkspaceTabId = ref<string | null>(null)
   const scopeMode = ref<EvidenceScopeMode>('all')
   const currentTrackId = ref<string | null>(null)
   const selectedTrackIds = ref<Set<string>>(new Set())
   const skippedSegmentKeys = ref<Set<string>>(new Set())
+  const deselectedSegmentKeys = ref<Set<string>>(new Set())
   const timeSyncEnabled = ref(false)
   const activeTimeAnchor = ref<{ trackId: string; cursorTime: string; cursorId: string } | null>(null)
   const tracks = ref<Map<string, EvidenceTrackRegistration>>(new Map())
 
+  const activePins = computed(() => {
+    if (!activeWorkspaceTabId.value) return [...pins.value].sort(comparePinsByCursor)
+    return pins.value.filter(pin => pin.workspaceTabId === activeWorkspaceTabId.value).sort(comparePinsByCursor)
+  })
+
   const trackList = computed(() =>
-    [...tracks.value.values()].map(track => ({
-      trackId: track.trackId,
-      panelId: track.panelId,
-      trackLabel: track.trackLabel,
-      sourceKey: track.sourceKey,
-      pinCount: pins.value.filter(pin => pin.trackId === track.trackId).length,
-    })),
+    [...tracks.value.values()]
+      .filter(track => !activeWorkspaceTabId.value || (track.workspaceTabId ?? '') === activeWorkspaceTabId.value)
+      .map(track => ({
+        trackId: track.trackId,
+        panelId: track.panelId,
+        trackLabel: track.trackLabel,
+        sourceKey: track.sourceKey,
+        pinCount: activePins.value.filter(pin => pin.trackId === track.trackId).length,
+      })),
   )
 
   const scopedPins = computed(() => {
-    if (scopeMode.value === 'all') return [...pins.value].sort(comparePinsByCursor)
+    if (scopeMode.value === 'all') return [...activePins.value].sort(comparePinsByCursor)
     if (scopeMode.value === 'current') {
-      return pins.value.filter(pin => pin.trackId === currentTrackId.value).sort(comparePinsByCursor)
+      return activePins.value.filter(pin => pin.trackId === currentTrackId.value).sort(comparePinsByCursor)
     }
-    return pins.value.filter(pin => selectedTrackIds.value.has(pin.trackId)).sort(comparePinsByCursor)
+    return activePins.value.filter(pin => selectedTrackIds.value.has(pin.trackId)).sort(comparePinsByCursor)
   })
+
+  function setActiveWorkspaceTab(tabId: string | null) {
+    activeWorkspaceTabId.value = tabId
+    const visibleTrackIds = new Set(trackList.value.map(track => track.trackId))
+    selectedTrackIds.value = new Set([...selectedTrackIds.value].filter(trackId => visibleTrackIds.has(trackId)))
+    if (currentTrackId.value && !visibleTrackIds.has(currentTrackId.value)) currentTrackId.value = null
+    logEvidenceDiagnostic('debug', 'workspace_tab.change', { tabId: tabId ?? undefined })
+  }
 
   function setDrawerOpen(open: boolean) {
     drawerOpen.value = open
@@ -134,29 +162,37 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
   }
 
   function registerTrack(track: EvidenceTrackRegistration) {
-    tracks.value.set(track.trackId, track)
+    const workspaceTabId = workspaceTabIdOrDefault(track.workspaceTabId ?? activeWorkspaceTabId.value)
+    tracks.value.set(trackRegistryKey(workspaceTabId, track.trackId), { ...track, workspaceTabId })
     tracks.value = new Map(tracks.value)
-    logEvidenceDiagnostic('debug', 'track.register', { trackId: track.trackId, panelId: track.panelId })
+    logEvidenceDiagnostic('debug', 'track.register', { workspaceTabId, trackId: track.trackId, panelId: track.panelId })
   }
 
-  function unregisterTrack(trackId: string) {
-    tracks.value.delete(trackId)
+  function unregisterTrack(trackId: string, workspaceTabId: string | null = activeWorkspaceTabId.value) {
+    const tabId = workspaceTabIdOrDefault(workspaceTabId)
+    tracks.value.delete(trackRegistryKey(tabId, trackId))
     tracks.value = new Map(tracks.value)
     selectedTrackIds.value.delete(trackId)
     selectedTrackIds.value = new Set(selectedTrackIds.value)
     if (currentTrackId.value === trackId) currentTrackId.value = null
-    logEvidenceDiagnostic('debug', 'track.unregister', { trackId })
+    logEvidenceDiagnostic('debug', 'track.unregister', { workspaceTabId: tabId, trackId })
   }
 
-  function nextPinSequence(): number {
-    return pins.value.reduce((max, pin) => Math.max(max, pin.sequence), 0) + 1
+  function nextPinSequence(workspaceTabId: string): number {
+    return pins.value
+      .filter(pin => pin.workspaceTabId === workspaceTabId)
+      .reduce((max, pin) => Math.max(max, pin.sequence), 0) + 1
   }
 
   function addPin(input: AddEvidencePinInput): EvidencePin {
-    const existing = pins.value.find(pin => `${pin.trackId}:${pin.sourceKey}:${pin.logId}` === pinIdentity(input))
+    const workspaceTabId = input.workspaceTabId ?? activeWorkspaceTabId.value ?? 'default'
+    activeWorkspaceTabId.value ??= workspaceTabId
+    currentTrackId.value = input.trackId
+    const existing = pins.value.find(pin => pin.workspaceTabId === workspaceTabId && `${pin.trackId}:${pin.sourceKey}:${pin.logId}` === pinIdentity(input))
     if (existing) return existing
-    const sequence = nextPinSequence()
+    const sequence = nextPinSequence(workspaceTabId)
     const pin: EvidencePin = {
+      workspaceTabId,
       id: makePinId(),
       panelId: input.panelId,
       trackId: input.trackId,
@@ -192,7 +228,10 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
   }
 
   function togglePin(input: AddEvidencePinInput): TogglePinResult {
-    const existing = pins.value.find(pin => `${pin.trackId}:${pin.sourceKey}:${pin.logId}` === pinIdentity(input))
+    const workspaceTabId = input.workspaceTabId ?? activeWorkspaceTabId.value ?? 'default'
+    activeWorkspaceTabId.value ??= workspaceTabId
+    currentTrackId.value = input.trackId
+    const existing = pins.value.find(pin => pin.workspaceTabId === workspaceTabId && `${pin.trackId}:${pin.sourceKey}:${pin.logId}` === pinIdentity(input))
     if (existing) {
       removePin(existing.id)
       return { action: 'removed', pin: existing }
@@ -208,7 +247,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
   }
 
   function pinFor(trackId: string, sourceKey: string, logId: string): EvidencePin | null {
-    return pins.value.find(pin => pin.trackId === trackId && pin.sourceKey === sourceKey && pin.logId === String(logId)) ?? null
+    return activePins.value.find(pin => pin.trackId === trackId && pin.sourceKey === sourceKey && pin.logId === String(logId)) ?? null
   }
 
   function setEvidenceScope(mode: EvidenceScopeMode, trackId: string | null = currentTrackId.value) {
@@ -226,7 +265,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
     const out: Record<string, LogEntry[]> = {}
     for (const pin of scopedPins.value) {
       if (out[pin.trackId]) continue
-      out[pin.trackId] = tracks.value.get(pin.trackId)?.getLogs() ?? []
+      out[pin.trackId] = tracks.value.get(trackRegistryKey(pin.workspaceTabId, pin.trackId))?.getLogs() ?? []
     }
     return out
   }
@@ -236,6 +275,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
       pins: scopedPins.value,
       logsByTrack: logsByTrackForScope(),
       skippedSegmentKeys: skippedSegmentKeys.value,
+      deselectedSegmentKeys: deselectedSegmentKeys.value,
     })
   }
 
@@ -252,7 +292,37 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
     if (next.has(key)) next.delete(key)
     else next.add(key)
     skippedSegmentKeys.value = next
+    const deselected = new Set(deselectedSegmentKeys.value)
+    if (next.has(key)) deselected.delete(key)
+    deselectedSegmentKeys.value = deselected
     logEvidenceDiagnostic('info', 'segment.toggle', { segmentKey: key, skipped: next.has(key) })
+  }
+
+  function toggleSegmentSelection(key: string) {
+    if (skippedSegmentKeys.value.has(key)) return
+    const next = new Set(deselectedSegmentKeys.value)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    deselectedSegmentKeys.value = next
+    logEvidenceDiagnostic('info', 'segment.selection.toggle', { segmentKey: key, selected: !next.has(key) })
+  }
+
+  function selectAllSegments(keys: string[]) {
+    const next = new Set(deselectedSegmentKeys.value)
+    for (const key of keys) {
+      if (!skippedSegmentKeys.value.has(key)) next.delete(key)
+    }
+    deselectedSegmentKeys.value = next
+    logEvidenceDiagnostic('info', 'segment.selection.all', { count: keys.length })
+  }
+
+  function deselectAllSegments(keys: string[]) {
+    const next = new Set(deselectedSegmentKeys.value)
+    for (const key of keys) {
+      if (!skippedSegmentKeys.value.has(key)) next.add(key)
+    }
+    deselectedSegmentKeys.value = next
+    logEvidenceDiagnostic('info', 'segment.selection.none', { count: keys.length })
   }
 
   function setTimeSyncEnabled(enabled: boolean) {
@@ -270,6 +340,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
     })
     for (const track of tracks.value.values()) {
       if (track.trackId === originTrackId) continue
+      if (activeWorkspaceTabId.value && (track.workspaceTabId ?? '') !== activeWorkspaceTabId.value) continue
       void track.alignToTime(log.timestamp, String(log.id ?? ''))
     }
   }
@@ -277,7 +348,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
   async function jumpToPin(pinId: string): Promise<boolean> {
     const pin = pins.value.find(item => item.id === pinId)
     if (!pin) return false
-    const track = tracks.value.get(pin.trackId)
+    const track = tracks.value.get(trackRegistryKey(pin.workspaceTabId, pin.trackId))
     if (!track) return false
     const ok = await track.jumpToLog(pin.logId)
     logEvidenceDiagnostic(ok ? 'info' : 'warn', 'pin.jump', { trackId: pin.trackId, pinId: pin.id, pinLabel: pin.label, cursorId: pin.logId })
@@ -290,6 +361,7 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
     const candidates: SameTimePinCandidate[] = []
     for (const track of tracks.value.values()) {
       if (track.trackId === pin.trackId) continue
+      if ((track.workspaceTabId ?? 'default') !== pin.workspaceTabId) continue
       const logs = track.getLogs()
       const index = nearestLogIndexByCursorTime(logs, pin.log.timestamp, pin.log.id)
       if (index < 0) continue
@@ -297,30 +369,41 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
       const distanceMs = Math.abs(ms(log.timestamp) - ms(pin.log.timestamp))
       if (distanceMs > SAME_TIME_CANDIDATE_WINDOW_MS) continue
       // 候选列表只展示尚未在目标轨道打钉的邻近日志，避免一键重复制造证据点。
-      if (pinFor(track.trackId, track.sourceKey, log.id)) continue
+      if (pins.value.some(existing =>
+        existing.workspaceTabId === pin.workspaceTabId
+        && existing.trackId === track.trackId
+        && existing.sourceKey === track.sourceKey
+        && existing.logId === String(log.id ?? ''),
+      )) continue
       candidates.push({ trackId: track.trackId, trackLabel: track.trackLabel, sourceKey: track.sourceKey, log, distanceMs })
     }
     return candidates.sort((a, b) => a.distanceMs - b.distanceMs)
   }
 
   function clearAll() {
-    const count = pins.value.length
-    pins.value = []
+    const tabId = activeWorkspaceTabId.value
+    const count = tabId ? pins.value.filter(pin => pin.workspaceTabId === tabId).length : pins.value.length
+    pins.value = tabId ? pins.value.filter(pin => pin.workspaceTabId !== tabId) : []
     skippedSegmentKeys.value = new Set()
+    deselectedSegmentKeys.value = new Set()
     logEvidenceDiagnostic('info', 'pins.clear_all', { count })
   }
 
   return {
     pins,
     drawerOpen,
+    activeWorkspaceTabId,
     scopeMode,
     currentTrackId,
     selectedTrackIds,
     skippedSegmentKeys,
+    deselectedSegmentKeys,
     timeSyncEnabled,
     activeTimeAnchor,
     trackList,
+    activePins,
     scopedPins,
+    setActiveWorkspaceTab,
     setDrawerOpen,
     registerTrack,
     unregisterTrack,
@@ -335,6 +418,9 @@ export const useLogEvidenceStore = defineStore('logEvidence', () => {
     formatPinnedLinesMarkdown: formatPinnedLinesMarkdownForScope,
     formatEvidencePackageMarkdown,
     toggleSegmentSkipped,
+    toggleSegmentSelection,
+    selectAllSegments,
+    deselectAllSegments,
     setTimeSyncEnabled,
     alignOtherTracksToLog,
     jumpToPin,

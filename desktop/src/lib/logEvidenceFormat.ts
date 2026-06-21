@@ -19,6 +19,7 @@ export interface EvidenceSegment {
   to: EvidencePin
   logs: LogEntry[]
   skipped: boolean
+  selected: boolean
 }
 
 export interface EvidenceTrackExport {
@@ -38,6 +39,7 @@ export interface BuildEvidenceExportModelInput {
   pins: EvidencePin[]
   logsByTrack: Record<string, LogEntry[]>
   skippedSegmentKeys: Set<string>
+  deselectedSegmentKeys?: Set<string>
 }
 
 function cursorMs(log: Pick<LogEntry, 'timestamp'>): number {
@@ -163,6 +165,7 @@ export function buildEvidenceExportModel(input: BuildEvidenceExportModelInput): 
         to,
         logs: logsBetween(input.logsByTrack[trackId] ?? [], from, to),
         skipped: input.skippedSegmentKeys.has(key),
+        selected: !input.skippedSegmentKeys.has(key) && !(input.deselectedSegmentKeys?.has(key) ?? false),
       })
     }
     tracks.push({
@@ -209,11 +212,12 @@ export function formatEvidenceMarkdown(model: EvidenceExportModel): string {
   parts.push('', '## Segments', '')
   for (const track of model.tracks) {
     parts.push(`### Track: ${track.trackLabel}`, '')
-    if (track.segments.length === 0) {
-      parts.push('- No same-track intervals', '')
+    const selectedSegments = track.segments.filter(segment => segment.selected)
+    if (selectedSegments.length === 0) {
+      parts.push('- No selected same-track intervals', '')
       continue
     }
-    parts.push(...track.segments.map(formatSegment), '')
+    parts.push(...selectedSegments.map(formatSegment), '')
   }
   parts.push('## Timeline', '')
   for (const pin of model.timeline) {

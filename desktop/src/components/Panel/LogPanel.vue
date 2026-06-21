@@ -12,6 +12,7 @@ import { useLogEvidenceStore } from '@/stores/logEvidence'
 import { usePanelStore } from '@/stores/panel'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
+import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
 import BookmarkMarkerRow from './BookmarkMarkerRow.vue'
@@ -59,6 +60,7 @@ const deploymentNodeSelectionStore = useDeploymentNodeSelectionStore()
 const logLifecycleStore = useLogLifecycleStore()
 const evidenceStore = useLogEvidenceStore()
 const panelStore = usePanelStore()
+const workspaceStore = useWorkspaceStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
 const { t } = useI18n()
@@ -78,6 +80,7 @@ const timeAnchorLogId = ref<string | null>(null)
 const contextMenu = ref<{ x: number; y: number; log: DisplayLogEntry } | null>(null)
 const editingPinId = ref<string | null>(null)
 const pinNotePopoverStyle = ref<Record<string, string>>({ left: '14px', top: '44px' })
+const registeredEvidenceTrack = ref<{ workspaceTabId: string; trackId: string } | null>(null)
 
 const markerStartId = ref('')
 const markerEndId = ref('')
@@ -105,6 +108,8 @@ const currentDeploymentInfo = computed(() => {
 })
 
 const evidenceSourceKey = computed(() => deploymentIdFromSource(props.source) ?? props.panelId)
+
+const evidenceWorkspaceTabId = computed(() => workspaceStore.activeTabId ?? 'default')
 
 const evidenceTrackLabel = computed(() => {
   const deploymentId = deploymentIdFromSource(props.source)
@@ -199,7 +204,9 @@ watch(
 onUnmounted(() => {
   const deploymentId = deploymentIdFromSource(props.source)
   if (deploymentId) deploymentLogStore.unsubscribe(deploymentId)
-  evidenceStore.unregisterTrack(props.panelId)
+  if (registeredEvidenceTrack.value) {
+    evidenceStore.unregisterTrack(registeredEvidenceTrack.value.trackId, registeredEvidenceTrack.value.workspaceTabId)
+  }
   historyLoadToken++
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
@@ -364,7 +371,10 @@ function isHighlighted(log: DisplayLogEntry): boolean {
 }
 
 function registerEvidenceTrack() {
+  const workspaceTabId = evidenceWorkspaceTabId.value
+  evidenceStore.setActiveWorkspaceTab(workspaceTabId)
   evidenceStore.registerTrack({
+    workspaceTabId,
     trackId: props.panelId,
     panelId: props.panelId,
     trackLabel: evidenceTrackLabel.value,
@@ -373,6 +383,7 @@ function registerEvidenceTrack() {
     jumpToLog,
     alignToTime,
   })
+  registeredEvidenceTrack.value = { workspaceTabId, trackId: props.panelId }
 }
 
 function evidencePinFor(log: DisplayLogEntry) {
@@ -383,6 +394,7 @@ function toggleEvidencePin(log: DisplayLogEntry) {
   const existing = evidencePinFor(log)
   if (existing?.note.trim() && !window.confirm(t('panel.evidence.confirmRemoveNotedPin'))) return
   evidenceStore.togglePin({
+    workspaceTabId: evidenceWorkspaceTabId.value,
     panelId: props.panelId,
     trackId: props.panelId,
     trackLabel: evidenceTrackLabel.value,

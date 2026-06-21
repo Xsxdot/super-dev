@@ -175,6 +175,7 @@ describe('BottomBar', () => {
     const apiPanel = panelStore.allLeaves.find(leaf => leaf.serviceId === apiDep)!
 
     evidenceStore.addPin({
+      workspaceTabId: 'default',
       panelId: apiPanel.id,
       trackId: apiPanel.id,
       trackLabel: 'api · dev',

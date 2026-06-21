@@ -725,6 +725,7 @@ describe('LogPanel', () => {
     await nextTick()
 
     expect(registerTrack).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceTabId: 'default',
       trackId: 'panel-evidence',
       panelId: 'panel-evidence',
       sourceKey: 'dep-1',
@@ -732,7 +733,7 @@ describe('LogPanel', () => {
 
     wrapper.unmount()
 
-    expect(unregisterTrack).toHaveBeenCalledWith('panel-evidence')
+    expect(unregisterTrack).toHaveBeenCalledWith('panel-evidence', 'default')
   })
 
   it('双击日志行时在当前 track 添加证据钉子', async () => {
@@ -848,6 +849,7 @@ describe('LogPanel', () => {
     await Promise.resolve()
     await nextTick()
     const pin = evidenceStore.addPin({
+      workspaceTabId: 'default',
       panelId: 'panel-jump',
       trackId: 'panel-jump',
       trackLabel: 'dep-1',

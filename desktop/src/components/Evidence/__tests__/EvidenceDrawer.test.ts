@@ -46,6 +46,7 @@ function makeLog(id: string, deploymentId: string, timestamp: string, message: s
 
 function makeTrack(trackId: string, label: string, logs: LogEntry[], jumpToLog = vi.fn()): EvidenceTrackRegistration {
   return {
+    workspaceTabId: 'tab-a',
     trackId,
     panelId: trackId,
     trackLabel: label,
@@ -58,6 +59,7 @@ function makeTrack(trackId: string, label: string, logs: LogEntry[], jumpToLog =
 
 function seedEvidenceStore() {
   const store = useLogEvidenceStore()
+  store.setActiveWorkspaceTab('tab-a')
   const apiFirst = makeLog('1', 'dep-api', '2026-06-20T10:00:00.000Z', 'api first')
   const worker = makeLog('2', 'dep-worker', '2026-06-20T10:00:01.000Z', 'worker near')
   const apiSecond = makeLog('3', 'dep-api', '2026-06-20T10:00:02.000Z', 'api second')
@@ -67,9 +69,9 @@ function seedEvidenceStore() {
 
   store.registerTrack(makeTrack('api', 'api · dev', [apiFirst, apiSecond], apiJump))
   store.registerTrack(makeTrack('worker', 'worker · dev', [workerCandidate, worker], workerJump))
-  const p1 = store.addPin({ panelId: 'api', trackId: 'api', trackLabel: 'api · dev', sourceKey: 'dep-api', log: apiFirst })
-  const p2 = store.addPin({ panelId: 'worker', trackId: 'worker', trackLabel: 'worker · dev', sourceKey: 'dep-worker', log: worker })
-  const p3 = store.addPin({ panelId: 'api', trackId: 'api', trackLabel: 'api · dev', sourceKey: 'dep-api', log: apiSecond })
+  const p1 = store.addPin({ workspaceTabId: 'tab-a', panelId: 'api', trackId: 'api', trackLabel: 'api · dev', sourceKey: 'dep-api', log: apiFirst })
+  const p2 = store.addPin({ workspaceTabId: 'tab-a', panelId: 'worker', trackId: 'worker', trackLabel: 'worker · dev', sourceKey: 'dep-worker', log: worker })
+  const p3 = store.addPin({ workspaceTabId: 'tab-a', panelId: 'api', trackId: 'api', trackLabel: 'api · dev', sourceKey: 'dep-api', log: apiSecond })
   store.updateNote(p1.id, 'retry starts')
 
   return { store, p1, p2, p3, apiJump, workerJump }
@@ -118,18 +120,49 @@ describe('EvidenceDrawer', () => {
     expect(apiJump).toHaveBeenCalledWith('1')
   })
 
-  it('can switch scope to selected tracks', async () => {
-    const { store } = seedEvidenceStore()
+  it('removes pinned-only and scope tabs from the drawer navigation', () => {
+    seedEvidenceStore()
     const wrapper = mountDrawer()
 
-    await wrapper.find('[data-test="scope-selected"]').trigger('click')
-    await wrapper.find('[data-test="track-worker"]').setValue(true)
-
-    expect(store.scopeMode).toBe('selected')
-    expect(store.scopedPins.map(pin => pin.trackId)).toEqual(['worker'])
+    expect(wrapper.find('[data-test="tab-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="evidence-track-selector"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tab-timeline"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="tab-segments"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="tab-preview"]').exists()).toBe(true)
   })
 
-  it('segments only connect same-track pins and can be skipped in preview', async () => {
+  it('renders as a left floating draggable drawer', () => {
+    seedEvidenceStore()
+    const wrapper = mountDrawer()
+
+    expect(wrapper.find('[data-test="evidence-drag-handle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="evidence-resize-handle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="evidence-drawer"]').classes()).toContain('left-floating')
+  })
+
+  it('uses inspector chrome without a crowded header toolbar', () => {
+    seedEvidenceStore()
+    const wrapper = mountDrawer()
+
+    expect(wrapper.find('.drawer-header [data-test="copy-evidence"]').exists()).toBe(false)
+    expect(wrapper.find('.drawer-header [data-test="export-evidence"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="evidence-timeline-list"]').classes()).toContain('timeline-rail')
+  })
+
+  it('shows package actions only on Segments and Preview tabs', async () => {
+    seedEvidenceStore()
+    const wrapper = mountDrawer()
+
+    expect(wrapper.find('[data-test="drawer-footer-actions"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="tab-segments"]').trigger('click')
+    expect(wrapper.find('[data-test="drawer-footer-actions"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="tab-preview"]').trigger('click')
+    expect(wrapper.find('[data-test="drawer-footer-actions"]').exists()).toBe(true)
+  })
+
+  it('segments only connect same-track pins and selected segments drive preview', async () => {
     const { store } = seedEvidenceStore()
     const wrapper = mountDrawer()
 
@@ -141,11 +174,11 @@ describe('EvidenceDrawer', () => {
 
     const segment = store.exportModel().tracks.find(track => track.trackId === 'api')?.segments[0]
     expect(segment?.key).toBeTruthy()
-    store.toggleSegmentSkipped(segment!.key)
-    expect(store.skippedSegmentKeys.size).toBe(1)
+    store.toggleSegmentSelection(segment!.key)
+    expect(store.deselectedSegmentKeys.size).toBe(1)
     await wrapper.find('[data-test="tab-preview"]').trigger('click')
 
-    expect(wrapper.find('[data-test="evidence-preview"]').text()).toContain('Omitted P1 -> P3')
+    expect(wrapper.find('[data-test="evidence-preview"]').text()).not.toContain('Segment P1 -> P3')
   })
 
   it('segment list toggles skipped segments directly', async () => {
@@ -161,20 +194,57 @@ describe('EvidenceDrawer', () => {
 
     expect(toggleSegmentSkipped).toHaveBeenCalledTimes(1)
     expect(store.skippedSegmentKeys.size).toBe(1)
+    expect(store.exportModel().tracks[0].segments[0].selected).toBe(false)
   })
 
   it('renders same-time candidates and can pin one explicitly', async () => {
     const { store } = seedEvidenceStore()
     const wrapper = mountDrawer()
 
+    await wrapper.findAll('[data-test="evidence-timeline-item"]')[0].trigger('click')
     await wrapper.find('[data-test="same-time-candidate-pin"]').trigger('click')
 
     expect(store.pins.some(pin => pin.logId === '10' && pin.trackId === 'worker')).toBe(true)
   })
 
+  it('shows same-time candidates at the bottom only after selecting a pin', async () => {
+    seedEvidenceStore()
+    const wrapper = mountDrawer()
+
+    expect(wrapper.find('[data-test="same-time-candidate-panel"]').exists()).toBe(false)
+
+    await wrapper.findAll('[data-test="evidence-timeline-item"]')[0].trigger('click')
+
+    expect(wrapper.find('[data-test="same-time-candidate-panel"]').exists()).toBe(true)
+    const candidate = wrapper.find('[data-test="same-time-candidate-pin"]')
+    expect(candidate.text()).toContain('#10')
+    expect(candidate.text().length).toBeLessThan(24)
+  })
+
+  it('opens a timeline pin menu for copy, copy with cursor, and removal', async () => {
+    const { store, p1 } = seedEvidenceStore()
+    const wrapper = mountDrawer()
+
+    await wrapper.findAll('[data-test="timeline-pin-more"]')[0].trigger('click')
+    expect(wrapper.find('[data-test="timeline-pin-menu"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="timeline-copy-log"]').trigger('click')
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('api first')
+
+    await wrapper.findAll('[data-test="timeline-pin-more"]')[0].trigger('click')
+    await wrapper.find('[data-test="timeline-copy-log-with-cursor"]').trigger('click')
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('cursor_id: 1'))
+
+    await wrapper.findAll('[data-test="timeline-pin-more"]')[0].trigger('click')
+    await wrapper.find('[data-test="timeline-remove-pin"]').trigger('click')
+    expect(store.pins.some(pin => pin.id === p1.id)).toBe(false)
+  })
+
   it('copies and exports Markdown evidence', async () => {
     seedEvidenceStore()
     const wrapper = mountDrawer()
+
+    await wrapper.find('[data-test="tab-segments"]').trigger('click')
 
     await wrapper.find('[data-test="copy-evidence"]').trigger('click')
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('# SuperDev Log Evidence'))
@@ -190,6 +260,7 @@ describe('EvidenceDrawer', () => {
     seedEvidenceStore()
     const wrapper = mountDrawer()
 
+    await wrapper.find('[data-test="tab-segments"]').trigger('click')
     await wrapper.find('[data-test="copy-evidence"]').trigger('click')
     await nextTick()
 
@@ -208,12 +279,14 @@ describe('EvidenceDrawer', () => {
     expect(store.drawerOpen).toBe(false)
   })
 
-  it('renders clear evidence as a text button instead of a fixed-width icon button', () => {
+  it('renders clear evidence as a text button instead of a fixed-width icon button', async () => {
     seedEvidenceStore()
     const wrapper = mountDrawer()
+
+    await wrapper.find('[data-test="tab-segments"]').trigger('click')
     const clearButton = wrapper.find('[data-test="clear-evidence"]')
 
-    expect(clearButton.classes()).toContain('action-btn')
+    expect(clearButton.classes()).toContain('footer-action')
     expect(clearButton.classes()).not.toContain('icon-btn')
   })
 })

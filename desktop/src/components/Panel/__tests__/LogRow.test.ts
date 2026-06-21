@@ -30,6 +30,7 @@ function makeLog(): DisplayLogEntry {
 
 function makePin(log = makeLog()): EvidencePin {
   return {
+    workspaceTabId: 'tab-a',
     id: 'pin-1',
     panelId: 'panel-api',
     trackId: 'panel-api',

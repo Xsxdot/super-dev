@@ -318,7 +318,7 @@ onBeforeUnmount(() => {
         :aria-expanded="evidenceStore.drawerOpen"
         @click="evidenceStore.setDrawerOpen(!evidenceStore.drawerOpen)"
       >
-        {{ t('bottomBar.evidencePins', { count: evidenceStore.pins.length }) }}
+        {{ t('bottomBar.evidencePins', { count: evidenceStore.activePins.length }) }}
       </button>
       <EvidenceDrawer v-if="evidenceStore.drawerOpen" />
     </section>

@@ -35,6 +35,7 @@ function makeLog(id: string, deploymentId: string, timestamp: string, message: s
 
 function makePin(sequence: number, trackId: string, trackLabel: string, log: LogEntry, note = ''): EvidencePin {
   return {
+    workspaceTabId: 'tab-a',
     id: `pin-${sequence}`,
     panelId: trackId,
     trackId,
@@ -109,7 +110,7 @@ describe('logEvidenceFormat', () => {
     expect(model.timeline.map(item => item.label)).toEqual(['P1', 'P2', 'P3'])
   })
 
-  it('renders skipped intervals as omitted gaps with boundary cursors', () => {
+  it('omits skipped intervals from selected Markdown output', () => {
     const p1 = makePin(1, 'panel-api', 'api · dev', makeLog('1', 'dep-api', '2026-06-20T10:00:00.000Z', 'api first'))
     const p2 = makePin(2, 'panel-api', 'api · dev', makeLog('2', 'dep-api', '2026-06-20T10:00:02.000Z', 'api second'))
     const model = buildEvidenceExportModel({
@@ -120,10 +121,8 @@ describe('logEvidenceFormat', () => {
 
     const markdown = formatEvidenceMarkdown(model)
 
-    expect(markdown).toContain('### Omitted P1 -> P2')
-    expect(markdown).toContain('- reason: user skipped this interval')
-    expect(markdown).toContain('- from_cursor_id: 1')
-    expect(markdown).toContain('- to_cursor_id: 2')
+    expect(markdown).not.toContain('### Omitted P1 -> P2')
+    expect(markdown).toContain('- No selected same-track intervals')
   })
 
   it('finds the nearest loaded log by timestamp and cursor id', () => {
