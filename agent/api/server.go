@@ -502,7 +502,7 @@ func agentTargetSource(hostStore *remote.Store, agentStore *remote.AgentStore) n
 //
 // 注意：
 //   - 退出路径可能从信号 handler 与 main 的 defer 同时触发，故用 sync.Once 保证清理只执行一次。
-//   - 清理包含 procMgr.StopAll()，会停掉本进程托管的所有服务进程组，避免退出后遗留孤儿。
+//   - 清理包含项目 manager 与 procMgr 的 StopAll()，会停掉本进程托管的所有服务进程组，避免退出后遗留孤儿。
 func (a *App) Close() {
 	a.closeOnce.Do(func() {
 		if a.closeFn != nil {
@@ -533,6 +533,7 @@ func (a *App) doClose() {
 	if a.logCleanupDone != nil {
 		<-a.logCleanupDone
 	}
+	a.stopProjectManagers()
 	if a.procMgr != nil {
 		log.Printf("[SuperDev] shutdown: stopping all managed services")
 		a.procMgr.StopAll()
@@ -548,6 +549,29 @@ func (a *App) doClose() {
 	if a.store != nil {
 		a.store.Close()
 	}
+}
+
+// stopProjectManagers 停止所有项目级 deployment manager 中的本地托管进程。
+//
+// 注意：只在持锁时复制 manager 快照，实际 StopAll 在锁外执行，避免停止进程时阻塞项目状态读写。
+func (a *App) stopProjectManagers() {
+	a.mu.RLock()
+	managers := make([]*process.Manager, 0, len(a.managers))
+	for _, mgr := range a.managers {
+		if mgr != nil {
+			managers = append(managers, mgr)
+		}
+	}
+	a.mu.RUnlock()
+
+	if len(managers) == 0 {
+		return
+	}
+	log.Printf("[SuperDev] shutdown: stopping project managed services projects=%d", len(managers))
+	for _, mgr := range managers {
+		mgr.StopAll()
+	}
+	log.Printf("[SuperDev] shutdown: project managed services stopped")
 }
 
 // Handler 构建并返回 HTTP 路由处理器。
