@@ -28,6 +28,7 @@ import {
 import { formatLogWithCursor, nearestLogIndexByCursorTime } from '@/lib/logEvidenceFormat'
 import { logEvidenceDiagnostic } from '@/lib/logEvidenceDiagnostics'
 import type { DisplayLogEntry } from '@/lib/logEngine'
+import { ScrollIntentMachine, type ScrollIntent } from '@/lib/logScrollIntent'
 import type { EvidencePin } from '@/stores/logEvidence'
 import type { PanelSource } from '@/stores/panel'
 import {
@@ -63,7 +64,7 @@ const nodeStore = useNodeStore()
 const { t } = useI18n()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
-const isFollowing = ref(true)
+const scrollIntent = ref<ScrollIntent>('follow-bottom')
 const newLogCount = ref(0)
 const logListEl = ref<HTMLElement | null>(null)
 const isLoadingHistory = ref(false)
@@ -91,7 +92,6 @@ const remoteManagedStatuses = computed(() =>
 )
 
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
-let scrollRetryTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
 let historyLoadToken = 0
 
@@ -162,7 +162,7 @@ async function subscribeDeployment(deploymentId: string) {
   const newest = logs[logs.length - 1]
   initialHistoryBoundary.value = newest ? { timestamp: newest.timestamp, id: newest.id } : null
   refreshDisplayImmediately()
-  if (isFollowing.value) pinToBottomIfFollowing()
+  if (scrollIntent.value === 'follow-bottom') scrollMachine.jumpToBottom()
 }
 
 onMounted(() => {
@@ -183,7 +183,7 @@ watch(
     initialHistoryBoundary.value = null
     if (deploymentId) void subscribeDeployment(deploymentId)
     registerEvidenceTrack()
-    isFollowing.value = true
+    scrollMachine.jumpToBottom()
     newLogCount.value = 0
     refreshDisplayImmediately()
   },
@@ -203,7 +203,6 @@ onUnmounted(() => {
   historyLoadToken++
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
-  cancelScrollRetries()
 })
 
 const rawLogs = computed<DisplayLogEntry[]>(() => {
@@ -222,9 +221,56 @@ const panelFilterSignature = computed(() => {
   return `${panel.logic}:${chips}`
 })
 
+const projectRuleSignature = computed(() => {
+  const projectId = props.projectId
+  if (!projectId) return ''
+  return JSON.stringify(filterStore.projectRules[projectId] ?? [])
+})
+
+let ruleFilterCache: {
+  signature: string
+  rawIds: string[]
+  logs: DisplayLogEntry[]
+  filteredCount: number
+} | null = null
+
 const ruleFilterResult = computed(() => {
-  panelFilterSignature.value
-  return filterStore.applyFiltersWithStats(props.panelId, props.projectId ?? null, rawLogs.value)
+  const signature = `${props.projectId ?? ''}:${panelFilterSignature.value}:${projectRuleSignature.value}`
+  const raw = rawLogs.value
+  const cache = ruleFilterCache
+  const canIncrement =
+    !!cache &&
+    cache.signature === signature &&
+    raw.length > cache.rawIds.length &&
+    cache.rawIds.every((id, index) => raw[index]?.id === id)
+  if (canIncrement) {
+    const logs = filterStore.applyFiltersIncremental(
+      props.panelId,
+      props.projectId ?? null,
+      cache.logs,
+      raw.slice(cache.rawIds.length),
+    )
+    ruleFilterCache = {
+      signature,
+      rawIds: raw.map(log => log.id),
+      logs,
+      filteredCount: raw.length - logs.length,
+    }
+    logPanelDiagnostic('debug', 'filter.incremental', {
+      rawCount: raw.length,
+      added: raw.length - cache.rawIds.length,
+      visibleCount: logs.length,
+    })
+    return { logs, filteredCount: raw.length - logs.length }
+  }
+  const result = filterStore.applyFiltersWithStats(props.panelId, props.projectId ?? null, raw)
+  ruleFilterCache = {
+    signature,
+    rawIds: raw.map(log => log.id),
+    logs: result.logs,
+    filteredCount: result.filteredCount,
+  }
+  return result
 })
 
 const ruleFilteredLogs = computed(() => ruleFilterResult.value.logs)
@@ -278,11 +324,7 @@ function scheduleDisplayRefresh() {
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
   displayRefreshTimer = setTimeout(() => {
     displayRefreshTimer = null
-    const oldCount = entryCount(cachedDisplay.value.items)
-    makeLogDisplay()
-    const newCount = entryCount(cachedDisplay.value.items)
-    applyItemsCountChange(oldCount, newCount)
-    settleVirtualizerAfterCountChange(oldCount, newCount)
+    commitDisplay()
   }, 32)
 }
 
@@ -291,12 +333,8 @@ function refreshDisplayImmediately() {
     clearTimeout(displayRefreshTimer)
     displayRefreshTimer = null
   }
-  const oldCount = entryCount(cachedDisplay.value.items)
   nextTick(() => {
-    makeLogDisplay()
-    const newCount = entryCount(cachedDisplay.value.items)
-    applyItemsCountChange(oldCount, newCount)
-    settleVirtualizerAfterCountChange(oldCount, newCount)
+    commitDisplay()
   })
 }
 
@@ -449,26 +487,19 @@ watch(
 
 watch(
   panelFilterSignature,
-  () => refreshDisplayImmediately(),
+  () => commitDisplay('filter'),
 )
 
 watch(
   nodeFilterSignature,
-  () => refreshDisplayImmediately(),
+  () => commitDisplay('filter'),
 )
 
 watch(
   () => (props.projectId ? filterStore.projectRules[props.projectId] : undefined),
-  () => scheduleDisplayRefresh(),
+  () => commitDisplay('filter'),
   { deep: true },
 )
-
-function cancelScrollRetries() {
-  if (scrollRetryTimer) {
-    clearTimeout(scrollRetryTimer)
-    scrollRetryTimer = null
-  }
-}
 
 function measureVirtualizer() {
   virtualizer.value.measure()
@@ -488,25 +519,41 @@ function logPanelDiagnostic(level: 'debug' | 'info' | 'warn', event: string, con
   }))
 }
 
-function settleVirtualizerAfterCountChange(oldCount: number, newCount: number) {
-  if (oldCount === newCount) return
+const scrollMachine = new ScrollIntentMachine({
+  scrollToBottom: () => { void scrollToBottom() },
+  scrollToLogId: logId => scrollToDisplayLog(logId, 'center'),
+  diagnostic: (event, ctx) => {
+    if (event === 'scroll_intent.transition' && typeof ctx.to === 'string') {
+      scrollIntent.value = ctx.to as ScrollIntent
+    }
+    logPanelDiagnostic('debug', event, ctx)
+  },
+})
+
+function syncScrollIntent() {
+  scrollIntent.value = scrollMachine.intent
+}
+
+// commitDisplay 原子提交 displayItems 后再 measure 和裁决滚动，避免过滤/实时变化暴露半更新态。
+function commitDisplay(kind: 'content' | 'filter' = 'content') {
+  const oldCount = entryCount(cachedDisplay.value.items)
+  makeLogDisplay()
+  const newCount = entryCount(cachedDisplay.value.items)
+  applyItemsCountChange(oldCount, newCount)
   nextTick(() => {
-    const rangeStart = virtualizer.value.range?.startIndex ?? 0
     measureVirtualizer()
+    if (kind === 'filter') {
+      scrollMachine.onFilterRebuild({ oldCount, newCount })
+    } else {
+      scrollMachine.onContentChange({ oldCount, newCount })
+    }
+    syncScrollIntent()
     logPanelDiagnostic('debug', 'virtualizer.count_change', {
       oldCount,
       newCount,
-      rangeStart,
-      following: isFollowing.value,
+      rangeStart: virtualizer.value.range?.startIndex ?? 0,
+      intent: scrollIntent.value,
     })
-    if (isFollowing.value) {
-      // 过滤规则既可能增加也可能减少可见行；follow 模式必须贴到新底部，避免停在旧 range 的空白区。
-      pinToBottomIfFollowing()
-      return
-    }
-    if (newCount > 0 && rangeStart >= displayItems.value.length) {
-      virtualizer.value.scrollToIndex(displayItems.value.length - 1, { align: 'end' })
-    }
   })
 }
 
@@ -522,37 +569,8 @@ async function scrollToBottom() {
   }, 80)
 }
 
-function scheduleScrollRetries() {
-  cancelScrollRetries()
-  const delays = [50, 120, 250]
-  let i = 0
-  const run = () => {
-    if (!isFollowing.value || i >= delays.length) {
-      scrollRetryTimer = null
-      return
-    }
-    scrollRetryTimer = setTimeout(async () => {
-      if (!isFollowing.value) {
-        scrollRetryTimer = null
-        return
-      }
-      await scrollToBottom()
-      i++
-      run()
-    }, delays[i])
-  }
-  run()
-}
-
-function pinToBottomIfFollowing() {
-  if (!isFollowing.value) return
-  newLogCount.value = 0
-  scrollToBottom()
-  scheduleScrollRetries()
-}
-
 function applyItemsCountChange(oldCount: number, newCount: number) {
-  if (isFollowing.value) {
+  if (scrollIntent.value === 'follow-bottom') {
     newLogCount.value = 0
   } else {
     newLogCount.value += Math.max(0, newCount - oldCount)
@@ -564,15 +582,9 @@ function onScroll() {
   const el = logListEl.value
   if (!el) return
   const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-  const wasFollowing = isFollowing.value
-  if (dist >= 50) {
-    isFollowing.value = false
-    cancelScrollRetries()
-  } else {
-    isFollowing.value = true
-    newLogCount.value = 0
-    if (!wasFollowing) pinToBottomIfFollowing()
-  }
+  scrollMachine.onUserScroll({ distanceFromBottom: dist })
+  syncScrollIntent()
+  if (scrollIntent.value === 'follow-bottom') newLogCount.value = 0
   const range = virtualizer.value.range
   if (range && range.startIndex < HISTORY_PREFETCH_START_INDEX) {
     void tryLoadMoreHistory()
@@ -581,8 +593,8 @@ function onScroll() {
 
 function onWheel(e: WheelEvent) {
   if (e.deltaY < 0) {
-    isFollowing.value = false
-    cancelScrollRetries()
+    scrollMachine.onUserScroll({ distanceFromBottom: 1000 })
+    syncScrollIntent()
     const rangeStart = virtualizer.value.range?.startIndex ?? 0
     if (rangeStart < HISTORY_PREFETCH_START_INDEX || displayItems.value.length < HISTORY_PREFETCH_START_INDEX) {
       void tryLoadMoreHistory()
@@ -596,14 +608,18 @@ async function tryLoadMoreHistory() {
     if (!deploymentLogStore.hasMoreHistory(deploymentId)) return
     if (isLoadingHistory.value) return
     isLoadingHistory.value = true
-    // 快速滚动时 range 可能短暂为空；按 0 补偿可以让重新测量后的窗口回到顶部附近。
-    const prevStart = virtualizer.value.range?.startIndex ?? 0
-    const prevCount = displayItems.value.length
+    const topIdx = virtualizer.value.range?.startIndex ?? 0
+    const anchorItem = displayItems.value[topIdx]
+    const anchorId = anchorItem?.kind === 'entry' ? anchorItem.log.id : null
+    // 用稳定日志 id 做 anchor，避免过滤/分隔行变化导致 index 偏移算错。
+    if (anchorId) scrollMachine.beginHistoryAnchor(anchorId)
     let loadedPages = 0
+    let rawPulled = 0
     try {
       while (deploymentLogStore.hasMoreHistory(deploymentId) && loadedPages < FILTERED_HISTORY_BACKFILL_MAX_PAGES) {
         loadedPages++
         const result = await deploymentLogStore.loadMoreHistory(deploymentId, INCREMENTAL_HISTORY_LIMIT)
+        rawPulled += result.added
         if (displayRefreshTimer) {
           clearTimeout(displayRefreshTimer)
           displayRefreshTimer = null
@@ -622,23 +638,18 @@ async function tryLoadMoreHistory() {
         // 过滤条件可能把整页历史都隐藏掉；继续向上找，避免用户在无滚动条时卡住。
         if (result.added <= 0 || afterVisibleCount > beforeVisibleCount) break
       }
-      const visibleAdded = displayItems.value.length - prevCount
-      if (visibleAdded > 0) {
-        programmaticScroll = true
-        measureVirtualizer()
-        virtualizer.value.scrollToIndex(prevStart + visibleAdded, { align: 'start' })
-        setTimeout(() => {
-          measureVirtualizer()
-          virtualizer.value.scrollToIndex(prevStart + visibleAdded, { align: 'start' })
-        }, 0)
-        setTimeout(() => { programmaticScroll = false }, 80)
-      }
+      measureVirtualizer()
+      scrollMachine.settleHistoryAnchor()
+      syncScrollIntent()
       logPanelDiagnostic('debug', 'history.backfill.done', {
         deploymentId,
         loadedPages,
-        visibleAdded,
+        rawPulled,
         hasMoreHistory: deploymentLogStore.hasMoreHistory(deploymentId),
       })
+      if (loadedPages >= FILTERED_HISTORY_BACKFILL_MAX_PAGES && deploymentLogStore.hasMoreHistory(deploymentId)) {
+        logPanelDiagnostic('info', 'history.backfill.capped', { deploymentId, rawPulled })
+      }
     } finally {
       isLoadingHistory.value = false
     }
@@ -646,9 +657,9 @@ async function tryLoadMoreHistory() {
 }
 
 function jumpToBottom() {
-  isFollowing.value = true
   newLogCount.value = 0
-  pinToBottomIfFollowing()
+  scrollMachine.jumpToBottom()
+  syncScrollIntent()
 }
 
 function onLogSelection(logId: number, text: string | null, rect: DOMRect | null) {
@@ -749,6 +760,17 @@ function displayIndexOfLog(logId: string): number {
   return displayItems.value.findIndex(item => item.kind === 'entry' && item.log.id === logId)
 }
 
+function scrollToDisplayLog(logId: string, align: 'start' | 'center' | 'end' = 'center'): boolean {
+  const index = displayIndexOfLog(logId)
+  if (index < 0) return false
+  programmaticScroll = true
+  virtualizer.value.scrollToIndex(index, { align })
+  window.setTimeout(() => {
+    programmaticScroll = false
+  }, 80)
+  return true
+}
+
 async function jumpToLog(logId: string): Promise<boolean> {
   const index = displayIndexOfLog(logId)
   if (index < 0) return false
@@ -777,13 +799,10 @@ async function alignToTime(cursorTime: string, cursorId: string): Promise<boolea
     logEvidenceDiagnostic('warn', 'time_sync.align.not_rendered', { panelId: props.panelId, trackId: props.panelId, cursorTime, cursorId })
     return false
   }
-  programmaticScroll = true
   await nextTick()
-  virtualizer.value.scrollToIndex(displayIndex, { align: 'center' })
+  scrollMachine.beginTimeAlign(target.id)
+  syncScrollIntent()
   timeAnchorLogId.value = target.id
-  window.setTimeout(() => {
-    programmaticScroll = false
-  }, 80)
   logEvidenceDiagnostic('info', 'time_sync.align.success', {
     panelId: props.panelId,
     trackId: props.panelId,
@@ -977,7 +996,7 @@ function toggleNode(hostId: string) {
     </div>
 
     <Transition name="fade">
-      <button v-if="!isFollowing && newLogCount > 0" class="new-log-pill" @click="jumpToBottom">
+      <button v-if="scrollIntent !== 'follow-bottom' && newLogCount > 0" class="new-log-pill" @click="jumpToBottom">
         {{ t('panel.log.newLogs', { count: newLogCount }) }}
       </button>
     </Transition>

@@ -246,7 +246,7 @@ describe('LogPanel', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(loadMoreHistory).toHaveBeenCalledWith('dep-1', 80)
-    expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(5, { align: 'start' })
+    expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(5, { align: 'center' })
   })
 
   it('向顶部插入历史时用稳定条目 id 作为虚拟行 key 并重新测量', async () => {
@@ -530,6 +530,50 @@ describe('LogPanel', () => {
       virtualizerMock.optionsRef.value.count - 1,
       { align: 'end' },
     )
+  })
+
+  it('用户离开底部时通过 ScrollIntent 仲裁器发出意图转移诊断', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2)])
+    const diagnostics: string[] = []
+    window.addEventListener('superdev:log-panel', (event) => {
+      diagnostics.push((event as CustomEvent).detail.event)
+    })
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-scroll-intent',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const el = wrapper.find('.log-list').element
+    Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
+
+    await wrapper.find('.log-list').trigger('scroll')
+
+    expect(diagnostics).toContain('scroll_intent.transition')
   })
 
   it('英文 locale 下渲染状态栏文案', async () => {
