@@ -16,6 +16,10 @@ const AGENT_HEALTH_ENDPOINT: &str = "/api/exec/health";
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const AGENT_PORT_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
+/// 退出时发出 SIGTERM 后，等待 agent 优雅退出的最长秒数；超时则 SIGKILL 兜底。
+const AGENT_TERM_GRACE: u32 = 3;
+/// 优雅退出轮询的间隔。
+const AGENT_TERM_POLL: Duration = Duration::from_millis(100);
 const JS_DEBUG_DIR_NAME: &str = "js-debug";
 const JS_DEBUG_SERVER_RELATIVE_PATH: [&str; 2] = ["src", "dapDebugServer.js"];
 const JS_DEBUG_VERSION_FILE: &str = ".superdev-version";
@@ -37,6 +41,15 @@ enum EndpointProbe {
 #[derive(Debug, PartialEq, Eq)]
 enum AgentPortState {
     StartSidecar,
+}
+
+/// TerminateOutcome 记录一次优雅终止的最终结果，用于日志与测试断言。
+#[derive(Debug, PartialEq, Eq)]
+enum TerminateOutcome {
+    /// SIGTERM 后进程在超时内退出，未触发强杀。
+    ExitedAfterTerm,
+    /// 进程未在超时内退出，已 SIGKILL 兜底。
+    ForceKilled,
 }
 
 pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
@@ -136,13 +149,111 @@ impl AgentProcess {
     ///
     /// 返回：无。
     ///
-    /// 注意：start 不复用端口上的旧 agent，因此退出时只清理自己启动的 child。
+    /// 注意：
+    ///   - 先对 agent 发 SIGTERM，给它时间停掉所有托管服务（避免孤儿进程），
+    ///     超时未退出再 SIGKILL 兜底。
+    ///   - 非 Unix 平台无 SIGTERM 语义，直接走 child.kill()。
     pub fn stop(&self) {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(child) = guard.take() {
-            let _ = child.kill();
+            #[cfg(unix)]
+            {
+                let pid = child.pid();
+                println!("[SuperDev] stopping agent gracefully pid={pid}");
+                let outcome = terminate_pid_gracefully(
+                    pid,
+                    AGENT_TERM_GRACE,
+                    || send_sigterm(pid),
+                    || pid_alive(pid),
+                    || force_sigkill(pid),
+                );
+                let _ = outcome;
+                // 兜底强杀直接对 pid 发 SIGKILL，而不是调用 child.kill()，避免闭包消费 child 所有权。
+                drop(child);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = child.kill();
+            }
             println!("[SuperDev] agent stopped");
         }
+    }
+}
+
+/// terminate_pid_gracefully 以「先 SIGTERM、轮询、超时再 SIGKILL」的策略终止进程。
+///
+/// 参数：
+///   - pid: 目标进程 pid（仅用于日志，实际发信号由闭包封装）。
+///   - grace_secs: 等待优雅退出的最长秒数。
+///   - send_term: 发送 SIGTERM 的动作（注入便于测试）。
+///   - is_alive: 探测进程是否仍存活（注入便于测试）。
+///   - force_kill: 超时兜底的强杀动作（注入便于测试）。
+///
+/// 返回：终止结果（及时退出 / 超时强杀）。
+///
+/// 注意：把策略与真实系统调用解耦，使「轮询+超时」逻辑可在不发真实信号的前提下单测。
+fn terminate_pid_gracefully<T, A, K>(
+    pid: u32,
+    grace_secs: u32,
+    send_term: T,
+    is_alive: A,
+    mut force_kill: K,
+) -> TerminateOutcome
+where
+    T: FnOnce(),
+    A: Fn() -> bool,
+    K: FnMut(),
+{
+    send_term();
+    let deadline = Instant::now() + Duration::from_secs(grace_secs as u64);
+    loop {
+        if !is_alive() {
+            println!("[SuperDev] agent exited gracefully after SIGTERM pid={pid}");
+            return TerminateOutcome::ExitedAfterTerm;
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "[SuperDev] agent did not exit within {grace_secs}s, sending SIGKILL pid={pid}"
+            );
+            force_kill();
+            return TerminateOutcome::ForceKilled;
+        }
+        sleep(AGENT_TERM_POLL);
+    }
+}
+
+/// send_sigterm 向指定 pid 发送 SIGTERM（仅 Unix）。
+///
+/// 注意：失败仅记录日志；进程可能已自行退出，调用方随后会探活并按需兜底强杀。
+#[cfg(unix)]
+fn send_sigterm(pid: u32) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    if let Err(err) = kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+        eprintln!("[SuperDev] send SIGTERM to agent pid={pid} failed: {err}");
+    }
+}
+
+/// force_sigkill 向指定 pid 发送 SIGKILL 兜底强杀（仅 Unix）。
+#[cfg(unix)]
+fn force_sigkill(pid: u32) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    if let Err(err) = kill(Pid::from_raw(pid as i32), Signal::SIGKILL) {
+        eprintln!("[SuperDev] send SIGKILL to agent pid={pid} failed: {err}");
+    }
+}
+
+/// pid_alive 探测指定 pid 是否仍存活（仅 Unix，发 0 号信号探测）。
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    // kill(pid, None) 不发信号只做存在性/权限检查：Ok=存在，EPERM 也视为存在。
+    match kill(Pid::from_raw(pid as i32), None) {
+        Ok(_) => true,
+        Err(nix::errno::Errno::EPERM) => true,
+        Err(_) => false,
     }
 }
 
@@ -602,5 +713,40 @@ mod tests {
         .expect_err("unsafe recovery should keep compatibility error");
 
         assert!(err.contains("/api/exec/health 返回 404"));
+    }
+
+    #[test]
+    fn graceful_terminate_skips_kill_when_process_exits_in_time() {
+        use std::cell::Cell;
+        let alive_polls = Cell::new(0_u32);
+        let killed = Cell::new(false);
+
+        // 第 2 次探活时报告已退出，模拟 SIGTERM 后进程及时退出。
+        let outcome = terminate_pid_gracefully(
+            1234,
+            3,
+            || {},
+            || {
+                let n = alive_polls.get() + 1;
+                alive_polls.set(n);
+                n < 2
+            },
+            || killed.set(true),
+        );
+
+        assert_eq!(outcome, TerminateOutcome::ExitedAfterTerm);
+        assert!(!killed.get(), "及时退出不应再 SIGKILL");
+    }
+
+    #[test]
+    fn graceful_terminate_force_kills_after_timeout() {
+        use std::cell::Cell;
+        let killed = Cell::new(false);
+
+        // 探活恒为存活，模拟 agent 未在超时内退出。
+        let outcome = terminate_pid_gracefully(1234, 2, || {}, || true, || killed.set(true));
+
+        assert_eq!(outcome, TerminateOutcome::ForceKilled);
+        assert!(killed.get(), "超时后必须 SIGKILL 兜底");
     }
 }
