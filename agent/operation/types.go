@@ -113,17 +113,18 @@ var (
 
 // Target 描述一次 operation 解析后的稳定目标。
 type Target struct {
-	ProjectID      string `json:"project_id,omitempty"`
-	ProjectName    string `json:"project_name,omitempty"`
-	EnvName        string `json:"env_name,omitempty"`
-	ServiceID      string `json:"service_id,omitempty"`
-	ServiceName    string `json:"service_name,omitempty"`
-	DeploymentID   string `json:"deployment_id,omitempty"`
-	HostID         string `json:"host_id,omitempty"`
-	TemplatePath   string `json:"template_path,omitempty"`
-	TemplateDigest string `json:"template_digest,omitempty"`
-	PipelineID     string `json:"pipeline_id,omitempty"`
-	DebugSessionID string `json:"debug_session_id,omitempty"`
+	ProjectID       string `json:"project_id,omitempty"`
+	ProjectName     string `json:"project_name,omitempty"`
+	EnvName         string `json:"env_name,omitempty"`
+	ServiceID       string `json:"service_id,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
+	DeploymentID    string `json:"deployment_id,omitempty"`
+	HostID          string `json:"host_id,omitempty"`
+	TemplatePath    string `json:"template_path,omitempty"`
+	TemplateDigest  string `json:"template_digest,omitempty"`
+	PipelineID      string `json:"pipeline_id,omitempty"`
+	ArtifactVersion string `json:"artifact_version,omitempty"`
+	DebugSessionID  string `json:"debug_session_id,omitempty"`
 }
 
 // Check 描述预检中的一个可解释检查项。

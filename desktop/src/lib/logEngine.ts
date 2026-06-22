@@ -2,6 +2,8 @@ import type { LogEntry } from '@/api/agent'
 
 /** Client-side fields added during ingest (not from agent API). */
 export interface DisplayLogEntry extends LogEntry {
+  // cursor_id 保留后端原始日志游标，复制/导出给 MCP 使用；id 可被改写成 UI 展示 key。
+  cursor_id?: string
   repeat_count: number
 }
 
@@ -45,9 +47,11 @@ function displayLogId(log: LogEntry): string {
  * 注意：折叠签名计算已下沉到 agent（唯一权威），前端不再计算 normalize。
  */
 export function toDisplayEntry(log: LogEntry): DisplayLogEntry {
+  const cursorId = String(log.cursor_id ?? log.id ?? '')
   return {
     ...log,
     id: displayLogId(log),
+    cursor_id: cursorId,
     repeat_count: log.repeat_count ?? 1,
   }
 }

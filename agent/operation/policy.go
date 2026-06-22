@@ -540,10 +540,11 @@ func PlanPipelineRun(project model.Project, pipelineID, envName string, isRollba
 		verb = "rollback"
 	}
 	target := Target{
-		ProjectID:   project.ID,
-		ProjectName: project.Name,
-		EnvName:     trim(envName),
-		PipelineID:  pipelineID,
+		ProjectID:       project.ID,
+		ProjectName:     project.Name,
+		EnvName:         trim(envName),
+		PipelineID:      pipelineID,
+		ArtifactVersion: trim(artifactVersion),
 	}
 	plan := Plan{
 		ID:               newID("op"),

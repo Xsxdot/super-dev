@@ -162,6 +162,32 @@ describe('operation approval api', () => {
     )
   })
 
+  it('sends approval token when deploying an approved pipeline run', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        id: 'run-1',
+        deployment_id: 'project:p1:pipeline:deploy-prod:env:prod',
+        status: 'running',
+        step_runs: [],
+        started_at: 1,
+      }),
+    } as Response)
+
+    await api.deployProjectPipeline('p1', 'deploy-prod', { env_name: 'prod', artifact_version: 'v42' }, 'tok_pipeline')
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/projects/p1/pipelines/deploy-prod/deploy'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ env_name: 'prod', artifact_version: 'v42' }),
+        headers: expect.objectContaining({
+          'X-SuperDev-Approval-Token': 'tok_pipeline',
+        }),
+      }),
+    )
+  })
+
   it('sends debug_launch intent in deployment start body', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,

@@ -70,6 +70,17 @@ describe('logEvidenceFormat', () => {
     expect(text).toContain('message: retrying request')
   })
 
+  it('formats MCP cursor id from backend row id instead of display id', () => {
+    const text = formatLogWithCursor({
+      ...makeLog('superdev-7d96:218895', 'dep-api', '2026-06-22T06:16:49.425300088Z', 'timeout'),
+      cursor_id: '218895',
+      source_id: 'superdev-7d96',
+    })
+
+    expect(text).toContain('cursor_id: 218895')
+    expect(text).not.toContain('cursor_id: superdev-7d96:218895')
+  })
+
   it('formats pinned-only Markdown with notes and cursor identity', () => {
     const pin = makePin(
       1,
@@ -86,6 +97,24 @@ describe('logEvidenceFormat', () => {
     expect(markdown).toContain('- track: api · dev')
     expect(markdown).toContain('- cursor_id: 1849')
     expect(markdown).toContain('- note: 第一次出现 retry')
+  })
+
+  it('exports pinned Markdown with MCP cursor id instead of display id', () => {
+    const pin = makePin(
+      1,
+      'panel-api',
+      'api · dev',
+      {
+        ...makeLog('superdev-7d96:218895', 'dep-api', '2026-06-22T06:16:49.425300088Z', 'timeout'),
+        cursor_id: '218895',
+        source_id: 'superdev-7d96',
+      },
+    )
+
+    const markdown = formatPinnedLinesMarkdown([pin])
+
+    expect(markdown).toContain('- cursor_id: 218895')
+    expect(markdown).not.toContain('- cursor_id: superdev-7d96:218895')
   })
 
   it('builds segments only between adjacent pins on the same track', () => {

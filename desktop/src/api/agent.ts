@@ -576,6 +576,7 @@ export interface Project {
 
 export interface LogEntry {
   id: string
+  cursor_id?: string
   deployment_id: string
   run_id: string
   timestamp: string
@@ -729,6 +730,7 @@ export interface OperationTarget {
   template_path?: string
   template_digest?: string
   pipeline_id?: string
+  artifact_version?: string
 }
 
 export interface OperationCheck {
@@ -1491,11 +1493,11 @@ export const api = {
       `/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/preview`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
-  deployProjectPipeline: (projectId: string, pipelineId: string, payload: ProjectPipelineDeployRequest) =>
-    request<Run>(`/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/deploy`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  deployProjectPipeline: (projectId: string, pipelineId: string, payload: ProjectPipelineDeployRequest, approvalToken?: string) =>
+    request<Run>(
+      `/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/deploy`,
+      postWithApprovalTokenAndBody(approvalToken, payload),
+    ),
   listProjectPipelineRuns: (projectId: string, pipelineId: string) =>
     request<ProjectPipelineRunsResponse>(`/api/projects/${encodeURIComponent(projectId)}/pipelines/${encodeURIComponent(pipelineId)}/runs`),
   getProjectPipelineRun: (projectId: string, pipelineId: string, runId: string) =>

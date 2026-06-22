@@ -47,6 +47,10 @@ function cursorMs(log: Pick<LogEntry, 'timestamp'>): number {
   return Number.isFinite(ms) ? ms : 0
 }
 
+function mcpCursorId(log: Pick<LogEntry, 'id' | 'cursor_id'>): string {
+  return String(log.cursor_id ?? log.id ?? '')
+}
+
 /**
  * compareLogCursors 按 Agent 查询 cursor 顺序比较两条日志。
  *
@@ -63,7 +67,7 @@ function cursorMs(log: Pick<LogEntry, 'timestamp'>): number {
 export function compareLogCursors(a: Pick<LogEntry, 'timestamp' | 'id'>, b: Pick<LogEntry, 'timestamp' | 'id'>): number {
   const timeDiff = cursorMs(a) - cursorMs(b)
   if (timeDiff !== 0) return timeDiff
-  return String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+  return mcpCursorId(a).localeCompare(mcpCursorId(b), undefined, { numeric: true })
 }
 
 export function comparePinsByCursor(a: EvidencePin, b: EvidencePin): number {
@@ -81,7 +85,7 @@ export function formatLogWithCursor(log: LogEntry): string {
   return [
     `deployment_id: ${log.deployment_id}`,
     `cursor_time: ${log.timestamp}`,
-    `cursor_id: ${log.id}`,
+    `cursor_id: ${mcpCursorId(log)}`,
     `source_id: ${log.source_id ?? ''}`,
     `level: ${log.level}`,
     `stream: ${log.stream}`,
@@ -103,7 +107,7 @@ function formatPin(pin: EvidencePin): string {
     `- track: ${pin.trackLabel}`,
     `- deployment_id: ${pin.log.deployment_id}`,
     `- cursor_time: ${pin.log.timestamp}`,
-    `- cursor_id: ${pin.log.id}`,
+    `- cursor_id: ${mcpCursorId(pin.log)}`,
     `- source_id: ${pin.log.source_id ?? ''}`,
     `- level: ${pin.log.level}`,
     `- stream: ${pin.log.stream}`,
@@ -187,9 +191,9 @@ function formatSegment(segment: EvidenceSegment): string {
   const header = [
     title,
     `- from_cursor_time: ${segment.from.log.timestamp}`,
-    `- from_cursor_id: ${segment.from.log.id}`,
+    `- from_cursor_id: ${mcpCursorId(segment.from.log)}`,
     `- to_cursor_time: ${segment.to.log.timestamp}`,
-    `- to_cursor_id: ${segment.to.log.id}`,
+    `- to_cursor_id: ${mcpCursorId(segment.to.log)}`,
   ]
   if (segment.skipped) {
     return [...header, '- reason: user skipped this interval'].join('\n')

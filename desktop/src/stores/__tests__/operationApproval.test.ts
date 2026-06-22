@@ -239,6 +239,54 @@ describe('operationApproval store', () => {
     expect(store.error).toBe('')
   })
 
+  it('resumes a desktop pipeline run after approval', async () => {
+    const approval = {
+      id: 'opa_pipeline',
+      status: 'approved',
+      requested_by: 'desktop',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_pipeline',
+        kind: 'pipeline.run',
+        target: {
+          project_id: 'p1',
+          pipeline_id: 'deploy-prod',
+          env_name: 'prod',
+          artifact_version: 'v42',
+        },
+        target_summary: 'demo/prod pipeline deploy-prod (rollback)',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'fp_pipeline',
+      },
+    } as any
+    vi.spyOn(api, 'approveOperationApproval').mockResolvedValue({ approval } as any)
+    vi.spyOn(api, 'getOperationApproval').mockResolvedValue({ approval, approval_token: 'tok_pipeline' })
+    vi.spyOn(api, 'deployProjectPipeline').mockResolvedValue({
+      id: 'run-1',
+      project_id: 'p1',
+      pipeline_id: 'deploy-prod',
+      env_name: 'prod',
+      deployment_id: 'project:p1:pipeline:deploy-prod:env:prod',
+      artifact_version: 'v42',
+      status: 'running',
+      step_runs: [],
+      started_at: 1,
+    })
+    vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+    const store = useOperationApprovalStore()
+    await store.approve('opa_pipeline', 'ok')
+
+    expect(api.getOperationApproval).toHaveBeenCalledWith('opa_pipeline')
+    expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-prod', {
+      env_name: 'prod',
+      artifact_version: 'v42',
+    }, 'tok_pipeline')
+    expect(store.error).toBe('')
+  })
+
   it('retries execution without approving again after a resume failure', async () => {
     const approval = {
       id: 'opa_1',

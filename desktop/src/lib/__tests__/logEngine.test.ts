@@ -42,6 +42,12 @@ describe('logEngine without client-side folding', () => {
     expect(entry.id).toBe('node-x:42')
   })
 
+  it('preserves backend row id as MCP cursor id when display id is source-scoped', () => {
+    const entry = base({ id: '218895', source_id: 'superdev-7d96' })
+    expect(entry.id).toBe('superdev-7d96:218895')
+    expect(entry.cursor_id).toBe('218895')
+  })
+
   it('appends a new entry event', () => {
     const list: DisplayLogEntry[] = []
     applyEvent(list, { entry: base({ id: '1', fold_key: 'k1', repeat_count: 1 }) })

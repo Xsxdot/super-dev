@@ -192,6 +192,7 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       'runtime.restart',
       'runtime.start_selected',
       'browser_debug.open',
+      'pipeline.run',
     ].includes(approval.plan.kind)
   }
 
@@ -249,6 +250,14 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       case 'browser_debug.open':
         if (!target.deployment_id) throw new Error('approved operation missing deployment id')
         await api.openBrowserSession({ deployment_id: target.deployment_id, open_devtools: true }, token)
+        return
+      case 'pipeline.run':
+        if (!target.project_id || !target.pipeline_id || !target.env_name) throw new Error('approved operation missing project, pipeline or environment')
+        await api.deployProjectPipeline(target.project_id, target.pipeline_id, {
+          env_name: target.env_name,
+          // artifact_version 绑定在审批 target 上，避免批准回滚后续跑成普通部署。
+          artifact_version: target.artifact_version || undefined,
+        }, token)
         return
       default:
         throw new Error(`unsupported approved operation ${approval.plan.kind}`)

@@ -10,6 +10,7 @@
 package operation
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,6 +142,22 @@ func TestPlanPipelineRunRollbackFingerprintDiffers(t *testing.T) {
 	rollback, err := PlanPipelineRun(project, "pl1", "prod", true, "v1")
 	require.NoError(t, err)
 	assert.NotEqual(t, deploy.Fingerprint, rollback.Fingerprint)
+}
+
+func TestPlanPipelineRunTargetCarriesArtifactVersion(t *testing.T) {
+	project := model.Project{ID: "p1", Name: "demo"}
+	plan, err := PlanPipelineRun(project, "pl1", "prod", true, "v1")
+	require.NoError(t, err)
+
+	targetJSON, err := json.Marshal(plan.Target)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"project_id": "p1",
+		"project_name": "demo",
+		"env_name": "prod",
+		"pipeline_id": "pl1",
+		"artifact_version": "v1"
+	}`, string(targetJSON))
 }
 
 func TestPlanPipelineRunRequiresPipelineID(t *testing.T) {

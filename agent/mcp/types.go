@@ -409,15 +409,16 @@ type OperationRequest struct {
 
 // OperationTarget 描述 operation plan 中绑定的稳定目标。
 type OperationTarget struct {
-	ProjectID      string `json:"project_id,omitempty"`
-	ProjectName    string `json:"project_name,omitempty"`
-	EnvName        string `json:"env_name,omitempty"`
-	ServiceID      string `json:"service_id,omitempty"`
-	ServiceName    string `json:"service_name,omitempty"`
-	DeploymentID   string `json:"deployment_id,omitempty"`
-	TemplatePath   string `json:"template_path,omitempty"`
-	TemplateDigest string `json:"template_digest,omitempty"`
-	PipelineID     string `json:"pipeline_id,omitempty"`
+	ProjectID       string `json:"project_id,omitempty"`
+	ProjectName     string `json:"project_name,omitempty"`
+	EnvName         string `json:"env_name,omitempty"`
+	ServiceID       string `json:"service_id,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
+	DeploymentID    string `json:"deployment_id,omitempty"`
+	TemplatePath    string `json:"template_path,omitempty"`
+	TemplateDigest  string `json:"template_digest,omitempty"`
+	PipelineID      string `json:"pipeline_id,omitempty"`
+	ArtifactVersion string `json:"artifact_version,omitempty"`
 }
 
 // OperationCheck 描述 operation preflight 中的一条检查项。
