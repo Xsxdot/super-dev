@@ -170,6 +170,8 @@ type HTTPAgentClient struct {
 	http    *http.Client
 }
 
+const defaultAgentHTTPTimeout = 60 * time.Second
+
 // NewHTTPAgentClient 创建 HTTP agent client。
 //
 // 参数：
@@ -180,7 +182,7 @@ type HTTPAgentClient struct {
 //   - 可访问本机 agent 的 HTTPAgentClient
 func NewHTTPAgentClient(baseURL string, httpClient *http.Client) *HTTPAgentClient {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = &http.Client{Timeout: defaultAgentHTTPTimeout}
 	}
 	return &HTTPAgentClient{baseURL: strings.TrimRight(baseURL, "/"), http: httpClient}
 }

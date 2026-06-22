@@ -16,11 +16,19 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+func TestHTTPAgentClientDefaultTimeoutCoversBrowserOpenBudget(t *testing.T) {
+	client := NewHTTPAgentClient("http://127.0.0.1:57017", nil)
+
+	require.NotNil(t, client.http)
+	assert.GreaterOrEqual(t, client.http.Timeout, 60*time.Second)
+}
 
 func TestHTTPAgentClientListProjects(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

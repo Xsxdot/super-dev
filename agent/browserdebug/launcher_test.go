@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -210,6 +211,33 @@ func TestChromiumLauncherPersistentProfileReusesStableDirectory(t *testing.T) {
 	require.NoError(t, result.Close())
 	_, err = os.Stat(persistentDir)
 	require.NoError(t, err)
+}
+
+func TestCleanupStartedBrowserDoesNotBlockWhenWaitChannelStalls(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	profileDir := filepath.Join(t.TempDir(), "profile")
+	require.NoError(t, os.MkdirAll(profileDir, 0o755))
+	stalledWait := make(chan error)
+	returned := make(chan struct{})
+
+	go func() {
+		cleanupStartedBrowser(cmd, stalledWait, profileDir, true)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		_, err := os.Stat(profileDir)
+		assert.True(t, os.IsNotExist(err))
+	case <-time.After(time.Second):
+		t.Fatal("cleanupStartedBrowser blocked waiting for browser process waiter")
+	}
 }
 
 func TestDiscoverCDPPrefersEquivalentTargetURLOverFirstPage(t *testing.T) {

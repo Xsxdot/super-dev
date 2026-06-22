@@ -30,6 +30,7 @@ import (
 
 const devToolsPortTimeout = 15 * time.Second
 const cdpTargetTimeout = 5 * time.Second
+const browserCleanupTimeout = 500 * time.Millisecond
 
 const (
 	// ProfileModeEphemeral 表示每个调试 session 使用新的临时 Chromium user data dir。
@@ -186,10 +187,26 @@ func safeProfileComponent(value string) string {
 
 func cleanupStartedBrowser(cmd *exec.Cmd, done <-chan error, profileDir string, removeProfile bool) {
 	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		<-done
+		pid := cmd.Process.Pid
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			log.Printf("[SuperDev] debug browser kill failed pid=%d profile_dir=%s error=%v", pid, profileDir, err)
+		}
+		waitStartedBrowserExit(done, pid, profileDir)
 	}
 	cleanupProfileDir(profileDir, removeProfile)
+}
+
+func waitStartedBrowserExit(done <-chan error, pid int, profileDir string) {
+	if done == nil {
+		return
+	}
+	timer := time.NewTimer(browserCleanupTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		log.Printf("[SuperDev] debug browser cleanup timed out pid=%d profile_dir=%s timeout=%s", pid, profileDir, browserCleanupTimeout)
+	}
 }
 
 func cleanupProfileDir(profileDir string, removeProfile bool) {
