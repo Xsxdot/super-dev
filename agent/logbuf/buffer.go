@@ -14,6 +14,7 @@ package logbuf
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -264,6 +265,11 @@ func (b *Buffer) flush() {
 	b.mu.Unlock()
 
 	if b.store != nil {
-		_ = b.store.AppendBatch(context.Background(), batch)
+		// 落库失败不能再静默吞：曾因 fold_key 撞键等问题导致持久化长期失败而无人知晓。
+		// 这里打印批次大小与首条 deployment/fold_key 上下文，便于 tail_logs 直接定位。
+		if err := b.store.AppendBatch(context.Background(), batch); err != nil {
+			log.Printf("[logbuf] flush 落库失败 batch=%d deployment=%s fold_key=%s: %v",
+				len(batch), batch[0].DeploymentID, batch[0].FoldKey, err)
+		}
 	}
 }
