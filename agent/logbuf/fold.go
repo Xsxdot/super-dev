@@ -43,18 +43,31 @@ type foldTracker struct {
 
 var foldKeySeq uint64
 
+// processFoldEpoch 是本 agent 进程的启动唯一标识，进程重启必变、生命周期内不变。
+//
+// 作用：fold_key 落库时的 UPSERT 冲突键是 (run_id, fold_key)。采集类日志（journalctl/
+// process 进程 stdout）的 run_id 恒为空，若 fold_key 只用进程内自增序号 foldKeySeq，
+// agent 重启后序号归零会与历史 fold_key 精确撞键，新日志被 UPDATE 进重启前旧行，
+// 表现为「实时能看到新日志、刷新就没、且每次卡在 agent 重启那一刻」。
+// 用启动纳秒时间戳做 epoch 顶替缺失的 run 维度，保证跨重启永不撞键。
+var processFoldEpoch = strconv.FormatInt(time.Now().UnixNano(), 36)
+
 // nextFoldKey 生成本次折叠段的 fold_key。
 //
-// 必须带 runID 维度：foldKeySeq 是进程内自增计数器，agent 重启会归零，
-// 若不带 run 维度，重启后新会话重发的序号会与历史 fold_key 撞键；
-// 而 fold_key 是落库 upsert 的冲突键，撞键会让新日志被 UPDATE 进重启前的旧行，
-// 表现为「实时日志卡在重启前不刷新」。带上 runID 后跨 run/跨重启永不撞键。
+// 参数：
+//   - runID: 日志所属的 run 会话 id；采集类服务日志恒为空，pipeline run 日志非空
 //
-// runID 为空时退化为纯序号（仅理论兜底，正常链路 LogEntry.RunID 必非空）。
+// 返回：
+//   - 跨 run/跨 agent 重启唯一的 fold_key
+//
+// 注意：
+//   - runID 非空时用 runID 维度（pipeline run 日志）
+//   - runID 为空时用进程启动 epoch 维度（采集类日志的正常路径），
+//     避免重启后纯序号归零撞键——这是生产主链路，不是理论兜底
 func nextFoldKey(runID string) string {
 	seq := strconv.FormatUint(atomic.AddUint64(&foldKeySeq, 1), 36)
 	if runID == "" {
-		return "f" + seq
+		return "f" + processFoldEpoch + ":" + seq
 	}
 	return "f" + runID + ":" + seq
 }

@@ -8,6 +8,8 @@
 package logbuf
 
 import (
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,5 +84,29 @@ func TestFoldTrackerSweepClosesStale(t *testing.T) {
 	}
 	if again := tr.sweep(t0.Add(20 * time.Second)); len(again) != 0 {
 		t.Fatalf("second sweep produced %d rows, want 0", len(again))
+	}
+}
+
+func TestNextFoldKeyEmptyRunIDCarriesProcessEpoch(t *testing.T) {
+	// 空 run_id（采集类日志的正常情况）时，fold_key 必须带进程启动 epoch，
+	// 否则 agent 重启后纯自增序号归零会与历史 fold_key 撞键，
+	// 落库 UPSERT 把新日志 UPDATE 进重启前旧行（store 卡在重启点）。
+	if processFoldEpoch == "" {
+		t.Fatal("processFoldEpoch 应在包初始化时被赋值为非空唯一值")
+	}
+	key := nextFoldKey("")
+	if !strings.Contains(key, processFoldEpoch) {
+		t.Fatalf("空 run_id 的 fold_key=%q 应包含进程 epoch=%q", key, processFoldEpoch)
+	}
+
+	// 模拟「重启」：epoch 改变后，即使自增序号回到同一值，fold_key 也必须不同。
+	oldEpoch := processFoldEpoch
+	atomic.StoreUint64(&foldKeySeq, 0)
+	keyA := nextFoldKey("")
+	processFoldEpoch = oldEpoch + "-restarted"
+	atomic.StoreUint64(&foldKeySeq, 0)
+	keyB := nextFoldKey("")
+	if keyA == keyB {
+		t.Fatalf("epoch 变化后同序号的 fold_key 不应相同: %q == %q", keyA, keyB)
 	}
 }
