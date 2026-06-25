@@ -97,6 +97,11 @@ const remoteManagedStatuses = computed(() =>
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
 let historyLoadToken = 0
+// settleToBottomToken 标记当前正在进行的「贴底复位」回合，后发起的复位会作废前一个回合的 rAF 循环。
+let settleToBottomToken = 0
+
+// 贴底复位最多重试的帧数。行高异步测量通常 2-3 帧内沉降，给足余量兜底，超过则停止避免死循环。
+const SETTLE_TO_BOTTOM_MAX_FRAMES = 20
 
 function deploymentIdFromSource(source: PanelSource | null | undefined): string | null {
   return source?.type === 'deployment' ? source.deploymentId : null
@@ -579,16 +584,53 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
   })
 }
 
+// scrollToBottom 贴底，并在行高异步测量沉降后逐帧重新断言底部。
+//
+// 为什么要多帧复位：虚拟列表用 estimateSize 估算行高，scrollToIndex 用估算值算 offset 滚一次；
+// 随后底部行真正渲染、measureElement 上报更大的真实高度，getTotalSize 增大，那次 offset 就失效了，
+// 视口被停在真实底部上方（过滤越重、行越高越明显，表现为打开 tab 一片空白、要往上滑很久）。
+// 单次 scrollToIndex 赌不中底部，必须在每帧测量增量后重新 scrollToIndex，直到 totalSize 连续两帧不变（沉降）。
 async function scrollToBottom() {
   programmaticScroll = true
   await nextTick()
   const count = displayItems.value.length
-  if (count > 0) {
-    virtualizer.value.scrollToIndex(count - 1, { align: 'end' })
-  }
-  setTimeout(() => {
+  if (count === 0) {
+    // 空列表无需滚动，但仍要尽快放开守卫，避免后续真实滚动被误吞。
     programmaticScroll = false
-  }, 80)
+    return
+  }
+
+  const token = ++settleToBottomToken
+  let frame = 0
+  let lastTotalSize = -1
+
+  const settle = () => {
+    // 回合已被后发起的复位作废，直接退出，不再抢滚动也不放开守卫（由新回合接管）。
+    if (token !== settleToBottomToken) return
+    const c = displayItems.value.length
+    if (c > 0) virtualizer.value.scrollToIndex(c - 1, { align: 'end' })
+    const totalSize = virtualizer.value.getTotalSize()
+    frame++
+    // totalSize 不再变化即视为测量沉降；或达到帧数上限兜底，结束复位、放开守卫。
+    if (totalSize === lastTotalSize || frame >= SETTLE_TO_BOTTOM_MAX_FRAMES) {
+      programmaticScroll = false
+      logPanelDiagnostic('debug', 'scroll.settle_bottom.done', {
+        frames: frame,
+        totalSize,
+        itemCount: c,
+        settled: totalSize === lastTotalSize,
+      })
+      return
+    }
+    lastTotalSize = totalSize
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(settle)
+    } else {
+      programmaticScroll = false
+    }
+  }
+
+  settle()
 }
 
 function applyItemsCountChange(oldCount: number, newCount: number) {

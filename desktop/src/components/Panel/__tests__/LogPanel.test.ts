@@ -1006,4 +1006,52 @@ describe('LogPanel', () => {
     expect(virtualizerMock.measure).not.toHaveBeenCalled()
     expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled()
   })
+
+  it('贴底时在行高异步测量沉降前逐帧重新断言底部（totalSize 持续增长则反复滚到底）', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 1, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2), makeLog(3)])
+
+    // 模拟行高异步测量：前几帧 totalSize 持续增大（底部真实高度逐步上报），随后沉降不变。
+    // 单次 scrollToIndex 会落在更小的估算底部之上；正确实现必须每帧重滚直到 totalSize 稳定。
+    let totalSize = 60
+    virtualizerMock.getTotalSize.mockImplementation(() => {
+      const current = totalSize
+      if (totalSize < 300) totalSize += 80
+      return current
+    })
+
+    mount(LogPanel, {
+      props: {
+        panelId: 'panel-settle-bottom',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    // 给 rAF 沉降循环留足时间（前几帧增长，之后稳定）
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // 贴底统一用 align:'end' 滚到最后一条；沉降前每帧重滚一次。
+    const bottomCalls = virtualizerMock.scrollToIndex.mock.calls.filter(
+      ([, opts]) => opts?.align === 'end',
+    )
+    // 单帧只滚一次会落不到真实底部；沉降前必须多帧重滚（至少 2 次）。
+    expect(bottomCalls.length).toBeGreaterThanOrEqual(2)
+  })
 })

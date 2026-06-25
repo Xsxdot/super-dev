@@ -12,6 +12,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentAPIError, api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const notifyOperationApprovalMock = vi.hoisted(() => vi.fn())
 
@@ -279,11 +280,22 @@ describe('operationApproval store', () => {
     const store = useOperationApprovalStore()
     await store.approve('opa_pipeline', 'ok')
 
+    const workspace = useWorkspaceStore()
     expect(api.getOperationApproval).toHaveBeenCalledWith('opa_pipeline')
     expect(api.deployProjectPipeline).toHaveBeenCalledWith('p1', 'deploy-prod', {
       env_name: 'prod',
       artifact_version: 'v42',
     }, 'tok_pipeline')
+    expect(workspace.activeTabId).toBe('run:run-1')
+    expect(workspace.tabs).toContainEqual(expect.objectContaining({
+      id: 'run:run-1',
+      type: 'run',
+      projectId: 'p1',
+      pipelineId: 'deploy-prod',
+      runId: 'run-1',
+      mode: 'live',
+      title: 'deploy-prod · #v42',
+    }))
     expect(store.error).toBe('')
   })
 

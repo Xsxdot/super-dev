@@ -11,7 +11,7 @@
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, isApprovalRequiredError, type OperationApproval, type OperationApprovalDecision } from '@/api/agent'
+import { api, isApprovalRequiredError, type OperationApproval, type OperationApprovalDecision, type Run } from '@/api/agent'
 import { notifyOperationApproval } from '@/lib/operationApprovalNotification'
 
 const approvalPollIntervalMs = 2000
@@ -253,15 +253,33 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
         return
       case 'pipeline.run':
         if (!target.project_id || !target.pipeline_id || !target.env_name) throw new Error('approved operation missing project, pipeline or environment')
-        await api.deployProjectPipeline(target.project_id, target.pipeline_id, {
+        const run = await api.deployProjectPipeline(target.project_id, target.pipeline_id, {
           env_name: target.env_name,
           // artifact_version 绑定在审批 target 上，避免批准回滚后续跑成普通部署。
           artifact_version: target.artifact_version || undefined,
         }, token)
+        await openPipelineRunConsole(target.project_id, target.pipeline_id, run)
         return
       default:
         throw new Error(`unsupported approved operation ${approval.plan.kind}`)
     }
+  }
+
+  function pipelineRunTitle(pipelineId: string, run: Run): string {
+    const version = run.artifact_version ? `#${run.artifact_version}` : run.id.slice(0, 8)
+    return `${pipelineId} · ${version}`
+  }
+
+  async function openPipelineRunConsole(projectId: string, pipelineId: string, run: Run) {
+    // 动态导入避免 operationApproval -> workspace -> agent -> operationApproval 的静态循环依赖。
+    const { useWorkspaceStore } = await import('@/stores/workspace')
+    useWorkspaceStore().openRunConsole({
+      projectId,
+      pipelineId,
+      runId: run.id,
+      mode: 'live',
+      title: pipelineRunTitle(pipelineId, run),
+    })
   }
 
   return {
