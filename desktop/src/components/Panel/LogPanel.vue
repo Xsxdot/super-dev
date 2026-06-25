@@ -561,13 +561,17 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
     // 仅在需要重排布局时主动 measure：过滤重建（可见行集合整体改变），
     // 或 follow-bottom 且可见行真正增长（即将贴底）。
     // 主动 measure 会触发 tanstack 的 _scrollToOffset 修正——
-    //   - idle/anchor/align 下持续 measure → 视口被持续拉走（“一直在滚动”）；
+    //   - idle/anchor/align 下持续 measure → 视口被持续拉走（”一直在滚动”）；
     //   - follow 下可见行不变时 measure（被过滤的新日志/折叠增量），没有后续贴底动作
-    //     抵消，_scrollToOffset 会把视口往上带一点（“没新行却上跳”）。
+    //     抵消，_scrollToOffset 会把视口往上带一点（”没新行却上跳”）。
     // 可见行不变的增量由每行 measureElement 自然处理，无需主动全量 measure。
+    // 注意：即使 scrollMachine.intent 说是 follow-bottom，也要检查实际滚动位置，
+    // 因为高频实时日志到达时可能用户已经开始向上滚，但 onScroll 尚未触发意图转移。
+    const el = logListEl.value
+    const isUserScrolling = el && el.scrollHeight - el.scrollTop - el.clientHeight > 100
     const needMeasure =
       kind === 'filter' ||
-      (scrollMachine.intent === 'follow-bottom' && newCount > oldCount)
+      (scrollMachine.intent === 'follow-bottom' && newCount > oldCount && !isUserScrolling)
     if (needMeasure) measureVirtualizer()
     if (kind === 'filter') {
       scrollMachine.onFilterRebuild({ oldCount, newCount })
@@ -580,6 +584,7 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
       newCount,
       rangeStart: virtualizer.value.range?.startIndex ?? 0,
       intent: scrollIntent.value,
+      isUserScrolling,
     })
   })
 }
