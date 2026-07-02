@@ -15,7 +15,7 @@
 
 use serde::Serialize;
 use serde_json::json;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -448,6 +448,38 @@ fn coding_agent_app_dirs(home: &Path) -> Vec<PathBuf> {
         push_unique_path(&mut dirs, PathBuf::from("/Applications"));
     }
     dirs
+}
+
+fn resolve_user_home_dir() -> Result<PathBuf, String> {
+    user_home_dir_from_env(|key| std::env::var_os(key), cfg!(windows)).ok_or_else(|| {
+        "无法解析用户目录：请检查 HOME（macOS/Linux）或 USERPROFILE/HOMEDRIVE/HOMEPATH（Windows）"
+            .to_string()
+    })
+}
+
+fn user_home_dir_from_env(
+    mut env_var: impl FnMut(&str) -> Option<OsString>,
+    is_windows: bool,
+) -> Option<PathBuf> {
+    if let Some(home) = non_empty_env_value(env_var("HOME")) {
+        return Some(PathBuf::from(home));
+    }
+    if !is_windows {
+        return None;
+    }
+    // Windows 的普通桌面进程通常没有 HOME；优先使用 USERPROFILE，
+    // 再回退到 HOMEDRIVE + HOMEPATH，避免启动向导在第一步就失败。
+    if let Some(user_profile) = non_empty_env_value(env_var("USERPROFILE")) {
+        return Some(PathBuf::from(user_profile));
+    }
+    let mut drive = non_empty_env_value(env_var("HOMEDRIVE"))?;
+    let path = non_empty_env_value(env_var("HOMEPATH"))?;
+    drive.push(path);
+    Some(PathBuf::from(drive))
+}
+
+fn non_empty_env_value(value: Option<OsString>) -> Option<OsString> {
+    value.filter(|value| !value.as_os_str().is_empty())
 }
 
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -1572,9 +1604,7 @@ pub fn mcp_docs_for_skill_source(skill_source: &Path) -> Result<McpDocs, String>
 /// 注意：
 ///   - 该 command 只读本地配置和打包资源，不修改文件
 pub fn mcp_status(app: AppHandle) -> Result<Vec<McpStatus>, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let home = resolve_user_home_dir()?;
     let path_value = std::env::var_os("PATH");
     let skill_source = resolve_skill_source_dir(&app);
     let (skill_source_path, skill_source_error) = match &skill_source {
@@ -1602,9 +1632,7 @@ pub fn mcp_status(app: AppHandle) -> Result<Vec<McpStatus>, String> {
 /// 注意：
 ///   - 只删除 superdev 这一项，其他 MCP server 保持不变
 pub fn uninstall_mcp(agent: String) -> Result<UninstallOutcome, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let home = resolve_user_home_dir()?;
     uninstall_mcp_for_paths(&agent, &home)
 }
 
@@ -1626,9 +1654,7 @@ pub fn mcp_docs(app: AppHandle) -> Result<McpDocs, String> {
 
 #[tauri::command]
 pub fn install_mcp(app: AppHandle, agent: String) -> Result<InstallOutcome, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let home = resolve_user_home_dir()?;
     let mcp = resolve_sidecar_binary(&app, "superdev-mcp")?;
     let skill_source = resolve_skill_source_dir(&app);
     let (skill_source_path, skill_source_error) = match &skill_source {
@@ -1640,18 +1666,14 @@ pub fn install_mcp(app: AppHandle, agent: String) -> Result<InstallOutcome, Stri
 
 #[tauri::command]
 pub fn mcp_install_hint(app: AppHandle, agent: String) -> Result<InstallHint, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let home = resolve_user_home_dir()?;
     let mcp = resolve_sidecar_binary(&app, "superdev-mcp")?;
     install_hint_for_paths(&agent, &home, &mcp)
 }
 
 #[tauri::command]
 pub fn detect_coding_agents() -> Result<Vec<CodingAgentAvailability>, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "无法解析 HOME 目录".to_string())?;
+    let home = resolve_user_home_dir()?;
     let path_value = std::env::var_os("PATH");
     Ok(detect_coding_agents_for_paths(
         &home,
@@ -2143,6 +2165,8 @@ SUPERDEV_AGENT_URL = "http://127.0.0.1:57017"
 #[cfg(test)]
 mod path_tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::fs;
 
     #[test]
@@ -2276,6 +2300,16 @@ mod path_tests {
         assert!(!agent_status(&statuses, "claude-code").installed);
         assert!(!agent_status(&statuses, "codex").installed);
         assert!(!agent_status(&statuses, "cursor").installed);
+    }
+
+    #[test]
+    fn user_home_dir_from_env_uses_userprofile_on_windows_when_home_missing() {
+        let vars = HashMap::from([("USERPROFILE", OsString::from(r"C:\Users\superdev-user"))]);
+
+        let home =
+            user_home_dir_from_env(|key| vars.get(key).cloned(), true).expect("windows home");
+
+        assert_eq!(home, PathBuf::from(r"C:\Users\superdev-user"));
     }
 
     fn agent_status<'a>(

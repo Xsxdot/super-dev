@@ -45,6 +45,9 @@ const INCREMENTAL_HISTORY_LIMIT = 80
 const HISTORY_PREFETCH_START_INDEX = 30
 const FILTERED_HISTORY_BACKFILL_MAX_PAGES = 6
 const LOG_VIRTUAL_OVERSCAN = 12
+// FOLLOW_BOTTOM_NEAR：scrollTop 未向上移动时，仅当距底部足够近才允许裁决意图（回 follow）。
+// 略大于 ScrollIntentMachine 的 FOLLOW_BOTTOM_THRESHOLD(50)，覆盖贴底时的正常小抖动。
+const FOLLOW_BOTTOM_NEAR = 80
 
 const props = defineProps<{
   panelId: string
@@ -96,6 +99,10 @@ const remoteManagedStatuses = computed(() =>
 
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let programmaticScroll = false
+// lastScrollTop 记录上一次 scroll 事件的 scrollTop，用于区分「用户主动向上滚」与
+// 「totalSize 异步增长造成的 distanceFromBottom 假象」。突发日志时底部行真实高度逐帧上报，
+// scrollHeight 持续变大，但 scrollTop 没动；只有 scrollTop 真的减小才是用户离开底部。
+let lastScrollTop = 0
 let historyLoadToken = 0
 // settleToBottomToken 标记当前正在进行的「贴底复位」回合，后发起的复位会作废前一个回合的 rAF 循环。
 let settleToBottomToken = 0
@@ -647,12 +654,25 @@ function applyItemsCountChange(oldCount: number, newCount: number) {
 }
 
 function onScroll() {
-  if (programmaticScroll) return
   const el = logListEl.value
   if (!el) return
+  // 程序化滚动期间不裁决意图，但仍要同步 lastScrollTop，
+  // 否则守卫释放后第一条真实事件会拿陈旧基准误算方向。
+  if (programmaticScroll) {
+    lastScrollTop = el.scrollTop
+    return
+  }
   const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-  scrollMachine.onUserScroll({ distanceFromBottom: dist })
-  syncScrollIntent()
+  const movedUp = el.scrollTop < lastScrollTop - 1
+  lastScrollTop = el.scrollTop
+  // 只在「用户确实向上滚（scrollTop 减小）」或「已稳定停在底部附近」时裁决意图。
+  // 突发日志时底部行逐帧测量、scrollHeight 持续变大，dist 会瞬时偏大，
+  // 但 scrollTop 并未减小——那是底部增长的假象，不是用户离开底部，必须忽略，
+  // 否则 follow-bottom 被误判为 idle，自动滚动中断、弹出「N 条新日志」。
+  if (movedUp || dist < FOLLOW_BOTTOM_NEAR) {
+    scrollMachine.onUserScroll({ distanceFromBottom: dist })
+    syncScrollIntent()
+  }
   if (scrollIntent.value === 'follow-bottom') newLogCount.value = 0
   const range = virtualizer.value.range
   if (range && range.startIndex < HISTORY_PREFETCH_START_INDEX) {

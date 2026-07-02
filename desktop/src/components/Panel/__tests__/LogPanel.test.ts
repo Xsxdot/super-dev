@@ -569,8 +569,14 @@ describe('LogPanel', () => {
     const el = wrapper.find('.log-list').element
     Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
     Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    // 先建立「贴底」基准（scrollTop 接近 scrollHeight-clientHeight），再向上滚。
+    // 用户离开底部一定是 scrollTop 由大变小的连续过程，仅靠终态距离无法区分底部增长假象。
+    Object.defineProperty(el, 'scrollTop', { value: 500, configurable: true })
+    await wrapper.find('.log-list').trigger('scroll')
+    // 贴底 scroll 会触发 scrollToBottom 重新上守卫，等其 settle 释放后再模拟向上滚
+    await new Promise(resolve => setTimeout(resolve, 60))
+    // 用户向上滚：scrollTop 显著减小
     Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
-
     await wrapper.find('.log-list').trigger('scroll')
 
     expect(diagnostics).toContain('scroll_intent.transition')
@@ -1053,5 +1059,63 @@ describe('LogPanel', () => {
     )
     // 单帧只滚一次会落不到真实底部；沉降前必须多帧重滚（至少 2 次）。
     expect(bottomCalls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('贴底 settle 结束后 scrollToIndex 留下的滞后 scroll 事件不得把 follow-bottom 误判为 idle', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2), makeLog(3)])
+    virtualizerMock.getTotalSize.mockReturnValue(66)
+
+    const diagnostics: Array<{ from: string; to: string }> = []
+    window.addEventListener('superdev:log-panel', (event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail.event === 'scroll_intent.transition') {
+        diagnostics.push({ from: detail.from, to: detail.to })
+      }
+    })
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-lagging-scroll',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    // 给初始 scrollToBottom 的 rAF settle 循环跑完并释放 programmaticScroll 守卫
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // 模拟浏览器滞后派发的 scroll 事件：scrollToIndex 已把视口贴底，但突发新日志让
+    // scrollHeight 在这一刻已经增大，scrollTop 还是贴底前一刻的值 → distanceFromBottom 偏大。
+    // 这是程序化贴底留下的尾迹，不是用户真正向上滚，绝不能转入 idle。
+    // 突发日志：底部行逐帧测量使 scrollHeight 暴涨到 1200，但 scrollTop 仍停在贴底前的 600，
+    // distanceFromBottom = 1200 - 600 - 600 = 0... 这里刻意制造一个偏大的瞬时距离：
+    // scrollHeight 已增大但 scrollTop 尚未被浏览器更新到新底部，dist 偏大却非用户上滚。
+    const el = wrapper.find('.log-list').element
+    Object.defineProperty(el, 'scrollHeight', { value: 1200, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 300, configurable: true })
+
+    await wrapper.find('.log-list').trigger('scroll')
+
+    // 滞后的程序化滚动尾迹（scrollTop 未向上移动，仅 scrollHeight 增大）
+    // 不应触发 follow-bottom → idle 的意图转移
+    expect(diagnostics.some(d => d.to === 'idle')).toBe(false)
   })
 })
