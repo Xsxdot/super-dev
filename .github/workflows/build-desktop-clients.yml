@@ -1,0 +1,150 @@
+# Manual desktop client packaging for ad-hoc Windows/Linux validation.
+#
+# Responsibilities:
+#   - Build downloadable SuperDev desktop client packages from a selected ref.
+#   - Provide temporary GitHub Actions artifacts without requiring local Go/Node/Rust installs.
+#
+# Boundaries:
+#   - Does not publish GitHub Releases or sign/notarize packages.
+#   - Does not replace CI or tag-driven release packaging.
+name: Build Desktop Clients
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to build
+        required: true
+        default: main
+      target:
+        description: Client platform to build
+        required: true
+        default: windows-linux
+        type: choice
+        options:
+          - windows-linux
+          - windows
+          - linux
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Desktop Linux client
+    if: ${{ inputs.target == 'windows-linux' || inputs.target == 'linux' }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build remote agents and sidecars
+        run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
+
+      - name: Build Tauri Linux packages
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - name: Upload Linux desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: superdev-desktop-linux
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/release/bundle/**/*.deb
+            desktop/src-tauri/target/release/bundle/**/*.rpm
+
+  windows:
+    name: Desktop Windows client
+    if: ${{ inputs.target == 'windows-linux' || inputs.target == 'windows' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Verify version metadata
+        run: node scripts/check-version.mjs
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build remote agents and sidecars
+        shell: bash
+        run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
+
+      - name: Verify Windows sidecar names
+        shell: bash
+        run: |
+          target="$(rustc --print host-tuple)"
+          for name in superdev-agent superdev-mcp superdev-sample; do
+            test -f "desktop/src-tauri/binaries/$name-$target.exe"
+            test -f "desktop/src-tauri/target/debug/$name.exe"
+          done
+          test -f desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe
+
+      - name: Build Tauri Windows packages
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - name: Upload Windows desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: superdev-desktop-windows
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.exe
