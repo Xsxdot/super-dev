@@ -316,6 +316,14 @@ fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn should_install_native_app_menu_for_target(target_os: &str) -> bool {
+    target_os == "macos"
+}
+
+fn should_install_native_app_menu() -> bool {
+    should_install_native_app_menu_for_target(std::env::consts::OS)
+}
+
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
@@ -387,8 +395,10 @@ fn main() {
                 eprintln!("[SuperDev] agent failed to start: {e}");
             }
             app.manage(agent);
-            if let Err(e) = install_app_menu(app) {
-                eprintln!("[SuperDev] app menu failed to install: {e}");
+            if should_install_native_app_menu() {
+                if let Err(e) = install_app_menu(app) {
+                    eprintln!("[SuperDev] app menu failed to install: {e}");
+                }
             }
             if let Err(e) = install_tray(app) {
                 eprintln!("[SuperDev] tray icon failed to install: {e}");
@@ -428,7 +438,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::append_loopback_proxy_bypass;
+    use super::{append_loopback_proxy_bypass, should_install_native_app_menu_for_target};
 
     const MAIN_RS: &str = include_str!("main.rs");
 
@@ -523,6 +533,22 @@ mod tests {
             menu_source
                 .contains("MenuItem::with_id(app, \"quit\", \"退出 SuperDev\", true, Some(\"CmdOrCtrl+Q\"))"),
             "the app menu quit item must bind Cmd+Q so macOS can dispatch app quit instead of only supporting mouse clicks"
+        );
+    }
+
+    #[test]
+    fn native_app_menu_is_installed_only_on_macos() {
+        assert!(should_install_native_app_menu_for_target("macos"));
+        assert!(!should_install_native_app_menu_for_target("windows"));
+        assert!(!should_install_native_app_menu_for_target("linux"));
+    }
+
+    #[test]
+    fn setup_guards_native_app_menu_installation_by_platform() {
+        let source = setup_source();
+        assert!(
+            source.contains("if should_install_native_app_menu() {"),
+            "Windows and Linux should not install a native app menu because it consumes a second top row"
         );
     }
 
