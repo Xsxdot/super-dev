@@ -1562,6 +1562,12 @@ export const api = {
     return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
       .then(response => ({ ...response, items: normalizeLogEntries(response.items) }))
   },
+  /** postFrontendDiagnostics 批量上报前端诊断事件到 agent，落为 __desktop__ 虚拟 deployment 日志。 */
+  postFrontendDiagnostics: (events: Record<string, unknown>[]) =>
+    request<{ accepted: number }>('/api/frontend-diagnostics', {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    }),
 
   // 远程监听：Host CRUD
   listHosts: () => request<Host[]>('/api/hosts'),
