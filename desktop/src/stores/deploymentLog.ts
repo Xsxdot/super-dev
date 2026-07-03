@@ -19,6 +19,10 @@ const TRIM_BATCH = 500
 const TRIMMED_FOLD_KEYS_MAX = 512
 const MAX_RECONNECT = 5
 const REPLAY_ON_RECONNECT = 100
+const CATCHUP_PAGE_LIMIT = 200
+// 补拉最多翻 20 页（4000 条）。再多说明断线太久，剩余部分用缺口标记明示，
+// 不无限追赶（用户此刻要看的是最新日志，陈年区间可通过向上翻历史补齐）。
+const CATCHUP_MAX_PAGES = 20
 
 interface LogCursor {
   time: string
@@ -28,11 +32,15 @@ interface LogCursor {
 interface DeploymentSession {
   refCount: number
   ws: WebSocket | null
+  projectId: string | null
   logs: DisplayLogEntry[]
   hasMoreHistory: boolean
   oldestCursor: LogCursor | null
   loadingMoreHistory: boolean
   lastSeen: LogCursor | null
+  catchingUp: boolean
+  pendingLive: LogEntry[]
+  gapMarkers: { id: string; time: string }[]
   reconnectAttempts: number
   discontinuous: boolean
   liveStartIndex: number
@@ -61,11 +69,15 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return {
       refCount: 1,
       ws: null,
+      projectId: null,
       logs: [],
       hasMoreHistory: true,
       oldestCursor: null,
       loadingMoreHistory: false,
       lastSeen: null,
+      catchingUp: false,
+      pendingLive: [],
+      gapMarkers: [],
       reconnectAttempts: 0,
       discontinuous: false,
       liveStartIndex: 0,
@@ -76,6 +88,10 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
 
   function cursorFromLog(log: LogEntry): LogCursor {
     return { time: log.timestamp, id: String(log.id ?? '') }
+  }
+
+  function gapMarkerID(): string {
+    return globalThis.crypto?.randomUUID?.() ?? `gap-${Date.now()}-${Math.random()}`
   }
 
   // diagnostic 通过 superdev:log-panel 事件打点，非 console.log，便于 tail_logs 复盘。
@@ -256,6 +272,12 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         const raw = JSON.parse(event.data) as LogEntry
         const s = sessions.value.get(deploymentId)
         if (!s || s.ws !== ws) return
+        if (s.catchingUp) {
+          // 补拉进行中：实时日志先缓冲，避免与补拉页交叉乱序。
+          // 上限防补拉卡死时内存爆掉；超限丢弃由 catch-up 结束后的 gap 标记兜底。
+          if (s.pendingLive.length < 2000) s.pendingLive.push(raw)
+          return
+        }
         if (raw.message === '' && raw.fold_key) {
           applyIncrement(s, raw)
         } else {
@@ -266,6 +288,13 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         s.discontinuous = false
       } catch {
         // 忽略解析失败的消息，避免单条损坏数据影响整体
+      }
+    }
+    ws.onopen = () => {
+      const s = sessions.value.get(deploymentId)
+      if (!s || s.ws !== ws) return
+      if (s.lastSeen && s.projectId) {
+        void catchUpFromLastSeen(deploymentId, s)
       }
     }
     ws.onerror = () => {
@@ -291,25 +320,90 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     }
   }
 
+  // catchUpFromLastSeen 断线重连后从 lastSeen 游标向后补拉，直到追上或达页数上限。
+  //
+  // 为什么不用 WS 的 replay 参数：replay 固定回放最近 N 条，断线超过 N 条就留洞
+  // 且永远补不回来；按游标补拉是确定性的。replay 参数保留（兜首连与无 projectId 场景），
+  // 补拉页与 replay 的重复条目由同 id 覆盖去重兜底。
+  async function catchUpFromLastSeen(deploymentId: string, session: DeploymentSession) {
+    session.catchingUp = true
+    touchSessions()
+    let pages = 0
+    let cursor = session.lastSeen!
+    let hasMore = true
+    try {
+      while (hasMore && pages < CATCHUP_MAX_PAGES) {
+        pages++
+        const resp = await api.fetchLogContextPage({
+          project: session.projectId!,
+          deployment: deploymentId,
+          cursor_time: cursor.time,
+          cursor_id: cursor.id,
+          direction: 'after',
+          limit: CATCHUP_PAGE_LIMIT,
+        })
+        const items = resp.items ?? []
+        for (const raw of items) {
+          ingestLive(session, raw)
+        }
+        if (items.length > 0) {
+          cursor = cursorFromLog(items[items.length - 1])
+          session.lastSeen = cursor
+        }
+        hasMore = resp.has_more === true && items.length > 0
+      }
+      if (hasMore) {
+        // 补拉封顶仍没追上：明示缺口，宁可让用户看到"这里缺了"，不静默装完整。
+        session.gapMarkers.push({ id: gapMarkerID(), time: cursor.time })
+        diagnostic('log_store.catchup_capped', { deploymentId, pages, cursorTime: cursor.time })
+      }
+      diagnostic('log_store.catchup_done', { deploymentId, pages, caughtUp: !hasMore })
+    } catch (err) {
+      // 补拉失败同样明示缺口——诊断事件 + gap 标记双通道，不静默。
+      session.gapMarkers.push({ id: gapMarkerID(), time: cursor.time })
+      diagnostic('log_store.catchup_failed', {
+        deploymentId,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      session.catchingUp = false
+      const pending = session.pendingLive
+      session.pendingLive = []
+      for (const raw of pending) {
+        if (raw.message === '' && raw.fold_key) {
+          applyIncrement(session, raw)
+        } else {
+          ingestLive(session, raw)
+          session.lastSeen = cursorFromLog(raw)
+        }
+      }
+      bumpRevision()
+      touchSessions()
+    }
+  }
+
   /**
    * subscribe 订阅指定 deployment 的实时日志流。
    *
    * 参数：
    *   - deploymentId: deployment 唯一标识
+   *   - projectId: deployment 所属项目，用于重连后按上下文 API 精确补拉
    *
    * 注意：
    *   - 相同 deploymentId 多次调用只建立一个 WebSocket，refCount 累加
    *   - 必须与 unsubscribe 配对使用，否则 WebSocket 不会关闭
    */
-  function subscribe(deploymentId: string) {
+  function subscribe(deploymentId: string, projectId?: string | null) {
     const existing = sessions.value.get(deploymentId)
     if (existing) {
       existing.refCount++
+      if (!existing.projectId && projectId) existing.projectId = projectId
       touchSessions()
       return
     }
 
     const session = makeSession()
+    session.projectId = projectId ?? null
     sessions.value.set(deploymentId, session)
     touchSessions()
     connect(deploymentId, session)
@@ -411,6 +505,11 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     return sessions.value.get(deploymentId)?.loadingMoreHistory ?? false
   }
 
+  /** getGapMarkers 返回该 deployment 的断流缺口标记（时间点），供面板渲染缺口分隔行。 */
+  function getGapMarkers(deploymentId: string): { id: string; time: string }[] {
+    return sessions.value.get(deploymentId)?.gapMarkers ?? []
+  }
+
   /**
    * refCountOf 返回指定 deployment 的当前引用计数。
    *
@@ -430,6 +529,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     getLogs,
     hasMoreHistory,
     isLoadingMore,
+    getGapMarkers,
     refCountOf,
   }
 })

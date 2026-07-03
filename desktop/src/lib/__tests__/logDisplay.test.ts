@@ -153,4 +153,18 @@ describe('makeDisplayItems', () => {
 
     expect(computeDisplayStats(items).total).toBe(1)
   })
+
+  it('按时间插入断流缺口分隔线且不参与统计', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:03.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, null, [], [
+      { id: 'gap-1', time: '2026-05-21T10:00:02.000Z' },
+    ])
+
+    expect(items.map(item => item.kind)).toEqual(['entry', 'gapSeparator', 'entry'])
+    expect(computeDisplayStats(items).total).toBe(2)
+  })
 })

@@ -131,7 +131,7 @@ describe('LogPanel', () => {
     })
     await nextTick()
 
-    expect(subscribe).toHaveBeenCalledWith('dep-1')
+    expect(subscribe).toHaveBeenCalledWith('dep-1', null)
     expect(loadMoreHistory).toHaveBeenCalledWith('dep-1', 200)
 
     await wrapper.setProps({
@@ -140,7 +140,7 @@ describe('LogPanel', () => {
     await nextTick()
 
     expect(unsubscribe).toHaveBeenCalledWith('dep-1')
-    expect(subscribe).toHaveBeenCalledWith('dep-2')
+    expect(subscribe).toHaveBeenCalledWith('dep-2', null)
     expect(loadMoreHistory).toHaveBeenCalledWith('dep-2', 200)
   })
 

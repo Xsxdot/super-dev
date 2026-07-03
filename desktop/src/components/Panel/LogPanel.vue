@@ -20,6 +20,7 @@ import LogContextMenu from './LogContextMenu.vue'
 import PinNotePopover from './PinNotePopover.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import LogLifecycleSeparatorRow from './LogLifecycleSeparatorRow.vue'
+import LogGapSeparatorRow from './LogGapSeparatorRow.vue'
 import {
   buildDeploymentNodeStatus,
   logMatchesSelectedNodes,
@@ -170,7 +171,7 @@ watch(
 )
 
 async function subscribeDeployment(deploymentId: string) {
-  deploymentLogStore.subscribe(deploymentId)
+  deploymentLogStore.subscribe(deploymentId, props.projectId ?? null)
   initialHistoryBoundary.value = null
   const token = ++historyLoadToken
   await deploymentLogStore.loadMoreHistory(deploymentId, INITIAL_HISTORY_LIMIT)
@@ -332,10 +333,13 @@ function makeLogDisplay() {
           lockedLogs: bm.lockedLogs,
         }
       : null
+  const gapMarkers = props.source?.type === 'deployment'
+    ? deploymentLogStore.getGapMarkers(props.source.deploymentId)
+    : []
   const items = makeDisplayItems(logs, displayBm, {
     start: markerStartId.value,
     end: markerEndId.value,
-  }, historyBoundary.value, lifecycleMarkers.value)
+  }, historyBoundary.value, lifecycleMarkers.value, gapMarkers)
   cachedDisplay.value = { items, stats: computeDisplayStats(items) }
 }
 
@@ -1032,6 +1036,10 @@ function toggleNode(hostId: string) {
             <LogLifecycleSeparatorRow
               v-else-if="displayItems[vRow.index].kind === 'lifecycleSeparator'"
               :marker="(displayItems[vRow.index] as any).marker"
+            />
+            <LogGapSeparatorRow
+              v-else-if="displayItems[vRow.index].kind === 'gapSeparator'"
+              :time="(displayItems[vRow.index] as any).time"
             />
             <LogRow
               v-else-if="displayItems[vRow.index].kind === 'entry'"

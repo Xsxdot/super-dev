@@ -1152,6 +1152,7 @@ export default {
       historyLoading: '加载历史记录中...',
       historyEnd: '- 已到最早记录 -',
       historySeparator: '历史消息 · 之后为实时输出',
+      gapSeparator: '断线期间此处可能缺失日志（{time} 前后）',
       addSelectionToFilter: '填入过滤关键词',
       newLogs: '↓ {count} 条新日志',
       liveStats: '实时 · 显示 {total} 条',
