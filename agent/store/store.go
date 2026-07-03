@@ -228,30 +228,15 @@ func migrate(db *sql.DB) error {
 	if err := ensureLogEntriesFoldColumns(db); err != nil {
 		return err
 	}
+	if err := ensureLogEntriesSeqColumns(db); err != nil {
+		return err
+	}
 	return ensurePipelineRunLogsHostNameColumn(db)
 }
 
 func ensureLogEntriesFoldColumns(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(log_entries)`)
+	cols, err := tableColumns(db, "log_entries")
 	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	cols := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		cols[name] = true
-	}
-	if err := rows.Err(); err != nil {
 		return err
 	}
 	if !cols["repeat_count"] {
@@ -272,6 +257,64 @@ func ensureLogEntriesFoldColumns(db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+// tableColumns 返回指定表已存在的列名集合，供幂等迁移判断是否需要 ALTER TABLE。
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return cols, nil
+}
+
+// ensureLogEntriesSeqColumns 为旧库补齐 seq/last_seen_at 列并回填 seq。
+//
+// seq 是 per-deployment 单调逻辑身份（spec §3.1）。回填用 ROW_NUMBER 按 id 序
+// 生成，保证与历史写入顺序一致；回填后建 (deployment_id, seq) 唯一索引，
+// 任何重复分配都会在写入时立刻暴露而不是静默覆盖。
+func ensureLogEntriesSeqColumns(db *sql.DB) error {
+	cols, err := tableColumns(db, "log_entries")
+	if err != nil {
+		return err
+	}
+	if !cols["seq"] {
+		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN seq INTEGER`); err != nil {
+			return err
+		}
+	}
+	if !cols["last_seen_at"] {
+		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN last_seen_at DATETIME`); err != nil {
+			return err
+		}
+	}
+	// 只回填 seq 为 NULL 的行，迁移幂等；UPDATE...FROM 需 SQLite>=3.33（modernc 满足）。
+	if _, err := db.Exec(`
+		UPDATE log_entries SET seq = t.rn
+		FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY deployment_id ORDER BY id) AS rn FROM log_entries) AS t
+		WHERE log_entries.id = t.id AND log_entries.seq IS NULL`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dep_seq ON log_entries(deployment_id, seq)`)
+	return err
 }
 
 // migrateFoldKeyUniqueIndex 将 fold_key 唯一约束从单列迁移为 (run_id, fold_key) 复合。
@@ -358,12 +401,13 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 	}
 	// 折叠 upsert 的冲突键是 (run_id, fold_key)：同一 run 内同 fold_key 累加计数，
 	// 不同 run（含 agent 重启后的新会话）的同 fold_key 互不干扰，各自落新行。
+	// UPSERT 不回写 timestamp，折叠段最新出现时间写入 last_seen_at。
 	stmt, err := tx.Prepare(`
-		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id, fold_key) WHERE fold_key != '' DO UPDATE SET
 			repeat_count = excluded.repeat_count,
-			timestamp    = excluded.timestamp
+			last_seen_at = excluded.last_seen_at
 	`)
 	if err != nil {
 		_ = tx.Rollback()
@@ -376,12 +420,79 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 		if repeatCount <= 0 {
 			repeatCount = 1
 		}
-		if _, err := stmt.Exec(e.DeploymentID, e.RunID, e.Timestamp.UTC(), e.Level, e.Message, e.Stream, repeatCount, e.FoldKey); err != nil {
+		entryTime := e.Timestamp.UTC()
+		if _, err := stmt.Exec(e.DeploymentID, e.RunID, entryTime, e.Level, e.Message, e.Stream, repeatCount, e.FoldKey, nullableSeq(e.Seq), entryTime); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// nullableSeq 把 0 值 seq 映射为 NULL：0 表示"未分配"（如 __desktop__ 打点等
+// 未来可能的旁路），NULL 不参与 (deployment_id, seq) 唯一约束，不会互相撞键。
+func nullableSeq(seq uint64) any {
+	if seq == 0 {
+		return nil
+	}
+	return int64(seq)
+}
+
+// scanLogEntry 扫描标准日志列清单，确保所有读路径一致带回 seq 与 last_seen_at。
+func scanLogEntry(rows *sql.Rows) (model.LogEntry, error) {
+	var e model.LogEntry
+	var seq sql.NullInt64
+	var lastSeen sql.NullTime
+	err := rows.Scan(
+		&e.ID,
+		&e.DeploymentID,
+		&e.RunID,
+		&e.Timestamp,
+		&e.Level,
+		&e.Message,
+		&e.Stream,
+		&e.RepeatCount,
+		&e.FoldKey,
+		&seq,
+		&lastSeen,
+	)
+	if err != nil {
+		return e, err
+	}
+	if seq.Valid && seq.Int64 > 0 {
+		e.Seq = uint64(seq.Int64)
+	}
+	if lastSeen.Valid {
+		t := lastSeen.Time
+		e.LastSeenAt = &t
+	}
+	return e, nil
+}
+
+// SeqWatermarks 返回每个 deployment 已分配的最大 seq，供 logbuf 启动时恢复水位。
+//
+// 返回：
+//   - map[deploymentID]maxSeq；无日志的 deployment 不出现在 map 中
+//   - 查询失败返回错误（调用方必须拒绝启动，不可静默从 1 开始撞历史）
+func (s *Store) SeqWatermarks() (map[string]uint64, error) {
+	rows, err := s.db.Query(`SELECT deployment_id, MAX(seq) FROM log_entries WHERE seq IS NOT NULL GROUP BY deployment_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]uint64{}
+	for rows.Next() {
+		var dep string
+		var max sql.NullInt64
+		if err := rows.Scan(&dep, &max); err != nil {
+			return nil, err
+		}
+		if max.Valid {
+			out[dep] = uint64(max.Int64)
+		}
+	}
+	return out, rows.Err()
 }
 
 // Fetch 按指定参数查询日志条目，结果按 id ASC 排序。
@@ -400,7 +511,7 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		p.Limit = 1000
 	}
 
-	query := `SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key FROM log_entries WHERE 1=1`
+	query := `SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at FROM log_entries WHERE 1=1`
 	args := []any{}
 
 	if p.DeploymentID != "" {
@@ -430,9 +541,9 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 
 	var entries []model.LogEntry
 	for rows.Next() {
-		var e model.LogEntry
 		// modernc.org/sqlite 将 DATETIME 列以 time.Time 形式返回，直接 Scan 避免格式解析歧义。
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
+		e, err := scanLogEntry(rows)
+		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -532,7 +643,7 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	}
 
 	entryQuery := fmt.Sprintf(
-		"SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
+		"SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at FROM log_entries WHERE %s ORDER BY timestamp ASC, id ASC LIMIT %d",
 		entryWhere,
 		p.Limit+1,
 	)
@@ -542,8 +653,8 @@ func (s *Store) Search(p SearchParams) (SearchResult, error) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
+		e, err := scanLogEntry(rows)
+		if err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)
@@ -656,7 +767,7 @@ func (s *Store) fetchContextHalfWindow(deploymentID string, from time.Time, to t
 		order = "ASC"
 	}
 	query := fmt.Sprintf(`
-		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at
 		FROM log_entries
 		WHERE deployment_id = ? AND %s
 		ORDER BY timestamp %s, id %s
@@ -669,8 +780,8 @@ func (s *Store) fetchContextHalfWindow(deploymentID string, from time.Time, to t
 	defer rows.Close()
 	entries := []model.LogEntry{}
 	for rows.Next() {
-		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
+		e, err := scanLogEntry(rows)
+		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -714,7 +825,7 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key
+		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at
 		FROM log_entries
 		WHERE deployment_id = ? AND %s
 		ORDER BY timestamp %s, id %s
@@ -734,8 +845,8 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 	defer rows.Close()
 
 	for rows.Next() {
-		var e model.LogEntry
-		if err := rows.Scan(&e.ID, &e.DeploymentID, &e.RunID, &e.Timestamp, &e.Level, &e.Message, &e.Stream, &e.RepeatCount, &e.FoldKey); err != nil {
+		e, err := scanLogEntry(rows)
+		if err != nil {
 			return result, err
 		}
 		result.Entries = append(result.Entries, e)

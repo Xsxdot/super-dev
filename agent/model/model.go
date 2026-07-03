@@ -201,6 +201,12 @@ type LogEntry struct {
 	// FoldKey 标识折叠段，供实时增量推送时前端对齐"当前折叠行"；
 	// 同一段（同 deployment + 同签名 + 时间窗内）共享同一 FoldKey。
 	FoldKey string `json:"fold_key,omitempty"`
+	// Seq 是该 deployment 内的单调逻辑序号，由产生日志的 agent 在采集入口分配。
+	// 它是日志的持久身份（期 2b 的流协议缺口检测也基于它）；0 表示旧数据未回填/未分配。
+	Seq uint64 `json:"seq,omitempty"`
+	// LastSeenAt 是折叠段最近一次出现的时间；nil 表示未折叠或旧数据。
+	// 段首行的 Timestamp 保持段开始时间不再被 UPSERT 回写，段的"最新时间"由本字段承载。
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // LogRule 表示一条日志过滤规则。

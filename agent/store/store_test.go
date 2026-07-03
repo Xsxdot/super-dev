@@ -3,6 +3,7 @@ package store_test
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,7 +54,9 @@ func TestAppendBatchUpsertsByFoldKey(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, 5, got[0].RepeatCount)
 	assert.Equal(t, "k1", got[0].FoldKey)
-	assert.Equal(t, ts.Add(time.Second), got[0].Timestamp)
+	assert.Equal(t, ts, got[0].Timestamp)
+	require.NotNil(t, got[0].LastSeenAt)
+	assert.Equal(t, ts.Add(time.Second), *got[0].LastSeenAt)
 }
 
 // TestAppendBatchDoesNotFoldAcrossRuns 回归用例：同 deployment、相同 fold_key，
@@ -167,6 +170,67 @@ func TestNewMigratesExistingLogEntriesBeforeCreatingFoldIndex(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, 3, got[0].RepeatCount)
 	assert.Equal(t, "legacy-k", got[0].FoldKey)
+}
+
+// TestSeqMigrationBackfill 验证旧库升级后按 (deployment_id, id 序) 回填 seq。
+func TestSeqMigrationBackfill(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "logs.db")
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE log_entries (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		deployment_id TEXT NOT NULL, run_id TEXT NOT NULL,
+		timestamp DATETIME NOT NULL, level TEXT NOT NULL,
+		message TEXT NOT NULL, stream TEXT NOT NULL,
+		repeat_count INTEGER NOT NULL DEFAULT 1, fold_key TEXT NOT NULL DEFAULT '');
+		CREATE UNIQUE INDEX idx_run_fold_key ON log_entries(run_id, fold_key) WHERE fold_key != ''`)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		_, err = db.Exec(`INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, fold_key)
+			VALUES ('dep-a','', ?, 'INFO', ?, 'stdout', ?)`, now, fmt.Sprintf("a%d", i), fmt.Sprintf("fa%d", i))
+		require.NoError(t, err)
+	}
+	_, err = db.Exec(`INSERT INTO log_entries (deployment_id, run_id, timestamp, level, message, stream, fold_key)
+		VALUES ('dep-b','', ?, 'INFO', 'b0', 'stdout', 'fb0')`, now)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	wm, err := s.SeqWatermarks()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(3), wm["dep-a"], "dep-a 三条按 id 序回填 1..3")
+	assert.Equal(t, uint64(1), wm["dep-b"])
+}
+
+// TestAppendBatchSeqAndLastSeen 验证插入写 seq/last_seen_at，折叠 UPSERT 不回写 timestamp。
+func TestAppendBatchSeqAndLastSeen(t *testing.T) {
+	s := newTestStore(t)
+	t0 := time.Date(2026, 7, 3, 10, 0, 0, 0, time.UTC)
+	head := model.LogEntry{DeploymentID: "dep-1", RunID: "", Timestamp: t0,
+		Level: "INFO", Message: "boom", Stream: "stdout", FoldKey: "fk1", RepeatCount: 1, Seq: 7}
+	require.NoError(t, s.AppendBatch([]model.LogEntry{head}))
+
+	// 同 (run_id, fold_key) 的折叠代表行：计数与 last_seen_at 更新，timestamp 与 seq 不动。
+	rep := head
+	rep.Timestamp = t0.Add(3 * time.Second)
+	rep.RepeatCount = 5
+	require.NoError(t, s.AppendBatch([]model.LogEntry{rep}))
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "dep-1"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint64(7), got[0].Seq)
+	assert.Equal(t, 5, got[0].RepeatCount)
+	assert.True(t, got[0].Timestamp.Equal(t0), "折叠 UPSERT 不得回写 timestamp")
+	require.NotNil(t, got[0].LastSeenAt)
+	assert.True(t, got[0].LastSeenAt.Equal(t0.Add(3*time.Second)))
 }
 
 func TestFetchPagination(t *testing.T) {
