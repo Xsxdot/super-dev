@@ -703,6 +703,7 @@ func (a *App) Handler() http.Handler {
 
 	// 日志
 	mux.HandleFunc("GET /api/logs", a.fetchLogs)
+	mux.HandleFunc("POST /api/frontend-diagnostics", a.frontendDiagnostics)
 	mux.HandleFunc("GET /api/log-search", a.searchLogs)
 	mux.HandleFunc("GET /api/logs/context", a.fetchLogContext)
 	mux.HandleFunc("GET /api/logs/context/page", a.fetchLogContextPage)
