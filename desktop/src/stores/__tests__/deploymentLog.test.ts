@@ -44,6 +44,29 @@ class MockWebSocket {
 
 vi.stubGlobal('WebSocket', MockWebSocket)
 
+const trimBaseTime = Date.parse('2026-07-03T04:00:00.000Z')
+
+function timestampFor(index: number): string {
+  return new Date(trimBaseTime + index * 1000).toISOString()
+}
+
+function makeRawLog(index: number, deploymentId: string, extra: Partial<apiModule.LogEntry> = {}): apiModule.LogEntry {
+  return {
+    id: String(index),
+    deployment_id: deploymentId,
+    run_id: '',
+    timestamp: timestampFor(index),
+    level: 'INFO',
+    message: `msg-${index}`,
+    stream: 'stdout',
+    ...extra,
+  }
+}
+
+function sendWsLog(ws: MockWebSocket, raw: apiModule.LogEntry) {
+  ws.onmessage?.({ data: JSON.stringify(raw) })
+}
+
 describe('useDeploymentLogStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -144,6 +167,73 @@ describe('useDeploymentLogStore', () => {
     expect('_seedForTest' in store).toBe(false)
     expect('_trimHistoryHead' in store).toBe(false)
   })
+})
+
+describe('trim 与历史游标同步', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    MockWebSocket.instances = []
+    vi.clearAllMocks()
+  })
+
+  it('裁剪后 oldestCursor 前移到裁剪边界，hasMoreHistory 强制为 true', () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-cursor'
+    store.subscribe(deploymentId)
+    const session = store.sessions.get(deploymentId)!
+    session.hasMoreHistory = false
+    const ws = MockWebSocket.instances[0]
+
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId))
+    }
+
+    const logs = store.getLogs(deploymentId)
+    const removedCount = 5501 - logs.length
+    expect(logs.length).toBeLessThanOrEqual(5000)
+    expect(session.oldestCursor).toEqual({
+      time: timestampFor(removedCount),
+      id: String(removedCount),
+    })
+    expect(session.hasMoreHistory).toBe(true)
+  }, 30000)
+
+  it('loadMoreHistory 在裁剪后携带 before 与 before_time', async () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-before-time'
+    store.subscribe(deploymentId)
+    const ws = MockWebSocket.instances[0]
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId))
+    }
+    const session = store.sessions.get(deploymentId)!
+    const cursor = session.oldestCursor!
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({ items: [] })
+
+    await store.loadMoreHistory(deploymentId, 200)
+
+    expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({
+      deploymentId,
+      limit: 200,
+      before: cursor.id,
+      beforeTime: cursor.time,
+    }))
+  }, 30000)
+
+  it('trimmedFoldKeys 有 512 上限', () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-fold-cap'
+    store.subscribe(deploymentId)
+    const ws = MockWebSocket.instances[0]
+
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId, { fold_key: `fk-${i}`, repeat_count: i }))
+    }
+
+    const session = store.sessions.get(deploymentId)!
+    expect(session.trimmedFoldKeys.size).toBeLessThanOrEqual(512)
+  }, 30000)
 })
 
 describe('log ingestion', () => {

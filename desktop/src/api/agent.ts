@@ -1252,6 +1252,7 @@ export interface DeploymentFetchLogsParams {
   deploymentId: string
   limit?: number
   before?: string
+  beforeTime?: string
 }
 
 export interface DeploymentLogsResponse {
@@ -1640,6 +1641,7 @@ export const api = {
     const qs = new URLSearchParams()
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before != null) qs.set('before', String(params.before))
+    if (params.beforeTime) qs.set('before_time', params.beforeTime)
     const q = qs.toString()
     return request<DeploymentLogsResponse | LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
       .then(normalizeDeploymentLogsResponse)

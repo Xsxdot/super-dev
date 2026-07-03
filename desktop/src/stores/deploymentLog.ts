@@ -16,6 +16,7 @@ import { appendLive, insertSorted } from '@/lib/logOrder'
 
 const MAX_LOGS = 5000
 const TRIM_BATCH = 500
+const TRIMMED_FOLD_KEYS_MAX = 512
 const MAX_RECONNECT = 5
 const REPLAY_ON_RECONNECT = 100
 
@@ -122,13 +123,33 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     if (state.active <= 0) session.liveIdState.delete(baseId)
   }
 
+  // trimHead 从头部裁掉 count 条，并把 oldestCursor 同步前移到裁剪边界。
+  //
+  // 为什么必须同步游标：裁剪只删前端缓冲，store 里数据还在。若 oldestCursor
+  // 停在旧锚点，loadMoreHistory 会跳过 (旧锚点..裁剪边界) 直接翻更早的日志，
+  // 该区间成为永久盲区——这就是"面板找不到、MCP 搜得到"的根因。
   function trimHead(session: DeploymentSession, count: number) {
     const removable = Math.min(count, session.logs.length)
     if (removable <= 0) return 0
     const removed = session.logs.splice(0, removable)
     for (const entry of removed) {
-      if (entry.fold_key) session.trimmedFoldKeys.set(entry.fold_key, entry.repeat_count)
+      if (entry.fold_key) {
+        session.trimmedFoldKeys.set(entry.fold_key, entry.repeat_count)
+        // fold_key 记录仅用于区分"预期 miss"，容量收敛到最近 512 个，防内存无限涨。
+        if (session.trimmedFoldKeys.size > TRIMMED_FOLD_KEYS_MAX) {
+          const oldest = session.trimmedFoldKeys.keys().next().value
+          if (oldest !== undefined) session.trimmedFoldKeys.delete(oldest)
+        }
+      }
       releaseLiveId(session, entry)
+    }
+    const boundary = removed[removed.length - 1]
+    if (boundary) {
+      // 边界条目可能是无 rowid 的实时日志（cursor_id 为空），此时退化为纯时间游标，
+      // 由后端 before_time 参数兜底（Task 1）。
+      session.oldestCursor = { time: boundary.timestamp, id: boundary.cursor_id ?? '' }
+      // 裁掉了缓冲就意味着"又有历史可翻了"，必须重置，否则翻页永久停摆。
+      session.hasMoreHistory = true
     }
     session.liveStartIndex = Math.max(0, session.liveStartIndex - removed.length)
     return removed.length
@@ -154,6 +175,8 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       liveRemoved,
       kept: session.logs.length,
       liveStartIndex: session.liveStartIndex,
+      oldestCursorTime: session.oldestCursor?.time,
+      oldestCursorId: session.oldestCursor?.id,
     })
   }
 
@@ -337,7 +360,8 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
       const page = await api.fetchDeploymentLogs({
         deploymentId,
         limit,
-        before: session.oldestCursor?.id,
+        before: session.oldestCursor?.id || undefined,
+        beforeTime: session.oldestCursor?.time || undefined,
       })
       const entries = page.items
       const displayEntries = ingestHistoryBatch(session, entries)
