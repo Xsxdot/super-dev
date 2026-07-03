@@ -87,7 +87,10 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
   }
 
   function cursorFromLog(log: LogEntry): LogCursor {
-    return { time: log.timestamp, id: String(log.id ?? '') }
+    // cursorFromLog 构造翻页/补拉游标。后端游标已切到 per-deployment seq（期 2a），
+    // 优先取 seq；无 seq（旧 agent 数据）回退 rowid——两者同序，退化只影响精度不影响正确性。
+    const seq = log.seq && log.seq > 0 ? String(log.seq) : ''
+    return { time: log.timestamp, id: seq || String(log.id ?? '') }
   }
 
   function gapMarkerID(): string {

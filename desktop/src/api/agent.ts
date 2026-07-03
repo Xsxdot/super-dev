@@ -576,6 +576,8 @@ export interface Project {
 
 export interface LogEntry {
   id: string
+  /** per-deployment 单调逻辑序号（agent 采集入口分配）；旧数据/未分配为缺省。 */
+  seq?: number
   cursor_id?: string
   deployment_id: string
   run_id: string

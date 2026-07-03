@@ -190,6 +190,25 @@ describe('重连补拉', () => {
     vi.clearAllMocks()
   })
 
+  it('lastSeen 游标优先取 seq，无 seq 时回退 rowid', () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-last-seen-seq'
+    store.subscribe(deploymentId)
+    const ws = MockWebSocket.instances[0]
+
+    sendWsLog(ws, makeRawLog(999, deploymentId, { seq: 42 }))
+    expect(store.sessions.get(deploymentId)?.lastSeen).toEqual({
+      time: timestampFor(999),
+      id: '42',
+    })
+
+    sendWsLog(ws, makeRawLog(1000, deploymentId))
+    expect(store.sessions.get(deploymentId)?.lastSeen).toEqual({
+      time: timestampFor(1000),
+      id: '1000',
+    })
+  })
+
   it('重连成功后按 lastSeen 游标向后补拉直到 hasMore=false', async () => {
     vi.useFakeTimers()
     try {
@@ -197,7 +216,7 @@ describe('重连补拉', () => {
       const deploymentId = 'dep-catchup'
       store.subscribe(deploymentId, 'proj-1')
       const ws = MockWebSocket.instances[0]
-      const first = makeRawLog(10, deploymentId)
+      const first = makeRawLog(10, deploymentId, { seq: 42 })
       sendWsLog(ws, first)
       const mockFetch = vi.mocked(apiModule.api.fetchLogContextPage)
       mockFetch
@@ -221,7 +240,7 @@ describe('重连补拉', () => {
         project: 'proj-1',
         deployment: deploymentId,
         cursor_time: first.timestamp,
-        cursor_id: '10',
+        cursor_id: '42',
         direction: 'after',
         limit: 200,
       }))
