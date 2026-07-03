@@ -324,6 +324,14 @@ fn should_install_native_app_menu() -> bool {
     should_install_native_app_menu_for_target(std::env::consts::OS)
 }
 
+fn should_disable_main_window_decorations_for_target(target_os: &str) -> bool {
+    target_os == "windows"
+}
+
+fn should_disable_main_window_decorations() -> bool {
+    should_disable_main_window_decorations_for_target(std::env::consts::OS)
+}
+
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     // 系统托盘（勿在 tauri.conf.json 再配置 trayIcon，否则会创建重复图标）
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
@@ -395,6 +403,13 @@ fn main() {
                 eprintln!("[SuperDev] agent failed to start: {e}");
             }
             app.manage(agent);
+            if should_disable_main_window_decorations() {
+                if let Some(main) = app.get_webview_window("main") {
+                    if let Err(e) = main.set_decorations(false) {
+                        eprintln!("[SuperDev] main window decorations failed to disable: {e}");
+                    }
+                }
+            }
             if should_install_native_app_menu() {
                 if let Err(e) = install_app_menu(app) {
                     eprintln!("[SuperDev] app menu failed to install: {e}");
@@ -438,7 +453,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_loopback_proxy_bypass, should_install_native_app_menu_for_target};
+    use super::{
+        append_loopback_proxy_bypass, should_disable_main_window_decorations_for_target,
+        should_install_native_app_menu_for_target,
+    };
 
     const MAIN_RS: &str = include_str!("main.rs");
 
@@ -544,11 +562,31 @@ mod tests {
     }
 
     #[test]
+    fn main_window_decorations_are_disabled_only_on_windows() {
+        assert!(should_disable_main_window_decorations_for_target("windows"));
+        assert!(!should_disable_main_window_decorations_for_target("macos"));
+        assert!(!should_disable_main_window_decorations_for_target("linux"));
+    }
+
+    #[test]
     fn setup_guards_native_app_menu_installation_by_platform() {
         let source = setup_source();
         assert!(
             source.contains("if should_install_native_app_menu() {"),
             "Windows and Linux should not install a native app menu because it consumes a second top row"
+        );
+    }
+
+    #[test]
+    fn setup_disables_main_window_decorations_for_windows_custom_titlebar() {
+        let source = setup_source();
+        assert!(
+            source.contains("if should_disable_main_window_decorations() {"),
+            "Windows needs native decorations disabled so the Vue titlebar shares the row with window controls"
+        );
+        assert!(
+            source.contains("main.set_decorations(false)"),
+            "setup should disable main window decorations instead of changing macOS or Linux globally"
         );
     }
 

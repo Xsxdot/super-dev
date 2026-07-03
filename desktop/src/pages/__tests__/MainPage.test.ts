@@ -23,11 +23,6 @@ const windowApiMock = vi.hoisted(() => ({
   toggleMaximize: vi.fn(),
 }))
 
-const menuApiMock = vi.hoisted(() => ({
-  new: vi.fn(),
-  popup: vi.fn(),
-}))
-
 function mockNavigatorPlatform(platform: string) {
   Object.defineProperty(window.navigator, 'platform', {
     configurable: true,
@@ -55,24 +50,6 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowApiMock,
 }))
 
-vi.mock('@tauri-apps/api/menu', () => ({
-  Menu: {
-    new: menuApiMock.new,
-  },
-}))
-
-vi.mock('@tauri-apps/api/dpi', () => ({
-  LogicalPosition: class LogicalPosition {
-    x: number
-    y: number
-
-    constructor(x: number, y: number) {
-      this.x = x
-      this.y = y
-    }
-  },
-}))
-
 describe('MainPage', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -81,8 +58,6 @@ describe('MainPage', () => {
     vi.clearAllMocks()
     mockNavigatorPlatform('MacIntel')
     windowApiMock.startDragging.mockResolvedValue(undefined)
-    menuApiMock.popup.mockResolvedValue(undefined)
-    menuApiMock.new.mockResolvedValue({ popup: menuApiMock.popup })
   })
 
   it('hides sidebar and bottom bar while runtime workspace is maximized', () => {
@@ -144,34 +119,13 @@ describe('MainPage', () => {
     expect(contentRow.contains(tabs)).toBe(false)
   })
 
-  it('shows compact menu entries in the app chrome on Windows shell builds', () => {
+  it('does not render the Windows menu inside the runtime app chrome', () => {
     mockNavigatorPlatform('Win32')
     vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
 
     const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
 
-    expect(wrapper.find('[data-test="app-chrome-menu"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="app-chrome-menu-edit"]').text()).toBe('编辑')
-    expect(wrapper.find('[data-test="app-chrome-menu-window"]').text()).toBe('窗口')
-    expect(wrapper.find('[data-test="app-chrome-menu-help"]').text()).toBe('帮助')
-  })
-
-  it('opens a native popup menu from the Windows app chrome menu', async () => {
-    mockNavigatorPlatform('Win32')
-    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
-
-    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
-
-    await wrapper.find('[data-test="app-chrome-menu-edit"]').trigger('click')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(menuApiMock.new).toHaveBeenCalledWith({
-      items: expect.arrayContaining([
-        expect.objectContaining({ item: 'Undo', text: '撤销' }),
-        expect.objectContaining({ item: 'Paste', text: '粘贴' }),
-      ]),
-    })
-    expect(menuApiMock.popup).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-test="app-chrome-menu"]').exists()).toBe(false)
   })
 
   it('does not duplicate the native app menu on macOS shell builds', () => {

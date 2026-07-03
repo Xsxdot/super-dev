@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { LogicalPosition } from '@tauri-apps/api/dpi'
-import { Menu, type MenuOptions } from '@tauri-apps/api/menu'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAgentStore } from '@/stores/agent'
 import { useNodeStore } from '@/stores/node'
@@ -23,48 +21,10 @@ const showWorkspaceTabs = computed(() =>
 )
 
 const appWindow = getCurrentWindow()
-type ChromeMenuId = 'edit' | 'window' | 'help'
-type ChromeMenuItems = NonNullable<MenuOptions['items']>
-
-const showChromeMenu = !isMacShell()
-const chromeMenuLabels: Array<{ id: ChromeMenuId; label: string }> = [
-  { id: 'edit', label: '编辑' },
-  { id: 'window', label: '窗口' },
-  { id: 'help', label: '帮助' },
-]
-const chromeMenuItems: Record<ChromeMenuId, ChromeMenuItems> = {
-  edit: [
-    { item: 'Undo', text: '撤销' },
-    { item: 'Redo', text: '重做' },
-    { item: 'Separator' },
-    { item: 'Cut', text: '剪切' },
-    { item: 'Copy', text: '复制' },
-    { item: 'Paste', text: '粘贴' },
-    { item: 'SelectAll', text: '全选' },
-  ],
-  window: [
-    { item: 'Minimize', text: '最小化' },
-    { item: 'CloseWindow', text: '关闭窗口' },
-  ],
-  help: [{ text: '暂无帮助项', enabled: false }],
-}
-
-function isMacShell() {
-  return /mac/i.test(window.navigator.platform)
-}
 
 function startWindowDrag(event: MouseEvent) {
   if (event.buttons !== 1) return
   void appWindow.startDragging().catch(() => undefined)
-}
-
-async function openChromeMenu(menuId: ChromeMenuId, event: MouseEvent) {
-  const target = event.currentTarget
-  if (!(target instanceof HTMLElement)) return
-
-  const rect = target.getBoundingClientRect()
-  const menu = await Menu.new({ items: chromeMenuItems[menuId] })
-  await menu.popup(new LogicalPosition(rect.left, rect.bottom), appWindow)
 }
 </script>
 
@@ -84,20 +44,6 @@ async function openChromeMenu(menuId: ChromeMenuId, event: MouseEvent) {
       >
         <span class="app-brand-title" data-tauri-drag-region>SuperDev</span>
       </div>
-      <nav v-if="showChromeMenu" class="app-chrome-menu" data-test="app-chrome-menu" aria-label="应用菜单">
-        <button
-          v-for="item in chromeMenuLabels"
-          :key="item.id"
-          class="app-chrome-menu-button"
-          type="button"
-          :data-test="`app-chrome-menu-${item.id}`"
-          aria-haspopup="menu"
-          @mousedown.stop
-          @click="openChromeMenu(item.id, $event)"
-        >
-          {{ item.label }}
-        </button>
-      </nav>
       <div class="app-tabs-region" data-test="app-tabs-region">
         <WorkspaceTabs v-if="showWorkspaceTabs" />
         <div class="app-drag-fill" data-tauri-drag-region @mousedown="startWindowDrag" />
@@ -142,39 +88,6 @@ async function openChromeMenu(menuId: ChromeMenuId, event: MouseEvent) {
   align-items: center;
   padding: 0 18px 0 108px;
   border-right: 1px solid var(--border-secondary);
-}
-
-.app-chrome-menu {
-  display: flex;
-  height: 100%;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 2px;
-  padding: 0 8px;
-  border-right: 1px solid var(--border-secondary);
-}
-
-.app-chrome-menu-button {
-  display: inline-flex;
-  height: 28px;
-  min-width: 42px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: default;
-  font: inherit;
-  line-height: 1;
-  padding: 0 9px;
-}
-
-.app-chrome-menu-button:hover,
-.app-chrome-menu-button:focus-visible {
-  background: var(--control-hover);
-  color: var(--text-primary);
-  outline: none;
 }
 
 .app-brand-title {

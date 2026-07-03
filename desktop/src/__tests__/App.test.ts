@@ -19,6 +19,23 @@ import { installTestI18n } from '@/test-utils/i18n'
 
 const routeState = vi.hoisted(() => ({ path: '/' }))
 const replace = vi.hoisted(() => vi.fn())
+const windowApiMock = vi.hoisted(() => ({
+  close: vi.fn(),
+  minimize: vi.fn(),
+  startDragging: vi.fn(),
+  toggleMaximize: vi.fn(),
+}))
+const menuApiMock = vi.hoisted(() => ({
+  new: vi.fn(),
+  popup: vi.fn(),
+}))
+
+function mockNavigatorPlatform(platform: string) {
+  Object.defineProperty(window.navigator, 'platform', {
+    configurable: true,
+    value: platform,
+  })
+}
 
 vi.mock('vue-router', () => ({
   RouterView: { template: '<main />' },
@@ -26,12 +43,42 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ replace }),
 }))
 
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => windowApiMock,
+}))
+
+vi.mock('@tauri-apps/api/menu', () => ({
+  Menu: {
+    new: menuApiMock.new,
+  },
+}))
+
+vi.mock('@tauri-apps/api/dpi', () => ({
+  LogicalPosition: class LogicalPosition {
+    x: number
+    y: number
+
+    constructor(x: number, y: number) {
+      this.x = x
+      this.y = y
+    }
+  },
+}))
+
 describe('App', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
+    vi.clearAllMocks()
     routeState.path = '/'
     replace.mockReset()
+    mockNavigatorPlatform('MacIntel')
+    windowApiMock.close.mockResolvedValue(undefined)
+    windowApiMock.minimize.mockResolvedValue(undefined)
+    windowApiMock.startDragging.mockResolvedValue(undefined)
+    windowApiMock.toggleMaximize.mockResolvedValue(undefined)
+    menuApiMock.popup.mockResolvedValue(undefined)
+    menuApiMock.new.mockResolvedValue({ popup: menuApiMock.popup })
   })
 
   it('redirects main window to onboarding when incomplete', async () => {
@@ -98,5 +145,63 @@ describe('App', () => {
 
     wrapper.unmount()
     expect(stopPolling).not.toHaveBeenCalled()
+  })
+
+  it('renders the Windows titlebar menu beside native window controls', async () => {
+    mockNavigatorPlatform('Win32')
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
+    })
+
+    const wrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="app-titlebar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="app-titlebar-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="app-titlebar-menu-file"]').text()).toBe('文件')
+    expect(wrapper.find('[data-test="app-titlebar-minimize"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="app-titlebar-maximize"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="app-titlebar-close"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="app-titlebar-minimize"]').trigger('click')
+    await wrapper.find('[data-test="app-titlebar-maximize"]').trigger('click')
+    await wrapper.find('[data-test="app-titlebar-close"]').trigger('click')
+
+    expect(windowApiMock.minimize).toHaveBeenCalledTimes(1)
+    expect(windowApiMock.toggleMaximize).toHaveBeenCalledTimes(1)
+    expect(windowApiMock.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps macOS and Linux out of the custom Windows titlebar', async () => {
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
+    })
+
+    mockNavigatorPlatform('MacIntel')
+    const macWrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+    expect(macWrapper.find('[data-test="app-titlebar"]').exists()).toBe(false)
+    macWrapper.unmount()
+
+    mockNavigatorPlatform('Linux x86_64')
+    const linuxWrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+    expect(linuxWrapper.find('[data-test="app-titlebar"]').exists()).toBe(false)
+  })
+
+  it('does not add the Windows titlebar to the tray popover route', async () => {
+    routeState.path = '/popover'
+    mockNavigatorPlatform('Win32')
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
+    })
+
+    const wrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="app-titlebar"]').exists()).toBe(false)
   })
 })
