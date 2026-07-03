@@ -3,7 +3,8 @@
 //
 // 职责：
 //   - 维护互斥的滚动意图（follow-bottom / anchor-history / align-to-time / idle）
-//   - 接收内容变化、用户滚动、历史加载、时间对齐事件，裁决是否以及如何滚动
+//   - 接收内容变化、输入事件、历史加载、时间对齐事件，裁决是否以及如何滚动
+//   - 意图裁决只接受输入事件（wheel/键盘/滚动条拖拽），scroll 位置事件不参与
 //   - 通过注入的回调请求实际滚动，自身不触碰 DOM 或 virtualizer
 //
 // 边界：
@@ -42,13 +43,26 @@ export class ScrollIntentMachine {
     this.cb.diagnostic?.('scroll_intent.transition', { from: prev, to: next, reason })
   }
 
-  // onUserScroll：用户滚动事件。靠近底部回 follow-bottom，离开底部进 idle。
-  onUserScroll({ distanceFromBottom }: { distanceFromBottom: number }) {
+  // leaveBottom：用户输入（wheel 上滚 / PageUp / 滚动条拖拽）明确表示离开底部。
+  //
+  // 只从 follow-bottom / align-to-time 转 idle；anchor-history 不打断——
+  // 历史回填期间用户滚动是常态，锚点复位必须完成，否则回填后视口漂移。
+  leaveBottom(reason: string) {
+    if (this._intent === 'follow-bottom' || this._intent === 'align-to-time') {
+      this.transition('idle', reason)
+    }
+  }
+
+  // maybeReturnToBottom：用户输入（wheel 下滚 / 拖拽结束 / End 键）后检查是否已回到底部附近。
+  //
+  // 距离只在"输入事件发生的这一刻"读取一次——scroll 事件永不参与意图裁决，
+  // 这样 totalSize 异步增长、tanstack 内部 _scrollToOffset 修正等非用户位移不可能误判意图。
+  maybeReturnToBottom({ distanceFromBottom }: { distanceFromBottom: number }) {
+    if (this._intent === 'follow-bottom') return // 已在 follow，避免重复贴底自激励
+    if (this._intent === 'anchor-history') return
     if (distanceFromBottom < FOLLOW_BOTTOM_THRESHOLD) {
       this.transition('follow-bottom', 'user-at-bottom')
       this.cb.scrollToBottom?.()
-    } else {
-      this.transition('idle', 'user-scrolled-away')
     }
   }
 
@@ -65,11 +79,12 @@ export class ScrollIntentMachine {
     this.transition('anchor-history', 'history-backfill-start')
   }
 
-  // settleHistoryAnchor：历史加载完成后用稳定 id 复位，避免按 index 偏移算错。
+  // settleHistoryAnchor：历史加载完成后用稳定 id 复位，随后意图落 idle（用户在翻历史）。
   settleHistoryAnchor() {
     const anchor = this.anchorLogId
     this.anchorLogId = null
     if (anchor) this.cb.scrollToLogId?.(anchor)
+    this.transition('idle', 'history-anchor-settled')
   }
 
   // beginTimeAlign：被动面板被对齐到目标日志，暂停 follow，单向不回广播。

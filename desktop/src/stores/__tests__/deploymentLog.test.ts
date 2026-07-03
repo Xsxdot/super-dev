@@ -22,6 +22,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
     api: {
       ...actual.api,
       fetchDeploymentLogs: vi.fn().mockResolvedValue({ items: [] }),
+      fetchLogContextPage: vi.fn().mockResolvedValue({ items: [], has_more: false }),
     },
     deploymentWsUrl: actual.deploymentWsUrl,
   }
@@ -29,6 +30,7 @@ vi.mock('@/api/agent', async (importOriginal) => {
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
+  onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
@@ -43,6 +45,41 @@ class MockWebSocket {
 }
 
 vi.stubGlobal('WebSocket', MockWebSocket)
+
+const trimBaseTime = Date.parse('2026-07-03T04:00:00.000Z')
+
+function timestampFor(index: number): string {
+  return new Date(trimBaseTime + index * 1000).toISOString()
+}
+
+function makeRawLog(index: number, deploymentId: string, extra: Partial<apiModule.LogEntry> = {}): apiModule.LogEntry {
+  return {
+    id: String(index),
+    deployment_id: deploymentId,
+    run_id: '',
+    timestamp: timestampFor(index),
+    level: 'INFO',
+    message: `msg-${index}`,
+    stream: 'stdout',
+    ...extra,
+  }
+}
+
+function sendWsLog(ws: MockWebSocket, raw: apiModule.LogEntry) {
+  ws.onmessage?.({ data: JSON.stringify(raw) })
+}
+
+async function flushMicrotasks(times = 6) {
+  for (let i = 0; i < times; i++) await Promise.resolve()
+}
+
+async function reconnectAndOpen(oldWs: MockWebSocket): Promise<MockWebSocket> {
+  oldWs.close()
+  await vi.advanceTimersByTimeAsync(1000)
+  const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+  ws.onopen?.()
+  return ws
+}
 
 describe('useDeploymentLogStore', () => {
   beforeEach(() => {
@@ -144,6 +181,194 @@ describe('useDeploymentLogStore', () => {
     expect('_seedForTest' in store).toBe(false)
     expect('_trimHistoryHead' in store).toBe(false)
   })
+})
+
+describe('重连补拉', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    MockWebSocket.instances = []
+    vi.clearAllMocks()
+  })
+
+  it('重连成功后按 lastSeen 游标向后补拉直到 hasMore=false', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = useDeploymentLogStore()
+      const deploymentId = 'dep-catchup'
+      store.subscribe(deploymentId, 'proj-1')
+      const ws = MockWebSocket.instances[0]
+      const first = makeRawLog(10, deploymentId)
+      sendWsLog(ws, first)
+      const mockFetch = vi.mocked(apiModule.api.fetchLogContextPage)
+      mockFetch
+        .mockResolvedValueOnce({
+          deployment_id: deploymentId,
+          direction: 'after',
+          items: Array.from({ length: 200 }, (_, index) => makeRawLog(11 + index, deploymentId)),
+          has_more: true,
+        })
+        .mockResolvedValueOnce({
+          deployment_id: deploymentId,
+          direction: 'after',
+          items: Array.from({ length: 50 }, (_, index) => makeRawLog(211 + index, deploymentId)),
+          has_more: false,
+        })
+
+      await reconnectAndOpen(ws)
+      await flushMicrotasks()
+
+      expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({
+        project: 'proj-1',
+        deployment: deploymentId,
+        cursor_time: first.timestamp,
+        cursor_id: '10',
+        direction: 'after',
+        limit: 200,
+      }))
+      const logs = store.getLogs(deploymentId)
+      expect(logs).toHaveLength(251)
+      expect(logs[0].message).toBe('msg-10')
+      expect(logs[250].message).toBe('msg-260')
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30000)
+
+  it('补拉期间到达的实时日志先缓冲、补拉完成后按序落入', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = useDeploymentLogStore()
+      const deploymentId = 'dep-catchup-pending'
+      store.subscribe(deploymentId, 'proj-1')
+      const ws = MockWebSocket.instances[0]
+      sendWsLog(ws, makeRawLog(10, deploymentId))
+      let resolvePage!: (value: apiModule.LogContextPageResponse) => void
+      vi.mocked(apiModule.api.fetchLogContextPage).mockReturnValueOnce(new Promise(resolve => {
+        resolvePage = resolve
+      }))
+
+      const nextWs = await reconnectAndOpen(ws)
+      sendWsLog(nextWs, makeRawLog(12, deploymentId))
+      sendWsLog(nextWs, makeRawLog(13, deploymentId))
+      sendWsLog(nextWs, makeRawLog(14, deploymentId))
+      expect(store.getLogs(deploymentId).map(log => log.message)).toEqual(['msg-10'])
+
+      resolvePage({
+        deployment_id: deploymentId,
+        direction: 'after',
+        items: [makeRawLog(11, deploymentId)],
+        has_more: false,
+      })
+      await flushMicrotasks()
+
+      expect(store.getLogs(deploymentId).map(log => log.message)).toEqual([
+        'msg-10',
+        'msg-11',
+        'msg-12',
+        'msg-13',
+        'msg-14',
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30000)
+
+  it('补拉翻页达到上限仍 hasMore 时记录 gap marker', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = useDeploymentLogStore()
+      const deploymentId = 'dep-catchup-capped'
+      store.subscribe(deploymentId, 'proj-1')
+      const ws = MockWebSocket.instances[0]
+      sendWsLog(ws, makeRawLog(10, deploymentId))
+      const mockFetch = vi.mocked(apiModule.api.fetchLogContextPage)
+      for (let page = 0; page < 20; page++) {
+        mockFetch.mockResolvedValueOnce({
+          deployment_id: deploymentId,
+          direction: 'after',
+          items: [makeRawLog(11 + page, deploymentId)],
+          has_more: true,
+        })
+      }
+
+      await reconnectAndOpen(ws)
+      await flushMicrotasks(30)
+
+      expect(mockFetch).toHaveBeenCalledTimes(20)
+      const markers = store.getGapMarkers(deploymentId)
+      expect(markers).toHaveLength(1)
+      expect(markers[0].time).toBe(timestampFor(30))
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30000)
+})
+
+describe('trim 与历史游标同步', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    MockWebSocket.instances = []
+    vi.clearAllMocks()
+  })
+
+  it('裁剪后 oldestCursor 前移到裁剪边界，hasMoreHistory 强制为 true', () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-cursor'
+    store.subscribe(deploymentId)
+    const session = store.sessions.get(deploymentId)!
+    session.hasMoreHistory = false
+    const ws = MockWebSocket.instances[0]
+
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId))
+    }
+
+    const logs = store.getLogs(deploymentId)
+    const removedCount = 5501 - logs.length
+    expect(logs.length).toBeLessThanOrEqual(5000)
+    expect(session.oldestCursor).toEqual({
+      time: timestampFor(removedCount),
+      id: String(removedCount),
+    })
+    expect(session.hasMoreHistory).toBe(true)
+  }, 30000)
+
+  it('loadMoreHistory 在裁剪后携带 before 与 before_time', async () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-before-time'
+    store.subscribe(deploymentId)
+    const ws = MockWebSocket.instances[0]
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId))
+    }
+    const session = store.sessions.get(deploymentId)!
+    const cursor = session.oldestCursor!
+    const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
+    mockFetch.mockResolvedValueOnce({ items: [] })
+
+    await store.loadMoreHistory(deploymentId, 200)
+
+    expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({
+      deploymentId,
+      limit: 200,
+      before: cursor.id,
+      beforeTime: cursor.time,
+    }))
+  }, 30000)
+
+  it('trimmedFoldKeys 有 512 上限', () => {
+    const store = useDeploymentLogStore()
+    const deploymentId = 'dep-trim-fold-cap'
+    store.subscribe(deploymentId)
+    const ws = MockWebSocket.instances[0]
+
+    for (let i = 1; i <= 5501; i++) {
+      sendWsLog(ws, makeRawLog(i, deploymentId, { fold_key: `fk-${i}`, repeat_count: i }))
+    }
+
+    const session = store.sessions.get(deploymentId)!
+    expect(session.trimmedFoldKeys.size).toBeLessThanOrEqual(512)
+  }, 30000)
 })
 
 describe('log ingestion', () => {

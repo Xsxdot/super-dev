@@ -19,6 +19,7 @@ export type LogDisplayItem =
   | { kind: 'markerEnd'; id: string; date: Date }
   | { kind: 'historySeparator'; id: string }
   | { kind: 'lifecycleSeparator'; id: string; marker: LogLifecycleMarker }
+  | { kind: 'gapSeparator'; id: string; time: string }
 
 export interface BookmarkDisplayInput {
   state: BookmarkState
@@ -92,6 +93,26 @@ function withLifecycleSeparators(
   return out
 }
 
+// withGapSeparators 把断流缺口标记按时间插入显示列表。
+// 与 lifecycle marker 同构；缺口行提示"此处可能缺失日志"，是补拉封顶/失败的可见认账。
+function withGapSeparators(
+  items: LogDisplayItem[],
+  markers: { id: string; time: string }[] = [],
+): LogDisplayItem[] {
+  if (!markers.length) return items
+  const out = [...items]
+  for (const marker of markers) {
+    const markerTime = new Date(marker.time).getTime()
+    const insertAt = out.findIndex(item =>
+      item.kind === 'entry' && new Date(item.log.timestamp).getTime() > markerTime
+    )
+    const displayItem: LogDisplayItem = { kind: 'gapSeparator', id: `gap-${marker.id}`, time: marker.time }
+    if (insertAt < 0) out.push(displayItem)
+    else out.splice(insertAt, 0, displayItem)
+  }
+  return out
+}
+
 /**
  * makeDisplayItems 构造带书签标记的日志显示列表。
  *
@@ -112,11 +133,15 @@ export function makeDisplayItems(
   markerIds: MarkerIds,
   historyBoundary: HistoryBoundary | null = null,
   lifecycleMarkers: LogLifecycleMarker[] = [],
+  gapMarkers: { id: string; time: string }[] = [],
 ): LogDisplayItem[] {
   const items: LogDisplayItem[] = []
   if (!bm?.startTime) {
     for (const log of logs) items.push(entryItem(log))
-    return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
+    return withGapSeparators(
+      withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+      gapMarkers,
+    )
   }
 
   const startTime = bm.startTime
@@ -139,7 +164,10 @@ export function makeDisplayItems(
       items.push({ kind: 'markerEnd', id: markerIds.end, date: endTime })
     }
     for (const log of after) items.push(entryItem(log))
-    return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
+    return withGapSeparators(
+      withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+      gapMarkers,
+    )
   }
 
   const before = logs.filter(l => ts(l) < startTime)
@@ -149,7 +177,10 @@ export function makeDisplayItems(
     items.push({ kind: 'markerStart', id: markerIds.start, date: startTime })
   }
   for (const log of after) items.push(entryItem(log))
-  return withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers)
+  return withGapSeparators(
+    withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+    gapMarkers,
+  )
 }
 
 export interface DisplayStats {

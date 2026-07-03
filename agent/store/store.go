@@ -44,6 +44,9 @@ type FetchParams struct {
 	RunID        string
 	Limit        int
 	Before       int64
+	// BeforeTime 按时间向前翻页的兜底游标：只返回 timestamp 严格早于该时间的记录。
+	// 与 Before(rowid) 可同时指定（AND 关系）；前端裁剪掉无 rowid 的实时条目后用它续翻。
+	BeforeTime *time.Time
 }
 
 // SearchParams 定义跨部署历史日志搜索参数。
@@ -386,6 +389,7 @@ func (s *Store) AppendBatch(entries []model.LogEntry) error {
 // 参数：
 //   - p: 查询参数，DeploymentID/RunID 为空则不过滤该字段；
 //     Before > 0 时仅返回 id < Before 的记录（用于向前翻页）；
+//     BeforeTime 非空时仅返回 timestamp 早于该时间的记录；
 //     Limit <= 0 时默认取 1000 条。
 //
 // 返回：
@@ -410,6 +414,10 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 	if p.Before > 0 {
 		query += " AND id < ?"
 		args = append(args, p.Before)
+	}
+	if p.BeforeTime != nil {
+		query += " AND timestamp < ?"
+		args = append(args, p.BeforeTime.UTC())
 	}
 	// 始终用 DESC 取最接近游标（或最新）的 N 条，返回前翻转为 ASC，保证调用方顺序一致
 	query += fmt.Sprintf(" ORDER BY id DESC LIMIT %d", p.Limit)

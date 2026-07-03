@@ -79,6 +79,9 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 		Limit:        f.Limit,
 		Before:       decodeSQLiteCursor(f.Before.ID),
 	}
+	if !f.BeforeTime.IsZero() {
+		params.BeforeTime = &f.BeforeTime
+	}
 
 	entries, err := b.store.Fetch(params)
 	if err != nil {

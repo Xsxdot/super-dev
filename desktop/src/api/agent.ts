@@ -1252,6 +1252,7 @@ export interface DeploymentFetchLogsParams {
   deploymentId: string
   limit?: number
   before?: string
+  beforeTime?: string
 }
 
 export interface DeploymentLogsResponse {
@@ -1562,6 +1563,12 @@ export const api = {
     return request<LogContextPageResponse>(`/api/logs/context/page?${qs}`)
       .then(response => ({ ...response, items: normalizeLogEntries(response.items) }))
   },
+  /** postFrontendDiagnostics 批量上报前端诊断事件到 agent，落为 __desktop__ 虚拟 deployment 日志。 */
+  postFrontendDiagnostics: (events: Record<string, unknown>[]) =>
+    request<{ accepted: number }>('/api/frontend-diagnostics', {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    }),
 
   // 远程监听：Host CRUD
   listHosts: () => request<Host[]>('/api/hosts'),
@@ -1634,6 +1641,7 @@ export const api = {
     const qs = new URLSearchParams()
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.before != null) qs.set('before', String(params.before))
+    if (params.beforeTime) qs.set('before_time', params.beforeTime)
     const q = qs.toString()
     return request<DeploymentLogsResponse | LogEntry[]>(`/api/deployments/${encodeURIComponent(params.deploymentId)}/logs${q ? '?' + q : ''}`)
       .then(normalizeDeploymentLogsResponse)

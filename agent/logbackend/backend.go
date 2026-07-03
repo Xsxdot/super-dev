@@ -30,6 +30,9 @@ type QueryFilter struct {
 	Limit int
 	// Before 游标分页：只返回早于此游标的记录；零值表示从最新记录开始。
 	Before Cursor
+	// BeforeTime 按时间向前翻页的兜底游标；零值表示不启用。
+	// 供前端在裁剪掉无 rowid 的实时条目后继续向更早翻页。
+	BeforeTime time.Time
 }
 
 // SearchQuery 定义关键字搜索参数。

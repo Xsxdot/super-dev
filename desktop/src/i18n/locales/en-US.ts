@@ -1152,6 +1152,7 @@ export default {
       historyLoading: 'Loading history...',
       historyEnd: '- Earliest record reached -',
       historySeparator: 'History messages · live output follows',
+      gapSeparator: 'Logs may be missing here after a disconnect (around {time})',
       addSelectionToFilter: 'Use as filter keyword',
       newLogs: '↓ {count} new logs',
       liveStats: 'Live · showing {total}',
