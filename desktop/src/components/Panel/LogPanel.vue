@@ -46,9 +46,6 @@ const INCREMENTAL_HISTORY_LIMIT = 80
 const HISTORY_PREFETCH_START_INDEX = 30
 const FILTERED_HISTORY_BACKFILL_MAX_PAGES = 6
 const LOG_VIRTUAL_OVERSCAN = 12
-// FOLLOW_BOTTOM_NEAR：scrollTop 未向上移动时，仅当距底部足够近才允许裁决意图（回 follow）。
-// 略大于 ScrollIntentMachine 的 FOLLOW_BOTTOM_THRESHOLD(50)，覆盖贴底时的正常小抖动。
-const FOLLOW_BOTTOM_NEAR = 80
 
 const props = defineProps<{
   panelId: string
@@ -99,14 +96,10 @@ const remoteManagedStatuses = computed(() =>
 )
 
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
-let programmaticScroll = false
-// lastScrollTop 记录上一次 scroll 事件的 scrollTop，用于区分「用户主动向上滚」与
-// 「totalSize 异步增长造成的 distanceFromBottom 假象」。突发日志时底部行真实高度逐帧上报，
-// scrollHeight 持续变大，但 scrollTop 没动；只有 scrollTop 真的减小才是用户离开底部。
-let lastScrollTop = 0
 let historyLoadToken = 0
 // settleToBottomToken 标记当前正在进行的「贴底复位」回合，后发起的复位会作废前一个回合的 rAF 循环。
 let settleToBottomToken = 0
+let draggingScrollbar = false
 
 // 贴底复位最多重试的帧数。行高异步测量通常 2-3 帧内沉降，给足余量兜底，超过则停止避免死循环。
 const SETTLE_TO_BOTTOM_MAX_FRAMES = 20
@@ -576,13 +569,9 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
     //   - follow 下可见行不变时 measure（被过滤的新日志/折叠增量），没有后续贴底动作
     //     抵消，_scrollToOffset 会把视口往上带一点（”没新行却上跳”）。
     // 可见行不变的增量由每行 measureElement 自然处理，无需主动全量 measure。
-    // 注意：即使 scrollMachine.intent 说是 follow-bottom，也要检查实际滚动位置，
-    // 因为高频实时日志到达时可能用户已经开始向上滚，但 onScroll 尚未触发意图转移。
-    const el = logListEl.value
-    const isUserScrolling = el && el.scrollHeight - el.scrollTop - el.clientHeight > 100
     const needMeasure =
       kind === 'filter' ||
-      (scrollMachine.intent === 'follow-bottom' && newCount > oldCount && !isUserScrolling)
+      (scrollMachine.intent === 'follow-bottom' && newCount > oldCount)
     if (needMeasure) measureVirtualizer()
     if (kind === 'filter') {
       scrollMachine.onFilterRebuild({ oldCount, newCount })
@@ -595,7 +584,6 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
       newCount,
       rangeStart: virtualizer.value.range?.startIndex ?? 0,
       intent: scrollIntent.value,
-      isUserScrolling,
     })
   })
 }
@@ -607,12 +595,9 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
 // 视口被停在真实底部上方（过滤越重、行越高越明显，表现为打开 tab 一片空白、要往上滑很久）。
 // 单次 scrollToIndex 赌不中底部，必须在每帧测量增量后重新 scrollToIndex，直到 totalSize 连续两帧不变（沉降）。
 async function scrollToBottom() {
-  programmaticScroll = true
   await nextTick()
   const count = displayItems.value.length
   if (count === 0) {
-    // 空列表无需滚动，但仍要尽快放开守卫，避免后续真实滚动被误吞。
-    programmaticScroll = false
     return
   }
 
@@ -629,7 +614,6 @@ async function scrollToBottom() {
     frame++
     // totalSize 不再变化即视为测量沉降；或达到帧数上限兜底，结束复位、放开守卫。
     if (totalSize === lastTotalSize || frame >= SETTLE_TO_BOTTOM_MAX_FRAMES) {
-      programmaticScroll = false
       logPanelDiagnostic('debug', 'scroll.settle_bottom.done', {
         frames: frame,
         totalSize,
@@ -641,8 +625,6 @@ async function scrollToBottom() {
     lastTotalSize = totalSize
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(settle)
-    } else {
-      programmaticScroll = false
     }
   }
 
@@ -658,26 +640,9 @@ function applyItemsCountChange(oldCount: number, newCount: number) {
 }
 
 function onScroll() {
-  const el = logListEl.value
-  if (!el) return
-  // 程序化滚动期间不裁决意图，但仍要同步 lastScrollTop，
-  // 否则守卫释放后第一条真实事件会拿陈旧基准误算方向。
-  if (programmaticScroll) {
-    lastScrollTop = el.scrollTop
-    return
-  }
-  const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-  const movedUp = el.scrollTop < lastScrollTop - 1
-  lastScrollTop = el.scrollTop
-  // 只在「用户确实向上滚（scrollTop 减小）」或「已稳定停在底部附近」时裁决意图。
-  // 突发日志时底部行逐帧测量、scrollHeight 持续变大，dist 会瞬时偏大，
-  // 但 scrollTop 并未减小——那是底部增长的假象，不是用户离开底部，必须忽略，
-  // 否则 follow-bottom 被误判为 idle，自动滚动中断、弹出「N 条新日志」。
-  if (movedUp || dist < FOLLOW_BOTTOM_NEAR) {
-    scrollMachine.onUserScroll({ distanceFromBottom: dist })
-    syncScrollIntent()
-  }
-  if (scrollIntent.value === 'follow-bottom') newLogCount.value = 0
+  // onScroll 只负责历史预取触发。意图裁决完全由输入事件（onWheel/onKeydown/onPointerDown）
+  // 完成——scrollTop 有三个写入者（用户/贴底复位/tanstack 内部修正），从位置反推意图
+  // 已被证伪五次，不再做。
   const range = virtualizer.value.range
   if (range && range.startIndex < HISTORY_PREFETCH_START_INDEX) {
     void tryLoadMoreHistory()
@@ -685,14 +650,52 @@ function onScroll() {
 }
 
 function onWheel(e: WheelEvent) {
+  const el = logListEl.value
+  if (!el) return
   if (e.deltaY < 0) {
-    scrollMachine.onUserScroll({ distanceFromBottom: 1000 })
+    scrollMachine.leaveBottom('wheel-up')
     syncScrollIntent()
     const rangeStart = virtualizer.value.range?.startIndex ?? 0
     if (rangeStart < HISTORY_PREFETCH_START_INDEX || displayItems.value.length < HISTORY_PREFETCH_START_INDEX) {
       void tryLoadMoreHistory()
     }
+  } else if (e.deltaY > 0) {
+    // wheel 事件先于滚动位置更新，用 deltaY 投影"滚完后"的距底距离，避免差一帧误判。
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    scrollMachine.maybeReturnToBottom({ distanceFromBottom: Math.max(0, dist - e.deltaY) })
+    syncScrollIntent()
   }
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'PageUp' || e.key === 'ArrowUp' || e.key === 'Home') {
+    scrollMachine.leaveBottom(`key-${e.key}`)
+    syncScrollIntent()
+  } else if (e.key === 'End') {
+    jumpToBottom()
+  }
+}
+
+function onPointerDown(e: PointerEvent) {
+  const el = logListEl.value
+  if (!el) return
+  // clientWidth 不含纵向滚动条：offsetX 落在其右侧即滚动条轨道区，视为拖拽开始。
+  if (e.offsetX >= el.clientWidth) {
+    draggingScrollbar = true
+    scrollMachine.leaveBottom('scrollbar-drag')
+    syncScrollIntent()
+  }
+}
+
+function onPointerUp() {
+  if (!draggingScrollbar) return
+  draggingScrollbar = false
+  const el = logListEl.value
+  if (!el) return
+  scrollMachine.maybeReturnToBottom({
+    distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
+  })
+  syncScrollIntent()
 }
 
 async function tryLoadMoreHistory() {
@@ -856,25 +859,18 @@ function displayIndexOfLog(logId: string): number {
 function scrollToDisplayLog(logId: string, align: 'start' | 'center' | 'end' = 'center'): boolean {
   const index = displayIndexOfLog(logId)
   if (index < 0) return false
-  programmaticScroll = true
   virtualizer.value.scrollToIndex(index, { align })
-  window.setTimeout(() => {
-    programmaticScroll = false
-  }, 80)
   return true
 }
 
 async function jumpToLog(logId: string): Promise<boolean> {
   const index = displayIndexOfLog(logId)
   if (index < 0) return false
-  // 程序化滚动不能被 onScroll 当作用户离开 live-follow，否则跳转会破坏追踪状态。
-  programmaticScroll = true
   await nextTick()
   virtualizer.value.scrollToIndex(index, { align: 'center' })
   flashLogId.value = logId
   window.setTimeout(() => {
     if (flashLogId.value === logId) flashLogId.value = null
-    programmaticScroll = false
   }, 900)
   return true
 }
@@ -1007,7 +1003,16 @@ function toggleNode(hostId: string) {
         <span class="node-name">{{ node.hostName }}</span>
       </button>
     </div>
-    <div ref="logListEl" class="log-list" @scroll="onScroll" @wheel="onWheel">
+    <div
+      ref="logListEl"
+      class="log-list"
+      tabindex="0"
+      @scroll="onScroll"
+      @wheel="onWheel"
+      @keydown="onKeydown"
+      @pointerdown="onPointerDown"
+      @pointerup="onPointerUp"
+    >
       <div v-if="source?.type === 'deployment' && isLoadingHistory" class="history-loading">{{ t('panel.log.historyLoading') }}</div>
       <div v-else-if="source?.type === 'deployment' && !deploymentLogStore.hasMoreHistory(source.deploymentId)" class="history-end">{{ t('panel.log.historyEnd') }}</div>
 

@@ -1,89 +1,74 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ScrollIntentMachine } from './logScrollIntent'
 
-describe('ScrollIntentMachine', () => {
-  it('默认意图为 follow-bottom', () => {
+describe('ScrollIntentMachine（输入事件驱动）', () => {
+  it('初始意图为 follow-bottom', () => {
     const m = new ScrollIntentMachine()
     expect(m.intent).toBe('follow-bottom')
   })
 
-  it('用户上滚进入 idle，到底部回 follow-bottom', () => {
+  it('leaveBottom 从 follow-bottom 转 idle', () => {
     const m = new ScrollIntentMachine()
-    m.onUserScroll({ distanceFromBottom: 200 })
+    m.leaveBottom('wheel-up')
     expect(m.intent).toBe('idle')
-    m.onUserScroll({ distanceFromBottom: 0 })
+  })
+
+  it('leaveBottom 从 align-to-time 转 idle，但不打断 anchor-history', () => {
+    const m1 = new ScrollIntentMachine({ scrollToLogId: vi.fn() })
+    m1.beginTimeAlign('log-1')
+    m1.leaveBottom('wheel-up')
+    expect(m1.intent).toBe('idle')
+
+    const m2 = new ScrollIntentMachine({ scrollToLogId: vi.fn() })
+    m2.beginHistoryAnchor('log-1')
+    m2.leaveBottom('wheel-up')
+    // 历史回填进行中用户滚动是常态，锚点复位必须完成，否则视口漂移。
+    expect(m2.intent).toBe('anchor-history')
+  })
+
+  it('maybeReturnToBottom 距底足够近才回 follow 并贴底', () => {
+    const scrollToBottom = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToBottom })
+    m.leaveBottom('wheel-up')
+    m.maybeReturnToBottom({ distanceFromBottom: 200 })
+    expect(m.intent).toBe('idle')
+    m.maybeReturnToBottom({ distanceFromBottom: 10 })
     expect(m.intent).toBe('follow-bottom')
+    expect(scrollToBottom).toHaveBeenCalledTimes(1)
   })
 
-  it('follow-bottom 仅在内容增长时请求一次滚动', () => {
-    const scrollTo = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToBottom: scrollTo })
-    m.onContentChange({ oldCount: 10, newCount: 12 })
-    expect(scrollTo).toHaveBeenCalledTimes(1)
-    m.onContentChange({ oldCount: 12, newCount: 12 })
-    expect(scrollTo).toHaveBeenCalledTimes(1)
+  it('已在 follow 时 maybeReturnToBottom 不重复贴底（避免自激励滚动）', () => {
+    const scrollToBottom = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToBottom })
+    m.maybeReturnToBottom({ distanceFromBottom: 10 })
+    expect(scrollToBottom).not.toHaveBeenCalled()
   })
 
-  it('idle 下内容增长不滚动', () => {
-    const scrollTo = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToBottom: scrollTo })
-    m.onUserScroll({ distanceFromBottom: 200 })
-    m.onContentChange({ oldCount: 10, newCount: 30 })
-    expect(scrollTo).not.toHaveBeenCalled()
-  })
-
-  it('beginHistoryAnchor 记锚点，settle 用稳定 id 复位', () => {
-    const scrollToId = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToLogId: scrollToId })
-    m.beginHistoryAnchor('log-42')
-    expect(m.intent).toBe('anchor-history')
+  it('settleHistoryAnchor 复位后意图落 idle', () => {
+    const scrollToLogId = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToLogId })
+    m.beginHistoryAnchor('log-9')
     m.settleHistoryAnchor()
-    expect(scrollToId).toHaveBeenCalledWith('log-42')
+    expect(scrollToLogId).toHaveBeenCalledWith('log-9')
+    expect(m.intent).toBe('idle')
   })
 
-  it('settleHistoryAnchor 清掉锚点，后续无新锚点时不复用旧 id', () => {
-    const scrollToId = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToLogId: scrollToId })
-    m.beginHistoryAnchor('log-42')
-    m.settleHistoryAnchor()
-    m.settleHistoryAnchor()
-    expect(scrollToId).toHaveBeenCalledTimes(1)
+  it('onContentChange 仅 follow 且增长时贴底', () => {
+    const scrollToBottom = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToBottom })
+    m.onContentChange({ oldCount: 5, newCount: 8 })
+    expect(scrollToBottom).toHaveBeenCalledTimes(1)
+    m.leaveBottom('wheel-up')
+    m.onContentChange({ oldCount: 8, newCount: 12 })
+    expect(scrollToBottom).toHaveBeenCalledTimes(1)
   })
 
-  it('beginTimeAlign 暂停 follow 并对齐', () => {
-    const scrollToId = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToLogId: scrollToId })
-    m.beginTimeAlign('log-7')
-    expect(m.intent).toBe('align-to-time')
-    expect(scrollToId).toHaveBeenCalledWith('log-7')
-    m.onContentChange({ oldCount: 5, newCount: 9 })
-    expect(m.intent).toBe('align-to-time')
-  })
-
-  it('时间同步单向：被动方对齐不回调主动方（无回环）', () => {
-    const broadcast = vi.fn()
-    const m = new ScrollIntentMachine({ broadcastCursor: broadcast })
-    m.beginTimeAlign('log-7')
-    expect(broadcast).not.toHaveBeenCalled()
-  })
-
-  it('jumpToBottom 强制回 follow-bottom 并滚动', () => {
-    const scrollTo = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToBottom: scrollTo })
-    m.beginTimeAlign('log-7')
+  it('jumpToBottom 从任意意图强制回 follow', () => {
+    const scrollToBottom = vi.fn()
+    const m = new ScrollIntentMachine({ scrollToBottom })
+    m.leaveBottom('wheel-up')
     m.jumpToBottom()
     expect(m.intent).toBe('follow-bottom')
-    expect(scrollTo).toHaveBeenCalled()
-  })
-
-  it('过滤重建：follow-bottom 贴底，idle 保持不滚', () => {
-    const scrollTo = vi.fn()
-    const m = new ScrollIntentMachine({ scrollToBottom: scrollTo })
-    m.onFilterRebuild({ oldCount: 100, newCount: 20 })
-    expect(scrollTo).toHaveBeenCalledTimes(1)
-    m.onUserScroll({ distanceFromBottom: 300 })
-    scrollTo.mockClear()
-    m.onFilterRebuild({ oldCount: 20, newCount: 8 })
-    expect(scrollTo).not.toHaveBeenCalled()
+    expect(scrollToBottom).toHaveBeenCalled()
   })
 })

@@ -532,7 +532,7 @@ describe('LogPanel', () => {
     )
   })
 
-  it('用户离开底部时通过 ScrollIntent 仲裁器发出意图转移诊断', async () => {
+  it('wheel 上滚立即离开 follow 并发出意图转移诊断', async () => {
     const deploymentLogStore = useDeploymentLogStore()
     vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
@@ -569,17 +569,114 @@ describe('LogPanel', () => {
     const el = wrapper.find('.log-list').element
     Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
     Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
-    // 先建立「贴底」基准（scrollTop 接近 scrollHeight-clientHeight），再向上滚。
-    // 用户离开底部一定是 scrollTop 由大变小的连续过程，仅靠终态距离无法区分底部增长假象。
     Object.defineProperty(el, 'scrollTop', { value: 500, configurable: true })
-    await wrapper.find('.log-list').trigger('scroll')
-    // 贴底 scroll 会触发 scrollToBottom 重新上守卫，等其 settle 释放后再模拟向上滚
-    await new Promise(resolve => setTimeout(resolve, 60))
-    // 用户向上滚：scrollTop 显著减小
-    Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
-    await wrapper.find('.log-list').trigger('scroll')
+    await wrapper.find('.log-list').trigger('wheel', { deltaY: -100 })
 
     expect(diagnostics).toContain('scroll_intent.transition')
+  })
+
+  it('突发日志导致 scrollHeight 暴涨时 follow 不脱落', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    const logs = [makeLog(1), makeLog(2)]
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue(logs)
+    const transitions: string[] = []
+    window.addEventListener('superdev:log-panel', (event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail.event === 'scroll_intent.transition') transitions.push(detail.to)
+    })
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-follow-burst',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    const el = wrapper.find('.log-list').element
+    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
+    await wrapper.find('.log-list').trigger('scroll')
+    await wrapper.find('.log-list').trigger('scroll')
+
+    logs.push(makeLog(3))
+    deploymentLogStore.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve, 60))
+    await nextTick()
+
+    expect(transitions).not.toContain('idle')
+    expect(wrapper.find('.new-log-pill').exists()).toBe(false)
+  })
+
+  it('wheel 下滚到底部附近恢复 follow 并隐藏新日志提示', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    const logs = [makeLog(1), makeLog(2)]
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue(logs)
+    const transitions: string[] = []
+    window.addEventListener('superdev:log-panel', (event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail.event === 'scroll_intent.transition') transitions.push(detail.to)
+    })
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-wheel-bottom',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    const list = wrapper.find('.log-list')
+    const el = list.element
+    Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
+    await list.trigger('wheel', { deltaY: -100 })
+
+    logs.push(makeLog(3))
+    deploymentLogStore.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve, 60))
+    await nextTick()
+    expect(transitions).toContain('idle')
+
+    Object.defineProperty(el, 'scrollTop', { value: 450, configurable: true })
+    await list.trigger('wheel', { deltaY: 100 })
+
+    expect(transitions).toContain('follow-bottom')
+    expect(wrapper.find('.new-log-pill').exists()).toBe(false)
   })
 
   it('英文 locale 下渲染状态栏文案', async () => {
@@ -946,12 +1043,12 @@ describe('LogPanel', () => {
     await nextTick()
     await new Promise(resolve => setTimeout(resolve, 100))
 
-    // 用户向上滚离开底部 → 进入 idle
+    // 用户 wheel 上滚离开底部 → 进入 idle
     const el = wrapper.find('.log-list').element
     Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
     Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
     Object.defineProperty(el, 'scrollTop', { value: 100, configurable: true })
-    await wrapper.find('.log-list').trigger('scroll')
+    await wrapper.find('.log-list').trigger('wheel', { deltaY: -100 })
 
     // 清掉进入 idle 过程中的调用，只观察「之后实时日志到达」的影响
     virtualizerMock.measure.mockClear()
@@ -1098,7 +1195,7 @@ describe('LogPanel', () => {
     await nextTick()
     await Promise.resolve()
     await nextTick()
-    // 给初始 scrollToBottom 的 rAF settle 循环跑完并释放 programmaticScroll 守卫
+    // 给初始 scrollToBottom 的 rAF settle 循环跑完
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // 模拟浏览器滞后派发的 scroll 事件：scrollToIndex 已把视口贴底，但突发新日志让
