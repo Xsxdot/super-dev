@@ -11,7 +11,7 @@ import (
 
 // TestFrontendDiagnostics 验证打点事件写入 logbuf 且带 __desktop__ 归属。
 func TestFrontendDiagnostics(t *testing.T) {
-	buf := logbuf.New(nil, 100, "test-node")
+	buf := logbuf.New(nil, 100, "test-node", nil)
 	defer buf.Close()
 	a := &App{buf: buf}
 
@@ -38,7 +38,7 @@ func TestFrontendDiagnostics(t *testing.T) {
 
 // TestFrontendDiagnosticsLimit 验证超过 500 条报 400。
 func TestFrontendDiagnosticsLimit(t *testing.T) {
-	buf := logbuf.New(nil, 100, "test-node")
+	buf := logbuf.New(nil, 100, "test-node", nil)
 	defer buf.Close()
 	a := &App{buf: buf}
 	var sb strings.Builder

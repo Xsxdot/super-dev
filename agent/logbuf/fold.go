@@ -23,6 +23,7 @@ import (
 type foldLane struct {
 	signature   string
 	foldKey     string
+	seq         uint64
 	repeatCount int
 	rep         model.LogEntry
 	lastSeen    time.Time
@@ -37,8 +38,9 @@ type foldIncrement struct {
 
 // foldTracker 持有所有 deployment 的折叠车道。
 type foldTracker struct {
-	window time.Duration
-	lanes  map[string]*foldLane
+	window  time.Duration
+	lanes   map[string]*foldLane
+	nextSeq func(deploymentID string) uint64
 }
 
 var foldKeySeq uint64
@@ -76,8 +78,9 @@ func nextFoldKey(runID string) string {
 //
 // 参数：
 //   - window: 折叠时间窗口，超过则同签名也不折叠（保留时间真相）
-func newFoldTracker(window time.Duration) *foldTracker {
-	return &foldTracker{window: window, lanes: map[string]*foldLane{}}
+//   - nextSeq: 开新段时分配 deployment 内单调序号；nil 表示调用方不需要 seq
+func newFoldTracker(window time.Duration, nextSeq func(string) uint64) *foldTracker {
+	return &foldTracker{window: window, lanes: map[string]*foldLane{}, nextSeq: nextSeq}
 }
 
 // observe 处理一条新日志，返回两个互斥结果之一：
@@ -96,6 +99,7 @@ func (t *foldTracker) observe(e model.LogEntry) (emit *model.LogEntry, inc *fold
 		lane.rep = e
 		lane.rep.RepeatCount = lane.repeatCount
 		lane.rep.FoldKey = lane.foldKey
+		lane.rep.Seq = lane.seq
 		return nil, &foldIncrement{DeploymentID: e.DeploymentID, FoldKey: lane.foldKey, RepeatCount: lane.repeatCount}
 	}
 
@@ -103,9 +107,15 @@ func (t *foldTracker) observe(e model.LogEntry) (emit *model.LogEntry, inc *fold
 	row := e
 	row.RepeatCount = 1
 	row.FoldKey = key
+	// seq 只在开新段（真正产生存储新行）时分配；折叠命中沿用段首 seq，
+	// 保证 (deployment_id, seq) 与存储行一一对应、折叠 UPSERT 不产生序号空洞。
+	if t.nextSeq != nil {
+		row.Seq = t.nextSeq(e.DeploymentID)
+	}
 	t.lanes[e.DeploymentID] = &foldLane{
 		signature:   sig,
 		foldKey:     key,
+		seq:         row.Seq,
 		repeatCount: 1,
 		rep:         row,
 		lastSeen:    e.Timestamp,

@@ -60,10 +60,15 @@ type Buffer struct {
 //   - store: 持久化接口，传 nil 时跳过持久化（测试场景）
 //   - maxSize: 环形缓冲容量，保留最近 maxSize 条日志
 //   - nodeID: 本机 node_id，Append 时用于填充 LogEntry.SourceID；传空字符串时不填充
+//   - seqWatermarks: 每个 deployment 已落库最大 seq；nil 表示从 1 开始（测试/空库）
 //
 // 返回：
 //   - 已启动 flush goroutine 的 *Buffer
-func New(store LogWriter, maxSize int, nodeID string) *Buffer {
+func New(store LogWriter, maxSize int, nodeID string, seqWatermarks map[string]uint64) *Buffer {
+	watermarks := map[string]uint64{}
+	for dep, max := range seqWatermarks {
+		watermarks[dep] = max
+	}
 	b := &Buffer{
 		ring:    make([]model.LogEntry, maxSize),
 		maxSize: maxSize,
@@ -71,9 +76,13 @@ func New(store LogWriter, maxSize int, nodeID string) *Buffer {
 		store:   store,
 		done:    make(chan struct{}),
 		nodeID:  nodeID,
-		fold:    newFoldTracker(defaultFoldWindow),
 		foldPos: map[string]int{},
 	}
+	// nextSeq 在 Buffer.mu 保护下由 observe 调用（Append 持锁），无需自己加锁。
+	b.fold = newFoldTracker(defaultFoldWindow, func(dep string) uint64 {
+		watermarks[dep]++
+		return watermarks[dep]
+	})
 	go b.flushLoop()
 	return b
 }

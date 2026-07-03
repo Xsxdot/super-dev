@@ -62,7 +62,7 @@ func addTestDeploymentBackend(t *testing.T, app *api.App) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	buf := logbuf.New(testStoreWriter{s: s}, 100, "")
+	buf := logbuf.New(testStoreWriter{s: s}, 100, "", nil)
 	t.Cleanup(buf.Close)
 	backend := logbackend.NewSQLiteBackend(s, buf)
 	app.SetBackendForTest(depID, backend)

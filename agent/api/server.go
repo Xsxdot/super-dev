@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -253,7 +254,15 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID)
+	seqWatermarks, err := s.SeqWatermarks()
+	if err != nil {
+		_ = s.Close()
+		// 水位恢复失败必须拒绝启动：静默从 1 开始会与历史 seq 撞 (deployment_id, seq)
+		// 唯一键，重蹈 fold_key 撞键覆盖旧行的覆辙。
+		return nil, fmt.Errorf("恢复日志 seq 水位失败，拒绝启动: %w", err)
+	}
+	log.Printf("[server] 日志 seq 水位已恢复 deployments=%d", len(seqWatermarks))
+	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID, seqWatermarks)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
 	if result, err := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{

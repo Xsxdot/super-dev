@@ -45,7 +45,7 @@ func TestCloseStopsProjectManagers(t *testing.T) {
 	}
 
 	a := &App{
-		buf:      logbuf.New(nil, 10, ""),
+		buf:      logbuf.New(nil, 10, "", nil),
 		managers: map[string]*agentprocess.Manager{"project-1": mgr},
 	}
 	a.Close()

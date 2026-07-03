@@ -29,7 +29,7 @@ func newTestSQLiteBackend(t *testing.T) (*logbackend.SQLiteBackend, *logbuf.Buff
 	s, err := store.New(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
-	buf := logbuf.New(testStoreWriter{s: s}, 100, "")
+	buf := logbuf.New(testStoreWriter{s: s}, 100, "", nil)
 	t.Cleanup(buf.Close)
 	return logbackend.NewSQLiteBackend(s, buf), buf
 }

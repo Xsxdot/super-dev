@@ -21,7 +21,7 @@ func entryAt(dep, msg string, ts time.Time) model.LogEntry {
 }
 
 func TestFoldTrackerSameLaneWithinWindow(t *testing.T) {
-	tr := newFoldTracker(5 * time.Second)
+	tr := newFoldTracker(5*time.Second, nil)
 	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 
 	// 第一条：开新段，emit=新行，inc=nil。
@@ -44,7 +44,7 @@ func TestFoldTrackerSameLaneWithinWindow(t *testing.T) {
 }
 
 func TestFoldTrackerLanesIndependent(t *testing.T) {
-	tr := newFoldTracker(5 * time.Second)
+	tr := newFoldTracker(5*time.Second, nil)
 	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 
 	tr.observe(entryAt("A", "boom", t0))
@@ -59,7 +59,7 @@ func TestFoldTrackerLanesIndependent(t *testing.T) {
 }
 
 func TestFoldTrackerWindowExpiry(t *testing.T) {
-	tr := newFoldTracker(5 * time.Second)
+	tr := newFoldTracker(5*time.Second, nil)
 	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 
 	tr.observe(entryAt("A", "boom", t0))
@@ -73,7 +73,7 @@ func TestFoldTrackerWindowExpiry(t *testing.T) {
 }
 
 func TestFoldTrackerSweepClosesStale(t *testing.T) {
-	tr := newFoldTracker(5 * time.Second)
+	tr := newFoldTracker(5*time.Second, nil)
 	t0 := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	tr.observe(entryAt("A", "boom count=1", t0))
 	tr.observe(entryAt("A", "boom count=2", t0.Add(time.Second)))
