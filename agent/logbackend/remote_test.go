@@ -76,7 +76,7 @@ func (m *mockNodeTransport) Covers() []string {
 func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
 	now := time.Now().Truncate(time.Millisecond)
 	entries := []model.LogEntry{
-		{ID: 1, DeploymentID: "svc-1", Timestamp: now, Message: "hello", Stream: "stdout"},
+		{ID: 9, DeploymentID: "svc-1", Timestamp: now, Message: "hello", Stream: "stdout", Seq: 2},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,7 @@ func TestRemoteAgentBackend_QueryReturnsEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "hello", got[0].Message)
-	assert.Equal(t, "1", next.ID)
+	assert.Equal(t, "2", next.ID)
 }
 
 func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {

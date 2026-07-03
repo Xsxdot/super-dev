@@ -4,7 +4,6 @@ package logbackend_test
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"testing"
 	"time"
 
@@ -74,7 +73,7 @@ func TestSQLiteBackend_QueryReturnsEntries(t *testing.T) {
 	assert.Equal(t, "world", entries[1].Message)
 }
 
-func TestSQLiteBackend_QueryBeforeID(t *testing.T) {
+func TestSQLiteBackend_QueryBeforeCursor(t *testing.T) {
 	b, buf := newTestSQLiteBackend(t)
 
 	now := time.Now().Truncate(time.Millisecond)
@@ -90,18 +89,52 @@ func TestSQLiteBackend_QueryBeforeID(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	first, _, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 3})
+	first, next, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 3})
 	require.NoError(t, err)
 	require.Len(t, first, 3)
 
 	second, _, err := b.Query(context.Background(), logbackend.QueryFilter{
 		DeploymentID: "svc-1",
 		Limit:        3,
-		Before:       logbackend.Cursor{ID: strconv.FormatInt(first[0].ID, 10)},
+		Before:       next,
 	})
 	require.NoError(t, err)
 	require.Len(t, second, 2)
 	assert.Equal(t, []string{"msg-0", "msg-1"}, []string{second[0].Message, second[1].Message})
+}
+
+func TestQueryCursorIsSeq(t *testing.T) {
+	b, _ := newTestSQLiteBackend(t)
+	now := time.Now().UTC()
+	entries := []model.LogEntry{
+		{DeploymentID: "other", Timestamp: now, Level: "INFO", Message: "rowid offset", Stream: "stdout", Seq: 1},
+	}
+	for i := 1; i <= 5; i++ {
+		entries = append(entries, model.LogEntry{
+			DeploymentID: "svc-1",
+			Timestamp:    now.Add(time.Duration(i) * time.Second),
+			Level:        "INFO",
+			Message:      fmt.Sprintf("m%d", i),
+			Stream:       "stdout",
+			Seq:          uint64(i),
+		})
+	}
+	require.NoError(t, b.AppendBatch(context.Background(), entries))
+
+	first, next, err := b.Query(context.Background(), logbackend.QueryFilter{DeploymentID: "svc-1", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, []string{"m4", "m5"}, []string{first[0].Message, first[1].Message})
+	assert.Equal(t, "4", next.ID)
+
+	second, _, err := b.Query(context.Background(), logbackend.QueryFilter{
+		DeploymentID: "svc-1",
+		Limit:        2,
+		Before:       next,
+	})
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"m2", "m3"}, []string{second[0].Message, second[1].Message})
 }
 
 func TestSQLiteBackend_SearchReturnsMatches(t *testing.T) {

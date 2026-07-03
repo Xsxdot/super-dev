@@ -62,11 +62,11 @@ func (b *SQLiteBackend) AppendBatch(ctx context.Context, entries []model.LogEntr
 	return b.store.AppendBatch(entries)
 }
 
-// Query 按 DeploymentID/RunID/不透明游标从 SQLite 拉取历史日志，结果按 timestamp ASC, id ASC 排序。
+// Query 按 DeploymentID/RunID/不透明游标从 SQLite 拉取历史日志，结果按 timestamp ASC, seq ASC 排序。
 //
 // 参数：
 //   - ctx: 上下文（当前实现未使用，保留以满足接口契约）
-//   - f: 查询过滤参数，Before.ID 会在 SQLite 后端内部解码成 rowid
+//   - f: 查询过滤参数，Before.ID 会在 SQLite 后端内部解码成 per-deployment seq
 //
 // 返回：
 //   - 匹配的日志条目列表
@@ -77,7 +77,7 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 		DeploymentID: f.DeploymentID,
 		RunID:        f.RunID,
 		Limit:        f.Limit,
-		Before:       decodeSQLiteCursor(f.Before.ID),
+		BeforeSeq:    decodeSQLiteCursorUint(f.Before.ID),
 	}
 	if !f.BeforeTime.IsZero() {
 		params.BeforeTime = &f.BeforeTime
@@ -90,7 +90,7 @@ func (b *SQLiteBackend) Query(ctx context.Context, f QueryFilter) ([]model.LogEn
 	var next Cursor
 	if len(entries) > 0 {
 		first := entries[0]
-		next = Cursor{Time: first.Timestamp, ID: encodeSQLiteCursor(first.ID)}
+		next = Cursor{Time: first.Timestamp, ID: encodeLogEntrySeqCursor(first.Seq, first.ID)}
 	}
 	return entries, next, nil
 }
@@ -167,12 +167,12 @@ func (b *SQLiteBackend) Context(_ context.Context, q ContextQuery) (ContextResul
 	}, nil
 }
 
-// ContextPage 按时间和 ID 游标从 SQLite 拉取单 deployment 的上下文分页。
+// ContextPage 按时间和 seq 游标从 SQLite 拉取单 deployment 的上下文分页。
 func (b *SQLiteBackend) ContextPage(_ context.Context, q ContextPageQuery) (ContextPageResult, error) {
 	result, err := b.store.FetchContextPage(store.ContextPageParams{
 		DeploymentID: q.DeploymentID,
 		CursorTime:   q.Cursor.Time,
-		CursorID:     decodeSQLiteCursor(q.Cursor.ID),
+		CursorSeq:    decodeSQLiteCursorUint(q.Cursor.ID),
 		Direction:    store.ContextPageDirection(q.Direction),
 		Limit:        q.Limit,
 	})

@@ -38,7 +38,11 @@ func (s *stubBackend) Query(_ context.Context, f logbackend.QueryFilter) ([]mode
 	}
 	filtered := make([]model.LogEntry, 0, len(s.entries))
 	for _, entry := range s.entries {
-		if before > 0 && entry.ID >= before {
+		cursorKey := entry.ID
+		if entry.Seq > 0 {
+			cursorKey = int64(entry.Seq)
+		}
+		if before > 0 && cursorKey >= before {
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -92,6 +96,10 @@ func containsStr(s, sub string) bool {
 
 func makeEntry(id int64, msg string, t time.Time) model.LogEntry {
 	return model.LogEntry{ID: id, DeploymentID: "svc-1", Timestamp: t, Message: msg, Stream: "stdout"}
+}
+
+func makeSeqEntry(id int64, seq uint64, msg string, t time.Time) model.LogEntry {
+	return model.LogEntry{ID: id, Seq: seq, DeploymentID: "svc-1", Timestamp: t, Message: msg, Stream: "stdout"}
 }
 
 func TestFederatedBackend_QueryMergesAndSorts(t *testing.T) {
@@ -173,6 +181,29 @@ func TestFederatedBackend_QueryCursorKeepsUnemittedChildPage(t *testing.T) {
 	second, _, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2, Before: next})
 	require.NoError(t, err)
 
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"old-a", "old-b"}, []string{second[0].Message, second[1].Message})
+}
+
+func TestFederatedBackend_QueryCursorUsesSeqWhenPresent(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	oldNode := newStubBackend([]model.LogEntry{
+		makeSeqEntry(101, 1, "old-a", now),
+		makeSeqEntry(102, 2, "old-b", now.Add(time.Millisecond)),
+	})
+	newNode := newStubBackend([]model.LogEntry{
+		makeSeqEntry(201, 1, "new-a", now.Add(10*time.Millisecond)),
+		makeSeqEntry(202, 2, "new-b", now.Add(11*time.Millisecond)),
+	})
+	fed := logbackend.NewFederatedBackend([]logbackend.LogBackend{oldNode, newNode})
+
+	first, next, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, []string{"new-a", "new-b"}, []string{first[0].Message, first[1].Message})
+
+	second, _, err := fed.Query(context.Background(), logbackend.QueryFilter{Limit: 2, Before: next})
+	require.NoError(t, err)
 	require.Len(t, second, 2)
 	assert.Equal(t, []string{"old-a", "old-b"}, []string{second[0].Message, second[1].Message})
 }

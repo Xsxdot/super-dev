@@ -38,14 +38,15 @@ type Store struct {
 // FetchParams 定义日志查询的过滤与分页参数。
 //
 // DeploymentID 和 RunID 可同时指定（AND 关系），也可单独使用。
-// Before 为上一页最小 ID，用于实现向前翻页（游标分页）。
 type FetchParams struct {
 	DeploymentID string
 	RunID        string
 	Limit        int
-	Before       int64
+	// BeforeSeq 游标分页：只返回 seq < BeforeSeq 的记录；0 表示从最新记录开始。
+	// seq 是 per-deployment 单调序，本参数仅在 DeploymentID 非空时有意义。
+	BeforeSeq uint64
 	// BeforeTime 按时间向前翻页的兜底游标：只返回 timestamp 严格早于该时间的记录。
-	// 与 Before(rowid) 可同时指定（AND 关系）；前端裁剪掉无 rowid 的实时条目后用它续翻。
+	// 与 BeforeSeq 可同时指定（AND 关系）；前端裁剪掉无 seq 的实时条目后用它续翻。
 	BeforeTime *time.Time
 }
 
@@ -106,9 +107,11 @@ const (
 type ContextPageParams struct {
 	DeploymentID string
 	CursorTime   time.Time
-	CursorID     int64
-	Direction    ContextPageDirection
-	Limit        int
+	// CursorSeq 是 CursorTime 相同情况下的 per-deployment seq tiebreak。
+	// seq 为 0 的旁路日志会在查询内部退回 rowid 兜底。
+	CursorSeq uint64
+	Direction ContextPageDirection
+	Limit     int
 }
 
 // ContextResult 表示跨部署上下文查询结果。
@@ -495,11 +498,11 @@ func (s *Store) SeqWatermarks() (map[string]uint64, error) {
 	return out, rows.Err()
 }
 
-// Fetch 按指定参数查询日志条目，结果按 id ASC 排序。
+// Fetch 按指定参数查询日志条目，结果按 seq ASC 排序。
 //
 // 参数：
 //   - p: 查询参数，DeploymentID/RunID 为空则不过滤该字段；
-//     Before > 0 时仅返回 id < Before 的记录（用于向前翻页）；
+//     BeforeSeq > 0 时仅返回 seq < BeforeSeq 的记录（用于向前翻页）；
 //     BeforeTime 非空时仅返回 timestamp 早于该时间的记录；
 //     Limit <= 0 时默认取 1000 条。
 //
@@ -522,16 +525,17 @@ func (s *Store) Fetch(p FetchParams) ([]model.LogEntry, error) {
 		query += " AND run_id = ?"
 		args = append(args, p.RunID)
 	}
-	if p.Before > 0 {
-		query += " AND id < ?"
-		args = append(args, p.Before)
+	if p.BeforeSeq > 0 {
+		query += " AND seq < ?"
+		args = append(args, int64(p.BeforeSeq))
 	}
 	if p.BeforeTime != nil {
 		query += " AND timestamp < ?"
 		args = append(args, p.BeforeTime.UTC())
 	}
-	// 始终用 DESC 取最接近游标（或最新）的 N 条，返回前翻转为 ASC，保证调用方顺序一致
-	query += fmt.Sprintf(" ORDER BY id DESC LIMIT %d", p.Limit)
+	// 始终用 DESC 取最接近游标（或最新）的 N 条，返回前翻转为 ASC，保证调用方顺序一致。
+	// seq 是正常日志身份；COALESCE 仅服务 seq 为 NULL 的旁路/测试数据，避免旧路径无序。
+	query += fmt.Sprintf(" ORDER BY COALESCE(seq, id) DESC LIMIT %d", p.Limit)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -800,10 +804,10 @@ func (s *Store) fetchContextHalfWindow(deploymentID string, from time.Time, to t
 // FetchContextPage 按部署和时间游标继续读取上下文日志。
 //
 // 参数：
-//   - p: DeploymentID 限定单个部署，CursorTime/CursorID 定义当前位置，Direction 控制向前或向后翻页
+//   - p: DeploymentID 限定单个部署，CursorTime/CursorSeq 定义当前位置，Direction 控制向前或向后翻页
 //
 // 返回：
-//   - Entries: 按 timestamp ASC, id ASC 排序的日志页
+//   - Entries: 按 timestamp ASC, seq ASC 排序的日志页
 //   - HasMore: 当前方向是否还有更多历史数据
 //   - 查询或扫描失败时返回错误
 func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error) {
@@ -816,10 +820,12 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 	}
 
 	order := "ASC"
-	comparator := "(timestamp > ? OR (timestamp = ? AND id > ?))"
+	cursorSeq := int64(p.CursorSeq)
+	cursorKey := "COALESCE(seq, id)"
+	comparator := fmt.Sprintf("(timestamp > ? OR (timestamp = ? AND %s > ?))", cursorKey)
 	if p.Direction == ContextPageBefore {
 		order = "DESC"
-		comparator = "(timestamp < ? OR (timestamp = ? AND id < ?))"
+		comparator = fmt.Sprintf("(timestamp < ? OR (timestamp = ? AND %s < ?))", cursorKey)
 	} else if p.Direction != ContextPageAfter {
 		return result, fmt.Errorf("invalid context page direction: %s", p.Direction)
 	}
@@ -828,15 +834,15 @@ func (s *Store) FetchContextPage(p ContextPageParams) (ContextPageResult, error)
 		SELECT id, deployment_id, run_id, timestamp, level, message, stream, repeat_count, fold_key, seq, last_seen_at
 		FROM log_entries
 		WHERE deployment_id = ? AND %s
-		ORDER BY timestamp %s, id %s
+		ORDER BY timestamp %s, %s %s
 		LIMIT ?
-	`, comparator, order, order)
+	`, comparator, order, cursorKey, order)
 	rows, err := s.db.Query(
 		query,
 		p.DeploymentID,
 		p.CursorTime.UTC(),
 		p.CursorTime.UTC(),
-		p.CursorID,
+		cursorSeq,
 		p.Limit+1,
 	)
 	if err != nil {

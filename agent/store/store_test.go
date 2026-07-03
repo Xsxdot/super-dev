@@ -243,6 +243,7 @@ func TestFetchPagination(t *testing.T) {
 			DeploymentID: "svc-1", RunID: "run-1",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Level:     "INFO", Message: fmt.Sprintf("msg-%d", i), Stream: "stdout",
+			Seq: uint64(i + 1),
 		}
 	}
 	require.NoError(t, s.AppendBatch(entries))
@@ -254,17 +255,41 @@ func TestFetchPagination(t *testing.T) {
 	assert.Equal(t, "msg-2", first[0].Message) // id=3
 	assert.Equal(t, "msg-4", first[2].Message) // id=5
 
-	// Before=first[0].ID（即 id=3）：返回 id<3 的最新 2 条（id 1,2）
-	second, err := s.Fetch(store.FetchParams{DeploymentID: "svc-1", Limit: 3, Before: first[0].ID})
+	// BeforeSeq=first[0].Seq（即 seq=3）：返回 seq<3 的最新 2 条（seq 1,2）
+	second, err := s.Fetch(store.FetchParams{DeploymentID: "svc-1", Limit: 3, BeforeSeq: first[0].Seq})
 	require.NoError(t, err)
 	assert.Len(t, second, 2)
 	assert.Equal(t, "msg-0", second[0].Message) // id=1
 	assert.Equal(t, "msg-1", second[1].Message) // id=2
 
-	// Before=second[0].ID（即 id=1）：没有更早的记录
-	third, err := s.Fetch(store.FetchParams{DeploymentID: "svc-1", Limit: 3, Before: second[0].ID})
+	// BeforeSeq=second[0].Seq（即 seq=1）：没有更早的记录
+	third, err := s.Fetch(store.FetchParams{DeploymentID: "svc-1", Limit: 3, BeforeSeq: second[0].Seq})
 	require.NoError(t, err)
 	assert.Len(t, third, 0)
+}
+
+// TestFetchBeforeSeq 验证 BeforeSeq 游标按 seq 向前翻页。
+func TestFetchBeforeSeq(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	var entries []model.LogEntry
+	for i := 1; i <= 5; i++ {
+		entries = append(entries, model.LogEntry{
+			DeploymentID: "dep-1",
+			Timestamp:    now.Add(time.Duration(i) * time.Second),
+			Level:        "INFO",
+			Message:      fmt.Sprintf("m%d", i),
+			Stream:       "stdout",
+			Seq:          uint64(i),
+		})
+	}
+	require.NoError(t, s.AppendBatch(entries))
+
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "dep-1", BeforeSeq: 4, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "m2", got[0].Message)
+	assert.Equal(t, "m3", got[1].Message)
 }
 
 // TestFetchBeforeTime 验证 BeforeTime 游标只返回严格早于该时间的日志。
@@ -559,14 +584,14 @@ func TestFetchContextPagePagesBeforeAndAfter(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2026, 5, 20, 22, 41, 32, 0, time.UTC)
 	require.NoError(t, s.AppendBatch([]model.LogEntry{
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-3 * time.Second), Level: "INFO", Message: "a-3", Stream: "stdout"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "a-2", Stream: "stdout"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-1 * time.Second), Level: "INFO", Message: "a-1", Stream: "stdout"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "a+1", Stream: "stdout"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "a+2", Stream: "stdout"},
-		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "a+3", Stream: "stdout"},
-		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(-500 * time.Millisecond), Level: "INFO", Message: "b-near", Stream: "stdout"},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-3 * time.Second), Level: "INFO", Message: "a-3", Stream: "stdout", Seq: 1},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-2 * time.Second), Level: "INFO", Message: "a-2", Stream: "stdout", Seq: 2},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(-1 * time.Second), Level: "INFO", Message: "a-1", Stream: "stdout", Seq: 3},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base, Level: "ERROR", Message: "target", Stream: "stderr", Seq: 4},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(time.Second), Level: "INFO", Message: "a+1", Stream: "stdout", Seq: 5},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(2 * time.Second), Level: "INFO", Message: "a+2", Stream: "stdout", Seq: 6},
+		{DeploymentID: "svc-a", RunID: "run-1", Timestamp: base.Add(3 * time.Second), Level: "INFO", Message: "a+3", Stream: "stdout", Seq: 7},
+		{DeploymentID: "svc-b", RunID: "run-1", Timestamp: base.Add(-500 * time.Millisecond), Level: "INFO", Message: "b-near", Stream: "stdout", Seq: 1},
 	}))
 	search, err := s.Search(store.SearchParams{DeploymentIDs: []string{"svc-a"}, Query: "target", Limit: 1})
 	require.NoError(t, err)
@@ -575,7 +600,7 @@ func TestFetchContextPagePagesBeforeAndAfter(t *testing.T) {
 	before, err := s.FetchContextPage(store.ContextPageParams{
 		DeploymentID: "svc-a",
 		CursorTime:   target.Timestamp,
-		CursorID:     target.ID,
+		CursorSeq:    target.Seq,
 		Direction:    store.ContextPageBefore,
 		Limit:        2,
 	})
@@ -586,7 +611,7 @@ func TestFetchContextPagePagesBeforeAndAfter(t *testing.T) {
 	after, err := s.FetchContextPage(store.ContextPageParams{
 		DeploymentID: "svc-a",
 		CursorTime:   target.Timestamp,
-		CursorID:     target.ID,
+		CursorSeq:    target.Seq,
 		Direction:    store.ContextPageAfter,
 		Limit:        2,
 	})

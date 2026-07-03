@@ -24,7 +24,7 @@ const maxLimit = 5000
 //   - deployment: 按 DeploymentID 过滤
 //   - run: 按 RunID 过滤
 //   - limit: 返回条数上限（默认 1000，最大 5000）
-//   - before: 返回 id < before 的记录（游标分页）
+//   - before: 返回 seq < before 的记录（游标分页）
 func (a *App) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -43,8 +43,8 @@ func (a *App) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if beforeStr := q.Get("before"); beforeStr != "" {
-		if before, err := strconv.ParseInt(beforeStr, 10, 64); err == nil && before > 0 {
-			params.Before = before
+		if before, err := strconv.ParseUint(beforeStr, 10, 64); err == nil && before > 0 {
+			params.BeforeSeq = before
 		}
 	}
 

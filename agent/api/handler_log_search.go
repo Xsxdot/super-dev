@@ -488,7 +488,7 @@ func (a *App) fetchLogContextPageForDeployment(ctx context.Context, deploymentID
 	return a.store.FetchContextPage(store.ContextPageParams{
 		DeploymentID: deploymentID,
 		CursorTime:   cursorTime,
-		CursorID:     cursorID,
+		CursorSeq:    uint64(cursorID),
 		Direction:    direction,
 		Limit:        limit,
 	})

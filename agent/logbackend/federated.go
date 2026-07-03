@@ -301,7 +301,7 @@ func nextFederatedCursorStates(
 			next[result.child] = federatedCursorState{Exhausted: true}
 		default:
 			oldest := oldestEmitted[result.child]
-			next[result.child] = federatedCursorState{Cursor: Cursor{Time: oldest.Timestamp, ID: encodeSQLiteCursor(oldest.ID)}}
+			next[result.child] = federatedCursorState{Cursor: Cursor{Time: oldest.Timestamp, ID: encodeLogEntrySeqCursor(oldest.Seq, oldest.ID)}}
 		}
 	}
 	return next
