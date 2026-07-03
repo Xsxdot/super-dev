@@ -98,6 +98,26 @@ func TestDeploymentLogsEndpoint_ScopesQueryToPathDeploymentID(t *testing.T) {
 	assert.Equal(t, logbackend.Cursor{ID: "88"}, backend.queryFilter.Before)
 }
 
+func TestDeploymentLogsEndpoint_BeforeTime(t *testing.T) {
+	app := newTestAppInstance(t)
+	depID := "dep-before-time"
+	backend := &recordingLogBackend{}
+	app.SetBackendForTest(depID, backend)
+
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	cut := time.Date(2026, 7, 3, 4, 0, 1, 123, time.UTC)
+	resp, err := http.Get(srv.URL + "/api/deployments/" + depID + "/logs?before_time=" + cut.Format(time.RFC3339Nano))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.True(t, backend.queryFilter.BeforeTime.Equal(cut), "before_time should be parsed and passed to backend")
+
+	resp, err = http.Get(srv.URL + "/api/deployments/" + depID + "/logs?before_time=not-a-time")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
 func TestDeploymentLogsWebSocket_ScopesSubscriptionToPathDeploymentID(t *testing.T) {
 	app := newTestAppInstance(t)
 	depID := "dep-ws-scoped"

@@ -203,6 +203,31 @@ func TestFetchPagination(t *testing.T) {
 	assert.Len(t, third, 0)
 }
 
+// TestFetchBeforeTime 验证 BeforeTime 游标只返回严格早于该时间的日志。
+func TestFetchBeforeTime(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 7, 3, 10, 0, 0, 0, time.UTC)
+	entries := make([]model.LogEntry, 0, 3)
+	for i := 0; i < 3; i++ {
+		entries = append(entries, model.LogEntry{
+			DeploymentID: "dep-1",
+			RunID:        "run-1",
+			Timestamp:    base.Add(time.Duration(i) * time.Minute),
+			Level:        "INFO",
+			Message:      fmt.Sprintf("m%d", i),
+			Stream:       "stdout",
+		})
+	}
+	require.NoError(t, s.AppendBatch(entries))
+
+	cut := base.Add(1 * time.Minute) // 只应返回 m0。
+	got, err := s.Fetch(store.FetchParams{DeploymentID: "dep-1", BeforeTime: &cut})
+	require.NoError(t, err)
+	if len(got) != 1 || got[0].Message != "m0" {
+		t.Fatalf("want [m0], got %+v", got)
+	}
+}
+
 func TestFetchByRunID(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()

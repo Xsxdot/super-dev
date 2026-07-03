@@ -11,6 +11,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ type deploymentSearchResponse struct {
 //   - run: 按 RunID 过滤（可选）
 //   - limit: 最大返回条数（默认 1000，上限由 maxLimit 控制）
 //   - before: 返回 id < before 的记录（游标分页）
+//   - before_time: 返回 timestamp < before_time 的记录（RFC3339Nano，时间游标兜底）
 func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	depID := r.PathValue("id")
 	backend, ok := a.lookupBackend(depID)
@@ -61,9 +63,19 @@ func (a *App) fetchDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	if beforeStr := q.Get("before"); beforeStr != "" {
 		filter.Before = logbackend.Cursor{ID: beforeStr}
 	}
+	if beforeTimeStr := q.Get("before_time"); beforeTimeStr != "" {
+		beforeTime, err := time.Parse(time.RFC3339Nano, beforeTimeStr)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "before_time is invalid, want RFC3339Nano")
+			return
+		}
+		filter.BeforeTime = beforeTime
+	}
 
 	entries, next, err := backend.Query(r.Context(), filter)
 	if err != nil {
+		log.Printf("[api] 拉取 deployment 历史日志失败 deployment=%s before=%s before_time=%s: %v",
+			depID, q.Get("before"), q.Get("before_time"), err)
 		jsonError(w, http.StatusInternalServerError, "failed to fetch logs: "+err.Error())
 		return
 	}
