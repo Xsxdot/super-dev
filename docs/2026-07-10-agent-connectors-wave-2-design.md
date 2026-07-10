@@ -53,16 +53,16 @@ flowchart TD
     Kimi --> JSON["private JSON codec"]
 ```
 
-Each Connector implements the complete `AgentConnector` surface:
+Each Connector implements the complete existing `AgentConnector` surface:
 
 - `descriptor`
 - `detect`
 - `status`
 - `install`
-- `update`
 - `uninstall`
-- `verify`
 - `manual_instructions`
+
+`ConnectorRegistry` keeps the operation mapping already established by the protocol: update calls `install` with `request.operation = Update`, while verify re-reads `status` and normalizes it into a verify outcome. The new Connectors do not add duplicate `update` or `verify` trait methods.
 
 The four Connectors live in focused submodules under `mcp_install/connectors/`. Shared helpers may be extracted for safe file mutation, Skill directory management, known environment overrides, and bounded process execution, but those helpers must not become a competing public Connector abstraction.
 
