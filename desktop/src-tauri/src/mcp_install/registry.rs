@@ -25,10 +25,59 @@ use std::time::Instant;
 const ISOLATED_STATE_MESSAGE: &str = "连接器状态暂时不可用，请稍后重试";
 const MANUAL_ACTION_MESSAGE: &str = "此操作需要按连接器指引手动完成";
 
+/// ConnectorEnvironment 保存已批准的 Agent 配置路径覆盖。
+///
+/// 边界：不保存任意环境变量或秘密值，Connector 只能读取三个公开路径。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectorEnvironment {
+    opencode_config: Option<PathBuf>,
+    openclaw_config_path: Option<PathBuf>,
+    kimi_code_home: Option<PathBuf>,
+}
+
+impl ConnectorEnvironment {
+    /// new 构造仅包含已知路径覆盖的环境值对象。
+    ///
+    /// 参数：
+    ///   - opencode_config: OpenCode 配置文件覆盖路径（对应 OPENCODE_CONFIG）
+    ///   - openclaw_config_path: OpenClaw 配置路径覆盖（对应 OPENCLAW_CONFIG_PATH）
+    ///   - kimi_code_home: Kimi Code 数据根目录覆盖（对应 KIMI_CODE_HOME）
+    ///
+    /// 返回：
+    ///   - 只读路径覆盖集合；未设置的字段为 None
+    pub fn new(
+        opencode_config: Option<PathBuf>,
+        openclaw_config_path: Option<PathBuf>,
+        kimi_code_home: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            opencode_config,
+            openclaw_config_path,
+            kimi_code_home,
+        }
+    }
+
+    /// opencode_config 返回 OpenCode 配置文件覆盖路径。
+    pub fn opencode_config(&self) -> Option<&Path> {
+        self.opencode_config.as_deref()
+    }
+
+    /// openclaw_config_path 返回 OpenClaw 配置路径覆盖。
+    pub fn openclaw_config_path(&self) -> Option<&Path> {
+        self.openclaw_config_path.as_deref()
+    }
+
+    /// kimi_code_home 返回 Kimi Code 数据根目录覆盖。
+    pub fn kimi_code_home(&self) -> Option<&Path> {
+        self.kimi_code_home.as_deref()
+    }
+}
+
 /// ConnectorRuntimeContext 提供连接器运行所需的已解析本机资源。
 ///
 /// 边界：
-///   - 上下文只拥有路径和预解析错误，不主动读取环境变量或文件系统
+///   - 上下文只拥有路径、已知环境覆盖和预解析错误，不主动读取文件系统
+///   - 环境变量仅在 Tauri 边界解析一次后注入，连接器不直接读 std::env
 ///   - getter 仅暴露借用，连接器不能改写 Registry 持有的调用上下文
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectorRuntimeContext {
@@ -38,6 +87,7 @@ pub struct ConnectorRuntimeContext {
     mcp_binary: PathBuf,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
+    environment: ConnectorEnvironment,
 }
 
 impl ConnectorRuntimeContext {
@@ -52,7 +102,7 @@ impl ConnectorRuntimeContext {
     ///   - skill_source_error: skill 源解析失败时的结构化说明
     ///
     /// 返回：
-    ///   - 可克隆、只读访问其字段的运行上下文
+    ///   - 可克隆、只读访问其字段的运行上下文；环境覆盖默认为空
     pub fn new(
         home_dir: PathBuf,
         command_dirs: Vec<PathBuf>,
@@ -68,7 +118,20 @@ impl ConnectorRuntimeContext {
             mcp_binary,
             skill_source,
             skill_source_error,
+            environment: ConnectorEnvironment::default(),
         }
+    }
+
+    /// with_environment 注入已在 Tauri 边界解析的已知路径覆盖。
+    ///
+    /// 参数：
+    ///   - environment: 仅含三个公开路径覆盖的值对象
+    ///
+    /// 返回：
+    ///   - 带环境覆盖的运行上下文
+    pub fn with_environment(mut self, environment: ConnectorEnvironment) -> Self {
+        self.environment = environment;
+        self
     }
 
     /// home_dir 返回已解析的用户目录。
@@ -99,6 +162,11 @@ impl ConnectorRuntimeContext {
     /// skill_source_error 返回 skill 源解析失败时的说明。
     pub fn skill_source_error(&self) -> Option<&str> {
         self.skill_source_error.as_deref()
+    }
+
+    /// environment 返回已知 Agent 配置路径覆盖。
+    pub fn environment(&self) -> &ConnectorEnvironment {
+        &self.environment
     }
 }
 
@@ -1405,6 +1473,33 @@ mod tests {
             Some(PathBuf::from("/skills/superdev")),
             None,
         )
+    }
+
+    #[test]
+    fn connector_environment_exposes_only_known_path_overrides() {
+        let env = ConnectorEnvironment::new(
+            Some(PathBuf::from("/tmp/opencode.json")),
+            Some(PathBuf::from("/tmp/openclaw.json")),
+            Some(PathBuf::from("/tmp/kimi-code")),
+        );
+        let ctx = context().with_environment(env);
+        assert_eq!(
+            ctx.environment().opencode_config(),
+            Some(Path::new("/tmp/opencode.json"))
+        );
+        assert_eq!(
+            ctx.environment().openclaw_config_path(),
+            Some(Path::new("/tmp/openclaw.json"))
+        );
+        assert_eq!(
+            ctx.environment().kimi_code_home(),
+            Some(Path::new("/tmp/kimi-code"))
+        );
+    }
+
+    #[test]
+    fn connector_runtime_context_defaults_to_no_overrides() {
+        assert_eq!(context().environment(), &ConnectorEnvironment::default());
     }
 
     fn states(status: IntegrationStateStatus) -> Vec<IntegrationState> {

@@ -1681,6 +1681,7 @@ pub fn resolve_skill_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// connector_runtime_context 统一解析 Registry 所需的本机资源。
 ///
 /// 解析失败只保留安全错误说明，调用方不得将路径或配置内容写入日志。
+/// 已知环境覆盖只在此边界读取一次，连接器通过上下文 getter 消费。
 pub fn connector_runtime_context(
     app: &AppHandle,
 ) -> Result<registry::ConnectorRuntimeContext, String> {
@@ -1692,6 +1693,19 @@ pub fn connector_runtime_context(
         Ok(path) => (Some(path), None),
         Err(error) => (None, Some(error)),
     };
+    // 只解析已批准的三个路径覆盖，不透传任意环境变量。
+    let environment = registry::ConnectorEnvironment::new(
+        std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from),
+        std::env::var_os("OPENCLAW_CONFIG_PATH").map(PathBuf::from),
+        std::env::var_os("KIMI_CODE_HOME").map(PathBuf::from),
+    );
+    // 只记录是否存在覆盖，不记录路径值，避免把用户目录写进日志。
+    tracing::debug!(
+        has_opencode_config = environment.opencode_config().is_some(),
+        has_openclaw_config_path = environment.openclaw_config_path().is_some(),
+        has_kimi_code_home = environment.kimi_code_home().is_some(),
+        "connector runtime environment resolved"
+    );
     Ok(registry::ConnectorRuntimeContext::new(
         home,
         command_dirs,
@@ -1699,7 +1713,8 @@ pub fn connector_runtime_context(
         mcp_binary,
         skill_source,
         skill_source_error,
-    ))
+    )
+    .with_environment(environment))
 }
 
 /// mcp_status_for_paths 读取每个编程智能体的 SuperDev MCP/skill 安装状态。
