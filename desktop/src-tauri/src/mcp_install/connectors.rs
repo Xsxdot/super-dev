@@ -5,6 +5,7 @@
 
 mod common;
 mod kimi_code;
+mod openclaw;
 mod opencode;
 mod process;
 
