@@ -74,9 +74,15 @@ fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     })
 }
 
+fn mcp_command(ctx: &ConnectorRuntimeContext) -> String {
+    // jsonc-parser 0.26.3 的 CST string writer 不会转义 Windows 反斜杠。
+    // Windows 接受正斜杠绝对路径，因此在生成边界统一规范化。
+    ctx.mcp_binary().to_string_lossy().replace('\\', "/")
+}
+
 /// superdev_mcp_value 构造 OpenCode 本地 MCP 条目的 CST 输入值。
 fn superdev_mcp_value(ctx: &ConnectorRuntimeContext) -> jsonc_parser::cst::CstInputValue {
-    let command = ctx.mcp_binary().to_string_lossy().into_owned();
+    let command = mcp_command(ctx);
     json!({
         "type": "local",
         "command": [command],
@@ -91,7 +97,7 @@ fn superdev_mcp_value(ctx: &ConnectorRuntimeContext) -> jsonc_parser::cst::CstIn
 fn expected_superdev_json(ctx: &ConnectorRuntimeContext) -> serde_json::Value {
     serde_json::json!({
         "type": "local",
-        "command": [ctx.mcp_binary().to_string_lossy()],
+        "command": [mcp_command(ctx)],
         "enabled": true,
         "environment": {
             "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL
@@ -143,6 +149,14 @@ fn merge_opencode_jsonc(
         mcp.append("superdev", value);
     }
     let after = root.to_string();
+    // CST writer 的输出必须再过一次独立解析门，禁止将平台路径
+    // 等输入转成无法重新读取的 OpenCode 配置。
+    parse_to_serde_value(&after, &ParseOptions::default()).map_err(|error| {
+        ConnectorError::new(
+            "config_transform_failed",
+            format!("OpenCode JSONC 生成结果无法解析: {error}"),
+        )
+    })?;
     Ok(MergeResult {
         content: after.clone(),
         changed: before != after,
@@ -811,5 +825,31 @@ mod tests {
             assert_eq!(backups, 0, "case={label}");
             let _ = fs::remove_dir_all(home);
         }
+    }
+
+    #[test]
+    fn windows_style_mcp_paths_are_emitted_as_valid_jsonc() {
+        let home = test_dir("windows-command-path");
+        let skill_source = home.join("bundled-skill");
+        fs::create_dir_all(&skill_source).unwrap();
+        fs::write(skill_source.join("SKILL.md"), "fixture").unwrap();
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\Program Files\SuperDev\superdev-mcp.exe"),
+            Some(skill_source),
+            None,
+        );
+
+        let merged = merge_opencode_jsonc(None, &ctx).unwrap();
+        let value = parse_to_serde_value(&merged.content, &ParseOptions::default())
+            .expect("generated Windows JSONC must parse")
+            .unwrap();
+        assert_eq!(
+            value["mcp"]["superdev"]["command"][0],
+            "C:/Program Files/SuperDev/superdev-mcp.exe"
+        );
+        let _ = fs::remove_dir_all(home);
     }
 }

@@ -360,12 +360,15 @@ mod tests {
             "powershell",
             [
                 OsString::from("-NoProfile"),
+                OsString::from("-NonInteractive"),
                 OsString::from("-Command"),
                 OsString::from(
-                    "$a = 'A' * (80 * 1024); $b = 'B' * (80 * 1024); \
-                     Write-Output $a; [Console]::Error.WriteLine($b)",
+                    "$a = [Text.Encoding]::ASCII.GetBytes('A' * (80 * 1024)); \
+                     $b = [Text.Encoding]::ASCII.GetBytes('B' * (80 * 1024)); \
+                     $stdout = [Console]::OpenStandardOutput(); \
+                     $stderr = [Console]::OpenStandardError(); \
+                     $stdout.Write($a, 0, $a.Length); $stderr.Write($b, 0, $b.Length)",
                 ),
-                OsString::from("super-secret-token-xyz"),
             ],
         )
         .with_timeout(Duration::from_secs(15))
@@ -400,10 +403,15 @@ mod tests {
         let output = SystemCommandRunner
             .run(large_output_spec())
             .expect("large output command must exit");
-        assert!(output.truncated, "both streams exceed 64KiB");
+        assert!(
+            output.truncated,
+            "both streams exceed 64KiB: stdout={}, stderr={}",
+            output.stdout.len(),
+            output.stderr.len()
+        );
         // 捕获上限按字节计；UTF-8 有损替换后长度仍不得超过上限。
-        assert!(output.stdout.len() <= MAX_CAPTURED_BYTES);
-        assert!(output.stderr.len() <= MAX_CAPTURED_BYTES);
+        assert_eq!(output.stdout.len(), MAX_CAPTURED_BYTES);
+        assert_eq!(output.stderr.len(), MAX_CAPTURED_BYTES);
 
         // 错误路径：用不存在程序证明用户消息不含密钥片段。
         let secret = "super-secret-token-xyz";
