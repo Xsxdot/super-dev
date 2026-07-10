@@ -3,6 +3,9 @@
 // 职责：声明 Claude Code、Codex、Cursor 及标准 JSON fixture 连接器，并桥接统一契约。
 // 边界：不执行未知命令或网络请求；实际文件写入继续复用 mcp_install 既有安全原语。
 
+mod common;
+mod process;
+
 use super::contracts::*;
 use super::registry::*;
 use super::AgentKind;
