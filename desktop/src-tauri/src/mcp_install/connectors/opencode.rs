@@ -33,12 +33,7 @@ impl OpenCodeConnector {
     /// new 创建标准支持级别的 OpenCode 连接器。
     pub(super) fn new() -> Self {
         Self {
-            descriptor: common::descriptor(
-                CONNECTOR_ID,
-                DISPLAY_NAME,
-                SupportMode::Manual,
-                None,
-            ),
+            descriptor: common::descriptor(CONNECTOR_ID, DISPLAY_NAME, SupportMode::Manual, None),
         }
     }
 }
@@ -117,7 +112,10 @@ fn merge_opencode_jsonc(
         _ => "{\n}\n",
     };
     let root = CstRootNode::parse(source, &ParseOptions::default()).map_err(|error| {
-        ConnectorError::new("invalid_config", format!("OpenCode JSONC 无法解析: {error}"))
+        ConnectorError::new(
+            "invalid_config",
+            format!("OpenCode JSONC 无法解析: {error}"),
+        )
     })?;
     let before = root.to_string();
     let root_obj = root.object_value_or_set();
@@ -144,7 +142,10 @@ fn remove_opencode_superdev(existing: Option<&str>) -> Result<MergeResult, Conne
         });
     };
     let root = CstRootNode::parse(source, &ParseOptions::default()).map_err(|error| {
-        ConnectorError::new("invalid_config", format!("OpenCode JSONC 无法解析: {error}"))
+        ConnectorError::new(
+            "invalid_config",
+            format!("OpenCode JSONC 无法解析: {error}"),
+        )
     })?;
     let before = root.to_string();
     if let Some(root_obj) = root.object_value() {
@@ -167,7 +168,10 @@ fn remove_opencode_superdev(existing: Option<&str>) -> Result<MergeResult, Conne
 fn mcp_configured(ctx: &ConnectorRuntimeContext, content: &str) -> Result<bool, ConnectorError> {
     let value = parse_to_serde_value(content, &ParseOptions::default())
         .map_err(|error| {
-            ConnectorError::new("invalid_config", format!("OpenCode JSONC 无法解析: {error}"))
+            ConnectorError::new(
+                "invalid_config",
+                format!("OpenCode JSONC 无法解析: {error}"),
+            )
         })?
         .unwrap_or(serde_json::Value::Null);
     let Some(superdev) = value.get("mcp").and_then(|mcp| mcp.get("superdev")) else {
@@ -680,9 +684,7 @@ mod tests {
         let ctx = context_at(home.clone());
         assert_eq!(
             config_path(&ctx),
-            home.join(".config")
-                .join("opencode")
-                .join("opencode.json")
+            home.join(".config").join("opencode").join("opencode.json")
         );
         assert_eq!(
             skill_path(&ctx),

@@ -16,8 +16,8 @@
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
-    install_skill_dir, remove_skill_dir, skill_status_for_target, atomic_write_file, backup_path,
-    MergeResult, McpEntry, SkillInstallOutcome, DEFAULT_AGENT_URL,
+    atomic_write_file, backup_path, install_skill_dir, remove_skill_dir, skill_status_for_target,
+    McpEntry, MergeResult, SkillInstallOutcome, DEFAULT_AGENT_URL,
 };
 use std::fs;
 use std::io;
@@ -161,10 +161,7 @@ pub(super) fn manual_hook_result(target_path: Option<String>) -> IntegrationOper
 ///
 /// 返回：
 ///   - Skill 集成状态；路径仅出现在返回值中
-pub(super) fn skill_status(
-    ctx: &ConnectorRuntimeContext,
-    skill_path: &Path,
-) -> IntegrationState {
+pub(super) fn skill_status(ctx: &ConnectorRuntimeContext, skill_path: &Path) -> IntegrationState {
     let (installed, matches, error) = skill_status_for_target(
         ctx.skill_source(),
         ctx.skill_source_error().map(str::to_string),
@@ -330,10 +327,7 @@ where
     result
 }
 
-fn mutate_config_inner<F>(
-    path: &Path,
-    transform: F,
-) -> Result<FileMutationOutcome, ConnectorError>
+fn mutate_config_inner<F>(path: &Path, transform: F) -> Result<FileMutationOutcome, ConnectorError>
 where
     F: FnOnce(Option<&str>) -> Result<MergeResult, ConnectorError>,
 {
@@ -382,10 +376,7 @@ where
     // 5. 创建父目录。
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            ConnectorError::new(
-                "config_parent_failed",
-                format!("创建配置目录失败: {error}"),
-            )
+            ConnectorError::new("config_parent_failed", format!("创建配置目录失败: {error}"))
         })?;
     }
 
@@ -393,10 +384,7 @@ where
     let backup = if path.exists() {
         let backup = backup_path(path);
         fs::copy(path, &backup).map_err(|error| {
-            ConnectorError::new(
-                "config_backup_failed",
-                format!("备份配置文件失败: {error}"),
-            )
+            ConnectorError::new("config_backup_failed", format!("备份配置文件失败: {error}"))
         })?;
         Some(backup.to_string_lossy().into_owned())
     } else {
@@ -404,9 +392,8 @@ where
     };
 
     // 7. 原子写入。
-    atomic_write_file(path, merged.content.as_bytes(), "配置文件").map_err(|error| {
-        ConnectorError::new("config_write_failed", error)
-    })?;
+    atomic_write_file(path, merged.content.as_bytes(), "配置文件")
+        .map_err(|error| ConnectorError::new("config_write_failed", error))?;
 
     Ok(FileMutationOutcome {
         changed: true,
@@ -460,10 +447,7 @@ pub(super) fn path_string(path: &Path) -> String {
 pub(super) fn ensure_parent_dir(path: &Path) -> Result<(), ConnectorError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            ConnectorError::new(
-                "config_parent_failed",
-                format!("创建配置目录失败: {error}"),
-            )
+            ConnectorError::new("config_parent_failed", format!("创建配置目录失败: {error}"))
         })?;
     }
     Ok(())

@@ -51,7 +51,10 @@ fn config_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
 }
 
 fn skill_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
-    ctx.home_dir().join(".hermes").join("skills").join("superdev")
+    ctx.home_dir()
+        .join(".hermes")
+        .join("skills")
+        .join("superdev")
 }
 
 fn data_root(ctx: &ConnectorRuntimeContext) -> PathBuf {
@@ -176,8 +179,7 @@ fn append_mcp_servers(
                     continue;
                 }
                 if let Some(nested) = value.as_mapping() {
-                    servers =
-                        servers.mapping(name, |child| append_scalar_pairs(child, nested));
+                    servers = servers.mapping(name, |child| append_scalar_pairs(child, nested));
                 } else if let Some(scalar) = value.as_scalar() {
                     servers = servers.pair(name, scalar.as_string());
                 }
@@ -300,9 +302,9 @@ fn merge_hermes_yaml(
     let doc = Document::from_str(&source).map_err(|error| {
         ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
     })?;
-    let root = doc.as_mapping().ok_or_else(|| {
-        ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping")
-    })?;
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
     let after = rebuild_document(
         &source,
         &root,
@@ -327,9 +329,9 @@ fn remove_hermes_owned(existing: Option<&str>) -> Result<MergeResult, ConnectorE
     let doc = Document::from_str(source).map_err(|error| {
         ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
     })?;
-    let root = doc.as_mapping().ok_or_else(|| {
-        ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping")
-    })?;
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
     // 卸载时不需要真实 MCP 二进制路径；传入占位 ctx 不可用，改用只剥除逻辑。
     // 这里用 rebuild：include_superdev=false，hooks 剥离 owned。
     // command 仅在 include_superdev=true 时使用，占位 Path 即可。
@@ -351,11 +353,9 @@ fn remove_hermes_owned(existing: Option<&str>) -> Result<MergeResult, ConnectorE
 fn read_doc(path: &Path) -> Result<Option<Document>, ConnectorError> {
     match fs::read_to_string(path) {
         Ok(content) if content.trim().is_empty() => Ok(None),
-        Ok(content) => Document::from_str(&content)
-            .map(Some)
-            .map_err(|error| {
-                ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
-            }),
+        Ok(content) => Document::from_str(&content).map(Some).map_err(|error| {
+            ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
+        }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(ConnectorError::new(
             "config_read_failed",
@@ -802,8 +802,8 @@ impl AgentConnector for HermesConnector {
             }
         };
         let skill_result = common::uninstall_skill(&skill);
-        let changed = mcp_outcome.changed
-            || matches!(skill_result.result, IntegrationResult::Installed);
+        let changed =
+            mcp_outcome.changed || matches!(skill_result.result, IntegrationResult::Installed);
         let outcome = ConnectorOperationOutcome {
             connector_id: CONNECTOR_ID.into(),
             operation: ConnectorOperation::Uninstall,
@@ -963,10 +963,7 @@ hooks:
             first.result,
             ConnectorResult::Partial | ConnectorResult::Success
         ));
-        assert_eq!(
-            first.integrations[2].result,
-            IntegrationResult::NeedsAction
-        );
+        assert_eq!(first.integrations[2].result, IntegrationResult::NeedsAction);
 
         let after = fs::read_to_string(&config).unwrap();
         assert!(

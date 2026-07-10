@@ -63,11 +63,7 @@ impl CommandSpec {
     }
 
     /// with_env 追加一条环境变量。
-    pub(super) fn with_env(
-        mut self,
-        key: impl Into<OsString>,
-        value: impl Into<OsString>,
-    ) -> Self {
+    pub(super) fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.push((key.into(), value.into()));
         self
     }
@@ -187,10 +183,7 @@ impl CommandRunner for SystemCommandRunner {
                                     duration_ms = started.elapsed().as_millis() as u64,
                                     "connector command timed out"
                                 );
-                                return Err(ConnectorError::new(
-                                    "command_timeout",
-                                    "命令执行超时",
-                                ));
+                                return Err(ConnectorError::new("command_timeout", "命令执行超时"));
                             }
                             Err(error) => {
                                 tracing::error!(
@@ -225,12 +218,12 @@ impl CommandRunner for SystemCommandRunner {
             }
         };
 
-        let stdout_stream = stdout_rx.recv().map_err(|_| {
-            ConnectorError::new("command_output_failed", "读取标准输出失败")
-        })?;
-        let stderr_stream = stderr_rx.recv().map_err(|_| {
-            ConnectorError::new("command_output_failed", "读取标准错误失败")
-        })?;
+        let stdout_stream = stdout_rx
+            .recv()
+            .map_err(|_| ConnectorError::new("command_output_failed", "读取标准输出失败"))?;
+        let stderr_stream = stderr_rx
+            .recv()
+            .map_err(|_| ConnectorError::new("command_output_failed", "读取标准错误失败"))?;
         let truncated = stdout_stream.truncated || stderr_stream.truncated;
         let output = CommandOutput {
             status_code: status.code(),

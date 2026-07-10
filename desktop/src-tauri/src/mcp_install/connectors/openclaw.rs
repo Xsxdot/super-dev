@@ -40,12 +40,7 @@ impl OpenClawConnector {
     #[cfg(test)]
     pub(super) fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
         Self {
-            descriptor: common::descriptor(
-                CONNECTOR_ID,
-                DISPLAY_NAME,
-                SupportMode::Manual,
-                None,
-            ),
+            descriptor: common::descriptor(CONNECTOR_ID, DISPLAY_NAME, SupportMode::Manual, None),
             runner,
         }
     }
@@ -53,19 +48,17 @@ impl OpenClawConnector {
     #[cfg(not(test))]
     fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
         Self {
-            descriptor: common::descriptor(
-                CONNECTOR_ID,
-                DISPLAY_NAME,
-                SupportMode::Manual,
-                None,
-            ),
+            descriptor: common::descriptor(CONNECTOR_ID, DISPLAY_NAME, SupportMode::Manual, None),
             runner,
         }
     }
 }
 
 fn skill_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
-    ctx.home_dir().join(".openclaw").join("skills").join("superdev")
+    ctx.home_dir()
+        .join(".openclaw")
+        .join("skills")
+        .join("superdev")
 }
 
 fn data_root(ctx: &ConnectorRuntimeContext) -> PathBuf {
@@ -146,7 +139,10 @@ fn show_superdev(
         return Ok(None);
     }
     let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
-        ConnectorError::new("invalid_cli_output", "openclaw mcp show --json 输出无法解析")
+        ConnectorError::new(
+            "invalid_cli_output",
+            "openclaw mcp show --json 输出无法解析",
+        )
     })?;
     if value.is_null() {
         Ok(None)
@@ -157,10 +153,7 @@ fn show_superdev(
 
 fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bool {
     let expected_command = ctx.mcp_binary().to_string_lossy();
-    let command = value
-        .get("command")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let command = value.get("command").and_then(|v| v.as_str()).unwrap_or("");
     let agent_url = value
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
@@ -551,8 +544,12 @@ impl AgentConnector for OpenClawConnector {
                 }
             };
             if present {
-                let output =
-                    run_cli(self.runner.as_ref(), ctx, &program, &["mcp", "unset", "superdev"])?;
+                let output = run_cli(
+                    self.runner.as_ref(),
+                    ctx,
+                    &program,
+                    &["mcp", "unset", "superdev"],
+                )?;
                 if !output.success() {
                     return Ok(ConnectorOperationOutcome {
                         connector_id: CONNECTOR_ID.into(),
@@ -640,10 +637,7 @@ impl AgentConnector for OpenClawConnector {
             summary: "通过 openclaw 官方 CLI 接入 SuperDev MCP".into(),
             steps: vec![
                 format!("运行: openclaw mcp set superdev '{}'", canonical),
-                format!(
-                    "Skill 目标目录: {}",
-                    skill_path(ctx).display()
-                ),
+                format!("Skill 目标目录: {}", skill_path(ctx).display()),
                 "重启或重新加载 OpenClaw".into(),
                 "可选验证: openclaw doctor --probe".into(),
                 "Session Hook 需按 OpenClaw 文档手动配置".into(),
@@ -929,7 +923,10 @@ mod tests {
         for name in executable_file_names("openclaw") {
             let _ = std::fs::remove_file(bin.join(&name));
         }
-        let name = executable_file_names("openclaw").into_iter().next().unwrap();
+        let name = executable_file_names("openclaw")
+            .into_iter()
+            .next()
+            .unwrap();
         std::fs::write(bin.join(&name), "").unwrap();
         let ctx = ConnectorRuntimeContext::new(
             home.clone(),

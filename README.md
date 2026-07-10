@@ -94,7 +94,12 @@ See / Inspect / Operate is what AI does. Two things make it trustworthy and cont
 
 ### Zero-touch onboarding
 
-- Choose any detected built-in Connector on first launch. Claude Code, Codex, and Cursor are currently verified automatic Connectors; other local MCP-capable Agents can be connected manually with the standard stdio instructions.
+- Choose any detected built-in Connector on first launch. Seven verified built-ins are available: **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **OpenClaw**, **Hermes**, and **Kimi Code**.
+  - **Full** support (Claude Code, Codex, Cursor, Hermes): automatic MCP + Skill + Session Hook.
+  - **Standard** support (OpenCode, OpenClaw, Kimi Code): automatic MCP + Skill, with a manual Session Hook step.
+  - Unknown compatible local Agents can still use Connector/manual materials without a hard-coded whitelist.
+  - **Pi is deferred** from this wave and is not registered as a built-in Connector.
+- Other local MCP-capable Agents can be connected manually with the standard stdio instructions.
 - Cloud or isolated-sandbox Agents cannot reach the local `127.0.0.1` endpoint; they require a future authenticated Remote MCP Gateway and are not presented with a misleading local configuration.
 - Install the MCP connection and the SuperDev guide skill from the desktop app.
 - Seed a local `superdev-sample` project automatically.

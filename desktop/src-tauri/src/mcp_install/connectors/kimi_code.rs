@@ -32,12 +32,7 @@ impl KimiCodeConnector {
     /// new 创建标准支持级别（自动 MCP+Skill，手动 Hook）的 Kimi Code 连接器。
     pub(super) fn new() -> Self {
         Self {
-            descriptor: common::descriptor(
-                CONNECTOR_ID,
-                DISPLAY_NAME,
-                SupportMode::Manual,
-                None,
-            ),
+            descriptor: common::descriptor(CONNECTOR_ID, DISPLAY_NAME, SupportMode::Manual, None),
         }
     }
 }
@@ -83,8 +78,9 @@ fn map_merge_error(error: String) -> ConnectorError {
 
 /// mcp_configured 判断配置中的 superdev 条目是否匹配当前 MCP 二进制与默认 URL。
 fn mcp_configured(ctx: &ConnectorRuntimeContext, content: &str) -> Result<bool, ConnectorError> {
-    let root: serde_json::Value = serde_json::from_str(content)
-        .map_err(|error| ConnectorError::new("invalid_config", format!("配置 JSON 无法解析: {error}")))?;
+    let root: serde_json::Value = serde_json::from_str(content).map_err(|error| {
+        ConnectorError::new("invalid_config", format!("配置 JSON 无法解析: {error}"))
+    })?;
     let Some(server) = root
         .get("mcpServers")
         .and_then(|servers| servers.get("superdev"))
@@ -363,13 +359,10 @@ impl AgentConnector for KimiCodeConnector {
         // Skill 安装门控：必须先用 post-write status 证明 MCP 已配置。
         // 否则会在半配置状态下写入 Skill，造成「Skill 在但 MCP 不可用」的假成功。
         let status_after = self.status(ctx)?;
-        let mcp_ready = status_after
-            .integrations
-            .iter()
-            .any(|item| {
-                item.capability == IntegrationCapability::Mcp
-                    && item.status == IntegrationStateStatus::Configured
-            });
+        let mcp_ready = status_after.integrations.iter().any(|item| {
+            item.capability == IntegrationCapability::Mcp
+                && item.status == IntegrationStateStatus::Configured
+        });
 
         let skill_result = if !mcp_ready {
             common::integration_result(
@@ -557,10 +550,7 @@ impl AgentConnector for KimiCodeConnector {
         Ok(ConnectorManualInstructions {
             summary: "手动将 SuperDev 接入 Kimi Code".into(),
             steps: vec![
-                format!(
-                    "将以下 mcpServers.superdev 写入 {}",
-                    config.display()
-                ),
+                format!("将以下 mcpServers.superdev 写入 {}", config.display()),
                 format!("确认 Skill 目录存在：{}", skill.display()),
                 "重启 Kimi Code 使 MCP 生效".into(),
                 "在终端运行 `kimi mcp list`（或等价命令）确认 superdev 已被发现".into(),
@@ -645,10 +635,7 @@ mod tests {
     fn default_paths_use_native_separators_under_home() {
         let home = test_dir("default-home");
         let ctx = context_at(home.clone());
-        assert_eq!(
-            config_path(&ctx),
-            home.join(".kimi-code").join("mcp.json")
-        );
+        assert_eq!(config_path(&ctx), home.join(".kimi-code").join("mcp.json"));
         assert_eq!(
             skill_path(&ctx),
             home.join(".kimi-code").join("skills").join("superdev")
@@ -680,22 +667,14 @@ mod tests {
 
         let first = connector.install(&ctx, install_request()).unwrap();
         assert_eq!(first.result, ConnectorResult::Partial);
-        assert_eq!(
-            first.integrations[0].result,
-            IntegrationResult::Installed
-        );
-        assert_eq!(
-            first.integrations[2].result,
-            IntegrationResult::NeedsAction
-        );
-        assert!(first
-            .integrations
-            .iter()
-            .any(|item| item.capability == IntegrationCapability::Skill
-                && matches!(
-                    item.result,
-                    IntegrationResult::Installed | IntegrationResult::AlreadyPresent
-                )));
+        assert_eq!(first.integrations[0].result, IntegrationResult::Installed);
+        assert_eq!(first.integrations[2].result, IntegrationResult::NeedsAction);
+        assert!(first.integrations.iter().any(|item| item.capability
+            == IntegrationCapability::Skill
+            && matches!(
+                item.result,
+                IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+            )));
 
         let after = fs::read_to_string(&config).unwrap();
         let value: serde_json::Value = serde_json::from_str(&after).unwrap();
@@ -760,14 +739,8 @@ mod tests {
         let connector = KimiCodeConnector::new();
         let outcome = connector.install(&ctx, install_request()).unwrap();
         assert_eq!(outcome.result, ConnectorResult::Failed);
-        assert_eq!(
-            outcome.integrations[0].result,
-            IntegrationResult::Failed
-        );
-        assert_eq!(
-            outcome.integrations[1].result,
-            IntegrationResult::Skipped
-        );
+        assert_eq!(outcome.integrations[0].result, IntegrationResult::Failed);
+        assert_eq!(outcome.integrations[1].result, IntegrationResult::Skipped);
         assert_eq!(fs::read(&config).unwrap(), before);
         // 无 .superdev-bak 旁路文件。
         let backups: Vec<_> = fs::read_dir(&root)
