@@ -1,11 +1,11 @@
 /**
- * MCP 安装 API 封装。
+ * Agent Connector API 封装。
  *
  * 职责：
- *   - 调用 Tauri install_mcp command
- *   - 调用 Tauri detect_coding_agents command
- *   - 调用 Tauri MCP 状态、卸载和文档 command
- *   - 统一安装结果类型和支持的智能体类型
+ *   - 调用 Tauri Connector 列表、安装、更新、验证、卸载和手动指引 command
+ *   - 保持 Rust canonical Connector DTO 与 TypeScript 字段一致
+ *   - 读取其他本机 stdio MCP Agent 的通用连接材料
+ *   - 统一开放 Connector ID 与能力结果类型
  *
  * 边界：
  *   - 不渲染引导界面
@@ -13,77 +13,50 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 
-export type CodingAgent = 'claude-code' | 'codex' | 'cursor'
+export type ConnectorId = string
+export type ConnectorPlatform = 'macos' | 'windows' | 'linux'
+export type IntegrationCapability = 'mcp' | 'skill' | 'session_hook'
+export type SupportMode = 'automatic' | 'manual' | 'unsupported'
+export type SupportLevel = 'full' | 'standard' | 'mcp_compatible' | 'manual_limited'
+export type IntegrationStateStatus = 'configured' | 'missing' | 'needs_action' | 'error' | 'unknown'
+export type ConnectorOperation = 'detect' | 'install' | 'update' | 'status' | 'uninstall' | 'verify'
+export type ConnectorResult = 'success' | 'partial' | 'failed' | 'unchanged' | 'needs_action'
+export type IntegrationResult = 'installed' | 'already_present' | 'skipped' | 'unsupported' | 'needs_action' | 'failed'
 
-export interface CodingAgentAvailability {
-  agent: CodingAgent
-  installed: boolean
-  detection_path?: string | null
+export interface IntegrationSupport { capability: IntegrationCapability; support: SupportMode }
+export interface OperationSupport { operation: ConnectorOperation; support: SupportMode }
+export interface AgentConnectorDescriptor {
+  id: ConnectorId; display_name: string; built_in: boolean; platforms: ConnectorPlatform[]
+  support_level?: SupportLevel | null; integrations: IntegrationSupport[]; operations: OperationSupport[]
+  docs_url?: string | null; verified_versions?: string[] | null
+}
+export interface IntegrationState {
+  capability: IntegrationCapability; status: IntegrationStateStatus; target_path?: string | null; message?: string | null
+}
+export interface AgentConnectorState {
+  detected: boolean; detection_path?: string | null; integrations: IntegrationState[]
+  requires_restart: boolean; message?: string | null
+}
+export interface AgentConnectorSummary { descriptor: AgentConnectorDescriptor; state: AgentConnectorState }
+export interface IntegrationOperationResult {
+  capability: IntegrationCapability; result: IntegrationResult; target_path?: string | null
+  backup_path?: string | null; message?: string | null
+}
+export interface ConnectorManualInstructions {
+  summary: string; steps: string[]; config_path?: string | null; manual_config?: string | null
+  verification_prompt?: string | null
+}
+export interface ConnectorOperationOutcome {
+  connector_id: ConnectorId; operation: ConnectorOperation; result: ConnectorResult
+  integrations: IntegrationOperationResult[]; manual_instructions?: ConnectorManualInstructions | null
+  requires_restart: boolean; message?: string | null
 }
 
-export interface SkillInstallOutcome {
-  installed: boolean
-  already_present: boolean
-  target_path: string
-  backup_path?: string | null
-  error?: string | null
-}
-
-export interface SessionHookOutcome {
-  installed: boolean
-  already_present: boolean
-  config_path: string
-  backup_path?: string | null
-  needs_trust: boolean
-  error?: string | null
-}
-
-export interface InstallOutcome {
-  installed: boolean
-  already_present: boolean
-  agent: CodingAgent
-  backup_path?: string | null
-  config_path: string
+export interface GenericMcpConnectionMaterial {
+  transport: 'stdio'
+  command: string
+  agent_url: string
   manual_config: string
-  skill: SkillInstallOutcome
-  session_hook: SessionHookOutcome
-}
-
-export interface InstallHint {
-  agent: CodingAgent
-  config_path: string
-  manual_config: string
-  skill_target_path: string
-}
-
-export interface McpStatus {
-  agent: CodingAgent
-  agent_installed: boolean
-  detection_path?: string | null
-  config_path: string
-  config_exists: boolean
-  mcp_configured: boolean
-  mcp_command?: string | null
-  agent_url?: string | null
-  config_error?: string | null
-  skill_path: string
-  skill_installed: boolean
-  skill_matches_bundled?: boolean | null
-  skill_error?: string | null
-  hook_config_path: string
-  hook_installed: boolean
-  hook_needs_trust: boolean
-}
-
-export interface UninstallOutcome {
-  agent: CodingAgent
-  config_path: string
-  removed_config: boolean
-  config_backup_path?: string | null
-  skill_path: string
-  removed_skill: boolean
-  hook_config_path: string
-  removed_hook: boolean
 }
 
 export interface McpCapabilityTool {
@@ -112,45 +85,41 @@ export interface McpDocs {
   documents: McpDocument[]
 }
 
-export async function detectCodingAgents(): Promise<CodingAgentAvailability[]> {
-  return invoke<CodingAgentAvailability[]>('detect_coding_agents')
+export async function listAgentConnectors(): Promise<AgentConnectorSummary[]> {
+  return invoke<AgentConnectorSummary[]>('list_agent_connectors')
 }
 
-export async function installMcp(agent: CodingAgent): Promise<InstallOutcome> {
-  return invoke<InstallOutcome>('install_mcp', { agent })
+export async function installAgentConnector(connectorId: ConnectorId, previousOutcome?: ConnectorOperationOutcome | null): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('install_agent_connector', { connectorId, previousOutcome: previousOutcome ?? null })
 }
 
-export async function getMcpInstallHint(agent: CodingAgent): Promise<InstallHint> {
-  return invoke<InstallHint>('mcp_install_hint', { agent })
+export async function updateAgentConnector(connectorId: ConnectorId, previousOutcome?: ConnectorOperationOutcome | null): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('update_agent_connector', { connectorId, previousOutcome: previousOutcome ?? null })
+}
+
+export async function uninstallAgentConnector(connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('uninstall_agent_connector', { connectorId })
+}
+
+export async function verifyAgentConnector(connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('verify_agent_connector', { connectorId })
+}
+
+export async function getAgentConnectorManualInstructions(connectorId: ConnectorId): Promise<ConnectorManualInstructions> {
+  return invoke<ConnectorManualInstructions>('agent_connector_manual_instructions', { connectorId })
 }
 
 /**
- * getMcpStatus 读取所有支持 Agent 的 SuperDev MCP/skill 状态。
+ * getGenericMcpConnectionMaterial 读取未知本机 Agent 可参考的标准 stdio MCP 材料。
  *
  * 返回：
- *   - Agent 检测、配置文件、MCP server 和 skill 状态列表
+ *   - 打包 sidecar 的绝对命令、Agent URL 与标准 mcpServers JSON 示例
  *
  * 注意：
- *   - 只调用只读 Tauri command，不修改本地配置
+ *   - 该 API 不写配置，也不推断未知 Agent 的配置路径或 schema 方言
  */
-export async function getMcpStatus(): Promise<McpStatus[]> {
-  return invoke<McpStatus[]>('mcp_status')
-}
-
-/**
- * uninstallMcp 从指定 Agent 移除 SuperDev MCP 配置和 skill。
- *
- * 参数：
- *   - agent: Agent 标识，支持 claude-code、codex、cursor
- *
- * 返回：
- *   - 配置项和 skill 目录的移除结果
- *
- * 注意：
- *   - Tauri command 只删除 superdev MCP server，不删除其他 MCP 配置
- */
-export async function uninstallMcp(agent: CodingAgent): Promise<UninstallOutcome> {
-  return invoke<UninstallOutcome>('uninstall_mcp', { agent })
+export async function getGenericMcpConnectionMaterial(): Promise<GenericMcpConnectionMaterial> {
+  return invoke<GenericMcpConnectionMaterial>('generic_mcp_connection_material')
 }
 
 /**

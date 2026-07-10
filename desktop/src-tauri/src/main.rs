@@ -3,18 +3,149 @@
 mod agent;
 mod mcp_install;
 use agent::AgentProcess;
+use mcp_install::contracts::{ConnectorManualInstructions, ConnectorOperationOutcome};
+use mcp_install::registry::ConnectorRegistry;
 use mcp_install::{
-    detect_coding_agents, install_mcp, mcp_docs, mcp_install_hint, mcp_status, uninstall_mcp,
+    detect_coding_agents, generic_mcp_connection_material, install_mcp, mcp_docs, mcp_install_hint,
+    mcp_status, uninstall_mcp,
 };
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    Manager, Monitor, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder,
 };
+
+fn connector_context(
+    app: &tauri::AppHandle,
+) -> Result<mcp_install::registry::ConnectorRuntimeContext, String> {
+    mcp_install::connector_runtime_context(app)
+}
+
+/// run_connector_command 记录 Connector Tauri 边界的进入、完成和不可形成响应的失败。
+///
+/// 日志只包含开放 Connector ID、操作名、结果和耗时；错误文本、路径与配置材料不会输出。
+fn run_connector_command<T, F>(
+    connector_id: &str,
+    operation: &'static str,
+    command: F,
+) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    let started = Instant::now();
+    tracing::info!(
+        connector_id,
+        operation,
+        command_result = "started",
+        "connector command started"
+    );
+    let result = command();
+    match &result {
+        Ok(_) => tracing::info!(
+            connector_id,
+            operation,
+            command_result = "success",
+            duration_ms = started.elapsed().as_millis() as u64,
+            "connector command finished"
+        ),
+        Err(_) => tracing::error!(
+            connector_id,
+            operation,
+            command_result = "failed",
+            duration_ms = started.elapsed().as_millis() as u64,
+            "connector command failed"
+        ),
+    }
+    result
+}
+
+#[tauri::command]
+fn list_agent_connectors(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+) -> Result<Vec<mcp_install::contracts::AgentConnectorSummary>, String> {
+    run_connector_command("all", "list", || {
+        let ctx = connector_context(&app)?;
+        Ok(registry.list(&ctx))
+    })
+}
+
+#[tauri::command]
+fn install_agent_connector(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+    connector_id: String,
+    previous_outcome: Option<ConnectorOperationOutcome>,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_connector_command(&connector_id, "install", || {
+        let ctx = connector_context(&app)?;
+        registry
+            .install(&connector_id, &ctx, previous_outcome.as_ref())
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+fn update_agent_connector(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+    connector_id: String,
+    previous_outcome: Option<ConnectorOperationOutcome>,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_connector_command(&connector_id, "update", || {
+        let ctx = connector_context(&app)?;
+        registry
+            .update(&connector_id, &ctx, previous_outcome.as_ref())
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+fn uninstall_agent_connector(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+    connector_id: String,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_connector_command(&connector_id, "uninstall", || {
+        let ctx = connector_context(&app)?;
+        registry
+            .uninstall(&connector_id, &ctx)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+fn verify_agent_connector(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+    connector_id: String,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_connector_command(&connector_id, "verify", || {
+        let ctx = connector_context(&app)?;
+        registry
+            .verify(&connector_id, &ctx)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+fn agent_connector_manual_instructions(
+    app: tauri::AppHandle,
+    registry: State<'_, ConnectorRegistry>,
+    connector_id: String,
+) -> Result<ConnectorManualInstructions, String> {
+    run_connector_command(&connector_id, "manual_instructions", || {
+        let ctx = connector_context(&app)?;
+        registry
+            .manual_instructions(&connector_id, &ctx)
+            .map_err(|e| e.to_string())
+    })
+}
 use tauri_plugin_autostart::MacosLauncher;
 
 /// 最近一次显示 popover 的时间戳（ms），用于忽略打开瞬间的误触 Focused(false)。
@@ -375,6 +506,10 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(false)
+        .try_init();
     install_loopback_proxy_bypass();
 
     tauri::Builder::default()
@@ -389,15 +524,25 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             show_home_window,
+            list_agent_connectors,
+            install_agent_connector,
+            update_agent_connector,
+            uninstall_agent_connector,
+            verify_agent_connector,
+            agent_connector_manual_instructions,
             detect_coding_agents,
             install_mcp,
             mcp_install_hint,
+            generic_mcp_connection_material,
             mcp_status,
             uninstall_mcp,
             mcp_docs
         ])
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .setup(|app| {
+            let registry = ConnectorRegistry::builtin()
+                .map_err(|e| format!("connector registry init failed: {e}"))?;
+            app.manage(registry);
             let agent = AgentProcess::new();
             if let Err(e) = agent.start(app.handle()) {
                 eprintln!("[SuperDev] agent failed to start: {e}");
@@ -429,15 +574,12 @@ fn main() {
                     let _ = window.hide();
                 }
             }
-            tauri::WindowEvent::Focused(false) => {
-                if window.label() == "popover" {
-                    let elapsed =
-                        now_ms().saturating_sub(POPOVER_SHOWN_AT_MS.load(Ordering::SeqCst));
-                    if elapsed < POPOVER_FOCUS_GRACE_MS {
-                        return;
-                    }
-                    let _ = window.hide();
+            tauri::WindowEvent::Focused(false) if window.label() == "popover" => {
+                let elapsed = now_ms().saturating_sub(POPOVER_SHOWN_AT_MS.load(Ordering::SeqCst));
+                if elapsed < POPOVER_FOCUS_GRACE_MS {
+                    return;
                 }
+                let _ = window.hide();
             }
             _ => {}
         })
@@ -454,11 +596,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_loopback_proxy_bypass, should_disable_main_window_decorations_for_target,
+        append_loopback_proxy_bypass, run_connector_command,
+        should_disable_main_window_decorations_for_target,
         should_install_native_app_menu_for_target,
     };
 
     const MAIN_RS: &str = include_str!("main.rs");
+
+    #[test]
+    fn connector_command_boundary_preserves_success_and_error_results() {
+        let success = run_connector_command("fixture-json-agent", "verify", || Ok::<_, String>(7));
+        let failure = run_connector_command("fixture-json-agent", "verify", || {
+            Err::<(), _>("context unavailable".to_string())
+        });
+
+        assert_eq!(success, Ok(7));
+        assert_eq!(failure, Err("context unavailable".to_string()));
+    }
 
     fn install_app_menu_source() -> &'static str {
         let start = MAIN_RS

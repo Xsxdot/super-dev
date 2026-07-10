@@ -2,7 +2,7 @@
  * frontendDiagnostics 把面板诊断事件桥接到 agent。
  *
  * 职责：
- *   - 监听 window 上的 superdev:log-panel / superdev:log-evidence 自定义事件
+ *   - 监听 window 上的日志、证据、首次启动与 Connector 结构化诊断事件
  *   - 批量缓冲并周期性 POST 到 agent 的 /api/frontend-diagnostics
  *
  * 边界：
@@ -17,7 +17,12 @@ const MAX_BATCH = 200
 // 队列硬上限：agent 不可达时最多囤 1000 条，再多丢最旧（诊断数据可丢，内存不可爆）。
 const MAX_QUEUE = 1000
 
-const EVENT_NAMES = ['superdev:log-panel', 'superdev:log-evidence'] as const
+const EVENT_NAMES = [
+  'superdev:log-panel',
+  'superdev:log-evidence',
+  'superdev:onboarding',
+  'superdev:connector',
+] as const
 
 /**
  * installFrontendDiagnosticsBridge 安装打点桥。

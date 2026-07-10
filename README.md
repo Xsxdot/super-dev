@@ -94,7 +94,8 @@ See / Inspect / Operate is what AI does. Two things make it trustworthy and cont
 
 ### Zero-touch onboarding
 
-- Choose Claude Code, Codex, or Cursor on first launch.
+- Choose any detected built-in Connector on first launch. Claude Code, Codex, and Cursor are currently verified automatic Connectors; other local MCP-capable Agents can be connected manually with the standard stdio instructions.
+- Cloud or isolated-sandbox Agents cannot reach the local `127.0.0.1` endpoint; they require a future authenticated Remote MCP Gateway and are not presented with a misleading local configuration.
 - Install the MCP connection and the SuperDev guide skill from the desktop app.
 - Seed a local `superdev-sample` project automatically.
 - Copy one prompt to AI and watch the full loop: inspect logs, request approval, approve in the desktop app, and let MCP continue automatically.
@@ -116,7 +117,7 @@ pnpm tauri dev
 ### Try the AI safety demo
 
 1. Open SuperDev.
-2. Pick Claude Code, Codex, or Cursor during onboarding.
+2. Pick a detected Connector during onboarding, or open the manual setup instructions for another local MCP Agent.
 3. Install the MCP connection.
 4. Copy the generated prompt into your AI coding agent.
 5. When AI asks to restart the sample service, approve it in SuperDev Operation Approvals.
@@ -126,7 +127,7 @@ pnpm tauri dev
 
 ```mermaid
 flowchart TB
-    AI["Claude Code / Codex / Cursor"] --> MCP["superdev-mcp"]
+    AI["Built-in or manually configured local Agent"] --> MCP["superdev-mcp"]
     MCP --> Agent["Local SuperDev Agent (Go)"]
     Desktop["Desktop UI (Tauri + Vue)"] --> Agent
     Agent --> Runtime["Runtime Control"]

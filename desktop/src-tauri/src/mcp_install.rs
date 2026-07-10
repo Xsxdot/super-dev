@@ -6,19 +6,28 @@
 //   - 在写入前备份原文件并用临时文件原子替换
 //   - 随 MCP 配置安装 SuperDev 使用指南 skill
 //   - 检测 Claude Code、Codex、Cursor 是否已安装
+//   - 为其他本机 stdio MCP Agent 生成不带配置路径假设的标准连接材料
 //
 // 边界：
 //   - 不启动或探测 SuperDev agent
 //   - 不启动编程智能体进程
 //   - 不调用智能体 CLI
 //   - 不渲染前端状态
+//   - 不猜测未知 Agent 的私有配置位置、schema 方言、Skill 或 Hook
+
+pub mod compat;
+pub mod connectors;
+pub mod contracts;
+pub mod registry;
 
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::{AppHandle, Manager, State};
 
 const DEFAULT_AGENT_URL: &str = "http://127.0.0.1:57017";
 
@@ -35,7 +44,7 @@ pub struct MergeResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ConfigInstallOutcome {
+pub(crate) struct ConfigInstallOutcome {
     installed: bool,
     already_present: bool,
     agent: String,
@@ -96,6 +105,14 @@ pub struct InstallHint {
     pub config_path: String,
     pub manual_config: String,
     pub skill_target_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GenericMcpConnectionMaterial {
+    pub transport: String,
+    pub command: String,
+    pub agent_url: String,
+    pub manual_config: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -180,7 +197,7 @@ pub struct CodingAgentAvailability {
 }
 
 #[derive(Clone, Copy)]
-enum AgentKind {
+pub(crate) enum AgentKind {
     ClaudeCode,
     Codex,
     Cursor,
@@ -349,6 +366,27 @@ pub fn install_hint_for_paths(
     })
 }
 
+fn generic_mcp_connection_material_for_path(mcp_path: &Path) -> GenericMcpConnectionMaterial {
+    let command = mcp_path.to_string_lossy().to_string();
+    let agent_url = DEFAULT_AGENT_URL.to_string();
+    let manual_config = serde_json::to_string_pretty(&json!({
+        "mcpServers": {
+            "superdev": {
+                "command": command,
+                "env": { "SUPERDEV_AGENT_URL": agent_url }
+            }
+        }
+    }))
+    .expect("generic manual json");
+    GenericMcpConnectionMaterial {
+        transport: "stdio".to_string(),
+        command,
+        agent_url,
+        manual_config,
+    }
+}
+
+#[cfg(test)]
 pub fn detect_coding_agents_for_paths(
     home: &Path,
     path_value: Option<&OsStr>,
@@ -358,6 +396,7 @@ pub fn detect_coding_agents_for_paths(
     detect_coding_agents_for_search_dirs(home, &command_dirs, app_dirs)
 }
 
+#[cfg(test)]
 fn detect_coding_agents_for_search_dirs(
     home: &Path,
     command_dirs: &[PathBuf],
@@ -421,8 +460,12 @@ fn command_search_dirs(home: &Path, path_value: Option<&OsStr>) -> Vec<PathBuf> 
     dirs
 }
 
-fn executable_file_names(command: &str) -> Vec<String> {
-    if cfg!(windows) {
+pub(crate) fn executable_file_names(command: &str) -> Vec<String> {
+    executable_file_names_for_platform(command, cfg!(windows))
+}
+
+fn executable_file_names_for_platform(command: &str, is_windows: bool) -> Vec<String> {
+    if is_windows {
         vec![
             command.to_string(),
             format!("{command}.exe"),
@@ -599,12 +642,14 @@ fn read_json_config_status(
     let command = server
         .get("command")
         .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
+        .map(|value| value.to_string())
+        .or_else(|| Some(String::new()));
     let agent_url = server
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
+        .map(|value| value.to_string())
+        .or_else(|| Some(String::new()));
     (true, true, command, agent_url, None)
 }
 
@@ -633,12 +678,14 @@ fn read_codex_config_status(
     let command = server
         .get("command")
         .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
+        .map(|value| value.to_string())
+        .or_else(|| Some(String::new()));
     let agent_url = server
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
+        .map(|value| value.to_string())
+        .or_else(|| Some(String::new()));
     (true, true, command, agent_url, None)
 }
 
@@ -697,6 +744,166 @@ fn remove_codex_superdev_config(existing: Option<&str>) -> Result<MergeResult, S
     Ok(MergeResult { content, changed })
 }
 
+const TEMP_ARTIFACT_MARKER: &str = ".superdev-tmp-";
+static TEMP_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy)]
+enum TempArtifactKind {
+    File,
+    Directory,
+}
+
+impl TempArtifactKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "directory",
+        }
+    }
+}
+
+struct TempArtifactGuard {
+    path: PathBuf,
+    kind: TempArtifactKind,
+}
+
+impl TempArtifactGuard {
+    fn new(path: PathBuf, kind: TempArtifactKind) -> Self {
+        Self { path, kind }
+    }
+}
+
+impl Drop for TempArtifactGuard {
+    fn drop(&mut self) {
+        let result = match self.kind {
+            TempArtifactKind::File => fs::remove_file(&self.path),
+            TempArtifactKind::Directory => fs::remove_dir_all(&self.path),
+        };
+        if let Err(error) = result {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    artifact_kind = self.kind.label(),
+                    error_kind = ?error.kind(),
+                    "failed to clean SuperDev temporary artifact"
+                );
+            }
+        }
+    }
+}
+
+fn target_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn unique_temp_candidate(target: &Path) -> PathBuf {
+    let counter = TEMP_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let mut name = OsString::from(".");
+    name.push(target.file_name().unwrap_or_else(|| OsStr::new("superdev")));
+    name.push(format!(
+        "{TEMP_ARTIFACT_MARKER}{}-{nanos}-{counter}",
+        std::process::id()
+    ));
+    target.with_file_name(name)
+}
+
+fn create_unique_temp_file(target: &Path) -> Result<(PathBuf, fs::File), std::io::Error> {
+    for _ in 0..64 {
+        let temp = unique_temp_candidate(target);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "无法分配唯一临时文件",
+    ))
+}
+
+fn create_unique_temp_directory(target: &Path) -> Result<PathBuf, std::io::Error> {
+    for _ in 0..64 {
+        let temp = unique_temp_candidate(target);
+        match fs::create_dir(&temp) {
+            Ok(()) => return Ok(temp),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "无法分配唯一临时目录",
+    ))
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<(), std::io::Error> {
+    fs::File::open(target_parent(path))?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
+fn atomic_write_file_with_replace<F>(
+    target: &Path,
+    content: &[u8],
+    write_kind: &str,
+    replace: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path, &Path) -> Result<(), std::io::Error>,
+{
+    let (temp, mut file) = create_unique_temp_file(target)
+        .map_err(|error| format!("创建{write_kind}临时文件失败: {error}"))?;
+    let _guard = TempArtifactGuard::new(temp.clone(), TempArtifactKind::File);
+    file.write_all(content)
+        .map_err(|error| format!("写入临时{write_kind}失败: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("刷新临时{write_kind}失败: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("同步临时{write_kind}失败: {error}"))?;
+    // Windows 不允许在打开的临时文件句柄上完成替换，因此必须先显式关闭文件。
+    drop(file);
+    replace(&temp, target).map_err(|error| format!("替换{write_kind}失败: {error}"))?;
+    sync_parent_directory(target)
+        .map_err(|error| format!("同步{write_kind}所在目录失败: {error}"))?;
+    Ok(())
+}
+
+fn atomic_write_file(target: &Path, content: &[u8], write_kind: &str) -> Result<(), String> {
+    tracing::debug!(write_kind, "atomic file write started");
+    let started = std::time::Instant::now();
+    let result = atomic_write_file_with_replace(target, content, write_kind, |temp, target| {
+        fs::rename(temp, target)
+    });
+    match &result {
+        Ok(()) => tracing::info!(
+            write_kind,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "atomic file write finished"
+        ),
+        Err(error) => tracing::error!(
+            write_kind,
+            error,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "atomic file write failed"
+        ),
+    }
+    result
+}
+
 fn uninstall_from_path(
     path: &Path,
     remove: fn(Option<&str>) -> Result<MergeResult, String>,
@@ -712,13 +919,11 @@ fn uninstall_from_path(
     }
     let backup = backup_path(path);
     fs::copy(path, &backup).map_err(|err| format!("备份配置文件失败: {err}"))?;
-    let tmp = path.with_extension("superdev-tmp");
-    fs::write(&tmp, removed.content).map_err(|err| format!("写入临时配置失败: {err}"))?;
-    fs::rename(&tmp, path).map_err(|err| format!("替换配置文件失败: {err}"))?;
+    atomic_write_file(path, removed.content.as_bytes(), "配置文件")?;
     Ok((true, Some(backup.to_string_lossy().to_string())))
 }
 
-fn install_json_kind_to_path(
+pub(crate) fn install_json_kind_to_path(
     path: &Path,
     entry: &McpEntry,
     agent: &str,
@@ -732,7 +937,7 @@ fn install_json_kind_to_path(
     )
 }
 
-fn install_toml_kind_to_path(
+pub(crate) fn install_toml_kind_to_path(
     path: &Path,
     entry: &McpEntry,
     agent: &str,
@@ -779,9 +984,7 @@ fn install_to_path(
     } else {
         None
     };
-    let tmp = path.with_extension("superdev-tmp");
-    fs::write(&tmp, merged.content).map_err(|err| format!("写入临时配置失败: {err}"))?;
-    fs::rename(&tmp, path).map_err(|err| format!("替换配置文件失败: {err}"))?;
+    atomic_write_file(path, merged.content.as_bytes(), "配置文件")?;
     Ok(ConfigInstallOutcome {
         installed: true,
         already_present: false,
@@ -793,6 +996,21 @@ fn install_to_path(
 }
 
 fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome, String> {
+    install_skill_dir_with_ops(source, target, copy_dir_recursive, |temp, target| {
+        fs::rename(temp, target)
+    })
+}
+
+fn install_skill_dir_with_ops<C, R>(
+    source: &Path,
+    target: &Path,
+    copy: C,
+    replace: R,
+) -> Result<SkillInstallOutcome, String>
+where
+    C: FnOnce(&Path, &Path) -> Result<(), String>,
+    R: FnOnce(&Path, &Path) -> Result<(), std::io::Error>,
+{
     let source_files =
         collect_relative_files(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?;
     if source_files.is_empty() {
@@ -810,19 +1028,30 @@ fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("创建 skill 目录失败: {err}"))?;
     }
-    let tmp = target.with_extension("superdev-tmp");
-    if tmp.exists() {
-        fs::remove_dir_all(&tmp).map_err(|err| format!("清理临时 skill 目录失败: {err}"))?;
-    }
-    copy_dir_recursive(source, &tmp)?;
-    let backup_path = if target.exists() {
+    let temp = create_unique_temp_directory(target)
+        .map_err(|error| format!("创建唯一 skill 临时目录失败: {error}"))?;
+    let _guard = TempArtifactGuard::new(temp.clone(), TempArtifactKind::Directory);
+    copy(source, &temp)?;
+    let backup = if target.exists() {
         let backup = backup_dir_path(target);
         fs::rename(target, &backup).map_err(|err| format!("备份旧 skill 目录失败: {err}"))?;
-        Some(backup.to_string_lossy().to_string())
+        Some(backup)
     } else {
         None
     };
-    fs::rename(&tmp, target).map_err(|err| format!("替换 skill 目录失败: {err}"))?;
+    if let Err(error) = replace(&temp, target) {
+        // 旧目录已经移动到备份位置；最终替换失败时必须先恢复它，避免用户看到半完成状态。
+        if let Some(backup) = &backup {
+            if let Err(restore_error) = fs::rename(backup, target) {
+                return Err(format!(
+                    "替换 skill 目录失败: {error}; 恢复旧 skill 目录失败: {restore_error}"
+                ));
+            }
+        }
+        return Err(format!("替换 skill 目录失败: {error}"));
+    }
+    sync_parent_directory(target).map_err(|error| format!("同步 skill 目录失败: {error}"))?;
+    let backup_path = backup.map(|path| path.to_string_lossy().to_string());
     Ok(SkillInstallOutcome {
         installed: true,
         already_present: false,
@@ -1018,9 +1247,7 @@ fn install_session_hook(
     } else {
         None
     };
-    let tmp = hook_path.with_extension("superdev-hook-tmp");
-    fs::write(&tmp, merged.content).map_err(|err| format!("写入临时 hook 配置失败: {err}"))?;
-    fs::rename(&tmp, hook_path).map_err(|err| format!("替换 hook 配置失败: {err}"))?;
+    atomic_write_file(hook_path, merged.content.as_bytes(), "hook 配置文件")?;
     Ok(SessionHookOutcome {
         installed: true,
         already_present: false,
@@ -1077,12 +1304,10 @@ fn remove_session_hook(kind: AgentKind, hook_path: &Path) -> Result<bool, String
     }
     let backup = backup_path(hook_path);
     fs::copy(hook_path, &backup).map_err(|err| format!("备份 hook 配置失败: {err}"))?;
-    let tmp = hook_path.with_extension("superdev-hook-tmp");
     let out = serde_json::to_string_pretty(&root)
         .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
         + "\n";
-    fs::write(&tmp, out).map_err(|err| format!("写入临时 hook 配置失败: {err}"))?;
-    fs::rename(&tmp, hook_path).map_err(|err| format!("替换 hook 配置失败: {err}"))?;
+    atomic_write_file(hook_path, out.as_bytes(), "hook 配置文件")?;
     Ok(true)
 }
 
@@ -1453,6 +1678,30 @@ pub fn resolve_skill_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Err("找不到 SuperDev skill 资源目录，请检查桌面端打包配置".to_string())
 }
 
+/// connector_runtime_context 统一解析 Registry 所需的本机资源。
+///
+/// 解析失败只保留安全错误说明，调用方不得将路径或配置内容写入日志。
+pub fn connector_runtime_context(
+    app: &AppHandle,
+) -> Result<registry::ConnectorRuntimeContext, String> {
+    let home = resolve_user_home_dir()?;
+    let command_dirs = command_search_dirs(&home, std::env::var_os("PATH").as_deref());
+    let app_dirs = coding_agent_app_dirs(&home);
+    let mcp_binary = resolve_sidecar_binary(app, "superdev-mcp")?;
+    let (skill_source, skill_source_error) = match resolve_skill_source_dir(app) {
+        Ok(path) => (Some(path), None),
+        Err(error) => (None, Some(error)),
+    };
+    Ok(registry::ConnectorRuntimeContext::new(
+        home,
+        command_dirs,
+        app_dirs,
+        mcp_binary,
+        skill_source,
+        skill_source_error,
+    ))
+}
+
 /// mcp_status_for_paths 读取每个编程智能体的 SuperDev MCP/skill 安装状态。
 ///
 /// 参数：
@@ -1467,6 +1716,7 @@ pub fn resolve_skill_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
 ///
 /// 注意：
 ///   - 该函数只读配置文件和 skill 文件，不写入任何内容
+#[cfg(test)]
 pub fn mcp_status_for_paths(
     home: &Path,
     path_value: Option<&OsStr>,
@@ -1475,43 +1725,58 @@ pub fn mcp_status_for_paths(
     skill_source_error: Option<String>,
 ) -> Vec<McpStatus> {
     let command_dirs = command_search_dirs(home, path_value);
-    let detected = detect_coding_agents_for_search_dirs(home, &command_dirs, app_dirs);
     [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor]
         .into_iter()
         .map(|kind| {
-            let agent = kind.label().to_string();
-            let availability = detected
-                .iter()
-                .find(|status| status.agent == agent)
-                .expect("known agent availability");
-            let config_path = kind.config_path(home);
-            let skill_path = kind.skill_dir(home);
-            let hook_path = kind.session_hook_path(home);
-            let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
-                read_config_status(kind, &config_path);
-            let (skill_installed, skill_matches_bundled, skill_error) =
-                skill_status_for_target(skill_source, skill_source_error.clone(), &skill_path);
-            let hook_installed = session_hook_status(kind, &hook_path);
-            McpStatus {
-                agent,
-                agent_installed: availability.installed,
-                detection_path: availability.detection_path.clone(),
-                config_path: config_path.to_string_lossy().to_string(),
-                config_exists,
-                mcp_configured,
-                mcp_command,
-                agent_url,
-                config_error,
-                skill_path: skill_path.to_string_lossy().to_string(),
-                skill_installed,
-                skill_matches_bundled,
-                skill_error,
-                hook_config_path: hook_path.to_string_lossy().to_string(),
-                hook_installed,
-                hook_needs_trust: kind.hook_needs_trust(),
-            }
+            mcp_status_for_kind(
+                home,
+                &command_dirs,
+                app_dirs,
+                skill_source,
+                skill_source_error.clone(),
+                kind,
+            )
         })
         .collect()
+}
+
+/// mcp_status_for_kind 读取单个连接器的状态，供 Registry 适配器使用。
+pub fn mcp_status_for_kind(
+    home: &Path,
+    command_dirs: &[PathBuf],
+    app_dirs: &[PathBuf],
+    skill_source: Option<&Path>,
+    skill_source_error: Option<String>,
+    kind: AgentKind,
+) -> McpStatus {
+    let availability = kind.detect_installation(home, command_dirs, app_dirs);
+    let agent = kind.label().to_string();
+    let config_path = kind.config_path(home);
+    let skill_path = kind.skill_dir(home);
+    let hook_path = kind.session_hook_path(home);
+    let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
+        read_config_status(kind, &config_path);
+    let (skill_installed, skill_matches_bundled, skill_error) =
+        skill_status_for_target(skill_source, skill_source_error.clone(), &skill_path);
+    let hook_installed = session_hook_status(kind, &hook_path);
+    McpStatus {
+        agent,
+        agent_installed: availability.is_some(),
+        detection_path: availability.map(|path| path.to_string_lossy().into_owned()),
+        config_path: config_path.to_string_lossy().to_string(),
+        config_exists,
+        mcp_configured,
+        mcp_command,
+        agent_url,
+        config_error,
+        skill_path: skill_path.to_string_lossy().to_string(),
+        skill_installed,
+        skill_matches_bundled,
+        skill_error,
+        hook_config_path: hook_path.to_string_lossy().to_string(),
+        hook_installed,
+        hook_needs_trust: kind.hook_needs_trust(),
+    }
 }
 
 /// uninstall_mcp_for_paths 移除指定 Agent 的 SuperDev MCP 配置和 superdev skill。
@@ -1603,21 +1868,12 @@ pub fn mcp_docs_for_skill_source(skill_source: &Path) -> Result<McpDocs, String>
 ///
 /// 注意：
 ///   - 该 command 只读本地配置和打包资源，不修改文件
-pub fn mcp_status(app: AppHandle) -> Result<Vec<McpStatus>, String> {
-    let home = resolve_user_home_dir()?;
-    let path_value = std::env::var_os("PATH");
-    let skill_source = resolve_skill_source_dir(&app);
-    let (skill_source_path, skill_source_error) = match &skill_source {
-        Ok(path) => (Some(path.as_path()), None),
-        Err(err) => (None, Some(err.clone())),
-    };
-    Ok(mcp_status_for_paths(
-        &home,
-        path_value.as_deref(),
-        &coding_agent_app_dirs(&home),
-        skill_source_path,
-        skill_source_error,
-    ))
+pub fn mcp_status(
+    app: AppHandle,
+    registry: State<'_, registry::ConnectorRegistry>,
+) -> Result<Vec<McpStatus>, String> {
+    let context = connector_runtime_context(&app)?;
+    Ok(compat::statuses(registry.list(&context)))
 }
 
 #[tauri::command]
@@ -1631,9 +1887,16 @@ pub fn mcp_status(app: AppHandle) -> Result<Vec<McpStatus>, String> {
 ///
 /// 注意：
 ///   - 只删除 superdev 这一项，其他 MCP server 保持不变
-pub fn uninstall_mcp(agent: String) -> Result<UninstallOutcome, String> {
-    let home = resolve_user_home_dir()?;
-    uninstall_mcp_for_paths(&agent, &home)
+pub fn uninstall_mcp(
+    app: AppHandle,
+    registry: State<'_, registry::ConnectorRegistry>,
+    agent: String,
+) -> Result<UninstallOutcome, String> {
+    let context = connector_runtime_context(&app)?;
+    registry
+        .uninstall(&agent, &context)
+        .map(compat::uninstall_outcome)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1653,33 +1916,57 @@ pub fn mcp_docs(app: AppHandle) -> Result<McpDocs, String> {
 }
 
 #[tauri::command]
-pub fn install_mcp(app: AppHandle, agent: String) -> Result<InstallOutcome, String> {
-    let home = resolve_user_home_dir()?;
-    let mcp = resolve_sidecar_binary(&app, "superdev-mcp")?;
-    let skill_source = resolve_skill_source_dir(&app);
-    let (skill_source_path, skill_source_error) = match &skill_source {
-        Ok(path) => (Some(path.as_path()), None),
-        Err(err) => (None, Some(err.clone())),
-    };
-    install_mcp_for_paths_with_skill(&agent, &home, &mcp, skill_source_path, skill_source_error)
+pub fn install_mcp(
+    app: AppHandle,
+    registry: State<'_, registry::ConnectorRegistry>,
+    agent: String,
+) -> Result<InstallOutcome, String> {
+    let context = connector_runtime_context(&app)?;
+    registry
+        .install(&agent, &context, None)
+        .map(compat::install_outcome)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn mcp_install_hint(app: AppHandle, agent: String) -> Result<InstallHint, String> {
-    let home = resolve_user_home_dir()?;
-    let mcp = resolve_sidecar_binary(&app, "superdev-mcp")?;
-    install_hint_for_paths(&agent, &home, &mcp)
+pub fn mcp_install_hint(
+    app: AppHandle,
+    registry: State<'_, registry::ConnectorRegistry>,
+    agent: String,
+) -> Result<InstallHint, String> {
+    let context = connector_runtime_context(&app)?;
+    registry
+        .manual_instructions(&agent, &context)
+        .map(|instructions| compat::hint(&agent, instructions))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn detect_coding_agents() -> Result<Vec<CodingAgentAvailability>, String> {
-    let home = resolve_user_home_dir()?;
-    let path_value = std::env::var_os("PATH");
-    Ok(detect_coding_agents_for_paths(
-        &home,
-        path_value.as_deref(),
-        &coding_agent_app_dirs(&home),
-    ))
+/// generic_mcp_connection_material 返回未知本机 Agent 可参考的标准 stdio MCP 连接材料。
+///
+/// 参数：
+///   - app: Tauri AppHandle，用于解析随桌面端打包的 superdev-mcp 绝对路径
+///
+/// 返回：
+///   - transport、sidecar 绝对命令、Agent URL 与标准 mcpServers JSON 示例
+///
+/// 注意：
+///   - 该命令只提供传输材料，不猜测未知 Agent 的配置路径、schema 方言、Skill 或 Hook
+///   - 返回的 127.0.0.1 地址只适用于本机或同一执行环境，不适用于云端或隔离沙箱
+pub fn generic_mcp_connection_material(
+    app: AppHandle,
+) -> Result<GenericMcpConnectionMaterial, String> {
+    let mcp = resolve_sidecar_binary(&app, "superdev-mcp")?;
+    Ok(generic_mcp_connection_material_for_path(&mcp))
+}
+
+#[tauri::command]
+pub fn detect_coding_agents(
+    app: AppHandle,
+    registry: State<'_, registry::ConnectorRegistry>,
+) -> Result<Vec<CodingAgentAvailability>, String> {
+    let context = connector_runtime_context(&app)?;
+    Ok(compat::availability(registry.list(&context)))
 }
 
 #[cfg(test)]
@@ -1687,11 +1974,49 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn unique_temp_artifacts(dir: &Path) -> Vec<PathBuf> {
+        let mut artifacts = fs::read_dir(dir)
+            .expect("read temp parent")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".superdev-tmp-"))
+            })
+            .collect::<Vec<_>>();
+        artifacts.sort();
+        artifacts
+    }
+
     fn entry() -> McpEntry {
         McpEntry {
             command: "/Applications/SuperDev/superdev-mcp".to_string(),
             agent_url: "http://127.0.0.1:57017".to_string(),
         }
+    }
+
+    #[test]
+    fn generic_mcp_connection_material_uses_standard_json() {
+        let material = generic_mcp_connection_material_for_path(Path::new(
+            "/Applications/SuperDev.app/Contents/MacOS/superdev-mcp",
+        ));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&material.manual_config).expect("generic manual json");
+
+        assert_eq!(material.transport, "stdio");
+        assert_eq!(
+            material.command,
+            "/Applications/SuperDev.app/Contents/MacOS/superdev-mcp"
+        );
+        assert_eq!(material.agent_url, DEFAULT_AGENT_URL);
+        assert_eq!(
+            parsed["mcpServers"]["superdev"]["command"],
+            material.command
+        );
+        assert_eq!(
+            parsed["mcpServers"]["superdev"]["env"]["SUPERDEV_AGENT_URL"],
+            DEFAULT_AGENT_URL
+        );
     }
 
     #[test]
@@ -1925,6 +2250,97 @@ command = "gh"
             .contains("superdev"));
     }
 
+    #[test]
+    fn atomic_write_file_concurrent_writers_use_unique_temps_without_residue() {
+        let dir = tempfile_dir();
+        let target = dir.join("concurrent.json");
+        fs::write(&target, "original").expect("seed target");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let expected = (0..8)
+            .map(|index| format!("payload-{index}"))
+            .collect::<Vec<_>>();
+
+        let handles = expected
+            .iter()
+            .cloned()
+            .map(|payload| {
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    atomic_write_file(&target, payload.as_bytes(), "test_config")
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().expect("join writer").expect("atomic write");
+        }
+
+        let final_content = fs::read_to_string(&target).expect("read final target");
+        assert!(expected.contains(&final_content));
+        assert_eq!(unique_temp_artifacts(&dir), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn atomic_write_file_failure_preserves_original_and_cleans_temp() {
+        let dir = tempfile_dir();
+        let target = dir.join("protected.json");
+        fs::write(&target, "original").expect("seed target");
+
+        let error = atomic_write_file_with_replace(
+            &target,
+            b"replacement",
+            "test_config",
+            |_temp, _target| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected replace failure",
+                ))
+            },
+        )
+        .expect_err("replace must fail");
+
+        assert!(error.contains("替换"));
+        assert_eq!(
+            fs::read_to_string(&target).expect("read target"),
+            "original"
+        );
+        assert_eq!(unique_temp_artifacts(&dir), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn config_and_hook_mutations_do_not_reuse_fixed_legacy_temp_names() {
+        let dir = tempfile_dir();
+        let config = dir.join("mcp.json");
+        fs::write(&config, r#"{"mcpServers":{"github":{"command":"gh"}}}"#).expect("seed config");
+        let legacy_config_temp = config.with_extension("superdev-tmp");
+        fs::create_dir_all(&legacy_config_temp).expect("reserve legacy config temp");
+        fs::write(legacy_config_temp.join("marker"), "keep").expect("seed marker");
+
+        install_json_kind_to_path(&config, &entry(), "claude-code").expect("install config");
+        uninstall_from_path(&config, remove_json_superdev_config).expect("uninstall config");
+        assert_eq!(
+            fs::read_to_string(legacy_config_temp.join("marker")).expect("read config marker"),
+            "keep"
+        );
+
+        let skill_dir = dir.join("skills").join("superdev");
+        fs::create_dir_all(skill_dir.join("hooks")).expect("mkdir skill hooks");
+        let hook_path = dir.join("settings.json");
+        fs::write(&hook_path, r#"{"theme":"dark"}"#).expect("seed hook config");
+        let legacy_hook_temp = hook_path.with_extension("superdev-hook-tmp");
+        fs::create_dir_all(&legacy_hook_temp).expect("reserve legacy hook temp");
+        fs::write(legacy_hook_temp.join("marker"), "keep").expect("seed hook marker");
+
+        install_session_hook(AgentKind::ClaudeCode, &hook_path, &skill_dir).expect("install hook");
+        remove_session_hook(AgentKind::ClaudeCode, &hook_path).expect("remove hook");
+        assert_eq!(
+            fs::read_to_string(legacy_hook_temp.join("marker")).expect("read hook marker"),
+            "keep"
+        );
+        assert_eq!(unique_temp_artifacts(&dir), Vec::<PathBuf>::new());
+    }
+
     fn seed_skill_source(root: &Path) {
         let refs = root.join("references");
         fs::create_dir_all(&refs).expect("mkdir refs");
@@ -1994,6 +2410,57 @@ command = "gh"
         assert_eq!(
             fs::read_to_string(target.join("SKILL.md")).expect("read target"),
             "---\nname: superdev\n---\n# SuperDev\n"
+        );
+    }
+
+    #[test]
+    fn skill_replace_failure_restores_original_and_cleans_each_unique_temp() {
+        let dir = tempfile_dir();
+        let source = dir.join("source");
+        let target = dir.join("target").join("superdev");
+        seed_skill_source(&source);
+        fs::create_dir_all(&target).expect("mkdir original target");
+        fs::write(target.join("SKILL.md"), "original").expect("seed original skill");
+        let seen_temps = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
+
+        for _ in 0..2 {
+            let seen_temps_for_copy = seen_temps.clone();
+            let error = install_skill_dir_with_ops(
+                &source,
+                &target,
+                move |source, temp| {
+                    seen_temps_for_copy
+                        .lock()
+                        .expect("lock seen temps")
+                        .push(temp.to_path_buf());
+                    copy_dir_recursive(source, temp)
+                },
+                |_temp, _target| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected skill replace failure",
+                    ))
+                },
+            )
+            .expect_err("skill replace must fail");
+
+            assert!(error.contains("替换 skill 目录失败"));
+            assert_eq!(
+                fs::read_to_string(target.join("SKILL.md")).expect("read restored skill"),
+                "original"
+            );
+        }
+
+        let seen_temps = seen_temps.lock().expect("lock final seen temps");
+        assert_eq!(seen_temps.len(), 2);
+        assert_ne!(seen_temps[0], seen_temps[1]);
+        assert!(seen_temps
+            .iter()
+            .all(|temp| temp.parent() == target.parent()));
+        assert!(seen_temps.iter().all(|temp| !temp.exists()));
+        assert_eq!(
+            unique_temp_artifacts(target.parent().expect("target parent")),
+            Vec::<PathBuf>::new()
         );
     }
 
@@ -2310,6 +2777,23 @@ mod path_tests {
             user_home_dir_from_env(|key| vars.get(key).cloned(), true).expect("windows home");
 
         assert_eq!(home, PathBuf::from(r"C:\Users\superdev-user"));
+    }
+
+    #[test]
+    fn executable_name_matrix_covers_windows_and_unix_connectors() {
+        assert_eq!(
+            executable_file_names_for_platform("fixture-json-agent", false),
+            vec!["fixture-json-agent"]
+        );
+        assert_eq!(
+            executable_file_names_for_platform("fixture-json-agent", true),
+            vec![
+                "fixture-json-agent",
+                "fixture-json-agent.exe",
+                "fixture-json-agent.cmd",
+                "fixture-json-agent.bat",
+            ]
+        );
     }
 
     fn agent_status<'a>(

@@ -36,6 +36,29 @@ describe('frontendDiagnostics bridge', () => {
     expect(events[0].event).toBe('scroll_intent.transition')
   })
 
+  it('收集 onboarding 结构化事件并保留上下文', async () => {
+    window.dispatchEvent(new CustomEvent('superdev:onboarding', {
+      detail: {
+        scope: 'onboarding',
+        level: 'info',
+        event: 'agents.detect.succeeded',
+        at: '2026-07-10T08:00:00Z',
+        detectedCount: 2,
+      },
+    }))
+
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS)
+
+    expect(api.postFrontendDiagnostics).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.postFrontendDiagnostics).mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        scope: 'onboarding',
+        event: 'agents.detect.succeeded',
+        detectedCount: 2,
+      }),
+    ])
+  })
+
   it('上报失败时保留队列下轮重试，且队列有上限', async () => {
     vi.mocked(api.postFrontendDiagnostics).mockRejectedValueOnce(new Error('down'))
     window.dispatchEvent(new CustomEvent('superdev:log-panel', {

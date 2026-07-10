@@ -95,7 +95,8 @@ AI 改完前端，自己验证：导航、点击、输入、截图、读 console
 
 ### 零操作 onboarding
 
-- 首次打开引导页选择 Claude Code、Codex 或 Cursor。
+- 首次打开引导页选择检测到的内置 Connector。目前 Claude Code、Codex、Cursor 已验证支持自动接入；其他支持本地 MCP 的 Agent 可按标准 stdio 指引手动接入。
+- 云端或隔离沙箱 Agent 无法访问本机 `127.0.0.1` endpoint；它们需要未来带鉴权的 Remote MCP Gateway，界面不会误导用户复制本机配置。
 - 一键安装 MCP 连接和 SuperDev 使用指南 skill。
 - 自动落地 `superdev-sample` 示例项目。
 - 复制一段提示词给 AI，即可体验“看日志 -> 触发审批 -> 用户批准 -> MCP 自动继续执行”的闭环。
@@ -117,7 +118,7 @@ pnpm tauri dev
 ### 体验 AI 安全演示
 
 1. 打开 SuperDev。
-2. 在 onboarding 中选择 Claude Code、Codex 或 Cursor。
+2. 在 onboarding 中选择检测到的 Connector，或打开其他本地 MCP Agent 的手动接入指引。
 3. 点击安装 MCP 连接。
 4. 复制页面给出的提示词并发给 AI。
 5. 当 AI 请求重启示例服务时，在 SuperDev 的“操作审批”中批准。
@@ -127,7 +128,7 @@ pnpm tauri dev
 
 ```mermaid
 flowchart TB
-    AI["Claude Code / Codex / Cursor"] --> MCP["superdev-mcp"]
+    AI["内置或手动配置的本地 Agent"] --> MCP["superdev-mcp"]
     MCP --> Agent["Local SuperDev Agent (Go)"]
     Desktop["Desktop UI (Tauri + Vue)"] --> Agent
     Agent --> Runtime["Runtime Control"]

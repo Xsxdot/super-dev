@@ -1,118 +1,95 @@
 /**
- * McpManagerTab 测试设置页 MCP 管理能力。
+ * Dynamic Connector settings tests.
  *
- * 职责：
- *   - 验证 MCP 状态、安装更新、卸载和手动配置入口
- *   - 验证 MCP 功能说明和 skill 文档查看
- *
- * 边界：
- *   - 不调用真实 Tauri command
- *   - 不读写真实 Agent 配置或 skill 文件
+ * Responsibility: verify shared summaries, operation gating, grouping, and manual entry.
+ * Boundary: Tauri and filesystem operations are mocked.
  */
-import { mount, flushPromises } from '@vue/test-utils'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ask } from '@tauri-apps/plugin-dialog'
 import McpManagerTab from '@/components/Settings/McpManagerTab.vue'
 import { installTestI18n } from '@/test-utils/i18n'
-import {
-  getMcpDocs,
-  getMcpInstallHint,
-  getMcpStatus,
-  installMcp,
-  uninstallMcp,
-  type McpDocs,
-  type McpStatus,
-} from '@/api/mcpInstall'
+import * as api from '@/api/mcpInstall'
+import type { AgentConnectorSummary, ConnectorOperationOutcome, McpDocs } from '@/api/mcpInstall'
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  ask: vi.fn(),
-}))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ ask: vi.fn() }))
+vi.mock('@/api/mcpInstall', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/api/mcpInstall')>()
+  return {
+    ...original,
+    listAgentConnectors: vi.fn(),
+    installAgentConnector: vi.fn(),
+    updateAgentConnector: vi.fn(),
+    verifyAgentConnector: vi.fn(),
+    uninstallAgentConnector: vi.fn(),
+    getAgentConnectorManualInstructions: vi.fn(),
+    getGenericMcpConnectionMaterial: vi.fn(),
+    getMcpDocs: vi.fn(),
+  }
+})
 
-vi.mock('@/api/mcpInstall', () => ({
-  getMcpStatus: vi.fn(),
-  installMcp: vi.fn(),
-  uninstallMcp: vi.fn(),
-  getMcpInstallHint: vi.fn(),
-  getMcpDocs: vi.fn(),
-}))
-
-const codexStatus: McpStatus = {
-  agent: 'codex',
-  agent_installed: true,
-  detection_path: '/opt/homebrew/bin/codex',
-  config_path: '/Users/alice/.codex/config.toml',
-  config_exists: true,
-  mcp_configured: true,
-  mcp_command: '/Applications/SuperDev/superdev-mcp',
-  agent_url: 'http://127.0.0.1:57017',
-  config_error: null,
-  skill_path: '/Users/alice/.codex/skills/superdev',
-  skill_installed: true,
-  skill_matches_bundled: true,
-  skill_error: null,
-  hook_config_path: '/Users/alice/.codex/hooks.json',
-  hook_installed: true,
-  hook_needs_trust: true,
+function summary(id: string, detected: boolean, configured: boolean, builtIn = true): AgentConnectorSummary {
+  const allAutomatic = id !== 'manual-limited'
+  return {
+    descriptor: {
+      id,
+      display_name: id === 'fixture-json-agent' ? 'Fixture JSON Agent' : id === 'codex' ? 'Codex' : id,
+      built_in: builtIn,
+      platforms: ['macos'],
+      support_level: allAutomatic ? 'standard' : 'manual_limited',
+      integrations: [
+        { capability: 'mcp', support: allAutomatic ? 'automatic' : 'manual' },
+        { capability: 'skill', support: 'unsupported' },
+        { capability: 'session_hook', support: 'unsupported' },
+      ],
+      operations: ['install', 'update', 'verify', 'uninstall'].map(operation => ({
+        operation: operation as 'install' | 'update' | 'verify' | 'uninstall',
+        support: allAutomatic ? 'automatic' as const : 'manual' as const,
+      })),
+    },
+    state: {
+      detected,
+      detection_path: detected ? `/bin/${id}` : null,
+      integrations: [
+        { capability: 'mcp', status: configured ? 'configured' : 'missing', target_path: `/config/${id}` },
+        { capability: 'skill', status: 'missing' },
+        { capability: 'session_hook', status: 'missing' },
+      ],
+      requires_restart: configured,
+      message: configured ? 'Restart the Agent' : null,
+    },
+  }
 }
 
-const missingClaudeStatus: McpStatus = {
-  agent: 'claude-code',
-  agent_installed: false,
-  detection_path: null,
-  config_path: '/Users/alice/.claude.json',
-  config_exists: false,
-  mcp_configured: false,
-  mcp_command: null,
-  agent_url: null,
-  config_error: null,
-  skill_path: '/Users/alice/.claude/skills/superdev',
-  skill_installed: false,
-  skill_matches_bundled: false,
-  skill_error: null,
-  hook_config_path: '/Users/alice/.claude/settings.json',
-  hook_installed: false,
-  hook_needs_trust: false,
-}
+const summaries = [
+  summary('codex', true, true),
+  summary('fixture-json-agent', true, false, false),
+  summary('claude-code', false, false),
+  summary('manual-limited', true, false, false),
+]
 
-const cursorStatus: McpStatus = {
-  agent: 'cursor',
-  agent_installed: true,
-  detection_path: '/Applications/Cursor.app',
-  config_path: '/Users/alice/.cursor/mcp.json',
-  config_exists: true,
-  mcp_configured: false,
-  mcp_command: null,
-  agent_url: null,
-  config_error: null,
-  skill_path: '/Users/alice/.cursor/skills/superdev',
-  skill_installed: false,
-  skill_matches_bundled: false,
-  skill_error: null,
-  hook_config_path: '/Users/alice/.cursor/hooks.json',
-  hook_installed: false,
-  hook_needs_trust: false,
+const operationOutcome: ConnectorOperationOutcome = {
+  connector_id: 'codex', operation: 'update', result: 'unchanged', requires_restart: false,
+  integrations: [
+    { capability: 'mcp', result: 'already_present' },
+    { capability: 'skill', result: 'unsupported' },
+    { capability: 'session_hook', result: 'unsupported' },
+  ],
 }
 
 const docs: McpDocs = {
   summary_sections: [{
-    id: 'logs',
-    title: '日志与诊断',
-    description: '读取日志、搜索错误、采集诊断证据和 trace 线索。',
-    tools: [
-      { name: 'tail_logs', purpose: '查看近期日志', access: '读', reference: 'references/log-tools.md' },
-      { name: 'restart_service', purpose: '重启 deployment', access: '写, 需审批纪律', reference: 'references/safe-operations.md' },
-    ],
+    id: 'logs', title: '日志与诊断', description: '读取日志',
+    tools: [{ name: 'tail_logs', purpose: '查看近期日志', access: '读', reference: 'references/log-tools.md' }],
   }],
   documents: [
-    { id: 'skill', title: 'SKILL.md', path: '/bundle/SKILL.md', content: '# SuperDev MCP 使用指南' },
-    { id: 'references/log-tools.md', title: 'log-tools.md', path: '/bundle/references/log-tools.md', content: '# Log Tools\n`tail_logs`' },
+    { id: 'skill', title: 'SKILL.md', path: 'SKILL.md', content: '# SuperDev MCP 使用指南' },
+    { id: 'references/log-tools.md', title: 'log-tools.md', path: 'references/log-tools.md', content: '# Log Tools\n`tail_logs`' },
   ],
 }
 
 async function mountTab() {
-  const wrapper = mount(McpManagerTab, {
-    global: { plugins: [installTestI18n('zh-CN')] },
-  })
+  const wrapper = mount(McpManagerTab, { global: { plugins: [installTestI18n('zh-CN')] } })
   await flushPromises()
   return wrapper
 }
@@ -120,117 +97,94 @@ async function mountTab() {
 describe('McpManagerTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(getMcpStatus).mockResolvedValue([codexStatus, missingClaudeStatus, cursorStatus])
-    vi.mocked(getMcpDocs).mockResolvedValue(docs)
-    vi.mocked(installMcp).mockResolvedValue({
-      agent: 'codex',
-      installed: false,
-      already_present: true,
-      config_path: codexStatus.config_path,
-      manual_config: '',
-      backup_path: null,
-      skill: {
-        installed: false,
-        already_present: true,
-        target_path: codexStatus.skill_path,
-        backup_path: null,
-        error: null,
-      },
-      session_hook: {
-        installed: false,
-        already_present: true,
-        config_path: codexStatus.hook_config_path,
-        backup_path: null,
-        needs_trust: true,
-        error: null,
-      },
-    })
-    vi.mocked(uninstallMcp).mockResolvedValue({
-      agent: 'codex',
-      config_path: codexStatus.config_path,
-      removed_config: true,
-      config_backup_path: '/Users/alice/.codex/config.toml.superdev-bak',
-      skill_path: codexStatus.skill_path,
-      removed_skill: true,
-      hook_config_path: codexStatus.hook_config_path,
-      removed_hook: true,
-    })
-    vi.mocked(getMcpInstallHint).mockResolvedValue({
-      agent: 'codex',
-      config_path: codexStatus.config_path,
-      manual_config: '[mcp_servers.superdev]\ncommand = "/Applications/SuperDev/superdev-mcp"\n',
-      skill_target_path: codexStatus.skill_path,
+    vi.mocked(api.listAgentConnectors).mockResolvedValue(summaries)
+    vi.mocked(api.getMcpDocs).mockResolvedValue(docs)
+    vi.mocked(api.installAgentConnector).mockResolvedValue({ ...operationOutcome, connector_id: 'fixture-json-agent', operation: 'install', result: 'success' })
+    vi.mocked(api.updateAgentConnector).mockResolvedValue(operationOutcome)
+    vi.mocked(api.verifyAgentConnector).mockResolvedValue({ ...operationOutcome, operation: 'verify', result: 'success', message: 'Configuration verified' })
+    vi.mocked(api.uninstallAgentConnector).mockResolvedValue({ ...operationOutcome, operation: 'uninstall', result: 'success' })
+    vi.mocked(api.getAgentConnectorManualInstructions).mockResolvedValue({
+      summary: 'Configure Codex manually', steps: ['Open settings'], config_path: '/config/codex',
+      manual_config: '[mcp_servers.superdev]\ncommand = "/app/superdev-mcp"',
     })
     vi.mocked(ask).mockResolvedValue(true)
   })
 
-  it('展示 Agent MCP 状态和共享设置样式', async () => {
+  it('renders detected open IDs first and collapses undetected built-ins', async () => {
     const wrapper = await mountTab()
 
-    expect(wrapper.find('.settings-pane-header').exists()).toBe(true)
-    expect(wrapper.find('.settings-card-list').exists()).toBe(true)
     expect(wrapper.text()).toContain('Codex')
-    expect(wrapper.text()).toContain('/Users/alice/.codex/config.toml')
-    expect(wrapper.text()).toContain('/Applications/SuperDev/superdev-mcp')
-    expect(wrapper.text()).toContain('已配置')
-    expect(wrapper.text()).toContain('未检测到')
-    expect(wrapper.find('[data-test="mcp-install-claude-code"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Fixture JSON Agent')
+    expect(wrapper.find('[data-test="mcp-support-level-fixture-json-agent"]').text()).toBe('standard')
+    expect(wrapper.text()).not.toContain('claude-code')
+    expect(wrapper.find('[data-test="mcp-generic-manual-card"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="mcp-toggle-other-builtins"]').trigger('click')
+    expect(wrapper.text()).toContain('claude-code')
   })
 
-  it('安装更新后刷新状态', async () => {
+  it('uses update for configured MCP and install for missing MCP', async () => {
     const wrapper = await mountTab()
 
     await wrapper.find('[data-test="mcp-install-codex"]').trigger('click')
     await flushPromises()
+    await wrapper.find('[data-test="mcp-install-fixture-json-agent"]').trigger('click')
+    await flushPromises()
 
-    expect(installMcp).toHaveBeenCalledWith('codex')
-    expect(getMcpStatus).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('已是最新')
+    expect(api.updateAgentConnector).toHaveBeenCalledWith('codex')
+    expect(api.installAgentConnector).toHaveBeenCalledWith('fixture-json-agent')
+    expect(api.listAgentConnectors).toHaveBeenCalledTimes(3)
   })
 
-  it('卸载前确认并在确认后刷新状态', async () => {
+  it('gates every automatic operation from the descriptor', async () => {
+    const wrapper = await mountTab()
+
+    expect(wrapper.find('[data-test="mcp-install-manual-limited"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="mcp-verify-manual-limited"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="mcp-uninstall-manual-limited"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.find('[data-test="mcp-verify-codex"]').trigger('click')
+    await flushPromises()
+    expect(api.verifyAgentConnector).toHaveBeenCalledWith('codex')
+  })
+
+  it('confirms precise uninstall and refreshes the shared summary', async () => {
     const wrapper = await mountTab()
 
     await wrapper.find('[data-test="mcp-uninstall-codex"]').trigger('click')
     await flushPromises()
 
     expect(ask).toHaveBeenCalled()
-    expect(uninstallMcp).toHaveBeenCalledWith('codex')
-    expect(getMcpStatus).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('已卸载')
+    expect(api.uninstallAgentConnector).toHaveBeenCalledWith('codex')
+    expect(api.listAgentConnectors).toHaveBeenCalledTimes(2)
   })
 
-  it('取消卸载时不调用卸载 API', async () => {
-    vi.mocked(ask).mockResolvedValue(false)
-    const wrapper = await mountTab()
-
-    await wrapper.find('[data-test="mcp-uninstall-codex"]').trigger('click')
-    await flushPromises()
-
-    expect(uninstallMcp).not.toHaveBeenCalled()
-  })
-
-  it('展示手动配置片段', async () => {
+  it('shows connector-provided manual instructions', async () => {
     const wrapper = await mountTab()
 
     await wrapper.find('[data-test="mcp-manual-codex"]').trigger('click')
     await flushPromises()
 
-    expect(getMcpInstallHint).toHaveBeenCalledWith('codex')
+    expect(api.getAgentConnectorManualInstructions).toHaveBeenCalledWith('codex')
     expect(wrapper.text()).toContain('[mcp_servers.superdev]')
-    expect(wrapper.text()).toContain(codexStatus.skill_path)
   })
 
-  it('展示 MCP 功能说明并可切换 skill 文档', async () => {
+  it('reuses the local/cloud manual dialog for any other MCP Agent', async () => {
     const wrapper = await mountTab()
 
+    await wrapper.find('[data-test="mcp-open-generic-manual"]').trigger('click')
+    await wrapper.find('[data-test="manual-env-cloud"]').trigger('click')
+
+    expect(wrapper.find('[data-test="manual-cloud-limit"]').text()).toContain('Remote MCP Gateway')
+    expect(wrapper.find('[data-test="manual-config"]').exists()).toBe(false)
+  })
+
+  it('retains shared capability docs below the dynamic list', async () => {
+    const wrapper = await mountTab()
     expect(wrapper.text()).toContain('日志与诊断')
     expect(wrapper.text()).toContain('tail_logs')
-    expect(wrapper.text()).toContain('写, 需审批纪律')
 
     await wrapper.find('[data-test="mcp-doc-references/log-tools.md"]').trigger('click')
-
     expect(wrapper.find('[data-test="mcp-doc-content"]').text()).toContain('# Log Tools')
-    expect(wrapper.find('[data-test="mcp-doc-content"]').text()).toContain('tail_logs')
   })
 })

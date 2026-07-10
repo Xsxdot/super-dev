@@ -15,52 +15,57 @@ MCP 管理设置页签
 import { computed, onMounted, ref } from 'vue'
 import { ask } from '@tauri-apps/plugin-dialog'
 import { useI18n } from 'vue-i18n'
+import ManualAgentConnectDialog from '@/components/Onboarding/ManualAgentConnectDialog.vue'
+import { emitConnectorDiagnostic } from '@/lib/connectorDiagnostics'
 import {
   getMcpDocs,
-  getMcpInstallHint,
-  getMcpStatus,
-  installMcp,
-  uninstallMcp,
-  type CodingAgent,
-  type InstallHint,
+  getAgentConnectorManualInstructions,
+  listAgentConnectors,
+  installAgentConnector,
+  updateAgentConnector,
+  verifyAgentConnector,
+  uninstallAgentConnector,
+  type ConnectorId,
+  type ConnectorManualInstructions,
+  type AgentConnectorSummary,
   type McpDocs,
   type McpDocument,
-  type McpStatus,
 } from '@/api/mcpInstall'
 
-const agents: Array<{ id: CodingAgent, label: string }> = [
-  { id: 'claude-code', label: 'Claude Code' },
-  { id: 'codex', label: 'Codex' },
-  { id: 'cursor', label: 'Cursor' },
-]
-
 const { t } = useI18n()
-const statuses = ref<McpStatus[]>([])
+const statuses = ref<AgentConnectorSummary[]>([])
 const docs = ref<McpDocs | null>(null)
 const loading = ref(false)
 const docsLoading = ref(false)
 const error = ref('')
 const docsError = ref('')
 const selectedDocId = ref('overview')
-const manualHint = ref<InstallHint | null>(null)
+const manualHint = ref<ConnectorManualInstructions | null>(null)
 const manualAgentLabel = ref('')
-const operationAgent = ref<CodingAgent | null>(null)
-const operationMessage = ref<Record<CodingAgent, string>>({
-  'claude-code': '',
-  codex: '',
-  cursor: '',
-})
+const operationAgent = ref<ConnectorId | null>(null)
+const operationMessage = ref<Record<string, string>>({})
+const showOtherBuiltIns = ref(false)
+const manualDialogOpen = ref(false)
 
 const selectedDocument = computed<McpDocument | null>(() =>
   docs.value?.documents.find(doc => doc.id === selectedDocId.value) ?? null,
 )
 
 const agentRows = computed(() =>
-  agents.map(agent => ({
-    ...agent,
-    status: statuses.value.find(status => status.agent === agent.id) ?? null,
+  statuses.value.map(summary => ({
+    id: summary.descriptor.id,
+    label: summary.descriptor.display_name,
+    status: summary,
   })),
 )
+const detectedRows = computed(() => agentRows.value.filter(row => row.status.state.detected))
+const otherBuiltInRows = computed(() => agentRows.value.filter(row =>
+  !row.status.state.detected && row.status.descriptor.built_in,
+))
+const visibleRows = computed(() => [
+  ...detectedRows.value,
+  ...(showOtherBuiltIns.value ? otherBuiltInRows.value : []),
+])
 
 onMounted(() => {
   void refreshAll()
@@ -70,17 +75,23 @@ function errorMessage(errorValue: unknown): string {
   return errorValue instanceof Error ? errorValue.message : String(errorValue)
 }
 
-function skillLabel(status: McpStatus | null): string {
-  if (!status?.skill_installed) return t('settings.mcp.skillMissing')
-  if (status.skill_matches_bundled === true) return t('settings.mcp.skillCurrent')
-  return t('settings.mcp.skillOutdated')
+function skillLabel(status: AgentConnectorSummary | null): string {
+  return status?.state.integrations.find(i => i.capability === 'skill')?.status ?? 'unknown'
 }
 
 // hookLabel 描述 SessionStart hook 状态：未装 / 已装但 Codex 需手动信任 / 已装生效。
-function hookLabel(status: McpStatus | null): string {
-  if (!status?.hook_installed) return t('settings.mcp.hookMissing')
-  if (status.hook_needs_trust) return t('settings.mcp.hookNeedsTrust')
-  return t('settings.mcp.hookActive')
+function hookLabel(status: AgentConnectorSummary | null): string {
+  return status?.state.integrations.find(i => i.capability === 'session_hook')?.status ?? 'unknown'
+}
+
+function operationSupport(status: AgentConnectorSummary, operation: 'install' | 'update' | 'verify' | 'uninstall') {
+  return status.descriptor.operations.find(item => item.operation === operation)?.support ?? 'unsupported'
+}
+
+function mcpConfigured(status: AgentConnectorSummary): boolean {
+  return status.state.integrations.some(item =>
+    item.capability === 'mcp' && item.status === 'configured',
+  )
 }
 
 async function refreshAll() {
@@ -88,12 +99,22 @@ async function refreshAll() {
 }
 
 async function refreshStatus() {
+  const started = performance.now()
   loading.value = true
   error.value = ''
+  emitConnectorDiagnostic('list.started', 'info', { surface: 'settings' })
   try {
-    statuses.value = await getMcpStatus()
+    statuses.value = await listAgentConnectors()
+    emitConnectorDiagnostic('list.succeeded', 'info', {
+      surface: 'settings', connectorCount: statuses.value.length,
+      durationMs: Math.round(performance.now() - started),
+    })
   } catch (err) {
     error.value = t('settings.mcp.readFailed', { message: errorMessage(err) })
+    emitConnectorDiagnostic('list.failed', 'error', {
+      surface: 'settings', errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
   } finally {
     loading.value = false
   }
@@ -111,55 +132,119 @@ async function refreshDocs() {
   }
 }
 
-async function installOrUpdate(agent: CodingAgent) {
+async function installOrUpdate(agent: ConnectorId) {
+  const started = performance.now()
   operationAgent.value = agent
   operationMessage.value[agent] = ''
   try {
-    const outcome = await installMcp(agent)
+    const status = statuses.value.find(item => item.descriptor.id === agent)
+    if (!status) throw new Error('Connector status unavailable')
+    const updating = mcpConfigured(status)
+    const operation = updating ? 'update' : 'install'
+    emitConnectorDiagnostic(`${operation}.started`, 'info', { surface: 'settings', connectorId: agent })
+    const outcome = updating
+      ? await updateAgentConnector(agent)
+      : await installAgentConnector(agent)
     // 三者都已是最新才算「已是最新」；hook 是本次新装时应提示「已更新」。
     const allCurrent =
-      outcome.already_present && outcome.skill.already_present && outcome.session_hook.already_present
+      outcome.result === 'unchanged'
     operationMessage.value[agent] = allCurrent
       ? t('settings.mcp.installCurrent')
       : t('settings.mcp.installUpdated')
+    emitConnectorDiagnostic(`${operation}.completed`, outcome.result === 'failed' ? 'error' : outcome.result === 'partial' ? 'warn' : 'info', {
+      surface: 'settings', connectorId: agent, result: outcome.result,
+      capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
+      durationMs: Math.round(performance.now() - started),
+    })
     await refreshStatus()
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    emitConnectorDiagnostic('mutation.failed', 'error', {
+      surface: 'settings', connectorId: agent,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
   } finally {
     operationAgent.value = null
   }
 }
 
-async function confirmUninstall(agent: CodingAgent, label: string) {
+async function verifyConnector(agent: ConnectorId) {
+  const started = performance.now()
+  operationAgent.value = agent
+  operationMessage.value[agent] = ''
+  try {
+    emitConnectorDiagnostic('verify.started', 'info', { surface: 'settings', connectorId: agent })
+    const outcome = await verifyAgentConnector(agent)
+    operationMessage.value[agent] = outcome.message ?? outcome.result
+    emitConnectorDiagnostic('verify.completed', outcome.result === 'failed' ? 'error' : 'info', {
+      surface: 'settings', connectorId: agent, result: outcome.result,
+      capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
+      durationMs: Math.round(performance.now() - started),
+    })
+    await refreshStatus()
+  } catch (err) {
+    operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    emitConnectorDiagnostic('verify.failed', 'error', {
+      surface: 'settings', connectorId: agent,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
+  } finally {
+    operationAgent.value = null
+  }
+}
+
+async function confirmUninstall(agent: ConnectorId, label: string) {
   const confirmed = await ask(t('settings.mcp.uninstallConfirmMessage', { agent: label }), {
     title: t('settings.mcp.uninstallConfirmTitle'),
     kind: 'warning',
   })
   if (!confirmed) return
   operationAgent.value = agent
+  const started = performance.now()
   operationMessage.value[agent] = ''
   try {
-    const outcome = await uninstallMcp(agent)
-    const backup = outcome.config_backup_path
-      ? ` · ${t('settings.mcp.backupSaved', { path: outcome.config_backup_path })}`
-      : ''
-    operationMessage.value[agent] = `${t('settings.mcp.uninstallDone')}${backup}`
+    emitConnectorDiagnostic('uninstall.started', 'info', { surface: 'settings', connectorId: agent })
+    const outcome = await uninstallAgentConnector(agent)
+    operationMessage.value[agent] = t('settings.mcp.uninstallDone')
+    emitConnectorDiagnostic('uninstall.completed', outcome.result === 'failed' ? 'error' : 'info', {
+      surface: 'settings', connectorId: agent, result: outcome.result,
+      capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
+      durationMs: Math.round(performance.now() - started),
+    })
     await refreshStatus()
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    emitConnectorDiagnostic('uninstall.failed', 'error', {
+      surface: 'settings', connectorId: agent,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
   } finally {
     operationAgent.value = null
   }
 }
 
-async function showManualConfig(agent: CodingAgent, label: string) {
+async function showManualConfig(agent: ConnectorId, label: string) {
+  const started = performance.now()
   operationAgent.value = agent
   operationMessage.value[agent] = ''
   try {
-    manualHint.value = await getMcpInstallHint(agent)
+    emitConnectorDiagnostic('manual.started', 'info', { surface: 'settings', connectorId: agent })
+    manualHint.value = await getAgentConnectorManualInstructions(agent)
     manualAgentLabel.value = label
+    emitConnectorDiagnostic('manual.completed', 'info', {
+      surface: 'settings', connectorId: agent,
+      durationMs: Math.round(performance.now() - started),
+    })
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    emitConnectorDiagnostic('manual.failed', 'error', {
+      surface: 'settings', connectorId: agent,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
   } finally {
     operationAgent.value = null
   }
@@ -182,14 +267,14 @@ async function showManualConfig(agent: CodingAgent, label: string) {
     <div v-if="loading" class="settings-empty">{{ t('settings.mcp.loading') }}</div>
 
     <div class="settings-card-list mcp-agent-list">
-      <article v-for="row in agentRows" :key="row.id" class="settings-card">
+      <article v-for="row in visibleRows" :key="row.id" class="settings-card">
         <header class="settings-card-header mcp-card-header">
           <div>
             <h2 class="mcp-agent-name">{{ row.label }}</h2>
             <p class="mcp-agent-path">
               {{ t('settings.mcp.agentStatus') }}:
-              {{ row.status?.agent_installed ? t('settings.mcp.detected') : t('settings.mcp.notDetected') }}
-              <span v-if="row.status?.detection_path"> · {{ row.status.detection_path }}</span>
+              {{ row.status?.state.detected ? t('settings.mcp.detected') : t('settings.mcp.notDetected') }}
+              <span v-if="row.status?.state.detection_path"> · {{ row.status.state.detection_path }}</span>
             </p>
           </div>
           <div class="settings-toolbar">
@@ -197,16 +282,25 @@ async function showManualConfig(agent: CodingAgent, label: string) {
               class="settings-btn settings-btn-primary"
               :data-test="`mcp-install-${row.id}`"
               type="button"
-              :disabled="!row.status?.agent_installed || operationAgent === row.id"
+              :disabled="!row.status.state.detected || operationAgent === row.id || operationSupport(row.status, mcpConfigured(row.status) ? 'update' : 'install') !== 'automatic'"
               @click="installOrUpdate(row.id)"
             >
               {{ t('settings.mcp.installUpdate') }}
             </button>
             <button
+              class="settings-btn settings-btn-secondary"
+              :data-test="`mcp-verify-${row.id}`"
+              type="button"
+              :disabled="operationAgent === row.id || operationSupport(row.status, 'verify') !== 'automatic'"
+              @click="verifyConnector(row.id)"
+            >
+              {{ t('settings.mcp.verify') }}
+            </button>
+            <button
               class="settings-btn settings-btn-danger"
               :data-test="`mcp-uninstall-${row.id}`"
               type="button"
-              :disabled="operationAgent === row.id"
+              :disabled="operationAgent === row.id || operationSupport(row.status, 'uninstall') !== 'automatic'"
               @click="confirmUninstall(row.id, row.label)"
             >
               {{ t('settings.mcp.uninstall') }}
@@ -222,22 +316,28 @@ async function showManualConfig(agent: CodingAgent, label: string) {
             </button>
           </div>
         </header>
+        <div class="agent-capabilities">
+          <span :data-test="`mcp-support-level-${row.id}`">{{ row.status.descriptor.support_level ?? 'unsupported' }}</span>
+          <span v-for="integration in row.status.descriptor.integrations" :key="integration.capability">
+            {{ integration.capability }} · {{ integration.support }}
+          </span>
+        </div>
         <div class="mcp-detail-grid">
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.configFile') }}</span>
-            <code>{{ row.status?.config_path }}</code>
+            <code>{{ row.status?.state.integrations.find(i => i.capability === 'mcp')?.target_path }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>MCP</span>
-            <strong>{{ row.status?.mcp_configured ? t('settings.mcp.configured') : t('settings.mcp.notConfigured') }}</strong>
+            <strong>{{ row.status?.state.integrations.find(i => i.capability === 'mcp')?.status ?? 'unknown' }}</strong>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.command') }}</span>
-            <code>{{ row.status?.mcp_command ?? t('settings.mcp.noCommand') }}</code>
+            <code>{{ row.status?.state.message ?? t('settings.mcp.noCommand') }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.agentUrl') }}</span>
-            <code>{{ row.status?.agent_url ?? t('settings.mcp.noAgentUrl') }}</code>
+            <code>{{ row.status?.descriptor.docs_url ?? t('settings.mcp.noAgentUrl') }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.skill') }}</span>
@@ -245,7 +345,7 @@ async function showManualConfig(agent: CodingAgent, label: string) {
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.skillPath') }}</span>
-            <code>{{ row.status?.skill_path }}</code>
+            <code>{{ row.status?.state.integrations.find(i => i.capability === 'skill')?.target_path }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.hook') }}</span>
@@ -253,21 +353,41 @@ async function showManualConfig(agent: CodingAgent, label: string) {
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.hookPath') }}</span>
-            <code>{{ row.status?.hook_config_path }}</code>
+            <code>{{ row.status?.state.integrations.find(i => i.capability === 'session_hook')?.target_path }}</code>
           </div>
         </div>
-        <div v-if="row.status?.config_error" class="settings-alert settings-alert-danger mcp-inline-alert">
-          {{ row.status.config_error }}
+        <div v-if="row.status?.state.message" class="settings-alert settings-alert-warning mcp-inline-alert">
+          {{ row.status.state.message }}
         </div>
-        <div v-if="row.status?.skill_error" class="settings-alert settings-alert-warning mcp-inline-alert">
-          {{ row.status.skill_error }}
-        </div>
-        <div v-if="row.status?.hook_installed && row.status?.hook_needs_trust" class="settings-alert settings-alert-warning mcp-inline-alert">
-          {{ t('settings.mcp.hookTrustHint') }}
+        <div v-if="row.status.state.requires_restart" class="settings-alert settings-alert-warning mcp-inline-alert">
+          {{ t('settings.mcp.restartConnector', { agent: row.label }) }}
         </div>
         <div v-if="operationMessage[row.id]" class="settings-alert mcp-inline-alert">
           {{ operationMessage[row.id] }}
         </div>
+      </article>
+
+      <button
+        v-if="otherBuiltInRows.length > 0"
+        class="settings-btn settings-btn-secondary"
+        data-test="mcp-toggle-other-builtins"
+        type="button"
+        :aria-expanded="showOtherBuiltIns"
+        @click="showOtherBuiltIns = !showOtherBuiltIns"
+      >
+        {{ showOtherBuiltIns ? t('settings.mcp.hideOtherBuiltIns') : t('settings.mcp.showOtherBuiltIns') }}
+      </button>
+
+      <article class="settings-card" data-test="mcp-generic-manual-card">
+        <header class="settings-card-header mcp-card-header">
+          <div>
+            <h2 class="mcp-agent-name">{{ t('onboarding.manualAgentTitle') }}</h2>
+            <p class="mcp-agent-path">{{ t('onboarding.manualAgentDescription') }}</p>
+          </div>
+          <button class="settings-btn settings-btn-primary" type="button" data-test="mcp-open-generic-manual" @click="manualDialogOpen = true">
+            {{ t('settings.mcp.manualConfig') }}
+          </button>
+        </header>
       </article>
     </div>
 
@@ -346,9 +466,8 @@ async function showManualConfig(agent: CodingAgent, label: string) {
           </button>
         </header>
         <div class="settings-modal-body">
-          <p class="mcp-agent-path">{{ t('settings.mcp.configFile') }}: {{ manualHint.config_path }}</p>
           <pre class="settings-mono mcp-doc-content">{{ manualHint.manual_config }}</pre>
-          <p class="mcp-agent-path">{{ t('settings.mcp.skillPath') }}: {{ manualHint.skill_target_path }}</p>
+          <p class="mcp-agent-path">{{ t('settings.mcp.configFile') }}: {{ manualHint.config_path ?? t('settings.mcp.noCommand') }}</p>
         </div>
         <footer class="settings-modal-footer">
           <button class="settings-btn settings-btn-primary" type="button" @click="manualHint = null">
@@ -358,6 +477,7 @@ async function showManualConfig(agent: CodingAgent, label: string) {
       </div>
     </div>
   </div>
+  <ManualAgentConnectDialog :open="manualDialogOpen" @close="manualDialogOpen = false" @verified="manualDialogOpen = false" />
 </template>
 
 <style scoped>
@@ -382,6 +502,22 @@ async function showManualConfig(agent: CodingAgent, label: string) {
   font-size: 11px;
   line-height: 1.45;
   word-break: break-all;
+}
+
+.agent-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+}
+
+.agent-capabilities span {
+  border: 1px solid var(--border-secondary);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 3px 7px;
+  font-size: 10px;
 }
 
 .mcp-detail-grid {

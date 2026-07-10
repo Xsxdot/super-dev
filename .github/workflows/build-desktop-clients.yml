@@ -73,6 +73,10 @@ jobs:
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
+      - name: Run Connector registry smoke on Linux
+        working-directory: desktop/src-tauri
+        run: cargo test mcp_install::connectors -- --nocapture
+
       - name: Build Tauri Linux packages
         working-directory: desktop
         run: pnpm tauri build
@@ -135,6 +139,10 @@ jobs:
             test -f "desktop/src-tauri/target/debug/$name.exe"
           done
           test -f desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe
+
+      - name: Run Connector registry smoke on Windows
+        working-directory: desktop/src-tauri
+        run: cargo test mcp_install::connectors -- --nocapture
 
       - name: Build Tauri Windows packages
         working-directory: desktop

@@ -1,72 +1,101 @@
 /**
- * MCP install API client 测试。
+ * Connector API client tests.
  *
- * 职责：
- *   - 验证桌面端 MCP Tauri command 调用名称和参数
- *   - 验证新增状态、卸载、文档 API 的类型入口
- *
- * 边界：
- *   - 不调用真实 Tauri command
- *   - 不读写真实 Agent 配置
+ * Responsibility: protect the canonical open-ID Tauri command surface and payloads.
+ * Boundary: no real Tauri command or local Agent configuration is touched.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import {
-  detectCodingAgents,
+  getAgentConnectorManualInstructions,
+  getGenericMcpConnectionMaterial,
   getMcpDocs,
-  getMcpStatus,
-  installMcp,
-  uninstallMcp,
+  installAgentConnector,
+  listAgentConnectors,
+  uninstallAgentConnector,
+  updateAgentConnector,
+  verifyAgentConnector,
+  type ConnectorOperationOutcome,
 } from '@/api/mcpInstall'
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
-afterEach(() => {
-  vi.clearAllMocks()
-})
+const outcome: ConnectorOperationOutcome = {
+  connector_id: 'fixture-json-agent',
+  operation: 'install',
+  result: 'partial',
+  integrations: [
+    { capability: 'mcp', result: 'installed' },
+    { capability: 'skill', result: 'unsupported' },
+    { capability: 'session_hook', result: 'unsupported' },
+  ],
+  requires_restart: false,
+}
 
-describe('mcpInstall API', () => {
-  it('detects supported coding agents', async () => {
-    vi.mocked(invoke).mockResolvedValue([
-      { agent: 'codex', installed: true, detection_path: '/usr/local/bin/codex' },
-    ])
+afterEach(() => vi.clearAllMocks())
 
-    const result = await detectCodingAgents()
+describe('mcpInstall Connector API', () => {
+  it('lists summaries with an unknown open connector id', async () => {
+    vi.mocked(invoke).mockResolvedValue([{
+      descriptor: {
+        id: 'fixture-json-agent', display_name: 'Fixture JSON Agent', built_in: false,
+        platforms: ['linux'], support_level: 'standard',
+        integrations: [
+          { capability: 'mcp', support: 'automatic' },
+          { capability: 'skill', support: 'unsupported' },
+          { capability: 'session_hook', support: 'unsupported' },
+        ],
+        operations: [{ operation: 'install', support: 'automatic' }],
+      },
+      state: { detected: true, integrations: [], requires_restart: false },
+    }])
 
-    expect(result[0].agent).toBe('codex')
-    expect(invoke).toHaveBeenCalledWith('detect_coding_agents')
+    const result = await listAgentConnectors()
+
+    expect(result[0]?.descriptor.id).toBe('fixture-json-agent')
+    expect(invoke).toHaveBeenCalledWith('list_agent_connectors')
   })
 
-  it('reads MCP status', async () => {
-    vi.mocked(invoke).mockResolvedValue([{ agent: 'codex', mcp_configured: true }])
+  it('passes canonical install/update retry payloads', async () => {
+    vi.mocked(invoke).mockResolvedValue(outcome)
 
-    const result = await getMcpStatus()
+    await installAgentConnector('fixture-json-agent')
+    await updateAgentConnector('fixture-json-agent', outcome)
 
-    expect(result[0].agent).toBe('codex')
-    expect(invoke).toHaveBeenCalledWith('mcp_status')
-  })
-
-  it('installs and uninstalls MCP for an agent', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({ agent: 'codex' }).mockResolvedValueOnce({ agent: 'codex' })
-
-    await installMcp('codex')
-    await uninstallMcp('codex')
-
-    expect(invoke).toHaveBeenNthCalledWith(1, 'install_mcp', { agent: 'codex' })
-    expect(invoke).toHaveBeenNthCalledWith(2, 'uninstall_mcp', { agent: 'codex' })
-  })
-
-  it('reads MCP capability and skill docs', async () => {
-    vi.mocked(invoke).mockResolvedValue({
-      summary_sections: [{ id: 'logs', title: '日志', tools: [] }],
-      documents: [{ id: 'skill', title: 'SKILL.md', path: '/tmp/SKILL.md', content: '# SuperDev' }],
+    expect(invoke).toHaveBeenNthCalledWith(1, 'install_agent_connector', {
+      connectorId: 'fixture-json-agent', previousOutcome: null,
     })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'update_agent_connector', {
+      connectorId: 'fixture-json-agent', previousOutcome: outcome,
+    })
+  })
 
+  it('routes verify, uninstall, and manual instructions by open id', async () => {
+    vi.mocked(invoke).mockResolvedValue(outcome)
+
+    await verifyAgentConnector('fixture-json-agent')
+    await uninstallAgentConnector('fixture-json-agent')
+    await getAgentConnectorManualInstructions('fixture-json-agent')
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'verify_agent_connector', { connectorId: 'fixture-json-agent' })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'uninstall_agent_connector', { connectorId: 'fixture-json-agent' })
+    expect(invoke).toHaveBeenNthCalledWith(3, 'agent_connector_manual_instructions', { connectorId: 'fixture-json-agent' })
+  })
+
+  it('reads generic local material and shared docs', async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ transport: 'stdio', command: '/app/superdev-mcp', agent_url: 'http://127.0.0.1:57017', manual_config: '{"mcpServers":{}}' })
+      .mockResolvedValueOnce({
+        summary_sections: [{ id: 'logs', title: 'Logs', description: 'Read logs', tools: [] }],
+        documents: [{ id: 'skill', title: 'SKILL.md', path: 'SKILL.md', content: '# SuperDev' }],
+      })
+
+    const material = await getGenericMcpConnectionMaterial()
     const docs = await getMcpDocs()
 
-    expect(docs.documents[0].title).toBe('SKILL.md')
-    expect(invoke).toHaveBeenCalledWith('mcp_docs')
+    expect(material.transport).toBe('stdio')
+    expect(docs.documents[0]?.title).toBe('SKILL.md')
+    expect(invoke).toHaveBeenNthCalledWith(1, 'generic_mcp_connection_material')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'mcp_docs')
   })
 })
