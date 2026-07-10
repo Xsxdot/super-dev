@@ -34,7 +34,6 @@ pub(super) struct HermesConnector {
 
 impl HermesConnector {
     /// new 创建 Full 支持级别（三项集成均为 Automatic）的 Hermes 连接器。
-    #[allow(dead_code)] // Task 7 注册 builtin 时消费
     pub(super) fn new() -> Self {
         Self {
             descriptor: common::descriptor(

@@ -91,6 +91,69 @@ describe('onboardingStore', () => {
     expect(store.isAgentInstalled('cursor')).toBe(false)
   })
 
+  it('renders seven production connectors dynamically without a typescript whitelist', async () => {
+    const seven = [
+      summary('claude-code', true),
+      summary('codex', true),
+      summary('cursor', false),
+      summary('opencode', true),
+      summary('openclaw', false),
+      summary('hermes', true),
+      summary('kimi-code', false),
+    ].map((item, index) => {
+      // Standard connectors: MCP+Skill automatic, Hook manual.
+      if (['opencode', 'openclaw', 'kimi-code'].includes(item.descriptor.id)) {
+        item.descriptor.support_level = 'standard'
+        item.descriptor.integrations = [
+          { capability: 'mcp', support: 'automatic' },
+          { capability: 'skill', support: 'automatic' },
+          { capability: 'session_hook', support: 'manual' },
+        ]
+      }
+      item.descriptor.display_name = [
+        'Claude Code', 'Codex', 'Cursor', 'OpenCode', 'OpenClaw', 'Hermes', 'Kimi Code',
+      ][index]
+      return item
+    })
+    vi.spyOn(api, 'listAgentConnectors').mockResolvedValue(seven)
+    const store = useOnboardingStore()
+    await store.detectInstalledAgents()
+
+    expect(store.connectors.map(item => item.descriptor.id)).toEqual([
+      'claude-code', 'codex', 'cursor', 'opencode', 'openclaw', 'hermes', 'kimi-code',
+    ])
+    expect(store.connectors.map(item => item.descriptor.support_level)).toEqual([
+      'full', 'full', 'full', 'standard', 'standard', 'full', 'standard',
+    ])
+    expect(store.selectedAgents).toEqual(['claude-code', 'codex', 'opencode', 'hermes'])
+  })
+
+  it('preserves working mcp when kimi-code hook is needs_action and overall is partial', async () => {
+    vi.spyOn(api, 'listAgentConnectors').mockResolvedValue([summary('kimi-code', true)])
+    const partial: ConnectorOperationOutcome = {
+      connector_id: 'kimi-code',
+      operation: 'install',
+      result: 'partial',
+      integrations: [
+        { capability: 'mcp', result: 'installed', message: 'MCP ready' },
+        { capability: 'skill', result: 'installed' },
+        { capability: 'session_hook', result: 'needs_action', message: 'Hook needs manual setup' },
+      ],
+      requires_restart: true,
+      message: 'Partial: MCP works',
+    }
+    vi.spyOn(api, 'installAgentConnector').mockResolvedValue(partial)
+    const store = useOnboardingStore()
+    await store.detectInstalledAgents()
+    await store.installSelectedMcp()
+
+    expect(store.installOutcomes[0]?.result).toBe('partial')
+    expect(hasWorkingMcp(store.installOutcomes[0]!)).toBe(true)
+    expect(
+      store.installOutcomes[0]?.integrations.find(item => item.capability === 'session_hook')?.result,
+    ).toBe('needs_action')
+  })
+
   it('does not select an undetected connector', async () => {
     vi.spyOn(api, 'listAgentConnectors').mockResolvedValue([summary('cursor', false)])
     const store = useOnboardingStore()

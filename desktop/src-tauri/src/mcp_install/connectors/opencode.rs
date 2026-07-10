@@ -31,7 +31,6 @@ pub(super) struct OpenCodeConnector {
 
 impl OpenCodeConnector {
     /// new 创建标准支持级别的 OpenCode 连接器。
-    #[allow(dead_code)] // Task 7 注册 builtin 时消费
     pub(super) fn new() -> Self {
         Self {
             descriptor: common::descriptor(

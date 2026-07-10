@@ -123,6 +123,88 @@ describe('McpManagerTab', () => {
     expect(wrapper.text()).toContain('claude-code')
   })
 
+  it('renders seven production connectors from registry data without a whitelist', async () => {
+    const seven = [
+      summary('claude-code', true, false),
+      summary('codex', true, true),
+      summary('cursor', false, false),
+      summary('opencode', true, false),
+      summary('openclaw', false, false),
+      summary('hermes', true, false),
+      summary('kimi-code', false, false),
+    ].map((item, index) => {
+      const names = ['Claude Code', 'Codex', 'Cursor', 'OpenCode', 'OpenClaw', 'Hermes', 'Kimi Code']
+      const levels = ['full', 'full', 'full', 'standard', 'standard', 'full', 'standard'] as const
+      item.descriptor.display_name = names[index]
+      item.descriptor.support_level = levels[index]
+      if (levels[index] === 'standard') {
+        item.descriptor.integrations = [
+          { capability: 'mcp', support: 'automatic' },
+          { capability: 'skill', support: 'automatic' },
+          { capability: 'session_hook', support: 'manual' },
+        ]
+      }
+      return item
+    })
+    vi.mocked(api.listAgentConnectors).mockResolvedValue(seven)
+    const wrapper = await mountTab()
+
+    // Detected connectors visible; labels come from descriptor.display_name.
+    expect(wrapper.text()).toContain('Claude Code')
+    expect(wrapper.text()).toContain('OpenCode')
+    expect(wrapper.text()).toContain('Hermes')
+    expect(wrapper.find('[data-test="mcp-support-level-opencode"]').text()).toBe('standard')
+    expect(wrapper.find('[data-test="mcp-support-level-hermes"]').text()).toBe('full')
+    expect(wrapper.find('[data-test="mcp-install-opencode"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="mcp-toggle-other-builtins"]').trigger('click')
+    expect(wrapper.text()).toContain('OpenClaw')
+    expect(wrapper.text()).toContain('Kimi Code')
+    expect(wrapper.find('[data-test="mcp-support-level-kimi-code"]').text()).toBe('standard')
+  })
+
+  it('preserves working mcp state for partial kimi-code results with needs_action hook', async () => {
+    const kimiMissing = summary('kimi-code', true, false)
+    kimiMissing.descriptor.display_name = 'Kimi Code'
+    kimiMissing.descriptor.support_level = 'standard'
+    const kimiConfigured = summary('kimi-code', true, true)
+    kimiConfigured.descriptor.display_name = 'Kimi Code'
+    kimiConfigured.descriptor.support_level = 'standard'
+    kimiConfigured.state.integrations = [
+      { capability: 'mcp', status: 'configured', target_path: '/config/kimi-code', message: 'MCP ready' },
+      { capability: 'skill', status: 'configured', target_path: '/skills/superdev' },
+      { capability: 'session_hook', status: 'needs_action', message: 'Hook needs manual setup' },
+    ]
+    vi.mocked(api.listAgentConnectors)
+      .mockResolvedValueOnce([kimiMissing])
+      .mockResolvedValue([kimiConfigured])
+    vi.mocked(api.installAgentConnector).mockResolvedValue({
+      connector_id: 'kimi-code',
+      operation: 'install',
+      result: 'partial',
+      requires_restart: true,
+      integrations: [
+        { capability: 'mcp', result: 'installed', message: 'MCP ready' },
+        { capability: 'skill', result: 'installed' },
+        { capability: 'session_hook', result: 'needs_action', message: 'Hook needs manual setup' },
+      ],
+      message: 'Partial: MCP works',
+      manual_instructions: {
+        summary: 'Finish hook manually',
+        steps: ['Configure hook'],
+        manual_config: '{"mcpServers":{"superdev":{}}}',
+      },
+    })
+    const wrapper = await mountTab()
+    await wrapper.find('[data-test="mcp-install-kimi-code"]').trigger('click')
+    await flushPromises()
+
+    // Install still runs for partial (MCP succeeded); refresh shows configured MCP + needs_action hook.
+    expect(api.installAgentConnector).toHaveBeenCalledWith('kimi-code')
+    expect(wrapper.text()).toMatch(/configured|已配置|MCP ready/i)
+    expect(wrapper.text()).toMatch(/needs_action|Hook needs manual|手动/i)
+  })
+
   it('uses update for configured MCP and install for missing MCP', async () => {
     const wrapper = await mountTab()
 

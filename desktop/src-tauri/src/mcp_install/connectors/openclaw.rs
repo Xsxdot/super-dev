@@ -32,7 +32,6 @@ pub(super) struct OpenClawConnector {
 
 impl OpenClawConnector {
     /// new 使用系统进程执行器创建连接器。
-    #[allow(dead_code)] // Task 7 注册 builtin 时消费
     pub(super) fn new() -> Self {
         Self::with_runner(Arc::new(SystemCommandRunner))
     }

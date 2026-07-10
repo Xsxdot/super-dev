@@ -961,18 +961,55 @@ impl StandardJsonConnector {
     }
 }
 
-/// builtin 返回三个生产内置连接器，注册表负责并发门控。
+/// builtin 返回七个生产内置连接器，注册表负责并发门控。
+///
+/// 注册顺序是 deterministic first-launch 展示的一部分；连接器 ID 仍是开放字符串。
 pub fn builtin() -> Vec<Arc<dyn AgentConnector>> {
-    vec![
+    // 仅记录数量，不记录路径或 ID 列表中的敏感信息。
+    let connectors: Vec<Arc<dyn AgentConnector>> = vec![
         Arc::new(BuiltInConnector::new(AgentKind::ClaudeCode)),
         Arc::new(BuiltInConnector::new(AgentKind::Codex)),
         Arc::new(BuiltInConnector::new(AgentKind::Cursor)),
-    ]
+        Arc::new(opencode::OpenCodeConnector::new()),
+        Arc::new(openclaw::OpenClawConnector::new()),
+        Arc::new(hermes::HermesConnector::new()),
+        Arc::new(kimi_code::KimiCodeConnector::new()),
+    ];
+    tracing::debug!(
+        connector_count = connectors.len(),
+        "built-in agent connectors assembled"
+    );
+    connectors
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp_install::contracts::SupportLevel;
+
+    #[test]
+    fn builtin_registers_seven_connectors_in_stable_order_with_derived_levels() {
+        assert_eq!(
+            builtin()
+                .iter()
+                .map(|connector| {
+                    (
+                        connector.descriptor().id(),
+                        connector.descriptor().support_level(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("claude-code", Some(SupportLevel::Full)),
+                ("codex", Some(SupportLevel::Full)),
+                ("cursor", Some(SupportLevel::Full)),
+                ("opencode", Some(SupportLevel::Standard)),
+                ("openclaw", Some(SupportLevel::Standard)),
+                ("hermes", Some(SupportLevel::Full)),
+                ("kimi-code", Some(SupportLevel::Standard)),
+            ]
+        );
+    }
 
     #[test]
     fn builtin_descriptors_expose_automatic_hooks() {

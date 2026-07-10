@@ -30,7 +30,6 @@ pub(super) struct KimiCodeConnector {
 
 impl KimiCodeConnector {
     /// new 创建标准支持级别（自动 MCP+Skill，手动 Hook）的 Kimi Code 连接器。
-    #[allow(dead_code)] // Task 7 注册 builtin 时消费
     pub(super) fn new() -> Self {
         Self {
             descriptor: common::descriptor(
