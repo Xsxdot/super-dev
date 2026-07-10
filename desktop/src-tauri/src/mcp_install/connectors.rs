@@ -5,6 +5,7 @@
 
 mod common;
 mod kimi_code;
+mod opencode;
 mod process;
 
 use super::contracts::*;
