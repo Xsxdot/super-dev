@@ -10,9 +10,6 @@
 //   - 不读取环境变量、不启动外部进程
 //   - 不向日志写入配置路径或文件内容
 
-// 本模块的 pub(super) API 供后续连接器模块消费；Task 2 单独合入时允许暂时未引用。
-#![allow(dead_code)]
-
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
@@ -441,16 +438,6 @@ where
 /// path_string 将路径转为返回值用的拥有字符串。
 pub(super) fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-/// ensure_parent_dir 创建路径的父目录（若存在）。
-pub(super) fn ensure_parent_dir(path: &Path) -> Result<(), ConnectorError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            ConnectorError::new("config_parent_failed", format!("创建配置目录失败: {error}"))
-        })?;
-    }
-    Ok(())
 }
 
 /// test_dir 生成隔离的临时测试目录（避免线程名中的 `::`）。

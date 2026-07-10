@@ -165,8 +165,6 @@ impl ConnectorRuntimeContext {
     }
 
     /// environment 返回已知 Agent 配置路径覆盖。
-    // 第二波连接器会消费该 getter；当前仅测试与边界注入使用。
-    #[allow(dead_code)]
     pub fn environment(&self) -> &ConnectorEnvironment {
         &self.environment
     }

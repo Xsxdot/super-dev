@@ -10,7 +10,7 @@
 //   - 不把 argv、stdout、stderr 或完整路径写入用户可见错误/结构化日志字段
 //   - 不负责 OpenClaw 等具体 CLI 的业务语义
 
-// pub(super) API 由 OpenClaw 等连接器注入消费；本 Task 先落地可测后端。
+// stderr 等字段由调用方按需消费；保留完整输出摘要避免 API 半成品。
 #![allow(dead_code)]
 
 use crate::mcp_install::registry::ConnectorError;
