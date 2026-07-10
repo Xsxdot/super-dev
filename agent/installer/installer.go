@@ -69,6 +69,8 @@ type installMode string
 const (
 	installModeSystem          installMode = "system"
 	installModeUserLaunchAgent installMode = "user_launch_agent"
+	defaultVerifyAttempts                  = 90
+	defaultVerifyDelay                     = time.Second
 )
 
 // InstallError 带有失败阶段，方便 API 和 UI 展示具体原因。
@@ -832,24 +834,29 @@ func (i *Installer) verifyAttempts() int {
 	if i.opts.VerifyAttempts > 0 {
 		return i.opts.VerifyAttempts
 	}
-	return 12
+	return defaultVerifyAttempts
 }
 
 func (i *Installer) verifyDelay() time.Duration {
 	if i.opts.VerifyDelay > 0 {
 		return i.opts.VerifyDelay
 	}
-	return 500 * time.Millisecond
+	return defaultVerifyDelay
 }
 
 func verifyAgentReady(ctx context.Context, remote Remote, port int, attempts int, delay time.Duration) error {
 	cmd := fmt.Sprintf("curl -fsS http://127.0.0.1:%d/api/security/health >/dev/null", port)
 	var lastErr error
+	log.Printf("[installer] verifying agent readiness port=%d attempts=%d delay=%s", port, attempts, delay)
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if _, err := remote.Run(ctx, cmd); err != nil {
 			lastErr = err
 		} else {
+			log.Printf("[installer] agent readiness verified port=%d attempt=%d", port, attempt)
 			return nil
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			log.Printf("[installer] agent readiness still pending port=%d attempt=%d/%d err=%v", port, attempt, attempts, lastErr)
 		}
 		if attempt == attempts {
 			break
@@ -863,7 +870,8 @@ func verifyAgentReady(ctx context.Context, remote Remote, port int, attempts int
 		case <-timer.C:
 		}
 	}
-	return lastErr
+	log.Printf("[installer] agent readiness verification failed port=%d attempts=%d err=%v", port, attempts, lastErr)
+	return fmt.Errorf("agent not ready after %d attempts with %s delay: %w", attempts, delay, lastErr)
 }
 
 func stageErr(stage string, err error) error {

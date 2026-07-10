@@ -265,8 +265,9 @@ func TestManagerOpenReusesExistingDebugRuntime(t *testing.T) {
 			launchCount++
 			return AdapterProcess{PID: 40 + launchCount, Close: func() error { return nil }}, nil
 		},
-		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
-		ReservePort: func() (int, error) { return 41002 + launchCount, nil },
+		Dial:         func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort:  func() (int, error) { return 41002 + launchCount, nil },
+		ProcessAlive: func(int) bool { return true },
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 
@@ -304,8 +305,9 @@ func TestResolveLeaseCreatesWhenRuntimeRunningNoLease(t *testing.T) {
 		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
 			return AdapterProcess{PID: 1234, Close: func() error { return nil }}, nil
 		},
-		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
-		ReservePort: func() (int, error) { return 41004, nil },
+		Dial:         func(context.Context, string, time.Duration) (DAP, error) { return &fakeDAP{}, nil },
+		ReservePort:  func() (int, error) { return 41004, nil },
+		ProcessAlive: func(int) bool { return true },
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 	_, err := mgr.StartRuntime(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
@@ -444,6 +446,7 @@ func TestResolveLeaseAttachesRunningService(t *testing.T) {
 		listProcessGroup: func(pgid int) []procInfo {
 			return []procInfo{{pid: 100, comm: "go"}, {pid: 4321, comm: "api"}}
 		},
+		ProcessAlive: func(int) bool { return true },
 	})
 	project, service, dep := managerTestTarget(t.TempDir())
 
@@ -460,6 +463,76 @@ func TestResolveLeaseAttachesRunningService(t *testing.T) {
 		t.Fatalf("expected attached runtime after ResolveLease, got ok=%v origin=%q", ok, rt.Origin)
 	}
 	assert.Equal(t, 100, rt.ProcessID)
+}
+
+func TestTerminatedEventRetiresRuntimeAndSessions(t *testing.T) {
+	dap := &fakeDAP{}
+	adapterClosed := make(chan struct{})
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9001, Close: func() error { close(adapterClosed); return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41100, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		ProcessAlive: func(int) bool { return true },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	session, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	require.NoError(t, err)
+
+	// debuggee 退出（如服务被 restart）：adapter 发 terminated 事件。
+	// runtime 必须被反向失效并摘除，否则死 runtime 会被后续调试请求永久复用。
+	dap.emit(map[string]any{"event": "terminated"})
+
+	require.Eventually(t, func() bool {
+		_, ok := mgr.RuntimeStatus(dep.ID)
+		return !ok
+	}, 2*time.Second, 10*time.Millisecond, "runtime should be retired after terminated event")
+	select {
+	case <-adapterClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("adapter process should be closed on retire")
+	}
+	got, ok := mgr.Status(session.ID)
+	require.True(t, ok, "session should remain queryable after retire")
+	assert.False(t, got.Alive, "session should be closed after runtime retired")
+}
+
+func TestResolveLeaseRetiresDeadRuntimeAndReattaches(t *testing.T) {
+	dap := &fakeDAP{}
+	debuggeeAlive := true
+	adapterCloses := 0
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9001, Close: func() error { adapterCloses++; return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41101, nil },
+		RunningProcess: func(deploymentID string) (int, int, bool) {
+			return 100, 100, deploymentID == "dep-api-dev"
+		},
+		ProcessAlive: func(pid int) bool { return debuggeeAlive },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+
+	session, _, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, dap.attachCalls)
+	// 释放 lease 但保留 runtime（模拟一次 capture 结束后的常态）
+	require.NoError(t, mgr.Close(session.ID, CloseRequest{}))
+
+	// debuggee 死亡但 terminated 事件丢失（如 agent 错过事件/断连）：
+	// 复用前的 liveness 兜底必须发现进程已死，retire 后重新 attach。
+	debuggeeAlive = false
+
+	_, created, err := mgr.ResolveLease(context.Background(), project, service, dep, "")
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, 2, dap.attachCalls, "dead runtime must be retired and a fresh attach performed")
+	assert.GreaterOrEqual(t, adapterCloses, 1, "stale adapter should be closed on retire")
 }
 
 func TestResolveLeaseNativeAttachCarriesProgram(t *testing.T) {
@@ -1167,6 +1240,45 @@ func TestCaptureAtCoexistsWithPump(t *testing.T) {
 	assert.Equal(t, 42, snap.Line)
 }
 
+func TestCaptureAtClearsBreakpointsAfterCapture(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "main.go")
+	dap := &fakeDAP{
+		autoStoppedOnPause:    true,
+		autoStoppedOnContinue: true,
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     11,
+				"line":   20,
+				"source": map[string]any{"path": source},
+			}},
+		},
+		scopesResult: map[string]any{
+			"scopes": []map[string]any{{"variablesReference": 7}},
+		},
+		variablesResult: map[string]any{
+			"variables": []map[string]any{{"name": "answer", "value": "42"}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+
+	_, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+		SessionID: session.ID,
+		Source:    "main.go",
+		Line:      20,
+		ThreadID:  1,
+	})
+	require.NoError(t, err)
+
+	// 采集完成后必须清掉本次断点：残留断点会让后续命中它的请求把 debuggee
+	// 永久挂起（实测服务 /health 冻结），且没有任何人来 continue。
+	history := dap.breakpointsHistory()
+	require.NotEmpty(t, history)
+	assert.Equal(t, []int{20}, history[0])
+	assert.Empty(t, history[len(history)-1], "capture should clear breakpoints for the source before returning")
+	require.GreaterOrEqual(t, len(history), 2, "expected a second SetBreakpoints call clearing the lines")
+}
+
 func TestCaptureAtIgnoresAlreadyRunningContinueError(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "main.go")
@@ -1539,6 +1651,7 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 type fakeDAP struct {
 	mu                              sync.Mutex
 	breakpointsSource               string
+	breakpointsLines                [][]int
 	breakpointsResult               map[string]any
 	stackResult                     map[string]any
 	scopesResult                    map[string]any
@@ -1671,8 +1784,11 @@ func (f *fakeDAP) ConfigurationDone(context.Context) error {
 	}
 	return nil
 }
-func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, _ []int) (map[string]any, error) {
+func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, lines []int) (map[string]any, error) {
+	f.mu.Lock()
 	f.breakpointsSource = source
+	f.breakpointsLines = append(f.breakpointsLines, append([]int{}, lines...))
+	f.mu.Unlock()
 	if f.autoStoppedOnSetBreakpoints {
 		f.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": f.setBreakpointsThreadID}})
 	}
@@ -1680,6 +1796,15 @@ func (f *fakeDAP) SetBreakpoints(_ context.Context, source string, _ []int) (map
 		return f.breakpointsResult, nil
 	}
 	return map[string]any{}, nil
+}
+
+// breakpointsHistory 返回每次 SetBreakpoints 收到的 lines（按调用顺序）。
+func (f *fakeDAP) breakpointsHistory() [][]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	history := make([][]int, len(f.breakpointsLines))
+	copy(history, f.breakpointsLines)
+	return history
 }
 func (f *fakeDAP) Continue(_ context.Context, threadID int) error {
 	f.mu.Lock()

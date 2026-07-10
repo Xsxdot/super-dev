@@ -325,7 +325,7 @@ describe('AgentConfigPanel', () => {
     await flushPromises()
 
     expect(checkAgent).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('1/12')
+    expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('1/45')
 
     await vi.advanceTimersByTimeAsync(2000)
     await run
@@ -395,7 +395,7 @@ describe('AgentConfigPanel', () => {
       message: 'restarted',
     })
     const checkAgent = vi.spyOn(store, 'checkAgent')
-    for (let i = 0; i < 12; i += 1) {
+    for (let i = 0; i < 45; i += 1) {
       checkAgent.mockResolvedValueOnce(agent({ runtime: { installed: false, health: 'unreachable', reachable: false } }))
     }
     checkAgent.mockResolvedValue(agent())
@@ -411,7 +411,7 @@ describe('AgentConfigPanel', () => {
     await wrapper.find('input[value="push_over_ssh"]').setValue(true)
     const run = wrapper.find('[data-test="agent-install-push"]').trigger('click')
     await flushPromises()
-    for (let i = 1; i < 12; i += 1) {
+    for (let i = 1; i < 45; i += 1) {
       await vi.advanceTimersByTimeAsync(2000)
     }
     await run
@@ -422,7 +422,7 @@ describe('AgentConfigPanel', () => {
     await wrapper.find('[data-test="agent-install-security-retry"]').trigger('click')
     await flushPromises()
 
-    expect(checkAgent).toHaveBeenCalledTimes(13)
+    expect(checkAgent).toHaveBeenCalledTimes(46)
     expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
   })
 

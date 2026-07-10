@@ -79,12 +79,21 @@ func TestStartDeploymentRejectsLegacyModeField(t *testing.T) {
 	assert.Contains(t, resp["error"], "mode")
 }
 
-func TestResolveStartIntentDefaultsAndRestartKeepsDebug(t *testing.T) {
+func TestResolveStartIntentDefaultsToStartDev(t *testing.T) {
 	intent, err := resolveStartIntent("", "start", false)
 	require.NoError(t, err)
 	assert.Equal(t, intentStartDev, intent)
 
+	// restart 缺省一律回 start_dev，即使当前处于 debug runtime。
+	// 依据 2026-07-07 事故：restart 静默归一化 debug_launch 会 launch 一个
+	// dlv 重编译分身进程，分身抢端口/连真实依赖并 panic 僵死——debug_launch
+	// 必须显式请求，不能由"保持当前模式"推断。
 	intent, err = resolveStartIntent("", "restart", true)
+	require.NoError(t, err)
+	assert.Equal(t, intentStartDev, intent)
+
+	// 显式传 debug_launch 仍然生效。
+	intent, err = resolveStartIntent("debug_launch", "restart", false)
 	require.NoError(t, err)
 	assert.Equal(t, intentDebugLaunch, intent)
 

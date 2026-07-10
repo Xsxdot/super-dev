@@ -193,6 +193,15 @@ func TestInstallerWaitsForAgentReadyWhenVerifyIsTransientlyUnavailable(t *testin
 	assert.Equal(t, 2, countCommand(remote.commands, verifyCmd))
 }
 
+func TestInstallerDefaultVerifyWindowCoversSlowAgentStartup(t *testing.T) {
+	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {
+		return nil, nil
+	})
+
+	window := time.Duration(inst.verifyAttempts()) * inst.verifyDelay()
+	assert.GreaterOrEqual(t, window, 60*time.Second)
+}
+
 func TestInstallerRestartsLinuxAgent(t *testing.T) {
 	remote := &fakeRemote{outputs: []string{"Linux\n"}}
 	inst := NewWithRemoteFactory(Options{}, func(host model.Host) (Remote, error) {

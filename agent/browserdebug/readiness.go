@@ -80,6 +80,12 @@ func probeHTTPReadiness(ctx context.Context, client *http.Client, targetURL stri
 	if err != nil {
 		return false, err
 	}
+	// 显式带上 Accept: text/html，模拟浏览器整页导航。
+	// 前端 dev server(Vite 等)的 SPA history-fallback 只在请求头 Accept 含 text/html 时，
+	// 才把未知深链(甚至根路径 /)重写到 index.html 返回 200；Go net/http 默认不带 Accept，
+	// 会被当成静态资源请求而返回真实 404，导致 readiness 误判为 web_entrypoint_not_ready。
+	// 本探针的语义就是「浏览器能否打开该前端入口」，因此必须带浏览器视角的 Accept 头。
+	req.Header.Set("Accept", "text/html")
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, err

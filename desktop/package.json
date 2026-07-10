@@ -1,7 +1,7 @@
 {
   "name": "superdev-desktop",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "SuperDev desktop UI and Tauri shell.",
   "license": "Apache-2.0",
   "repository": {

@@ -100,6 +100,7 @@ let historyLoadToken = 0
 // settleToBottomToken 标记当前正在进行的「贴底复位」回合，后发起的复位会作废前一个回合的 rAF 循环。
 let settleToBottomToken = 0
 let draggingScrollbar = false
+let skippedFollowHistoryPrefetch = false
 
 // 贴底复位最多重试的帧数。行高异步测量通常 2-3 帧内沉降，给足余量兜底，超过则停止避免死循环。
 const SETTLE_TO_BOTTOM_MAX_FRAMES = 20
@@ -112,6 +113,17 @@ const currentDeploymentInfo = computed(() => {
   const deploymentId = deploymentIdFromSource(props.source)
   return deploymentId ? agentStore.serviceForDeployment(deploymentId) : undefined
 })
+
+// 初始历史边界只能来自本次历史页；合并后的 store 可能已经包含加载期间到达的实时日志。
+function initialBoundaryFromHistory(entries: DisplayLogEntry[]): HistoryBoundary | null {
+  if (entries.length === 0) return null
+  return entries.reduce((latest, entry) => {
+    const diff = new Date(entry.timestamp).getTime() - new Date(latest.timestamp).getTime()
+    if (diff > 0) return entry
+    if (diff === 0 && entry.id > latest.id) return entry
+    return latest
+  }, entries[0])
+}
 
 const evidenceSourceKey = computed(() => deploymentIdFromSource(props.source) ?? props.panelId)
 
@@ -167,11 +179,16 @@ async function subscribeDeployment(deploymentId: string) {
   deploymentLogStore.subscribe(deploymentId, props.projectId ?? null)
   initialHistoryBoundary.value = null
   const token = ++historyLoadToken
-  await deploymentLogStore.loadMoreHistory(deploymentId, INITIAL_HISTORY_LIMIT)
+  const initialHistory = await deploymentLogStore.loadMoreHistory(deploymentId, INITIAL_HISTORY_LIMIT)
   if (token !== historyLoadToken || deploymentId !== deploymentIdFromSource(props.source)) return
-  const logs = deploymentLogStore.getLogs(deploymentId)
-  const newest = logs[logs.length - 1]
+  const newest = initialBoundaryFromHistory(initialHistory.entries)
   initialHistoryBoundary.value = newest ? { timestamp: newest.timestamp, id: newest.id } : null
+  logPanelDiagnostic('debug', 'history.initial.loaded', {
+    deploymentId,
+    added: initialHistory.added,
+    boundaryId: newest?.id ?? null,
+    boundaryTime: newest?.timestamp ?? null,
+  })
   refreshDisplayImmediately()
   if (scrollIntent.value === 'follow-bottom') scrollMachine.jumpToBottom()
 }
@@ -644,9 +661,23 @@ function onScroll() {
   // 完成——scrollTop 有三个写入者（用户/贴底复位/tanstack 内部修正），从位置反推意图
   // 已被证伪五次，不再做。
   const range = virtualizer.value.range
-  if (range && range.startIndex < HISTORY_PREFETCH_START_INDEX) {
-    void tryLoadMoreHistory()
+  if (!range || range.startIndex >= HISTORY_PREFETCH_START_INDEX) {
+    skippedFollowHistoryPrefetch = false
+    return
   }
+  if (scrollMachine.intent === 'follow-bottom') {
+    // 新 tab 初始化和贴底复位都会产生 scroll 事件；没有用户上滚输入时不能触发历史锚点，
+    // 否则实时日志到达期间会被历史回填抢走视口，最终停在旧日志上。
+    if (!skippedFollowHistoryPrefetch) {
+      logPanelDiagnostic('debug', 'history.prefetch.skip_follow_bottom', {
+        rangeStart: range.startIndex,
+      })
+      skippedFollowHistoryPrefetch = true
+    }
+    return
+  }
+  skippedFollowHistoryPrefetch = false
+  void tryLoadMoreHistory()
 }
 
 function onWheel(e: WheelEvent) {

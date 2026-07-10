@@ -161,21 +161,27 @@ const (
 //
 // 参数：
 //   - requested: HTTP body 显式传入的 intent（start_dev/start_normal/debug_launch/空）
-//   - action: start | restart
-//   - currentlyDebug: 该 deployment 当前是否处于 debug runtime
+//   - action: start | restart（当前规则下两者缺省一致，参数保留供未来分叉与调用方语义自查）
+//   - currentlyDebug: 该 deployment 当前是否处于 debug runtime（保留参数：调用方已探测，
+//     未来若需对 debug 态 restart 做提示/拒绝可直接使用）
 //
-// 规则：显式优先；start 缺省 start_dev；restart 缺省保持当前模式
-// （当前在 debug runtime 则 debug_launch）。旧 mode 词汇直接报错，不静默映射。
+// 规则：显式优先；缺省一律 start_dev，debug_launch 只能显式请求。
+// 旧 mode 词汇直接报错，不静默映射。
+//
+// 为什么 restart 不再"保持当前 debug 模式"：2026-07-07 实测事故——用户在 debug
+// attach 会话存续期间 restart，intent 被静默归一化为 debug_launch，走 StartRuntime
+// 让 dlv 重新编译并 launch 了一个 __debug_bin 分身进程；分身连上真实 pg/redis/MQ、
+// 与未退出的旧进程抢端口后 panic，被 debugger 挂成僵尸残留 24 小时。restart 的
+// 用户意图是"把服务重启回正常运行"，切换进程语义必须显式。
 func resolveStartIntent(requested string, action string, currentlyDebug bool) (startIntent, error) {
+	_ = action
+	_ = currentlyDebug
 	switch strings.TrimSpace(requested) {
 	case "":
 	case string(intentStartDev), string(intentStartNormal), string(intentDebugLaunch):
 		return startIntent(strings.TrimSpace(requested)), nil
 	default:
 		return "", fmt.Errorf("invalid intent %q (expected start_dev, start_normal, or debug_launch)", requested)
-	}
-	if action == "restart" && currentlyDebug {
-		return intentDebugLaunch, nil
 	}
 	return intentStartDev, nil
 }

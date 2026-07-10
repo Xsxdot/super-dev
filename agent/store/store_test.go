@@ -135,6 +135,90 @@ func TestNewMigratesLegacySingleColumnFoldIndex(t *testing.T) {
 	}
 }
 
+// TestNewEnablesAutoVacuumOnLegacyDatabase 回归用例：旧生产库 auto_vacuum=NONE
+// （建于 incremental 未启用的版本）经 store.New 打开后，必须通过一次性 VACUUM
+// 把模式落地为 INCREMENTAL，否则 incremental_vacuum 永远空转、logs.db 文件永不收缩。
+func TestNewEnablesAutoVacuumOnLegacyDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/logs.db"
+
+	// 构造一个 auto_vacuum=NONE 的老库：显式关闭后建表，模拟历史遗留。
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		PRAGMA auto_vacuum=NONE;
+		CREATE TABLE log_entries (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			deployment_id TEXT     NOT NULL,
+			run_id        TEXT     NOT NULL,
+			timestamp     DATETIME NOT NULL,
+			level         TEXT     NOT NULL,
+			message       TEXT     NOT NULL,
+			stream        TEXT     NOT NULL,
+			repeat_count  INTEGER  NOT NULL DEFAULT 1,
+			fold_key      TEXT     NOT NULL DEFAULT ''
+		);
+	`)
+	require.NoError(t, err)
+	var legacyMode int
+	require.NoError(t, db.QueryRow(`PRAGMA auto_vacuum`).Scan(&legacyMode))
+	require.Equal(t, 0, legacyMode, "legacy db should start with auto_vacuum=NONE")
+	require.NoError(t, db.Close())
+
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// 迁移后可观测行为：直接查库确认 auto_vacuum 已落地为 INCREMENTAL(=2)。
+	verify, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	defer verify.Close()
+	var mode int
+	require.NoError(t, verify.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode))
+	assert.Equal(t, 2, mode, "store.New must enable auto_vacuum=INCREMENTAL on legacy db")
+}
+
+// TestDeleteToMaxBytesShrinksBelowLimit 回归用例：容量淘汰必须持续删到体积压回上限
+// 之下，而不是"删一批体积没降就放弃"。历史实现在页未即时回收时提前返回，导致每轮只删
+// 一小批就停、永远追不上写入；这里塞入远超上限的数据，断言最终体积确实回落到上限内。
+func TestDeleteToMaxBytesShrinksBelowLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/logs.db"
+	s, err := store.New(path)
+	require.NoError(t, err)
+	defer s.Close()
+
+	base := time.Now().UTC()
+	var batch []model.LogEntry
+	for i := 0; i < 2000; i++ {
+		batch = append(batch, model.LogEntry{
+			DeploymentID: "A",
+			RunID:        "r",
+			Timestamp:    base.Add(time.Duration(i) * time.Second),
+			Level:        "INFO",
+			Message:      fmt.Sprintf("padding line %d %s", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+			Stream:       "stdout",
+			RepeatCount:  1,
+		})
+	}
+	require.NoError(t, s.AppendBatch(batch))
+
+	before, err := s.SizeBytes()
+	require.NoError(t, err)
+	// 设一个明显低于当前体积的上限，强制淘汰要删掉大部分数据。
+	limit := before / 4
+
+	deleted, err := s.DeleteToMaxBytes(limit)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
+
+	after, err := s.SizeBytes()
+	require.NoError(t, err)
+	assert.LessOrEqualf(t, after, limit,
+		"capacity eviction must shrink db below limit: before=%d limit=%d after=%d deleted=%d",
+		before, limit, after, deleted)
+}
+
 func TestNewMigratesExistingLogEntriesBeforeCreatingFoldIndex(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/logs.db"

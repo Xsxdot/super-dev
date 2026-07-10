@@ -96,7 +96,7 @@ const installForm = reactive({
   tokenTTLMinutes: 30,
 })
 
-const connectCheckRetryAttempts = 12
+const connectCheckRetryAttempts = 45
 const connectCheckRetryDelayMS = 2000
 
 const isCreateMode = computed(() => props.mode === 'create')

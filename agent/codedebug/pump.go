@@ -7,7 +7,8 @@
 //
 // 边界：
 //   - 不向前端主动推送事件
-//   - 不持有 manager 锁，不管理 runtime 生命周期
+//   - 不持有 manager 锁，不管理 runtime 生命周期——terminated/exited 只通过
+//     onTerminated 回调通知外部（由 manager 决定如何反向失效 runtime）
 //   - 不解释变量和 scopes，只取顶层 stack frame 位置
 package codedebug
 
@@ -43,6 +44,10 @@ type eventPump struct {
 	store  *debuggerSnapshotStore
 	stopFn func()
 	done   chan struct{}
+	// onTerminated 在收到 terminated/exited 事件时触发（在 pump loop goroutine 内）。
+	// 回调方若要停 pump 或关闭资源必须异步执行——pump.stop 会等待 loop 退出，
+	// 同步调用会死锁。必须在 start 之前设置。
+	onTerminated func()
 }
 
 func newEventPump(dap pumpDAP, store *debuggerSnapshotStore) *eventPump {
@@ -86,6 +91,11 @@ func (p *eventPump) handle(ctx context.Context, event map[string]any) bool {
 		p.store.set(DebuggerSnapshot{State: "attached"})
 	case "terminated", "exited":
 		p.store.set(DebuggerSnapshot{State: "attached"})
+		// debuggee 已终止：通知外部反向失效 runtime，否则死 runtime 会被
+		// 后续调试请求永久复用（Alive 只在显式 Stop/Close 时翻转是不够的）。
+		if p.onTerminated != nil {
+			p.onTerminated()
+		}
 		if p.stopFn != nil {
 			p.stopFn()
 		}

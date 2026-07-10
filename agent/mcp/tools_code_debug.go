@@ -46,9 +46,8 @@ func (s *Server) setDebugBreakpointsTool(ctx context.Context, args json.RawMessa
 	if req.Source == "" {
 		return toolError("invalid_arguments", "source is required", nil), nil
 	}
-	if len(req.Lines) == 0 {
-		return toolError("invalid_arguments", "lines is required", nil), nil
-	}
+	// lines 允许为空：DAP setBreakpoints 是按 source 全量替换，空列表即清空
+	// 该文件全部断点——残留断点会把命中它的 debuggee 永久挂住，必须有清空手段。
 	result, err := s.client.SetCodeDebugBreakpoints(ctx, req)
 	if err != nil {
 		return clientToolError(err), nil

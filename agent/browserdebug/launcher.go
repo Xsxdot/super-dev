@@ -66,6 +66,16 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 		if err != nil {
 			return LaunchResult{}, err
 		}
+		// 持久化 profile 会残留上一次会话的 DevToolsActivePort 和 Singleton* 锁文件。
+		// 不清理会导致两类故障：
+		//   1. 新 Chrome 检测到残留 Singleton 锁，误以为已有实例持有该 profile，
+		//      handoff 后立即退出、不写新的 DevToolsActivePort；
+		//   2. waitDevToolsPort 读到上一次遗留的旧端口（对应的浏览器早已死亡），
+		//      拿着这个死端口去连 CDP，导致 "connection refused"。
+		// 因此持久化模式启动前必须清掉这些残留状态，保证读到的端口一定是本次进程写的。
+		if !removeProfileOnClose {
+			clearStalePersistentProfileState(profileDir)
+		}
 		args := []string{
 			"--remote-debugging-port=0",
 			"--user-data-dir=" + profileDir,
@@ -98,7 +108,7 @@ func NewChromiumLauncher(profileRoot string, httpClient *http.Client) Launcher {
 			exited.Store(true)
 			done <- err
 		}()
-		port, err := waitDevToolsPort(ctx, filepath.Join(profileDir, "DevToolsActivePort"))
+		port, err := waitDevToolsPort(ctx, filepath.Join(profileDir, "DevToolsActivePort"), &exited)
 		if err != nil {
 			cleanupStartedBrowser(cmd, done, profileDir, removeProfileOnClose)
 			log.Printf("[SuperDev] debug browser did not expose DevTools target=%s browser=%s error=%v", req.TargetURL, req.Browser.ID, err)
@@ -215,7 +225,7 @@ func cleanupProfileDir(profileDir string, removeProfile bool) {
 	}
 }
 
-func waitDevToolsPort(ctx context.Context, path string) (int, error) {
+func waitDevToolsPort(ctx context.Context, path string, exited *atomic.Bool) (int, error) {
 	deadline := time.NewTimer(devToolsPortTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -225,12 +235,42 @@ func waitDevToolsPort(ctx context.Context, path string) (int, error) {
 		if err == nil {
 			return port, nil
 		}
+		// 浏览器进程在写出 DevToolsActivePort 前就退出了（典型是 singleton handoff
+		// 或启动即崩溃）。此时再等下去只会一直读不到文件，直到超时；提前报错更快也更准确。
+		if exited != nil && exited.Load() {
+			return 0, fmt.Errorf("browser exited before exposing devtools port")
+		}
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		case <-deadline.C:
 			return 0, fmt.Errorf("devtools active port not produced")
 		case <-ticker.C:
+		}
+	}
+}
+
+// clearStalePersistentProfileState 清理持久化 Chromium profile 里可能残留的
+// DevToolsActivePort 和 Singleton 锁文件。
+//
+// 参数：
+//   - profileDir: 持久化 profile 的 user-data-dir
+//
+// 注意：
+//   - 仅用于持久化 profile；ephemeral profile 每次是全新目录，无需清理
+//   - 残留文件通常来自上一次会话未正常退出（崩溃、Cmd+Q、被 kill）
+//   - 清理失败不阻断启动：新进程仍可能覆盖这些文件，这里尽力而为并记日志
+func clearStalePersistentProfileState(profileDir string) {
+	stale := []string{
+		"DevToolsActivePort",
+		"SingletonLock",
+		"SingletonSocket",
+		"SingletonCookie",
+	}
+	for _, name := range stale {
+		target := filepath.Join(profileDir, name)
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			log.Printf("[SuperDev] clear stale profile state failed file=%s error=%v", target, err)
 		}
 	}
 }

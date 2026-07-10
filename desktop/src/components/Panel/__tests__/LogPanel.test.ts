@@ -191,6 +191,48 @@ describe('LogPanel', () => {
     expect(deploymentLogStore.loadMoreHistory).toHaveBeenCalledWith('dep-1', 200)
   })
 
+  it('首次历史边界只取初始历史页，不吞掉加载期间到达的实时日志', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    const history = makeLog(7)
+    const live = makeLog(8)
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([history, live])
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({
+      added: 1,
+      entries: [history],
+    })
+
+    mount(LogPanel, {
+      props: {
+        panelId: 'panel-initial-boundary',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+
+    expect(virtualizerMock.optionsRef.value.count).toBe(3)
+    expect(virtualizerMock.optionsRef.value.getItemKey(0)).toBe('live-7')
+    expect(String(virtualizerMock.optionsRef.value.getItemKey(1))).toContain('history-separator')
+    expect(virtualizerMock.optionsRef.value.getItemKey(2)).toBe('live-8')
+  })
+
   it('向上加载历史后保持原可见行位置并使用较小页大小', async () => {
     const deploymentLogStore = useDeploymentLogStore()
     const logs = ref([makeLog(10), makeLog(11), makeLog(12)])
@@ -239,7 +281,7 @@ describe('LogPanel', () => {
     Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true })
     Object.defineProperty(el, 'scrollTop', { value: 390, configurable: true })
 
-    await wrapper.find('.log-list').trigger('scroll')
+    await wrapper.find('.log-list').trigger('wheel', { deltaY: -120 })
     await Promise.resolve()
     await nextTick()
     await Promise.resolve()
@@ -247,6 +289,49 @@ describe('LogPanel', () => {
 
     expect(loadMoreHistory).toHaveBeenCalledWith('dep-1', 80)
     expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(5, { align: 'center' })
+  })
+
+  it('follow-bottom 下初始化/程序化 scroll 不触发向上历史补拉', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    const logs = ref([makeLog(10), makeLog(11), makeLog(12)])
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'hasMoreHistory').mockReturnValue(true)
+    vi.spyOn(deploymentLogStore, 'getLogs').mockImplementation(() => logs.value)
+    const loadMoreHistory = vi
+      .spyOn(deploymentLogStore, 'loadMoreHistory')
+      .mockResolvedValue({ added: 0, entries: [] })
+
+    const wrapper = mount(LogPanel, {
+      props: {
+        panelId: 'panel-follow-programmatic-scroll',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 100))
+    loadMoreHistory.mockClear()
+    virtualizerMock.range.startIndex = 0
+
+    await wrapper.find('.log-list').trigger('scroll')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(loadMoreHistory).not.toHaveBeenCalled()
   })
 
   it('向顶部插入历史时用稳定条目 id 作为虚拟行 key 并重新测量', async () => {
@@ -297,7 +382,7 @@ describe('LogPanel', () => {
     Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true })
     Object.defineProperty(el, 'scrollTop', { value: 390, configurable: true })
 
-    await wrapper.find('.log-list').trigger('scroll')
+    await wrapper.find('.log-list').trigger('wheel', { deltaY: -120 })
     await Promise.resolve()
     await nextTick()
     await Promise.resolve()

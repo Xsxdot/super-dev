@@ -213,6 +213,85 @@ func TestChromiumLauncherPersistentProfileReusesStableDirectory(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestChromiumLauncherPersistentProfileRejectsStaleDevToolsPort 复现持久化 profile 复用的核心 bug：
+// 上一次会话在 profile 里残留了指向已死端口的 DevToolsActivePort，本次新进程因 singleton handoff
+// 立即退出、不写新文件。launcher 必须识别这是死端口并报错，而不是把旧端口当成功返回。
+func TestChromiumLauncherPersistentProfileRejectsStaleDevToolsPort(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	// 立刻关掉，模拟旧端口对应的浏览器已经死亡：连接一定被拒。
+	stalePort := serverPort(t, cdp.URL)
+	cdp.Close()
+
+	dir := t.TempDir()
+	browserPath := filepath.Join(dir, "fake-browser")
+	// 这个 fake 模拟 singleton handoff：一旦 profile 里已存在 DevToolsActivePort 就直接退出，不写新文件。
+	writeHandoffChromium(t, browserPath)
+
+	profileRoot := filepath.Join(t.TempDir(), "profiles")
+	persistentDir := filepath.Join(profileRoot, "persistent", "chrome", "dep-admin-dev")
+	require.NoError(t, os.MkdirAll(persistentDir, 0o755))
+	// 预置一份上一次会话残留的、指向死端口的 DevToolsActivePort。
+	require.NoError(t, os.WriteFile(filepath.Join(persistentDir, "DevToolsActivePort"),
+		fmt.Appendf(nil, "%d\n/devtools/browser/stale\n", stalePort), 0o644))
+
+	launcher := NewChromiumLauncher(profileRoot, &http.Client{Timeout: time.Second})
+	_, err := launcher(context.Background(), LaunchRequest{
+		Browser:      BrowserRecord{ID: "chrome", Name: "Chrome", ExecutablePath: browserPath, Available: true},
+		TargetURL:    targetURL,
+		ProfileMode:  ProfileModePersistent,
+		ProfileScope: "dep/admin dev",
+	})
+	require.Error(t, err, "launcher 不能把残留的死端口当成功返回")
+}
+
+// TestChromiumLauncherClearsStaleSingletonState 验证持久化 profile 启动前会清掉残留的
+// DevToolsActivePort 与 Singleton* 文件，否则新 Chrome 会 handoff 给死进程后退出。
+func TestChromiumLauncherClearsStaleSingletonState(t *testing.T) {
+	targetURL := "http://127.0.0.1:3000/"
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json/version":
+			_, _ = fmt.Fprint(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/browser-1"}`)
+		case "/json/list":
+			_, _ = fmt.Fprintf(w, `[{"type":"page","url":%q,"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/page-1"}]`, targetURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdp.Close()
+
+	dir := t.TempDir()
+	browserPath := filepath.Join(dir, "fake-browser")
+	writeFakeChromium(t, browserPath, serverPort(t, cdp.URL), "")
+
+	profileRoot := filepath.Join(t.TempDir(), "profiles")
+	persistentDir := filepath.Join(profileRoot, "persistent", "chrome", "dep-admin-dev")
+	require.NoError(t, os.MkdirAll(persistentDir, 0o755))
+	stale := []string{"DevToolsActivePort", "SingletonLock", "SingletonSocket", "SingletonCookie"}
+	for _, name := range stale {
+		require.NoError(t, os.WriteFile(filepath.Join(persistentDir, name), []byte("stale"), 0o644))
+	}
+
+	launcher := NewChromiumLauncher(profileRoot, cdp.Client())
+	result, err := launcher(context.Background(), LaunchRequest{
+		Browser:      BrowserRecord{ID: "chrome", Name: "Chrome", ExecutablePath: browserPath, Available: true},
+		TargetURL:    targetURL,
+		ProfileMode:  ProfileModePersistent,
+		ProfileScope: "dep/admin dev",
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, result.Close()) }()
+
+	// Singleton* 应在启动前被清理；DevToolsActivePort 会被新进程重写为有效端口。
+	for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+		_, statErr := os.Stat(filepath.Join(persistentDir, name))
+		assert.True(t, os.IsNotExist(statErr), "%s 应在启动前被清理", name)
+	}
+}
+
 func TestCleanupStartedBrowserDoesNotBlockWhenWaitChannelStalls(t *testing.T) {
 	cmd := exec.Command("sleep", "60")
 	require.NoError(t, cmd.Start())
@@ -311,6 +390,34 @@ while true; do
   sleep 1
 done
 `, argsPath, argsPath, cdpPort)
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+}
+
+// writeHandoffChromium 写一个模拟 Chromium singleton handoff 的 fake：
+// 如果 profile 里已存在 DevToolsActivePort（说明有其它实例持有该 profile），就直接退出、不写新文件，
+// 复现真实 Chrome 检测到 singleton 后 handoff 给旧实例并立即退出的行为。
+func writeHandoffChromium(t *testing.T, path string) {
+	t.Helper()
+	script := `#!/bin/sh
+profile=""
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
+  esac
+done
+if [ -z "$profile" ]; then
+  exit 2
+fi
+if [ -f "$profile/DevToolsActivePort" ]; then
+  # 检测到已有 DevToolsActivePort：模拟 handoff 给旧实例后立即退出。
+  exit 0
+fi
+printf "%s\n" "12345" "unused" > "$profile/DevToolsActivePort"
+trap 'exit 0' TERM INT
+while true; do
+  sleep 1
+done
+`
 	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
 }
 

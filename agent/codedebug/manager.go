@@ -92,6 +92,9 @@ type ManagerOptions struct {
 	listProcessGroup processGroupLister
 	// SignalProcess 是包内测试 hook，用于替换真实 syscall.Kill。
 	SignalProcess func(pid int, signal string) error
+	// ProcessAlive 探测某 pid 的进程是否存活（复用 runtime 前的 liveness 兜底）。
+	// nil 时使用 OS 默认实现；测试可替换。
+	ProcessAlive func(pid int) bool
 }
 
 type runtimeRecord struct {
@@ -125,6 +128,7 @@ type Manager struct {
 	jsDebugServerPath    string
 	listProcessGroup     processGroupLister
 	signalProcess        signalProcessFunc
+	processAlive         func(pid int) bool
 	runtimes             map[string]*runtimeRecord
 	sessions             map[string]*sessionRecord
 	closed               map[string]Session
@@ -162,6 +166,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	if signalProcess == nil {
 		signalProcess = signalProcessOS
 	}
+	processAlive := opts.ProcessAlive
+	if processAlive == nil {
+		processAlive = processAliveOS
+	}
 	return &Manager{
 		launch:               launch,
 		dial:                 dial,
@@ -174,6 +182,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		jsDebugServerPath:    opts.JSDebugServerPath,
 		listProcessGroup:     listProcessGroup,
 		signalProcess:        signalProcess,
+		processAlive:         processAlive,
 		runtimes:             map[string]*runtimeRecord{},
 		sessions:             map[string]*sessionRecord{},
 		closed:               map[string]Session{},
@@ -245,26 +254,59 @@ func (m *Manager) ResolveLease(ctx context.Context, project model.Project, servi
 	if existing, ok := m.activeLeaseFor(deploymentID); ok {
 		return existing, false, nil
 	}
-	if runtime, ok := m.RuntimeStatus(deploymentID); ok && runtime.Alive {
+	if _, ok := m.reusableRuntime(deploymentID); ok {
 		return m.openLeaseOnRuntime(ctx, project, service, dep, approvalToken)
 	}
 	if attached, err := m.tryAttachRunning(ctx, project, service, dep); err != nil {
 		return Session{}, false, err
 	} else if attached {
-		return m.openLeaseOnRuntime(ctx, project, service, dep, approvalToken)
+		// attach 刚完成，runtime 必然新鲜，直接建 lease；不再过 liveness 探测
+		// （探测服务于"陈旧 runtime 复用"场景，这里多余且会误伤）。
+		if runtime, ok := m.RuntimeStatus(deploymentID); ok && runtime.Alive {
+			return m.createSessionForRuntime(runtime), true, nil
+		}
+		return Session{}, false, ErrRuntimeNotRunning
 	}
 	return Session{}, false, ErrRuntimeNotRunning
 }
 
-func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, provider Provider) (Runtime, error) {
+// reusableRuntime 返回可安全复用的 runtime 快照。
+//
+// 在 Alive 标记之外增加进程存活兜底：debuggee/adapter 死亡但 terminated 事件
+// 丢失时（agent 断连、事件竞态），Alive 会滞留 true——2026-07-07 实测这种死
+// runtime 会劫持后续所有调试请求。发现进程已死立即 retire，调用方回落到
+// 重新 attach 路径。
+func (m *Manager) reusableRuntime(deploymentID string) (Runtime, bool) {
+	deploymentID = strings.TrimSpace(deploymentID)
 	m.mu.Lock()
-	if existing, ok := m.runtimes[cfg.Target.DeploymentID]; ok && existing.Alive {
-		existing.LastUsedAt = m.now().UTC()
-		runtime := existing.Runtime
+	record, ok := m.runtimes[deploymentID]
+	if !ok || !record.Alive {
 		m.mu.Unlock()
-		return runtime, nil
+		return Runtime{}, false
 	}
+	runtime := record.Runtime
+	pid := record.ProcessID
 	m.mu.Unlock()
+	if pid > 0 && m.processAlive != nil && !m.processAlive(pid) {
+		log.Printf("[codedebug] runtime process dead on reuse check deployment=%s pid=%d, retiring", deploymentID, pid)
+		m.retireRuntime(deploymentID, record)
+		return Runtime{}, false
+	}
+	return runtime, true
+}
+
+func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, provider Provider) (Runtime, error) {
+	// 复用前做 liveness 兜底：进程已死的 runtime 会被 retire，走下方新建路径。
+	if _, ok := m.reusableRuntime(cfg.Target.DeploymentID); ok {
+		m.mu.Lock()
+		if existing, stillThere := m.runtimes[cfg.Target.DeploymentID]; stillThere && existing.Alive {
+			existing.LastUsedAt = m.now().UTC()
+			runtime := existing.Runtime
+			m.mu.Unlock()
+			return runtime, nil
+		}
+		m.mu.Unlock()
+	}
 
 	port, err := m.reserve()
 	if err != nil {
@@ -313,25 +355,9 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 			runtimeDAP = childDAP
 		}
 	}
+	now := m.now().UTC()
 	store := &debuggerSnapshotStore{}
 	pump := newEventPump(runtimeDAP, store)
-	pump.start(context.Background())
-	if cfg.StopOnEntry {
-		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := runtimeDAP.WaitForStopped(waitCtx)
-		cancel()
-		if err != nil {
-			pump.stop()
-			_ = runtimeDAP.Close()
-			if rootDAP != runtimeDAP {
-				_ = rootDAP.Close()
-			}
-			_ = closeProcessIfPresent(closeProcess)
-			return Runtime{}, err
-		}
-	}
-
-	now := m.now().UTC()
 	record := &runtimeRecord{
 		Runtime: Runtime{
 			ProjectID:    cfg.Target.ProjectID,
@@ -362,8 +388,35 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 			return closeProcessIfPresent(closeProcess)
 		},
 	}
+	// 回调必须在 pump.start 之前挂上，否则启动即死的 debuggee 的 terminated
+	// 事件会漏过反向失效。retire 需等 pump loop 退出，必须异步。
+	pump.onTerminated = func() {
+		go m.retireRuntime(cfg.Target.DeploymentID, record)
+	}
+	pump.start(context.Background())
+	if cfg.StopOnEntry {
+		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := runtimeDAP.WaitForStopped(waitCtx)
+		cancel()
+		if err != nil {
+			pump.stop()
+			_ = runtimeDAP.Close()
+			if rootDAP != runtimeDAP {
+				_ = rootDAP.Close()
+			}
+			_ = closeProcessIfPresent(closeProcess)
+			return Runtime{}, err
+		}
+	}
 
 	m.mu.Lock()
+	// debuggee 在启动窗口内已终止（retireRuntime 抢先翻转 Alive）：拒绝登记
+	// 死 runtime，否则它会以 Alive=true 一直留在 map 里被后续调试复用。
+	if !record.Alive {
+		m.mu.Unlock()
+		_ = closeProcessIfPresent(record.close)
+		return Runtime{}, fmt.Errorf("debug runtime terminated during startup: %w", ErrRuntimeNotRunning)
+	}
 	m.runtimes[cfg.Target.DeploymentID] = record
 	m.mu.Unlock()
 	return record.Runtime, nil
@@ -615,7 +668,6 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 	now := m.now().UTC()
 	store := &debuggerSnapshotStore{}
 	pump := newEventPump(runtimeDAP, store)
-	pump.start(context.Background())
 	record := &runtimeRecord{
 		Runtime: Runtime{
 			ProjectID:    cfg.Target.ProjectID,
@@ -648,7 +700,18 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		}
 		return closeProcessIfPresent(process.Close)
 	}
+	// 回调必须在 pump.start 之前挂上；retire 需等 pump loop 退出，必须异步。
+	pump.onTerminated = func() {
+		go m.retireRuntime(cfg.Target.DeploymentID, record)
+	}
+	pump.start(context.Background())
 	m.mu.Lock()
+	// debuggee 在 attach 窗口内已终止：拒绝登记死 runtime。
+	if !record.Alive {
+		m.mu.Unlock()
+		_ = closeProcessIfPresent(record.close)
+		return Runtime{}, fmt.Errorf("debug runtime terminated during attach: %w", ErrRuntimeNotRunning)
+	}
 	m.runtimes[cfg.Target.DeploymentID] = record
 	m.mu.Unlock()
 	return record.Runtime, nil
@@ -675,7 +738,6 @@ func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, pro
 	now := m.now().UTC()
 	store := &debuggerSnapshotStore{}
 	pump := newEventPump(dap, store)
-	pump.start(context.Background())
 	record := &runtimeRecord{
 		Runtime: Runtime{
 			ProjectID:    cfg.Target.ProjectID,
@@ -705,7 +767,18 @@ func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, pro
 		_ = dap.Close()
 		return nil
 	}
+	// 回调必须在 pump.start 之前挂上；retire 需等 pump loop 退出，必须异步。
+	pump.onTerminated = func() {
+		go m.retireRuntime(cfg.Target.DeploymentID, record)
+	}
+	pump.start(context.Background())
 	m.mu.Lock()
+	// debuggee 在 attach 窗口内已终止：拒绝登记死 runtime。
+	if !record.Alive {
+		m.mu.Unlock()
+		_ = closeProcessIfPresent(record.close)
+		return Runtime{}, fmt.Errorf("debug runtime terminated during attach: %w", ErrRuntimeNotRunning)
+	}
 	m.runtimes[cfg.Target.DeploymentID] = record
 	m.mu.Unlock()
 	return record.Runtime, nil
@@ -809,18 +882,20 @@ func nodeMainProcessIsNode(dep model.Deployment) bool {
 }
 
 // openLeaseOnRuntime 在已存在的 debug runtime 上建 lease（不重启 debuggee）。
+//
+// runtime 不可复用（刚被 retire/竞态消失）时返回 ErrRuntimeNotRunning，
+// 不回落到 Open：Open 走 launch 语义，会启动一个重新编译的分身进程——
+// ResolveLease 承诺"attach 不可用时返回结构化错误,不静默 launch"，
+// 这里静默 launch 正是 2026-07-07 分身事故的成因之一。
 func (m *Manager) openLeaseOnRuntime(ctx context.Context, project model.Project, service model.Service, dep model.Deployment, approvalToken string) (Session, bool, error) {
-	if runtime, ok := m.RuntimeStatus(dep.ID); ok && runtime.Alive {
+	_ = ctx
+	_ = project
+	_ = service
+	_ = approvalToken
+	if runtime, ok := m.reusableRuntime(dep.ID); ok {
 		return m.createSessionForRuntime(runtime), true, nil
 	}
-	session, err := m.Open(ctx, project, service, dep, OpenRequest{
-		DeploymentID:  strings.TrimSpace(dep.ID),
-		ApprovalToken: approvalToken,
-	})
-	if err != nil {
-		return Session{}, false, err
-	}
-	return session, true, nil
+	return Session{}, false, ErrRuntimeNotRunning
 }
 
 // List 返回当前已知 session 快照。
@@ -907,6 +982,43 @@ func (m *Manager) activeLeaseFor(deploymentID string) (Session, bool) {
 	return Session{}, false
 }
 
+// retireRuntime 在 debuggee 终止（terminated/exited 事件）后反向失效 runtime。
+//
+// 为什么必须存在：debuggee 死亡或被重启后 adapter 会话已不可用；若只等显式
+// Stop/Close 翻转 Alive，ResolveLease 会永久复用这个 Alive=true 的死 runtime，
+// 后续所有调试请求都打在死连接上（2026-07-07 实测：僵尸 runtime 劫持调试 24 小时）。
+//
+// 仅当 map 中仍是同一 record 时才摘除——deployment 重启后新建的 runtime
+// 会顶替 map 槽位，旧 record 迟到的 terminated 事件不能误杀新 runtime。
+// 由 pump 的 onTerminated 回调异步触发（回调内 record.close 会等 pump loop
+// 退出，必须在 loop goroutine 之外执行）。
+func (m *Manager) retireRuntime(deploymentID string, record *runtimeRecord) {
+	m.mu.Lock()
+	// 无条件先翻转 record 自身的 Alive：若 terminated 抢在 record 入 map 之前
+	// 到达（debuggee 启动即死），入 map 处会检查 Alive 并拒绝登记死 runtime。
+	record.Alive = false
+	current, ok := m.runtimes[deploymentID]
+	if !ok || current != record {
+		m.mu.Unlock()
+		return
+	}
+	closeFn := record.close
+	delete(m.runtimes, deploymentID)
+	for id, session := range m.sessions {
+		if session.runtimeDeploymentID != deploymentID {
+			continue
+		}
+		session.Alive = false
+		session.Closed = true
+		session.Error = "debug runtime terminated: debuggee exited"
+		delete(m.sessions, id)
+		m.closed[id] = session.Session
+	}
+	m.mu.Unlock()
+	log.Printf("[codedebug] debug runtime retired on terminated event deployment=%s", deploymentID)
+	_ = closeProcessIfPresent(closeFn)
+}
+
 // StopRuntime 停止 deployment 级 Debug Runtime，并关闭关联 AI lease。
 func (m *Manager) StopRuntime(deploymentID string) error {
 	deploymentID = strings.TrimSpace(deploymentID)
@@ -972,6 +1084,9 @@ func (m *Manager) Close(id string, req CloseRequest) error {
 }
 
 // SetBreakpoints 设置源码断点。
+//
+// lines 为空是合法请求：DAP setBreakpoints 语义是按 source 全量替换，
+// 空列表即清空该文件全部断点（capture 收尾、手工解除冻结都依赖它）。
 func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, lines []int) (map[string]any, error) {
 	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
@@ -980,9 +1095,6 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 	sourcePath, err := ResolveInsideRoot(runtime.sourceRoot, source)
 	if err != nil {
 		return nil, err
-	}
-	if len(lines) == 0 {
-		return nil, ErrConfigInvalid
 	}
 	for _, line := range lines {
 		if err := validatePositiveLine(line); err != nil {
@@ -1369,6 +1481,16 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
 	}
+	// 无论命中、超时还是采集失败，退出前都清掉本次断点：残留断点会让后续
+	// 命中它的请求把 debuggee 永久挂起（服务对外表现为冻结），而 capture
+	// 已经返回，没有任何调用方会来 continue。暂停现场不受影响，仍可 inspect。
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, clearErr := m.SetBreakpoints(cctx, req.SessionID, req.Source, nil); clearErr != nil {
+			log.Printf("[codedebug] clear capture breakpoints failed session=%s source=%s: %v", req.SessionID, req.Source, clearErr)
+		}
+	}()
 	if err := ensureCaptureBreakpointVerified(breakpoints, req.Line); err != nil {
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
@@ -1859,6 +1981,9 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 		c.Dir = strings.TrimSpace(cmd.WorkDir)
 	}
 	c.Env = adapterEnv
+	// adapter 自成进程组：dlv dap 会派生 debugserver/debuggee，Close 必须能
+	// 整组回收，否则残留孤儿（2026-07-07 实测三件套残留 24 小时）。
+	setAdapterProcessGroup(c)
 	if err := c.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, err)
@@ -1872,7 +1997,7 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 		PID: c.Process.Pid,
 		Close: func() error {
 			if c.Process != nil {
-				_ = c.Process.Kill()
+				return killAdapterProcessTree(c.Process.Pid)
 			}
 			return nil
 		},

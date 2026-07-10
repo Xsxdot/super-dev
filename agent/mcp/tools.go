@@ -700,7 +700,11 @@ func codeDebugBreakpointsInputSchema() map[string]any {
 		"properties": map[string]any{
 			"deployment_id": map[string]any{"type": "string"},
 			"source":        map[string]any{"type": "string"},
-			"lines":         map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}},
+			"lines": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "integer", "minimum": 1},
+				"description": "Full replacement per DAP semantics; an empty array clears all breakpoints in the source file.",
+			},
 		},
 		"required": []string{"deployment_id", "source", "lines"},
 	}

@@ -15,6 +15,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,6 +168,14 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`PRAGMA auto_vacuum=INCREMENTAL`); err != nil {
 		return err
 	}
+	// SQLite 规则：对已存在的库，PRAGMA auto_vacuum 从 none 切到 incremental 不会立即生效，
+	// 必须做一次全量 VACUUM 才会真正改写库的 auto_vacuum 模式。历史上老库建于 auto_vacuum
+	// 未启用的版本，如果不在此处补一次 VACUUM，incremental_vacuum 永远是空操作、删行只进
+	// freelist、文件永不收缩（20GiB logs.db 即由此而来）。这里检测实际模式，仅对未生效的老库
+	// 补做一次一次性重整；VACUUM 后 auto_vacuum 落为 incremental，后续启动查到即跳过。
+	if err := ensureAutoVacuumEffective(db); err != nil {
+		return err
+	}
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS log_entries (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -299,7 +308,8 @@ func ensureLogEntriesSeqColumns(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if !cols["seq"] {
+	seqColumnAdded := !cols["seq"]
+	if seqColumnAdded {
 		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN seq INTEGER`); err != nil {
 			return err
 		}
@@ -308,6 +318,13 @@ func ensureLogEntriesSeqColumns(db *sql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE log_entries ADD COLUMN last_seen_at DATETIME`); err != nil {
 			return err
 		}
+	}
+	needsBackfill, err := logEntriesNeedSeqBackfill(db, seqColumnAdded)
+	if err != nil {
+		return err
+	}
+	if !needsBackfill {
+		return nil
 	}
 	// 只回填 seq 为 NULL 的行，迁移幂等；UPDATE...FROM 需 SQLite>=3.33（modernc 满足）。
 	if _, err := db.Exec(`
@@ -318,6 +335,30 @@ func ensureLogEntriesSeqColumns(db *sql.DB) error {
 	}
 	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dep_seq ON log_entries(deployment_id, seq)`)
 	return err
+}
+
+// logEntriesNeedSeqBackfill 判断是否需要执行昂贵的 seq 窗口回填。
+//
+// 参数：
+//   - db: 已打开并完成基础表结构迁移的 SQLite 连接
+//   - seqColumnAdded: 本轮迁移是否刚添加 seq 列
+//
+// 返回：
+//   - true 表示存在需要回填的 NULL seq
+//   - 查询过程中的错误
+//
+// 注意：
+//   - 已全量回填的库必须跳过 ROW_NUMBER 全表窗口计算，否则每次 agent 启动都会
+//     在 HTTP listener 创建前重复扫描大日志库。
+func logEntriesNeedSeqBackfill(db *sql.DB, seqColumnAdded bool) (bool, error) {
+	if seqColumnAdded {
+		return true, nil
+	}
+	var exists int
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM log_entries WHERE seq IS NULL LIMIT 1)`).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists != 0, nil
 }
 
 // migrateFoldKeyUniqueIndex 将 fold_key 唯一约束从单列迁移为 (run_id, fold_key) 复合。
@@ -344,6 +385,43 @@ func migrateFoldKeyUniqueIndex(db *sql.DB) error {
 	}
 	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_run_fold_key ON log_entries(run_id, fold_key) WHERE fold_key != ''`)
 	return err
+}
+
+// autoVacuumIncremental 是 SQLite PRAGMA auto_vacuum 处于 INCREMENTAL 模式时的取值。
+// 取值含义：0=NONE，1=FULL，2=INCREMENTAL。
+const autoVacuumIncremental = 2
+
+// ensureAutoVacuumEffective 确保库的 auto_vacuum 真正处于 INCREMENTAL 模式。
+//
+// 背景：
+//   - SQLite 对已存在的库改 auto_vacuum（none→incremental）不会立即生效，
+//     必须做一次全量 VACUUM 才会落地。老版本建的库 auto_vacuum 实为 NONE，
+//     导致 incremental_vacuum 空转、删行只进 freelist、logs.db 文件永不收缩。
+//
+// 行为：
+//   - 读回实际 auto_vacuum 值；已是 INCREMENTAL 则直接返回（新库/已重整过的库走这里，零开销）
+//   - 未生效的老库执行一次 VACUUM：它会改写模式并物理回收所有 freelist 空间，
+//     文件立刻缩到真实数据量。这是一次性操作，之后启动查到 INCREMENTAL 即跳过。
+//
+// 注意：
+//   - VACUUM 会重建整库、需要约等量的临时磁盘空间并持有写锁，对超大老库可能耗时较久；
+//     这是把历史欠账一次性还清的必要代价，故打印起止日志便于观测启动为何变慢。
+func ensureAutoVacuumEffective(db *sql.DB) error {
+	var mode int
+	if err := db.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return fmt.Errorf("read auto_vacuum mode: %w", err)
+	}
+	if mode == autoVacuumIncremental {
+		return nil
+	}
+	// 老库：auto_vacuum 未生效，做一次性 VACUUM 使其落地并回收历史 freelist 空间。
+	log.Printf("[store] logs.db auto_vacuum 未生效(mode=%d)，执行一次性 VACUUM 重整以启用增量回收并收缩文件，超大库可能耗时较久", mode)
+	start := time.Now()
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("vacuum to enable auto_vacuum: %w", err)
+	}
+	log.Printf("[store] logs.db VACUUM 重整完成，耗时=%s，auto_vacuum 已切换为 INCREMENTAL", time.Since(start).Round(time.Millisecond))
+	return nil
 }
 
 // indexExists 报告指定名称的索引是否已存在于库中。
@@ -921,14 +999,16 @@ const deleteBatchSize = 100
 //
 // 注意：
 //   - 行为是"丢最旧保运行"：宁可删未到保留期的老日志，也不让磁盘被打爆
-//   - SQLite 可能不会在每批删除后立即降低 page_count；若体积不再下降，停止本轮，
-//     避免因空闲页未回收而把剩余日志全部删空。
+//   - 停止判据是"删无可删"（本批 RowsAffected==0），而非"体积不再下降"。
+//     历史实现用后者，在 auto_vacuum 未生效的老库上，删行后 page_count 纹丝不动，
+//     第二轮就误判"体积没降"直接返回——每轮只删 100 行就放弃，永远追不上写入。
+//     只要还删得到行就继续删，才能真正把体积压回上限之下（ensureAutoVacuumEffective
+//     已保证 auto_vacuum 生效，incremental_vacuum 会真正回收页、体积随之下降）。
 func (s *Store) DeleteToMaxBytes(maxBytes int64) (int64, error) {
 	if maxBytes <= 0 {
 		return 0, nil
 	}
 	var total int64
-	var previousSize int64
 	for {
 		size, err := s.SizeBytes()
 		if err != nil {
@@ -937,10 +1017,6 @@ func (s *Store) DeleteToMaxBytes(maxBytes int64) (int64, error) {
 		if size <= maxBytes {
 			return total, nil
 		}
-		if previousSize > 0 && size >= previousSize {
-			return total, nil
-		}
-		previousSize = size
 
 		res, err := s.db.Exec(`
 			DELETE FROM log_entries
@@ -951,6 +1027,8 @@ func (s *Store) DeleteToMaxBytes(maxBytes int64) (int64, error) {
 		}
 		n, _ := res.RowsAffected()
 		total += n
+		// 删无可删：日志已全部清空仍未达标（阈值被设得比空库还小，或空间全被
+		// 索引/其他表占据），继续循环也删不动，停止避免空转死循环。
 		if n == 0 {
 			return total, nil
 		}
