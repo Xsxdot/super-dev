@@ -6,7 +6,7 @@
 
 **Architecture:** Each Agent is an independent `AgentConnector` registered in the existing `ConnectorRegistry`. Private helpers provide known-environment resolution, lossless JSONC/YAML mutation, safe Skill operations, and bounded official CLI execution; update and verify remain Registry operations over the existing six-method trait.
 
-**Tech Stack:** Rust 2021, Tauri 2, `serde_json`, `jsonc-parser` 0.26.3 with `cst`/`serde`, `yaml-edit` 0.2.1, `tracing`, Vue 3, Pinia, Vitest, GitHub Actions.
+**Tech Stack:** Rust 2021, Tauri 2, `serde_json`, `jsonc-parser` 0.26.3 with `cst`/`serde`, `yaml-edit` 0.2.3, `tracing`, Vue 3, Pinia, Vitest, GitHub Actions.
 
 ---
 
@@ -410,7 +410,7 @@ Use the existing strict JSON merge/remove helpers through `common::mutate_config
 4. return `manual_hook_result` for Session Hook;
 5. on uninstall, remove only `mcpServers.superdev` and the owned Skill directory.
 
-`manual_instructions` must include a pasteable `mcpServers.superdev` object, Skill path, restart guidance, and a Kimi Code command the user can run to verify discovery. Do not introduce an `AgentKind` variant.
+`manual_instructions` must include a pasteable `mcpServers.superdev` object, Skill path, restart guidance, and the current Kimi Code TUI verification commands `/mcp` and `/mcp-config`. Do not introduce an `AgentKind` variant.
 
 - [ ] **Step 5: Add logs and intent comments**
 
@@ -630,7 +630,7 @@ fn descriptor_is_full() {
 }
 ```
 
-Assert install/update preserve comments and user values, add exactly one SuperDev MCP entry and one marked hook command, are idempotent, and uninstall removes only those owned nodes. Assert malformed YAML is never backed up or rewritten. Assert status treats an installed hook as `NeedsAction` until the user trusts/restarts it, while a missing hook is `Missing`.
+Assert install/update preserve comments, sequences, block scalars, and user values; add exactly one SuperDev MCP entry and one marked hook command; are idempotent; and uninstall removes only those owned nodes. Assert malformed or unsupported YAML is never backed up or rewritten. Assert a failed Skill install never leaves an active Hook. Assert status treats an installed hook as `NeedsAction` until its exact event/command pair appears in the Hermes allowlist, then reports `Configured`; a missing hook remains `Missing`.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -643,13 +643,13 @@ Expected: the connector and lossless YAML transform are unresolved.
 
 - [ ] **Step 3: Implement lossless YAML transforms**
 
-Resolve `~/.hermes/config.yaml` and `~/.hermes/skills/superdev`. Parse with `yaml_edit::Document`. Build mappings through typed APIs such as `Mapping::set`; never interpolate binary paths into YAML strings.
+Resolve `~/.hermes/config.yaml` and `~/.hermes/skills/superdev`. Parse with `yaml_edit::Document`; use typed builders for generated fragments, exact block-level splices for nested YAML nodes, and a final parse gate before writing. This avoids the indentation loss in `yaml-edit` 0.2.3 nested `set`/`push` operations while retaining the rest of the CST byte-for-byte. Never interpolate binary paths into hand-written YAML strings.
 
-Set only `mcp_servers.superdev` to the SuperDev command/env and append one uniquely marked `hooks.on_session_start` entry that invokes the absolute `skills/superdev/hooks/run-hook.cmd session-start` wrapper. The marker must be stable enough for precise status and uninstall. Preserve empty parent mappings instead of deleting structures the user may own, and build all paths with native `PathBuf` semantics for macOS/Linux/Windows CI.
+Set only `mcp_servers.superdev` to the SuperDev command/env and append one uniquely marked `hooks.pre_llm_call` entry that invokes the absolute `skills/superdev/hooks/run-hook.cmd hermes-session-context` wrapper. The script consumes Hermes JSON stdin, injects `{"context":"..."}` once per `session_id`, and returns `{}` thereafter. Migrate only the obsolete SuperDev-owned `on_session_start` entry. The marker must be stable enough for precise status and uninstall. Preserve user parent mappings and build all paths with native `PathBuf` semantics for macOS/Linux/Windows CI.
 
 - [ ] **Step 4: Implement the six Connector methods**
 
-Detect `hermes`/`hermes.exe` or `~/.hermes`. Install MCP, prove status, install Skill, then install the owned Hook. Uninstall removes only the owned MCP entry, owned Skill, and marked Hook. Return Full support because all three integrations are automatic, while status keeps the Hook at `NeedsAction` until user trust/restart confirmation. Manual instructions explain the YAML schema and trust/restart step for recovery paths.
+Detect `hermes`/`hermes.exe` or `~/.hermes`. Install MCP, prove status, install Skill, then install the owned Hook. Uninstall removes only the owned MCP entry, owned Skill, and marked Hook. Return Full support because all three integrations are automatic. Compare the exact event/command pair with `shell-hooks-allowlist.json`: report `NeedsAction` before trust, `Configured` after approval, and `Error` for an unreadable or malformed trust file. Manual instructions reference `hermes hooks list` and `hermes hooks doctor` for recovery.
 
 - [ ] **Step 5: Add logs and intent comments**
 

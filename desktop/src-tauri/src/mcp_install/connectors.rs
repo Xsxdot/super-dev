@@ -986,6 +986,124 @@ pub fn builtin() -> Vec<Arc<dyn AgentConnector>> {
 mod tests {
     use super::*;
     use crate::mcp_install::contracts::SupportLevel;
+    use std::path::PathBuf;
+
+    /// real_wave2_agent_connector_round_trip 用真实安装的 Agent CLI 验证四个 Connector。
+    ///
+    /// 边界：
+    ///   - 仅在显式提供 `/private/tmp` 隔离根目录时运行，绝不触碰用户 HOME。
+    ///   - 默认 ignore，不让 CI 依赖网络安装的第三方 CLI。
+    #[test]
+    #[ignore = "requires isolated real Agent installations"]
+    fn real_wave2_agent_connector_round_trip() {
+        let root = std::env::var_os("SUPERDEV_REAL_CONNECTOR_ROOT")
+            .map(PathBuf::from)
+            .expect("SUPERDEV_REAL_CONNECTOR_ROOT is required");
+        assert!(
+            root.starts_with("/private/tmp"),
+            "real smoke root must stay under /private/tmp"
+        );
+        let command_dirs = std::env::var_os("SUPERDEV_REAL_CONNECTOR_BIN_DIRS")
+            .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .expect("SUPERDEV_REAL_CONNECTOR_BIN_DIRS is required");
+        let mcp_binary = std::env::var_os("SUPERDEV_REAL_MCP_BINARY")
+            .map(PathBuf::from)
+            .expect("SUPERDEV_REAL_MCP_BINARY is required");
+        assert!(mcp_binary.is_file(), "real MCP binary must exist");
+        let skill_source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("skills")
+            .join("superdev");
+        assert!(skill_source.join("SKILL.md").is_file());
+
+        let home = root.join("connector-home");
+        fs::create_dir_all(&home).unwrap();
+        let environment = ConnectorEnvironment::new(
+            Some(root.join("opencode/opencode.json")),
+            Some(root.join("openclaw/openclaw.json")),
+            Some(root.join("kimi-code")),
+        );
+        let ctx = ConnectorRuntimeContext::new(
+            home,
+            command_dirs,
+            vec![],
+            mcp_binary,
+            Some(skill_source),
+            None,
+        )
+        .with_environment(environment);
+        let connectors: Vec<Arc<dyn AgentConnector>> = vec![
+            Arc::new(opencode::OpenCodeConnector::new()),
+            Arc::new(openclaw::OpenClawConnector::new()),
+            Arc::new(hermes::HermesConnector::new()),
+            Arc::new(kimi_code::KimiCodeConnector::new()),
+        ];
+
+        for connector in connectors {
+            let id = connector.descriptor().id().to_string();
+            let detection = connector.detect(&ctx).unwrap();
+            assert!(detection.detected, "{id} real CLI was not detected");
+            let install = connector
+                .install(
+                    &ctx,
+                    ConnectorInstallRequest {
+                        operation: ConnectorOperation::Install,
+                        capabilities: vec![
+                            IntegrationCapability::Mcp,
+                            IntegrationCapability::Skill,
+                            IntegrationCapability::SessionHook,
+                        ],
+                    },
+                )
+                .unwrap();
+            assert_ne!(
+                install.result,
+                ConnectorResult::Failed,
+                "{id} install failed"
+            );
+            let installed = connector.status(&ctx).unwrap();
+            for capability in [IntegrationCapability::Mcp, IntegrationCapability::Skill] {
+                assert_eq!(
+                    installed
+                        .integrations
+                        .iter()
+                        .find(|item| item.capability == capability)
+                        .expect("capability status")
+                        .status,
+                    IntegrationStateStatus::Configured,
+                    "{id} {capability:?} was not configured"
+                );
+            }
+            println!(
+                "REAL_CONNECTOR_INSTALL {}",
+                serde_json::to_string(&install).unwrap()
+            );
+
+            let uninstall = connector.uninstall(&ctx).unwrap();
+            assert_ne!(
+                uninstall.result,
+                ConnectorResult::Failed,
+                "{id} uninstall failed"
+            );
+            let removed = connector.status(&ctx).unwrap();
+            for capability in [IntegrationCapability::Mcp, IntegrationCapability::Skill] {
+                assert_eq!(
+                    removed
+                        .integrations
+                        .iter()
+                        .find(|item| item.capability == capability)
+                        .expect("capability status")
+                        .status,
+                    IntegrationStateStatus::Missing,
+                    "{id} {capability:?} survived uninstall"
+                );
+            }
+            println!(
+                "REAL_CONNECTOR_UNINSTALL {}",
+                serde_json::to_string(&uninstall).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn builtin_registers_seven_connectors_in_stable_order_with_derived_levels() {

@@ -118,8 +118,24 @@ fn merge_opencode_jsonc(
         )
     })?;
     let before = root.to_string();
-    let root_obj = root.object_value_or_set();
-    let mcp = root_obj.object_value_or_set("mcp");
+    let root_obj = root.object_value().ok_or_else(|| {
+        ConnectorError::new(
+            "unsupported_config_shape",
+            "OpenCode 配置根节点必须是 object",
+        )
+    })?;
+    let mcp = match root_obj.get("mcp") {
+        Some(property) => property.object_value().ok_or_else(|| {
+            ConnectorError::new("unsupported_config_shape", "OpenCode mcp 配置必须是 object")
+        })?,
+        None => {
+            // 只创建缺失对象；已存在的非对象值属于用户数据，禁止覆盖。
+            root_obj.append("mcp", jsonc_parser::cst::CstInputValue::Object(Vec::new()));
+            root_obj
+                .object_value("mcp")
+                .expect("new mcp property must be an object")
+        }
+    };
     let value = superdev_mcp_value(ctx);
     if let Some(prop) = mcp.get("superdev") {
         prop.set_value(value);
@@ -763,5 +779,37 @@ mod tests {
             .collect();
         assert!(backups.is_empty());
         let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn valid_but_unsupported_jsonc_shapes_are_not_overwritten() {
+        for (label, fixture) in [
+            ("root-array", "[\n  { \"keep\": true }\n]\n"),
+            (
+                "mcp-scalar",
+                "{\n  // user-owned non-object value\n  \"mcp\": \"managed elsewhere\"\n}\n",
+            ),
+        ] {
+            let home = test_dir(label);
+            let config_dir = home.join(".config").join("opencode");
+            fs::create_dir_all(&config_dir).unwrap();
+            let config = config_dir.join("opencode.json");
+            fs::write(&config, fixture).unwrap();
+            let before = fs::read(&config).unwrap();
+            let ctx = context_at(home.clone());
+
+            let outcome = OpenCodeConnector::new()
+                .install(&ctx, install_request())
+                .unwrap();
+            assert_eq!(outcome.result, ConnectorResult::Failed, "case={label}");
+            assert_eq!(fs::read(&config).unwrap(), before, "case={label}");
+            let backups = fs::read_dir(&config_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains("superdev-bak"))
+                .count();
+            assert_eq!(backups, 0, "case={label}");
+            let _ = fs::remove_dir_all(home);
+        }
     }
 }

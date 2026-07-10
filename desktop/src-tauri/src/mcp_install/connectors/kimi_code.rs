@@ -553,13 +553,15 @@ impl AgentConnector for KimiCodeConnector {
                 format!("将以下 mcpServers.superdev 写入 {}", config.display()),
                 format!("确认 Skill 目录存在：{}", skill.display()),
                 "重启 Kimi Code 使 MCP 生效".into(),
-                "在终端运行 `kimi mcp list`（或等价命令）确认 superdev 已被发现".into(),
+                "在 Kimi Code TUI 输入 `/mcp` 确认 superdev 已被发现".into(),
+                "如需检查或调整 MCP 配置，在 TUI 输入 `/mcp-config`".into(),
                 "按需手动配置 Session Hook（本连接器不自动写入 Hook）".into(),
             ],
             config_path: Some(common::path_string(&config)),
             manual_config: Some(pasteable_mcp_config(ctx)),
             verification_prompt: Some(
-                "重启 Kimi Code 后运行 kimi 相关 MCP 列表命令，确认 superdev 出现".into(),
+                "重启 Kimi Code 后在 TUI 输入 /mcp，确认 superdev 出现；使用 /mcp-config 检查配置"
+                    .into(),
             ),
         })
     }
@@ -770,5 +772,22 @@ mod tests {
         assert!(KimiCodeConnector::new().detect(&ctx2).unwrap().detected);
         let _ = fs::remove_dir_all(home);
         let _ = fs::remove_dir_all(home2);
+    }
+
+    #[test]
+    fn manual_verification_uses_current_tui_commands() {
+        let home = test_dir("manual-commands");
+        let ctx = context_at(home.clone());
+        let manual = KimiCodeConnector::new().manual_instructions(&ctx).unwrap();
+        let text = format!(
+            "{}\n{}\n{}",
+            manual.steps.join("\n"),
+            manual.verification_prompt.unwrap_or_default(),
+            manual.manual_config.unwrap_or_default()
+        );
+        assert!(!text.contains("kimi mcp list"), "{text}");
+        assert!(text.contains("/mcp"), "{text}");
+        assert!(text.contains("/mcp-config"), "{text}");
+        let _ = fs::remove_dir_all(home);
     }
 }

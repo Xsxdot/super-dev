@@ -831,6 +831,26 @@ fn create_unique_temp_file(target: &Path) -> Result<(PathBuf, fs::File), std::io
     ))
 }
 
+#[cfg(unix)]
+fn apply_atomic_target_permissions(target: &Path, file: &fs::File) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = match fs::metadata(target) {
+        Ok(metadata) => metadata.permissions(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // 新建 Agent 配置可能包含 token/env，不能继承常见 umask=022 的 0644。
+            fs::Permissions::from_mode(0o600)
+        }
+        Err(error) => return Err(error),
+    };
+    file.set_permissions(permissions)
+}
+
+#[cfg(not(unix))]
+fn apply_atomic_target_permissions(_target: &Path, _file: &fs::File) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
 fn create_unique_temp_directory(target: &Path) -> Result<PathBuf, std::io::Error> {
     for _ in 0..64 {
         let temp = unique_temp_candidate(target);
@@ -868,6 +888,9 @@ where
     let (temp, mut file) = create_unique_temp_file(target)
         .map_err(|error| format!("创建{write_kind}临时文件失败: {error}"))?;
     let _guard = TempArtifactGuard::new(temp.clone(), TempArtifactKind::File);
+    // rename 会继承临时文件权限；写入敏感正文前先复制旧 mode 或使用安全默认值。
+    apply_atomic_target_permissions(target, &file)
+        .map_err(|error| format!("设置临时{write_kind}权限失败: {error}"))?;
     file.write_all(content)
         .map_err(|error| format!("写入临时{write_kind}失败: {error}"))?;
     file.flush()

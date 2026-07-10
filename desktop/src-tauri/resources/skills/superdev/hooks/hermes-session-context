@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Hermes pre_llm_call session context hook
+#
+# 职责：
+#   - 读取 Hermes shell hook 的 JSON stdin，并按 session_id 仅注入一次 bootstrap。
+#   - 使用 Hermes 支持的 {"context":"..."} 协议返回额外上下文。
+#
+# 边界：
+#   - 不调用 SuperDev 工具、不触网、不读项目代码。
+#   - stdout 专用于 Hook JSON 协议；任何无法确定的输入都回退为 {}。
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BOOTSTRAP_FILE="${SCRIPT_DIR}/bootstrap.md"
+payload="$(cat 2>/dev/null || true)"
+
+# Hermes 的 shell hook payload 提供 session_id。只保留文件名安全字符，
+# 避免外部输入影响 marker 目录边界。
+session_id="$(printf '%s' "$payload" | sed -nE 's/.*"session_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | tr -cd '[:alnum:]_.-' | cut -c1-128)"
+if [ -z "$session_id" ] || [ ! -f "$BOOTSTRAP_FILE" ]; then
+    printf '{}\n'
+    exit 0
+fi
+
+marker_root="${TMPDIR:-/tmp}/superdev-hermes-session-context"
+mkdir -p "$marker_root" 2>/dev/null || {
+    printf '{}\n'
+    exit 0
+}
+
+# mkdir 是原子的：并发 pre_llm_call 也只有一次能获得该 session 的注入权。
+if ! mkdir "${marker_root}/${session_id}" 2>/dev/null; then
+    printf '{}\n'
+    exit 0
+fi
+find "$marker_root" -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rmdir {} \; 2>/dev/null || true
+
+bootstrap_content="$(cat "$BOOTSTRAP_FILE" 2>/dev/null || true)"
+if [ -z "$bootstrap_content" ]; then
+    printf '{}\n'
+    exit 0
+fi
+
+escape_for_json() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+
+bootstrap_escaped="$(escape_for_json "$bootstrap_content")"
+printf '{"context":"<EXTREMELY_IMPORTANT>\\n%s\\n</EXTREMELY_IMPORTANT>"}\n' "$bootstrap_escaped"

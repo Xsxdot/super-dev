@@ -97,6 +97,9 @@ fn canonical_mcp_json(ctx: &ConnectorRuntimeContext) -> String {
 }
 
 fn apply_config_env(mut spec: CommandSpec, ctx: &ConnectorRuntimeContext) -> CommandSpec {
+    // OpenClaw 即使收到独立配置路径，仍会打开 state SQLite。
+    // 显式对齐 Connector home，避免调用落到另一个用户/测试运行态目录。
+    spec = spec.with_env("OPENCLAW_STATE_DIR", data_root(ctx).as_os_str());
     // OPENCLAW_CONFIG_PATH 只作为 CLI 环境提示透传，SuperDev 从不解析该文件。
     if let Some(path) = ctx.environment().openclaw_config_path() {
         spec = spec.with_env("OPENCLAW_CONFIG_PATH", path.as_os_str());
@@ -125,8 +128,8 @@ fn show_superdev(
 ) -> Result<Option<serde_json::Value>, ConnectorError> {
     let output = run_cli(runner, ctx, program, &["mcp", "show", "superdev", "--json"])?;
     if !output.success() {
-        // 缺失条目时 CLI 可能非零退出；视为未配置而非硬失败。
-        if output.status_code.is_some() {
+        // 只有 CLI 明确报告条目不存在时才映射 Missing；其它非零退出必须保留故障语义。
+        if show_output_reports_missing(&output) {
             return Ok(None);
         }
         return Err(ConnectorError::new(
@@ -149,6 +152,24 @@ fn show_superdev(
     } else {
         Ok(Some(value))
     }
+}
+
+/// show_output_reports_missing 识别 OpenClaw 对不存在 server 的稳定文本诊断。
+///
+/// 输出只用于本地分类，不写入日志或用户错误，避免回显潜在敏感 CLI 内容。
+fn show_output_reports_missing(output: &CommandOutput) -> bool {
+    if output.status_code != Some(1) {
+        return false;
+    }
+    let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    [
+        "not found",
+        "does not exist",
+        "no mcp server",
+        "unknown mcp server",
+    ]
+    .iter()
+    .any(|pattern| diagnostic.contains(pattern))
 }
 
 fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bool {
@@ -526,6 +547,7 @@ impl AgentConnector for OpenClawConnector {
         );
         let skill = skill_path(ctx);
         let mut mcp_changed = false;
+        let mut mcp_needs_action = false;
         let mut mcp_message = Some("未配置 superdev，跳过 unset".into());
         let mut mcp_result = IntegrationResult::AlreadyPresent;
 
@@ -582,8 +604,11 @@ impl AgentConnector for OpenClawConnector {
                 mcp_message = Some("已通过 openclaw mcp unset 移除 superdev".into());
             }
         } else {
-            mcp_result = IntegrationResult::Skipped;
-            mcp_message = Some("未找到 openclaw CLI，跳过 MCP 卸载".into());
+            // MCP 可能仍留在 OpenClaw 配置中，不能被 Skill 删除成功掩盖成整体 Success。
+            mcp_needs_action = true;
+            mcp_result = IntegrationResult::NeedsAction;
+            mcp_message =
+                Some("未找到 openclaw CLI，请手动运行 openclaw mcp unset superdev".into());
         }
 
         let skill_result = common::uninstall_skill(&skill);
@@ -592,7 +617,11 @@ impl AgentConnector for OpenClawConnector {
         let outcome = ConnectorOperationOutcome {
             connector_id: CONNECTOR_ID.into(),
             operation: ConnectorOperation::Uninstall,
-            result: if changed {
+            result: if mcp_needs_action && changed {
+                ConnectorResult::Partial
+            } else if mcp_needs_action {
+                ConnectorResult::NeedsAction
+            } else if changed {
                 ConnectorResult::Success
             } else {
                 ConnectorResult::Unchanged
@@ -614,7 +643,11 @@ impl AgentConnector for OpenClawConnector {
                     Some("未管理 Session Hook".into()),
                 ),
             ],
-            manual_instructions: None,
+            manual_instructions: if mcp_needs_action {
+                Some(self.manual_instructions(ctx)?)
+            } else {
+                None
+            },
             requires_restart: changed,
             message: Some("OpenClaw 卸载完成".into()),
         };
@@ -676,10 +709,14 @@ mod tests {
         }
 
         fn push_ok(&self, status: i32, stdout: &str) {
+            self.push_output(status, stdout, "");
+        }
+
+        fn push_output(&self, status: i32, stdout: &str, stderr: &str) {
             self.responses.lock().unwrap().push_back(Ok(CommandOutput {
                 status_code: Some(status),
                 stdout: stdout.into(),
-                stderr: String::new(),
+                stderr: stderr.into(),
                 truncated: false,
             }));
         }
@@ -779,7 +816,7 @@ mod tests {
         let ctx = context_with_cli(home.clone());
         let runner = FakeCommandRunner::succeed();
         // show missing
-        runner.push_ok(1, "");
+        runner.push_output(1, "", "MCP server 'superdev' not found");
         // set ok
         runner.push_ok(0, "");
         // show configured
@@ -874,11 +911,43 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_without_cli_reports_partial_and_keeps_manual_mcp_remediation() {
+        let home = test_dir("uninstall-no-cli");
+        let skill_source = home.join("bundled-skill");
+        std::fs::create_dir_all(skill_source.join("hooks")).unwrap();
+        std::fs::write(skill_source.join("SKILL.md"), "x").unwrap();
+        let installed_skill = home.join(".openclaw").join("skills").join("superdev");
+        std::fs::create_dir_all(&installed_skill).unwrap();
+        std::fs::write(installed_skill.join("SKILL.md"), "x").unwrap();
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![home.join("empty-bin")],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_source),
+            None,
+        );
+        std::fs::create_dir_all(home.join("empty-bin")).unwrap();
+        let connector = OpenClawConnector::with_runner(Arc::new(FakeCommandRunner::succeed()));
+
+        let outcome = connector.uninstall(&ctx).unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Partial);
+        assert_eq!(
+            outcome.integrations[0].result,
+            IntegrationResult::NeedsAction
+        );
+        assert_eq!(outcome.integrations[1].result, IntegrationResult::Installed);
+        assert!(outcome.manual_instructions.is_some());
+        assert!(!installed_skill.exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn nonzero_set_fails_mcp_and_skips_skill() {
         let home = test_dir("set-fail");
         let ctx = context_with_cli(home.clone());
         let runner = FakeCommandRunner::succeed();
-        runner.push_ok(1, ""); // show missing
+        runner.push_output(1, "", "MCP server 'superdev' not found"); // show missing
         runner.push_ok(2, "boom"); // set fails
         let connector = OpenClawConnector::with_runner(Arc::new(runner));
         let outcome = connector.install(&ctx, install_request()).unwrap();
@@ -897,6 +966,20 @@ mod tests {
         let connector = OpenClawConnector::with_runner(Arc::new(runner));
         let outcome = connector.install(&ctx, install_request()).unwrap();
         assert_eq!(outcome.result, ConnectorResult::Failed);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn nonzero_show_errors_are_not_misclassified_as_missing() {
+        let home = test_dir("show-error");
+        let ctx = context_with_cli(home.clone());
+        let runner = FakeCommandRunner::succeed();
+        runner.push_output(2, "", "OpenClaw configuration is invalid");
+        let program = require_cli(&ctx).unwrap();
+
+        let error = show_superdev(&runner, &ctx, &program).unwrap_err();
+        assert_eq!(error.code(), "cli_show_failed");
+        assert_eq!(runner.argv().len(), 1);
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -941,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn openclaw_config_path_is_env_only_hint() {
+    fn openclaw_config_and_state_paths_are_cli_env_hints() {
         let home = test_dir("env-hint");
         let override_path = home.join("custom-openclaw.json");
         let ctx = context_with_cli(home.clone()).with_environment(ConnectorEnvironment::new(
@@ -950,7 +1033,7 @@ mod tests {
             None,
         ));
         let runner = FakeCommandRunner::succeed();
-        runner.push_ok(1, "");
+        runner.push_output(1, "", "MCP server 'superdev' not found");
         runner.push_ok(0, "");
         runner.push_ok(0, &configured_show(&ctx));
         // 捕获 env：扩展 Fake 以记录 env
@@ -985,9 +1068,13 @@ mod tests {
         let envs = capture.envs.lock().unwrap();
         assert!(!envs.is_empty());
         assert!(envs.iter().all(|call| {
-            call.iter().any(|(k, v)| {
+            let has_config = call.iter().any(|(k, v)| {
                 k == "OPENCLAW_CONFIG_PATH" && Path::new(v) == override_path.as_path()
-            })
+            });
+            let has_state = call.iter().any(|(k, v)| {
+                k == "OPENCLAW_STATE_DIR" && Path::new(v) == data_root(&ctx).as_path()
+            });
+            has_config && has_state
         }));
         let _ = std::fs::remove_dir_all(home);
     }

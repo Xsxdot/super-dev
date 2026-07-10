@@ -152,7 +152,7 @@ OpenClaw owns a JSON5 configuration format with includes, alternate config paths
 
 The canonical server object contains the absolute `superdev-mcp` command and `SUPERDEV_AGENT_URL` environment entry. No shell command string is constructed.
 
-The Connector respects non-zero exit codes, timeouts, Nix immutable mode, and CLI diagnostics. Stderr is summarized and redacted before being placed in an operation result or log.
+The Connector respects non-zero exit codes, timeouts, Nix immutable mode, and CLI diagnostics. Every CLI call receives both `OPENCLAW_CONFIG_PATH` (when overridden) and an `OPENCLAW_STATE_DIR` aligned with the Connector home, because current OpenClaw releases open their state SQLite even for read-only MCP commands. Stderr is summarized and redacted before being placed in an operation result or log.
 
 ### Skill and hook
 
@@ -176,13 +176,15 @@ mcp_servers:
       SUPERDEV_AGENT_URL: http://127.0.0.1:57017
 ```
 
-The YAML codec preserves unrelated mappings and comments. It must reject malformed YAML and fail closed on constructs it cannot safely retain. Every changed file is backed up and atomically replaced.
+The YAML codec preserves unrelated mappings, sequences, block scalars, and comments. It uses `yaml-edit` for structural validation and owned-node discovery, then performs exact block-level splices because the current library release cannot safely insert nested block nodes without losing indentation. The resulting document is parsed again before any write. Malformed YAML, flow-style parent mappings, and other shapes that cannot be retained safely fail closed. Every changed file is backed up and atomically replaced without changing an existing file mode.
 
 ### Skill and hook
 
 The bundled Skill is installed under `~/.hermes/skills/superdev`.
 
-Hermes receives a shell hook entry for `on_session_start` that invokes the bundled `hooks/run-hook.cmd session-start` wrapper by absolute path. The merge is marker-based, idempotent, and preserves user hooks. Removal deletes only the SuperDev entry. Because Hermes may require first-use consent for shell hooks, an installed but untrusted hook is reported as `NeedsAction`, not `Configured`.
+Hermes receives a `pre_llm_call` shell hook that invokes the bundled `hooks/run-hook.cmd hermes-session-context` wrapper by absolute path. The Hermes-specific script consumes the hook JSON payload and returns `{"context":"..."}` only on the first call for each `session_id`; later calls return `{}`. The merge is marker-based, idempotent, migrates the obsolete SuperDev `on_session_start` entry, and preserves user hooks.
+
+The Hook is written only after both MCP and Skill are proven ready. Status compares the exact event/command pair with `~/.hermes/shell-hooks-allowlist.json`: an installed but untrusted hook is `NeedsAction`, an approved hook is `Configured`, and an unreadable or malformed trust file is `Error`.
 
 ## KimiCodeConnector
 
@@ -211,7 +213,7 @@ The existing JSON safe-merge primitives are reused where their schema matches. T
 
 ### Skill and hook
 
-The bundled Skill is installed under the Kimi-specific Skill root. Kimi Code hook support remains manual while the official contract is Beta; automatic install does not modify `config.toml`.
+The bundled Skill is installed under the Kimi-specific Skill root. Kimi Code hook support remains manual while the official contract is Beta; automatic install does not modify `config.toml`. Verification instructions use the current TUI commands `/mcp` and `/mcp-config`.
 
 ## Common Operation Flow
 

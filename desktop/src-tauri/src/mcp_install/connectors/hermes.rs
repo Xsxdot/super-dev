@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 解析 ~/.hermes/config.yaml 与 skills/superdev
-//   - 通过 yaml-edit 仅写入 mcp_servers.superdev 与标记过的 on_session_start hook
+//   - 通过 yaml-edit 仅写入 mcp_servers.superdev 与标记过的 pre_llm_call hook
 //   - MCP → Skill → Hook 顺序安装；卸载仅移除 SuperDev 拥有的节点
 //
 // 边界：
@@ -18,14 +18,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
-use yaml_edit::{Document, Mapping, MappingBuilder, YamlNode};
+use yaml_edit::{Document, Mapping, MappingBuilder, SequenceBuilder, YamlNode};
 
 const CONNECTOR_ID: &str = "hermes";
 const DISPLAY_NAME: &str = "Hermes";
-/// HOOK_MARKER 用于在 hooks.on_session_start 中精确识别 SuperDev 拥有的条目。
+/// HOOK_MARKER 用于在 Hermes hooks 中精确识别 SuperDev 拥有的条目。
 /// 使用稳定子串，避免依赖列表下标，并与 skill 路径结构对齐。
 const HOOK_MARKER: &str = "skills/superdev/hooks/run-hook.cmd";
-const HOOK_NAME: &str = "superdev-session-start";
+const HOOK_NAME: &str = "superdev-session-context";
+const HOOK_EVENT: &str = "pre_llm_call";
+const HOOK_SCRIPT: &str = "hermes-session-context";
+const LEGACY_HOOK_NAME: &str = "superdev-session-start";
+const LEGACY_HOOK_EVENT: &str = "on_session_start";
+const LEGACY_HOOK_SCRIPT: &str = "session-start";
 
 /// HermesConnector 适配 Hermes 的 YAML MCP、Skill 与自动 Session Hook。
 pub(super) struct HermesConnector {
@@ -61,6 +66,10 @@ fn data_root(ctx: &ConnectorRuntimeContext) -> PathBuf {
     ctx.home_dir().join(".hermes")
 }
 
+fn allowlist_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
+    data_root(ctx).join("shell-hooks-allowlist.json")
+}
+
 fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
         executable_file_names("hermes")
@@ -74,45 +83,49 @@ fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
 fn hook_command(skill_dir: &Path) -> String {
     let runner = skill_dir.join("hooks").join("run-hook.cmd");
     let runner = runner.to_string_lossy().replace('\\', "/");
-    format!("\"{runner}\" session-start")
-}
-
-fn node_text(node: &YamlNode) -> String {
-    node.to_string()
+    format!("\"{runner}\" {HOOK_SCRIPT}")
 }
 
 fn scalar_string(node: &YamlNode) -> Option<String> {
     node.as_scalar().map(|s| s.as_string())
 }
 
-fn key_name(key: &YamlNode) -> String {
-    key.as_scalar()
-        .map(|scalar| scalar.as_string())
-        .unwrap_or_default()
-}
-
 /// entry_has_marker 判断 hook 条目是否由 SuperDev 拥有。
 fn entry_has_marker(entry: &YamlNode) -> bool {
-    let text = node_text(entry);
-    if text.contains(HOOK_MARKER) || text.contains(HOOK_NAME) {
-        return true;
-    }
     if let Some(mapping) = entry.as_mapping() {
         if let Some(name) = mapping.get("name").and_then(|n| scalar_string(&n)) {
-            if name == HOOK_NAME {
+            if name == HOOK_NAME || name == LEGACY_HOOK_NAME {
                 return true;
             }
         }
         if let Some(command) = mapping.get("command").and_then(|n| scalar_string(&n)) {
-            if command.contains(HOOK_MARKER) {
+            if command.contains(HOOK_MARKER)
+                && (command.contains(HOOK_SCRIPT) || command.contains(LEGACY_HOOK_SCRIPT))
+            {
                 return true;
             }
         }
     }
     if let Some(command) = scalar_string(entry) {
-        return command.contains(HOOK_MARKER);
+        return command.contains(HOOK_MARKER)
+            && (command.contains(HOOK_SCRIPT) || command.contains(LEGACY_HOOK_SCRIPT));
     }
     false
+}
+
+fn entry_matches_current_hook(entry: &YamlNode, skill_dir: &Path) -> bool {
+    let Some(mapping) = entry.as_mapping() else {
+        return false;
+    };
+    let name = mapping
+        .get("name")
+        .and_then(|node| scalar_string(&node))
+        .unwrap_or_default();
+    let command = mapping
+        .get("command")
+        .and_then(|node| scalar_string(&node))
+        .unwrap_or_default();
+    name == HOOK_NAME && command == hook_command(skill_dir)
 }
 
 fn mcp_entry_matches(ctx: &ConnectorRuntimeContext, entry: &Mapping) -> bool {
@@ -129,189 +142,495 @@ fn mcp_entry_matches(ctx: &ConnectorRuntimeContext, entry: &Mapping) -> bool {
     command == expected.as_ref() && agent_url == DEFAULT_AGENT_URL
 }
 
-/// leading_comment_prefix 保留文件开头的注释/空行前缀（不参与 mapping 重建）。
-fn leading_comment_prefix(source: &str) -> String {
-    let mut prefix = String::new();
-    for line in source.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            prefix.push_str(line);
-            prefix.push('\n');
-        } else {
-            break;
-        }
-    }
-    prefix
-}
-
-/// append_scalar_pairs 把 mapping 的标量字段复制进 builder（仅一层）。
-fn append_scalar_pairs(mut builder: MappingBuilder, mapping: &Mapping) -> MappingBuilder {
-    for (key, value) in mapping.iter() {
-        let name = key_name(&key);
-        if name.is_empty() {
-            continue;
-        }
-        if let Some(scalar) = value.as_scalar() {
-            builder = builder.pair(name, scalar.as_string());
-        } else if let Some(nested) = value.as_mapping() {
-            // 递归重建嵌套 mapping，避免复制 YamlNode 导致缩进丢失。
-            builder = builder.mapping(name, |child| append_scalar_pairs(child, nested));
-        } else if let Some(text) = scalar_string(&value) {
-            builder = builder.pair(name, text);
-        }
-    }
-    builder
-}
-
-/// append_mcp_servers 把用户 server + SuperDev 条目写入根 MappingBuilder。
-fn append_mcp_servers(
-    builder: MappingBuilder,
-    root: &Mapping,
-    ctx: &ConnectorRuntimeContext,
-    include_superdev: bool,
-) -> MappingBuilder {
+fn desired_mcp_server_fragment(ctx: &ConnectorRuntimeContext) -> String {
     let command = ctx.mcp_binary().to_string_lossy().into_owned();
-    builder.mapping("mcp_servers", |mut servers| {
-        if let Some(existing) = root.get_mapping("mcp_servers") {
-            for (key, value) in existing.iter() {
-                let name = key_name(&key);
-                if name.is_empty() || name == "superdev" {
-                    continue;
-                }
-                if let Some(nested) = value.as_mapping() {
-                    servers = servers.mapping(name, |child| append_scalar_pairs(child, nested));
-                } else if let Some(scalar) = value.as_scalar() {
-                    servers = servers.pair(name, scalar.as_string());
-                }
-            }
-        }
-        if include_superdev {
-            servers = servers.mapping("superdev", |superdev| {
-                superdev
-                    .pair("command", command.as_str())
-                    .mapping("env", |env| {
-                        env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
-                    })
-            });
-        }
-        servers
-    })
-}
-
-/// append_hooks 重建 hooks，可选择写入/剥离 SuperDev 标记条目。
-fn append_hooks(
-    builder: MappingBuilder,
-    root: &Mapping,
-    skill_dir: &Path,
-    include_owned_hook: bool,
-) -> MappingBuilder {
-    let command = hook_command(skill_dir);
-    builder.mapping("hooks", |mut hooks| {
-        if let Some(existing) = root.get_mapping("hooks") {
-            for (key, value) in existing.iter() {
-                let name = key_name(&key);
-                if name.is_empty() || name == "on_session_start" {
-                    continue;
-                }
-                if let Some(nested) = value.as_mapping() {
-                    hooks = hooks.mapping(name, |child| append_scalar_pairs(child, nested));
-                } else if let Some(scalar) = value.as_scalar() {
-                    hooks = hooks.pair(name, scalar.as_string());
-                }
-            }
-        }
-        hooks.sequence("on_session_start", |mut seq| {
-            if let Some(existing) = root.get_mapping("hooks") {
-                if let Some(items) = existing.get_sequence("on_session_start") {
-                    for index in 0..items.len() {
-                        if let Some(item) = items.get(index) {
-                            if entry_has_marker(&item) {
-                                continue;
-                            }
-                            if let Some(mapping) = item.as_mapping() {
-                                seq = seq.mapping(|entry| append_scalar_pairs(entry, mapping));
-                            } else if let Some(scalar) = item.as_scalar() {
-                                seq = seq.item(scalar.as_string());
-                            }
-                        }
-                    }
-                }
-            }
-            if include_owned_hook {
-                seq = seq.mapping(|entry| {
-                    entry
-                        .pair("name", HOOK_NAME)
-                        .pair("command", command.as_str())
-                });
-            }
-            seq
+    MappingBuilder::new()
+        .mapping("superdev", |server| {
+            server.pair("command", command).mapping("env", |env| {
+                env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
+            })
         })
+        .build_document()
+        .to_string()
+}
+
+fn desired_hook_event_fragment(skill_dir: &Path) -> String {
+    let command = hook_command(skill_dir);
+    MappingBuilder::new()
+        .sequence(HOOK_EVENT, |sequence| {
+            sequence.mapping(|entry| entry.pair("name", HOOK_NAME).pair("command", command))
+        })
+        .build_document()
+        .to_string()
+}
+
+fn desired_hook_item_fragment(skill_dir: &Path) -> String {
+    let command = hook_command(skill_dir);
+    SequenceBuilder::new()
+        .mapping(|entry| entry.pair("name", HOOK_NAME).pair("command", command))
+        .build_document()
+        .to_string()
+}
+
+fn indent_fragment(fragment: &str, spaces: usize) -> String {
+    let indent = " ".repeat(spaces);
+    fragment
+        .lines()
+        .map(|line| format!("{indent}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn node_indent(
+    source: &str,
+    needle: &str,
+    label: &str,
+    default: usize,
+) -> Result<usize, ConnectorError> {
+    let (start, _) = unique_span(source, needle, label)?;
+    let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
+    let prefix = &source[line_start..start];
+    Ok(if prefix.chars().all(|character| character == ' ') {
+        prefix.len()
+    } else {
+        default
     })
 }
 
-/// rebuild_document 以根 MappingBuilder 重建整份配置。
-///
-/// yaml-edit 0.2.x 复制嵌套 YamlNode 或在已有 block 上 set 会弄乱缩进；
-/// 根级 MappingBuilder + 标量递归重建可被 from_str 正确 round-trip。
-/// 文件头注释通过 leading_comment_prefix 另行拼接保留。
-fn rebuild_document(
-    source: &str,
-    root: &Mapping,
-    ctx: &ConnectorRuntimeContext,
-    include_superdev: bool,
-    include_owned_hook: Option<bool>,
-) -> String {
-    let prefix = leading_comment_prefix(source);
-    let mut builder = MappingBuilder::new();
-    for (key, value) in root.iter() {
-        let name = key_name(&key);
-        if name.is_empty() || name == "mcp_servers" || name == "hooks" {
-            continue;
-        }
-        if let Some(scalar) = value.as_scalar() {
-            builder = builder.pair(name, scalar.as_string());
-        } else if let Some(nested) = value.as_mapping() {
-            builder = builder.mapping(name, |child| append_scalar_pairs(child, nested));
-        }
-    }
-    builder = append_mcp_servers(builder, root, ctx, include_superdev);
-    match include_owned_hook {
-        Some(include) => {
-            builder = append_hooks(builder, root, &skill_path(ctx), include);
-        }
-        None => {
-            if root.get_mapping("hooks").is_some() {
-                builder = append_hooks(builder, root, &skill_path(ctx), false);
-            }
-        }
-    }
-    let body = builder.build_document().to_string();
-    format!("{prefix}{body}")
-}
-
-/// merge_hermes_yaml 写入 MCP 条目与 owned Hook（幂等）。
-fn merge_hermes_yaml(
-    existing: Option<&str>,
-    ctx: &ConnectorRuntimeContext,
-    install_hook: bool,
-) -> Result<MergeResult, ConnectorError> {
-    let source = match existing {
-        Some(text) if !text.trim().is_empty() => text.to_string(),
-        _ => "theme: default\n".into(),
+fn parse_hermes_document(existing: Option<&str>) -> Result<(Document, String), ConnectorError> {
+    let source = existing
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_default()
+        .to_string();
+    let doc = if source.is_empty() {
+        MappingBuilder::new().build_document()
+    } else {
+        Document::from_str(&source).map_err(|error| {
+            ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
+        })?
     };
-    let doc = Document::from_str(&source).map_err(|error| {
-        ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
-    })?;
     let root = doc
         .as_mapping()
         .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
-    let after = rebuild_document(
-        &source,
-        &root,
-        ctx,
-        true,
-        if install_hook { Some(true) } else { None },
-    );
+    // yaml-edit 不能安全地向 flow-style mapping 里追加 block-style 子节点。
+    // 对这类罕见形态 fail closed，避免为了自动安装破坏用户文件。
+    if root.is_flow_style() {
+        return Err(ConnectorError::new(
+            "unsupported_config_shape",
+            "Hermes 配置根节点不支持 flow-style mapping",
+        ));
+    }
+    if source.trim_end().ends_with("...") {
+        return Err(ConnectorError::new(
+            "unsupported_config_shape",
+            "Hermes 配置不支持在显式文档结束标记后自动追加节点",
+        ));
+    }
+    Ok((doc, source))
+}
+
+fn unique_span(source: &str, needle: &str, label: &str) -> Result<(usize, usize), ConnectorError> {
+    if needle.is_empty() {
+        return Err(ConnectorError::new(
+            "config_transform_failed",
+            format!("Hermes {label} 节点为空，无法安全定位"),
+        ));
+    }
+    let matches = source
+        .match_indices(needle)
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(ConnectorError::new(
+            "config_transform_failed",
+            format!("Hermes {label} 节点无法唯一定位"),
+        ));
+    }
+    Ok((matches[0], matches[0] + needle.len()))
+}
+
+fn validate_generated_yaml(content: String) -> Result<String, ConnectorError> {
+    Document::from_str(&content).map_err(|error| {
+        ConnectorError::new(
+            "config_transform_failed",
+            format!("Hermes YAML 变更后无法解析: {error}"),
+        )
+    })?;
+    Ok(content)
+}
+
+fn block_end(source: &str, start: usize, indent: usize) -> usize {
+    let mut cursor = source[start..]
+        .find('\n')
+        .map_or(source.len(), |offset| start + offset + 1);
+    while cursor < source.len() {
+        let next = source[cursor..]
+            .find('\n')
+            .map_or(source.len(), |offset| cursor + offset + 1);
+        let line = source[cursor..next].trim_end_matches(['\r', '\n']);
+        if !line.trim().is_empty() {
+            let current_indent = line.len() - line.trim_start_matches(' ').len();
+            if current_indent <= indent {
+                return cursor;
+            }
+        }
+        cursor = next;
+    }
+    source.len()
+}
+
+fn mapping_entry_span(
+    source: &str,
+    needle: &str,
+    label: &str,
+) -> Result<(usize, usize, usize), ConnectorError> {
+    let (match_start, _) = unique_span(source, needle, label)?;
+    let start = source[..match_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let indent = match_start - start;
+    Ok((start, block_end(source, start, indent), indent))
+}
+
+fn key_line_matches(line: &str, key: &str) -> bool {
+    let trimmed = line.trim_start_matches(' ');
+    [
+        format!("{key}:"),
+        format!("'{key}':"),
+        format!("\"{key}\":"),
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix))
+}
+
+fn mapping_key_span_within(
+    source: &str,
+    key: &str,
+    range_start: usize,
+    range_end: usize,
+    minimum_indent: usize,
+) -> Result<(usize, usize, usize), ConnectorError> {
+    let mut candidates = Vec::new();
+    let mut cursor = range_start;
+    while cursor < range_end {
+        let next = source[cursor..range_end]
+            .find('\n')
+            .map_or(range_end, |offset| cursor + offset + 1);
+        let line = source[cursor..next].trim_end_matches(['\r', '\n']);
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if indent >= minimum_indent && key_line_matches(line, key) {
+            candidates.push((
+                cursor,
+                block_end(source, cursor, indent).min(range_end),
+                indent,
+            ));
+        }
+        cursor = next;
+    }
+    if candidates.len() != 1 {
+        return Err(ConnectorError::new(
+            "config_transform_failed",
+            format!("Hermes {key} 键无法唯一定位"),
+        ));
+    }
+    Ok(candidates[0])
+}
+
+fn sequence_item_span(
+    source: &str,
+    needle: &str,
+    label: &str,
+) -> Result<(usize, usize), ConnectorError> {
+    let (match_start, _) = unique_span(source, needle, label)?;
+    let line_start = source[..match_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let prefix = &source[line_start..match_start];
+    let mut start = line_start;
+    if !prefix.contains('-') && line_start > 0 {
+        let previous_end = line_start - 1;
+        let previous_start = source[..previous_end]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        if source[previous_start..previous_end].trim() == "-" {
+            start = previous_start;
+        }
+    }
+    let first_line_end = source[start..]
+        .find('\n')
+        .map_or(source.len(), |offset| start + offset);
+    let first_line = &source[start..first_line_end];
+    let indent = first_line.len() - first_line.trim_start_matches(' ').len();
+    Ok((start, block_end(source, start, indent)))
+}
+
+fn remove_owned_hook_event(source: &str, event: &str) -> Result<String, ConnectorError> {
+    let doc = Document::from_str(source).map_err(|error| {
+        ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
+    })?;
+    let Some(hooks) = doc.as_mapping().and_then(|root| root.get_mapping("hooks")) else {
+        return Ok(source.to_string());
+    };
+    let Some(sequence) = hooks.get_sequence(event) else {
+        return Ok(source.to_string());
+    };
+    let mut owned = Vec::new();
+    let mut user_count = 0usize;
+    for index in 0..sequence.len() {
+        if let Some(item) = sequence.get(index) {
+            if entry_has_marker(&item) {
+                owned.push(item.to_string());
+            } else {
+                user_count += 1;
+            }
+        }
+    }
+    if owned.is_empty() {
+        return Ok(source.to_string());
+    }
+    if user_count == 0 {
+        let entry = hooks
+            .find_entry_by_key(event)
+            .expect("validated event must have a mapping entry");
+        let (start, end, _) = mapping_entry_span(source, &entry.to_string(), event)?;
+        let mut after = source.to_string();
+        after.replace_range(start..end, "");
+        return validate_generated_yaml(after);
+    }
+    let mut spans = owned
+        .iter()
+        .map(|needle| sequence_item_span(source, needle, event))
+        .collect::<Result<Vec<_>, _>>()?;
+    spans.sort_unstable();
+    spans.dedup();
+    let mut after = source.to_string();
+    for (start, end) in spans.into_iter().rev() {
+        after.replace_range(start..end, "");
+    }
+    validate_generated_yaml(after)
+}
+
+fn append_fragment_at_node_end(
+    source: &str,
+    node_text: &str,
+    fragment: &str,
+    label: &str,
+) -> Result<String, ConnectorError> {
+    let (_, end) = unique_span(source, node_text, label)?;
+    let mut insertion = String::new();
+    if !node_text.ends_with('\n') {
+        insertion.push('\n');
+    }
+    insertion.push_str(fragment);
+    if !fragment.ends_with('\n') {
+        insertion.push('\n');
+    }
+    let mut after = source.to_string();
+    after.insert_str(end, &insertion);
+    validate_generated_yaml(after)
+}
+
+fn append_root_fragment(source: &str, fragment: &str) -> Result<String, ConnectorError> {
+    let mut after = source.to_string();
+    if !after.is_empty() && !after.ends_with('\n') {
+        after.push('\n');
+    }
+    after.push_str(fragment);
+    if !fragment.ends_with('\n') {
+        after.push('\n');
+    }
+    validate_generated_yaml(after)
+}
+
+/// merge_hermes_mcp 仅写入 MCP owned 节点，为 Skill 安装保留明确的顺序边界。
+fn merge_hermes_mcp(
+    existing: Option<&str>,
+    ctx: &ConnectorRuntimeContext,
+) -> Result<MergeResult, ConnectorError> {
+    let (doc, source) = parse_hermes_document(existing)?;
+    if source.is_empty() {
+        let command = ctx.mcp_binary().to_string_lossy().into_owned();
+        let content = MappingBuilder::new()
+            .mapping("mcp_servers", |servers| {
+                servers.mapping("superdev", |server| {
+                    server.pair("command", command).mapping("env", |env| {
+                        env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
+                    })
+                })
+            })
+            .build_document()
+            .to_string();
+        return Ok(MergeResult {
+            changed: true,
+            content,
+        });
+    }
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
+    let after = if let Some(servers) = root.get_mapping("mcp_servers") {
+        if servers.is_flow_style() {
+            return Err(ConnectorError::new(
+                "unsupported_config_shape",
+                "Hermes mcp_servers 不支持 flow-style mapping",
+            ));
+        }
+        if servers.find_entry_by_key("superdev").is_some() {
+            if servers
+                .get_mapping("superdev")
+                .is_some_and(|entry| mcp_entry_matches(ctx, &entry))
+            {
+                return Ok(MergeResult {
+                    changed: false,
+                    content: source,
+                });
+            }
+            let (mcp_start, mcp_end, _) =
+                mapping_key_span_within(&source, "mcp_servers", 0, source.len(), 0)?;
+            let (start, end, indent) =
+                mapping_key_span_within(&source, "superdev", mcp_start, mcp_end, 1)?;
+            let mut after = source.clone();
+            let fragment = format!(
+                "{}\n",
+                indent_fragment(&desired_mcp_server_fragment(ctx), indent)
+            );
+            after.replace_range(start..end, &fragment);
+            validate_generated_yaml(after)?
+        } else {
+            let servers_text = servers.to_string();
+            let fragment = indent_fragment(
+                &desired_mcp_server_fragment(ctx),
+                node_indent(&source, &servers_text, "mcp_servers", 2)?,
+            );
+            append_fragment_at_node_end(&source, &servers_text, &fragment, "mcp_servers")?
+        }
+    } else if root.contains_key("mcp_servers") {
+        return Err(ConnectorError::new(
+            "unsupported_config_shape",
+            "Hermes mcp_servers 必须是 mapping",
+        ));
+    } else {
+        let command = ctx.mcp_binary().to_string_lossy().into_owned();
+        let fragment = MappingBuilder::new()
+            .mapping("mcp_servers", |servers| {
+                servers.mapping("superdev", |server| {
+                    server.pair("command", command).mapping("env", |env| {
+                        env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
+                    })
+                })
+            })
+            .build_document()
+            .to_string();
+        append_root_fragment(&source, &fragment)?
+    };
+    Ok(MergeResult {
+        changed: after != source,
+        content: after,
+    })
+}
+
+/// merge_hermes_hook 在 Skill 就绪后写入 pre_llm_call，并迁移旧版 owned hook。
+fn merge_hermes_hook(
+    existing: Option<&str>,
+    ctx: &ConnectorRuntimeContext,
+) -> Result<MergeResult, ConnectorError> {
+    let (doc, source) = parse_hermes_document(existing)?;
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
+    let skill = skill_path(ctx);
+    if root.contains_key("hooks") && root.get_mapping("hooks").is_none() {
+        return Err(ConnectorError::new(
+            "unsupported_config_shape",
+            "Hermes hooks 必须是 mapping",
+        ));
+    }
+    if let Some(hooks) = root.get_mapping("hooks") {
+        if hooks.is_flow_style() {
+            return Err(ConnectorError::new(
+                "unsupported_config_shape",
+                "Hermes hooks 不支持 flow-style mapping",
+            ));
+        }
+        if let Some(current) = hooks.get_sequence(HOOK_EVENT) {
+            if current.is_flow_style() {
+                return Err(ConnectorError::new(
+                    "unsupported_config_shape",
+                    "Hermes hooks.pre_llm_call 不支持 flow-style sequence",
+                ));
+            }
+        } else if hooks.contains_key(HOOK_EVENT) {
+            return Err(ConnectorError::new(
+                "unsupported_config_shape",
+                "Hermes hooks.pre_llm_call 必须是 sequence",
+            ));
+        }
+    }
+
+    // 先以文本块精确移除旧版/重复 owned 条目，避免 yaml-edit remove 吞掉相邻换行。
+    let base = remove_owned_hook_event(&source, LEGACY_HOOK_EVENT)?;
+    let base = remove_owned_hook_event(&base, HOOK_EVENT)?;
+    let base_doc = Document::from_str(&base).map_err(|error| {
+        ConnectorError::new(
+            "config_transform_failed",
+            format!("Hermes Hook 迁移后无法解析: {error}"),
+        )
+    })?;
+    let base_root = base_doc
+        .as_mapping()
+        .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
+    let after = if let Some(hooks) = base_root.get_mapping("hooks") {
+        if let Some(current) = hooks.get_sequence(HOOK_EVENT) {
+            let sequence_text = current.to_string();
+            let fragment = indent_fragment(
+                &desired_hook_item_fragment(&skill),
+                node_indent(&base, &sequence_text, "hooks.pre_llm_call", 4)?,
+            );
+            append_fragment_at_node_end(&base, &sequence_text, &fragment, "hooks.pre_llm_call")?
+        } else if hooks.contains_key(HOOK_EVENT) {
+            return Err(ConnectorError::new(
+                "unsupported_config_shape",
+                "Hermes hooks.pre_llm_call 必须是 sequence",
+            ));
+        } else if hooks.is_empty() {
+            let entry = base_root
+                .find_entry_by_key("hooks")
+                .expect("existing hooks mapping must have an entry");
+            let needle = entry.to_string();
+            let (start, end, _) = mapping_entry_span(&base, &needle, "hooks")?;
+            let command = hook_command(&skill);
+            let fragment = MappingBuilder::new()
+                .mapping("hooks", |hooks| {
+                    hooks.sequence(HOOK_EVENT, |sequence| {
+                        sequence
+                            .mapping(|entry| entry.pair("name", HOOK_NAME).pair("command", command))
+                    })
+                })
+                .build_document()
+                .to_string();
+            let mut after = base.clone();
+            after.replace_range(start..end, &format!("{fragment}\n"));
+            validate_generated_yaml(after)?
+        } else {
+            let hooks_text = hooks.to_string();
+            let fragment = indent_fragment(
+                &desired_hook_event_fragment(&skill),
+                node_indent(&base, &hooks_text, "hooks", 2)?,
+            );
+            append_fragment_at_node_end(&base, &hooks_text, &fragment, "hooks")?
+        }
+    } else {
+        let command = hook_command(&skill);
+        let fragment = MappingBuilder::new()
+            .mapping("hooks", |hooks| {
+                hooks.sequence(HOOK_EVENT, |sequence| {
+                    sequence.mapping(|entry| entry.pair("name", HOOK_NAME).pair("command", command))
+                })
+            })
+            .build_document()
+            .to_string();
+        append_root_fragment(&base, &fragment)?
+    };
     Ok(MergeResult {
         changed: after != source,
         content: after,
@@ -332,18 +651,22 @@ fn remove_hermes_owned(existing: Option<&str>) -> Result<MergeResult, ConnectorE
     let root = doc
         .as_mapping()
         .ok_or_else(|| ConnectorError::new("invalid_config", "Hermes 配置根节点必须是 mapping"))?;
-    // 卸载时不需要真实 MCP 二进制路径；传入占位 ctx 不可用，改用只剥除逻辑。
-    // 这里用 rebuild：include_superdev=false，hooks 剥离 owned。
-    // command 仅在 include_superdev=true 时使用，占位 Path 即可。
-    let placeholder = ConnectorRuntimeContext::new(
-        PathBuf::from("/"),
-        vec![],
-        vec![],
-        PathBuf::from("/superdev-mcp"),
-        None,
-        None,
-    );
-    let after = rebuild_document(source, &root, &placeholder, false, Some(false));
+    let mut after = source.to_string();
+    if let Some(servers) = root.get_mapping("mcp_servers") {
+        if servers.find_entry_by_key("superdev").is_some() {
+            let (mcp_start, mcp_end, _) =
+                mapping_key_span_within(&after, "mcp_servers", 0, after.len(), 0)?;
+            let (start, end, _) = if servers.len() == 1 {
+                (mcp_start, mcp_end, 0)
+            } else {
+                mapping_key_span_within(&after, "superdev", mcp_start, mcp_end, 1)?
+            };
+            after.replace_range(start..end, "");
+        }
+    }
+    after = remove_owned_hook_event(&after, HOOK_EVENT)?;
+    after = remove_owned_hook_event(&after, LEGACY_HOOK_EVENT)?;
+    let after = validate_generated_yaml(after)?;
     Ok(MergeResult {
         changed: after != source,
         content: after,
@@ -405,7 +728,60 @@ fn mcp_status_from_doc(
     }
 }
 
-fn hook_status_from_doc(doc: Option<&Document>) -> (IntegrationStateStatus, Option<String>) {
+fn hook_trust_status(ctx: &ConnectorRuntimeContext) -> (IntegrationStateStatus, Option<String>) {
+    let path = allowlist_path(ctx);
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                IntegrationStateStatus::NeedsAction,
+                Some("Session Hook 已写入，请在 Hermes 中信任后重启".into()),
+            );
+        }
+        Err(error) => {
+            return (
+                IntegrationStateStatus::Error,
+                Some(format!("读取 Hermes Hook 信任状态失败: {error}")),
+            );
+        }
+    };
+    let allowlist: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                IntegrationStateStatus::Error,
+                Some(format!("Hermes Hook 信任文件无法解析: {error}")),
+            );
+        }
+    };
+    let expected = hook_command(&skill_path(ctx));
+    let approved = allowlist
+        .get("approvals")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|approvals| {
+            approvals.iter().any(|approval| {
+                approval.get("event").and_then(serde_json::Value::as_str) == Some(HOOK_EVENT)
+                    && approval.get("command").and_then(serde_json::Value::as_str)
+                        == Some(expected.as_str())
+            })
+        });
+    if approved {
+        (
+            IntegrationStateStatus::Configured,
+            Some("Session Hook 已配置并获得 Hermes 信任".into()),
+        )
+    } else {
+        (
+            IntegrationStateStatus::NeedsAction,
+            Some("Session Hook 已写入，请在 Hermes 中信任后重启".into()),
+        )
+    }
+}
+
+fn hook_status_from_doc(
+    ctx: &ConnectorRuntimeContext,
+    doc: Option<&Document>,
+) -> (IntegrationStateStatus, Option<String>) {
     let Some(doc) = doc else {
         return (
             IntegrationStateStatus::Missing,
@@ -424,7 +800,7 @@ fn hook_status_from_doc(doc: Option<&Document>) -> (IntegrationStateStatus, Opti
             Some("Session Hook 未安装".into()),
         );
     };
-    let Some(seq) = hooks.get_sequence("on_session_start") else {
+    let Some(seq) = hooks.get_sequence(HOOK_EVENT) else {
         return (
             IntegrationStateStatus::Missing,
             Some("Session Hook 未安装".into()),
@@ -433,18 +809,14 @@ fn hook_status_from_doc(doc: Option<&Document>) -> (IntegrationStateStatus, Opti
     let mut found = false;
     for index in 0..seq.len() {
         if let Some(item) = seq.get(index) {
-            if entry_has_marker(&item) {
+            if entry_matches_current_hook(&item, &skill_path(ctx)) {
                 found = true;
                 break;
             }
         }
     }
     if found {
-        // Hook 已写入，但仍需用户信任/重启后才真正生效——因此状态保持 NeedsAction。
-        (
-            IntegrationStateStatus::NeedsAction,
-            Some("Session Hook 已写入，请在 Hermes 中信任并重启后生效".into()),
-        )
+        hook_trust_status(ctx)
     } else {
         (
             IntegrationStateStatus::Missing,
@@ -497,7 +869,7 @@ impl AgentConnector for HermesConnector {
         let skill = skill_path(ctx);
         let doc = read_doc(&config)?;
         let (mcp_status, mcp_message) = mcp_status_from_doc(ctx, doc.as_ref());
-        let (hook_status, hook_message) = hook_status_from_doc(doc.as_ref());
+        let (hook_status, hook_message) = hook_status_from_doc(ctx, doc.as_ref());
         let skill_state = common::skill_status(ctx, &skill);
         let result = ConnectorStatus {
             integrations: vec![
@@ -552,9 +924,8 @@ impl AgentConnector for HermesConnector {
             .contains(&IntegrationCapability::SessionHook);
 
         let (mcp_result, mcp_backup, mcp_message) = if want_mcp {
-            // Hook 与 MCP 同文件；若同时请求 Hook 则一次写入，避免二次备份。
             match common::mutate_config(CONNECTOR_ID, &config, |existing| {
-                merge_hermes_yaml(existing, ctx, want_hook)
+                merge_hermes_mcp(existing, ctx)
             }) {
                 Ok(outcome) => {
                     tracing::info!(
@@ -660,8 +1031,11 @@ impl AgentConnector for HermesConnector {
                 skill_state.message,
             )
         };
+        let skill_ready = matches!(
+            skill_result.result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        );
 
-        // 若 MCP 写入时未带 Hook（例如只装 MCP），在 MCP 就绪后再单独写入 Hook。
         let hook_result = if !mcp_ready {
             common::integration_result(
                 IntegrationCapability::SessionHook,
@@ -670,41 +1044,49 @@ impl AgentConnector for HermesConnector {
                 None,
                 Some("MCP 未就绪，已跳过 Hook".into()),
             )
+        } else if want_hook && !skill_ready {
+            // Hook 依赖 Skill 内的可执行脚本，不允许留下指向空路径的活跃配置。
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Skipped,
+                Some(common::path_string(&config)),
+                None,
+                Some("Skill 未就绪，已跳过 Hook".into()),
+            )
         } else if want_hook {
-            if want_mcp {
-                // 已在 MCP 写入中合并 Hook；按状态映射结果。
-                let (_, message) = hook_status_from_doc(read_doc(&config)?.as_ref());
-                common::integration_result(
+            match common::mutate_config(CONNECTOR_ID, &config, |existing| {
+                merge_hermes_hook(existing, ctx)
+            }) {
+                Ok(mutation) => {
+                    let (status, message) = hook_status_from_doc(ctx, read_doc(&config)?.as_ref());
+                    let result = match status {
+                        IntegrationStateStatus::Configured if mutation.changed => {
+                            IntegrationResult::Installed
+                        }
+                        IntegrationStateStatus::Configured => IntegrationResult::AlreadyPresent,
+                        IntegrationStateStatus::NeedsAction => IntegrationResult::NeedsAction,
+                        IntegrationStateStatus::Missing
+                        | IntegrationStateStatus::Error
+                        | IntegrationStateStatus::Unknown => IntegrationResult::Failed,
+                    };
+                    common::integration_result(
+                        IntegrationCapability::SessionHook,
+                        result,
+                        Some(common::path_string(&config)),
+                        mutation.backup_path,
+                        message,
+                    )
+                }
+                Err(error) => common::integration_result(
                     IntegrationCapability::SessionHook,
-                    IntegrationResult::NeedsAction,
+                    IntegrationResult::Failed,
                     Some(common::path_string(&config)),
                     None,
-                    message.or_else(|| {
-                        Some("Session Hook 已写入，请在 Hermes 中信任并重启后生效".into())
-                    }),
-                )
-            } else {
-                match common::mutate_config(CONNECTOR_ID, &config, |existing| {
-                    merge_hermes_yaml(existing, ctx, true)
-                }) {
-                    Ok(outcome) => common::integration_result(
-                        IntegrationCapability::SessionHook,
-                        IntegrationResult::NeedsAction,
-                        Some(common::path_string(&config)),
-                        outcome.backup_path,
-                        Some("Session Hook 已写入，请在 Hermes 中信任并重启后生效".into()),
-                    ),
-                    Err(error) => common::integration_result(
-                        IntegrationCapability::SessionHook,
-                        IntegrationResult::Failed,
-                        Some(common::path_string(&config)),
-                        None,
-                        Some(error.message().into()),
-                    ),
-                }
+                    Some(error.message().into()),
+                ),
             }
         } else {
-            let (status, message) = hook_status_from_doc(read_doc(&config)?.as_ref());
+            let (status, message) = hook_status_from_doc(ctx, read_doc(&config)?.as_ref());
             common::integration_result(
                 IntegrationCapability::SessionHook,
                 match status {
@@ -857,18 +1239,17 @@ impl AgentConnector for HermesConnector {
     ) -> Result<ConnectorManualInstructions, ConnectorError> {
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let command = ctx.mcp_binary().to_string_lossy();
-        let hook = hook_command(&skill);
-        let manual = format!(
-            "mcp_servers:\n  superdev:\n    command: {command}\n    env:\n      SUPERDEV_AGENT_URL: {DEFAULT_AGENT_URL}\nhooks:\n  on_session_start:\n    - name: {HOOK_NAME}\n      command: {hook}\n"
-        );
+        // 恢复指引与自动安装共用同一 YAML 生成路径，避免带空格路径的引用规则漂移。
+        let mcp = merge_hermes_mcp(None, ctx)?.content;
+        let manual = merge_hermes_hook(Some(&mcp), ctx)?.content;
         Ok(ConnectorManualInstructions {
             summary: "手动将 SuperDev 写入 Hermes YAML 并信任 Hook".into(),
             steps: vec![
                 format!("编辑 {}", config.display()),
-                "写入 mcp_servers.superdev 与 hooks.on_session_start 标记条目".into(),
+                format!("写入 mcp_servers.superdev 与 hooks.{HOOK_EVENT} 标记条目"),
                 format!("确认 Skill 目录：{}", skill.display()),
-                "在 Hermes 中信任 Session Hook 并重启".into(),
+                "运行 `hermes hooks list` 检查 Hook，在 Hermes 提示时信任并重启".into(),
+                "若 Hook 未生效，运行 `hermes hooks doctor` 诊断".into(),
             ],
             config_path: Some(common::path_string(&config)),
             manual_config: Some(manual),
@@ -904,6 +1285,11 @@ mod tests {
         fs::create_dir_all(skill_source.join("hooks")).unwrap();
         fs::write(skill_source.join("SKILL.md"), "fixture skill").unwrap();
         fs::write(skill_source.join("hooks/session-start"), "#!/bin/sh\n").unwrap();
+        fs::write(
+            skill_source.join("hooks/hermes-session-context"),
+            "#!/bin/sh\nprintf '{}\\n'\n",
+        )
+        .unwrap();
         fs::write(skill_source.join("hooks/run-hook.cmd"), "echo hook\n").unwrap();
         ConnectorRuntimeContext::new(
             home.clone(),
@@ -937,6 +1323,66 @@ hooks:
     - name: user-hook
       command: echo user
 "#
+    }
+
+    #[test]
+    fn yaml_mutation_preserves_sequences_block_scalars_and_inline_comments() {
+        let home = test_dir("yaml-lossless");
+        let root = home.join(".hermes");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("config.yaml");
+        let fixture = r#"theme: dark # keep inline comment
+toolsets:
+  - hermes-cli
+  - mcp-other
+notes: |
+  keep this block
+  exactly as written
+mcp_servers:
+  other:
+    command: npx
+    args: ["-y", "other-mcp"] # keep args and comment
+hooks:
+  post_tool_call:
+    - matcher: "write_file|patch"
+      command: "echo user-hook"
+"#;
+        fs::write(&config, fixture).unwrap();
+        let ctx = context_at(home.clone());
+        let connector = HermesConnector::new();
+
+        connector.install(&ctx, install_request()).unwrap();
+        let installed = fs::read_to_string(&config).unwrap();
+        for preserved in [
+            "theme: dark # keep inline comment",
+            "  - hermes-cli\n  - mcp-other",
+            "notes: |\n  keep this block\n  exactly as written",
+            "args: [\"-y\", \"other-mcp\"] # keep args and comment",
+            "matcher: \"write_file|patch\"",
+            "command: \"echo user-hook\"",
+        ] {
+            assert!(
+                installed.contains(preserved),
+                "install must preserve `{preserved}` byte-for-byte:\n{installed}"
+            );
+        }
+
+        connector.uninstall(&ctx).unwrap();
+        let removed = fs::read_to_string(&config).unwrap();
+        for preserved in [
+            "theme: dark # keep inline comment",
+            "  - hermes-cli\n  - mcp-other",
+            "notes: |\n  keep this block\n  exactly as written",
+            "args: [\"-y\", \"other-mcp\"] # keep args and comment",
+            "matcher: \"write_file|patch\"",
+            "command: \"echo user-hook\"",
+        ] {
+            assert!(
+                removed.contains(preserved),
+                "uninstall must preserve `{preserved}` byte-for-byte:\n{removed}"
+            );
+        }
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
@@ -1035,6 +1481,43 @@ hooks:
     }
 
     #[test]
+    fn mismatched_existing_mcp_is_replaced_without_corrupting_adjacent_keys() {
+        let home = test_dir("mcp-replace");
+        let root = home.join(".hermes");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("config.yaml");
+        fs::write(
+            &config,
+            "mcp_servers:\n  superdev:\n    command: old-command\n    env:\n      SUPERDEV_AGENT_URL: http://old.invalid\ntheme: dark # preserve me\n",
+        )
+        .unwrap();
+        let ctx = context_at(home.clone());
+        let connector = HermesConnector::new();
+
+        let outcome = connector.install(&ctx, install_request()).unwrap();
+        assert_ne!(outcome.result, ConnectorResult::Failed);
+        let content = fs::read_to_string(&config).unwrap();
+        let parsed = Document::from_str(&content).expect("updated YAML must remain valid");
+        let root = parsed.as_mapping().unwrap();
+        assert_eq!(
+            root.get("theme").and_then(|node| scalar_string(&node)),
+            Some("dark".into())
+        );
+        assert!(content.contains("theme: dark # preserve me"), "{content}");
+        let status = connector.status(&ctx).unwrap();
+        assert_eq!(
+            status
+                .integrations
+                .iter()
+                .find(|item| item.capability == IntegrationCapability::Mcp)
+                .unwrap()
+                .status,
+            IntegrationStateStatus::Configured
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn missing_hook_status_is_missing() {
         let home = test_dir("hook-missing");
         let root = home.join(".hermes");
@@ -1052,6 +1535,134 @@ hooks:
             .find(|i| i.capability == IntegrationCapability::SessionHook)
             .unwrap();
         assert_eq!(hook.status, IntegrationStateStatus::Missing);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn hook_is_not_written_when_skill_install_fails() {
+        let home = test_dir("hook-skill-failure");
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![home.join("bin")],
+            vec![],
+            home.join("superdev-mcp"),
+            None,
+            Some("bundled skill unavailable".into()),
+        );
+        let connector = HermesConnector::new();
+
+        let outcome = connector.install(&ctx, install_request()).unwrap();
+        let config = fs::read_to_string(config_path(&ctx)).unwrap();
+        assert!(
+            !config.contains(HOOK_MARKER) && !config.contains(HOOK_NAME),
+            "failed Skill must not leave an active hook:\n{config}"
+        );
+        let hook = outcome
+            .integrations
+            .iter()
+            .find(|item| item.capability == IntegrationCapability::SessionHook)
+            .unwrap();
+        assert!(matches!(
+            hook.result,
+            IntegrationResult::Skipped | IntegrationResult::Failed
+        ));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn hook_uses_hermes_context_protocol_and_becomes_configured_after_trust() {
+        let home = test_dir("hook-protocol");
+        let ctx = context_at(home.clone());
+        let connector = HermesConnector::new();
+        connector.install(&ctx, install_request()).unwrap();
+
+        let config = fs::read_to_string(config_path(&ctx)).unwrap();
+        assert!(config.contains("pre_llm_call"), "{config}");
+        assert!(config.contains("hermes-session-context"), "{config}");
+        assert!(
+            !config.contains("on_session_start"),
+            "legacy hook must be migrated:\n{config}"
+        );
+        assert!(skill_path(&ctx)
+            .join("hooks")
+            .join("hermes-session-context")
+            .is_file());
+
+        let before = connector.status(&ctx).unwrap();
+        let before_hook = before
+            .integrations
+            .iter()
+            .find(|item| item.capability == IntegrationCapability::SessionHook)
+            .unwrap();
+        assert_eq!(before_hook.status, IntegrationStateStatus::NeedsAction);
+
+        let allowlist = home.join(".hermes").join("shell-hooks-allowlist.json");
+        fs::write(
+            allowlist,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "approvals": [{
+                    "event": "pre_llm_call",
+                    "command": hook_command(&skill_path(&ctx))
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let trusted = connector.status(&ctx).unwrap();
+        let trusted_hook = trusted
+            .integrations
+            .iter()
+            .find(|item| item.capability == IntegrationCapability::SessionHook)
+            .unwrap();
+        assert_eq!(trusted_hook.status, IntegrationStateStatus::Configured);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn current_event_user_hooks_survive_install_update_and_uninstall() {
+        let home = test_dir("hook-user-current-event");
+        let root = home.join(".hermes");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("config.yaml");
+        fs::write(
+            &config,
+            "hooks:\n  pre_llm_call:\n    - name: user-context\n      command: echo user-context # keep user hook\n",
+        )
+        .unwrap();
+        let ctx = context_at(home.clone());
+        let connector = HermesConnector::new();
+
+        connector.install(&ctx, install_request()).unwrap();
+        connector.install(&ctx, install_request()).unwrap();
+        let installed = fs::read_to_string(&config).unwrap();
+        Document::from_str(&installed).expect("installed YAML must remain valid");
+        assert!(installed.contains("echo user-context # keep user hook"));
+        assert_eq!(installed.matches(HOOK_NAME).count(), 1, "{installed}");
+
+        connector.uninstall(&ctx).unwrap();
+        let removed = fs::read_to_string(&config).unwrap();
+        Document::from_str(&removed).expect("uninstalled YAML must remain valid");
+        assert!(removed.contains("echo user-context # keep user hook"));
+        assert!(!removed.contains(HOOK_NAME));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn manual_config_is_valid_yaml_with_the_exact_hook_command() {
+        let home = test_dir("manual-yaml");
+        let ctx = context_at(home.clone());
+        let manual = HermesConnector::new().manual_instructions(&ctx).unwrap();
+        let content = manual.manual_config.expect("manual config");
+        let doc = Document::from_str(&content).expect("manual config must be valid YAML");
+        let command = doc
+            .as_mapping()
+            .and_then(|root| root.get_mapping("hooks"))
+            .and_then(|hooks| hooks.get_sequence(HOOK_EVENT))
+            .and_then(|sequence| sequence.get(0))
+            .and_then(|entry| entry.as_mapping().cloned())
+            .and_then(|entry| entry.get("command"))
+            .and_then(|node| scalar_string(&node));
+        assert_eq!(command, Some(hook_command(&skill_path(&ctx))));
         let _ = fs::remove_dir_all(home);
     }
 

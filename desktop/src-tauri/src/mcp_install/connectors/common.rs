@@ -505,6 +505,42 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn mutate_config_preserves_existing_mode_and_restricts_new_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = test_dir("config-mode");
+        let existing = root.join("existing.json");
+        fs::write(&existing, "{}\n").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).unwrap();
+        mutate_config("fixture", &existing, |_| {
+            Ok(MergeResult {
+                content: "{\"changed\":true}\n".into(),
+                changed: true,
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let new_file = root.join("new.json");
+        mutate_config("fixture", &new_file, |_| {
+            Ok(MergeResult {
+                content: "{\"created\":true}\n".into(),
+                changed: true,
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            fs::metadata(&new_file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn manual_hook_result_requires_a_nonblank_message() {
         let result = manual_hook_result(None);
