@@ -1009,10 +1009,14 @@ mod tests {
 
     #[test]
     fn builtin_connectors_round_trip_real_json_and_toml_configs() {
+        // Rust 测试线程名包含 `::`，不能直接作为 Windows 路径；时间戳同时避免并发冲突。
         let root = std::env::temp_dir().join(format!(
             "builtin-roundtrip-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let skill_source = root.join("skill-source");
         std::fs::create_dir_all(skill_source.join("hooks")).unwrap();
