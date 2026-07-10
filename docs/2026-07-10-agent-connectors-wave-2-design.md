@@ -145,8 +145,10 @@ OpenClaw owns a JSON5 configuration format with includes, alternate config paths
 
 - Install/update: `openclaw mcp set superdev <canonical-json>`.
 - Status: `openclaw mcp show superdev --json`.
-- Verify: `openclaw mcp doctor superdev --probe`.
+- Verify: re-read `openclaw mcp show superdev --json`, because Registry verify is a read-only normalization over `status`.
 - Uninstall: `openclaw mcp unset superdev`.
+
+`openclaw mcp doctor superdev --probe` is included in manual verification instructions, but the Connector does not execute it from `status` or Registry verify because it may perform broader diagnostics than the read-only protocol permits.
 
 The canonical server object contains the absolute `superdev-mcp` command and `SUPERDEV_AGENT_URL` environment entry. No shell command string is constructed.
 
@@ -235,7 +237,7 @@ Uninstall removes only the `superdev` MCP entry, bundled `superdev` Skill direct
 
 ### Verify
 
-File-based Connectors re-read and structurally validate current configuration, command, environment, and Skill contents. OpenClaw additionally runs its official bounded `doctor --probe` command. Verification never trusts a prior install result.
+File-based Connectors re-read and structurally validate current configuration, command, environment, and Skill contents. OpenClaw re-runs the bounded official `mcp show superdev --json` query; its broader `doctor --probe` command remains a user-invoked manual verification step. Verification never trusts a prior install result.
 
 ## Frontend Behavior
 
