@@ -365,6 +365,10 @@ pub struct AgentConnectorState {
     pub integrations: Vec<IntegrationState>,
     pub requires_restart: bool,
     pub message: Option<String>,
+    /// 当前配置中的 SuperDev MCP 可执行命令；未配置时为 None。
+    pub mcp_command: Option<String>,
+    /// 当前配置中的 SUPERDEV_AGENT_URL；未配置时为 None。
+    pub agent_url: Option<String>,
 }
 
 /// AgentConnectorSummary 将静态描述符与运行时状态组成一个查询结果。
@@ -1682,6 +1686,8 @@ mod tests {
                 }],
                 requires_restart: false,
                 message: Some("ready".to_string()),
+                mcp_command: Some("/bin/superdev-mcp".to_string()),
+                agent_url: Some("http://127.0.0.1:57017".to_string()),
             },
         };
 
@@ -1721,7 +1727,9 @@ mod tests {
                         "message": null
                     }],
                     "requires_restart": false,
-                    "message": "ready"
+                    "message": "ready",
+                    "mcp_command": "/bin/superdev-mcp",
+                    "agent_url": "http://127.0.0.1:57017"
                 }
             })
         );

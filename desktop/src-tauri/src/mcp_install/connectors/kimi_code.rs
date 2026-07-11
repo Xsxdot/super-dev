@@ -245,6 +245,12 @@ impl AgentConnector for KimiCodeConnector {
             target_path: None,
             message: Some("Session Hook 需手动配置".into()),
         };
+        // 仅在可读 JSON 时回填运行时字段；不在成功路径塞全局 message，避免设置页误显示告警。
+        let (mcp_command, agent_url) = fs::read_to_string(&config)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .map(|value| common::extract_json_mcp_runtime(&value))
+            .unwrap_or((None, None));
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -256,8 +262,10 @@ impl AgentConnector for KimiCodeConnector {
                 skill_state,
                 hook_state,
             ],
-            requires_restart: mcp_status == IntegrationStateStatus::Configured,
-            message: Some("Kimi Code 状态已读取".into()),
+            requires_restart: false,
+            message: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,

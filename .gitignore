@@ -38,6 +38,9 @@ docs/model-redesign.md
 docs/superpowers/
 specs/
 
+# Local markdown issue tracker
+.scratch/
+
 # Private business/strategy docs (not for the open-source repo)
 docs/MONETIZATION.md
 

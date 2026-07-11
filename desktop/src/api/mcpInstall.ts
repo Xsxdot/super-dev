@@ -34,8 +34,15 @@ export interface IntegrationState {
   capability: IntegrationCapability; status: IntegrationStateStatus; target_path?: string | null; message?: string | null
 }
 export interface AgentConnectorState {
-  detected: boolean; detection_path?: string | null; integrations: IntegrationState[]
-  requires_restart: boolean; message?: string | null
+  detected: boolean
+  detection_path?: string | null
+  integrations: IntegrationState[]
+  requires_restart: boolean
+  message?: string | null
+  /** 当前配置中的 SuperDev MCP 可执行命令；未配置时为空 */
+  mcp_command?: string | null
+  /** 当前配置中的 SUPERDEV_AGENT_URL；未配置时为空 */
+  agent_url?: string | null
 }
 export interface AgentConnectorSummary { descriptor: AgentConnectorDescriptor; state: AgentConnectorState }
 export interface IntegrationOperationResult {

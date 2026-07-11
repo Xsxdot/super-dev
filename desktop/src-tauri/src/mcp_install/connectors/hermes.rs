@@ -871,6 +871,14 @@ impl AgentConnector for HermesConnector {
         let (mcp_status, mcp_message) = mcp_status_from_doc(ctx, doc.as_ref());
         let (hook_status, hook_message) = hook_status_from_doc(ctx, doc.as_ref());
         let skill_state = common::skill_status(ctx, &skill);
+        let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
+            || mcp_status == IntegrationStateStatus::NeedsAction
+        {
+            let entry = common::entry(ctx);
+            (Some(entry.command), Some(entry.agent_url))
+        } else {
+            (None, None)
+        };
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -887,8 +895,10 @@ impl AgentConnector for HermesConnector {
                     message: hook_message,
                 },
             ],
-            requires_restart: true,
-            message: Some("Hermes 状态已读取".into()),
+            requires_restart: false,
+            message: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,

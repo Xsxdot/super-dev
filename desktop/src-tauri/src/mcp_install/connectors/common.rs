@@ -110,6 +110,42 @@ pub(super) fn entry(ctx: &ConnectorRuntimeContext) -> McpEntry {
     }
 }
 
+/// extract_json_mcp_runtime 从标准 `mcpServers.superdev` JSON 片段读取运行时命令与 Agent URL。
+///
+/// 参数：
+///   - root: 已解析的 JSON 根对象
+///
+/// 返回：
+///   - (mcp_command, agent_url)；字段缺失或为空时对应为 None
+///
+/// 注意：
+///   - command 支持字符串与首元素为字符串的数组两种 schema
+pub(super) fn extract_json_mcp_runtime(
+    root: &serde_json::Value,
+) -> (Option<String>, Option<String>) {
+    let Some(server) = root.get("mcpServers").and_then(|servers| servers.get("superdev")) else {
+        return (None, None);
+    };
+    let command = match server.get("command") {
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
+            Some(value.clone())
+        }
+        Some(serde_json::Value::Array(items)) => items
+            .first()
+            .and_then(|item| item.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string),
+        _ => None,
+    };
+    let agent_url = server
+        .get("env")
+        .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    (command, agent_url)
+}
+
 /// integration_result 构造单项集成操作结果。
 ///
 /// 参数：

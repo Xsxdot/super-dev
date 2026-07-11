@@ -55,8 +55,10 @@ function summary(id: string, detected: boolean, configured: boolean, builtIn = t
         { capability: 'skill', status: 'missing' },
         { capability: 'session_hook', status: 'missing' },
       ],
-      requires_restart: configured,
-      message: configured ? 'Restart the Agent' : null,
+      requires_restart: false,
+      message: null,
+      mcp_command: configured ? '/app/superdev-mcp' : null,
+      agent_url: configured ? 'http://127.0.0.1:57017' : null,
     },
   }
 }
@@ -163,6 +165,17 @@ describe('McpManagerTab', () => {
     expect(wrapper.find('[data-test="mcp-support-level-kimi-code"]').text()).toBe('standard')
   })
 
+  it('renders runtime mcp command and agent url without treating success messages as warnings', async () => {
+    const wrapper = await mountTab()
+
+    const codexCard = wrapper.find('[data-test="mcp-install-codex"]').element.closest('article')
+    expect(codexCard?.textContent).toContain('/app/superdev-mcp')
+    expect(codexCard?.textContent).toContain('http://127.0.0.1:57017')
+    expect(wrapper.findAll('[data-test="mcp-state-message"]')).toHaveLength(0)
+    // 已配置不再永久展示重启告警；重启提示只来自写操作 outcome。
+    expect(wrapper.findAll('[data-test="mcp-restart-hint"]')).toHaveLength(0)
+  })
+
   it('preserves working mcp state for partial kimi-code results with needs_action hook', async () => {
     const kimiMissing = summary('kimi-code', true, false)
     kimiMissing.descriptor.display_name = 'Kimi Code'
@@ -175,10 +188,7 @@ describe('McpManagerTab', () => {
       { capability: 'skill', status: 'configured', target_path: '/skills/superdev' },
       { capability: 'session_hook', status: 'needs_action', message: 'Hook needs manual setup' },
     ]
-    vi.mocked(api.listAgentConnectors)
-      .mockResolvedValueOnce([kimiMissing])
-      .mockResolvedValue([kimiConfigured])
-    vi.mocked(api.installAgentConnector).mockResolvedValue({
+    const partialOutcome: ConnectorOperationOutcome = {
       connector_id: 'kimi-code',
       operation: 'install',
       result: 'partial',
@@ -194,15 +204,28 @@ describe('McpManagerTab', () => {
         steps: ['Configure hook'],
         manual_config: '{"mcpServers":{"superdev":{}}}',
       },
-    })
+    }
+    vi.mocked(api.listAgentConnectors)
+      .mockResolvedValueOnce([kimiMissing])
+      .mockResolvedValue([kimiConfigured])
+    vi.mocked(api.installAgentConnector).mockResolvedValue(partialOutcome)
     const wrapper = await mountTab()
     await wrapper.find('[data-test="mcp-install-kimi-code"]').trigger('click')
     await flushPromises()
 
     // Install still runs for partial (MCP succeeded); refresh shows configured MCP + needs_action hook.
-    expect(api.installAgentConnector).toHaveBeenCalledWith('kimi-code')
+    expect(api.installAgentConnector).toHaveBeenCalledWith('kimi-code', null)
+    expect(wrapper.find('[data-test="mcp-operation-message-kimi-code"]').text()).toContain('部分完成')
+    expect(wrapper.find('[data-test="mcp-operation-message-kimi-code"]').classes()).toContain('settings-alert-warning')
+    expect(wrapper.find('[data-test="mcp-restart-hint"]').exists()).toBe(true)
     expect(wrapper.text()).toMatch(/configured|已配置|MCP ready/i)
     expect(wrapper.text()).toMatch(/needs_action|Hook needs manual|手动/i)
+
+    // MCP 已配置后按钮走 update，必须把 prior partial outcome 传给 Registry 做增量重试。
+    vi.mocked(api.updateAgentConnector).mockResolvedValue(partialOutcome)
+    await wrapper.find('[data-test="mcp-install-kimi-code"]').trigger('click')
+    await flushPromises()
+    expect(api.updateAgentConnector).toHaveBeenLastCalledWith('kimi-code', partialOutcome)
   })
 
   it('uses update for configured MCP and install for missing MCP', async () => {
@@ -213,9 +236,37 @@ describe('McpManagerTab', () => {
     await wrapper.find('[data-test="mcp-install-fixture-json-agent"]').trigger('click')
     await flushPromises()
 
-    expect(api.updateAgentConnector).toHaveBeenCalledWith('codex')
-    expect(api.installAgentConnector).toHaveBeenCalledWith('fixture-json-agent')
+    expect(api.updateAgentConnector).toHaveBeenCalledWith('codex', null)
+    expect(api.installAgentConnector).toHaveBeenCalledWith('fixture-json-agent', null)
     expect(api.listAgentConnectors).toHaveBeenCalledTimes(3)
+  })
+
+  it('surfaces failed install outcomes instead of claiming updated', async () => {
+    vi.mocked(api.installAgentConnector).mockResolvedValue({
+      connector_id: 'fixture-json-agent',
+      operation: 'install',
+      result: 'failed',
+      requires_restart: false,
+      integrations: [
+        { capability: 'mcp', result: 'failed', message: 'config corrupt' },
+        { capability: 'skill', result: 'skipped' },
+        { capability: 'session_hook', result: 'skipped' },
+      ],
+      manual_instructions: {
+        summary: 'Paste the manual config',
+        steps: ['Open Agent settings'],
+        manual_config: '{"mcpServers":{}}',
+      },
+    })
+    const wrapper = await mountTab()
+    await wrapper.find('[data-test="mcp-install-fixture-json-agent"]').trigger('click')
+    await flushPromises()
+
+    const message = wrapper.find('[data-test="mcp-operation-message-fixture-json-agent"]')
+    expect(message.text()).toContain('安装失败')
+    expect(message.text()).toContain('Paste the manual config')
+    expect(message.classes()).toContain('settings-alert-danger')
+    expect(message.text()).not.toContain('已更新')
   })
 
   it('gates every automatic operation from the descriptor', async () => {

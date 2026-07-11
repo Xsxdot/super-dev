@@ -171,6 +171,7 @@ impl AgentConnector for BuiltInConnector {
         } else {
             IntegrationStateStatus::Missing
         };
+        // 状态读取只报告当前事实，不因「已配置」永久提示重启；重启提示由 install/update outcome 携带。
         Ok(ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -194,8 +195,10 @@ impl AgentConnector for BuiltInConnector {
                         .then(|| "需要在 Codex 中信任 hook".into()),
                 },
             ],
-            requires_restart: s.mcp_configured,
-            message: Some("状态读取完成".into()),
+            requires_restart: false,
+            message: None,
+            mcp_command: s.mcp_command,
+            agent_url: s.agent_url,
         })
     }
     fn install(
@@ -684,32 +687,36 @@ impl AgentConnector for StandardJsonConnector {
                 return Err(ConnectorError::new("read_failed", "标准 JSON 配置无法读取"));
             }
         };
+        let mut mcp_command = None;
+        let mut agent_url = None;
         let (mcp, msg) = match raw.as_deref() {
-            None => (IntegrationStateStatus::Missing, "MCP 配置缺失"),
+            None => (IntegrationStateStatus::Missing, None),
             Some(s) => {
                 let v: serde_json::Value = serde_json::from_str(s)
                     .map_err(|_| ConnectorError::new("invalid_json", "配置 JSON 无法解析"))?;
                 match v.get("mcpServers").and_then(|x| x.get("superdev")) {
-                    None => (IntegrationStateStatus::Missing, "SuperDev MCP 配置缺失"),
-                    Some(x)
-                        if !x
+                    None => (IntegrationStateStatus::Missing, None),
+                    Some(x) => {
+                        mcp_command = x
                             .get("command")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .trim()
-                            .is_empty()
-                            && x.get("env")
-                                .and_then(|e| e.get("SUPERDEV_AGENT_URL"))
-                                .and_then(|v| v.as_str())
-                                .map(|v| !v.trim().is_empty())
-                                .unwrap_or(false) =>
-                    {
-                        (IntegrationStateStatus::Configured, "SuperDev MCP 已配置")
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string);
+                        agent_url = x
+                            .get("env")
+                            .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+                            .and_then(|v| v.as_str())
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string);
+                        if mcp_command.is_some() && agent_url.is_some() {
+                            (IntegrationStateStatus::Configured, None)
+                        } else {
+                            (
+                                IntegrationStateStatus::NeedsAction,
+                                Some("SuperDev MCP 配置不完整".into()),
+                            )
+                        }
                     }
-                    Some(_) => (
-                        IntegrationStateStatus::NeedsAction,
-                        "SuperDev MCP 配置不完整",
-                    ),
                 }
             }
         };
@@ -719,7 +726,7 @@ impl AgentConnector for StandardJsonConnector {
                     capability: IntegrationCapability::Mcp,
                     status: mcp,
                     target_path: Some(path.to_string_lossy().into()),
-                    message: Some(msg.into()),
+                    message: msg,
                 },
                 IntegrationState {
                     capability: IntegrationCapability::Skill,
@@ -734,8 +741,10 @@ impl AgentConnector for StandardJsonConnector {
                     message: Some("不支持 Session Hook".into()),
                 },
             ],
-            requires_restart: mcp == IntegrationStateStatus::Configured,
-            message: Some(msg.into()),
+            requires_restart: false,
+            message: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(connector_id = self.descriptor.id(), status = ?mcp, duration_ms = started.elapsed().as_millis() as u64, "standard connector status finished");
         Ok(result)
@@ -761,6 +770,11 @@ impl AgentConnector for StandardJsonConnector {
                 IntegrationStateStatus::Missing => IntegrationResult::NeedsAction,
                 _ => IntegrationResult::Skipped,
             };
+            // needs_action 契约要求非空 message；缺失配置时 status 可能不带文案。
+            let mcp_message = mcp.message.clone().or_else(|| {
+                matches!(mcp_result, IntegrationResult::NeedsAction)
+                    .then(|| "请先完成 SuperDev MCP 配置".into())
+            });
             let outcome = aggregate_connector_result(
                 self.descriptor.id().into(),
                 request.operation,
@@ -770,7 +784,7 @@ impl AgentConnector for StandardJsonConnector {
                         result: mcp_result,
                         target_path: mcp.target_path.clone(),
                         backup_path: None,
-                        message: mcp.message.clone(),
+                        message: mcp_message,
                     },
                     IntegrationOperationResult {
                         capability: IntegrationCapability::Skill,

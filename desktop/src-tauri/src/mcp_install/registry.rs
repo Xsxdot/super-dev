@@ -187,9 +187,15 @@ pub struct ConnectorStatus {
     /// integrations 是 MCP、Skill 与 Session Hook 的状态明细。
     pub integrations: Vec<IntegrationState>,
     /// requires_restart 表示配置是否需要重启 Agent 才能生效。
+    ///
+    /// 注意：状态读取不应因「已配置」永久为 true；写操作 outcome 才是重启提示的主来源。
     pub requires_restart: bool,
-    /// message 是连接器生成的可展示整体说明。
+    /// message 是连接器生成的可展示整体说明；仅异常或待处理时填写，避免成功路径噪音。
     pub message: Option<String>,
+    /// 当前配置中的 SuperDev MCP 可执行命令。
+    pub mcp_command: Option<String>,
+    /// 当前配置中的 SUPERDEV_AGENT_URL。
+    pub agent_url: Option<String>,
 }
 
 /// ConnectorInstallRequest 描述一次自动安装或更新应执行的能力集合。
@@ -573,7 +579,10 @@ impl ConnectorRegistry {
                             .map(|path| path.to_string_lossy().into_owned()),
                         integrations: status.integrations,
                         requires_restart: status.requires_restart,
-                        message: status.message.or(detection.message),
+                        // 仅透传 status 侧真实说明；检测成功消息不升级为状态告警。
+                        message: status.message,
+                        mcp_command: status.mcp_command,
+                        agent_url: status.agent_url,
                     },
                     // 任一读取失败都舍弃另一半快照，避免把不同时间点的局部成功拼成误导状态。
                     _ => unknown_state(&descriptor),
@@ -894,6 +903,8 @@ fn unknown_state(descriptor: &AgentConnectorDescriptor) -> AgentConnectorState {
             .collect(),
         requires_restart: false,
         message: Some(ISOLATED_STATE_MESSAGE.to_string()),
+        mcp_command: None,
+        agent_url: None,
     }
 }
 
@@ -1221,6 +1232,8 @@ mod tests {
                     integrations: states(IntegrationStateStatus::Configured),
                     requires_restart: false,
                     message: None,
+                    mcp_command: None,
+                    agent_url: None,
                 }),
                 install_requests: Arc::new(Mutex::new(Vec::new())),
                 status_calls: Arc::new(AtomicUsize::new(0)),
@@ -2064,6 +2077,8 @@ mod tests {
                 ],
                 requires_restart: true,
                 message: Some("需要重启".to_string()),
+                mcp_command: Some("/bin/superdev-mcp".to_string()),
+                agent_url: Some("http://127.0.0.1:57017".to_string()),
             },
         )));
         let registry = ConnectorRegistry::new(vec![connector.clone()]).expect("valid registry");

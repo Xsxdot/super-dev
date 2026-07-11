@@ -263,6 +263,15 @@ impl AgentConnector for OpenClawConnector {
             ),
         };
         let skill_state = common::skill_status(ctx, &skill);
+        // OpenClaw 通过 CLI 读取状态；已配置时回填期望的 SuperDev 运行时字段供设置页展示。
+        let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
+            || mcp_status == IntegrationStateStatus::NeedsAction
+        {
+            let entry = common::entry(ctx);
+            (Some(entry.command), Some(entry.agent_url))
+        } else {
+            (None, None)
+        };
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -279,8 +288,10 @@ impl AgentConnector for OpenClawConnector {
                     message: Some("Session Hook 需手动配置".into()),
                 },
             ],
-            requires_restart: mcp_status == IntegrationStateStatus::Configured,
-            message: Some("OpenClaw 状态已读取".into()),
+            requires_restart: false,
+            message: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,

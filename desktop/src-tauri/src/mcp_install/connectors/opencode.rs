@@ -320,6 +320,11 @@ impl AgentConnector for OpenCodeConnector {
             }
         };
         let skill_state = common::skill_status(ctx, &skill);
+        let (mcp_command, agent_url) = fs::read_to_string(&config)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .map(|value| common::extract_json_mcp_runtime(&value))
+            .unwrap_or((None, None));
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -336,8 +341,10 @@ impl AgentConnector for OpenCodeConnector {
                     message: Some("Session Hook 需手动配置（OpenCode plugin/startup）".into()),
                 },
             ],
-            requires_restart: mcp_status == IntegrationStateStatus::Configured,
-            message: Some("OpenCode 状态已读取".into()),
+            requires_restart: false,
+            message: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,

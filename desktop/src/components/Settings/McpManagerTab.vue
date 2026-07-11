@@ -27,6 +27,8 @@ import {
   uninstallAgentConnector,
   type ConnectorId,
   type ConnectorManualInstructions,
+  type ConnectorOperationOutcome,
+  type ConnectorResult,
   type AgentConnectorSummary,
   type McpDocs,
   type McpDocument,
@@ -44,6 +46,11 @@ const manualHint = ref<ConnectorManualInstructions | null>(null)
 const manualAgentLabel = ref('')
 const operationAgent = ref<ConnectorId | null>(null)
 const operationMessage = ref<Record<string, string>>({})
+const operationTone = ref<Record<string, 'success' | 'warning' | 'danger' | 'info'>>({})
+/** 写操作 outcome 带来的一次性重启提示；不绑定长期 status.configured。 */
+const restartHints = ref<Record<string, boolean>>({})
+/** 最近一次 install/update outcome，供 Registry 增量重试。 */
+const lastOutcomes = ref<Record<string, ConnectorOperationOutcome>>({})
 const showOtherBuiltIns = ref(false)
 const manualDialogOpen = ref(false)
 
@@ -94,6 +101,49 @@ function mcpConfigured(status: AgentConnectorSummary): boolean {
   )
 }
 
+/**
+ * formatOutcomeMessage 按 ConnectorResult 真值表生成设置页反馈，并附上能力明细。
+ *
+ * 注意：partial/failed/needs_action 不得伪装成「已更新」。
+ */
+function formatOutcomeMessage(outcome: ConnectorOperationOutcome): string {
+  const baseKey: Record<ConnectorResult, string> = {
+    success: 'settings.mcp.installUpdated',
+    unchanged: 'settings.mcp.installCurrent',
+    partial: 'settings.mcp.installPartial',
+    failed: 'settings.mcp.installFailed',
+    needs_action: 'settings.mcp.installNeedsAction',
+  }
+  const base = t(baseKey[outcome.result] ?? 'settings.mcp.actionFailed', {
+    message: outcome.message ?? outcome.result,
+  })
+  const details = outcome.integrations
+    .map((item) => {
+      const suffix = item.message ? ` (${item.message})` : ''
+      return `${item.capability}: ${item.result}${suffix}`
+    })
+    .join('；')
+  const withDetails = details ? `${base} — ${details}` : base
+  if (outcome.result === 'failed' && outcome.manual_instructions?.summary) {
+    return `${withDetails}；${outcome.manual_instructions.summary}`
+  }
+  return withDetails
+}
+
+function outcomeTone(result: ConnectorResult): 'success' | 'warning' | 'danger' | 'info' {
+  if (result === 'failed') return 'danger'
+  if (result === 'partial' || result === 'needs_action') return 'warning'
+  if (result === 'unchanged') return 'info'
+  return 'success'
+}
+
+function rememberOutcome(agent: ConnectorId, outcome: ConnectorOperationOutcome) {
+  lastOutcomes.value[agent] = outcome
+  operationMessage.value[agent] = formatOutcomeMessage(outcome)
+  operationTone.value[agent] = outcomeTone(outcome.result)
+  restartHints.value[agent] = outcome.requires_restart
+}
+
 async function refreshAll() {
   await Promise.all([refreshStatus(), refreshDocs()])
 }
@@ -136,21 +186,23 @@ async function installOrUpdate(agent: ConnectorId) {
   const started = performance.now()
   operationAgent.value = agent
   operationMessage.value[agent] = ''
+  operationTone.value[agent] = 'info'
   try {
     const status = statuses.value.find(item => item.descriptor.id === agent)
     if (!status) throw new Error('Connector status unavailable')
     const updating = mcpConfigured(status)
     const operation = updating ? 'update' : 'install'
-    emitConnectorDiagnostic(`${operation}.started`, 'info', { surface: 'settings', connectorId: agent })
+    // 传入上次 outcome，让 Registry 只重试 failed/needs_action 及依赖 MCP 未执行的能力。
+    const previous = lastOutcomes.value[agent] ?? null
+    emitConnectorDiagnostic(`${operation}.started`, 'info', {
+      surface: 'settings',
+      connectorId: agent,
+      hasPreviousOutcome: previous !== null,
+    })
     const outcome = updating
-      ? await updateAgentConnector(agent)
-      : await installAgentConnector(agent)
-    // 三者都已是最新才算「已是最新」；hook 是本次新装时应提示「已更新」。
-    const allCurrent =
-      outcome.result === 'unchanged'
-    operationMessage.value[agent] = allCurrent
-      ? t('settings.mcp.installCurrent')
-      : t('settings.mcp.installUpdated')
+      ? await updateAgentConnector(agent, previous)
+      : await installAgentConnector(agent, previous)
+    rememberOutcome(agent, outcome)
     emitConnectorDiagnostic(`${operation}.completed`, outcome.result === 'failed' ? 'error' : outcome.result === 'partial' ? 'warn' : 'info', {
       surface: 'settings', connectorId: agent, result: outcome.result,
       capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
@@ -159,6 +211,7 @@ async function installOrUpdate(agent: ConnectorId) {
     await refreshStatus()
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    operationTone.value[agent] = 'danger'
     emitConnectorDiagnostic('mutation.failed', 'error', {
       surface: 'settings', connectorId: agent,
       errorType: err instanceof Error ? err.name : typeof err,
@@ -173,10 +226,12 @@ async function verifyConnector(agent: ConnectorId) {
   const started = performance.now()
   operationAgent.value = agent
   operationMessage.value[agent] = ''
+  operationTone.value[agent] = 'info'
   try {
     emitConnectorDiagnostic('verify.started', 'info', { surface: 'settings', connectorId: agent })
     const outcome = await verifyAgentConnector(agent)
-    operationMessage.value[agent] = outcome.message ?? outcome.result
+    operationMessage.value[agent] = formatOutcomeMessage(outcome)
+    operationTone.value[agent] = outcomeTone(outcome.result)
     emitConnectorDiagnostic('verify.completed', outcome.result === 'failed' ? 'error' : 'info', {
       surface: 'settings', connectorId: agent, result: outcome.result,
       capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
@@ -185,6 +240,7 @@ async function verifyConnector(agent: ConnectorId) {
     await refreshStatus()
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    operationTone.value[agent] = 'danger'
     emitConnectorDiagnostic('verify.failed', 'error', {
       surface: 'settings', connectorId: agent,
       errorType: err instanceof Error ? err.name : typeof err,
@@ -204,10 +260,17 @@ async function confirmUninstall(agent: ConnectorId, label: string) {
   operationAgent.value = agent
   const started = performance.now()
   operationMessage.value[agent] = ''
+  operationTone.value[agent] = 'info'
   try {
     emitConnectorDiagnostic('uninstall.started', 'info', { surface: 'settings', connectorId: agent })
     const outcome = await uninstallAgentConnector(agent)
-    operationMessage.value[agent] = t('settings.mcp.uninstallDone')
+    // 卸载后清空 prior outcome，避免下次安装误用旧的 partial 重试集合。
+    delete lastOutcomes.value[agent]
+    delete restartHints.value[agent]
+    operationMessage.value[agent] = outcome.result === 'failed'
+      ? formatOutcomeMessage(outcome)
+      : t('settings.mcp.uninstallDone')
+    operationTone.value[agent] = outcome.result === 'failed' ? 'danger' : 'success'
     emitConnectorDiagnostic('uninstall.completed', outcome.result === 'failed' ? 'error' : 'info', {
       surface: 'settings', connectorId: agent, result: outcome.result,
       capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
@@ -216,6 +279,7 @@ async function confirmUninstall(agent: ConnectorId, label: string) {
     await refreshStatus()
   } catch (err) {
     operationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    operationTone.value[agent] = 'danger'
     emitConnectorDiagnostic('uninstall.failed', 'error', {
       surface: 'settings', connectorId: agent,
       errorType: err instanceof Error ? err.name : typeof err,
@@ -333,11 +397,11 @@ async function showManualConfig(agent: ConnectorId, label: string) {
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.command') }}</span>
-            <code>{{ row.status?.state.message ?? t('settings.mcp.noCommand') }}</code>
+            <code data-test="mcp-command">{{ row.status?.state.mcp_command || t('settings.mcp.noCommand') }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.agentUrl') }}</span>
-            <code>{{ row.status?.descriptor.docs_url ?? t('settings.mcp.noAgentUrl') }}</code>
+            <code data-test="mcp-agent-url">{{ row.status?.state.agent_url || t('settings.mcp.noAgentUrl') }}</code>
           </div>
           <div class="mcp-detail-item">
             <span>{{ t('settings.mcp.skill') }}</span>
@@ -356,13 +420,25 @@ async function showManualConfig(agent: ConnectorId, label: string) {
             <code>{{ row.status?.state.integrations.find(i => i.capability === 'session_hook')?.target_path }}</code>
           </div>
         </div>
-        <div v-if="row.status?.state.message" class="settings-alert settings-alert-warning mcp-inline-alert">
+        <div v-if="row.status?.state.message" class="settings-alert settings-alert-warning mcp-inline-alert" data-test="mcp-state-message">
           {{ row.status.state.message }}
         </div>
-        <div v-if="row.status.state.requires_restart" class="settings-alert settings-alert-warning mcp-inline-alert">
+        <div
+          v-if="restartHints[row.id] || row.status.state.requires_restart"
+          class="settings-alert settings-alert-warning mcp-inline-alert"
+          data-test="mcp-restart-hint"
+        >
           {{ t('settings.mcp.restartConnector', { agent: row.label }) }}
         </div>
-        <div v-if="operationMessage[row.id]" class="settings-alert mcp-inline-alert">
+        <div
+          v-if="operationMessage[row.id]"
+          class="settings-alert mcp-inline-alert"
+          :class="{
+            'settings-alert-warning': operationTone[row.id] === 'warning',
+            'settings-alert-danger': operationTone[row.id] === 'danger',
+          }"
+          :data-test="`mcp-operation-message-${row.id}`"
+        >
           {{ operationMessage[row.id] }}
         </div>
       </article>
