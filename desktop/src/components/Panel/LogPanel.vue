@@ -46,6 +46,8 @@ const INCREMENTAL_HISTORY_LIMIT = 80
 const HISTORY_PREFETCH_START_INDEX = 30
 const FILTERED_HISTORY_BACKFILL_MAX_PAGES = 6
 const LOG_VIRTUAL_OVERSCAN = 12
+const LOG_VIRTUAL_SCROLL_END_THRESHOLD = 24
+const FOLLOW_BOTTOM_OBSERVATION_DELAY_MS = 250
 
 const props = defineProps<{
   panelId: string
@@ -97,13 +99,11 @@ const remoteManagedStatuses = computed(() =>
 
 let displayRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let historyLoadToken = 0
-// settleToBottomToken 标记当前正在进行的「贴底复位」回合，后发起的复位会作废前一个回合的 rAF 循环。
-let settleToBottomToken = 0
+// 观察 token 只用于淘汰过期诊断，不参与滚动；实际沉降完全交给 virtual-core reconcile。
+let followBottomObservationToken = 0
+let followBottomObservationTimer: ReturnType<typeof setTimeout> | null = null
 let draggingScrollbar = false
 let skippedFollowHistoryPrefetch = false
-
-// 贴底复位最多重试的帧数。行高异步测量通常 2-3 帧内沉降，给足余量兜底，超过则停止避免死循环。
-const SETTLE_TO_BOTTOM_MAX_FRAMES = 20
 
 function deploymentIdFromSource(source: PanelSource | null | undefined): string | null {
   return source?.type === 'deployment' ? source.deploymentId : null
@@ -231,6 +231,8 @@ onUnmounted(() => {
     evidenceStore.unregisterTrack(registeredEvidenceTrack.value.trackId, registeredEvidenceTrack.value.workspaceTabId)
   }
   historyLoadToken++
+  followBottomObservationToken++
+  if (followBottomObservationTimer) clearTimeout(followBottomObservationTimer)
   filterStore.removePanel(props.panelId)
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer)
 })
@@ -605,47 +607,55 @@ function commitDisplay(kind: 'content' | 'filter' = 'content') {
   })
 }
 
-// scrollToBottom 贴底，并在行高异步测量沉降后逐帧重新断言底部。
-//
-// 为什么要多帧复位：虚拟列表用 estimateSize 估算行高，scrollToIndex 用估算值算 offset 滚一次；
-// 随后底部行真正渲染、measureElement 上报更大的真实高度，getTotalSize 增大，那次 offset 就失效了，
-// 视口被停在真实底部上方（过滤越重、行越高越明显，表现为打开 tab 一片空白、要往上滑很久）。
-// 单次 scrollToIndex 赌不中底部，必须在每帧测量增量后重新 scrollToIndex，直到 totalSize 连续两帧不变（沉降）。
+function distanceFromLogBottom(): number | null {
+  const el = logListEl.value
+  if (!el) return null
+  return Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+}
+
+// 只观察 virtual-core reconcile 的结果，不再用第二套 rAF 循环反复写 scrollTop。
+// 安静窗口后记录一个只读快照，覆盖晚于两帧到达的测量；它不宣称框架已永久稳定。
+function observeFollowBottomOutcome(token: number, requestedItemCount: number) {
+  followBottomObservationTimer = setTimeout(() => {
+    followBottomObservationTimer = null
+    if (token !== followBottomObservationToken) return
+    const distanceFromBottom = distanceFromLogBottom()
+    logPanelDiagnostic('debug', 'scroll.follow_bottom.observed', {
+      requestedItemCount,
+      itemCount: displayItems.value.length,
+      totalSize: virtualizer.value.getTotalSize(),
+      distanceFromBottom,
+      observationWindowMs: FOLLOW_BOTTOM_OBSERVATION_DELAY_MS,
+      withinThreshold:
+        distanceFromBottom === null
+          ? null
+          : distanceFromBottom <= LOG_VIRTUAL_SCROLL_END_THRESHOLD,
+    })
+  }, FOLLOW_BOTTOM_OBSERVATION_DELAY_MS)
+}
+
+// 是否跟随由 ScrollIntentMachine 单一裁决；实际滚动与迟到行高补偿交给 virtual-core。
+// 这里仅发出一次 end 对齐请求，避免外层多帧循环反复重置 virtual-core 的 scrollState。
 async function scrollToBottom() {
   await nextTick()
-  const count = displayItems.value.length
-  if (count === 0) {
+  const itemCount = displayItems.value.length
+  const token = ++followBottomObservationToken
+  if (followBottomObservationTimer) {
+    clearTimeout(followBottomObservationTimer)
+    followBottomObservationTimer = null
+  }
+  if (itemCount === 0) {
+    logPanelDiagnostic('debug', 'scroll.follow_bottom.skipped', { reason: 'empty' })
     return
   }
 
-  const token = ++settleToBottomToken
-  let frame = 0
-  let lastTotalSize = -1
-
-  const settle = () => {
-    // 回合已被后发起的复位作废，直接退出，不再抢滚动也不放开守卫（由新回合接管）。
-    if (token !== settleToBottomToken) return
-    const c = displayItems.value.length
-    if (c > 0) virtualizer.value.scrollToIndex(c - 1, { align: 'end' })
-    const totalSize = virtualizer.value.getTotalSize()
-    frame++
-    // totalSize 不再变化即视为测量沉降；或达到帧数上限兜底，结束复位、放开守卫。
-    if (totalSize === lastTotalSize || frame >= SETTLE_TO_BOTTOM_MAX_FRAMES) {
-      logPanelDiagnostic('debug', 'scroll.settle_bottom.done', {
-        frames: frame,
-        totalSize,
-        itemCount: c,
-        settled: totalSize === lastTotalSize,
-      })
-      return
-    }
-    lastTotalSize = totalSize
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(settle)
-    }
-  }
-
-  settle()
+  virtualizer.value.scrollToIndex(itemCount - 1, { align: 'end' })
+  logPanelDiagnostic('debug', 'scroll.follow_bottom.requested', {
+    itemCount,
+    totalSize: virtualizer.value.getTotalSize(),
+    distanceFromBottom: distanceFromLogBottom(),
+  })
+  observeFollowBottomOutcome(token, itemCount)
 }
 
 function applyItemsCountChange(oldCount: number, newCount: number) {
@@ -954,6 +964,10 @@ const virtualizer = useVirtualizer(
     estimateSize: () => 22,
     getItemKey: (index: number) => displayItems.value[index]?.id ?? index,
     overscan: LOG_VIRTUAL_OVERSCAN,
+    // end anchor 让 virtual-core 在已贴底时补偿迟到的真实行高；append 是否跟随仍由 ScrollIntentMachine 裁决。
+    anchorTo: 'end',
+    followOnAppend: false,
+    scrollEndThreshold: LOG_VIRTUAL_SCROLL_END_THRESHOLD,
   }))
 )
 

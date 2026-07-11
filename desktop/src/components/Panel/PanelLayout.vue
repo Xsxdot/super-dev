@@ -54,7 +54,9 @@ onBeforeUnmount(stopDividerDrag)
     v-if="node.type === 'leaf'"
     class="panel-leaf-wrapper"
   >
+    <!-- leaf id 是布局树中的组件身份；切换 workspace tab 时必须销毁旧叶子的本地缓存与虚拟列表。 -->
     <PanelLeaf
+      :key="node.id"
       :panel-id="node.id"
       :service-id="node.serviceId"
       :project-id="node.projectId"

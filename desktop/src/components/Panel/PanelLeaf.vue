@@ -35,6 +35,13 @@ const isFocused = computed(() => panelStore.focusedPanelId === props.panelId)
 // deployment 单源：来源即 props.source，不再从 serviceId/projectId 兜底构造。
 const source = computed<PanelSource | null>(() => props.source ?? null)
 
+// 同一 leaf 可通过中心拖放替换 deployment；source 身份变化时必须重建 LogPanel，
+// 防止旧 deployment 的显示缓存、滚动意图和 virtualizer 行高缓存继续存活。
+const logPanelIdentity = computed(() => {
+  const deploymentId = source.value?.type === 'deployment' ? source.value.deploymentId : 'empty'
+  return `${props.panelId}:${deploymentId}`
+})
+
 // deployment 反查所属 service + env，供面板标题与项目规则加载使用。
 const deploymentInfo = computed(() =>
   source.value?.type === 'deployment'
@@ -304,6 +311,7 @@ watch(serviceDropRequest, (request) => {
 
     <!-- Log panel -->
     <LogPanel
+      :key="logPanelIdentity"
       :panel-id="panelId"
       :project-id="effectiveProjectId"
       :source="source"

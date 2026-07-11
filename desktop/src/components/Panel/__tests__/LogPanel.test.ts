@@ -233,6 +233,38 @@ describe('LogPanel', () => {
     expect(virtualizerMock.optionsRef.value.getItemKey(2)).toBe('live-8')
   })
 
+  it('使用 virtual-core 的底部锚定补偿迟到的真实行高', async () => {
+    const deploymentLogStore = useDeploymentLogStore()
+    vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1)])
+
+    mount(LogPanel, {
+      props: {
+        panelId: 'panel-end-anchor',
+        projectId: null,
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: {
+          PanelToolbar: { template: '<div />' },
+          LogRow: { template: '<div />' },
+          BookmarkMarkerRow: { template: '<div />' },
+          LogHistorySeparatorRow: { template: '<div />' },
+          LogLifecycleSeparatorRow: { template: '<div />' },
+        },
+      },
+    })
+    await nextTick()
+
+    // 这两个选项由真实 virtual-core 消费；mock 测试只负责锁住组件没有退回默认 start 锚定。
+    expect(virtualizerMock.optionsRef.value.anchorTo).toBe('end')
+    expect(virtualizerMock.optionsRef.value.followOnAppend).toBe(false)
+    expect(virtualizerMock.optionsRef.value.scrollEndThreshold).toBe(24)
+  })
+
   it('向上加载历史后保持原可见行位置并使用较小页大小', async () => {
     const deploymentLogStore = useDeploymentLogStore()
     const logs = ref([makeLog(10), makeLog(11), makeLog(12)])
@@ -1195,21 +1227,14 @@ describe('LogPanel', () => {
     expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled()
   })
 
-  it('贴底时在行高异步测量沉降前逐帧重新断言底部（totalSize 持续增长则反复滚到底）', async () => {
+  it('follow-bottom 可见行增长时只发一次 end 对齐请求，把沉降交给 virtual-core', async () => {
     const deploymentLogStore = useDeploymentLogStore()
+    const logs = ref([makeLog(1), makeLog(2), makeLog(3)])
     vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
-    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 1, entries: [] })
-    vi.spyOn(deploymentLogStore, 'getLogs').mockReturnValue([makeLog(1), makeLog(2), makeLog(3)])
-
-    // 模拟行高异步测量：前几帧 totalSize 持续增大（底部真实高度逐步上报），随后沉降不变。
-    // 单次 scrollToIndex 会落在更小的估算底部之上；正确实现必须每帧重滚直到 totalSize 稳定。
-    let totalSize = 60
-    virtualizerMock.getTotalSize.mockImplementation(() => {
-      const current = totalSize
-      if (totalSize < 300) totalSize += 80
-      return current
-    })
+    vi.spyOn(deploymentLogStore, 'loadMoreHistory').mockResolvedValue({ added: 0, entries: [] })
+    vi.spyOn(deploymentLogStore, 'getLogs').mockImplementation(() => logs.value)
+    virtualizerMock.getTotalSize.mockReturnValue(66)
 
     mount(LogPanel, {
       props: {
@@ -1232,18 +1257,22 @@ describe('LogPanel', () => {
     await nextTick()
     await Promise.resolve()
     await nextTick()
-    // 给 rAF 沉降循环留足时间（前几帧增长，之后稳定）
-    await new Promise(resolve => setTimeout(resolve, 200))
+    await new Promise(resolve => setTimeout(resolve, 100))
 
-    // 贴底统一用 align:'end' 滚到最后一条；沉降前每帧重滚一次。
+    // 清掉挂载和首次历史完成时的贴底请求，只观察一次实时可见行增长。
+    virtualizerMock.scrollToIndex.mockClear()
+    logs.value = [...logs.value, makeLog(4)]
+    deploymentLogStore.logSourceRevision++
+    await new Promise(resolve => setTimeout(resolve, 80))
+    await nextTick()
+
     const bottomCalls = virtualizerMock.scrollToIndex.mock.calls.filter(
       ([, opts]) => opts?.align === 'end',
     )
-    // 单帧只滚一次会落不到真实底部；沉降前必须多帧重滚（至少 2 次）。
-    expect(bottomCalls.length).toBeGreaterThanOrEqual(2)
+    expect(bottomCalls).toEqual([[3, { align: 'end' }]])
   })
 
-  it('贴底 settle 结束后 scrollToIndex 留下的滞后 scroll 事件不得把 follow-bottom 误判为 idle', async () => {
+  it('单次贴底请求留下的滞后 scroll 事件不得把 follow-bottom 误判为 idle', async () => {
     const deploymentLogStore = useDeploymentLogStore()
     vi.spyOn(deploymentLogStore, 'subscribe').mockImplementation(() => {})
     vi.spyOn(deploymentLogStore, 'unsubscribe').mockImplementation(() => {})
@@ -1280,7 +1309,7 @@ describe('LogPanel', () => {
     await nextTick()
     await Promise.resolve()
     await nextTick()
-    // 给初始 scrollToBottom 的 rAF settle 循环跑完
+    // 等初始单次贴底请求发出。
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // 模拟浏览器滞后派发的 scroll 事件：scrollToIndex 已把视口贴底，但突发新日志让

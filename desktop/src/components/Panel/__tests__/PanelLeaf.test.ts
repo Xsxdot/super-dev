@@ -495,4 +495,42 @@ describe('PanelLeaf', () => {
     expect(wrapper.find('[data-test="panel-env-name"]').text()).toContain('dev')
     expect(wrapper.find('[data-test="panel-live-state"]').text()).toContain('Live')
   })
+
+  it('同一 leaf 替换 deployment 来源时重建 LogPanel 本地状态', async () => {
+    let nextLogPanelInstanceId = 0
+    const LogPanelStub = {
+      props: ['panelId', 'projectId', 'source'],
+      setup() {
+        return { instanceId: ++nextLogPanelInstanceId }
+      },
+      template: `
+        <div
+          data-test="log-panel-instance"
+          :data-instance-id="instanceId"
+          :data-deployment-id="source?.deploymentId || ''"
+        />
+      `,
+    }
+    const wrapper = mount(PanelLeaf, {
+      props: {
+        panelId: 'leaf-source-replacement',
+        source: { type: 'deployment', deploymentId: 'dep-1' },
+        canClose: false,
+      },
+      global: {
+        plugins: [installTestI18n()],
+        stubs: { LogPanel: LogPanelStub },
+      },
+    })
+    const firstInstanceId = wrapper.find('[data-test="log-panel-instance"]').attributes('data-instance-id')
+
+    await wrapper.setProps({
+      source: { type: 'deployment', deploymentId: 'dep-2' },
+    })
+
+    const nextLogPanel = wrapper.find('[data-test="log-panel-instance"]')
+    expect(nextLogPanel.attributes('data-deployment-id')).toBe('dep-2')
+    // source 改变时不能复用旧 virtualizer；旧行高缓存正是大片空白的来源之一。
+    expect(nextLogPanel.attributes('data-instance-id')).not.toBe(firstInstanceId)
+  })
 })
