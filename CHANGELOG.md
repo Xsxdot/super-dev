@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Added a built-in **Grok** Agent Connector (Full): detect Grok CLI, install SuperDev MCP via `grok mcp` (`--scope user`), install Skill under `~/.grok/skills/superdev`, and install an owned SessionStart hook file under `~/.grok/hooks/` (Grok SessionStart is passive; guidance is Skill-first).
+
 ### Fixed
 
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.

@@ -127,6 +127,101 @@ fn run_cli(
     runner.run(spec)
 }
 
+/// map_process_error 将底层 CommandRunner 错误映射为设计规定的稳定 CLI 错误码。
+///
+/// 为何映射：process 层返回 command_timeout / command_spawn_failed 等通用码，
+/// Connector 对外契约要求 cli_add_failed / cli_list_failed / cli_remove_failed。
+fn map_process_error(error: ConnectorError, stable_code: &str) -> ConnectorError {
+    match error.code() {
+        "command_timeout" | "command_spawn_failed" | "command_output_failed" => {
+            ConnectorError::new(stable_code, error.message())
+        }
+        code if code == stable_code => error,
+        _ => error,
+    }
+}
+
+/// shell_quote 为手动指引中的路径加引号，避免空格路径被 shell 拆参。
+///
+/// 注意：安装路径走 argv 不经 shell；本函数仅用于 manual_instructions 文案。
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "\"\"".into();
+    }
+    if value
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\' | '$' | '`' | '!'))
+    {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// log_op_finish 在 install/uninstall 早退与正常结束时统一写 finished/failed 日志。
+fn log_op_finish(
+    operation: &str,
+    started: Instant,
+    outcome: &Result<ConnectorOperationOutcome, ConnectorError>,
+) {
+    match outcome {
+        Ok(result) => {
+            tracing::info!(
+                connector_id = CONNECTOR_ID,
+                operation,
+                result = ?result.result,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "grok operation finished"
+            );
+        }
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation,
+                error_code = error.code(),
+                duration_ms = started.elapsed().as_millis() as u64,
+                "grok operation failed"
+            );
+        }
+    }
+}
+
+/// mcp_blocked_outcome 在 MCP 失败时聚合 Failed MCP + Skipped Skill/Hook（消除重复骨架）。
+fn mcp_blocked_outcome(
+    ctx: &ConnectorRuntimeContext,
+    operation: ConnectorOperation,
+    mcp_message: &str,
+    summary: &str,
+    manual: Option<ConnectorManualInstructions>,
+) -> Result<ConnectorOperationOutcome, ConnectorError> {
+    let skill = skill_path(ctx);
+    aggregate_connector_result(
+        CONNECTOR_ID.into(),
+        operation,
+        vec![
+            common::integration_result(
+                IntegrationCapability::Mcp,
+                IntegrationResult::Failed,
+                Some(common::path_string(&config_path(ctx))),
+                None,
+                Some(mcp_message.into()),
+            ),
+            common::integration_result(
+                IntegrationCapability::Skill,
+                IntegrationResult::Skipped,
+                Some(common::path_string(&skill)),
+                None,
+                Some("MCP 失败，已跳过 Skill".into()),
+            ),
+            hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
+        ],
+        manual,
+        false,
+        Some(summary.into()),
+    )
+    .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"))
+}
+
 /// list_servers 调用 `grok mcp list --json`。
 ///
 /// 使用 list 而非 doctor：doctor 面向连通性诊断，status/verify 只需配置证明。
@@ -265,12 +360,21 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
             target_path: Some(target),
             message: Some("hook 文件存在但不是 SuperDev 拥有格式".into()),
         },
-        Err(_) => IntegrationState {
-            capability: IntegrationCapability::SessionHook,
-            status: IntegrationStateStatus::Error,
-            target_path: Some(target),
-            message: Some("无法读取 hook 文件".into()),
-        },
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_status",
+                error_code = "hook_read_failed",
+                error_kind = ?error.kind(),
+                "grok session hook read failed"
+            );
+            IntegrationState {
+                capability: IntegrationCapability::SessionHook,
+                status: IntegrationStateStatus::Error,
+                target_path: Some(target),
+                message: Some("无法读取 hook 文件".into()),
+            }
+        }
     }
 }
 
@@ -282,11 +386,12 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
     let skill = skill_path(ctx);
     let target = common::path_string(&path);
     if path.is_file() {
-        if let Ok(existing) = std::fs::read_to_string(&path) {
-            if !hook_has_marker(&existing) {
+        match std::fs::read_to_string(&path) {
+            Ok(existing) if !hook_has_marker(&existing) => {
                 tracing::info!(
                     connector_id = CONNECTOR_ID,
                     operation = "hook_install",
+                    error_code = "hook_owned_conflict",
                     "foreign hook file present; refusing overwrite"
                 );
                 return common::integration_result(
@@ -297,14 +402,32 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                     Some("同名 hook 文件存在且非 SuperDev 所有，拒绝覆盖".into()),
                 );
             }
-            let desired = hook_file_body(&skill);
-            if existing.trim() == desired.trim() {
+            Ok(existing) => {
+                let desired = hook_file_body(&skill);
+                if existing.trim() == desired.trim() {
+                    return common::integration_result(
+                        IntegrationCapability::SessionHook,
+                        IntegrationResult::AlreadyPresent,
+                        Some(target),
+                        None,
+                        Some("SessionStart hook 已存在且内容匹配".into()),
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "hook_install",
+                    error_code = "hook_read_failed",
+                    error_kind = ?error.kind(),
+                    "grok session hook read failed before write"
+                );
                 return common::integration_result(
                     IntegrationCapability::SessionHook,
-                    IntegrationResult::AlreadyPresent,
+                    IntegrationResult::Failed,
                     Some(target),
                     None,
-                    Some("SessionStart hook 已存在且内容匹配".into()),
+                    Some("无法读取已有 hook 文件".into()),
                 );
             }
         }
@@ -335,10 +458,12 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
             )
         }
         Err(error) => {
+            // 对外稳定码：设计表中的 hook_write_failed（保留底层 code 于日志对照）。
             tracing::error!(
                 connector_id = CONNECTOR_ID,
                 operation = "hook_install",
-                error_code = error.code(),
+                error_code = "hook_write_failed",
+                underlying_code = error.code(),
                 "grok session hook write failed"
             );
             common::integration_result(
@@ -382,10 +507,12 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                     None,
                 )
             }
-            Err(_) => {
+            Err(error) => {
                 tracing::error!(
                     connector_id = CONNECTOR_ID,
                     operation = "hook_uninstall",
+                    error_code = "hook_write_failed",
+                    error_kind = ?error.kind(),
                     "grok session hook remove failed"
                 );
                 common::integration_result(
@@ -402,6 +529,7 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
             tracing::info!(
                 connector_id = CONNECTOR_ID,
                 operation = "hook_uninstall",
+                error_code = "hook_owned_conflict",
                 "foreign hook file left untouched"
             );
             common::integration_result(
@@ -412,13 +540,22 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                 Some("hook 文件非 SuperDev 所有，未删除".into()),
             )
         }
-        Err(_) => common::integration_result(
-            IntegrationCapability::SessionHook,
-            IntegrationResult::Failed,
-            Some(target),
-            None,
-            Some("无法读取 hook 文件".into()),
-        ),
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_uninstall",
+                error_code = "hook_read_failed",
+                error_kind = ?error.kind(),
+                "grok session hook read failed during uninstall"
+            );
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Failed,
+                Some(target),
+                None,
+                Some("无法读取 hook 文件".into()),
+            )
+        }
     }
 }
 
@@ -500,25 +637,46 @@ impl AgentConnector for GrokConnector {
                         ),
                     }
                 }
-                Err(error) if error.code() == "invalid_cli_output" => (
-                    IntegrationStateStatus::Error,
-                    Some("grok mcp list 输出无法解析".into()),
-                ),
-                Err(error) => {
+                Err(error) if error.code() == "invalid_cli_output" => {
                     tracing::error!(
                         connector_id = CONNECTOR_ID,
                         operation = "status",
                         error_code = error.code(),
-                        duration_ms = started.elapsed().as_millis() as u64,
+                        "grok status list output invalid"
+                    );
+                    (
+                        IntegrationStateStatus::Error,
+                        Some("grok mcp list 输出无法解析".into()),
+                    )
+                }
+                // list 失败不得向上抛 Err：Registry 会把 hard error 泛化为 Unknown。
+                Err(error) => {
+                    let error = map_process_error(error, "cli_list_failed");
+                    tracing::error!(
+                        connector_id = CONNECTOR_ID,
+                        operation = "status",
+                        error_code = error.code(),
                         "grok status list failed"
                     );
-                    return Err(error);
+                    (
+                        IntegrationStateStatus::Error,
+                        Some("grok mcp list 失败".into()),
+                    )
                 }
             },
-            Err(_) => (
-                IntegrationStateStatus::Missing,
-                Some("未找到 grok CLI，无法读取 MCP 状态".into()),
-            ),
+            // CLI 缺失：设计矩阵为 Error/NeedsAction；NeedsAction 便于引导用户安装 CLI。
+            Err(error) => {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "status",
+                    error_code = error.code(),
+                    "grok status cli missing"
+                );
+                (
+                    IntegrationStateStatus::NeedsAction,
+                    Some("未找到 grok CLI，无法读取 MCP 状态".into()),
+                )
+            }
         };
 
         // 已配置或需纠正时回填期望的 SuperDev 运行时字段供设置页展示。
@@ -583,31 +741,15 @@ impl AgentConnector for GrokConnector {
                     error_code = error.code(),
                     "grok cli missing"
                 );
-                return aggregate_connector_result(
-                    CONNECTOR_ID.into(),
+                let outcome = mcp_blocked_outcome(
+                    ctx,
                     request.operation,
-                    vec![
-                        common::integration_result(
-                            IntegrationCapability::Mcp,
-                            IntegrationResult::Failed,
-                            Some(common::path_string(&config_path(ctx))),
-                            None,
-                            Some(error.message().into()),
-                        ),
-                        common::integration_result(
-                            IntegrationCapability::Skill,
-                            IntegrationResult::Skipped,
-                            Some(common::path_string(&skill)),
-                            None,
-                            Some("MCP 失败，已跳过 Skill".into()),
-                        ),
-                        hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
-                    ],
+                    error.message(),
+                    "Grok CLI 不可用",
                     Some(self.manual_instructions(ctx)?),
-                    false,
-                    Some("Grok CLI 不可用".into()),
-                )
-                .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                );
+                log_op_finish("install", started, &outcome);
+                return outcome;
             }
         };
 
@@ -620,33 +762,34 @@ impl AgentConnector for GrokConnector {
                         _ => false,
                     },
                     Err(error) if error.code() == "invalid_cli_output" => {
-                        return aggregate_connector_result(
-                            CONNECTOR_ID.into(),
+                        let outcome = mcp_blocked_outcome(
+                            ctx,
                             request.operation,
-                            vec![
-                                common::integration_result(
-                                    IntegrationCapability::Mcp,
-                                    IntegrationResult::Failed,
-                                    Some(common::path_string(&config_path(ctx))),
-                                    None,
-                                    Some(error.message().into()),
-                                ),
-                                common::integration_result(
-                                    IntegrationCapability::Skill,
-                                    IntegrationResult::Skipped,
-                                    Some(common::path_string(&skill)),
-                                    None,
-                                    Some("MCP 失败，已跳过 Skill".into()),
-                                ),
-                                hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
-                            ],
+                            error.message(),
+                            "Grok MCP 状态输出无效",
                             Some(self.manual_instructions(ctx)?),
-                            false,
-                            Some("Grok MCP 状态输出无效".into()),
-                        )
-                        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                        );
+                        log_op_finish("install", started, &outcome);
+                        return outcome;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        let error = map_process_error(error, "cli_list_failed");
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_list",
+                            error_code = error.code(),
+                            "grok install list failed"
+                        );
+                        let outcome = mcp_blocked_outcome(
+                            ctx,
+                            request.operation,
+                            "grok mcp list 失败",
+                            "Grok MCP 状态读取失败",
+                            Some(self.manual_instructions(ctx)?),
+                        );
+                        log_op_finish("install", started, &outcome);
+                        return outcome;
+                    }
                 };
 
                 if !already {
@@ -663,40 +806,45 @@ impl AgentConnector for GrokConnector {
                         "--",
                         mcp_bin.as_str(),
                     ];
-                    let add_output = run_cli(self.runner.as_ref(), &program, &add_args)?;
+                    let add_output = match run_cli(self.runner.as_ref(), &program, &add_args) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            let error = map_process_error(error, "cli_add_failed");
+                            tracing::error!(
+                                connector_id = CONNECTOR_ID,
+                                operation = "mcp_add",
+                                error_code = error.code(),
+                                "grok mcp add failed"
+                            );
+                            let outcome = mcp_blocked_outcome(
+                                ctx,
+                                request.operation,
+                                "grok mcp add 失败",
+                                "Grok MCP 配置失败",
+                                Some(self.manual_instructions(ctx)?),
+                            );
+                            log_op_finish("install", started, &outcome);
+                            return outcome;
+                        }
+                    };
                     if !add_output.success() {
                         tracing::error!(
                             connector_id = CONNECTOR_ID,
                             operation = "mcp_add",
+                            error_code = "cli_add_failed",
                             status_code = add_output.status_code,
                             truncated = add_output.truncated,
                             "grok mcp add failed"
                         );
-                        return aggregate_connector_result(
-                            CONNECTOR_ID.into(),
+                        let outcome = mcp_blocked_outcome(
+                            ctx,
                             request.operation,
-                            vec![
-                                common::integration_result(
-                                    IntegrationCapability::Mcp,
-                                    IntegrationResult::Failed,
-                                    Some(common::path_string(&config_path(ctx))),
-                                    None,
-                                    Some("grok mcp add 返回非零退出码".into()),
-                                ),
-                                common::integration_result(
-                                    IntegrationCapability::Skill,
-                                    IntegrationResult::Skipped,
-                                    Some(common::path_string(&skill)),
-                                    None,
-                                    Some("MCP 失败，已跳过 Skill".into()),
-                                ),
-                                hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
-                            ],
+                            "grok mcp add 返回非零退出码",
+                            "Grok MCP 配置失败",
                             Some(self.manual_instructions(ctx)?),
-                            false,
-                            Some("Grok MCP 配置失败".into()),
-                        )
-                        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                        );
+                        log_op_finish("install", started, &outcome);
+                        return outcome;
                     }
                 }
 
@@ -711,34 +859,35 @@ impl AgentConnector for GrokConnector {
                             Some("MCP 已通过 grok CLI 配置".into()),
                         ),
                         _ => {
-                            return aggregate_connector_result(
-                                CONNECTOR_ID.into(),
+                            let outcome = mcp_blocked_outcome(
+                                ctx,
                                 request.operation,
-                                vec![
-                                    common::integration_result(
-                                        IntegrationCapability::Mcp,
-                                        IntegrationResult::Failed,
-                                        Some(common::path_string(&config_path(ctx))),
-                                        None,
-                                        Some("add 后 list 未能证明 user-scope superdev 已配置".into()),
-                                    ),
-                                    common::integration_result(
-                                        IntegrationCapability::Skill,
-                                        IntegrationResult::Skipped,
-                                        Some(common::path_string(&skill)),
-                                        None,
-                                        Some("MCP 失败，已跳过 Skill".into()),
-                                    ),
-                                    hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
-                                ],
+                                "add 后 list 未能证明 user-scope superdev 已配置",
+                                "Grok MCP 复核失败",
                                 Some(self.manual_instructions(ctx)?),
-                                false,
-                                Some("Grok MCP 复核失败".into()),
-                            )
-                            .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                            );
+                            log_op_finish("install", started, &outcome);
+                            return outcome;
                         }
                     },
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        let error = map_process_error(error, "cli_list_failed");
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_list",
+                            error_code = error.code(),
+                            "grok install verify list failed"
+                        );
+                        let outcome = mcp_blocked_outcome(
+                            ctx,
+                            request.operation,
+                            "add 后 list 复核失败",
+                            "Grok MCP 复核失败",
+                            Some(self.manual_instructions(ctx)?),
+                        );
+                        log_op_finish("install", started, &outcome);
+                        return outcome;
+                    }
                 }
             } else {
                 let status = self.status(ctx)?;
@@ -838,16 +987,9 @@ impl AgentConnector for GrokConnector {
             true,
             Some("Grok 安装完成".into()),
         )
-        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"))?;
-
-        tracing::info!(
-            connector_id = CONNECTOR_ID,
-            operation = ?request.operation,
-            result = ?outcome.result,
-            duration_ms = started.elapsed().as_millis() as u64,
-            "grok install finished"
-        );
-        Ok(outcome)
+        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+        log_op_finish("install", started, &outcome);
+        outcome
     }
 
     fn uninstall(
@@ -866,11 +1008,14 @@ impl AgentConnector for GrokConnector {
         let hook_result = uninstall_hook(ctx);
         let hook_changed = matches!(hook_result.result, IntegrationResult::Installed);
         let hook_needs_action = matches!(hook_result.result, IntegrationResult::NeedsAction);
+        let hook_failed = matches!(hook_result.result, IntegrationResult::Failed);
         let skill_result = common::uninstall_skill(&skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
+        let skill_failed = matches!(skill_result.result, IntegrationResult::Failed);
 
         let mut mcp_changed = false;
         let mut mcp_needs_action = false;
+        let mut mcp_failed = false;
         let mut mcp_message = Some("未配置 user-scope superdev，跳过 remove".into());
         let mut mcp_result = IntegrationResult::AlreadyPresent;
 
@@ -878,53 +1023,96 @@ impl AgentConnector for GrokConnector {
             let present = match list_servers(self.runner.as_ref(), &program) {
                 Ok(items) => find_superdev_user_entry(&items).is_some(),
                 Err(error) => {
+                    let error = map_process_error(error, "cli_list_failed");
                     tracing::error!(
                         connector_id = CONNECTOR_ID,
                         operation = "uninstall",
                         error_code = error.code(),
                         "grok uninstall list failed"
                     );
-                    return Err(error);
+                    mcp_failed = true;
+                    mcp_result = IntegrationResult::Failed;
+                    mcp_message = Some("卸载前 list 失败，无法确认 MCP 状态".into());
+                    false
                 }
             };
-            if present {
-                let output = run_cli(
+            if present && !mcp_failed {
+                let remove_output = match run_cli(
                     self.runner.as_ref(),
                     &program,
                     &["mcp", "remove", "superdev", "--scope", "user"],
-                )?;
-                if !output.success() {
-                    tracing::error!(
-                        connector_id = CONNECTOR_ID,
-                        operation = "mcp_remove",
-                        status_code = output.status_code,
-                        truncated = output.truncated,
-                        "grok mcp remove failed"
-                    );
-                    return Ok(ConnectorOperationOutcome {
-                        connector_id: CONNECTOR_ID.into(),
-                        operation: ConnectorOperation::Uninstall,
-                        result: ConnectorResult::Failed,
-                        integrations: vec![
-                            common::integration_result(
-                                IntegrationCapability::Mcp,
-                                IntegrationResult::Failed,
-                                Some(common::path_string(&config_path(ctx))),
-                                None,
-                                Some("grok mcp remove 失败".into()),
-                            ),
-                            skill_result,
-                            hook_result,
-                        ],
-                        manual_instructions: Some(self.manual_instructions(ctx)?),
-                        requires_restart: false,
-                        message: Some("Grok 卸载 MCP 失败".into()),
-                    });
+                ) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        let error = map_process_error(error, "cli_remove_failed");
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_remove",
+                            error_code = error.code(),
+                            "grok mcp remove failed"
+                        );
+                        mcp_failed = true;
+                        mcp_result = IntegrationResult::Failed;
+                        mcp_message = Some("grok mcp remove 失败".into());
+                        CommandOutput {
+                            status_code: None,
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            truncated: false,
+                        }
+                    }
+                };
+                if !mcp_failed {
+                    if !remove_output.success() {
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_remove",
+                            error_code = "cli_remove_failed",
+                            status_code = remove_output.status_code,
+                            truncated = remove_output.truncated,
+                            "grok mcp remove failed"
+                        );
+                        mcp_failed = true;
+                        mcp_result = IntegrationResult::Failed;
+                        mcp_message = Some("grok mcp remove 返回非零退出码".into());
+                    } else {
+                        // 计划要求 remove 后再次 list 验证，避免空成功。
+                        match list_servers(self.runner.as_ref(), &program) {
+                            Ok(items) if find_superdev_user_entry(&items).is_none() => {
+                                mcp_changed = true;
+                                // Installed 在卸载语义中表示「发生了变更」。
+                                mcp_result = IntegrationResult::Installed;
+                                mcp_message = Some(
+                                    "已通过 grok mcp remove 移除 user-scope superdev".into(),
+                                );
+                            }
+                            Ok(_) => {
+                                tracing::error!(
+                                    connector_id = CONNECTOR_ID,
+                                    operation = "mcp_remove",
+                                    error_code = "cli_remove_failed",
+                                    "grok mcp remove reported success but entry remains"
+                                );
+                                mcp_failed = true;
+                                mcp_result = IntegrationResult::Failed;
+                                mcp_message =
+                                    Some("remove 后 list 仍见 user-scope superdev".into());
+                            }
+                            Err(error) => {
+                                let error = map_process_error(error, "cli_list_failed");
+                                tracing::error!(
+                                    connector_id = CONNECTOR_ID,
+                                    operation = "mcp_remove_verify",
+                                    error_code = error.code(),
+                                    "grok mcp remove verify list failed"
+                                );
+                                mcp_failed = true;
+                                mcp_result = IntegrationResult::Failed;
+                                mcp_message = Some("remove 后 list 复核失败".into());
+                            }
+                        }
+                    }
                 }
-                mcp_changed = true;
-                // Installed 在卸载语义中表示「发生了变更」（与 OpenClaw 一致）。
-                mcp_result = IntegrationResult::Installed;
-                mcp_message = Some("已通过 grok mcp remove 移除 user-scope superdev".into());
             }
         } else {
             // MCP 可能仍留在 Grok 配置中，不能被 Skill/Hook 删除成功掩盖成整体 Success。
@@ -936,18 +1124,27 @@ impl AgentConnector for GrokConnector {
 
         let changed = mcp_changed || skill_changed || hook_changed;
         let needs_action = mcp_needs_action || hook_needs_action;
+        let any_failed = mcp_failed || skill_failed || hook_failed;
+        // Skill/Hook Failed 必须进入总结果，禁止「子项失败却 Success」。
+        let result = if any_failed {
+            if changed {
+                ConnectorResult::Partial
+            } else {
+                ConnectorResult::Failed
+            }
+        } else if needs_action && changed {
+            ConnectorResult::Partial
+        } else if needs_action {
+            ConnectorResult::NeedsAction
+        } else if changed {
+            ConnectorResult::Success
+        } else {
+            ConnectorResult::Unchanged
+        };
         let outcome = ConnectorOperationOutcome {
             connector_id: CONNECTOR_ID.into(),
             operation: ConnectorOperation::Uninstall,
-            result: if needs_action && changed {
-                ConnectorResult::Partial
-            } else if needs_action {
-                ConnectorResult::NeedsAction
-            } else if changed {
-                ConnectorResult::Success
-            } else {
-                ConnectorResult::Unchanged
-            },
+            result,
             integrations: vec![
                 common::integration_result(
                     IntegrationCapability::Mcp,
@@ -959,7 +1156,7 @@ impl AgentConnector for GrokConnector {
                 skill_result,
                 hook_result,
             ],
-            manual_instructions: if needs_action {
+            manual_instructions: if needs_action || any_failed {
                 Some(self.manual_instructions(ctx)?)
             } else {
                 None
@@ -967,14 +1164,9 @@ impl AgentConnector for GrokConnector {
             requires_restart: changed,
             message: Some("Grok 卸载完成".into()),
         };
-        tracing::info!(
-            connector_id = CONNECTOR_ID,
-            operation = "uninstall",
-            result = ?outcome.result,
-            duration_ms = started.elapsed().as_millis() as u64,
-            "grok uninstall finished"
-        );
-        Ok(outcome)
+        let outcome = Ok(outcome);
+        log_op_finish("uninstall", started, &outcome);
+        outcome
     }
 
     fn manual_instructions(
@@ -983,20 +1175,28 @@ impl AgentConnector for GrokConnector {
     ) -> Result<ConnectorManualInstructions, ConnectorError> {
         // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
         // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
-        let mcp = ctx.mcp_binary().display().to_string();
+        // 路径含空格时加引号，避免用户复制到 shell 时被拆参（真实 install 走 argv，无此问题）。
+        let mcp = shell_quote(&ctx.mcp_binary().display().to_string());
         let add = format!(
             "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp}"
         );
+        let hook = hook_path(ctx);
+        let skill = skill_path(ctx);
+        let hook_example = {
+            let body = hook_file_body(&skill);
+            format!("在 {} 写入类似内容（owned 文件，勿与用户其它 hook 合并）: {body}", hook.display())
+        };
         Ok(ConnectorManualInstructions {
             summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
             steps: vec![
                 "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
                 format!("运行: {add}"),
-                format!("Skill 目标目录: {}", skill_path(ctx).display()),
+                format!("Skill 目标目录: {}", skill.display()),
                 format!(
                     "Hook 文件: {} （SessionStart；Grok 不注入 additionalContext，引导以 Skill 为主）",
-                    hook_path(ctx).display()
+                    hook.display()
                 ),
+                hook_example,
                 "重启 Grok 会话，或在 /mcps 中刷新".into(),
                 "验证: grok mcp list --json".into(),
             ],
@@ -1275,6 +1475,62 @@ mod tests {
     }
 
     #[test]
+    fn status_mcp_needs_action_when_cli_missing() {
+        let home = test_dir("status-no-cli");
+        let ctx = context_at(home.clone(), vec![]);
+        let status = GrokConnector::new().status(&ctx).unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::NeedsAction);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn status_mcp_error_on_list_nonzero_exit() {
+        let home = test_dir("status-list-fail");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(1, "");
+        let status = GrokConnector::with_runner(Arc::new(runner))
+            .status(&ctx)
+            .unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::Error);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn uninstall_fails_when_remove_verify_list_still_has_entry() {
+        let home = test_dir("uninstall-verify-fail");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let runner = FakeCommandRunner::default();
+        // list present → remove ok → list still present
+        runner.push_ok(0, &configured_list_json(&ctx));
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+        let outcome = GrokConnector::with_runner(Arc::new(runner))
+            .uninstall(&ctx)
+            .unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Failed);
+        assert_eq!(
+            outcome.integrations[0].result,
+            IntegrationResult::Failed
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn install_mcp_calls_add_with_scope_user_and_env() {
         let home = test_dir("install-add");
         let bin = home.join("bin");
@@ -1336,9 +1592,10 @@ mod tests {
         write_fake_cli(&bin);
         let ctx = context_at(home.clone(), vec![bin]);
         let runner = FakeCommandRunner::default();
-        // list with user superdev → remove ok
+        // list with user superdev → remove ok → list empty (verify)
         runner.push_ok(0, &configured_list_json(&ctx));
         runner.push_ok(0, "");
+        runner.push_ok(0, "[]");
         let outcome = GrokConnector::with_runner(Arc::new(runner.clone()))
             .uninstall(&ctx)
             .unwrap();
@@ -1464,9 +1721,10 @@ mod tests {
         runner.push_ok(0, "[]");
         runner.push_ok(0, "");
         runner.push_ok(0, &configured_list_json(&ctx));
-        // uninstall: list present → remove
+        // uninstall: list present → remove → list empty (verify)
         runner.push_ok(0, &configured_list_json(&ctx));
         runner.push_ok(0, "");
+        runner.push_ok(0, "[]");
 
         let connector = GrokConnector::with_runner(Arc::new(runner.clone()));
         connector.install(&ctx, install_all_request()).unwrap();
@@ -1570,7 +1828,8 @@ mod tests {
     #[test]
     fn manual_instructions_document_user_scope_and_skill_first_hook() {
         let home = test_dir("manual-instructions");
-        let ctx = context_at(home.clone(), vec![]);
+        let spaced = home.join("dir with spaces").join("superdev-mcp");
+        let ctx = ConnectorRuntimeContext::new(home.clone(), vec![], vec![], spaced, None, None);
         let mi = GrokConnector::new().manual_instructions(&ctx).unwrap();
         let blob = format!(
             "{:?}{:?}{:?}{:?}",
@@ -1593,6 +1852,20 @@ mod tests {
                 .as_deref()
                 .is_some_and(|c| c.contains("grok mcp add superdev")),
             "manual_config must be the pasteable add command"
+        );
+        assert!(
+            mi.manual_config
+                .as_deref()
+                .is_some_and(|c| c.contains('\"') && c.contains("dir with spaces")),
+            "spaced MCP path must be shell-quoted: {:?}",
+            mi.manual_config
+        );
+        assert!(
+            mi.steps
+                .iter()
+                .any(|s| s.contains("SessionStart") && s.contains("hooks")),
+            "must include hook file example: {:?}",
+            mi.steps
         );
         assert!(
             mi.config_path
