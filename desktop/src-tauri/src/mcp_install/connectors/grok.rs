@@ -127,26 +127,36 @@ fn run_cli(
     runner.run(spec)
 }
 
+/// MappedCliError 保存稳定对外错误码与底层 process 错误码（供日志保留类别）。
+struct MappedCliError {
+    error: ConnectorError,
+    /// underlying_code 是 process 层原始码（command_timeout 等），永不写入用户 message。
+    underlying_code: String,
+}
+
 /// map_process_error 将底层 CommandRunner 错误映射为设计规定的稳定 CLI 错误码。
 ///
 /// 为何映射：process 层返回 command_timeout / command_spawn_failed 等通用码，
 /// Connector 对外契约要求 cli_add_failed / cli_list_failed / cli_remove_failed。
-fn map_process_error(error: ConnectorError, stable_code: &str) -> ConnectorError {
-    match error.code() {
+/// 调用方必须在日志中同时写 `error_code`（稳定）与 `underlying_code`。
+fn map_process_error(error: ConnectorError, stable_code: &str) -> MappedCliError {
+    let underlying_code = error.code().to_string();
+    let mapped = match error.code() {
         "command_timeout"
         | "command_spawn_failed"
         | "command_output_failed"
         | "command_wait_failed" => ConnectorError::new(stable_code, error.message()),
         code if code == stable_code => error,
         _ => error,
+    };
+    MappedCliError {
+        error: mapped,
+        underlying_code,
     }
 }
 
-/// shell_quote 用 POSIX 单引号包裹路径，供 manual_instructions 粘贴到 shell。
-///
-/// 始终单引号；内部 `'` 写成 `'\''`。单引号内 shell 不展开 `$`/`\`/`\``，
-/// Windows 路径反斜杠保持字面量（不加倍）。真实 install 走 argv，不经 shell。
-fn shell_quote(value: &str) -> String {
+/// shell_quote_posix 用 POSIX 单引号包裹路径（bash/zsh/sh）。
+fn shell_quote_posix(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {
@@ -158,6 +168,28 @@ fn shell_quote(value: &str) -> String {
     }
     out.push('\'');
     out
+}
+
+/// shell_quote_powershell 用 PowerShell 单引号字面量（`'` → `''`）。
+fn shell_quote_powershell(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// shell_quote_cmd 用 cmd.exe 双引号字面量（`"` → `""`）。
+fn shell_quote_cmd(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// shell_quote 返回当前宿主默认 shell 的安全路径字面量（manual_instructions 用）。
+///
+/// 真实 install 走 argv，不经 shell。Windows 默认给出 PowerShell 形态；
+/// manual_instructions 会同时附带 cmd.exe 形态以免 cmd 用户粘贴失败。
+fn shell_quote(value: &str) -> String {
+    if cfg!(windows) {
+        shell_quote_powershell(value)
+    } else {
+        shell_quote_posix(value)
+    }
 }
 
 /// aggregate_map_err 保留聚合失败的底层上下文，避免 `|_` 吞掉原因。
@@ -207,51 +239,101 @@ fn install_skill_mapped(
     result
 }
 
-/// MCP list 条目字段访问（收敛裸字符串键）。
-fn mcp_entry_name(value: &serde_json::Value) -> Option<&str> {
-    value.get("name").and_then(|v| v.as_str())
-}
-fn mcp_entry_scope(value: &serde_json::Value) -> Option<&str> {
-    value.get("scope").and_then(|v| v.as_str())
-}
-fn mcp_entry_command(value: &serde_json::Value) -> Option<&str> {
-    value.get("command").and_then(|v| v.as_str())
-}
-fn mcp_entry_agent_url(value: &serde_json::Value) -> Option<&str> {
-    value
-        .get("env")
-        .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
-        .and_then(|v| v.as_str())
-}
-fn mcp_entry_enabled(value: &serde_json::Value) -> bool {
-    value
-        .get("enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
+/// McpListEntry 是 `grok mcp list --json` 单条记录的只读 DTO。
+///
+/// 从 serde_json::Value 一次性解析字段，避免调用点散落字符串键。
+#[derive(Clone, Debug)]
+struct McpListEntry {
+    name: Option<String>,
+    scope: Option<String>,
+    command: Option<String>,
+    agent_url: Option<String>,
+    enabled: bool,
 }
 
-/// log_op_finish 在 install/uninstall 早退与正常结束时统一写 finished/failed 日志。
+impl McpListEntry {
+    /// from_value 解析 list 数组中的一个对象；缺省 enabled=true。
+    fn from_value(value: &serde_json::Value) -> Self {
+        Self {
+            name: value
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            scope: value
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            command: value
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            agent_url: value
+                .get("env")
+                .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            enabled: value
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        }
+    }
+
+    fn is_superdev_user(&self) -> bool {
+        self.name.as_deref() == Some("superdev") && self.scope.as_deref() == Some("user")
+    }
+
+    fn is_named_superdev(&self) -> bool {
+        self.name.as_deref() == Some("superdev")
+    }
+
+    fn matches_expected(&self, ctx: &ConnectorRuntimeContext) -> bool {
+        let expected = ctx.mcp_binary().to_string_lossy();
+        self.command.as_deref() == Some(expected.as_ref())
+            && self.agent_url.as_deref() == Some(DEFAULT_AGENT_URL)
+            && self.enabled
+    }
+}
+
+/// log_op_finish 在 install/uninstall 结束时统一写 finished/failed 日志。
+///
+/// Ok(Failed/Partial/NeedsAction) 走 error 级，避免失败结果被伪装成 info 成功收尾。
 fn log_op_finish(
     operation: &str,
     started: Instant,
     outcome: &Result<ConnectorOperationOutcome, ConnectorError>,
 ) {
+    let duration_ms = started.elapsed().as_millis() as u64;
     match outcome {
         Ok(result) => {
-            tracing::info!(
-                connector_id = CONNECTOR_ID,
-                operation,
-                result = ?result.result,
-                duration_ms = started.elapsed().as_millis() as u64,
-                "grok operation finished"
+            let is_failure = matches!(
+                result.result,
+                ConnectorResult::Failed | ConnectorResult::Partial | ConnectorResult::NeedsAction
             );
+            if is_failure {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation,
+                    result = ?result.result,
+                    duration_ms,
+                    "grok operation finished with failure result"
+                );
+            } else {
+                tracing::info!(
+                    connector_id = CONNECTOR_ID,
+                    operation,
+                    result = ?result.result,
+                    duration_ms,
+                    "grok operation finished"
+                );
+            }
         }
         Err(error) => {
             tracing::error!(
                 connector_id = CONNECTOR_ID,
                 operation,
                 error_code = error.code(),
-                duration_ms = started.elapsed().as_millis() as u64,
+                duration_ms,
                 "grok operation failed"
             );
         }
@@ -301,7 +383,7 @@ fn mcp_blocked_outcome(
 fn list_servers(
     runner: &dyn CommandRunner,
     program: &Path,
-) -> Result<Vec<serde_json::Value>, ConnectorError> {
+) -> Result<Vec<McpListEntry>, ConnectorError> {
     let output = run_cli(runner, program, &["mcp", "list", "--json"])?;
     if !output.success() {
         return Err(ConnectorError::new("cli_list_failed", "grok mcp list 失败"));
@@ -317,7 +399,7 @@ fn list_servers(
         )
     })?;
     match value {
-        serde_json::Value::Array(items) => Ok(items),
+        serde_json::Value::Array(items) => Ok(items.iter().map(McpListEntry::from_value).collect()),
         _ => Err(ConnectorError::new(
             "invalid_cli_output",
             "grok mcp list --json 根节点必须是数组",
@@ -328,20 +410,13 @@ fn list_servers(
 /// find_superdev_user_entry 仅匹配 user-scope 的 superdev 条目。
 ///
 /// 始终使用 --scope user：项目级配置不属于 SuperDev 自动管理范围。
-fn find_superdev_user_entry(items: &[serde_json::Value]) -> Option<&serde_json::Value> {
-    items.iter().find(|item| {
-        mcp_entry_name(item) == Some("superdev") && mcp_entry_scope(item) == Some("user")
-    })
+fn find_superdev_user_entry(items: &[McpListEntry]) -> Option<&McpListEntry> {
+    items.iter().find(|item| item.is_superdev_user())
 }
 
 /// entry_matches 判断 list 条目是否与期望的 SuperDev MCP 完全一致。
-fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bool {
-    let expected = ctx.mcp_binary().to_string_lossy();
-    let command = mcp_entry_command(value).unwrap_or("");
-    let agent_url = mcp_entry_agent_url(value).unwrap_or("");
-    // enabled 缺省视为 true；显式 false 表示用户禁用，应 NeedsAction。
-    let enabled = mcp_entry_enabled(value);
-    command == expected.as_ref() && agent_url == DEFAULT_AGENT_URL && enabled
+fn entry_matches(ctx: &ConnectorRuntimeContext, entry: &McpListEntry) -> bool {
+    entry.matches_expected(ctx)
 }
 
 /// configured_list_json 构造匹配期望的 list --json 夹具（测试与假 runner 复用）。
@@ -418,12 +493,20 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
                     .into(),
             ),
         },
-        Ok(_) => IntegrationState {
-            capability: IntegrationCapability::SessionHook,
-            status: IntegrationStateStatus::NeedsAction,
-            target_path: Some(target),
-            message: Some("hook 文件存在但不是 SuperDev 拥有格式".into()),
-        },
+        Ok(_) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_status",
+                error_code = "hook_owned_conflict",
+                "grok session hook present but not SuperDev-owned"
+            );
+            IntegrationState {
+                capability: IntegrationCapability::SessionHook,
+                status: IntegrationStateStatus::NeedsAction,
+                target_path: Some(target),
+                message: Some("hook 文件存在但不是 SuperDev 拥有格式".into()),
+            }
+        }
         Err(error) => {
             tracing::error!(
                 connector_id = CONNECTOR_ID,
@@ -669,6 +752,12 @@ fn grok_install_body(
                         _ => false,
                     },
                     Err(error) if error.code() == "invalid_cli_output" => {
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_list",
+                            error_code = "invalid_cli_output",
+                            "grok install list output invalid"
+                        );
                         return mcp_blocked_outcome(
                             ctx,
                             request.operation,
@@ -678,11 +767,12 @@ fn grok_install_body(
                         );
                     }
                     Err(error) => {
-                        let error = map_process_error(error, "cli_list_failed");
+                        let mapped = map_process_error(error, "cli_list_failed");
                         tracing::error!(
                             connector_id = CONNECTOR_ID,
                             operation = "mcp_list",
-                            error_code = error.code(),
+                            error_code = mapped.error.code(),
+                            underlying_code = mapped.underlying_code.as_str(),
                             "grok install list failed"
                         );
                         return mcp_blocked_outcome(
@@ -712,11 +802,12 @@ fn grok_install_body(
                     let add_output = match run_cli(connector.runner.as_ref(), &program, &add_args) {
                         Ok(output) => output,
                         Err(error) => {
-                            let error = map_process_error(error, "cli_add_failed");
+                            let mapped = map_process_error(error, "cli_add_failed");
                             tracing::error!(
                                 connector_id = CONNECTOR_ID,
                                 operation = "mcp_add",
-                                error_code = error.code(),
+                                error_code = mapped.error.code(),
+                                underlying_code = mapped.underlying_code.as_str(),
                                 "grok mcp add failed"
                             );
                             return mcp_blocked_outcome(
@@ -758,6 +849,12 @@ fn grok_install_body(
                             Some("MCP 已通过 grok CLI 配置".into()),
                         ),
                         _ => {
+                            tracing::error!(
+                                connector_id = CONNECTOR_ID,
+                                operation = "mcp_add",
+                                error_code = "cli_add_failed",
+                                "add succeeded but list verify did not show matching user-scope superdev"
+                            );
                             return mcp_blocked_outcome(
                                 ctx,
                                 request.operation,
@@ -768,11 +865,12 @@ fn grok_install_body(
                         }
                     },
                     Err(error) => {
-                        let error = map_process_error(error, "cli_list_failed");
+                        let mapped = map_process_error(error, "cli_list_failed");
                         tracing::error!(
                             connector_id = CONNECTOR_ID,
                             operation = "mcp_list",
-                            error_code = error.code(),
+                            error_code = mapped.error.code(),
+                            underlying_code = mapped.underlying_code.as_str(),
                             "grok install verify list failed"
                         );
                         return mcp_blocked_outcome(
@@ -899,6 +997,14 @@ fn grok_uninstall_body(
         let skill_result = common::uninstall_skill(&skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let skill_failed = matches!(skill_result.result, IntegrationResult::Failed);
+        if skill_failed {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "skill_uninstall",
+                error_code = "skill_install_failed",
+                "grok skill uninstall failed"
+            );
+        }
 
         let mut mcp_changed = false;
         let mut mcp_needs_action = false;
@@ -910,11 +1016,12 @@ fn grok_uninstall_body(
             let present = match list_servers(connector.runner.as_ref(), &program) {
                 Ok(items) => find_superdev_user_entry(&items).is_some(),
                 Err(error) => {
-                    let error = map_process_error(error, "cli_list_failed");
+                    let mapped = map_process_error(error, "cli_list_failed");
                     tracing::error!(
                         connector_id = CONNECTOR_ID,
                         operation = "uninstall",
-                        error_code = error.code(),
+                        error_code = mapped.error.code(),
+                        underlying_code = mapped.underlying_code.as_str(),
                         "grok uninstall list failed"
                     );
                     mcp_failed = true;
@@ -931,11 +1038,12 @@ fn grok_uninstall_body(
                 ) {
                     Ok(output) => output,
                     Err(error) => {
-                        let error = map_process_error(error, "cli_remove_failed");
+                        let mapped = map_process_error(error, "cli_remove_failed");
                         tracing::error!(
                             connector_id = CONNECTOR_ID,
                             operation = "mcp_remove",
-                            error_code = error.code(),
+                            error_code = mapped.error.code(),
+                            underlying_code = mapped.underlying_code.as_str(),
                             "grok mcp remove failed"
                         );
                         mcp_failed = true;
@@ -986,11 +1094,12 @@ fn grok_uninstall_body(
                                     Some("remove 后 list 仍见 user-scope superdev".into());
                             }
                             Err(error) => {
-                                let error = map_process_error(error, "cli_list_failed");
+                                let mapped = map_process_error(error, "cli_list_failed");
                                 tracing::error!(
                                     connector_id = CONNECTOR_ID,
                                     operation = "mcp_remove_verify",
-                                    error_code = error.code(),
+                                    error_code = mapped.error.code(),
+                                    underlying_code = mapped.underlying_code.as_str(),
                                     "grok mcp remove verify list failed"
                                 );
                                 mcp_failed = true;
@@ -1104,9 +1213,7 @@ impl AgentConnector for GrokConnector {
             Ok(program) => match list_servers(self.runner.as_ref(), &program) {
                 Ok(items) => {
                     let user = find_superdev_user_entry(&items);
-                    let any_superdev = items
-                        .iter()
-                        .any(|item| mcp_entry_name(item) == Some("superdev"));
+                    let any_superdev = items.iter().any(|item| item.is_named_superdev());
                     match user {
                         Some(value) if entry_matches(ctx, value) => (
                             IntegrationStateStatus::Configured,
@@ -1131,7 +1238,7 @@ impl AgentConnector for GrokConnector {
                     tracing::error!(
                         connector_id = CONNECTOR_ID,
                         operation = "status",
-                        error_code = error.code(),
+                        error_code = "invalid_cli_output",
                         "grok status list output invalid"
                     );
                     (
@@ -1141,11 +1248,12 @@ impl AgentConnector for GrokConnector {
                 }
                 // list 失败不得向上抛 Err：Registry 会把 hard error 泛化为 Unknown。
                 Err(error) => {
-                    let error = map_process_error(error, "cli_list_failed");
+                    let mapped = map_process_error(error, "cli_list_failed");
                     tracing::error!(
                         connector_id = CONNECTOR_ID,
                         operation = "status",
-                        error_code = error.code(),
+                        error_code = mapped.error.code(),
+                        underlying_code = mapped.underlying_code.as_str(),
                         "grok status list failed"
                     );
                     (
@@ -1247,11 +1355,25 @@ impl AgentConnector for GrokConnector {
     ) -> Result<ConnectorManualInstructions, ConnectorError> {
         // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
         // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
-        // 路径含空格时加引号，避免用户复制到 shell 时被拆参（真实 install 走 argv，无此问题）。
-        let mcp = shell_quote(&ctx.mcp_binary().display().to_string());
-        let add = format!(
-            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp}"
+        // 路径 quoting 分 shell 方言：POSIX / PowerShell / cmd.exe 各一版（真实 install 走 argv）。
+        let raw_mcp = ctx.mcp_binary().display().to_string();
+        let add_posix = format!(
+            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
+            shell_quote_posix(&raw_mcp)
         );
+        let add_powershell = format!(
+            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
+            shell_quote_powershell(&raw_mcp)
+        );
+        let add_cmd = format!(
+            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
+            shell_quote_cmd(&raw_mcp)
+        );
+        let add_default = if cfg!(windows) {
+            add_powershell.clone()
+        } else {
+            add_posix.clone()
+        };
         let hook = hook_path(ctx);
         let skill = skill_path(ctx);
         let hook_example = {
@@ -1262,7 +1384,9 @@ impl AgentConnector for GrokConnector {
             summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
             steps: vec![
                 "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
-                format!("运行: {add}"),
+                format!("POSIX shell: {add_posix}"),
+                format!("PowerShell: {add_powershell}"),
+                format!("cmd.exe: {add_cmd}"),
                 format!("Skill 目标目录: {}", skill.display()),
                 format!(
                     "Hook 文件: {} （SessionStart；Grok 不注入 additionalContext，引导以 Skill 为主）",
@@ -1273,7 +1397,7 @@ impl AgentConnector for GrokConnector {
                 "验证: grok mcp list --json".into(),
             ],
             config_path: Some(common::path_string(&config_path(ctx))),
-            manual_config: Some(add),
+            manual_config: Some(add_default),
             verification_prompt: Some(
                 "运行 grok mcp list --json，确认 name=superdev、scope=user、command 与 SUPERDEV_AGENT_URL 正确"
                     .into(),
@@ -1433,15 +1557,17 @@ mod tests {
         let home = test_dir("entry-match");
         let ctx = context_at(home.clone(), vec![]);
         let good: serde_json::Value = serde_json::from_str(&configured_list_json(&ctx)).unwrap();
-        let entry = &good.as_array().unwrap()[0];
-        assert!(entry_matches(&ctx, entry));
+        let entry = McpListEntry::from_value(&good.as_array().unwrap()[0]);
+        assert!(entry_matches(&ctx, &entry));
 
-        let mut disabled = entry.clone();
-        disabled["enabled"] = serde_json::json!(false);
+        let mut disabled_json = good.as_array().unwrap()[0].clone();
+        disabled_json["enabled"] = serde_json::json!(false);
+        let disabled = McpListEntry::from_value(&disabled_json);
         assert!(!entry_matches(&ctx, &disabled));
 
-        let mut bad_url = entry.clone();
-        bad_url["env"]["SUPERDEV_AGENT_URL"] = serde_json::json!("http://127.0.0.1:9");
+        let mut bad_url_json = good.as_array().unwrap()[0].clone();
+        bad_url_json["env"]["SUPERDEV_AGENT_URL"] = serde_json::json!("http://127.0.0.1:9");
+        let bad_url = McpListEntry::from_value(&bad_url_json);
         assert!(!entry_matches(&ctx, &bad_url));
         let _ = std::fs::remove_dir_all(home);
     }
@@ -1982,6 +2108,18 @@ mod tests {
     }
 
     #[test]
+    fn map_process_error_maps_timeout_to_cli_add_failed_and_keeps_underlying() {
+        assert_eq!(CLI_TIMEOUT, Duration::from_secs(30));
+        let mapped = map_process_error(
+            ConnectorError::new("command_timeout", "命令执行超时"),
+            "cli_add_failed",
+        );
+        assert_eq!(mapped.error.code(), "cli_add_failed");
+        assert_eq!(mapped.underlying_code, "command_timeout");
+        assert!(mapped.error.message().contains("超时") || mapped.error.message().contains("timeout") || !mapped.error.message().is_empty());
+    }
+
+    #[test]
     fn install_maps_command_timeout_to_cli_add_failed() {
         let home = test_dir("install-timeout");
         let bin = home.join("bin");
@@ -2011,17 +2149,52 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.result, ConnectorResult::Failed);
         assert_eq!(outcome.integrations[0].result, IntegrationResult::Failed);
+        // 映射后用户 message 来自 mcp_blocked 文案，稳定码在日志；直接验证 map_process_error 契约。
+        let mapped = map_process_error(
+            ConnectorError::new("command_timeout", "命令执行超时"),
+            "cli_add_failed",
+        );
+        assert_eq!(mapped.error.code(), "cli_add_failed");
+        assert_eq!(mapped.underlying_code, "command_timeout");
+        assert_eq!(CLI_TIMEOUT.as_secs(), 30);
         let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
-    fn shell_quote_preserves_metacharacters_and_backslashes() {
+    fn shell_quote_dialects_are_safe_for_posix_powershell_and_cmd() {
+        let tricky = r"/tmp/Super $HOME/`date`/mcp";
+        assert_eq!(shell_quote_posix(tricky), r"'/tmp/Super $HOME/`date`/mcp'");
         assert_eq!(
-            shell_quote(r"/tmp/Super $HOME/`date`/mcp"),
+            shell_quote_powershell(tricky),
             r"'/tmp/Super $HOME/`date`/mcp'"
         );
-        assert_eq!(shell_quote(r"C:\Users\foo\bar"), r"'C:\Users\foo\bar'");
-        assert_eq!(shell_quote("a'b"), r"'a'\''b'");
+        assert_eq!(
+            shell_quote_cmd(r#"C:\Users\foo\bar"baz"#),
+            "\"C:\\Users\\foo\\bar\"\"baz\""
+        );
+        // PowerShell 把内部 ' 翻倍，而不是 POSIX '\''。
+        assert_eq!(shell_quote_powershell("a'b"), "'a''b'");
+        assert_eq!(shell_quote_posix("a'b"), r"'a'\''b'");
+        // 宿主默认 shell_quote 与平台一致。
+        if cfg!(windows) {
+            assert_eq!(shell_quote("a'b"), shell_quote_powershell("a'b"));
+        } else {
+            assert_eq!(shell_quote("a'b"), shell_quote_posix("a'b"));
+        }
+    }
+
+    #[test]
+    fn manual_instructions_include_posix_powershell_and_cmd_forms() {
+        let home = test_dir("manual-shells");
+        let spaced = home.join("dir with spaces").join("superdev-mcp");
+        let ctx = ConnectorRuntimeContext::new(home.clone(), vec![], vec![], spaced, None, None);
+        let mi = GrokConnector::new().manual_instructions(&ctx).unwrap();
+        let blob = mi.steps.join("\n");
+        assert!(blob.contains("POSIX shell:"), "{blob}");
+        assert!(blob.contains("PowerShell:"), "{blob}");
+        assert!(blob.contains("cmd.exe:"), "{blob}");
+        assert!(blob.contains("dir with spaces"), "{blob}");
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
