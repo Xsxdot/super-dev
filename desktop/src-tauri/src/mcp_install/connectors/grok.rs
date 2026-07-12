@@ -12,8 +12,8 @@
 //   - Grok SessionStart 为 passive：不承诺 additionalContext 注入
 //
 // 注意：
-//   - Task 1 仅为注册脚手架：detect/status/install/uninstall 返回安全占位结果
-//   - 真实 MCP CLI / Skill / Hook 写入在后续 Task 实现
+//   - detect 已实现（CLI 优先，回退 ~/.grok 目录）
+//   - status/install/uninstall 仍为安全占位；真实 MCP CLI / Skill / Hook 写入在后续 Task
 
 use super::common;
 use super::process::{CommandRunner, SystemCommandRunner};
@@ -118,14 +118,14 @@ impl AgentConnector for GrokConnector {
             operation = "detect",
             "grok detect started"
         );
-        // Task 1 脚手架：不报告已安装，避免在 MCP/Hook 实现前误导 onboarding。
-        // resolve_cli / data_root 保留调用路径，供后续 Task 接上真实检测。
-        let _ = resolve_cli(ctx);
-        let _ = data_root(ctx);
+        // CLI 优先；无 CLI 时仅当 ~/.grok 目录存在才视为已检测到安装痕迹。
+        let cli = resolve_cli(ctx);
+        let root = data_root(ctx);
+        let hit = cli.or_else(|| root.is_dir().then_some(root));
         let result = ConnectorDetection {
-            detected: false,
-            detection_path: None,
-            message: Some("Grok 检测完成（脚手架：暂未启用）".into()),
+            detected: hit.is_some(),
+            detection_path: hit,
+            message: Some("Grok 检测完成".into()),
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,
@@ -303,5 +303,89 @@ impl AgentConnector for GrokConnector {
             manual_config: Some(manual_config),
             verification_prompt: Some("验证 SuperDev MCP 在 Grok 中可用".into()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "grok-{}-{}-{}",
+            label,
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn context_at(home: PathBuf, command_dirs: Vec<PathBuf>) -> ConnectorRuntimeContext {
+        ConnectorRuntimeContext::new(
+            home.clone(),
+            command_dirs,
+            vec![],
+            home.join("superdev-mcp"),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn detect_prefers_cli_path_when_present() {
+        let home = test_dir("detect-cli");
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let cli_name = if cfg!(windows) { "grok.exe" } else { "grok" };
+        let cli_path = bin.join(cli_name);
+        std::fs::write(&cli_path, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&cli_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&cli_path, perms).unwrap();
+        }
+        // 同时存在 data root 时，CLI 应优先作为 detection_path
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+
+        let ctx = context_at(home.clone(), vec![bin]);
+        let hit = GrokConnector::new().detect(&ctx).unwrap();
+        assert!(hit.detected);
+        assert_eq!(hit.detection_path.as_deref(), Some(cli_path.as_path()));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn detect_falls_back_to_data_root_without_cli() {
+        let home = test_dir("detect-root");
+        let root = home.join(".grok");
+        std::fs::create_dir_all(&root).unwrap();
+        let empty_bin = home.join("empty-bin");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+
+        let ctx = context_at(home.clone(), vec![empty_bin]);
+        let hit = GrokConnector::new().detect(&ctx).unwrap();
+        assert!(hit.detected);
+        assert_eq!(hit.detection_path.as_deref(), Some(root.as_path()));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn detect_misses_when_neither_cli_nor_root() {
+        let home = test_dir("detect-miss");
+        let empty_bin = home.join("empty-bin");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+
+        let ctx = context_at(home.clone(), vec![empty_bin]);
+        let hit = GrokConnector::new().detect(&ctx).unwrap();
+        assert!(!hit.detected);
+        assert!(hit.detection_path.is_none());
+        let _ = std::fs::remove_dir_all(home);
     }
 }
