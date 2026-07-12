@@ -13,13 +13,14 @@
 //
 // 注意：
 //   - MCP 经官方 CLI 证明就绪；Skill 走 common 文件系统原语
-//   - Session Hook 自动写入在后续 Task 实现；当前 status/install 对 Hook 保持诚实占位
+//   - Hook 使用独立 owned 文件（文件名即所有权键），不与用户其它 hook 配置合并
+//   - SessionStart 在 Grok 上 stdout 被忽略，产品引导以 Skill 为主
 
 use super::common;
 use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
-use crate::mcp_install::{executable_file_names, DEFAULT_AGENT_URL};
+use crate::mcp_install::{executable_file_names, MergeResult, DEFAULT_AGENT_URL};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,9 +30,9 @@ const CONNECTOR_ID: &str = "grok";
 const DISPLAY_NAME: &str = "Grok";
 /// CLI 调用超时（add/list/remove 均受此上限约束）。
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
-/// SuperDev 拥有的 SessionStart hook 命令标记子串（后续 Task 匹配用）。
-#[allow(dead_code)]
+/// SuperDev 拥有的 SessionStart hook 命令标记子串（幂等识别与安全卸载锚点）。
 const HOOK_MARKER: &str = "skills/superdev/hooks/run-hook.cmd";
+/// 固定 owned 文件名：整文件归 SuperDev 管理，避免与用户其它 hook 配置混写。
 const HOOK_FILE_NAME: &str = "superdev-session-start.json";
 
 /// GrokConnector 适配 Grok CLI 的 MCP/Skill/Session Hook。
@@ -198,14 +199,237 @@ fn configured_list_json(ctx: &ConnectorRuntimeContext) -> String {
     .to_string()
 }
 
-/// hook_not_ready_result 在 Task 4 完成前对 Session Hook 返回诚实的 NeedsAction。
-fn hook_not_ready_result(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+/// hook_command 生成绝对路径的 run-hook 调用；统一正斜杠以便 HOOK_MARKER 跨平台匹配。
+fn hook_command(skill_dir: &Path) -> String {
+    let runner = skill_dir.join("hooks").join("run-hook.cmd");
+    let runner = runner.to_string_lossy().replace('\\', "/");
+    format!("\"{runner}\" session-start")
+}
+
+/// hook_file_body 构造 SuperDev 拥有的 SessionStart hook JSON 正文。
+///
+/// 使用独立文件而非合并进用户配置，是为了整文件所有权清晰：
+/// 安装/卸载只动这一个文件，不会误改用户其它 hooks。
+fn hook_file_body(skill_dir: &Path) -> String {
+    let command = hook_command(skill_dir);
+    // command 路径含 skills/superdev/hooks/run-hook.cmd，作为所有权标记。
+    serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": command,
+                    "timeout": 15
+                }]
+            }]
+        }
+    })
+    .to_string()
+}
+
+/// hook_has_marker 判断文件内容是否为 SuperDev 拥有的 SessionStart hook。
+///
+/// 同时要求 HOOK_MARKER 与 session-start，避免误匹配其它 run-hook 用途。
+fn hook_has_marker(content: &str) -> bool {
+    content.contains(HOOK_MARKER) && content.contains("session-start")
+}
+
+/// hook_status 只读检查 owned SessionStart hook 文件状态。
+///
+/// 消息刻意写明「引导以 Skill 为主」：Grok 的 SessionStart 是 passive hook，
+/// stdout 不会注入 additionalContext，与 Claude/Codex/Cursor 行为不同。
+fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
+    let path = hook_path(ctx);
+    let target = common::path_string(&path);
+    if !path.is_file() {
+        return IntegrationState {
+            capability: IntegrationCapability::SessionHook,
+            status: IntegrationStateStatus::Missing,
+            target_path: Some(target),
+            message: Some("未安装 SuperDev SessionStart hook".into()),
+        };
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) if hook_has_marker(&content) => IntegrationState {
+            capability: IntegrationCapability::SessionHook,
+            status: IntegrationStateStatus::Configured,
+            target_path: Some(target),
+            message: Some(
+                "SessionStart hook 已安装（Grok 不注入 additionalContext，引导以 Skill 为主）"
+                    .into(),
+            ),
+        },
+        Ok(_) => IntegrationState {
+            capability: IntegrationCapability::SessionHook,
+            status: IntegrationStateStatus::NeedsAction,
+            target_path: Some(target),
+            message: Some("hook 文件存在但不是 SuperDev 拥有格式".into()),
+        },
+        Err(_) => IntegrationState {
+            capability: IntegrationCapability::SessionHook,
+            status: IntegrationStateStatus::Error,
+            target_path: Some(target),
+            message: Some("无法读取 hook 文件".into()),
+        },
+    }
+}
+
+/// install_hook 写入或更新 SuperDev 拥有的 SessionStart hook 文件。
+///
+/// 同名文件若无标记则拒绝覆盖：用户可能手动放了同名配置，误删会造成数据丢失。
+fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+    let path = hook_path(ctx);
+    let skill = skill_path(ctx);
+    let target = common::path_string(&path);
+    if path.is_file() {
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            if !hook_has_marker(&existing) {
+                tracing::info!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "hook_install",
+                    "foreign hook file present; refusing overwrite"
+                );
+                return common::integration_result(
+                    IntegrationCapability::SessionHook,
+                    IntegrationResult::NeedsAction,
+                    Some(target),
+                    None,
+                    Some("同名 hook 文件存在且非 SuperDev 所有，拒绝覆盖".into()),
+                );
+            }
+            let desired = hook_file_body(&skill);
+            if existing.trim() == desired.trim() {
+                return common::integration_result(
+                    IntegrationCapability::SessionHook,
+                    IntegrationResult::AlreadyPresent,
+                    Some(target),
+                    None,
+                    Some("SessionStart hook 已存在且内容匹配".into()),
+                );
+            }
+        }
+    }
+    match common::mutate_config(CONNECTOR_ID, &path, |_old| {
+        Ok(MergeResult {
+            content: hook_file_body(&skill),
+            changed: true,
+        })
+    }) {
+        Ok(outcome) => {
+            tracing::info!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_install",
+                changed = outcome.changed,
+                "grok session hook write finished"
+            );
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                if outcome.changed {
+                    IntegrationResult::Installed
+                } else {
+                    IntegrationResult::AlreadyPresent
+                },
+                Some(target),
+                outcome.backup_path,
+                Some("SessionStart hook 已写入（引导以 Skill 为主）".into()),
+            )
+        }
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_install",
+                error_code = error.code(),
+                "grok session hook write failed"
+            );
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Failed,
+                Some(target),
+                None,
+                Some(error.message().into()),
+            )
+        }
+    }
+}
+
+/// uninstall_hook 仅在标记匹配时删除 owned hook 文件；外源文件不删除。
+fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+    let path = hook_path(ctx);
+    let target = common::path_string(&path);
+    if !path.is_file() {
+        return common::integration_result(
+            IntegrationCapability::SessionHook,
+            IntegrationResult::AlreadyPresent,
+            Some(target),
+            None,
+            None,
+        );
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) if hook_has_marker(&content) => match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::info!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "hook_uninstall",
+                    "grok session hook removed"
+                );
+                // Installed 在卸载语义中表示「发生了删除变更」。
+                common::integration_result(
+                    IntegrationCapability::SessionHook,
+                    IntegrationResult::Installed,
+                    Some(target),
+                    None,
+                    None,
+                )
+            }
+            Err(_) => {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "hook_uninstall",
+                    "grok session hook remove failed"
+                );
+                common::integration_result(
+                    IntegrationCapability::SessionHook,
+                    IntegrationResult::Failed,
+                    Some(target),
+                    None,
+                    Some("删除 hook 文件失败".into()),
+                )
+            }
+        },
+        Ok(_) => {
+            // 外源同名文件：不删除，避免破坏用户配置。
+            tracing::info!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_uninstall",
+                "foreign hook file left untouched"
+            );
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::NeedsAction,
+                Some(target),
+                None,
+                Some("hook 文件非 SuperDev 所有，未删除".into()),
+            )
+        }
+        Err(_) => common::integration_result(
+            IntegrationCapability::SessionHook,
+            IntegrationResult::Failed,
+            Some(target),
+            None,
+            Some("无法读取 hook 文件".into()),
+        ),
+    }
+}
+
+/// hook_skipped_for_mcp 在 MCP 未就绪时跳过 Hook，避免宣称已处理。
+fn hook_skipped_for_mcp(ctx: &ConnectorRuntimeContext, reason: &str) -> IntegrationOperationResult {
     common::integration_result(
         IntegrationCapability::SessionHook,
-        IntegrationResult::NeedsAction,
+        IntegrationResult::Skipped,
         Some(common::path_string(&hook_path(ctx))),
         None,
-        Some("Session Hook 自动安装尚未实现（后续 Task）".into()),
+        Some(reason.into()),
     )
 }
 
@@ -307,6 +531,8 @@ impl AgentConnector for GrokConnector {
             (None, None)
         };
 
+        let skill_state = common::skill_status(ctx, &skill_path(ctx));
+        let hook_state = hook_status(ctx);
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -315,13 +541,8 @@ impl AgentConnector for GrokConnector {
                     target_path: Some(common::path_string(&config_path(ctx))),
                     message: mcp_message,
                 },
-                common::skill_status(ctx, &skill_path(ctx)),
-                IntegrationState {
-                    capability: IntegrationCapability::SessionHook,
-                    status: IntegrationStateStatus::Missing,
-                    target_path: Some(common::path_string(&hook_path(ctx))),
-                    message: Some("Session Hook 自动管理尚未实现".into()),
-                },
+                skill_state,
+                hook_state,
             ],
             requires_restart: false,
             message: None,
@@ -380,7 +601,7 @@ impl AgentConnector for GrokConnector {
                             None,
                             Some("MCP 失败，已跳过 Skill".into()),
                         ),
-                        hook_not_ready_result(ctx),
+                        hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
                     ],
                     Some(self.manual_instructions(ctx)?),
                     false,
@@ -417,7 +638,7 @@ impl AgentConnector for GrokConnector {
                                     None,
                                     Some("MCP 失败，已跳过 Skill".into()),
                                 ),
-                                hook_not_ready_result(ctx),
+                                hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
                             ],
                             Some(self.manual_instructions(ctx)?),
                             false,
@@ -469,7 +690,7 @@ impl AgentConnector for GrokConnector {
                                     None,
                                     Some("MCP 失败，已跳过 Skill".into()),
                                 ),
-                                hook_not_ready_result(ctx),
+                                hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
                             ],
                             Some(self.manual_instructions(ctx)?),
                             false,
@@ -508,7 +729,7 @@ impl AgentConnector for GrokConnector {
                                         None,
                                         Some("MCP 失败，已跳过 Skill".into()),
                                     ),
-                                    hook_not_ready_result(ctx),
+                                    hook_skipped_for_mcp(ctx, "MCP 失败，已跳过 Hook"),
                                 ],
                                 Some(self.manual_instructions(ctx)?),
                                 false,
@@ -535,6 +756,7 @@ impl AgentConnector for GrokConnector {
                 )
             };
 
+        // 安装顺序固定为 MCP → Skill → Hook：Hook 命令依赖 Skill 内 run-hook.cmd。
         let mcp_ready = matches!(
             mcp_result,
             IntegrationResult::Installed | IntegrationResult::AlreadyPresent
@@ -562,8 +784,42 @@ impl AgentConnector for GrokConnector {
                 skill_state.message,
             )
         };
+        let skill_ready = matches!(
+            skill_result.result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        );
 
-        // Hook 在 Task 4 实现；此处不宣称 Configured，避免假 Success。
+        let hook_result = if !mcp_ready {
+            hook_skipped_for_mcp(ctx, "MCP 未就绪，已跳过 Hook")
+        } else if request.capabilities.contains(&IntegrationCapability::SessionHook)
+            && !skill_ready
+        {
+            // Hook 指向 Skill 内脚本；Skill 失败时不写活跃 hook，避免悬空命令。
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Skipped,
+                Some(common::path_string(&hook_path(ctx))),
+                None,
+                Some("Skill 未就绪，已跳过 Hook".into()),
+            )
+        } else if request.capabilities.contains(&IntegrationCapability::SessionHook) {
+            install_hook(ctx)
+        } else {
+            let hook_state = hook_status(ctx);
+            common::integration_result(
+                IntegrationCapability::SessionHook,
+                match hook_state.status {
+                    IntegrationStateStatus::Configured => IntegrationResult::AlreadyPresent,
+                    IntegrationStateStatus::NeedsAction => IntegrationResult::NeedsAction,
+                    IntegrationStateStatus::Missing => IntegrationResult::Skipped,
+                    _ => IntegrationResult::Failed,
+                },
+                hook_state.target_path,
+                None,
+                hook_state.message,
+            )
+        };
+
         let outcome = aggregate_connector_result(
             CONNECTOR_ID.into(),
             request.operation,
@@ -576,7 +832,7 @@ impl AgentConnector for GrokConnector {
                     mcp_message,
                 ),
                 skill_result,
-                hook_not_ready_result(ctx),
+                hook_result,
             ],
             Some(self.manual_instructions(ctx)?),
             true,
@@ -606,14 +862,10 @@ impl AgentConnector for GrokConnector {
         );
 
         let skill = skill_path(ctx);
-        // 卸载顺序：Hook（本 Task 跳过）→ Skill → MCP。
-        let hook_result = common::integration_result(
-            IntegrationCapability::SessionHook,
-            IntegrationResult::Skipped,
-            Some(common::path_string(&hook_path(ctx))),
-            None,
-            Some("Session Hook 卸载尚未实现".into()),
-        );
+        // 卸载顺序固定为 Hook → Skill → MCP，与安装顺序相反。
+        let hook_result = uninstall_hook(ctx);
+        let hook_changed = matches!(hook_result.result, IntegrationResult::Installed);
+        let hook_needs_action = matches!(hook_result.result, IntegrationResult::NeedsAction);
         let skill_result = common::uninstall_skill(&skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
 
@@ -675,20 +927,21 @@ impl AgentConnector for GrokConnector {
                 mcp_message = Some("已通过 grok mcp remove 移除 user-scope superdev".into());
             }
         } else {
-            // MCP 可能仍留在 Grok 配置中，不能被 Skill 删除成功掩盖成整体 Success。
+            // MCP 可能仍留在 Grok 配置中，不能被 Skill/Hook 删除成功掩盖成整体 Success。
             mcp_needs_action = true;
             mcp_result = IntegrationResult::NeedsAction;
             mcp_message =
                 Some("未找到 grok CLI，请手动运行 grok mcp remove superdev --scope user".into());
         }
 
-        let changed = mcp_changed || skill_changed;
+        let changed = mcp_changed || skill_changed || hook_changed;
+        let needs_action = mcp_needs_action || hook_needs_action;
         let outcome = ConnectorOperationOutcome {
             connector_id: CONNECTOR_ID.into(),
             operation: ConnectorOperation::Uninstall,
-            result: if mcp_needs_action && changed {
+            result: if needs_action && changed {
                 ConnectorResult::Partial
-            } else if mcp_needs_action {
+            } else if needs_action {
                 ConnectorResult::NeedsAction
             } else if changed {
                 ConnectorResult::Success
@@ -706,7 +959,7 @@ impl AgentConnector for GrokConnector {
                 skill_result,
                 hook_result,
             ],
-            manual_instructions: if mcp_needs_action {
+            manual_instructions: if needs_action {
                 Some(self.manual_instructions(ctx)?)
             } else {
                 None
@@ -1102,6 +1355,213 @@ mod tests {
                 "user".to_string(),
             ]
         }));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    fn write_skill_source(home: &Path) -> PathBuf {
+        let skill_src = home.join("skill-src");
+        std::fs::create_dir_all(skill_src.join("hooks")).unwrap();
+        std::fs::write(skill_src.join("SKILL.md"), "# superdev\n").unwrap();
+        std::fs::write(skill_src.join("hooks/run-hook.cmd"), "echo hook\n").unwrap();
+        std::fs::write(skill_src.join("hooks/session-start"), "#!/bin/sh\n").unwrap();
+        skill_src
+    }
+
+    fn install_all_request() -> ConnectorInstallRequest {
+        ConnectorInstallRequest {
+            operation: ConnectorOperation::Install,
+            capabilities: vec![
+                IntegrationCapability::Mcp,
+                IntegrationCapability::Skill,
+                IntegrationCapability::SessionHook,
+            ],
+        }
+    }
+
+    #[test]
+    fn install_writes_skill_and_owned_hook_after_mcp() {
+        let home = test_dir("install-skill-hook");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = write_skill_source(&home);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let runner = FakeCommandRunner::default();
+        // list empty → add ok → list configured
+        runner.push_ok(0, "[]");
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+        // status after install re-lists for MCP
+        runner.push_ok(0, &configured_list_json(&ctx));
+
+        let connector = GrokConnector::with_runner(Arc::new(runner));
+        let outcome = connector.install(&ctx, install_all_request()).unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Success);
+        assert!(matches!(
+            outcome.integrations[0].result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        ));
+        assert!(matches!(
+            outcome.integrations[1].result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        ));
+        assert!(matches!(
+            outcome.integrations[2].result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        ));
+
+        assert!(skill_path(&ctx).join("SKILL.md").is_file());
+        let hook = std::fs::read_to_string(hook_path(&ctx)).unwrap();
+        assert!(
+            hook.contains(HOOK_MARKER) && hook.contains("session-start"),
+            "owned hook must carry marker: {hook}"
+        );
+
+        let status = connector.status(&ctx).unwrap();
+        for capability in [
+            IntegrationCapability::Mcp,
+            IntegrationCapability::Skill,
+            IntegrationCapability::SessionHook,
+        ] {
+            let state = status
+                .integrations
+                .iter()
+                .find(|item| item.capability == capability)
+                .unwrap();
+            assert_eq!(
+                state.status,
+                IntegrationStateStatus::Configured,
+                "{capability:?} should be configured"
+            );
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn uninstall_removes_owned_hook_and_skill_and_mcp() {
+        let home = test_dir("uninstall-full");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = write_skill_source(&home);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let runner = FakeCommandRunner::default();
+        // install: list empty → add → list configured
+        runner.push_ok(0, "[]");
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+        // uninstall: list present → remove
+        runner.push_ok(0, &configured_list_json(&ctx));
+        runner.push_ok(0, "");
+
+        let connector = GrokConnector::with_runner(Arc::new(runner.clone()));
+        connector.install(&ctx, install_all_request()).unwrap();
+        assert!(skill_path(&ctx).exists());
+        assert!(hook_path(&ctx).is_file());
+
+        let outcome = connector.uninstall(&ctx).unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Success);
+        assert!(!hook_path(&ctx).exists(), "owned hook must be removed");
+        assert!(!skill_path(&ctx).exists(), "skill dir must be removed");
+        let argv = runner.argv();
+        assert!(argv.iter().any(|a| {
+            a == &vec![
+                "mcp".to_string(),
+                "remove".to_string(),
+                "superdev".to_string(),
+                "--scope".to_string(),
+                "user".to_string(),
+            ]
+        }));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn partial_when_mcp_ok_skill_source_missing() {
+        let home = test_dir("partial-skill-missing");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            None,
+            Some("bundled skill unavailable".into()),
+        );
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, "[]");
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+
+        let outcome = GrokConnector::with_runner(Arc::new(runner))
+            .install(&ctx, install_all_request())
+            .unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Partial);
+        assert!(matches!(
+            outcome.integrations[0].result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        ));
+        assert_eq!(
+            outcome.integrations[1].result,
+            IntegrationResult::Failed
+        );
+        assert!(matches!(
+            outcome.integrations[2].result,
+            IntegrationResult::Skipped | IntegrationResult::Failed
+        ));
+        assert!(
+            !hook_path(&ctx).exists(),
+            "hook must not be written when skill is missing"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn hook_conflict_does_not_overwrite_foreign_file() {
+        let home = test_dir("hook-conflict");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = write_skill_source(&home);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let foreign = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}"#;
+        std::fs::create_dir_all(hook_path(&ctx).parent().unwrap()).unwrap();
+        std::fs::write(hook_path(&ctx), foreign).unwrap();
+
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, "[]");
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+
+        let outcome = GrokConnector::with_runner(Arc::new(runner))
+            .install(&ctx, install_all_request())
+            .unwrap();
+        assert_eq!(
+            outcome.integrations[2].result,
+            IntegrationResult::NeedsAction
+        );
+        let after = std::fs::read_to_string(hook_path(&ctx)).unwrap();
+        assert_eq!(after, foreign, "foreign hook file must remain unchanged");
+        assert!(!after.contains(HOOK_MARKER));
         let _ = std::fs::remove_dir_all(home);
     }
 }
