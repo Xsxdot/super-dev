@@ -981,28 +981,30 @@ impl AgentConnector for GrokConnector {
         &self,
         ctx: &ConnectorRuntimeContext,
     ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        let mcp_binary = ctx.mcp_binary().to_string_lossy();
-        let manual_config = serde_json::to_string_pretty(&serde_json::json!({
-            "command": format!(
-                "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp_binary}"
-            )
-        }))
-        .unwrap_or_else(|_| "{}".into());
+        // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
+        // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
+        let mcp = ctx.mcp_binary().display().to_string();
+        let add = format!(
+            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp}"
+        );
         Ok(ConnectorManualInstructions {
             summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
             steps: vec![
                 "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
-                format!(
-                    "运行: grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp_binary}"
-                ),
+                format!("运行: {add}"),
                 format!("Skill 目标目录: {}", skill_path(ctx).display()),
-                "Session Hook 自动安装将在后续版本完成；引导以 Skill 为主".into(),
-                "使用 grok mcp list --json 确认 user-scope superdev 已配置".into(),
+                format!(
+                    "Hook 文件: {} （SessionStart；Grok 不注入 additionalContext，引导以 Skill 为主）",
+                    hook_path(ctx).display()
+                ),
+                "重启 Grok 会话，或在 /mcps 中刷新".into(),
+                "验证: grok mcp list --json".into(),
             ],
             config_path: Some(common::path_string(&config_path(ctx))),
-            manual_config: Some(manual_config),
+            manual_config: Some(add),
             verification_prompt: Some(
-                "运行 grok mcp list --json 确认 superdev（scope=user）已配置".into(),
+                "运行 grok mcp list --json，确认 name=superdev、scope=user、command 与 SUPERDEV_AGENT_URL 正确"
+                    .into(),
             ),
         })
     }
@@ -1562,6 +1564,87 @@ mod tests {
         let after = std::fs::read_to_string(hook_path(&ctx)).unwrap();
         assert_eq!(after, foreign, "foreign hook file must remain unchanged");
         assert!(!after.contains(HOOK_MARKER));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn manual_instructions_document_user_scope_and_skill_first_hook() {
+        let home = test_dir("manual-instructions");
+        let ctx = context_at(home.clone(), vec![]);
+        let mi = GrokConnector::new().manual_instructions(&ctx).unwrap();
+        let blob = format!(
+            "{:?}{:?}{:?}{:?}",
+            mi.summary,
+            mi.steps,
+            mi.manual_config,
+            mi.verification_prompt
+        );
+        assert!(blob.contains("--scope user"), "must document user scope: {blob}");
+        assert!(
+            blob.contains("Skill") || blob.contains("skill"),
+            "must mention Skill: {blob}"
+        );
+        assert!(
+            blob.contains("additionalContext") || blob.contains("引导"),
+            "must document Skill-first / no additionalContext: {blob}"
+        );
+        assert!(
+            mi.manual_config
+                .as_deref()
+                .is_some_and(|c| c.contains("grok mcp add superdev")),
+            "manual_config must be the pasteable add command"
+        );
+        assert!(
+            mi.config_path
+                .as_deref()
+                .is_some_and(|p| p.contains("config.toml")),
+            "config_path should point at config.toml"
+        );
+        assert!(
+            mi.verification_prompt
+                .as_deref()
+                .is_some_and(|p| p.contains("list --json") && p.contains("scope=user")),
+            "verification should check list --json user-scope"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn install_without_cli_returns_failed_with_manual_instructions() {
+        let home = test_dir("install-no-cli");
+        let empty_bin = home.join("empty-bin");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let ctx = context_at(home.clone(), vec![empty_bin]);
+
+        let outcome = GrokConnector::new()
+            .install(&ctx, install_all_request())
+            .unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Failed);
+        assert_eq!(
+            outcome.integrations[0].result,
+            IntegrationResult::Failed,
+            "MCP must fail when CLI is missing"
+        );
+        assert_eq!(
+            outcome.integrations[1].result,
+            IntegrationResult::Skipped,
+            "Skill must be skipped when MCP fails"
+        );
+        assert_eq!(
+            outcome.integrations[2].result,
+            IntegrationResult::Skipped,
+            "Hook must be skipped when MCP fails"
+        );
+        let mi = outcome
+            .manual_instructions
+            .as_ref()
+            .expect("manual_instructions required on MCP failure");
+        assert!(
+            mi.manual_config
+                .as_deref()
+                .is_some_and(|c| !c.trim().is_empty() && c.contains("--scope user")),
+            "manual_config must be non-empty add command"
+        );
         let _ = std::fs::remove_dir_all(home);
     }
 }
