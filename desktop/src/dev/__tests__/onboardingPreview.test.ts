@@ -1,9 +1,9 @@
 /**
- * onboardingPreview 测试开发预览激活边界与七 Connector 夹具。
+ * onboardingPreview 测试开发预览激活边界与八 Connector 夹具。
  *
  * 职责：
  *   - 验证显式 query 只在无 Tauri runtime 的开发浏览器中启用夹具
- *   - 验证七个生产 ID、support level 与 Kimi Code Partial 结果
+ *   - 验证八个生产 ID、support level 与 Kimi Code Partial 结果
  *
  * 边界：
  *   - 不调用真实 Tauri command，不修改 Agent 配置
@@ -34,8 +34,9 @@ describe('isOnboardingPreviewMode', () => {
 })
 
 describe('previewConnectorSummaries', () => {
-  it('exposes seven production connectors with derived support levels and mixed detection', () => {
+  it('exposes eight production connectors with derived support levels and mixed detection', () => {
     const summaries = previewConnectorSummaries()
+    expect(summaries).toHaveLength(8)
     expect(summaries.map(item => [item.descriptor.id, item.descriptor.support_level, item.state.detected])).toEqual([
       ['claude-code', 'full', true],
       ['codex', 'full', true],
@@ -44,6 +45,7 @@ describe('previewConnectorSummaries', () => {
       ['openclaw', 'standard', false],
       ['hermes', 'full', true],
       ['kimi-code', 'standard', false],
+      ['grok', 'full', true],
     ])
     // 无 TypeScript 白名单：所有展示字段来自 descriptor/state。
     for (const item of summaries) {
