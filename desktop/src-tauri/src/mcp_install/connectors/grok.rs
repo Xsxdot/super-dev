@@ -12,22 +12,22 @@
 //   - Grok SessionStart 为 passive：不承诺 additionalContext 注入
 //
 // 注意：
-//   - detect 已实现（CLI 优先，回退 ~/.grok 目录）
-//   - status/install/uninstall 仍为安全占位；真实 MCP CLI / Skill / Hook 写入在后续 Task
+//   - MCP 经官方 CLI 证明就绪；Skill 走 common 文件系统原语
+//   - Session Hook 自动写入在后续 Task 实现；当前 status/install 对 Hook 保持诚实占位
 
 use super::common;
-use super::process::{CommandRunner, SystemCommandRunner};
+use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, DEFAULT_AGENT_URL};
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CONNECTOR_ID: &str = "grok";
 const DISPLAY_NAME: &str = "Grok";
-/// CLI 调用超时；后续 Task 在 CommandSpec 上使用。
-#[allow(dead_code)]
+/// CLI 调用超时（add/list/remove 均受此上限约束）。
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 /// SuperDev 拥有的 SessionStart hook 命令标记子串（后续 Task 匹配用）。
 #[allow(dead_code)]
@@ -37,8 +37,7 @@ const HOOK_FILE_NAME: &str = "superdev-session-start.json";
 /// GrokConnector 适配 Grok CLI 的 MCP/Skill/Session Hook。
 pub(super) struct GrokConnector {
     descriptor: AgentConnectorDescriptor,
-    /// runner 在后续 Task 中执行 `grok mcp`；脚手架阶段保留注入点。
-    #[allow(dead_code)]
+    /// runner 执行 `grok mcp`；生产为系统进程，测试可注入 Fake。
     runner: Arc<dyn CommandRunner>,
 }
 
@@ -106,6 +105,110 @@ fn resolve_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     })
 }
 
+/// require_cli 要求 status/install/uninstall 的 MCP 路径必须能解析到 grok CLI。
+fn require_cli(ctx: &ConnectorRuntimeContext) -> Result<PathBuf, ConnectorError> {
+    resolve_cli(ctx).ok_or_else(|| {
+        ConnectorError::new(
+            "cli_not_found",
+            "未找到 grok CLI，无法通过官方命令管理 MCP",
+        )
+    })
+}
+
+/// run_cli 以 argv 方式调用 grok，超时 30s；不注入 HOME，不经 shell。
+fn run_cli(
+    runner: &dyn CommandRunner,
+    program: &Path,
+    args: &[&str],
+) -> Result<CommandOutput, ConnectorError> {
+    let spec = CommandSpec::new(program, args.iter().map(|arg| OsString::from(*arg)))
+        .with_timeout(CLI_TIMEOUT);
+    runner.run(spec)
+}
+
+/// list_servers 调用 `grok mcp list --json`。
+///
+/// 使用 list 而非 doctor：doctor 面向连通性诊断，status/verify 只需配置证明。
+/// 根节点必须是数组；空 stdout 视为无条目。
+fn list_servers(
+    runner: &dyn CommandRunner,
+    program: &Path,
+) -> Result<Vec<serde_json::Value>, ConnectorError> {
+    let output = run_cli(runner, program, &["mcp", "list", "--json"])?;
+    if !output.success() {
+        return Err(ConnectorError::new("cli_list_failed", "grok mcp list 失败"));
+    }
+    let text = output.stdout.trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
+        ConnectorError::new(
+            "invalid_cli_output",
+            "grok mcp list --json 输出无法解析",
+        )
+    })?;
+    match value {
+        serde_json::Value::Array(items) => Ok(items),
+        _ => Err(ConnectorError::new(
+            "invalid_cli_output",
+            "grok mcp list --json 根节点必须是数组",
+        )),
+    }
+}
+
+/// find_superdev_user_entry 仅匹配 user-scope 的 superdev 条目。
+///
+/// 始终使用 --scope user：项目级配置不属于 SuperDev 自动管理范围。
+fn find_superdev_user_entry(items: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    items.iter().find(|item| {
+        item.get("name").and_then(|v| v.as_str()) == Some("superdev")
+            && item.get("scope").and_then(|v| v.as_str()) == Some("user")
+    })
+}
+
+/// entry_matches 判断 list 条目是否与期望的 SuperDev MCP 完全一致。
+fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bool {
+    let expected = ctx.mcp_binary().to_string_lossy();
+    let command = value.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    let agent_url = value
+        .get("env")
+        .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    // enabled 缺省视为 true；显式 false 表示用户禁用，应 NeedsAction。
+    let enabled = value
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    command == expected.as_ref() && agent_url == DEFAULT_AGENT_URL && enabled
+}
+
+/// configured_list_json 构造匹配期望的 list --json 夹具（测试与假 runner 复用）。
+#[cfg(test)]
+fn configured_list_json(ctx: &ConnectorRuntimeContext) -> String {
+    serde_json::json!([{
+        "name": "superdev",
+        "command": ctx.mcp_binary().to_string_lossy(),
+        "args": [],
+        "env": { "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL },
+        "enabled": true,
+        "scope": "user"
+    }])
+    .to_string()
+}
+
+/// hook_not_ready_result 在 Task 4 完成前对 Session Hook 返回诚实的 NeedsAction。
+fn hook_not_ready_result(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+    common::integration_result(
+        IntegrationCapability::SessionHook,
+        IntegrationResult::NeedsAction,
+        Some(common::path_string(&hook_path(ctx))),
+        None,
+        Some("Session Hook 自动安装尚未实现（后续 Task）".into()),
+    )
+}
+
 impl AgentConnector for GrokConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
@@ -144,31 +247,91 @@ impl AgentConnector for GrokConnector {
             operation = "status",
             "grok status started"
         );
-        // MCP/Hook 在后续 Task 实现前一律 Missing；Skill 走 common 真实只读状态。
+
+        // 仅用 list --json 证明 MCP 配置；不跑 doctor（避免把连通性当接入状态）。
+        let (mcp_status, mcp_message) = match require_cli(ctx) {
+            Ok(program) => match list_servers(self.runner.as_ref(), &program) {
+                Ok(items) => {
+                    let user = find_superdev_user_entry(&items);
+                    let any_superdev = items
+                        .iter()
+                        .any(|item| item.get("name").and_then(|v| v.as_str()) == Some("superdev"));
+                    match user {
+                        Some(value) if entry_matches(ctx, value) => (
+                            IntegrationStateStatus::Configured,
+                            Some("SuperDev MCP 已由 grok CLI 配置".into()),
+                        ),
+                        Some(_) => (
+                            IntegrationStateStatus::NeedsAction,
+                            Some("superdev MCP 条目存在但不匹配期望配置".into()),
+                        ),
+                        // 仅有 project-scope 等同名条目时不能自动改写，提示改为 --scope user。
+                        None if any_superdev => (
+                            IntegrationStateStatus::NeedsAction,
+                            Some("superdev 仅存在于非 user scope，需改为 --scope user".into()),
+                        ),
+                        None => (
+                            IntegrationStateStatus::Missing,
+                            Some("grok 未配置 user-scope superdev MCP".into()),
+                        ),
+                    }
+                }
+                Err(error) if error.code() == "invalid_cli_output" => (
+                    IntegrationStateStatus::Error,
+                    Some("grok mcp list 输出无法解析".into()),
+                ),
+                Err(error) => {
+                    tracing::error!(
+                        connector_id = CONNECTOR_ID,
+                        operation = "status",
+                        error_code = error.code(),
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "grok status list failed"
+                    );
+                    return Err(error);
+                }
+            },
+            Err(_) => (
+                IntegrationStateStatus::Missing,
+                Some("未找到 grok CLI，无法读取 MCP 状态".into()),
+            ),
+        };
+
+        // 已配置或需纠正时回填期望的 SuperDev 运行时字段供设置页展示。
+        let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
+            || mcp_status == IntegrationStateStatus::NeedsAction
+        {
+            let entry = common::entry(ctx);
+            (Some(entry.command), Some(entry.agent_url))
+        } else {
+            (None, None)
+        };
+
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
                     capability: IntegrationCapability::Mcp,
-                    status: IntegrationStateStatus::Missing,
+                    status: mcp_status,
                     target_path: Some(common::path_string(&config_path(ctx))),
-                    message: Some("Grok MCP 状态尚未实现（脚手架）".into()),
+                    message: mcp_message,
                 },
                 common::skill_status(ctx, &skill_path(ctx)),
                 IntegrationState {
                     capability: IntegrationCapability::SessionHook,
                     status: IntegrationStateStatus::Missing,
                     target_path: Some(common::path_string(&hook_path(ctx))),
-                    message: None,
+                    message: Some("Session Hook 自动管理尚未实现".into()),
                 },
             ],
             requires_restart: false,
             message: None,
-            mcp_command: None,
-            agent_url: None,
+            mcp_command,
+            agent_url,
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,
             operation = "status",
+            mcp_status = ?mcp_status,
             duration_ms = started.elapsed().as_millis() as u64,
             "grok status finished"
         );
@@ -181,50 +344,252 @@ impl AgentConnector for GrokConnector {
         request: ConnectorInstallRequest,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
+        let capability_count = request.capabilities.len();
         tracing::info!(
             connector_id = CONNECTOR_ID,
             operation = ?request.operation,
-            capability_count = request.capabilities.len(),
-            "grok install started (scaffold stub)"
+            capability_count,
+            "grok install started"
         );
-        // 安全占位：不写盘、不调 CLI，返回 NeedsAction + 手动指引。
+
+        let skill = skill_path(ctx);
+        let program = match require_cli(ctx) {
+            Ok(program) => program,
+            Err(error) => {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation = ?request.operation,
+                    error_code = error.code(),
+                    "grok cli missing"
+                );
+                return aggregate_connector_result(
+                    CONNECTOR_ID.into(),
+                    request.operation,
+                    vec![
+                        common::integration_result(
+                            IntegrationCapability::Mcp,
+                            IntegrationResult::Failed,
+                            Some(common::path_string(&config_path(ctx))),
+                            None,
+                            Some(error.message().into()),
+                        ),
+                        common::integration_result(
+                            IntegrationCapability::Skill,
+                            IntegrationResult::Skipped,
+                            Some(common::path_string(&skill)),
+                            None,
+                            Some("MCP 失败，已跳过 Skill".into()),
+                        ),
+                        hook_not_ready_result(ctx),
+                    ],
+                    Some(self.manual_instructions(ctx)?),
+                    false,
+                    Some("Grok CLI 不可用".into()),
+                )
+                .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+            }
+        };
+
+        let (mcp_result, mcp_message) =
+            if request.capabilities.contains(&IntegrationCapability::Mcp) {
+                // list → 按需 add（始终 --scope user）→ list 复核。从不直接写 config.toml。
+                let already = match list_servers(self.runner.as_ref(), &program) {
+                    Ok(items) => match find_superdev_user_entry(&items) {
+                        Some(value) if entry_matches(ctx, value) => true,
+                        _ => false,
+                    },
+                    Err(error) if error.code() == "invalid_cli_output" => {
+                        return aggregate_connector_result(
+                            CONNECTOR_ID.into(),
+                            request.operation,
+                            vec![
+                                common::integration_result(
+                                    IntegrationCapability::Mcp,
+                                    IntegrationResult::Failed,
+                                    Some(common::path_string(&config_path(ctx))),
+                                    None,
+                                    Some(error.message().into()),
+                                ),
+                                common::integration_result(
+                                    IntegrationCapability::Skill,
+                                    IntegrationResult::Skipped,
+                                    Some(common::path_string(&skill)),
+                                    None,
+                                    Some("MCP 失败，已跳过 Skill".into()),
+                                ),
+                                hook_not_ready_result(ctx),
+                            ],
+                            Some(self.manual_instructions(ctx)?),
+                            false,
+                            Some("Grok MCP 状态输出无效".into()),
+                        )
+                        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                    }
+                    Err(error) => return Err(error),
+                };
+
+                if !already {
+                    let mcp_bin = ctx.mcp_binary().to_string_lossy().into_owned();
+                    let env_arg = format!("SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL}");
+                    let add_args = [
+                        "mcp",
+                        "add",
+                        "superdev",
+                        "--scope",
+                        "user",
+                        "-e",
+                        env_arg.as_str(),
+                        "--",
+                        mcp_bin.as_str(),
+                    ];
+                    let add_output = run_cli(self.runner.as_ref(), &program, &add_args)?;
+                    if !add_output.success() {
+                        tracing::error!(
+                            connector_id = CONNECTOR_ID,
+                            operation = "mcp_add",
+                            status_code = add_output.status_code,
+                            truncated = add_output.truncated,
+                            "grok mcp add failed"
+                        );
+                        return aggregate_connector_result(
+                            CONNECTOR_ID.into(),
+                            request.operation,
+                            vec![
+                                common::integration_result(
+                                    IntegrationCapability::Mcp,
+                                    IntegrationResult::Failed,
+                                    Some(common::path_string(&config_path(ctx))),
+                                    None,
+                                    Some("grok mcp add 返回非零退出码".into()),
+                                ),
+                                common::integration_result(
+                                    IntegrationCapability::Skill,
+                                    IntegrationResult::Skipped,
+                                    Some(common::path_string(&skill)),
+                                    None,
+                                    Some("MCP 失败，已跳过 Skill".into()),
+                                ),
+                                hook_not_ready_result(ctx),
+                            ],
+                            Some(self.manual_instructions(ctx)?),
+                            false,
+                            Some("Grok MCP 配置失败".into()),
+                        )
+                        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                    }
+                }
+
+                match list_servers(self.runner.as_ref(), &program) {
+                    Ok(items) => match find_superdev_user_entry(&items) {
+                        Some(value) if entry_matches(ctx, value) => (
+                            if already {
+                                IntegrationResult::AlreadyPresent
+                            } else {
+                                IntegrationResult::Installed
+                            },
+                            Some("MCP 已通过 grok CLI 配置".into()),
+                        ),
+                        _ => {
+                            return aggregate_connector_result(
+                                CONNECTOR_ID.into(),
+                                request.operation,
+                                vec![
+                                    common::integration_result(
+                                        IntegrationCapability::Mcp,
+                                        IntegrationResult::Failed,
+                                        Some(common::path_string(&config_path(ctx))),
+                                        None,
+                                        Some("add 后 list 未能证明 user-scope superdev 已配置".into()),
+                                    ),
+                                    common::integration_result(
+                                        IntegrationCapability::Skill,
+                                        IntegrationResult::Skipped,
+                                        Some(common::path_string(&skill)),
+                                        None,
+                                        Some("MCP 失败，已跳过 Skill".into()),
+                                    ),
+                                    hook_not_ready_result(ctx),
+                                ],
+                                Some(self.manual_instructions(ctx)?),
+                                false,
+                                Some("Grok MCP 复核失败".into()),
+                            )
+                            .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"));
+                        }
+                    },
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let status = self.status(ctx)?;
+                let mcp = status
+                    .integrations
+                    .iter()
+                    .find(|item| item.capability == IntegrationCapability::Mcp)
+                    .expect("mcp");
+                (
+                    match mcp.status {
+                        IntegrationStateStatus::Configured => IntegrationResult::AlreadyPresent,
+                        _ => IntegrationResult::NeedsAction,
+                    },
+                    mcp.message.clone(),
+                )
+            };
+
+        let mcp_ready = matches!(
+            mcp_result,
+            IntegrationResult::Installed | IntegrationResult::AlreadyPresent
+        );
+        let skill_result = if !mcp_ready {
+            common::integration_result(
+                IntegrationCapability::Skill,
+                IntegrationResult::Skipped,
+                Some(common::path_string(&skill)),
+                None,
+                Some("MCP 未就绪，已跳过 Skill".into()),
+            )
+        } else if request.capabilities.contains(&IntegrationCapability::Skill) {
+            common::install_skill(ctx, &skill)
+        } else {
+            let skill_state = common::skill_status(ctx, &skill);
+            common::integration_result(
+                IntegrationCapability::Skill,
+                match skill_state.status {
+                    IntegrationStateStatus::Configured => IntegrationResult::AlreadyPresent,
+                    _ => IntegrationResult::Skipped,
+                },
+                skill_state.target_path,
+                None,
+                skill_state.message,
+            )
+        };
+
+        // Hook 在 Task 4 实现；此处不宣称 Configured，避免假 Success。
         let outcome = aggregate_connector_result(
             CONNECTOR_ID.into(),
             request.operation,
             vec![
                 common::integration_result(
                     IntegrationCapability::Mcp,
-                    IntegrationResult::NeedsAction,
+                    mcp_result,
                     Some(common::path_string(&config_path(ctx))),
                     None,
-                    Some("Grok MCP 安装尚未实现，请按手动指引配置".into()),
+                    mcp_message,
                 ),
-                common::integration_result(
-                    IntegrationCapability::Skill,
-                    IntegrationResult::NeedsAction,
-                    Some(common::path_string(&skill_path(ctx))),
-                    None,
-                    Some("Grok Skill 安装尚未实现".into()),
-                ),
-                common::integration_result(
-                    IntegrationCapability::SessionHook,
-                    IntegrationResult::NeedsAction,
-                    Some(common::path_string(&hook_path(ctx))),
-                    None,
-                    Some("Grok Session Hook 安装尚未实现".into()),
-                ),
+                skill_result,
+                hook_not_ready_result(ctx),
             ],
             Some(self.manual_instructions(ctx)?),
-            false,
-            Some("Grok 连接器脚手架：安装逻辑待后续 Task 实现".into()),
+            true,
+            Some("Grok 安装完成".into()),
         )
         .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"))?;
+
         tracing::info!(
             connector_id = CONNECTOR_ID,
             operation = ?request.operation,
             result = ?outcome.result,
             duration_ms = started.elapsed().as_millis() as u64,
-            "grok install finished (scaffold stub)"
+            "grok install finished"
         );
         Ok(outcome)
     }
@@ -237,46 +602,124 @@ impl AgentConnector for GrokConnector {
         tracing::info!(
             connector_id = CONNECTOR_ID,
             operation = "uninstall",
-            "grok uninstall started (scaffold stub)"
+            "grok uninstall started"
         );
-        // 安全占位：不改写用户配置，报告 Unchanged。
+
+        let skill = skill_path(ctx);
+        // 卸载顺序：Hook（本 Task 跳过）→ Skill → MCP。
+        let hook_result = common::integration_result(
+            IntegrationCapability::SessionHook,
+            IntegrationResult::Skipped,
+            Some(common::path_string(&hook_path(ctx))),
+            None,
+            Some("Session Hook 卸载尚未实现".into()),
+        );
+        let skill_result = common::uninstall_skill(&skill);
+        let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
+
+        let mut mcp_changed = false;
+        let mut mcp_needs_action = false;
+        let mut mcp_message = Some("未配置 user-scope superdev，跳过 remove".into());
+        let mut mcp_result = IntegrationResult::AlreadyPresent;
+
+        if let Ok(program) = require_cli(ctx) {
+            let present = match list_servers(self.runner.as_ref(), &program) {
+                Ok(items) => find_superdev_user_entry(&items).is_some(),
+                Err(error) => {
+                    tracing::error!(
+                        connector_id = CONNECTOR_ID,
+                        operation = "uninstall",
+                        error_code = error.code(),
+                        "grok uninstall list failed"
+                    );
+                    return Err(error);
+                }
+            };
+            if present {
+                let output = run_cli(
+                    self.runner.as_ref(),
+                    &program,
+                    &["mcp", "remove", "superdev", "--scope", "user"],
+                )?;
+                if !output.success() {
+                    tracing::error!(
+                        connector_id = CONNECTOR_ID,
+                        operation = "mcp_remove",
+                        status_code = output.status_code,
+                        truncated = output.truncated,
+                        "grok mcp remove failed"
+                    );
+                    return Ok(ConnectorOperationOutcome {
+                        connector_id: CONNECTOR_ID.into(),
+                        operation: ConnectorOperation::Uninstall,
+                        result: ConnectorResult::Failed,
+                        integrations: vec![
+                            common::integration_result(
+                                IntegrationCapability::Mcp,
+                                IntegrationResult::Failed,
+                                Some(common::path_string(&config_path(ctx))),
+                                None,
+                                Some("grok mcp remove 失败".into()),
+                            ),
+                            skill_result,
+                            hook_result,
+                        ],
+                        manual_instructions: Some(self.manual_instructions(ctx)?),
+                        requires_restart: false,
+                        message: Some("Grok 卸载 MCP 失败".into()),
+                    });
+                }
+                mcp_changed = true;
+                // Installed 在卸载语义中表示「发生了变更」（与 OpenClaw 一致）。
+                mcp_result = IntegrationResult::Installed;
+                mcp_message = Some("已通过 grok mcp remove 移除 user-scope superdev".into());
+            }
+        } else {
+            // MCP 可能仍留在 Grok 配置中，不能被 Skill 删除成功掩盖成整体 Success。
+            mcp_needs_action = true;
+            mcp_result = IntegrationResult::NeedsAction;
+            mcp_message =
+                Some("未找到 grok CLI，请手动运行 grok mcp remove superdev --scope user".into());
+        }
+
+        let changed = mcp_changed || skill_changed;
         let outcome = ConnectorOperationOutcome {
             connector_id: CONNECTOR_ID.into(),
             operation: ConnectorOperation::Uninstall,
-            result: ConnectorResult::Unchanged,
+            result: if mcp_needs_action && changed {
+                ConnectorResult::Partial
+            } else if mcp_needs_action {
+                ConnectorResult::NeedsAction
+            } else if changed {
+                ConnectorResult::Success
+            } else {
+                ConnectorResult::Unchanged
+            },
             integrations: vec![
                 common::integration_result(
                     IntegrationCapability::Mcp,
-                    IntegrationResult::Skipped,
+                    mcp_result,
                     Some(common::path_string(&config_path(ctx))),
                     None,
-                    Some("Grok MCP 卸载尚未实现".into()),
+                    mcp_message,
                 ),
-                common::integration_result(
-                    IntegrationCapability::Skill,
-                    IntegrationResult::Skipped,
-                    Some(common::path_string(&skill_path(ctx))),
-                    None,
-                    Some("Grok Skill 卸载尚未实现".into()),
-                ),
-                common::integration_result(
-                    IntegrationCapability::SessionHook,
-                    IntegrationResult::Skipped,
-                    Some(common::path_string(&hook_path(ctx))),
-                    None,
-                    Some("Grok Session Hook 卸载尚未实现".into()),
-                ),
+                skill_result,
+                hook_result,
             ],
-            manual_instructions: None,
-            requires_restart: false,
-            message: Some("Grok 连接器脚手架：卸载逻辑待后续 Task 实现".into()),
+            manual_instructions: if mcp_needs_action {
+                Some(self.manual_instructions(ctx)?)
+            } else {
+                None
+            },
+            requires_restart: changed,
+            message: Some("Grok 卸载完成".into()),
         };
         tracing::info!(
             connector_id = CONNECTOR_ID,
             operation = "uninstall",
             result = ?outcome.result,
             duration_ms = started.elapsed().as_millis() as u64,
-            "grok uninstall finished (scaffold stub)"
+            "grok uninstall finished"
         );
         Ok(outcome)
     }
@@ -296,12 +739,18 @@ impl AgentConnector for GrokConnector {
             summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
             steps: vec![
                 "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
-                "使用 grok mcp add 配置 user-scope superdev MCP".into(),
-                "安装 SuperDev Skill 与 SessionStart hook（脚手架阶段请等待完整实现）".into(),
+                format!(
+                    "运行: grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {mcp_binary}"
+                ),
+                format!("Skill 目标目录: {}", skill_path(ctx).display()),
+                "Session Hook 自动安装将在后续版本完成；引导以 Skill 为主".into(),
+                "使用 grok mcp list --json 确认 user-scope superdev 已配置".into(),
             ],
             config_path: Some(common::path_string(&config_path(ctx))),
             manual_config: Some(manual_config),
-            verification_prompt: Some("验证 SuperDev MCP 在 Grok 中可用".into()),
+            verification_prompt: Some(
+                "运行 grok mcp list --json 确认 superdev（scope=user）已配置".into(),
+            ),
         })
     }
 }
@@ -309,9 +758,60 @@ impl AgentConnector for GrokConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// FakeCommandRunner 按队列返回预设输出，并记录 argv 供断言（不经真实进程）。
+    #[derive(Clone, Default)]
+    struct FakeCommandRunner {
+        calls: Arc<Mutex<Vec<Vec<String>>>>,
+        responses: Arc<Mutex<VecDeque<Result<CommandOutput, ConnectorError>>>>,
+    }
+
+    impl FakeCommandRunner {
+        fn push_ok(&self, status: i32, stdout: &str) {
+            self.push_output(status, stdout, "");
+        }
+
+        fn push_output(&self, status: i32, stdout: &str, stderr: &str) {
+            self.responses.lock().unwrap().push_back(Ok(CommandOutput {
+                status_code: Some(status),
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+                truncated: false,
+            }));
+        }
+
+        fn argv(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl CommandRunner for FakeCommandRunner {
+        fn run(&self, spec: CommandSpec) -> Result<CommandOutput, ConnectorError> {
+            let args: Vec<String> = spec
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            self.calls.lock().unwrap().push(args);
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Ok(CommandOutput {
+                        status_code: Some(0),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        truncated: false,
+                    })
+                })
+        }
+    }
 
     fn test_dir(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -336,11 +836,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn detect_prefers_cli_path_when_present() {
-        let home = test_dir("detect-cli");
-        let bin = home.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
+    fn write_fake_cli(bin: &Path) -> PathBuf {
+        std::fs::create_dir_all(bin).unwrap();
         let cli_name = if cfg!(windows) { "grok.exe" } else { "grok" };
         let cli_path = bin.join(cli_name);
         std::fs::write(&cli_path, "").unwrap();
@@ -351,6 +848,14 @@ mod tests {
             perms.set_mode(0o755);
             std::fs::set_permissions(&cli_path, perms).unwrap();
         }
+        cli_path
+    }
+
+    #[test]
+    fn detect_prefers_cli_path_when_present() {
+        let home = test_dir("detect-cli");
+        let bin = home.join("bin");
+        let cli_path = write_fake_cli(&bin);
         // 同时存在 data root 时，CLI 应优先作为 detection_path
         std::fs::create_dir_all(home.join(".grok")).unwrap();
 
@@ -386,6 +891,217 @@ mod tests {
         let hit = GrokConnector::new().detect(&ctx).unwrap();
         assert!(!hit.detected);
         assert!(hit.detection_path.is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn entry_matches_requires_command_url_enabled() {
+        let home = test_dir("entry-match");
+        let ctx = context_at(home.clone(), vec![]);
+        let good: serde_json::Value = serde_json::from_str(&configured_list_json(&ctx)).unwrap();
+        let entry = &good.as_array().unwrap()[0];
+        assert!(entry_matches(&ctx, entry));
+
+        let mut disabled = entry.clone();
+        disabled["enabled"] = serde_json::json!(false);
+        assert!(!entry_matches(&ctx, &disabled));
+
+        let mut bad_url = entry.clone();
+        bad_url["env"]["SUPERDEV_AGENT_URL"] = serde_json::json!("http://127.0.0.1:9");
+        assert!(!entry_matches(&ctx, &bad_url));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn status_mcp_configured_when_list_matches() {
+        let home = test_dir("status-configured");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, &configured_list_json(&ctx));
+        let status = GrokConnector::with_runner(Arc::new(runner))
+            .status(&ctx)
+            .unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::Configured);
+        assert_eq!(
+            status.mcp_command.as_deref(),
+            Some(ctx.mcp_binary().to_str().unwrap())
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn status_mcp_needs_action_for_project_only_scope() {
+        let home = test_dir("status-project");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let body = serde_json::json!([{
+            "name": "superdev",
+            "command": ctx.mcp_binary().to_string_lossy(),
+            "env": { "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL },
+            "enabled": true,
+            "scope": "project"
+        }])
+        .to_string();
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, &body);
+        let status = GrokConnector::with_runner(Arc::new(runner))
+            .status(&ctx)
+            .unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::NeedsAction);
+        assert!(
+            mcp.message
+                .as_deref()
+                .unwrap_or("")
+                .contains("--scope user"),
+            "project-only should mention --scope user"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn status_mcp_needs_action_on_user_entry_mismatch() {
+        let home = test_dir("status-mismatch");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let body = serde_json::json!([{
+            "name": "superdev",
+            "command": "/wrong/mcp",
+            "env": { "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL },
+            "enabled": true,
+            "scope": "user"
+        }])
+        .to_string();
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, &body);
+        let status = GrokConnector::with_runner(Arc::new(runner))
+            .status(&ctx)
+            .unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::NeedsAction);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn status_mcp_error_on_invalid_list_json() {
+        let home = test_dir("status-invalid");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let runner = FakeCommandRunner::default();
+        runner.push_ok(0, "not-json");
+        let status = GrokConnector::with_runner(Arc::new(runner))
+            .status(&ctx)
+            .unwrap();
+        let mcp = status
+            .integrations
+            .iter()
+            .find(|i| i.capability == IntegrationCapability::Mcp)
+            .unwrap();
+        assert_eq!(mcp.status, IntegrationStateStatus::Error);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn install_mcp_calls_add_with_scope_user_and_env() {
+        let home = test_dir("install-add");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = home.join("skill-src");
+        std::fs::create_dir_all(&skill_src).unwrap();
+        std::fs::write(skill_src.join("SKILL.md"), "# s\n").unwrap();
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let runner = FakeCommandRunner::default();
+        // list empty → add ok → list configured
+        runner.push_ok(0, "[]");
+        runner.push_ok(0, "");
+        runner.push_ok(0, &configured_list_json(&ctx));
+        let connector = GrokConnector::with_runner(Arc::new(runner.clone()));
+        let outcome = connector
+            .install(
+                &ctx,
+                ConnectorInstallRequest {
+                    operation: ConnectorOperation::Install,
+                    capabilities: vec![
+                        IntegrationCapability::Mcp,
+                        IntegrationCapability::Skill,
+                        IntegrationCapability::SessionHook,
+                    ],
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            outcome.result,
+            ConnectorResult::Success | ConnectorResult::Partial
+        ));
+        assert_eq!(
+            outcome.integrations[0].result,
+            IntegrationResult::Installed
+        );
+        let argv = runner.argv();
+        assert!(argv.iter().any(|a| {
+            a.first().map(String::as_str) == Some("mcp")
+                && a.get(1).map(String::as_str) == Some("add")
+                && a.iter().any(|x| x == "--scope")
+                && a.iter().any(|x| x == "user")
+                && a.iter().any(|x| x == "superdev")
+                && a.iter().any(|x| x.starts_with("SUPERDEV_AGENT_URL="))
+        }));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn uninstall_mcp_calls_remove_with_scope_user() {
+        let home = test_dir("uninstall-remove");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let ctx = context_at(home.clone(), vec![bin]);
+        let runner = FakeCommandRunner::default();
+        // list with user superdev → remove ok
+        runner.push_ok(0, &configured_list_json(&ctx));
+        runner.push_ok(0, "");
+        let outcome = GrokConnector::with_runner(Arc::new(runner.clone()))
+            .uninstall(&ctx)
+            .unwrap();
+        assert_eq!(outcome.result, ConnectorResult::Success);
+        assert_eq!(
+            outcome.integrations[0].result,
+            IntegrationResult::Installed
+        );
+        let argv = runner.argv();
+        assert!(argv.iter().any(|a| {
+            a == &vec![
+                "mcp".to_string(),
+                "remove".to_string(),
+                "superdev".to_string(),
+                "--scope".to_string(),
+                "user".to_string(),
+            ]
+        }));
         let _ = std::fs::remove_dir_all(home);
     }
 }
