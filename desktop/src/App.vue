@@ -72,7 +72,12 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
-.app-route-frame :deep(.onboarding-page),
+.app-route-frame :deep(.onboarding-page) {
+  /* 路由框会裁切溢出；引导页必须先受视口高度约束，内部滚动才不会被父级截断。 */
+  height: 100%;
+  min-height: 0;
+}
+
 .app-route-frame :deep(.onboarding-shell) {
   min-height: 100%;
 }

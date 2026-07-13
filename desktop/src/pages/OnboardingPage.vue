@@ -507,8 +507,10 @@ async function finish(action: 'confirm' | 'skip') {
 
 <style scoped>
 .onboarding-page {
-  min-height: 100vh;
-  overflow: auto;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     radial-gradient(ellipse at 24% 48%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 47%),
     var(--bg-primary);
