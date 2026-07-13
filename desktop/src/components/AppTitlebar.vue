@@ -13,9 +13,12 @@ AppTitlebar：Windows 主窗口自绘标题栏。
 import { LogicalPosition } from '@tauri-apps/api/dpi'
 import { Menu, type MenuOptions } from '@tauri-apps/api/menu'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import appIconUrl from '../../src-tauri/icons/32x32.png'
+import { emitShellDiagnostic } from '@/lib/shellDiagnostics'
 
 type TitlebarMenuId = 'file' | 'edit' | 'view' | 'window' | 'help'
 type TitlebarMenuItems = NonNullable<MenuOptions['items']>
+type TitlebarAction = 'drag' | 'menu' | 'minimize' | 'toggle-maximize' | 'close'
 
 const appWindow = getCurrentWindow()
 const titlebarMenuLabels: Array<{ id: TitlebarMenuId; label: string }> = [
@@ -44,9 +47,24 @@ const titlebarMenuItems: Record<TitlebarMenuId, TitlebarMenuItems> = {
   help: [{ text: '暂无帮助项', enabled: false }],
 }
 
+async function runTitlebarAction(
+  action: TitlebarAction,
+  operation: () => Promise<void>,
+  context: Record<string, unknown> = {},
+) {
+  emitShellDiagnostic('titlebar.action.started', 'debug', { action, ...context })
+  try {
+    await operation()
+    emitShellDiagnostic('titlebar.action.succeeded', 'info', { action, ...context })
+  } catch {
+    // 不透传 Tauri 错误正文，避免把本机路径或运行环境细节写入诊断日志。
+    emitShellDiagnostic('titlebar.action.failed', 'error', { action, ...context })
+  }
+}
+
 function startWindowDrag(event: MouseEvent) {
   if (event.buttons !== 1) return
-  void appWindow.startDragging().catch(() => undefined)
+  void runTitlebarAction('drag', () => appWindow.startDragging())
 }
 
 async function openTitlebarMenu(menuId: TitlebarMenuId, event: MouseEvent) {
@@ -54,20 +72,22 @@ async function openTitlebarMenu(menuId: TitlebarMenuId, event: MouseEvent) {
   if (!(target instanceof HTMLElement)) return
 
   const rect = target.getBoundingClientRect()
-  const menu = await Menu.new({ items: titlebarMenuItems[menuId] })
-  await menu.popup(new LogicalPosition(rect.left, rect.bottom), appWindow)
+  await runTitlebarAction('menu', async () => {
+    const menu = await Menu.new({ items: titlebarMenuItems[menuId] })
+    await menu.popup(new LogicalPosition(rect.left, rect.bottom), appWindow)
+  }, { menuId })
 }
 
 function minimizeWindow() {
-  void appWindow.minimize().catch(() => undefined)
+  void runTitlebarAction('minimize', () => appWindow.minimize())
 }
 
 function toggleWindowMaximize() {
-  void appWindow.toggleMaximize().catch(() => undefined)
+  void runTitlebarAction('toggle-maximize', () => appWindow.toggleMaximize())
 }
 
 function closeWindow() {
-  void appWindow.close().catch(() => undefined)
+  void runTitlebarAction('close', () => appWindow.close())
 }
 </script>
 
@@ -79,7 +99,7 @@ function closeWindow() {
     @mousedown="startWindowDrag"
   >
     <div class="app-titlebar-brand" data-tauri-drag-region>
-      <img class="app-titlebar-icon" src="/favicon.svg" alt="" data-tauri-drag-region>
+      <img class="app-titlebar-icon" :src="appIconUrl" alt="" data-tauri-drag-region>
       <span class="app-titlebar-name" data-tauri-drag-region>SuperDev</span>
     </div>
     <nav class="app-titlebar-menu" data-test="app-titlebar-menu" aria-label="应用菜单">

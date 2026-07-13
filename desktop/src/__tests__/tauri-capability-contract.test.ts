@@ -16,6 +16,12 @@ describe('Tauri capabilities', () => {
     expect(defaultCapability.permissions).toContain('core:window:allow-start-dragging')
   })
 
+  it('allows every window action exposed by the Windows custom titlebar', () => {
+    expect(defaultCapability.permissions).toContain('core:window:allow-minimize')
+    expect(defaultCapability.permissions).toContain('core:window:allow-toggle-maximize')
+    expect(defaultCapability.permissions).toContain('core:window:allow-close')
+  })
+
   it('allows native notification access for approval reminders', () => {
     expect(defaultCapability.permissions).toContain('notification:default')
   })

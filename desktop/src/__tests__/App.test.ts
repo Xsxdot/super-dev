@@ -160,6 +160,9 @@ describe('App', () => {
     expect(wrapper.find('[data-test="app-titlebar"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="app-titlebar-menu"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="app-titlebar-menu-file"]').text()).toBe('文件')
+    expect(wrapper.find('.app-titlebar-icon').attributes('src')).toContain(
+      '/src-tauri/icons/32x32.png',
+    )
     expect(wrapper.find('[data-test="app-titlebar-minimize"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="app-titlebar-maximize"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="app-titlebar-close"]').exists()).toBe(true)
@@ -171,6 +174,31 @@ describe('App', () => {
     expect(windowApiMock.minimize).toHaveBeenCalledTimes(1)
     expect(windowApiMock.toggleMaximize).toHaveBeenCalledTimes(1)
     expect(windowApiMock.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('emits a structured diagnostic when a Windows titlebar action fails', async () => {
+    mockNavigatorPlatform('Win32')
+    const settings = useSettingsStore()
+    vi.spyOn(settings, 'loadAgentSettings').mockImplementation(async () => {
+      settings.agentSettings = { log_retention_days: 7, artifact_keep_versions: 10, sample_seeded: true, onboarding_completed: true }
+    })
+    windowApiMock.minimize.mockRejectedValueOnce(new Error('permission denied'))
+    const diagnostics: Record<string, unknown>[] = []
+    const listener = (event: Event) => diagnostics.push((event as CustomEvent).detail)
+    window.addEventListener('superdev:shell', listener)
+
+    const wrapper = mount(App, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+    await wrapper.find('[data-test="app-titlebar-minimize"]').trigger('click')
+    await flushPromises()
+
+    window.removeEventListener('superdev:shell', listener)
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      scope: 'shell',
+      level: 'error',
+      event: 'titlebar.action.failed',
+      action: 'minimize',
+    }))
   })
 
   it('keeps macOS and Linux out of the custom Windows titlebar', async () => {

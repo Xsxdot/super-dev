@@ -59,6 +59,28 @@ describe('frontendDiagnostics bridge', () => {
     ])
   })
 
+  it('收集 Windows 自绘标题栏的窗口动作事件', async () => {
+    window.dispatchEvent(new CustomEvent('superdev:shell', {
+      detail: {
+        scope: 'shell',
+        level: 'error',
+        event: 'titlebar.action.failed',
+        at: '2026-07-13T08:00:00Z',
+        action: 'minimize',
+      },
+    }))
+
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS)
+
+    expect(vi.mocked(api.postFrontendDiagnostics).mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        scope: 'shell',
+        event: 'titlebar.action.failed',
+        action: 'minimize',
+      }),
+    ])
+  })
+
   it('上报失败时保留队列下轮重试，且队列有上限', async () => {
     vi.mocked(api.postFrontendDiagnostics).mockRejectedValueOnce(new Error('down'))
     window.dispatchEvent(new CustomEvent('superdev:log-panel', {

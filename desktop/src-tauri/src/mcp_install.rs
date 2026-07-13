@@ -1631,8 +1631,12 @@ fn backup_path(path: &Path) -> PathBuf {
     }
 }
 
-pub fn find_sidecar_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
-    let exact = dir.join(name);
+fn find_sidecar_binary_in_dir_with_executable_suffix(
+    dir: &Path,
+    name: &str,
+    executable_suffix: &str,
+) -> Option<PathBuf> {
+    let exact = dir.join(format!("{name}{executable_suffix}"));
     if exact.is_file() {
         return Some(exact);
     }
@@ -1649,6 +1653,19 @@ pub fn find_sidecar_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
         })
 }
 
+/// find_sidecar_binary_in_dir 按当前平台的可执行文件扩展名查找 sidecar。
+///
+/// 参数：
+///   - dir: Tauri 安装目录或资源目录
+///   - name: 不带平台扩展名的 sidecar 名称
+///
+/// 返回：存在的精确平台文件或 target-suffixed 文件路径；未找到返回 None。
+pub fn find_sidecar_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    // Tauri 会把 Windows sidecar 安装成 `<name>.exe`；按当前目标平台补扩展名，
+    // 避免把已正确打包的 MCP 误判为缺失。
+    find_sidecar_binary_in_dir_with_executable_suffix(dir, name, std::env::consts::EXE_SUFFIX)
+}
+
 pub fn find_skill_source_dir_in_dir(dir: &Path) -> Option<PathBuf> {
     let candidate = dir.join("skills").join("superdev");
     if candidate.join("SKILL.md").is_file() {
@@ -1658,14 +1675,21 @@ pub fn find_skill_source_dir_in_dir(dir: &Path) -> Option<PathBuf> {
 }
 
 pub fn resolve_sidecar_binary(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    tracing::debug!(sidecar = name, "sidecar resolution started");
     let exe = std::env::current_exe().map_err(|err| format!("解析当前进程路径失败: {err}"))?;
     if let Some(dir) = exe.parent() {
         if let Some(path) = find_sidecar_binary_in_dir(dir, name) {
+            tracing::info!(
+                sidecar = name,
+                source = "executable_dir",
+                "sidecar resolved"
+            );
             return Ok(path);
         }
     }
     if let Ok(resource_dir) = app.path().resource_dir() {
         if let Some(path) = find_sidecar_binary_in_dir(&resource_dir, name) {
+            tracing::info!(sidecar = name, source = "resource_dir", "sidecar resolved");
             return Ok(path);
         }
     }
@@ -1675,9 +1699,15 @@ pub fn resolve_sidecar_binary(app: &AppHandle, name: &str) -> Result<PathBuf, St
             .join("src-tauri")
             .join("binaries");
         if let Some(path) = find_sidecar_binary_in_dir(&dev_dir, name) {
+            tracing::info!(
+                sidecar = name,
+                source = "development_dir",
+                "sidecar resolved"
+            );
             return Ok(path);
         }
     }
+    tracing::error!(sidecar = name, "sidecar resolution failed");
     Err(format!(
         "找不到 {name} sidecar 二进制，请检查桌面端打包配置"
     ))
@@ -2697,6 +2727,18 @@ mod path_tests {
         assert_eq!(
             find_sidecar_binary_in_dir(&dir, "superdev-mcp"),
             Some(suffixed)
+        );
+    }
+
+    #[test]
+    fn find_sidecar_binary_accepts_windows_executable_name() {
+        let dir = tempfile_dir();
+        let executable = dir.join("superdev-mcp.exe");
+        fs::write(&executable, b"bin").expect("write Windows executable");
+
+        assert_eq!(
+            find_sidecar_binary_in_dir_with_executable_suffix(&dir, "superdev-mcp", ".exe"),
+            Some(executable)
         );
     }
 

@@ -22,6 +22,7 @@ const EVENT_NAMES = [
   'superdev:log-evidence',
   'superdev:onboarding',
   'superdev:connector',
+  'superdev:shell',
 ] as const
 
 /**
