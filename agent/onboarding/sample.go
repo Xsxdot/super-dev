@@ -159,8 +159,13 @@ func repairLegacySampleConfig(target string, binaryPath string) (bool, error) {
 }
 
 func isLegacyGeneratedSampleConfig(raw string, template string, binaryPath string) bool {
-	// 逐字节比较能把“用户恰好保留旧模板形状但修改了 command”排除在自动修复之外。
-	return raw == strings.ReplaceAll(template, "{{SAMPLE_BINARY}}", binaryPath)
+	// 仅忽略 Git 在 Windows checkout 产生的 CRLF 差异；其余内容仍逐字节比较，
+	// 从而把“用户保留旧模板形状但修改了 command”排除在自动修复之外。
+	expected := strings.ReplaceAll(template, "{{SAMPLE_BINARY}}", binaryPath)
+	normalizeNewlines := func(value string) string {
+		return strings.ReplaceAll(value, "\r\n", "\n")
+	}
+	return normalizeNewlines(raw) == normalizeNewlines(expected)
 }
 
 func copySampleAssets(target string) error {

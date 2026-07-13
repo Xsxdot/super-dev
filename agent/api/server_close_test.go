@@ -1,8 +1,18 @@
+//go:build !windows
+
+// server_close_test.go 验证 Unix 下 App 关闭时的幂等性与进程组清理。
+//
+// 职责：
+//   - 验证 App.Close 多次调用只执行一次清理
+//   - 验证项目 manager 启动的 Unix 进程会在关闭时退出
+//
+// 边界：
+//   - 依赖 Unix signal 0 与 sh/sleep，不在 Windows 编译
+//   - 不验证 Windows Job Object；该边界由 process 包的平台测试负责
 package api
 
 import (
 	"errors"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -28,10 +38,6 @@ func TestCloseRunsOnce(t *testing.T) {
 
 // TestCloseStopsProjectManagers 验证 App.Close 会停止项目 deployment manager 中的进程。
 func TestCloseStopsProjectManagers(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("process group signal semantics differ on windows")
-	}
-
 	mgr := agentprocess.NewManager(func(model.LogEntry) {})
 	t.Cleanup(mgr.StopAll)
 

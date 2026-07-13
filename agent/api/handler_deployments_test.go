@@ -13,9 +13,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -334,6 +335,9 @@ func TestStartEnvSelectedRunsRemoteStartAfterApproval(t *testing.T) {
 }
 
 func TestRestart_AfterExternalKill_Succeeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("该用例验证 Unix shell 主进程被外部终止后的重启恢复")
+	}
 	app := newTestAppForPackage(t)
 	dep := model.Deployment{
 		ID:       "dep-restart-killed",
@@ -347,7 +351,9 @@ func TestRestart_AfterExternalKill_Succeeds(t *testing.T) {
 	mgr := app.getOrCreateManager("proj-restart")
 	oldPGID := mgr.DeploymentPID(dep.ID)
 	require.NotZero(t, oldPGID)
-	require.NoError(t, syscall.Kill(-oldPGID, syscall.SIGKILL))
+	oldProcess, err := os.FindProcess(oldPGID)
+	require.NoError(t, err)
+	require.NoError(t, oldProcess.Kill())
 
 	require.NoError(t, app.restartDeploymentRuntime(context.Background(), "proj-restart", dep, intentStartNormal))
 	require.Eventually(t, func() bool {

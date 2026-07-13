@@ -135,7 +135,8 @@ func TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, []byte("bin"), 0o755))
 	projectDir := filepath.Join(dataDir, "examples", "superdev-sample")
 	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, ".superdev"), 0o755))
-	legacyConfig := legacySampleConfig(bin)
+	// 模拟 Windows checkout 的 CRLF 模板；升级识别不能被 Git 的换行策略影响。
+	legacyConfig := strings.ReplaceAll(legacySampleConfig(bin), "\n", "\r\n")
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, ".superdev", "config.yaml"), []byte(legacyConfig), 0o644))
 	settings := config.NewSettingsStore(dataDir)
 	initial := config.DefaultAgentSettings()
