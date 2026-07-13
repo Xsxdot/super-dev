@@ -218,6 +218,10 @@ export interface PipelineReservedVariable {
 export interface RuntimeConfig {
   type: RuntimeType
   command?: string
+  /** command runtime 的结构化可执行文件；存在时 agent 绕过平台 shell。 */
+  executable?: string
+  /** 与 executable 配套的逐项参数，避免平台 shell 转义差异。 */
+  args?: string[]
   working_dir?: string
   cwd?: string
   env?: Record<string, string>

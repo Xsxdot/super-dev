@@ -145,6 +145,7 @@ jobs:
         env:
           SUPERDEV_PACKAGED_SAMPLE_BINARY: ${{ github.workspace }}\desktop\src-tauri\target\debug\superdev-sample.exe
         run: |
+          go test ./execenv -count=1
           go test ./onboarding -run 'TestSeedSampleProjectWritesLoadableConfigForWindowsBinaryPath|TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded' -count=1
           go test ./api -run TestPackagedWindowsSampleIsRegisteredAndRunnable -count=1 -v
 

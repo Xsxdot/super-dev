@@ -14,12 +14,14 @@ package execenv
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 const fallbackSystemPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+const fallbackWindowsPathExt = ".COM;.EXE;.BAT;.CMD"
 
 // Options 描述一次子进程环境构造所需的上下文。
 type Options struct {
@@ -54,16 +56,20 @@ func Build(opts Options) []string {
 func BuildFrom(base []string, opts Options) []string {
 	env, order := parseEnv(base)
 	for key, value := range opts.Overrides {
-		if _, ok := env[key]; !ok {
+		actualKey, ok := matchingEnvKey(env, key, runtime.GOOS)
+		if !ok {
+			actualKey = key
 			order = append(order, key)
 		}
-		env[key] = value
+		env[actualKey] = value
 	}
 
-	if _, ok := env["PATH"]; !ok {
-		order = append(order, "PATH")
+	pathKey, ok := matchingEnvKey(env, "PATH", runtime.GOOS)
+	if !ok {
+		pathKey = "PATH"
+		order = append(order, pathKey)
 	}
-	env["PATH"] = augmentPath(env["PATH"], opts.WorkDir)
+	env[pathKey] = augmentPath(env[pathKey], opts.WorkDir)
 
 	out := make([]string, 0, len(order))
 	seen := make(map[string]struct{}, len(order))
@@ -90,26 +96,94 @@ func BuildFrom(base []string, opts Options) []string {
 //   - 解决 Go os/exec 的陷阱：exec.Command 在构造时即用「当前进程 PATH」做 LookPath，
 //     之后再设 cmd.Env 不会改变已选中的二进制。子进程若依赖 override/补齐后的 PATH
 //     （如指向 venv 的 python），必须先用本函数解析出绝对路径再交给 exec.Command。
-//   - file 含路径分隔符时按原样返回（沿用 exec.LookPath 语义），由调用方/OS 校验可执行性。
+//   - file 含当前平台路径语法时按原样返回（沿用 exec.LookPath 语义），由调用方/OS 校验可执行性。
+//   - Windows PATH 查找遵循 PATHEXT，且不使用 Unix 可执行权限位判断 .exe。
 func LookPath(file string, env []string) (string, error) {
-	if strings.ContainsRune(file, os.PathListSeparator) || strings.ContainsAny(file, "/") {
+	if isExecutablePath(file, runtime.GOOS) {
 		return file, nil
 	}
 	parsed, _ := parseEnv(env)
-	pathValue := parsed["PATH"]
+	pathValue := envValueForPlatform(parsed, "PATH", runtime.GOOS)
 	if strings.TrimSpace(pathValue) == "" {
-		pathValue = fallbackSystemPath
+		pathValue = fallbackPath()
 	}
+	pathExt := envValueForPlatform(parsed, "PATHEXT", runtime.GOOS)
 	for _, dir := range splitPath(pathValue) {
 		if dir == "" {
 			continue
 		}
-		candidate := filepath.Join(dir, file)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return candidate, nil
+		for _, candidate := range executableCandidates(filepath.Join(dir, file), pathExt, runtime.GOOS) {
+			if info, err := os.Stat(candidate); err == nil && isExecutableFile(info, runtime.GOOS) {
+				return candidate, nil
+			}
 		}
 	}
 	return "", &execNotFoundError{file: file}
+}
+
+func isExecutablePath(file string, goos string) bool {
+	if filepath.IsAbs(file) || strings.ContainsRune(file, '/') {
+		return true
+	}
+	if goos != "windows" {
+		return false
+	}
+	// filepath 在非 Windows 测试机上不理解盘符和反斜杠，因此显式识别 Windows 语法，
+	// 让该决策可以跨平台做纯单元测试。
+	return strings.ContainsRune(file, '\\') || len(file) >= 2 && isASCIILetter(file[0]) && file[1] == ':'
+}
+
+func isASCIILetter(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func executableCandidates(path string, pathExt string, goos string) []string {
+	if goos != "windows" {
+		return []string{path}
+	}
+	exts := windowsPathExtensions(pathExt)
+	fileExt := filepath.Ext(path)
+	if fileExt != "" {
+		for _, ext := range exts {
+			if strings.EqualFold(fileExt, ext) {
+				return []string{path}
+			}
+		}
+	}
+	candidates := make([]string, 0, len(exts))
+	for _, ext := range exts {
+		candidates = append(candidates, path+ext)
+	}
+	return candidates
+}
+
+func windowsPathExtensions(pathExt string) []string {
+	if strings.TrimSpace(pathExt) == "" {
+		pathExt = fallbackWindowsPathExt
+	}
+	raw := strings.Split(pathExt, ";")
+	exts := make([]string, 0, len(raw))
+	for _, ext := range raw {
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		exts = append(exts, ext)
+	}
+	return exts
+}
+
+func isExecutableFile(info os.FileInfo, goos string) bool {
+	if info.IsDir() {
+		return false
+	}
+	if goos == "windows" {
+		return true
+	}
+	return info.Mode()&0o111 != 0
 }
 
 type execNotFoundError struct{ file string }
@@ -131,9 +205,41 @@ func parseEnv(items []string) (map[string]string, []string) {
 	return env, order
 }
 
+func matchingEnvKey(env map[string]string, key string, goos string) (string, bool) {
+	if _, ok := env[key]; ok {
+		return key, true
+	}
+	if goos == "windows" {
+		for candidate := range env {
+			if strings.EqualFold(candidate, key) {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}
+
+func envValueForPlatform(env map[string]string, key string, goos string) string {
+	actualKey, ok := matchingEnvKey(env, key, goos)
+	if !ok {
+		return ""
+	}
+	return env[actualKey]
+}
+
+func fallbackPath() string {
+	if runtime.GOOS == "windows" {
+		// Build 的正常输入来自 os.Environ；只有调用方传入缺少 Path 的人工环境时才回退父进程。
+		if current := os.Getenv("PATH"); strings.TrimSpace(current) != "" {
+			return current
+		}
+	}
+	return fallbackSystemPath
+}
+
 func augmentPath(current string, workDir string) string {
 	if strings.TrimSpace(current) == "" {
-		current = fallbackSystemPath
+		current = fallbackPath()
 	}
 	parts := splitPath(current)
 	seen := make(map[string]struct{}, len(parts))

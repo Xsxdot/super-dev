@@ -12,6 +12,7 @@ package execenv
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -113,4 +114,56 @@ func TestLookPathPassesThroughPathWithSlash(t *testing.T) {
 	got, err := LookPath(bin, BuildFrom([]string{"PATH=/usr/bin"}, Options{}))
 	require.NoError(t, err)
 	assert.Equal(t, bin, got)
+}
+
+func TestExecutablePathRecognizesWindowsPathSyntax(t *testing.T) {
+	assert.True(t, isExecutablePath(`C:\Program Files\SuperDev\sample.exe`, "windows"))
+	assert.True(t, isExecutablePath(`C:tools\sample.exe`, "windows"))
+	assert.True(t, isExecutablePath(`.\sample.exe`, "windows"))
+	assert.True(t, isExecutablePath(`C:/Program Files/SuperDev/sample.exe`, "windows"))
+	assert.False(t, isExecutablePath("sample.exe", "windows"))
+	assert.False(t, isExecutablePath(`tools\sample`, "linux"))
+}
+
+func TestWindowsExecutableCandidatesFollowPathExt(t *testing.T) {
+	assert.Equal(t,
+		[]string{`C:\tools\superdev-probe.EXE`, `C:\tools\superdev-probe.CMD`},
+		executableCandidates(`C:\tools\superdev-probe`, ".EXE;.CMD", "windows"),
+	)
+	assert.Equal(t,
+		[]string{`C:\tools\superdev-probe.exe`},
+		executableCandidates(`C:\tools\superdev-probe.exe`, ".EXE;.CMD", "windows"),
+	)
+}
+
+func TestMatchingEnvKeyUsesWindowsCaseInsensitiveSemantics(t *testing.T) {
+	key, ok := matchingEnvKey(map[string]string{"Path": `C:\tools`}, "PATH", "windows")
+	require.True(t, ok)
+	assert.Equal(t, "Path", key)
+	_, ok = matchingEnvKey(map[string]string{"Path": `C:\tools`}, "PATH", "linux")
+	assert.False(t, ok)
+}
+
+func TestLookPathPassesThroughWindowsAbsolutePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path semantics require a native Windows test process")
+	}
+	path := `C:\Program Files\SuperDev\superdev-sample.exe`
+	got, err := LookPath(path, BuildFrom([]string{`Path=C:\Windows\System32`}, Options{}))
+	require.NoError(t, err)
+	assert.Equal(t, path, got)
+}
+
+func TestLookPathResolvesWindowsBareExecutableWithoutUnixModeBits(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable and PATHEXT semantics require a native Windows test process")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "superdev-probe.exe")
+	require.NoError(t, os.WriteFile(bin, []byte("probe"), 0o644))
+
+	env := BuildFrom([]string{"Path=" + dir, "PATHEXT=.COM;.EXE;.BAT;.CMD"}, Options{})
+	got, err := LookPath("superdev-probe", env)
+	require.NoError(t, err)
+	assert.True(t, strings.EqualFold(filepath.Clean(bin), filepath.Clean(got)), "Windows executable paths should be compared case-insensitively")
 }

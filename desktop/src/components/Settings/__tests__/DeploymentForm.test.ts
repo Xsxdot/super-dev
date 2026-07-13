@@ -204,11 +204,16 @@ describe('DeploymentForm', () => {
   })
 
   it('修改命令 emit runtime.command 新值', async () => {
-    const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+    const deployment = localDep()
+    deployment.runtime!.executable = '/Applications/SuperDev/sample'
+    deployment.runtime!.args = ['--port', '18191']
+    const wrapper = mount(DeploymentForm, { props: { modelValue: deployment, hosts: [] } })
     await wrapper.find('[data-test="dep-command"]').setValue('npm run dev')
     const emitted = wrapper.emitted('update:modelValue')
     const last = emitted![emitted!.length - 1][0] as Deployment
     expect(last.runtime?.command).toBe('npm run dev')
+    expect(last.runtime?.executable).toBeUndefined()
+    expect(last.runtime?.args).toBeUndefined()
   })
 
   it('local managed 时显示开机自启开关与依赖多选', () => {

@@ -90,6 +90,8 @@ function normalizeRuntime(d: Deployment): RuntimeConfig {
 
   if (runtime.type === 'command') {
     runtime.command = source.command ?? d.command ?? ''
+    if (source.executable !== undefined) runtime.executable = source.executable
+    if (source.args !== undefined) runtime.args = [...source.args]
     const workingDir = source.working_dir ?? d.work_dir
     const envFile = source.env_file ?? d.env_file
     const envVars = stripEmptyEnvKeys(source.env_vars ?? d.env)

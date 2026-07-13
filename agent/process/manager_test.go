@@ -1,6 +1,7 @@
 package process_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -82,6 +83,53 @@ func TestManagerStartDeploymentSpecUsesArgv(t *testing.T) {
 		defer entriesMu.Unlock()
 		for _, entry := range entries {
 			if entry.DeploymentID == "dep-argv" && entry.Message == "manager argv" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+// TestCommandRuntimeStructuredArgvHelper 是结构化 command runtime 测试启动的子进程入口。
+//
+// 边界：仅当测试显式注入 SUPERDEV_PROCESS_ARGV_HELPER 时输出探针文本，正常测试进程中为空操作。
+func TestCommandRuntimeStructuredArgvHelper(t *testing.T) {
+	if os.Getenv("SUPERDEV_PROCESS_ARGV_HELPER") != "1" {
+		return
+	}
+	fmt.Println("structured command runtime argv")
+}
+
+func TestManagerStartDeploymentUsesStructuredCommandRuntimeArgv(t *testing.T) {
+	var entriesMu sync.Mutex
+	var entries []model.LogEntry
+	mgr := process.NewManager(func(e model.LogEntry) {
+		entriesMu.Lock()
+		entries = append(entries, e)
+		entriesMu.Unlock()
+	})
+	dep := model.Deployment{
+		ID:       "dep-command-runtime-argv",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		// shell 命令故意无效；只有 Runtime 的结构化 argv 被采用时，探针子进程才会输出成功标记。
+		Command: "superdev-command-that-must-not-run",
+		Env: map[string]string{
+			"SUPERDEV_PROCESS_ARGV_HELPER": "1",
+		},
+		Runtime: &model.RuntimeConfig{
+			Type:       model.RuntimeTypeCommand,
+			Executable: os.Args[0],
+			Args:       []string{"-test.run=^TestCommandRuntimeStructuredArgvHelper$"},
+		},
+	}
+
+	require.NoError(t, mgr.StartDeployment(dep))
+	require.Eventually(t, func() bool {
+		entriesMu.Lock()
+		defer entriesMu.Unlock()
+		for _, entry := range entries {
+			if entry.DeploymentID == dep.ID && entry.Message == "structured command runtime argv" {
 				return true
 			}
 		}

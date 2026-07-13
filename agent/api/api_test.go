@@ -365,7 +365,11 @@ func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Services, 1)
 	require.Len(t, project.Services[0].Deployments, 1)
-	assert.Equal(t, `"`+bin+`" --port 18191`, project.Services[0].Deployments[0].Command)
+	deployment := project.Services[0].Deployments[0]
+	assert.Equal(t, `"`+bin+`" --port 18191`, deployment.Command)
+	require.NotNil(t, deployment.Runtime)
+	assert.Equal(t, bin, deployment.Runtime.Executable)
+	assert.Equal(t, []string{"--port", "18191"}, deployment.Runtime.Args)
 
 	rawRegistry, err := os.ReadFile(filepath.Join(dataDir, "projects.json"))
 	require.NoError(t, err)
@@ -380,7 +384,7 @@ func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
 //
 // 注意：
 //   - 仅由 Windows 打包工作流通过 SUPERDEV_PACKAGED_SAMPLE_BINARY 注入真实 sidecar 路径时执行
-//   - 使用固定示例端口验证完整 command shell 边界，测试结束由 app.Close 清理进程
+//   - 使用固定示例端口验证完整结构化 argv 启动边界，测试结束由 app.Close 清理进程
 func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
 	bin := os.Getenv("SUPERDEV_PACKAGED_SAMPLE_BINARY")
 	if bin == "" {

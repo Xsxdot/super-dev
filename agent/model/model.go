@@ -657,7 +657,7 @@ const (
 type RuntimeType string
 
 const (
-	// RuntimeTypeCommand 表示本机或远程 shell 命令运行。
+	// RuntimeTypeCommand 表示本机或远程命令运行；默认使用 shell，显式 executable/args 时本机直启。
 	RuntimeTypeCommand RuntimeType = "command"
 	// RuntimeTypeLanguage 表示本地 managed dev 进程由 Language Runtime Provider
 	// 生成执行计划（command 的结构化继任者）。不覆盖 systemd/launchd/docker 等其他基座。
@@ -714,8 +714,12 @@ const (
 //   - 不描述构建、传输、健康检查等部署过程
 //   - 不执行命令，仅作为配置模型
 type RuntimeConfig struct {
-	Type       RuntimeType       `json:"type" yaml:"type"`
-	Command    string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Type    RuntimeType `json:"type" yaml:"type"`
+	Command string      `json:"command,omitempty" yaml:"command,omitempty"`
+	// Executable 与 Args 为 command runtime 提供不经 shell 的结构化启动契约。
+	// Executable 为空时继续使用 Command，保持用户已有 shell 命令的兼容性。
+	Executable string            `json:"executable,omitempty" yaml:"executable,omitempty"`
+	Args       []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	WorkingDir string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
 	EnvFile    string            `json:"env_file,omitempty" yaml:"env_file,omitempty"`
 	EnvVars    map[string]string `json:"env_vars,omitempty" yaml:"env_vars,omitempty"`

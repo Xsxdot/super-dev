@@ -207,6 +207,11 @@ function patchRuntime(partial: Partial<RuntimeConfig>) {
   patchRuntimeAndLogs(nextRuntime, nextLogs)
 }
 
+/** setCommand 把用户手写命令恢复为 shell 契约，避免隐藏的结构化 argv 覆盖界面上的新值。 */
+function setCommand(command: string) {
+  patchRuntime({ type: 'command', command, executable: undefined, args: undefined })
+}
+
 function patchLogs(partial: Partial<LogConfig>) {
   const nextLogs: LogConfig = { ...logs.value, ...partial, type: partial.type ?? logs.value.type }
   patchRuntimeAndLogs(runtime.value, nextLogs)
@@ -561,7 +566,7 @@ watch(
             data-test="dep-command"
             :placeholder="t('settings.deployment.commandPlaceholder')"
             :value="runtime.command"
-            @input="patchRuntime({ type: 'command', command: ($event.target as HTMLInputElement).value })"
+            @input="setCommand(($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="settings-field dep-field">

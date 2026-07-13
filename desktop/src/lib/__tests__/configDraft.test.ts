@@ -78,6 +78,25 @@ describe('configDraft', () => {
     expect(out.env).toEqual({ B: '2' })
   })
 
+  it('保留 command runtime 的结构化 executable/args', () => {
+    const project = makeProject()
+    project.services[0].deployments![0].runtime = {
+      type: 'command',
+      command: '"C:\\Program Files\\SuperDev\\sample.exe" --port 18191',
+      executable: 'C:\\Program Files\\SuperDev\\sample.exe',
+      args: ['--port', '18191'],
+    }
+
+    const payload = draftToPayload(projectToDraft(project))
+
+    expect(payload.services[0].deployments[0].runtime).toMatchObject({
+      type: 'command',
+      command: '"C:\\Program Files\\SuperDev\\sample.exe" --port 18191',
+      executable: 'C:\\Program Files\\SuperDev\\sample.exe',
+      args: ['--port', '18191'],
+    })
+  })
+
   it('projectToDraft 将旧只读和 external 归一成 monitor 控制模式', () => {
     const p = makeProject()
     p.services[0].deployments![0] = {

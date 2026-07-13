@@ -34,7 +34,7 @@ type RunnerConfig struct {
 	// PreRun 非空时在主进程启动前同步执行，失败即视为启动失败。
 	PreRun *CommandStep
 	// Argv 非空时按 argv 直启（argv[0] 为可执行文件），绕过 sh -c；
-	// language runtime 的执行计划是结构化 argv，不拼 shell 字符串。
+	// language runtime 与需要跨平台稳定启动的 command runtime 都使用该契约。
 	Argv []string
 	// WorkDir 是命令的工作目录；为空则继承父进程目录。
 	WorkDir string

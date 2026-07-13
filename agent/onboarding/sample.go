@@ -189,7 +189,8 @@ func copySampleAssets(target string) error {
 }
 
 func writeSampleConfig(target string, binaryPath string) error {
-	// command runtime 经过平台 shell 启动；始终包住可执行路径，避免 Windows 安装目录含空格时被拆开。
+	// Command 保留可读文本供 UI 和旧版本兼容；当前版本通过 Runtime 的结构化 argv 直启，
+	// 避免安装目录含空格时受 Windows cmd 引号规则影响。
 	command := fmt.Sprintf(`"%s" --port %d`, strings.ReplaceAll(binaryPath, `"`, `\"`), samplePort)
 	project := model.Project{
 		Name:     "superdev-sample",
@@ -217,6 +218,8 @@ func writeSampleConfig(target string, binaryPath string) error {
 				Runtime: &model.RuntimeConfig{
 					Type:       model.RuntimeTypeCommand,
 					Command:    command,
+					Executable: binaryPath,
+					Args:       []string{"--port", fmt.Sprintf("%d", samplePort)},
 					WorkingDir: ".",
 				},
 				Logs: &model.LogConfig{Type: model.LogKindProcess},

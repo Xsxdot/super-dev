@@ -546,20 +546,26 @@ func (m *Manager) emitExitFailure(id string, info ExitInfo) {
 }
 
 // deploymentToSpec 将 Deployment 字段映射为 ProcessSpec。
-// local deployment 用自身 Command/WorkDir/Env；
+// local deployment 用自身 Command/WorkDir/Env；command runtime 显式提供
+// Executable 时用结构化 argv 直启；
 // remote deployment 用 StartCommand 作为命令，本机 env/workDir 不透传。
 func deploymentToSpec(dep model.Deployment) ProcessSpec {
 	cmd := dep.Command
 	workDir := dep.WorkDir
 	env := dep.Env
 	envFile := dep.EnvFile
+	var argv []string
 	if dep.Location == model.LocationRemote {
 		cmd = dep.StartCommand
 		workDir = ""
 		env = nil
 		envFile = ""
+	} else if dep.Runtime != nil && dep.Runtime.Type == model.RuntimeTypeCommand && dep.Runtime.Executable != "" {
+		// 机器生成的跨平台命令不能依赖 cmd/sh 的引号规则；保留 Command 供展示和旧客户端兼容，
+		// 实际启动则把可执行文件与参数逐项交给操作系统。
+		argv = append([]string{dep.Runtime.Executable}, dep.Runtime.Args...)
 	}
-	return ProcessSpec{Command: cmd, WorkDir: workDir, Env: env, EnvFile: envFile}
+	return ProcessSpec{Command: cmd, Argv: argv, WorkDir: workDir, Env: env, EnvFile: envFile}
 }
 
 func runtimeTypeOf(dep model.Deployment) model.RuntimeType {

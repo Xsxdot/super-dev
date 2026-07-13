@@ -125,7 +125,11 @@ func TestSeedSampleProjectWritesLoadableConfigForWindowsBinaryPath(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, project.Services, 1)
 	require.Len(t, project.Services[0].Deployments, 1)
-	assert.Equal(t, `"`+bin+`" --port 18191`, project.Services[0].Deployments[0].Command)
+	deployment := project.Services[0].Deployments[0]
+	assert.Equal(t, `"`+bin+`" --port 18191`, deployment.Command)
+	require.NotNil(t, deployment.Runtime)
+	assert.Equal(t, bin, deployment.Runtime.Executable)
+	assert.Equal(t, []string{"--port", "18191"}, deployment.Runtime.Args)
 }
 
 // TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded 验证升级后会修复旧版半完成状态。
@@ -158,7 +162,11 @@ func TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Services, 1)
 	require.Len(t, project.Services[0].Deployments, 1)
-	assert.Equal(t, `"`+bin+`" --port 18191`, project.Services[0].Deployments[0].Command)
+	deployment := project.Services[0].Deployments[0]
+	assert.Equal(t, `"`+bin+`" --port 18191`, deployment.Command)
+	require.NotNil(t, deployment.Runtime)
+	assert.Equal(t, bin, deployment.Runtime.Executable)
+	assert.Equal(t, []string{"--port", "18191"}, deployment.Runtime.Args)
 }
 
 // TestSeedSampleProjectPreservesUserModifiedInvalidConfig 验证自动修复不会覆盖用户自定义内容。
