@@ -21,6 +21,9 @@ import (
 )
 
 func TestBuildFromAppendsInstalledNVMVersionsNewestFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix nvm directory discovery is not part of the Windows PATH contract")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	v16 := filepath.Join(home, ".nvm", "versions", "node", "v16.20.2", "bin")
@@ -38,6 +41,9 @@ func TestBuildFromAppendsInstalledNVMVersionsNewestFirst(t *testing.T) {
 }
 
 func TestBuildFromPrefersNVMRCVersionWithinNVMPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix nvm directory discovery is not part of the Windows PATH contract")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	workDir := filepath.Join(home, "workspace", "app")
@@ -88,6 +94,9 @@ func envKeyCount(env []string, key string) int {
 }
 
 func TestLookPathResolvesAgainstBuiltEnvPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable-bit lookup is covered by the dedicated Windows PATHEXT test")
+	}
 	// 一个只存在于 override PATH 里的可执行，不在 agent 自身 PATH 中。
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "python")

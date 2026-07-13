@@ -142,6 +142,7 @@ jobs:
 
       - name: Run packaged Windows onboarding smoke
         working-directory: agent
+        shell: bash
         env:
           SUPERDEV_PACKAGED_SAMPLE_BINARY: ${{ github.workspace }}\desktop\src-tauri\target\debug\superdev-sample.exe
         run: |
