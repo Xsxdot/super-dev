@@ -493,7 +493,8 @@ fn coding_agent_app_dirs(home: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn resolve_user_home_dir() -> Result<PathBuf, String> {
+/// resolve_user_home_dir 按当前平台解析桌面进程对应的真实用户目录。
+pub(crate) fn resolve_user_home_dir() -> Result<PathBuf, String> {
     user_home_dir_from_env(|key| std::env::var_os(key), cfg!(windows)).ok_or_else(|| {
         "无法解析用户目录：请检查 HOME（macOS/Linux）或 USERPROFILE/HOMEDRIVE/HOMEPATH（Windows）"
             .to_string()

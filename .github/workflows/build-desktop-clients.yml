@@ -140,6 +140,14 @@ jobs:
           done
           test -f desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe
 
+      - name: Run packaged Windows onboarding smoke
+        working-directory: agent
+        env:
+          SUPERDEV_PACKAGED_SAMPLE_BINARY: ${{ github.workspace }}\desktop\src-tauri\target\debug\superdev-sample.exe
+        run: |
+          go test ./onboarding -run 'TestSeedSampleProjectWritesLoadableConfigForWindowsBinaryPath|TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded' -count=1
+          go test ./api -run TestPackagedWindowsSampleIsRegisteredAndRunnable -count=1 -v
+
       - name: Run Connector registry smoke on Windows
         working-directory: desktop/src-tauri
         run: cargo test mcp_install::connectors -- --nocapture

@@ -6,17 +6,21 @@
 //   - 验证日志查询接口
 //
 // 边界：
-//   - 使用 httptest.NewServer 模拟真实 HTTP 服务
-//   - 不依赖外部网络或实际进程启动
+//   - 常规用例使用 httptest.NewServer，不依赖外部网络
+//   - 打包 smoke 仅在注入真实示例二进制时启动本机 agent 与 sample 进程，验证随包链路
 package api_test
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -345,7 +349,11 @@ func TestNewAppPrunesOldLogsUsingSavedSettings(t *testing.T) {
 // TestNewAppSeedsSampleProjectWhenBinaryProvided 验证 agent 启动时会落地并注册 onboarding 示例项目。
 func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
 	dataDir := t.TempDir()
-	bin := filepath.Join(dataDir, "superdev-sample")
+	bin := filepath.Join(dataDir, `C:\Users\alice\AppData\Local\SuperDev\superdev-sample.exe`)
+	if runtime.GOOS == "windows" {
+		bin = filepath.Join(dataDir, "Program Files", "SuperDev", "superdev-sample.exe")
+		require.NoError(t, os.MkdirAll(filepath.Dir(bin), 0o755))
+	}
 	require.NoError(t, os.WriteFile(bin, []byte("bin"), 0o755))
 
 	app, err := api.NewApp(api.AppConfig{DataDir: dataDir, SampleBinaryPath: bin})
@@ -353,9 +361,11 @@ func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
 	t.Cleanup(func() { app.Close() })
 
 	projectDir := filepath.Join(dataDir, "examples", "superdev-sample")
-	rawConfig, err := os.ReadFile(filepath.Join(projectDir, ".superdev", "config.yaml"))
+	project, err := config.NewLoader(projectDir).Load()
 	require.NoError(t, err)
-	assert.Contains(t, string(rawConfig), bin)
+	require.Len(t, project.Services, 1)
+	require.Len(t, project.Services[0].Deployments, 1)
+	assert.Equal(t, `"`+bin+`" --port 18191`, project.Services[0].Deployments[0].Command)
 
 	rawRegistry, err := os.ReadFile(filepath.Join(dataDir, "projects.json"))
 	require.NoError(t, err)
@@ -364,6 +374,119 @@ func TestNewAppSeedsSampleProjectWhenBinaryProvided(t *testing.T) {
 	rawSettings, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(rawSettings), `"sample_seeded": true`)
+}
+
+// TestPackagedWindowsSampleIsRegisteredAndRunnable 验证 Windows 打包产出的真实示例二进制可被首启注册并启动。
+//
+// 注意：
+//   - 仅由 Windows 打包工作流通过 SUPERDEV_PACKAGED_SAMPLE_BINARY 注入真实 sidecar 路径时执行
+//   - 使用固定示例端口验证完整 command shell 边界，测试结束由 app.Close 清理进程
+func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
+	bin := os.Getenv("SUPERDEV_PACKAGED_SAMPLE_BINARY")
+	if bin == "" {
+		t.Skip("SUPERDEV_PACKAGED_SAMPLE_BINARY is not set")
+	}
+	require.FileExists(t, bin)
+
+	dataDir := t.TempDir()
+	app, err := api.NewApp(api.AppConfig{DataDir: dataDir, SampleBinaryPath: bin})
+	require.NoError(t, err)
+	t.Cleanup(func() { app.Close() })
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- app.Start(addr)
+	}()
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + addr
+	var resp *http.Response
+	deadline := time.Now().Add(10 * time.Second)
+	for resp == nil {
+		select {
+		case err := <-startErr:
+			require.NoError(t, err, "agent HTTP server exited before onboarding smoke")
+		default:
+		}
+		resp, err = client.Get(baseURL + "/api/projects")
+		if err == nil {
+			break
+		}
+		resp = nil
+		if time.Now().After(deadline) {
+			require.FailNow(t, "agent HTTP server did not become ready", "last error: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&projects))
+	require.Len(t, projects, 1)
+	require.Len(t, projects[0].Services, 1)
+	require.Len(t, projects[0].Services[0].Deployments, 1)
+	deploymentID := projects[0].Services[0].Deployments[0].ID
+
+	resp, err = client.Post(baseURL+"/api/deployments/"+deploymentID+"/start", "application/json", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var approvalRequired struct {
+		Code     string `json:"code"`
+		Approval struct {
+			ID string `json:"id"`
+		} `json:"approval"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&approvalRequired))
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, "approval_required", approvalRequired.Code)
+	require.NotEmpty(t, approvalRequired.Approval.ID)
+
+	approvalBody := bytes.NewBufferString(`{"decided_by":"windows-package-smoke","note":"verify packaged onboarding sample"}`)
+	resp, err = client.Post(baseURL+"/api/operation-approvals/"+approvalRequired.Approval.ID+"/approve", "application/json", approvalBody)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	resp, err = client.Get(baseURL + "/api/operation-approvals/" + approvalRequired.Approval.ID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var approvalDetail struct {
+		ApprovalToken string `json:"approval_token"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&approvalDetail))
+	require.NoError(t, resp.Body.Close())
+	require.NotEmpty(t, approvalDetail.ApprovalToken)
+
+	startRequest, err := http.NewRequest(http.MethodPost, baseURL+"/api/deployments/"+deploymentID+"/start", nil)
+	require.NoError(t, err)
+	startRequest.Header.Set("X-SuperDev-Approval-Token", approvalDetail.ApprovalToken)
+	resp, err = client.Do(startRequest)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	deadline = time.Now().Add(10 * time.Second)
+	lastHealthResult := "health endpoint was not requested"
+	for {
+		health, healthErr := client.Get("http://127.0.0.1:18191/health")
+		if healthErr == nil {
+			body, readErr := io.ReadAll(health.Body)
+			_ = health.Body.Close()
+			lastHealthResult = fmt.Sprintf("status=%d body=%q read_error=%v", health.StatusCode, string(body), readErr)
+			if health.StatusCode == http.StatusOK && readErr == nil && strings.TrimSpace(string(body)) == "ok" {
+				break
+			}
+		} else {
+			lastHealthResult = fmt.Sprintf("request_error=%v", healthErr)
+		}
+		if time.Now().After(deadline) {
+			require.FailNow(t, "packaged Windows sample did not become healthy", "last result: %s", lastHealthResult)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func addProjectFromConfig(t *testing.T, srvURL string, cfg string) model.Project {

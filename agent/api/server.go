@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/browsercontrol"
 	"github.com/xsxdot/super-dev/agent/browserdebug"
@@ -265,15 +266,28 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID, seqWatermarks)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
-	if result, err := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
+	result, seedErr := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
 		DataDir:          cfg.DataDir,
 		SampleBinaryPath: cfg.SampleBinaryPath,
 		Registry:         registry,
 		Settings:         settingsStore,
-	}); err != nil {
-		log.Printf("[SuperDev] sample seed skipped: %v", err)
-	} else if result.Reason != "" {
-		log.Printf("[SuperDev] sample seed skipped: %s", result.Reason)
+	})
+	onboardingLogger := logger.GetLogger().WithEntryName("Onboarding")
+	switch {
+	case seedErr != nil:
+		onboardingLogger.WithErr(seedErr).WithFields(map[string]any{
+			"data_dir": cfg.DataDir,
+			"path":     result.Path,
+		}).Error("示例项目初始化失败")
+	case result.Outcome == onboarding.SampleSeedOutcomeSeeded:
+		onboardingLogger.WithField("path", result.Path).Info("示例项目已创建并注册")
+	case result.Outcome == onboarding.SampleSeedOutcomeRepaired:
+		onboardingLogger.WithField("path", result.Path).Info("旧版示例项目配置已修复")
+	default:
+		onboardingLogger.WithFields(map[string]any{
+			"path":   result.Path,
+			"reason": result.Reason,
+		}).Info("示例项目初始化已跳过")
 	}
 	procMgr := process.NewManager(buf.Append)
 	probe := collector.Probe(collector.NewSystemProbe())
@@ -888,20 +902,36 @@ func (a *App) startManagedDeploymentReconciler() {
 func (a *App) loadRegisteredProjects() {
 	a.pidStore.KillAll()
 	paths := a.registry.List()
+	projectLogger := logger.GetLogger().WithEntryName("ProjectRegistry")
+	projectLogger.WithField("count", len(paths)).Info("开始加载已注册项目")
 	used := newProjectIdentitySet()
+	loaded := 0
+	skipped := 0
 	for _, path := range paths {
 		loader := config.NewLoader(path)
 		p, err := loader.Load()
 		if err != nil {
+			skipped++
+			projectLogger.WithErr(err).WithField("path", path).Error("加载已注册项目失败")
 			continue
 		}
 		assignIDsAvoiding(&p, &used)
 		// 将新生成的 ID 写回配置，避免重启后 ID 变化
-		_ = loader.Save(p)
+		if err := loader.Save(p); err != nil {
+			projectLogger.WithErr(err).WithFields(map[string]any{
+				"path":       path,
+				"project_id": p.ID,
+			}).Error("持久化项目标识失败")
+		}
 		a.mu.Lock()
 		a.appendProjectLocked(p)
 		a.mu.Unlock()
+		loaded++
 	}
+	projectLogger.WithFields(map[string]any{
+		"loaded":  loaded,
+		"skipped": skipped,
+	}).Info("已注册项目加载完成")
 }
 
 func (a *App) appendProjectLocked(p model.Project) {

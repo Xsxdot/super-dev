@@ -52,6 +52,7 @@ jobs:
       - name: Run Windows platform tests
         working-directory: agent
         run: |
+          go test ./onboarding -run 'TestSeedSampleProjectWritesLoadableConfigForWindowsBinaryPath|TestSeedSampleProjectRepairsLegacyWindowsConfigMarkedSeeded' -count=1
           go test ./process -run TestJobObjectKillsChildTree -count=1
           go test ./codedebug -run TestNodeAttachWindowsUsesPrearm -count=1
           go test ./installer -run 'TestNormalizePlatformWindowsBinaryName|TestInstallerInstallsWindowsAgent' -count=1

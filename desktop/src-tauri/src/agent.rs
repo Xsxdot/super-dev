@@ -7,9 +7,9 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use crate::mcp_install::resolve_sidecar_binary;
+use crate::mcp_install::{resolve_sidecar_binary, resolve_user_home_dir};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 const AGENT_HEALTH_ENDPOINT: &str = "/api/exec/health";
@@ -23,6 +23,9 @@ const AGENT_TERM_POLL: Duration = Duration::from_millis(100);
 const JS_DEBUG_DIR_NAME: &str = "js-debug";
 const JS_DEBUG_SERVER_RELATIVE_PATH: [&str; 2] = ["src", "dapDebugServer.js"];
 const JS_DEBUG_VERSION_FILE: &str = ".superdev-version";
+const AGENT_SIDECAR_LOG_FILE: &str = "agent-sidecar.log";
+const AGENT_SIDECAR_LOG_ROTATED_FILE: &str = "agent-sidecar.log.1";
+const AGENT_SIDECAR_LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ProbeOutcome {
@@ -53,6 +56,55 @@ enum TerminateOutcome {
 }
 
 pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
+
+fn open_agent_sidecar_log(data_dir: &Path, max_bytes: u64) -> Result<fs::File, String> {
+    fs::create_dir_all(data_dir)
+        .map_err(|err| format!("创建 agent 日志目录 {} 失败: {err}", data_dir.display()))?;
+    let current = data_dir.join(AGENT_SIDECAR_LOG_FILE);
+    let rotated = data_dir.join(AGENT_SIDECAR_LOG_ROTATED_FILE);
+    let should_rotate = match fs::metadata(&current) {
+        Ok(metadata) => metadata.len() >= max_bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            return Err(format!(
+                "读取 agent 日志元数据 {} 失败: {err}",
+                current.display()
+            ));
+        }
+    };
+    // 只保留一代启动日志，既留下上次首启失败证据，也避免桌面常驻后无限占用用户目录。
+    if should_rotate {
+        if let Err(err) = fs::remove_file(&rotated) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!(
+                    "删除旧 agent 轮转日志 {} 失败: {err}",
+                    rotated.display()
+                ));
+            }
+        }
+        fs::rename(&current, &rotated).map_err(|err| {
+            format!(
+                "轮转 agent 日志 {} -> {} 失败: {err}",
+                current.display(),
+                rotated.display()
+            )
+        })?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&current)
+        .map_err(|err| format!("打开 agent 日志 {} 失败: {err}", current.display()))
+}
+
+fn write_agent_sidecar_log(file: &mut fs::File, stream: &str, message: &str) -> Result<(), String> {
+    let message = message.trim_end_matches(|ch| ch == '\r' || ch == '\n');
+    writeln!(file, "[{stream}] {message}")
+        .map_err(|err| format!("写入 agent sidecar 日志失败: {err}"))?;
+    // 首启可能在下一条事件前退出；逐条刷新确保关键错误已经落盘。
+    file.flush()
+        .map_err(|err| format!("刷新 agent sidecar 日志失败: {err}"))
+}
 
 impl AgentProcess {
     /// new 创建 AgentProcess 容器。
@@ -86,13 +138,17 @@ impl AgentProcess {
 
         // debug_assertions 在 `tauri dev` 时为 true，`tauri build` 时为 false，
         // 以此区分开发版（57018）和正式版（57017），避免同时运行时端口冲突。
-        let (addr, data_dir) = if cfg!(debug_assertions) {
-            let home = std::env::var("HOME").unwrap_or_default();
-            ("127.0.0.1:57018", format!("{home}/.superdev-dev"))
+        let (addr, data_dir_name) = if cfg!(debug_assertions) {
+            ("127.0.0.1:57018", ".superdev-dev")
         } else {
-            let home = std::env::var("HOME").unwrap_or_default();
-            ("127.0.0.1:57017", format!("{home}/.superdev"))
+            ("127.0.0.1:57017", ".superdev")
         };
+        let data_dir_path = resolve_user_home_dir()?.join(data_dir_name);
+        tracing::info!(
+            address = addr,
+            data_dir = %data_dir_path.display(),
+            "agent launch target resolved"
+        );
 
         match prepare_agent_port(
             addr,
@@ -103,7 +159,6 @@ impl AgentProcess {
             AgentPortState::StartSidecar => {}
         }
 
-        let data_dir_path = PathBuf::from(&data_dir);
         if let Some(resource_dir) = resolve_resource_dir(app) {
             if let Err(err) = sync_js_debug_resource(&resource_dir, &data_dir_path) {
                 eprintln!("[SuperDev] 同步 js-debug 资源失败: {err}");
@@ -114,7 +169,7 @@ impl AgentProcess {
             "--addr".to_string(),
             addr.to_string(),
             "--data".to_string(),
-            data_dir,
+            data_dir_path.to_string_lossy().to_string(),
         ];
         if let Ok(sample) = resolve_sidecar_binary(app, "superdev-sample") {
             args.push("--sample-binary".to_string());
@@ -125,13 +180,56 @@ impl AgentProcess {
             args.push(install_dir.to_string_lossy().to_string());
         }
 
-        let (_rx, child) = app
+        let mut sidecar_log =
+            match open_agent_sidecar_log(&data_dir_path, AGENT_SIDECAR_LOG_MAX_BYTES) {
+                Ok(file) => Some(file),
+                Err(err) => {
+                    tracing::error!(error = %err, "agent sidecar persistent log unavailable");
+                    None
+                }
+            };
+        let (mut rx, child) = app
             .shell()
             .sidecar("superdev-agent")
             .map_err(|e| format!("找不到 agent sidecar: {e}"))?
             .args(args)
             .spawn()
             .map_err(|e| format!("启动 agent 失败: {e}"))?;
+
+        // sidecar 使用有界事件通道；持续消费既避免 stdout/stderr 管道反压卡住 agent，也把首启错误留在用户数据目录。
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                let (stream, message) = match event {
+                    CommandEvent::Stdout(bytes) => {
+                        let message = String::from_utf8_lossy(&bytes).into_owned();
+                        tracing::info!(target: "superdev_agent", line = %message, "agent stdout");
+                        ("stdout", message)
+                    }
+                    CommandEvent::Stderr(bytes) => {
+                        let message = String::from_utf8_lossy(&bytes).into_owned();
+                        tracing::warn!(target: "superdev_agent", line = %message, "agent stderr");
+                        ("stderr", message)
+                    }
+                    CommandEvent::Error(error) => {
+                        tracing::error!(target: "superdev_agent", error = %error, "agent event stream failed");
+                        ("error", error)
+                    }
+                    CommandEvent::Terminated(payload) => {
+                        let message =
+                            format!("code={:?} signal={:?}", payload.code, payload.signal);
+                        tracing::info!(target: "superdev_agent", %message, "agent terminated");
+                        ("terminated", message)
+                    }
+                    _ => continue,
+                };
+                if let Some(file) = sidecar_log.as_mut() {
+                    if let Err(err) = write_agent_sidecar_log(file, stream, &message) {
+                        tracing::error!(error = %err, "agent sidecar persistent log disabled after write failure");
+                        sidecar_log = None;
+                    }
+                }
+            }
+        });
 
         if let Err(err) = wait_for_compatible_agent(addr, AGENT_START_TIMEOUT) {
             let _ = child.kill();
@@ -748,5 +846,28 @@ mod tests {
 
         assert_eq!(outcome, TerminateOutcome::ForceKilled);
         assert!(killed.get(), "超时后必须 SIGKILL 兜底");
+    }
+
+    #[test]
+    fn agent_sidecar_log_rotates_and_persists_stderr() {
+        let root = temp_test_dir("sidecar-log");
+        let current = root.join(AGENT_SIDECAR_LOG_FILE);
+        fs::write(&current, "previous startup failure\n").expect("write previous log");
+
+        let mut file = open_agent_sidecar_log(&root, 8).expect("open rotated sidecar log");
+        write_agent_sidecar_log(&mut file, "stderr", "sample initialization failed")
+            .expect("persist sidecar stderr");
+        drop(file);
+
+        assert_eq!(
+            fs::read_to_string(root.join(AGENT_SIDECAR_LOG_ROTATED_FILE))
+                .expect("read rotated log"),
+            "previous startup failure\n"
+        );
+        assert_eq!(
+            fs::read_to_string(current).expect("read current log"),
+            "[stderr] sample initialization failed\n"
+        );
+        fs::remove_dir_all(root).expect("cleanup temp test dir");
     }
 }
