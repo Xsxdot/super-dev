@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.fixture",
+  "id": "go-primary",
+  "provider": "go",
+  "cwd": "fixtures/go",
+  "runtime": {
+    "config": {
+      "program": "."
+    },
+    "env": {
+      "FIXTURE_PORT": "18190",
+      "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"
+    }
+  },
+  "build": {
+    "windows_command": "build.cmd",
+    "prerequisites": ["go>=1.22"]
+  },
+  "run": {
+    "windows_command": "run.cmd",
+    "port": 18190
+  },
+  "readiness": {
+    "url": "http://127.0.0.1:18190/ready",
+    "status": 200
+  },
+  "debug": {
+    "preflight": ["preflight.cmd", "debug"],
+    "source": "main.go",
+    "line": 179,
+    "marker": "SUPERDEV_BREAKPOINT",
+    "variables": ["validationMarker", "requestID", "counter"],
+    "expected_non_secret_variables": {
+      "validationMarker": "superdev-breakpoint-ready",
+      "requestID": "debug-probe-request"
+    },
+    "prerequisites": ["dlv"]
+  },
+  "contract": {
+    "normal_path": "/api/normal?trace_id=go-normal-trace&request_id=go-normal-request",
+    "error_path": "/api/error?trace_id=go-error-trace&request_id=go-error-request",
+    "auth_header": "Authorization",
+    "auth_value_env": "FIXTURE_CAMPAIGN_ID",
+    "auth_scheme": "bearer_campaign_id",
+    "authorization_template": "Bearer superdev-validation-{campaign_id}"
+  }
+}

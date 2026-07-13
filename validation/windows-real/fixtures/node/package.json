@@ -1,0 +1,14 @@
+{
+  "responsibility": "Freeze the dependency-free Node.js fixture entry and syntax-check command.",
+  "boundary": "This package does not install or invoke SuperDev, MCP, or js-debug.",
+  "name": "superdev-windows-node-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node --check src/server.js",
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": "24.18.0"
+  }
+}

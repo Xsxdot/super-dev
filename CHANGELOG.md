@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Added a deterministic, portable Windows 10 x64 validation package that can be built on macOS, copied to a dedicated Windows host, and used to verify the frozen MSI/NSIS installers, all 75 packaged MCP tools, seven language providers, browser/code debugging, remote pipeline behavior, redacted evidence, and cleanup without claiming Windows results during packaging.
+
 ### Fixed
 
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.campaign-report",
+  "campaign_id": "WINDOWS_RUN_ONLY",
+  "status": "PASS|FAIL|BLOCKED",
+  "functional_status": "PASS|FAIL|BLOCKED",
+  "lane": "msi_smoke|nsis_core",
+  "installer_checks": [],
+  "runtime_attestation": {},
+  "providers": [],
+  "tool_rows": [],
+  "scenarios": [],
+  "sections": {
+    "msi_installer": {"status": "PASS|FAIL|BLOCKED"},
+    "nsis_installer": {"status": "PASS|FAIL|BLOCKED"},
+    "core": {"status": "PASS|FAIL|BLOCKED"},
+    "providers": {"status": "PASS|FAIL|BLOCKED"},
+    "mcp_tools": {"status": "PASS|FAIL|BLOCKED"},
+    "pipeline": {"status": "PASS|FAIL|BLOCKED"},
+    "cleanup": {"status": "PASS|FAIL|BLOCKED"}
+  },
+  "cleanup": {}
+}

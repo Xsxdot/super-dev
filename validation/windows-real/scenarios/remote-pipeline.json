@@ -1,0 +1,1202 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.scenario",
+  "id": "remote-pipeline",
+  "title": "Windows packaged MCP to dedicated Linux Agent pipeline validation",
+  "_comment": "职责：经安装后的 superdev-mcp.exe 和唯一 tunnel transport 真实完成 deploy A、update B、rollback A 与精确 cleanup。边界：不在 macOS 执行、不直连 SSH、不保存 token/TLS/SSH 凭据，也不把 package verified 写成 Windows PASS。",
+  "requires": [
+    "windows_10_x64",
+    "packaged_superdev_mcp",
+    "ordinary_user_context",
+    "dedicated_resettable_linux_x64",
+    "linux_agent_0_2_1_healthy_reachable_provisioned",
+    "canonical_non_self_host_id",
+    "tunnel_only_transport_with_bearer_and_tls",
+    "linux_agent_port_not_directly_reachable",
+    "artifact_keep_versions_at_least_2",
+    "ticket_15_config_preview_apply_and_approval_verified"
+  ],
+  "variables": {
+    "package_root": {
+      "required": true,
+      "secret": false,
+      "description": "解压后的 Windows 验证包绝对根；只用于读取本包 pipeline 资产。"
+    },
+    "campaign_id": {
+      "required": true,
+      "secret": false,
+      "description": "格式为 w10x64-e3cc94f-<UTC>-<random> 的唯一 campaign marker。"
+    },
+    "project_name": {
+      "required": true,
+      "secret": false,
+      "description": "票 15 创建的 campaign-owned SuperDev Project 名称。"
+    },
+    "pipeline_id": {
+      "required": true,
+      "secret": false,
+      "description": "包含 campaign marker 的唯一 project pipeline ID。"
+    },
+    "env_name": {
+      "required": false,
+      "default": "windows-remote-validation",
+      "secret": false,
+      "description": "远端验证专用环境名。"
+    },
+    "linux_host_id": {
+      "required": true,
+      "secret": false,
+      "description": "list_hosts 返回且 is_self=false 的冻结 Host ID；禁止传 hostname/display name。"
+    },
+    "linux_root": {
+      "required": true,
+      "secret": false,
+      "description": "必须精确等于 /srv/superdev-validation/<campaign-id>。"
+    },
+    "remote_pipeline_config": {
+      "required": true,
+      "secret": false,
+      "description": "由 driver 从 pipeline/project-pipeline.json 加载并延迟渲染的 ProjectPipeline object。"
+    },
+    "artifact_version_a": {
+      "required": false,
+      "default": "A",
+      "secret": false,
+      "description": "首个不可变 validation artifact 版本。"
+    },
+    "artifact_version_b": {
+      "required": false,
+      "default": "B",
+      "secret": false,
+      "description": "更新用不可变 validation artifact 版本。"
+    },
+    "approval_wait_seconds": {
+      "required": false,
+      "default": 300,
+      "secret": false,
+      "description": "等待人工审批的上限；审批 token 仅在内存中使用且不得落盘。"
+    },
+    "debug_session_id": {
+      "required": false,
+      "default": "",
+      "secret": false,
+      "description": "可选的 campaign 调试记录 ID。"
+    }
+  },
+  "steps": [
+    {
+      "id": "pipeline-host-id-preflight",
+      "tool": "list_hosts",
+      "coverage": "supporting",
+      "_comment": "指定的 Linux Host 必须作为 non-self 目标真实存在；pipeline roles 和显式 host_ids 必须复用它的 id，禁止使用展示名。验证不依赖其他已登记主机的数量或排序。",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.remote_count",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.remote_hosts",
+            "operator": "contains_item",
+            "value": {
+              "id": "{{linux_host_id}}",
+              "is_self": false
+            }
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.remote_count",
+          "structuredContent.data.remote_hosts",
+          "structuredContent.data.host_id_contract"
+        ],
+        "redact": [
+          "structuredContent.data.remote_hosts.*.name",
+          "structuredContent.data.remote_hosts.*.public_ip",
+          "structuredContent.data.remote_hosts.*.private_ip"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-template-preview",
+      "tool": "preview_pipeline_template",
+      "coverage": "primary",
+      "arguments": {
+        "path": "{{package_root}}/pipeline/templates/remote-validation-deploy.yaml"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.preview.template.id",
+            "operator": "eq",
+            "value": "windows-remote-validation-deploy"
+          },
+          {
+            "path": "structuredContent.data.preview.digest",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "capture": {
+        "preview_template_digest": "structuredContent.data.preview.digest"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.preview.template.id",
+          "structuredContent.data.preview.template.version",
+          "structuredContent.data.preview.digest",
+          "structuredContent.data.preview.errors"
+        ],
+        "redact": [
+          "request.arguments.path"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-template-import",
+      "tool": "import_pipeline_template",
+      "coverage": "primary",
+      "arguments": {
+        "path": "{{package_root}}/pipeline/templates/remote-validation-deploy.yaml",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.template.id",
+            "operator": "eq",
+            "value": "windows-remote-validation-deploy"
+          },
+          {
+            "path": "structuredContent.data.template.digest",
+            "operator": "eq",
+            "variable": "preview_template_digest"
+          }
+        ]
+      },
+      "capture": {
+        "imported_template_digest": "structuredContent.data.template.digest"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.template.source",
+          "structuredContent.data.template.id",
+          "structuredContent.data.template.version",
+          "structuredContent.data.template.digest"
+        ],
+        "redact": [
+          "request.arguments.path"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-config-upsert",
+      "tool": "upsert_project_pipeline",
+      "coverage": "supporting",
+      "_comment": "票 15 已主覆盖配置写入；这里的 supporting 调用只把刚导入且 digest 锁定的模板接入 disposable campaign pipeline。roles.hosts 只能填 linux_host_id。",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "debug_session_id": "{{debug_session_id}}",
+        "pipeline": "{{remote_pipeline_config}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.preview.validation.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.preview.kind",
+          "structuredContent.data.preview.validation.ok",
+          "structuredContent.data.preview.plan.id",
+          "structuredContent.data.preview.plan.fingerprint",
+          "structuredContent.data.preview.diff"
+        ],
+        "redact": [
+          "structuredContent.data.preview.project.root_path",
+          "request.arguments.pipeline.pipeline.build.*.with.files.*.from"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-config-validate",
+      "tool": "validate_project_pipeline",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "variables": {
+          "version": "{{artifact_version_a}}",
+          "action": "deploy",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.validation.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.run.step_runs",
+            "operator": "contains",
+            "variable": "linux_host_id"
+          },
+          {
+            "path": "structuredContent.data.plan.variables.remote_root",
+            "operator": "eq",
+            "variable": "linux_root"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.validation.ok",
+          "structuredContent.data.run.step_runs",
+          "structuredContent.data.plan.variables.campaign_id",
+          "structuredContent.data.plan.variables.remote_root",
+          "structuredContent.data.plan.variables.version"
+        ],
+        "redact": [
+          "structuredContent.data.plan.variables.workspace",
+          "structuredContent.data.plan.variables.artifact",
+          "structuredContent.data.plan.variables.artifact_source",
+          "structuredContent.data.plan.variables.remote_release_script",
+          "structuredContent.data.run.step_runs.*.tasks.*.host_address",
+          "structuredContent.data.run.step_runs.*.tasks.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-deploy-a",
+      "tool": "deploy_project_pipeline",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "host_ids": [
+          "{{linux_host_id}}"
+        ],
+        "variables": {
+          "version": "{{artifact_version_a}}",
+          "action": "deploy",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        },
+        "approval_wait_seconds": "{{approval_wait_seconds}}",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.run.id",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.run.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "capture": {
+        "pipeline_run_a": "structuredContent.data.run.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.run.id",
+          "structuredContent.data.run.project_id",
+          "structuredContent.data.run.pipeline_id",
+          "structuredContent.data.run.env_name",
+          "structuredContent.data.run.artifact_version",
+          "structuredContent.data.run.status",
+          "structuredContent.data.run.started_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-wait-a",
+      "tool": "list_pipeline_runs",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "poll": {
+        "interval_seconds": 2,
+        "timeout_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.runs.0.id",
+            "operator": "eq",
+            "variable": "pipeline_run_a"
+          },
+          {
+            "path": "structuredContent.data.runs.0.status",
+            "operator": "eq",
+            "value": "success"
+          },
+          {
+            "path": "structuredContent.data.runs.0.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.runs.0.id",
+          "structuredContent.data.runs.0.status",
+          "structuredContent.data.runs.0.artifact_version",
+          "structuredContent.data.runs.0.started_at",
+          "structuredContent.data.runs.0.finished_at",
+          "structuredContent.data.runs.0.step_runs"
+        ],
+        "redact": [
+          "structuredContent.data.runs.*.step_runs.*.tasks.*.host_address",
+          "structuredContent.data.runs.*.step_runs.*.tasks.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-logs-a",
+      "tool": "read_pipeline_run_logs",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "run_id": "{{pipeline_run_a}}",
+        "host_id": "{{linux_host_id}}",
+        "limit": 1000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"verify_transfer_digest\",\"outcome\":\"success\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"verify_release\",\"outcome\":\"success\""
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.count",
+          "structuredContent.data.logs"
+        ],
+        "redact": [
+          "structuredContent.data.logs.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-deploy-b",
+      "tool": "deploy_project_pipeline",
+      "coverage": "supporting",
+      "_comment": "真实 update B；tool coverage 仍归属 pipeline-deploy-a，避免 75-tool 主归属重复。",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "host_ids": [
+          "{{linux_host_id}}"
+        ],
+        "variables": {
+          "version": "{{artifact_version_b}}",
+          "action": "deploy",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-b",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        },
+        "approval_wait_seconds": "{{approval_wait_seconds}}",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.run.id",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.run.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_b"
+          }
+        ]
+      },
+      "capture": {
+        "pipeline_run_b": "structuredContent.data.run.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.run.id",
+          "structuredContent.data.run.artifact_version",
+          "structuredContent.data.run.status",
+          "structuredContent.data.run.started_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-wait-b",
+      "tool": "list_pipeline_runs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "poll": {
+        "interval_seconds": 2,
+        "timeout_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.runs.0.id",
+            "operator": "eq",
+            "variable": "pipeline_run_b"
+          },
+          {
+            "path": "structuredContent.data.runs.0.status",
+            "operator": "eq",
+            "value": "success"
+          },
+          {
+            "path": "structuredContent.data.runs.0.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_b"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.runs.0.id",
+          "structuredContent.data.runs.0.status",
+          "structuredContent.data.runs.0.artifact_version",
+          "structuredContent.data.runs.0.started_at",
+          "structuredContent.data.runs.0.finished_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-logs-b",
+      "tool": "read_pipeline_run_logs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "run_id": "{{pipeline_run_b}}",
+        "host_id": "{{linux_host_id}}",
+        "limit": 1000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"verify_transfer_digest\",\"outcome\":\"success\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"version\":\"B\""
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.logs"
+        ],
+        "redact": [
+          "structuredContent.data.logs.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-artifacts-a-b",
+      "tool": "list_pipeline_artifacts",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 1
+          },
+          {
+            "path": "structuredContent.data.artifacts.0.version",
+            "operator": "eq",
+            "variable": "artifact_version_b"
+          },
+          {
+            "path": "structuredContent.data.artifacts.1.version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.count",
+          "structuredContent.data.artifacts.0.version",
+          "structuredContent.data.artifacts.0.kind",
+          "structuredContent.data.artifacts.0.created_at",
+          "structuredContent.data.artifacts.1.version",
+          "structuredContent.data.artifacts.1.kind",
+          "structuredContent.data.artifacts.1.created_at"
+        ],
+        "redact": [
+          "structuredContent.data.artifacts.*.location"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-rollback-a",
+      "tool": "deploy_project_pipeline",
+      "coverage": "supporting",
+      "_comment": "真实 rollback A：artifact_version 指向已登记的 A，产品必须跳过 build 并复用旧 artifact。",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "host_ids": [
+          "{{linux_host_id}}"
+        ],
+        "artifact_version": "{{artifact_version_a}}",
+        "variables": {
+          "action": "deploy",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        },
+        "approval_wait_seconds": "{{approval_wait_seconds}}",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.run.id",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.run.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "capture": {
+        "pipeline_run_rollback_a": "structuredContent.data.run.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.run.id",
+          "structuredContent.data.run.artifact_version",
+          "structuredContent.data.run.status",
+          "structuredContent.data.run.started_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-wait-rollback-a",
+      "tool": "list_pipeline_runs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "poll": {
+        "interval_seconds": 2,
+        "timeout_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.runs.0.id",
+            "operator": "eq",
+            "variable": "pipeline_run_rollback_a"
+          },
+          {
+            "path": "structuredContent.data.runs.0.status",
+            "operator": "eq",
+            "value": "success"
+          },
+          {
+            "path": "structuredContent.data.runs.0.artifact_version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.runs.0.id",
+          "structuredContent.data.runs.0.status",
+          "structuredContent.data.runs.0.artifact_version",
+          "structuredContent.data.runs.0.started_at",
+          "structuredContent.data.runs.0.finished_at",
+          "structuredContent.data.runs.0.step_runs"
+        ],
+        "redact": [
+          "structuredContent.data.runs.*.step_runs.*.tasks.*.host_address",
+          "structuredContent.data.runs.*.step_runs.*.tasks.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-logs-rollback-a",
+      "tool": "read_pipeline_run_logs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "run_id": "{{pipeline_run_rollback_a}}",
+        "host_id": "{{linux_host_id}}",
+        "limit": 1000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"verify_transfer_digest\",\"outcome\":\"success\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"version\":\"A\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"verify_release\",\"outcome\":\"success\""
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.logs"
+        ],
+        "redact": [
+          "structuredContent.data.logs.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-cleanup",
+      "tool": "deploy_project_pipeline",
+      "coverage": "supporting",
+      "_comment": "精确 cleanup 仍经 SuperDev pipeline 和 Agent route 执行；它复用 A artifact 中已验证的 helper，并在删除前再次检查绝对根和 owner marker。",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "host_ids": [
+          "{{linux_host_id}}"
+        ],
+        "artifact_version": "{{artifact_version_a}}",
+        "variables": {
+          "action": "cleanup",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        },
+        "approval_wait_seconds": "{{approval_wait_seconds}}",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.run.id",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "capture": {
+        "pipeline_run_cleanup": "structuredContent.data.run.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.run.id",
+          "structuredContent.data.run.artifact_version",
+          "structuredContent.data.run.status",
+          "structuredContent.data.run.started_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-wait-cleanup",
+      "tool": "list_pipeline_runs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "poll": {
+        "interval_seconds": 2,
+        "timeout_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.runs.0.id",
+            "operator": "eq",
+            "variable": "pipeline_run_cleanup"
+          },
+          {
+            "path": "structuredContent.data.runs.0.status",
+            "operator": "eq",
+            "value": "success"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.runs.0.id",
+          "structuredContent.data.runs.0.status",
+          "structuredContent.data.runs.0.artifact_version",
+          "structuredContent.data.runs.0.started_at",
+          "structuredContent.data.runs.0.finished_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-logs-cleanup",
+      "tool": "read_pipeline_run_logs",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "run_id": "{{pipeline_run_cleanup}}",
+        "host_id": "{{linux_host_id}}",
+        "limit": 1000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"cleanup_campaign\",\"outcome\":\"success\""
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.logs"
+        ],
+        "redact": [
+          "structuredContent.data.logs.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-artifacts-final",
+      "tool": "list_pipeline_artifacts",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.artifacts.0.version",
+            "operator": "eq",
+            "variable": "artifact_version_b"
+          },
+          {
+            "path": "structuredContent.data.artifacts.1.version",
+            "operator": "eq",
+            "variable": "artifact_version_a"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.artifacts.0.version",
+          "structuredContent.data.artifacts.0.created_at",
+          "structuredContent.data.artifacts.1.version",
+          "structuredContent.data.artifacts.1.created_at"
+        ],
+        "redact": [
+          "structuredContent.data.artifacts.*.location"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "pipeline-cleanup-on-abort",
+      "tool": "deploy_project_pipeline",
+      "coverage": "supporting",
+      "run_if": "variable_set:pipeline_run_a&&variable_unset:pipeline_run_cleanup",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "env_name": "{{env_name}}",
+        "host_ids": [
+          "{{linux_host_id}}"
+        ],
+        "artifact_version": "{{artifact_version_a}}",
+        "variables": {
+          "action": "cleanup",
+          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
+          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+        },
+        "approval_wait_seconds": "{{approval_wait_seconds}}",
+        "debug_session_id": "{{debug_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.run.id",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "capture": {
+        "pipeline_run_cleanup_abort": "structuredContent.data.run.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.run.id",
+          "structuredContent.data.run.artifact_version",
+          "structuredContent.data.run.status"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-wait-cleanup-on-abort",
+      "tool": "list_pipeline_runs",
+      "coverage": "supporting",
+      "run_if": "variable_set:pipeline_run_cleanup_abort",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}"
+      },
+      "poll": {
+        "interval_seconds": 2,
+        "timeout_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.runs.0.id",
+            "operator": "eq",
+            "variable": "pipeline_run_cleanup_abort"
+          },
+          {
+            "path": "structuredContent.data.runs.0.status",
+            "operator": "eq",
+            "value": "success"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.runs.0.id",
+          "structuredContent.data.runs.0.status",
+          "structuredContent.data.runs.0.artifact_version",
+          "structuredContent.data.runs.0.started_at",
+          "structuredContent.data.runs.0.finished_at"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token"
+        ]
+      }
+    },
+    {
+      "id": "pipeline-logs-cleanup-on-abort",
+      "tool": "read_pipeline_run_logs",
+      "coverage": "supporting",
+      "run_if": "variable_set:pipeline_run_cleanup_abort",
+      "arguments": {
+        "project_name": "{{project_name}}",
+        "pipeline_id": "{{pipeline_id}}",
+        "run_id": "{{pipeline_run_cleanup_abort}}",
+        "host_id": "{{linux_host_id}}",
+        "limit": 1000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"cleanup_campaign\",\"outcome\":\"success\""
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.logs"
+        ],
+        "redact": [
+          "structuredContent.data.logs.*.host_name"
+        ],
+        "forbid": [
+          "authorization",
+          "approval_token",
+          "bearer ",
+          "ssh_private_key",
+          "bootstrap_token",
+          "-> ssh"
+        ]
+      }
+    }
+  ]
+}

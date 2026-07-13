@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.runtime-input",
+  "mcp_path": "C:\\Program Files\\SuperDev\\superdev-mcp.exe",
+  "installer_directory": "C:\\SuperDevValidation\\installers",
+  "campaign_root": "C:\\SuperDevValidation\\campaigns",
+  "results_root": "C:\\SuperDevValidation\\results",
+  "linux_host_id": "REPLACE_WITH_LIST_HOSTS_NON_SELF_ID",
+  "linux_root": "/srv/superdev-validation/{{run_id}}",
+  "approval_wait_seconds": 300
+}

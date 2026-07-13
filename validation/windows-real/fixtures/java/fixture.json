@@ -1,0 +1,41 @@
+{
+  "responsibility": "Describe the Java Fixture Protocol v1 process, direct JDK build and external JVM adapter gate.",
+  "boundary": "This descriptor contributes provider evidence only, owns zero MCP rows, and never substitutes a fake JVM DAP wrapper.",
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.fixture",
+  "id": "java",
+  "contract_version": "v1",
+  "provider": "java",
+  "cwd": "fixtures/java",
+  "build": {"windows_command": "build.cmd", "prerequisites": ["Eclipse Temurin JDK 21.0.11+10"], "windows_entry": "build.cmd", "working_directory": ".", "success_exit_code": 0},
+  "run": {"windows_command": "run.cmd", "port": 18173, "windows_entry": "run.cmd", "working_directory": ".", "default_port": 18173, "clean_stop": ["CTRL_C", "CTRL_BREAK"]},
+  "readiness": {"url": "http://127.0.0.1:18173/healthz", "status": 200, "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": {"ready": true, "contract_version": "v1", "provider": "java"}},
+  "probe": {"method": "POST", "path": "/api/probe", "authentication": "bearer_campaign_id", "normal_status": 200, "controlled_error_status": 500},
+  "language_runtime": {
+    "cwd": ".",
+    "config": {"program": "superdev.fixture.FixtureServer", "classpath": "build\\classes", "vm_args": ["--add-modules", "jdk.httpserver"]}
+  },
+  "runtime": {
+    "config": {"program": "superdev.fixture.FixtureServer", "classpath": "build\\classes", "vm_args": ["--add-modules", "jdk.httpserver"]},
+    "env": {"FIXTURE_PORT": "18173", "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"}
+  },
+  "debug": {
+    "strategy": "prearm-listen",
+    "adapter": "jvm",
+    "preflight": ["preflight.cmd", "debug"],
+    "source": "src/superdev/fixture/FixtureServer.java",
+    "line": 150,
+    "variables": ["fixtureMarker", "fixtureCount", "fixtureProvider"],
+    "prerequisites": ["JDWP prearm", "project-approved frozen JVM DAP wrapper"],
+    "marker": "SUPERDEV_FIXTURE_BREAKPOINT",
+    "expected_non_secret_variables": {"fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "java"},
+    "missing_adapter_verdict": "BLOCKED",
+    "missing_adapter_code": "known_experimental_capability_gap"
+  },
+  "prerequisites": [
+    {"name": "Eclipse Temurin JDK", "version": "21.0.11+10", "required_for": ["build", "run", "jdwp"]},
+    {"name": "project-approved JVM DAP wrapper", "version": "campaign-frozen", "required_for": ["debug"], "missing_verdict": "BLOCKED"}
+  ],
+  "contract": {"normal_path": "/api/probe", "error_path": "/api/probe", "auth_header": "Authorization", "auth_value_env": "FIXTURE_CAMPAIGN_ID", "auth_scheme": "bearer_campaign_id", "authorization_template": "Bearer superdev-validation-{campaign_id}"},
+  "coverage": {"provider_report": true, "mcp_tool_rows": []}
+}

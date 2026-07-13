@@ -1,0 +1,44 @@
+{
+  "responsibility": "Describe the C++ Fixture Protocol v1 Windows binary and lldb-dap debug gate.",
+  "boundary": "This descriptor contributes provider evidence only and owns zero MCP tool verdict rows.",
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.fixture",
+  "id": "cpp",
+  "contract_version": "v1",
+  "provider": "cpp",
+  "cwd": "fixtures/cpp",
+  "build": {"windows_command": "build.cmd", "prerequisites": ["VS 2022 Build Tools 17.14", "CMake 4.4.0", "Ninja 1.13.2", "LLVM 22.1.3"], "windows_entry": "build.cmd", "working_directory": ".", "success_exit_code": 0},
+  "run": {"windows_command": "run.cmd", "port": 18176, "windows_entry": "run.cmd", "working_directory": ".", "default_port": 18176, "clean_stop": ["CTRL_C", "CTRL_BREAK"]},
+  "readiness": {"url": "http://127.0.0.1:18176/healthz", "status": 200, "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": {"ready": true, "contract_version": "v1", "provider": "cpp"}},
+  "probe": {"method": "POST", "path": "/api/probe", "authentication": "bearer_campaign_id", "normal_status": 200, "controlled_error_status": 500},
+  "language_runtime": {
+    "cwd": ".",
+    "config": {"program": "build\\superdev-windows-cpp-fixture.exe"}
+  },
+  "runtime": {
+    "config": {"program": "build\\superdev-windows-cpp-fixture.exe"},
+    "env": {"FIXTURE_PORT": "18176", "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"}
+  },
+  "debug": {
+    "strategy": "attach-pid",
+    "adapter": "native",
+    "preflight": ["preflight.cmd", "debug"],
+    "adapter_command_contract": "lldb-dap --connection listen://127.0.0.1:<port>",
+    "source": "src/main.cpp",
+    "line": 142,
+    "variables": ["fixture_marker", "fixture_count", "fixture_provider"],
+    "prerequisites": ["lldb-dap 22.1.3 exact listen handshake", "PDB from clang-cl/MSVC linker"],
+    "marker": "SUPERDEV_FIXTURE_BREAKPOINT",
+    "expected_non_secret_variables": {"fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "cpp"},
+    "missing_adapter_verdict": "BLOCKED"
+  },
+  "prerequisites": [
+    {"name": "VS 2022 C++ Build Tools", "version": "17.14", "components": ["MSVC v143", "Windows SDK 10.0.22621"], "required_for": ["build", "link"]},
+    {"name": "CMake", "version": "4.4.0", "required_for": ["build"]},
+    {"name": "Ninja", "version": "1.13.2", "required_for": ["build"]},
+    {"name": "clang-cl", "version": "22.1.3", "required_for": ["build"]},
+    {"name": "lldb-dap", "version": "22.1.3", "required_for": ["debug"], "missing_verdict": "BLOCKED"}
+  ],
+  "contract": {"normal_path": "/api/probe", "error_path": "/api/probe", "auth_header": "Authorization", "auth_value_env": "FIXTURE_CAMPAIGN_ID", "auth_scheme": "bearer_campaign_id", "authorization_template": "Bearer superdev-validation-{campaign_id}"},
+  "coverage": {"provider_report": true, "mcp_tool_rows": []}
+}
