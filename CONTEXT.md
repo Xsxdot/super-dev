@@ -20,6 +20,22 @@ _Avoid_: Sandbox Revision, Git Commit, File Timestamp
 Project 的一个具体代码工作副本；主工作树和 Git worktree 都是 Workspace。
 _Avoid_: Project Instance, Project Copy
 
+**Remote Workspace Replica**:
+一个 Workspace 在特定 Remote Node 上供多个 Runtime Instance 共享使用的代码副本；它不拥有独立的 Project 或 Workspace Identity。
+_Avoid_: Remote Project, Deployment Directory, Independent Workspace
+
+**Remote Workspace Preparation**:
+在 Remote Node 上通过被引用的 Project Pipeline 为一个 Remote Workspace Replica 准备目标代码的共享过程；它按 Workspace 与 Remote Node 定位，不属于单个 Deployment。
+_Avoid_: Deployment Sync, Per-service Upload, Runtime Start Command
+
+**Remote Workspace Preparation Pipeline**:
+被 Remote Workspace Preparation 引用的普通 Project Pipeline；它自由组合现有命令、归档、传输与检查步骤，而不对应一套 SuperDev 内建同步策略。
+_Avoid_: Sync Mode, Built-in Git Strategy, Preparation-only Engine
+
+**Remote Workspace Preparation Operation**:
+一次显式、可观察且可审计的 Remote Workspace Preparation Pipeline 执行；它可单独运行，也可作为用户明确选择的“准备并重启”组合动作的第一阶段。
+_Avoid_: Runtime Restart, Background Sync, Implicit Pull
+
 **Workspace Identity**:
 由 Controller Agent 在本机注册表中分配并持久化的 Workspace 稳定身份；版本控制信息只用于路径移动后的重新关联。
 _Avoid_: Root Path, Branch Name, Git Commit
