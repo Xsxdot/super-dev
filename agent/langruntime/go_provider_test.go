@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -145,6 +146,33 @@ func TestGoProviderStartDevBuildsThenExecs(t *testing.T) {
 		assert.Equal(t, "/repo/server", plan.WorkingDir)
 		assert.Equal(t, map[string]string{"ENABLE": "true"}, plan.Env)
 	}
+}
+
+func TestGoProviderStartDevUsesWindowsExecutableSuffix(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable naming requires a native Windows test process")
+	}
+	projectRoot := t.TempDir()
+	normalized := normalizeGoConfig(t, langruntime.RuntimeConfigInput{
+		ProjectRoot: projectRoot,
+		CWD:         ".",
+		Config:      map[string]any{"program": "."},
+	})
+	artifactDir := t.TempDir()
+
+	plan, diagnostics, err := langruntime.NewGoProvider().BuildPlan(context.Background(), langruntime.BuildPlanInput{
+		Intent:      langruntime.IntentStartDev,
+		Config:      normalized,
+		ArtifactDir: artifactDir,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, diagnostics)
+	require.NotNil(t, plan.Command)
+	require.NotNil(t, plan.Command.PreRun)
+	wantArtifact := filepath.Join(artifactDir, "app.exe")
+	assert.Equal(t, wantArtifact, plan.Command.Executable)
+	assert.Contains(t, plan.Command.PreRun.Args, wantArtifact)
 }
 
 func TestGoBuildPlanEscapeHatchExecutesVerbatim(t *testing.T) {

@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Fixed native Windows Go language runtimes by building and launching `.exe` artifacts consistently, and exposed stopped service and deployment states through MCP as the canonical `stopped` value.
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.
 
 ## [0.2.0] - 2026-06-17

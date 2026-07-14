@@ -389,6 +389,9 @@ func sanitizeServiceWithProjectCredentials(service model.Service, projectCredent
 	service.HasDebugCredentials = len(merged) > 0
 	service.DebugCredentialHints = debugCredentialHints(merged)
 	service.DebugCredentials = nil // 调试凭据明文不在服务快照里渲染，避免 list_services 泄漏。
+	// ServiceStatus 的 stopped 在领域模型中刻意使用零值；MCP 是外部契约，
+	// 必须输出稳定、可断言的名称，不能要求每个调用方自行理解内部零值。
+	service.Status = model.ServiceStatus(serviceStatusKey(service.Status))
 	for i, dep := range service.Deployments {
 		service.Deployments[i] = sanitizeDeployment(dep)
 	}
@@ -431,6 +434,7 @@ func hasAnyDebugCredentials(projects []model.Project, services []model.Service) 
 }
 
 func sanitizeDeployment(dep model.Deployment) model.Deployment {
+	dep.Status = model.ServiceStatus(serviceStatusKey(dep.Status))
 	dep.Env = redactSecretMap(dep.Env)
 	if dep.Runtime != nil {
 		runtime := *dep.Runtime

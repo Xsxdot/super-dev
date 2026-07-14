@@ -597,6 +597,27 @@ func TestListServicesIncludesMergedDebugCredentialHints(t *testing.T) {
 	}
 }
 
+func TestListServicesUsesCanonicalStoppedStatus(t *testing.T) {
+	project := sampleProject()
+	service := sampleService("api", model.StatusStopped, "dep-api-dev")
+	service.ProjectID = project.ID
+	server := NewServer(&fakeAgentClient{
+		projects: []model.Project{project},
+		services: []model.Service{service},
+	})
+
+	result, err := server.callToolForTest(context.Background(), "list_services", `{"project_id":"p1"}`)
+
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	payload := result.StructuredContent.(toolPayload)
+	services := payload.Data.(map[string]any)["services"].([]model.Service)
+	require.Len(t, services, 1)
+	require.Len(t, services[0].Deployments, 1)
+	assert.Equal(t, model.ServiceStatus("stopped"), services[0].Status)
+	assert.Equal(t, model.ServiceStatus("stopped"), services[0].Deployments[0].Status)
+}
+
 func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
 	client := &fakeAgentClient{
 		hosts: []HostReference{

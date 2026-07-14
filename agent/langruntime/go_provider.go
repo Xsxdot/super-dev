@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -174,7 +175,7 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 				Message: "Go start requires an artifact output dir for build+exec",
 			}}, nil
 		}
-		artifact := filepath.Join(input.ArtifactDir, goArtifactName(program))
+		artifact := filepath.Join(input.ArtifactDir, goArtifactName(program, runtime.GOOS))
 		buildArgs := []string{"build", "-gcflags", "all=-N -l"}
 		buildArgs = append(buildArgs, buildFlags...)
 		buildArgs = append(buildArgs, "-o", artifact, program)
@@ -224,11 +225,16 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 	}
 }
 
-// goArtifactName 从 program 包路径推导产物文件名（basename，"." → 模块目录名占位 "app"）。
-func goArtifactName(program string) string {
+// goArtifactName 从 program 包路径和目标平台推导可直接启动的产物文件名。
+func goArtifactName(program, goos string) string {
 	base := filepath.Base(strings.TrimSpace(program))
 	if base == "" || base == "." || base == "/" {
-		return "app"
+		base = "app"
+	}
+	// go build -o 会严格使用指定文件名；Windows 的进程启动则按 PATHEXT
+	// 解析可执行文件，因此 provider 必须让构建产物与启动路径共同带 .exe。
+	if goos == "windows" && !strings.EqualFold(filepath.Ext(base), ".exe") {
+		return base + ".exe"
 	}
 	return base
 }
