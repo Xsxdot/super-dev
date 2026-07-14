@@ -28,19 +28,22 @@ import (
 )
 
 type providerEvidence struct {
-	Provider       string          `json:"provider"`
-	RuntimeStages  []stageEvidence `json:"runtime_stages"`
-	DebugStages    []stageEvidence `json:"debug_stages"`
-	RuntimeVerdict string          `json:"runtime_verdict"`
-	DebugVerdict   string          `json:"debug_verdict"`
+	Provider           string           `json:"provider"`
+	PrerequisiteStages []stageEvidence  `json:"prerequisite_stages"`
+	RuntimeStages      []stageEvidence  `json:"runtime_stages"`
+	DebugStages        []stageEvidence  `json:"debug_stages"`
+	Runtime            ValidationResult `json:"runtime"`
+	Debug              ValidationResult `json:"debug"`
 }
 
 type stageEvidence struct {
-	Stage    string `json:"stage"`
-	Verdict  string `json:"verdict"`
-	Summary  any    `json:"summary,omitempty"`
-	Error    string `json:"error,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
+	Stage    string           `json:"stage"`
+	Tool     string           `json:"tool,omitempty"`
+	Result   ValidationResult `json:"result"`
+	Request  any              `json:"request,omitempty"`
+	Response any              `json:"response,omitempty"`
+	Summary  any              `json:"summary,omitempty"`
+	ExitCode int              `json:"exit_code,omitempty"`
 }
 
 // ExecuteProviderMatrix 按冻结顺序执行七语言 runtime/debug 合同并单独报告。
@@ -54,71 +57,94 @@ func (e *ScenarioExecutor) ExecuteProviderMatrix(ctx context.Context, fixtures [
 
 func (e *ScenarioExecutor) executeProvider(ctx context.Context, fixture FixtureManifest) ProviderExecution {
 	log := logger.GetLogger().WithEntryName("WindowsValidationProvider")
-	log.WithField("provider", fixture.Provider).Info("开始执行 Windows language provider 合同")
-	evidence := providerEvidence{Provider: fixture.Provider, RuntimeVerdict: verdictPass, DebugVerdict: verdictPass}
+	log.WithFields(e.logFields(map[string]any{"provider": fixture.Provider, "stage": "begin"})).Info("开始执行 Windows language provider 合同")
+	evidence := providerEvidence{Provider: fixture.Provider}
 	fixtureRoot := filepath.Join(fmt.Sprint(e.variables["project_root"]), filepath.FromSlash(fixture.CWD))
-	if stage := runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "runtime"); stage.Verdict != verdictPass {
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stage)
-		evidence.RuntimeVerdict = stage.Verdict
-		evidence.DebugVerdict = verdictBlocked
-		return e.finishProvider(fixture, evidence, stage.Error)
-	} else {
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stage)
+	stage := e.runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "runtime")
+	stage.Stage = "runtime_preflight"
+	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stage)
+	if stage.Result.PhaseStatus != PhaseStatusPass {
+		reason := resultReason(stage.Result)
+		return e.finishProvider(fixture, evidence,
+			blockedResult("runtime_preflight", reason),
+			blockedResult("runtime_preflight", reason), reason)
 	}
-	if stage := runFixtureCommand(ctx, fixtureRoot, fixture.Build.WindowsCommand); stage.Verdict != verdictPass {
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stage)
-		evidence.RuntimeVerdict = stage.Verdict
-		evidence.DebugVerdict = verdictBlocked
-		return e.finishProvider(fixture, evidence, stage.Error)
-	} else {
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stage)
+	stage = e.runFixtureCommand(ctx, fixtureRoot, fixture.Build.WindowsCommand)
+	stage.Stage = "provider_build"
+	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stage)
+	if stage.Result.PhaseStatus != PhaseStatusPass {
+		reason := resultReason(stage.Result)
+		return e.finishProvider(fixture, evidence,
+			blockedResult("provider_build", reason),
+			blockedResult("provider_build", reason), reason)
 	}
 
+	configStarted := time.Now().UTC()
+	e.logProviderStage(fixture.Provider, "runtime_config", "render_fixture_runtime", "started", nil)
 	runtimeConfig, env, err := e.renderFixtureRuntime(fixture, fixtureRoot)
+	configFinished := time.Now().UTC()
 	if err != nil {
-		evidence.RuntimeVerdict = verdictFail
-		return e.finishProvider(fixture, evidence, err.Error())
+		e.logProviderStage(fixture.Provider, "runtime_config", "render_fixture_runtime", "failed", err)
+		reason := err.Error()
+		evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stageEvidence{
+			Stage: "runtime_config", Tool: "render_fixture_runtime",
+			Result:  providerStageResult(false, reason, configStarted, configFinished),
+			Summary: map[string]any{"provider": fixture.Provider, "rendered": false},
+		})
+		return e.finishProvider(fixture, evidence,
+			blockedResult("runtime_config", reason), blockedResult("runtime_config", reason), reason)
 	}
+	e.logProviderStage(fixture.Provider, "runtime_config", "render_fixture_runtime", "succeeded", nil)
+	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stageEvidence{
+		Stage: "runtime_config", Tool: "render_fixture_runtime",
+		Result:  providerStageResult(true, "", configStarted, configFinished),
+		Summary: map[string]any{"provider": fixture.Provider, "rendered": true},
+	})
 	if err := e.configureAndStartProvider(ctx, fixture, runtimeConfig, env, &evidence); err != nil {
-		evidence.RuntimeVerdict = verdictFail
-		evidence.DebugVerdict = verdictBlocked
 		if cleanupErr := e.recordProviderStop(ctx, fixture, &evidence); cleanupErr != nil {
 			err = fmt.Errorf("%w; cleanup: %v", err, cleanupErr)
 		}
-		return e.finishProvider(fixture, evidence, err.Error())
+		return e.finishProvider(fixture, evidence,
+			aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+			blockedResult("provider_runtime", err.Error()), err.Error())
 	}
 	if err := e.probeFixtureRuntime(ctx, fixture, &evidence); err != nil {
-		evidence.RuntimeVerdict = verdictFail
-		evidence.DebugVerdict = verdictBlocked
 		if cleanupErr := e.recordProviderStop(ctx, fixture, &evidence); cleanupErr != nil {
 			err = fmt.Errorf("%w; cleanup: %v", err, cleanupErr)
 		}
-		return e.finishProvider(fixture, evidence, err.Error())
+		return e.finishProvider(fixture, evidence,
+			aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+			blockedResult("provider_runtime", err.Error()), err.Error())
 	}
 
-	debugStage := runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "debug")
-	evidence.DebugStages = append(evidence.DebugStages, debugStage)
-	if debugStage.Verdict != verdictPass {
-		evidence.DebugVerdict = debugStage.Verdict
+	debugStage := e.runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "debug")
+	debugStage.Stage = "debug_preflight"
+	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, debugStage)
+	if debugStage.Result.PhaseStatus != PhaseStatusPass {
+		reason := resultReason(debugStage.Result)
 		if err := e.recordProviderStop(ctx, fixture, &evidence); err != nil {
-			evidence.RuntimeVerdict = verdictFail
-			return e.finishProvider(fixture, evidence, debugStage.Error+"; cleanup: "+err.Error())
+			reason += "; cleanup: " + err.Error()
 		}
-		return e.finishProvider(fixture, evidence, debugStage.Error)
+		return e.finishProvider(fixture, evidence,
+			aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+			blockedResult("debug_preflight", resultReason(debugStage.Result)), reason)
 	}
 	if err := e.captureProviderBreakpoint(ctx, fixture, &evidence); err != nil {
-		evidence.DebugVerdict = verdictFail
 		if cleanupErr := e.recordProviderStop(ctx, fixture, &evidence); cleanupErr != nil {
-			evidence.RuntimeVerdict = verdictFail
 			err = fmt.Errorf("%w; cleanup: %v", err, cleanupErr)
 		}
-		return e.finishProvider(fixture, evidence, err.Error())
+		return e.finishProvider(fixture, evidence,
+			aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+			aggregateStageResults(fixture.Provider+" debug", evidence.DebugStages), err.Error())
 	}
 	if err := e.recordProviderStop(ctx, fixture, &evidence); err != nil {
-		evidence.RuntimeVerdict = verdictFail
-		return e.finishProvider(fixture, evidence, err.Error())
+		return e.finishProvider(fixture, evidence,
+			aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+			aggregateStageResults(fixture.Provider+" debug", evidence.DebugStages), err.Error())
 	}
-	return e.finishProvider(fixture, evidence, "")
+	return e.finishProvider(fixture, evidence,
+		aggregateStageResults(fixture.Provider+" runtime", evidence.RuntimeStages),
+		aggregateStageResults(fixture.Provider+" debug", evidence.DebugStages), "")
 }
 
 func (e *ScenarioExecutor) renderFixtureRuntime(fixture FixtureManifest, fixtureRoot string) (map[string]any, map[string]string, error) {
@@ -174,31 +200,75 @@ func (e *ScenarioExecutor) configureAndStartProvider(ctx context.Context, fixtur
 		}},
 		{"start_service", "start_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300}},
 	} {
+		e.logProviderStage(fixture.Provider, call.stage, call.tool, "started", nil)
+		started := time.Now().UTC()
 		result, err := e.client.CallTool(ctx, call.tool, call.args)
+		finished := time.Now().UTC()
 		if err != nil || result.IsError {
 			if err == nil {
-				err = fmt.Errorf("%s", toolErrorCode(result))
+				err = fmt.Errorf("product error %s", toolErrorCode(result))
 			}
-			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: call.stage, Verdict: verdictFail, Error: err.Error()})
+			e.logProviderStage(fixture.Provider, call.stage, call.tool, "failed", err)
+			evidence.RuntimeStages = append(evidence.RuntimeStages, providerCallStage(
+				call.stage, call.tool, call.args, result, err, started, finished,
+			))
 			return fmt.Errorf("provider %s %s: %w", fixture.Provider, call.stage, err)
 		}
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: call.stage, Verdict: verdictPass, Summary: e.redactor.Redact(RawMessageMap(result))})
+		e.logProviderStage(fixture.Provider, call.stage, call.tool, "succeeded", nil)
+		evidence.RuntimeStages = append(evidence.RuntimeStages, providerCallStage(
+			call.stage, call.tool, call.args, result, nil, started, finished,
+		))
 	}
+	pollStarted := time.Now().UTC()
+	e.logProviderStage(fixture.Provider, "running_state", "list_services", "started", nil)
 	deadline := time.Now().Add(90 * time.Second)
+	var pollAttempts []any
 	for time.Now().Before(deadline) {
+		attemptStarted := time.Now().UTC()
 		state, err := e.client.CallTool(ctx, "list_services", map[string]any{"project_id": projectID})
+		attemptFinished := time.Now().UTC()
+		attempt := map[string]any{
+			"started_at_utc":  attemptStarted.Format(time.RFC3339Nano),
+			"finished_at_utc": attemptFinished.Format(time.RFC3339Nano),
+			"response":        RawMessageMap(state),
+		}
+		if err != nil {
+			attempt["transport_error"] = err.Error()
+		}
+		pollAttempts = append(pollAttempts, attempt)
 		if err == nil && !state.IsError && deploymentStatus(state, deploymentID) == "running" {
+			e.logProviderStage(fixture.Provider, "running_state", "list_services", "succeeded", nil)
 			e.variables["provider_"+fixture.Provider+"_deployment_id"] = deploymentID
-			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: "running_state", Verdict: verdictPass, Summary: map[string]any{"deployment_id": deploymentID, "status": "running"}})
+			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+				Stage: "running_state", Tool: "list_services",
+				Result:  providerStageResult(true, "", pollStarted, attemptFinished),
+				Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+				Summary: map[string]any{"deployment_id": deploymentID, "status": "running"},
+			})
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			failure := ctx.Err()
+			e.logProviderStage(fixture.Provider, "running_state", "list_services", "failed", failure)
+			finished := time.Now().UTC()
+			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+				Stage: "running_state", Tool: "list_services",
+				Result:  providerStageResult(false, failure.Error(), pollStarted, finished),
+				Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+			})
+			return failure
 		case <-time.After(time.Second):
 		}
 	}
-	return fmt.Errorf("provider %s deployment did not reach running", fixture.Provider)
+	failure := fmt.Errorf("provider %s deployment did not reach running", fixture.Provider)
+	e.logProviderStage(fixture.Provider, "running_state", "list_services", "failed", failure)
+	evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+		Stage: "running_state", Tool: "list_services",
+		Result:  providerStageResult(false, failure.Error(), pollStarted, time.Now().UTC()),
+		Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+	})
+	return failure
 }
 
 func providerCodeDebugConfig(provider string) map[string]any {
@@ -222,14 +292,26 @@ func providerCodeDebugConfig(provider string) map[string]any {
 }
 
 func (e *ScenarioExecutor) probeFixtureRuntime(ctx context.Context, fixture FixtureManifest, evidence *providerEvidence) error {
+	e.logProviderStage(fixture.Provider, "readiness", "http", "started", nil)
+	started := time.Now().UTC()
 	status, body, err := fixtureRequest(ctx, "GET", fixture.Readiness.URL, "", nil)
-	if err != nil || status != fixture.Readiness.Status {
-		return fmt.Errorf("provider %s readiness status=%d: %w", fixture.Provider, status, err)
+	if err == nil && status != fixture.Readiness.Status {
+		err = fmt.Errorf("status=%d, want %d", status, fixture.Readiness.Status)
 	}
-	if err := assertFixtureJSON(body, map[string]any{"ready": true, "provider": fixture.Provider}); err != nil {
-		return fmt.Errorf("provider %s readiness body: %w", fixture.Provider, err)
+	if err == nil {
+		if assertionErr := assertFixtureJSON(body, map[string]any{"ready": true, "provider": fixture.Provider}); assertionErr != nil {
+			err = fmt.Errorf("readiness body: %w", assertionErr)
+		}
 	}
-	evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: "readiness", Verdict: verdictPass, Summary: map[string]any{"status": status, "body_sha256": digestText(body)}})
+	finished := time.Now().UTC()
+	evidence.RuntimeStages = append(evidence.RuntimeStages, providerHTTPStage(
+		"readiness", map[string]any{"method": "GET", "url": fixture.Readiness.URL}, status, body, err, started, finished,
+	))
+	if err != nil {
+		e.logProviderStage(fixture.Provider, "readiness", "http", "failed", err)
+		return fmt.Errorf("provider %s readiness: %w", fixture.Provider, err)
+	}
+	e.logProviderStage(fixture.Provider, "readiness", "http", "succeeded", nil)
 	for _, probe := range []struct {
 		name    string
 		outcome string
@@ -237,9 +319,11 @@ func (e *ScenarioExecutor) probeFixtureRuntime(ctx context.Context, fixture Fixt
 	}{
 		{"normal_probe", "ok", 200}, {"controlled_error", "error", 500},
 	} {
+		e.logProviderStage(fixture.Provider, probe.name, "http", "started", nil)
+		started = time.Now().UTC()
 		status, body, err = e.performFixtureProbe(ctx, fixture, probe.outcome)
-		if err != nil || status != probe.status {
-			return fmt.Errorf("provider %s %s status=%d: %w", fixture.Provider, probe.name, status, err)
+		if err == nil && status != probe.status {
+			err = fmt.Errorf("status=%d, want %d", status, probe.status)
 		}
 		expectedCode := "fixture_ok"
 		if fixture.Provider == "go" {
@@ -252,10 +336,20 @@ func (e *ScenarioExecutor) probeFixtureRuntime(ctx context.Context, fixture Fixt
 		if expectedCode != "" {
 			expected["code"] = expectedCode
 		}
-		if err := assertFixtureJSON(body, expected); err != nil {
-			return fmt.Errorf("provider %s %s body: %w", fixture.Provider, probe.name, err)
+		if err == nil {
+			if assertionErr := assertFixtureJSON(body, expected); assertionErr != nil {
+				err = fmt.Errorf("response body: %w", assertionErr)
+			}
 		}
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: probe.name, Verdict: verdictPass, Summary: map[string]any{"status": status, "body_sha256": digestText(body)}})
+		finished = time.Now().UTC()
+		evidence.RuntimeStages = append(evidence.RuntimeStages, providerHTTPStage(
+			probe.name, map[string]any{"outcome": probe.outcome}, status, body, err, started, finished,
+		))
+		if err != nil {
+			e.logProviderStage(fixture.Provider, probe.name, "http", "failed", err)
+			return fmt.Errorf("provider %s %s: %w", fixture.Provider, probe.name, err)
+		}
+		e.logProviderStage(fixture.Provider, probe.name, "http", "succeeded", nil)
 	}
 	return nil
 }
@@ -274,6 +368,7 @@ func (e *ScenarioExecutor) performFixtureProbe(ctx context.Context, fixture Fixt
 }
 
 func (e *ScenarioExecutor) captureProviderBreakpoint(ctx context.Context, fixture FixtureManifest, evidence *providerEvidence) error {
+	e.logProviderStage(fixture.Provider, "debug_capture_at", "debug_capture_at", "started", nil)
 	deploymentID := fmt.Sprint(e.variables["provider_"+fixture.Provider+"_deployment_id"])
 	triggerDone := make(chan struct{})
 	go func() {
@@ -287,89 +382,163 @@ func (e *ScenarioExecutor) captureProviderBreakpoint(ctx context.Context, fixtur
 			_, _, _ = e.performFixtureProbe(ctx, fixture, "ok")
 		}
 	}()
-	result, err := e.client.CallTool(ctx, "debug_capture_at", map[string]any{
+	arguments := map[string]any{
 		"deployment_id": deploymentID, "source": fixture.Debug.Source, "line": fixture.Debug.Line,
 		"timeout_ms": 45000, "max_variables": 50, "variable_names": fixture.Debug.Variables,
 		"approval_wait_seconds": 300,
-	})
+	}
+	started := time.Now().UTC()
+	result, err := e.client.CallTool(ctx, "debug_capture_at", arguments)
 	<-triggerDone
+	if err == nil && result.IsError {
+		err = fmt.Errorf("product error %s", toolErrorCode(result))
+	}
+	if err == nil {
+		canonical := CanonicalJSON(RawMessageMap(result))
+		for _, variable := range fixture.Debug.Variables {
+			if !strings.Contains(canonical, variable) {
+				err = fmt.Errorf("debug capture omitted variable %s", variable)
+				break
+			}
+		}
+		if err == nil {
+			for name, expected := range fixture.Debug.Expected {
+				if !strings.Contains(canonical, name) || !strings.Contains(canonical, fmt.Sprint(expected)) {
+					err = fmt.Errorf("debug capture omitted expected %s=%v", name, expected)
+					break
+				}
+			}
+		}
+	}
+	finished := time.Now().UTC()
+	evidence.DebugStages = append(evidence.DebugStages, providerCallStage(
+		"debug_capture_at", "debug_capture_at", arguments, result, err, started, finished,
+	))
 	if err != nil {
+		e.logProviderStage(fixture.Provider, "debug_capture_at", "debug_capture_at", "failed", err)
 		return fmt.Errorf("provider %s debug capture: %w", fixture.Provider, err)
 	}
-	if result.IsError {
-		return fmt.Errorf("provider %s debug capture: %s", fixture.Provider, toolErrorCode(result))
-	}
-	canonical := CanonicalJSON(RawMessageMap(result))
-	for _, variable := range fixture.Debug.Variables {
-		if !strings.Contains(canonical, variable) {
-			return fmt.Errorf("provider %s debug capture omitted variable %s", fixture.Provider, variable)
-		}
-	}
-	for name, expected := range fixture.Debug.Expected {
-		if !strings.Contains(canonical, name) || !strings.Contains(canonical, fmt.Sprint(expected)) {
-			return fmt.Errorf("provider %s debug capture omitted expected %s=%v", fixture.Provider, name, expected)
-		}
-	}
-	evidence.DebugStages = append(evidence.DebugStages, stageEvidence{Stage: "debug_capture_at", Verdict: verdictPass, Summary: e.redactor.Redact(RawMessageMap(result))})
+	e.logProviderStage(fixture.Provider, "debug_capture_at", "debug_capture_at", "succeeded", nil)
 	return nil
 }
 
-func (e *ScenarioExecutor) stopProvider(ctx context.Context, fixture FixtureManifest) error {
+func (e *ScenarioExecutor) recordProviderStop(ctx context.Context, fixture FixtureManifest, evidence *providerEvidence) error {
 	projectID := fmt.Sprint(e.variables["project_id"])
 	deploymentID := fmt.Sprint(e.variables["provider_"+fixture.Provider+"_deployment_id"])
 	if deploymentID == "" {
 		return nil
 	}
-	result, err := e.client.CallTool(ctx, "stop_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300})
+	stopArguments := map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300}
+	e.logProviderStage(fixture.Provider, "stop_service", "stop_service", "started", nil)
+	stopStarted := time.Now().UTC()
+	stopResult, err := e.client.CallTool(ctx, "stop_service", stopArguments)
+	stopFinished := time.Now().UTC()
+	if err == nil && stopResult.IsError {
+		err = fmt.Errorf("product error %s", toolErrorCode(stopResult))
+	}
+	evidence.RuntimeStages = append(evidence.RuntimeStages, providerCallStage(
+		"stop_service", "stop_service", stopArguments, stopResult, err, stopStarted, stopFinished,
+	))
 	if err != nil {
-		return err
+		e.logProviderStage(fixture.Provider, "stop_service", "stop_service", "failed", err)
+		return fmt.Errorf("stop provider %s: %w", fixture.Provider, err)
 	}
-	if result.IsError {
-		return fmt.Errorf("stop provider %s: %s", fixture.Provider, toolErrorCode(result))
-	}
-	return nil
-}
-
-func (e *ScenarioExecutor) recordProviderStop(ctx context.Context, fixture FixtureManifest, evidence *providerEvidence) error {
-	err := e.stopProvider(ctx, fixture)
-	if err != nil {
-		evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: "stop_service", Verdict: verdictFail, Error: err.Error()})
-		return err
-	}
-	projectID := fmt.Sprint(e.variables["project_id"])
-	deploymentID := fmt.Sprint(e.variables["provider_"+fixture.Provider+"_deployment_id"])
+	e.logProviderStage(fixture.Provider, "stop_service", "stop_service", "succeeded", nil)
+	pollStarted := time.Now().UTC()
+	e.logProviderStage(fixture.Provider, "stopped_state", "list_services", "started", nil)
 	deadline := time.Now().Add(60 * time.Second)
+	var pollAttempts []any
 	for time.Now().Before(deadline) {
+		attemptStarted := time.Now().UTC()
 		state, callErr := e.client.CallTool(ctx, "list_services", map[string]any{"project_id": projectID})
+		attemptFinished := time.Now().UTC()
+		attempt := map[string]any{
+			"started_at_utc":  attemptStarted.Format(time.RFC3339Nano),
+			"finished_at_utc": attemptFinished.Format(time.RFC3339Nano),
+			"response":        RawMessageMap(state),
+		}
+		if callErr != nil {
+			attempt["transport_error"] = callErr.Error()
+		}
+		pollAttempts = append(pollAttempts, attempt)
 		if callErr == nil && !state.IsError && deploymentStatus(state, deploymentID) == "stopped" {
-			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: "stopped_state", Verdict: verdictPass, Summary: map[string]any{"deployment_id": deploymentID, "status": "stopped"}})
+			e.logProviderStage(fixture.Provider, "stopped_state", "list_services", "succeeded", nil)
+			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+				Stage: "stopped_state", Tool: "list_services",
+				Result:  providerStageResult(true, "", pollStarted, attemptFinished),
+				Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+				Summary: map[string]any{"deployment_id": deploymentID, "status": "stopped"},
+			})
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			err = ctx.Err()
+			e.logProviderStage(fixture.Provider, "stopped_state", "list_services", "failed", err)
+			finished := time.Now().UTC()
+			evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+				Stage: "stopped_state", Tool: "list_services",
+				Result:  providerStageResult(false, err.Error(), pollStarted, finished),
+				Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+			})
+			return err
 		case <-time.After(time.Second):
 		}
 	}
 	err = fmt.Errorf("provider %s deployment did not reach stopped", fixture.Provider)
-	evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{Stage: "stopped_state", Verdict: verdictFail, Error: err.Error()})
+	e.logProviderStage(fixture.Provider, "stopped_state", "list_services", "failed", err)
+	evidence.RuntimeStages = append(evidence.RuntimeStages, stageEvidence{
+		Stage: "stopped_state", Tool: "list_services",
+		Result:  providerStageResult(false, err.Error(), pollStarted, time.Now().UTC()),
+		Request: map[string]any{"project_id": projectID}, Response: pollAttempts,
+	})
 	return err
 }
 
-func (e *ScenarioExecutor) finishProvider(fixture FixtureManifest, evidence providerEvidence, reason string) ProviderExecution {
+func (e *ScenarioExecutor) finishProvider(fixture FixtureManifest, evidence providerEvidence, runtimeResult, debugResult ValidationResult, reason string) ProviderExecution {
 	log := logger.GetLogger().WithEntryName("WindowsValidationProvider")
-	relative := filepath.ToSlash(filepath.Join("evidence", "providers", fixture.Provider+".json"))
+	relative := providerEvidenceRef(fixture.Provider)
 	path := filepath.Join(e.resultsDir, filepath.FromSlash(relative))
-	if err := writeJSON(path, e.redactor.Redact(RawMessageMap(evidence))); err != nil {
-		evidence.RuntimeVerdict = verdictFail
-		reason = "write provider evidence: " + err.Error()
-		log.WithErr(err).WithField("provider", fixture.Provider).Error("Windows language provider 证据写入失败")
+	present := EvidenceRecord{Name: "provider_evidence", Required: true, Present: true, Ref: relative}
+	completedEvidence := completeProviderEvidence(evidence, runtimeResult, debugResult, present)
+	redactedEvidence := e.redactor.Redact(RawMessageMap(completedEvidence))
+	var writeErr error
+	if e.redactor.containsKnownSecret(redactedEvidence) {
+		writeErr = fmt.Errorf("redaction invariant failed before writing provider evidence")
+	} else {
+		writeErr = writeJSON(path, redactedEvidence)
 	}
-	result := ProviderExecution{Provider: fixture.Provider, RuntimeVerdict: evidence.RuntimeVerdict, DebugVerdict: evidence.DebugVerdict, EvidencePath: relative, Reason: reason}
-	fields := map[string]any{"provider": fixture.Provider, "runtime": result.RuntimeVerdict, "debug": result.DebugVerdict}
-	if result.RuntimeVerdict == verdictFail || result.DebugVerdict == verdictFail {
+	inline := map[string]any(nil)
+	if writeErr != nil {
+		missing := EvidenceRecord{Name: "provider_evidence", Required: true, Present: false, Ref: relative, WriteError: writeErr.Error()}
+		completedEvidence = completeProviderEvidence(evidence, runtimeResult, debugResult, missing)
+		reason = "write provider evidence: " + writeErr.Error()
+		failedPayload := e.redactor.Redact(RawMessageMap(completedEvidence))
+		if safe, ok := failedPayload.(map[string]any); ok && !e.redactor.containsKnownSecret(safe) {
+			inline = safe
+		}
+		log.WithErr(writeErr).WithFields(e.logFields(map[string]any{"provider": fixture.Provider, "stage": "persist_evidence"})).Error("Windows language provider 证据写入失败")
+	}
+	runtimeResult = completedEvidence.Runtime
+	debugResult = completedEvidence.Debug
+	prerequisites := providerPrerequisiteExecutions(completedEvidence.PrerequisiteStages)
+	children := make([]ValidationResult, 0, 2+len(prerequisites))
+	children = append(children, runtimeResult, debugResult)
+	for _, prerequisite := range prerequisites {
+		children = append(children, prerequisite.Result)
+	}
+	overall := aggregateResult(fixture.Provider+" provider", len(children), children)
+	if strings.TrimSpace(reason) == "" && overall.PhaseStatus != PhaseStatusPass {
+		reason = resultReason(overall)
+	}
+	result := ProviderExecution{
+		Provider: fixture.Provider, Result: overall, Runtime: runtimeResult, Debug: debugResult, Prerequisites: prerequisites,
+		EvidencePath: relative, InlineEvidence: inline, Reason: reason,
+	}
+	fields := e.logFields(map[string]any{"provider": fixture.Provider, "stage": "complete", "runtime": result.Runtime.PhaseStatus, "debug": result.Debug.PhaseStatus, "result": result.Result.PhaseStatus})
+	if result.Result.PhaseStatus == PhaseStatusFail {
 		log.WithFields(fields).WithField("reason", reason).Error("Windows language provider 合同执行失败")
-	} else if result.RuntimeVerdict == verdictBlocked || result.DebugVerdict == verdictBlocked {
+	} else if result.Result.PhaseStatus == PhaseStatusBlocked || result.Result.PhaseStatus == PhaseStatusNotRun {
 		log.WithFields(fields).WithField("reason", reason).Info("Windows language provider 合同执行受阻")
 	} else {
 		log.WithFields(fields).Info("Windows language provider 合同执行完成")
@@ -377,11 +546,51 @@ func (e *ScenarioExecutor) finishProvider(fixture FixtureManifest, evidence prov
 	return result
 }
 
-func runFixtureCommand(ctx context.Context, directory, command string, args ...string) stageEvidence {
+func (e *ScenarioExecutor) logProviderStage(provider, stage, tool, outcome string, stageErr error) {
+	log := logger.GetLogger().WithEntryName("WindowsValidationProviderStage")
+	fields := e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": tool, "outcome": outcome})
+	if stageErr != nil {
+		log.WithErr(stageErr).WithFields(fields).Error("Windows language provider 阶段失败")
+		return
+	}
+	log.WithFields(fields).Info("Windows language provider 阶段状态变化")
+}
+
+func completeProviderEvidence(evidence providerEvidence, runtimeResult, debugResult ValidationResult, record EvidenceRecord) providerEvidence {
+	completed := evidence
+	completed.PrerequisiteStages = append([]stageEvidence{}, evidence.PrerequisiteStages...)
+	completed.RuntimeStages = append([]stageEvidence{}, evidence.RuntimeStages...)
+	completed.DebugStages = append([]stageEvidence{}, evidence.DebugStages...)
+	for index := range completed.PrerequisiteStages {
+		completed.PrerequisiteStages[index].Result = withEvidence(completed.PrerequisiteStages[index].Result, record)
+	}
+	for index := range completed.RuntimeStages {
+		completed.RuntimeStages[index].Result = withEvidence(completed.RuntimeStages[index].Result, record)
+	}
+	for index := range completed.DebugStages {
+		completed.DebugStages[index].Result = withEvidence(completed.DebugStages[index].Result, record)
+	}
+	completed.Runtime = withEvidence(runtimeResult, record)
+	completed.Debug = withEvidence(debugResult, record)
+	return completed
+}
+
+func providerPrerequisiteExecutions(stages []stageEvidence) []StepExecution {
+	results := make([]StepExecution, 0, len(stages))
+	for _, stage := range stages {
+		results = append(results, StepExecution{
+			StepID: stage.Stage, Tool: stage.Tool, Coverage: CoverageSupporting, Result: stage.Result,
+		})
+	}
+	return results
+}
+
+func (e *ScenarioExecutor) runFixtureCommand(ctx context.Context, directory, command string, args ...string) stageEvidence {
 	stage := strings.TrimSuffix(strings.ToLower(filepath.Base(command)), filepath.Ext(command))
 	provider := filepath.Base(directory)
 	log := logger.GetLogger().WithEntryName("WindowsValidationFixtureCommand")
-	log.WithFields(map[string]any{"provider": provider, "stage": stage, "command": filepath.Base(command)}).Info("开始执行 Windows fixture 外部进程")
+	log.WithFields(e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": filepath.Base(command)})).Info("开始执行 Windows fixture 外部进程")
+	started := time.Now().UTC()
 	cmdArgs := []string{"/d", "/s", "/c", "call", command}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, "cmd.exe", cmdArgs...)
@@ -390,21 +599,74 @@ func runFixtureCommand(ctx context.Context, directory, command string, args ...s
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	err := cmd.Run()
+	finished := time.Now().UTC()
 	if err == nil {
-		log.WithFields(map[string]any{"provider": provider, "stage": stage, "command": filepath.Base(command), "exit_code": 0}).Info("Windows fixture 外部进程执行完成")
-		return stageEvidence{Stage: stage, Verdict: verdictPass, Summary: map[string]any{"command": filepath.Base(command), "output": output.String()}}
+		log.WithFields(e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": filepath.Base(command), "exit_code": 0})).Info("Windows fixture 外部进程执行完成")
+		return stageEvidence{
+			Stage: stage, Tool: filepath.Base(command),
+			Result:   providerStageResult(true, "", started, finished),
+			Request:  map[string]any{"command": filepath.Base(command), "arguments": args},
+			Response: map[string]any{"exit_code": 0, "output": output.String()},
+			Summary:  map[string]any{"command": filepath.Base(command), "exit_code": 0},
+		}
 	}
 	exitCode := 1
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		exitCode = exitErr.ExitCode()
 	}
-	verdict := verdictFail
-	if exitCode == 10 || exitCode == 20 {
-		verdict = verdictBlocked
+	failure := strings.TrimSpace(output.String())
+	if failure == "" {
+		failure = err.Error()
 	}
-	log.WithErr(err).WithFields(map[string]any{"provider": provider, "stage": stage, "command": filepath.Base(command), "exit_code": exitCode, "verdict": verdict}).Error("Windows fixture 外部进程执行失败")
-	return stageEvidence{Stage: stage, Verdict: verdict, ExitCode: exitCode, Error: strings.TrimSpace(output.String())}
+	log.WithErr(err).WithFields(e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": filepath.Base(command), "exit_code": exitCode})).Error("Windows fixture 外部进程执行失败")
+	return stageEvidence{
+		Stage: stage, Tool: filepath.Base(command), ExitCode: exitCode,
+		Result:   providerStageResult(false, failure, started, finished),
+		Request:  map[string]any{"command": filepath.Base(command), "arguments": args},
+		Response: map[string]any{"exit_code": exitCode, "output": output.String(), "process_error": err.Error()},
+	}
+}
+
+func providerCallStage(stage, tool string, request map[string]any, response ToolCallResult, callErr error, started, finished time.Time) stageEvidence {
+	failure := ""
+	if callErr != nil {
+		failure = callErr.Error()
+	}
+	return stageEvidence{
+		Stage: stage, Tool: tool,
+		Result:  providerStageResult(callErr == nil, failure, started, finished),
+		Request: cloneJSONMap(request), Response: RawMessageMap(response),
+	}
+}
+
+func providerHTTPStage(stage string, request map[string]any, status int, body []byte, callErr error, started, finished time.Time) stageEvidence {
+	failure := ""
+	if callErr != nil {
+		failure = callErr.Error()
+	}
+	return stageEvidence{
+		Stage: stage, Tool: "http",
+		Result:   providerStageResult(callErr == nil, failure, started, finished),
+		Request:  cloneJSONMap(request),
+		Response: map[string]any{"status": status, "body": string(body), "body_sha256": digestText(body)},
+	}
+}
+
+func providerStageResult(succeeded bool, failure string, started, finished time.Time) ValidationResult {
+	return attemptedResult(succeeded, failure, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), nil)
+}
+
+func providerEvidenceRef(provider string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "providers", provider+".json"))
+}
+
+func aggregateStageResults(name string, stages []stageEvidence) ValidationResult {
+	children := make([]ValidationResult, 0, len(stages))
+	for _, stage := range stages {
+		children = append(children, stage.Result)
+	}
+	return aggregateResult(name, len(children), children)
 }
 
 func fixtureRequest(ctx context.Context, method, url, authorization string, body []byte) (int, []byte, error) {

@@ -62,19 +62,19 @@ func validateRuntimeInput(input RuntimeInput) error {
 		}
 	}
 	lane := laneOrDefault(input.Lane)
-	if lane != "msi_smoke" && lane != "nsis_core" {
-		return fmt.Errorf("runtime input lane must be msi_smoke or nsis_core")
+	if lane != "msi_smoke" && lane != "nsis_core" && lane != "core_only" {
+		return fmt.Errorf("runtime input lane must be msi_smoke, nsis_core, or core_only")
 	}
 	if input.CampaignID != "" && !campaignIDPattern.MatchString(input.CampaignID) {
 		return fmt.Errorf("runtime input campaign_id is invalid")
 	}
-	// MSI smoke 不触碰远端 pipeline；仅 NSIS 主路径要求专用 Linux 节点输入，避免两条 lane 互相阻断。
+	// MSI smoke 不触碰远端 pipeline；NSIS 与 core_only 功能路径都要求专用 Linux 节点输入。
 	if lane == "msi_smoke" {
 		return nil
 	}
 	for name, value := range map[string]string{"linux_host_id": input.LinuxHostID, "linux_root": input.LinuxRoot} {
 		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("runtime input %s is required for nsis_core", name)
+			return fmt.Errorf("runtime input %s is required for %s", name, lane)
 		}
 	}
 	if strings.Contains(input.LinuxHostID, "REPLACE_") {

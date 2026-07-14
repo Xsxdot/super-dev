@@ -63,11 +63,20 @@ func TestWriteCampaignReportsRedactsMarkdownAndJSON(t *testing.T) {
 	redactor := NewRedactor()
 	redactor.RegisterSecret("AUTHORIZATION", "Basic report-secret")
 	report := CampaignReport{
-		SchemaVersion: 1,
-		Kind:          "superdev.windows-validation.campaign-report",
-		Status:        verdictFail,
-		Providers:     []ProviderExecution{{Provider: "go", RuntimeVerdict: verdictFail, Reason: "request used Basic report-secret"}},
+		SchemaVersion:      2,
+		Kind:               "superdev.windows-validation.campaign-report",
+		CampaignID:         "w10x64-e3cc94f-20260714T120000Z-aabbcc",
+		Lane:               "msi_smoke",
+		Installer:          testCompleteInstaller(t, "msi"),
+		RuntimeAttestation: RuntimeAttestation{Result: attemptedResult(false, "request used Basic report-secret", resultTestTime, resultTestTime, nil)},
+		Cleanup:            pendingCleanupRecord("cleanup pending", ""),
+		Providers: []ProviderExecution{{
+			Provider: "go", Result: attemptedResult(false, "request used Basic report-secret", resultTestTime, resultTestTime, nil),
+			Runtime: attemptedResult(false, "request used Basic report-secret", resultTestTime, resultTestTime, nil),
+			Debug:   blockedResult("runtime", "request used Basic report-secret"), Reason: "request used Basic report-secret",
+		}},
 	}
+	report.ValidationCatalog, report.Scenarios, report.ToolRows, _ = testValidationSurface(notRunResult("independent MSI lane"))
 	if err := writeCampaignReports(directory, redactor, report); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +104,15 @@ func TestValidateRuntimeInputKeepsMSISmokeIndependentFromRemoteInputs(t *testing
 	input.Lane = "nsis_core"
 	if err := validateRuntimeInput(input); err == nil {
 		t.Fatal("NSIS core must require the dedicated Linux host inputs")
+	}
+	input.Lane = "core_only"
+	if err := validateRuntimeInput(input); err == nil {
+		t.Fatal("core_only executes the remote functional surface and must require dedicated Linux inputs")
+	}
+	input.LinuxHostID = "linux-validation-host"
+	input.LinuxRoot = "/srv/superdev-validation/{{run_id}}"
+	if err := validateRuntimeInput(input); err != nil {
+		t.Fatalf("core_only should be a supported diagnostic lane: %v", err)
 	}
 	input.Lane = "msi_smoke"
 	input.CampaignID = "unsafe-campaign"

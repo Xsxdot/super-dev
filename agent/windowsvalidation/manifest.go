@@ -114,3 +114,18 @@ func ValidateCoverage(frozen []string, scenarios []Scenario) ([]CoverageAssignme
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].Tool < assignments[j].Tool })
 	return assignments, nil
 }
+
+func buildValidationCatalog(scenarios []Scenario, coverage []CoverageAssignment) ValidationCatalog {
+	catalog := ValidationCatalog{Coverage: append([]CoverageAssignment{}, coverage...)}
+	for _, scenario := range orderedScenarios(scenarios) {
+		entry := ScenarioCatalogEntry{ID: scenario.ID, Title: scenario.Title}
+		for _, step := range scenario.Steps {
+			entry.Steps = append(entry.Steps, StepCatalogEntry{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage})
+		}
+		for _, step := range scenario.Cleanup {
+			entry.Cleanup = append(entry.Cleanup, StepCatalogEntry{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage})
+		}
+		catalog.Scenarios = append(catalog.Scenarios, entry)
+	}
+	return catalog
+}

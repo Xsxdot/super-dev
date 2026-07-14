@@ -10,7 +10,7 @@
 #   - it records hashes rather than connector or user-state contents;
 #   - it never deletes or overwrites an existing backup.
 # Parameters:
-#   - Lane selects the independent msi_smoke or nsis_core preparation identity;
+#   - Lane selects the independent msi_smoke, nsis_core, or diagnostic core_only preparation identity;
 #   - BackupRoot is the operator-controlled parent for the new immutable backup.
 # Exit behavior:
 #   - exits 0 only after baseline, state isolation, and ready manifest persistence;
@@ -20,7 +20,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('msi_smoke', 'nsis_core')]
+    [ValidateSet('msi_smoke', 'nsis_core', 'core_only')]
     [string]$Lane,
     [string]$BackupRoot = 'C:\SuperDevValidation\backups'
 )
@@ -80,6 +80,28 @@ function Get-TextSHA256 {
     } finally {
         $sha.Dispose()
     }
+}
+
+function ConvertTo-ComparableJson {
+    param([object]$Value)
+    # -InputObject 保留空数组和单元素数组的 JSON 身份，避免 pipeline 枚举把 [] 变成空文本。
+    return (ConvertTo-Json -InputObject $Value -Depth 20 -Compress)
+}
+
+function Get-RequiredPropertyValue {
+    param([object]$Object, [string]$Name)
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { throw "Object is missing category $Name." }
+    return $property.Value
+}
+
+function Get-BaselineCategoryHashes {
+    param([object]$Baseline)
+    $hashes = [ordered]@{}
+    foreach ($category in @('superdev_processes', 'listening_port_57017', 'install_paths', 'uninstall_entries', 'connector_files', 'user_state')) {
+        $hashes[$category] = Get-TextSHA256 (ConvertTo-ComparableJson (Get-RequiredPropertyValue $Baseline $category))
+    }
+    return $hashes
 }
 
 function Get-OptionalPropertyValue {
@@ -179,10 +201,15 @@ try {
     if (@($baseline.superdev_processes).Count -ne 0) { throw 'Close SuperDev Desktop and stop all SuperDev sidecars before pre-install preparation.' }
     # 先把完整基线持久化，再移动用户状态；中途失败时操作者仍有可机械核对的恢复依据。
     $baselineJson = $baseline | ConvertTo-Json -Depth 12
-    [System.IO.File]::WriteAllText((Join-Path $destination 'baseline.json'), $baselineJson, [System.Text.UTF8Encoding]::new($false))
+    $baselinePath = Join-Path $destination 'baseline.json'
+    [System.IO.File]::WriteAllText($baselinePath, $baselineJson, [System.Text.UTF8Encoding]::new($false))
+    # manifest 同时锁定整份基线和六类比较输入，使 cleanup 报告不能自行声明另一套 expected hash。
+    $persistedBaseline = Get-Content -LiteralPath $baselinePath -Raw | ConvertFrom-Json
+    $baselineSha256 = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $baselineCategorySha256 = Get-BaselineCategoryHashes $persistedBaseline
     Write-PreparationEvent 'info' 'baseline_capture' 'succeeded' @{ process_count = @($baseline.superdev_processes).Count; state_file_count = @($baseline.user_state.files).Count }
 
-    $preparingManifest = [ordered]@{ schema_version = 1; kind = 'superdev.windows-validation.prepared-backup'; status = 'preparing'; created_at_utc = [DateTime]::UtcNow.ToString('o'); source = $source; lane = $Lane; campaign_id = $campaignId } | ConvertTo-Json
+    $preparingManifest = [ordered]@{ schema_version = 1; kind = 'superdev.windows-validation.prepared-backup'; status = 'preparing'; created_at_utc = [DateTime]::UtcNow.ToString('o'); source = $source; lane = $Lane; campaign_id = $campaignId; baseline_sha256 = $baselineSha256; baseline_category_sha256 = $baselineCategorySha256 } | ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText((Join-Path $destination 'backup-manifest.json'), $preparingManifest, [System.Text.UTF8Encoding]::new($false))
     $stateFiles = @($baseline.user_state.files)
     $stateFilesJson = ConvertTo-Json -InputObject @($stateFiles) -Depth 8
@@ -196,7 +223,7 @@ try {
     }
     Write-PreparationEvent 'info' 'user_state_isolation' 'succeeded' @{ state_file_count = @($stateFiles).Count }
 
-    $manifest = [ordered]@{ schema_version = 1; kind = 'superdev.windows-validation.prepared-backup'; status = 'ready'; created_at_utc = [DateTime]::UtcNow.ToString('o'); source = $source; lane = $Lane; campaign_id = $campaignId; state_file_count = @($stateFiles).Count } | ConvertTo-Json
+    $manifest = [ordered]@{ schema_version = 1; kind = 'superdev.windows-validation.prepared-backup'; status = 'ready'; created_at_utc = [DateTime]::UtcNow.ToString('o'); source = $source; lane = $Lane; campaign_id = $campaignId; baseline_sha256 = $baselineSha256; baseline_category_sha256 = $baselineCategorySha256; state_file_count = @($stateFiles).Count } | ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText((Join-Path $destination 'backup-manifest.json'), $manifest, [System.Text.UTF8Encoding]::new($false))
     Write-PreparationEvent 'info' 'prepare' 'succeeded' @{ backup_directory = $destination; campaign_id = $campaignId; state_file_count = @($stateFiles).Count }
     exit 0

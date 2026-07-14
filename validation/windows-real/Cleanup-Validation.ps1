@@ -38,10 +38,11 @@ $ErrorActionPreference = 'Stop'
 # 才能保证重定向日志与 finalizer 管道在不同 Windows 语言环境中保持同一字节合同。
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
+$script:cleanupLane = ''
 
 function Write-CleanupEvent {
     param([string]$Level, [string]$Stage, [string]$Outcome, [hashtable]$Fields = @{})
-    $record = [ordered]@{ timestamp = [DateTime]::UtcNow.ToString('o'); level = $Level; component = 'windows-validation-cleanup'; stage = $Stage; outcome = $Outcome; campaign_id = $CampaignId }
+    $record = [ordered]@{ timestamp = [DateTime]::UtcNow.ToString('o'); level = $Level; component = 'windows-validation-cleanup'; stage = $Stage; outcome = $Outcome; campaign_id = $CampaignId; lane = $script:cleanupLane }
     foreach ($key in $Fields.Keys) { $record[$key] = $Fields[$key] }
     # 直接写控制台而不是返回 pipeline 对象，保证 report path 等函数返回值不会被结构化日志污染。
     [Console]::Out.WriteLine(($record | ConvertTo-Json -Compress))
@@ -158,7 +159,8 @@ function Get-MachineFacts {
 
 function ConvertTo-ComparableJson {
     param([object]$Value)
-    return ($Value | ConvertTo-Json -Depth 20 -Compress)
+    # -InputObject 保留空数组和单元素数组的 JSON 身份，避免 pipeline 枚举改变基线摘要。
+    return (ConvertTo-Json -InputObject $Value -Depth 20 -Compress)
 }
 
 function Compare-BaselineCategory {
@@ -167,7 +169,7 @@ function Compare-BaselineCategory {
     $actualJson = ConvertTo-ComparableJson $Actual
     return [ordered]@{
         category = $Name
-        status = if ($expectedJson -ceq $actualJson) { 'PASS' } else { 'FAIL' }
+        matched = ($expectedJson -ceq $actualJson)
         expected_sha256 = Get-TextSHA256 $expectedJson
         actual_sha256 = Get-TextSHA256 $actualJson
     }
@@ -196,8 +198,17 @@ function Compare-MachineBaseline {
         $actualValue = Get-RequiredPropertyValue $Actual $category
         $checks += Compare-BaselineCategory $category $expectedValue $actualValue
     }
-    $failed = @($checks | Where-Object { $_.status -ne 'PASS' })
-    return [ordered]@{ status = if ($failed.Count -eq 0) { 'PASS' } else { 'FAIL' }; checks = $checks }
+    $failed = @($checks | Where-Object { -not [bool]$_.matched })
+    return [ordered]@{ matched = ($failed.Count -eq 0); checks = $checks }
+}
+
+function Get-BaselineCategoryHashes {
+    param([object]$Baseline)
+    $hashes = [ordered]@{}
+    foreach ($category in @('superdev_processes', 'listening_port_57017', 'install_paths', 'uninstall_entries', 'connector_files', 'user_state')) {
+        $hashes[$category] = Get-TextSHA256 (ConvertTo-ComparableJson (Get-RequiredPropertyValue $Baseline $category))
+    }
+    return $hashes
 }
 
 function Ensure-CampaignReport {
@@ -210,70 +221,22 @@ function Ensure-CampaignReport {
     if ($prepared.kind -ne 'superdev.windows-validation.prepared-backup' -or $prepared.campaign_id -ne $CampaignId) {
         throw 'Cannot synthesize pre-driver report from a different backup identity.'
     }
-    $frozenPath = Join-Path $PSScriptRoot 'manifest\frozen-build.json'
-    $frozen = Get-Content -LiteralPath $frozenPath -Raw | ConvertFrom-Json
-    $failureReason = 'Validation driver was not reached; inspect Run-Validation preflight events.'
-    $runFailurePath = Join-Path $Backup 'run-failure.json'
-    if (Test-Path -LiteralPath $runFailurePath -PathType Leaf) {
-        $runFailure = Get-Content -LiteralPath $runFailurePath -Raw | ConvertFrom-Json
-        if ($runFailure.kind -eq 'superdev.windows-validation.pre-driver-failure' -and $runFailure.campaign_id -eq $CampaignId) {
-            $failureReason = [string]$runFailure.error
-        }
-    }
-    $providerRows = @($frozen.source_surface.language_runtime_providers.names | ForEach-Object {
-        [ordered]@{ provider = [string]$_; runtime_verdict = 'BLOCKED'; debug_verdict = 'BLOCKED'; reason = $failureReason }
-    })
-    $toolRows = @()
-    $scenarioRows = @()
-    foreach ($scenarioPath in @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'scenarios') -Filter '*.json' -File | Sort-Object Name)) {
-        $scenario = Get-Content -LiteralPath $scenarioPath.FullName -Raw | ConvertFrom-Json
-        $stepRows = @()
-        foreach ($step in @($scenario.steps)) {
-            $stepRow = [ordered]@{ step_id = [string]$step.id; tool = [string]$step.tool; coverage = [string]$step.coverage; verdict = 'BLOCKED'; error = $failureReason }
-            $stepRows += $stepRow
-            if ($step.coverage -eq 'primary') {
-                $toolRows += [ordered]@{ tool = [string]$step.tool; scenario_id = [string]$scenario.id; step_id = [string]$step.id; verdict = 'BLOCKED'; error = $failureReason }
-            }
-        }
-        $scenarioRows += [ordered]@{ id = [string]$scenario.id; title = [string]$scenario.title; verdict = 'BLOCKED'; steps = $stepRows; cleanup = @() }
-    }
-    # driver 前也必须保留冻结的 75 行唯一归属；不调用工具，但每行明确 BLOCKED，而不是空数组或伪 PASS。
-    if ($providerRows.Count -ne 7 -or $toolRows.Count -ne 75 -or @($toolRows | Group-Object tool | Where-Object { $_.Count -ne 1 }).Count -ne 0) {
-        throw 'Cannot synthesize pre-driver report because the frozen 75-tool assignment has drifted.'
-    }
-    # driver 前失败也必须形成正常 FAIL 报告；provider/tool 只记录未执行 BLOCKED，绝不伪造 Windows 结论。
-    $report = [ordered]@{
-        schema_version = 1
-        kind = 'superdev.windows-validation.campaign-report'
-        campaign_id = $CampaignId
-        status = 'FAIL'
-        functional_status = 'FAIL'
-        failure_stage = 'pre_driver_preflight'
-        failure_reason = $failureReason
-        build_commit = [string]$frozen.build.git_commit
-        product_version = [string]$frozen.build.product_version
-        target = 'Windows 10 x64'
-        lane = [string]$prepared.lane
-        runtime_attestation = [ordered]@{ verdict = 'FAIL' }
-        installer_checks = @()
-        scenarios = $scenarioRows
-        providers = $providerRows
-        tool_rows = $toolRows
-        sections = [ordered]@{}
-        cleanup = [ordered]@{ status = 'PENDING'; reason = $failureReason }
-        known_anomalies = @($frozen.known_baseline_exceptions)
-        started_at_utc = [string]$prepared.created_at_utc
-        finished_at_utc = [DateTime]::UtcNow.ToString('o')
-    }
-    New-Item -ItemType Directory -Force -Path $ResultDirectory | Out-Null
-    $json = $report | ConvertTo-Json -Depth 40
-    [System.IO.File]::WriteAllText($reportPath, $json, [System.Text.UTF8Encoding]::new($false))
-    Write-CleanupEvent 'info' 'pre_driver_report' 'created' @{ campaign_report = $reportPath }
+    $script:cleanupLane = [string]$prepared.lane
+    $driver = Join-Path $PSScriptRoot 'bin\superdev-windows-validation.exe'
+    if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) { throw "Packaged pre-driver report materializer is missing: $driver" }
+    # PowerShell 只提交 backup、campaign 和原始失败记录；Phase Status、七 provider 与 75 工具行全部由 Go 的统一结果模块派生。
+    Write-CleanupEvent 'info' 'pre_driver_report' 'materialize_started' @{ campaign_report = $reportPath }
+    & $driver --materialize-pre-driver-failure --package-root $PSScriptRoot --results-root $ResultsRoot --campaign-id $CampaignId --prepared-backup $Backup
+    $materializeExit = $LASTEXITCODE
+    if ($materializeExit -ne 0) { throw "Pre-driver report materializer exited with code $materializeExit." }
+    if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Pre-driver report materializer did not create campaign-report.json.' }
+    Write-CleanupEvent 'info' 'pre_driver_report' 'materialized' @{ campaign_report = $reportPath }
 }
 
 function Write-CleanupReport {
     param([string]$ResultDirectory, [string]$Backup, [object]$Report)
-    Write-CleanupEvent 'info' 'cleanup_report' 'write_started' @{ status = $Report.status }
+    $executionOutcome = if (-not [bool]$Report.execution_facts.attempted) { 'not_attempted' } elseif ([bool]$Report.execution_facts.succeeded) { 'succeeded' } else { 'failed' }
+    Write-CleanupEvent 'info' 'cleanup_report' 'write_started' @{ execution_outcome = $executionOutcome }
     $json = $Report | ConvertTo-Json -Depth 10
     if (Test-Path -LiteralPath $Backup -PathType Container) {
         $backupReportPath = Join-Path $Backup "cleanup-$CampaignId.json"
@@ -283,7 +246,7 @@ function Write-CleanupReport {
     $resultReportPath = Join-Path $ResultDirectory 'cleanup-report.json'
     [System.IO.File]::WriteAllText($resultReportPath, $json, [System.Text.UTF8Encoding]::new($false))
     # Go finalizer 只接受 campaign 直属 cleanup-report，禁止用 backup 任意路径改写其他 campaign。
-    Write-CleanupEvent 'info' 'cleanup_report' 'write_succeeded' @{ status = $Report.status; cleanup_report = $resultReportPath }
+    Write-CleanupEvent 'info' 'cleanup_report' 'write_succeeded' @{ execution_outcome = $executionOutcome; cleanup_report = $resultReportPath }
     return $resultReportPath
 }
 
@@ -292,7 +255,7 @@ function Invoke-CleanupFinalizer {
     $driver = Join-Path $PSScriptRoot 'bin\superdev-windows-validation.exe'
     if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) { throw "Packaged cleanup finalizer is missing: $driver" }
     Write-CleanupEvent 'info' 'cleanup_finalizer' 'started' @{ cleanup_report = $ReportPath }
-    & $driver --finalize-cleanup --results-root $ResultsRoot --campaign-id $CampaignId --cleanup-report $ReportPath
+    & $driver --finalize-cleanup --results-root $ResultsRoot --campaign-id $CampaignId --cleanup-report $ReportPath --prepared-backup $BackupDirectory
     $finalizerExit = $LASTEXITCODE
     if ($finalizerExit -ne 0) { throw "Cleanup finalizer exited with code $finalizerExit." }
     Write-CleanupEvent 'info' 'cleanup_finalizer' 'succeeded' @{ cleanup_report = $ReportPath }
@@ -300,7 +263,9 @@ function Invoke-CleanupFinalizer {
 
 $resultDirectory = Join-Path ([System.IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')) $CampaignId
 $baselineComparison = $null
+$preparedBaselineSha256 = ''
 $quarantine = ''
+$cleanupStartedAtUtc = [DateTime]::UtcNow.ToString('o')
 
 try {
     Write-CleanupEvent 'info' 'cleanup' 'started'
@@ -316,9 +281,21 @@ try {
     if ($backupManifest.kind -ne 'superdev.windows-validation.prepared-backup' -or $backupManifest.status -ne 'ready' -or $backupManifest.campaign_id -ne $CampaignId) {
         throw 'Selected backup was not completed for this exact campaign by Prepare-Validation.ps1.'
     }
+    $script:cleanupLane = [string]$backupManifest.lane
     $baseline = Get-Content -LiteralPath $baselinePath -Raw | ConvertFrom-Json
     if ($baseline.schema_version -ne 1 -or $baseline.kind -ne 'superdev.windows-validation.machine-baseline') {
         throw 'Selected baseline.json identity is invalid.'
+    }
+    $preparedBaselineSha256 = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$backupManifest.baseline_sha256 -cne $preparedBaselineSha256) {
+        throw 'baseline.json SHA-256 does not match the prepared backup manifest.'
+    }
+    $preparedCategorySha256 = Get-BaselineCategoryHashes $baseline
+    foreach ($category in @('superdev_processes', 'listening_port_57017', 'install_paths', 'uninstall_entries', 'connector_files', 'user_state')) {
+        $manifestHash = Get-RequiredPropertyValue $backupManifest.baseline_category_sha256 $category
+        if ([string]$manifestHash -cne [string]$preparedCategorySha256[$category]) {
+            throw "Prepared baseline category hash does not match baseline.json: $category"
+        }
     }
     $target = Join-Path $HOME '.superdev'
     if ([System.IO.Path]::GetFullPath([string]$backupManifest.source) -ne [System.IO.Path]::GetFullPath($target)) {
@@ -361,8 +338,8 @@ try {
     Write-CleanupEvent 'info' 'baseline_precheck' 'started'
     $currentFacts = Get-MachineFacts $target
     $baselineComparison = Compare-MachineBaseline $baseline $currentFacts
-    if ($baselineComparison.status -ne 'PASS') {
-        $drift = @($baselineComparison.checks | Where-Object { $_.status -ne 'PASS' } | ForEach-Object { $_.category }) -join ','
+    if (-not [bool]$baselineComparison.matched) {
+        $drift = @($baselineComparison.checks | Where-Object { -not [bool]$_.matched } | ForEach-Object { $_.category }) -join ','
         throw "Post-cleanup baseline drift detected: $drift"
     }
     Write-CleanupEvent 'info' 'baseline_precheck' 'succeeded' @{ category_count = @($baselineComparison.checks).Count }
@@ -379,24 +356,31 @@ try {
     Write-CleanupEvent 'info' 'baseline_comparison' 'started'
     $finalFacts = Get-MachineFacts $target
     $baselineComparison = Compare-MachineBaseline $baseline $finalFacts
-    if ($baselineComparison.status -ne 'PASS') {
-        $drift = @($baselineComparison.checks | Where-Object { $_.status -ne 'PASS' } | ForEach-Object { $_.category }) -join ','
+    if (-not [bool]$baselineComparison.matched) {
+        $drift = @($baselineComparison.checks | Where-Object { -not [bool]$_.matched } | ForEach-Object { $_.category }) -join ','
         throw "Final baseline drift detected: $drift"
     }
     Write-CleanupEvent 'info' 'baseline_comparison' 'succeeded' @{ category_count = @($baselineComparison.checks).Count }
 
+    $cleanupFinishedAtUtc = [DateTime]::UtcNow.ToString('o')
     $cleanupReport = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         kind = 'superdev.windows-validation.cleanup-report'
         campaign_id = $CampaignId
-        status = 'PASS'
+        prepared_baseline_sha256 = $preparedBaselineSha256
+        execution_facts = [ordered]@{
+            attempted = $true
+            succeeded = $true
+            started_at_utc = $cleanupStartedAtUtc
+            finished_at_utc = $cleanupFinishedAtUtc
+        }
         campaign_workspace_removed = $true
         campaign_results_removed = [bool]$RemoveResults
         user_state_restored = $true
         restored_state_file_count = @($baseline.user_state.files).Count
         baseline_comparison = $baselineComparison
         validation_state_quarantine_removed = $true
-        finished_at_utc = [DateTime]::UtcNow.ToString('o')
+        finished_at_utc = $cleanupFinishedAtUtc
     }
     Ensure-CampaignReport $resultDirectory $BackupDirectory
     $cleanupReportPath = Write-CleanupReport $resultDirectory $BackupDirectory $cleanupReport
@@ -412,15 +396,23 @@ try {
     exit 0
 } catch {
     $failureMessage = $_.Exception.Message
+    $cleanupFinishedAtUtc = [DateTime]::UtcNow.ToString('o')
     $failureReport = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         kind = 'superdev.windows-validation.cleanup-report'
         campaign_id = $CampaignId
-        status = 'FAIL'
+        prepared_baseline_sha256 = $preparedBaselineSha256
+        execution_facts = [ordered]@{
+            attempted = $true
+            succeeded = $false
+            failure = $failureMessage
+            started_at_utc = $cleanupStartedAtUtc
+            finished_at_utc = $cleanupFinishedAtUtc
+        }
         error = $failureMessage
         baseline_comparison = $baselineComparison
         recovery_quarantine = $quarantine
-        finished_at_utc = [DateTime]::UtcNow.ToString('o')
+        finished_at_utc = $cleanupFinishedAtUtc
     }
     try {
         Ensure-CampaignReport $resultDirectory $BackupDirectory

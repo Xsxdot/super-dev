@@ -5,6 +5,7 @@
   "installer_directory": "C:\\SuperDevValidation\\installers",
   "campaign_root": "C:\\SuperDevValidation\\campaigns",
   "results_root": "C:\\SuperDevValidation\\results",
+  "lane": "nsis_core",
   "linux_host_id": "REPLACE_WITH_LIST_HOSTS_NON_SELF_ID",
   "linux_root": "/srv/superdev-validation/{{run_id}}",
   "approval_wait_seconds": 300

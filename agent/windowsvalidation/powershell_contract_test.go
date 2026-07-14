@@ -115,6 +115,39 @@ func TestLoadPackageSourceRejectsAmbientPowerShellRunbookCommand(t *testing.T) {
 	}
 }
 
+func TestPowerShellEntrypointsBindBaselineAndLogCampaignContext(t *testing.T) {
+	t.Parallel()
+	root := filepath.Clean(filepath.Join("..", "..", "validation", "windows-real"))
+	markers := map[string][]string{
+		"Prepare-Validation.ps1": {
+			"baseline_sha256 = $baselineSha256",
+			"baseline_category_sha256 = $baselineCategorySha256",
+			"ConvertTo-Json -InputObject $Value -Depth 20 -Compress",
+		},
+		"Run-Validation.ps1": {
+			"campaign_id = $script:validationCampaignId",
+			"$script:validationCampaignId = [string]$backupManifest.campaign_id",
+		},
+		"Cleanup-Validation.ps1": {
+			"lane = $script:cleanupLane",
+			"prepared_baseline_sha256 = $preparedBaselineSha256",
+			"ConvertTo-Json -InputObject $Value -Depth 20 -Compress",
+			"--prepared-backup $BackupDirectory",
+		},
+	}
+	for name, required := range markers {
+		content, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, marker := range required {
+			if !bytes.Contains(content, []byte(marker)) {
+				t.Errorf("%s is missing contract marker %q", name, marker)
+			}
+		}
+	}
+}
+
 func readArchiveEntries(t *testing.T, path string) map[string][]byte {
 	t.Helper()
 	reader, err := zip.OpenReader(path)

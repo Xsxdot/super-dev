@@ -47,6 +47,16 @@ type MCPInitializeResult struct {
 	Capabilities map[string]any `json:"capabilities"`
 }
 
+type mcpToolCaller interface {
+	CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error)
+}
+
+type runtimeAttestationClient interface {
+	mcpToolCaller
+	Initialize(ctx context.Context) (MCPInitializeResult, error)
+	ListTools(ctx context.Context) ([]map[string]any, []string, error)
+}
+
 // MCPProcess 是一次 campaign 独占的 packaged MCP 子进程。
 type MCPProcess struct {
 	cmd    *exec.Cmd
@@ -120,14 +130,7 @@ func (c *MCPProcess) Initialize(ctx context.Context) (MCPInitializeResult, error
 	var out MCPInitializeResult
 	log := logger.GetLogger().WithEntryName("WindowsValidationMCP")
 	log.Info("开始 MCP initialize 握手")
-	raw, err := c.callRPC(ctx, "initialize", map[string]any{
-		"protocolVersion": "2025-11-25",
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]string{
-			"name":    "superdev-windows-validation",
-			"version": "1.0.0",
-		},
-	})
+	raw, err := c.callRPC(ctx, "initialize", validationInitializeParams())
 	if err != nil {
 		log.WithErr(err).Error("MCP initialize 握手失败")
 		return out, err
@@ -140,6 +143,17 @@ func (c *MCPProcess) Initialize(ctx context.Context) (MCPInitializeResult, error
 	}
 	log.WithFields(map[string]any{"server": out.ServerInfo.Name, "version": out.ServerInfo.Version, "protocol": out.ProtocolVersion}).Info("MCP initialize 握手完成")
 	return out, nil
+}
+
+func validationInitializeParams() map[string]any {
+	return map[string]any{
+		"protocolVersion": "2025-11-25",
+		"capabilities":    map[string]any{},
+		"clientInfo": map[string]string{
+			"name":    "superdev-windows-validation",
+			"version": "1.0.0",
+		},
+	}
 }
 
 // ListTools 读取 packaged MCP 的完整工具定义和排序后名称集合。

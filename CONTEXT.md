@@ -357,3 +357,33 @@ _Avoid_: Sandbox Reconcile, Config Generation, Runtime Start
 **Runtime Command**:
 一个 SuperDev Agent 向另一个节点上的同款 Agent 发出的 Runtime Instance 启动、停止、重启或状态查询指令。
 _Avoid_: Runtime Assignment, Shell Command
+
+## Windows Validation
+
+**Execution Fact**:
+一次 Windows 验证动作是否真实尝试、是否满足预期、何时发生以及为何未运行或失败的原始记录；最终状态只能由这些事实与 Evidence Obligation 派生。
+_Avoid_: Verdict, Result String, Assumed Outcome
+
+**Phase Status**:
+由 Execution Fact 与 Evidence Obligation 唯一派生的 `NOT_RUN`、`BLOCKED`、`PASS` 或 `FAIL`；它不能由 scenario、provider、installer 或报告代码直接填写。
+_Avoid_: Verdict String, Manual Status, Outcome Flag
+
+**Evidence Obligation**:
+某次已尝试动作必须保留的脱敏 request、response 或 error、时间及引用；缺失或写入失败会使该次已尝试动作失败，但不能把未尝试动作变成失败。
+_Avoid_: Optional Attachment, Screenshot Only, Verdict Reason
+
+**Artifact Verification**:
+冻结 MSI 或 NSIS 文件的名称、大小与摘要已匹配这一独立事实；它不证明安装器生命周期发生过。
+_Avoid_: Installer PASS, Installation Proof, Runtime Attestation
+
+**Installer Lifecycle**:
+一个安装器 lane 的 install、start、stop 与 uninstall 动作及其 Evidence Obligation；只有四段都真实执行并满足合同，installer lane 才能通过。
+_Avoid_: Artifact Verification, Packaged Runtime Attestation, File Check
+
+**Validation Catalog**:
+一次 Windows campaign 从冻结包带入并持久化的 scenario、target step、supporting/cleanup step 与工具归属目录；重新派生结果前必须用它拒绝缺失、重复或重映射事实。
+_Avoid_: Current Row Count, Best-effort Coverage, Report Layout
+
+**Prepared Baseline Identity**:
+Prepare 阶段锁定的 `baseline.json` 整体 SHA-256、六类比较 SHA-256、campaign 与 lane；Cleanup PASS 必须机械证明其 expected/actual 事实属于这一身份。
+_Avoid_: Self-declared Match, Latest Backup, Cleanup Verdict

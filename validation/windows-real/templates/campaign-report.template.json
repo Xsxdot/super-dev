@@ -1,23 +1,74 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "superdev.windows-validation.campaign-report",
   "campaign_id": "WINDOWS_RUN_ONLY",
-  "status": "PASS|FAIL|BLOCKED",
-  "functional_status": "PASS|FAIL|BLOCKED",
-  "lane": "msi_smoke|nsis_core",
+  "result": {
+    "phase_status": "NOT_RUN|BLOCKED|PASS|FAIL",
+    "attempted": false,
+    "succeeded": false,
+    "evidence": []
+  },
+  "functional_result": {
+    "phase_status": "NOT_RUN|BLOCKED|PASS|FAIL",
+    "attempted": false,
+    "succeeded": false,
+    "evidence": []
+  },
+  "lane": "msi_smoke|nsis_core|core_only",
+  "installer": {
+    "format": "msi|nsis",
+    "artifact_verified": false,
+    "installer_executed": false,
+    "artifact": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "install": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "start": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "stop": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "uninstall": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "lifecycle": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}
+  },
   "installer_checks": [],
-  "runtime_attestation": {},
+  "runtime_attestation": {
+    "server_name": "",
+    "server_version": "",
+    "protocol_version": "",
+    "tool_names": [],
+    "provider_names": [],
+    "sidecars": [],
+    "result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}
+  },
+  "prerequisites": [],
+  "operations": [],
+  "validation_catalog": {
+    "scenarios": [
+      {
+        "id": "frozen-scenario-id",
+        "title": "frozen title",
+        "steps": [{"step_id": "frozen-step-id", "tool": "frozen_tool", "coverage": "primary|supporting"}],
+        "cleanup": [{"step_id": "frozen-cleanup-id", "tool": "frozen_cleanup_tool", "coverage": "supporting"}]
+      }
+    ],
+    "coverage": [{"tool": "frozen_tool", "scenario_id": "frozen-scenario-id", "step_id": "frozen-step-id"}]
+  },
   "providers": [],
   "tool_rows": [],
   "scenarios": [],
   "sections": {
-    "msi_installer": {"status": "PASS|FAIL|BLOCKED"},
-    "nsis_installer": {"status": "PASS|FAIL|BLOCKED"},
-    "core": {"status": "PASS|FAIL|BLOCKED"},
-    "providers": {"status": "PASS|FAIL|BLOCKED"},
-    "mcp_tools": {"status": "PASS|FAIL|BLOCKED"},
-    "pipeline": {"status": "PASS|FAIL|BLOCKED"},
-    "cleanup": {"status": "PASS|FAIL|BLOCKED"}
+    "msi_installer": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "nsis_installer": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "core": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "providers": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "mcp_tools": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "pipeline": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "cleanup": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}}
   },
-  "cleanup": {}
+  "cleanup": {
+    "prepared_baseline_sha256": "64-lowercase-hex",
+    "execution_facts": {
+      "attempted": false,
+      "succeeded": false,
+      "not_run_reason": "run Cleanup-Validation.ps1 to compare and restore the prepared baseline"
+    },
+    "baseline_comparison": {"matched": false, "checks": []}
+  }
 }

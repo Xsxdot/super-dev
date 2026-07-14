@@ -55,7 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1
 
 记录成功事件中的 `<msi-backup>` 和安装前已冻结的 `<msi-id>`。
 
-**Expected**：`<msi-backup>` 内 `backup-manifest.json` 为 `ready` 且包含 `<msi-id>`；`baseline.json` 同时包含 SuperDev 进程、57017 监听、安装目录、卸载项、connector 文件和 `.superdev` 文件身份；原 `.superdev` 已被移动到 backup 或写入 `NO_SUPERDEV_STATE`。
+**Expected**：`<msi-backup>` 内 `backup-manifest.json` 为 `ready` 且包含 `<msi-id>`、`baseline_sha256` 和六类 `baseline_category_sha256`；`baseline.json` 同时包含 SuperDev 进程、57017 监听、安装目录、卸载项、connector 文件和 `.superdev` 文件身份；原 `.superdev` 已被移动到 backup 或写入 `NO_SUPERDEV_STATE`。
 
 **Stop**：存在 SuperDev 进程、端口/注册表无法读取、backup 已存在或任一基线文件缺失时停止；不要手工补写 baseline。
 
@@ -91,7 +91,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -La
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <msi-id> -BackupDirectory <msi-backup> -RestoreUserState
 ```
 
-**Expected**：cleanup 对进程、57017 监听、四类安装路径、三处卸载注册表、Codex/Claude connector 摘要和 `.superdev` 逐文件身份全部返回 PASS；临时 quarantine 被精确删除；packaged finalizer 将最终状态同时写回 backup cleanup report、campaign JSON/Markdown 和结果根 `validation-summary.json/.md` 的 cleanup section。
+**Expected**：cleanup 对进程、57017 监听、四类安装路径、三处卸载注册表、Codex/Claude connector 摘要和 `.superdev` 逐文件身份全部记录 `matched=true`；每类 expected/actual SHA-256 相同，且 finalizer 从该 campaign 真实 `baseline.json` 重算整份与六类 SHA 后再比对 Prepare manifest；临时 quarantine 被精确删除；packaged finalizer 再由这些执行事实派生 cleanup 结果，并同时写回 backup cleanup report、campaign JSON/Markdown 和结果根 `validation-summary.json/.md` 的 cleanup section。
 
 **Stop**：任一类别摘要漂移、quarantine/安装残留时 cleanup 必须为 FAIL，保留 finding 与 recovery quarantine，禁止手工改报告为 PASS。只有仍在运行的进程/端口、会影响 NSIS 安装启动的 MSI 状态、无法证明 sidecar 来自冻结 NSIS，或使 MCP/runtime 身份门禁无法执行的污染才阻断 NSIS；其他 MSI 残留保持独立 FAIL finding，重新记录独立 NSIS 基线后可继续 core lane。
 
@@ -133,7 +133,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -La
 
 **Stop**：正常情况下不要中断；若出现越界路径、非预期 SSH fallback、凭据泄漏或无法确认资源身份，立即停止新增操作，保留现有证据并进入卸载/恢复。审批超时或产品错误不是可忽略阻塞。
 
-**Evidence**：`campaign-report.json/.md`、`runtime-attestation.json`、逐步骤 `evidence\`、provider 报告和远端 pipeline 路由/cleanup 证据。
+**Evidence**：`campaign-report.json/.md`、`runtime-attestation.json`、`mcp-stop.json`、逐步骤 `evidence\`、provider 报告和远端 pipeline 路由/cleanup 证据。driver 只能把 frozen installer 文件身份记录为 Artifact Verification；runtime attestation 与 packaged MCP stop 是独立运行事实，均不得冒充 installer install/start/stop/uninstall。
 
 **Cleanup responsibility**：driver 清理它捕获到身份的 MCP 资源；remote-pipeline 只清理精确 Linux campaign root；失败时不得用宽泛命令补清。
 
@@ -165,10 +165,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1
 
 **Expected**：六类基线逐项 PASS、validation quarantine 已删除；packaged finalizer 将 cleanup report 同步进入 backup、尚保留的 campaign JSON/Markdown 与结果根 JSON/Markdown summary；Cleanup 单项绝不把未完成的其他 section 宣称为 PASS。
 
-**Stop**：任一残留/漂移、summary 无法更新或 cleanup FAIL 时，最终结论必须 FAIL；保留 quarantine、backup、结果和结构化错误，不进行宽泛删除。
+**Stop**：任一残留/漂移、summary 无法更新或 cleanup FAIL 时，最终结论必须 FAIL；已绑定 campaign/lane 后发现的 baseline 完整性错误会作为独立 attempted prerequisite 并入 campaign/summary FAIL，不能让报告留在 pending；保留 quarantine、backup、结果和结构化错误，不进行宽泛删除。
 
 **Evidence**：NSIS cleanup report、最终 campaign JSON/Markdown、`validation-summary.json/.md` 与失败时的 recovery quarantine 路径。
 
 **Cleanup responsibility**：Cleanup 恢复本地机器；操作者核对 MSI、NSIS、core、七 provider、75 工具、pipeline、cleanup 八个独立 section 后归档。`-RemoveResults` 仅在证据已有独立副本时使用，并在 finalizer 成功后执行；backup 最后由操作者按验证资料保留策略处置。
 
-判定规则：只有实际工具响应与断言均满足才是 PASS；真实前置缺失是 BLOCKED；产品错误、摘要/目录漂移、意外审批错误、SSH fallback、远端或本地清理失败、summary 回写失败、secret 扫描失败均是 FAIL。macOS 侧的 `package_verified` 不是 Windows PASS，Cleanup PASS 也不单独等于整场 PASS。
+判定规则：每个目标统一输出 `phase_status = NOT_RUN | BLOCKED | PASS | FAIL`、`attempted`、原始执行事实与 required evidence。`NOT_RUN` 和 `BLOCKED` 的目标都必须 `attempted=false`，其中只有具名 prerequisite 才是 `BLOCKED`；`FAIL` 要求目标已尝试，或尝试后的 required evidence 缺失/写入失败。真实 MCP response 或 transport/product error 与开始/结束时间即使在后置断言失败时也必须保留。只有实际工具响应与断言均满足才是 PASS；产品错误、摘要/目录漂移、意外审批错误、SSH fallback、远端或本地清理失败、summary 回写失败、secret 扫描失败均是 FAIL。
+
+每份 campaign report 同时保存冻结 `validation_catalog`：scenario、target step、supporting/cleanup step 和 75 工具的 `scenario_id/step_id` 归属必须完整且唯一。持久化后删除失败 scenario、省略未触发 cleanup 或改写工具归属都会让重新派生失败，不得用当前数组长度充当预期覆盖数。
+
+`artifact_verified` 与 `installer_executed` 是独立事实：冻结安装包名称/大小/SHA-256 匹配只能让 artifact phase PASS，runtime attestation、MCP start/stop 和 cleanup 基线恢复也都不能证明人工 installer 动作发生。当前 Runbook 没有机械记录 Explorer/UAC 安装与官方卸载的真实命令、退出码和时间，因此 install/start/stop/uninstall 保持 `NOT_RUN`、`installer_executed=false`，MSI/NSIS installer section 不得 PASS；正式票 29 开跑前必须先补齐并审核真实 lifecycle execution-fact 入口。macOS 侧的 `package_verified` 不是 Windows PASS，Cleanup PASS 也不单独等于整场 PASS。
+
+`core_only` 只用于定向诊断：它执行与 `nsis_core` 相同的 core、七 provider、75 工具和 remote pipeline 合同，但 MSI/NSIS installer section 都保持 `NOT_RUN`。它可以收集票 28 所需根因证据，不能替代正式安装器 lane 或票 29 的最终全量验收。

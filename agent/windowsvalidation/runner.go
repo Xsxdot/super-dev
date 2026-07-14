@@ -29,9 +29,6 @@ import (
 )
 
 const (
-	verdictPass                = "PASS"
-	verdictFail                = "FAIL"
-	verdictBlocked             = "BLOCKED"
 	fixtureAuthorizationPrefix = "Bearer superdev-validation-"
 )
 
@@ -62,44 +59,66 @@ type RunOptions struct {
 
 // ToolEvidenceRow 是最终 75 工具表中的一行。
 type ToolEvidenceRow struct {
-	Tool          string `json:"tool"`
-	ScenarioID    string `json:"scenario_id"`
-	StepID        string `json:"step_id"`
-	Verdict       string `json:"verdict"`
-	Outcome       string `json:"outcome,omitempty"`
-	EvidencePath  string `json:"evidence_path,omitempty"`
-	Error         string `json:"error,omitempty"`
-	StartedAtUTC  string `json:"started_at_utc,omitempty"`
-	FinishedAtUTC string `json:"finished_at_utc,omitempty"`
+	Tool           string           `json:"tool"`
+	ScenarioID     string           `json:"scenario_id"`
+	StepID         string           `json:"step_id"`
+	Result         ValidationResult `json:"result"`
+	Outcome        string           `json:"outcome,omitempty"`
+	InlineEvidence map[string]any   `json:"inline_evidence,omitempty"`
 }
 
 // StepExecution 保存 supporting 与 primary 步骤的统一执行摘要。
 type StepExecution struct {
-	StepID       string `json:"step_id"`
-	Tool         string `json:"tool"`
-	Coverage     string `json:"coverage"`
-	Verdict      string `json:"verdict"`
-	Outcome      string `json:"outcome,omitempty"`
-	EvidencePath string `json:"evidence_path,omitempty"`
-	Error        string `json:"error,omitempty"`
+	StepID         string           `json:"step_id"`
+	Tool           string           `json:"tool"`
+	Coverage       string           `json:"coverage"`
+	Result         ValidationResult `json:"result"`
+	Outcome        string           `json:"outcome,omitempty"`
+	Prerequisites  []StepExecution  `json:"prerequisites,omitempty"`
+	InlineEvidence map[string]any   `json:"inline_evidence,omitempty"`
 }
 
 // ScenarioExecution 保存一个固定能力场景的步骤与 cleanup 结果。
 type ScenarioExecution struct {
-	ID      string          `json:"id"`
-	Title   string          `json:"title"`
-	Verdict string          `json:"verdict"`
-	Steps   []StepExecution `json:"steps"`
-	Cleanup []StepExecution `json:"cleanup"`
+	ID            string           `json:"id"`
+	Title         string           `json:"title"`
+	Result        ValidationResult `json:"result"`
+	Prerequisites []StepExecution  `json:"prerequisites"`
+	Steps         []StepExecution  `json:"steps"`
+	Cleanup       []StepExecution  `json:"cleanup"`
+}
+
+// StepCatalogEntry 保存冻结场景中一个步骤不可删减的身份合同。
+type StepCatalogEntry struct {
+	StepID   string `json:"step_id"`
+	Tool     string `json:"tool"`
+	Coverage string `json:"coverage"`
+}
+
+// ScenarioCatalogEntry 保存冻结场景及其 target/cleanup 步骤目录。
+type ScenarioCatalogEntry struct {
+	ID      string             `json:"id"`
+	Title   string             `json:"title"`
+	Steps   []StepCatalogEntry `json:"steps"`
+	Cleanup []StepCatalogEntry `json:"cleanup"`
+}
+
+// ValidationCatalog 把本次报告绑定到冻结 scenario、step 与 75 工具归属。
+type ValidationCatalog struct {
+	Scenarios []ScenarioCatalogEntry `json:"scenarios"`
+	Coverage  []CoverageAssignment   `json:"coverage"`
 }
 
 // ProviderExecution 保存七语言各自的运行与调试结论。
 type ProviderExecution struct {
-	Provider       string `json:"provider"`
-	RuntimeVerdict string `json:"runtime_verdict"`
-	DebugVerdict   string `json:"debug_verdict"`
-	EvidencePath   string `json:"evidence_path,omitempty"`
-	Reason         string `json:"reason,omitempty"`
+	Provider       string           `json:"provider"`
+	Result         ValidationResult `json:"result"`
+	Runtime        ValidationResult `json:"runtime"`
+	Debug          ValidationResult `json:"debug"`
+	Prerequisites  []StepExecution  `json:"prerequisites"`
+	EvidencePath   string           `json:"evidence_path,omitempty"`
+	InlineEvidence map[string]any   `json:"inline_evidence,omitempty"`
+	Reason         string           `json:"reason,omitempty"`
 }
 
 // RuntimeAttestation 保存 installed MCP/sidecar 与冻结源面的双向比对。
@@ -110,14 +129,15 @@ type RuntimeAttestation struct {
 	ToolNames       []string              `json:"tool_names"`
 	ProviderNames   []string              `json:"provider_names"`
 	Sidecars        []PackageFileIdentity `json:"sidecars"`
-	Verdict         string                `json:"verdict"`
+	Result          ValidationResult      `json:"result"`
+	InlineEvidence  map[string]any        `json:"inline_evidence,omitempty"`
 }
 
 // ReportSection 保存最终报告中一个固定验收面的独立状态。
 type ReportSection struct {
-	Status       string `json:"status"`
-	EvidencePath string `json:"evidence_path,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	Result       ValidationResult `json:"result"`
+	EvidencePath string           `json:"evidence_path,omitempty"`
+	Reason       string           `json:"reason,omitempty"`
 }
 
 // ReportSections 分开展示安装器、core、provider、工具、pipeline 与 cleanup。
@@ -136,21 +156,25 @@ type CampaignReport struct {
 	SchemaVersion      int                   `json:"schema_version"`
 	Kind               string                `json:"kind"`
 	CampaignID         string                `json:"campaign_id"`
-	Status             string                `json:"status"`
-	FunctionalStatus   string                `json:"functional_status"`
+	Result             ValidationResult      `json:"result"`
+	Functional         ValidationResult      `json:"functional_result"`
 	FailureStage       string                `json:"failure_stage,omitempty"`
 	FailureReason      string                `json:"failure_reason,omitempty"`
 	BuildCommit        string                `json:"build_commit"`
 	ProductVersion     string                `json:"product_version"`
 	Target             string                `json:"target"`
 	Lane               string                `json:"lane"`
+	Installer          InstallerExecution    `json:"installer"`
 	RuntimeAttestation RuntimeAttestation    `json:"runtime_attestation"`
 	InstallerChecks    []PackageFileIdentity `json:"installer_checks"`
+	Prerequisites      []StepExecution       `json:"prerequisites"`
+	Operations         []StepExecution       `json:"operations"`
+	ValidationCatalog  ValidationCatalog     `json:"validation_catalog"`
 	Scenarios          []ScenarioExecution   `json:"scenarios"`
 	Providers          []ProviderExecution   `json:"providers"`
 	ToolRows           []ToolEvidenceRow     `json:"tool_rows"`
 	Sections           ReportSections        `json:"sections"`
-	Cleanup            map[string]any        `json:"cleanup"`
+	Cleanup            CleanupRecord         `json:"cleanup"`
 	KnownAnomalies     []map[string]any      `json:"known_anomalies"`
 	StartedAtUTC       string                `json:"started_at_utc"`
 	FinishedAtUTC      string                `json:"finished_at_utc"`
@@ -158,12 +182,22 @@ type CampaignReport struct {
 
 // ScenarioExecutor 执行固定场景并持有 campaign 内存变量。
 type ScenarioExecutor struct {
-	client     *MCPProcess
+	client     mcpToolCaller
 	redactor   *Redactor
 	resultsDir string
+	campaignID string
+	lane       string
 	variables  map[string]any
 	passed     map[string]bool
 	toolRows   []ToolEvidenceRow
+}
+
+func (e *ScenarioExecutor) logFields(fields map[string]any) map[string]any {
+	contextual := map[string]any{"campaign_id": e.campaignID, "lane": e.lane}
+	for key, value := range fields {
+		contextual[key] = value
+	}
+	return contextual
 }
 
 // RunCampaign 在 Windows x64 上执行已安装 packaged MCP 的固定验证包。
@@ -171,9 +205,10 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	log := logger.GetLogger().WithEntryName("WindowsValidationCampaign")
 	stage := "platform_gate"
 	campaignID := ""
+	lane := ""
 	defer func() {
 		if runErr != nil {
-			log.WithErr(runErr).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID}).Error("Windows packaged MCP campaign 失败")
+			log.WithErr(runErr).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": lane}).Error("Windows packaged MCP campaign 失败")
 		}
 	}()
 	if err := ValidateExecutionPlatform(runtime.GOOS, runtime.GOARCH); err != nil {
@@ -200,8 +235,14 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	if err := validateRuntimeInput(input); err != nil {
 		return CampaignReport{}, err
 	}
+	lane = laneOrDefault(input.Lane)
 	stage = "verify_lane_installer"
-	installerChecks, err := VerifyInstallerForLane(input.InstallerDirectory, laneOrDefault(input.Lane), source.Frozen.Installers)
+	installerVerificationStarted := time.Now().UTC()
+	installerChecks, err := VerifyInstallerForLane(input.InstallerDirectory, lane, source.Frozen.Installers)
+	if err != nil {
+		return CampaignReport{}, err
+	}
+	installer, err := artifactOnlyInstaller(lane, installerChecks, installerVerificationStarted, time.Now().UTC())
 	if err != nil {
 		return CampaignReport{}, err
 	}
@@ -230,39 +271,48 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	if agentURL == "" {
 		agentURL = "http://127.0.0.1:57017"
 	}
-	log.WithFields(map[string]any{"campaign_id": campaignID, "package_root": options.PackageRoot, "results_dir": resultsDir}).Info("开始 Windows packaged MCP campaign")
+	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "package_root": options.PackageRoot, "results_dir": resultsDir}).Info("开始 Windows packaged MCP campaign")
 	stage = "start_packaged_mcp"
 	client, err := StartMCPProcess(ctx, input.MCPPath, agentURL)
 	if err != nil {
-		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, stage, err)
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, RuntimeAttestation{}, stage, err)
 		return CampaignReport{}, err
 	}
-	defer client.Close()
+	clientClosed := false
+	defer func() {
+		if !clientClosed {
+			_ = client.Close()
+		}
+	}()
 	stage = "runtime_attestation"
-	attestation, err := attestRuntime(ctx, client, source, input.MCPPath, resultsDir, redactor)
+	attestation, err := attestRuntime(ctx, client, source, input.MCPPath, resultsDir, redactor, campaignID, lane)
 	if err != nil {
-		log.WithErr(err).Error("运行时身份门禁失败")
-		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, stage, err)
+		log.WithErr(err).WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage}).Error("运行时身份门禁失败")
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, attestation, stage, err)
 		return CampaignReport{}, err
 	}
-	if laneOrDefault(input.Lane) == "msi_smoke" {
+	if lane == "msi_smoke" {
+		stage = "stop_packaged_mcp"
+		stopExecution := recordPackagedMCPStop(client, resultsDir, redactor, campaignID, lane)
+		clientClosed = true
+		functional := aggregateResult("MSI packaged runtime smoke", 2, []ValidationResult{attestation.Result, stopExecution.Result})
 		report := CampaignReport{
-			SchemaVersion: 1, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
-			Status: pendingCampaignStatus(verdictPass), FunctionalStatus: verdictPass,
+			SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+			Functional:  functional,
 			BuildCommit: source.Frozen.Build.GitCommit, ProductVersion: source.Frozen.Build.ProductVersion,
-			Target: "Windows 10 x64", Lane: "msi_smoke", RuntimeAttestation: attestation,
-			InstallerChecks: installerChecks,
-			ToolRows:        ensureAllToolRows(source.Coverage, nil),
-			Providers:       blockedProviderMatrix(source.Fixtures, "not executed in the independent MSI smoke lane"),
-			Scenarios:       blockedScenarioMatrix(source.Scenarios, "not executed in the independent MSI smoke lane"),
-			Cleanup: map[string]any{
-				"status": "PENDING", "reason": "run Cleanup-Validation.ps1 to compare and restore the prepared baseline",
-				"campaign_workspace": workspaceRoot,
-			},
-			KnownAnomalies: source.Frozen.KnownBaselineExceptions, StartedAtUTC: started.Format(time.RFC3339Nano),
+			Target: "Windows 10 x64", Lane: "msi_smoke", Installer: installer, RuntimeAttestation: attestation,
+			InstallerChecks:   installerChecks,
+			Operations:        []StepExecution{stopExecution},
+			ValidationCatalog: buildValidationCatalog(source.Scenarios, source.Coverage),
+			ToolRows:          ensureAllToolRows(source.Coverage, nil, notRunResult("not executed in the independent MSI smoke lane")),
+			Providers:         notRunProviderMatrix(source.Fixtures, "not executed in the independent MSI smoke lane"),
+			Scenarios:         notRunScenarioMatrix(source.Scenarios, "not executed in the independent MSI smoke lane"),
+			Cleanup:           pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
+			KnownAnomalies:    source.Frozen.KnownBaselineExceptions, StartedAtUTC: started.Format(time.RFC3339Nano),
 			FinishedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		report.Sections = buildReportSections(report)
+		report.Result = deriveCampaignCompletionResult("MSI smoke campaign", report)
 		stage = "write_msi_report"
 		if err := writeCampaignReports(resultsDir, redactor, report); err != nil {
 			return CampaignReport{}, err
@@ -270,15 +320,17 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		if err := writeValidationSummary(input.ResultsRoot, redactor, report); err != nil {
 			return CampaignReport{}, err
 		}
-		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": "msi_smoke", "status": report.Status}).Info("Windows MSI packaged sidecar smoke 完成")
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": "msi_smoke", "phase_status": report.Result.PhaseStatus, "attempted": report.Result.Attempted}).Info("Windows MSI packaged sidecar smoke 完成")
 		return report, nil
 	}
 	executor := &ScenarioExecutor{
 		client: client, redactor: redactor, resultsDir: resultsDir,
+		campaignID: campaignID, lane: lane,
 		variables: variables, passed: map[string]bool{},
 	}
 	scenarios := orderedScenarios(source.Scenarios)
 	executions := make([]ScenarioExecution, 0, len(scenarios))
+	campaignPrerequisites := make([]StepExecution, 0, 1)
 	configReady := false
 	for _, scenario := range scenarios {
 		// provider 矩阵必须在远端 pipeline 之前完成；remote 场景在下方单独执行。
@@ -286,16 +338,22 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 			continue
 		}
 		if !configReady && scenario.ID != "identity-observation" && scenario.ID != "config-security-lifecycle" {
-			execution := executor.blockScenario(scenario, "campaign configuration gate did not pass")
+			execution := executor.blockScenario(scenario, "campaign_configuration", "campaign configuration gate did not pass")
 			executions = append(executions, execution)
 			continue
 		}
 		if scenario.ID == "browser-debug" || scenario.ID == "code-debug" {
-			if err := executor.ensureGoRunning(ctx); err != nil {
-				execution := executor.blockScenario(scenario, "Go fixture precondition failed: "+err.Error())
+			prerequisite := executor.ensureGoRunning(ctx, scenario.ID+"-go-fixture-running")
+			if prerequisite.Result.PhaseStatus != PhaseStatusPass {
+				execution := executor.blockScenario(scenario, prerequisite.StepID, "Go fixture precondition failed: "+resultReason(prerequisite.Result))
+				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
 				executions = append(executions, execution)
 				continue
 			}
+			execution := executor.ExecuteScenario(ctx, scenario)
+			execution.Prerequisites = append(execution.Prerequisites, prerequisite)
+			executions = append(executions, execution)
+			continue
 		}
 		execution := executor.ExecuteScenario(ctx, scenario)
 		executions = append(executions, execution)
@@ -305,60 +363,69 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 			configReady = executor.configurationReady()
 		}
 	}
-	providers := blockedProviderMatrix(source.Fixtures, "campaign configuration gate did not establish a project and Go deployment")
+	providers := blockedProviderMatrix(source.Fixtures, "campaign_configuration", "campaign configuration gate did not establish a project and Go deployment")
 	if configReady {
-		if err := executor.ensureGoStopped(ctx); err != nil {
-			providers = blockedProviderMatrix(source.Fixtures, "primary Go fixture cleanup gate failed: "+err.Error())
-			for index := range providers {
-				if providers[index].Provider == "go" {
-					providers[index].RuntimeVerdict = verdictFail
-				}
-			}
+		prerequisite := executor.ensureGoStopped(ctx, "provider-go-fixture-stopped")
+		campaignPrerequisites = append(campaignPrerequisites, prerequisite)
+		if prerequisite.Result.PhaseStatus != PhaseStatusPass {
+			reason := "primary Go fixture cleanup gate failed: " + resultReason(prerequisite.Result)
+			providers = blockedProviderMatrix(source.Fixtures, prerequisite.StepID, reason)
 		} else {
 			providers = executor.ExecuteProviderMatrix(ctx, source.Fixtures)
 		}
 	}
 	if remote, found := scenarioByID(scenarios, "remote-pipeline"); found {
 		if !configReady {
-			executions = append(executions, executor.blockScenario(remote, "campaign configuration gate did not pass"))
+			executions = append(executions, executor.blockScenario(remote, "campaign_configuration", "campaign configuration gate did not pass"))
 		} else {
-			available, preflightErr := executor.preflightRemoteHost(ctx, input.LinuxHostID)
+			available, prerequisite := executor.preflightRemoteHost(ctx, input.LinuxHostID)
 			switch {
-			case preflightErr != nil:
-				executions = append(executions, executor.failScenario(remote, "remote Host ID preflight failed: "+preflightErr.Error()))
+			case prerequisite.Result.PhaseStatus != PhaseStatusPass:
+				execution := executor.blockScenario(remote, "remote_host_available", "remote Host ID preflight failed: "+resultReason(prerequisite.Result))
+				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
+				executions = append(executions, execution)
 			case !available:
-				executions = append(executions, executor.blockScenario(remote, "configured dedicated Linux Host ID is not currently available as a non-self target"))
+				execution := executor.blockScenario(remote, "remote_host_available", "configured dedicated Linux Host ID is not currently available as a non-self target")
+				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
+				executions = append(executions, execution)
 			default:
-				executions = append(executions, executor.ExecuteScenario(ctx, remote))
+				execution := executor.ExecuteScenario(ctx, remote)
+				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
+				executions = append(executions, execution)
 			}
 		}
 	}
-	toolRows := ensureAllToolRows(source.Coverage, executor.toolRows)
-	functionalStatus := aggregateCampaignStatus(toolRows, providers, executions)
+	toolRows := ensureAllToolRows(source.Coverage, executor.toolRows, notRunResult("primary step was not reached"))
+	functionalResult := aggregateCampaignResult(toolRows, providers, executions, source.Frozen.SourceSurface.MCPTools.Names, source.Frozen.SourceSurface.LanguageRuntimeProviders.Names, source.Coverage)
+	stage = "stop_packaged_mcp"
+	stopExecution := recordPackagedMCPStop(client, resultsDir, redactor, campaignID, lane)
+	clientClosed = true
+	functionalResult = aggregateResult("NSIS functional execution and packaged MCP stop", 2, []ValidationResult{functionalResult, stopExecution.Result})
 	report = CampaignReport{
-		SchemaVersion:      1,
+		SchemaVersion:      2,
 		Kind:               "superdev.windows-validation.campaign-report",
 		CampaignID:         campaignID,
-		Status:             pendingCampaignStatus(functionalStatus),
-		FunctionalStatus:   functionalStatus,
+		Functional:         functionalResult,
 		BuildCommit:        source.Frozen.Build.GitCommit,
 		ProductVersion:     source.Frozen.Build.ProductVersion,
 		Target:             "Windows 10 x64",
 		Lane:               laneOrDefault(input.Lane),
+		Installer:          installer,
 		RuntimeAttestation: attestation,
 		InstallerChecks:    installerChecks,
+		Operations:         []StepExecution{stopExecution},
+		ValidationCatalog:  buildValidationCatalog(source.Scenarios, source.Coverage),
 		Scenarios:          executions,
 		Providers:          providers,
 		ToolRows:           toolRows,
-		Cleanup: map[string]any{
-			"status": "PENDING", "reason": "run Cleanup-Validation.ps1 to compare and restore the prepared baseline",
-			"campaign_workspace": workspaceRoot,
-		},
-		KnownAnomalies: source.Frozen.KnownBaselineExceptions,
-		StartedAtUTC:   started.Format(time.RFC3339Nano),
-		FinishedAtUTC:  time.Now().UTC().Format(time.RFC3339Nano),
+		Prerequisites:      campaignPrerequisites,
+		Cleanup:            pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
+		KnownAnomalies:     source.Frozen.KnownBaselineExceptions,
+		StartedAtUTC:       started.Format(time.RFC3339Nano),
+		FinishedAtUTC:      time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	report.Sections = buildReportSections(report)
+	report.Result = deriveCampaignCompletionResult("NSIS core campaign", report)
 	stage = "write_nsis_report"
 	if err := writeCampaignReports(resultsDir, redactor, report); err != nil {
 		return CampaignReport{}, err
@@ -367,11 +434,16 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		return CampaignReport{}, err
 	}
 	stage = "complete"
-	log.WithFields(map[string]any{"campaign_id": campaignID, "status": report.Status, "functional_status": functionalStatus, "tool_rows": len(toolRows), "provider_rows": len(providers)}).Info("Windows packaged MCP campaign 执行完成；等待最终 cleanup")
+	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "phase_status": report.Result.PhaseStatus, "functional_status": functionalResult.PhaseStatus, "tool_rows": len(toolRows), "provider_rows": len(providers)}).Info("Windows packaged MCP campaign 执行完成；等待最终 cleanup")
 	return report, nil
 }
 
 func writeCampaignReports(resultsDir string, redactor *Redactor, report CampaignReport) error {
+	derived, err := rederiveCampaignReport(report)
+	if err != nil {
+		return fmt.Errorf("derive campaign report before persistence: %w", err)
+	}
+	report = derived
 	redacted := redactor.Redact(RawMessageMap(report))
 	if err := writeJSON(filepath.Join(resultsDir, "campaign-report.json"), redacted); err != nil {
 		return err
@@ -387,76 +459,112 @@ func writeCampaignReports(resultsDir string, redactor *Redactor, report Campaign
 	return writeMarkdownReport(filepath.Join(resultsDir, "campaign-report.md"), safeReport)
 }
 
-func persistGateFailure(resultsDir string, redactor *Redactor, source PackageSource, input RuntimeInput, campaignID string, started time.Time, installerChecks []PackageFileIdentity, stage string, cause error) {
+func persistGateFailure(resultsDir string, redactor *Redactor, source PackageSource, input RuntimeInput, campaignID string, started time.Time, installerChecks []PackageFileIdentity, attestation RuntimeAttestation, stage string, cause error) {
 	reason := stage + ": " + cause.Error()
+	installer, installerErr := artifactOnlyInstaller(laneOrDefault(input.Lane), installerChecks, started, time.Now().UTC())
+	if installerErr != nil {
+		logger.GetLogger().WithEntryName("WindowsValidationReport").WithErr(installerErr).WithFields(map[string]any{"campaign_id": campaignID, "lane": laneOrDefault(input.Lane), "stage": stage}).Error("身份门禁失败时无法派生安装包事实")
+		return
+	}
+	if attestation.Result.PhaseStatus == "" {
+		attestation.Result = blockedResult("packaged_mcp_started", reason)
+		if stage == "runtime_attestation" {
+			attestation.Result = attemptedResult(false, cause.Error(), started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
+		}
+	}
+	functional := blockedResult(stage, reason)
+	prerequisiteResult := attemptedResult(false, cause.Error(), started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
+	if stage == "runtime_attestation" && attestation.Result.PhaseStatus != "" {
+		prerequisiteResult = attestation.Result
+	}
+	prerequisite := StepExecution{
+		StepID: stage, Result: prerequisiteResult,
+	}
+	blocked := blockedResult(stage, reason)
 	report := CampaignReport{
-		SchemaVersion: 1, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
-		Status: verdictFail, FunctionalStatus: verdictFail, FailureStage: stage, FailureReason: cause.Error(),
+		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+		Functional: functional, FailureStage: stage, FailureReason: cause.Error(),
 		BuildCommit: source.Frozen.Build.GitCommit, ProductVersion: source.Frozen.Build.ProductVersion,
 		Target: "Windows 10 x64", Lane: laneOrDefault(input.Lane),
-		RuntimeAttestation: RuntimeAttestation{Verdict: verdictFail}, InstallerChecks: installerChecks,
-		Scenarios:      blockedScenarioMatrix(source.Scenarios, reason),
-		Providers:      blockedProviderMatrix(source.Fixtures, reason),
-		ToolRows:       ensureAllToolRows(source.Coverage, nil),
-		Cleanup:        map[string]any{"status": "PENDING", "reason": "run Cleanup-Validation.ps1 even after a gate failure"},
-		KnownAnomalies: source.Frozen.KnownBaselineExceptions,
-		StartedAtUTC:   started.Format(time.RFC3339Nano), FinishedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
+		Installer: installer, RuntimeAttestation: attestation, InstallerChecks: installerChecks,
+		ValidationCatalog: buildValidationCatalog(source.Scenarios, source.Coverage),
+		Prerequisites:     []StepExecution{prerequisite},
+		Scenarios:         blockedScenarioMatrix(source.Scenarios, stage, reason),
+		Providers:         blockedProviderMatrix(source.Fixtures, stage, reason),
+		ToolRows:          ensureAllToolRows(source.Coverage, nil, blocked),
+		Cleanup:           pendingCleanupRecord("run Cleanup-Validation.ps1 even after a gate failure", ""),
+		KnownAnomalies:    source.Frozen.KnownBaselineExceptions,
+		StartedAtUTC:      started.Format(time.RFC3339Nano), FinishedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	report.Sections = buildReportSections(report)
+	report.Result = deriveCampaignCompletionResult("failed campaign gate", report)
 	log := logger.GetLogger().WithEntryName("WindowsValidationReport")
 	if err := writeCampaignReports(resultsDir, redactor, report); err != nil {
-		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID}).Error("身份门禁失败报告写入失败")
+		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane)}).Error("身份门禁失败报告写入失败")
 		return
 	}
 	if err := writeValidationSummary(input.ResultsRoot, redactor, report); err != nil {
-		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID}).Error("身份门禁失败聚合摘要写入失败")
+		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane)}).Error("身份门禁失败聚合摘要写入失败")
 	}
 }
 
 // ExecuteScenario 执行一个固定场景；失败后仍执行受 guard 保护的 cleanup。
 func (e *ScenarioExecutor) ExecuteScenario(ctx context.Context, scenario Scenario) (execution ScenarioExecution) {
 	log := logger.GetLogger().WithEntryName("WindowsValidationScenario")
-	log.WithFields(map[string]any{"scenario": scenario.ID, "step_count": len(scenario.Steps)}).Info("开始执行固定验证场景")
+	log.WithFields(e.logFields(map[string]any{"scenario": scenario.ID, "step_count": len(scenario.Steps)})).Info("开始执行固定验证场景")
 	defer func() {
-		fields := map[string]any{"scenario": scenario.ID, "verdict": execution.Verdict}
-		if execution.Verdict == verdictFail {
+		fields := e.logFields(map[string]any{"scenario": scenario.ID, "phase_status": execution.Result.PhaseStatus, "attempted": execution.Result.Attempted})
+		if execution.Result.PhaseStatus == PhaseStatusFail {
 			log.WithFields(fields).Error("固定验证场景执行失败")
 		} else {
 			log.WithFields(fields).Info("固定验证场景执行完成")
 		}
 	}()
-	execution = ScenarioExecution{ID: scenario.ID, Title: scenario.Title, Verdict: verdictPass}
+	execution = ScenarioExecution{ID: scenario.ID, Title: scenario.Title}
+	variableCheckStarted := time.Now().UTC()
 	if err := e.mergeScenarioVariables(scenario); err != nil {
-		execution = e.blockScenario(scenario, err.Error())
+		execution = e.blockScenario(scenario, "scenario_variables", err.Error())
+		execution.Prerequisites = append(execution.Prerequisites, e.recordLocalPrerequisiteFailure(scenario.ID, "scenario-variables", "validate_scenario_variables", variableCheckStarted, err))
 		return execution
 	}
-	failed := false
+	blockingStep := ""
 	for _, step := range scenario.Steps {
-		if failed {
-			blocked := StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictBlocked, Error: "blocked by an earlier step in the same scenario"}
+		if blockingStep != "" {
+			reason := "blocked by earlier step " + blockingStep + " in the same scenario"
+			blocked := StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: blockedResult(blockingStep, reason)}
 			execution.Steps = append(execution.Steps, blocked)
 			e.appendToolRow(scenario.ID, step, blocked)
 			continue
 		}
 		result := e.executeStep(ctx, scenario.ID, step)
 		execution.Steps = append(execution.Steps, result)
-		e.passed[step.ID] = result.Verdict == verdictPass
+		e.passed[step.ID] = result.Result.PhaseStatus == PhaseStatusPass
 		e.appendToolRow(scenario.ID, step, result)
-		if result.Verdict != verdictPass {
-			failed = true
-			execution.Verdict = result.Verdict
+		if result.Result.PhaseStatus != PhaseStatusPass {
+			blockingStep = step.ID
 		}
 	}
 	for _, step := range scenario.Cleanup {
 		if !ShouldRunCleanup(step.RunIf, e.variables, e.passed) {
+			execution.Cleanup = append(execution.Cleanup, StepExecution{
+				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage,
+				Result: notRunResult("cleanup guard did not require this fixed step"),
+			})
 			continue
 		}
 		result := e.executeStep(ctx, scenario.ID+"-cleanup", step)
 		execution.Cleanup = append(execution.Cleanup, result)
-		if result.Verdict != verdictPass {
-			execution.Verdict = verdictFail
+	}
+	children := make([]ValidationResult, 0, len(execution.Steps)+len(execution.Cleanup))
+	for _, step := range execution.Steps {
+		children = append(children, step.Result)
+	}
+	for _, step := range execution.Cleanup {
+		if step.Result.PhaseStatus != PhaseStatusNotRun {
+			children = append(children, step.Result)
 		}
 	}
+	execution.Result = aggregateResult(scenario.ID+" scenario", len(children), children)
 	return execution
 }
 
@@ -516,17 +624,28 @@ func ShouldRunCleanup(condition string, variables map[string]any, passed map[str
 	return true
 }
 
+type mcpCallAttempt struct {
+	StartedAtUTC  string
+	FinishedAtUTC string
+	Response      map[string]any
+	TransportErr  string
+	AssertionErr  string
+}
+
 func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, step ScenarioStep) StepExecution {
 	started := time.Now().UTC()
 	log := logger.GetLogger().WithEntryName("WindowsValidationStep")
-	log.WithFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool}).Info("开始执行 MCP 验证步骤")
+	log.WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool})).Info("开始执行 MCP 验证步骤")
 	rendered, err := RenderValue(step.Arguments, e.variables)
 	if err != nil {
-		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictFail, Error: err.Error()}
+		prerequisite := e.recordLocalPrerequisiteFailure(scenarioID, step.ID+"-rendered-arguments", "render_arguments", started, err)
+		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: blockedResult("rendered_arguments", err.Error()), Prerequisites: []StepExecution{prerequisite}}
 	}
 	arguments, ok := rendered.(map[string]any)
 	if !ok {
-		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictFail, Error: "rendered arguments are not an object"}
+		renderErr := fmt.Errorf("rendered arguments are not an object")
+		prerequisite := e.recordLocalPrerequisiteFailure(scenarioID, step.ID+"-rendered-arguments", "validate_rendered_arguments", started, renderErr)
+		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: blockedResult("rendered_arguments", renderErr.Error()), Prerequisites: []StepExecution{prerequisite}}
 	}
 	deadline := time.Now()
 	if step.Poll != nil {
@@ -534,11 +653,30 @@ func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, s
 	}
 	var result ToolCallResult
 	var outcome string
+	var attempts []mcpCallAttempt
 	for {
-		result, err = e.client.CallTool(ctx, step.Tool, arguments)
-		if err == nil {
-			outcome, err = EvaluateStepResult(step, result, e.variables)
+		attemptStarted := time.Now().UTC()
+		callResult, callErr := e.client.CallTool(ctx, step.Tool, arguments)
+		attemptFinished := time.Now().UTC()
+		assertionErr := callErr
+		attemptOutcome := ""
+		if assertionErr == nil {
+			attemptOutcome, assertionErr = EvaluateStepResult(step, callResult, e.variables)
 		}
+		attempt := mcpCallAttempt{
+			StartedAtUTC: attemptStarted.Format(time.RFC3339Nano), FinishedAtUTC: attemptFinished.Format(time.RFC3339Nano),
+			Response: RawMessageMap(callResult),
+		}
+		if callErr != nil {
+			attempt.TransportErr = callErr.Error()
+		}
+		if assertionErr != nil {
+			attempt.AssertionErr = assertionErr.Error()
+		}
+		attempts = append(attempts, attempt)
+		result = callResult
+		err = assertionErr
+		outcome = attemptOutcome
 		if err == nil || step.Poll == nil || result.IsError || !time.Now().Before(deadline) {
 			break
 		}
@@ -549,7 +687,7 @@ func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, s
 			err = ctx.Err()
 		case <-timer.C:
 		}
-		if err == ctx.Err() && err != nil {
+		if ctx.Err() != nil {
 			break
 		}
 	}
@@ -563,10 +701,6 @@ func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, s
 		}
 	}
 	root := RawMessageMap(result)
-	evidencePath, evidenceErr := e.recordStepEvidence(scenarioID, step, arguments, root, err)
-	if err == nil && evidenceErr != nil {
-		err = evidenceErr
-	}
 	if err == nil {
 		for name, path := range step.Capture {
 			value, found := LookupPath(root, path)
@@ -586,43 +720,75 @@ func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, s
 			}
 		}
 	}
-	finished := time.Now().UTC()
-	if err != nil {
-		log.WithErr(err).WithFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool}).Error("MCP 验证步骤失败")
-		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictFail, EvidencePath: evidencePath, Error: err.Error()}
+	evidence, inlineEvidence, evidenceErr := e.recordStepEvidence(scenarioID, step, arguments, attempts, root, err)
+	if err == nil && evidenceErr != nil {
+		err = evidenceErr
 	}
-	log.WithFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "outcome": outcome, "duration_ms": finished.Sub(started).Milliseconds()}).Info("MCP 验证步骤完成")
-	return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictPass, Outcome: outcome, EvidencePath: evidencePath}
+	finished := time.Now().UTC()
+	failure := ""
+	if err != nil {
+		failure = err.Error()
+	}
+	resultContract := attemptedResult(err == nil, failure, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), evidence)
+	if err != nil {
+		log.WithErr(err).WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "attempt_count": len(attempts), "evidence_count": len(evidence)})).Error("MCP 验证步骤失败")
+		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: resultContract, Outcome: outcome, InlineEvidence: inlineEvidence}
+	}
+	log.WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "outcome": outcome, "attempt_count": len(attempts), "evidence_count": len(evidence), "duration_ms": finished.Sub(started).Milliseconds()})).Info("MCP 验证步骤完成")
+	return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: resultContract, Outcome: outcome, InlineEvidence: inlineEvidence}
 }
 
-func (e *ScenarioExecutor) recordStepEvidence(scenarioID string, step ScenarioStep, arguments map[string]any, response map[string]any, stepErr error) (string, error) {
+func (e *ScenarioExecutor) recordStepEvidence(scenarioID string, step ScenarioStep, arguments map[string]any, attempts []mcpCallAttempt, response map[string]any, stepErr error) ([]EvidenceRecord, map[string]any, error) {
 	root := filepath.Join(e.resultsDir, "evidence", scenarioID, step.ID)
-	requestValue := map[string]any{"tool": step.Tool, "arguments": arguments}
-	requestCopy := cloneJSONMap(requestValue)
+	relativeRoot := filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID))
+	attemptsRef := filepath.ToSlash(filepath.Join(relativeRoot, "attempts.json"))
+	selectedRef := filepath.ToSlash(filepath.Join(relativeRoot, "evidence.json"))
+	records := []EvidenceRecord{
+		{Name: "call_attempts", Required: true, Ref: attemptsRef},
+		{Name: "selected_evidence", Required: true, Ref: selectedRef},
+	}
+	attemptRows := make([]any, 0, len(attempts))
+	for index, attempt := range attempts {
+		requestCopy := cloneJSONMap(map[string]any{"tool": step.Tool, "arguments": arguments})
+		responseCopy := cloneJSONMap(attempt.Response)
+		applyEvidenceRedactions(requestCopy, responseCopy, step.Evidence.Redact, e.redactor)
+		attemptRows = append(attemptRows, map[string]any{
+			"attempt": index + 1, "started_at_utc": attempt.StartedAtUTC, "finished_at_utc": attempt.FinishedAtUTC,
+			"request": requestCopy, "normalized_response": responseCopy,
+			"transport_error": attempt.TransportErr, "assertion_error": attempt.AssertionErr,
+		})
+	}
+	redactedAttempts := e.redactor.Redact(map[string]any{"attempts": attemptRows})
+	if e.redactor.containsKnownSecret(redactedAttempts) {
+		err := fmt.Errorf("redaction invariant failed before writing MCP attempt evidence")
+		records[0].WriteError = err.Error()
+		return records, nil, err
+	}
+	inline := map[string]any{"call_attempts": redactedAttempts}
+	if err := writeJSON(filepath.Join(root, "attempts.json"), redactedAttempts); err != nil {
+		records[0].WriteError = err.Error()
+		return records, inline, err
+	}
+	records[0].Present = true
 	responseCopy := cloneJSONMap(response)
+	requestCopy := cloneJSONMap(map[string]any{"tool": step.Tool, "arguments": arguments})
 	applyEvidenceRedactions(requestCopy, responseCopy, step.Evidence.Redact, e.redactor)
-	redactedRequest := e.redactor.Redact(requestCopy)
-	redactedResponse := e.redactor.Redact(responseCopy)
-	if e.redactor.containsKnownSecret(redactedRequest) || e.redactor.containsKnownSecret(redactedResponse) {
-		return "", fmt.Errorf("redaction invariant failed before writing step evidence")
-	}
-	if err := writeJSON(filepath.Join(root, "request.json"), redactedRequest); err != nil {
-		return "", err
-	}
-	if err := writeJSON(filepath.Join(root, "response.json"), redactedResponse); err != nil {
-		return "", err
-	}
 	selected := map[string]any{}
 	for _, record := range step.Evidence.Record {
 		if strings.HasPrefix(record, "sha256:") {
 			path := strings.TrimPrefix(record, "sha256:")
 			value, found := LookupPath(response, path)
 			if !found {
-				return filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID)), fmt.Errorf("evidence hash path %s missing", path)
+				err := fmt.Errorf("evidence hash path %s missing", path)
+				records[1].WriteError = err.Error()
+				inline["selected_evidence"] = selected
+				return records, inline, err
 			}
 			digest, size, err := digestEvidenceValue(value)
 			if err != nil {
-				return filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID)), err
+				records[1].WriteError = err.Error()
+				inline["selected_evidence"] = selected
+				return records, inline, err
 			}
 			selected[record] = map[string]any{"sha256": digest, "size_bytes": size}
 			continue
@@ -637,18 +803,25 @@ func (e *ScenarioExecutor) recordStepEvidence(scenarioID string, step ScenarioSt
 		selected["assertion_error"] = stepErr.Error()
 	}
 	if e.redactor.containsKnownSecret(selected) {
-		return filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID)), fmt.Errorf("selected evidence still contains a registered secret")
+		err := fmt.Errorf("selected evidence still contains a registered secret")
+		records[1].WriteError = err.Error()
+		return records, nil, err
 	}
 	encoded := strings.ToLower(CanonicalJSON(selected))
 	for _, forbidden := range step.Evidence.Forbid {
 		if forbidden != "" && strings.Contains(encoded, strings.ToLower(forbidden)) {
-			return filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID)), fmt.Errorf("selected evidence contains forbidden marker %q", forbidden)
+			err := fmt.Errorf("selected evidence contains forbidden marker %q", forbidden)
+			records[1].WriteError = err.Error()
+			return records, nil, err
 		}
 	}
+	inline["selected_evidence"] = selected
 	if err := writeJSON(filepath.Join(root, "evidence.json"), selected); err != nil {
-		return "", err
+		records[1].WriteError = err.Error()
+		return records, inline, err
 	}
-	return filepath.ToSlash(filepath.Join("evidence", scenarioID, step.ID)), nil
+	records[1].Present = true
+	return records, nil, nil
 }
 
 func (e *ScenarioExecutor) mergeScenarioVariables(scenario Scenario) error {
@@ -681,31 +854,64 @@ func (e *ScenarioExecutor) appendToolRow(scenarioID string, step ScenarioStep, e
 		return
 	}
 	e.toolRows = append(e.toolRows, ToolEvidenceRow{
-		Tool: step.Tool, ScenarioID: scenarioID, StepID: step.ID, Verdict: execution.Verdict,
-		Outcome: execution.Outcome, EvidencePath: execution.EvidencePath, Error: execution.Error,
+		Tool: step.Tool, ScenarioID: scenarioID, StepID: step.ID, Result: execution.Result, Outcome: execution.Outcome, InlineEvidence: execution.InlineEvidence,
 	})
 }
 
-func (e *ScenarioExecutor) blockScenario(scenario Scenario, reason string) ScenarioExecution {
-	logger.GetLogger().WithEntryName("WindowsValidationScenario").WithFields(map[string]any{"scenario": scenario.ID, "reason": reason}).Info("固定验证场景受前置条件阻断")
-	execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title, Verdict: verdictBlocked}
+func (e *ScenarioExecutor) blockScenario(scenario Scenario, prerequisite, reason string) ScenarioExecution {
+	logger.GetLogger().WithEntryName("WindowsValidationScenario").WithFields(e.logFields(map[string]any{"scenario": scenario.ID, "prerequisite": prerequisite, "reason": reason})).Info("固定验证场景受前置条件阻断")
+	execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title}
 	for _, step := range scenario.Steps {
-		blocked := StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictBlocked, Error: reason}
+		blocked := StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: blockedResult(prerequisite, reason)}
 		execution.Steps = append(execution.Steps, blocked)
 		e.appendToolRow(scenario.ID, step, blocked)
 	}
+	for _, step := range scenario.Cleanup {
+		execution.Cleanup = append(execution.Cleanup, StepExecution{
+			StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage,
+			Result: notRunResult("scenario was blocked before cleanup resources could exist"),
+		})
+	}
+	execution.Result = aggregateStepExecutions(scenario.ID+" scenario", execution.Steps)
 	return execution
 }
 
-func blockedScenarioMatrix(scenarios []Scenario, reason string) []ScenarioExecution {
+func blockedScenarioMatrix(scenarios []Scenario, prerequisite, reason string) []ScenarioExecution {
 	results := make([]ScenarioExecution, 0, len(scenarios))
 	for _, scenario := range orderedScenarios(scenarios) {
-		execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title, Verdict: verdictBlocked}
+		execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title}
 		for _, step := range scenario.Steps {
 			execution.Steps = append(execution.Steps, StepExecution{
-				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictBlocked, Error: reason,
+				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: blockedResult(prerequisite, reason),
 			})
 		}
+		for _, step := range scenario.Cleanup {
+			execution.Cleanup = append(execution.Cleanup, StepExecution{
+				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage,
+				Result: notRunResult("scenario was blocked before cleanup resources could exist"),
+			})
+		}
+		execution.Result = aggregateStepExecutions(scenario.ID+" scenario", execution.Steps)
+		results = append(results, execution)
+	}
+	return results
+}
+
+func notRunScenarioMatrix(scenarios []Scenario, reason string) []ScenarioExecution {
+	results := make([]ScenarioExecution, 0, len(scenarios))
+	for _, scenario := range orderedScenarios(scenarios) {
+		execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title}
+		for _, step := range scenario.Steps {
+			execution.Steps = append(execution.Steps, StepExecution{
+				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: notRunResult(reason),
+			})
+		}
+		for _, step := range scenario.Cleanup {
+			execution.Cleanup = append(execution.Cleanup, StepExecution{
+				StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: notRunResult(reason),
+			})
+		}
+		execution.Result = aggregateStepExecutions(scenario.ID+" scenario", execution.Steps)
 		results = append(results, execution)
 	}
 	return results
@@ -716,37 +922,66 @@ func (e *ScenarioExecutor) configurationReady() bool {
 	return strings.TrimSpace(projectID) != "" && e.passed["upsert-go-service"] && e.passed["upsert-bootstrap-pipeline"]
 }
 
-func (e *ScenarioExecutor) failScenario(scenario Scenario, reason string) ScenarioExecution {
-	logger.GetLogger().WithEntryName("WindowsValidationScenario").WithFields(map[string]any{"scenario": scenario.ID, "reason": reason}).Error("固定验证场景预检失败")
-	execution := ScenarioExecution{ID: scenario.ID, Title: scenario.Title, Verdict: verdictFail}
-	for _, step := range scenario.Steps {
-		failed := StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Verdict: verdictFail, Error: reason}
-		execution.Steps = append(execution.Steps, failed)
-		e.appendToolRow(scenario.ID, step, failed)
+func (e *ScenarioExecutor) preflightRemoteHost(ctx context.Context, hostID string) (bool, StepExecution) {
+	log := logger.GetLogger().WithEntryName("WindowsValidationRemotePreflight")
+	log.WithFields(e.logFields(map[string]any{"host_id": hostID, "tool": "list_hosts"})).Info("开始核对专用 Linux Host ID")
+	started := time.Now().UTC()
+	result, err := e.client.CallTool(ctx, "list_hosts", map[string]any{})
+	finished := time.Now().UTC()
+	root := RawMessageMap(result)
+	available := false
+	failure := ""
+	switch {
+	case err != nil:
+		failure = err.Error()
+	case result.IsError:
+		failure = "list_hosts returned " + toolErrorCode(result)
+	default:
+		available = remoteHostPresent(root, hostID)
+		if !available {
+			failure = "configured dedicated Linux Host ID is not available as a non-self target"
+		}
 	}
-	return execution
+	relative := filepath.ToSlash(filepath.Join("evidence", "remote-host-preflight.json"))
+	attempt := assertionAttempt("tools/call", map[string]any{"tool": "list_hosts", "arguments": map[string]any{}}, root, started, finished, err)
+	attempt.Tool = "list_hosts"
+	if result.IsError {
+		attempt.ProductError = toolErrorCode(result)
+	}
+	if err == nil && failure != "" {
+		attempt.AssertionError = failure
+	}
+	evidence, safePayload := persistMCPAttemptEvidence(e.resultsDir, relative, "remote_host_preflight", "superdev.windows-validation.remote-host-preflight", []mcpEvidenceAttempt{attempt}, map[string]any{
+		"campaign_id": e.campaignID, "lane": e.lane, "step_id": "remote-host-preflight", "stage": "remote_host_preflight", "tool": "list_hosts",
+		"execution_facts": map[string]any{
+			"attempted": true, "succeeded": failure == "", "failure": failure,
+			"started_at_utc": started.Format(time.RFC3339Nano), "finished_at_utc": finished.Format(time.RFC3339Nano),
+		},
+	}, e.redactor)
+	outcome := "host_unavailable"
+	if available {
+		outcome = "host_available"
+	}
+	contract := attemptedResult(failure == "", failure, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), []EvidenceRecord{evidence})
+	fields := e.logFields(map[string]any{"host_id": hostID, "tool": "list_hosts", "available": available, "phase_status": contract.PhaseStatus, "evidence_ref": relative})
+	if contract.PhaseStatus == PhaseStatusPass {
+		log.WithFields(fields).Info("专用 Linux Host ID 预检完成")
+	} else {
+		log.WithFields(fields).WithField("failure", resultReason(contract)).Error("专用 Linux Host ID 预检失败")
+	}
+	inline := map[string]any(nil)
+	if !evidence.Present {
+		inline = safePayload
+	}
+	return available, StepExecution{StepID: "remote-host-preflight", Tool: "list_hosts", Coverage: CoverageSupporting, Outcome: outcome, Result: contract, InlineEvidence: inline}
 }
 
-func (e *ScenarioExecutor) preflightRemoteHost(ctx context.Context, hostID string) (bool, error) {
-	log := logger.GetLogger().WithEntryName("WindowsValidationRemotePreflight")
-	log.WithField("host_id", hostID).Info("开始核对专用 Linux Host ID")
-	result, err := e.client.CallTool(ctx, "list_hosts", map[string]any{})
-	if err != nil {
-		log.WithErr(err).WithField("host_id", hostID).Error("专用 Linux Host ID 预检调用失败")
-		return false, err
+func aggregateStepExecutions(name string, steps []StepExecution) ValidationResult {
+	children := make([]ValidationResult, 0, len(steps))
+	for _, step := range steps {
+		children = append(children, step.Result)
 	}
-	if result.IsError {
-		err := fmt.Errorf("list_hosts returned %s", toolErrorCode(result))
-		log.WithErr(err).WithField("host_id", hostID).Error("专用 Linux Host ID 预检返回产品错误")
-		return false, err
-	}
-	root := RawMessageMap(result)
-	if err := writeJSON(filepath.Join(e.resultsDir, "evidence", "remote-host-preflight.json"), e.redactor.Redact(root)); err != nil {
-		return false, err
-	}
-	available := remoteHostPresent(root, hostID)
-	log.WithFields(map[string]any{"host_id": hostID, "available": available}).Info("专用 Linux Host ID 预检完成")
-	return available, nil
+	return aggregateResult(name, len(children), children)
 }
 
 func remoteHostPresent(value any, hostID string) bool {
@@ -770,80 +1005,150 @@ func remoteHostPresent(value any, hostID string) bool {
 	return false
 }
 
-func (e *ScenarioExecutor) ensureGoRunning(ctx context.Context) error {
+func (e *ScenarioExecutor) ensureGoRunning(ctx context.Context, stepID string) StepExecution {
+	started := time.Now().UTC()
+	attempts := make([]mcpEvidenceAttempt, 0, 4)
 	projectID, _ := e.variables["project_id"].(string)
 	deploymentID, _ := e.variables["go_deployment_id"].(string)
 	if projectID == "" || deploymentID == "" {
-		return fmt.Errorf("Go project/deployment identity is missing")
+		return StepExecution{StepID: stepID, Coverage: CoverageSupporting, Result: blockedResult("go_fixture_identity", "Go project/deployment identity is missing")}
 	}
-	result, err := e.client.CallTool(ctx, "start_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300})
+	result, attempt, err := observeToolCall(ctx, e.client, "start_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300})
+	attempts = append(attempts, attempt)
 	if err != nil {
-		return err
+		return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("start Go fixture", err.Error()))
 	}
 	if result.IsError {
 		code := toolErrorCode(result)
 		if code != "deployment_already_running" && code != "already_running" {
-			return fmt.Errorf("start Go fixture: %s", code)
+			return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("start Go fixture", code))
 		}
 	}
 	deadline := time.Now().Add(60 * time.Second)
+	lastFailure := ""
 	for time.Now().Before(deadline) {
-		state, callErr := e.client.CallTool(ctx, "list_services", map[string]any{"project_id": projectID})
+		state, stateAttempt, callErr := observeToolCall(ctx, e.client, "list_services", map[string]any{"project_id": projectID})
+		attempts = append(attempts, stateAttempt)
 		if callErr == nil && !state.IsError && deploymentStatus(state, deploymentID) == "running" {
-			return nil
+			return e.finishSupportingMCPAction(stepID, started, attempts, true, "")
+		}
+		switch {
+		case callErr != nil:
+			lastFailure = callErr.Error()
+		case state.IsError:
+			lastFailure = "list_services returned " + toolErrorCode(state)
+		default:
+			lastFailure = "observed deployment status " + deploymentStatus(state, deploymentID)
 		}
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("wait for Go fixture running", ctx.Err().Error()))
 		case <-timer.C:
 		}
 	}
-	return fmt.Errorf("Go fixture did not reach running")
+	return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("Go fixture did not reach running", lastFailure))
 }
 
-func (e *ScenarioExecutor) ensureGoStopped(ctx context.Context) error {
+func (e *ScenarioExecutor) ensureGoStopped(ctx context.Context, stepID string) StepExecution {
+	started := time.Now().UTC()
+	attempts := make([]mcpEvidenceAttempt, 0, 4)
 	projectID, _ := e.variables["project_id"].(string)
 	deploymentID, _ := e.variables["go_deployment_id"].(string)
 	if projectID == "" || deploymentID == "" {
-		return fmt.Errorf("Go project/deployment identity is missing")
+		return StepExecution{StepID: stepID, Coverage: CoverageSupporting, Result: blockedResult("go_fixture_identity", "Go project/deployment identity is missing")}
 	}
-	state, stateErr := e.client.CallTool(ctx, "list_services", map[string]any{"project_id": projectID})
+	state, stateAttempt, stateErr := observeToolCall(ctx, e.client, "list_services", map[string]any{"project_id": projectID})
+	attempts = append(attempts, stateAttempt)
 	if stateErr == nil && !state.IsError && deploymentStatus(state, deploymentID) == "stopped" {
-		return nil
+		return e.finishSupportingMCPAction(stepID, started, attempts, true, "")
 	}
-	result, err := e.client.CallTool(ctx, "stop_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300})
+	result, stopAttempt, err := observeToolCall(ctx, e.client, "stop_service", map[string]any{"project_id": projectID, "deployment_id": deploymentID, "approval_wait_seconds": 300})
+	attempts = append(attempts, stopAttempt)
 	if err != nil {
-		return err
+		return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("stop Go fixture", err.Error()))
 	}
 	if result.IsError {
 		code := toolErrorCode(result)
 		if code != "deployment_already_stopped" && code != "already_stopped" {
-			return fmt.Errorf("stop Go fixture: %s", code)
+			return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("stop Go fixture", code))
 		}
 	}
 	deadline := time.Now().Add(60 * time.Second)
+	lastFailure := ""
 	for time.Now().Before(deadline) {
-		state, callErr := e.client.CallTool(ctx, "list_services", map[string]any{"project_id": projectID})
+		state, pollAttempt, callErr := observeToolCall(ctx, e.client, "list_services", map[string]any{"project_id": projectID})
+		attempts = append(attempts, pollAttempt)
 		if callErr == nil && !state.IsError && deploymentStatus(state, deploymentID) == "stopped" {
-			return nil
+			return e.finishSupportingMCPAction(stepID, started, attempts, true, "")
+		}
+		switch {
+		case callErr != nil:
+			lastFailure = callErr.Error()
+		case state.IsError:
+			lastFailure = "list_services returned " + toolErrorCode(state)
+		default:
+			lastFailure = "observed deployment status " + deploymentStatus(state, deploymentID)
 		}
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("wait for Go fixture stopped", ctx.Err().Error()))
 		case <-timer.C:
 		}
 	}
-	return fmt.Errorf("Go fixture did not reach stopped")
+	return e.finishSupportingMCPAction(stepID, started, attempts, false, supportingFailure("Go fixture did not reach stopped", lastFailure))
 }
 
-func blockedProviderMatrix(fixtures []FixtureManifest, reason string) []ProviderExecution {
+func (e *ScenarioExecutor) finishSupportingMCPAction(stepID string, started time.Time, attempts []mcpEvidenceAttempt, succeeded bool, failure string) StepExecution {
+	finished := time.Now().UTC()
+	relative := filepath.ToSlash(filepath.Join("evidence", "prerequisites", stepID+".json"))
+	evidence, safePayload := persistMCPAttemptEvidence(e.resultsDir, relative, stepID, "superdev.windows-validation.prerequisite-evidence", attempts, map[string]any{
+		"campaign_id": e.campaignID, "lane": e.lane, "step_id": stepID,
+		"execution_facts": map[string]any{
+			"attempted": true, "succeeded": succeeded, "failure": failure,
+			"started_at_utc": started.Format(time.RFC3339Nano), "finished_at_utc": finished.Format(time.RFC3339Nano),
+		},
+	}, e.redactor)
+	result := attemptedResult(succeeded, failure, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), []EvidenceRecord{evidence})
+	fields := e.logFields(map[string]any{"step": stepID, "phase_status": result.PhaseStatus, "attempted": result.Attempted, "attempt_count": len(attempts), "evidence_ref": relative})
+	log := logger.GetLogger().WithEntryName("WindowsValidationPrerequisite")
+	if result.PhaseStatus == PhaseStatusPass {
+		log.WithFields(fields).Info("Windows MCP 前置动作完成")
+	} else {
+		log.WithFields(fields).Error("Windows MCP 前置动作失败")
+	}
+	inline := map[string]any(nil)
+	if !evidence.Present {
+		inline = safePayload
+	}
+	return StepExecution{StepID: stepID, Coverage: CoverageSupporting, Result: result, InlineEvidence: inline}
+}
+
+func blockedProviderMatrix(fixtures []FixtureManifest, prerequisite, reason string) []ProviderExecution {
 	results := make([]ProviderExecution, 0, len(fixtures))
 	for _, fixture := range fixtures {
-		results = append(results, ProviderExecution{Provider: fixture.Provider, RuntimeVerdict: verdictBlocked, DebugVerdict: verdictBlocked, Reason: reason})
+		runtimeResult := blockedResult(prerequisite, reason)
+		debugResult := blockedResult(prerequisite, reason)
+		results = append(results, ProviderExecution{
+			Provider: fixture.Provider, Runtime: runtimeResult, Debug: debugResult,
+			Result: aggregateResult(fixture.Provider+" provider", 2, []ValidationResult{runtimeResult, debugResult}), Reason: reason,
+		})
+	}
+	return results
+}
+
+func notRunProviderMatrix(fixtures []FixtureManifest, reason string) []ProviderExecution {
+	results := make([]ProviderExecution, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		runtimeResult := notRunResult(reason)
+		debugResult := notRunResult(reason)
+		results = append(results, ProviderExecution{
+			Provider: fixture.Provider, Runtime: runtimeResult, Debug: debugResult,
+			Result: aggregateResult(fixture.Provider+" provider", 2, []ValidationResult{runtimeResult, debugResult}), Reason: reason,
+		})
 	}
 	return results
 }
@@ -915,40 +1220,17 @@ func bootstrapPipelineConfig(campaignID string) map[string]any {
 	}
 }
 
-func aggregateCampaignStatus(rows []ToolEvidenceRow, providers []ProviderExecution, scenarios []ScenarioExecution) string {
-	status := verdictPass
-	for _, row := range rows {
-		if row.Verdict == verdictFail {
-			return verdictFail
-		}
-		if row.Verdict == verdictBlocked {
-			status = verdictBlocked
-		}
-	}
-	for _, provider := range providers {
-		if provider.RuntimeVerdict == verdictFail || provider.DebugVerdict == verdictFail {
-			return verdictFail
-		}
-		if provider.RuntimeVerdict == verdictBlocked || provider.DebugVerdict == verdictBlocked {
-			status = verdictBlocked
-		}
-	}
+func aggregateCampaignResult(rows []ToolEvidenceRow, providers []ProviderExecution, scenarios []ScenarioExecution, expectedToolNames, expectedProviderNames []string, expectedCoverage []CoverageAssignment) ValidationResult {
+	children := make([]ValidationResult, 0, 2+len(scenarios))
+	children = append(children, aggregateToolResult(rows, expectedToolNames, expectedCoverage))
+	children = append(children, aggregateProviderResult(providers, expectedProviderNames))
 	for _, scenario := range scenarios {
-		if scenario.Verdict == verdictFail {
-			return verdictFail
-		}
+		children = append(children, scenario.Result)
 	}
-	return status
+	return aggregateResult("Windows functional validation", len(children), children)
 }
 
-func pendingCampaignStatus(functionalStatus string) string {
-	if functionalStatus == verdictFail {
-		return verdictFail
-	}
-	return verdictBlocked
-}
-
-func ensureAllToolRows(assignments []CoverageAssignment, rows []ToolEvidenceRow) []ToolEvidenceRow {
+func ensureAllToolRows(assignments []CoverageAssignment, rows []ToolEvidenceRow, missing ValidationResult) []ToolEvidenceRow {
 	byTool := map[string]ToolEvidenceRow{}
 	for _, row := range rows {
 		byTool[row.Tool] = row
@@ -957,12 +1239,32 @@ func ensureAllToolRows(assignments []CoverageAssignment, rows []ToolEvidenceRow)
 	for _, assignment := range assignments {
 		row, ok := byTool[assignment.Tool]
 		if !ok {
-			row = ToolEvidenceRow{Tool: assignment.Tool, ScenarioID: assignment.ScenarioID, StepID: assignment.StepID, Verdict: verdictBlocked, Error: "primary step was not reached"}
+			row = ToolEvidenceRow{Tool: assignment.Tool, ScenarioID: assignment.ScenarioID, StepID: assignment.StepID, Result: missing}
 		}
 		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Tool < out[j].Tool })
 	return out
+}
+
+func artifactOnlyInstaller(lane string, checks []PackageFileIdentity, started, finished time.Time) (InstallerExecution, error) {
+	if len(checks) != 1 {
+		return InstallerExecution{}, fmt.Errorf("installer artifact verification produced %d identities, want 1", len(checks))
+	}
+	format := "nsis"
+	if laneOrDefault(lane) == "msi_smoke" {
+		format = "msi"
+	}
+	lifecycleReason := "installer lifecycle facts were not recorded by artifact verification"
+	notRun := ResultInput{Facts: ExecutionFacts{NotRunReason: lifecycleReason}}
+	return DeriveInstallerExecution(InstallerExecutionFacts{
+		Format: format, ArtifactVerified: true, InstallerExecuted: false,
+		Artifact: ResultInput{
+			Facts:    ExecutionFacts{Attempted: true, Succeeded: true, StartedAtUTC: started.Format(time.RFC3339Nano), FinishedAtUTC: finished.Format(time.RFC3339Nano)},
+			Evidence: []EvidenceRecord{{Name: "installer_identity", Required: true, Present: true, Ref: "campaign-report.json#installer_checks"}},
+		},
+		Install: notRun, Start: notRun, Stop: notRun, Uninstall: notRun,
+	})
 }
 
 func applyEvidenceRedactions(request, response map[string]any, paths []string, redactor *Redactor) {

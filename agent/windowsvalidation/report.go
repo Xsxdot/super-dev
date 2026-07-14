@@ -5,11 +5,13 @@
 //   - 保留每一条 BLOCKED/FAIL 和证据相对路径
 //
 // 边界：
-//   - 不重新计算 verdict 或用总分掩盖局部失败
+//   - 不手工拼装 Phase Status 或用总分掩盖局部失败
 //   - 不写入请求、凭据或完整 MCP 响应
 package windowsvalidation
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/xsxdot/gokit/logger"
 )
@@ -33,8 +36,9 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 	fmt.Fprintf(&out, "- Campaign: `%s`\n", markdownCell(report.CampaignID))
 	fmt.Fprintf(&out, "- 冻结构建: `%s` / `%s`\n", markdownCell(report.BuildCommit), markdownCell(report.ProductVersion))
 	fmt.Fprintf(&out, "- 执行 lane: `%s`\n", markdownCell(report.Lane))
-	fmt.Fprintf(&out, "- 总状态: **%s**\n", report.Status)
-	fmt.Fprintf(&out, "- Windows 功能状态: **%s**\n", report.FunctionalStatus)
+	fmt.Fprintf(&out, "- 总状态: **%s**（attempted=%t）\n", report.Result.PhaseStatus, report.Result.Attempted)
+	fmt.Fprintf(&out, "- Windows 功能状态: **%s**（attempted=%t）\n", report.Functional.PhaseStatus, report.Functional.Attempted)
+	fmt.Fprintf(&out, "- 冻结验收目录: scenario `%d`，tool mapping `%d`\n", len(report.ValidationCatalog.Scenarios), len(report.ValidationCatalog.Coverage))
 	fmt.Fprintf(&out, "- 时间: `%s` — `%s`\n\n", report.StartedAtUTC, report.FinishedAtUTC)
 
 	out.WriteString("## 固定验收面\n\n")
@@ -51,7 +55,11 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 		{"Remote pipeline", report.Sections.Pipeline},
 		{"Cleanup / baseline restore", report.Sections.Cleanup},
 	} {
-		fmt.Fprintf(&out, "| %s | %s | `%s` | %s |\n", section.name, section.value.Status, markdownCell(section.value.EvidencePath), markdownCell(section.value.Reason))
+		reason := section.value.Reason
+		if strings.TrimSpace(reason) == "" {
+			reason = resultReason(section.value.Result)
+		}
+		fmt.Fprintf(&out, "| %s | %s (attempted=%t) | `%s` | %s |\n", section.name, section.value.Result.PhaseStatus, section.value.Result.Attempted, markdownCell(section.value.EvidencePath), markdownCell(reason))
 	}
 	out.WriteString("\n")
 
@@ -66,26 +74,34 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 		}
 		fmt.Fprintf(&out, "| %s | `%s` | %d | `%s` |\n", format, markdownCell(installer.Path), installer.SizeBytes, installer.SHA256)
 	}
-	fmt.Fprintf(&out, "\nPackaged MCP attestation: **%s**, server `%s` `%s`, protocol `%s`, tools `%d`, providers `%d`.\n\n",
-		report.RuntimeAttestation.Verdict, markdownCell(report.RuntimeAttestation.ServerName), markdownCell(report.RuntimeAttestation.ServerVersion),
+	fmt.Fprintf(&out, "\nArtifact verified: **%t**；installer executed: **%t**；installer lifecycle: **%s**.\n\n", report.Installer.ArtifactVerified, report.Installer.InstallerExecuted, report.Installer.Lifecycle.PhaseStatus)
+	fmt.Fprintf(&out, "Packaged MCP attestation: **%s**, server `%s` `%s`, protocol `%s`, tools `%d`, providers `%d`.\n\n",
+		report.RuntimeAttestation.Result.PhaseStatus, markdownCell(report.RuntimeAttestation.ServerName), markdownCell(report.RuntimeAttestation.ServerVersion),
 		markdownCell(report.RuntimeAttestation.ProtocolVersion), len(report.RuntimeAttestation.ToolNames), len(report.RuntimeAttestation.ProviderNames))
 
 	out.WriteString("## 七语言 provider 结果\n\n")
-	out.WriteString("| Provider | Runtime | Debug | 证据 | 原因 |\n|---|---|---|---|---|\n")
+	out.WriteString("| Provider | Overall | Runtime | Debug | 证据 | 原因 |\n|---|---|---|---|---|---|\n")
 	for _, provider := range report.Providers {
-		fmt.Fprintf(&out, "| `%s` | %s | %s | `%s` | %s |\n", provider.Provider, provider.RuntimeVerdict, provider.DebugVerdict, markdownCell(provider.EvidencePath), markdownCell(provider.Reason))
+		fmt.Fprintf(&out, "| `%s` | %s/%t | %s/%t | %s/%t | `%s` | %s |\n", provider.Provider,
+			provider.Result.PhaseStatus, provider.Result.Attempted,
+			provider.Runtime.PhaseStatus, provider.Runtime.Attempted, provider.Debug.PhaseStatus, provider.Debug.Attempted,
+			markdownCell(provider.EvidencePath), markdownCell(provider.Reason))
 	}
 
 	out.WriteString("\n## 75 个 MCP 工具证据\n\n")
 	out.WriteString("| 工具 | 场景/步骤 | 结论 | Outcome | 证据 | 原因 |\n|---|---|---|---|---|---|\n")
 	for _, row := range report.ToolRows {
-		fmt.Fprintf(&out, "| `%s` | `%s/%s` | %s | `%s` | `%s` | %s |\n",
-			row.Tool, row.ScenarioID, row.StepID, row.Verdict, markdownCell(row.Outcome), markdownCell(row.EvidencePath), markdownCell(row.Error))
+		fmt.Fprintf(&out, "| `%s` | `%s/%s` | %s/%t | `%s` | `%s` | %s |\n",
+			row.Tool, row.ScenarioID, row.StepID, row.Result.PhaseStatus, row.Result.Attempted,
+			markdownCell(row.Outcome), markdownCell(strings.Join(evidenceReferences(row.Result), ", ")), markdownCell(resultReason(row.Result)))
 	}
 
 	out.WriteString("\n## 场景、远端 Pipeline 与清理\n\n")
+	for _, prerequisite := range report.Prerequisites {
+		fmt.Fprintf(&out, "- campaign prerequisite `%s`: **%s**（attempted=%t），%s。\n", prerequisite.StepID, prerequisite.Result.PhaseStatus, prerequisite.Result.Attempted, markdownCell(resultReason(prerequisite.Result)))
+	}
 	for _, scenario := range report.Scenarios {
-		fmt.Fprintf(&out, "- `%s`: **%s**", scenario.ID, scenario.Verdict)
+		fmt.Fprintf(&out, "- `%s`: **%s**（attempted=%t）", scenario.ID, scenario.Result.PhaseStatus, scenario.Result.Attempted)
 		if scenario.ID == "remote-pipeline" {
 			out.WriteString("（Windows → Linux Agent tunnel；A → B → A → cleanup）")
 		}
@@ -106,102 +122,140 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 }
 
 func buildReportSections(report CampaignReport) ReportSections {
-	notRun := ReportSection{Status: verdictBlocked, Reason: "not executed in this independent lane"}
+	notRun := ReportSection{Result: notRunResult("not executed in this independent lane"), Reason: "not executed in this independent lane"}
 	sections := ReportSections{
 		MSIInstaller: notRun, NSISInstaller: notRun, Core: notRun,
 		Providers: notRun, MCPTools: notRun, Pipeline: notRun,
 		Cleanup: cleanupSection(report.Cleanup),
 	}
-	functionalStatus := report.FunctionalStatus
-	if functionalStatus == "" {
-		functionalStatus = report.Status
-	}
 	if report.Lane == "msi_smoke" {
-		sections.MSIInstaller = ReportSection{Status: installerSectionStatus(report), EvidencePath: "runtime-attestation.json"}
+		sections.MSIInstaller = ReportSection{Result: report.Installer.Result, EvidencePath: strings.Join(evidenceReferences(report.Installer.Result), ", ")}
 		return sections
 	}
-	sections.NSISInstaller = ReportSection{Status: installerSectionStatus(report), EvidencePath: "runtime-attestation.json"}
-	sections.Core = ReportSection{Status: functionalStatus, EvidencePath: "campaign-report.json", Reason: strings.TrimSpace(strings.Trim(strings.TrimSpace(report.FailureStage+": "+report.FailureReason), ":"))}
-	sections.Providers = ReportSection{Status: aggregateProviderStatus(report.Providers), EvidencePath: "evidence/providers"}
-	sections.MCPTools = ReportSection{Status: aggregateToolStatus(report.ToolRows), EvidencePath: "campaign-report.json"}
+	if report.Lane != "nsis_core" && report.Lane != "core_only" {
+		return sections
+	}
+	if report.Lane == "nsis_core" {
+		sections.NSISInstaller = ReportSection{Result: report.Installer.Result, EvidencePath: strings.Join(evidenceReferences(report.Installer.Result), ", ")}
+	}
+	sections.Core = ReportSection{Result: resultOrNotRun(report.Functional, "core execution did not produce facts"), EvidencePath: "campaign-report.json", Reason: strings.TrimSpace(strings.Trim(strings.TrimSpace(report.FailureStage+": "+report.FailureReason), ":"))}
+	sections.Providers = ReportSection{Result: aggregateProviderResult(report.Providers, report.RuntimeAttestation.ProviderNames), EvidencePath: "evidence/providers"}
+	sections.MCPTools = ReportSection{Result: aggregateToolResult(report.ToolRows, report.RuntimeAttestation.ToolNames, report.ValidationCatalog.Coverage), EvidencePath: "campaign-report.json"}
 	sections.Pipeline = pipelineSection(report.Scenarios)
 	return sections
 }
 
-func installerSectionStatus(report CampaignReport) string {
-	if report.RuntimeAttestation.Verdict != verdictPass || len(report.InstallerChecks) != 1 {
-		return verdictFail
-	}
-	return verdictPass
-}
-
-func aggregateProviderStatus(providers []ProviderExecution) string {
+func aggregateProviderResult(providers []ProviderExecution, expectedNames []string) ValidationResult {
 	if len(providers) != 7 {
-		return verdictBlocked
+		return attemptedResult(false, fmt.Sprintf("seven language provider coverage has %d rows, want exactly 7", len(providers)), "", "", nil)
 	}
-	status := verdictPass
+	seen := make(map[string]bool, len(providers))
+	children := make([]ValidationResult, 0, len(providers))
 	for _, provider := range providers {
-		if provider.RuntimeVerdict == verdictFail || provider.DebugVerdict == verdictFail {
-			return verdictFail
+		name := strings.TrimSpace(provider.Provider)
+		if name == "" || seen[name] {
+			return attemptedResult(false, fmt.Sprintf("seven language provider coverage contains blank or duplicate provider %q", name), "", "", nil)
 		}
-		if provider.RuntimeVerdict == verdictBlocked || provider.DebugVerdict == verdictBlocked {
-			status = verdictBlocked
+		seen[name] = true
+		children = append(children, provider.Result)
+	}
+	if len(expectedNames) > 0 {
+		if len(expectedNames) != 7 {
+			return attemptedResult(false, fmt.Sprintf("runtime attestation has %d provider names, want exactly 7", len(expectedNames)), "", "", nil)
+		}
+		expected := append([]string{}, expectedNames...)
+		actual := make([]string, 0, len(seen))
+		for name := range seen {
+			actual = append(actual, name)
+		}
+		sort.Strings(expected)
+		sort.Strings(actual)
+		if strings.Join(expected, "\x00") != strings.Join(actual, "\x00") {
+			return attemptedResult(false, "seven language provider rows do not match the attested provider catalog", "", "", nil)
 		}
 	}
-	return status
+	return aggregateResult("seven language providers", 7, children)
 }
 
-func aggregateToolStatus(rows []ToolEvidenceRow) string {
+func aggregateToolResult(rows []ToolEvidenceRow, expectedNames []string, expectedCoverage ...[]CoverageAssignment) ValidationResult {
 	if len(rows) != 75 {
-		return verdictBlocked
+		return attemptedResult(false, fmt.Sprintf("75 MCP tool coverage has %d rows, want exactly 75", len(rows)), "", "", nil)
 	}
-	status := verdictPass
+	seen := make(map[string]bool, len(rows))
+	children := make([]ValidationResult, 0, len(rows))
 	for _, row := range rows {
-		if row.Verdict == verdictFail {
-			return verdictFail
+		name := strings.TrimSpace(row.Tool)
+		if name == "" || seen[name] {
+			return attemptedResult(false, fmt.Sprintf("75 MCP tool coverage contains blank or duplicate tool %q", name), "", "", nil)
 		}
-		if row.Verdict == verdictBlocked {
-			status = verdictBlocked
+		seen[name] = true
+		children = append(children, row.Result)
+	}
+	if len(expectedNames) > 0 {
+		if len(expectedNames) != 75 {
+			return attemptedResult(false, fmt.Sprintf("runtime attestation has %d tool names, want exactly 75", len(expectedNames)), "", "", nil)
+		}
+		expected := append([]string{}, expectedNames...)
+		actual := make([]string, 0, len(seen))
+		for name := range seen {
+			actual = append(actual, name)
+		}
+		sort.Strings(expected)
+		sort.Strings(actual)
+		if strings.Join(expected, "\x00") != strings.Join(actual, "\x00") {
+			return attemptedResult(false, "75 MCP tool rows do not match the attested frozen tool catalog", "", "", nil)
 		}
 	}
-	return status
+	if len(expectedCoverage) > 0 {
+		if err := validateToolRowCoverage(rows, expectedCoverage[0]); err != nil {
+			return attemptedResult(false, err.Error(), "", "", nil)
+		}
+	}
+	return aggregateResult("75 MCP tool coverage", 75, children)
 }
 
 func pipelineSection(scenarios []ScenarioExecution) ReportSection {
 	for _, scenario := range scenarios {
 		if scenario.ID == "remote-pipeline" {
-			return ReportSection{Status: scenario.Verdict, EvidencePath: "evidence/remote-pipeline"}
+			return ReportSection{Result: scenario.Result, EvidencePath: "evidence/remote-pipeline"}
 		}
 	}
-	return ReportSection{Status: verdictBlocked, Reason: "remote-pipeline scenario was not reached"}
+	return ReportSection{Result: notRunResult("remote-pipeline scenario was not reached"), Reason: "remote-pipeline scenario was not reached"}
 }
 
-func cleanupSection(cleanup map[string]any) ReportSection {
-	status := strings.ToUpper(fmt.Sprint(cleanup["status"]))
-	switch status {
-	case verdictPass, verdictFail:
-		return ReportSection{Status: status, EvidencePath: "cleanup-report.json", Reason: fmt.Sprint(cleanup["error"])}
-	default:
-		return ReportSection{Status: verdictBlocked, Reason: fmt.Sprint(cleanup["reason"])}
+func cleanupSection(cleanup CleanupRecord) ReportSection {
+	result, err := deriveCleanupResult(cleanup)
+	if err != nil {
+		result = attemptedResult(false, "invalid cleanup execution facts: "+err.Error(), "", "", nil)
 	}
+	section := ReportSection{Result: result, Reason: resultReason(result)}
+	if result.Attempted {
+		section.EvidencePath = "cleanup-report.json"
+	}
+	return section
 }
 
 func writeValidationSummary(resultsRoot string, redactor *Redactor, current CampaignReport) error {
+	derived, err := rederiveCampaignReport(current)
+	if err != nil {
+		return fmt.Errorf("derive current campaign before summary: %w", err)
+	}
+	current = derived
 	summary := current
 	summary.Kind = "superdev.windows-validation.summary"
 	summary.Lane = "aggregate"
 	if current.Lane == "nsis_core" {
 		if prior, found := latestLaneReport(resultsRoot, "msi_smoke", current.BuildCommit); found {
 			summary.Sections.MSIInstaller = ReportSection{
-				Status: prior.Status, EvidencePath: filepath.ToSlash(filepath.Join(prior.CampaignID, "campaign-report.json")),
+				Result: prior.Sections.MSIInstaller.Result, EvidencePath: filepath.ToSlash(filepath.Join(prior.CampaignID, "campaign-report.json")),
 				Reason: "independent MSI smoke lane final status",
 			}
 			summary.InstallerChecks = mergeInstallerChecks(prior.InstallerChecks, summary.InstallerChecks)
 		} else {
-			summary.Sections.MSIInstaller = ReportSection{Status: verdictBlocked, Reason: "no completed MSI smoke report found for this frozen build"}
+			summary.Sections.MSIInstaller = ReportSection{Result: notRunResult("no completed MSI smoke report found for this frozen build"), Reason: "no completed MSI smoke report found for this frozen build"}
 		}
 	}
-	summary.Status = aggregateSummaryStatus(summary.Sections)
+	summary.Result = aggregateSummaryResult(summary.Sections, current.Result)
 	redacted := redactor.Redact(RawMessageMap(summary))
 	if err := writeJSON(filepath.Join(resultsRoot, "validation-summary.json"), redacted); err != nil {
 		return fmt.Errorf("write validation summary JSON: %w", err)
@@ -232,6 +286,10 @@ func latestLaneReport(resultsRoot, lane, buildCommit string) (CampaignReport, bo
 		if err := readJSONFile(filepath.Join(resultsRoot, entry.Name(), "campaign-report.json"), &candidate); err != nil {
 			continue
 		}
+		candidate, err = rederiveCampaignReport(candidate)
+		if err != nil {
+			continue
+		}
 		if candidate.Lane != lane || candidate.BuildCommit != buildCommit {
 			continue
 		}
@@ -256,20 +314,18 @@ func mergeInstallerChecks(left, right []PackageFileIdentity) []PackageFileIdenti
 	return merged
 }
 
-func aggregateSummaryStatus(sections ReportSections) string {
-	status := verdictPass
+func aggregateSummaryResult(sections ReportSections, currentCampaign ValidationResult) ValidationResult {
+	children := make([]ValidationResult, 0, 8)
 	for _, section := range []ReportSection{
 		sections.MSIInstaller, sections.NSISInstaller, sections.Core, sections.Providers,
 		sections.MCPTools, sections.Pipeline, sections.Cleanup,
 	} {
-		if section.Status == verdictFail {
-			return verdictFail
-		}
-		if section.Status != verdictPass {
-			status = verdictBlocked
-		}
+		children = append(children, section.Result)
 	}
-	return status
+	// current campaign result 已包含 campaign/scenario/step prerequisite 的独立事实；
+	// summary 再加入独立 MSI section，不能把嵌套前置失败降级成 BLOCKED。
+	children = append(children, currentCampaign)
+	return aggregateResult("final validation summary", len(children), children)
 }
 
 // FinalizeCampaignCleanup 把 Windows cleanup 证据合并回 lane 报告并重建最终聚合摘要。
@@ -278,18 +334,20 @@ func aggregateSummaryStatus(sections ReportSections) string {
 //   - resultsRoot: campaign 结果根目录
 //   - campaignID: Prepare 阶段冻结的 campaign 身份
 //   - cleanupPath: 该 campaign 直属的 cleanup-report.json
+//   - preparedBackup: Prepare-Validation.ps1 产生的精确基线目录
 //
 // 返回：
 //   - 合并 cleanup 后的 campaign 报告
 //   - 身份、读取、脱敏或报告重建错误
 //
 // 该入口只接受固定 campaign 直属的 cleanup-report.json，避免清理脚本用任意路径改写其他结果。
-func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath string) (report CampaignReport, finalizeErr error) {
+func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath, preparedBackup string) (report CampaignReport, finalizeErr error) {
 	log := logger.GetLogger().WithEntryName("WindowsValidationCleanupFinalize")
 	stage := "validate_campaign_identity"
+	lane := ""
 	defer func() {
 		if finalizeErr != nil {
-			log.WithErr(finalizeErr).WithFields(map[string]any{"campaign_id": campaignID, "stage": stage}).Error("Windows cleanup 最终证据合并失败")
+			log.WithErr(finalizeErr).WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage}).Error("Windows cleanup 最终证据合并失败")
 		}
 	}()
 	log.WithFields(map[string]any{"results_root": resultsRoot, "campaign_id": campaignID}).Info("开始合并 Windows cleanup 最终证据")
@@ -311,16 +369,22 @@ func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath string) (repor
 		return CampaignReport{}, fmt.Errorf("cleanup report must be the selected campaign direct child")
 	}
 	stage = "read_cleanup_report"
-	var cleanup map[string]any
+	var cleanup CleanupRecord
 	if err := readJSONFile(actualCleanup, &cleanup); err != nil {
 		return CampaignReport{}, fmt.Errorf("read cleanup report: %w", err)
 	}
-	if cleanup["kind"] != "superdev.windows-validation.cleanup-report" || fmt.Sprint(cleanup["campaign_id"]) != campaignID {
+	if cleanup.Kind != "superdev.windows-validation.cleanup-report" || cleanup.CampaignID != campaignID {
 		return CampaignReport{}, fmt.Errorf("cleanup report identity does not match campaign")
 	}
-	cleanupStatus := strings.ToUpper(fmt.Sprint(cleanup["status"]))
-	if cleanupStatus != verdictPass && cleanupStatus != verdictFail {
-		return CampaignReport{}, fmt.Errorf("cleanup report status must be PASS or FAIL")
+	if cleanup.SchemaVersion != 2 {
+		return CampaignReport{}, fmt.Errorf("cleanup report schema_version must be 2")
+	}
+	cleanupResult, err := deriveCleanupResult(cleanup)
+	if err != nil {
+		return CampaignReport{}, fmt.Errorf("derive cleanup result: %w", err)
+	}
+	if !cleanupResult.Attempted || (cleanupResult.PhaseStatus != PhaseStatusPass && cleanupResult.PhaseStatus != PhaseStatusFail) {
+		return CampaignReport{}, fmt.Errorf("cleanup report must contain completed attempted execution facts")
 	}
 	stage = "read_campaign_report"
 	if err := readJSONFile(filepath.Join(campaignDir, "campaign-report.json"), &report); err != nil {
@@ -329,12 +393,44 @@ func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath string) (repor
 	if report.CampaignID != campaignID {
 		return CampaignReport{}, fmt.Errorf("campaign report identity mismatch")
 	}
+	lane = report.Lane
+	stage = "rederive_persisted_campaign"
+	report, err = rederiveCampaignReport(report)
+	if err != nil {
+		return CampaignReport{}, fmt.Errorf("rederive persisted campaign report: %w", err)
+	}
+	stage = "verify_prepared_backup_identity"
+	backupDirectory, preparedManifest, err := loadPreparedBackupIdentity(preparedBackup, campaignID, report.Lane)
+	if err != nil {
+		return CampaignReport{}, err
+	}
+	stage = "verify_prepared_baseline"
+	verificationStarted := time.Now().UTC()
+	baselineErr := verifyPreparedBaselineIntegrity(backupDirectory, preparedManifest, cleanup)
+	verificationFinished := time.Now().UTC()
+	if baselineErr != nil && cleanupResult.PhaseStatus == PhaseStatusPass {
+		return CampaignReport{}, baselineErr
+	}
+	verificationFailure := ""
+	if baselineErr != nil {
+		verificationFailure = baselineErr.Error()
+		log.WithErr(baselineErr).WithFields(map[string]any{"campaign_id": campaignID, "lane": report.Lane, "stage": stage}).Error("prepared baseline 完整性失败已并入 cleanup FAIL 报告")
+	}
+	verificationResult := attemptedResult(baselineErr == nil, verificationFailure, verificationStarted.Format(time.RFC3339Nano), verificationFinished.Format(time.RFC3339Nano), []EvidenceRecord{{
+		Name: "prepared_baseline_verification", Required: true, Present: true, Ref: "campaign-report.json#prerequisites/prepared-baseline-verification",
+	}})
+	var verificationInline map[string]any
+	if baselineErr != nil {
+		verificationInline = map[string]any{"error": verificationFailure, "prepared_baseline_sha256": cleanup.PreparedBaselineSHA256}
+	}
+	report.Prerequisites = upsertStepExecution(report.Prerequisites, StepExecution{
+		StepID: "prepared-baseline-verification", Coverage: CoverageSupporting, Result: verificationResult,
+		InlineEvidence: verificationInline,
+	})
 	report.Cleanup = cleanup
-	report.Sections = buildReportSections(report)
-	if cleanupStatus == verdictFail {
-		report.Status = verdictFail
-	} else {
-		report.Status = report.FunctionalStatus
+	report, err = rederiveCampaignReport(report)
+	if err != nil {
+		return CampaignReport{}, fmt.Errorf("rederive finalized campaign report: %w", err)
 	}
 	redactor := NewRedactor()
 	stage = "write_campaign_report"
@@ -346,8 +442,168 @@ func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath string) (repor
 		return CampaignReport{}, err
 	}
 	stage = "complete"
-	log.WithFields(map[string]any{"campaign_id": campaignID, "status": report.Status, "cleanup_status": cleanupStatus}).Info("Windows cleanup 最终证据合并完成")
+	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": report.Lane, "phase_status": report.Result.PhaseStatus, "cleanup_status": report.Sections.Cleanup.Result.PhaseStatus}).Info("Windows cleanup 最终证据合并完成")
 	return report, nil
+}
+
+func verifyPreparedBaseline(preparedBackup, campaignID, lane string, cleanup CleanupRecord) error {
+	backupDirectory, manifest, err := loadPreparedBackupIdentity(preparedBackup, campaignID, lane)
+	if err != nil {
+		return err
+	}
+	return verifyPreparedBaselineIntegrity(backupDirectory, manifest, cleanup)
+}
+
+func loadPreparedBackupIdentity(preparedBackup, campaignID, lane string) (string, preparedBackupManifest, error) {
+	backupDirectory, err := filepath.Abs(preparedBackup)
+	if err != nil {
+		return "", preparedBackupManifest{}, fmt.Errorf("resolve prepared backup: %w", err)
+	}
+	var manifest preparedBackupManifest
+	if err := readJSONFile(filepath.Join(backupDirectory, "backup-manifest.json"), &manifest); err != nil {
+		return "", preparedBackupManifest{}, fmt.Errorf("read prepared backup manifest: %w", err)
+	}
+	if err := validatePreparedBackupIdentity(manifest, campaignID); err != nil {
+		return "", preparedBackupManifest{}, err
+	}
+	if manifest.Lane != lane {
+		return "", preparedBackupManifest{}, fmt.Errorf("prepared backup lane %q does not match campaign lane %q", manifest.Lane, lane)
+	}
+	return backupDirectory, manifest, nil
+}
+
+func verifyPreparedBaselineIntegrity(backupDirectory string, manifest preparedBackupManifest, cleanup CleanupRecord) error {
+	if err := validatePreparedBaselineManifest(manifest); err != nil {
+		return err
+	}
+	baselinePath := filepath.Join(backupDirectory, "baseline.json")
+	baselineBytes, err := os.ReadFile(baselinePath)
+	if err != nil {
+		return fmt.Errorf("read prepared baseline: %w", err)
+	}
+	actualDigest := fmt.Sprintf("%x", sha256.Sum256(baselineBytes))
+	if actualDigest != manifest.BaselineSHA256 {
+		return fmt.Errorf("prepared manifest and baseline.json SHA-256 are not identical")
+	}
+	cleanupSucceeded := cleanup.ExecutionFacts != nil && cleanup.ExecutionFacts.Succeeded
+	if cleanupSucceeded && cleanup.PreparedBaselineSHA256 != actualDigest {
+		return fmt.Errorf("cleanup report is not bound to the prepared baseline SHA-256")
+	}
+	if cleanup.PreparedBaselineSHA256 != "" && cleanup.PreparedBaselineSHA256 != actualDigest {
+		return fmt.Errorf("cleanup report references a different prepared baseline SHA-256")
+	}
+	var baselineIdentity struct {
+		SchemaVersion int    `json:"schema_version"`
+		Kind          string `json:"kind"`
+	}
+	if err := json.Unmarshal(baselineBytes, &baselineIdentity); err != nil {
+		return fmt.Errorf("decode prepared baseline: %w", err)
+	}
+	if baselineIdentity.SchemaVersion != 1 || baselineIdentity.Kind != "superdev.windows-validation.machine-baseline" {
+		return fmt.Errorf("prepared baseline identity is invalid")
+	}
+	preparedCategoryDigests, err := preparedBaselineCategoryDigests(baselineBytes)
+	if err != nil {
+		return err
+	}
+	for _, category := range cleanupBaselineCategories {
+		if manifest.BaselineCategorySHA256[category] != preparedCategoryDigests[category] {
+			return fmt.Errorf("prepared manifest category %q is not derived from baseline.json", category)
+		}
+	}
+	if cleanupSucceeded && cleanup.BaselineComparison == nil {
+		return fmt.Errorf("cleanup report has no final baseline comparison")
+	}
+	if cleanup.BaselineComparison == nil {
+		return nil
+	}
+	for _, check := range cleanup.BaselineComparison.Checks {
+		if manifest.BaselineCategorySHA256[check.Category] != check.ExpectedSHA256 {
+			return fmt.Errorf("cleanup category %q is not bound to the prepared baseline", check.Category)
+		}
+	}
+	return nil
+}
+
+func upsertStepExecution(steps []StepExecution, replacement StepExecution) []StepExecution {
+	for index := range steps {
+		if steps[index].StepID == replacement.StepID {
+			steps[index] = replacement
+			return steps
+		}
+	}
+	return append(steps, replacement)
+}
+
+func preparedBaselineCategoryDigests(baselineBytes []byte) (map[string]string, error) {
+	var baseline map[string]json.RawMessage
+	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
+		return nil, fmt.Errorf("decode prepared baseline categories: %w", err)
+	}
+	digests := make(map[string]string, len(cleanupBaselineCategories))
+	for _, category := range cleanupBaselineCategories {
+		raw, ok := baseline[category]
+		if !ok {
+			return nil, fmt.Errorf("prepared baseline is missing category %q", category)
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, raw); err != nil {
+			return nil, fmt.Errorf("compact prepared baseline category %q: %w", category, err)
+		}
+		digests[category] = fmt.Sprintf("%x", sha256.Sum256(compact.Bytes()))
+	}
+	return digests, nil
+}
+
+func resultOrNotRun(result ValidationResult, reason string) ValidationResult {
+	if result.PhaseStatus == "" {
+		return notRunResult(reason)
+	}
+	return result
+}
+
+func deriveCampaignCompletionResult(name string, report CampaignReport) ValidationResult {
+	children := make([]ValidationResult, 0, 4+len(report.Prerequisites))
+	children = append(children,
+		resultOrNotRun(report.Installer.Result, "installer execution did not produce facts"),
+		resultOrNotRun(report.RuntimeAttestation.Result, "runtime attestation did not produce facts"),
+		resultOrNotRun(report.Functional, "functional execution did not produce facts"),
+	)
+	children = appendPrerequisiteResults(children, report.Prerequisites)
+	for _, scenario := range report.Scenarios {
+		children = appendPrerequisiteResults(children, scenario.Prerequisites)
+		for _, step := range scenario.Steps {
+			children = appendPrerequisiteResults(children, step.Prerequisites)
+		}
+		for _, step := range scenario.Cleanup {
+			children = appendPrerequisiteResults(children, step.Prerequisites)
+		}
+	}
+	children = append(children, report.Sections.Cleanup.Result)
+	return aggregateResult(name, len(children), children)
+}
+
+func appendPrerequisiteResults(children []ValidationResult, prerequisites []StepExecution) []ValidationResult {
+	for _, prerequisite := range prerequisites {
+		children = append(children, prerequisite.Result)
+		children = appendPrerequisiteResults(children, prerequisite.Prerequisites)
+	}
+	return children
+}
+
+func evidenceReferences(result ValidationResult) []string {
+	seen := map[string]bool{}
+	references := make([]string, 0, len(result.Evidence))
+	for _, record := range result.Evidence {
+		ref := strings.TrimSpace(record.Ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		references = append(references, ref)
+	}
+	sort.Strings(references)
+	return references
 }
 
 func markdownCell(value string) string {
