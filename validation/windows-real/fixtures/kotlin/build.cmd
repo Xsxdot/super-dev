@@ -9,7 +9,8 @@ call "%ROOT%preflight.cmd" runtime
 if errorlevel 1 goto :failed_preflight
 if not exist "%ROOT%build" mkdir "%ROOT%build"
 echo {"level":"info","event":"fixture_build_stage_started","provider":"kotlin","stage":"kotlinc","command_summary":"kotlinc jvm-target 21 include-runtime"}
-kotlinc -J--add-modules=jdk.httpserver "%ROOT%src\FixtureServer.kt" -jvm-target 21 -include-runtime -d "%ROOT%build\fixture-kotlin.jar"
+@rem kotlinc.bat strips caller quotes, so keep the Java option and its module value as two -J arguments.
+kotlinc -J--add-modules -Jjdk.httpserver "%ROOT%src\FixtureServer.kt" -jvm-target 21 -include-runtime -d "%ROOT%build\fixture-kotlin.jar"
 if errorlevel 1 goto :failed_compile
 echo {"level":"info","event":"fixture_build_succeeded","provider":"kotlin","entry":"superdev.fixture.FixtureServerKt","debug_symbols":"full"}
 exit /b 0

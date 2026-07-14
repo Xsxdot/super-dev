@@ -12,6 +12,8 @@ node_modules/
 dist/
 coverage/
 artifacts/
+!validation/windows-real/pipeline/artifacts/
+!validation/windows-real/pipeline/artifacts/**
 *.profraw
 *.profdata
 desktop/dist/

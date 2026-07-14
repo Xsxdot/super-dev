@@ -117,3 +117,45 @@ func TestFinalizeCampaignCleanupCannotPreserveOldPassAfterCleanupFailure(t *test
 		t.Fatalf("summary status=%s, want FAIL", summary.Status)
 	}
 }
+
+func TestFinalizeCampaignCleanupKeepsIdentityAfterNumericEvidenceRedaction(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	campaignID := "w10x64-e3cc94f-20260714T065650Z-1e3e78"
+	directory := filepath.Join(root, campaignID)
+	redactor := NewRedactor()
+	response := map[string]any{
+		"structuredContent": map[string]any{
+			"data": map[string]any{
+				"result": map[string]any{"variablesReference": float64(0)},
+			},
+		},
+	}
+	applyEvidenceRedactions(map[string]any{}, response, []string{"structuredContent.data.result.variablesReference"}, redactor)
+	report := CampaignReport{
+		SchemaVersion: 1, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+		Status: verdictBlocked, FunctionalStatus: verdictPass, BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "msi_smoke",
+		RuntimeAttestation: RuntimeAttestation{Verdict: verdictPass}, InstallerChecks: []PackageFileIdentity{{Path: "frozen.msi"}},
+		Cleanup: map[string]any{"status": "PENDING", "evidence": response}, FinishedAtUTC: "2026-07-14T06:56:50Z",
+	}
+	report.Sections = buildReportSections(report)
+	if err := writeCampaignReports(directory, redactor, report); err != nil {
+		t.Fatal(err)
+	}
+	cleanupPath := filepath.Join(directory, "cleanup-report.json")
+	if err := writeJSON(cleanupPath, map[string]any{
+		"schema_version": 1, "kind": "superdev.windows-validation.cleanup-report",
+		"campaign_id": campaignID, "status": verdictPass,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := FinalizeCampaignCleanup(root, campaignID, cleanupPath)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.CampaignID != campaignID || final.ProductVersion != "0.2.1" {
+		t.Fatalf("report identity changed after targeted redaction: campaign=%q version=%q", final.CampaignID, final.ProductVersion)
+	}
+}

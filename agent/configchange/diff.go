@@ -129,6 +129,17 @@ func diffDeployments(serviceName string, before []model.Deployment, after []mode
 		if prev.Location != dep.Location {
 			out = append(out, DiffEntry{Path: path + ".location", Before: prev.Location, After: dep.Location})
 		}
+		if prev.StartOnBoot != dep.StartOnBoot {
+			out = append(out, DiffEntry{Path: path + ".start_on_boot", Before: prev.StartOnBoot, After: dep.StartOnBoot})
+		}
+		if !reflect.DeepEqual(prev.DependsOn, dep.DependsOn) {
+			out = append(out, DiffEntry{Path: path + ".depends_on", Before: prev.DependsOn, After: dep.DependsOn})
+		}
+		beforeReadiness := readinessSummary(prev.Readiness)
+		afterReadiness := readinessSummary(dep.Readiness)
+		if !reflect.DeepEqual(beforeReadiness, afterReadiness) {
+			out = append(out, DiffEntry{Path: path + ".readiness", Before: beforeReadiness, After: afterReadiness})
+		}
 		beforeCodeDebug := codeDebugSummary(prev.CodeDebug)
 		afterCodeDebug := codeDebugSummary(dep.CodeDebug)
 		if !reflect.DeepEqual(beforeCodeDebug, afterCodeDebug) {
@@ -189,6 +200,17 @@ func codeDebugSummary(cfg *model.CodeDebugConfig) map[string]any {
 	}
 	if cfg.StopOnEntry {
 		out["stop_on_entry"] = true
+	}
+	return out
+}
+
+func readinessSummary(probe *model.ReadinessProbe) map[string]any {
+	if probe == nil {
+		return nil
+	}
+	out := map[string]any{"type": probe.Type, "target": probe.Target}
+	if probe.TimeoutSeconds != 0 {
+		out["timeout_seconds"] = probe.TimeoutSeconds
 	}
 	return out
 }

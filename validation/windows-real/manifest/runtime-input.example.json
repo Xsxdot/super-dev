@@ -7,5 +7,7 @@
   "results_root": "C:\\SuperDevValidation\\results",
   "linux_host_id": "REPLACE_WITH_LIST_HOSTS_NON_SELF_ID",
   "linux_root": "/srv/superdev-validation/{{run_id}}",
+  "rustup_home": "",
+  "jvm_adapter_command": "",
   "approval_wait_seconds": 300
 }

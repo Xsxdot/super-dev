@@ -3,17 +3,17 @@
 @rem Boundary: this wrapper never downloads toolchains, invokes Bash, or reports a Windows runtime verdict.
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-set "ROOT=%~dp0"
+for %%I in ("%~dp0.") do set "ROOT=%%~fI"
 echo {"level":"info","event":"fixture_build_started","provider":"cpp","stage":"toolchain"}
-call "%ROOT%toolchain.cmd"
+call "%ROOT%\toolchain.cmd"
 if errorlevel 1 goto :failed_toolchain
-call "%ROOT%preflight.cmd" runtime
+call "%ROOT%\preflight.cmd" runtime
 if errorlevel 1 goto :failed_preflight
 echo {"level":"info","event":"fixture_build_stage_started","provider":"cpp","stage":"cmake_configure","command_summary":"cmake Ninja Debug clang-cl"}
-cmake -S "%ROOT%" -B "%ROOT%build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang-cl
+cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang-cl
 if errorlevel 1 goto :failed_configure
 echo {"level":"info","event":"fixture_build_stage_started","provider":"cpp","stage":"cmake_build","command_summary":"cmake --build fixture-local-build --config Debug"}
-cmake --build "%ROOT%build" --config Debug
+cmake --build "%ROOT%\build" --config Debug
 if errorlevel 1 goto :failed_build
 echo {"level":"info","event":"fixture_build_succeeded","provider":"cpp","binary":"build/superdev-windows-cpp-fixture.exe","debug_symbols":"pdb-full"}
 exit /b 0

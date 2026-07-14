@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -46,6 +47,8 @@ type RuntimeInput struct {
 	LinuxHostID         string `json:"linux_host_id"`
 	LinuxRoot           string `json:"linux_root"`
 	ApprovalWaitSeconds int    `json:"approval_wait_seconds"`
+	RustupHome          string `json:"rustup_home,omitempty"`
+	JVMAdapterCommand   string `json:"jvm_adapter_command,omitempty"`
 	Lane                string `json:"lane,omitempty"`
 	CampaignID          string `json:"campaign_id,omitempty"`
 }
@@ -199,6 +202,27 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	stage = "validate_runtime_input"
 	if err := validateRuntimeInput(input); err != nil {
 		return CampaignReport{}, err
+	}
+	stage = "apply_runtime_environment"
+	restoreEnvironment, err := applyRuntimeEnvironment(input)
+	if err != nil {
+		return CampaignReport{}, err
+	}
+	defer func() {
+		if restoreErr := restoreEnvironment(); restoreErr != nil {
+			wrappedErr := fmt.Errorf("restore Windows validation runtime environment: %w", restoreErr)
+			log.WithErr(wrappedErr).WithFields(map[string]any{
+				"stage":       "restore_runtime_environment",
+				"campaign_id": campaignID,
+			}).Error("恢复 Windows 验证进程环境失败")
+			runErr = errors.Join(runErr, wrappedErr)
+		}
+	}()
+	if input.RustupHome != "" || input.JVMAdapterCommand != "" {
+		log.WithFields(map[string]any{
+			"rustup_home_configured": input.RustupHome != "",
+			"jvm_adapter_configured": input.JVMAdapterCommand != "",
+		}).Info("已应用 Windows 验证进程的显式工具链环境")
 	}
 	stage = "verify_lane_installer"
 	installerChecks, err := VerifyInstallerForLane(input.InstallerDirectory, laneOrDefault(input.Lane), source.Frozen.Installers)
@@ -963,49 +987,6 @@ func ensureAllToolRows(assignments []CoverageAssignment, rows []ToolEvidenceRow)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Tool < out[j].Tool })
 	return out
-}
-
-func applyEvidenceRedactions(request, response map[string]any, paths []string, redactor *Redactor) {
-	for _, path := range paths {
-		target := response
-		trimmed := path
-		if strings.HasPrefix(path, "request.") {
-			target = request
-			trimmed = strings.TrimPrefix(path, "request.")
-		}
-		redactAtPath(target, strings.Split(trimmed, "."), redactor)
-	}
-}
-
-func redactAtPath(current any, parts []string, redactor *Redactor) {
-	if len(parts) == 0 {
-		return
-	}
-	switch typed := current.(type) {
-	case map[string]any:
-		part := parts[0]
-		if part == "*" {
-			for key := range typed {
-				redactAtPath(typed[key], parts[1:], redactor)
-			}
-			return
-		}
-		value, ok := typed[part]
-		if !ok {
-			return
-		}
-		if len(parts) == 1 {
-			typed[part] = redactor.RegisterSecret("EVIDENCE", fmt.Sprint(value))
-			return
-		}
-		redactAtPath(value, parts[1:], redactor)
-	case []any:
-		if parts[0] == "*" {
-			for _, item := range typed {
-				redactAtPath(item, parts[1:], redactor)
-			}
-		}
-	}
 }
 
 func digestEvidenceValue(value any) (string, int, error) {

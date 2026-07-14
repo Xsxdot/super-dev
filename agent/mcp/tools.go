@@ -225,7 +225,7 @@ func configChangeInputSchema() map[string]any {
 			"project":          map[string]any{"type": "object"},
 			"service": map[string]any{
 				"type":        "object",
-				"description": "Service config. Set service.language (go, node, python) as the service implementation language; it is required for local managed runtime.type=language deployments. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
+				"description": "Service config. Set service.language (go, node, python) as the service implementation language; it is required for local managed runtime.type=language deployments. deployments[].readiness defines the http/tcp probe that gates starting -> running; deployments[].depends_on and start_on_boot preserve orchestration behavior. For remote deployments, deployments[].host_ids must contain canonical non-self Host.id values returned by list_hosts, not host name/display name.",
 			},
 			"pipeline": map[string]any{
 				"type": "object",

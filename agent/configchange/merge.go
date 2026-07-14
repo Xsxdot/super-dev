@@ -149,6 +149,8 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 		Logs:         patch.Logs,
 		Web:          patch.Web,
 		CodeDebug:    patch.CodeDebug,
+		DependsOn:    patch.DependsOn,
+		Readiness:    patch.Readiness,
 		Command:      patch.Command,
 		WorkDir:      patch.WorkDir,
 		EnvFile:      patch.EnvFile,
@@ -159,6 +161,9 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 		ExtraArgs:    patch.ExtraArgs,
 		StartCommand: patch.StartCommand,
 		StopCommand:  patch.StopCommand,
+	}
+	if patch.StartOnBoot != nil {
+		dep.StartOnBoot = *patch.StartOnBoot
 	}
 	if patch.ReadOnly != nil {
 		dep.ReadOnly = *patch.ReadOnly
@@ -188,6 +193,15 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	}
 	if patch.CodeDebug != nil {
 		dep.CodeDebug = patch.CodeDebug
+	}
+	if patch.StartOnBoot != nil {
+		dep.StartOnBoot = *patch.StartOnBoot
+	}
+	if patch.DependsOn != nil {
+		dep.DependsOn = patch.DependsOn
+	}
+	if patch.Readiness != nil {
+		dep.Readiness = patch.Readiness
 	}
 	if patch.Command != "" {
 		dep.Command = patch.Command

@@ -37,6 +37,7 @@ func loadRuntimeInput(path string) (RuntimeInput, error) {
 	input.InstallerDirectory = resolveInputPath(base, input.InstallerDirectory)
 	input.CampaignRoot = resolveInputPath(base, input.CampaignRoot)
 	input.ResultsRoot = resolveInputPath(base, input.ResultsRoot)
+	input.RustupHome = resolveInputPath(base, input.RustupHome)
 	return input, nil
 }
 
@@ -88,7 +89,10 @@ func validateRuntimeInput(input RuntimeInput) error {
 
 func resolveInputPath(base, value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" || filepath.IsAbs(value) {
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(filepath.Join(base, value))

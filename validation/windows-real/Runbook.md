@@ -33,7 +33,7 @@
 
 **Prerequisite**：步骤 1 通过；专用 Linux Agent 只需在 NSIS core 前注册并在线，MSI smoke 不以它为前置。
 
-**Action**：把 `manifest\runtime-input.example.json` 复制到解压目录同级并命名 `runtime-input.json`；先填写已安装 `superdev-mcp.exe`、安装器、campaign 与 results 的绝对路径。MSI smoke 可以暂不填写 Linux 字段；进入 NSIS core 前再填写专用非 self Linux Host ID 与受控 root。七语言工具链和 `SUPERDEV_JVM_ADAPTER_COMMAND` 也只在 NSIS core 前必须就绪：Go 1.22+ / Delve、Node 24.18.0 / npm 11.16.0、CPython 3.14.6 / debugpy 1.8.21、Temurin JDK 21.0.11+10、Kotlin 2.4.0、Rust 1.97.0 MSVC、VS Build Tools 17.14、CMake 4.4.0、Ninja 1.13.2、LLVM/lldb-dap 22.1.3。
+**Action**：把 `manifest\runtime-input.example.json` 复制到解压目录同级并命名 `runtime-input.json`；先填写已安装 `superdev-mcp.exe`、安装器、campaign 与 results 的绝对路径。MSI smoke 可以暂不填写 Linux 字段；进入 NSIS core 前再填写专用非 self Linux Host ID 与受控 root。Rust 使用非默认工具链目录时，把该绝对目录填入 `rustup_home`；JVM 调试适配器可执行命令填入 `jvm_adapter_command`。这两个值只作用于 driver 及其 fixture 子进程，不写入持久用户环境。七语言工具链只在 NSIS core 前必须就绪：Go 1.22+ / Delve、Node 24.18.0 / npm 11.16.0、CPython 3.14.6 / debugpy 1.8.21、Temurin JDK 21.0.11+10、Kotlin 2.4.0、Rust 1.97.0 MSVC、VS Build Tools 17.14、CMake 4.4.0、Ninja 1.13.2、LLVM/lldb-dap 22.1.3。进入 core 前还必须在 Desktop 设置中检测并启用一个 Edge/Chrome，使 `list_debug_browsers` 返回至少一个 `available=true` 浏览器。
 
 **Expected**：input 和安装器都在不可变包外；Linux 写入边界为 `/srv/superdev-validation/<campaign-id>`；实际缺失依赖会被报告为 `BLOCKED`。
 
@@ -95,7 +95,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -Ca
 
 **Stop**：任一类别摘要漂移、quarantine/安装残留时 cleanup 必须为 FAIL，保留 finding 与 recovery quarantine，禁止手工改报告为 PASS。只有仍在运行的进程/端口、会影响 NSIS 安装启动的 MSI 状态、无法证明 sidecar 来自冻结 NSIS，或使 MCP/runtime 身份门禁无法执行的污染才阻断 NSIS；其他 MSI 残留保持独立 FAIL finding，重新记录独立 NSIS 基线后可继续 core lane。
 
-**Evidence**：`<msi-backup>\cleanup-<campaign-id>.json`、结果目录 `cleanup-report.json`、更新后的 campaign report 与聚合 summary。
+**Evidence**：`<msi-backup>\cleanup-<campaign-id>.json`、结果目录 `cleanup-report.json`、更新后的 campaign report 与聚合 summary；`user_state` 漂移时，`baseline_comparison.checks[].file_differences` 立即记录 missing/extra/changed 相对路径、大小和 SHA-256，不记录文件内容。
 
 **Cleanup responsibility**：Cleanup 删除本地 campaign 并恢复安装前状态；结果默认保留。只有证据另行归档后才可显式加 `-RemoveResults`，脚本也只会在 packaged finalizer 已成功固化 campaign/summary 后删除精确结果子目录。
 

@@ -75,6 +75,9 @@ type DeploymentPatch struct {
 	Logs         *model.LogConfig           `json:"logs,omitempty"`
 	Web          *model.WebEntrypointConfig `json:"web,omitempty"`
 	CodeDebug    *model.CodeDebugConfig     `json:"code_debug,omitempty"`
+	StartOnBoot  *bool                      `json:"start_on_boot,omitempty"`
+	DependsOn    []string                   `json:"depends_on,omitempty"`
+	Readiness    *model.ReadinessProbe      `json:"readiness,omitempty"`
 	Command      string                     `json:"command,omitempty"`
 	WorkDir      string                     `json:"work_dir,omitempty"`
 	EnvFile      string                     `json:"env_file,omitempty"`

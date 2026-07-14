@@ -82,6 +82,7 @@ func TestServiceUpsertSchemaDocumentsLanguageRuntimeContract(t *testing.T) {
 	assert.Contains(t, tool.Description, "runtime.type=language")
 	assert.Contains(t, service["description"], "service.language")
 	assert.Contains(t, service["description"], "required for local managed runtime.type=language")
+	assert.Contains(t, service["description"], "deployments[].readiness")
 }
 
 func TestUpsertProjectPipelinePassesApprovalToken(t *testing.T) {

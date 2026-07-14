@@ -172,6 +172,100 @@ func TestServiceUpsertPreservesDeploymentCodeDebugConfig(t *testing.T) {
 	assert.True(t, got.StopOnEntry)
 }
 
+func TestServiceUpsertPreservesDeploymentOrchestrationContract(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].StartOnBoot = true
+	project.Services[0].Deployments[0].DependsOn = []string{"svc-database"}
+	project.Services[0].Deployments[0].Readiness = &model.ReadinessProbe{
+		Type: "http", Target: "http://127.0.0.1:18190/ready", TimeoutSeconds: 45,
+	}
+	change := ChangeRequest{
+		Kind: KindServiceUpsert,
+		Service: &ServicePatch{
+			ID: "svc-worker",
+			Deployments: []DeploymentPatch{{
+				ID:      "dep-worker-dev",
+				Command: "go run ./worker-v2",
+			}},
+		},
+	}
+
+	updated, err := Apply(project, change)
+
+	require.NoError(t, err)
+	got := findServiceForTest(updated, "worker").Deployments[0]
+	assert.True(t, got.StartOnBoot)
+	assert.Equal(t, []string{"svc-database"}, got.DependsOn)
+	require.NotNil(t, got.Readiness)
+	assert.Equal(t, "http://127.0.0.1:18190/ready", got.Readiness.Target)
+}
+
+func TestServiceUpsertAppliesDeploymentOrchestrationContractFromJSON(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].StartOnBoot = true
+	project.Services[0].Deployments[0].DependsOn = []string{"svc-old"}
+	var change ChangeRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"kind": "config.service.upsert",
+		"service": {
+			"id": "svc-worker",
+			"deployments": [{
+				"id": "dep-worker-dev",
+				"start_on_boot": false,
+				"depends_on": [],
+				"readiness": {
+					"type": "http",
+					"target": "http://127.0.0.1:18190/healthz",
+					"timeout_seconds": 45
+				}
+			}]
+		}
+	}`), &change))
+
+	updated, err := Apply(project, change)
+
+	require.NoError(t, err)
+	got := findServiceForTest(updated, "worker").Deployments[0]
+	assert.False(t, got.StartOnBoot)
+	assert.Empty(t, got.DependsOn)
+	require.NotNil(t, got.Readiness)
+	assert.Equal(t, "http", got.Readiness.Type)
+	assert.Equal(t, "http://127.0.0.1:18190/healthz", got.Readiness.Target)
+	assert.Equal(t, 45, got.Readiness.TimeoutSeconds)
+}
+
+func TestServiceUpsertCreatesDeploymentWithOrchestrationContract(t *testing.T) {
+	project := sampleProject()
+	change := ChangeRequest{
+		Kind: KindServiceUpsert,
+		Service: &ServicePatch{
+			Name: "api",
+			Deployments: []DeploymentPatch{{
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				Command:     "go run ./api",
+				StartOnBoot: ptrBool(true),
+				DependsOn:   []string{"svc-worker"},
+				Readiness: &model.ReadinessProbe{
+					Type: "http", Target: "http://127.0.0.1:18191/healthz", TimeoutSeconds: 45,
+				},
+			}},
+		},
+	}
+
+	updated, err := Apply(project, change)
+
+	require.NoError(t, err)
+	api := findServiceForTest(updated, "api")
+	require.NotNil(t, api)
+	require.Len(t, api.Deployments, 1)
+	got := api.Deployments[0]
+	assert.True(t, got.StartOnBoot)
+	assert.Equal(t, []string{"svc-worker"}, got.DependsOn)
+	require.NotNil(t, got.Readiness)
+	assert.Equal(t, "http://127.0.0.1:18191/healthz", got.Readiness.Target)
+}
+
 func TestServiceUpsertRejectsRemoteWebDebugV1(t *testing.T) {
 	project := sampleProject()
 	change := ChangeRequest{
@@ -515,6 +609,31 @@ func TestDiffIncludesDeploymentCodeDebugChanges(t *testing.T) {
 			"policy":        model.CodeDebugPolicyEnabled,
 			"mode":          model.CodeDebugModeLaunch,
 			"stop_on_entry": true,
+		},
+	})
+}
+
+func TestDiffIncludesDeploymentOrchestrationChanges(t *testing.T) {
+	before := sampleProject()
+	before.Services[0].Deployments[0].DependsOn = []string{"svc-old"}
+	after := sampleProject()
+	after.Services[0].Deployments[0].StartOnBoot = true
+	after.Services[0].Deployments[0].DependsOn = []string{"svc-database"}
+	after.Services[0].Deployments[0].Readiness = &model.ReadinessProbe{
+		Type: "http", Target: "http://127.0.0.1:18190/ready", TimeoutSeconds: 45,
+	}
+
+	diff := Diff(before, after)
+
+	assert.Contains(t, diff, DiffEntry{Path: "services[worker].deployments[dev].start_on_boot", Before: false, After: true})
+	assert.Contains(t, diff, DiffEntry{Path: "services[worker].deployments[dev].depends_on", Before: []string{"svc-old"}, After: []string{"svc-database"}})
+	assert.Contains(t, diff, DiffEntry{
+		Path:   "services[worker].deployments[dev].readiness",
+		Before: map[string]any(nil),
+		After: map[string]any{
+			"type":            "http",
+			"target":          "http://127.0.0.1:18190/ready",
+			"timeout_seconds": 45,
 		},
 	})
 }

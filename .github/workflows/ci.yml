@@ -57,6 +57,12 @@ jobs:
           go test ./codedebug -run TestNodeAttachWindowsUsesPrearm -count=1
           go test ./installer -run 'TestNormalizePlatformWindowsBinaryName|TestInstallerInstallsWindowsAgent' -count=1
           go test ./langruntime -run 'TestGoProviderStartDevUsesWindowsExecutableSuffix|TestNodePrearmArgsForWindows|TestNodePrearmEnvForWindows|TestNodeDebuggerSpecForPlatform' -count=1
+          go test ./configchange -run 'TestServiceUpsert.*DeploymentOrchestrationContract' -count=1
+          go test ./windowsvalidation -run 'TestEvidencePathRedactionDoesNotRegisterCommonScalarGlobally|TestFinalizeCampaignCleanupKeepsIdentityAfterNumericEvidenceRedaction|TestWindowsFixtureBuildWrappersProtectArgumentBoundaries' -count=1
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '..\validation\windows-real\Cleanup-Validation.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
 
   desktop:
     name: Desktop web checks

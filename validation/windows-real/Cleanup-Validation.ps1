@@ -149,16 +149,56 @@ function ConvertTo-ComparableJson {
     return ($Value | ConvertTo-Json -Depth 20 -Compress)
 }
 
+function Compare-StateFiles {
+    param([object[]]$Expected, [object[]]$Actual)
+    $expectedByPath = @{}
+    $actualByPath = @{}
+    foreach ($file in @($Expected)) { $expectedByPath[[string]$file.path] = $file }
+    foreach ($file in @($Actual)) { $actualByPath[[string]$file.path] = $file }
+    $missing = @()
+    $extra = @()
+    $changed = @()
+    foreach ($path in @($expectedByPath.Keys | Sort-Object)) {
+        $expectedFile = $expectedByPath[$path]
+        if (-not $actualByPath.ContainsKey($path)) {
+            $missing += [ordered]@{ path = $path; expected_size_bytes = $expectedFile.size_bytes; expected_sha256 = $expectedFile.sha256 }
+            continue
+        }
+        $actualFile = $actualByPath[$path]
+        if ($expectedFile.size_bytes -ne $actualFile.size_bytes -or $expectedFile.sha256 -cne $actualFile.sha256) {
+            # 只记录相对路径、大小和摘要，既能定位恢复漂移，又不会把用户文件内容写入验证证据。
+            $changed += [ordered]@{
+                path = $path
+                expected_size_bytes = $expectedFile.size_bytes
+                actual_size_bytes = $actualFile.size_bytes
+                expected_sha256 = $expectedFile.sha256
+                actual_sha256 = $actualFile.sha256
+            }
+        }
+    }
+    foreach ($path in @($actualByPath.Keys | Sort-Object)) {
+        if (-not $expectedByPath.ContainsKey($path)) {
+            $actualFile = $actualByPath[$path]
+            $extra += [ordered]@{ path = $path; actual_size_bytes = $actualFile.size_bytes; actual_sha256 = $actualFile.sha256 }
+        }
+    }
+    return [ordered]@{ missing = $missing; extra = $extra; changed = $changed }
+}
+
 function Compare-BaselineCategory {
     param([string]$Name, [object]$Expected, [object]$Actual)
     $expectedJson = ConvertTo-ComparableJson $Expected
     $actualJson = ConvertTo-ComparableJson $Actual
-    return [ordered]@{
+    $result = [ordered]@{
         category = $Name
         status = if ($expectedJson -ceq $actualJson) { 'PASS' } else { 'FAIL' }
         expected_sha256 = Get-TextSHA256 $expectedJson
         actual_sha256 = Get-TextSHA256 $actualJson
     }
+    if ($Name -eq 'user_state') {
+        $result['file_differences'] = Compare-StateFiles -Expected @($Expected.files) -Actual @($Actual.files)
+    }
+    return $result
 }
 
 function Get-RequiredPropertyValue {

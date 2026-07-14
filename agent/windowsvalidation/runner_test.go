@@ -102,3 +102,39 @@ func TestValidateRuntimeInputKeepsMSISmokeIndependentFromRemoteInputs(t *testing
 		t.Fatal("prepared campaign identity must be validated before path construction")
 	}
 }
+
+func TestApplyRuntimeEnvironmentUsesMachineInputAndRestoresProcess(t *testing.T) {
+	t.Setenv("RUSTUP_HOME", `C:\Users\validator\.rustup`)
+	t.Setenv("SUPERDEV_JVM_ADAPTER_COMMAND", `C:\old\adapter.cmd`)
+
+	restore, err := applyRuntimeEnvironment(RuntimeInput{
+		RustupHome:        `C:\SuperDevValidation\tools\rustup`,
+		JVMAdapterCommand: `C:\SuperDevValidation\tools\jvm-adapter.cmd`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("RUSTUP_HOME"); got != `C:\SuperDevValidation\tools\rustup` {
+		t.Fatalf("RUSTUP_HOME=%q", got)
+	}
+	if got := os.Getenv("SUPERDEV_JVM_ADAPTER_COMMAND"); got != `C:\SuperDevValidation\tools\jvm-adapter.cmd` {
+		t.Fatalf("SUPERDEV_JVM_ADAPTER_COMMAND=%q", got)
+	}
+
+	if err := restore(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("RUSTUP_HOME"); got != `C:\Users\validator\.rustup` {
+		t.Fatalf("RUSTUP_HOME was not restored: %q", got)
+	}
+	if got := os.Getenv("SUPERDEV_JVM_ADAPTER_COMMAND"); got != `C:\old\adapter.cmd` {
+		t.Fatalf("SUPERDEV_JVM_ADAPTER_COMMAND was not restored: %q", got)
+	}
+}
+
+func TestResolveInputPathKeepsOptionalToolchainPathEmpty(t *testing.T) {
+	t.Parallel()
+	if got := resolveInputPath(t.TempDir(), ""); got != "" {
+		t.Fatalf("empty optional path resolved to %q", got)
+	}
+}
