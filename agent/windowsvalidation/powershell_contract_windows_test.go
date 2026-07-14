@@ -5,11 +5,11 @@
 // 职责：
 //   - 从含空格和非 ASCII 字符的普通目录直接执行三个验证入口；
 //   - 证明原始脚本能越过解析/参数绑定并到达安全的预检失败；
-//   - 验证结构化控制台输出保持 UTF-8。
+//   - 验证结构化控制台输出、transcript 和最终错误上下文保持可读。
 //
 // 边界：
 //   - 只构造必然在任何安装、用户状态隔离或清理前失败的输入；
-//   - 不安装、启动、停止或卸载 SuperDev。
+//   - 不安装、启动、停止或卸载 SuperDev，也不冒充最终 Windows 10 正向验收。
 package windowsvalidation
 
 import (
@@ -69,7 +69,7 @@ var windowsPowerShell51AutomaticParameterNames = map[string]string{
 const windowsPowerShellASTContractCommand = `
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $parseFailed = $false
-@('Prepare-Validation.ps1', 'Run-Validation.ps1', 'Cleanup-Validation.ps1') | ForEach-Object {
+@(__ENTRYPOINTS__) | ForEach-Object {
     $scriptName = [string]$_
     $tokens = $null
     $parseErrors = $null
@@ -90,7 +90,7 @@ $parseFailed = $false
 if ($parseFailed) { exit 1 }
 `
 
-func TestShippedPowerShellEntrypointsExecuteUnmodifiedOnWindowsPowerShell51(t *testing.T) {
+func TestFinalArchivePowerShellEntrypointsReachStructuredPreflightOnWindowsPowerShell51(t *testing.T) {
 	versionOutput, err := exec.Command("powershell.exe", "-NoProfile", "-Command", `"$($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor)"`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("read Windows PowerShell version: %v: %s", err, versionOutput)
@@ -134,13 +134,13 @@ func TestShippedPowerShellEntrypointsExecuteUnmodifiedOnWindowsPowerShell51(t *t
 			name:      "run_msi",
 			script:    "Run-Validation.ps1",
 			component: "windows-validation-entry",
-			args:      []string{"-Lane", "msi_smoke", "-PreparedBackupDirectory", missingPreparedBackup},
+			args:      []string{"-Lane", "msi_smoke", "-RuntimeInput", `..\runtime-input.json`, "-PreparedBackupDirectory", missingPreparedBackup},
 		},
 		{
 			name:      "run_nsis",
 			script:    "Run-Validation.ps1",
 			component: "windows-validation-entry",
-			args:      []string{"-Lane", "nsis_core", "-PreparedBackupDirectory", missingPreparedBackup},
+			args:      []string{"-Lane", "nsis_core", "-RuntimeInput", `..\runtime-input.json`, "-PreparedBackupDirectory", missingPreparedBackup},
 		},
 		{
 			name:      "cleanup",
@@ -183,11 +183,17 @@ func TestShippedPowerShellEntrypointsExecuteUnmodifiedOnWindowsPowerShell51(t *t
 	if !bytes.Contains(cleanupOutput, []byte("缺失 预备备份")) {
 		t.Fatalf("cleanup output did not preserve the non-ASCII path as UTF-8: %s", cleanupOutput)
 	}
+	assertWindowsPowerShell51TranscriptReadable(t, packageRoot)
 }
 
 func assertWindowsPowerShell51ASTContract(t *testing.T, packageRoot string) {
 	t.Helper()
-	command := exec.Command("powershell.exe", "-NoProfile", "-Command", windowsPowerShellASTContractCommand)
+	quotedEntrypoints := make([]string, 0, len(windowsPowerShellEntrypoints))
+	for _, name := range windowsPowerShellEntrypoints {
+		quotedEntrypoints = append(quotedEntrypoints, "'"+strings.ReplaceAll(name, "'", "''")+"'")
+	}
+	contractCommand := strings.Replace(windowsPowerShellASTContractCommand, "__ENTRYPOINTS__", strings.Join(quotedEntrypoints, ", "), 1)
+	command := exec.Command("powershell.exe", "-NoProfile", "-Command", contractCommand)
 	command.Dir = packageRoot
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -204,6 +210,54 @@ func assertWindowsPowerShell51ASTContract(t *testing.T, packageRoot string) {
 		}
 		if canonical, reserved := windowsPowerShell51AutomaticParameterNames[strings.ToLower(fields[1])]; reserved {
 			t.Fatalf("%s declares Windows PowerShell automatic variable $%s as a parameter", fields[0], canonical)
+		}
+	}
+}
+
+func assertWindowsPowerShell51TranscriptReadable(t *testing.T, packageRoot string) {
+	t.Helper()
+	transcriptPath := filepath.Join(t.TempDir(), "PowerShell 记录 中文.txt")
+	campaignRoot := filepath.Join(t.TempDir(), "transcript campaigns")
+	resultsRoot := filepath.Join(t.TempDir(), "transcript results")
+	missingBackup := filepath.Join(t.TempDir(), "缺失 transcript 备份")
+	const transcriptCommand = `
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$ErrorActionPreference = 'Stop'
+Start-Transcript -LiteralPath $env:SUPERDEV_TEST_TRANSCRIPT -Force | Out-Null
+try {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId w10x64-abcdef0-20260714T000000Z-abcdee -CampaignRoot $env:SUPERDEV_TEST_CAMPAIGNS -ResultsRoot $env:SUPERDEV_TEST_RESULTS -BackupDirectory $env:SUPERDEV_TEST_MISSING_BACKUP -RestoreUserState
+    $scriptExitCode = $LASTEXITCODE
+} finally {
+    Stop-Transcript | Out-Null
+}
+exit $scriptExitCode
+`
+	command := exec.Command("powershell.exe", "-NoProfile", "-Command", transcriptCommand)
+	command.Dir = packageRoot
+	command.Env = append(os.Environ(),
+		"SUPERDEV_TEST_TRANSCRIPT="+transcriptPath,
+		"SUPERDEV_TEST_CAMPAIGNS="+campaignRoot,
+		"SUPERDEV_TEST_RESULTS="+resultsRoot,
+		"SUPERDEV_TEST_MISSING_BACKUP="+missingBackup,
+	)
+	output, runErr := command.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		t.Fatalf("transcript harness error = %v, want safe non-zero cleanup preflight exit; output=%s", runErr, output)
+	}
+
+	readCommand := exec.Command("powershell.exe", "-NoProfile", "-Command", `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::Out.Write((Get-Content -LiteralPath $env:SUPERDEV_TEST_TRANSCRIPT -Raw))`)
+	readCommand.Env = append(os.Environ(), "SUPERDEV_TEST_TRANSCRIPT="+transcriptPath)
+	transcript, err := readCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read PowerShell 5.1 transcript: %v: %s", err, transcript)
+	}
+	if !utf8.Valid(transcript) {
+		t.Fatalf("PowerShell 5.1 transcript is not readable UTF-8 after native decoding: %x", transcript)
+	}
+	for _, marker := range []string{`"component":"windows-validation-cleanup"`, "Selected backup has no backup-manifest.json", "缺失 transcript 备份"} {
+		if !bytes.Contains(transcript, []byte(marker)) {
+			t.Fatalf("PowerShell 5.1 transcript is missing readable marker %q: %s", marker, transcript)
 		}
 	}
 }

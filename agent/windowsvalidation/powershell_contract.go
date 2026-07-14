@@ -1,22 +1,19 @@
-// powershell_contract.go 校验便携包对 Windows PowerShell 5.1 暴露的原生入口合同。
+// powershell_contract.go 校验便携包对 Windows PowerShell 5.1 暴露的 Runbook 入口合同。
 //
 // 职责：
-//   - 在打包和 Windows 执行前验证 shipped PowerShell 源码字节；
-//   - 拒绝需要外部编码 loader 才能被 Windows PowerShell 5.1 正确读取的入口。
+//   - 在打包前确认 Runbook 引用的 shipped PowerShell 入口真实存在；
+//   - 锁定操作者可复制的 powershell.exe -File 命令。
 //
 // 边界：
-//   - 不执行 PowerShell、安装器或验证场景；
-//   - 不重写或重新编码源文件来修复失败输入。
+//   - 不在非 Windows 主机模拟 PowerShell 解析或编码行为；
+//   - 不规定 BOM、变量名或编码初始化语法等具体修复手段。
 package windowsvalidation
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/xsxdot/gokit/logger"
 )
@@ -36,11 +33,8 @@ var windowsPowerShellRunbookCommands = []string{
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <nsis-id> -BackupDirectory <nsis-backup> -RestoreUserState`,
 }
 
-var powershellConsoleUTF8Pattern = regexp.MustCompile(`(?im)^\s*\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$false\)\s*$`)
-var powershellNativePipelineUTF8Pattern = regexp.MustCompile(`(?im)^\s*\$OutputEncoding\s*=\s*\[Console\]::OutputEncoding\s*$`)
-
-func validatePowerShell51Entrypoints(root string) (contractErr error) {
-	log := logger.GetLogger().WithEntryName("WindowsValidationPowerShellContract")
+func validateWindowsPowerShellRunbookContract(root string) (contractErr error) {
+	log := logger.GetLogger().WithEntryName("WindowsValidationPowerShellContract").WithField("package_root", root)
 	log.WithField("entrypoint_count", len(windowsPowerShellEntrypoints)).Info("开始校验 Windows PowerShell 5.1 原生入口合同")
 	defer func() {
 		if contractErr != nil {
@@ -48,27 +42,26 @@ func validatePowerShell51Entrypoints(root string) (contractErr error) {
 		}
 	}()
 	for _, name := range windowsPowerShellEntrypoints {
-		content, err := os.ReadFile(filepath.Join(root, name))
+		path := filepath.Join(root, name)
+		fileLog := log.WithField("path", path)
+		fileLog.Debug("开始检查 Windows PowerShell 入口文件")
+		info, err := os.Stat(path)
 		if err != nil {
-			return fmt.Errorf("read PowerShell entrypoint %s: %w", name, err)
+			return fmt.Errorf("stat PowerShell entrypoint %s: %w", name, err)
 		}
-		// Windows PowerShell 5.1 会把无 BOM 文件按系统 ANSI 代码页解释；验证包包含中文注释和日志，
-		// 因此必须在 shipped bytes 上保留 UTF-8 BOM，不能依赖执行者临时 loader。
-		if !bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
-			return fmt.Errorf("PowerShell entrypoint %s must start with a UTF-8 BOM for Windows PowerShell 5.1", name)
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("PowerShell entrypoint %s is not a regular file", name)
 		}
-		body := content[3:]
-		if !utf8.Valid(body) {
-			return fmt.Errorf("PowerShell entrypoint %s is not valid UTF-8 after its BOM", name)
-		}
-		if !powershellConsoleUTF8Pattern.Match(body) || !powershellNativePipelineUTF8Pattern.Match(body) {
-			return fmt.Errorf("PowerShell entrypoint %s must initialize UTF-8 console output and native-pipeline encoding", name)
-		}
+		fileLog.WithField("size_bytes", info.Size()).Debug("Windows PowerShell 入口文件检查完成")
 	}
-	runbook, err := os.ReadFile(filepath.Join(root, "Runbook.md"))
+	runbookPath := filepath.Join(root, "Runbook.md")
+	runbookLog := log.WithField("path", runbookPath)
+	runbookLog.Debug("开始读取 Windows 验证 Runbook")
+	runbook, err := os.ReadFile(runbookPath)
 	if err != nil {
 		return fmt.Errorf("read Windows validation Runbook: %w", err)
 	}
+	runbookLog.WithField("size_bytes", len(runbook)).Debug("Windows 验证 Runbook 读取完成")
 	for _, command := range windowsPowerShellRunbookCommands {
 		if strings.Count(string(runbook), command) != 1 {
 			return fmt.Errorf("Runbook must use powershell.exe exactly once for command %q", command)

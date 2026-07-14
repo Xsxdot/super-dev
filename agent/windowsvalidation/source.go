@@ -87,7 +87,7 @@ func LoadPackageSource(root string) (PackageSource, error) {
 	if err := rejectSymlinks(root); err != nil {
 		return PackageSource{}, err
 	}
-	if err := validatePowerShell51Entrypoints(root); err != nil {
+	if err := validateWindowsPowerShellRunbookContract(root); err != nil {
 		return PackageSource{}, err
 	}
 	var source PackageSource
