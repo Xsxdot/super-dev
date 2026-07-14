@@ -1,4 +1,4 @@
-# Prepare-Validation.ps1 captures a pre-install baseline and isolates existing SuperDev user state.
+﻿# Prepare-Validation.ps1 captures a pre-install baseline and isolates existing SuperDev user state.
 #
 # Responsibilities:
 #   - refuse preparation while SuperDev processes are running;
@@ -9,6 +9,14 @@
 #   - this script does not install, uninstall, start, or stop SuperDev;
 #   - it records hashes rather than connector or user-state contents;
 #   - it never deletes or overwrites an existing backup.
+# Parameters:
+#   - Lane selects the independent msi_smoke or nsis_core preparation identity;
+#   - BackupRoot is the operator-controlled parent for the new immutable backup.
+# Exit behavior:
+#   - exits 0 only after baseline, state isolation, and ready manifest persistence;
+#   - exits 1 with a structured error event and leaves recovery material intact.
+# Notes:
+#   - run from a normal Windows PowerShell 5.1 process before launching an installer.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -19,6 +27,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 默认沿用系统代码页；在第一次结构化事件写出前固定 UTF-8，
+# 才能保证重定向日志与后续原生进程管道在不同 Windows 语言环境中保持同一字节合同。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 function Write-PreparationEvent {
     param([string]$Level, [string]$Stage, [string]$Outcome, [hashtable]$Fields = @{})

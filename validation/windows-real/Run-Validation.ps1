@@ -1,4 +1,4 @@
-# Run-Validation.ps1 is the Windows-native entry point for one frozen validation lane.
+﻿# Run-Validation.ps1 is the Windows-native entry point for one frozen validation lane.
 #
 # Responsibilities:
 #   - enforce Windows 10 x64, package and installer identity preflight;
@@ -9,6 +9,14 @@
 #   - this script never installs or uninstalls SuperDev and never requests elevation;
 #   - UAC belongs only to the separately launched frozen installer;
 #   - this script accepts no arbitrary command, MCP tool, or scenario path.
+# Parameters:
+#   - Lane selects msi_smoke or nsis_core; RuntimeInput points to mutable machine facts outside the package;
+#   - PreparedBackupDirectory binds the run to one completed preparation; AgentUrl selects the local frozen agent endpoint.
+# Exit behavior:
+#   - exits with the packaged driver result after all identity gates pass;
+#   - exits 1 with structured pre-driver evidence when any gate or invocation fails.
+# Notes:
+#   - run from a normal Windows PowerShell 5.1 process after the matching official installer completes.
 [CmdletBinding()]
 param(
     [ValidateSet('msi_smoke', 'nsis_core')]
@@ -21,6 +29,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 默认沿用系统代码页；在第一次结构化事件写出前固定 UTF-8，
+# 才能保证重定向日志与后续原生 driver 管道在不同 Windows 语言环境中保持同一字节合同。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 function Write-ValidationEvent {
     param([string]$Level, [string]$Stage, [string]$Outcome, [hashtable]$Fields = @{})
@@ -68,13 +80,13 @@ function Assert-PackageFiles {
 }
 
 function Assert-Installers {
-    param([object]$Input, [object]$Frozen)
+    param([object]$RuntimeInputObject, [object]$Frozen)
     $format = if ($Lane -eq 'msi_smoke') { 'msi' } else { 'nsis' }
     $selected = @($Frozen.installers | Where-Object { $_.format -eq $format })
     # 两条 lane 必须能独立失败；当前安装器损坏时拒绝执行，但绝不要求另一格式同时存在。
     if ($selected.Count -ne 1) { throw "Frozen manifest must contain exactly one $format installer." }
     foreach ($expected in $selected) {
-        $path = Join-Path ([string]$Input.installer_directory) ([string]$expected.filename)
+        $path = Join-Path ([string]$RuntimeInputObject.installer_directory) ([string]$expected.filename)
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Frozen installer missing: $($expected.filename)" }
         $item = Get-Item -LiteralPath $path
         if ($item.Length -ne [long]$expected.size_bytes) { throw "Frozen installer size mismatch: $($expected.filename)" }

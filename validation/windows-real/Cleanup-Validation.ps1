@@ -1,4 +1,4 @@
-# Cleanup-Validation.ps1 removes one explicitly identified local campaign and restores its prepared state backup.
+﻿# Cleanup-Validation.ps1 removes one explicitly identified local campaign and restores its prepared state backup.
 #
 # Responsibilities:
 #   - remove only a validated direct child campaign directory;
@@ -10,6 +10,14 @@
 #   - this script does not stop SuperDev processes or perform broad wildcard deletion;
 #   - remote Linux cleanup must already be evidenced by the remote-pipeline scenario;
 #   - restoration is refused while Desktop or Agent processes are running.
+# Parameters:
+#   - CampaignId, CampaignRoot, ResultsRoot and BackupDirectory identify one exact prepared campaign;
+#   - RestoreUserState is mandatory for a PASS; RemoveResults is an explicit post-finalization opt-in.
+# Exit behavior:
+#   - exits 0 only after restore, final baseline comparison, report persistence, and finalization;
+#   - exits 1 with structured failure and recovery-quarantine context when cleanup is incomplete.
+# Notes:
+#   - run from a normal Windows PowerShell 5.1 process only after the official uninstall and process shutdown.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -26,6 +34,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 默认沿用系统代码页；在第一次结构化事件写出前固定 UTF-8，
+# 才能保证重定向日志与 finalizer 管道在不同 Windows 语言环境中保持同一字节合同。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 function Write-CleanupEvent {
     param([string]$Level, [string]$Stage, [string]$Outcome, [hashtable]$Fields = @{})
@@ -296,9 +308,10 @@ try {
     $manifest = Join-Path $BackupDirectory 'backup-manifest.json'
     $baselinePath = Join-Path $BackupDirectory 'baseline.json'
     $stateFilesPath = Join-Path $BackupDirectory 'state-files.json'
-    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Selected backup has no backup-manifest.json.' }
-    if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) { throw 'Selected backup has no baseline.json.' }
-    if (-not (Test-Path -LiteralPath $stateFilesPath -PathType Leaf)) { throw 'Selected backup has no state-files.json.' }
+    # 失败上下文保留操作者实际传入的路径，才能确认含空格/非 ASCII 参数在 PS5.1 中没有被错误解码。
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Selected backup has no backup-manifest.json: $manifest" }
+    if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) { throw "Selected backup has no baseline.json: $baselinePath" }
+    if (-not (Test-Path -LiteralPath $stateFilesPath -PathType Leaf)) { throw "Selected backup has no state-files.json: $stateFilesPath" }
     $backupManifest = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
     if ($backupManifest.kind -ne 'superdev.windows-validation.prepared-backup' -or $backupManifest.status -ne 'ready' -or $backupManifest.campaign_id -ne $CampaignId) {
         throw 'Selected backup was not completed for this exact campaign by Prepare-Validation.ps1.'

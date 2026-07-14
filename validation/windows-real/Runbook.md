@@ -14,7 +14,7 @@
 
 ## 1. 传输并冻结输入
 
-**Prerequisite**：macOS 侧已交付 ZIP、同名 `.sha256`、原始 MSI 和 NSIS；Windows 使用普通 PowerShell。
+**Prerequisite**：macOS 侧已交付 ZIP、同名 `.sha256`、原始 MSI 和 NSIS；Windows 使用系统自带 Windows PowerShell 5.1（`powershell.exe`）。本 Runbook 中的脚本命令必须对解压后的原始文件逐字执行，不得使用 PowerShell 7、外部 UTF-8 loader、预处理、字符串替换或内存源码改写。
 
 **Action**：运行 `Get-FileHash <zip> -Algorithm SHA256`，与 `.sha256` 逐字核对后用 Explorer 解压；建立 `C:\SuperDevValidation\installers` 并放入：
 
@@ -50,7 +50,7 @@
 **Action**：运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane msi_smoke
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane msi_smoke
 ```
 
 记录成功事件中的 `<msi-backup>` 和安装前已冻结的 `<msi-id>`。
@@ -70,7 +70,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -La
 **Action**：用 Explorer 启动 MSI；这是本步骤唯一允许的 UAC 边界。启动 Desktop，确认 Agent `http://127.0.0.1:57017` 可用，再在普通 PowerShell 运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane msi_smoke -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <msi-backup>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane msi_smoke -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <msi-backup>
 ```
 
 **Expected**：结果目录包含 campaign ID；MSI lane 只判定安装器身份、三个 packaged sidecar、MCP initialize、恰好 75 个工具名和七 provider 名，不产生 75 个功能 PASS。
@@ -88,7 +88,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane m
 **Action**：通过正常 Windows 卸载入口卸载 MSI（允许 UAC），然后运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <msi-id> -BackupDirectory <msi-backup> -RestoreUserState
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <msi-id> -BackupDirectory <msi-backup> -RestoreUserState
 ```
 
 **Expected**：cleanup 对进程、57017 监听、四类安装路径、三处卸载注册表、Codex/Claude connector 摘要和 `.superdev` 逐文件身份全部返回 PASS；临时 quarantine 被精确删除；packaged finalizer 将最终状态同时写回 backup cleanup report、campaign JSON/Markdown 和结果根 `validation-summary.json/.md` 的 cleanup section。
@@ -103,7 +103,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -Ca
 
 **Prerequisite**：MSI cleanup 已执行并形成最终报告；若报告 FAIL，已按步骤 5 continuation gate 证明残留不会污染 NSIS 身份与运行，且全部 SuperDev 进程关闭。
 
-**Action**：运行 `Prepare-Validation.ps1 -Lane nsis_core`，记录新的 `<nsis-backup>` 与 `<nsis-id>`；不得复用 `<msi-backup>` 或 `<msi-id>`。
+**Action**：运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane nsis_core
+```
+
+记录新的 `<nsis-backup>` 与 `<nsis-id>`；不得复用 `<msi-backup>` 或 `<msi-id>`。
 
 **Expected**：与步骤 3 相同的六类完整基线和独立 `ready` manifest。
 
@@ -120,7 +126,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -Ca
 **Action**：用 Explorer 启动 NSIS setup（允许 UAC），启动 Desktop 并确认 Agent 可用，然后运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane nsis_core -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <nsis-backup>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane nsis_core -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <nsis-backup>
 ```
 
 **Expected**：按身份 → 配置/审批/生命周期 → Go 日志诊断 → 浏览器调试 → 代码调试 → 七 provider → Windows→Linux pipeline A→B→A→cleanup 执行；报告分别呈现 NSIS/core、七 provider、75 工具、pipeline，不以总分掩盖 FAIL/BLOCKED。
@@ -152,7 +158,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane n
 **Action**：运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <nsis-id> -BackupDirectory <nsis-backup> -RestoreUserState
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <nsis-id> -BackupDirectory <nsis-backup> -RestoreUserState
 ```
 
 确认 summary 的 cleanup section 已被当前结果覆盖，而不是旧 PASS。
