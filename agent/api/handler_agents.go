@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
@@ -68,6 +69,12 @@ func (a *App) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	release, ok := a.acquireAgentLifecycleOperation(w, dto.HostID, "create_config")
+	if !ok {
+		return
+	}
+	defer release()
+
 	host, found, err := a.remoteHostByID(dto.HostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -109,7 +116,14 @@ func (a *App) updateAgent(w http.ResponseWriter, r *http.Request) {
 
 // updateAgentTransport 处理 PUT /api/agents/{host_id}/transport。
 func (a *App) updateAgentTransport(w http.ResponseWriter, r *http.Request) {
-	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "update_transport")
+	if !ok {
+		return
+	}
+	defer release()
+
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -138,7 +152,14 @@ func (a *App) updateAgentTransport(w http.ResponseWriter, r *http.Request) {
 
 // updateAgentConfig 处理 PUT /api/agents/{host_id}/config。
 func (a *App) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
-	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "update_config")
+	if !ok {
+		return
+	}
+	defer release()
+
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -167,18 +188,14 @@ func (a *App) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
 // deleteAgent 处理 DELETE /api/agents/{host_id}。
 func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
-	if _, found, err := a.remoteHostByID(hostID); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	} else if !found {
-		jsonError(w, http.StatusNotFound, "host not found")
-		return
-	}
-	if err := a.agentStore.RemoveAgent(hostID); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	jsonOK(w, map[string]string{"status": "deleted"})
+	// 旧 DELETE 曾静默留下远端 Agent；必须强制调用方选择卸载或显式 Detach。
+	logger.GetLogger().WithEntryName("AgentLifecycle").WithFields(map[string]any{
+		"host_id":   hostID,
+		"operation": "legacy_delete",
+	}).Info("拒绝旧 Agent 配置删除旁路")
+	jsonErrorCode(w, http.StatusConflict, "decommission_required", "remote Agent uninstall or explicit detach is required", map[string]string{
+		"host_id": hostID,
+	})
 }
 
 // checkAgent 处理 POST /api/agents/{host_id}/check。

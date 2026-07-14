@@ -282,6 +282,30 @@ _Avoid_: Coding Agent, SuperDev Agent
 提供 SuperDev 编排、观察和调试能力的节点进程。
 _Avoid_: Coding Agent
 
+**Agent Uninstall**:
+先卸载远端 SuperDev Agent、成功后再移除 Controller 中 Agent 管理配置的正常移除操作；失败时保留配置作为可恢复的管理入口。
+_Avoid_: Remove Agent Config, Delete Agent, Decommission
+
+**Agent Child Process**:
+由 SuperDev Agent 直接启动且生命周期从属于该 Agent 的 Runtime 或采集进程。
+_Avoid_: Managed Deployment, systemd Service, Docker Container
+
+**Independent Host Runtime**:
+生命周期不从属于 SuperDev Agent、由 Host 运行基座独立持有的 Runtime。
+_Avoid_: Agent Child Process, RuntimeTypeExternal, Agent-owned Process
+
+**Agent Detach**:
+在无法完成 Agent Uninstall 时，仅移除 Controller 中 Agent 管理配置的风险兜底；它不代表远端 Agent 已被删除。
+_Avoid_: Agent Uninstall, Clean Removal
+
+**Remote Agent Data**:
+由远端 SuperDev Agent 持久化、可在 Agent Uninstall 后继续保留的节点状态、日志与历史数据。
+_Avoid_: Agent Binary, Controller Agent Config, Disposable Cache
+
+**Agent Data Purge**:
+在 Agent Uninstall 中经用户显式选择，删除 Remote Agent Data 的不可恢复操作。
+_Avoid_: Default Uninstall, Cache Cleanup, Agent Detach
+
 **Controller Agent**:
 运行在开发主机上、拥有 Workspace 与 Sandbox 生命周期并向 Sandbox Node 下发期望状态的 SuperDev Agent。
 _Avoid_: Sandbox Agent, Coding Agent

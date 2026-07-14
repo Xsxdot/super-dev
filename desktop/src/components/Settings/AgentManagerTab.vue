@@ -14,7 +14,7 @@ AgentManagerTab：设置页 Agent 连接与安装管理标签页。
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AgentDTO, AgentHealth, AgentRuntime } from '@/api/agent'
+import { AgentAPIError, agentUninstallScriptURL, type AgentDTO, type AgentHealth, type AgentRuntime } from '@/api/agent'
 import { useAgentsStore } from '@/stores/agents'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
@@ -24,6 +24,8 @@ import { agentStage, agentStageView, runtimeFor, type AgentPanelTab } from '@/li
 import { agentRouteRows, agentRouteSummary, transportTypeLabelKey, type AgentRouteRowStatus } from '@/lib/agentRoute'
 import AgentConfigPanel from './AgentConfigPanel.vue'
 import AgentBulkUpdateModal from './AgentBulkUpdateModal.vue'
+import AgentUninstallModal from './AgentUninstallModal.vue'
+import AgentDetachModal from './AgentDetachModal.vue'
 
 const agentsStore = useAgentsStore()
 const remoteStore = useRemoteStore()
@@ -38,7 +40,11 @@ const openMenuHostId = ref<string | null>(null)
 const menuPosition = ref({ top: 0, left: 0 })
 const menuTriggerRect = ref<{ top: number; right: number; bottom: number } | null>(null)
 const checking = ref<Set<string>>(new Set())
-const removing = ref<Set<string>>(new Set())
+const uninstalling = ref<Set<string>>(new Set())
+const uninstallTarget = ref<AgentDTO | null>(null)
+const manualUninstallTarget = ref<AgentDTO | null>(null)
+const detachTarget = ref<AgentDTO | null>(null)
+const detaching = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
 const bulkUpdateVisible = ref(false)
 const actionMenuWidth = 150
@@ -248,20 +254,64 @@ async function checkAgent(agent: AgentDTO) {
   }
 }
 
-async function removeAgent(agent: AgentDTO) {
+function openUninstall(agent: AgentDTO) {
   openMenuHostId.value = null
-  if (!confirm(t('settings.agents.removeConfigConfirm', { name: agent.host_name }))) return
-  const next = new Set(removing.value)
+  uninstallTarget.value = agent
+}
+
+async function uninstallAgent(removeData: boolean) {
+  const agent = uninstallTarget.value
+  if (!agent) return
+  uninstallTarget.value = null
+  const next = new Set(uninstalling.value)
   next.add(agent.host_id)
-  removing.value = next
+  uninstalling.value = next
   try {
-    await agentsStore.deleteAgent(agent.host_id)
+    await agentsStore.uninstallAgent(agent.host_id, removeData)
+    if (manualUninstallTarget.value?.host_id === agent.host_id) {
+      manualUninstallTarget.value = null
+    }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('settings.agents.removeConfigFailed')
+    if (err instanceof AgentAPIError && err.stage === 'remote_uninstall') {
+      error.value = t('settings.agents.remoteUninstallFailed', { message: err.message })
+      // SSH 自动卸载失败时保留配置，并暴露与当前 Controller 版本匹配的离线脚本。
+      manualUninstallTarget.value = agent
+    } else if (err instanceof AgentAPIError && err.stage === 'config_remove') {
+      error.value = t('settings.agents.configRemoveFailed', { message: err.message })
+    } else {
+      error.value = err instanceof Error ? err.message : t('settings.agents.uninstallFailed')
+    }
   } finally {
-    const done = new Set(removing.value)
+    const done = new Set(uninstalling.value)
     done.delete(agent.host_id)
-    removing.value = done
+    uninstalling.value = done
+  }
+}
+
+function openDetachFallback() {
+  // 只有自动卸载失败并已进入手动指引的 Agent，才允许打开 Detach 风险确认。
+  if (!manualUninstallTarget.value) return
+  detachTarget.value = manualUninstallTarget.value
+}
+
+async function detachAgent() {
+  const agent = detachTarget.value
+  if (!agent) return
+  const next = new Set(detaching.value)
+  next.add(agent.host_id)
+  detaching.value = next
+  try {
+    await agentsStore.detachAgent(agent.host_id, 'manual_uninstall_failed')
+    detachTarget.value = null
+    if (manualUninstallTarget.value?.host_id === agent.host_id) {
+      manualUninstallTarget.value = null
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('settings.agents.detachFailed')
+  } finally {
+    const done = new Set(detaching.value)
+    done.delete(agent.host_id)
+    detaching.value = done
   }
 }
 </script>
@@ -286,6 +336,43 @@ async function removeAgent(agent: AgentDTO) {
     </header>
 
     <div v-if="error || agentsStore.error" class="settings-alert settings-alert-danger">{{ error || agentsStore.error }}</div>
+    <div v-if="manualUninstallTarget" class="settings-alert manual-uninstall" data-test="agent-manual-uninstall">
+      <strong>{{ t('settings.agents.manualUninstallTitle', { name: manualUninstallTarget.host_name }) }}</strong>
+      <p>{{ t('settings.agents.manualUninstallDescription') }}</p>
+      <div class="manual-uninstall-actions">
+        <div class="manual-uninstall-platform">
+          <a
+            class="settings-btn settings-btn-secondary"
+            data-test="agent-uninstall-script-shell"
+            :href="agentUninstallScriptURL('uninstall-agent.sh')"
+            download="uninstall-agent.sh"
+          >{{ t('settings.agents.downloadShellUninstall') }}</a>
+          <code>sh uninstall-agent.sh</code>
+          <code>sh uninstall-agent.sh --purge</code>
+        </div>
+        <div class="manual-uninstall-platform">
+          <a
+            class="settings-btn settings-btn-secondary"
+            data-test="agent-uninstall-script-powershell"
+            :href="agentUninstallScriptURL('uninstall-agent.ps1')"
+            download="uninstall-agent.ps1"
+          >{{ t('settings.agents.downloadPowerShellUninstall') }}</a>
+          <code>powershell -ExecutionPolicy Bypass -File .\uninstall-agent.ps1</code>
+          <code>powershell -ExecutionPolicy Bypass -File .\uninstall-agent.ps1 -Purge</code>
+        </div>
+      </div>
+      <div class="manual-uninstall-footer">
+        <button
+          class="settings-btn settings-btn-text"
+          type="button"
+          data-test="agent-detach-unavailable"
+          :disabled="detaching.has(manualUninstallTarget.host_id)"
+          @click="openDetachFallback"
+        >
+          {{ t('settings.agents.manualUninstallUnavailable') }}
+        </button>
+      </div>
+    </div>
     <div v-if="sortedAgents.length > 0" class="settings-surface settings-surface-scroll">
       <table class="settings-table agent-table">
         <thead>
@@ -367,8 +454,8 @@ async function removeAgent(agent: AgentDTO) {
                       <button type="button" :data-test="`agent-menu-security-${agent.host_id}`" @click="openPanel(agent, 'security')">{{ t('settings.agents.securityConfig') }}</button>
                       <button type="button" :data-test="`agent-menu-install-${agent.host_id}`" @click="openPanel(agent, 'install')">{{ t('settings.agents.generateCommand') }}</button>
                       <button type="button" :data-test="`agent-menu-check-${agent.host_id}`" @click="checkAgent(agent)">{{ t('settings.agents.recheck') }}</button>
-                      <button type="button" class="danger" :disabled="removing.has(agent.host_id)" :data-test="`agent-menu-remove-${agent.host_id}`" @click="removeAgent(agent)">
-                        {{ t('settings.agents.removeConfig') }}
+                      <button type="button" class="danger" :disabled="uninstalling.has(agent.host_id)" :data-test="`agent-menu-uninstall-${agent.host_id}`" @click="openUninstall(agent)">
+                        {{ t('settings.agents.uninstall') }}
                       </button>
                     </div>
                   </Teleport>
@@ -398,6 +485,20 @@ async function removeAgent(agent: AgentDTO) {
       :hosts="remoteStore.hosts"
       @cancel="closeBulkUpdate"
     />
+    <AgentUninstallModal
+      :visible="Boolean(uninstallTarget)"
+      :host-name="uninstallTarget?.host_name || ''"
+      :busy="uninstallTarget ? uninstalling.has(uninstallTarget.host_id) : false"
+      @cancel="uninstallTarget = null"
+      @confirm="uninstallAgent"
+    />
+    <AgentDetachModal
+      :visible="Boolean(detachTarget)"
+      :host-name="detachTarget?.host_name || ''"
+      :busy="detachTarget ? detaching.has(detachTarget.host_id) : false"
+      @cancel="detachTarget = null"
+      @confirm="detachAgent"
+    />
   </section>
 </template>
 
@@ -411,6 +512,37 @@ async function removeAgent(agent: AgentDTO) {
 .muted {
   color: var(--text-tertiary);
   font-size: 11px;
+}
+.manual-uninstall {
+  display: grid;
+  gap: 8px;
+}
+.manual-uninstall p {
+  margin: 0;
+}
+.manual-uninstall-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px;
+}
+.manual-uninstall-actions a {
+  text-decoration: none;
+}
+.manual-uninstall-platform {
+  display: grid;
+  gap: 6px;
+}
+.manual-uninstall-platform code {
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.manual-uninstall-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 .tag-chip {
   display: inline-block;

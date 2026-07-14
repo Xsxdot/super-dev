@@ -13,6 +13,8 @@ package installer
 
 import (
 	"context"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -21,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -226,25 +229,50 @@ func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, ser
 //   - 卸载成功结果，包含是否删除数据
 //   - 分阶段错误，便于上层定位失败原因
 func (i *Installer) Uninstall(ctx context.Context, host model.Host, removeData bool) (UninstallResult, error) {
+	baseLog := logger.GetLogger().WithEntryName("AgentInstaller").
+		WithField("host_id", host.ID).
+		WithField("purge", removeData)
+	baseLog.WithField("stage", "connect").Info("开始连接远端 Host 执行 Agent 卸载")
 	remote, err := i.factory(host)
 	if err != nil {
+		baseLog.WithField("stage", "connect").WithErr(err).Error("连接远端 Host 失败")
 		return UninstallResult{}, stageErr("connect", err)
 	}
-	defer remote.Close() //nolint:errcheck
+	defer func() {
+		if closeErr := remote.Close(); closeErr != nil {
+			baseLog.WithField("stage", "close").WithErr(closeErr).Error("关闭 Agent 卸载 SSH 连接失败")
+		}
+	}()
+	baseLog.WithField("stage", "connect").Info("远端 Host 连接已建立")
 
+	baseLog.WithField("stage", "detect_platform").Info("开始检测 Agent 卸载平台")
 	normalizedOS, err := detectOS(ctx, remote)
 	if err != nil {
+		baseLog.WithField("stage", "detect_platform").WithErr(err).Error("检测 Agent 卸载平台失败")
 		return UninstallResult{}, stageErr("detect_platform", err)
 	}
-	if err := uninstallCommands(ctx, remote, normalizedOS, removeData); err != nil {
+	platformLog := baseLog.WithField("platform", normalizedOS)
+	platformLog.WithField("stage", "detect_platform").Info("Agent 卸载平台检测完成")
+	platformLog.WithField("stage", "platform_cleanup").Info("开始清理 Agent 自有资源")
+	if err := uninstallCommands(ctx, remote, platformLog, normalizedOS, removeData); err != nil {
+		platformLog.WithField("stage", uninstallErrorStage(err, "platform_cleanup")).WithErr(err).Error("清理 Agent 自有资源失败")
 		return UninstallResult{}, err
 	}
+	platformLog.WithField("stage", "platform_cleanup").Info("Agent 自有资源清理完成")
 	return UninstallResult{
 		OK:          true,
 		HostID:      host.ID,
 		RemovedData: removeData,
 		Message:     "Agent uninstalled",
 	}, nil
+}
+
+func uninstallErrorStage(err error, fallback string) string {
+	var installErr *InstallError
+	if errors.As(err, &installErr) && installErr.Stage != "" {
+		return installErr.Stage
+	}
+	return fallback
 }
 
 // Restart restarts the remote agent service on host.
@@ -577,7 +605,8 @@ func replaceWindowsBinary(ctx context.Context, remote Remote, remoteTmp string) 
 }
 
 func updateMacOSUserLaunchAgentBinary(ctx context.Context, remote Remote, remoteTmp string) error {
-	home, _, err := macOSUserContext(ctx, remote)
+	operationLog := logger.GetLogger().WithEntryName("AgentInstaller").WithField("stage", "replace_user_binary")
+	home, _, err := macOSUserContext(ctx, remote, operationLog)
 	if err != nil {
 		return stageErr("replace_binary", err)
 	}
@@ -619,52 +648,209 @@ func windowsQuote(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 }
 
-func uninstallCommands(ctx context.Context, remote Remote, osName string, removeData bool) error {
+type remoteOperation struct {
+	Action   string
+	Resource string
+	Command  string
+}
+
+const (
+	linuxSystemdLoadStateCommand = "systemctl show superdev-agent.service --property=LoadState --property=ActiveState --property=FragmentPath --property=ExecStart --no-pager"
+	linuxSystemdUnitPath         = "/etc/systemd/system/superdev-agent.service"
+	linuxAgentBinaryPath         = "/usr/local/bin/superdev-agent"
+	macOSOwnershipAbsentMarker   = "__SUPERDEV_RESOURCE_ABSENT__"
+	macOSLayoutAmbiguousMarker   = "ambiguous"
+	macOSLayoutAbsentMarker      = "absent"
+	windowsTaskAbsentMarker      = "__SUPERDEV_TASK_ABSENT__"
+	windowsTaskQueryCommand      = `cmd /c if not exist "%SystemRoot%\System32\Tasks\SuperDevAgent" (echo __SUPERDEV_TASK_ABSENT__) else schtasks /Query /TN SuperDevAgent /XML`
+	windowsAgentBinaryPath       = `C:\ProgramData\SuperDev\Agent\superdev-agent.exe`
+)
+
+func runObservedRemoteOperation(ctx context.Context, remote Remote, operationLog *logger.Log, stage string, operation remoteOperation) (string, error) {
+	// 完整命令可能包含主机路径等环境信息，日志只使用稳定的 action/resource 标签。
+	entry := operationLog.WithField("stage", stage).
+		WithField("action", operation.Action).
+		WithField("resource", operation.Resource)
+	entry.Info("开始执行 Agent 远端清理动作")
+	output, err := remote.Run(ctx, operation.Command)
+	if err != nil {
+		entry.WithErr(err).Error("Agent 远端清理动作失败")
+		return "", err
+	}
+	entry.Info("Agent 远端清理动作完成")
+	return output, nil
+}
+
+func runObservedRemoteOperations(ctx context.Context, remote Remote, operationLog *logger.Log, stage string, operations []remoteOperation) error {
+	for _, operation := range operations {
+		if _, err := runObservedRemoteOperation(ctx, remote, operationLog, stage, operation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stopLinuxSystemdUnit(ctx context.Context, remote Remote, operationLog *logger.Log) (bool, error) {
+	output, err := runObservedRemoteOperation(ctx, remote, operationLog, "uninstall_systemd", remoteOperation{
+		Action:   "inspect",
+		Resource: "systemd_service",
+		Command:  linuxSystemdLoadStateCommand,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	state := make(map[string]string, 2)
+	for _, line := range strings.Split(output, "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if found {
+			state[key] = value
+		}
+	}
+	loadState, hasLoadState := state["LoadState"]
+	activeState, hasActiveState := state["ActiveState"]
+	fragmentPath, hasFragmentPath := state["FragmentPath"]
+	execStart, hasExecStart := state["ExecStart"]
+	if !hasLoadState || !hasActiveState || !hasFragmentPath || !hasExecStart {
+		return false, fmt.Errorf("systemctl 未返回完整的 Agent unit 状态")
+	}
+
+	stateLog := operationLog.WithField("stage", "uninstall_systemd").
+		WithField("resource", "systemd_service").
+		WithField("load_state", loadState).
+		WithField("active_state", activeState)
+	// 只有 systemd 同时明确 unit 未加载且未活动时才视为幂等 no-op；活动进程优先于文件状态。
+	if loadState == "not-found" && activeState == "inactive" {
+		if fragmentPath != "" || execStart != "" {
+			return false, fmt.Errorf("不存在的 Agent unit 返回了未知所有权信息")
+		}
+		stateLog.Info("Agent systemd unit 不存在，无需停止")
+		return false, nil
+	}
+	if fragmentPath != linuxSystemdUnitPath {
+		return false, fmt.Errorf("同名 systemd unit 不属于 SuperDev Agent: FragmentPath=%q", fragmentPath)
+	}
+	execStartPaths := systemdExecStartPaths(execStart)
+	if len(execStartPaths) != 1 || execStartPaths[0] != linuxAgentBinaryPath {
+		return false, fmt.Errorf("同名 systemd unit 不属于 SuperDev Agent: ExecStart 非 canonical binary")
+	}
+	stateLog.Info("检测到 Agent systemd unit，准备停止")
+	_, err = runObservedRemoteOperation(ctx, remote, operationLog, "uninstall_systemd", remoteOperation{
+		Action:   "stop",
+		Resource: "systemd_service",
+		Command:  "sudo -n systemctl stop superdev-agent.service",
+	})
+	return true, err
+}
+
+func systemdExecStartPaths(execStart string) []string {
+	const marker = "path="
+	paths := make([]string, 0, 1)
+	for remaining := execStart; ; {
+		start := strings.Index(remaining, marker)
+		if start < 0 {
+			break
+		}
+		value := remaining[start+len(marker):]
+		if end := strings.IndexAny(value, " ;}\t\r\n"); end >= 0 {
+			paths = append(paths, strings.TrimSpace(value[:end]))
+			remaining = value[end:]
+			continue
+		}
+		paths = append(paths, strings.TrimSpace(value))
+		break
+	}
+	return paths
+}
+
+func uninstallCommands(ctx context.Context, remote Remote, operationLog *logger.Log, osName string, removeData bool) error {
 	switch osName {
 	case "linux":
-		commands := []string{
-			"sudo -n systemctl stop superdev-agent.service || true",
-			"sudo -n systemctl disable superdev-agent.service || true",
-			"sudo -n rm -f /etc/systemd/system/superdev-agent.service /usr/local/bin/superdev-agent",
-			"sudo -n systemctl daemon-reload",
+		unitExists, err := stopLinuxSystemdUnit(ctx, remote, operationLog)
+		if err != nil {
+			return stageErr("uninstall_systemd", err)
 		}
+		// 命令仅指向 SuperDev Agent 自有 unit 和安装路径；缺失表示已经是目标状态。
+		operations := make([]remoteOperation, 0, 4)
+		if unitExists {
+			// unit 文件可能已被部分卸载，因此 disable 仍以文件存在为边界；stop 已依据 systemd 运行状态完成。
+			operations = append(operations, remoteOperation{Action: "disable", Resource: "systemd_service", Command: "if [ -e /etc/systemd/system/superdev-agent.service ]; then sudo -n systemctl disable superdev-agent.service; fi"})
+		}
+		operations = append(operations,
+			remoteOperation{Action: "delete", Resource: "service_and_binary", Command: "sudo -n rm -f /etc/systemd/system/superdev-agent.service /usr/local/bin/superdev-agent"},
+			remoteOperation{Action: "reload", Resource: "systemd_manager", Command: "sudo -n systemctl daemon-reload"},
+		)
 		if removeData {
-			commands = append(commands, "sudo -n rm -rf /var/lib/superdev-agent")
+			operations = append(operations, remoteOperation{Action: "purge", Resource: "data", Command: "sudo -n rm -rf /var/lib/superdev-agent"})
 		}
-		for _, cmd := range commands {
-			if _, err := remote.Run(ctx, cmd); err != nil {
-				return stageErr("uninstall_systemd", err)
-			}
+		if err := runObservedRemoteOperations(ctx, remote, operationLog, "uninstall_systemd", operations); err != nil {
+			return stageErr("uninstall_systemd", err)
 		}
 	case "darwin":
-		commands := []string{
-			"sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true",
-			"sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent",
+		mode, err := detectMacOSUninstallMode(ctx, remote, operationLog, removeData)
+		if err != nil {
+			return stageErr("uninstall_launchd", err)
+		}
+		if mode == installModeUserLaunchAgent {
+			return uninstallMacOSUserLaunchAgent(ctx, remote, operationLog, removeData)
+		}
+
+		if err := stopMacOSLaunchdJob(
+			ctx,
+			remote,
+			operationLog,
+			"uninstall_launchd",
+			"launch_daemon",
+			"system/dev.superdev.agent",
+			"/Library/LaunchDaemons/dev.superdev.agent.plist",
+			"/usr/local/bin/superdev-agent",
+			true,
+			"sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist",
+		); err != nil {
+			return stageErr("uninstall_launchd", err)
+		}
+
+		// LaunchDaemon 的数据与日志位置由我们生成的 plist 固定，purge 只删除这些 Agent 自有路径。
+		operations := []remoteOperation{
+			{Action: "delete", Resource: "launch_daemon_and_binary", Command: "sudo -n rm -f /Library/LaunchDaemons/dev.superdev.agent.plist /usr/local/bin/superdev-agent"},
 		}
 		if removeData {
-			commands = append(commands, "sudo -n rm -rf '/Library/Application Support/SuperDev/Agent'")
+			operations = append(operations,
+				remoteOperation{Action: "purge", Resource: "data", Command: "sudo -n rm -rf '/Library/Application Support/SuperDev/Agent'"},
+				remoteOperation{Action: "purge", Resource: "logs", Command: "sudo -n rm -f /var/log/superdev-agent.log /var/log/superdev-agent.err.log"},
+			)
 		}
-		for _, cmd := range commands {
-			if _, err := remote.Run(ctx, cmd); err != nil {
-				if shouldUseMacOSUserLaunchAgent(err) {
-					return uninstallMacOSUserLaunchAgent(ctx, remote, removeData)
-				}
-				return stageErr("uninstall_launchd", err)
-			}
+		if err := runObservedRemoteOperations(ctx, remote, operationLog, "uninstall_launchd", operations); err != nil {
+			return stageErr("uninstall_launchd", err)
 		}
 	case "windows":
-		commands := []string{
-			`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
-			`cmd /c schtasks /Delete /TN SuperDevAgent /F 2>NUL || exit /b 0`,
-			`cmd /c del /F /Q "C:\ProgramData\SuperDev\Agent\superdev-agent.exe" 2>NUL`,
+		taskExists, err := verifyWindowsScheduledTaskOwnership(ctx, remote, operationLog)
+		if err != nil {
+			return stageErr("uninstall_windows_task", err)
+		}
+		// 先检查 Agent 自有路径，使缺失资源成为成功 no-op，同时保留真实权限错误的非零退出码。
+		operations := make([]remoteOperation, 0, 2)
+		if taskExists {
+			operations = append(operations,
+				// 仅在 Action 已验证指向 canonical Agent binary 后，才允许变更同名任务。
+				remoteOperation{Action: "stop", Resource: "scheduled_task", Command: `cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`},
+				remoteOperation{Action: "delete", Resource: "scheduled_task", Command: `cmd /c schtasks /Delete /TN SuperDevAgent /F`},
+			)
+		}
+		if err := runObservedRemoteOperations(ctx, remote, operationLog, "uninstall_windows_task", operations); err != nil {
+			return stageErr("uninstall_windows_task", err)
+		}
+		if err := verifyWindowsAgentStopped(ctx, remote, operationLog); err != nil {
+			return stageErr("uninstall_windows_task", err)
+		}
+		operations = []remoteOperation{
+			{Action: "delete", Resource: "binary", Command: `cmd /c if exist "C:\ProgramData\SuperDev\Agent\superdev-agent.exe" del /F /Q "C:\ProgramData\SuperDev\Agent\superdev-agent.exe"`},
 		}
 		if removeData {
-			commands = append(commands, `cmd /c rmdir /S /Q "C:\ProgramData\SuperDev\Agent" 2>NUL`)
+			operations = append(operations, remoteOperation{Action: "purge", Resource: "data_and_logs", Command: `cmd /c if exist "C:\ProgramData\SuperDev\Agent" rmdir /S /Q "C:\ProgramData\SuperDev\Agent"`})
 		}
-		for _, cmd := range commands {
-			if _, err := remote.Run(ctx, cmd); err != nil {
-				return stageErr("uninstall_windows_task", err)
-			}
+		if err := runObservedRemoteOperations(ctx, remote, operationLog, "uninstall_windows_task", operations); err != nil {
+			return stageErr("uninstall_windows_task", err)
 		}
 	default:
 		return stageErr("uninstall_service", fmt.Errorf("unsupported os %q", osName))
@@ -704,8 +890,263 @@ func restartCommands(ctx context.Context, remote Remote, osName string) (install
 	return installModeSystem, nil
 }
 
+func macOSUninstallModeProbe(removeData bool) string {
+	_ = removeData // 保留参数以维持调用契约；保留数据和日志始终参与重试布局识别。
+	systemPaths := []string{
+		"[ -e /usr/local/bin/superdev-agent ]",
+		"[ -d '/Library/Application Support/SuperDev/Agent' ]",
+		"[ -e /var/log/superdev-agent.log ]",
+		"[ -e /var/log/superdev-agent.err.log ]",
+	}
+	userPaths := []string{
+		"[ -e \"$HOME/Library/Application Support/SuperDev/Agent/bin/superdev-agent\" ]",
+		"[ -d \"$HOME/Library/Application Support/SuperDev/Agent/data\" ]",
+		"[ -e \"$HOME/Library/Logs/superdev-agent.log\" ]",
+		"[ -e \"$HOME/Library/Logs/superdev-agent.err.log\" ]",
+	}
+	systemPresent := strings.Join(systemPaths, " || ")
+	userPresent := strings.Join(userPaths, " || ")
+	// 路径证据不做优先级猜测；两种布局同时留下 Agent 自有路径时必须交由上层拒绝自动卸载。
+	return "if { " + systemPresent + "; } && { " + userPresent + "; }; then printf " + macOSLayoutAmbiguousMarker +
+		"; elif " + systemPresent + "; then printf system; elif " + userPresent +
+		"; then printf user_launch_agent; else printf " + macOSLayoutAbsentMarker + "; fi"
+}
+
+func verifyWindowsScheduledTaskOwnership(ctx context.Context, remote Remote, operationLog *logger.Log) (bool, error) {
+	output, err := runObservedRemoteOperation(ctx, remote, operationLog, "uninstall_windows_task", remoteOperation{
+		Action: "inspect", Resource: "scheduled_task", Command: windowsTaskQueryCommand,
+	})
+	if err != nil {
+		return false, err
+	}
+	if trimOutput(output) == windowsTaskAbsentMarker {
+		operationLog.WithField("stage", "uninstall_windows_task").
+			WithField("resource", "scheduled_task").Info("Windows Agent Scheduled Task 不存在，无需停止")
+		return false, nil
+	}
+
+	var task struct {
+		Actions struct {
+			Action []struct {
+				XMLName xml.Name
+				Command string `xml:"Command"`
+			} `xml:",any"`
+		} `xml:"Actions"`
+	}
+	// schtasks 声明 UTF-16，但 SSH 通道可能已转为单字节文本；去除 NUL 并统一声明后再解析结构。
+	normalizedXML := strings.ReplaceAll(output, "\x00", "")
+	normalizedXML = strings.ReplaceAll(normalizedXML, `encoding="UTF-16"`, `encoding="UTF-8"`)
+	normalizedXML = strings.ReplaceAll(normalizedXML, `encoding="utf-16"`, `encoding="UTF-8"`)
+	if err := xml.Unmarshal([]byte(normalizedXML), &task); err != nil {
+		return false, fmt.Errorf("解析 SuperDevAgent Scheduled Task XML 失败: %w", err)
+	}
+	if len(task.Actions.Action) != 1 || task.Actions.Action[0].XMLName.Local != "Exec" {
+		return false, fmt.Errorf("同名 Scheduled Task 必须仅包含一个 Exec Action")
+	}
+	command := strings.Trim(strings.TrimSpace(task.Actions.Action[0].Command), `"`)
+	if !strings.EqualFold(command, windowsAgentBinaryPath) {
+		return false, fmt.Errorf("同名 Scheduled Task 不属于 SuperDev Agent: Action 非 canonical binary")
+	}
+	return true, nil
+}
+
+func verifyWindowsAgentStopped(ctx context.Context, remote Remote, operationLog *logger.Log) error {
+	entry := operationLog.WithField("stage", "uninstall_windows_task").
+		WithField("action", "verify").
+		WithField("resource", "agent_process")
+	entry.Info("开始验证 Windows Agent 进程已停止")
+	output, err := remote.Run(ctx, `cmd /c tasklist /FI "IMAGENAME eq superdev-agent.exe" /NH`)
+	if err != nil {
+		entry.WithErr(err).Error("验证 Windows Agent 进程失败")
+		return err
+	}
+	if strings.Contains(strings.ToLower(output), "superdev-agent.exe") {
+		err := fmt.Errorf("SuperDev Agent process is still running")
+		entry.WithErr(err).Error("Windows Agent 进程未停止")
+		return err
+	}
+	entry.Info("Windows Agent 进程已停止")
+	return nil
+}
+
+func stopMacOSLaunchdJob(
+	ctx context.Context,
+	remote Remote,
+	operationLog *logger.Log,
+	stage string,
+	resource string,
+	target string,
+	plistPath string,
+	expectedBinary string,
+	requiresSudo bool,
+	bootoutCommand string,
+) error {
+	loaded, err := macOSLaunchdJobLoaded(ctx, remote, operationLog, stage, resource, target)
+	if err != nil {
+		return err
+	}
+	if _, err := inspectMacOSPlistOwnership(ctx, remote, operationLog, stage, resource, plistPath, expectedBinary, requiresSudo, loaded); err != nil {
+		return err
+	}
+	if !loaded {
+		return nil
+	}
+	_, err = runObservedRemoteOperation(ctx, remote, operationLog, stage, remoteOperation{
+		Action:   "stop",
+		Resource: resource,
+		Command:  bootoutCommand,
+	})
+	return err
+}
+
+func inspectMacOSPlistOwnership(
+	ctx context.Context,
+	remote Remote,
+	operationLog *logger.Log,
+	stage string,
+	resource string,
+	plistPath string,
+	expectedBinary string,
+	requiresSudo bool,
+	jobLoaded bool,
+) (bool, error) {
+	program, err := runObservedRemoteOperation(ctx, remote, operationLog, stage, remoteOperation{
+		Action:   "inspect",
+		Resource: resource + "_plist",
+		Command:  macOSPlistProgramProbe(plistPath, requiresSudo),
+	})
+	if err != nil {
+		return false, err
+	}
+	program = trimOutput(program)
+	if program == macOSOwnershipAbsentMarker {
+		if jobLoaded {
+			return false, fmt.Errorf("同名 launchd job 已加载但 canonical plist 不存在，无法验证所有权")
+		}
+		return false, nil
+	}
+	if program != expectedBinary {
+		return false, fmt.Errorf("同名 launchd job 不属于 SuperDev Agent: ProgramArguments[0]=%q", program)
+	}
+	return true, nil
+}
+
+func macOSPlistProgramProbe(plistPath string, requiresSudo bool) string {
+	prefix := ""
+	if requiresSudo {
+		prefix = "sudo -n "
+	}
+	return "if [ -e " + shellQuote(plistPath) + " ]; then " + prefix +
+		"/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' " + shellQuote(plistPath) +
+		"; else printf " + shellQuote(macOSOwnershipAbsentMarker) + "; fi"
+}
+
+func macOSLaunchdJobLoaded(
+	ctx context.Context,
+	remote Remote,
+	operationLog *logger.Log,
+	stage string,
+	resource string,
+	target string,
+) (bool, error) {
+	entry := operationLog.WithField("stage", stage).
+		WithField("action", "detect").
+		WithField("resource", resource)
+	entry.Info("开始检测 macOS Agent launchd job")
+	if _, err := remote.Run(ctx, "launchctl print "+target); err != nil {
+		// launchd 明确报告 job 不存在时已经达到停止目标；其他探测错误不得伪装成幂等成功。
+		if isMacOSLaunchdJobNotFound(target, err) {
+			entry.Info("macOS Agent launchd job 已不存在")
+			return false, nil
+		}
+		entry.WithErr(err).Error("检测 macOS Agent launchd job 失败")
+		return false, err
+	}
+	entry.Info("macOS Agent launchd job 已加载")
+	return true, nil
+}
+
+func isMacOSLaunchdJobNotFound(target string, err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "could not find service") || strings.Contains(message, "service not found") {
+		return true
+	}
+	// system daemon Host 可能没有 GUI domain；仅用户域探测可把该精确错误视为 job 不存在。
+	return strings.HasPrefix(target, "gui/") && strings.Contains(message, "could not find domain for user gui")
+}
+
+func detectMacOSUninstallMode(ctx context.Context, remote Remote, operationLog *logger.Log, removeData bool) (installMode, error) {
+	home, uid, err := macOSUserContext(ctx, remote, operationLog)
+	if err != nil {
+		return "", err
+	}
+	userPaths := macOSUserAgentPaths(home)
+	systemLoaded, err := macOSLaunchdJobLoaded(ctx, remote, operationLog, "detect_install_mode", "launch_daemon", "system/dev.superdev.agent")
+	if err != nil {
+		return "", err
+	}
+	userLoaded, err := macOSLaunchdJobLoaded(ctx, remote, operationLog, "detect_install_mode", "user_launch_agent", "gui/"+uid+"/dev.superdev.agent")
+	if err != nil {
+		return "", err
+	}
+	systemPlist, err := inspectMacOSPlistOwnership(
+		ctx, remote, operationLog, "detect_install_mode", "launch_daemon",
+		"/Library/LaunchDaemons/dev.superdev.agent.plist", "/usr/local/bin/superdev-agent", true, systemLoaded,
+	)
+	if err != nil {
+		return "", err
+	}
+	userPlist, err := inspectMacOSPlistOwnership(
+		ctx, remote, operationLog, "detect_install_mode", "user_launch_agent",
+		userPaths.plist, userPaths.binary, false, userLoaded,
+	)
+	if err != nil {
+		return "", err
+	}
+	output, err := runObservedRemoteOperation(ctx, remote, operationLog, "detect_install_mode", remoteOperation{
+		Action:   "detect",
+		Resource: "install_layout",
+		Command:  macOSUninstallModeProbe(removeData),
+	})
+	if err != nil {
+		return "", err
+	}
+	systemPaths := false
+	userPathsPresent := false
+	switch trimOutput(output) {
+	case string(installModeSystem):
+		systemPaths = true
+	case string(installModeUserLaunchAgent):
+		userPathsPresent = true
+	case macOSLayoutAmbiguousMarker:
+		systemPaths = true
+		userPathsPresent = true
+	case macOSLayoutAbsentMarker:
+	default:
+		return "", fmt.Errorf("unsupported macOS agent install evidence %q", trimOutput(output))
+	}
+	systemPresent := systemLoaded || systemPlist || systemPaths
+	userPresent := userLoaded || userPlist || userPathsPresent
+	// 两个布局都含 Agent 证据时不能安全推断 Controller 配置指向哪一个，必须在任何 mutation 前拒绝。
+	if systemPresent && userPresent {
+		return "", fmt.Errorf("ambiguous macOS Agent install: system LaunchDaemon and user LaunchAgent both exist")
+	}
+	if systemPresent {
+		return installModeSystem, nil
+	}
+	if userPresent {
+		return installModeUserLaunchAgent, nil
+	}
+	// 两侧均无资源时选择用户布局只为完成幂等路径清理；所有命令仍受 canonical 路径约束。
+	return installModeUserLaunchAgent, nil
+}
+
 func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp string, opts ServiceOptions) error {
-	home, uid, err := macOSUserContext(ctx, remote)
+	operationLog := logger.GetLogger().WithEntryName("AgentInstaller").WithField("stage", "install_user_launchd")
+	home, uid, err := macOSUserContext(ctx, remote, operationLog)
 	if err != nil {
 		return stageErr("install_user_launchd", err)
 	}
@@ -733,7 +1174,8 @@ func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp s
 }
 
 func restartMacOSUserLaunchAgent(ctx context.Context, remote Remote) error {
-	_, uid, err := macOSUserContext(ctx, remote)
+	operationLog := logger.GetLogger().WithEntryName("AgentInstaller").WithField("stage", "restart_user_launchd")
+	_, uid, err := macOSUserContext(ctx, remote, operationLog)
 	if err != nil {
 		return stageErr("restart_user_launchd", err)
 	}
@@ -743,33 +1185,52 @@ func restartMacOSUserLaunchAgent(ctx context.Context, remote Remote) error {
 	return nil
 }
 
-func uninstallMacOSUserLaunchAgent(ctx context.Context, remote Remote, removeData bool) error {
-	home, uid, err := macOSUserContext(ctx, remote)
+func uninstallMacOSUserLaunchAgent(ctx context.Context, remote Remote, operationLog *logger.Log, removeData bool) error {
+	home, uid, err := macOSUserContext(ctx, remote, operationLog)
 	if err != nil {
 		return stageErr("uninstall_user_launchd", err)
 	}
 	paths := macOSUserAgentPaths(home)
-	commands := []string{
-		"launchctl bootout gui/" + uid + " " + shellQuote(paths.plist) + " || true",
-		"rm -f " + shellQuote(paths.plist) + " " + shellQuote(paths.binary),
+	if err := stopMacOSLaunchdJob(
+		ctx,
+		remote,
+		operationLog,
+		"uninstall_user_launchd",
+		"user_launch_agent",
+		"gui/"+uid+"/dev.superdev.agent",
+		paths.plist,
+		paths.binary,
+		false,
+		"launchctl bootout gui/"+uid+" "+shellQuote(paths.plist),
+	); err != nil {
+		return stageErr("uninstall_user_launchd", err)
+	}
+	operations := []remoteOperation{
+		{Action: "delete", Resource: "user_launch_agent_and_binary", Command: "rm -f " + shellQuote(paths.plist) + " " + shellQuote(paths.binary)},
 	}
 	if removeData {
-		commands = append(commands, "rm -rf "+shellQuote(paths.rootDir))
+		// 用户模式日志位于 ~/Library/Logs，不在主数据根目录内，purge 需同时清理两者。
+		operations = append(operations,
+			remoteOperation{Action: "purge", Resource: "user_data", Command: "rm -rf " + shellQuote(paths.rootDir)},
+			remoteOperation{Action: "purge", Resource: "user_logs", Command: "rm -f " + shellQuote(paths.stdoutLog) + " " + shellQuote(paths.stderrLog)},
+		)
 	}
-	for _, cmd := range commands {
-		if _, err := remote.Run(ctx, cmd); err != nil {
-			return stageErr("uninstall_user_launchd", err)
-		}
+	if err := runObservedRemoteOperations(ctx, remote, operationLog, "uninstall_user_launchd", operations); err != nil {
+		return stageErr("uninstall_user_launchd", err)
 	}
 	return nil
 }
 
-func macOSUserContext(ctx context.Context, remote Remote) (string, string, error) {
-	home, err := remote.Run(ctx, "printf %s \"$HOME\"")
+func macOSUserContext(ctx context.Context, remote Remote, operationLog *logger.Log) (string, string, error) {
+	home, err := runObservedRemoteOperation(ctx, remote, operationLog, "detect_user_context", remoteOperation{
+		Action: "detect", Resource: "user_home", Command: "printf %s \"$HOME\"",
+	})
 	if err != nil {
 		return "", "", err
 	}
-	uid, err := remote.Run(ctx, "id -u")
+	uid, err := runObservedRemoteOperation(ctx, remote, operationLog, "detect_user_context", remoteOperation{
+		Action: "detect", Resource: "user_id", Command: "id -u",
+	})
 	if err != nil {
 		return "", "", err
 	}

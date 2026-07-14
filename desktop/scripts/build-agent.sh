@@ -22,6 +22,7 @@ OUT_AGENT="$OUT_DIR/superdev-agent-$TARGET$HOST_BIN_SUFFIX"
 OUT_MCP="$OUT_DIR/superdev-mcp-$TARGET$HOST_BIN_SUFFIX"
 OUT_SAMPLE="$OUT_DIR/superdev-sample-$TARGET$HOST_BIN_SUFFIX"
 BUILD_REMOTE_INSTALL="${BUILD_REMOTE_INSTALL:-0}"
+UNINSTALL_SCRIPTS=("uninstall-agent.sh" "uninstall-agent.ps1")
 
 for arg in "$@"; do
   case "$arg" in
@@ -128,6 +129,15 @@ prepare_js_debug
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   mkdir -p "$RESOURCE_DIR"
+  for script in "${UNINSTALL_SCRIPTS[@]}"; do
+    source_script="$ROOT/../scripts/$script"
+    if [[ ! -f "$source_script" ]]; then
+      echo "build-agent: uninstall script not found at $source_script" >&2
+      exit 1
+    fi
+    echo "build-agent: bundling manual uninstall script -> $RESOURCE_DIR/$script"
+    cp "$source_script" "$RESOURCE_DIR/$script"
+  done
   targets=(
     "darwin amd64"
     "darwin arm64"

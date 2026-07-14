@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Added safe remote Agent uninstall that preserves Agent data by default, supports explicit data purge, provides version-matched manual Shell and PowerShell scripts, and offers configuration-only detach only as a warned fallback.
 - Added a deterministic, portable Windows 10 x64 validation package that can be built on macOS, copied to a dedicated Windows host, and used to verify the frozen MSI/NSIS installers, all 75 packaged MCP tools, seven language providers, browser/code debugging, remote pipeline behavior, redacted evidence, and cleanup without claiming Windows results during packaging.
 
 ### Fixed

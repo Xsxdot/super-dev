@@ -20,8 +20,11 @@ mkdir -p \
   "$TMP_DIR/desktop/src-tauri/resources/js-debug" \
   "$TMP_DIR/desktop/src-tauri/target/debug" \
   "$TMP_DIR/agent" \
+  "$TMP_DIR/scripts" \
   "$TMP_DIR/bin"
 cp "$ROOT/scripts/build-agent.sh" "$TMP_DIR/desktop/scripts/build-agent.sh"
+printf 'shell uninstall fixture\n' > "$TMP_DIR/scripts/uninstall-agent.sh"
+printf 'powershell uninstall fixture\n' > "$TMP_DIR/scripts/uninstall-agent.ps1"
 
 cat > "$TMP_DIR/agent/main.go" <<'EOF'
 package main
@@ -190,6 +193,14 @@ if grep -q '/agent-install/' "$BUILD_AGENT_TEST_LOG"; then
   cat "$BUILD_AGENT_TEST_LOG" >&2
   exit 1
 fi
+
+for script in uninstall-agent.sh uninstall-agent.ps1; do
+  bundled="$TMP_DIR/desktop/src-tauri/resources/agent-install/$script"
+  if [[ ! -s "$bundled" ]]; then
+    echo "expected manual uninstall script to be bundled: $bundled" >&2
+    exit 1
+  fi
+done
 
 js_debug_server="$TMP_DIR/desktop/src-tauri/resources/js-debug/src/dapDebugServer.js"
 if [[ ! -f "$js_debug_server" ]]; then

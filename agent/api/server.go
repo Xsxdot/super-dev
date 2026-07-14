@@ -90,10 +90,21 @@ type AppConfig struct {
 	TLSKeyFile string
 }
 
-// HostAgentInstaller 安装、重启或原地更新远端 SuperDev agent。
+// HostAgentInstaller 安装、卸载、重启或原地更新远端 SuperDev agent。
 type HostAgentInstaller interface {
 	// Install 使用 Host SSH 凭据和 Agent 服务参数执行安装。
 	Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error)
+	// Uninstall 使用 Host SSH 凭据卸载远端 Agent。
+	//
+	// 参数：
+	//   - ctx: 控制 SSH 卸载的取消和超时
+	//   - host: 包含 SSH 登录信息的目标 Host
+	//   - removeData: 是否一并清除 Agent 数据；false 时必须保留数据和日志
+	//
+	// 返回：
+	//   - 远端卸载结果
+	//   - SSH、平台检测或清理阶段错误
+	Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error)
 	// Restart 使用 Host SSH 凭据重启远端 Agent 服务。
 	Restart(ctx context.Context, host model.Host) (installer.RestartResult, error)
 	// UpdateBinary 使用 Host SSH 凭据原地替换远端 Agent 二进制并重启服务。
@@ -115,6 +126,20 @@ func (w storeWriter) AppendBatch(_ context.Context, entries []model.LogEntry) er
 
 func (p productionHostAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
 	return p.installer.InstallWithOptions(ctx, host, opts)
+}
+
+// Uninstall 通过 SSH Installer 卸载指定 Host 的 Agent。
+//
+// 参数：
+//   - ctx: 控制 SSH 卸载的取消和超时
+//   - host: 包含 SSH 登录信息的目标 Host
+//   - removeData: 是否一并清除远端 Agent 数据；常规卸载必须为 false
+//
+// 返回：
+//   - 远端卸载结果
+//   - SSH、平台检测或清理阶段错误
+func (p productionHostAgentInstaller) Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error) {
+	return p.installer.Uninstall(ctx, host, removeData)
 }
 
 func (p productionHostAgentInstaller) Restart(ctx context.Context, host model.Host) (installer.RestartResult, error) {
@@ -181,10 +206,13 @@ type App struct {
 	nodeRegistryCancel context.CancelFunc
 	// backends 按 deployment ID 索引对应的 LogBackend。
 	// 在 loadRegisteredProjects 时构造，供 deployment 日志 handler 使用。
-	backends                    map[string]logbackend.LogBackend
-	identity                    identity.Identity
-	pidStore                    *process.PIDStore
-	hostAgentInstaller          HostAgentInstaller
+	backends           map[string]logbackend.LogBackend
+	identity           identity.Identity
+	pidStore           *process.PIDStore
+	hostAgentInstaller HostAgentInstaller
+	// removeAgentConfig 把卸载编排与 AgentStore 文件写入边界隔开，便于验证部分失败后的安全重试。
+	removeAgentConfig           func(hostID string) error
+	agentLifecycleGate          *hostOperationGate
 	runtimeMetricsSampler       metrics.MetricsSampler
 	runtimeStatusRequestTimeout time.Duration
 	// agentHealth 监控各 host 远端 agent 的健康状态，与隧道状态正交。
@@ -467,6 +495,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 		identity:                    id,
 		pidStore:                    process.NewPIDStore(filepath.Join(cfg.DataDir, "pids.json")),
 		hostAgentInstaller:          hostAgentInstaller,
+		removeAgentConfig:           agentStore.RemoveAgent,
+		agentLifecycleGate:          newHostOperationGate(),
 		runtimeMetricsSampler:       runtimeSampler,
 		runtimeStatusRequestTimeout: runtimeTimeout,
 		agentHealth:                 agentHealthMonitor,
@@ -755,14 +785,17 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/agents/{host_id}/transport", a.updateAgentTransport)
 	mux.HandleFunc("PUT /api/agents/{host_id}/config", a.updateAgentConfig)
 	mux.HandleFunc("DELETE /api/agents/{host_id}", a.deleteAgent)
+	mux.HandleFunc("POST /api/agents/{host_id}/detach", a.detachAgentHandler)
 	mux.HandleFunc("POST /api/agents/{host_id}/check", a.checkAgent)
 	mux.HandleFunc("GET /api/agents/update-target", a.getAgentUpdateTarget)
 	mux.HandleFunc("POST /api/agents/{host_id}/install", a.installAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/restart", a.restartAgent)
 	mux.HandleFunc("POST /api/agents/{host_id}/update-binary", a.updateAgentBinary)
+	mux.HandleFunc("POST /api/agents/{host_id}/uninstall", a.uninstallAgentHandler)
 	mux.HandleFunc("POST /api/agents/{host_id}/install-command", a.generateAgentInstallCommand)
 	mux.HandleFunc("GET /api/agents/install.sh", a.serveAgentInstallScript)
 	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)
+	mux.HandleFunc("GET /api/agents/uninstall-scripts/{name}", a.serveAgentUninstallScript)
 	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
 	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)

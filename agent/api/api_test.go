@@ -251,25 +251,63 @@ func TestSettingsRoundTripDebugBrowser(t *testing.T) {
 	assert.Equal(t, "/Applications/Arc.app/Contents/MacOS/Arc", settings.DebugBrowser.Browsers[0].ExecutablePath)
 }
 
-// TestCORSAllowsDesktopRequesterHeaders 验证桌面端自定义请求头能通过浏览器预检。
-func TestCORSAllowsDesktopRequesterHeaders(t *testing.T) {
+// TestCORSAllowsTrustedDesktopOrigins 验证固定 Tauri 与 Vite Origin 能通过浏览器预检。
+func TestCORSAllowsTrustedDesktopOrigins(t *testing.T) {
 	srv, _ := newTestApp(t)
 
+	for _, origin := range []string{
+		"tauri://localhost",
+		"http://tauri.localhost",
+		"https://tauri.localhost",
+		"http://localhost:6688",
+		"http://127.0.0.1:6688",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/settings", nil)
+			require.NoError(t, err)
+			req.Header.Set("Origin", origin)
+			req.Header.Set("Access-Control-Request-Method", http.MethodPut)
+			req.Header.Set("Access-Control-Request-Headers", "content-type,x-superdev-requester,x-superdev-requester-label,x-superdev-approval-token")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusNoContent, resp.StatusCode)
+			assert.Equal(t, origin, resp.Header.Get("Access-Control-Allow-Origin"))
+			assert.Contains(t, resp.Header.Values("Vary"), "Origin")
+
+			allowedHeaders := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
+			assert.Contains(t, allowedHeaders, "content-type")
+			assert.Contains(t, allowedHeaders, "x-superdev-requester")
+			assert.Contains(t, allowedHeaders, "x-superdev-requester-label")
+			assert.Contains(t, allowedHeaders, "x-superdev-approval-token")
+		})
+	}
+}
+
+// TestCORSRejectsUnknownOriginPreflight 验证未知网页不能获得本机 API 预检授权。
+func TestCORSRejectsUnknownOriginPreflight(t *testing.T) {
+	srv, _ := newTestApp(t)
 	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/settings", nil)
 	require.NoError(t, err)
+	req.Header.Set("Origin", "https://attacker.example")
 	req.Header.Set("Access-Control-Request-Method", http.MethodPut)
-	req.Header.Set("Access-Control-Request-Headers", "content-type,x-superdev-requester,x-superdev-requester-label,x-superdev-approval-token")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
+}
 
-	allowedHeaders := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
-	assert.Contains(t, allowedHeaders, "content-type")
-	assert.Contains(t, allowedHeaders, "x-superdev-requester")
-	assert.Contains(t, allowedHeaders, "x-superdev-requester-label")
-	assert.Contains(t, allowedHeaders, "x-superdev-approval-token")
+// TestCORSAllowsNoOriginLocalAPI 验证本机 CLI 等非浏览器调用保持兼容。
+func TestCORSAllowsNoOriginLocalAPI(t *testing.T) {
+	srv, _ := newTestApp(t)
+	resp, err := http.Get(srv.URL + "/api/settings")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
 }
 
 // TestSettingsPutPreservesSampleSeeded 验证桌面端更新设置时不会清掉 agent 内部示例落地标记。

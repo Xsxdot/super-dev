@@ -96,8 +96,22 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
 func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
-	if err := a.remoteStore.RemoveHost(r.PathValue("id")); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+	hostID := r.PathValue("id")
+	if deleteErr := a.removeHostSafely(hostID); deleteErr != nil {
+		switch deleteErr.Code {
+		case "operation_in_progress":
+			data := map[string]string{"host_id": hostID, "operation": "delete_host"}
+			if deleteErr.Conflict != nil {
+				data["active_operation"] = deleteErr.Conflict.ActiveOperation
+			}
+			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "another agent lifecycle operation is in progress", data)
+		case hostDeleteCodeAgentConfigured:
+			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "uninstall or detach the Agent before deleting the Host", map[string]string{
+				"host_id": hostID,
+			})
+		default:
+			jsonError(w, http.StatusInternalServerError, deleteErr.Err.Error())
+		}
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})

@@ -8,11 +8,22 @@ const BASE = `http://${AGENT_HOST}`
 export const WS_BASE = `ws://${AGENT_HOST}`
 export { AGENT_HOST }
 
+export type AgentUninstallScriptName = 'uninstall-agent.sh' | 'uninstall-agent.ps1'
+
+// agentUninstallScriptURL returns the local Controller URL for a version-matched manual script.
+//
+// The Controller serves scripts bundled with its own release, so callers must not substitute
+// a latest-release URL that could drift from the installed Desktop version.
+export function agentUninstallScriptURL(name: AgentUninstallScriptName): string {
+  return `${BASE}/api/agents/uninstall-scripts/${encodeURIComponent(name)}`
+}
+
 // AgentAPIErrorPayload 描述 agent 结构化错误响应。
 //
 // 参数：
 //   - code: 稳定错误码，例如 approval_required
 //   - error: 可展示错误信息
+//   - stage: 生命周期操作的稳定失败阶段
 //   - plan: operation 预检计划
 //   - approval: 待处理审批请求
 //
@@ -21,6 +32,7 @@ export { AGENT_HOST }
 export interface AgentAPIErrorPayload {
   code?: string
   error?: string
+  stage?: string
   plan?: OperationPlan
   approval?: OperationApproval
 }
@@ -36,10 +48,12 @@ export interface AgentAPIErrorPayload {
 //   - 可被调用方用 code/plan/approval 精确分支处理的 Error
 //
 // 注意：
+//   - stage 仅由服务端返回，不由前端推断
 //   - approval token 不会出现在该错误对象中
 export class AgentAPIError extends Error {
   status: number
   code?: string
+  stage?: string
   plan?: OperationPlan
   approval?: OperationApproval
 
@@ -48,6 +62,7 @@ export class AgentAPIError extends Error {
     this.name = 'AgentAPIError'
     this.status = status
     this.code = payload?.code
+    this.stage = payload?.stage
     this.plan = payload?.plan
     this.approval = payload?.approval
   }
@@ -1087,6 +1102,28 @@ export interface AgentInstallPayload {
   method: 'push_over_ssh'
 }
 
+export interface AgentUninstallPayload {
+  remove_data: boolean
+}
+
+export interface AgentUninstallResponse {
+  ok: boolean
+  host_id: string
+  removed_data: boolean
+  message: string
+}
+
+export type AgentDetachReason = 'manual_uninstall_failed'
+
+export interface AgentDetachPayload {
+  reason: AgentDetachReason
+}
+
+export interface AgentDetachResponse {
+  status: 'detached'
+  host_id: string
+}
+
 export interface AgentInstallCommandResponse {
   command: string
   restart_command?: string
@@ -1360,6 +1397,16 @@ export const api = {
     request<AgentDTO>(`/api/agents/${encodeURIComponent(hostId)}/check`, { method: 'POST' }),
   installAgent: (hostId: string, payload: AgentInstallPayload) =>
     request<AgentInstallResponse>(`/api/agents/${encodeURIComponent(hostId)}/install`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  uninstallAgent: (hostId: string, payload: AgentUninstallPayload) =>
+    request<AgentUninstallResponse>(`/api/agents/${encodeURIComponent(hostId)}/uninstall`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  detachAgent: (hostId: string, payload: AgentDetachPayload) =>
+    request<AgentDetachResponse>(`/api/agents/${encodeURIComponent(hostId)}/detach`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
