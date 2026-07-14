@@ -9,12 +9,12 @@
     "elevation_boundary": "installer_uac_only"
   },
   "build": {
-    "git_commit": "e3cc94fe7ba3e53ca1b46a24d730bebc173e5cdb",
+    "git_commit": "68691155e1a06ea7c18b4f00b270ee300ebd69b6",
     "product_version": "0.2.1",
     "workflow": {
-      "name": "Manual Build Desktop Clients",
-      "run_id": 29250104348,
-      "url": "https://github.com/Xsxdot/super-dev/actions/runs/29250104348",
+      "name": "Build Desktop Clients",
+      "run_id": 29318105155,
+      "url": "https://github.com/Xsxdot/super-dev/actions/runs/29318105155",
       "conclusion": "success"
     }
   },
@@ -23,15 +23,15 @@
       "filename": "SuperDev_0.2.1_x64-setup.exe",
       "format": "nsis",
       "validation_role": "primary_full_suite",
-      "size_bytes": 80355213,
-      "sha256": "cdb950afb388c147b057f173fcfdb3281d7b7526b19921d21a17f5d22c3bb0cd"
+      "size_bytes": 80372327,
+      "sha256": "c8a486b8a7be47478498ea9d2af1731a6baf01201fbccbbfdf00898a1e12c139"
     },
     {
       "filename": "SuperDev_0.2.1_x64_en-US.msi",
       "format": "msi",
       "validation_role": "install_launch_sidecar_mcp_uninstall_smoke",
-      "size_bytes": 93888512,
-      "sha256": "5c01dc9eaca3d61f094b82820e93ab546ecb77e4f99d56eebdb5a0e3f8fe1a48"
+      "size_bytes": 93896704,
+      "sha256": "5a7a95d5f3ad222c90bbf48fbad98bedcac320c8cf746cc8061b7728fc3b4dc5"
     }
   ],
   "source_surface": {

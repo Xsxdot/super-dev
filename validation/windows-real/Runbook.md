@@ -1,6 +1,6 @@
 # Windows 10 x64 一次性真实验证 Runbook
 
-本包由 macOS 构建，但所有功能结论只能在专用 Windows 10 x64 机器上产生。验证固定构建 `e3cc94fe7ba3e53ca1b46a24d730bebc173e5cdb` / `0.2.1`，覆盖 75 个 MCP 工具和 Go、Node、Python、Java、Kotlin、Rust、C++ 七个正式 language provider。
+本包由 macOS 构建，但所有功能结论只能在专用 Windows 10 x64 机器上产生。验证固定构建 `68691155e1a06ea7c18b4f00b270ee300ebd69b6` / `0.2.1`，对应 GitHub Actions run `29318105155`，覆盖 75 个 MCP 工具和 Go、Node、Python、Java、Kotlin、Rust、C++ 七个正式 language provider。
 
 这是一次性、无常驻状态的验证流程：ZIP 始终只读，机器变化只允许存在于包外的 `backups`、`campaigns`、`results` 和冻结安装器目录；本包不新增 worker、调度器、恢复服务或验证平台。每个 lane 都必须以完整 cleanup 结束，后一个 lane 不复用前一个 lane 的 backup、campaign 或用户状态。
 
