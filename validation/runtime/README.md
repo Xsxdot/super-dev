@@ -263,8 +263,11 @@ pending operation, a human must inspect and approve the exact plan ID, kind,
 target, fingerprint, and expiry. The runner registers only that short-lived
 identity, rejects drift/expiry/duplicate pending requests, and waits for the
 official one-time token; it never calls the approve endpoint or enables a grace
-window on the user's behalf. The packaged auth sidecar likewise receives its
-credential only through an inherited anonymous stdin pipe.
+window on the user's behalf. Every controlled mutation must first return
+`approval_required`; after the retry, the runner also requires exactly one
+matching `executed` audit event with the same approval ID and rejects
+`grace_granted` or `approved_by_grace`. The packaged auth sidecar likewise
+receives its credential only through an inherited anonymous stdin pipe.
 
 Use the exact matching target on each machine. The runner checks the kernel and
 native machine architecture through Darwin sysctl/uname, Linux `uname(2)`, or

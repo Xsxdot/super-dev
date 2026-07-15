@@ -3,7 +3,7 @@
 // 职责：
 //   - 识别 MCP approval_required，并注册精确、短期的 operation identity allowlist
 //   - 复核 plan ID、fingerprint、kind、规范化 target 与双重过期时间
-//   - 等待用户在正式 SuperDev 审批面批准后领取 token，并重试原 tools/call
+//   - 等待用户在正式 SuperDev 审批面批准后领取 token，并核验它被唯一消费
 //
 // 边界：
 //   - 不代替用户调用 approve/reject，不开启 grace window
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/operation"
 )
 
 const (
@@ -117,7 +118,8 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 // CallTool 执行原 MCP 调用；仅在精确 identity 获得真人批准后携带一次性 token 重试。
 func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
 	delegatedArguments := arguments
-	if _, approvalAware := c.allowed[name]; approvalAware {
+	allowedKinds, approvalAware := c.allowed[name]
+	if approvalAware {
 		delegatedArguments = cloneMap(arguments)
 		// MCP 内建等待会在 wrapper 看到 approval_required 前消费 token；强制归零后由本层独占精确 identity 复核。
 		delegatedArguments["approval_wait_seconds"] = 0
@@ -128,9 +130,13 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	}
 	required, ok := parseApprovalRequired(result)
 	if !ok {
+		// strict campaign 中的受控写工具必须先返回 approval_required。
+		// 首次直接成功意味着审批策略被关闭或命中了 grace，两者都不能作为验收通路。
+		if approvalAware && !result.IsError && RawMessageMap(result.StructuredContent)["ok"] != false {
+			return result, fmt.Errorf("approval-aware MCP tool %s completed without approval_required", name)
+		}
 		return result, nil
 	}
-	allowedKinds := c.allowed[name]
 	if _, allowed := allowedKinds[required.Kind]; !allowed {
 		return result, fmt.Errorf("approval tool/kind is not allowlisted: %s/%s", name, required.Kind)
 	}
@@ -157,8 +163,70 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	if retried.IsError || RawMessageMap(retried.StructuredContent)["ok"] == false {
 		return retried, fmt.Errorf("approved MCP tool %s still returned an application error", name)
 	}
+	if err := c.verifyTokenConsumedWithoutGrace(ctx, required); err != nil {
+		return retried, err
+	}
 	log.Info("operation approval 一次性 token 已消费")
 	return retried, nil
+}
+
+func (c *ApprovalToolCaller) verifyTokenConsumedWithoutGrace(ctx context.Context, expected approvalIdentity) error {
+	endpoint := *c.baseURL
+	endpoint.Path = "/api/operation-audit"
+	query := endpoint.Query()
+	query.Set("kind", expected.Kind)
+	query.Set("limit", "0")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("list operation audit after approved retry: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
+		return fmt.Errorf("list operation audit after approved retry returned HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
+		return fmt.Errorf("decode operation audit after approved retry: %w", err)
+	}
+
+	executed := 0
+	for _, event := range payload.Events {
+		plan := RawMessageMap(event["plan"])
+		if strings.TrimSpace(fmt.Sprint(event["kind"])) != expected.Kind ||
+			strings.TrimSpace(fmt.Sprint(plan["kind"])) != expected.Kind ||
+			strings.TrimSpace(fmt.Sprint(plan["fingerprint"])) != expected.Fingerprint {
+			continue
+		}
+		target, targetErr := normalizeApprovalTarget(plan["target"])
+		if targetErr != nil {
+			return fmt.Errorf("operation audit for approval %s has incomplete target identity", expected.ID)
+		}
+		if target != expected.NormalizedTarget {
+			continue
+		}
+		action := strings.TrimSpace(fmt.Sprint(event["action"]))
+		switch action {
+		case operation.AuditGraceGranted, operation.AuditApprovedByGrace:
+			return fmt.Errorf("operation approval %s used forbidden grace action %s", expected.ID, action)
+		case operation.AuditExecuted:
+			if strings.TrimSpace(fmt.Sprint(event["approval_id"])) != expected.ID {
+				return fmt.Errorf("operation approval %s execution audit has a different approval identity", expected.ID)
+			}
+			executed++
+		}
+	}
+	if executed != 1 {
+		return fmt.Errorf("operation approval %s one-time token consumption audit count is %d, want 1", expected.ID, executed)
+	}
+	return nil
 }
 
 type approvalIdentity struct {
