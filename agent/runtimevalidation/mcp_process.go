@@ -23,9 +23,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xsxdot/gokit/logger"
 )
+
+const mcpStdioExitGrace = 5 * time.Second
 
 // MCPProcessSpec 描述 packaged MCP executable、Agent loopback origin 和脱敏 stderr sink。
 type MCPProcessSpec struct {
@@ -282,6 +285,11 @@ func (c *MCPProcess) Close(ctx context.Context) error {
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
+	// stdio EOF 是 MCP 的正式关闭信号。先观察协议进程自行退出，避免 Close 紧接着向
+	// 已退出但 Wait 尚未完成的 process group 发 TERM，并把 Darwin EPERM 误记为残留。
+	graceCtx, graceCancel := context.WithTimeout(ctx, mcpStdioExitGrace)
+	_ = c.managed.Wait(graceCtx)
+	graceCancel()
 	err := c.managed.Close(ctx)
 	if err != nil {
 		log.WithErr(err).Error("packaged MCP stdio 会话关闭失败")

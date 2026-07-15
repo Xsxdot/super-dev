@@ -126,10 +126,23 @@ func ValidateFoundation(root, expectedProfileID string) (CheckResult, error) {
 	for _, state := range []struct {
 		path string
 		name string
-	}{{"projects.json", "projects"}, {"pids.json", "managed pids"}, {"debug-sessions.json", "debug sessions"}, {"operation-approvals.json", "operation approvals"}, {"operation-grace.json", "operation grace"}} {
+	}{{"projects.json", "projects"}, {"pids.json", "managed pids"}, {"debug-sessions.json", "debug sessions"}} {
 		empty, err := optionalJSONContainerEmpty(filepath.Join(root, state.path))
 		if err != nil {
 			return CheckResult{}, err
+		}
+		if !empty {
+			return blocked("foundation_not_topology_only", state.name+" must be empty in a topology-only foundation")
+		}
+	}
+	for _, state := range []struct {
+		path string
+		key  string
+		name string
+	}{{"operation-approvals.json", "approvals", "operation approvals"}, {"operation-grace.json", "grants", "operation grace"}} {
+		empty, err := optionalNamedJSONArrayEmpty(filepath.Join(root, state.path), state.key)
+		if err != nil {
+			return blocked("foundation_state_schema_invalid", err.Error())
 		}
 		if !empty {
 			return blocked("foundation_not_topology_only", state.name+" must be empty in a topology-only foundation")
@@ -233,6 +246,34 @@ func optionalJSONContainerEmpty(path string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func optionalNamedJSONArrayEmpty(path, key string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return false, fmt.Errorf("foundation state %s must use the current object schema: %w", path, err)
+	}
+	for field := range state {
+		if field != key {
+			return false, fmt.Errorf("foundation state %s contains unknown field %q", path, field)
+		}
+	}
+	entriesRaw, ok := state[key]
+	if !ok || strings.TrimSpace(string(entriesRaw)) == "null" {
+		return true, nil
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(entriesRaw, &entries); err != nil {
+		return false, fmt.Errorf("foundation state %s field %q must be an array: %w", path, key, err)
+	}
+	return len(entries) == 0, nil
 }
 
 func optionalDirectoryEmpty(path string) (bool, error) {

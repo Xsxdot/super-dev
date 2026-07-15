@@ -86,6 +86,21 @@ runtime-validation-foundation/
 }
 ```
 
+Approval and grace stores may be absent. If preparation tooling creates them,
+they must use the current Agent object schemas rather than legacy empty arrays:
+
+```json
+{"approvals": []}
+```
+
+```json
+{"grants": []}
+```
+
+The runner rejects a schema-incompatible empty file before creating
+`active.json`; an empty container that the Agent cannot load is not a valid
+topology-only baseline.
+
 The borrowed Host selected by `remote_host_id` must carry the exact
 `superdev-validation-dedicated-resettable` tag, and `agents.json` must contain
 that Host ID with a non-empty transport chain. The runner verifies these facts

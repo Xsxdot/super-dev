@@ -45,6 +45,7 @@ func TestMCPProcessRunsPersistentProtocolSession(t *testing.T) {
 	require.False(t, result.IsError)
 	require.Equal(t, true, RawMessageMap(result.StructuredContent)["ok"])
 	require.NoError(t, client.Close(ctx))
+	require.NoError(t, client.Wait(ctx))
 }
 
 func TestMCPProcessHelper(t *testing.T) {
