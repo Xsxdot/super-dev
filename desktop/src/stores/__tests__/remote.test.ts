@@ -136,8 +136,9 @@ describe('useRemoteStore', () => {
         host_name: 'host-01',
         desired_deployment_count: 1,
         desired_collector_count: 1,
+        active_collector_count: 1,
         tunnel_connected: true,
-        remote: { deployment_count: 1, collector_count: 1, collectors: [] },
+        remote: { deployment_count: 1, collector_count: 1, active_collector_count: 1, collectors: [] },
       })
       const store = useRemoteStore()
 

@@ -81,7 +81,7 @@ func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
 	relatedHosts := make([]hostViewDTO, 0, len(ls.HostIDs))
 	for _, hid := range ls.HostIDs {
 		if h, ok := hostByID[hid]; ok {
-			relatedHosts = append(relatedHosts, toHostViewDTO(h))
+			relatedHosts = append(relatedHosts, a.hostAssembler.ToView(h))
 		}
 	}
 

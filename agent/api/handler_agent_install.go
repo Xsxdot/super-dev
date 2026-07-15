@@ -99,7 +99,10 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agent = resetAgentSecurityForBootstrap(agent)
-	if _, err := a.remoteNodeMutations.UpsertAgent(agent); err != nil {
+	if _, err := a.remoteNodeMutations.UpsertAgent(r.Context(), agent); err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

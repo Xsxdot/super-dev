@@ -15,6 +15,7 @@ export { AGENT_HOST }
 //   - error: 可展示错误信息
 //   - plan: operation 预检计划
 //   - approval: 待处理审批请求
+//   - data: 错误码特有的结构化副作用或恢复上下文
 //
 // 注意：
 //   - 该结构只用于保留 agent 返回的错误上下文，不自行计算审批状态
@@ -23,6 +24,7 @@ export interface AgentAPIErrorPayload {
   error?: string
   plan?: OperationPlan
   approval?: OperationApproval
+  data?: unknown
 }
 
 // AgentAPIError 表示 agent HTTP API 返回的结构化错误。
@@ -42,6 +44,7 @@ export class AgentAPIError extends Error {
   code?: string
   plan?: OperationPlan
   approval?: OperationApproval
+  data?: unknown
 
   constructor(message: string, status: number, payload?: AgentAPIErrorPayload) {
     super(message)
@@ -50,6 +53,7 @@ export class AgentAPIError extends Error {
     this.code = payload?.code
     this.plan = payload?.plan
     this.approval = payload?.approval
+    this.data = payload?.data
   }
 }
 
@@ -994,6 +998,14 @@ export interface AgentRuntime {
   local_port?: number
 }
 
+export interface NodeSystemFacts {
+  os: string
+  kernel_arch: string
+  agent_arch: string
+  agent_node_id: string
+  machine_id_sha256: string
+}
+
 export interface NodeStatus {
   host_id: string
   name?: string
@@ -1001,6 +1013,7 @@ export interface NodeStatus {
   agent: AgentRuntime
   deployments: RuntimeInstanceStatus[]
   managed?: ManagedDeploymentStatus
+  system?: NodeSystemFacts
   route?: RouteStatus
   updated_at: string
   error?: string
@@ -1167,6 +1180,7 @@ export interface ManagedCollectorStatus {
 export interface ManagedDeploymentStatus {
   deployment_count: number
   collector_count: number
+  active_collector_count: number
   collectors: ManagedCollectorStatus[]
   last_result?: {
     deployment_count: number
@@ -1182,6 +1196,7 @@ export interface HostManagedDeploymentStatus {
   host_name?: string
   desired_deployment_count: number
   desired_collector_count: number
+  active_collector_count: number
   tunnel_connected: boolean
   remote?: ManagedDeploymentStatus
   error?: string

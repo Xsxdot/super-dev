@@ -60,6 +60,8 @@ Changes that start, stop, restart, deploy, tunnel, proxy, or remotely execute an
 
 Do not bypass this flow in UI code, MCP tools, tests, or helper scripts. If a change intentionally modifies the boundary, call it out in the PR summary and include focused tests.
 
+One fail-closed exception applies to an explicit Host or Agent connection-target mutation: the agent must durably append a secret-free `tunnel.invalidate/prepared` audit event before committing the mutation, then immediately invalidate any tunnel created for the previous target or credentials and append the terminal `executed` event after persistence. If the prepared event cannot be stored, the mutation must not be committed; if terminal audit persistence fails, the configuration record must retain its pending invalidation revision so a retry can complete the same audit plan. This invalidation only reduces an existing access surface, so delaying it for a second approval would preserve an identity the stored configuration no longer trusts. The UI must disclose the disconnect before saving, and both audit stages must contain the host, trigger, changed field names, and previous tunnel status. This exception does not authorize active connect, user-requested disconnect, proxy, or remote execution operations.
+
 ## Security Reports
 
 Please do not open public issues for vulnerabilities. Use the process in `SECURITY.md`.

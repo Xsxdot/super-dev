@@ -31,6 +31,64 @@ type RuntimeDeploymentTarget struct {
 	Deployment model.Deployment
 }
 
+// PlanTunnelInvalidation 为持久化连接目标变更生成审计专用计划。
+//
+// 参数：
+//   - req: host、触发来源和不含秘密的变更字段名
+//
+// 返回：
+//   - 无需审批、只减少访问面的 tunnel 失效计划
+//   - host、trigger 或 changed fields 为空时返回 ErrInvalidOperation
+//
+// 注意：
+//   - 调用方必须先持久化 prepared 审计，再提交配置并执行对应的运行态失效
+//   - 本计划不能复用于用户主动建立或断开 tunnel
+func PlanTunnelInvalidation(req TunnelInvalidationRequest) (Plan, error) {
+	hostID := trim(req.HostID)
+	trigger := trim(req.Trigger)
+	changedFields := make([]string, 0, len(req.ChangedFields))
+	seen := make(map[string]struct{}, len(req.ChangedFields))
+	for _, field := range req.ChangedFields {
+		field = trim(field)
+		if field == "" {
+			continue
+		}
+		if _, exists := seen[field]; exists {
+			continue
+		}
+		seen[field] = struct{}{}
+		changedFields = append(changedFields, field)
+	}
+	if hostID == "" || trigger == "" || len(changedFields) == 0 {
+		return Plan{}, ErrInvalidOperation
+	}
+	sort.Strings(changedFields)
+	now := time.Now().UTC()
+	plan := Plan{
+		ID:               newID("op"),
+		Kind:             OperationTunnelInvalidate,
+		Target:           Target{HostID: hostID},
+		TargetSummary:    fmt.Sprintf("stale tunnel runtime on host %s", hostID),
+		RiskLevel:        RiskLow,
+		RequiresApproval: false,
+		ExpectedEffects: []string{
+			"disconnect stale tunnel runtime and clear cached host-key evidence",
+		},
+		Checks: []Check{
+			{Name: "prepared_audit_required", Status: "passed", Message: "connection target mutation is gated on durable prepared audit"},
+		},
+		CreatedAt: now,
+		ExpiresAt: now.Add(DefaultPlanTTL),
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":           plan.Kind,
+		"target":         plan.Target,
+		"trigger":        trigger,
+		"changed_fields": changedFields,
+	})
+	return plan, nil
+}
+
 // PlanRuntime 为 deployment 运行态写操作生成安全预检计划。
 //
 // 参数：

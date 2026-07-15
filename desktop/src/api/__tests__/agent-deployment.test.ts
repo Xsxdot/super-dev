@@ -143,6 +143,41 @@ describe('operation approval api', () => {
     expect(isApprovalRequiredError(caught)).toBe(true)
   })
 
+  it('preserves structured tunnel invalidation side-effect data', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: () => Promise.resolve({
+        code: 'tunnel_invalidation_audit_failed',
+        error: 'audit completion is pending',
+        data: {
+          persisted: true,
+          tunnel_invalidated: true,
+          audit_intent_persisted: true,
+          audit_completed: false,
+        },
+      }),
+    } as Response)
+
+    let caught: unknown
+    try {
+      await api.updateHost('host-1', { name: 'edge' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toMatchObject({
+      code: 'tunnel_invalidation_audit_failed',
+      data: {
+        persisted: true,
+        tunnel_invalidated: true,
+        audit_intent_persisted: true,
+        audit_completed: false,
+      },
+    })
+  })
+
   it('marks desktop requests with requester headers', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,

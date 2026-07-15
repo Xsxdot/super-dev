@@ -367,6 +367,8 @@ type Host struct {
 	SSHPassword           string   `json:"ssh_password,omitempty"`
 	SSHPrivateKey         string   `json:"ssh_private_key,omitempty"`
 	SSHHostKeyFingerprint string   `json:"ssh_host_key_fingerprint,omitempty"`
+	// PendingTunnelInvalidationRevision 与连接目标变更同文件落盘，作为待完成安全审计的 outbox 标记。
+	PendingTunnelInvalidationRevision string `json:"pending_tunnel_invalidation_revision,omitempty"`
 }
 
 // Agent 表示安装在某台 Host 上的 SuperDev agent 配置。
@@ -380,6 +382,8 @@ type Agent struct {
 	Security  AgentSecurity   `json:"security"`
 	Secret    AgentSecret     `json:"secret,omitempty"`
 	Runtime   AgentRuntime    `json:"-"`
+	// PendingTunnelInvalidationRevision 与 tunnel target 变更同文件落盘，供失败重试补齐审计。
+	PendingTunnelInvalidationRevision string `json:"pending_tunnel_invalidation_revision,omitempty"`
 }
 
 // AgentConfig 表示 agent 进程统一监听配置。

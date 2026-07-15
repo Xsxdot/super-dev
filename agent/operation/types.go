@@ -52,6 +52,12 @@ const (
 	OperationConfigPipelineUpsert = "config.pipeline.upsert"
 	// OperationPipelineRun 表示运行项目级流水线（部署或回滚）的写操作。
 	OperationPipelineRun = "pipeline.run"
+	// OperationTunnelInvalidate 表示连接目标持久化变更后强制撤销旧 tunnel 的安全审计事件。
+	//
+	// 注意：
+	//   - 该 kind 只描述减少现有访问面的 fail-closed 失效，不用于主动 connect/disconnect
+	//   - 配置写入完成后不能继续保留旧身份连接，因此无需二次审批，但必须写入审计
+	OperationTunnelInvalidate = "tunnel.invalidate"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"
@@ -79,6 +85,8 @@ const (
 	AuditApproved = "approved"
 	// AuditRejected 记录一次审批拒绝。
 	AuditRejected = "rejected"
+	// AuditPrepared 记录一次副作用执行前已持久化的安全意图，可作为失败恢复的 outbox。
+	AuditPrepared = "prepared"
 	// AuditExecuted 记录一次操作已执行。
 	AuditExecuted = "executed"
 	// AuditFailed 记录一次操作执行失败。
@@ -174,6 +182,16 @@ type CodeDebugEvaluateRequest struct {
 	DeploymentID   string
 	DebugSessionID string
 	ExpressionHash string
+}
+
+// TunnelInvalidationRequest 描述持久化连接目标变更触发的 tunnel 安全失效。
+//
+// 注意：
+//   - ChangedFields 只能包含字段名，不能携带密码、私钥或 fingerprint 原值
+type TunnelInvalidationRequest struct {
+	HostID        string
+	Trigger       string
+	ChangedFields []string
 }
 
 // Approval 记录一条需要用户决策的 operation 请求。

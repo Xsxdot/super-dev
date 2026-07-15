@@ -119,6 +119,54 @@ func TestAuditStoreAppendsAndFilters(t *testing.T) {
 	assert.NotEmpty(t, events[0].ID)
 }
 
+func TestAuditStoreTrimPreservesUnfinishedPreparedPlan(t *testing.T) {
+	store := NewAuditFileStore(t.TempDir()+"/operation-audit.json", 2)
+	preparedPlan := storePlan(OperationTunnelInvalidate, "prepared-fingerprint")
+	preparedPlan.ID = "op_prepared"
+	_, err := store.Append(context.Background(), AuditEvent{
+		Action: AuditPrepared,
+		Plan:   preparedPlan,
+	})
+	require.NoError(t, err)
+
+	for _, id := range []string{"op_completed_1", "op_completed_2", "op_completed_3"} {
+		plan := storePlan("runtime.restart", id)
+		plan.ID = id
+		_, err = store.Append(context.Background(), AuditEvent{
+			Action: AuditExecuted,
+			Plan:   plan,
+		})
+		require.NoError(t, err)
+	}
+
+	events, err := store.List(context.Background(), AuditFilter{})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Contains(t, []string{events[0].Plan.ID, events[1].Plan.ID}, preparedPlan.ID)
+}
+
+func TestAuditStoreTrimReleasesPreparedPlanAfterTerminalEvent(t *testing.T) {
+	store := NewAuditFileStore(t.TempDir()+"/operation-audit.json", 2)
+	preparedPlan := storePlan(OperationTunnelInvalidate, "prepared-fingerprint")
+	preparedPlan.ID = "op_prepared"
+	_, err := store.Append(context.Background(), AuditEvent{Action: AuditPrepared, Plan: preparedPlan})
+	require.NoError(t, err)
+	_, err = store.Append(context.Background(), AuditEvent{Action: AuditExecuted, Plan: preparedPlan})
+	require.NoError(t, err)
+
+	for _, id := range []string{"op_new_1", "op_new_2"} {
+		plan := storePlan("runtime.restart", id)
+		plan.ID = id
+		_, err = store.Append(context.Background(), AuditEvent{Action: AuditExecuted, Plan: plan})
+		require.NoError(t, err)
+	}
+
+	events, err := store.List(context.Background(), AuditFilter{})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.NotContains(t, []string{events[0].Plan.ID, events[1].Plan.ID}, preparedPlan.ID)
+}
+
 func storePlan(kind string, fp string) Plan {
 	return Plan{
 		ID:          "op_1",

@@ -102,6 +102,14 @@ const connectCheckRetryDelayMS = 2000
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedHost = computed(() => props.hosts?.find(host => host.id === hostID.value))
 const currentHost = computed(() => isCreateMode.value ? selectedHost.value : props.host ?? selectedHost.value)
+const pushSSHBlocked = computed(() => {
+  const host = currentHost.value
+  return !host
+    || !host.ssh_host?.trim()
+    || !host.ssh_user?.trim()
+    || host.ssh_credential_configured !== true
+    || host.ssh_host_key_fingerprint_configured !== true
+})
 const persistedAgent = computed<AgentDTO | null>(() => localAgent.value ?? props.agent ?? null)
 const panelAgent = computed<AgentDTO | null>(() => {
   if (persistedAgent.value) return persistedAgent.value
@@ -129,6 +137,8 @@ const directOptions = computed(() => directAddressOptions(currentHost.value, bin
 const hasPublicIP = computed(() => Boolean(currentHost.value?.public_ip?.trim()))
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
+const tunnelTargetDirty = computed(() => Boolean(persistedAgent.value)
+  && tunnelTargetSignature(chain.value) !== tunnelTargetSignature(savedChain.value))
 const bindScopeDirty = computed(() => (
   runtime.value?.installed === true &&
   resolveBindAddressFromChain(savedChain.value) !== resolveBindAddressFromChain(chain.value)
@@ -178,6 +188,12 @@ function cloneChain(agent?: AgentDTO | null, fallbackType: TransportType = 'dire
 
 function chainSignature(entries: TransportEntry[]): string {
   return JSON.stringify(entries.map(normalizeEntry))
+}
+
+function tunnelTargetSignature(entries: TransportEntry[]): string {
+  const tunnel = entries.find(entry => entry.type === 'tunnel' && entry.tunnel)
+  // 后端只在 tunnel 是否存在或远端 Agent 端口变化时撤销旧转发；direct 编辑不应误报警告。
+  return tunnel ? `tunnel:${Number(tunnel.tunnel?.remote_agent_port) || 57017}` : 'no-tunnel'
 }
 
 function clearProbeResults() {
@@ -571,7 +587,8 @@ async function confirmGeneratedInstallExecuted() {
 
 async function pushInstall() {
   const agent = persistedAgent.value
-  if (!agent) return
+  // Push 安装必须与后端 fail-closed 的 SSH 身份合同保持一致，不能先发起必然失败的远程操作。
+  if (!agent || pushSSHBlocked.value) return
   const runID = panelRunID
   installingPush.value = true
   actionError.value = null
@@ -806,7 +823,8 @@ onBeforeUnmount(() => {
 
                   <template v-else>
                     <p class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
-                    <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush" data-test="agent-install-push" @click="pushInstall">
+                    <p v-if="pushSSHBlocked" class="install-note warning" data-test="agent-install-push-blocker">{{ t('settings.agents.pushOverSSHBlocked') }}</p>
+                    <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush || pushSSHBlocked" data-test="agent-install-push" @click="pushInstall">
                       {{ installingPush ? t('common.loading') : t('settings.agents.installStartNow') }}
                     </button>
                     <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
@@ -848,6 +866,9 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="canProbe && transportDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-dirty">
               {{ t('settings.agents.saveTransportBeforeProbe') }}
+            </div>
+            <div v-if="tunnelTargetDirty" class="settings-alert settings-alert-warning" data-test="agent-transport-tunnel-invalidation">
+              {{ t('settings.agents.tunnelInvalidationWarning') }}
             </div>
             <div v-if="bindScopeDirty" class="settings-alert settings-alert-warning" data-test="agent-bind-scope-dirty">
               {{ t('settings.agents.bindScopeDirtyHint') }}

@@ -18,6 +18,20 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
+func TestPlanTunnelInvalidationDoesNotClaimMutationAlreadyPersisted(t *testing.T) {
+	plan, err := PlanTunnelInvalidation(TunnelInvalidationRequest{
+		HostID:        "host-1",
+		Trigger:       "host_connection_config_changed",
+		ChangedFields: []string{"ssh_host"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, plan.Checks, 1)
+	assert.Equal(t, "prepared_audit_required", plan.Checks[0].Name)
+	assert.Equal(t, "passed", plan.Checks[0].Status)
+	assert.NotContains(t, plan.Checks[0].Message, "persisted before invalidation")
+}
+
 func TestPlanRuntimeAllowsDevLocalDeployment(t *testing.T) {
 	project := operationProject(true, model.LocationLocal, false)
 	plan, err := PlanRuntime(OperationRuntimeStart, project, project.Services[0], project.Services[0].Deployments[0])

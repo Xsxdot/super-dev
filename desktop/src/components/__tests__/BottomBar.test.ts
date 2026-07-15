@@ -267,10 +267,12 @@ describe('BottomBar', () => {
       host_name: hostId,
       desired_deployment_count: 1,
       desired_collector_count: 1,
+      active_collector_count: 1,
       tunnel_connected: true,
       remote: {
         deployment_count: 1,
         collector_count: 1,
+        active_collector_count: 1,
         collectors: [{
           deployment_id: 'dep-api',
           desired: true,
@@ -315,10 +317,12 @@ describe('BottomBar', () => {
       host_name: hostId,
       desired_deployment_count: 2,
       desired_collector_count: 2,
+      active_collector_count: 2,
       tunnel_connected: true,
       remote: {
         deployment_count: 2,
         collector_count: 2,
+        active_collector_count: 2,
         collectors: ['dep-api', 'dep-worker'].map(deploymentId => ({
           deployment_id: deploymentId,
           desired: true,

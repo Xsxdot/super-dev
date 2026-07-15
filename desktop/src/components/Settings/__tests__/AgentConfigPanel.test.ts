@@ -63,6 +63,10 @@ const hosts: Host[] = [
     public_ip: '203.0.113.10',
     private_ip: '10.0.0.8',
     ssh_host: '10.0.0.8',
+    ssh_user: 'root',
+    ssh_credential_configured: true,
+    ssh_private_key_configured: true,
+    ssh_host_key_fingerprint_configured: true,
     tags: ['prod'],
   },
 ]
@@ -237,6 +241,7 @@ describe('AgentConfigPanel', () => {
       props: {
         visible: true,
         agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: hosts[0],
         initialTab: 'install',
       },
       global: { plugins: [installTestI18n()] },
@@ -254,6 +259,32 @@ describe('AgentConfigPanel', () => {
     expect(store.checkAgent).toHaveBeenCalledWith('h1')
     expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('已连接')
     expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).not.toContain('locked')
+  })
+
+  it('blocks SSH push until the Host has a login credential and trusted host-key fingerprint', async () => {
+    const store = useAgentsStore()
+    const installAgent = vi.spyOn(store, 'installAgent')
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: {
+          ...hosts[0],
+          ssh_user: 'root',
+          ssh_credential_configured: true,
+          ssh_host_key_fingerprint_configured: false,
+        },
+        initialTab: 'install',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+
+    expect(wrapper.get('[data-test="agent-install-push"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="agent-install-push-blocker"]').text()).toContain('host-key fingerprint')
+    await wrapper.get('[data-test="agent-install-push"]').trigger('click')
+    expect(installAgent).not.toHaveBeenCalled()
   })
 
   it('auto-restarts SSH push installs when auto TLS provision requires restart', async () => {
@@ -276,6 +307,7 @@ describe('AgentConfigPanel', () => {
       props: {
         visible: true,
         agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: hosts[0],
         initialTab: 'install',
       },
       global: { plugins: [installTestI18n()] },
@@ -315,6 +347,7 @@ describe('AgentConfigPanel', () => {
       props: {
         visible: true,
         agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: hosts[0],
         initialTab: 'install',
       },
       global: { plugins: [installTestI18n()] },
@@ -358,6 +391,7 @@ describe('AgentConfigPanel', () => {
       props: {
         visible: true,
         agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: hosts[0],
         initialTab: 'install',
       },
       global: { plugins: [installTestI18n()] },
@@ -403,6 +437,7 @@ describe('AgentConfigPanel', () => {
       props: {
         visible: true,
         agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+        host: hosts[0],
         initialTab: 'install',
       },
       global: { plugins: [installTestI18n()] },
@@ -635,6 +670,23 @@ describe('AgentConfigPanel', () => {
     expect(wrapper.find('[data-test="agent-bind-scope-dirty"]').exists()).toBe(false)
     await wrapper.find('[data-test="transport-add-direct"]').trigger('click')
     expect(wrapper.find('[data-test="agent-bind-scope-dirty"]').text()).toContain('重新安装')
+  })
+
+  it('warns before a tunnel target edit invalidates the active tunnel runtime', async () => {
+    const wrapper = mount(AgentConfigPanel, {
+      props: {
+        visible: true,
+        agent: agent(),
+        host: hosts[0],
+        initialTab: 'transport',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="agent-transport-tunnel-invalidation"]').exists()).toBe(false)
+    await wrapper.find('[data-test="transport-remove-1"]').trigger('click')
+
+    expect(wrapper.get('[data-test="agent-transport-tunnel-invalidation"]').text()).toContain('disconnect')
   })
 
   it('locks transport probes while local chain edits are unsaved', async () => {

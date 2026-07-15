@@ -42,7 +42,7 @@ func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	out := make([]hostViewDTO, 0, len(hosts)+1)
 	out = append(out, selfNode)
 	for _, h := range hosts {
-		out = append(out, toHostViewDTO(h))
+		out = append(out, a.hostAssembler.ToView(h))
 	}
 	log.WithField("host_count", len(hosts)).Debug("Host 安全视图读取完成")
 	jsonOK(w, out)
@@ -58,7 +58,7 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	saved, err := a.remoteNodeMutations.AddHost(dto)
+	saved, err := a.remoteNodeMutations.AddHost(r.Context(), dto)
 	if err != nil {
 		if isInvalidHostMutation(err) {
 			jsonError(w, http.StatusBadRequest, err.Error())
@@ -67,7 +67,7 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, toHostViewDTO(saved))
+	jsonOK(w, a.hostAssembler.ToView(saved))
 }
 
 // updateHost 处理 PUT /api/hosts/{id}。
@@ -81,8 +81,11 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	updated, err := a.remoteNodeMutations.UpdateHost(id, dto)
+	updated, err := a.remoteNodeMutations.UpdateHost(r.Context(), id, dto)
 	if err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		if isInvalidHostMutation(err) {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
@@ -94,12 +97,15 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, toHostViewDTO(updated))
+	jsonOK(w, a.hostAssembler.ToView(updated))
 }
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
 func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
-	if err := a.remoteNodeMutations.RemoveHost(r.PathValue("id")); err != nil {
+	if err := a.remoteNodeMutations.RemoveHost(r.Context(), r.PathValue("id")); err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -111,7 +111,10 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 	if agent.Security.TLS.Mode == "" {
 		agent.Security.TLS.Mode = model.AgentTLSModeOff
 	}
-	if _, err := a.remoteNodeMutations.UpsertAgent(agent); err != nil {
+	if _, err := a.remoteNodeMutations.UpsertAgent(r.Context(), agent); err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

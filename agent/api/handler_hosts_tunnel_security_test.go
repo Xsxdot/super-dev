@@ -11,6 +11,10 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -19,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
@@ -26,6 +31,57 @@ type blockingHostPinDialer struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type failingTunnelInvalidationAuditStore struct {
+	err error
+}
+
+type recoverableTunnelInvalidationAuditStore struct {
+	mu           sync.Mutex
+	events       []operation.AuditEvent
+	failExecuted bool
+	nextID       int
+}
+
+func (s failingTunnelInvalidationAuditStore) Append(context.Context, operation.AuditEvent) (operation.AuditEvent, error) {
+	return operation.AuditEvent{}, s.err
+}
+
+func (s failingTunnelInvalidationAuditStore) List(context.Context, operation.AuditFilter) ([]operation.AuditEvent, error) {
+	return nil, s.err
+}
+
+func (s *recoverableTunnelInvalidationAuditStore) Append(_ context.Context, event operation.AuditEvent) (operation.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.Action == operation.AuditExecuted && s.failExecuted {
+		return operation.AuditEvent{}, errors.New("audit completion unavailable")
+	}
+	s.nextID++
+	if event.ID == "" {
+		event.ID = fmt.Sprintf("audit-%d", s.nextID)
+	}
+	s.events = append(s.events, event)
+	return event, nil
+}
+
+func (s *recoverableTunnelInvalidationAuditStore) List(_ context.Context, filter operation.AuditFilter) ([]operation.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]operation.AuditEvent, 0, len(s.events))
+	for i := len(s.events) - 1; i >= 0; i-- {
+		if filter.Kind == "" || s.events[i].Kind == filter.Kind {
+			out = append(out, s.events[i])
+		}
+	}
+	return out, nil
+}
+
+func (s *recoverableTunnelInvalidationAuditStore) setFailExecuted(fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failExecuted = fail
 }
 
 func newBlockingHostPinDialer() *blockingHostPinDialer {
@@ -78,6 +134,17 @@ func TestUpdateHostPinChangeInvalidatesExistingTunnelEvidence(t *testing.T) {
 			require.Equal(t, http.StatusOK, rr.Code)
 			assert.Equal(t, tunnel.StatusDisconnected, app.tunnels.Status(host.ID))
 			assert.Equal(t, tunnel.HostKeyEvidence{}, app.tunnels.HostKeyEvidenceOf(host.ID))
+
+			events, err := app.operationAudit.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+			require.NoError(t, err)
+			require.Len(t, events, 2)
+			assert.Equal(t, operation.AuditExecuted, events[0].Action)
+			assert.Equal(t, operation.AuditPrepared, events[1].Action)
+			assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
+			assert.Equal(t, host.ID, events[0].Plan.Target.HostID)
+			assert.False(t, events[0].Plan.RequiresApproval)
+			assert.Equal(t, "host_connection_config_changed", events[0].Data["trigger"])
+			assert.Equal(t, []any{"ssh_host_key_fingerprint"}, events[0].Data["changed_fields"])
 		})
 	}
 }
@@ -126,4 +193,153 @@ func TestUpdateHostPinChangeInvalidatesInFlightTunnelAttempt(t *testing.T) {
 			assert.Equal(t, tunnel.HostKeyEvidence{}, app.tunnels.HostKeyEvidenceOf(host.ID))
 		})
 	}
+}
+
+func TestUpdateHostPinChangeDoesNotPersistWhenAuditPreparationFails(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditErr := errors.New("audit storage unavailable")
+	app.operationAudit = failingTunnelInvalidationAuditStore{err: auditErr}
+	host, err := app.remoteStore.AddHost(model.Host{
+		ID:                    "h1",
+		Name:                  "edge",
+		SSHHost:               "ssh.example.com",
+		SSHUser:               "deploy",
+		SSHHostKeyFingerprint: testHostPinA,
+	})
+	require.NoError(t, err)
+	_, err = app.tunnels.EnsureConnected(tunnel.Target{
+		HostID:                host.ID,
+		SSHHostKeyFingerprint: host.SSHHostKeyFingerprint,
+	})
+	require.NoError(t, err)
+
+	body := bytes.NewBufferString(`{"name":"edge","ssh_host":"ssh.example.com","ssh_user":"deploy","ssh_host_key_fingerprint":"` + testHostPinB + `"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/hosts/"+host.ID, body)
+	req.SetPathValue("id", host.ID)
+	rr := httptest.NewRecorder()
+
+	app.updateHost(rr, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	var response struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+		Data  struct {
+			Persisted         bool `json:"persisted"`
+			TunnelInvalidated bool `json:"tunnel_invalidated"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&response))
+	assert.Equal(t, "tunnel_invalidation_audit_unavailable", response.Code)
+	assert.Contains(t, response.Error, "not changed")
+	assert.False(t, response.Data.Persisted)
+	assert.False(t, response.Data.TunnelInvalidated)
+	assert.Equal(t, tunnel.StatusConnected, app.tunnels.Status(host.ID))
+
+	stored, found, err := app.remoteHostByID(host.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, testHostPinA, stored.SSHHostKeyFingerprint)
+}
+
+func TestUpdateHostPinChangeRetryCompletesPreparedAudit(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	host, err := app.remoteStore.AddHost(model.Host{
+		ID:                    "h1",
+		Name:                  "edge",
+		SSHHost:               "ssh.example.com",
+		SSHUser:               "deploy",
+		SSHHostKeyFingerprint: testHostPinA,
+	})
+	require.NoError(t, err)
+	_, err = app.tunnels.EnsureConnected(tunnel.Target{
+		HostID:                host.ID,
+		SSHHostKeyFingerprint: host.SSHHostKeyFingerprint,
+	})
+	require.NoError(t, err)
+
+	update := func() *httptest.ResponseRecorder {
+		body := bytes.NewBufferString(`{"name":"edge","ssh_host":"ssh.example.com","ssh_user":"deploy","ssh_host_key_fingerprint":"` + testHostPinB + `"}`)
+		req := httptest.NewRequest(http.MethodPut, "/api/hosts/"+host.ID, body)
+		req.SetPathValue("id", host.ID)
+		rr := httptest.NewRecorder()
+		app.updateHost(rr, req)
+		return rr
+	}
+
+	first := update()
+	require.Equal(t, http.StatusServiceUnavailable, first.Code)
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, operation.AuditPrepared, events[0].Action)
+	assert.Equal(t, tunnel.StatusDisconnected, app.tunnels.Status(host.ID))
+	stored, found, err := app.remoteHostByID(host.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, testHostPinB, stored.SSHHostKeyFingerprint)
+
+	auditStore.setFailExecuted(false)
+	second := update()
+	require.Equal(t, http.StatusOK, second.Code)
+	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
+}
+
+func TestDeleteHostRetryCompletesPreparedAuditAfterRecordIsGone(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	host, err := app.remoteStore.AddHost(model.Host{
+		ID:                    "h1",
+		Name:                  "edge",
+		SSHHost:               "ssh.example.com",
+		SSHUser:               "deploy",
+		SSHHostKeyFingerprint: testHostPinA,
+	})
+	require.NoError(t, err)
+	_, err = app.tunnels.EnsureConnected(tunnel.Target{
+		HostID:                host.ID,
+		SSHHostKeyFingerprint: host.SSHHostKeyFingerprint,
+	})
+	require.NoError(t, err)
+
+	remove := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/api/hosts/"+host.ID, nil)
+		req.SetPathValue("id", host.ID)
+		rr := httptest.NewRecorder()
+		app.deleteHost(rr, req)
+		return rr
+	}
+
+	first := remove()
+	require.Equal(t, http.StatusServiceUnavailable, first.Code)
+	_, found, err := app.remoteHostByID(host.ID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, tunnel.StatusDisconnected, app.tunnels.Status(host.ID))
+
+	auditStore.setFailExecuted(false)
+	second := remove()
+	require.Equal(t, http.StatusOK, second.Code)
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, operation.AuditPrepared, events[1].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
 }

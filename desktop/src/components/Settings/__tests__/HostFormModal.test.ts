@@ -123,4 +123,73 @@ describe('HostFormModal', () => {
       clear_ssh_host_key_fingerprint: true,
     }))
   })
+
+  it('does not emit replacement values together with explicit clear intent', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        initial: {
+          id: 'host-1',
+          name: 'edge',
+          tags: [],
+          ssh_credential_configured: true,
+          ssh_password_configured: true,
+          ssh_private_key_configured: true,
+          ssh_host_key_fingerprint_configured: true,
+        },
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="host-form-ssh-password"]').setValue('replacement-password')
+    await wrapper.find('[data-test="host-form-ssh-private-key"]').setValue('replacement-private-key')
+    await wrapper.find('[data-test="host-form-ssh-host-key-fingerprint"]').setValue('SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+    await wrapper.find('[data-test="host-form-clear-ssh-password"]').setValue(true)
+    await wrapper.find('[data-test="host-form-clear-ssh-private-key"]').setValue(true)
+    await wrapper.find('[data-test="host-form-clear-ssh-host-key-fingerprint"]').setValue(true)
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      ssh_password: '',
+      ssh_private_key: '',
+      ssh_host_key_fingerprint: '',
+      clear_ssh_password: true,
+      clear_ssh_private_key: true,
+      clear_ssh_host_key_fingerprint: true,
+    }))
+  })
+
+  it('warns before an SSH target edit can invalidate an active tunnel', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        initial: {
+          id: 'host-1',
+          name: 'edge',
+          tags: [],
+          ssh_host: 'ssh.example.com',
+          ssh_port: 22,
+          ssh_user: 'deploy',
+        },
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.find('[data-test="host-form-tunnel-invalidation"]').exists()).toBe(false)
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('new-ssh.example.com')
+
+    expect(wrapper.get('[data-test="host-form-tunnel-invalidation"]').text()).toContain('disconnect')
+  })
+
+  it('shows save and audit recovery errors inside the modal', () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        error: 'Configuration was saved; retry to complete the audit.',
+      },
+      global: { plugins: [installTestI18n('en-US')] },
+    })
+
+    expect(wrapper.get('[data-test="host-form-error"]').text()).toContain('retry to complete the audit')
+  })
 })

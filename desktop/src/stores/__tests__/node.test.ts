@@ -73,6 +73,7 @@ function status(hostId: string, reachable = true): NodeStatus {
       ? {
           deployment_count: 1,
           collector_count: 1,
+          active_collector_count: 1,
           collectors: [],
           last_result: { deployment_count: 1, collector_count: 1, persisted: true },
         }

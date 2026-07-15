@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
+	apiassembler "github.com/xsxdot/super-dev/agent/api/internal/assembler"
 	"github.com/xsxdot/super-dev/agent/browsercontrol"
 	"github.com/xsxdot/super-dev/agent/browserdebug"
 	"github.com/xsxdot/super-dev/agent/codedebug"
@@ -155,6 +156,8 @@ type App struct {
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
 	remoteStore           *remote.Store
+	// hostAssembler 是 Host HTTP DTO 与领域模型之间唯一的字段转换边界。
+	hostAssembler *apiassembler.HostAssembler
 	// remoteObservation 统一生成已脱敏系统身份与固定端口直连观察。
 	remoteObservation remoteobservation.Observer
 	agentStore        *remote.AgentStore
@@ -462,6 +465,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
+		hostAssembler:               apiassembler.NewHostAssembler(),
 		remoteObservation:           remoteObservation,
 		agentStore:                  agentStore,
 		tunnels:                     tunnels,
@@ -493,10 +497,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
 		ingressRegistry:             ingress.NewRegistry(),
 	}
-	app.remoteNodeMutations = newRemoteNodeMutationApplication(remoteStore, agentStore, tunnelRuntimeInvalidatorFunc(func(hostID string) {
-		// 通过 App 当前 manager 间接调用，允许测试替换 dialer/manager 后仍验证真实失效语义。
-		app.tunnels.Disconnect(hostID)
-	}))
+	app.remoteNodeMutations = newRemoteNodeMutationApplication(remoteStore, agentStore, app.hostAssembler, newAuditedTunnelRuntimeInvalidator(
+		func(hostID string) tunnel.Status {
+			return app.tunnels.Status(hostID)
+		},
+		func(hostID string) {
+			// 闭包读取 App 当前 manager，允许测试替换 dialer/manager 后仍验证真实失效语义。
+			app.tunnels.Disconnect(hostID)
+		},
+		func() operation.AuditStore {
+			// 测试可替换 Store 以覆盖 prepared/terminal 持久化故障。
+			return app.operationAudit
+		},
+	))
 	cleaner := newLogCleaner(s, cleanupConfig{
 		RetentionDays: settings.LogRetentionDays,
 		MaxBytes:      settings.LogMaxBytes,
