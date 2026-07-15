@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -42,7 +43,7 @@ func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 	out := make([]hostViewDTO, 0, len(hosts)+1)
 	out = append(out, selfNode)
 	for _, h := range hosts {
-		out = append(out, a.hostAssembler.ToView(h))
+		out = append(out, a.hostView(h))
 	}
 	log.WithField("host_count", len(hosts)).Debug("Host 安全视图读取完成")
 	jsonOK(w, out)
@@ -67,7 +68,7 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, a.hostAssembler.ToView(saved))
+	jsonOK(w, a.hostView(saved))
 }
 
 // updateHost 处理 PUT /api/hosts/{id}。
@@ -97,7 +98,7 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, a.hostAssembler.ToView(updated))
+	jsonOK(w, a.hostView(updated))
 }
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
@@ -114,4 +115,15 @@ func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) remoteHostByID(id string) (model.Host, bool, error) {
 	return hostByID(a.remoteStore, id)
+}
+
+func (a *App) hostView(host model.Host) hostViewDTO {
+	view := a.hostAssembler.ToView(host)
+	status := a.nodeSnapshotOf(host.ID)
+	if status == nil || status.System == nil {
+		return view
+	}
+	// Host.id 是持久化选择键；NodeID 必须来自同一 Host 的 live system facts，不能从名称或连接地址推断。
+	view.NodeID = strings.TrimSpace(status.System.AgentNodeID)
+	return view
 }
