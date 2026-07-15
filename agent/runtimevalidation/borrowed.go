@@ -25,6 +25,11 @@ import (
 	"github.com/xsxdot/gokit/logger"
 )
 
+const (
+	borrowedNodeStatusReadyTimeout = 15 * time.Second
+	borrowedNodeStatusPollInterval = 250 * time.Millisecond
+)
+
 // BorrowedLiveProjection 是可前后比较且不包含地址/凭据的远端 topology 安全投影。
 type BorrowedLiveProjection struct {
 	HostID                 string   `json:"host_id"`
@@ -61,14 +66,7 @@ func VerifyBorrowedLiveTopology(ctx context.Context, tools ToolCaller, agentURL 
 	if err != nil {
 		return BorrowedLiveProjection{}, "", err
 	}
-	result, err := tools.CallTool(ctx, "list_hosts", map[string]any{})
-	if err != nil {
-		return BorrowedLiveProjection{}, "", fmt.Errorf("list live hosts: %w", err)
-	}
-	if result.IsError || RawMessageMap(result.StructuredContent)["ok"] == false {
-		return BorrowedLiveProjection{}, "", fmt.Errorf("list_hosts did not return success")
-	}
-	hostNodeID, tags, err := selectGovernedRemoteHost(structuredData(result), input.RemoteHostID)
+	hostNodeID, tags, err := waitForBorrowedNodeStatus(ctx, tools, input.RemoteHostID)
 	if err != nil {
 		return BorrowedLiveProjection{}, "", err
 	}
@@ -99,6 +97,55 @@ func VerifyBorrowedLiveTopology(ctx context.Context, tools ToolCaller, agentURL 
 	return projection, digest, nil
 }
 
+func waitForBorrowedNodeStatus(ctx context.Context, tools ToolCaller, hostID string) (string, []string, error) {
+	readyContext, cancel := context.WithTimeout(ctx, borrowedNodeStatusReadyTimeout)
+	defer cancel()
+	attempts := 0
+	waitingLogged := false
+	for {
+		attempts++
+		result, err := tools.CallTool(readyContext, "list_hosts", map[string]any{})
+		if err != nil {
+			return "", nil, fmt.Errorf("list live hosts: %w", err)
+		}
+		if result.IsError || RawMessageMap(result.StructuredContent)["ok"] == false {
+			return "", nil, fmt.Errorf("list_hosts did not return success")
+		}
+		nodeID, tags, err := selectGovernedRemoteHost(structuredData(result), hostID)
+		if err != nil {
+			return "", nil, err
+		}
+		if nodeID != "" {
+			if waitingLogged {
+				logger.GetLogger().WithEntryName("RuntimeValidationBorrowed").WithFields(map[string]any{
+					"host_id": hostID, "attempts": attempts,
+				}).Info("borrowed remote 首个节点状态已就绪")
+			}
+			return nodeID, tags, nil
+		}
+		if !waitingLogged {
+			waitingLogged = true
+			logger.GetLogger().WithEntryName("RuntimeValidationBorrowed").WithFields(map[string]any{
+				"host_id": hostID,
+			}).Info("borrowed remote 尚未上报首个节点状态，等待就绪")
+		}
+
+		// Host 配置会先于五秒一次的 remote node status 出现在 list_hosts 中；空 node_id 是明确的未就绪态，不是身份漂移。
+		timer := time.NewTimer(borrowedNodeStatusPollInterval)
+		select {
+		case <-readyContext.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			logger.GetLogger().WithEntryName("RuntimeValidationBorrowed").WithFields(map[string]any{
+				"host_id": hostID, "attempts": attempts, "error": readyContext.Err(),
+			}).Error("borrowed remote 首个节点状态等待超时")
+			return "", nil, fmt.Errorf("live list_hosts node identity remained absent: %w", readyContext.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func selectGovernedRemoteHost(data map[string]any, hostID string) (string, []string, error) {
 	hosts, ok := data["remote_hosts"].([]any)
 	if !ok {
@@ -117,7 +164,16 @@ func selectGovernedRemoteHost(data map[string]any, hostID string) (string, []str
 			return "", nil, fmt.Errorf("live host %s lacks governance tag", hostID)
 		}
 		sort.Strings(tags)
-		return strings.TrimSpace(fmt.Sprint(host["node_id"])), tags, nil
+		rawNodeID, exists := host["node_id"]
+		if !exists || rawNodeID == nil {
+			// 首个 remote node status 到达前 API 会省略 node_id 或返回 null；两者都必须保留为可等待的未就绪态。
+			return "", tags, nil
+		}
+		nodeID, ok := rawNodeID.(string)
+		if !ok {
+			return "", nil, fmt.Errorf("live host %s node_id is not a string", hostID)
+		}
+		return strings.TrimSpace(nodeID), tags, nil
 	}
 	return "", nil, fmt.Errorf("live host %s is absent", hostID)
 }

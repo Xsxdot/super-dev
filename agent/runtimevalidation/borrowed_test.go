@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,12 +50,73 @@ func TestVerifyBorrowedLiveTopologyRejectsMachineIdentityDrift(t *testing.T) {
 	require.ErrorContains(t, err, "identity mismatch")
 }
 
+func TestVerifyBorrowedLiveTopologyWaitsForInitialNodeStatus(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(validBorrowedAgentProjection())
+	}))
+	t.Cleanup(server.Close)
+	tools := &borrowedHostSequenceTool{nodeIDs: []any{"", "node-linux-1"}}
+
+	projection, _, err := VerifyBorrowedLiveTopology(context.Background(), tools, server.URL, RuntimeInput{
+		RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1",
+	}, server.Client())
+
+	require.NoError(t, err)
+	require.Equal(t, "node-linux-1", projection.NodeID)
+	require.Equal(t, 2, tools.CallCount())
+}
+
+func TestVerifyBorrowedLiveTopologyTreatsNullNodeIdentityAsNotReady(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(validBorrowedAgentProjection())
+	}))
+	t.Cleanup(server.Close)
+	tools := &borrowedHostSequenceTool{nodeIDs: []any{nil, "node-linux-1"}}
+
+	projection, _, err := VerifyBorrowedLiveTopology(context.Background(), tools, server.URL, RuntimeInput{
+		RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1",
+	}, server.Client())
+
+	require.NoError(t, err)
+	require.Equal(t, "node-linux-1", projection.NodeID)
+	require.Equal(t, 2, tools.CallCount())
+}
+
 type borrowedHostTool struct{}
 
 func (borrowedHostTool) CallTool(context.Context, string, map[string]any) (ToolCallResult, error) {
 	return successToolResult(map[string]any{"remote_hosts": []any{map[string]any{
 		"id": "remote-linux", "is_self": false, "node_id": "node-linux-1", "tags": []any{dedicatedRemoteHostTag},
 	}}}), nil
+}
+
+type borrowedHostSequenceTool struct {
+	mu      sync.Mutex
+	nodeIDs []any
+	calls   int
+}
+
+func (tool *borrowedHostSequenceTool) CallTool(context.Context, string, map[string]any) (ToolCallResult, error) {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	index := tool.calls
+	tool.calls++
+	if index >= len(tool.nodeIDs) {
+		index = len(tool.nodeIDs) - 1
+	}
+	return successToolResult(map[string]any{"remote_hosts": []any{map[string]any{
+		"id": "remote-linux", "is_self": false, "node_id": tool.nodeIDs[index], "tags": []any{dedicatedRemoteHostTag},
+	}}}), nil
+}
+
+func (tool *borrowedHostSequenceTool) CallCount() int {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	return tool.calls
 }
 
 func validBorrowedAgentProjection() map[string]any {
