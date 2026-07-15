@@ -45,8 +45,23 @@ type FoundationSecurityState struct {
 
 // FoundationRuntimeSettings 是 strict browser evaluate 需要的 foundation 最小设置投影。
 type FoundationRuntimeSettings struct {
+	Approval struct {
+		ConfigUpsert      bool `json:"config_upsert"`
+		PipelineUpsert    bool `json:"pipeline_upsert"`
+		PipelineRun       bool `json:"pipeline_run"`
+		TemplateImport    bool `json:"template_import"`
+		BrowserDebugOpen  bool `json:"browser_debug_open"`
+		CodeDebugOpen     bool `json:"code_debug_open"`
+		CodeDebugEvaluate bool `json:"code_debug_evaluate"`
+	} `json:"approval"`
 	DebugBrowser struct {
-		AllowEvaluate bool `json:"allow_evaluate"`
+		DefaultBrowserID string `json:"default_browser_id"`
+		ProfileMode      string `json:"profile_mode"`
+		AllowEvaluate    bool   `json:"allow_evaluate"`
+		Browsers         []struct {
+			ID             string `json:"id"`
+			ExecutablePath string `json:"executable_path"`
+		} `json:"browsers"`
 	} `json:"debug_browser"`
 }
 

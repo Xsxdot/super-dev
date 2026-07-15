@@ -26,6 +26,8 @@ func TestBundleIntegrityAcceptsPathsWithSpaces(t *testing.T) {
 	receipt, err := VerifyBundle(root, Target{OS: "darwin", Architecture: "arm64"})
 	require.NoError(t, err)
 	require.Equal(t, 1, receipt.FileCount)
+	require.FileExists(t, filepath.Join(root, "bundle-manifest.json"))
+	require.FileExists(t, filepath.Join(root, "bundle-manifest.sha256"))
 }
 
 func TestBundleIntegrityRejectsMissingExtraHashModeAndTargetDrift(t *testing.T) {

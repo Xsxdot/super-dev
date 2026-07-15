@@ -172,6 +172,9 @@ func validateScenarioStep(scenarioID, group string, step ScenarioStep, seen map[
 	if len(step.Expect.Assertions) == 0 {
 		return fmt.Errorf("scenario %s step %s has no executable assertions", scenarioID, step.ID)
 	}
+	if step.Coverage == CoveragePrimary && len(step.Evidence.Record) == 0 {
+		return fmt.Errorf("scenario %s primary step %s has no selected evidence fields", scenarioID, step.ID)
+	}
 	for index, assertion := range step.Expect.Assertions {
 		path := strings.TrimSpace(assertion.Path)
 		operator := strings.TrimSpace(assertion.Operator)

@@ -9,6 +9,7 @@
 package runtimevalidation
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -91,6 +92,30 @@ func TestPrimaryAssignmentsRejectsDuplicatePrimary(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate primary")
 }
 
+func TestRemotePipelineBindsGovernanceIdentityToLiveHost(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	var assertionValue map[string]any
+	for _, scenario := range scenarios {
+		if scenario.ID != "remote-pipeline" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if step.ID != "pipeline-host-id-preflight" {
+				continue
+			}
+			for _, assertion := range step.Expect.Assertions {
+				if assertion.Path == "structuredContent.data.remote_hosts" {
+					assertionValue, _ = assertion.Value.(map[string]any)
+				}
+			}
+		}
+	}
+	require.Equal(t, "{{expected_remote_identity}}", assertionValue["node_id"])
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,
@@ -105,6 +130,7 @@ func validScenario(tool string) Scenario {
 				Outcome:    ExpectedOutcomeSuccess,
 				Assertions: []Assertion{{Path: "structuredContent.projects", Operator: "array_not_empty"}},
 			},
+			Evidence: EvidenceContract{Record: []string{"structuredContent.projects"}},
 		}},
 	}
 }

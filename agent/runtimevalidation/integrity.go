@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	bundleManifestFilename = "bundle.manifest.json"
-	bundleSidecarFilename  = "bundle.manifest.sha256"
+	bundleManifestFilename = "bundle-manifest.json"
+	bundleSidecarFilename  = "bundle-manifest.sha256"
 	bundleManifestKind     = "superdev.runtime-validation.bundle"
 	bundleManifestVersion  = 1
 )

@@ -43,6 +43,11 @@
       "secret": false,
       "description": "list_hosts 返回且 is_self=false 的冻结 Host ID；禁止传 hostname/display name。"
     },
+    "expected_remote_identity": {
+      "required": true,
+      "secret": false,
+      "description": "由带外治理证明冻结的远端 node_id；必须与 live list_hosts 安全投影一致。"
+    },
     "linux_root": {
       "required": true,
       "secret": false,
@@ -99,6 +104,7 @@
             "value": {
               "id": "{{linux_host_id}}",
               "is_self": false,
+              "node_id": "{{expected_remote_identity}}",
               "tags": [
                 "superdev-validation-dedicated-resettable"
               ]

@@ -1,17 +1,16 @@
-// approval.go 通过正式 Agent HTTP 门禁为精确 fingerprint 执行一次性审批。
+// approval.go 在正式 Agent HTTP 门禁上消费真人批准的一次性 token。
 //
 // 职责：
-//   - 识别 MCP approval_required，复核 approval ID、operation kind 与 plan fingerprint
-//   - 仅对 campaign allowlist 执行 grant_grace=false 的真实批准
-//   - 领取一次性 token 后重试原 tools/call，token 不进入日志或证据
+//   - 识别 MCP approval_required，并注册精确、短期的 operation identity allowlist
+//   - 复核 plan ID、fingerprint、kind、规范化 target 与双重过期时间
+//   - 等待用户在正式 SuperDev 审批面批准后领取 token，并重试原 tools/call
 //
 // 边界：
-//   - 不批准未列入 allowlist 的 tool/kind，不忽略 fingerprint 漂移
-//   - 不开启 grace window，不持久化 approval token
+//   - 不代替用户调用 approve/reject，不开启 grace window
+//   - 不接受未知、过期、重复 pending 或 identity 漂移，不持久化 approval token
 package runtimevalidation
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,12 +18,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
 )
 
-const maxApprovalResponseBytes = 128 * 1024
+const (
+	maxApprovalResponseBytes = 128 * 1024
+	maxRuntimeApprovalTTL    = 15 * time.Minute
+	defaultApprovalPoll      = 250 * time.Millisecond
+)
 
 // ApprovalActorOptions 配置 foundation Agent origin、campaign 身份与 tool/kind allowlist。
 type ApprovalActorOptions struct {
@@ -32,20 +36,24 @@ type ApprovalActorOptions struct {
 	CampaignID   string
 	AllowedKinds map[string][]string
 	HTTPClient   *http.Client
+	PollInterval time.Duration
 }
 
-// ApprovalToolCaller 为需要审批的 MCP 调用执行 fingerprint 匹配和一次重试。
+// ApprovalToolCaller 为需要审批的 MCP 调用复核真人批准并执行一次重试。
 type ApprovalToolCaller struct {
-	delegate ToolCaller
-	baseURL  *url.URL
-	campaign string
-	allowed  map[string]map[string]struct{}
-	http     *http.Client
+	delegate     ToolCaller
+	baseURL      *url.URL
+	campaign     string
+	allowed      map[string]map[string]struct{}
+	http         *http.Client
+	pollInterval time.Duration
+	mu           sync.Mutex
+	registered   map[string]struct{}
 }
 
-// DefaultRuntimeValidationApprovalKinds 返回 strict campaign 允许自动复核的 tool/operation 对。
+// DefaultRuntimeValidationApprovalKinds 返回 strict campaign 允许复核的 tool/operation 对。
 //
-// 注意：这是审批匹配白名单，不是跳过审批的权限列表。
+// 注意：这是匹配白名单，不是跳过真人审批的权限列表。
 func DefaultRuntimeValidationApprovalKinds() map[string][]string {
 	return map[string][]string{
 		"apply_config_change":        {"config.project.upsert", "config.service.upsert", "config.pipeline.upsert"},
@@ -96,10 +104,17 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 			}
 		}
 	}
-	return &ApprovalToolCaller{delegate: delegate, baseURL: parsed, campaign: options.CampaignID, allowed: allowed, http: client}, nil
+	pollInterval := options.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = defaultApprovalPoll
+	}
+	return &ApprovalToolCaller{
+		delegate: delegate, baseURL: parsed, campaign: options.CampaignID, allowed: allowed,
+		http: client, pollInterval: pollInterval, registered: map[string]struct{}{},
+	}, nil
 }
 
-// CallTool 执行原 MCP 调用；仅在精确 approval_required 合同上批准并重试一次。
+// CallTool 执行原 MCP 调用；仅在精确 identity 获得真人批准后携带一次性 token 重试。
 func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
 	result, err := c.delegate.CallTool(ctx, name, arguments)
 	if err != nil {
@@ -113,38 +128,22 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	if _, allowed := allowedKinds[required.Kind]; !allowed {
 		return result, fmt.Errorf("approval tool/kind is not allowlisted: %s/%s", name, required.Kind)
 	}
+	if err := c.registerTransientAllowlist(required, time.Now().UTC()); err != nil {
+		return result, err
+	}
+
 	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
 		"campaign_id": c.campaign, "tool": name, "approval_id": required.ID,
-		"operation_kind": required.Kind, "fingerprint": required.Fingerprint,
+		"plan_id": required.PlanID, "operation_kind": required.Kind, "fingerprint": required.Fingerprint,
 	})
-	log.Info("开始复核 runtime validation operation approval fingerprint")
-	pending, err := c.getApproval(ctx, required.ID)
+	log.Info("已注册短期精确 approval allowlist，等待用户在正式审批面确认")
+	detail, err := c.waitForHumanApproval(ctx, required)
 	if err != nil {
 		return result, err
-	}
-	if err := matchApprovalIdentity(required, pending); err != nil {
-		return result, err
-	}
-	approved, err := c.approve(ctx, required)
-	if err != nil {
-		return result, err
-	}
-	if err := matchApprovalIdentity(required, approved); err != nil {
-		return result, err
-	}
-	detail, err := c.getApproval(ctx, required.ID)
-	if err != nil {
-		return result, err
-	}
-	if err := matchApprovalIdentity(required, detail); err != nil {
-		return result, err
-	}
-	if detail.Status != "approved" || strings.TrimSpace(detail.Token) == "" {
-		return result, fmt.Errorf("approved operation %s did not issue a one-time token", required.ID)
 	}
 	retryArguments := cloneMap(arguments)
 	retryArguments["approval_token"] = detail.Token
-	log.Info("operation approval 已精确批准，重试原 MCP tools/call")
+	log.Info("真人审批 identity 已精确匹配，重试原 MCP tools/call")
 	retried, retryErr := c.delegate.CallTool(ctx, name, retryArguments)
 	if retryErr != nil {
 		return retried, retryErr
@@ -157,11 +156,15 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 }
 
 type approvalIdentity struct {
-	ID          string
-	Kind        string
-	Fingerprint string
-	Status      string
-	Token       string
+	ID               string
+	PlanID           string
+	Kind             string
+	Fingerprint      string
+	NormalizedTarget string
+	PlanExpiresAt    time.Time
+	ExpiresAt        time.Time
+	Status           string
+	Token            string
 }
 
 func parseApprovalRequired(result ToolCallResult) (approvalIdentity, bool) {
@@ -181,11 +184,88 @@ func parseApprovalRequired(result ToolCallResult) (approvalIdentity, bool) {
 	if len(plan) == 0 {
 		plan = RawMessageMap(approval["plan"])
 	}
-	identity := approvalIdentity{ID: strings.TrimSpace(fmt.Sprint(approval["id"])), Kind: strings.TrimSpace(fmt.Sprint(plan["kind"])), Fingerprint: strings.TrimSpace(fmt.Sprint(plan["fingerprint"]))}
-	if identity.ID == "" || identity.Kind == "" || identity.Fingerprint == "" {
-		return identity, false
+	identity, err := approvalIdentityFromMaps(approval, plan)
+	if err != nil {
+		return approvalIdentity{}, false
+	}
+	if nestedPlan := RawMessageMap(approval["plan"]); len(nestedPlan) > 0 {
+		nested, nestedErr := approvalIdentityFromMaps(approval, nestedPlan)
+		if nestedErr != nil || matchApprovalPlan(identity, nested) != nil {
+			return approvalIdentity{}, false
+		}
 	}
 	return identity, true
+}
+
+func (c *ApprovalToolCaller) registerTransientAllowlist(identity approvalIdentity, now time.Time) error {
+	if identity.Status != "pending" {
+		return fmt.Errorf("approval %s is not a new pending request", identity.ID)
+	}
+	if !identity.PlanExpiresAt.After(now) || !identity.ExpiresAt.After(now) {
+		return fmt.Errorf("approval %s or its plan is expired", identity.ID)
+	}
+	if identity.PlanExpiresAt.After(now.Add(maxRuntimeApprovalTTL)) || identity.ExpiresAt.After(now.Add(maxRuntimeApprovalTTL)) {
+		return fmt.Errorf("approval %s exceeds the %s short-lived allowlist TTL", identity.ID, maxRuntimeApprovalTTL)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.registered[identity.ID]; exists {
+		return fmt.Errorf("approval %s was already registered by this campaign", identity.ID)
+	}
+	c.registered[identity.ID] = struct{}{}
+	return nil
+}
+
+func (c *ApprovalToolCaller) waitForHumanApproval(ctx context.Context, expected approvalIdentity) (approvalIdentity, error) {
+	detail, err := c.getApproval(ctx, expected.ID)
+	if err != nil {
+		return approvalIdentity{}, err
+	}
+	if err := matchApprovalIdentity(expected, detail); err != nil {
+		return approvalIdentity{}, err
+	}
+	if detail.Status == "pending" {
+		if err := c.rejectDuplicatePending(ctx, expected); err != nil {
+			return approvalIdentity{}, err
+		}
+	}
+
+	deadline := expected.PlanExpiresAt
+	if expected.ExpiresAt.Before(deadline) {
+		deadline = expected.ExpiresAt
+	}
+	for {
+		switch detail.Status {
+		case "approved":
+			if strings.TrimSpace(detail.Token) == "" {
+				return approvalIdentity{}, fmt.Errorf("approved operation %s did not issue a one-time token", expected.ID)
+			}
+			return detail, nil
+		case "pending":
+			// pending 只表示用户尚未决策；actor 自己绝不能调用 approve 接口。
+		case "rejected", "expired", "used":
+			return approvalIdentity{}, fmt.Errorf("operation approval %s reached terminal status %s", expected.ID, detail.Status)
+		default:
+			return approvalIdentity{}, fmt.Errorf("operation approval %s returned unknown status %q", expected.ID, detail.Status)
+		}
+		if !time.Now().UTC().Before(deadline) {
+			return approvalIdentity{}, fmt.Errorf("operation approval %s expired while waiting for human decision", expected.ID)
+		}
+		timer := time.NewTimer(c.pollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return approvalIdentity{}, ctx.Err()
+		case <-timer.C:
+		}
+		detail, err = c.getApproval(ctx, expected.ID)
+		if err != nil {
+			return approvalIdentity{}, err
+		}
+		if err := matchApprovalIdentity(expected, detail); err != nil {
+			return approvalIdentity{}, err
+		}
+	}
 }
 
 func (c *ApprovalToolCaller) getApproval(ctx context.Context, id string) (approvalIdentity, error) {
@@ -207,36 +287,40 @@ func (c *ApprovalToolCaller) getApproval(ctx context.Context, id string) (approv
 	return decodeApprovalIdentity(response.Body)
 }
 
-func (c *ApprovalToolCaller) approve(ctx context.Context, expected approvalIdentity) (approvalIdentity, error) {
-	payload, err := json.Marshal(map[string]any{
-		"decided_by":  "runtime-validation:" + c.campaign,
-		"note":        "strict runtime validation fingerprint approved",
-		"grant_grace": false,
-	})
-	if err != nil {
-		return approvalIdentity{}, err
-	}
+func (c *ApprovalToolCaller) rejectDuplicatePending(ctx context.Context, expected approvalIdentity) error {
 	endpoint := *c.baseURL
-	endpoint.Path = "/api/operation-approvals/" + url.PathEscape(expected.ID) + "/approve"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(payload))
+	endpoint.Path = "/api/operation-approvals"
+	query := endpoint.Query()
+	query.Set("status", "pending")
+	query.Set("limit", "0")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return approvalIdentity{}, err
+		return err
 	}
-	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return approvalIdentity{}, fmt.Errorf("approve operation: %w", err)
+		return fmt.Errorf("list pending operation approvals: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
-		return approvalIdentity{}, fmt.Errorf("approve operation returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("list pending operation approvals returned HTTP %d", response.StatusCode)
 	}
-	identity, err := decodeApprovalIdentity(response.Body)
-	if err != nil {
-		return identity, err
+	var approvals []map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&approvals); err != nil {
+		return fmt.Errorf("decode pending operation approvals: %w", err)
 	}
-	return identity, nil
+	for _, raw := range approvals {
+		candidate, decodeErr := approvalIdentityFromMaps(raw, RawMessageMap(raw["plan"]))
+		if decodeErr != nil {
+			return fmt.Errorf("pending operation approval metadata is incomplete: %w", decodeErr)
+		}
+		if candidate.ID != expected.ID && candidate.Kind == expected.Kind && candidate.NormalizedTarget == expected.NormalizedTarget {
+			return fmt.Errorf("duplicate pending approvals for operation kind %s and the same normalized target", expected.Kind)
+		}
+	}
+	return nil
 }
 
 func decodeApprovalIdentity(reader io.Reader) (approvalIdentity, error) {
@@ -246,21 +330,72 @@ func decodeApprovalIdentity(reader io.Reader) (approvalIdentity, error) {
 		return approvalIdentity{}, fmt.Errorf("decode operation approval metadata: %w", err)
 	}
 	approval := RawMessageMap(payload["approval"])
-	plan := RawMessageMap(approval["plan"])
-	identity := approvalIdentity{
-		ID: strings.TrimSpace(fmt.Sprint(approval["id"])), Kind: strings.TrimSpace(fmt.Sprint(plan["kind"])),
-		Fingerprint: strings.TrimSpace(fmt.Sprint(plan["fingerprint"])), Status: strings.TrimSpace(fmt.Sprint(approval["status"])),
-		Token: strings.TrimSpace(fmt.Sprint(payload["approval_token"])),
+	identity, err := approvalIdentityFromMaps(approval, RawMessageMap(approval["plan"]))
+	if err != nil {
+		return identity, err
 	}
-	if identity.ID == "" || identity.Kind == "" || identity.Fingerprint == "" {
+	identity.Token = strings.TrimSpace(fmt.Sprint(payload["approval_token"]))
+	return identity, nil
+}
+
+func approvalIdentityFromMaps(approval map[string]any, plan map[string]any) (approvalIdentity, error) {
+	target, err := normalizeApprovalTarget(plan["target"])
+	if err != nil {
+		return approvalIdentity{}, err
+	}
+	identity := approvalIdentity{
+		ID: strings.TrimSpace(fmt.Sprint(approval["id"])), PlanID: strings.TrimSpace(fmt.Sprint(plan["id"])),
+		Kind: strings.TrimSpace(fmt.Sprint(plan["kind"])), Fingerprint: strings.TrimSpace(fmt.Sprint(plan["fingerprint"])),
+		NormalizedTarget: target, Status: strings.TrimSpace(fmt.Sprint(approval["status"])),
+	}
+	identity.PlanExpiresAt, err = parseApprovalTime(plan["expires_at"])
+	if err != nil {
+		return identity, fmt.Errorf("parse operation plan expiry: %w", err)
+	}
+	identity.ExpiresAt, err = parseApprovalTime(approval["expires_at"])
+	if err != nil {
+		return identity, fmt.Errorf("parse operation approval expiry: %w", err)
+	}
+	if identity.ID == "" || identity.PlanID == "" || identity.Kind == "" || identity.Fingerprint == "" || identity.NormalizedTarget == "" || identity.Status == "" {
 		return identity, fmt.Errorf("operation approval metadata is incomplete")
 	}
 	return identity, nil
 }
 
-func matchApprovalIdentity(expected, actual approvalIdentity) error {
-	if expected.ID != actual.ID || expected.Kind != actual.Kind || expected.Fingerprint != actual.Fingerprint {
-		return fmt.Errorf("operation approval fingerprint identity drift: expected %s/%s/%s", expected.ID, expected.Kind, expected.Fingerprint)
+func normalizeApprovalTarget(value any) (string, error) {
+	if len(RawMessageMap(value)) == 0 {
+		return "", fmt.Errorf("operation approval target is missing")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("normalize operation approval target: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func parseApprovalTime(value any) (time.Time, error) {
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if raw == "" || raw == "<nil>" {
+		return time.Time{}, fmt.Errorf("timestamp is missing")
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
+func matchApprovalPlan(expected, actual approvalIdentity) error {
+	if expected.PlanID != actual.PlanID || expected.Kind != actual.Kind || expected.Fingerprint != actual.Fingerprint ||
+		expected.NormalizedTarget != actual.NormalizedTarget || !expected.PlanExpiresAt.Equal(actual.PlanExpiresAt) {
+		return fmt.Errorf("operation approval plan identity drift for plan %s", expected.PlanID)
 	}
 	return nil
+}
+
+func matchApprovalIdentity(expected, actual approvalIdentity) error {
+	if expected.ID != actual.ID || !expected.ExpiresAt.Equal(actual.ExpiresAt) {
+		return fmt.Errorf("operation approval identity drift for approval %s", expected.ID)
+	}
+	return matchApprovalPlan(expected, actual)
 }

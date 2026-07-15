@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -96,12 +95,12 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 	summary.Host = host
 	if hostErr != nil {
 		checks = append(checks, CheckResult{ID: "native-host", Status: StatusBlocked, Cause: Cause{Code: "native_identity_unavailable", Message: hostErr.Error(), Source: "native-host"}})
-		return writePreflightSummary(reportRoot, summary, checks, input, options.CredentialValue)
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
 	hostCheck := ValidateHostTarget(options.Target, host)
 	checks = append(checks, hostCheck)
 	if hostCheck.Status != StatusPass {
-		return writePreflightSummary(reportRoot, summary, checks, input, options.CredentialValue)
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
 	foundationCheck, err := ValidateFoundation(input.FoundationPath, input.ProfileID)
 	if err != nil {
@@ -109,27 +108,43 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 	}
 	checks = append(checks, foundationCheck)
 	if foundationCheck.Status != StatusPass {
-		return writePreflightSummary(reportRoot, summary, checks, input, options.CredentialValue)
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
 	stateRoot := FoundationStateRoot(input.FoundationPath, input.ProfileID)
+	lock, err := AcquireFoundationLock(stateRoot)
+	if err != nil {
+		checks = append(checks, CheckResult{ID: "foundation-lock", Status: StatusBlocked, Cause: Cause{Code: "foundation_lock_unavailable", Message: err.Error(), Source: "foundation-lock"}})
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
+	}
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			log.WithErr(releaseErr).Error("释放 validation foundation runner-only 锁失败")
+		}
+	}()
+	checks = append(checks, CheckResult{ID: "foundation-lock", Status: StatusPass})
 	markerCheck, err := CheckActiveMarker(stateRoot)
 	if err != nil {
 		return StrictCampaignResult{}, err
 	}
 	checks = append(checks, markerCheck)
 	if markerCheck.Status != StatusPass {
-		return writePreflightSummary(reportRoot, summary, checks, input, options.CredentialValue)
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
 	if options.CredentialValue == "" {
 		checks = append(checks, CheckResult{ID: "credential-input", Status: StatusBlocked, Cause: Cause{Code: "credential_input_missing", Message: "one-time credential must be supplied through the process input channel", Source: "credential-input"}})
-		return writePreflightSummary(reportRoot, summary, checks, input, "")
+		return writePreflightSummary(reportRoot, summary, checks, "")
 	}
 	governanceDigest, err := validateGovernanceAttestation(input)
 	if err != nil {
 		checks = append(checks, CheckResult{ID: "borrowed-governance", Status: StatusBlocked, Cause: Cause{Code: "borrowed_governance_invalid", Message: err.Error(), Source: "borrowed-governance"}})
-		return writePreflightSummary(reportRoot, summary, checks, input, options.CredentialValue)
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
 	checks = append(checks, CheckResult{ID: "borrowed-governance", Status: StatusPass})
+	dependencyCheck := RunReadOnlyPreflight(ctx, options.BundleRoot, input, options.Target, nil)
+	checks = append(checks, dependencyCheck)
+	if dependencyCheck.Status != StatusPass {
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
+	}
 	log.WithFields(map[string]any{"campaign_id": campaignID, "bundle_digest": bundle.ManifestSHA256}).Info("runtime validation preflight 通过，进入 active campaign")
 	facts := runActiveCampaign(ctx, options, input, campaignID, stateRoot, bundle.ManifestSHA256, governanceDigest, checks)
 	summary.LiveTools = facts.liveTools
@@ -179,13 +194,6 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		_ = redactor.Close()
 		facts.processLog = logBuffer.String()
 	}()
-	lock, err := AcquireFoundationLock(stateRoot)
-	if err != nil {
-		facts.runErr = err
-		facts.checks = append(facts.checks, failedCampaignCheck("foundation-lock", "foundation_lock_failed", err))
-		return facts
-	}
-	defer lock.Release()
 	foundationBefore, err := DigestPath(input.FoundationPath)
 	if err != nil {
 		facts.runErr = err
@@ -194,7 +202,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	facts.borrowed = BorrowedAttestation{
 		RemoteHostID: input.RemoteHostID, ExpectedRemoteIdentity: input.ExpectedRemoteIdentity,
-		FoundationDigestBefore: foundationBefore, RemoteNodeConfirmedNonSelf: true,
+		FoundationDigestBefore: foundationBefore,
 	}
 	cloneRoot := filepath.Join(stateRoot, "campaigns", campaignID, "profile")
 	workRoot := filepath.Join(stateRoot, "campaigns", campaignID, "work")
@@ -270,7 +278,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		facts.checks = append(facts.checks, failedCampaignCheck("campaign-assets", "campaign_assets_failed", err))
 		return facts
 	}
-	assetRoot := filepath.Join(options.BundleRoot, "assets", "runtime")
+	assetRoot := filepath.Join(options.BundleRoot, "validation")
 	projectRoot := filepath.Join(workRoot, "project")
 	scenarios, err := LoadScenarios(filepath.Join(assetRoot, "scenarios"))
 	if err != nil {
@@ -338,7 +346,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	facts.checks = append(facts.checks, CheckResult{ID: "mcp-initialize", Status: StatusPass})
 
-	sidecarURL, err := startAuthSidecar(ctx, stack, projectRoot, campaignID, options.CredentialValue, redactor)
+	sidecarURL, err := startAuthSidecar(ctx, stack, options.BundleRoot, workRoot, campaignID, options.CredentialValue, redactor)
 	if err != nil {
 		facts.runErr = err
 		facts.checks = append(facts.checks, failedCampaignCheck("auth-sidecar", "auth_sidecar_failed", err))
@@ -381,8 +389,15 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	})
 	facts.liveTools = facts.toolResult.LiveTools
 	facts.coverage = facts.toolResult.Coverage
+	facts.borrowed.RemoteNodeConfirmedNonSelf = remoteIdentityConfirmed(facts.toolResult)
+	if facts.borrowed.RemoteNodeConfirmedNonSelf {
+		facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-identity", Status: StatusPass})
+	} else {
+		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-identity", "borrowed_live_identity_unconfirmed", fmt.Errorf("live list_hosts did not confirm the governed non-self node identity")))
+	}
 	pipelineStarted = !emptyManifestValue(facts.toolResult.Variables["pipeline_run_a"])
-	pipelineCleaned = !emptyManifestValue(facts.toolResult.Variables["pipeline_run_cleanup"]) || !emptyManifestValue(facts.toolResult.Variables["pipeline_run_cleanup_abort"])
+	// 提交 cleanup run 不等于远端已清理；只有终态和受控脚本 absence 日志都通过，才允许删除 active marker。
+	pipelineCleaned = pipelineCleanupConfirmed(facts.toolResult)
 	if facts.toolResult.Status != StatusPass {
 		facts.runErr = fmt.Errorf("live tool campaign %s: %s", facts.toolResult.Status, facts.toolResult.Cause.Code)
 		facts.checks = append(facts.checks, CheckResult{ID: "live-tools", Status: StatusFail, Cause: facts.toolResult.Cause})
@@ -417,30 +432,21 @@ func stageCampaignAssets(bundleRoot, cloneRoot, workRoot string) error {
 	if err := os.MkdirAll(projectRoot, 0o700); err != nil {
 		return err
 	}
-	_, err := copyResource(filepath.Join(bundleRoot, "assets", "runtime", "fixtures"), filepath.Join(projectRoot, "fixtures"))
+	_, err := copyResource(filepath.Join(bundleRoot, "validation", "fixtures"), filepath.Join(projectRoot, "fixtures"))
 	return err
 }
 
-func startAuthSidecar(ctx context.Context, stack *CleanupStack, projectRoot, campaignID, credential string, output io.Writer) (string, error) {
-	root := filepath.Join(projectRoot, "fixtures", "auth-sidecar")
+func startAuthSidecar(ctx context.Context, stack *CleanupStack, bundleRoot, workRoot, campaignID, credential string, output io.Writer) (string, error) {
 	port, err := allocateLoopbackPort()
 	if err != nil {
 		return "", err
 	}
-	executable := filepath.Join(root, "auth-sidecar")
+	executable := filepath.Join(bundleRoot, "bin", "runtime-validation-auth-sidecar")
 	if isWindowsExecutableTarget() {
 		executable += ".exe"
 	}
-	executor := NewOSCommandExecutor(output)
-	if err := executor.Run(ctx, CommandRunRequest{Name: "auth-sidecar-build", Directory: root, Command: CommandSpec{Executable: "go", Arguments: []string{"build", "-o", executable, "main.go"}}}); err != nil {
-		return "", err
-	}
 	_, err = stack.Acquire("process", "auth-sidecar", map[string]any{"state": "stopped"}, func() (CleanupAction, error) {
-		process, startErr := StartManagedProcess(ctx, ProcessSpec{
-			Name: "runtime-validation-auth-sidecar", Executable: executable, Directory: root,
-			Env:    map[string]string{"AUTH_SIDECAR_PORT": fmt.Sprint(port), "AUTH_SIDECAR_CAMPAIGN_ID": campaignID, "AUTH_SIDECAR_CREDENTIAL": credential},
-			Stdout: output, Stderr: output,
-		})
+		process, startErr := StartManagedProcess(ctx, authSidecarProcessSpec(executable, workRoot, port, campaignID, credential, output))
 		return &processCleanupAction{kind: "process", id: "auth-sidecar", process: process}, startErr
 	})
 	if err != nil {
@@ -453,8 +459,17 @@ func startAuthSidecar(ctx context.Context, stack *CleanupStack, projectRoot, cam
 	return baseURL, nil
 }
 
+func authSidecarProcessSpec(executable, root string, port int, campaignID, credential string, output io.Writer) ProcessSpec {
+	return ProcessSpec{
+		Name: "runtime-validation-auth-sidecar", Executable: executable, Directory: root,
+		Env: map[string]string{"AUTH_SIDECAR_PORT": fmt.Sprint(port), "AUTH_SIDECAR_CAMPAIGN_ID": campaignID},
+		// os/exec 为非 *os.File Reader 创建匿名 pipe；secret 不进入 argv 或环境。
+		Stdin: strings.NewReader(credential + "\n"), Stdout: output, Stderr: output,
+	}
+}
+
 func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campaignID string, ports map[string]int, fixtures []Fixture) (map[string]any, error) {
-	pipelineRaw, err := os.ReadFile(filepath.Join(bundleRoot, "assets", "runtime", "pipeline", "project-pipeline.json"))
+	pipelineRaw, err := os.ReadFile(filepath.Join(bundleRoot, "validation", "pipeline", "project-pipeline.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -479,9 +494,10 @@ func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campa
 		"go_artifact_dir": filepath.Join(projectRoot, "fixtures", "go"), "go_deployment_id": "go-validation-dev",
 		"go_source_path": goFixture.Debug.Source, "go_breakpoint_line": goFixture.Debug.Line,
 		"go_adapter_command": input.Adapters["dlv"], "browser_target_url": fmt.Sprintf("http://127.0.0.1:%d", goPort),
-		"package_root": filepath.Join(bundleRoot, "assets", "runtime"), "linux_host_id": input.RemoteHostID,
-		"linux_root":  strings.ReplaceAll(input.RemoteRootTemplate, "{campaign_id}", campaignID),
-		"pipeline_id": "runtime-validation-remote", "remote_pipeline_config": remotePipeline,
+		"package_root": filepath.Join(bundleRoot, "validation"), "linux_host_id": input.RemoteHostID,
+		"expected_remote_identity": input.ExpectedRemoteIdentity,
+		"linux_root":               strings.ReplaceAll(input.RemoteRootTemplate, "{campaign_id}", campaignID),
+		"pipeline_id":              "runtime-validation-remote", "remote_pipeline_config": remotePipeline,
 		"bootstrap_pipeline_config": map[string]any{
 			"id": "bootstrap-validation", "name": "Runtime Validation Bootstrap", "services": []any{},
 			"pipeline": map[string]any{"build": []any{map[string]any{"name": "Validate", "type": "local_command", "with": map[string]any{"cmd": "echo runtime-validation"}}}},
@@ -524,7 +540,7 @@ func sha256Bytes(value []byte) []byte {
 	return hash.Sum(nil)
 }
 
-func writePreflightSummary(reportRoot string, summary Summary, checks []CheckResult, input RuntimeInput, secret string) (StrictCampaignResult, error) {
+func writePreflightSummary(reportRoot string, summary Summary, checks []CheckResult, secret string) (StrictCampaignResult, error) {
 	status := StatusBlocked
 	cause := Cause{Code: "preflight_blocked", Message: "strict campaign did not enter mutation phase", Source: "preflight"}
 	for _, check := range checks {
@@ -543,7 +559,6 @@ func writePreflightSummary(reportRoot string, summary Summary, checks []CheckRes
 	if err != nil {
 		return StrictCampaignResult{}, err
 	}
-	_ = input
 	return StrictCampaignResult{Summary: written, ReportRoot: reportRoot}, nil
 }
 
@@ -673,11 +688,42 @@ func isWindowsExecutableTarget() bool {
 	return err == nil && identity.OS == "windows"
 }
 
-func sortedLanguageProviders(results []LanguageResult) []string {
-	providers := make([]string, 0, len(results))
-	for _, result := range results {
-		providers = append(providers, result.Provider)
+func pipelineCleanupConfirmed(result ToolCampaignResult) bool {
+	normal := []string{"pipeline-cleanup", "pipeline-wait-cleanup", "pipeline-logs-cleanup"}
+	abort := []string{"pipeline-cleanup-on-abort", "pipeline-wait-cleanup-on-abort", "pipeline-logs-cleanup-on-abort"}
+	return scenarioStepsPassed(result, "remote-pipeline", normal) || scenarioStepsPassed(result, "remote-pipeline", abort)
+}
+
+func remoteIdentityConfirmed(result ToolCampaignResult) bool {
+	for _, scenario := range result.Scenarios {
+		if scenario.ID != "remote-pipeline" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if step.StepID == "pipeline-host-id-preflight" {
+				return step.Status == StatusPass
+			}
+		}
 	}
-	sort.Strings(providers)
-	return providers
+	return false
+}
+
+func scenarioStepsPassed(result ToolCampaignResult, scenarioID string, required []string) bool {
+	passed := make(map[string]bool, len(required))
+	for _, scenario := range result.Scenarios {
+		if scenario.ID != scenarioID {
+			continue
+		}
+		for _, step := range append(append([]ToolStepExecution{}, scenario.Steps...), scenario.Cleanup...) {
+			if step.Status == StatusPass {
+				passed[step.StepID] = true
+			}
+		}
+	}
+	for _, stepID := range required {
+		if !passed[stepID] {
+			return false
+		}
+	}
+	return true
 }

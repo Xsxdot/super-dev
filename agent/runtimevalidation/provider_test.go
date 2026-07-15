@@ -69,6 +69,19 @@ func TestProviderRuntimeFailureLeavesDebugNotRunWithNamedUpstream(t *testing.T) 
 	require.Equal(t, "runtime.start", result.DebugCause.Source)
 }
 
+func TestProviderServiceConfigUsesPreflightedAdapterCommand(t *testing.T) {
+	t.Parallel()
+
+	fixture := validFixture("go")
+	request := ProviderRequest{Fixture: fixture, Port: 20101, AdapterPath: "/prepared/adapters/dlv"}
+	service := providerServiceConfig(request, fixture.Platforms["darwin"])
+	deployments := service["deployments"].([]any)
+	deployment := deployments[0].(map[string]any)
+	codeDebug := deployment["code_debug"].(map[string]any)
+
+	require.Equal(t, "/prepared/adapters/dlv", codeDebug["adapter_command"])
+}
+
 type providerCall struct {
 	name      string
 	arguments map[string]any

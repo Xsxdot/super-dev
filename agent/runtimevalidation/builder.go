@@ -47,6 +47,13 @@ type BundleBuildReceipt struct {
 	ArchiveSHA256   string        `json:"archive_sha256"`
 }
 
+type bundleVersion struct {
+	SchemaVersion int    `json:"schema_version"`
+	Kind          string `json:"kind"`
+	Version       string `json:"version"`
+	Target        Target `json:"target"`
+}
+
 // BuildRuntimeValidationBundles 为 targets.txt 中的每个 target 构建一份便携包。
 func BuildRuntimeValidationBundles(ctx context.Context, options BundleBuildOptions) ([]BundleBuildReceipt, error) {
 	for name, path := range map[string]string{
@@ -83,11 +90,11 @@ func BuildRuntimeValidationBundles(ctx context.Context, options BundleBuildOptio
 
 func buildRuntimeValidationBundle(ctx context.Context, options BundleBuildOptions, goBinary string, target Target) (BundleBuildReceipt, error) {
 	log := logger.GetLogger().WithEntryName("RuntimeValidationBuilder").WithField("target", target.String())
-	finalRoot := filepath.Join(options.OutputRoot, "runtime-validation-"+target.String())
+	finalRoot := filepath.Join(options.OutputRoot, "superdev-runtime-validation-"+target.String())
 	if _, err := os.Lstat(finalRoot); !os.IsNotExist(err) {
 		return BundleBuildReceipt{}, fmt.Errorf("bundle output already exists: %s", finalRoot)
 	}
-	stagingParent, err := os.MkdirTemp(options.OutputRoot, ".runtime-validation-"+target.String()+"-")
+	stagingParent, err := os.MkdirTemp(options.OutputRoot, ".superdev-runtime-validation-"+target.String()+"-")
 	if err != nil {
 		return BundleBuildReceipt{}, err
 	}
@@ -98,7 +105,9 @@ func buildRuntimeValidationBundle(ctx context.Context, options BundleBuildOption
 	}
 	log.Info("开始交叉编译 runtime validation runner、Agent 与 MCP")
 	for _, binary := range []struct{ name, pkg string }{
-		{"runtime-validation", "./cmd/runtime-validation"}, {"superdev-agent", "."}, {"superdev-mcp", "./cmd/superdev-mcp"},
+		{"runtime-validation", "./cmd/runtime-validation"},
+		{"runtime-validation-auth-sidecar", "./cmd/runtime-validation-auth-sidecar"},
+		{"superdev-agent", "."}, {"superdev-mcp", "./cmd/superdev-mcp"},
 	} {
 		output := filepath.Join(root, "bin", binary.name+target.ExecutableSuffix())
 		command := exec.CommandContext(ctx, goBinary, "build", "-trimpath", "-o", output, binary.pkg)
@@ -108,26 +117,7 @@ func buildRuntimeValidationBundle(ctx context.Context, options BundleBuildOption
 			return BundleBuildReceipt{}, fmt.Errorf("build %s for %s: %w: %s", binary.name, target.String(), err, strings.TrimSpace(string(result)))
 		}
 	}
-	for _, directory := range []string{filepath.Join(root, "assets"), filepath.Join(root, "resources")} {
-		if err := os.MkdirAll(directory, 0o755); err != nil {
-			return BundleBuildReceipt{}, err
-		}
-	}
-	if _, err := copyResource(options.RuntimeAssetsRoot, filepath.Join(root, "assets", "runtime")); err != nil {
-		return BundleBuildReceipt{}, fmt.Errorf("copy runtime assets: %w", err)
-	}
-	if _, err := copyResource(options.JSDebugRoot, filepath.Join(root, "resources", "js-debug")); err != nil {
-		return BundleBuildReceipt{}, fmt.Errorf("copy js-debug: %w", err)
-	}
-	driverSource := filepath.Join(options.PlaywrightDriversRoot, target.String())
-	if _, err := copyResource(driverSource, filepath.Join(root, "resources", "playwright-driver")); err != nil {
-		return BundleBuildReceipt{}, fmt.Errorf("copy target-native Playwright driver for %s: %w", target.String(), err)
-	}
-	wrapperName := "run-validation.sh"
-	if target.OS == "windows" {
-		wrapperName = "run-validation.cmd"
-	}
-	if _, err := copyResource(filepath.Join(options.RuntimeAssetsRoot, wrapperName), filepath.Join(root, wrapperName)); err != nil {
+	if err := stageRuntimeValidationAssets(options, target, root); err != nil {
 		return BundleBuildReceipt{}, err
 	}
 	manifest, err := CreateBundleManifest(root, target)
@@ -157,6 +147,48 @@ func buildRuntimeValidationBundle(ctx context.Context, options BundleBuildOption
 	}
 	log.WithFields(map[string]any{"manifest_sha256": bundleReceipt.ManifestSHA256, "archive_sha256": archiveDigest, "file_count": bundleReceipt.FileCount}).Info("runtime validation package_verified bundle 已构建")
 	return BundleBuildReceipt{Target: target, PackageVerified: true, BundleRoot: finalRoot, Bundle: bundleReceipt, ArchivePath: archivePath, ArchiveSHA256: archiveDigest}, nil
+}
+
+func stageRuntimeValidationAssets(options BundleBuildOptions, target Target, root string) error {
+	for _, directory := range []string{filepath.Join(root, "validation"), filepath.Join(root, "resources")} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"fixtures", "scenarios", "pipeline"} {
+		if _, err := copyResource(filepath.Join(options.RuntimeAssetsRoot, name), filepath.Join(root, "validation", name)); err != nil {
+			return fmt.Errorf("copy validation %s: %w", name, err)
+		}
+	}
+	if _, err := copyResource(options.JSDebugRoot, filepath.Join(root, "resources", "js-debug")); err != nil {
+		return fmt.Errorf("copy js-debug: %w", err)
+	}
+	driverSource := filepath.Join(options.PlaywrightDriversRoot, target.String())
+	if err := validatePlaywrightDriver(driverSource); err != nil {
+		return fmt.Errorf("validate target-native Playwright driver for %s: %w", target.String(), err)
+	}
+	if _, err := copyResource(driverSource, filepath.Join(root, "resources", "playwright-driver")); err != nil {
+		return fmt.Errorf("copy target-native Playwright driver for %s: %w", target.String(), err)
+	}
+	for _, name := range []string{
+		"targets.txt", "runtime-input.example.json", "remote-governance-attestation.example.json",
+		"run-validation.sh", "run-validation.cmd", "README.md",
+	} {
+		if _, err := copyResource(filepath.Join(options.RuntimeAssetsRoot, name), filepath.Join(root, name)); err != nil {
+			return fmt.Errorf("copy bundle root asset %s: %w", name, err)
+		}
+	}
+	versionRaw, err := os.ReadFile(filepath.Join(filepath.Dir(options.AgentRoot), "VERSION"))
+	if err != nil {
+		return fmt.Errorf("read repository VERSION: %w", err)
+	}
+	version := strings.TrimSpace(string(versionRaw))
+	if version == "" {
+		return fmt.Errorf("repository VERSION is empty")
+	}
+	return atomicWriteJSON(filepath.Join(root, "VERSION.json"), bundleVersion{
+		SchemaVersion: 1, Kind: "superdev.runtime-validation.version", Version: version, Target: target,
+	}, 0o644)
 }
 
 func createBundleArchive(root, destination string, useZip bool) error {

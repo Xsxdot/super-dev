@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/runtimevalidation"
 )
 
@@ -27,6 +28,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, build bundleBuilder) int {
+	log := logger.GetLogger().WithEntryName("BuildRuntimeValidationCLI")
+	log.Info("开始解析 runtime validation bundle builder 参数")
 	flags := flag.NewFlagSet("build-runtime-validation", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	repoRoot := flags.String("repo-root", "", "Absolute SuperDev repository root")
@@ -34,28 +37,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, build bun
 	playwrightRoot := flags.String("playwright-drivers", "", "Absolute root containing one target-native driver directory per target")
 	goBinary := flags.String("go", "go", "Go compiler executable")
 	if err := flags.Parse(args); err != nil {
+		log.WithErr(err).Error("runtime validation bundle builder 参数解析失败")
 		return 1
 	}
 	if !filepath.IsAbs(*repoRoot) || !filepath.IsAbs(*outputRoot) || !filepath.IsAbs(*playwrightRoot) {
-		_, _ = fmt.Fprintln(stderr, "build-runtime-validation: --repo-root, --output and --playwright-drivers must be absolute")
+		log.Error("runtime validation bundle builder 路径参数必须是绝对路径")
 		return 1
 	}
 	targets, err := runtimevalidation.LoadTargetsFile(filepath.Join(*repoRoot, "validation", "runtime", "targets.txt"))
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "build-runtime-validation: load target contract: %v\n", err)
+		log.WithErr(err).Error("加载 runtime validation target contract 失败")
 		return 1
 	}
+	log.WithFields(map[string]any{"target_count": len(targets), "output_root": *outputRoot}).Info("开始构建 runtime validation package_verified bundles")
 	receipts, err := build(ctx, runtimevalidation.BundleBuildOptions{
 		AgentRoot: filepath.Join(*repoRoot, "agent"), RuntimeAssetsRoot: filepath.Join(*repoRoot, "validation", "runtime"),
 		JSDebugRoot:           filepath.Join(*repoRoot, "desktop", "src-tauri", "resources", "js-debug"),
 		PlaywrightDriversRoot: *playwrightRoot, OutputRoot: *outputRoot, GoBinary: *goBinary, Targets: targets,
 	})
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "build-runtime-validation: %v\n", err)
+		log.WithErr(err).Error("runtime validation bundles 构建失败")
 		return 1
 	}
 	for _, receipt := range receipts {
 		_, _ = fmt.Fprintf(stdout, "package_verified target=%s manifest=%s archive=%s\n", receipt.Target.String(), receipt.Bundle.ManifestSHA256, receipt.ArchiveSHA256)
 	}
+	log.WithField("bundle_count", len(receipts)).Info("runtime validation package_verified bundles 构建完成")
 	return 0
 }

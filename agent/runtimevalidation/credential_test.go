@@ -144,15 +144,15 @@ func TestCredentialErrorsNeverContainSecret(t *testing.T) {
 	require.False(t, strings.Contains(err.Error(), secret))
 }
 
-func TestAuthSidecarAssetBuildsAndKeepsSecretOutOfResponses(t *testing.T) {
+func TestPackagedAuthSidecarBuildsAndKeepsSecretOutOfResponses(t *testing.T) {
 	t.Parallel()
 
-	root := filepath.Join("..", "..", "validation", "runtime", "fixtures", "auth-sidecar")
+	root := filepath.Join("..", "cmd", "runtime-validation-auth-sidecar")
 	source, err := os.ReadFile(filepath.Join(root, "main.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "subtle.ConstantTimeCompare")
 	require.NotContains(t, string(source), `"credential": credential`)
-	command := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "auth-sidecar"), "main.go")
+	command := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "auth-sidecar"), ".")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOCACHE=/private/tmp/super-debug-runtimevalidation-go-cache")
 	output, err := command.CombinedOutput()

@@ -489,7 +489,8 @@ func providerServiceConfig(request ProviderRequest, platform FixturePlatform) ma
 			"readiness": map[string]any{
 				"type": "http", "target": "http://127.0.0.1:" + strconv.Itoa(request.Port) + request.Fixture.Readiness.Path, "timeout_seconds": 30,
 			},
-			"code_debug": map[string]any{"policy": "auto"},
+			// adapter_command 绑定 active marker 前已检查的 target-native launcher，禁止运行期回退 PATH 或下载。
+			"code_debug": map[string]any{"policy": "auto", "adapter_command": request.AdapterPath},
 		}},
 	}
 }

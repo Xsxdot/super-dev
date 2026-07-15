@@ -75,6 +75,12 @@ runtime-validation-foundation/
 }
 ```
 
+The borrowed Host selected by `remote_host_id` must carry the exact
+`superdev-validation-dedicated-resettable` tag, and `agents.json` must contain
+that Host ID with a non-empty transport chain. The runner verifies these facts
+before creating `active.json`; live `list_hosts` later binds the same Host to the
+out-of-band `expected_remote_identity` and `is_self=false` evidence.
+
 Do not add token hashes, certificate paths, keys, passwords, cookies, or other
 credentials to that file. `settings.json` must keep all mutation approvals on,
 disable the grace shortcut, explicitly allow the read-only browser evaluate
@@ -187,7 +193,7 @@ go run ./cmd/build-runtime-validation \
 Expected output contains one `package_verified` line per target. Preserve all of
 these for every package:
 
-- the extracted `runtime-validation-<os>-<arch>/` directory;
+- the extracted `superdev-runtime-validation-<os>-<arch>/` directory;
 - `.tar.gz` on Darwin/Linux or `.zip` on Windows;
 - the sibling `.sha256` archive digest;
 - `bundle-manifest.json` and `bundle-manifest.sha256` inside the bundle.
@@ -238,6 +244,14 @@ $credential | .\run-validation.cmd `
   --input C:\validation\runtime-input.json `
   --target windows/amd64
 ```
+
+Keep the SuperDev approval surface open while the command runs. For every
+pending operation, a human must inspect and approve the exact plan ID, kind,
+target, fingerprint, and expiry. The runner registers only that short-lived
+identity, rejects drift/expiry/duplicate pending requests, and waits for the
+official one-time token; it never calls the approve endpoint or enables a grace
+window on the user's behalf. The packaged auth sidecar likewise receives its
+credential only through an inherited anonymous stdin pipe.
 
 Use the exact matching target on each machine. The runner checks the kernel and
 native machine architecture through Darwin sysctl/uname, Linux `uname(2)`, or

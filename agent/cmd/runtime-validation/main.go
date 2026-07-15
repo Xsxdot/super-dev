@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/runtimevalidation"
 )
 
@@ -33,6 +34,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, execute campaignRunner) int {
+	log := logger.GetLogger().WithEntryName("RuntimeValidationCLI")
+	log.Info("开始解析 runtime validation strict campaign 参数")
 	flags := flag.NewFlagSet("runtime-validation", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	bundleRoot := flags.String("bundle-root", "", "Absolute extracted bundle root")
@@ -40,25 +43,28 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	targetText := flags.String("target", "", "Bundle target as goos/goarch")
 	credentialStdin := flags.Bool("credential-stdin", false, "Read one credential line from stdin")
 	if err := flags.Parse(args); err != nil {
+		log.WithErr(err).Error("runtime validation 参数解析失败")
 		return 1
 	}
 	target, err := parseTarget(*targetText)
 	if err != nil || *bundleRoot == "" || *inputPath == "" || !*credentialStdin {
-		_, _ = fmt.Fprintln(stderr, "runtime-validation: --bundle-root, --input, --target and --credential-stdin are required")
+		log.WithErr(err).Error("runtime validation 必填参数或 stdin credential mode 无效")
 		return 1
 	}
 	credential, err := readCredentialLine(stdin)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "runtime-validation: one-time credential input is unavailable")
+		log.WithErr(err).Error("runtime validation 一次性 credential stdin 不可用")
 		return 2
 	}
+	log.WithFields(map[string]any{"target": target.String(), "bundle_root": *bundleRoot, "input_path": *inputPath}).Info("开始执行 runtime validation strict campaign")
 	result, err := execute(ctx, runtimevalidation.StrictCampaignOptions{
 		BundleRoot: *bundleRoot, InputPath: *inputPath, Target: target, CredentialValue: credential,
 	})
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "runtime-validation: campaign infrastructure failure: %v\n", err)
+		log.WithErr(err).Error("runtime validation campaign infrastructure failure")
 		return 1
 	}
+	log.WithFields(map[string]any{"status": result.Summary.Verdict.Status, "report_root": result.ReportRoot}).Info("runtime validation strict campaign 完成")
 	_, _ = fmt.Fprintf(stdout, "runtime-validation: status=%s report=%s\n", result.Summary.Verdict.Status, result.ReportRoot)
 	return runtimevalidation.ExitCodeForStatus(result.Summary.Verdict.Status)
 }

@@ -46,13 +46,14 @@ type ToolPrimaryRow struct {
 
 // ToolStepExecution 保存一次 manifest step 的调用、断言与重试结果。
 type ToolStepExecution struct {
-	StepID   string       `json:"step_id"`
-	Tool     string       `json:"tool"`
-	Coverage string       `json:"coverage"`
-	Status   Status       `json:"status"`
-	Cause    Cause        `json:"cause,omitempty"`
-	Attempts int          `json:"attempts"`
-	Evidence ToolEvidence `json:"evidence"`
+	StepID           string         `json:"step_id"`
+	Tool             string         `json:"tool"`
+	Coverage         string         `json:"coverage"`
+	Status           Status         `json:"status"`
+	Cause            Cause          `json:"cause,omitempty"`
+	Attempts         int            `json:"attempts"`
+	Evidence         ToolEvidence   `json:"evidence"`
+	RecordedEvidence map[string]any `json:"recorded_evidence,omitempty"`
 }
 
 // ToolScenarioExecution 保存一个场景主步骤与 guarded cleanup 的聚合状态。
@@ -334,6 +335,15 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 		return failedStep(request.CampaignID, scenarioID, step, StatusFail, "tool_step_failed", err, attempts, assertionResults)
 	}
 	root := RawMessageMap(response)
+	if mutating && request.Journal != nil {
+		if err := request.Journal.Acquired("mcp-mutation", journalID, request.CampaignID); err != nil {
+			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_acquired_failed", err, attempts, assertionResults)
+		}
+		// tools/call 已成功且业务断言通过；capture/evidence 失败不得把已发生 mutation 留在 intent 状态。
+		if err := request.Journal.Released("mcp-mutation", journalID, request.CampaignID); err != nil {
+			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_release_record_failed", err, attempts, assertionResults)
+		}
+	}
 	for name, path := range step.Capture {
 		value, found := lookupManifestPath(root, path)
 		if !found {
@@ -342,22 +352,124 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 		}
 		request.Variables[name] = value
 	}
-	if mutating && request.Journal != nil {
-		if err := request.Journal.Acquired("mcp-mutation", journalID, request.CampaignID); err != nil {
-			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_acquired_failed", err, attempts, assertionResults)
-		}
-		// 这条 journal 记录的是一次 tools/call 事务已完成；外部资源生命周期由 clone、service、session 和 pipeline cleanup action 另行持有。
-		if err := request.Journal.Released("mcp-mutation", journalID, request.CampaignID); err != nil {
-			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_release_record_failed", err, attempts, assertionResults)
-		}
+	evidenceRoot := cloneMap(root)
+	evidenceRoot["request"] = map[string]any{"arguments": cloneMap(arguments)}
+	recorded, err := buildRecordedEvidence(evidenceRoot, step.Evidence, request.Variables)
+	if err != nil {
+		return failedStep(request.CampaignID, scenarioID, step, StatusFail, "evidence_contract_failed", err, attempts, assertionResults)
 	}
 	applicationOK := applicationOK(response)
 	evidence := ToolEvidence{
 		CampaignID: request.CampaignID, ScenarioID: scenarioID, StepID: step.ID, Tool: step.Tool,
-		Outcome: ExpectedOutcomeSuccess, IsError: response.IsError, ApplicationOK: applicationOK, Assertions: assertionResults,
+		ResourceID: correlatedResourceID(arguments, root, request.CampaignID), Outcome: ExpectedOutcomeSuccess,
+		IsError: response.IsError, ApplicationOK: applicationOK, Assertions: assertionResults,
+		EvidenceRef: "evidence/tool-campaign.json#/" + scenarioID + "/" + step.ID,
 	}
 	log.WithFields(map[string]any{"attempt_count": attempts, "assertion_count": len(assertionResults), "duration_ms": time.Since(started).Milliseconds()}).Info("live MCP tools/call 与业务断言完成")
-	return ToolStepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Status: StatusPass, Attempts: attempts, Evidence: evidence}
+	return ToolStepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Status: StatusPass, Attempts: attempts, Evidence: evidence, RecordedEvidence: recorded}
+}
+
+func buildRecordedEvidence(root map[string]any, contract EvidenceContract, variables map[string]any) (map[string]any, error) {
+	redacted, err := cloneJSONMap(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range contract.Redact {
+		redactEvidencePath(redacted, strings.Split(path, "."))
+	}
+	paths := make(map[string]any, len(contract.Record))
+	for _, path := range contract.Record {
+		value, found := lookupManifestPath(redacted, path)
+		if !found {
+			return nil, fmt.Errorf("record path %s was not found after redaction", path)
+		}
+		paths[path] = value
+	}
+	recorded := map[string]any{"paths": paths}
+	raw, err := json.Marshal(recorded)
+	if err != nil {
+		return nil, fmt.Errorf("marshal selected evidence: %w", err)
+	}
+	lower := strings.ToLower(string(raw))
+	for _, forbidden := range contract.Forbid {
+		rendered, renderErr := renderManifestValue(forbidden, variables)
+		if renderErr != nil {
+			return nil, fmt.Errorf("render forbidden evidence value: %w", renderErr)
+		}
+		needle := strings.ToLower(strings.TrimSpace(fmt.Sprint(rendered)))
+		if needle != "" && strings.Contains(lower, needle) {
+			return nil, fmt.Errorf("selected evidence contains forbidden value")
+		}
+	}
+	return recorded, nil
+}
+
+func cloneJSONMap(input map[string]any) (map[string]any, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal evidence root: %w", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("clone evidence root: %w", err)
+	}
+	return result, nil
+}
+
+func redactEvidencePath(current any, parts []string) {
+	if len(parts) == 0 {
+		return
+	}
+	switch typed := current.(type) {
+	case map[string]any:
+		if parts[0] == "*" {
+			for key, nested := range typed {
+				if len(parts) == 1 {
+					delete(typed, key)
+				} else {
+					redactEvidencePath(nested, parts[1:])
+				}
+			}
+			return
+		}
+		nested, ok := typed[parts[0]]
+		if !ok {
+			return
+		}
+		if len(parts) == 1 {
+			delete(typed, parts[0])
+			return
+		}
+		redactEvidencePath(nested, parts[1:])
+	case []any:
+		if parts[0] == "*" {
+			for _, nested := range typed {
+				redactEvidencePath(nested, parts[1:])
+			}
+			return
+		}
+		index, err := strconv.Atoi(parts[0])
+		if err == nil && index >= 0 && index < len(typed) {
+			redactEvidencePath(typed[index], parts[1:])
+		}
+	}
+}
+
+func correlatedResourceID(arguments, response map[string]any, campaignID string) string {
+	for _, key := range []string{"deployment_id", "project_id", "session_id", "run_id", "pipeline_id", "host_id", "browser_id", "service_id"} {
+		if value := strings.TrimSpace(fmt.Sprint(arguments[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	for _, path := range []string{
+		"structuredContent.data.id", "structuredContent.data.project_id", "structuredContent.data.session_id",
+		"structuredContent.data.run.id", "structuredContent.data.session.id",
+	} {
+		if value, found := lookupManifestPath(response, path); found && !emptyManifestValue(value) {
+			return strings.TrimSpace(fmt.Sprint(value))
+		}
+	}
+	return campaignID
 }
 
 func evaluateToolStep(step ScenarioStep, response ToolCallResult, variables map[string]any) ([]AssertionResult, error) {

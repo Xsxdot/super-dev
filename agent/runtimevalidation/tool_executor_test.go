@@ -104,6 +104,38 @@ func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
 	require.Equal(t, []string{"first_tool"}, transport.calls)
 }
 
+func TestToolExecutorPersistsOnlySelectedRedactedCorrelatedEvidence(t *testing.T) {
+	t.Parallel()
+
+	step := executorStep("inspect", "inspect_tool", CoveragePrimary, "structuredContent.data.resource_id", "resource-7")
+	step.Arguments = map[string]any{"project_id": "project-42", "authorization": "one-time-secret"}
+	step.Evidence = EvidenceContract{
+		Record: []string{"structuredContent.data.resource_id", "request.arguments"},
+		Redact: []string{"request.arguments.authorization"},
+		Forbid: []string{"one-time-secret", "authorization"},
+	}
+	transport := &fakeLiveTools{
+		tools: []string{"inspect_tool"},
+		responses: map[string]ToolCallResult{"inspect_tool": successToolResult(map[string]any{
+			"resource_id": "resource-7", "ignored": "must-not-persist",
+		})},
+	}
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{executorScenario("identity-observation", []ScenarioStep{step})},
+	})
+
+	require.Equal(t, StatusPass, result.Status)
+	require.Len(t, result.Scenarios, 1)
+	execution := result.Scenarios[0].Steps[0]
+	require.Equal(t, map[string]any{"paths": map[string]any{
+		"structuredContent.data.resource_id": "resource-7",
+		"request.arguments":                  map[string]any{"project_id": "project-42"},
+	}}, execution.RecordedEvidence)
+	require.NotContains(t, fmt.Sprint(execution.RecordedEvidence), "must-not-persist")
+	require.Equal(t, "project-42", result.PrimaryEvidence[0].ResourceID)
+	require.Contains(t, result.PrimaryEvidence[0].EvidenceRef, "tool-campaign.json")
+}
+
 type fakeLiveTools struct {
 	tools     []string
 	responses map[string]ToolCallResult
@@ -130,7 +162,8 @@ func executorScenario(id string, steps []ScenarioStep) Scenario {
 func executorStep(id, tool, coverage, path string, value any) ScenarioStep {
 	return ScenarioStep{
 		ID: id, Tool: tool, Coverage: coverage,
-		Expect: StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: path, Operator: "eq", Value: value}}},
+		Expect:   StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: path, Operator: "eq", Value: value}}},
+		Evidence: EvidenceContract{Record: []string{path}},
 	}
 }
 
