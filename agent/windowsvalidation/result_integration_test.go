@@ -7,7 +7,7 @@
 //
 // 边界：
 //   - 不启动真实 MCP、安装器或 provider 进程
-//   - 不替代 Windows 10 x64 真机验收
+//   - 不替代 Windows 10 22H2 x64 (build 19045) 真机验收
 package windowsvalidation
 
 import (
@@ -361,6 +361,9 @@ func TestMaterializePreDriverFailureKeepsTargetsUnattempted(t *testing.T) {
 	report, err := MaterializePreDriverFailure(packageRoot, results, backup, campaignID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if report.Target != WindowsValidationTargetLabel {
+		t.Fatalf("pre-driver target=%q, want %q", report.Target, WindowsValidationTargetLabel)
 	}
 	if report.Result.PhaseStatus != PhaseStatusFail || report.Functional.PhaseStatus != PhaseStatusBlocked || report.Functional.Attempted {
 		t.Fatalf("pre-driver target/prerequisite facts were conflated: result=%#v functional=%#v", report.Result, report.Functional)

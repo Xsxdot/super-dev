@@ -7,7 +7,8 @@
     "artifact_checksum": "${workspace}/.superdev-validation/${campaign_id}/checksums/${version}.sha256",
     "action": "deploy",
     "campaign_id": "{{campaign_id}}",
-    "remote_root": "{{linux_root}}"
+    "remote_root": "{{linux_root}}",
+    "root_mode": "create"
   },
   "roles": {
     "linux_validation_target": {
@@ -72,6 +73,7 @@
             "artifact_checksum": "${artifact_checksum}",
             "campaign_id": "${campaign_id}",
             "remote_root": "${remote_root}",
+            "root_mode": "${root_mode}",
             "version": "${version}",
             "action": "${action}"
           }

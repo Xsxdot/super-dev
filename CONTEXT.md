@@ -380,6 +380,10 @@ _Avoid_: Installer PASS, Installation Proof, Runtime Attestation
 一个安装器 lane 的 install、start、stop 与 uninstall 动作及其 Evidence Obligation；只有四段都真实执行并满足合同，installer lane 才能通过。
 _Avoid_: Artifact Verification, Packaged Runtime Attestation, File Check
 
+**Installer Action Evidence**:
+由验证 driver 独占执行 install、start、stop 或 uninstall 后写入的单动作普通 JSON 事实；它精确绑定 campaign、lane、Prepared Baseline、冻结安装器和真实命令/观察，但不组成摘要链、WAL 或不可变 attempt ledger。操作者输入、外部 JSON 和事后观察都不能替代它。
+_Avoid_: Imported Fact, Operator Confirmation, Synthetic Evidence
+
 **Validation Catalog**:
 一次 Windows campaign 从冻结包带入并持久化的 scenario、target step、supporting/cleanup step 与工具归属目录；重新派生结果前必须用它拒绝缺失、重复或重映射事实。
 _Avoid_: Current Row Count, Best-effort Coverage, Report Layout
@@ -387,3 +391,27 @@ _Avoid_: Current Row Count, Best-effort Coverage, Report Layout
 **Prepared Baseline Identity**:
 Prepare 阶段锁定的 `baseline.json` 整体 SHA-256、六类比较 SHA-256、campaign 与 lane；Cleanup PASS 必须机械证明其 expected/actual 事实属于这一身份。
 _Avoid_: Self-declared Match, Latest Backup, Cleanup Verdict
+
+**Debug Credential Lease**:
+由单个 Validation Campaign 拥有、限定到一个 Project/Service scope、只在 Agent 进程与 TTL 都有效时可读的一次性调试凭据授权；它不同于持久化的 Project/Service Debug Credential。
+_Avoid_: Temporary Config Credential, Validation Token, Persisted Debug Credential
+
+**Environment Manifest**:
+一次 Validation Campaign 对正式 prerequisite 的 secret-free expected、observed 与 resolved identity 快照；expected 不能冒充 observed，缺失环境形成 BLOCKED 而不是产品 FAIL。
+_Avoid_: Runtime Input, Tool Version List, Installation Script
+
+**Campaign Admission**:
+两阶段、均由 Environment Manifest 重派生的准入决定：Pre-install Admission 在任何 installer lifecycle 副作用前要求所有不依赖产品的 prerequisite PASS；Post-install Admission 在受信 install/start 建立 MCP/Agent 观察面后要求完整 catalog 全部 required prerequisite PASS，且必须绑定前一份 pre-install manifest，随后才允许场景、fixture 或工具功能事实。
+_Avoid_: Preflight Log, Stored Verdict, Best-effort Check
+
+**SSH Host Identity Pin**:
+由可信带外渠道预先确认并写入 Host 配置的 SSH host-key SHA-256 fingerprint；push-over-SSH 与 tunnel 必须在连接时共同校验它，连接观察结果不能自动成为新的信任根。
+_Avoid_: TOFU, Observed Fingerprint, Host Address
+
+**Remote Observation**:
+Controller 通过受鉴权、只读且脱敏的产品接口收集到的远端机器身份、实际托管基线、tunnel 身份与固定 direct-exposure 探测事实；配置期望、Host tag 和调用者输入不能替代它。
+_Avoid_: Remote Requirement, Runtime Input, Host Declaration
+
+**Governance Attestation**:
+由人类明确提供并绑定 Validation Campaign、Host 与 Remote Observation 机器摘要的非秘密治理证据，用于声明专用可复位机器、可信 fingerprint 来源和允许轮换安全凭据；系统只能验证绑定，不能把声明内容伪装成机器证明。
+_Avoid_: Machine Fact, Host Tag, Automatic Approval

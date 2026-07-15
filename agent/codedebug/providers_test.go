@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 覆盖 Go、Python 开箱 provider 的 adapter 命令
-//   - 覆盖 Node experimental provider 缺少 adapter_command 时的提示错误
+//   - 覆盖 Node/JVM experimental provider 的资源与 wrapper 命令合同
 //
 // 边界：
 //   - 不校验真实调试器是否安装
@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/xsxdot/super-dev/agent/model"
 )
 
 func TestGoProviderBuildsDelveDAPCommand(t *testing.T) {
@@ -23,6 +22,28 @@ func TestGoProviderBuildsDelveDAPCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "dlv", cmd.Name)
 	assert.Equal(t, []string{"dap", "--listen=127.0.0.1:39001"}, cmd.Args)
+}
+
+func TestGoProviderExplicitAdapterOverridesPATHFallback(t *testing.T) {
+	provider := NewGoProvider()
+	cmd, err := provider.AdapterCommand(LaunchConfig{
+		AdapterPort:    39001,
+		AdapterCommand: `C:\Program Files\Delve\dlv.exe`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, `C:\Program Files\Delve\dlv.exe`, cmd.Name)
+	assert.Equal(t, AdapterCommandSourceExplicit, cmd.Source)
+	assert.Equal(t, []string{"dap", "--listen=127.0.0.1:39001"}, cmd.Args)
+}
+
+func TestGoProviderDefaultAdapterOverridesPATHFallback(t *testing.T) {
+	provider := NewGoProvider(`/opt/superdev/adapters/dlv`)
+	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 39001})
+
+	require.NoError(t, err)
+	assert.Equal(t, `/opt/superdev/adapters/dlv`, cmd.Name)
+	assert.Equal(t, AdapterCommandSourceProviderDefault, cmd.Source)
 }
 
 func TestGoProviderPassesLaunchEnvToDelveAdapter(t *testing.T) {
@@ -125,13 +146,13 @@ func TestJVMDebugProviderConnectsJdwpPort(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", args["hostName"])
 }
 
-func TestJVMDebugProviderRequiresExternalDebugServer(t *testing.T) {
+func TestJVMDebugProviderUsesPATHWrapperWhenNoConfiguredCommand(t *testing.T) {
 	provider := NewJVMDebugProvider("")
-	_, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41040})
-	require.ErrorIs(t, err, ErrAdapterUnavailable)
-	info, ok := AdapterErrorDetails(err)
-	require.True(t, ok)
-	assert.Equal(t, model.CodeDebugProviderJVM, info.Provider)
+	cmd, err := provider.AdapterCommand(LaunchConfig{AdapterPort: 41040})
+	require.NoError(t, err)
+	assert.Equal(t, "jvm-dap-wrapper", cmd.Name)
+	assert.Equal(t, AdapterCommandSourcePATHFallback, cmd.Source)
+	assert.Equal(t, []string{"41040"}, cmd.Args)
 }
 
 func TestJVMDebugProviderUsesConfiguredAdapterCommand(t *testing.T) {

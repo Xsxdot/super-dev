@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
@@ -14,7 +15,13 @@ import (
 func TestRemoteViewAggregation(t *testing.T) {
 	srv, _ := newTestApp(t)
 
-	h1Body, _ := json.Marshal(model.Host{Name: "c01", Tags: []string{"prod"}})
+	h1Body, _ := json.Marshal(model.Host{
+		Name:                  "c01",
+		Tags:                  []string{"prod"},
+		SSHPassword:           "REMOTE-VIEW-PASSWORD",
+		SSHPrivateKey:         "REMOTE-VIEW-PRIVATE-KEY",
+		SSHHostKeyFingerprint: "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
+	})
 	h2Body, _ := json.Marshal(model.Host{Name: "c02", Tags: []string{"prod", "temp"}})
 	r1, _ := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(h1Body))
 	var h1 struct {
@@ -55,6 +62,11 @@ func TestRemoteViewAggregation(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
+	responseBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(responseBody), "REMOTE-VIEW-PASSWORD")
+	assert.NotContains(t, string(responseBody), "REMOTE-VIEW-PRIVATE-KEY")
+	assert.NotContains(t, string(responseBody), "SHA256:")
 
 	var view struct {
 		LogSource struct {
@@ -72,7 +84,7 @@ func TestRemoteViewAggregation(t *testing.T) {
 			Tags []string `json:"tags"`
 		} `json:"hosts"`
 	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&view))
+	require.NoError(t, json.Unmarshal(responseBody, &view))
 	assert.Equal(t, ls.ID, view.LogSource.ID)
 	require.Len(t, view.Hosts, 2)
 

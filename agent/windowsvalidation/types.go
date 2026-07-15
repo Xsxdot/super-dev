@@ -14,6 +14,8 @@ package windowsvalidation
 import "encoding/json"
 
 const (
+	// CampaignReportSchemaVersion 要求功能 lane 携带可重派生的环境准入合同。
+	CampaignReportSchemaVersion = 4
 	// ScenarioKind 标识本包唯一接受的固定 MCP 场景格式。
 	ScenarioKind = "superdev.windows-validation.scenario"
 	// CoveragePrimary 表示工具的唯一主覆盖归属。
@@ -27,8 +29,11 @@ type FrozenBuild struct {
 	SchemaVersion int    `json:"schema_version"`
 	Kind          string `json:"kind"`
 	Target        struct {
-		OS           string `json:"os"`
-		Architecture string `json:"architecture"`
+		Label          string `json:"label"`
+		OS             string `json:"os"`
+		DisplayVersion string `json:"display_version"`
+		CurrentBuild   string `json:"current_build"`
+		Architecture   string `json:"architecture"`
 	} `json:"target"`
 	Build struct {
 		GitCommit      string `json:"git_commit"`
@@ -51,23 +56,25 @@ type FrozenNameSet struct {
 
 // InstallerIdentity 描述归档外部提供的一个 Windows 安装器。
 type InstallerIdentity struct {
-	Filename       string `json:"filename"`
-	Format         string `json:"format"`
-	ValidationRole string `json:"validation_role"`
-	SizeBytes      int64  `json:"size_bytes"`
-	SHA256         string `json:"sha256"`
+	Filename            string `json:"filename"`
+	Format              string `json:"format"`
+	ValidationRole      string `json:"validation_role"`
+	UninstallerFilename string `json:"uninstaller_filename,omitempty"`
+	SizeBytes           int64  `json:"size_bytes"`
+	SHA256              string `json:"sha256"`
 }
 
 // Scenario 是固定的一次性 MCP 能力场景。
 type Scenario struct {
-	SchemaVersion int            `json:"schema_version"`
-	Kind          string         `json:"kind"`
-	ID            string         `json:"id"`
-	Title         string         `json:"title"`
-	Requires      []string       `json:"requires,omitempty"`
-	Variables     map[string]any `json:"variables,omitempty"`
-	Steps         []ScenarioStep `json:"steps"`
-	Cleanup       []ScenarioStep `json:"cleanup,omitempty"`
+	SchemaVersion int    `json:"schema_version"`
+	Kind          string `json:"kind"`
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	// Requires 仅描述冻结场景编排关系；它不是执行事实，也不得直接派生 PASS/FAIL。
+	Requires  []string       `json:"requires,omitempty"`
+	Variables map[string]any `json:"variables,omitempty"`
+	Steps     []ScenarioStep `json:"steps"`
+	Cleanup   []ScenarioStep `json:"cleanup,omitempty"`
 }
 
 // ScenarioStep 描述一个固定 MCP 调用和其证据断言。

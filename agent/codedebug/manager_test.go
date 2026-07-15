@@ -1471,6 +1471,33 @@ func TestDefaultAdapterLaunchMissingCommandReturnsStableUnavailableError(t *test
 	assert.Contains(t, strings.ToLower(info.Hint), "install")
 }
 
+func TestManagerExplicitAdapterStartFailureDoesNotFallBack(t *testing.T) {
+	root := t.TempDir()
+	explicit := filepath.Join(root, "Program Files", "Delve", "dlv.exe")
+	dialCalled := false
+	mgr := NewManager(ManagerOptions{
+		ReservePort: func() (int, error) { return 39001, nil },
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCalled = true
+			return nil, errors.New("dial must not run after adapter start failure")
+		},
+	})
+	project, service, dep := managerTestTarget(root)
+	dep.CodeDebug.AdapterCommand = explicit
+
+	_, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.ErrorIs(t, err, ErrAdapterUnavailable)
+	info, ok := AdapterErrorDetails(err)
+	require.True(t, ok)
+	assert.Equal(t, CodeAdapterUnavailable, info.Code)
+	assert.Equal(t, AdapterCauseNotFound, info.CauseCode)
+	assert.Equal(t, AdapterCommandSourceExplicit, info.Source)
+	assert.Equal(t, "dlv.exe", info.Executable)
+	assert.NotContains(t, info.Command, root, "error context must not leak the absolute install path")
+	assert.False(t, dialCalled, "an explicit launch failure must stop instead of falling through to another candidate")
+}
+
 func TestDefaultAdapterLaunchKeepsProcessAfterCallerContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	process, err := defaultAdapterLaunch(ctx, AdapterCommand{

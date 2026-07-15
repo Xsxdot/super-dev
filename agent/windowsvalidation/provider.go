@@ -36,6 +36,12 @@ type providerEvidence struct {
 	Debug              ValidationResult `json:"debug"`
 }
 
+type providerAdapterBinding struct {
+	PrerequisiteKey string
+	Command         string
+	Source          string
+}
+
 type stageEvidence struct {
 	Stage    string           `json:"stage"`
 	Tool     string           `json:"tool,omitempty"`
@@ -60,7 +66,7 @@ func (e *ScenarioExecutor) executeProvider(ctx context.Context, fixture FixtureM
 	log.WithFields(e.logFields(map[string]any{"provider": fixture.Provider, "stage": "begin"})).Info("开始执行 Windows language provider 合同")
 	evidence := providerEvidence{Provider: fixture.Provider}
 	fixtureRoot := filepath.Join(fmt.Sprint(e.variables["project_root"]), filepath.FromSlash(fixture.CWD))
-	stage := e.runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "runtime")
+	stage := e.executeFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "runtime")
 	stage.Stage = "runtime_preflight"
 	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stage)
 	if stage.Result.PhaseStatus != PhaseStatusPass {
@@ -69,7 +75,7 @@ func (e *ScenarioExecutor) executeProvider(ctx context.Context, fixture FixtureM
 			blockedResult("runtime_preflight", reason),
 			blockedResult("runtime_preflight", reason), reason)
 	}
-	stage = e.runFixtureCommand(ctx, fixtureRoot, fixture.Build.WindowsCommand)
+	stage = e.executeFixtureCommand(ctx, fixtureRoot, fixture.Build.WindowsCommand)
 	stage.Stage = "provider_build"
 	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, stage)
 	if stage.Result.PhaseStatus != PhaseStatusPass {
@@ -117,7 +123,7 @@ func (e *ScenarioExecutor) executeProvider(ctx context.Context, fixture FixtureM
 			blockedResult("provider_runtime", err.Error()), err.Error())
 	}
 
-	debugStage := e.runFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "debug")
+	debugStage := e.executeFixtureCommand(ctx, fixtureRoot, "preflight.cmd", "debug")
 	debugStage.Stage = "debug_preflight"
 	evidence.PrerequisiteStages = append(evidence.PrerequisiteStages, debugStage)
 	if debugStage.Result.PhaseStatus != PhaseStatusPass {
@@ -169,6 +175,15 @@ func (e *ScenarioExecutor) renderFixtureRuntime(fixture FixtureManifest, fixture
 		env["PATH"] = filepath.Join(fixtureRoot, filepath.FromSlash(prepend)) + string(os.PathListSeparator) + os.Getenv("PATH")
 		delete(env, "PATH_PREPEND")
 	}
+	if _, bound := e.providerAdapters[fixture.Provider]; bound {
+		fixtureEnvironment, err := providerFixtureEnvironment(fixture.Provider, e.providerAdapters, e.agentDataDirectory)
+		if err != nil {
+			return nil, nil, err
+		}
+		for key, value := range fixtureEnvironment {
+			env[key] = value
+		}
+	}
 	env["FIXTURE_CAMPAIGN_ID"] = fmt.Sprint(e.variables["campaign_id"])
 	return config, env, nil
 }
@@ -178,9 +193,12 @@ func (e *ScenarioExecutor) configureAndStartProvider(ctx context.Context, fixtur
 	projectRoot := fmt.Sprint(e.variables["project_root"])
 	serviceID := "provider-" + fixture.Provider
 	deploymentID := serviceID + "-dev"
+	codeDebug, err := providerCodeDebugConfig(fixture.Provider, e.providerAdapters)
+	if err != nil {
+		return err
+	}
 	// 在任何写操作前固定资源身份，后续失败路径才能只停止本 campaign 的 deployment。
 	e.variables["provider_"+fixture.Provider+"_deployment_id"] = deploymentID
-	codeDebug := providerCodeDebugConfig(fixture.Provider)
 	base := map[string]any{"language": fixture.Provider, "project_root": projectRoot, "cwd": fixture.CWD, "env": env, "config": config}
 	for _, call := range []struct {
 		stage string
@@ -271,24 +289,102 @@ func (e *ScenarioExecutor) configureAndStartProvider(ctx context.Context, fixtur
 	return failure
 }
 
-func providerCodeDebugConfig(provider string) map[string]any {
-	config := map[string]any{"policy": "auto"}
+func providerCodeDebugConfig(provider string, bindings map[string]providerAdapterBinding) (map[string]any, error) {
+	binding, found := bindings[provider]
+	if !fixtureProviderSupported(provider) {
+		return nil, fmt.Errorf("provider %s has no adapter contract", provider)
+	}
+	if !found || strings.TrimSpace(binding.Command) == "" {
+		// diagnostic core_only 可以允许一个 adapter prerequisite BLOCKED。runtime
+		// 仍可运行，但 debug 必须显式关闭，不能让 policy=auto 重新查 Agent PATH。
+		return map[string]any{"policy": "disabled"}, nil
+	}
+	if !isAbsoluteRuntimePath(binding.Command) {
+		return nil, fmt.Errorf("provider %s admitted adapter binding is not absolute", provider)
+	}
+	// 这里下发 collector 已实际执行并准入的绝对路径；Agent 不再重新解析
+	// runtime input、ambient PATH 或 provider 默认值，避免 preflight A / execution B。
+	return map[string]any{"policy": "auto", "adapter_command": binding.Command}, nil
+}
+
+func fixtureProviderSupported(provider string) bool {
 	switch provider {
-	case "go":
-		if path, err := exec.LookPath("dlv"); err == nil {
-			config["adapter_command"] = path
+	case "go", "python", "node", "rust", "cpp", "java", "kotlin":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildProviderAdapterBindings(plan EnvironmentCollectionPlan, manifest EnvironmentManifest) (map[string]providerAdapterBinding, error) {
+	prerequisites := environmentPrerequisiteMap(manifest.Prerequisites)
+	bindings := map[string]providerAdapterBinding{}
+	for _, adapter := range plan.Adapters {
+		providers, supported := fixtureProvidersForAdapterKey(adapter.Key)
+		if !supported {
+			return nil, fmt.Errorf("environment adapter %s has no provider fixture binding", adapter.Key)
 		}
-	case "java", "kotlin":
-		path := strings.TrimSpace(os.Getenv("SUPERDEV_JVM_ADAPTER_COMMAND"))
-		if path != "" {
-			config["adapter_command"] = path
+		prerequisite, found := prerequisites[adapter.Key]
+		if !found || prerequisite.Result.PhaseStatus != PhaseStatusPass {
+			// core_only 可以准入具名 blocker；缺失 binding 的 provider 后续保持 BLOCKED，
+			// 绝不能回退到 Agent PATH 再尝试另一份 executable。
+			continue
 		}
-	case "rust", "cpp":
-		if path, err := exec.LookPath("lldb-dap"); err == nil {
-			config["adapter_command"] = path
+		command := strings.TrimSpace(prerequisite.Resolved.Path)
+		source := strings.TrimSpace(prerequisite.Resolved.Source)
+		if command == "" || !isAbsoluteRuntimePath(command) {
+			return nil, fmt.Errorf("environment adapter %s PASS result has no absolute resolved path", adapter.Key)
+		}
+		if source == "" || source != strings.TrimSpace(adapter.Expected.Source) {
+			return nil, fmt.Errorf("environment adapter %s resolved source differs from the frozen plan", adapter.Key)
+		}
+		binding := providerAdapterBinding{PrerequisiteKey: adapter.Key, Command: command, Source: source}
+		for _, provider := range providers {
+			if _, duplicated := bindings[provider]; duplicated {
+				return nil, fmt.Errorf("provider %s has duplicated admitted adapter bindings", provider)
+			}
+			bindings[provider] = binding
 		}
 	}
-	return config
+	return bindings, nil
+}
+
+func fixtureProvidersForAdapterKey(key string) ([]string, bool) {
+	switch key {
+	case EnvironmentKeyAdapterGo:
+		return []string{"go"}, true
+	case EnvironmentKeyAdapterPython:
+		return []string{"python"}, true
+	case EnvironmentKeyAdapterNode:
+		return []string{"node"}, true
+	case EnvironmentKeyAdapterNative:
+		return []string{"rust", "cpp"}, true
+	case EnvironmentKeyAdapterJVM:
+		return []string{"java", "kotlin"}, true
+	default:
+		return nil, false
+	}
+}
+
+func providerFixtureEnvironment(provider string, bindings map[string]providerAdapterBinding, agentDataDirectory string) (map[string]string, error) {
+	binding, found := bindings[provider]
+	if !found || strings.TrimSpace(binding.Command) == "" {
+		return nil, fmt.Errorf("provider %s has no admitted adapter binding", provider)
+	}
+	if !isAbsoluteRuntimePath(binding.Command) {
+		return nil, fmt.Errorf("provider %s admitted adapter binding is not absolute", provider)
+	}
+	environment := map[string]string{}
+	switch provider {
+	case "java", "kotlin":
+		environment["SUPERDEV_JVM_ADAPTER_COMMAND"] = binding.Command
+	case "node":
+		if !isAbsoluteRuntimePath(agentDataDirectory) {
+			return nil, fmt.Errorf("Node provider has no bound Agent data directory")
+		}
+		environment["SUPERDEV_AGENT_DATA_DIR"] = agentDataDirectory
+	}
+	return environment, nil
 }
 
 func (e *ScenarioExecutor) probeFixtureRuntime(ctx context.Context, fixture FixtureManifest, evidence *providerEvidence) error {
@@ -591,10 +687,34 @@ func (e *ScenarioExecutor) runFixtureCommand(ctx context.Context, directory, com
 	log := logger.GetLogger().WithEntryName("WindowsValidationFixtureCommand")
 	log.WithFields(e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": filepath.Base(command)})).Info("开始执行 Windows fixture 外部进程")
 	started := time.Now().UTC()
+	fixtureEnvironment := map[string]string{}
+	if fixtureCommandRequiresAdapterBinding(command, args) {
+		var bindingErr error
+		fixtureEnvironment, bindingErr = providerFixtureEnvironment(provider, e.providerAdapters, e.agentDataDirectory)
+		if bindingErr != nil {
+			log.WithFields(e.logFields(map[string]any{"provider": provider, "stage": stage, "tool": filepath.Base(command), "cause_code": "adapter_binding_unavailable"})).Error("Windows fixture 缺少已准入 adapter 绑定")
+			return stageEvidence{
+				Stage: stage, Tool: filepath.Base(command),
+				Result:  blockedResult("provider_adapter_binding", bindingErr.Error()),
+				Request: map[string]any{"command": filepath.Base(command), "arguments": args},
+				Summary: map[string]any{"cause_code": "adapter_binding_unavailable"},
+			}
+		}
+	}
 	cmdArgs := []string{"/d", "/s", "/c", "call", command}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.CommandContext(ctx, "cmd.exe", cmdArgs...)
+	commandPath, commandErr := trustedWindowsCommandPath()
+	if commandErr != nil {
+		return stageEvidence{
+			Stage: stage, Tool: filepath.Base(command),
+			Result:  blockedResult("trusted_cmd_unavailable", "trusted System32 cmd.exe is unavailable"),
+			Request: map[string]any{"command": filepath.Base(command), "arguments": args},
+			Summary: map[string]any{"cause_code": "trusted_cmd_unavailable"},
+		}
+	}
+	cmd := exec.CommandContext(ctx, commandPath, cmdArgs...)
 	cmd.Dir = directory
+	cmd.Env = environmentWithOverrides(os.Environ(), fixtureEnvironment)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
@@ -626,6 +746,35 @@ func (e *ScenarioExecutor) runFixtureCommand(ctx context.Context, directory, com
 		Request:  map[string]any{"command": filepath.Base(command), "arguments": args},
 		Response: map[string]any{"exit_code": exitCode, "output": output.String(), "process_error": err.Error()},
 	}
+}
+
+func (e *ScenarioExecutor) executeFixtureCommand(ctx context.Context, directory, command string, args ...string) stageEvidence {
+	if e.fixtureCommandRunner != nil {
+		return e.fixtureCommandRunner(ctx, directory, command, args...)
+	}
+	return e.runFixtureCommand(ctx, directory, command, args...)
+}
+
+func fixtureCommandRequiresAdapterBinding(command string, args []string) bool {
+	return strings.EqualFold(filepath.Base(command), "preflight.cmd") && len(args) == 1 && strings.EqualFold(args[0], "debug")
+}
+
+func environmentWithOverrides(base []string, overrides map[string]string) []string {
+	environment := append([]string{}, base...)
+	for key, value := range overrides {
+		replaced := false
+		for index, entry := range environment {
+			name, _, found := strings.Cut(entry, "=")
+			if found && strings.EqualFold(name, key) {
+				environment[index] = key + "=" + value
+				replaced = true
+			}
+		}
+		if !replaced {
+			environment = append(environment, key+"="+value)
+		}
+	}
+	return environment
 }
 
 func providerCallStage(stage, tool string, request map[string]any, response ToolCallResult, callErr error, started, finished time.Time) stageEvidence {

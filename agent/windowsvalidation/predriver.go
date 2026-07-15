@@ -134,10 +134,10 @@ func MaterializePreDriverFailure(packageRoot, resultsRoot, backupDirectory, camp
 	}
 	resultDirectory := filepath.Join(resultsRoot, campaignID)
 	report = CampaignReport{
-		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+		SchemaVersion: CampaignReportSchemaVersion, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
 		Functional: targetResult, FailureStage: failureStage, FailureReason: conditionalFailureReason(hasFailure, reason),
 		BuildCommit: source.Frozen.Build.GitCommit, ProductVersion: source.Frozen.Build.ProductVersion,
-		Target: "Windows 10 x64", Lane: prepared.Lane, Installer: installer,
+		Target: WindowsValidationTargetLabel, Lane: prepared.Lane, Installer: installer,
 		RuntimeAttestation: RuntimeAttestation{Result: attestationResult},
 		InstallerChecks:    append([]PackageFileIdentity{}, failure.InstallerChecks...),
 		Prerequisites:      []StepExecution{{StepID: "pre_driver_preflight", Result: prerequisiteResult}},

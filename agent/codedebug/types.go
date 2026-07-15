@@ -15,6 +15,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -42,6 +44,24 @@ const (
 	CodeDAPConnectionFailed = "dap_connection_failed"
 )
 
+// AdapterCauseCode 是 adapter 失败底层 cause 的稳定、脱敏分类。
+type AdapterCauseCode string
+
+const (
+	// AdapterCauseNotFound 表示选中的 executable 在启动时不存在。
+	AdapterCauseNotFound AdapterCauseCode = "not_found"
+	// AdapterCausePermissionDenied 表示操作系统拒绝执行选中的 executable。
+	AdapterCausePermissionDenied AdapterCauseCode = "permission_denied"
+	// AdapterCauseCancelled 表示启动或连接阶段被上下文取消或超时。
+	AdapterCauseCancelled AdapterCauseCode = "cancelled"
+	// AdapterCauseUnavailable 表示 resolver 没有任何 executable 候选。
+	AdapterCauseUnavailable AdapterCauseCode = "unavailable"
+	// AdapterCauseConnectionFailed 表示 executable 已启动但 DAP 连接失败。
+	AdapterCauseConnectionFailed AdapterCauseCode = "connection_failed"
+	// AdapterCauseStartFailed 表示无法安全细分的进程启动失败。
+	AdapterCauseStartFailed AdapterCauseCode = "start_failed"
+)
+
 // 不可打开原因码，对 AI 与 UI 稳定。
 const (
 	ReasonLanguageUnsupported = "language_unsupported"
@@ -52,10 +72,13 @@ const (
 
 // AdapterErrorInfo 描述 adapter 启动/连接失败时暴露给调用方的稳定错误信息。
 type AdapterErrorInfo struct {
-	Code     string                  `json:"code"`
-	Provider model.CodeDebugProvider `json:"provider,omitempty"`
-	Command  string                  `json:"command,omitempty"`
-	Hint     string                  `json:"remediation_hint,omitempty"`
+	Code       string                  `json:"code"`
+	CauseCode  AdapterCauseCode        `json:"cause_code,omitempty"`
+	Provider   model.CodeDebugProvider `json:"provider,omitempty"`
+	Source     AdapterCommandSource    `json:"source,omitempty"`
+	Executable string                  `json:"executable,omitempty"`
+	Command    string                  `json:"command,omitempty"`
+	Hint       string                  `json:"remediation_hint,omitempty"`
 }
 
 // AdapterError 表示 adapter 启动或 DAP 连接阶段的结构化错误。
@@ -64,31 +87,70 @@ type AdapterError struct {
 	cause error
 }
 
-// NewAdapterError 创建一个带稳定 code 和修复提示的 adapter 错误。
+// NewAdapterError 创建一个带稳定 code、候选来源与修复提示的 adapter 错误。
+//
+// 参数：
+//   - code: 对 API/UI 稳定的 adapter 阶段错误码
+//   - cmd: 已选择的 provider、source、executable 与真实启动参数
+//   - cause: 供 errors.Is/As 使用的原始错误，不进入 Error 字符串或结构化公开字段
+//
+// 返回：
+//   - 可通过 AdapterErrorDetails 提取脱敏上下文、通过 errors.Unwrap 检查 cause 的错误
 func NewAdapterError(code string, cmd AdapterCommand, cause error) error {
 	if cause == nil {
 		cause = errors.New(code)
 	}
 	return &AdapterError{
 		AdapterErrorInfo: AdapterErrorInfo{
-			Code:     strings.TrimSpace(code),
-			Provider: cmd.Provider,
-			Command:  cmd.Summary(),
-			Hint:     adapterRemediationHint(code, cmd.Provider),
+			Code:       strings.TrimSpace(code),
+			CauseCode:  classifyAdapterCause(code, cause),
+			Provider:   cmd.Provider,
+			Source:     cmd.Source,
+			Executable: adapterExecutableIdentity(cmd.Name),
+			Command:    cmd.Summary(),
+			Hint:       adapterRemediationHint(code, cmd.Provider),
 		},
 		cause: cause,
 	}
 }
 
-// Error 返回包含稳定 code 的错误摘要。
+func classifyAdapterCause(code string, cause error) AdapterCauseCode {
+	switch {
+	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+		return AdapterCauseCancelled
+	case errors.Is(cause, os.ErrPermission):
+		return AdapterCausePermissionDenied
+	case errors.Is(cause, os.ErrNotExist), errors.Is(cause, exec.ErrNotFound):
+		return AdapterCauseNotFound
+	case code == CodeAdapterUnavailable && errors.Is(cause, ErrAdapterUnavailable):
+		return AdapterCauseUnavailable
+	case code == CodeAdapterUnavailable:
+		// execenv 的 PATH 查找错误有意不暴露候选路径，也不依赖 os.PathError；
+		// 到达 adapter_unavailable 且存在候选时，稳定归类为 not_found。
+		return AdapterCauseNotFound
+	case code == CodeDAPConnectionFailed:
+		return AdapterCauseConnectionFailed
+	default:
+		return AdapterCauseStartFailed
+	}
+}
+
+// Error 返回仅包含稳定 code、provider、source 和 executable identity 的脱敏摘要。
 func (e *AdapterError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.cause == nil {
-		return e.Code
+	detail := e.Code
+	if e.Provider != "" {
+		detail += fmt.Sprintf(" provider=%s", e.Provider)
 	}
-	return fmt.Sprintf("%s: %v", e.Code, e.cause)
+	if e.Source != "" {
+		detail += fmt.Sprintf(" source=%s", e.Source)
+	}
+	if e.Executable != "" {
+		detail += fmt.Sprintf(" executable=%s", e.Executable)
+	}
+	return detail
 }
 
 // Unwrap 返回底层错误，便于调用方继续检查原始 cause。
@@ -129,7 +191,7 @@ func adapterRemediationHint(code string, provider model.CodeDebugProvider) strin
 	case model.CodeDebugProviderNode:
 		return "Configure code_debug.adapter_command for the experimental Node provider and ensure it is executable."
 	case model.CodeDebugProviderJVM:
-		return "Configure code_debug.adapter_command with a wrapper that starts a JDT LS/java-debug DAP server on the supplied port."
+		return "Configure code_debug.adapter_command or install `jvm-dap-wrapper` on PATH; the wrapper must start a JDT LS/java-debug DAP server on the supplied port."
 	case model.CodeDebugProviderNative:
 		return "Install lldb-dap (Xcode/LLVM) and ensure `lldb-dap` is on PATH."
 	default:

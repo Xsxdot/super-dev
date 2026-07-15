@@ -183,6 +183,8 @@ func (a *App) saveConfigChangeProject(project model.Project) error {
 			a.projects[i] = project
 			a.clearProjectBackendsLocked(existing)
 			a.registerProjectBackendsLocked(project)
+			// 即使当前 configchange 只暴露 upsert，这个快照替换 seam 也必须守住未来的删除语义。
+			a.revokeDisappearedDebugCredentialScopesLocked([]model.Project{existing}, []model.Project{project})
 			affected = unionProjectsForReconcile(existing, project)
 			a.mu.Unlock()
 			a.reconcileProjectsAsync(affected...)

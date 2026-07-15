@@ -39,6 +39,10 @@ function emptyForm(): HostCreatePayload {
     ssh_user: 'root',
     ssh_password: '',
     ssh_private_key: '',
+    ssh_host_key_fingerprint: '',
+    clear_ssh_password: false,
+    clear_ssh_private_key: false,
+    clear_ssh_host_key_fingerprint: false,
     tags: [],
   }
 }
@@ -55,8 +59,13 @@ watch(
         ssh_host: initial.ssh_host ?? '',
         ssh_port: initial.ssh_port || 22,
         ssh_user: initial.ssh_user ?? 'root',
-        ssh_password: initial.ssh_password ?? '',
-        ssh_private_key: initial.ssh_private_key ?? '',
+        // Host read view 永不回显秘密或 pin；空值由后端解释为保留既有配置。
+        ssh_password: '',
+        ssh_private_key: '',
+        ssh_host_key_fingerprint: '',
+        clear_ssh_password: false,
+        clear_ssh_private_key: false,
+        clear_ssh_host_key_fingerprint: false,
         tags: [...initial.tags],
       }
       return
@@ -76,6 +85,10 @@ function submit() {
     ssh_user: form.value.ssh_user,
     ssh_password: form.value.ssh_password,
     ssh_private_key: form.value.ssh_private_key,
+    ssh_host_key_fingerprint: form.value.ssh_host_key_fingerprint,
+    clear_ssh_password: form.value.clear_ssh_password,
+    clear_ssh_private_key: form.value.clear_ssh_private_key,
+    clear_ssh_host_key_fingerprint: form.value.clear_ssh_host_key_fingerprint,
     tags: form.value.tags ?? [],
   })
 }
@@ -127,13 +140,50 @@ function submit() {
         </div>
 
         <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.hostKeyFingerprint') }}</label>
+          <input
+            v-model="form.ssh_host_key_fingerprint"
+            class="settings-input mono-input"
+            :disabled="form.clear_ssh_host_key_fingerprint"
+            placeholder="SHA256:..."
+            data-test="host-form-ssh-host-key-fingerprint"
+          />
+          <span class="settings-field-hint">{{ t('settings.hostForm.hostKeyFingerprintHint') }}</span>
+          <label v-if="initial?.ssh_host_key_fingerprint_configured" class="credential-clear">
+            <input v-model="form.clear_ssh_host_key_fingerprint" type="checkbox" data-test="host-form-clear-ssh-host-key-fingerprint" />
+            {{ t('settings.hostForm.clearStoredHostKeyFingerprint') }}
+          </label>
+        </div>
+
+        <div class="settings-field">
           <label class="settings-field-label">{{ t('settings.hostForm.sshPassword') }}</label>
-          <input v-model="form.ssh_password" class="settings-input" type="password" :placeholder="t('settings.hostForm.passwordHint')" data-test="host-form-ssh-password" />
+          <input
+            v-model="form.ssh_password"
+            class="settings-input"
+            type="password"
+            :disabled="form.clear_ssh_password"
+            :placeholder="initial?.ssh_password_configured ? t('settings.hostForm.storedSecretHint') : t('settings.hostForm.passwordHint')"
+            data-test="host-form-ssh-password"
+          />
+          <label v-if="initial?.ssh_password_configured" class="credential-clear">
+            <input v-model="form.clear_ssh_password" type="checkbox" data-test="host-form-clear-ssh-password" />
+            {{ t('settings.hostForm.clearStoredPassword') }}
+          </label>
         </div>
 
         <div class="settings-field">
           <label class="settings-field-label">{{ t('settings.hostForm.sshPrivateKey') }}</label>
-          <textarea v-model="form.ssh_private_key" class="settings-input key-box" data-test="host-form-ssh-private-key" />
+          <textarea
+            v-model="form.ssh_private_key"
+            class="settings-input key-box"
+            :disabled="form.clear_ssh_private_key"
+            :placeholder="initial?.ssh_private_key_configured ? t('settings.hostForm.storedSecretHint') : ''"
+            data-test="host-form-ssh-private-key"
+          />
+          <label v-if="initial?.ssh_private_key_configured" class="credential-clear">
+            <input v-model="form.clear_ssh_private_key" type="checkbox" data-test="host-form-clear-ssh-private-key" />
+            {{ t('settings.hostForm.clearStoredPrivateKey') }}
+          </label>
         </div>
       </div>
 
@@ -158,5 +208,16 @@ function submit() {
   min-height: 112px;
   font-family: var(--font-mono, monospace);
   resize: vertical;
+}
+.mono-input {
+  font-family: var(--font-mono, monospace);
+}
+.credential-clear {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 </style>

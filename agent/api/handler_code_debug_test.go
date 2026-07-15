@@ -186,7 +186,12 @@ func TestWriteCodeDebugErrorIncludesAdapterRemediationData(t *testing.T) {
 	rec := httptest.NewRecorder()
 	err := codedebug.NewAdapterError(
 		codedebug.CodeAdapterUnavailable,
-		codedebug.AdapterCommand{Provider: model.CodeDebugProviderGo, Name: "dlv", Args: []string{"dap"}},
+		codedebug.AdapterCommand{
+			Provider: model.CodeDebugProviderGo,
+			Name:     "/private/user/tools/dlv",
+			Source:   codedebug.AdapterCommandSourceExplicit,
+			Args:     []string{"dap"},
+		},
 		errors.New("executable file not found"),
 	)
 
@@ -196,9 +201,14 @@ func TestWriteCodeDebugErrorIncludesAdapterRemediationData(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "adapter_unavailable", body["code"])
+	assert.Equal(t, "not_found", body["cause_code"])
 	assert.Equal(t, "go", body["provider"])
+	assert.Equal(t, "explicit", body["source"])
+	assert.Equal(t, "dlv", body["executable"])
 	assert.Equal(t, "dlv dap", body["command"])
 	assert.NotEmpty(t, body["remediation_hint"])
+	assert.NotContains(t, rec.Body.String(), "/private/user/tools")
+	assert.NotContains(t, rec.Body.String(), "executable file not found")
 }
 
 func TestRuntimeStatusReportsDebuggerDimension(t *testing.T) {

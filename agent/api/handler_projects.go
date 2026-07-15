@@ -197,6 +197,8 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 		newProjects = append(newProjects, p)
 	}
 	a.projects = newProjects
+	// scope 与 lease 必须在同一项目写锁边界内消失，避免同 ID 重建后读回旧凭据。
+	a.revokeDisappearedDebugCredentialScopesLocked([]model.Project{removedProject}, nil)
 	mgr, hasMgr := a.managers[id]
 	if hasMgr {
 		delete(a.managers, id)

@@ -105,7 +105,14 @@ type DebugCredential struct {
 // MergedDebugCredential 是合并后的凭据，附带来源标记，供 AI 知道凭据出处。
 type MergedDebugCredential struct {
 	DebugCredential
-	Source string `json:"source"` // "project" | "service"
+	Source       string `json:"source"`        // "project" | "ephemeral_project" | "service" | "ephemeral_service"
+	ValuePresent bool   `json:"value_present"` // 允许脱敏证据证明本次读取确有值，不暴露 value/hash
+}
+
+// DebugCredentialLayer 描述一层有明确来源和覆盖优先级的调试凭据。
+type DebugCredentialLayer struct {
+	Credentials []DebugCredential
+	Source      string
 }
 
 // DebugCredentialHint 是可暴露给 MCP 普通快照的非敏感凭据提示。
@@ -118,7 +125,7 @@ type MergedDebugCredential struct {
 type DebugCredentialHint struct {
 	Name   string `json:"name"`
 	Desc   string `json:"desc,omitempty"`
-	Source string `json:"source"` // "project" | "service"
+	Source string `json:"source"` // "project" | "ephemeral_project" | "service" | "ephemeral_service"
 }
 
 // MergeDebugCredentials 合并项目级与服务级调试凭据。
@@ -133,20 +140,36 @@ type DebugCredentialHint struct {
 // 注意：
 //   - 保持项目级先于服务级追加的顺序，覆盖时原地替换值与来源
 func MergeDebugCredentials(project, service []DebugCredential) []MergedDebugCredential {
-	out := make([]MergedDebugCredential, 0, len(project)+len(service))
-	indexByName := map[string]int{}
-	for _, c := range project {
-		indexByName[c.Name] = len(out)
-		out = append(out, MergedDebugCredential{DebugCredential: c, Source: "project"})
+	return MergeDebugCredentialLayers(
+		DebugCredentialLayer{Credentials: project, Source: "project"},
+		DebugCredentialLayer{Credentials: service, Source: "service"},
+	)
+}
+
+// MergeDebugCredentialLayers 按调用方给出的低到高优先级合并多层调试凭据。
+//
+// 参数：
+//   - layers: 每层的凭据和稳定 source；后面的层覆盖前面同名凭据
+//
+// 返回：
+//   - 保持首次出现顺序、同时携带最终来源的合并结果
+func MergeDebugCredentialLayers(layers ...DebugCredentialLayer) []MergedDebugCredential {
+	total := 0
+	for _, layer := range layers {
+		total += len(layer.Credentials)
 	}
-	// 同 name 服务级覆盖：命中则原地替换，否则追加，保证调用方看到更具体的凭据。
-	for _, c := range service {
-		if idx, ok := indexByName[c.Name]; ok {
-			out[idx] = MergedDebugCredential{DebugCredential: c, Source: "service"}
-			continue
+	out := make([]MergedDebugCredential, 0, total)
+	indexByName := map[string]int{}
+	for _, layer := range layers {
+		for _, credential := range layer.Credentials {
+			if idx, ok := indexByName[credential.Name]; ok {
+				// 后一层代表更具体或更临时的授权，必须原地覆盖而不能同时返回两个同名 secret。
+				out[idx] = MergedDebugCredential{DebugCredential: credential, Source: layer.Source, ValuePresent: credential.Value != ""}
+				continue
+			}
+			indexByName[credential.Name] = len(out)
+			out = append(out, MergedDebugCredential{DebugCredential: credential, Source: layer.Source, ValuePresent: credential.Value != ""})
 		}
-		indexByName[c.Name] = len(out)
-		out = append(out, MergedDebugCredential{DebugCredential: c, Source: "service"})
 	}
 	return out
 }
@@ -331,17 +354,19 @@ const (
 //   - 不感知是否安装 Agent
 //   - 不保存 agent token、TLS 或 transport chain
 //   - SSHPrivateKey 保存密钥内容，SSHKeyPath 仅可作为 API 导入入口
+//   - SSHHostKeyFingerprint 只能由可信外部来源预置，不承载 TOFU 发现结果
 type Host struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	PublicIP      string   `json:"public_ip,omitempty"`
-	PrivateIP     string   `json:"private_ip,omitempty"`
-	Tags          []string `json:"tags"`
-	SSHHost       string   `json:"ssh_host,omitempty"`
-	SSHPort       int      `json:"ssh_port,omitempty"`
-	SSHUser       string   `json:"ssh_user,omitempty"`
-	SSHPassword   string   `json:"ssh_password,omitempty"`
-	SSHPrivateKey string   `json:"ssh_private_key,omitempty"`
+	ID                    string   `json:"id"`
+	Name                  string   `json:"name"`
+	PublicIP              string   `json:"public_ip,omitempty"`
+	PrivateIP             string   `json:"private_ip,omitempty"`
+	Tags                  []string `json:"tags"`
+	SSHHost               string   `json:"ssh_host,omitempty"`
+	SSHPort               int      `json:"ssh_port,omitempty"`
+	SSHUser               string   `json:"ssh_user,omitempty"`
+	SSHPassword           string   `json:"ssh_password,omitempty"`
+	SSHPrivateKey         string   `json:"ssh_private_key,omitempty"`
+	SSHHostKeyFingerprint string   `json:"ssh_host_key_fingerprint,omitempty"`
 }
 
 // Agent 表示安装在某台 Host 上的 SuperDev agent 配置。

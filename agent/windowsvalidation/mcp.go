@@ -18,14 +18,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
 )
+
+const productionValidationAgentURL = "http://127.0.0.1:57017"
+
+type validationAgentEndpoint struct {
+	URL      string
+	Identity string
+}
 
 type rpcClientResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -87,16 +96,19 @@ func (b *lockedBuffer) String() string {
 	return b.b.String()
 }
 
-// StartMCPProcess 启动指定安装路径的 superdev-mcp.exe。
-func StartMCPProcess(ctx context.Context, executable, agentURL string) (*MCPProcess, error) {
+func startMCPProcess(ctx context.Context, executable string, endpoint validationAgentEndpoint) (*MCPProcess, error) {
 	log := logger.GetLogger().WithEntryName("WindowsValidationMCP")
 	if strings.TrimSpace(executable) == "" {
 		return nil, fmt.Errorf("MCP executable path is required")
 	}
-	log.WithFields(map[string]any{"mcp_path": executable, "agent_url": agentURL}).Info("开始启动已安装的 packaged MCP")
+	if strings.TrimSpace(endpoint.URL) == "" || strings.TrimSpace(endpoint.Identity) == "" {
+		return nil, fmt.Errorf("validated Agent endpoint is required")
+	}
+	// 日志只记录稳定 endpoint 身份；URL 永不接受凭据/query，仍不作为日志字段输出。
+	log.WithFields(map[string]any{"mcp_identity": safeWindowsBase(executable), "agent_identity": endpoint.Identity}).Info("开始启动已安装的 packaged MCP")
 	stderr := &lockedBuffer{}
 	cmd := exec.CommandContext(ctx, executable)
-	cmd.Env = append(os.Environ(), "SUPERDEV_AGENT_URL="+agentURL)
+	cmd.Env = environmentWithOverrides(os.Environ(), map[string]string{"SUPERDEV_AGENT_URL": endpoint.URL})
 	cmd.Stderr = stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -109,7 +121,7 @@ func StartMCPProcess(ctx context.Context, executable, agentURL string) (*MCPProc
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		log.WithErr(err).WithField("mcp_path", executable).Error("packaged MCP 启动失败")
+		log.WithErr(err).WithField("mcp_identity", safeWindowsBase(executable)).Error("packaged MCP 启动失败")
 		return nil, fmt.Errorf("start packaged MCP: %w", err)
 	}
 	process := &MCPProcess{
@@ -123,6 +135,81 @@ func StartMCPProcess(ctx context.Context, executable, agentURL string) (*MCPProc
 	go func() { process.done <- cmd.Wait() }()
 	log.WithField("pid", cmd.Process.Pid).Info("packaged MCP 已启动")
 	return process, nil
+}
+
+func parseProductionAgentEndpoint(raw string) (validationAgentEndpoint, error) {
+	endpoint, err := parseLoopbackAgentEndpoint(raw)
+	if err != nil || endpoint.URL != productionValidationAgentURL {
+		return validationAgentEndpoint{}, fmt.Errorf("production Agent endpoint must use the canonical loopback listener")
+	}
+	endpoint.Identity = "loopback-agent-57017"
+	return endpoint, nil
+}
+
+func validationAgentEndpointForTest(raw string) (validationAgentEndpoint, error) {
+	endpoint, err := parseLoopbackAgentEndpoint(raw)
+	if err != nil {
+		return validationAgentEndpoint{}, err
+	}
+	endpoint.Identity = "loopback-test-agent"
+	return endpoint, nil
+}
+
+func parseLoopbackAgentEndpoint(raw string) (validationAgentEndpoint, error) {
+	trimmed := strings.TrimSpace(raw)
+	if raw != trimmed {
+		return validationAgentEndpoint{}, fmt.Errorf("Agent endpoint URL is not canonical")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "http") || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.RawPath != "" || parsed.Opaque != "" {
+		return validationAgentEndpoint{}, fmt.Errorf("Agent endpoint URL is not an unadorned HTTP loopback origin")
+	}
+	if parsed.Hostname() != "127.0.0.1" {
+		return validationAgentEndpoint{}, fmt.Errorf("Agent endpoint host is not the fixed IPv4 loopback identity")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 || port > 65535 {
+		return validationAgentEndpoint{}, fmt.Errorf("Agent endpoint port is invalid")
+	}
+	canonical := "http://127.0.0.1:" + strconv.Itoa(port)
+	if parsed.String() != canonical {
+		return validationAgentEndpoint{}, fmt.Errorf("Agent endpoint is not canonical")
+	}
+	return validationAgentEndpoint{URL: canonical}, nil
+}
+
+func bindProductionAgentEndpoint(lane string, evidence []InstallerLifecycleActionEvidence) (validationAgentEndpoint, error) {
+	endpoint, err := parseProductionAgentEndpoint(productionValidationAgentURL)
+	if err != nil {
+		return validationAgentEndpoint{}, err
+	}
+	if laneOrDefault(lane) == "core_only" {
+		return endpoint, nil
+	}
+	var start *InstallerLifecycleActionEvidence
+	for index := range evidence {
+		if evidence[index].Action != LifecycleActionStart {
+			continue
+		}
+		if start != nil {
+			return validationAgentEndpoint{}, fmt.Errorf("installer lifecycle contains multiple start observations")
+		}
+		start = &evidence[index]
+	}
+	if start == nil || !start.ExecutionFacts.Attempted || !start.ExecutionFacts.Succeeded {
+		return validationAgentEndpoint{}, fmt.Errorf("installer lifecycle has no successful start observation for the Agent endpoint")
+	}
+	listener := start.Observation.Port57017
+	if listener == nil || listener.Port != 57017 || !listener.Listening || listener.OwningProcessID <= 0 {
+		return validationAgentEndpoint{}, fmt.Errorf("installer lifecycle did not prove the fixed Agent listener")
+	}
+	for _, process := range start.Observation.Processes {
+		if process.Role == "agent" && process.ProcessID == listener.OwningProcessID {
+			return endpoint, nil
+		}
+	}
+	return validationAgentEndpoint{}, fmt.Errorf("installer lifecycle Agent process does not own the fixed listener")
 }
 
 // Initialize 与 packaged MCP 完成协议握手并发送 initialized 通知。

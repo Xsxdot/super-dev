@@ -58,6 +58,21 @@ describe('HostFormModal', () => {
     }))
   })
 
+  it('accepts a trusted external SSH host-key fingerprint', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: { visible: true, initial: null },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="host-form-name"]').setValue('edge')
+    await wrapper.find('[data-test="host-form-ssh-host-key-fingerprint"]').setValue('SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      ssh_host_key_fingerprint: 'SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A',
+    }))
+  })
+
   it('hydrates existing identity fields when editing', async () => {
     const wrapper = mount(HostFormModal, {
       props: {
@@ -75,5 +90,37 @@ describe('HostFormModal', () => {
 
     expect((wrapper.find('[data-test="host-form-name"]').element as HTMLInputElement).value).toBe('edge')
     expect((wrapper.find('[data-test="host-form-public-ip"]').element as HTMLInputElement).value).toBe('203.0.113.10')
+  })
+
+  it('does not hydrate stored secrets and emits explicit clear intent', async () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        initial: {
+          id: 'host-1',
+          name: 'edge',
+          tags: [],
+          ssh_credential_configured: true,
+          ssh_password_configured: true,
+          ssh_private_key_configured: true,
+          ssh_host_key_fingerprint_configured: true,
+        },
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect((wrapper.find('[data-test="host-form-ssh-password"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-test="host-form-ssh-private-key"]').element as HTMLTextAreaElement).value).toBe('')
+    expect((wrapper.find('[data-test="host-form-ssh-host-key-fingerprint"]').element as HTMLInputElement).value).toBe('')
+    await wrapper.find('[data-test="host-form-clear-ssh-password"]').setValue(true)
+    await wrapper.find('[data-test="host-form-clear-ssh-private-key"]').setValue(true)
+    await wrapper.find('[data-test="host-form-clear-ssh-host-key-fingerprint"]').setValue(true)
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      clear_ssh_password: true,
+      clear_ssh_private_key: true,
+      clear_ssh_host_key_fingerprint: true,
+    }))
   })
 })

@@ -18,7 +18,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -34,27 +36,44 @@ const (
 
 // RuntimeInput 是复制到 Windows 后由测试者填写的机器相关输入。
 type RuntimeInput struct {
-	SchemaVersion       int    `json:"schema_version"`
-	Kind                string `json:"kind"`
-	MCPPath             string `json:"mcp_path"`
-	InstallerDirectory  string `json:"installer_directory"`
-	CampaignRoot        string `json:"campaign_root"`
-	ResultsRoot         string `json:"results_root"`
-	LinuxHostID         string `json:"linux_host_id"`
-	LinuxRoot           string `json:"linux_root"`
-	ApprovalWaitSeconds int    `json:"approval_wait_seconds"`
-	Lane                string `json:"lane,omitempty"`
-	CampaignID          string `json:"campaign_id,omitempty"`
+	SchemaVersion                   int      `json:"schema_version"`
+	Kind                            string   `json:"kind"`
+	MCPPath                         string   `json:"mcp_path"`
+	InstallerDirectory              string   `json:"installer_directory"`
+	CampaignRoot                    string   `json:"campaign_root"`
+	ResultsRoot                     string   `json:"results_root"`
+	LinuxHostID                     string   `json:"linux_host_id"`
+	LinuxRoot                       string   `json:"linux_root"`
+	RemoteGovernanceAttestationPath string   `json:"remote_governance_attestation_path,omitempty"`
+	AgentDataDirectory              string   `json:"agent_data_directory,omitempty"`
+	JVMAdapterCommand               string   `json:"jvm_adapter_command,omitempty"`
+	JVMAdapterSHA256                string   `json:"jvm_adapter_sha256,omitempty"`
+	GoAdapterCommand                string   `json:"go_adapter_command,omitempty"`
+	PythonAdapterCommand            string   `json:"python_adapter_command,omitempty"`
+	NodeAdapterCommand              string   `json:"node_adapter_command,omitempty"`
+	NativeAdapterCommand            string   `json:"native_adapter_command,omitempty"`
+	ChromeVersion                   string   `json:"chrome_version,omitempty"`
+	ChromeSHA256                    string   `json:"chrome_sha256,omitempty"`
+	ChromeSignerIdentity            string   `json:"chrome_signer_identity,omitempty"`
+	EdgeVersion                     string   `json:"edge_version,omitempty"`
+	EdgeSHA256                      string   `json:"edge_sha256,omitempty"`
+	EdgeSignerIdentity              string   `json:"edge_signer_identity,omitempty"`
+	AllowedEnvironmentBlockers      []string `json:"allowed_environment_blockers,omitempty"`
+	ApprovalWaitSeconds             int      `json:"approval_wait_seconds"`
+	Lane                            string   `json:"lane,omitempty"`
+	CampaignID                      string   `json:"campaign_id,omitempty"`
 }
 
 // RunOptions 描述一次 Windows campaign 的包和输入位置。
 type RunOptions struct {
-	PackageRoot  string
-	InputPath    string
-	MCPPath      string
-	AgentURL     string
-	ResultsRoot  string
-	InstallerDir string
+	PackageRoot    string
+	InputPath      string
+	MCPPath        string
+	ResultsRoot    string
+	InstallerDir   string
+	PreparedBackup string
+	// DebugCredentialValue 仅承载 CLI 从父进程环境读取的一次性值，禁止序列化或写入报告。
+	DebugCredentialValue string `json:"-" yaml:"-"`
 }
 
 // ToolEvidenceRow 是最终 75 工具表中的一行。
@@ -144,6 +163,7 @@ type ReportSection struct {
 type ReportSections struct {
 	MSIInstaller  ReportSection `json:"msi_installer"`
 	NSISInstaller ReportSection `json:"nsis_installer"`
+	Environment   ReportSection `json:"environment"`
 	Core          ReportSection `json:"core"`
 	Providers     ReportSection `json:"providers"`
 	MCPTools      ReportSection `json:"mcp_tools"`
@@ -153,31 +173,91 @@ type ReportSections struct {
 
 // CampaignReport 是 Windows 执行后可复查的最终结构化报告。
 type CampaignReport struct {
-	SchemaVersion      int                   `json:"schema_version"`
-	Kind               string                `json:"kind"`
-	CampaignID         string                `json:"campaign_id"`
-	Result             ValidationResult      `json:"result"`
-	Functional         ValidationResult      `json:"functional_result"`
-	FailureStage       string                `json:"failure_stage,omitempty"`
-	FailureReason      string                `json:"failure_reason,omitempty"`
-	BuildCommit        string                `json:"build_commit"`
-	ProductVersion     string                `json:"product_version"`
-	Target             string                `json:"target"`
-	Lane               string                `json:"lane"`
-	Installer          InstallerExecution    `json:"installer"`
-	RuntimeAttestation RuntimeAttestation    `json:"runtime_attestation"`
-	InstallerChecks    []PackageFileIdentity `json:"installer_checks"`
-	Prerequisites      []StepExecution       `json:"prerequisites"`
-	Operations         []StepExecution       `json:"operations"`
-	ValidationCatalog  ValidationCatalog     `json:"validation_catalog"`
-	Scenarios          []ScenarioExecution   `json:"scenarios"`
-	Providers          []ProviderExecution   `json:"providers"`
-	ToolRows           []ToolEvidenceRow     `json:"tool_rows"`
-	Sections           ReportSections        `json:"sections"`
-	Cleanup            CleanupRecord         `json:"cleanup"`
-	KnownAnomalies     []map[string]any      `json:"known_anomalies"`
-	StartedAtUTC       string                `json:"started_at_utc"`
-	FinishedAtUTC      string                `json:"finished_at_utc"`
+	SchemaVersion                    int                                    `json:"schema_version"`
+	Kind                             string                                 `json:"kind"`
+	CampaignID                       string                                 `json:"campaign_id"`
+	Result                           ValidationResult                       `json:"result"`
+	Functional                       ValidationResult                       `json:"functional_result"`
+	FailureStage                     string                                 `json:"failure_stage,omitempty"`
+	FailureReason                    string                                 `json:"failure_reason,omitempty"`
+	BuildCommit                      string                                 `json:"build_commit"`
+	ProductVersion                   string                                 `json:"product_version"`
+	Target                           string                                 `json:"target"`
+	Lane                             string                                 `json:"lane"`
+	Installer                        InstallerExecution                     `json:"installer"`
+	RuntimeAttestation               RuntimeAttestation                     `json:"runtime_attestation"`
+	EnvironmentPreinstall            *PreparedEnvironmentPreinstallEvidence `json:"environment_preinstall,omitempty"`
+	EnvironmentManifest              *EnvironmentManifest                   `json:"environment_manifest,omitempty"`
+	EnvironmentPlan                  *EnvironmentCollectionPlan             `json:"environment_plan,omitempty"`
+	EnvironmentComparison            *EnvironmentManifestComparison         `json:"environment_comparison,omitempty"`
+	EnvironmentComparisonPersistence *ValidationResult                      `json:"environment_comparison_persistence,omitempty"`
+	EnvironmentAdmissionRequest      *EnvironmentAdmissionRequest           `json:"environment_admission_request,omitempty"`
+	EnvironmentAdmission             *EnvironmentAdmissionDecision          `json:"environment_admission,omitempty"`
+	InstallerChecks                  []PackageFileIdentity                  `json:"installer_checks"`
+	Prerequisites                    []StepExecution                        `json:"prerequisites"`
+	Operations                       []StepExecution                        `json:"operations"`
+	ValidationCatalog                ValidationCatalog                      `json:"validation_catalog"`
+	Scenarios                        []ScenarioExecution                    `json:"scenarios"`
+	Providers                        []ProviderExecution                    `json:"providers"`
+	ToolRows                         []ToolEvidenceRow                      `json:"tool_rows"`
+	Sections                         ReportSections                         `json:"sections"`
+	Cleanup                          CleanupRecord                          `json:"cleanup"`
+	KnownAnomalies                   []map[string]any                       `json:"known_anomalies"`
+	StartedAtUTC                     string                                 `json:"started_at_utc"`
+	FinishedAtUTC                    string                                 `json:"finished_at_utc"`
+}
+
+// EnvironmentPreflightExecution 绑定一次 production preflight 的安全事实、准入与持久化结果。
+type EnvironmentPreflightExecution struct {
+	Preinstall            PreparedEnvironmentPreinstallEvidence `json:"preinstall"`
+	Plan                  EnvironmentCollectionPlan             `json:"plan"`
+	Manifest              EnvironmentManifest                   `json:"manifest"`
+	Request               EnvironmentAdmissionRequest           `json:"request"`
+	Decision              EnvironmentAdmissionDecision          `json:"decision"`
+	Persistence           EnvironmentManifestPersistence        `json:"persistence"`
+	Comparison            EnvironmentManifestComparison         `json:"comparison"`
+	ComparisonPersistence ValidationResult                      `json:"comparison_persistence"`
+	// ComparisonPath 只用于本次进程确认 A→B compare 已落盘，不把机器绝对路径写入报告。
+	ComparisonPath string `json:"-"`
+	// remoteObservation 与 remoteBaseline 只在本次进程内支持写前/cleanup 后复验，不进入报告 JSON。
+	remoteObservation EnvironmentAgentAPIReader           `json:"-"`
+	remoteBaseline    EnvironmentRemoteMachineObservation `json:"-"`
+}
+
+// verifyPreinstallThenLoadLifecycle 锁定 RunCampaign 真正使用的首个生产顺序边：
+// prepared A 验证失败时，installer lifecycle 事实读取必须保持零调用。
+func verifyPreinstallThenLoadLifecycle(verifyPreinstall, loadInstallerLifecycle func() error) error {
+	log := logger.GetLogger().WithEntryName("WindowsValidationCampaignOrder")
+	stages := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "verify_pre_install", run: verifyPreinstall},
+		{name: "load_installer_lifecycle", run: loadInstallerLifecycle},
+	}
+	for _, stage := range stages {
+		if stage.run == nil {
+			return fmt.Errorf("production campaign stage %s callback is required", stage.name)
+		}
+		log.WithField("stage", stage.name).Info("Windows validation production stage 开始")
+		if err := stage.run(); err != nil {
+			log.WithErr(err).WithField("stage", stage.name).Error("Windows validation production stage 失败，后续边界保持零调用")
+			return fmt.Errorf("production campaign stage %s: %w", stage.name, err)
+		}
+		log.WithField("stage", stage.name).Info("Windows validation production stage 完成")
+	}
+	return nil
+}
+
+func preparedEnvironmentPreinstallStep(evidence PreparedEnvironmentPreinstallEvidence) StepExecution {
+	return StepExecution{
+		StepID: "environment-preinstall-admission", Result: evidence.Record.Result,
+		InlineEvidence: map[string]any{
+			"stage": EnvironmentCollectionStagePreInstall, "admitted": evidence.Record.Decision.Admitted,
+			"manifest_digest": evidence.Record.ManifestDigest,
+			"record":          filepath.ToSlash(filepath.Join("prepared-backup", PreparedEnvironmentPreinstallDirectory, PreparedEnvironmentPreinstallRecordFilename)),
+		},
+	}
 }
 
 // ScenarioExecutor 执行固定场景并持有 campaign 内存变量。
@@ -190,6 +270,11 @@ type ScenarioExecutor struct {
 	variables  map[string]any
 	passed     map[string]bool
 	toolRows   []ToolEvidenceRow
+	// providerAdapters 只保存 collector 已 PASS 的真实绝对路径；provider 执行不得再次解析 PATH。
+	providerAdapters   map[string]providerAdapterBinding
+	agentDataDirectory string
+	// fixtureCommandRunner 仅供包内合同测试替换 Windows cmd.exe 进程边界。
+	fixtureCommandRunner func(context.Context, string, string, ...string) stageEvidence
 }
 
 func (e *ScenarioExecutor) logFields(fields map[string]any) map[string]any {
@@ -208,11 +293,11 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	lane := ""
 	defer func() {
 		if runErr != nil {
-			log.WithErr(runErr).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": lane}).Error("Windows packaged MCP campaign 失败")
+			log.WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": lane, "cause_code": "campaign_failed"}).Error("Windows packaged MCP campaign 失败")
 		}
 	}()
 	if err := ValidateExecutionPlatform(runtime.GOOS, runtime.GOARCH); err != nil {
-		log.WithErr(err).Error("拒绝在非目标平台执行 Windows 功能验证")
+		log.WithField("cause_code", "platform_not_supported").Error("拒绝在非目标平台执行 Windows 功能验证")
 		return CampaignReport{}, err
 	}
 	started := time.Now().UTC()
@@ -236,13 +321,27 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		return CampaignReport{}, err
 	}
 	lane = laneOrDefault(input.Lane)
-	stage = "verify_lane_installer"
-	installerVerificationStarted := time.Now().UTC()
-	installerChecks, err := VerifyInstallerForLane(input.InstallerDirectory, lane, source.Frozen.Installers)
-	if err != nil {
+	stage = "validate_agent_data_directory_binding"
+	if err := validateAgentDataDirectoryBinding(lane, input.AgentDataDirectory, os.Getenv("SUPERDEV_AGENT_DATA_DIR")); err != nil {
+		log.WithFields(map[string]any{"lane": lane, "stage": stage, "cause_code": "agent_data_binding_invalid"}).Error("Windows Agent 数据目录绑定无效")
 		return CampaignReport{}, err
 	}
-	installer, err := artifactOnlyInstaller(lane, installerChecks, installerVerificationStarted, time.Now().UTC())
+	stage = "validate_debug_credential_input"
+	if err := validateDebugCredentialInput(lane, options.DebugCredentialValue); err != nil {
+		return CampaignReport{}, err
+	}
+	stage = "verify_lane_installer"
+	var installerChecks []PackageFileIdentity
+	var installer InstallerExecution
+	if lane == "core_only" {
+		installer, err = excludedCoreOnlyInstaller()
+	} else {
+		installerVerificationStarted := time.Now().UTC()
+		installerChecks, err = VerifyInstallerForLane(input.InstallerDirectory, lane, source.Frozen.Installers)
+		if err == nil {
+			installer, err = artifactOnlyInstaller(lane, installerChecks, installerVerificationStarted, time.Now().UTC())
+		}
+	}
 	if err != nil {
 		return CampaignReport{}, err
 	}
@@ -251,6 +350,88 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		campaignID = input.CampaignID
 	} else {
 		campaignID, err = newCampaignID(source.Frozen.Build.GitCommit, started)
+		if err != nil {
+			return CampaignReport{}, err
+		}
+	}
+	input.CampaignID = campaignID
+	input.Lane = lane
+	var preinstallEvidence PreparedEnvironmentPreinstallEvidence
+	var installerLifecycleEvidence []InstallerLifecycleActionEvidence
+	err = verifyPreinstallThenLoadLifecycle(func() error {
+		stage = "verify_environment_preinstall"
+		preinstallEvidence, err = loadVerifiedPreparedEnvironmentPreinstallEvidence(options.PackageRoot, options.PreparedBackup, campaignID, lane)
+		if err != nil {
+			log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": "preinstall_record_invalid"}).Error("Windows 安装前环境门禁无效，拒绝读取 lifecycle 或启动 MCP")
+			return err
+		}
+		if err := verifyPreparedEnvironmentRuntimeInput(preinstallEvidence, input); err != nil {
+			log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": "runtime_input_drift"}).Error("Windows 当前 runtime input 与安装前门禁不一致")
+			return err
+		}
+		log.WithFields(map[string]any{
+			"campaign_id": campaignID, "lane": lane, "phase_status": preinstallEvidence.Record.Result.PhaseStatus,
+			"manifest_digest": preinstallEvidence.Record.ManifestDigest,
+		}).Info("Windows 安装前环境门禁已绑定，允许读取 lifecycle 事实")
+		return nil
+	}, func() error {
+		// core_only 没有 installer lifecycle；仍通过同一个生产 seam，确保产品启动发生在 A 之后。
+		if lane == "core_only" {
+			return nil
+		}
+		stage = "load_installer_lifecycle"
+		installer, installerLifecycleEvidence, err = installerExecutionFromPreparedLifecycle(
+			source.Frozen,
+			options.PreparedBackup,
+			campaignID,
+			lane,
+			installerChecks,
+			resultInput(installer.Artifact),
+			2,
+		)
+		if err != nil {
+			log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage}).Error("Windows installer lifecycle 前置事实校验失败")
+			return fmt.Errorf("installer lifecycle validation failed before functional validation: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return CampaignReport{}, err
+	}
+	if lane != "core_only" {
+		stage = "installer_functional_entry_gate"
+		if err := requireInstallerFunctionalEntry(installer); err != nil {
+			log.WithFields(map[string]any{
+				"campaign_id": campaignID,
+				"lane":        lane,
+				"stage":       stage,
+				"install":     installer.Install.PhaseStatus,
+				"start":       installer.Start.PhaseStatus,
+			}).Error("Windows installer install/start 未通过，拒绝进入功能验证")
+			return CampaignReport{}, fmt.Errorf("installer install/start gate rejected functional validation")
+		}
+		stage = "verify_installed_mcp_identity"
+		if err := verifyInstalledMCPIdentity(input.MCPPath, installerLifecycleEvidence); err != nil {
+			log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage}).Error("Windows packaged MCP 不属于 lifecycle-bound install root")
+			return CampaignReport{}, fmt.Errorf("installed MCP identity does not match installer lifecycle evidence")
+		}
+		log.WithFields(map[string]any{
+			"campaign_id": campaignID,
+			"lane":        lane,
+			"install":     installer.Install.PhaseStatus,
+			"start":       installer.Start.PhaseStatus,
+		}).Info("Windows installer install/start 生命周期事实已绑定")
+	}
+	stage = "bind_agent_endpoint"
+	agentEndpoint, err := bindProductionAgentEndpoint(lane, installerLifecycleEvidence)
+	if err != nil {
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": "agent_endpoint_binding_invalid"}).Error("Windows Agent endpoint 未绑定到本机 lifecycle listener")
+		return CampaignReport{}, err
+	}
+	linuxRoot := ""
+	if lane != "msi_smoke" {
+		stage = "expand_linux_campaign_root"
+		linuxRoot, err = expandLinuxCampaignRoot(input.LinuxRoot, campaignID)
 		if err != nil {
 			return CampaignReport{}, err
 		}
@@ -265,17 +446,19 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	stage = "create_fixture_authorization"
 	authValue := fixtureAuthorization(campaignID)
 	redactor.RegisterSecret("AUTHORIZATION", authValue)
-	variables := buildCampaignVariables(source, input, campaignID, workspaceRoot, options.PackageRoot, authValue)
+	variables := buildCampaignVariables(source, input, campaignID, workspaceRoot, options.PackageRoot, authValue, linuxRoot)
 
-	agentURL := strings.TrimSpace(options.AgentURL)
-	if agentURL == "" {
-		agentURL = "http://127.0.0.1:57017"
-	}
-	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "package_root": options.PackageRoot, "results_dir": resultsDir}).Info("开始 Windows packaged MCP campaign")
+	log.WithFields(map[string]any{
+		"campaign_id":    campaignID,
+		"lane":           lane,
+		"package_id":     safeWindowsBase(options.PackageRoot),
+		"results_id":     safeWindowsBase(resultsDir),
+		"agent_identity": agentEndpoint.Identity,
+	}).Info("开始 Windows packaged MCP campaign")
 	stage = "start_packaged_mcp"
-	client, err := StartMCPProcess(ctx, input.MCPPath, agentURL)
+	client, err := startMCPProcess(ctx, input.MCPPath, agentEndpoint)
 	if err != nil {
-		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, RuntimeAttestation{}, stage, err)
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, RuntimeAttestation{}, stage, err, EnvironmentPreflightExecution{Preinstall: preinstallEvidence})
 		return CampaignReport{}, err
 	}
 	clientClosed := false
@@ -287,8 +470,8 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	stage = "runtime_attestation"
 	attestation, err := attestRuntime(ctx, client, source, input.MCPPath, resultsDir, redactor, campaignID, lane)
 	if err != nil {
-		log.WithErr(err).WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage}).Error("运行时身份门禁失败")
-		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, attestation, stage, err)
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": "runtime_attestation_failed"}).Error("运行时身份门禁失败")
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, EnvironmentPreflightExecution{Preinstall: preinstallEvidence})
 		return CampaignReport{}, err
 	}
 	if lane == "msi_smoke" {
@@ -297,18 +480,20 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		clientClosed = true
 		functional := aggregateResult("MSI packaged runtime smoke", 2, []ValidationResult{attestation.Result, stopExecution.Result})
 		report := CampaignReport{
-			SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+			SchemaVersion: CampaignReportSchemaVersion, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
 			Functional:  functional,
 			BuildCommit: source.Frozen.Build.GitCommit, ProductVersion: source.Frozen.Build.ProductVersion,
-			Target: "Windows 10 x64", Lane: "msi_smoke", Installer: installer, RuntimeAttestation: attestation,
-			InstallerChecks:   installerChecks,
-			Operations:        []StepExecution{stopExecution},
-			ValidationCatalog: buildValidationCatalog(source.Scenarios, source.Coverage),
-			ToolRows:          ensureAllToolRows(source.Coverage, nil, notRunResult("not executed in the independent MSI smoke lane")),
-			Providers:         notRunProviderMatrix(source.Fixtures, "not executed in the independent MSI smoke lane"),
-			Scenarios:         notRunScenarioMatrix(source.Scenarios, "not executed in the independent MSI smoke lane"),
-			Cleanup:           pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
-			KnownAnomalies:    source.Frozen.KnownBaselineExceptions, StartedAtUTC: started.Format(time.RFC3339Nano),
+			Target: WindowsValidationTargetLabel, Lane: "msi_smoke", Installer: installer, RuntimeAttestation: attestation,
+			EnvironmentPreinstall: &preinstallEvidence,
+			InstallerChecks:       installerChecks,
+			Prerequisites:         []StepExecution{preparedEnvironmentPreinstallStep(preinstallEvidence)},
+			Operations:            []StepExecution{stopExecution},
+			ValidationCatalog:     buildValidationCatalog(source.Scenarios, source.Coverage),
+			ToolRows:              ensureAllToolRows(source.Coverage, nil, notRunResult("not executed in the independent MSI smoke lane")),
+			Providers:             notRunProviderMatrix(source.Fixtures, "not executed in the independent MSI smoke lane"),
+			Scenarios:             notRunScenarioMatrix(source.Scenarios, "not executed in the independent MSI smoke lane"),
+			Cleanup:               pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
+			KnownAnomalies:        source.Frozen.KnownBaselineExceptions, StartedAtUTC: started.Format(time.RFC3339Nano),
 			FinishedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		report.Sections = buildReportSections(report)
@@ -323,14 +508,50 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": "msi_smoke", "phase_status": report.Result.PhaseStatus, "attempted": report.Result.Attempted}).Info("Windows MSI packaged sidecar smoke 完成")
 		return report, nil
 	}
+	stage = "environment_preflight"
+	environment, err := runProductionEnvironmentPreflight(ctx, source, input, campaignID, client, attestation, agentEndpoint.URL, resultsDir, redactor, strings.TrimSpace(options.DebugCredentialValue) != "", preinstallEvidence)
+	if err != nil {
+		causeCode, _ := stableCampaignGateFailure(stage, err)
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": causeCode}).Error("Windows 环境准入失败，拒绝进入功能事实")
+		report = persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, environment)
+		return report, err
+	}
+	stage = "bind_provider_adapters"
+	providerAdapters, err := buildProviderAdapterBindings(environment.Plan, environment.Manifest)
+	if err != nil {
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": "provider_adapter_binding_invalid"}).Error("Windows provider adapter 绑定失败")
+		report = persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, environment)
+		return report, err
+	}
+	if goBinding, found := providerAdapters["go"]; found {
+		// 主 code-debug 场景先于 provider matrix 创建 Go service；它必须和后者
+		// 使用同一个 collector-owned 绝对路径，不能让 policy=auto 重新查 PATH。
+		variables["go_adapter_command"] = goBinding.Command
+	}
+	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "binding_count": len(providerAdapters)}).Info("Windows provider adapter 已绑定到环境清单真实路径")
+	stage = "prepare_debug_credential_lease"
+	leaseClient, err := newCredentialLeaseHTTPClient(agentEndpoint.URL, nil)
+	if err != nil {
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, environment)
+		return CampaignReport{}, err
+	}
+	scenarioClient, err := newCredentialLeaseToolCaller(client, leaseClient, campaignID, options.DebugCredentialValue, redactor)
+	if err != nil {
+		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, environment)
+		return CampaignReport{}, err
+	}
 	executor := &ScenarioExecutor{
-		client: client, redactor: redactor, resultsDir: resultsDir,
+		client: scenarioClient, redactor: redactor, resultsDir: resultsDir,
 		campaignID: campaignID, lane: lane,
 		variables: variables, passed: map[string]bool{},
+		providerAdapters: providerAdapters, agentDataDirectory: input.AgentDataDirectory,
 	}
 	scenarios := orderedScenarios(source.Scenarios)
 	executions := make([]ScenarioExecution, 0, len(scenarios))
-	campaignPrerequisites := make([]StepExecution, 0, 1)
+	campaignPrerequisites := []StepExecution{preparedEnvironmentPreinstallStep(preinstallEvidence), {
+		StepID: "environment-preflight-admission", Result: environment.Decision.Result,
+		InlineEvidence: map[string]any{"stage": environment.Manifest.CollectionStage, "mode": environment.Request.Mode, "admitted": environment.Decision.Admitted, "blocked_keys": environment.Decision.BlockedKeys, "previous_manifest_sha256": environment.Manifest.PreviousManifestSHA256},
+	}}
 	configReady := false
 	for _, scenario := range scenarios {
 		// provider 矩阵必须在远端 pipeline 之前完成；remote 场景在下方单独执行。
@@ -358,8 +579,7 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		execution := executor.ExecuteScenario(ctx, scenario)
 		executions = append(executions, execution)
 		if scenario.ID == "config-security-lifecycle" {
-			// 冻结产品的 get_debug_credentials 只能读取持久明文，安全验证会诚实 FAIL；
-			// 该产品缺口不能抹掉已经成功建立的 campaign 隔离配置，也不能阻断其余工具取证。
+			// get_debug_credentials 的一次性 lease 只承担凭据读取事实；campaign 配置门禁仍由独立配置事实决定。
 			configReady = executor.configurationReady()
 		}
 	}
@@ -378,21 +598,9 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		if !configReady {
 			executions = append(executions, executor.blockScenario(remote, "campaign_configuration", "campaign configuration gate did not pass"))
 		} else {
-			available, prerequisite := executor.preflightRemoteHost(ctx, input.LinuxHostID)
-			switch {
-			case prerequisite.Result.PhaseStatus != PhaseStatusPass:
-				execution := executor.blockScenario(remote, "remote_host_available", "remote Host ID preflight failed: "+resultReason(prerequisite.Result))
-				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
-				executions = append(executions, execution)
-			case !available:
-				execution := executor.blockScenario(remote, "remote_host_available", "configured dedicated Linux Host ID is not currently available as a non-self target")
-				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
-				executions = append(executions, execution)
-			default:
-				execution := executor.ExecuteScenario(ctx, remote)
-				execution.Prerequisites = append(execution.Prerequisites, prerequisite)
-				executions = append(executions, execution)
-			}
+			executions = append(executions, executeRemoteScenarioWithIdentityGuards(
+				ctx, executor, remote, environment, input.LinuxHostID, resultsDir, redactor,
+			))
 		}
 	}
 	toolRows := ensureAllToolRows(source.Coverage, executor.toolRows, notRunResult("primary step was not reached"))
@@ -402,27 +610,34 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	clientClosed = true
 	functionalResult = aggregateResult("NSIS functional execution and packaged MCP stop", 2, []ValidationResult{functionalResult, stopExecution.Result})
 	report = CampaignReport{
-		SchemaVersion:      2,
-		Kind:               "superdev.windows-validation.campaign-report",
-		CampaignID:         campaignID,
-		Functional:         functionalResult,
-		BuildCommit:        source.Frozen.Build.GitCommit,
-		ProductVersion:     source.Frozen.Build.ProductVersion,
-		Target:             "Windows 10 x64",
-		Lane:               laneOrDefault(input.Lane),
-		Installer:          installer,
-		RuntimeAttestation: attestation,
-		InstallerChecks:    installerChecks,
-		Operations:         []StepExecution{stopExecution},
-		ValidationCatalog:  buildValidationCatalog(source.Scenarios, source.Coverage),
-		Scenarios:          executions,
-		Providers:          providers,
-		ToolRows:           toolRows,
-		Prerequisites:      campaignPrerequisites,
-		Cleanup:            pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
-		KnownAnomalies:     source.Frozen.KnownBaselineExceptions,
-		StartedAtUTC:       started.Format(time.RFC3339Nano),
-		FinishedAtUTC:      time.Now().UTC().Format(time.RFC3339Nano),
+		SchemaVersion:                    CampaignReportSchemaVersion,
+		Kind:                             "superdev.windows-validation.campaign-report",
+		CampaignID:                       campaignID,
+		Functional:                       functionalResult,
+		BuildCommit:                      source.Frozen.Build.GitCommit,
+		ProductVersion:                   source.Frozen.Build.ProductVersion,
+		Target:                           WindowsValidationTargetLabel,
+		Lane:                             laneOrDefault(input.Lane),
+		Installer:                        installer,
+		RuntimeAttestation:               attestation,
+		EnvironmentPreinstall:            &preinstallEvidence,
+		EnvironmentManifest:              &environment.Manifest,
+		EnvironmentPlan:                  &environment.Plan,
+		EnvironmentComparison:            &environment.Comparison,
+		EnvironmentComparisonPersistence: &environment.ComparisonPersistence,
+		EnvironmentAdmissionRequest:      &environment.Request,
+		EnvironmentAdmission:             &environment.Decision,
+		InstallerChecks:                  installerChecks,
+		Operations:                       []StepExecution{stopExecution},
+		ValidationCatalog:                buildValidationCatalog(source.Scenarios, source.Coverage),
+		Scenarios:                        executions,
+		Providers:                        providers,
+		ToolRows:                         toolRows,
+		Prerequisites:                    campaignPrerequisites,
+		Cleanup:                          pendingCleanupRecord("run Cleanup-Validation.ps1 to compare and restore the prepared baseline", workspaceRoot),
+		KnownAnomalies:                   source.Frozen.KnownBaselineExceptions,
+		StartedAtUTC:                     started.Format(time.RFC3339Nano),
+		FinishedAtUTC:                    time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	report.Sections = buildReportSections(report)
 	report.Result = deriveCampaignCompletionResult("NSIS core campaign", report)
@@ -436,6 +651,206 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	stage = "complete"
 	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "phase_status": report.Result.PhaseStatus, "functional_status": functionalResult.PhaseStatus, "tool_rows": len(toolRows), "provider_rows": len(providers)}).Info("Windows packaged MCP campaign 执行完成；等待最终 cleanup")
 	return report, nil
+}
+
+func executeRemoteScenarioWithIdentityGuards(
+	ctx context.Context,
+	executor *ScenarioExecutor,
+	remote Scenario,
+	environment EnvironmentPreflightExecution,
+	linuxHostID string,
+	resultsDir string,
+	redactor *Redactor,
+) ScenarioExecution {
+	log := logger.GetLogger().WithEntryName("WindowsValidationRemoteScenario").WithField("campaign_id", executor.campaignID)
+	checkpoint, checkpointPath, checkpointErr := observeRemoteMachineIdentityCheckpoint(
+		ctx, environment.remoteObservation, environment.remoteBaseline, executor.campaignID,
+		RemoteObservationStageBeforeRemoteWrite, resultsDir, redactor,
+	)
+	if checkpointErr != nil {
+		execution := executor.blockScenario(remote, "remote_machine_identity_before_remote_write", "remote machine identity checkpoint evidence could not be completed")
+		execution.Prerequisites = append(execution.Prerequisites, remoteObservationCheckpointFailureStep(RemoteObservationStageBeforeRemoteWrite))
+		log.WithFields(map[string]any{"stage": "before_remote_write", "cause_code": "remote_identity_checkpoint_failed"}).Error("远端写入前机器身份门禁失败")
+		return execution
+	}
+	beforeStep := remoteObservationCheckpointStep(checkpoint, checkpointPath, resultsDir)
+	if requireRemoteWriteCheckpoint(checkpoint) != nil {
+		execution := executor.blockScenario(remote, "remote_machine_identity_before_remote_write", "remote machine identity differs from or cannot prove the admitted baseline")
+		execution.Prerequisites = append(execution.Prerequisites, beforeStep)
+		return execution
+	}
+
+	available, prerequisite := executor.preflightRemoteHost(ctx, linuxHostID)
+	if prerequisite.Result.PhaseStatus != PhaseStatusPass {
+		execution := executor.blockScenario(remote, "remote_host_available", "remote Host ID preflight failed: "+resultReason(prerequisite.Result))
+		execution.Prerequisites = append(execution.Prerequisites, beforeStep, prerequisite)
+		return execution
+	}
+	if !available {
+		execution := executor.blockScenario(remote, "remote_host_available", "configured dedicated Linux Host ID is not currently available as a non-self target")
+		execution.Prerequisites = append(execution.Prerequisites, beforeStep, prerequisite)
+		return execution
+	}
+
+	execution := executor.ExecuteScenario(ctx, remote)
+	execution.Prerequisites = append(execution.Prerequisites, beforeStep, prerequisite)
+	afterCheckpoint, afterPath, afterErr := observeRemoteMachineIdentityCheckpoint(
+		ctx, environment.remoteObservation, environment.remoteBaseline, executor.campaignID,
+		RemoteObservationStageAfterCleanup, resultsDir, redactor,
+	)
+	if afterErr != nil {
+		execution.Prerequisites = append(execution.Prerequisites, remoteObservationCheckpointFailureStep(RemoteObservationStageAfterCleanup))
+		log.WithFields(map[string]any{"stage": "after_cleanup", "cause_code": "remote_identity_checkpoint_failed"}).Error("远端 cleanup 后机器身份门禁失败")
+		return execution
+	}
+	execution.Prerequisites = append(execution.Prerequisites, remoteObservationCheckpointStep(afterCheckpoint, afterPath, resultsDir))
+	return execution
+}
+
+func remoteObservationCheckpointFailureStep(stage RemoteObservationStage) StepExecution {
+	return StepExecution{
+		StepID: "remote-machine-identity-" + string(stage), Coverage: CoverageSupporting,
+		Result: attemptedResult(false, "remote machine identity checkpoint evidence could not be completed", "", "", nil),
+	}
+}
+
+func validateDebugCredentialInput(lane, value string) error {
+	if lane == "msi_smoke" {
+		return nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("one-time debug credential is required for %s; enter it through the Runbook hidden prompt", lane)
+	}
+	return nil
+}
+
+type attestedEnvironmentMCP struct {
+	caller     mcpToolCaller
+	initialize MCPInitializeResult
+}
+
+func (c attestedEnvironmentMCP) Initialize(context.Context) (MCPInitializeResult, error) {
+	return c.initialize, nil
+}
+
+func (c attestedEnvironmentMCP) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
+	return c.caller.CallTool(ctx, name, arguments)
+}
+
+// runProductionEnvironmentPreflight 在 installer/function 报告事实前完成只读采集、持久化与准入。
+func runProductionEnvironmentPreflight(
+	ctx context.Context,
+	source PackageSource,
+	input RuntimeInput,
+	campaignID string,
+	client mcpToolCaller,
+	attestation RuntimeAttestation,
+	agentURL string,
+	resultsDir string,
+	redactor *Redactor,
+	credentialReady bool,
+	preinstall PreparedEnvironmentPreinstallEvidence,
+) (EnvironmentPreflightExecution, error) {
+	execution := EnvironmentPreflightExecution{Preinstall: preinstall}
+	agentAPI, err := NewHTTPEnvironmentAgentAPIReader(agentURL, nil)
+	if err != nil {
+		return execution, err
+	}
+	governance, err := LoadRemoteGovernanceAttestation(input.RemoteGovernanceAttestationPath)
+	if err != nil {
+		return execution, err
+	}
+	initialize := MCPInitializeResult{ProtocolVersion: attestation.ProtocolVersion}
+	initialize.ServerInfo.Name = attestation.ServerName
+	initialize.ServerInfo.Version = attestation.ServerVersion
+	currentPlan := DefaultWindowsEnvironmentPlan(DefaultEnvironmentPlanOptions{
+		FrozenBuild: source.Frozen, AgentDataDirectory: input.AgentDataDirectory,
+		LinuxHostID:       input.LinuxHostID,
+		JVMAdapterCommand: input.JVMAdapterCommand, JVMAdapterSHA256: input.JVMAdapterSHA256,
+		GoAdapterCommand: input.GoAdapterCommand, PythonAdapterCommand: input.PythonAdapterCommand,
+		NodeAdapterCommand: input.NodeAdapterCommand, NativeAdapterCommand: input.NativeAdapterCommand,
+		ChromeVersion: input.ChromeVersion, ChromeSHA256: input.ChromeSHA256, ChromeSignerIdentity: input.ChromeSignerIdentity,
+		EdgeVersion: input.EdgeVersion, EdgeSHA256: input.EdgeSHA256, EdgeSignerIdentity: input.EdgeSignerIdentity,
+	})
+	if err := VerifyPreInstallEnvironmentPlanBinding(preinstall.Plan, currentPlan); err != nil {
+		return execution, err
+	}
+	plan := currentPlan
+	execution.Plan = plan
+	planDigest := CanonicalEnvironmentPlanDigest(plan)
+	if laneOrDefault(input.Lane) == "core_only" {
+		execution.Request = EnvironmentAdmissionRequest{Mode: EnvironmentAdmissionDiagnostic, CollectionStage: EnvironmentCollectionStagePostInstall, ExpectedPlanDigest: planDigest, AllowedBlockedKeys: append([]string{}, input.AllowedEnvironmentBlockers...)}
+	} else {
+		execution.Request = EnvironmentAdmissionRequest{Mode: EnvironmentAdmissionFinal, CollectionStage: EnvironmentCollectionStagePostInstall, ExpectedPlanDigest: planDigest}
+	}
+	execution.Manifest, err = CollectEnvironmentManifest(ctx, EnvironmentCollectorOptions{
+		CampaignID: campaignID, Plan: plan,
+		CommandRunner: SystemEnvironmentCommandRunner{}, FileReader: SystemEnvironmentFileReader{},
+		MCP: attestedEnvironmentMCP{caller: client, initialize: initialize}, AgentAPI: agentAPI,
+		RemoteGovernanceAttestation: &governance,
+		LinuxHostID:                 input.LinuxHostID, CredentialReadinessObserved: true, CredentialReady: credentialReady,
+		Redactor: redactor,
+	})
+	if err != nil {
+		return execution, err
+	}
+	execution.Manifest, err = bindPostInstallEnvironmentManifest(preinstall.Manifest, preinstall.Plan, preinstall.Record.Request, execution.Manifest, plan)
+	if err != nil {
+		return execution, err
+	}
+	if execution.Manifest.PreviousManifestSHA256 != preinstall.Record.ManifestDigest {
+		return execution, fmt.Errorf("post-install environment manifest does not bind the prepared pre-install digest")
+	}
+	if err := VerifyEnvironmentManifestPlanBinding(execution.Manifest, plan); err != nil {
+		return execution, err
+	}
+	// 先在内存中建立 compare，使 B 已绑定但后续准入或写盘失败时，gate report 仍能
+	// 从 A/B 原始事实重派生差异；成功路径随后会对最终脱敏对象重新构造并落盘。
+	execution.Comparison, err = BuildEnvironmentManifestComparison(preinstall.Manifest, execution.Manifest)
+	if err != nil {
+		return execution, err
+	}
+	// 准入先在内存事实上派生，使后续写盘失败的 gate report 仍能解释阻断项。
+	execution.Decision, err = AdmitEnvironmentManifest(execution.Manifest, execution.Request)
+	var persistErr error
+	execution.Persistence, persistErr = PersistEnvironmentManifest(resultsDir, execution.Manifest, plan, redactor)
+	if execution.Persistence.Manifest.SchemaVersion != "" {
+		execution.Manifest = execution.Persistence.Manifest
+	}
+	if persistErr != nil {
+		return execution, persistErr
+	}
+	if err := VerifyEnvironmentManifestPlanBinding(execution.Manifest, plan); err != nil {
+		return execution, err
+	}
+	if err != nil {
+		return execution, err
+	}
+	// 持久化边界可能执行脱敏复制；正式准入必须对最终归档的同一安全对象重算。
+	execution.Decision, err = AdmitEnvironmentManifest(execution.Manifest, execution.Request)
+	if err != nil {
+		return execution, err
+	}
+	comparisonStarted := time.Now().UTC().Format(time.RFC3339Nano)
+	execution.Comparison, execution.ComparisonPath, err = PersistEnvironmentManifestComparison(resultsDir, preinstall.Manifest, execution.Manifest)
+	if err != nil {
+		execution.ComparisonPersistence = attemptedResult(false, "persist A-to-B environment comparison failed", comparisonStarted, time.Now().UTC().Format(time.RFC3339Nano), []EvidenceRecord{{
+			Name: "environment_manifest_comparison", Required: true, Present: false, Ref: EnvironmentManifestComparisonFilename,
+		}})
+		return execution, err
+	}
+	execution.ComparisonPersistence = attemptedResult(true, "", comparisonStarted, time.Now().UTC().Format(time.RFC3339Nano), []EvidenceRecord{{
+		Name: "environment_manifest_comparison", Required: true, Present: true, Ref: EnvironmentManifestComparisonFilename,
+	}})
+	if !execution.Decision.Admitted {
+		return execution, fmt.Errorf("environment admission rejected: %s", execution.Decision.Reason)
+	}
+	execution.remoteObservation = agentAPI
+	execution.remoteBaseline, err = remoteMachineObservationFromManifest(execution.Manifest)
+	if err != nil {
+		return execution, err
+	}
+	return execution, nil
 }
 
 func writeCampaignReports(resultsDir string, redactor *Redactor, report CampaignReport) error {
@@ -459,33 +874,34 @@ func writeCampaignReports(resultsDir string, redactor *Redactor, report Campaign
 	return writeMarkdownReport(filepath.Join(resultsDir, "campaign-report.md"), safeReport)
 }
 
-func persistGateFailure(resultsDir string, redactor *Redactor, source PackageSource, input RuntimeInput, campaignID string, started time.Time, installerChecks []PackageFileIdentity, attestation RuntimeAttestation, stage string, cause error) {
-	reason := stage + ": " + cause.Error()
-	installer, installerErr := artifactOnlyInstaller(laneOrDefault(input.Lane), installerChecks, started, time.Now().UTC())
+func persistGateFailure(resultsDir string, redactor *Redactor, source PackageSource, input RuntimeInput, campaignID string, started time.Time, installerChecks []PackageFileIdentity, installer InstallerExecution, attestation RuntimeAttestation, stage string, cause error, environments ...EnvironmentPreflightExecution) CampaignReport {
+	causeCode, reason := stableCampaignGateFailure(stage, cause)
+	verifiedInstaller, installerErr := rederiveInstallerExecution(installer)
 	if installerErr != nil {
-		logger.GetLogger().WithEntryName("WindowsValidationReport").WithErr(installerErr).WithFields(map[string]any{"campaign_id": campaignID, "lane": laneOrDefault(input.Lane), "stage": stage}).Error("身份门禁失败时无法派生安装包事实")
-		return
+		logger.GetLogger().WithEntryName("WindowsValidationReport").WithFields(map[string]any{"campaign_id": campaignID, "lane": laneOrDefault(input.Lane), "stage": stage, "cause_code": "installer_contract_invalid"}).Error("身份门禁失败时无法派生安装包事实")
+		return CampaignReport{}
 	}
+	installer = verifiedInstaller
 	if attestation.Result.PhaseStatus == "" {
 		attestation.Result = blockedResult("packaged_mcp_started", reason)
 		if stage == "runtime_attestation" {
-			attestation.Result = attemptedResult(false, cause.Error(), started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
+			attestation.Result = attemptedResult(false, reason, started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
 		}
 	}
 	functional := blockedResult(stage, reason)
-	prerequisiteResult := attemptedResult(false, cause.Error(), started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
+	prerequisiteResult := attemptedResult(false, reason, started.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil)
 	if stage == "runtime_attestation" && attestation.Result.PhaseStatus != "" {
 		prerequisiteResult = attestation.Result
 	}
 	prerequisite := StepExecution{
-		StepID: stage, Result: prerequisiteResult,
+		StepID: stage, Result: prerequisiteResult, InlineEvidence: map[string]any{"cause_code": causeCode},
 	}
 	blocked := blockedResult(stage, reason)
 	report := CampaignReport{
-		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
-		Functional: functional, FailureStage: stage, FailureReason: cause.Error(),
+		SchemaVersion: CampaignReportSchemaVersion, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+		Functional: functional, FailureStage: stage, FailureReason: reason,
 		BuildCommit: source.Frozen.Build.GitCommit, ProductVersion: source.Frozen.Build.ProductVersion,
-		Target: "Windows 10 x64", Lane: laneOrDefault(input.Lane),
+		Target: WindowsValidationTargetLabel, Lane: laneOrDefault(input.Lane),
 		Installer: installer, RuntimeAttestation: attestation, InstallerChecks: installerChecks,
 		ValidationCatalog: buildValidationCatalog(source.Scenarios, source.Coverage),
 		Prerequisites:     []StepExecution{prerequisite},
@@ -496,16 +912,51 @@ func persistGateFailure(resultsDir string, redactor *Redactor, source PackageSou
 		KnownAnomalies:    source.Frozen.KnownBaselineExceptions,
 		StartedAtUTC:      started.Format(time.RFC3339Nano), FinishedAtUTC: time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	if len(environments) > 0 && environments[0].Manifest.SchemaVersion != "" && environments[0].Comparison.SchemaVersion != "" {
+		environment := environments[0]
+		report.EnvironmentManifest = &environment.Manifest
+		report.EnvironmentPlan = &environment.Plan
+		report.EnvironmentComparison = &environment.Comparison
+		if environment.ComparisonPersistence.PhaseStatus != "" {
+			report.EnvironmentComparisonPersistence = &environment.ComparisonPersistence
+		}
+		report.EnvironmentAdmissionRequest = &environment.Request
+		report.EnvironmentAdmission = &environment.Decision
+	}
+	if len(environments) > 0 && environments[0].Preinstall.Record.SchemaVersion != "" {
+		preinstall := environments[0].Preinstall
+		report.EnvironmentPreinstall = &preinstall
+		report.Prerequisites = append([]StepExecution{preparedEnvironmentPreinstallStep(preinstall)}, report.Prerequisites...)
+	}
 	report.Sections = buildReportSections(report)
 	report.Result = deriveCampaignCompletionResult("failed campaign gate", report)
 	log := logger.GetLogger().WithEntryName("WindowsValidationReport")
 	if err := writeCampaignReports(resultsDir, redactor, report); err != nil {
-		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane)}).Error("身份门禁失败报告写入失败")
-		return
+		log.WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane), "cause_code": "report_write_failed"}).Error("身份门禁失败报告写入失败")
+		return report
 	}
 	if err := writeValidationSummary(input.ResultsRoot, redactor, report); err != nil {
-		log.WithErr(err).WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane)}).Error("身份门禁失败聚合摘要写入失败")
+		log.WithFields(map[string]any{"stage": stage, "campaign_id": campaignID, "lane": laneOrDefault(input.Lane), "cause_code": "summary_write_failed"}).Error("身份门禁失败聚合摘要写入失败")
 	}
+	return report
+}
+
+func stableCampaignGateFailure(stage string, cause error) (string, string) {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		stage = "unknown"
+	}
+	causeCode := stage + "_failed"
+	var persistenceErr *environmentPersistenceError
+	switch {
+	case errors.As(cause, &persistenceErr):
+		causeCode = "environment_persistence_failed"
+	case errors.Is(cause, context.Canceled):
+		causeCode = "cancelled"
+	case errors.Is(cause, context.DeadlineExceeded):
+		causeCode = "deadline_exceeded"
+	}
+	return causeCode, fmt.Sprintf("campaign gate %s failed (cause_code=%s)", stage, causeCode)
 }
 
 // ExecuteScenario 执行一个固定场景；失败后仍执行受 guard 保护的 cleanup。
@@ -731,7 +1182,7 @@ func (e *ScenarioExecutor) executeStep(ctx context.Context, scenarioID string, s
 	}
 	resultContract := attemptedResult(err == nil, failure, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), evidence)
 	if err != nil {
-		log.WithErr(err).WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "attempt_count": len(attempts), "evidence_count": len(evidence)})).Error("MCP 验证步骤失败")
+		log.WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "attempt_count": len(attempts), "evidence_count": len(evidence), "cause_code": "tool_execution_failed"})).Error("MCP 验证步骤失败")
 		return StepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Result: resultContract, Outcome: outcome, InlineEvidence: inlineEvidence}
 	}
 	log.WithFields(e.logFields(map[string]any{"scenario": scenarioID, "step": step.ID, "tool": step.Tool, "outcome": outcome, "attempt_count": len(attempts), "evidence_count": len(evidence), "duration_ms": finished.Sub(started).Milliseconds()})).Info("MCP 验证步骤完成")
@@ -1187,9 +1638,8 @@ func scenarioByID(scenarios []Scenario, id string) (Scenario, bool) {
 	return Scenario{}, false
 }
 
-func buildCampaignVariables(source PackageSource, input RuntimeInput, campaignID, workspaceRoot, packageRoot, authValue string) map[string]any {
+func buildCampaignVariables(source PackageSource, input RuntimeInput, campaignID, workspaceRoot, packageRoot, authValue, linuxRoot string) map[string]any {
 	goFixture := fixtureByProvider(source.Fixtures, "go")
-	linuxRoot := strings.ReplaceAll(input.LinuxRoot, "{{run_id}}", campaignID)
 	return map[string]any{
 		"run_id": campaignID, "campaign_id": campaignID,
 		"package_root": packageRoot, "project_root": workspaceRoot,
@@ -1226,6 +1676,9 @@ func aggregateCampaignResult(rows []ToolEvidenceRow, providers []ProviderExecuti
 	children = append(children, aggregateProviderResult(providers, expectedProviderNames))
 	for _, scenario := range scenarios {
 		children = append(children, scenario.Result)
+		// requires 仅是场景编排元数据；只有实际执行并归档的 prerequisite result
+		// 才能影响功能结论，防止声明一个 requires 就合成 PASS。
+		children = appendPrerequisiteResults(children, scenario.Prerequisites)
 	}
 	return aggregateResult("Windows functional validation", len(children), children)
 }
@@ -1264,6 +1717,14 @@ func artifactOnlyInstaller(lane string, checks []PackageFileIdentity, started, f
 			Evidence: []EvidenceRecord{{Name: "installer_identity", Required: true, Present: true, Ref: "campaign-report.json#installer_checks"}},
 		},
 		Install: notRun, Start: notRun, Stop: notRun, Uninstall: notRun,
+	})
+}
+
+func excludedCoreOnlyInstaller() (InstallerExecution, error) {
+	notRun := ResultInput{Facts: ExecutionFacts{NotRunReason: "core_only excludes installer artifact and lifecycle"}}
+	return DeriveInstallerExecution(InstallerExecutionFacts{
+		Format: "core_only", ArtifactVerified: false, InstallerExecuted: false,
+		Artifact: notRun, Install: notRun, Start: notRun, Stop: notRun, Uninstall: notRun,
 	})
 }
 

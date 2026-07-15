@@ -36,3 +36,30 @@ func TestDetectBrowsersFromCandidatesReturnsExecutableBrowsers(t *testing.T) {
 	assert.Equal(t, chrome, got[0].ExecutablePath)
 	assert.True(t, got[0].Available)
 }
+
+func TestExecutableFileAvailableForOSUsesPlatformExecutionSemantics(t *testing.T) {
+	tests := []struct {
+		name           string
+		goos           string
+		executablePath string
+		mode           os.FileMode
+		want           bool
+	}{
+		{name: "Windows EXE does not require Unix mode bits", goos: "windows", executablePath: `C:\Program Files\Google\Chrome\Application\chrome.exe`, mode: 0o666, want: true},
+		{name: "Windows extension is case insensitive", goos: "windows", executablePath: `C:\Program Files\Microsoft\Edge\msedge.EXE`, mode: 0o666, want: true},
+		{name: "Windows command extension is executable", goos: "windows", executablePath: `C:\Tools\browser.cmd`, mode: 0o666, want: true},
+		{name: "Windows rejects non executable extension", goos: "windows", executablePath: `C:\Tools\browser.txt`, mode: 0o777, want: false},
+		{name: "Windows rejects extensionless file", goos: "windows", executablePath: `C:\Tools\browser`, mode: 0o777, want: false},
+		{name: "Windows rejects directory", goos: "windows", executablePath: `C:\Tools\browser.exe`, mode: os.ModeDir | 0o777, want: false},
+		{name: "Windows rejects non regular file", goos: "windows", executablePath: `C:\Tools\browser.exe`, mode: os.ModeNamedPipe | 0o666, want: false},
+		{name: "Unix accepts regular executable", goos: "darwin", executablePath: "/Applications/Chrome", mode: 0o755, want: true},
+		{name: "Unix rejects regular non executable", goos: "linux", executablePath: "/opt/chrome", mode: 0o644, want: false},
+		{name: "Unix rejects EXE without execute bit", goos: "linux", executablePath: "/opt/chrome.exe", mode: 0o644, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, executableFileAvailableForOS(test.goos, test.executablePath, test.mode))
+		})
+	}
+}

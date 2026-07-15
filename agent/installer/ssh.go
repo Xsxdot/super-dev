@@ -21,6 +21,7 @@ import (
 	"path"
 	"strconv"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 	"golang.org/x/crypto/ssh"
@@ -39,25 +40,32 @@ type sshRemote struct {
 //   - 可执行远端命令和上传文件的 Remote
 //   - 凭据解析或 SSH 连接失败错误
 func NewSSHRemote(host model.Host) (Remote, error) {
+	log := logger.GetLogger().WithEntryName("SSHInstallerRemote").WithField("host_id", host.ID)
+	log.WithField("host_key_pin_configured", host.SSHHostKeyFingerprint != "").Info("开始建立 installer SSH remote")
 	creds, err := tunnel.CredentialsFromHost(host)
 	if err != nil {
+		log.WithErr(err).Error("读取 installer SSH 凭据失败")
 		return nil, fmt.Errorf("read private key: %w", err)
 	}
 	cfg, err := tunnel.BuildClientConfig(creds)
 	if err != nil {
+		log.WithField("cause_code", tunnel.PublicError(err)).Error("构造 installer SSH 安全配置失败")
 		return nil, err
 	}
 	if host.SSHHost == "" {
+		log.Error("建立 installer SSH remote 被拒绝：SSH Host 缺失")
 		return nil, fmt.Errorf("host %s ssh host is required", host.ID)
 	}
 	port := host.SSHPort
 	if port == 0 {
 		port = model.DefaultSSHPort
 	}
-	client, err := ssh.Dial("tcp", net.JoinHostPort(host.SSHHost, strconv.Itoa(port)), cfg)
+	client, err := tunnel.DialSSHClient(net.JoinHostPort(host.SSHHost, strconv.Itoa(port)), cfg)
 	if err != nil {
+		log.WithField("cause_code", tunnel.PublicError(err)).Error("installer SSH 握手失败")
 		return nil, err
 	}
+	log.Info("installer SSH remote 建立完成")
 	return &sshRemote{client: client}, nil
 }
 

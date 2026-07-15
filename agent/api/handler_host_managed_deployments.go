@@ -71,6 +71,7 @@ func (a *App) getHostManagedDeploymentsStatus(w http.ResponseWriter, r *http.Req
 	if remoteStatus.Collectors == nil {
 		remoteStatus.Collectors = []model.ManagedCollectorStatus{}
 	}
+	status.ActiveCollectorCount = remoteStatus.ActiveCollectorCount
 	status.Remote = &remoteStatus
 	jsonOK(w, status)
 }

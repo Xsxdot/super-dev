@@ -22,7 +22,9 @@ function host(overrides: Partial<Host> = {}): Host {
     ssh_host: '10.0.0.8',
     ssh_port: 22,
     ssh_user: 'root',
-    ssh_private_key: 'KEY',
+    ssh_credential_configured: true,
+    ssh_private_key_configured: true,
+    ssh_host_key_fingerprint_configured: true,
     ...overrides,
   }
 }
@@ -87,7 +89,7 @@ describe('agentBulkUpdate', () => {
         agent({ host_id: 'h2', runtime: { installed: true, health: 'healthy', reachable: true, version: '0.2.0' } }),
         agent({ host_id: 'h3', runtime: { installed: true, health: 'healthy', reachable: true, version: '0.1.0' } }),
       ],
-      [host({ id: 'h1' }), host({ id: 'h2' }), host({ id: 'h3', ssh_private_key: '', ssh_password: '' })],
+      [host({ id: 'h1' }), host({ id: 'h2' }), host({ id: 'h3', ssh_credential_configured: false })],
       '0.2.0',
     )
 

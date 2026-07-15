@@ -27,7 +27,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-func TestHostDTOIncludesSSHFieldsButNoAgent(t *testing.T) {
+func TestHostDTOHidesSSHSecretsAndReportsConfiguredState(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	defer app.Close()
@@ -42,7 +42,10 @@ func TestHostDTOIncludesSSHFieldsButNoAgent(t *testing.T) {
 	}`)
 	resp := httptestDo(t, app, http.MethodPost, "/api/hosts", body)
 	require.Equal(t, http.StatusOK, resp.Code)
-	assert.Contains(t, resp.Body.String(), `"ssh_private_key":"KEY"`)
+	assert.NotContains(t, resp.Body.String(), `"ssh_private_key"`)
+	assert.NotContains(t, resp.Body.String(), `"ssh_password"`)
+	assert.Contains(t, resp.Body.String(), `"ssh_credential_configured":true`)
+	assert.Contains(t, resp.Body.String(), `"ssh_private_key_configured":true`)
 	assert.NotContains(t, resp.Body.String(), `"agent"`)
 }
 
@@ -197,7 +200,7 @@ func httptestDo(t *testing.T, app *App, method, path string, body io.Reader) *ht
 
 func decodeHostID(t *testing.T, data []byte) string {
 	t.Helper()
-	var dto hostDTO
+	var dto hostViewDTO
 	require.NoError(t, json.Unmarshal(data, &dto))
 	require.NotEmpty(t, dto.ID)
 	return dto.ID

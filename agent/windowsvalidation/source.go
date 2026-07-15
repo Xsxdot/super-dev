@@ -149,6 +149,11 @@ func validateFrozen(frozen FrozenBuild) error {
 	if frozen.SchemaVersion != 1 || frozen.Build.GitCommit == "" || frozen.Build.ProductVersion == "" {
 		return fmt.Errorf("frozen build identity is incomplete")
 	}
+	if frozen.Target.Label != WindowsValidationTargetLabel || frozen.Target.OS != windowsValidationProductPrefix ||
+		frozen.Target.DisplayVersion != windowsValidationDisplayVersion || frozen.Target.CurrentBuild != windowsValidationBuild ||
+		normalizeWindowsValidationArchitecture(frozen.Target.Architecture) != "amd64" {
+		return fmt.Errorf("frozen build target must be %s", WindowsValidationTargetLabel)
+	}
 	if frozen.SourceSurface.MCPTools.Count != len(frozen.SourceSurface.MCPTools.Names) {
 		return fmt.Errorf("frozen MCP count=%d names=%d", frozen.SourceSurface.MCPTools.Count, len(frozen.SourceSurface.MCPTools.Names))
 	}

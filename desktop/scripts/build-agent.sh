@@ -61,8 +61,21 @@ sync_dev_sidecar() {
   local src="$1"
   local name="$2"
   mkdir -p "$DEV_OUT_DIR"
-  cp "$src" "$DEV_OUT_DIR/$name"
-  chmod +x "$DEV_OUT_DIR/$name"
+  (
+    local tmp
+    tmp="$(mktemp "$DEV_OUT_DIR/.${name}.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+
+    # The destination may be executed by a long-lived coding agent. Build the
+    # complete replacement on the same filesystem, then rename it into place so
+    # readers observe either the old inode or the complete new inode, never a
+    # truncated executable.
+    cp "$src" "$tmp"
+    chmod +x "$tmp"
+
+    # If sidecar signing is added, sign and verify "$tmp" here before publish.
+    mv -f "$tmp" "$DEV_OUT_DIR/$name"
+  )
 }
 
 prepare_js_debug() {

@@ -88,7 +88,7 @@
       "id": "pipeline-host-id-preflight",
       "tool": "list_hosts",
       "coverage": "supporting",
-      "_comment": "指定的 Linux Host 必须作为 non-self 目标真实存在；pipeline roles 和显式 host_ids 必须复用它的 id，禁止使用展示名。验证不依赖其他已登记主机的数量或排序。",
+      "_comment": "指定的 Linux Host 必须作为 non-self 目标真实存在并携带唯一 human-governance tag；pipeline roles 和显式 host_ids 必须复用它的 id，禁止使用展示名。tag 只证明专用重置治理标记，不能替代 Agent、port、version、health 或 transport observed facts。",
       "arguments": {},
       "expect": {
         "outcome": "success",
@@ -103,7 +103,10 @@
             "operator": "contains_item",
             "value": {
               "id": "{{linux_host_id}}",
-              "is_self": false
+              "is_self": false,
+              "tags": [
+                "superdev-validation-dedicated-resettable"
+              ]
             }
           }
         ]
@@ -288,6 +291,7 @@
         "variables": {
           "version": "{{artifact_version_a}}",
           "action": "deploy",
+          "root_mode": "create",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         }
@@ -309,6 +313,11 @@
             "path": "structuredContent.data.plan.variables.remote_root",
             "operator": "eq",
             "variable": "linux_root"
+          },
+          {
+            "path": "structuredContent.data.plan.variables.root_mode",
+            "operator": "eq",
+            "value": "create"
           }
         ]
       },
@@ -319,6 +328,7 @@
           "structuredContent.data.run.step_runs",
           "structuredContent.data.plan.variables.campaign_id",
           "structuredContent.data.plan.variables.remote_root",
+          "structuredContent.data.plan.variables.root_mode",
           "structuredContent.data.plan.variables.version"
         ],
         "redact": [
@@ -353,6 +363,7 @@
         "variables": {
           "version": "{{artifact_version_a}}",
           "action": "deploy",
+          "root_mode": "create",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         },
@@ -429,6 +440,9 @@
           }
         ]
       },
+      "capture": {
+        "pipeline_run_a_complete": "structuredContent.data.runs.0.id"
+      },
       "evidence": {
         "record": [
           "structuredContent.summary",
@@ -470,6 +484,11 @@
             "path": "structuredContent.data.logs",
             "operator": "contains",
             "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"preflight_root\",\"root_mode\":\"create\",\"root_state\":\"absent\""
           },
           {
             "path": "structuredContent.data.logs",
@@ -517,6 +536,7 @@
         "variables": {
           "version": "{{artifact_version_b}}",
           "action": "deploy",
+          "root_mode": "existing",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-b",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         },
@@ -630,6 +650,11 @@
           {
             "path": "structuredContent.data.logs",
             "operator": "contains",
+            "value": "\"stage\":\"preflight_root\",\"root_mode\":\"existing\",\"root_state\":\"owned\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
             "value": "\"stage\":\"verify_transfer_digest\",\"outcome\":\"success\""
           },
           {
@@ -723,6 +748,7 @@
         "artifact_version": "{{artifact_version_a}}",
         "variables": {
           "action": "deploy",
+          "root_mode": "existing",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         },
@@ -840,6 +866,11 @@
           {
             "path": "structuredContent.data.logs",
             "operator": "contains",
+            "value": "\"stage\":\"preflight_root\",\"root_mode\":\"existing\",\"root_state\":\"owned\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
             "value": "\"stage\":\"verify_transfer_digest\",\"outcome\":\"success\""
           },
           {
@@ -887,6 +918,7 @@
         "artifact_version": "{{artifact_version_a}}",
         "variables": {
           "action": "cleanup",
+          "root_mode": "existing",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         },
@@ -990,6 +1022,11 @@
           {
             "path": "structuredContent.data.logs",
             "operator": "contains",
+            "value": "\"stage\":\"preflight_root\",\"root_mode\":\"existing\",\"root_state\":\"owned\""
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
             "value": "\"stage\":\"cleanup_campaign\",\"outcome\":\"success\""
           }
         ]
@@ -1061,7 +1098,7 @@
       "id": "pipeline-cleanup-on-abort",
       "tool": "deploy_project_pipeline",
       "coverage": "supporting",
-      "run_if": "variable_set:pipeline_run_a&&variable_unset:pipeline_run_cleanup",
+      "run_if": "variable_set:pipeline_run_a_complete&&variable_unset:pipeline_run_cleanup",
       "arguments": {
         "project_name": "{{project_name}}",
         "pipeline_id": "{{pipeline_id}}",
@@ -1072,6 +1109,7 @@
         "artifact_version": "{{artifact_version_a}}",
         "variables": {
           "action": "cleanup",
+          "root_mode": "existing",
           "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
           "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
         },
@@ -1172,6 +1210,11 @@
             "path": "structuredContent.data.logs",
             "operator": "contains",
             "value": "remote route host {{linux_host_id}} -> agent"
+          },
+          {
+            "path": "structuredContent.data.logs",
+            "operator": "contains",
+            "value": "\"stage\":\"preflight_root\",\"root_mode\":\"existing\",\"root_state\":\"owned\""
           },
           {
             "path": "structuredContent.data.logs",

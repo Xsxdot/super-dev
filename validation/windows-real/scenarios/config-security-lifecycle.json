@@ -153,7 +153,7 @@
             "logs": {"type": "process"},
             "readiness": {"type": "http", "target": "{{go_readiness_url}}", "timeout_seconds": 30},
             "web": {"enabled": true, "url": "http://127.0.0.1:18190", "default_path": "/?run_id={{run_id}}", "readiness": {"type": "http", "timeout_seconds": 30}, "ai_debug": {"enabled": true}},
-            "code_debug": {"policy": "auto"}
+            "code_debug": {"policy": "auto", "adapter_command": "{{go_adapter_command}}"}
           }]
         }
       },
@@ -264,10 +264,10 @@
       "id": "get-fixture-credentials",
       "tool": "get_debug_credentials",
       "coverage": "primary",
-      "_comment": "冻结产品的 get_debug_credentials 只读取持久配置。campaign 禁止为通过测试而写入明文凭据，因此仍真实调用正式工具；若返回空集合，success 合同断言会形成可复查 FAIL。夹具鉴权只用公开 campaign ID 派生的内存 Header，不伪造产品调试凭据。",
+      "_comment": "人类通过 Runbook 隐藏输入提供一次性测试凭据；driver 在 disposable project/service 建立后调用正式 Agent REST 创建 campaign-owned 进程内 lease，不写配置、runtime input、命令行或证据。随后仍真实调用冻结的 get_debug_credentials；空集合或来源/身份不符都必须 FAIL。",
       "arguments": {"project_id": "{{project_id}}", "service_id": "{{go_service_id}}"},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}, {"path": "structuredContent.data.credentials.0.value", "operator": "not_empty"}]},
-      "evidence": {"record": ["structuredContent.data.count", "structuredContent.data.credentials.0.name", "structuredContent.data.credentials.0.desc", "structuredContent.data.credentials.0.source"], "redact": ["structuredContent.data.credentials.*.value"], "forbid": ["fixture_auth_value", "approval_token", "authorization"]}
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}, {"path": "structuredContent.data.credentials.0.name", "operator": "eq", "value": "windows_validation_credential"}, {"path": "structuredContent.data.credentials.0.desc", "operator": "eq", "value": "一次性 Windows validation 调试凭据"}, {"path": "structuredContent.data.credentials.0.source", "operator": "eq", "value": "ephemeral_service"}, {"path": "structuredContent.data.credentials.0.value_present", "operator": "eq", "value": true}]},
+      "evidence": {"record": ["structuredContent.data.count", "structuredContent.data.credentials.0.name", "structuredContent.data.credentials.0.desc", "structuredContent.data.credentials.0.source", "structuredContent.data.credentials.0.value_present"], "redact": ["structuredContent.data.credentials.*.value"], "forbid": ["fixture_auth_value", "approval_token", "authorization"]}
     }
   ],
   "cleanup": [

@@ -1,17 +1,19 @@
 ﻿# Run-Validation.ps1 is the Windows-native entry point for one frozen validation lane.
 #
 # Responsibilities:
-#   - enforce Windows 10 x64, package and installer identity preflight;
+#   - enforce Windows 10 22H2 x64 (build 19045), package and installer identity preflight;
 #   - require the exact pre-install backup created by Prepare-Validation.ps1;
+#   - collect one human-entered credential through a hidden prompt for functional lanes;
 #   - invoke the fixed packaged driver for MSI smoke, NSIS core, or diagnostic core-only validation.
 #
 # Boundaries:
 #   - this script never installs or uninstalls SuperDev and never requests elevation;
 #   - UAC belongs only to the separately launched frozen installer;
+#   - the one-time credential is never written to runtime input, command arguments, events, or disk;
 #   - this script accepts no arbitrary command, MCP tool, or scenario path.
 # Parameters:
 #   - Lane selects msi_smoke, nsis_core, or core_only; RuntimeInput points to mutable machine facts outside the package;
-#   - PreparedBackupDirectory binds the run to one completed preparation; AgentUrl selects the local frozen agent endpoint.
+#   - PreparedBackupDirectory binds the run to one completed preparation; the driver fixes Agent access to the lifecycle-proven loopback listener.
 # Exit behavior:
 #   - exits with the packaged driver result after all identity gates pass;
 #   - exits 1 with structured pre-driver evidence when any gate or invocation fails.
@@ -20,11 +22,10 @@
 [CmdletBinding()]
 param(
     [ValidateSet('msi_smoke', 'nsis_core', 'core_only')]
-    [string]$Lane = 'nsis_core',
-    [string]$RuntimeInput = '',
-    [Parameter(Mandatory = $true)]
-    [string]$PreparedBackupDirectory,
-    [string]$AgentUrl = 'http://127.0.0.1:57017'
+	[string]$Lane = 'nsis_core',
+	[string]$RuntimeInput = '',
+	[Parameter(Mandatory = $true)]
+	[string]$PreparedBackupDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -34,6 +35,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 $script:validationCampaignId = ''
+$script:platformFacts = $null
+$debugCredentialEnvironmentName = 'SUPERDEV_WINDOWS_VALIDATION_DEBUG_CREDENTIAL'
 
 function Write-ValidationEvent {
     param([string]$Level, [string]$Stage, [string]$Outcome, [hashtable]$Fields = @{})
@@ -56,13 +59,25 @@ function Assert-WindowsX64 {
     if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
         throw 'Windows x64 is required.'
     }
-    $version = [Environment]::OSVersion.Version
-    if ($version.Major -ne 10) { throw "Windows 10 kernel family is required; observed $version." }
-    $windows = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-    $build = [int]$windows.CurrentBuildNumber
+    $windows = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+    if ($null -eq $windows.PSObject.Properties['DisplayVersion'] -or $null -eq $windows.PSObject.Properties['UBR']) { throw 'Windows platform servicing identity is incomplete.' }
+    $build = [string]$windows.CurrentBuildNumber
+    $displayVersion = [string]$windows.DisplayVersion
+    $ubr = [string]$windows.UBR
     $productName = [string]$windows.ProductName
-    if ($productName -notlike '*Windows 10*' -or $productName -like '*Server*' -or $build -ge 22000) {
-        throw "Dedicated Windows 10 client is required; observed $productName build $build."
+    $installationType = [string]$windows.InstallationType
+    $installedKBs = @(Get-HotFix -ErrorAction Stop | ForEach-Object { [string]$_.HotFixID } | Where-Object { $_ -match '^KB[0-9]+$' } | ForEach-Object { $_.ToUpperInvariant() } | Sort-Object -Unique)
+    if ($productName -notlike 'Windows 10*' -or $installationType -ne 'Client' -or $displayVersion -ne '22H2' -or $build -ne '19045' -or $ubr -notmatch '^[1-9][0-9]*$' -or $installedKBs.Count -eq 0) {
+        throw "Windows 10 Client 22H2 x64 build 19045 with servicing evidence is required; observed $productName $displayVersion build $build.$ubr."
+    }
+    # 这里只证明 compatibility 平台，不能由 UBR/KB 合成 ESU entitlement。
+    $script:platformFacts = [ordered]@{
+        current_build = $build
+        display_version = $displayVersion
+        ubr = $ubr
+        installed_kbs = @($installedKBs)
+        support_scope = 'compatibility_only'
+        esu_evidence_status = 'not_mechanically_verified'
     }
 }
 
@@ -83,6 +98,7 @@ function Assert-PackageFiles {
 
 function Assert-Installers {
     param([object]$RuntimeInputObject, [object]$Frozen)
+    if ($Lane -eq 'core_only') { throw 'core_only must not verify an installer artifact.' }
     $format = if ($Lane -eq 'msi_smoke') { 'msi' } else { 'nsis' }
     $selected = @($Frozen.installers | Where-Object { $_.format -eq $format })
     # 两条 lane 必须能独立失败；当前安装器损坏时拒绝执行，但绝不要求另一格式同时存在。
@@ -139,6 +155,7 @@ try {
     Write-ValidationEvent 'info' 'entry' 'started'
     $runStage = 'platform_gate'
     Assert-WindowsX64
+    Write-ValidationEvent 'info' 'platform_gate' 'succeeded' @{ windows_build = $script:platformFacts.current_build; windows_display_version = $script:platformFacts.display_version; windows_ubr = $script:platformFacts.ubr; installed_kb_count = @($script:platformFacts.installed_kbs).Count; support_scope = $script:platformFacts.support_scope; esu_evidence_status = $script:platformFacts.esu_evidence_status }
     $packageRoot = $PSScriptRoot
     # prepared backup 是安装前唯一稳定身份，必须先读取；后续任何包/input/installer 失败才能归入同一 campaign 并安全恢复。
     $runStage = 'prepared_backup_identity'
@@ -162,26 +179,33 @@ try {
     $inputObject | Add-Member -NotePropertyName lane -NotePropertyValue $Lane -Force
     $inputObject | Add-Member -NotePropertyName campaign_id -NotePropertyValue ([string]$backupManifest.campaign_id) -Force
     $frozen = Get-Content -LiteralPath (Join-Path $packageRoot 'manifest\frozen-build.json') -Raw | ConvertFrom-Json
-    $runStage = 'installer_artifact_verification'
-    $artifactStartedAtUtc = [DateTime]::UtcNow.ToString('o')
-    try {
-        $installerChecks = @(Assert-Installers $inputObject $frozen)
-        $artifactVerification = [ordered]@{
-            attempted = $true
-            succeeded = $true
-            started_at_utc = $artifactStartedAtUtc
-            finished_at_utc = [DateTime]::UtcNow.ToString('o')
-        }
-    } catch {
-        $artifactVerification = [ordered]@{
-            attempted = $true
-            succeeded = $false
-            failure = $_.Exception.Message
-            started_at_utc = $artifactStartedAtUtc
-            finished_at_utc = [DateTime]::UtcNow.ToString('o')
-        }
-        throw
-    }
+	$runStage = 'installer_artifact_verification'
+	if ($Lane -eq 'core_only') {
+		# core_only 是无 installer 的定向诊断 lane；这里保留真实 NOT_RUN，不能借 NSIS
+		# 文件身份把 installer section 或 pre-driver failure 提升成已尝试。
+		$installerChecks = @()
+		$artifactVerification = [ordered]@{ attempted = $false; succeeded = $false; not_run_reason = 'core_only excludes installer artifact' }
+	} else {
+		$artifactStartedAtUtc = [DateTime]::UtcNow.ToString('o')
+		try {
+			$installerChecks = @(Assert-Installers $inputObject $frozen)
+			$artifactVerification = [ordered]@{
+				attempted = $true
+				succeeded = $true
+				started_at_utc = $artifactStartedAtUtc
+				finished_at_utc = [DateTime]::UtcNow.ToString('o')
+			}
+		} catch {
+			$artifactVerification = [ordered]@{
+				attempted = $true
+				succeeded = $false
+				failure = $_.Exception.Message
+				started_at_utc = $artifactStartedAtUtc
+				finished_at_utc = [DateTime]::UtcNow.ToString('o')
+			}
+			throw
+		}
+	}
     Write-ValidationEvent 'info' 'prepared_backup' 'verified' @{ backup_directory = $PreparedBackupDirectory; campaign_id = $backupManifest.campaign_id }
 
     $runStage = 'driver_input'
@@ -189,14 +213,45 @@ try {
     $derivedJson = $inputObject | ConvertTo-Json -Depth 20
     [System.IO.File]::WriteAllText($derivedInput, $derivedJson, [System.Text.UTF8Encoding]::new($false))
     try {
-        $env:SUPERDEV_AGENT_DATA_DIR = Join-Path $HOME '.superdev'
-        $driver = Join-Path $packageRoot 'bin\superdev-windows-validation.exe'
-        $runStage = 'driver'
-        Write-ValidationEvent 'info' 'driver' 'started' @{ driver = 'bin/superdev-windows-validation.exe' }
-        & $driver --package-root $packageRoot --input $derivedInput --agent-url $AgentUrl
-        $driverExit = $LASTEXITCODE
-        if ($driverExit -ne 0) { throw "Validation driver exited with code $driverExit. Preserve results and run cleanup." }
-        Write-ValidationEvent 'info' 'driver' 'succeeded' @{ backup_directory = $PreparedBackupDirectory }
+        $debugCredentialSecure = $null
+        $debugCredentialBstr = [IntPtr]::Zero
+        $debugCredentialPlain = $null
+        try {
+            # 每次运行先清除父进程可能遗留的同名变量；MSI lane 不读取也不传递凭据。
+            [Environment]::SetEnvironmentVariable($debugCredentialEnvironmentName, $null, 'Process')
+            if ($Lane -ne 'msi_smoke') {
+                $runStage = 'debug_credential_input'
+                $debugCredentialSecure = Read-Host -Prompt 'Enter one-time Windows validation debug credential' -AsSecureString
+                if ($null -eq $debugCredentialSecure -or $debugCredentialSecure.Length -eq 0) {
+                    throw 'A one-time debug credential is required for functional validation.'
+                }
+                $debugCredentialBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($debugCredentialSecure)
+                $debugCredentialPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($debugCredentialBstr)
+                if ([string]::IsNullOrWhiteSpace($debugCredentialPlain)) {
+                    throw 'A non-empty one-time debug credential is required for functional validation.'
+                }
+                # 专用环境变量只在 driver 子进程继承期间存在；secret 不进入命令行或派生 runtime input。
+                [Environment]::SetEnvironmentVariable($debugCredentialEnvironmentName, $debugCredentialPlain, 'Process')
+            }
+
+            $env:SUPERDEV_AGENT_DATA_DIR = Join-Path $HOME '.superdev'
+            $driver = Join-Path $packageRoot 'bin\superdev-windows-validation.exe'
+            $runStage = 'driver'
+            Write-ValidationEvent 'info' 'driver' 'started' @{ driver = 'bin/superdev-windows-validation.exe' }
+			& $driver --package-root $packageRoot --input $derivedInput --prepared-backup $PreparedBackupDirectory
+            $driverExit = $LASTEXITCODE
+            if ($driverExit -ne 0) { throw "Validation driver exited with code $driverExit. Preserve results and run cleanup." }
+            Write-ValidationEvent 'info' 'driver' 'succeeded' @{ backup_directory = $PreparedBackupDirectory }
+        } finally {
+            [Environment]::SetEnvironmentVariable($debugCredentialEnvironmentName, $null, 'Process')
+            if ($debugCredentialBstr -ne [IntPtr]::Zero) {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($debugCredentialBstr)
+            }
+            if ($null -ne $debugCredentialSecure) {
+                $debugCredentialSecure.Dispose()
+            }
+            $debugCredentialPlain = $null
+        }
     } finally {
         Remove-Item -LiteralPath $derivedInput -Force -ErrorAction SilentlyContinue
     }

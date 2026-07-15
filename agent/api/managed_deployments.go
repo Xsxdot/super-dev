@@ -11,8 +11,7 @@
 package api
 
 import (
-	"log"
-
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/logbackend"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -24,22 +23,29 @@ func (a *App) loadManagedDeployments() {
 	}
 	list, err := a.managedStore.Load()
 	if err != nil {
-		log.Printf("[SuperDev] failed to load managed deployments: %v", err)
+		logger.GetLogger().WithEntryName("ManagedDeployments").WithField("cause_code", "store_load_failed").Error("远程 managed deployment 清单加载失败，将以空清单恢复")
 		list = []model.ManagedDeployment{}
 	}
 	_ = a.applyManagedDeployments(list)
 }
 
 func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.ManagedDeploymentReconcileResult {
+	log := logger.GetLogger().WithEntryName("ManagedDeployments").WithField("requested_deployment_count", len(list))
+	log.Info("开始应用远程 managed deployment 期望清单")
 	normalized := normalizeManagedDeployments(list)
 	projects := managedProjectsFromDeployments(normalized)
 	desiredCollectors := managedCollectorsFromDeployments(normalized)
+	log.WithFields(map[string]any{
+		"normalized_deployment_count": len(normalized), "desired_collector_count": len(desiredCollectors),
+	}).Info("开始 reconcile managed collector")
 	collectorResult := a.collector.Reconcile(desiredCollectors)
 
 	a.mu.Lock()
 	kept := make([]model.Project, 0, len(a.projects))
+	previousManagedProjects := make([]model.Project, 0, len(a.managedProjectIDs))
 	for _, project := range a.projects {
 		if _, ok := a.managedProjectIDs[project.ID]; ok {
+			previousManagedProjects = append(previousManagedProjects, project)
 			a.clearManagedProjectBackendsLocked(project)
 			continue
 		}
@@ -60,6 +66,8 @@ func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.Mana
 			}
 		}
 	}
+	// managed deployment 清单是全量期望投影；缺席的 project/service scope 必须立即失效。
+	a.revokeDisappearedDebugCredentialScopesLocked(previousManagedProjects, projects)
 	a.mu.Unlock()
 
 	result := model.ManagedDeploymentReconcileResult{
@@ -82,6 +90,11 @@ func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.Mana
 	a.mu.Lock()
 	a.managedStatus = status
 	a.mu.Unlock()
+	log.WithFields(map[string]any{
+		"deployment_count": result.DeploymentCount, "desired_collector_count": result.CollectorCount,
+		"started_collector_count": len(result.StartedCollectors), "stopped_collector_count": len(result.StoppedCollectors),
+		"failed_collector_count": len(result.FailedCollectors),
+	}).Info("远程 managed deployment 期望清单应用完成")
 	return result
 }
 
@@ -194,7 +207,10 @@ func managedCollectorsFromDeployments(list []model.ManagedDeployment) []collecto
 		dep := model.Deployment{Logs: item.Logs}
 		name, t, extraArgs, ok := managedCollectorTarget(dep)
 		if !ok {
-			log.Printf("[SuperDev] skip unsupported managed collector for deployment %s: logs=%+v", item.DeploymentID, item.Logs)
+			logger.GetLogger().WithEntryName("ManagedDeployments").WithFields(map[string]any{
+				"deployment_id": item.DeploymentID, "log_type": item.Logs.Type,
+				"cause_code": "unsupported_collector",
+			}).Error("跳过不受支持的 managed collector")
 			continue
 		}
 		out = append(out, collector.DesiredCollector{ID: item.DeploymentID, Name: name, Type: t, ExtraArgs: extraArgs})

@@ -70,11 +70,16 @@ type ManagedCollectorStatus struct {
 }
 
 // ManagedDeploymentStatus 是远端 agent 当前 managed 编排视图的只读诊断状态。
+//
+// 注意：
+//   - CollectorCount 保留现有合同，表示期望 collector 数
+//   - ActiveCollectorCount 来自 collector.Manager.List 的实际 StatusRunning 数
 type ManagedDeploymentStatus struct {
-	DeploymentCount int                              `json:"deployment_count"`
-	CollectorCount  int                              `json:"collector_count"`
-	LastResult      ManagedDeploymentReconcileResult `json:"last_result"`
-	Collectors      []ManagedCollectorStatus         `json:"collectors"`
+	DeploymentCount      int                              `json:"deployment_count"`
+	CollectorCount       int                              `json:"collector_count"`
+	ActiveCollectorCount int                              `json:"active_collector_count"`
+	LastResult           ManagedDeploymentReconcileResult `json:"last_result"`
+	Collectors           []ManagedCollectorStatus         `json:"collectors"`
 }
 
 // HostManagedDeploymentStatus 是桌面端按 host 聚合后的远端编排诊断状态。
@@ -83,6 +88,7 @@ type HostManagedDeploymentStatus struct {
 	HostName               string                   `json:"host_name,omitempty"`
 	DesiredDeploymentCount int                      `json:"desired_deployment_count"`
 	DesiredCollectorCount  int                      `json:"desired_collector_count"`
+	ActiveCollectorCount   int                      `json:"active_collector_count"`
 	TunnelConnected        bool                     `json:"tunnel_connected"`
 	Remote                 *ManagedDeploymentStatus `json:"remote,omitempty"`
 	Error                  string                   `json:"error,omitempty"`

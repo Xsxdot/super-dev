@@ -3,7 +3,10 @@
   "kind": "superdev.windows-real-validation.frozen-build",
   "status": "source_and_artifacts_frozen_runtime_attestation_pending",
   "target": {
+    "label": "Windows 10 22H2 x64 (build 19045)",
     "os": "Windows 10",
+    "display_version": "22H2",
+    "current_build": "19045",
     "architecture": "x64",
     "execution_user": "standard_user",
     "elevation_boundary": "installer_uac_only"
@@ -23,6 +26,7 @@
       "filename": "SuperDev_0.2.1_x64-setup.exe",
       "format": "nsis",
       "validation_role": "primary_full_suite",
+      "uninstaller_filename": "uninstall.exe",
       "size_bytes": 80355213,
       "sha256": "cdb950afb388c147b057f173fcfdb3281d7b7526b19921d21a17f5d22c3bb0cd"
     },
@@ -128,12 +132,6 @@
     "rule": "Runtime tool/provider sets must equal source_surface and initialize serverInfo.version must equal 0.2.1 before functional steps."
   },
   "known_baseline_exceptions": [
-    {
-      "id": "debug-credentials-require-persisted-plaintext",
-      "scope": "get_debug_credentials",
-      "observed_cause": "The frozen product can only return credentials already stored in project or service configuration; a fresh isolated campaign has no non-persistent secret source.",
-      "final_verdict_rule": "The validation package must not write plaintext credentials merely to make the check pass. get_debug_credentials remains a real FAIL until the product offers a non-persistent secret boundary; all other independent tool checks continue."
-    },
     {
       "id": "ci-go-agent-timezone-assertions",
       "workflow_run_id": 29250096059,

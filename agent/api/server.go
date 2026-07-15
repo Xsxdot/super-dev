@@ -32,6 +32,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/debugcredential"
 	"github.com/xsxdot/super-dev/agent/debugsession"
 	"github.com/xsxdot/super-dev/agent/identity"
 	"github.com/xsxdot/super-dev/agent/ingress"
@@ -47,6 +48,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/process"
 	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
+	"github.com/xsxdot/super-dev/agent/remoteobservation"
 	"github.com/xsxdot/super-dev/agent/security"
 	"github.com/xsxdot/super-dev/agent/store"
 	"github.com/xsxdot/super-dev/agent/tunnel"
@@ -88,6 +90,8 @@ type AppConfig struct {
 	TLSCertFile string
 	// TLSKeyFile 是用户手动配置的 HTTPS 服务端私钥路径；必须与 TLSCertFile 同时提供。
 	TLSKeyFile string
+	// RemoteObservationOverride 注入安全远程观察模块，仅用于测试。
+	RemoteObservationOverride remoteobservation.Observer
 }
 
 // HostAgentInstaller 安装、重启或原地更新远端 SuperDev agent。
@@ -151,10 +155,16 @@ type App struct {
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
 	remoteStore           *remote.Store
-	agentStore            *remote.AgentStore
-	tunnels               *tunnel.Manager
+	// remoteObservation 统一生成已脱敏系统身份与固定端口直连观察。
+	remoteObservation remoteobservation.Observer
+	agentStore        *remote.AgentStore
+	// remoteNodeMutations 统一保证连接配置持久化成功后才使旧隧道运行态失效。
+	remoteNodeMutations remoteNodeMutationService
+	tunnels             *tunnel.Manager
 	// debugSessions 持久化本机排障记录，供 MCP 与用户共享诊断上下文。
 	debugSessions debugsession.Store
+	// debugCredentialLeases 保存显式授权、进程内且有 TTL 的调试凭据；不会进入 DataDir。
+	debugCredentialLeases *debugcredential.Store
 	// operationApprovals 持久化 MCP 写操作审批请求和一次性 token 状态。
 	operationApprovals operation.ApprovalStore
 	// operationAudit 持久化 MCP 写操作安全链路审计事件。
@@ -299,6 +309,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	remoteObservation := cfg.RemoteObservationOverride
+	if remoteObservation == nil {
+		remoteObservation = remoteobservation.NewService(id.NodeID, remoteObservationHostSource{store: remoteStore})
+	}
 	agentStore := remote.NewAgentStore(filepath.Join(cfg.DataDir, "agents.json"), remoteStore)
 	if err := agentStore.MigrateLegacyHostAgents(); err != nil {
 		_ = s.Close()
@@ -448,9 +462,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
+		remoteObservation:           remoteObservation,
 		agentStore:                  agentStore,
 		tunnels:                     tunnels,
 		debugSessions:               debugSessions,
+		debugCredentialLeases:       debugcredential.NewStore(debugcredential.Options{}),
 		operationApprovals:          operationApprovals,
 		operationAudit:              operationAudit,
 		operationGrace:              operationGrace,
@@ -477,6 +493,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
 		ingressRegistry:             ingress.NewRegistry(),
 	}
+	app.remoteNodeMutations = newRemoteNodeMutationApplication(remoteStore, agentStore, tunnelRuntimeInvalidatorFunc(func(hostID string) {
+		// 通过 App 当前 manager 间接调用，允许测试替换 dialer/manager 后仍验证真实失效语义。
+		app.tunnels.Disconnect(hostID)
+	}))
 	cleaner := newLogCleaner(s, cleanupConfig{
 		RetentionDays: settings.LogRetentionDays,
 		MaxBytes:      settings.LogMaxBytes,
@@ -538,6 +558,9 @@ func (a *App) Close() {
 
 // doClose 执行真实的资源释放，仅由 Close 经 sync.Once 调用一次。
 func (a *App) doClose() {
+	if a.debugCredentialLeases != nil {
+		a.debugCredentialLeases.Clear()
+	}
 	if a.nodeRegistryCancel != nil {
 		a.nodeRegistryCancel()
 	}
@@ -612,6 +635,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
 	mux.HandleFunc("GET /api/projects/{id}/config", a.getProjectConfig)
 	mux.HandleFunc("GET /api/debug-credentials", a.debugCredentials)
+	mux.HandleFunc("POST /api/debug-credential-leases", a.createDebugCredentialLease)
+	mux.HandleFunc("DELETE /api/debug-credential-leases/{id}", a.deleteDebugCredentialLease)
 	mux.HandleFunc("POST /api/config-changes/preview", a.previewConfigChange)
 	mux.HandleFunc("POST /api/config-changes/apply", a.applyConfigChange)
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
@@ -765,6 +790,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/agents/install-binary", a.serveAgentInstallBinary)
 	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
 	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
+	mux.HandleFunc("GET /api/agents/{host_id}/direct-exposure", a.getAgentDirectExposure)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
 

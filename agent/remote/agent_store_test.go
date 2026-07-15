@@ -71,7 +71,7 @@ func TestHostStorePersistsHostWithoutAgent(t *testing.T) {
 func TestAgentStoreMigratesLegacyHostAgentIntoAgentsJSON(t *testing.T) {
 	store, agents, hostsPath, agentsPath := newAgentStore(t)
 	require.NoError(t, os.WriteFile(hostsPath, []byte(`[
-	  {"id":"h1","name":"legacy","tags":[],"agent":{"token":"tok","transport":{"chain":[
+		  {"id":"h1","name":"legacy","tags":[],"ssh_host_key_fingerprint":"SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A","agent":{"token":"tok","transport":{"chain":[
 	    {"type":"direct","direct":{"address":"100.64.0.8:57017","tls":true,"ca_cert":"PEM"}},
 	    {"type":"tunnel","tunnel":{"ssh_host":"10.0.0.8","ssh_port":22,"ssh_user":"root","ssh_private_key":"KEY","remote_agent_port":57018}}
 	  ]}}}
@@ -86,6 +86,7 @@ func TestAgentStoreMigratesLegacyHostAgentIntoAgentsJSON(t *testing.T) {
 	assert.Equal(t, 22, hosts[0].SSHPort)
 	assert.Equal(t, "root", hosts[0].SSHUser)
 	assert.Equal(t, "KEY", hosts[0].SSHPrivateKey)
+	assert.Equal(t, "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A", hosts[0].SSHHostKeyFingerprint)
 
 	list, err := agents.ListAgents()
 	require.NoError(t, err)

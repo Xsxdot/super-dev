@@ -28,14 +28,22 @@ var campaignIDPattern = regexp.MustCompile(`^w10x64-[0-9a-f]{7}-[0-9]{8}T[0-9]{6
 
 func writeMarkdownReport(path string, report CampaignReport) error {
 	var out strings.Builder
-	title := "SuperDev Windows 10 x64 真实验证报告"
+	target := strings.TrimSpace(report.Target)
+	if target == "" {
+		target = WindowsValidationTargetLabel
+	}
+	if target != WindowsValidationTargetLabel {
+		return fmt.Errorf("managed report target must be %s", WindowsValidationTargetLabel)
+	}
+	title := "SuperDev " + WindowsValidationTargetLabel + " 真实验证报告"
 	if report.Kind == "superdev.windows-validation.summary" {
-		title = "SuperDev Windows 10 x64 最终聚合验收摘要"
+		title = "SuperDev " + WindowsValidationTargetLabel + " 最终聚合验收摘要"
 	}
 	fmt.Fprintf(&out, "# %s\n\n", title)
 	fmt.Fprintf(&out, "- Campaign: `%s`\n", markdownCell(report.CampaignID))
 	fmt.Fprintf(&out, "- 冻结构建: `%s` / `%s`\n", markdownCell(report.BuildCommit), markdownCell(report.ProductVersion))
 	fmt.Fprintf(&out, "- 执行 lane: `%s`\n", markdownCell(report.Lane))
+	fmt.Fprintf(&out, "- 目标平台: `%s`\n", markdownCell(target))
 	fmt.Fprintf(&out, "- 总状态: **%s**（attempted=%t）\n", report.Result.PhaseStatus, report.Result.Attempted)
 	fmt.Fprintf(&out, "- Windows 功能状态: **%s**（attempted=%t）\n", report.Functional.PhaseStatus, report.Functional.Attempted)
 	fmt.Fprintf(&out, "- 冻结验收目录: scenario `%d`，tool mapping `%d`\n", len(report.ValidationCatalog.Scenarios), len(report.ValidationCatalog.Coverage))
@@ -49,6 +57,7 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 	}{
 		{"MSI installer lane", report.Sections.MSIInstaller},
 		{"NSIS installer lane", report.Sections.NSISInstaller},
+		{"Environment preflight", report.Sections.Environment},
 		{"Core", report.Sections.Core},
 		{"七语言 provider", report.Sections.Providers},
 		{"75 MCP tools", report.Sections.MCPTools},
@@ -62,6 +71,44 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 		fmt.Fprintf(&out, "| %s | %s (attempted=%t) | `%s` | %s |\n", section.name, section.value.Result.PhaseStatus, section.value.Result.Attempted, markdownCell(section.value.EvidencePath), markdownCell(reason))
 	}
 	out.WriteString("\n")
+	if report.EnvironmentPreinstall != nil {
+		preinstall := report.EnvironmentPreinstall
+		fmt.Fprintf(&out, "## 安装前环境门禁（A）\n\n- Stage: `%s`；mode: `%s`；admitted: `%t`。\n", preinstall.Manifest.CollectionStage, preinstall.Record.Request.Mode, preinstall.Record.Decision.Admitted)
+		fmt.Fprintf(&out, "- Result: **%s**（attempted=%t）；manifest digest: `%s`。\n", preinstall.Record.Result.PhaseStatus, preinstall.Record.Result.Attempted, markdownCell(preinstall.Record.ManifestDigest))
+		fmt.Fprintf(&out, "- 稳定 runtime input / plan digest: `%s` / `%s`；A 只冻结安装前稳定字段，Host / governance 由 B 完整绑定。\n", markdownCell(preinstall.Record.StableRuntimeInputSHA256), markdownCell(preinstall.Record.StablePlanSHA256))
+		fmt.Fprintf(&out, "- 后续 B 必须通过 `previous_manifest_sha256` 绑定此 digest；证据：`prepared-backup/%s`。\n\n", filepath.ToSlash(PreparedEnvironmentPreinstallDirectory))
+	}
+	if report.EnvironmentManifest != nil {
+		out.WriteString("## 安装后环境预检（B）\n\n")
+		mode := EnvironmentAdmissionMode("")
+		if report.EnvironmentAdmissionRequest != nil {
+			mode = report.EnvironmentAdmissionRequest.Mode
+		}
+		fmt.Fprintf(&out, "- Stage: `%s`；mode: `%s`；admitted: `%t`；catalog: `%s`。\n", report.EnvironmentManifest.CollectionStage, mode, report.EnvironmentAdmission != nil && report.EnvironmentAdmission.Admitted, markdownCell(report.EnvironmentManifest.CatalogVersion))
+		fmt.Fprintf(&out, "- Previous A manifest digest: `%s`。\n", markdownCell(report.EnvironmentManifest.PreviousManifestSHA256))
+		out.WriteString("- B 完整计划与事实：`environment-plan.json` / `environment-manifest.json` / `environment-manifest.md`。\n")
+		if report.EnvironmentComparison != nil {
+			if environmentComparisonWasPersisted(report) {
+				fmt.Fprintf(&out, "- A→B 可重派生差异：`%s`（%d 条 drift）。\n", EnvironmentManifestComparisonFilename, len(report.EnvironmentComparison.Drifts))
+			} else {
+				fmt.Fprintf(&out, "- A→B 可重派生差异仅保留在 `campaign-report.json#environment_comparison`（%d 条 drift）；未声明独立 comparison 文件已落盘。\n", len(report.EnvironmentComparison.Drifts))
+			}
+		}
+		out.WriteString("\n")
+		out.WriteString("| Prerequisite | Expected | Observed | Resolved | Result | Remediation |\n|---|---|---|---|---|---|\n")
+		for _, prerequisite := range report.EnvironmentManifest.Prerequisites {
+			fmt.Fprintf(&out, "| `%s` | `%s` | `%s` | `%s` | %s | %s |\n", markdownCell(prerequisite.Key), markdownCell(CanonicalJSON(prerequisite.Expected)), markdownCell(CanonicalJSON(prerequisite.Observed)), markdownCell(CanonicalJSON(prerequisite.Resolved)), prerequisite.Result.PhaseStatus, markdownCell(prerequisite.Remediation))
+		}
+		out.WriteString("\n")
+		if report.EnvironmentComparison != nil {
+			out.WriteString("### A→B environment drift\n\n")
+			out.WriteString("| Prerequisite | Field | A | B |\n|---|---|---|---|\n")
+			for _, drift := range report.EnvironmentComparison.Drifts {
+				fmt.Fprintf(&out, "| `%s` | `%s` | `%s` | `%s` |\n", markdownCell(drift.Key), markdownCell(drift.Field), markdownCell(drift.Previous), markdownCell(drift.Current))
+			}
+			out.WriteString("\n")
+		}
+	}
 
 	out.WriteString("## 安装器与 packaged runtime 身份\n\n")
 	out.WriteString("| 类型 | 文件 | 大小 | SHA-256 |\n|---|---|---:|---|\n")
@@ -125,8 +172,44 @@ func buildReportSections(report CampaignReport) ReportSections {
 	notRun := ReportSection{Result: notRunResult("not executed in this independent lane"), Reason: "not executed in this independent lane"}
 	sections := ReportSections{
 		MSIInstaller: notRun, NSISInstaller: notRun, Core: notRun,
-		Providers: notRun, MCPTools: notRun, Pipeline: notRun,
+		Environment: notRun, Providers: notRun, MCPTools: notRun, Pipeline: notRun,
 		Cleanup: cleanupSection(report.Cleanup),
+	}
+	preinstallEvidencePath := filepath.ToSlash(filepath.Join("prepared-backup", PreparedEnvironmentPreinstallDirectory, PreparedEnvironmentPreinstallRecordFilename)) + ", " +
+		filepath.ToSlash(filepath.Join("prepared-backup", PreparedEnvironmentPreinstallDirectory, EnvironmentPlanJSONFilename)) + ", " +
+		filepath.ToSlash(filepath.Join("prepared-backup", PreparedEnvironmentPreinstallDirectory, EnvironmentManifestJSONFilename))
+	if report.EnvironmentPreinstall != nil {
+		reason := report.EnvironmentPreinstall.Record.Decision.Reason
+		if strings.TrimSpace(reason) == "" {
+			reason = resultReason(report.EnvironmentPreinstall.Record.Result)
+		}
+		sections.Environment = ReportSection{Result: report.EnvironmentPreinstall.Record.Result, EvidencePath: preinstallEvidencePath, Reason: reason}
+	}
+	if report.EnvironmentManifest != nil {
+		reason := resultReason(report.EnvironmentManifest.Result)
+		if report.EnvironmentAdmission != nil && strings.TrimSpace(report.EnvironmentAdmission.Reason) != "" {
+			reason = report.EnvironmentAdmission.Reason
+		}
+		result := report.EnvironmentManifest.Result
+		evidencePath := EnvironmentPlanJSONFilename + ", " + EnvironmentManifestJSONFilename + ", " + EnvironmentManifestMarkdownFilename
+		if report.EnvironmentPreinstall != nil {
+			result = aggregateResult("environment pre-install and post-install", 2, []ValidationResult{report.EnvironmentPreinstall.Record.Result, report.EnvironmentManifest.Result})
+			evidencePath = preinstallEvidencePath + ", " + evidencePath
+		}
+		if report.EnvironmentComparison != nil {
+			if environmentComparisonWasPersisted(report) {
+				evidencePath += ", " + EnvironmentManifestComparisonFilename
+			} else {
+				evidencePath += ", campaign-report.json#environment_comparison"
+			}
+		}
+		if report.EnvironmentComparisonPersistence != nil {
+			result = aggregateResult("environment pre-install, post-install, and comparison persistence", 2, []ValidationResult{result, *report.EnvironmentComparisonPersistence})
+			if report.EnvironmentComparisonPersistence.PhaseStatus != PhaseStatusPass {
+				reason = resultReason(*report.EnvironmentComparisonPersistence)
+			}
+		}
+		sections.Environment = ReportSection{Result: result, EvidencePath: evidencePath, Reason: reason}
 	}
 	if report.Lane == "msi_smoke" {
 		sections.MSIInstaller = ReportSection{Result: report.Installer.Result, EvidencePath: strings.Join(evidenceReferences(report.Installer.Result), ", ")}
@@ -143,6 +226,10 @@ func buildReportSections(report CampaignReport) ReportSections {
 	sections.MCPTools = ReportSection{Result: aggregateToolResult(report.ToolRows, report.RuntimeAttestation.ToolNames, report.ValidationCatalog.Coverage), EvidencePath: "campaign-report.json"}
 	sections.Pipeline = pipelineSection(report.Scenarios)
 	return sections
+}
+
+func environmentComparisonWasPersisted(report CampaignReport) bool {
+	return report.EnvironmentComparisonPersistence != nil && report.EnvironmentComparisonPersistence.PhaseStatus == PhaseStatusPass
 }
 
 func aggregateProviderResult(providers []ProviderExecution, expectedNames []string) ValidationResult {
@@ -317,7 +404,7 @@ func mergeInstallerChecks(left, right []PackageFileIdentity) []PackageFileIdenti
 func aggregateSummaryResult(sections ReportSections, currentCampaign ValidationResult) ValidationResult {
 	children := make([]ValidationResult, 0, 8)
 	for _, section := range []ReportSection{
-		sections.MSIInstaller, sections.NSISInstaller, sections.Core, sections.Providers,
+		sections.MSIInstaller, sections.NSISInstaller, sections.Environment, sections.Core, sections.Providers,
 		sections.MCPTools, sections.Pipeline, sections.Cleanup,
 	} {
 		children = append(children, section.Result)
@@ -427,6 +514,51 @@ func FinalizeCampaignCleanup(resultsRoot, campaignID, cleanupPath, preparedBacku
 		StepID: "prepared-baseline-verification", Coverage: CoverageSupporting, Result: verificationResult,
 		InlineEvidence: verificationInline,
 	})
+	stage = "merge_installer_lifecycle"
+	lifecycleDirectory := filepath.Join(backupDirectory, "installer-lifecycle")
+	factCount, factInspectErr := inspectInstallerLifecycleFactFiles(lifecycleDirectory)
+	if factInspectErr != nil {
+		return CampaignReport{}, fmt.Errorf("inspect installer lifecycle facts during cleanup finalize: %w", factInspectErr)
+	}
+	if factCount > 0 {
+		// baseline 完整性已作为独立 FAIL 事实时仍需把 cleanup 报告固化；只有摘要
+		// 完整的 prepared 输入才有资格继续证明 lifecycle 平台/clean-baseline 合同。
+		if baselineErr == nil {
+			if err := validateCleanInstallerBaseline(filepath.Join(backupDirectory, "baseline.json")); err != nil {
+				return CampaignReport{}, fmt.Errorf("verify installer lifecycle prepared baseline: %w", err)
+			}
+		}
+		factBinding, readErr := readInstallerLifecycleFactBinding(backupDirectory)
+		if readErr != nil {
+			return CampaignReport{}, fmt.Errorf("read installer lifecycle during cleanup finalize: %w", readErr)
+		}
+		binding, bindingErr := installerLifecycleBindingFromReport(report, preparedManifest, factBinding.InstallDirectory)
+		if bindingErr != nil {
+			return CampaignReport{}, fmt.Errorf("bind installer lifecycle during cleanup finalize: %w", bindingErr)
+		}
+		verified, verifyErr := loadVerifiedInstallerLifecycleFacts(backupDirectory, binding, resultInput(report.Installer.Artifact))
+		if verifyErr != nil {
+			return CampaignReport{}, fmt.Errorf("verify installer lifecycle during cleanup finalize: %w", verifyErr)
+		}
+		report.Installer = verified.Execution
+		log.WithFields(map[string]any{
+			"campaign_id": campaignID,
+			"lane":        report.Lane,
+			"actions":     len(verified.Evidence),
+			"status":      report.Installer.Lifecycle.PhaseStatus,
+		}).Info("prepared installer lifecycle facts 已并入 cleanup 最终报告")
+	} else if report.Lane != "core_only" {
+		// 四动作事实不存在时必须回落到明确 NOT_RUN；持久化报告里的旧 PASS 不是动作事实源。
+		report.Installer, err = installerExecutionWithoutRecordedLifecycle(
+			report.Lane,
+			resultInput(report.Installer.Artifact),
+			"prepared installer lifecycle action facts were not found during cleanup finalization",
+		)
+		if err != nil {
+			return CampaignReport{}, fmt.Errorf("derive missing installer lifecycle during cleanup finalize: %w", err)
+		}
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": report.Lane}).Error("prepared installer lifecycle 缺失，installer 保持 NOT_RUN")
+	}
 	report.Cleanup = cleanup
 	report, err = rederiveCampaignReport(report)
 	if err != nil {
@@ -570,6 +702,9 @@ func deriveCampaignCompletionResult(name string, report CampaignReport) Validati
 		resultOrNotRun(report.Functional, "functional execution did not produce facts"),
 	)
 	children = appendPrerequisiteResults(children, report.Prerequisites)
+	if report.EnvironmentManifest != nil {
+		children = append(children, report.EnvironmentManifest.Result)
+	}
 	for _, scenario := range report.Scenarios {
 		children = appendPrerequisiteResults(children, scenario.Prerequisites)
 		for _, step := range scenario.Steps {

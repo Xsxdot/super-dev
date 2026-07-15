@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/execenv"
 	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -313,13 +315,9 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		return Runtime{}, err
 	}
 	cfg.AdapterPort = port
-	cmd, err := provider.AdapterCommand(cfg)
+	cmd, process, err := m.resolveAndLaunchAdapter(ctx, cfg, provider)
 	if err != nil {
 		return Runtime{}, err
-	}
-	process, err := m.launch(ctx, cmd)
-	if err != nil {
-		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
 	closeProcess := process.Close
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
@@ -624,13 +622,9 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		return Runtime{}, err
 	}
 	cfg.AdapterPort = port
-	cmd, err := provider.AdapterCommand(cfg)
+	cmd, process, err := m.resolveAndLaunchAdapter(ctx, cfg, provider)
 	if err != nil {
 		return Runtime{}, err
-	}
-	process, err := m.launch(ctx, cmd)
-	if err != nil {
-		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
 	if err != nil {
@@ -723,6 +717,14 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 //   - 不 reserve 端口、不 spawn adapter（debuggee 自身即 DAP 服务，如 debugpy --listen）
 //   - dial 的是 targetPort 本身；close 时只断开 DAP，绝不杀 debuggee（普通 dev 进程）
 func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, provider Provider, targetPort int, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
+	// debuggee 已直接暴露 DAP 协议时没有 executable 可解析；记录 not_applicable，避免
+	// 观察端把“没有 adapter start 日志”误判成漏执行或 silent fallback。
+	logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithFields(map[string]any{
+		"provider":      cfg.Provider,
+		"deployment_id": cfg.Target.DeploymentID,
+		"source":        AdapterCommandSourceNotApplicable,
+		"target_port":   targetPort,
+	}).Info("direct DAP attach does not require an external adapter")
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", targetPort), 5*time.Second)
 	if err != nil {
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: cfg.Provider}, err)
@@ -1938,12 +1940,61 @@ func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error
 	}
 }
 
+// resolveAndLaunchAdapter 解析并启动一次外部 DAP adapter。
+//
+// 参数：
+//   - ctx: 控制启动阶段取消
+//   - cfg: deployment 的 adapter 配置、环境和工作目录
+//   - provider: 生成语言固定参数并调用统一 executable resolver 的 provider
+//
+// 返回：
+//   - 已解析的命令与进程句柄
+//   - 解析或启动失败时返回保留 provider、source 和 executable identity 的稳定错误
+//
+// 注意：
+//   - 一旦 resolver 选中候选，启动失败必须原样返回；这里绝不尝试低优先级候选。
+func (m *Manager) resolveAndLaunchAdapter(ctx context.Context, cfg LaunchConfig, provider Provider) (AdapterCommand, AdapterProcess, error) {
+	cmd, err := provider.AdapterCommand(cfg)
+	if err != nil {
+		fields := map[string]any{
+			"provider":      cfg.Provider,
+			"deployment_id": cfg.Target.DeploymentID,
+		}
+		if info, ok := AdapterErrorDetails(err); ok {
+			fields["cause_code"] = info.CauseCode
+		}
+		logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithErr(err).WithFields(fields).Error("debug adapter command resolution failed")
+		return AdapterCommand{}, AdapterProcess{}, err
+	}
+	log := logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithFields(map[string]any{
+		"provider":            cmd.Provider,
+		"deployment_id":       cfg.Target.DeploymentID,
+		"source":              cmd.Source,
+		"executable_identity": adapterExecutableIdentity(cmd.Name),
+	})
+	log.Info("debug adapter process starting")
+	process, err := m.launch(ctx, cmd)
+	if err != nil {
+		stableErr := ensureAdapterError(CodeAdapterStartFailed, cmd, err)
+		causeCode := AdapterCauseStartFailed
+		if info, ok := AdapterErrorDetails(stableErr); ok {
+			causeCode = info.CauseCode
+		}
+		// Error() 继续只暴露稳定 code/source/executable；底层 cause 仅以不可逆分类进入日志，
+		// 既能区分安装缺失与权限问题，也不会把绝对路径、参数或环境变量写入日志。
+		log.WithErr(stableErr).WithField("cause_code", causeCode).Error("debug adapter process start failed")
+		return cmd, AdapterProcess{}, stableErr
+	}
+	log.WithField("pid", process.PID).Info("debug adapter process started")
+	return cmd, process, nil
+}
+
 // providerIsExperimental 报告该调试 provider 是否为实验性档位。
 //
 // 实验性 = 不开箱即用、需用户自备 / 配置 adapter 才能调试：
 //   - Node：依赖打包的 js-debug，且 script 模式 attach 行为仍在收敛
 //   - JVM：官方 java-debug 是 JDT LS plugin，没有 standalone adapter，
-//     必须由用户把 JDT LS/java-debug 启动器配进 code_debug.adapter_command
+//     必须由用户显式配置或在 PATH 提供符合端口合同的 jvm-dap-wrapper
 //
 // 以能力归类代替语言硬编码：新增「需自备 adapter」的语言只需在此登记，
 // list_code_debug_targets 不必再叠 == ProviderX 判断。
@@ -1985,7 +2036,7 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 	// 整组回收，否则残留孤儿（2026-07-07 实测三件套残留 24 小时）。
 	setAdapterProcessGroup(c)
 	if err := c.Start(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, err)
 		}
 		return AdapterProcess{}, NewAdapterError(CodeAdapterStartFailed, cmd, err)

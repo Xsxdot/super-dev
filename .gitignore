@@ -12,6 +12,10 @@ node_modules/
 dist/
 coverage/
 artifacts/
+# The Windows validation package consumes these immutable pipeline fixtures as
+# source inputs; hiding them makes clean-clone validation non-reproducible.
+!validation/windows-real/pipeline/artifacts/
+!validation/windows-real/pipeline/artifacts/**
 *.profraw
 *.profdata
 desktop/dist/

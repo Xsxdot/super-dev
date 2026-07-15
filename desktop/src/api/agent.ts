@@ -889,9 +889,10 @@ export interface Host {
   ssh_host?: string
   ssh_port?: number
   ssh_user?: string
-  ssh_password?: string
-  ssh_private_key?: string
-  ssh_key_path?: string
+  ssh_credential_configured?: boolean
+  ssh_password_configured?: boolean
+  ssh_private_key_configured?: boolean
+  ssh_host_key_fingerprint_configured?: boolean
   is_self?: boolean
   node_id?: string
 }
@@ -1146,6 +1147,8 @@ export interface TunnelStatus {
   agent?: AgentHealth
   agent_version?: string
   agent_checked_at?: string
+  host_key_verified?: boolean
+  host_key_identity_sha256?: string
 }
 
 export interface ManagedCollectorStatus {
@@ -1294,6 +1297,10 @@ export interface HostCreatePayload {
   ssh_password?: string
   ssh_private_key?: string
   ssh_key_path?: string
+  ssh_host_key_fingerprint?: string
+  clear_ssh_password?: boolean
+  clear_ssh_private_key?: boolean
+  clear_ssh_host_key_fingerprint?: boolean
 }
 
 export type HostUpdatePayload = Partial<HostCreatePayload>

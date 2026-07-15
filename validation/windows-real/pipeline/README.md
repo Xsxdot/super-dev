@@ -1,6 +1,6 @@
 # Windows-to-Linux pipeline validation assets
 
-This directory contains the portable, campaign-scoped assets used by the Windows 10 x64 validation package to prove the SuperDev Agent pipeline route against a dedicated Linux x64 node.
+This directory contains the portable, campaign-scoped assets used by the Windows 10 22H2 x64 (build 19045) validation package to prove the SuperDev Agent pipeline route against a dedicated Linux x64 node.
 
 Responsibilities:
 

@@ -18,6 +18,82 @@ import (
 	"testing"
 )
 
+func TestWriteMarkdownReportUsesExactWindowsTargetLabel(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "campaign-report.md")
+	report := CampaignReport{Kind: "superdev.windows-validation.campaign-report", Target: WindowsValidationTargetLabel}
+	if err := writeMarkdownReport(path, report); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "SuperDev "+WindowsValidationTargetLabel+" 真实验证报告") ||
+		!strings.Contains(text, "目标平台: `"+WindowsValidationTargetLabel+"`") {
+		t.Fatalf("managed report does not expose the exact target label: %s", text)
+	}
+	if strings.Contains(text, "Windows 10"+" x64") {
+		t.Fatalf("managed report retained the ambiguous legacy target label: %s", text)
+	}
+}
+
+func TestEnvironmentSectionDoesNotClaimUnpersistedComparisonEvidence(t *testing.T) {
+	t.Parallel()
+	pass := testPassResult()
+	failedPersistence := attemptedResult(false, "persist A-to-B environment comparison failed", "2026-07-15T02:00:00Z", "2026-07-15T02:00:01Z", []EvidenceRecord{{
+		Name: "environment_manifest_comparison", Required: true, Present: false, Ref: EnvironmentManifestComparisonFilename,
+	}})
+	report := CampaignReport{
+		Lane:                             "nsis_core",
+		EnvironmentPreinstall:            &PreparedEnvironmentPreinstallEvidence{Record: PreparedEnvironmentPreinstall{Result: pass}},
+		EnvironmentManifest:              &EnvironmentManifest{Result: pass},
+		EnvironmentComparison:            &EnvironmentManifestComparison{SchemaVersion: EnvironmentManifestComparisonSchemaVersion},
+		EnvironmentComparisonPersistence: &failedPersistence,
+	}
+
+	section := buildReportSections(report).Environment
+	if section.Result.PhaseStatus != PhaseStatusFail {
+		t.Fatalf("comparison persistence failure status=%s, want FAIL", section.Result.PhaseStatus)
+	}
+	if strings.Contains(section.EvidencePath, EnvironmentManifestComparisonFilename) {
+		t.Fatalf("unpersisted comparison file was claimed as evidence: %s", section.EvidencePath)
+	}
+	if !strings.Contains(section.EvidencePath, "campaign-report.json#environment_comparison") {
+		t.Fatalf("inline comparison evidence is missing: %s", section.EvidencePath)
+	}
+}
+
+func TestCoreOnlyInstallerExclusionRequiresEveryDerivedPhaseNotRun(t *testing.T) {
+	t.Parallel()
+	valid, err := excludedCoreOnlyInstaller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCoreOnlyInstallerExclusion(valid); err != nil {
+		t.Fatalf("valid core_only exclusion was rejected: %v", err)
+	}
+
+	notRun := ResultInput{Facts: ExecutionFacts{NotRunReason: "core_only excludes installer activity"}}
+	blocked := ResultInput{Facts: ExecutionFacts{BlockedBy: "synthetic installer prerequisite"}}
+	invalid, err := DeriveInstallerExecution(InstallerExecutionFacts{
+		Format: "core_only", Artifact: notRun, Install: blocked, Start: notRun, Stop: notRun, Uninstall: notRun,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCoreOnlyInstallerExclusion(invalid); err == nil {
+		t.Fatal("core_only installer with a BLOCKED install phase survived exclusion validation")
+	}
+
+	wrongFormat := valid
+	wrongFormat.Format = "nsis"
+	if err := validateCoreOnlyInstallerExclusion(wrongFormat); err == nil {
+		t.Fatal("core_only installer exclusion accepted a non-core_only format")
+	}
+}
+
 func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -27,9 +103,9 @@ func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	msiID := "w10x64-e3cc94f-20260713T010101Z-a1b2c3"
 	msi := CampaignReport{
 		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: msiID,
-		Result: pass, Functional: pass, BuildCommit: "e3cc94f", Lane: "msi_smoke", Installer: testCompleteInstaller(t, "msi"),
+		Result: pass, Functional: pass, BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "msi_smoke", Installer: testCompleteInstaller(t, "msi"),
 		RuntimeAttestation: RuntimeAttestation{Result: pass}, Operations: []StepExecution{testStopOperation()},
-		InstallerChecks:   []PackageFileIdentity{{Path: "frozen.msi"}},
+		InstallerChecks:   []PackageFileIdentity{{Path: "frozen.msi", SizeBytes: 11, SHA256: strings.Repeat("a", 64)}},
 		ValidationCatalog: validationCatalog, Scenarios: scenarioExecutions, ToolRows: toolRows,
 		Cleanup: completedCleanupFacts(true, "", "2026-07-13T01:01:01Z"), FinishedAtUTC: "2026-07-13T01:01:01Z",
 	}
@@ -39,6 +115,17 @@ func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	}
 
 	nsisID := "w10x64-e3cc94f-20260713T020202Z-d4e5f6"
+	environmentPlan, environmentManifest := collectPassingDefaultEnvironmentManifest(t)
+	environmentManifest.CampaignID = nsisID
+	governanceIndex := environmentPrerequisiteIndex(t, environmentManifest, EnvironmentKeyRemoteGovernance)
+	environmentManifest.Prerequisites[governanceIndex].Observed.Attributes["campaign_id"] = nsisID
+	environmentManifest.Prerequisites[governanceIndex].ObservationDigest = CanonicalEnvironmentObservationDigest(environmentManifest.Prerequisites[governanceIndex])
+	sealEnvironmentCollectionProvenance(&environmentManifest)
+	environmentRequest := EnvironmentAdmissionRequest{Mode: EnvironmentAdmissionFinal, ExpectedPlanDigest: CanonicalEnvironmentPlanDigest(environmentPlan)}
+	environmentDecision, err := AdmitEnvironmentManifest(environmentManifest, environmentRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	providers := make([]ProviderExecution, 7)
 	providerNames := make([]string, 7)
 	for index := range providers {
@@ -47,9 +134,11 @@ func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	}
 	nsis := CampaignReport{
 		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: nsisID,
-		Result: notRunResult("cleanup pending"), Functional: pass, BuildCommit: "e3cc94f", Lane: "nsis_core", Installer: testCompleteInstaller(t, "nsis"),
+		Result: notRunResult("cleanup pending"), Functional: pass, BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "nsis_core", Installer: testCompleteInstaller(t, "nsis"),
 		RuntimeAttestation: RuntimeAttestation{Result: pass, ToolNames: toolNames, ProviderNames: providerNames}, Operations: []StepExecution{testStopOperation()},
-		InstallerChecks: []PackageFileIdentity{{Path: "frozen.exe"}}, Providers: providers, ToolRows: toolRows,
+		EnvironmentManifest: &environmentManifest, EnvironmentPlan: &environmentPlan,
+		EnvironmentAdmissionRequest: &environmentRequest, EnvironmentAdmission: &environmentDecision,
+		InstallerChecks: []PackageFileIdentity{{Path: "frozen.exe", SizeBytes: 22, SHA256: strings.Repeat("b", 64)}}, Providers: providers, ToolRows: toolRows,
 		ValidationCatalog: validationCatalog, Scenarios: scenarioExecutions,
 		Cleanup: pendingCleanupRecord("cleanup pending", ""), FinishedAtUTC: "2026-07-13T02:02:02Z",
 	}
@@ -61,6 +150,7 @@ func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	cleanupPath := filepath.Join(nsisDir, "cleanup-report.json")
 	cleanup := completedCleanupFacts(true, "", "2026-07-13T02:03:03Z")
 	preparedBackup := bindCleanupToPreparedBackup(t, root, nsisID, "nsis_core", &cleanup)
+	bindCompleteTestLifecycleToPreparedBackup(t, preparedBackup, nsis)
 	cleanup.SchemaVersion, cleanup.Kind, cleanup.CampaignID = 2, "superdev.windows-validation.cleanup-report", nsisID
 	if err := writeJSON(cleanupPath, RawMessageMap(cleanup)); err != nil {
 		t.Fatal(err)
@@ -91,9 +181,9 @@ func TestFinalizeCampaignCleanupCannotPreserveOldPassAfterCleanupFailure(t *test
 	directory := filepath.Join(root, campaignID)
 	report := CampaignReport{
 		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
-		Result: testPassResult(), Functional: testPassResult(), BuildCommit: "e3cc94f", Lane: "msi_smoke", Installer: testCompleteInstaller(t, "msi"),
+		Result: testPassResult(), Functional: testPassResult(), BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "msi_smoke", Installer: testCompleteInstaller(t, "msi"),
 		RuntimeAttestation: RuntimeAttestation{Result: testPassResult()}, Operations: []StepExecution{testStopOperation()},
-		InstallerChecks: []PackageFileIdentity{{Path: "frozen.msi"}},
+		InstallerChecks: []PackageFileIdentity{{Path: "frozen.msi", SizeBytes: 11, SHA256: strings.Repeat("a", 64)}},
 		Cleanup:         completedCleanupFacts(true, "", "2026-07-13T03:03:03Z"), FinishedAtUTC: "2026-07-13T03:03:03Z",
 	}
 	report.ValidationCatalog, report.Scenarios, report.ToolRows, _ = testValidationSurface(notRunResult("independent MSI lane"))
@@ -104,6 +194,7 @@ func TestFinalizeCampaignCleanupCannotPreserveOldPassAfterCleanupFailure(t *test
 	cleanupPath := filepath.Join(directory, "cleanup-report.json")
 	cleanup := completedCleanupFacts(false, "baseline drift", "2026-07-13T03:04:04Z")
 	preparedBackup := bindCleanupToPreparedBackup(t, root, campaignID, "msi_smoke", &cleanup)
+	bindCompleteTestLifecycleToPreparedBackup(t, preparedBackup, report)
 	baselinePath := filepath.Join(preparedBackup, "baseline.json")
 	baselineBytes, err := os.ReadFile(baselinePath)
 	if err != nil {
@@ -137,6 +228,42 @@ func TestFinalizeCampaignCleanupCannotPreserveOldPassAfterCleanupFailure(t *test
 	}
 }
 
+func TestFinalizeCampaignCleanupCannotPreserveInstallerPassWithoutActionFacts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	campaignID := "w10x64-e3cc94f-20260713T070707Z-aabbcc"
+	directory := filepath.Join(root, campaignID)
+	pass := testPassResult()
+	catalog, scenarios, rows, _ := testValidationSurface(notRunResult("independent missing-action-facts test"))
+	report := CampaignReport{
+		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
+		Result: pass, Functional: pass, BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "msi_smoke",
+		Installer:          testCompleteInstaller(t, "msi"),
+		InstallerChecks:    []PackageFileIdentity{{Path: "frozen.msi", SizeBytes: 11, SHA256: strings.Repeat("a", 64)}},
+		RuntimeAttestation: RuntimeAttestation{Result: pass}, Operations: []StepExecution{testStopOperation()},
+		ValidationCatalog: catalog, Scenarios: scenarios, ToolRows: rows,
+		Cleanup: pendingCleanupRecord("cleanup pending", ""), FinishedAtUTC: resultTestTime,
+	}
+	if err := writeCampaignReports(directory, NewRedactor(), report); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := completedCleanupFacts(true, "", resultTestTime)
+	preparedBackup := bindCleanupToPreparedBackup(t, root, campaignID, "msi_smoke", &cleanup)
+	cleanup.SchemaVersion, cleanup.Kind, cleanup.CampaignID = 2, "superdev.windows-validation.cleanup-report", campaignID
+	cleanupPath := filepath.Join(directory, "cleanup-report.json")
+	if err := writeJSON(cleanupPath, cleanup); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := FinalizeCampaignCleanup(root, campaignID, cleanupPath, preparedBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Installer.Result.PhaseStatus == PhaseStatusPass || final.Installer.InstallerExecuted {
+		t.Fatalf("missing prepared lifecycle action facts preserved installer PASS: %#v", final.Installer)
+	}
+}
+
 func stepExecutionByID(steps []StepExecution, stepID string) (StepExecution, bool) {
 	for _, step := range steps {
 		if step.StepID == stepID {
@@ -167,9 +294,9 @@ func TestFinalizeCampaignCleanupRederivesTamperedPersistedStatus(t *testing.T) {
 	}
 	report := CampaignReport{
 		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report", CampaignID: campaignID,
-		Result: pass, Functional: pass, BuildCommit: "e3cc94f", Lane: "nsis_core", Installer: testCompleteInstaller(t, "nsis"),
+		Result: pass, Functional: pass, BuildCommit: "e3cc94f", ProductVersion: "0.2.1", Lane: "nsis_core", Installer: testCompleteInstaller(t, "nsis"),
 		RuntimeAttestation: RuntimeAttestation{Result: pass, ToolNames: toolNames, ProviderNames: providerNames},
-		InstallerChecks:    []PackageFileIdentity{{Path: "frozen.exe"}}, Operations: []StepExecution{testStopOperation()},
+		InstallerChecks:    []PackageFileIdentity{{Path: "frozen.exe", SizeBytes: 22, SHA256: strings.Repeat("b", 64)}}, Operations: []StepExecution{testStopOperation()},
 		Providers: providers, ToolRows: rows,
 		ValidationCatalog: validationCatalog, Scenarios: scenarios,
 		Cleanup: pendingCleanupRecord("cleanup pending", ""), FinishedAtUTC: resultTestTime,
@@ -180,6 +307,7 @@ func TestFinalizeCampaignCleanupRederivesTamperedPersistedStatus(t *testing.T) {
 	cleanupPath := filepath.Join(directory, "cleanup-report.json")
 	cleanup := completedCleanupFacts(true, "", resultTestTime)
 	preparedBackup := bindCleanupToPreparedBackup(t, root, campaignID, "nsis_core", &cleanup)
+	bindCompleteTestLifecycleToPreparedBackup(t, preparedBackup, report)
 	cleanup.SchemaVersion, cleanup.Kind, cleanup.CampaignID = 2, "superdev.windows-validation.cleanup-report", campaignID
 	if err := writeJSON(cleanupPath, RawMessageMap(cleanup)); err != nil {
 		t.Fatal(err)
@@ -296,6 +424,65 @@ func TestRederiveCampaignReportRejectsDeletedOrRemappedFrozenFacts(t *testing.T)
 	}
 }
 
+func TestRederiveScenarioExecutionIncludesAttemptedPrerequisiteFacts(t *testing.T) {
+	t.Parallel()
+	pass := testPassResult()
+	drift := attemptedResult(false, "remote machine identity drifted after cleanup", resultTestTime, resultTestTime, nil)
+	scenario, err := rederiveScenarioExecution(ScenarioExecution{
+		ID: "remote-pipeline",
+		Steps: []StepExecution{{
+			StepID: "pipeline-cleanup",
+			Result: pass,
+		}},
+		Prerequisites: []StepExecution{{
+			StepID: "remote-observation-after-cleanup",
+			Result: drift,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("rederive remote scenario: %v", err)
+	}
+	if scenario.Result.PhaseStatus != PhaseStatusFail {
+		t.Fatalf("remote scenario status = %s, want FAIL from attempted identity checkpoint", scenario.Result.PhaseStatus)
+	}
+}
+
+func TestWriteCampaignReportsUsesSameDerivedRemoteFailureForJSONAndMarkdown(t *testing.T) {
+	t.Parallel()
+	pass := testPassResult()
+	catalog, scenarios, rows, toolNames := testValidationSurface(pass)
+	scenarios[0].Prerequisites = []StepExecution{{
+		StepID: "remote-observation-after-cleanup",
+		Result: attemptedResult(false, "remote machine identity drifted after cleanup", resultTestTime, resultTestTime, nil),
+	}}
+	report := CampaignReport{
+		SchemaVersion: 2, Kind: "superdev.windows-validation.campaign-report",
+		CampaignID: "w10x64-e3cc94f-20260715T130000Z-aabbcc", Lane: "core_only",
+		Installer:          testCompleteInstaller(t, "nsis"),
+		RuntimeAttestation: RuntimeAttestation{Result: pass, ToolNames: toolNames},
+		ValidationCatalog:  catalog, Scenarios: scenarios, ToolRows: rows,
+		Cleanup: pendingCleanupRecord("cleanup pending", ""), FinishedAtUTC: resultTestTime,
+	}
+	directory := t.TempDir()
+	if err := writeCampaignReports(directory, NewRedactor(), report); err != nil {
+		t.Fatalf("write campaign reports: %v", err)
+	}
+	var archived CampaignReport
+	if err := readJSONFile(filepath.Join(directory, "campaign-report.json"), &archived); err != nil {
+		t.Fatalf("read campaign JSON: %v", err)
+	}
+	if archived.Sections.Pipeline.Result.PhaseStatus != PhaseStatusFail {
+		t.Fatalf("JSON remote pipeline status = %s, want FAIL", archived.Sections.Pipeline.Result.PhaseStatus)
+	}
+	markdown, err := os.ReadFile(filepath.Join(directory, "campaign-report.md"))
+	if err != nil {
+		t.Fatalf("read campaign Markdown: %v", err)
+	}
+	if !strings.Contains(string(markdown), "| Remote pipeline | FAIL (attempted=true) |") {
+		t.Fatalf("Markdown remote pipeline section did not preserve derived FAIL: %s", markdown)
+	}
+}
+
 func testPassResult() ValidationResult {
 	return deriveKnown(successfulResultInput())
 }
@@ -372,6 +559,7 @@ func bindCleanupToPreparedBackup(t *testing.T, root, campaignID, lane string, cl
 	}
 	baseline := map[string]any{
 		"schema_version": 1, "kind": "superdev.windows-validation.machine-baseline",
+		"windows_platform":   testPreparedWindowsPlatformFacts(),
 		"superdev_processes": []any{}, "listening_port_57017": []any{}, "install_paths": []any{},
 		"uninstall_entries": []any{}, "connector_files": []any{}, "user_state": map[string]any{"present": false, "files": []any{}},
 	}
@@ -405,6 +593,32 @@ func bindCleanupToPreparedBackup(t *testing.T, root, campaignID, lane string, cl
 		t.Fatal(err)
 	}
 	return backup
+}
+
+func testPreparedWindowsPlatformFacts() map[string]any {
+	return map[string]any{
+		"product_name": "Windows 10 Pro", "current_build": "19045", "display_version": "22H2",
+		"installation_type": "Client", "architecture": "amd64", "ubr": "5737",
+		"installed_kbs": []string{"KB5060531"}, "support_scope": WindowsValidationSupportScope,
+		"esu_evidence_status": WindowsValidationESUEvidenceStatus,
+	}
+}
+
+func bindCompleteTestLifecycleToPreparedBackup(t *testing.T, backup string, report CampaignReport) {
+	t.Helper()
+	var prepared preparedBackupManifest
+	if err := readJSONFile(filepath.Join(backup, "backup-manifest.json"), &prepared); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := installerLifecycleBindingFromReport(report, prepared, filepath.Join(t.TempDir(), "SuperDev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(backup, "installer-lifecycle")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestInstallerLifecycleFacts(t, directory, testInstallerLifecycleFacts(binding))
 }
 
 func testCompleteInstaller(t *testing.T, format string) InstallerExecution {

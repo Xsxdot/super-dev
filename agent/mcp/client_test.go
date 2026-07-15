@@ -50,7 +50,7 @@ func TestHTTPAgentClientListHosts(t *testing.T) {
 		assert.Equal(t, "/api/hosts", r.URL.Path)
 		_ = json.NewEncoder(w).Encode([]HostReference{
 			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
-			{ID: "host-uuid-1", Name: "prod-a", PrivateIP: "10.0.0.1", Tags: []string{"prod"}},
+			{ID: "host-uuid-1", Name: "prod-a", Tags: []string{"prod"}},
 		})
 	}))
 	defer srv.Close()

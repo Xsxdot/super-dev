@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/remoteobservation"
 )
 
 // putManagedDeployments 处理 PUT /api/managed-deployments。
@@ -45,6 +46,7 @@ func (a *App) getManagedDeploymentsStatus(w http.ResponseWriter, r *http.Request
 	a.mu.RLock()
 	status := a.managedStatus
 	a.mu.RUnlock()
+	status.ActiveCollectorCount = remoteobservation.CountActiveCollectors(a.collector.List())
 	if status.Collectors == nil {
 		status.Collectors = []model.ManagedCollectorStatus{}
 	}

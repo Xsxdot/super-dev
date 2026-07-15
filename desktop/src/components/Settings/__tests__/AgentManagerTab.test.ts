@@ -77,7 +77,9 @@ function hostForManager(id: string): Host {
     ssh_host: '10.0.0.8',
     ssh_port: 22,
     ssh_user: 'root',
-    ssh_private_key: 'KEY',
+    ssh_credential_configured: true,
+    ssh_private_key_configured: true,
+    ssh_host_key_fingerprint_configured: true,
   }
 }
 

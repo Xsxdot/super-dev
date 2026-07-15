@@ -6,7 +6,7 @@
 //
 // 边界：
 //   - 使用内存 fake，不启动 packaged MCP 或 Windows 进程
-//   - 不替代 Windows 10 x64 真机证据
+//   - 不替代 Windows 10 22H2 x64 (build 19045) 真机证据
 package windowsvalidation
 
 import (

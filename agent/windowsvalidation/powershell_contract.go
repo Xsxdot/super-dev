@@ -20,16 +20,29 @@ import (
 
 var windowsPowerShellEntrypoints = []string{
 	"Prepare-Validation.ps1",
+	"Invoke-InstallerLifecycle.ps1",
 	"Run-Validation.ps1",
 	"Cleanup-Validation.ps1",
 }
 
+var windowsPowerShellInternalHelpers = []string{
+	filepath.Join("internal", "Invoke-InstallerLifecycleAction.ps1"),
+}
+
 var windowsPowerShellRunbookCommands = []string{
-	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane msi_smoke`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane msi_smoke -RuntimeInput ..\runtime-input.json`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action install -BackupDirectory <msi-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64_en-US.msi -InstallDirectory <msi-install-dir>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action start -BackupDirectory <msi-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64_en-US.msi -InstallDirectory <msi-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane msi_smoke -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <msi-backup>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action stop -BackupDirectory <msi-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64_en-US.msi -InstallDirectory <msi-install-dir>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action uninstall -BackupDirectory <msi-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64_en-US.msi -InstallDirectory <msi-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <msi-id> -BackupDirectory <msi-backup> -RestoreUserState`,
-	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane nsis_core`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane nsis_core -RuntimeInput ..\runtime-input.json`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action install -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action start -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane nsis_core -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <nsis-backup>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action stop -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action uninstall -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <nsis-id> -BackupDirectory <nsis-backup> -RestoreUserState`,
 }
 
@@ -41,7 +54,7 @@ func validateWindowsPowerShellRunbookContract(root string) (contractErr error) {
 			log.WithErr(contractErr).Error("Windows PowerShell 5.1 原生入口合同校验失败")
 		}
 	}()
-	for _, name := range windowsPowerShellEntrypoints {
+	for _, name := range append(append([]string{}, windowsPowerShellEntrypoints...), windowsPowerShellInternalHelpers...) {
 		path := filepath.Join(root, name)
 		fileLog := log.WithField("path", path)
 		fileLog.Debug("开始检查 Windows PowerShell 入口文件")

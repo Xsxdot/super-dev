@@ -137,6 +137,17 @@ func TestFinalArchivePowerShellEntrypointsReachStructuredPreflightOnWindowsPower
 			args:      []string{"-Lane", "msi_smoke", "-RuntimeInput", `..\runtime-input.json`, "-PreparedBackupDirectory", missingPreparedBackup},
 		},
 		{
+			name:      "installer_lifecycle",
+			script:    "Invoke-InstallerLifecycle.ps1",
+			component: "windows-validation-installer-lifecycle",
+			args: []string{
+				"-Action", "install",
+				"-BackupDirectory", missingPreparedBackup,
+				"-InstallerPath", filepath.Join(missingPreparedBackup, "frozen.msi"),
+				"-InstallDirectory", filepath.Join(t.TempDir(), "安装 目录"),
+			},
+		},
+		{
 			name:      "run_nsis",
 			script:    "Run-Validation.ps1",
 			component: "windows-validation-entry",
@@ -188,8 +199,9 @@ func TestFinalArchivePowerShellEntrypointsReachStructuredPreflightOnWindowsPower
 
 func assertWindowsPowerShell51ASTContract(t *testing.T, packageRoot string) {
 	t.Helper()
-	quotedEntrypoints := make([]string, 0, len(windowsPowerShellEntrypoints))
-	for _, name := range windowsPowerShellEntrypoints {
+	allScripts := append(append([]string{}, windowsPowerShellEntrypoints...), windowsPowerShellInternalHelpers...)
+	quotedEntrypoints := make([]string, 0, len(allScripts))
+	for _, name := range allScripts {
 		quotedEntrypoints = append(quotedEntrypoints, "'"+strings.ReplaceAll(name, "'", "''")+"'")
 	}
 	contractCommand := strings.Replace(windowsPowerShellASTContractCommand, "__ENTRYPOINTS__", strings.Join(quotedEntrypoints, ", "), 1)

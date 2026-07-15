@@ -201,6 +201,8 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	a.clearProjectBackendsLocked(before)
 	a.registerProjectBackendsLocked(a.projects[idx])
 	project := a.projects[idx]
+	// setup 是 service 全量替换入口；被删除的 scope 必须与活动视图更新原子撤销。
+	a.revokeDisappearedDebugCredentialScopesLocked([]model.Project{before}, []model.Project{project})
 	a.mu.Unlock()
 
 	loader := config.NewLoader(project.RootPath)
