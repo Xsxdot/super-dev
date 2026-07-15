@@ -232,8 +232,20 @@ try {
     $baseline = Get-MachineFacts $source
     if (@($baseline.superdev_processes).Count -ne 0) { throw 'Close SuperDev Desktop and stop all SuperDev sidecars before pre-install preparation.' }
     if (@($baseline.listening_port_57017).Count -ne 0) { throw 'Port 57017 must have no listener before installer lifecycle preparation.' }
-    if (@($baseline.uninstall_entries).Count -ne 0) { throw 'Existing SuperDev uninstall registrations must be removed before installer lifecycle preparation.' }
-    if (@($baseline.install_paths | Where-Object { [bool]$_.present }).Count -ne 0) { throw 'Existing SuperDev install directories must be removed before installer lifecycle preparation.' }
+    $hasUninstallEntries = @($baseline.uninstall_entries).Count -ne 0
+    $hasInstallPaths = @($baseline.install_paths | Where-Object { [bool]$_.present }).Count -ne 0
+    # core_only 保留既有安装身份作为 cleanup expected baseline；它只验证已安装产品的 MCP/语言能力，
+    # 不得要求操作者为了“跳过安装验证”先卸载产品。installer lane 仍必须从无安装状态开始。
+    if ($Lane -ne 'core_only') {
+        if ($hasUninstallEntries) { throw 'Existing SuperDev uninstall registrations must be removed before installer lifecycle preparation.' }
+        if ($hasInstallPaths) { throw 'Existing SuperDev install directories must be removed before installer lifecycle preparation.' }
+    } elseif ($hasUninstallEntries -or $hasInstallPaths) {
+        Write-PreparationEvent 'info' 'existing_installation_baseline' 'accepted' @{
+            uninstall_entry_count = @($baseline.uninstall_entries).Count
+            install_path_count = @($baseline.install_paths | Where-Object { [bool]$_.present }).Count
+            reason = 'core_only_preserves_existing_installation'
+        }
+    }
     # 先把完整基线持久化，再移动用户状态；中途失败时操作者仍有可机械核对的恢复依据。
     $baselineJson = $baseline | ConvertTo-Json -Depth 12
     $baselinePath = Join-Path $destination 'baseline.json'

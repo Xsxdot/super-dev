@@ -56,8 +56,8 @@ func TestFinalArchivePreservesPowerShellEntrypointBytesAndRunbookContract(t *tes
 	if !strings.Contains(runbook, WindowsValidationTargetLabel) {
 		t.Fatalf("Runbook does not expose exact target label %q", WindowsValidationTargetLabel)
 	}
-	if len(windowsPowerShellRunbookCommands) != 14 {
-		t.Fatalf("Windows PowerShell Runbook command contract has %d commands, want 14", len(windowsPowerShellRunbookCommands))
+	if len(windowsPowerShellRunbookCommands) != 17 {
+		t.Fatalf("Windows PowerShell Runbook command contract has %d commands, want 17", len(windowsPowerShellRunbookCommands))
 	}
 	for _, command := range windowsPowerShellRunbookCommands {
 		if count := strings.Count(runbook, command); count != 1 {
@@ -302,6 +302,52 @@ func TestPrepareValidationRunsReadOnlyEnvironmentGateBeforeUserStateMutation(t *
 	} {
 		if !bytes.Contains(content, marker) {
 			t.Fatalf("Prepare is missing two-stage input contract marker %q", marker)
+		}
+	}
+}
+
+func TestPrepareValidationCoreOnlyPreservesExistingInstallationAsBaseline(t *testing.T) {
+	t.Parallel()
+	path := filepath.Clean(filepath.Join("..", "..", "validation", "windows-real", "Prepare-Validation.ps1"))
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processGate := bytes.Index(content, []byte("@($baseline.superdev_processes).Count -ne 0"))
+	portGate := bytes.Index(content, []byte("@($baseline.listening_port_57017).Count -ne 0"))
+	coreOnlyBoundary := bytes.Index(content, []byte("if ($Lane -ne 'core_only') {"))
+	uninstallGate := bytes.Index(content, []byte("if ($hasUninstallEntries)"))
+	installPathGate := bytes.Index(content, []byte("if ($hasInstallPaths)"))
+	acceptedEvent := bytes.Index(content, []byte("'existing_installation_baseline' 'accepted'"))
+	if processGate < 0 || portGate <= processGate || coreOnlyBoundary <= portGate || uninstallGate <= coreOnlyBoundary || installPathGate <= uninstallGate || acceptedEvent <= installPathGate {
+		t.Fatalf("core_only baseline ordering must keep process/port gates unconditional and installation gates lane-scoped; got %d %d %d %d %d %d", processGate, portGate, coreOnlyBoundary, uninstallGate, installPathGate, acceptedEvent)
+	}
+	for _, marker := range [][]byte{
+		[]byte("core_only 保留既有安装身份作为 cleanup expected baseline"),
+		[]byte("reason = 'core_only_preserves_existing_installation'"),
+	} {
+		if !bytes.Contains(content, marker) {
+			t.Fatalf("Prepare-Validation.ps1 is missing core_only existing-installation contract %q", marker)
+		}
+	}
+}
+
+func TestRunbookCoreOnlyUsesExistingProductWithoutInstallerActions(t *testing.T) {
+	t.Parallel()
+	path := filepath.Clean(filepath.Join("..", "..", "validation", "windows-real", "Runbook.md"))
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range [][]byte{
+		[]byte("## 10. Core-only：跳过安装，只验证 MCP 与七种语言"),
+		[]byte("-Lane core_only -RuntimeInput ..\\runtime-input.json"),
+		[]byte("禁止运行 `Invoke-InstallerLifecycle.ps1`、MSI 或 NSIS EXE"),
+		[]byte("既有安装身份作为 Prepared Baseline"),
+		[]byte("installer artifact、install、start、stop、uninstall 与 lifecycle 必须全部保持 `NOT_RUN`"),
+	} {
+		if !bytes.Contains(content, marker) {
+			t.Fatalf("Runbook is missing core_only installed-product contract %q", marker)
 		}
 	}
 }

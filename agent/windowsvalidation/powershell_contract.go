@@ -44,6 +44,9 @@ var windowsPowerShellRunbookCommands = []string{
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action stop -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-InstallerLifecycle.ps1 -Action uninstall -BackupDirectory <nsis-backup> -InstallerPath C:\SuperDevValidation\installers\SuperDev_0.2.1_x64-setup.exe -InstallDirectory <nsis-install-dir>`,
 	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <nsis-id> -BackupDirectory <nsis-backup> -RestoreUserState`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane core_only -RuntimeInput ..\runtime-input.json`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane core_only -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <core-backup>`,
+	`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <core-id> -BackupDirectory <core-backup> -RestoreUserState`,
 }
 
 func validateWindowsPowerShellRunbookContract(root string) (contractErr error) {

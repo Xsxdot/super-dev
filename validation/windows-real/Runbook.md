@@ -268,6 +268,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1
 
 **Cleanup responsibility**：Cleanup 恢复本地机器；操作者核对 MSI、NSIS、core、七 provider、75 工具、pipeline、cleanup 八个独立 section 后归档。`-RemoveResults` 仅在证据已有独立副本时使用，并在 finalizer 成功后执行；backup 最后由操作者按验证资料保留策略处置。
 
+## 10. Core-only：跳过安装，只验证 MCP 与七种语言
+
+**Prerequisite**：冻结构建已经通过正式方式安装，`superdev-mcp.exe` 路径和 `0.2.1` runtime identity 可核对；执行前关闭 Desktop、Agent sidecar 与 MCP，确认端口 `57017` 无监听。禁止运行 `Invoke-InstallerLifecycle.ps1`、MSI 或 NSIS EXE；产品缺失或版本不符时记录 `BLOCKED` 并停止，不能在本 lane 补做安装。
+
+**Action**：复制包外 `runtime-input.json`，设置 `lane=core_only`、`installer_directory=""`，并填写步骤 2 的工具链、adapter、浏览器、Linux Host 与治理绑定。Prepare 会把既有安装身份作为 Prepared Baseline，只隔离原 `.superdev`；随后按步骤 7 在 fresh profile 中完成 Host/Agent/tunnel-only、浏览器与治理声明 bootstrap。完整 75 工具覆盖包含 remote pipeline，因此没有合格 Linux Host 时必须保留具名 `BLOCKED`，不能删除或伪造这些工具行。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane core_only -RuntimeInput ..\runtime-input.json
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane core_only -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <core-backup>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId <core-id> -BackupDirectory <core-backup> -RestoreUserState
+```
+
+Run 出现隐藏凭据提示时，只由操作者输入一次本次测试凭据；不得把值写入 input、命令参数、日志或证据。无论 Run 成功、失败还是中断，都必须关闭本 lane 启动的进程并执行上述 Cleanup；Cleanup 以 Prepare 记录的既有安装路径和卸载项为 expected，证明验证没有改变安装状态，并恢复原用户 state。
+
+**Expected**：MCP runtime attestation、七 provider 和 75 个工具各自保留真实结果；installer artifact、install、start、stop、uninstall 与 lifecycle 必须全部保持 `NOT_RUN`。这是能力诊断，不构成安装器验收或最终 Windows 全量发布结论。
+
 判定规则：每个目标统一输出 `phase_status = NOT_RUN | BLOCKED | PASS | FAIL`、`attempted`、原始执行事实与 required evidence。`NOT_RUN` 和 `BLOCKED` 的目标都必须 `attempted=false`，其中只有具名 prerequisite 才是 `BLOCKED`；`FAIL` 要求目标已尝试，或尝试后的 required evidence 缺失/写入失败。真实 MCP response 或 transport/product error 与开始/结束时间即使在后置断言失败时也必须保留。只有实际工具响应与断言均满足才是 PASS；产品错误、摘要/目录漂移、意外审批错误、SSH fallback、远端或本地清理失败、summary 回写失败、secret 扫描失败均是 FAIL。
 
 每份 campaign report 同时保存冻结 `validation_catalog`：scenario、target step、supporting/cleanup step 和 75 工具的 `scenario_id/step_id` 归属必须完整且唯一。持久化后删除失败 scenario、省略未触发 cleanup 或改写工具归属都会让重新派生失败，不得用当前数组长度充当预期覆盖数。
