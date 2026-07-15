@@ -26,7 +26,7 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 	driversRoot := filepath.Join(repo, "drivers")
 	for _, path := range []string{
 		filepath.Join(agentRoot), filepath.Join(runtimeRoot, "fixtures", "go"), filepath.Join(runtimeRoot, "scenarios"),
-		filepath.Join(runtimeRoot, "pipeline"), jsDebugRoot, filepath.Join(driversRoot, "linux-amd64", "node"),
+		filepath.Join(runtimeRoot, "pipeline"), jsDebugRoot,
 		filepath.Join(driversRoot, "linux-amd64", "package"),
 	} {
 		require.NoError(t, os.MkdirAll(path, 0o755))
@@ -43,10 +43,14 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 		filepath.Join(runtimeRoot, "run-validation.cmd"):                         "@echo off\r\n",
 		filepath.Join(runtimeRoot, "README.md"):                                  "# Validation\n",
 		filepath.Join(jsDebugRoot, "dapDebugServer.js"):                          "js",
-		filepath.Join(driversRoot, "linux-amd64", "node", "node"):                "native node",
+		filepath.Join(driversRoot, "linux-amd64", "node"):                        "native node",
 		filepath.Join(driversRoot, "linux-amd64", "package", "cli.js"):           "native package",
 	} {
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		mode := os.FileMode(0o600)
+		if filepath.Base(path) == "node" {
+			mode = 0o700
+		}
+		require.NoError(t, os.WriteFile(path, []byte(content), mode))
 	}
 	root := filepath.Join(t.TempDir(), "superdev-runtime-validation-linux-amd64")
 	require.NoError(t, os.MkdirAll(root, 0o755))
@@ -58,7 +62,7 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 
 	for _, relative := range []string{
 		"validation/fixtures/go/fixture.json", "validation/scenarios/identity.json", "validation/pipeline/project-pipeline.json",
-		"resources/js-debug/dapDebugServer.js", "resources/playwright-driver/node/node", "resources/playwright-driver/package/cli.js", "targets.txt", "VERSION.json",
+		"resources/js-debug/dapDebugServer.js", "resources/playwright-driver/node", "resources/playwright-driver/package/cli.js", "targets.txt", "VERSION.json",
 		"runtime-input.example.json", "run-validation.sh", "run-validation.cmd", "README.md",
 	} {
 		require.FileExists(t, filepath.Join(root, filepath.FromSlash(relative)), relative)
@@ -69,5 +73,5 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 func TestStageRuntimeValidationAssetsRejectsIncompletePlaywrightDriver(t *testing.T) {
 	t.Parallel()
 
-	require.ErrorContains(t, validatePlaywrightDriver(t.TempDir()), "node")
+	require.ErrorContains(t, validatePlaywrightDriver(t.TempDir(), Target{OS: "linux", Architecture: "amd64"}), "node")
 }

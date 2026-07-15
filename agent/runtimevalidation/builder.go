@@ -164,7 +164,7 @@ func stageRuntimeValidationAssets(options BundleBuildOptions, target Target, roo
 		return fmt.Errorf("copy js-debug: %w", err)
 	}
 	driverSource := filepath.Join(options.PlaywrightDriversRoot, target.String())
-	if err := validatePlaywrightDriver(driverSource); err != nil {
+	if err := validatePlaywrightDriver(driverSource, target); err != nil {
 		return fmt.Errorf("validate target-native Playwright driver for %s: %w", target.String(), err)
 	}
 	if _, err := copyResource(driverSource, filepath.Join(root, "resources", "playwright-driver")); err != nil {

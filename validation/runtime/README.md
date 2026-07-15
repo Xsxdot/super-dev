@@ -179,9 +179,9 @@ PLAYWRIGHT_DRIVER_PATH=/absolute/drivers/darwin-arm64 \
 Repeat on the other four native staging hosts and collect the five directories
 under one root named exactly `darwin-amd64`, `darwin-arm64`, `linux-amd64`,
 `linux-arm64`, and `windows-amd64`. Every collected directory must contain the
-Playwright `node/` and `package/` subdirectories for that target. Treat these as
-supply-chain inputs: transfer them over an authenticated channel and verify their
-source before packaging.
+Playwright root executable (`node` on Darwin/Linux or `node.exe` on Windows) and
+`package/cli.js` for that target. Treat these as supply-chain inputs: transfer
+them over an authenticated channel and verify their source before packaging.
 
 Populate the repository js-debug resource with the existing desktop build step:
 

@@ -76,7 +76,7 @@ func RunReadOnlyPreflight(ctx context.Context, bundleRoot string, input RuntimeI
 			return failed(StatusBlocked, "debug_adapter_unavailable", fmt.Sprintf("%s: %v", fixture.Provider, err), "adapter-"+fixture.Provider)
 		}
 	}
-	if err := validatePlaywrightDriver(filepath.Join(bundleRoot, "resources", "playwright-driver")); err != nil {
+	if err := validatePlaywrightDriver(filepath.Join(bundleRoot, "resources", "playwright-driver"), target); err != nil {
 		return failed(StatusBlocked, "playwright_driver_unavailable", err.Error(), "playwright-driver")
 	}
 	if err := validateFoundationBrowserAndApproval(input.FoundationPath, target.OS); err != nil {
@@ -110,15 +110,30 @@ func validateNativeAdapter(path, targetOS string, script bool) error {
 	return nil
 }
 
-func validatePlaywrightDriver(root string) error {
-	for _, name := range []string{"node", "package"} {
-		path := filepath.Join(root, name)
-		entries, err := os.ReadDir(path)
+func validatePlaywrightDriver(root string, target Target) error {
+	nodeName := "node"
+	if target.OS == "windows" {
+		nodeName = "node.exe"
+	}
+	// playwright-go 直接执行 driver 根目录下的 Node，并把 package/cli.js 作为入口；
+	// 把 node 误判为目录会让通过打包检查的 bundle 在真实启动时必然失败。
+	for _, candidate := range []struct {
+		name       string
+		path       string
+		executable bool
+	}{
+		{name: nodeName, path: filepath.Join(root, nodeName), executable: target.OS != "windows"},
+		{name: "package/cli.js", path: filepath.Join(root, "package", "cli.js")},
+	} {
+		info, err := os.Lstat(candidate.path)
 		if err != nil {
-			return fmt.Errorf("read Playwright %s directory: %w", name, err)
+			return fmt.Errorf("inspect Playwright %s: %w", candidate.name, err)
 		}
-		if len(entries) == 0 {
-			return fmt.Errorf("Playwright %s directory is empty", name)
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Playwright %s must be a regular non-symlink file", candidate.name)
+		}
+		if candidate.executable && info.Mode().Perm()&0o111 == 0 {
+			return fmt.Errorf("Playwright %s is not executable", candidate.name)
 		}
 	}
 	return nil

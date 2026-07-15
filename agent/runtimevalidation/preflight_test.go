@@ -83,7 +83,7 @@ func createPreflightEnvironment(t *testing.T) (string, RuntimeInput) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(jsDebug), 0o700))
 	require.NoError(t, os.WriteFile(jsDebug, []byte("// validation js-debug\n"), 0o600))
 	for path, content := range map[string]string{
-		filepath.Join(bundleRoot, "resources", "playwright-driver", "node", "node"):      "native node",
+		filepath.Join(bundleRoot, "resources", "playwright-driver", "node"):              "native node",
 		filepath.Join(bundleRoot, "resources", "playwright-driver", "package", "cli.js"): "driver package",
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
