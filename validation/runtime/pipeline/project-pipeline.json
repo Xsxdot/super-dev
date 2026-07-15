@@ -1,0 +1,42 @@
+{
+  "id": "{{pipeline_id}}",
+  "name": "Runtime Validation {{campaign_id}}",
+  "artifact_kind": "file",
+  "variables": {
+    "artifact": "${artifact_path}",
+    "artifact_checksum": "${artifact_checksum_path}",
+    "action": "deploy",
+    "campaign_id": "{{campaign_id}}",
+    "remote_root": "{{linux_root}}",
+    "root_mode": "create"
+  },
+  "roles": {
+    "linux_validation_target": {
+      "hosts": ["{{linux_host_id}}"]
+    }
+  },
+  "sync_mode": "transfer",
+  "pipeline": {
+    "deploy": [
+      {
+        "name": "Deploy Runtime Validation Artifact",
+        "type": "include",
+        "with": {
+          "template": "user://runtime-remote-validation-deploy",
+          "version": "1.0.0",
+          "digest": "{{imported_template_digest}}",
+          "vars": {
+            "role": "linux_validation_target",
+            "artifact": "${artifact}",
+            "artifact_checksum": "${artifact_checksum}",
+            "campaign_id": "${campaign_id}",
+            "remote_root": "${remote_root}",
+            "root_mode": "${root_mode}",
+            "version": "${version}",
+            "action": "${action}"
+          }
+        }
+      }
+    ]
+  }
+}

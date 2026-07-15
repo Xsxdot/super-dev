@@ -1,0 +1,110 @@
+// scenario_test.go 验证 strict 场景只能声明真实成功且具有业务语义的 MCP primary。
+//
+// 职责：
+//   - 锁定 scenario manifest 对 primary 归属的唯一控制权
+//   - 拒绝 policy denial、空断言和仅验证协议外壳的断言
+//
+// 边界：
+//   - 不启动 MCP 进程，也不执行场景步骤
+package runtimevalidation
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidateScenarioRejectsPrimaryWithoutStrictSuccessEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*ScenarioStep)
+	}{
+		{
+			name: "policy denial outcome",
+			mutate: func(step *ScenarioStep) {
+				step.Expect.Outcome = "success_or_policy_denied"
+			},
+		},
+		{
+			name: "empty assertions",
+			mutate: func(step *ScenarioStep) {
+				step.Expect.Assertions = nil
+			},
+		},
+		{
+			name: "protocol shell assertion",
+			mutate: func(step *ScenarioStep) {
+				step.Expect.Assertions = []Assertion{{Path: "content", Operator: "not_empty"}}
+			},
+		},
+		{
+			name: "error code allowlist",
+			mutate: func(step *ScenarioStep) {
+				step.Expect.AllowedErrorCodes = []string{"operation_denied"}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			scenario := validScenario("list_projects")
+			test.mutate(&scenario.Steps[0])
+			require.Error(t, ValidateScenario(scenario))
+		})
+	}
+}
+
+func TestValidateScenarioAcceptsSupportingPreparationWithoutPrimaryPromotion(t *testing.T) {
+	t.Parallel()
+
+	scenario := validScenario("list_projects")
+	scenario.Steps = append([]ScenarioStep{{
+		ID:       "prepare",
+		Tool:     "probe_project_config",
+		Coverage: CoverageSupporting,
+		Expect: StepExpectation{
+			Outcome:    ExpectedOutcomeSuccess,
+			Assertions: []Assertion{{Path: "structuredContent.plan_id", Operator: "not_empty"}},
+		},
+	}}, scenario.Steps...)
+
+	require.NoError(t, ValidateScenario(scenario))
+	assignments, err := PrimaryAssignments([]Scenario{scenario})
+	require.NoError(t, err)
+	require.Equal(t, []CoverageAssignment{{
+		Tool: "list_projects", ScenarioID: "identity", StepID: "primary",
+	}}, assignments)
+}
+
+func TestPrimaryAssignmentsRejectsDuplicatePrimary(t *testing.T) {
+	t.Parallel()
+
+	first := validScenario("list_projects")
+	second := validScenario("list_projects")
+	second.ID = "identity-copy"
+
+	_, err := PrimaryAssignments([]Scenario{first, second})
+	require.ErrorContains(t, err, "duplicate primary")
+}
+
+func validScenario(tool string) Scenario {
+	return Scenario{
+		SchemaVersion: ScenarioSchemaVersion,
+		Kind:          ScenarioKind,
+		ID:            "identity",
+		Title:         "Identity",
+		Steps: []ScenarioStep{{
+			ID:       "primary",
+			Tool:     tool,
+			Coverage: CoveragePrimary,
+			Expect: StepExpectation{
+				Outcome:    ExpectedOutcomeSuccess,
+				Assertions: []Assertion{{Path: "structuredContent.projects", Operator: "array_not_empty"}},
+			},
+		}},
+	}
+}

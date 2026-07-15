@@ -1,0 +1,972 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.scenario",
+  "id": "config-security-lifecycle",
+  "title": "Disposable configuration, security approval, and lifecycle",
+  "requires": [
+    "identity-observation",
+    "campaign_workspace_prepared"
+  ],
+  "variables": {
+    "project_name": {
+      "required": true,
+      "description": "Campaign-owned project name."
+    },
+    "project_root": {
+      "required": true,
+      "description": "Absolute campaign workspace root."
+    },
+    "go_service_id": {
+      "required": false,
+      "default": "go-validation",
+      "description": "Stable campaign Go service id."
+    },
+    "go_service_name": {
+      "required": false,
+      "default": "go-validation",
+      "description": "Stable campaign Go service name."
+    },
+    "go_deployment_id": {
+      "required": false,
+      "default": "go-validation-dev",
+      "description": "Stable campaign Go deployment id."
+    },
+    "go_readiness_url": {
+      "required": true,
+      "description": "由动态端口形成的 Go fixture /healthz URL。"
+    },
+    "bootstrap_pipeline_config": {
+      "required": true,
+      "description": "Disposable pipeline used only to verify config seams."
+    },
+    "go_port": {
+      "required": true,
+      "description": "Runner 分配给 Go fixture 的动态 loopback 端口。"
+    },
+    "go_artifact_dir": {
+      "required": true,
+      "description": "当前 target 的 campaign-owned Go artifact 目录。"
+    }
+  },
+  "steps": [
+    {
+      "id": "probe-project-config",
+      "tool": "probe_project_config",
+      "coverage": "primary",
+      "arguments": {
+        "root_path": "{{project_root}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.project.root_path",
+            "operator": "eq",
+            "variable": "project_root"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.project"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      }
+    },
+    {
+      "id": "preview-project-config",
+      "tool": "preview_config_change",
+      "coverage": "primary",
+      "arguments": {
+        "kind": "config.project.upsert",
+        "root_path": "{{project_root}}",
+        "project": {
+          "name": "{{project_name}}",
+          "root_path": "{{project_root}}",
+          "environments": [
+            {
+              "id": "validation",
+              "name": "validation",
+              "is_dev": true,
+              "order": 1
+            }
+          ],
+          "auth_hint": "The disposable fixture uses a driver-held one-time Authorization value; no plaintext debug credential is persisted in project configuration."
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.preview.plan.kind",
+            "operator": "eq",
+            "value": "config.project.upsert"
+          },
+          {
+            "path": "structuredContent.data.preview.validation.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.preview.diff",
+          "structuredContent.data.preview.plan"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value"
+        ]
+      }
+    },
+    {
+      "id": "apply-project-config",
+      "tool": "apply_config_change",
+      "coverage": "primary",
+      "arguments": {
+        "kind": "config.project.upsert",
+        "root_path": "{{project_root}}",
+        "project": {
+          "name": "{{project_name}}",
+          "root_path": "{{project_root}}",
+          "environments": [
+            {
+              "id": "validation",
+              "name": "validation",
+              "is_dev": true,
+              "order": 1
+            }
+          ],
+          "auth_hint": "The disposable fixture uses a driver-held one-time Authorization value; no plaintext debug credential is persisted in project configuration."
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.preview.kind",
+            "operator": "eq",
+            "value": "config.project.upsert"
+          },
+          {
+            "path": "structuredContent.data.preview.validation.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.preview.diff",
+          "structuredContent.data.preview.plan"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "direct-project-upsert",
+      "tool": "upsert_project_config",
+      "coverage": "primary",
+      "arguments": {
+        "kind": "config.project.upsert",
+        "root_path": "{{project_root}}",
+        "project": {
+          "name": "{{project_name}}",
+          "root_path": "{{project_root}}",
+          "environments": [
+            {
+              "id": "validation",
+              "name": "validation",
+              "is_dev": true,
+              "order": 1
+            }
+          ],
+          "auth_hint": "The disposable fixture uses a driver-held one-time Authorization value; no plaintext debug credential is persisted in project configuration."
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.preview.kind",
+            "operator": "eq",
+            "value": "config.project.upsert"
+          },
+          {
+            "path": "structuredContent.data.preview.validation.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.preview.diff"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "resolve-campaign-project",
+      "tool": "get_project",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{project_name}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.project.name",
+            "operator": "eq",
+            "variable": "project_name"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.project.id",
+          "structuredContent.data.project.name"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      },
+      "capture": {
+        "project_id": "structuredContent.data.project.id"
+      }
+    },
+    {
+      "id": "get-project-config",
+      "tool": "get_project_config",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.project.name",
+            "operator": "eq",
+            "variable": "project_name"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.project"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      }
+    },
+    {
+      "id": "list-language-providers",
+      "tool": "list_language_runtime_providers",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "eq",
+            "value": 7
+          },
+          {
+            "path": "structuredContent.data.languages",
+            "operator": "contains",
+            "value": "go"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.languages"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "describe-go-runtime",
+      "tool": "describe_language_runtime_schema",
+      "coverage": "primary",
+      "arguments": {
+        "language": "go"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.schema.language",
+            "operator": "eq",
+            "value": "go"
+          },
+          {
+            "path": "structuredContent.data.schema.fields",
+            "operator": "contains_item",
+            "value": {
+              "key": "program",
+              "required": true
+            }
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.schema"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "suggest-go-runtime",
+      "tool": "suggest_service_runtime",
+      "coverage": "primary",
+      "arguments": {
+        "language": "go",
+        "project_root": "{{project_root}}",
+        "cwd": "fixtures/go"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.suggestions.0.config.program",
+            "operator": "eq",
+            "value": "."
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "capture": {
+        "go_runtime_config": "structuredContent.data.suggestions.0.config"
+      }
+    },
+    {
+      "id": "validate-go-runtime",
+      "tool": "validate_service_runtime",
+      "coverage": "primary",
+      "arguments": {
+        "language": "go",
+        "project_root": "{{project_root}}",
+        "cwd": "fixtures/go",
+        "env": {
+          "FIXTURE_PORT": "{{go_port}}",
+          "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"
+        },
+        "config": "{{go_runtime_config}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.valid",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.diagnostics",
+          "structuredContent.data.normalized"
+        ],
+        "redact": [
+          "structuredContent.data.normalized.env"
+        ],
+        "forbid": [
+          "fixture_auth_value"
+        ]
+      }
+    },
+    {
+      "id": "preview-go-execution",
+      "tool": "preview_service_execution",
+      "coverage": "primary",
+      "arguments": {
+        "language": "go",
+        "project_root": "{{project_root}}",
+        "cwd": "fixtures/go",
+        "env": {
+          "FIXTURE_PORT": "{{go_port}}",
+          "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"
+        },
+        "config": "{{go_runtime_config}}",
+        "intent": "start_dev",
+        "artifact_dir": "{{go_artifact_dir}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.preview",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.plan.preview"
+        ],
+        "redact": [
+          "structuredContent.data.plan.env"
+        ],
+        "forbid": [
+          "fixture_auth_value"
+        ]
+      }
+    },
+    {
+      "id": "upsert-go-service",
+      "tool": "upsert_service",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "root_path": "{{project_root}}",
+        "service": {
+          "id": "{{go_service_id}}",
+          "name": "{{go_service_name}}",
+          "language": "go",
+          "required": true,
+          "order": 1,
+          "deployments": [
+            {
+              "id": "{{go_deployment_id}}",
+              "env_name": "validation",
+              "location": "local",
+              "control_mode": "managed",
+              "runtime": {
+                "type": "language",
+                "cwd": "fixtures/go",
+                "env": {
+                  "FIXTURE_PORT": "{{go_port}}",
+                  "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"
+                },
+                "config": "{{go_runtime_config}}"
+              },
+              "logs": {
+                "type": "process"
+              },
+              "readiness": {
+                "type": "http",
+                "target": "{{go_readiness_url}}",
+                "timeout_seconds": 30
+              },
+              "web": {
+                "enabled": true,
+                "url": "http://127.0.0.1:{{go_port}}",
+                "default_path": "/?run_id={{run_id}}",
+                "readiness": {
+                  "type": "http",
+                  "timeout_seconds": 30
+                },
+                "ai_debug": {
+                  "enabled": true
+                }
+              },
+              "code_debug": {
+                "policy": "auto",
+                "adapter_command": "{{go_adapter_command}}"
+              }
+            }
+          ]
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.preview.kind",
+            "operator": "eq",
+            "value": "config.service.upsert"
+          },
+          {
+            "path": "structuredContent.data.preview.validation.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.preview.diff"
+        ],
+        "redact": [
+          "request.arguments.service.deployments.0.runtime.env"
+        ],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "upsert-bootstrap-pipeline",
+      "tool": "upsert_project_pipeline",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "root_path": "{{project_root}}",
+        "pipeline": "{{bootstrap_pipeline_config}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.preview.diff"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "validate-bootstrap-pipeline",
+      "tool": "validate_project_pipeline",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "pipeline_id": "bootstrap-validation",
+        "env_name": "validation"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "preview-runtime-start",
+      "tool": "preview_operation",
+      "coverage": "primary",
+      "arguments": {
+        "kind": "runtime.start",
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.plan.kind",
+            "operator": "eq",
+            "value": "runtime.start"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.plan"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "start-go-service",
+      "tool": "start_service",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "start"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "wait-go-running",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "running"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      }
+    },
+    {
+      "id": "restart-go-service",
+      "tool": "restart_service",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "restart"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "wait-go-restarted",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "running"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      }
+    },
+    {
+      "id": "stop-go-service",
+      "tool": "stop_service",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "wait-go-stopped",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "stopped"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      }
+    },
+    {
+      "id": "list-operation-approvals",
+      "tool": "list_operation_approvals",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "limit": 50
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.approvals"
+        ],
+        "redact": [
+          "structuredContent.data.approvals.*.token"
+        ],
+        "forbid": [
+          "approval_token"
+        ]
+      },
+      "capture": {
+        "approval_id": "structuredContent.data.approvals.0.id"
+      }
+    },
+    {
+      "id": "get-operation-approval",
+      "tool": "get_operation_approval",
+      "coverage": "primary",
+      "arguments": {
+        "approval_id": "{{approval_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.approval.id",
+            "operator": "eq",
+            "variable": "approval_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.approval.id",
+          "structuredContent.data.approval.status"
+        ],
+        "redact": [
+          "structuredContent.data.approval_token"
+        ],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "list-operation-audit",
+      "tool": "list_operation_audit",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.events"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token",
+          "token"
+        ]
+      }
+    },
+    {
+      "id": "get-fixture-credentials",
+      "tool": "get_debug_credentials",
+      "coverage": "primary",
+      "_comment": "人类通过 Runbook 隐藏输入提供一次性测试凭据；driver 在 disposable project/service 建立后调用正式 Agent REST 创建 campaign-owned 进程内 lease，不写配置、runtime input、命令行或证据。随后仍真实调用冻结的 get_debug_credentials；空集合或来源/身份不符都必须 FAIL。",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "service_id": "{{go_service_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.credentials.0.name",
+            "operator": "eq",
+            "value": "runtime_validation_credential"
+          },
+          {
+            "path": "structuredContent.data.credentials.0.desc",
+            "operator": "eq",
+            "value": "一次性 runtime validation 调试凭据"
+          },
+          {
+            "path": "structuredContent.data.credentials.0.source",
+            "operator": "eq",
+            "value": "ephemeral_service"
+          },
+          {
+            "path": "structuredContent.data.credentials.0.value_present",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.count",
+          "structuredContent.data.credentials.0.name",
+          "structuredContent.data.credentials.0.desc",
+          "structuredContent.data.credentials.0.source",
+          "structuredContent.data.credentials.0.value_present"
+        ],
+        "redact": [
+          "structuredContent.data.credentials.*.value"
+        ],
+        "forbid": [
+          "fixture_auth_value",
+          "approval_token",
+          "authorization"
+        ]
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "ensure-go-stopped-after-config",
+      "tool": "stop_service",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      },
+      "run_if": "variable_set:project_id&&primary_step_not_passed:stop-go-service"
+    }
+  ]
+}

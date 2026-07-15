@@ -59,6 +59,60 @@ jobs:
           go test ./langruntime -run 'TestNodePrearmArgsForWindows|TestNodePrearmEnvForWindows|TestNodeDebuggerSpecForPlatform' -count=1
           go test ./windowsvalidation -run PowerShell -count=1
 
+  runtime-validation-package-contracts:
+    # This job proves source/CLI portability only. Native target summaries are
+    # produced by dedicated machines and use runtime-validation-native-summary-*.
+    name: Runtime validation package contracts (not native PASS)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Run runtime validation contract tests
+        working-directory: agent
+        run: go test ./runtimevalidation/... ./cmd/runtime-validation/... ./cmd/build-runtime-validation/...
+
+      - name: Cross-compile package entrypoints without claiming target PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/runtime-validation-package-contracts"
+          mkdir -p "$output/bin"
+          while read -r goos goarch extra; do
+            if [[ -z "${goos:-}" || "$goos" == \#* ]]; then
+              continue
+            fi
+            if [[ -z "${goarch:-}" || -n "${extra:-}" ]]; then
+              echo "invalid target contract row: $goos ${goarch:-} ${extra:-}" >&2
+              exit 1
+            fi
+            suffix=""
+            if [[ "$goos" == "windows" ]]; then
+              suffix=".exe"
+            fi
+            (
+              cd agent
+              GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+                go build -trimpath -o "$output/bin/runtime-validation-$goos-$goarch$suffix" ./cmd/runtime-validation
+            )
+          done < validation/runtime/targets.txt
+          cp validation/runtime/targets.txt "$output/targets.txt"
+          printf '%s\n' 'Cross-compiled package contract only; this artifact is not package_verified and is not native target PASS.' > "$output/SCOPE.txt"
+
+      - name: Upload package contract artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-validation-package-contracts
+          if-no-files-found: error
+          path: ${{ runner.temp }}/runtime-validation-package-contracts
+
   desktop:
     name: Desktop web checks
     runs-on: ubuntu-latest

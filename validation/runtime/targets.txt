@@ -1,0 +1,6 @@
+# runtime validation 与 Desktop remote-agent 共享的交付 target 合同。
+darwin amd64
+darwin arm64
+linux amd64
+linux arm64
+windows amd64

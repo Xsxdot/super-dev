@@ -1,0 +1,15 @@
+{
+  "foundation_path": "/absolute/path/to/runtime-validation-foundation",
+  "profile_id": "runtime-validation-dedicated",
+  "remote_host_id": "REPLACE_WITH_NON_SELF_LINUX_HOST_ID",
+  "expected_remote_identity": "REPLACE_WITH_OUT_OF_BAND_IDENTITY",
+  "governance_attestation_path": "/absolute/path/to/remote-governance-attestation.json",
+  "remote_root_template": "/srv/superdev-runtime-validation/{campaign_id}",
+  "results_root": "/absolute/path/to/runtime-validation-results",
+  "adapters": {
+    "dlv": "/absolute/path/to/dlv",
+    "debugpy": "/absolute/path/to/debugpy-adapter",
+    "jvm-dap-wrapper": "/absolute/path/to/jvm-dap-wrapper",
+    "lldb-dap": "/absolute/path/to/lldb-dap"
+  }
+}

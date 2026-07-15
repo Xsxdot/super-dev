@@ -19,9 +19,17 @@ mkdir -p \
   "$TMP_DIR/desktop/src-tauri/binaries" \
   "$TMP_DIR/desktop/src-tauri/resources/js-debug" \
   "$TMP_DIR/desktop/src-tauri/target/debug" \
+  "$TMP_DIR/validation/runtime" \
   "$TMP_DIR/agent" \
   "$TMP_DIR/bin"
 cp "$ROOT/scripts/build-agent.sh" "$TMP_DIR/desktop/scripts/build-agent.sh"
+cat > "$TMP_DIR/validation/runtime/targets.txt" <<'EOF'
+darwin amd64
+darwin arm64
+linux amd64
+linux arm64
+windows amd64
+EOF
 
 cat > "$TMP_DIR/agent/main.go" <<'EOF'
 package main

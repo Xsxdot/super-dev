@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.auth-sidecar",
+  "id": "auth-sidecar",
+  "environment": {
+    "AUTH_SIDECAR_PORT": "${PORT}",
+    "AUTH_SIDECAR_CAMPAIGN_ID": "${CAMPAIGN_ID}",
+    "AUTH_SIDECAR_CREDENTIAL": "driver-memory-only"
+  },
+  "platforms": {
+    "windows": {
+      "build": ["go", "build", "-o", "auth-sidecar.exe", "main.go"],
+      "run": ["auth-sidecar.exe"]
+    },
+    "darwin": {
+      "build": ["go", "build", "-o", "auth-sidecar", "main.go"],
+      "run": ["./auth-sidecar"]
+    },
+    "linux": {
+      "build": ["go", "build", "-o", "auth-sidecar", "main.go"],
+      "run": ["./auth-sidecar"]
+    }
+  },
+  "readiness": {
+    "method": "GET",
+    "path": "/healthz",
+    "expected_status": 200
+  },
+  "login": {
+    "method": "POST",
+    "path": "/login",
+    "authorization": "Bearer <driver-held-credential>",
+    "expected_status": 200
+  }
+}

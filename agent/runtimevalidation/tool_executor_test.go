@@ -1,0 +1,139 @@
+// tool_executor_test.go 验证 live tools/list 硬门、manifest bootstrap 与全量 primary 结果。
+//
+// 职责：
+//   - 锁定 coverage drift 时业务 mutation 零调用
+//   - 锁定 project_id 来自 manifest bootstrap capture
+//   - 锁定中途失败后仍为所有 primary 产生结果行
+//
+// 边界：
+//   - fake 只验证编排合同，不能生成 strict target PASS
+package runtimevalidation
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestToolExecutorCoverageDriftStopsBeforeBusinessMutation(t *testing.T) {
+	t.Parallel()
+
+	scenarios := []Scenario{executorScenario("identity-observation", []ScenarioStep{
+		executorStep("list-projects", "list_projects", CoveragePrimary, "structuredContent.data.count", 1),
+	})}
+	transport := &fakeLiveTools{tools: []string{"list_projects", "unexpected_live_tool"}}
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: scenarios,
+	})
+
+	require.Equal(t, StatusFail, result.Status)
+	require.False(t, result.Coverage.Complete)
+	require.Empty(t, transport.calls, "coverage drift must stop before tools/call")
+	require.Len(t, result.PrimaryRows, 1)
+	require.Equal(t, StatusNotRun, result.PrimaryRows[0].Status)
+}
+
+func TestToolExecutorBootstrapsProjectBeforeCallbackAndRemainingTopology(t *testing.T) {
+	t.Parallel()
+
+	bootstrap := executorScenario("config-security-lifecycle", []ScenarioStep{
+		executorStep("probe-project", "probe_project_config", CoveragePrimary, "structuredContent.data.root", "/tmp/project"),
+		executorStep("upsert-project", "upsert_project_config", CoveragePrimary, "structuredContent.data.name", "campaign-project"),
+		{
+			ID: "resolve-project", Tool: "get_project", Coverage: CoverageSupporting,
+			Arguments: map[string]any{"project_name": "{{project_name}}"},
+			Expect:    StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: "structuredContent.data.id", Operator: "not_empty"}}},
+			Capture:   map[string]string{"project_id": "structuredContent.data.id"},
+		},
+		executorStep("read-project", "get_project_config", CoveragePrimary, "structuredContent.data.project_id", "project-42"),
+	})
+	identity := executorScenario("identity-observation", []ScenarioStep{
+		executorStep("list-projects", "list_projects", CoveragePrimary, "structuredContent.data.count", 1),
+	})
+	transport := &fakeLiveTools{
+		tools: []string{"probe_project_config", "upsert_project_config", "get_project_config", "list_projects"},
+		responses: map[string]ToolCallResult{
+			"probe_project_config":  successToolResult(map[string]any{"root": "/tmp/project"}),
+			"upsert_project_config": successToolResult(map[string]any{"name": "campaign-project"}),
+			"get_project":           successToolResult(map[string]any{"id": "project-42"}),
+			"get_project_config":    successToolResult(map[string]any{"project_id": "project-42"}),
+			"list_projects":         successToolResult(map[string]any{"count": 1}),
+		},
+	}
+	callbackCalled := false
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{identity, bootstrap},
+		Variables: map[string]any{"project_name": "campaign-project"},
+		AfterBootstrap: func(_ context.Context, variables map[string]any) error {
+			callbackCalled = true
+			require.Equal(t, "project-42", variables["project_id"])
+			require.Equal(t, []string{"probe_project_config", "upsert_project_config", "get_project"}, transport.calls)
+			return nil
+		},
+	})
+
+	require.True(t, callbackCalled)
+	require.Equal(t, StatusPass, result.Status)
+	require.Equal(t, "project-42", result.Variables["project_id"])
+	require.Equal(t, []string{"probe_project_config", "upsert_project_config", "get_project", "list_projects", "get_project_config"}, transport.calls)
+	require.Len(t, result.PrimaryRows, 4)
+	for _, row := range result.PrimaryRows {
+		require.Equal(t, StatusPass, row.Status, row.Tool)
+	}
+}
+
+func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
+	t.Parallel()
+
+	scenario := executorScenario("identity-observation", []ScenarioStep{
+		executorStep("first", "first_tool", CoveragePrimary, "structuredContent.data.value", "wanted"),
+		executorStep("second", "second_tool", CoveragePrimary, "structuredContent.data.value", "wanted"),
+	})
+	transport := &fakeLiveTools{
+		tools:     []string{"first_tool", "second_tool"},
+		responses: map[string]ToolCallResult{"first_tool": successToolResult(map[string]any{"value": "wrong"})},
+	}
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{CampaignID: "campaign-1", Scenarios: []Scenario{scenario}})
+
+	require.Equal(t, StatusFail, result.Status)
+	require.Len(t, result.PrimaryRows, 2)
+	require.Equal(t, StatusFail, result.PrimaryRows[0].Status)
+	require.Equal(t, StatusNotRun, result.PrimaryRows[1].Status)
+	require.Equal(t, []string{"first_tool"}, transport.calls)
+}
+
+type fakeLiveTools struct {
+	tools     []string
+	responses map[string]ToolCallResult
+	calls     []string
+}
+
+func (f *fakeLiveTools) ListTools(context.Context) ([]string, error) {
+	return append([]string{}, f.tools...), nil
+}
+
+func (f *fakeLiveTools) CallTool(_ context.Context, name string, _ map[string]any) (ToolCallResult, error) {
+	f.calls = append(f.calls, name)
+	result, ok := f.responses[name]
+	if !ok {
+		return ToolCallResult{}, fmt.Errorf("unexpected tool %s", name)
+	}
+	return result, nil
+}
+
+func executorScenario(id string, steps []ScenarioStep) Scenario {
+	return Scenario{SchemaVersion: ScenarioSchemaVersion, Kind: ScenarioKind, ID: id, Title: id, Steps: steps}
+}
+
+func executorStep(id, tool, coverage, path string, value any) ScenarioStep {
+	return ScenarioStep{
+		ID: id, Tool: tool, Coverage: coverage,
+		Expect: StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: path, Operator: "eq", Value: value}}},
+	}
+}
+
+func successToolResult(data map[string]any) ToolCallResult {
+	return ToolCallResult{StructuredContent: map[string]any{"ok": true, "data": data}}
+}

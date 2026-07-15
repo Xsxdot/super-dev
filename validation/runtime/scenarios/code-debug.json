@@ -1,0 +1,1029 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.scenario",
+  "id": "code-debug",
+  "title": "Cross-platform packaged MCP code debug validation",
+  "_comment": "职责：通过已安装的 superdev-mcp.exe 验证 Go 主夹具的高层 capture/inspect 与低层 DAP 控制。边界：不直连 DAP adapter，不模拟 stopped 事件，不把 evaluate 表达式、返回值或秘密变量写入证据。",
+  "requires": [
+    "native_target_match",
+    "packaged_superdev_mcp",
+    "campaign_go_fixture_ready",
+    "dlv_available"
+  ],
+  "variables": {
+    "run_id": {
+      "required": true,
+      "secret": false,
+      "description": "当前验证 campaign 的唯一标识。"
+    },
+    "go_project_name": {
+      "required": true,
+      "secret": false,
+      "description": "只包含 Go 主夹具的 campaign-owned 项目名。"
+    },
+    "go_deployment_id": {
+      "required": true,
+      "secret": false,
+      "description": "正在运行且允许 code debug 的 Go deployment ID。"
+    },
+    "go_source_path": {
+      "required": true,
+      "secret": false,
+      "description": "相对于 Go runtime 工作目录的稳定断点源码路径。"
+    },
+    "go_breakpoint_line": {
+      "required": true,
+      "secret": false,
+      "description": "后台 ticker 和受控 HTTP 请求都会经过的稳定可执行行号。"
+    },
+    "go_debug_variable_names": {
+      "required": false,
+      "default": [
+        "fixtureMarker",
+        "fixtureCount",
+        "fixtureProvider"
+      ],
+      "secret": false,
+      "description": "只读取 Go fixture 合同内的非敏感局部变量，避免抓取整个作用域。"
+    },
+    "go_evaluate_expression": {
+      "required": false,
+      "default": "fixtureMarker",
+      "secret": false,
+      "description": "审批后执行的一次性、无副作用局部变量读取；证据只保存表达式摘要和结果类型。"
+    }
+  },
+  "steps": [
+    {
+      "id": "code-runtime-before",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "_comment": "使用正式 MCP 读取受管进程 PID，而不是 tasklist/进程库；campaign 在此阶段保证项目内只有 Go 主服务。",
+      "arguments": {
+        "project_name": "{{go_project_name}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "running"
+          },
+          {
+            "path": "structuredContent.data.services.0.deployments.0.pid",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "capture": {
+        "code_runtime_pid_before": "structuredContent.data.services.0.deployments.0.pid"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.services.0.id",
+          "structuredContent.data.services.0.deployments.0.id",
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-list-targets",
+      "tool": "list_code_debug_targets",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.targets",
+            "operator": "contains_item",
+            "value": {
+              "deployment_id": "{{go_deployment_id}}",
+              "provider": "go",
+              "can_open": true
+            }
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.count",
+          "structuredContent.data.targets"
+        ],
+        "redact": [
+          "structuredContent.data.targets.*.command",
+          "structuredContent.data.targets.*.work_dir",
+          "structuredContent.data.targets.*.root_path"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-capture-at",
+      "tool": "debug_capture_at",
+      "coverage": "primary",
+      "_comment": "Go fixture 的后台 ticker 会经过同一稳定函数，顺序 MCP 驱动无需另起脚本并发触发断点。capture 通过 deployment lease 使用真实 adapter，并在返回前自动清理自身临时断点。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "source": "{{go_source_path}}",
+        "line": "{{go_breakpoint_line}}",
+        "thread_id": 1,
+        "timeout_ms": 30000,
+        "max_variables": 20,
+        "variable_names": "{{go_debug_variable_names}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.session_id",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.thread_id",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.frame_id",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.variables",
+            "operator": "contains",
+          "value": "fixtureMarker"
+          }
+        ]
+      },
+      "capture": {
+        "code_debug_session_id": "structuredContent.data.session_id",
+        "code_thread_id": "structuredContent.data.thread_id",
+        "code_frame_id": "structuredContent.data.frame_id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.deployment_id",
+          "structuredContent.data.session_id",
+          "structuredContent.data.lease_created",
+          "structuredContent.data.thread_id",
+          "structuredContent.data.frame_id",
+          "structuredContent.data.stack.stackFrames",
+          "structuredContent.data.variables",
+          "structuredContent.data.stopped.reason"
+        ],
+        "redact": [
+          "request.arguments.approval_token"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer ",
+          "password=",
+          "secret="
+        ]
+      }
+    },
+    {
+      "id": "code-inspect-paused",
+      "tool": "debug_inspect",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}",
+        "frame_id": "{{code_frame_id}}",
+        "max_variables": 20,
+        "variable_names": "{{go_debug_variable_names}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.session_id",
+            "operator": "eq",
+            "variable": "code_debug_session_id"
+          },
+          {
+            "path": "structuredContent.data.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          },
+          {
+            "path": "structuredContent.data.variables",
+            "operator": "contains",
+            "value": "validationMarker"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.deployment_id",
+          "structuredContent.data.session_id",
+          "structuredContent.data.thread_id",
+          "structuredContent.data.frame_id",
+          "structuredContent.data.stack.stackFrames",
+          "structuredContent.data.variables"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer ",
+          "password=",
+          "secret="
+        ]
+      }
+    },
+    {
+      "id": "code-set-breakpoints",
+      "tool": "set_debug_breakpoints",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "source": "{{go_source_path}}",
+        "lines": [
+          "{{go_breakpoint_line}}"
+        ]
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.resolved_source",
+            "operator": "contains",
+            "variable": "go_source_path"
+          },
+          {
+            "path": "structuredContent.data.result.breakpoints.0.verified",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
+          "structuredContent.data.result.resolved_source",
+          "structuredContent.data.result.breakpoints"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-stack-trace",
+      "tool": "debug_stack_trace",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.stackFrames",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.result.stackFrames.0.id",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "capture": {
+        "code_low_level_frame_id": "structuredContent.data.result.stackFrames.0.id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.stackFrames"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-scopes",
+      "tool": "debug_scopes",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "frame_id": "{{code_low_level_frame_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.scopes",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.result.scopes.0.variablesReference",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "capture": {
+        "code_variables_reference": "structuredContent.data.result.scopes.0.variablesReference"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.scopes"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-variables",
+      "tool": "debug_variables",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "variables_reference": "{{code_variables_reference}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.variables",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.result.variables",
+            "operator": "contains",
+            "value": "validationMarker"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.variables"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer ",
+          "password=",
+          "secret="
+        ]
+      }
+    },
+    {
+      "id": "code-evaluate-policy",
+      "tool": "debug_evaluate",
+      "coverage": "primary",
+      "_comment": "evaluate 必须走 MCP 自带的审批等待链路。批准后只读取无副作用局部变量；明确 operation_denied/approval_rejected 可作为策略证据，但 approval_required 等待超时、过期 token 和产品错误不能被当作通过，也不能使用底层 DAP 绕过。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "expression": "{{go_evaluate_expression}}",
+        "frame_id": "{{code_low_level_frame_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.result",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.ok",
+          "structuredContent.summary",
+          "structuredContent.code",
+          "structuredContent.message",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id"
+        ],
+        "redact": [
+          "request.arguments.expression",
+          "request.arguments.approval_token",
+          "structuredContent.data.result.result",
+          "structuredContent.data.result.variablesReference"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer ",
+          "{{go_evaluate_expression}}"
+        ]
+      }
+    },
+    {
+      "id": "code-step-over",
+      "tool": "debug_step_over",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 750,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "step_over"
+          },
+          {
+            "path": "structuredContent.data.result.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-step-in",
+      "tool": "debug_step_in",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 750,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "step_in"
+          },
+          {
+            "path": "structuredContent.data.result.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-step-out",
+      "tool": "debug_step_out",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 750,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "step_out"
+          },
+          {
+            "path": "structuredContent.data.result.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-clear-breakpoints-before-pause",
+      "tool": "set_debug_breakpoints",
+      "coverage": "supporting",
+      "_comment": "低层 step 已完成后先清空 ticker 断点，再恢复运行去验证 pause，避免后台 ticker 抢先命中旧断点造成竞态。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "source": "{{go_source_path}}",
+        "lines": []
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.resolved_source",
+          "structuredContent.data.result.breakpoints"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-continue-before-pause",
+      "tool": "debug_continue",
+      "coverage": "supporting",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 250,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "continue"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-pause",
+      "tool": "debug_pause",
+      "coverage": "primary",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 750,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "pause"
+          },
+          {
+            "path": "structuredContent.data.result.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-continue-final",
+      "tool": "debug_continue",
+      "coverage": "primary",
+      "_comment": "主路径最后一次 continue 是无暂停残留的直接证明；失败或超时时 cleanup 会再做 supporting continue。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 500,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "continue"
+          },
+          {
+            "path": "structuredContent.data.result.thread_id",
+            "operator": "eq",
+            "variable": "code_thread_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-runtime-after",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "arguments": {
+        "project_name": "{{go_project_name}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "running"
+          },
+          {
+            "path": "structuredContent.data.services.0.deployments.0.pid",
+            "operator": "eq",
+            "variable": "code_runtime_pid_before"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.services.0.deployments.0.id",
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "code-health-after",
+      "tool": "diagnose_service",
+      "coverage": "supporting",
+      "_comment": "PID 相同只证明进程未替换；再通过正式 diagnose_service 聚合运行态和日志，证明恢复后的受管服务没有处于失败状态。",
+      "arguments": {
+        "project_name": "{{go_project_name}}",
+        "deployment_id": "{{go_deployment_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.target.deployment.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.status",
+            "operator": "eq",
+            "value": "running"
+          },
+          {
+            "path": "structuredContent.data.runtime_summary.pid",
+            "operator": "eq",
+            "variable": "code_runtime_pid_before"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.target.deployment.id",
+          "structuredContent.data.status",
+          "structuredContent.data.runtime_summary.pid",
+          "structuredContent.data.evidence",
+          "structuredContent.data.hints"
+        ],
+        "redact": [
+          "structuredContent.data.target.deployment.env",
+          "structuredContent.data.runtime_summary.env"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token",
+          "bearer ",
+          "password=",
+          "secret="
+        ]
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "code-clear-breakpoints",
+      "tool": "set_debug_breakpoints",
+      "coverage": "supporting",
+      "run_if": "variable_set:code_debug_session_id&&primary_step_not_passed:code-clear-breakpoints-before-pause",
+      "_comment": "setBreakpoints 是按 source 全量替换，空数组才是不会留下未来暂停点的精确清理。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "source": "{{go_source_path}}",
+        "lines": []
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.resolved_source",
+          "structuredContent.data.result.breakpoints"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "code-resume-on-abort",
+      "tool": "debug_continue",
+      "coverage": "supporting",
+      "run_if": "variable_set:code_debug_session_id&&primary_step_not_passed:code-continue-final",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "thread_id": "{{code_thread_id}}"
+      },
+      "settle_ms": 500,
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.action",
+            "operator": "eq",
+            "value": "continue"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.deployment_id",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.action",
+          "structuredContent.data.result.thread_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "stop-go-after-code",
+      "tool": "stop_service",
+      "coverage": "supporting",
+      "run_if": "variable_set:project_id",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "wait-go-stopped-after-code",
+      "tool": "list_services",
+      "coverage": "supporting",
+      "run_if": "variable_set:project_id",
+      "arguments": {
+        "project_id": "{{project_id}}"
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.services.0.deployments.0.status",
+            "operator": "eq",
+            "value": "stopped"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.services.0.deployments.0.status",
+          "structuredContent.data.services.0.deployments.0.pid"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    }
+  ]
+}

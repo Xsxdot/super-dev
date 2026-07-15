@@ -7,6 +7,7 @@ AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
 RESOURCE_ROOT="$ROOT/src-tauri/resources"
 RESOURCE_DIR="$RESOURCE_ROOT/agent-install"
+REMOTE_TARGETS_FILE="$ROOT/../validation/runtime/targets.txt"
 JS_DEBUG_VERSION="${JS_DEBUG_VERSION:-1.117.0}"
 JS_DEBUG_RESOURCE_DIR="$RESOURCE_ROOT/js-debug"
 JS_DEBUG_CACHE_DIR="$ROOT/src-tauri/target/js-debug-cache"
@@ -141,13 +142,25 @@ prepare_js_debug
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   mkdir -p "$RESOURCE_DIR"
-  targets=(
-    "darwin amd64"
-    "darwin arm64"
-    "linux amd64"
-    "linux arm64"
-    "windows amd64"
-  )
+  if [[ ! -f "$REMOTE_TARGETS_FILE" ]]; then
+    echo "build-agent: shared target contract not found at $REMOTE_TARGETS_FILE" >&2
+    exit 1
+  fi
+  targets=()
+  while read -r goos goarch extra; do
+    if [[ -z "${goos:-}" || "$goos" == \#* ]]; then
+      continue
+    fi
+    if [[ -z "${goarch:-}" || -n "${extra:-}" ]]; then
+      echo "build-agent: invalid target contract row: $goos ${goarch:-} ${extra:-}" >&2
+      exit 1
+    fi
+    targets+=("$goos $goarch")
+  done < "$REMOTE_TARGETS_FILE"
+  if [[ "${#targets[@]}" -eq 0 ]]; then
+    echo "build-agent: shared target contract is empty" >&2
+    exit 1
+  fi
   for target in "${targets[@]}"; do
     read -r goos goarch <<<"$target"
     suffix=""

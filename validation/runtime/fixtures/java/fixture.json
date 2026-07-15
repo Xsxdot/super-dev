@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.fixture",
+  "id": "java",
+  "provider": "java",
+  "working_dir": ".",
+  "runtime": {
+    "config": { "program": "superdev.fixture.FixtureServer", "classpath": "build/classes", "vm_args": ["--add-modules", "jdk.httpserver"] },
+    "env": { "FIXTURE_PORT": "${PORT}", "FIXTURE_CAMPAIGN_ID": "${CAMPAIGN_ID}" }
+  },
+  "platforms": {
+    "windows": {
+      "preflight": { "executable": "java.exe", "arguments": ["--version"] },
+      "build": { "executable": "javac.exe", "arguments": ["--add-modules", "jdk.httpserver", "-g", "-d", "build/classes", "src/superdev/fixture/FixtureServer.java"] },
+      "run": { "executable": "java.exe", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "build/classes", "superdev.fixture.FixtureServer"] },
+      "executable": "build/classes/superdev/fixture/FixtureServer.class",
+      "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServer" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "darwin": {
+      "preflight": { "executable": "java", "arguments": ["--version"] },
+      "build": { "executable": "javac", "arguments": ["--add-modules", "jdk.httpserver", "-g", "-d", "build/classes", "src/superdev/fixture/FixtureServer.java"] },
+      "run": { "executable": "java", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "build/classes", "superdev.fixture.FixtureServer"] },
+      "executable": "build/classes/superdev/fixture/FixtureServer.class",
+      "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServer" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "linux": {
+      "preflight": { "executable": "java", "arguments": ["--version"] },
+      "build": { "executable": "javac", "arguments": ["--add-modules", "jdk.httpserver", "-g", "-d", "build/classes", "src/superdev/fixture/FixtureServer.java"] },
+      "run": { "executable": "java", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "build/classes", "superdev.fixture.FixtureServer"] },
+      "executable": "build/classes/superdev/fixture/FixtureServer.class",
+      "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServer" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    }
+  },
+  "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "java" } },
+  "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
+  "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
+  "debug": { "provider": "jvm", "adapter_resource": "jvm-dap-wrapper", "source": "src/superdev/fixture/FixtureServer.java", "line": 30, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "java" } }
+}

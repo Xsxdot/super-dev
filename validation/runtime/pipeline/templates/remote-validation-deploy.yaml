@@ -1,0 +1,180 @@
+# Runtime validation remote deploy template.
+#
+# Responsibilities:
+#   - create only the exact campaign-owned non-self Linux root;
+#   - transfer, verify and activate one immutable validation artifact;
+#   - remove only that owned root during cleanup.
+#
+# Boundaries:
+#   - transport selection remains the SuperDev RoutingRunner responsibility;
+#   - the role must contain a canonical non-self Host ID, never a hostname;
+#   - the template does not create, update or delete borrowed Host/Agent/Tunnel topology.
+id: runtime-remote-validation-deploy
+name: Runtime Validation Remote Deploy
+description: Deploy or clean one campaign-owned runtime validation release on a dedicated non-self Linux Agent.
+category: deploy
+version: 1.0.0
+inputs:
+  role:
+    label: Canonical non-self Linux Host role
+    type: target_role
+    required: true
+  artifact:
+    label: Validation artifact
+    type: path
+    required: true
+  artifact_checksum:
+    label: Validation artifact SHA-256 sidecar
+    type: path
+    required: true
+  campaign_id:
+    label: Campaign ID
+    type: string
+    required: true
+  remote_root:
+    label: Linux campaign root
+    type: path
+    required: true
+  root_mode:
+    label: Campaign root mode
+    type: select
+    required: true
+    options: [create, existing]
+  version:
+    label: Artifact version
+    type: string
+    required: true
+  action:
+    label: Action
+    type: select
+    required: true
+    default: deploy
+    options: [deploy, cleanup]
+steps:
+  - name: Preflight Campaign Root
+    type: remote_command
+    roles: ["${vars.role}"]
+    with:
+      work_dir: /
+      cmd: >-
+        set -eu;
+        campaign='${vars.campaign_id}';
+        root='${vars.remote_root}';
+        mode='${vars.root_mode}';
+        expected="/srv/superdev-runtime-validation/$campaign";
+        printf '%s\n' "$campaign" | grep -Eq '^rv-(darwin|linux|windows)-(amd64|arm64)-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$' || exit 41;
+        test "$root" = "$expected";
+        test ! -L /srv/superdev-runtime-validation;
+        case "$mode" in
+          create) test ! -e "$root" ;;
+          existing) test -d "$root"; test -f "$root/.campaign-owner"; test "$(cat "$root/.campaign-owner")" = "$campaign" ;;
+          *) exit 44 ;;
+        esac;
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"preflight_root","campaign_id":"%s"}\n' "$campaign"
+  - name: Initialize Campaign Root
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Preflight Campaign Root]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      work_dir: /
+      cmd: >-
+        set -eu;
+        campaign='${vars.campaign_id}';
+        root='${vars.remote_root}';
+        mode='${vars.root_mode}';
+        test "$root" = "/srv/superdev-runtime-validation/$campaign";
+        if [ "$mode" = create ]; then
+          mkdir -p /srv/superdev-runtime-validation;
+          test ! -L /srv/superdev-runtime-validation;
+          mkdir "$root";
+          printf '%s\n' "$campaign" >"$root/.campaign-owner";
+          chmod 0600 "$root/.campaign-owner";
+        fi;
+        test "$(cat "$root/.campaign-owner")" = "$campaign";
+        mkdir -p "$root/releases" "$root/temp" "$root/logs";
+        test ! -L "$root/releases";
+        test ! -L "$root/temp";
+        test ! -L "$root/logs"
+  - name: Transfer Artifact
+    type: transfer
+    roles: ["${vars.role}"]
+    needs: [Initialize Campaign Root]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      source: ${vars.artifact}
+      target: ${vars.remote_root}/temp/release-${vars.campaign_id}-${vars.version}.tar.gz
+  - name: Transfer Artifact SHA256
+    type: transfer
+    roles: ["${vars.role}"]
+    needs: [Transfer Artifact]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      source: ${vars.artifact_checksum}
+      target: ${vars.remote_root}/temp/release-${vars.campaign_id}-${vars.version}.sha256
+  - name: Verify Transfer Digest
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Transfer Artifact SHA256]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      work_dir: /
+      cmd: >-
+        set -eu;
+        campaign='${vars.campaign_id}';
+        root='${vars.remote_root}';
+        version='${vars.version}';
+        test "$root" = "/srv/superdev-runtime-validation/$campaign";
+        test "$(cat "$root/.campaign-owner")" = "$campaign";
+        artifact="$root/temp/release-$campaign-$version.tar.gz";
+        checksum="$root/temp/release-$campaign-$version.sha256";
+        expected="$(cat "$checksum")";
+        printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$';
+        actual="$(sha256sum "$artifact" | awk '{print $1}')";
+        test "$actual" = "$expected";
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"verify_transfer_digest","campaign_id":"%s","version":"%s","sha256":"%s"}\n' "$campaign" "$version" "$actual"
+  - name: Extract Artifact
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Verify Transfer Digest]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      work_dir: /
+      cmd: >-
+        set -eu;
+        campaign='${vars.campaign_id}';
+        root='${vars.remote_root}';
+        version='${vars.version}';
+        case "$version" in ''|*[!A-Za-z0-9._-]*) exit 43 ;; esac;
+        test "$root" = "/srv/superdev-runtime-validation/$campaign";
+        test "$(cat "$root/.campaign-owner")" = "$campaign";
+        release="$root/releases/$version";
+        test ! -L "$release";
+        rm -rf -- "$release";
+        mkdir -p "$release";
+        tar -xzf "$root/temp/release-$campaign-$version.tar.gz" -C "$release";
+        chmod 0700 "$release/remote-release.sh"
+  - name: Activate Artifact
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Extract Artifact]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      work_dir: /
+      cmd: sh '${vars.remote_root}/releases/${vars.version}/remote-release.sh' activate '${vars.campaign_id}' '${vars.remote_root}' '${vars.version}'
+  - name: Verify Artifact
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Activate Artifact]
+    run_if: '"${vars.action}" != "cleanup"'
+    with:
+      work_dir: /
+      cmd: sh '${vars.remote_root}/releases/${vars.version}/remote-release.sh' verify '${vars.campaign_id}' '${vars.remote_root}' '${vars.version}'
+  - name: Cleanup Campaign Root
+    type: remote_command
+    roles: ["${vars.role}"]
+    needs: [Preflight Campaign Root]
+    run_if: '"${vars.action}" == "cleanup"'
+    with:
+      work_dir: /
+      cmd: sh '${vars.remote_root}/current/remote-release.sh' cleanup '${vars.campaign_id}' '${vars.remote_root}'
