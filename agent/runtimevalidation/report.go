@@ -31,12 +31,15 @@ const (
 
 // BorrowedAttestation 保存 foundation 与 borrowed non-self topology 的运行前后身份。
 type BorrowedAttestation struct {
-	RemoteHostID               string `json:"remote_host_id"`
-	ExpectedRemoteIdentity     string `json:"expected_remote_identity"`
-	FoundationDigestBefore     string `json:"foundation_digest_before"`
-	FoundationDigestAfter      string `json:"foundation_digest_after"`
-	BorrowedTopologyDigest     string `json:"borrowed_topology_digest"`
-	RemoteNodeConfirmedNonSelf bool   `json:"remote_node_confirmed_non_self"`
+	RemoteHostID                string `json:"remote_host_id"`
+	ExpectedRemoteIdentity      string `json:"expected_remote_identity"`
+	FoundationDigestBefore      string `json:"foundation_digest_before"`
+	FoundationDigestAfter       string `json:"foundation_digest_after"`
+	GovernanceAttestationDigest string `json:"governance_attestation_digest"`
+	LiveTopologyDigestBefore    string `json:"live_topology_digest_before"`
+	LiveTopologyDigestAfter     string `json:"live_topology_digest_after"`
+	BorrowedTopologyDigest      string `json:"borrowed_topology_digest"`
+	RemoteNodeConfirmedNonSelf  bool   `json:"remote_node_confirmed_non_self"`
 }
 
 // EvidenceFileIdentity 记录一份脱敏 evidence 的路径、size 和 SHA-256。

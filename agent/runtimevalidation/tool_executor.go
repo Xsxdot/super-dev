@@ -27,11 +27,12 @@ import (
 
 // ToolCampaignRequest 提交一次 live MCP campaign 的 manifest、运行时变量和 bootstrap 边界。
 type ToolCampaignRequest struct {
-	CampaignID     string
-	Scenarios      []Scenario
-	Variables      map[string]any
-	Journal        *CleanupJournal
-	AfterBootstrap func(context.Context, map[string]any) error
+	CampaignID          string
+	Scenarios           []Scenario
+	Variables           map[string]any
+	AfterBootstrap      func(context.Context, map[string]any) error
+	OnMutationCommitted func(tool string, arguments map[string]any, response ToolCallResult, variables map[string]any)
+	OnStepPassed        func(scenarioID, stepID string, variables map[string]any)
 }
 
 // ToolPrimaryRow 表示一个 live tool 唯一 primary step 的终态。
@@ -92,7 +93,7 @@ func NewToolExecutor(lister ToolLister, caller ToolCaller) *ToolExecutor {
 //
 // 参数：
 //   - ctx: campaign 总期限
-//   - request: campaign、manifest、运行时变量、journal 和 bootstrap callback
+//   - request: campaign、manifest、运行时变量、mutation hook 和 bootstrap callback
 //
 // 返回：
 //   - 始终包含全量 primary 行的 campaign 结果
@@ -141,7 +142,7 @@ func (e *ToolExecutor) Run(ctx context.Context, request ToolCampaignRequest) Too
 			result.Status = StatusBlocked
 			result.Cause = Cause{Code: "scenario_variables_missing", Message: err.Error(), Source: scenario.ID}
 			result.Scenarios = allScenariosNotRun(ordered, result.Cause)
-			result.PrimaryRows = collectPrimaryRows(coverage.Assignments, result.Scenarios)
+			finalizeToolPrimaryEvidence(&result, coverage.Assignments)
 			return result
 		}
 		boundary := projectBootstrapBoundary(scenario)
@@ -163,7 +164,7 @@ func (e *ToolExecutor) Run(ctx context.Context, request ToolCampaignRequest) Too
 				result.Cause = cause
 				result.Scenarios = append(result.Scenarios, execution)
 				result.Scenarios = append(result.Scenarios, scenariosNotRunExcept(ordered, scenario.ID, cause)...)
-				result.PrimaryRows = collectPrimaryRows(coverage.Assignments, result.Scenarios)
+				finalizeToolPrimaryEvidence(&result, coverage.Assignments)
 				return result
 			}
 			if request.AfterBootstrap != nil {
@@ -173,7 +174,7 @@ func (e *ToolExecutor) Run(ctx context.Context, request ToolCampaignRequest) Too
 					result.Cause = Cause{Code: "after_bootstrap_failed", Message: err.Error(), Source: "provider-matrix"}
 					result.Scenarios = append(result.Scenarios, execution)
 					result.Scenarios = append(result.Scenarios, scenariosNotRunExcept(ordered, scenario.ID, result.Cause)...)
-					result.PrimaryRows = collectPrimaryRows(coverage.Assignments, result.Scenarios)
+					finalizeToolPrimaryEvidence(&result, coverage.Assignments)
 					return result
 				}
 			}
@@ -225,11 +226,8 @@ func (e *ToolExecutor) Run(ctx context.Context, request ToolCampaignRequest) Too
 			globalBlockingScenario = scenario.ID
 		}
 	}
-	result.PrimaryRows = collectPrimaryRows(coverage.Assignments, result.Scenarios)
+	finalizeToolPrimaryEvidence(&result, coverage.Assignments)
 	for _, row := range result.PrimaryRows {
-		if row.Status == StatusPass && row.Evidence != nil {
-			result.PrimaryEvidence = append(result.PrimaryEvidence, *row.Evidence)
-		}
 		if row.Status != StatusPass && result.Status == StatusPass {
 			result.Status, result.Cause = StatusFail, row.Cause
 		}
@@ -296,13 +294,7 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 	if !ok {
 		return failedStep(request.CampaignID, scenarioID, step, StatusFail, "render_arguments_invalid", fmt.Errorf("rendered arguments are not an object"), 0, nil)
 	}
-	journalID := scenarioID + "/" + step.ID
 	mutating := mutationTool(step.Tool)
-	if mutating && request.Journal != nil {
-		if err := request.Journal.Intent("mcp-mutation", journalID, request.CampaignID, map[string]any{"tool": step.Tool}); err != nil {
-			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_intent_failed", err, 0, nil)
-		}
-	}
 	deadline := started
 	if step.Poll != nil {
 		deadline = deadline.Add(time.Duration(step.Poll.TimeoutMilliseconds) * time.Millisecond)
@@ -335,14 +327,9 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 		return failedStep(request.CampaignID, scenarioID, step, StatusFail, "tool_step_failed", err, attempts, assertionResults)
 	}
 	root := RawMessageMap(response)
-	if mutating && request.Journal != nil {
-		if err := request.Journal.Acquired("mcp-mutation", journalID, request.CampaignID); err != nil {
-			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_acquired_failed", err, attempts, assertionResults)
-		}
-		// tools/call 已成功且业务断言通过；capture/evidence 失败不得把已发生 mutation 留在 intent 状态。
-		if err := request.Journal.Released("mcp-mutation", journalID, request.CampaignID); err != nil {
-			return failedStep(request.CampaignID, scenarioID, step, StatusFail, "mutation_release_record_failed", err, attempts, assertionResults)
-		}
+	if mutating && request.OnMutationCommitted != nil {
+		// 回调位于 capture/evidence 前：外部副作用一旦成功，后续证据错误也不能让 campaign 忘记资源已存在。
+		request.OnMutationCommitted(step.Tool, cloneMap(arguments), response, request.Variables)
 	}
 	for name, path := range step.Capture {
 		value, found := lookupManifestPath(root, path)
@@ -363,9 +350,11 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 		CampaignID: request.CampaignID, ScenarioID: scenarioID, StepID: step.ID, Tool: step.Tool,
 		ResourceID: correlatedResourceID(arguments, root, request.CampaignID), Outcome: ExpectedOutcomeSuccess,
 		IsError: response.IsError, ApplicationOK: applicationOK, Assertions: assertionResults,
-		EvidenceRef: "evidence/tool-campaign.json#/" + scenarioID + "/" + step.ID,
 	}
 	log.WithFields(map[string]any{"attempt_count": attempts, "assertion_count": len(assertionResults), "duration_ms": time.Since(started).Milliseconds()}).Info("live MCP tools/call 与业务断言完成")
+	if request.OnStepPassed != nil {
+		request.OnStepPassed(scenarioID, step.ID, request.Variables)
+	}
 	return ToolStepExecution{StepID: step.ID, Tool: step.Tool, Coverage: step.Coverage, Status: StatusPass, Attempts: attempts, Evidence: evidence, RecordedEvidence: recorded}
 }
 
@@ -810,6 +799,7 @@ func mutationTool(tool string) bool {
 		"start_service": {}, "restart_service": {}, "stop_service": {}, "import_pipeline_template": {}, "deploy_project_pipeline": {},
 		"open_browser_debug_session": {}, "close_browser_debug_session": {}, "browser_navigate": {}, "browser_set_viewport": {},
 		"browser_type": {}, "browser_select_option": {}, "browser_click": {}, "browser_press_key": {}, "browser_reload": {},
+		"browser_evaluate": {},
 		"debug_capture_at": {}, "set_debug_breakpoints": {}, "debug_continue": {}, "debug_pause": {}, "debug_step_over": {},
 		"debug_step_in": {}, "debug_step_out": {}, "debug_evaluate": {}, "create_debug_session": {},
 		"append_log_analysis_to_session": {}, "append_debug_session_note": {}, "close_debug_session": {},
@@ -859,6 +849,30 @@ func collectPrimaryRows(assignments []CoverageAssignment, scenarios []ToolScenar
 		rows = append(rows, ToolPrimaryRow{Tool: assignment.Tool, ScenarioID: assignment.ScenarioID, StepID: assignment.StepID, Status: step.Status, Cause: step.Cause, Evidence: &evidence})
 	}
 	return rows
+}
+
+func bindToolEvidenceReferences(scenarios []ToolScenarioExecution) {
+	for scenarioIndex := range scenarios {
+		for stepIndex := range scenarios[scenarioIndex].Steps {
+			step := &scenarios[scenarioIndex].Steps[stepIndex]
+			step.Evidence.EvidenceRef = fmt.Sprintf("evidence/tool-campaign.json#/scenarios/%d/steps/%d/recorded_evidence", scenarioIndex, stepIndex)
+		}
+		for stepIndex := range scenarios[scenarioIndex].Cleanup {
+			step := &scenarios[scenarioIndex].Cleanup[stepIndex]
+			step.Evidence.EvidenceRef = fmt.Sprintf("evidence/tool-campaign.json#/scenarios/%d/cleanup/%d/recorded_evidence", scenarioIndex, stepIndex)
+		}
+	}
+}
+
+func finalizeToolPrimaryEvidence(result *ToolCampaignResult, assignments []CoverageAssignment) {
+	bindToolEvidenceReferences(result.Scenarios)
+	result.PrimaryRows = collectPrimaryRows(assignments, result.Scenarios)
+	result.PrimaryEvidence = nil
+	for _, row := range result.PrimaryRows {
+		if row.Status == StatusPass && row.Evidence != nil {
+			result.PrimaryEvidence = append(result.PrimaryEvidence, *row.Evidence)
+		}
+	}
 }
 
 func primaryRowsNotRun(scenarios []Scenario, cause Cause) []ToolPrimaryRow {

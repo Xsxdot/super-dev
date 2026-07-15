@@ -52,6 +52,31 @@ func TestManagedProcessCloseTerminatesOwnedProcessTree(t *testing.T) {
 	require.NoError(t, process.Close(closeCtx))
 }
 
+func TestManagedProcessCloseRetryRechecksProcessExit(t *testing.T) {
+	t.Parallel()
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	process, err := StartManagedProcess(context.Background(), ProcessSpec{
+		Name: "retry-helper", Executable: executable,
+		Arguments: []string{"-test.run=TestManagedProcessHelper"},
+		Env:       map[string]string{"GO_WANT_PROCESS_HELPER": "block"},
+	})
+	require.NoError(t, err)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = process.Close(cancelled)
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer retryCancel()
+	require.NoError(t, process.Close(retryCtx))
+	select {
+	case <-process.done:
+	default:
+		t.Fatal("successful Close retry returned before the process tree exit was confirmed")
+	}
+}
+
 func TestAllocateLoopbackPortReturnsDynamicPort(t *testing.T) {
 	t.Parallel()
 

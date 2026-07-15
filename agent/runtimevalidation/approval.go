@@ -116,7 +116,13 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 
 // CallTool 执行原 MCP 调用；仅在精确 identity 获得真人批准后携带一次性 token 重试。
 func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
-	result, err := c.delegate.CallTool(ctx, name, arguments)
+	delegatedArguments := arguments
+	if _, approvalAware := c.allowed[name]; approvalAware {
+		delegatedArguments = cloneMap(arguments)
+		// MCP 内建等待会在 wrapper 看到 approval_required 前消费 token；强制归零后由本层独占精确 identity 复核。
+		delegatedArguments["approval_wait_seconds"] = 0
+	}
+	result, err := c.delegate.CallTool(ctx, name, delegatedArguments)
 	if err != nil {
 		return result, err
 	}
@@ -141,7 +147,7 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	if err != nil {
 		return result, err
 	}
-	retryArguments := cloneMap(arguments)
+	retryArguments := cloneMap(delegatedArguments)
 	retryArguments["approval_token"] = detail.Token
 	log.Info("真人审批 identity 已精确匹配，重试原 MCP tools/call")
 	retried, retryErr := c.delegate.CallTool(ctx, name, retryArguments)

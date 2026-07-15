@@ -61,6 +61,7 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 	require.False(t, result.IsError)
 	require.Zero(t, postRequests.Load())
 	require.Equal(t, 2, delegate.calls)
+	require.Equal(t, 0, delegate.firstArguments["approval_wait_seconds"])
 	require.Equal(t, "one-time-token", delegate.lastArguments["approval_token"])
 }
 
@@ -158,13 +159,17 @@ func (f approvalFixture) approval(status string) map[string]any {
 }
 
 type approvalDelegate struct {
-	fixture       approvalFixture
-	calls         int
-	lastArguments map[string]any
+	fixture        approvalFixture
+	calls          int
+	firstArguments map[string]any
+	lastArguments  map[string]any
 }
 
 func (d *approvalDelegate) CallTool(_ context.Context, _ string, arguments map[string]any) (ToolCallResult, error) {
 	d.calls++
+	if d.calls == 1 {
+		d.firstArguments = arguments
+	}
 	d.lastArguments = arguments
 	if d.calls == 1 {
 		return ToolCallResult{IsError: true, StructuredContent: map[string]any{

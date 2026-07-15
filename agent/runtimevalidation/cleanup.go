@@ -18,13 +18,24 @@ import (
 	"github.com/xsxdot/gokit/logger"
 )
 
-// CleanupStack 管理本次进程已 acquired 的 campaign-owned actions。
+// CleanupStack 管理本次进程已 acquired 的 campaign-owned owning-root actions。
+//
+// Agent 内的 project/session 等嵌套状态由 disposable clone 与 Agent process
+// tree 传递所有权；credential lease 有精确 action，远端 pipeline 则由独立
+// guard action 阻止未确认终态的 marker 清除。每次 MCP 写调用另有审计 entry。
 type CleanupStack struct {
-	mu      sync.Mutex
-	journal *CleanupJournal
-	actions []CleanupAction
-	closed  bool
-	facts   CleanupResult
+	mu               sync.Mutex
+	journal          *CleanupJournal
+	actions          []CleanupAction
+	mutations        []journalMutation
+	closed           bool
+	journalFinalized bool
+	facts            CleanupResult
+}
+
+type journalMutation struct {
+	id       string
+	acquired bool
 }
 
 // NewCleanupStack 创建一个绑定当前 run journal 的 cleanup stack。
@@ -59,11 +70,14 @@ func (s *CleanupStack) Track(action CleanupAction) error {
 		if err := s.journal.Intent(action.Kind(), action.ID(), s.journal.campaign, nil); err != nil {
 			return err
 		}
+	}
+	// Track 在 mutation 之后调用；先纳入内存所有权，避免 acquired fsync 失败时资源失管。
+	s.actions = append(s.actions, action)
+	if s.journal != nil {
 		if err := s.journal.Acquired(action.Kind(), action.ID(), s.journal.campaign); err != nil {
 			return err
 		}
 	}
-	s.actions = append(s.actions, action)
 	logger.GetLogger().WithEntryName("RuntimeValidationCleanup").WithFields(map[string]any{"resource_kind": action.Kind(), "resource_id": action.ID()}).Info("campaign-owned cleanup action 已登记")
 	return nil
 }
@@ -96,16 +110,80 @@ func (s *CleanupStack) Acquire(kind, id string, preimage map[string]any, mutate 
 	if action == nil || action.Kind() != kind || action.ID() != id {
 		return nil, fmt.Errorf("mutation returned mismatched cleanup action for %s/%s", kind, id)
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("cleanup stack closed while acquiring %s/%s", kind, id)
+	}
+	for _, existing := range s.actions {
+		if existing.Kind() == kind && existing.ID() == id {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("cleanup action %s/%s is duplicated", kind, id)
+		}
+	}
+	// 外部 mutation 已成功，必须先把 action 纳入当前进程所有权；后续 acquired fsync 失败也不能让资源失管。
+	s.actions = append(s.actions, action)
+	s.mu.Unlock()
 	if err := s.journal.Acquired(kind, id, s.journal.campaign); err != nil {
-		return nil, err
+		logger.GetLogger().WithEntryName("RuntimeValidationCleanup").WithErr(err).WithFields(map[string]any{"resource_kind": kind, "resource_id": id}).Error("mutation 已成功但 acquired journal 持久化失败，cleanup action 保持受管")
+		return action, err
+	}
+	return action, nil
+}
+
+// IntentMutation 在一次 MCP 写调用前 fsync mutation intent。
+//
+// 参数：
+//   - id: 当前 campaign 内唯一的调用身份
+//   - preimage: 不含 secret 的 tool/owner 上下文
+//
+// 返回：journal 已持久化时 nil，否则返回错误并禁止调用外部 mutation。
+func (s *CleanupStack) IntentMutation(id string, preimage map[string]any) error {
+	if s == nil || s.journal == nil {
+		return fmt.Errorf("cleanup journal is required for MCP mutation")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return nil, fmt.Errorf("cleanup stack closed while acquiring %s/%s", kind, id)
+	if s.journalFinalized {
+		return fmt.Errorf("cleanup journal is already finalized")
 	}
-	s.actions = append(s.actions, action)
-	return action, nil
+	for _, mutation := range s.mutations {
+		if mutation.id == id {
+			return fmt.Errorf("MCP mutation %s is duplicated", id)
+		}
+	}
+	if err := s.journal.Intent("mcp-mutation", id, s.journal.campaign, preimage); err != nil {
+		return err
+	}
+	s.mutations = append(s.mutations, journalMutation{id: id})
+	return nil
+}
+
+// AcquireMutation 在 MCP 写调用返回成功后 fsync acquired 事实。
+//
+// 参数：
+//   - id: 已通过 IntentMutation 登记的调用身份
+//
+// 返回：acquired 已持久化时 nil；失败时 journal 保留 intent 并阻止 PASS。
+func (s *CleanupStack) AcquireMutation(id string) error {
+	if s == nil || s.journal == nil {
+		return fmt.Errorf("cleanup journal is required for MCP mutation")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.journalFinalized {
+		return fmt.Errorf("cleanup journal is already finalized")
+	}
+	if err := s.journal.Acquired("mcp-mutation", id, s.journal.campaign); err != nil {
+		return err
+	}
+	for index := range s.mutations {
+		if s.mutations[index].id == id {
+			s.mutations[index].acquired = true
+			return nil
+		}
+	}
+	return fmt.Errorf("MCP mutation %s acquired without in-memory intent", id)
 }
 
 // SetTerminalFacts 记录 pipeline、远端 root、borrowed topology 与 marker 的 cleanup gates。
@@ -198,6 +276,22 @@ func (s *CleanupStack) Cleanup(ctx context.Context) CleanupResult {
 			}
 		}
 		log.WithFields(fields).Info("campaign-owned 资源已释放")
+	}
+	s.mu.Lock()
+	s.journalFinalized = true
+	mutations := append([]journalMutation{}, s.mutations...)
+	s.mu.Unlock()
+	// MCP 写调用由 owning roots 传递所有权；只有所有 root 与远端/borrowed gate 都通过，才可统一声明 released。
+	if len(result.Residuals) == 0 && result.PipelineTerminal && result.RemoteRootAbsent && result.BorrowedTopologyStable && s.journal != nil {
+		for index := len(mutations) - 1; index >= 0; index-- {
+			if !mutations[index].acquired {
+				continue
+			}
+			if err := s.journal.Released("mcp-mutation", mutations[index].id, s.journal.campaign); err != nil {
+				result.Residuals = append(result.Residuals, Residual{Kind: "mcp-mutation", ID: mutations[index].id, Detail: "write released journal: " + err.Error()})
+				log.WithErr(err).WithField("resource_id", mutations[index].id).Error("MCP mutation owning roots 已清理但 released journal 写入失败")
+			}
+		}
 	}
 	if s.journal == nil {
 		result.JournalComplete = len(result.Residuals) == 0

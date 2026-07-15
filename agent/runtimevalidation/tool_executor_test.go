@@ -104,6 +104,33 @@ func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
 	require.Equal(t, []string{"first_tool"}, transport.calls)
 }
 
+func TestToolExecutorKeepsResolvablePrimaryEvidenceWhenBootstrapCallbackFails(t *testing.T) {
+	t.Parallel()
+
+	bootstrap := executorScenario("config-security-lifecycle", []ScenarioStep{
+		executorStep("probe-project", "probe_project_config", CoveragePrimary, "structuredContent.data.root", "/tmp/project"),
+		{
+			ID: "resolve-project", Tool: "get_project", Coverage: CoverageSupporting,
+			Expect:  StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: "structuredContent.data.id", Operator: "not_empty"}}},
+			Capture: map[string]string{"project_id": "structuredContent.data.id"},
+		},
+	})
+	transport := &fakeLiveTools{
+		tools: []string{"probe_project_config"}, responses: map[string]ToolCallResult{
+			"probe_project_config": successToolResult(map[string]any{"root": "/tmp/project"}),
+			"get_project":          successToolResult(map[string]any{"id": "project-42"}),
+		},
+	}
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{bootstrap},
+		AfterBootstrap: func(context.Context, map[string]any) error { return fmt.Errorf("provider failed") },
+	})
+
+	require.Equal(t, StatusFail, result.Status)
+	require.Len(t, result.PrimaryEvidence, 1)
+	require.Equal(t, "evidence/tool-campaign.json#/scenarios/0/steps/0/recorded_evidence", result.PrimaryEvidence[0].EvidenceRef)
+}
+
 func TestToolExecutorPersistsOnlySelectedRedactedCorrelatedEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -133,7 +160,30 @@ func TestToolExecutorPersistsOnlySelectedRedactedCorrelatedEvidence(t *testing.T
 	}}, execution.RecordedEvidence)
 	require.NotContains(t, fmt.Sprint(execution.RecordedEvidence), "must-not-persist")
 	require.Equal(t, "project-42", result.PrimaryEvidence[0].ResourceID)
-	require.Contains(t, result.PrimaryEvidence[0].EvidenceRef, "tool-campaign.json")
+	require.Equal(t, "evidence/tool-campaign.json#/scenarios/0/steps/0/recorded_evidence", result.PrimaryEvidence[0].EvidenceRef)
+}
+
+func TestToolExecutorReportsCommittedMutationBeforeEvidenceFailure(t *testing.T) {
+	t.Parallel()
+
+	step := executorStep("deploy", "deploy_project_pipeline", CoveragePrimary, "structuredContent.data.run.id", "run-1")
+	step.Evidence.Record = []string{"structuredContent.data.missing"}
+	transport := &fakeLiveTools{
+		tools: []string{"deploy_project_pipeline"},
+		responses: map[string]ToolCallResult{"deploy_project_pipeline": successToolResult(map[string]any{
+			"run": map[string]any{"id": "run-1"},
+		})},
+	}
+	committed := false
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{executorScenario("remote-pipeline", []ScenarioStep{step})},
+		OnMutationCommitted: func(tool string, _ map[string]any, _ ToolCallResult, _ map[string]any) {
+			committed = tool == "deploy_project_pipeline"
+		},
+	})
+
+	require.True(t, committed)
+	require.Equal(t, StatusFail, result.Status)
 }
 
 type fakeLiveTools struct {

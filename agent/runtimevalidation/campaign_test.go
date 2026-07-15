@@ -9,6 +9,7 @@
 package runtimevalidation
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -71,4 +72,18 @@ func TestRemoteIdentityAttestationRequiresLiveScenarioPass(t *testing.T) {
 
 	result.Scenarios[0].Steps[0].Status = StatusPass
 	require.True(t, remoteIdentityConfirmed(result))
+}
+
+func TestRemotePipelineGuardRetainsStartedUnconfirmedRun(t *testing.T) {
+	t.Parallel()
+
+	started, cleaned := true, false
+	action := &remotePipelineGuardAction{id: "campaign-1", started: func() bool { return started }, cleaned: func() bool { return cleaned }}
+	require.ErrorContains(t, action.Release(context.Background()), "without confirmed")
+
+	cleaned = true
+	require.NoError(t, action.Release(context.Background()))
+	started = false
+	cleaned = false
+	require.NoError(t, action.Release(context.Background()))
 }

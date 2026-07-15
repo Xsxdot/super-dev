@@ -42,6 +42,7 @@ type CredentialActorOptions struct {
 	CredentialValue string
 	HTTPClient      *http.Client
 	Redactor        *RedactingWriter
+	Cleanup         *CleanupStack
 }
 
 // CredentialToolCaller 只包装 get_debug_credentials 的 lease/readback/login/delete 生命周期。
@@ -52,6 +53,7 @@ type CredentialToolCaller struct {
 	campaign string
 	secret   string
 	http     *http.Client
+	cleanup  *CleanupStack
 }
 
 // NewCredentialToolCaller 创建 credential actor，并在任何输出写入前登记 secret 脱敏。
@@ -82,7 +84,10 @@ func NewCredentialToolCaller(delegate ToolCaller, options CredentialActorOptions
 	}
 	// POST 请求含 secret，禁止 redirect 把请求重放到其他 origin。
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &CredentialToolCaller{delegate: delegate, agent: agentURL, sidecar: sidecarURL, campaign: options.CampaignID, secret: options.CredentialValue, http: client}, nil
+	return &CredentialToolCaller{
+		delegate: delegate, agent: agentURL, sidecar: sidecarURL, campaign: options.CampaignID,
+		secret: options.CredentialValue, http: client, cleanup: options.Cleanup,
+	}, nil
 }
 
 // CallTool 对 get_debug_credentials 执行完整 lease 闭环，其他 tool 原样透传。
@@ -99,7 +104,26 @@ func (c *CredentialToolCaller) CallTool(ctx context.Context, name string, argume
 		"campaign_id": c.campaign, "project_id": projectID, "service_id": serviceID,
 	})
 	log.Info("开始创建 runtime validation 一次性 credential lease")
-	metadata, createErr := c.createLease(ctx, projectID, serviceID)
+	var metadata debugcredential.Metadata
+	leaseResourceID := projectID + "/" + serviceID
+	var createErr error
+	leaseTracked := false
+	if c.cleanup == nil {
+		metadata, createErr = c.createLease(ctx, projectID, serviceID)
+	} else {
+		action, acquireErr := c.cleanup.Acquire("credential-lease", leaseResourceID, map[string]any{
+			"project_id": projectID, "service_id": serviceID, "state": "absent",
+		}, func() (CleanupAction, error) {
+			created, err := c.createLease(ctx, projectID, serviceID)
+			metadata = created
+			if err != nil {
+				return nil, err
+			}
+			return &credentialLeaseCleanupAction{actor: c, id: leaseResourceID, metadata: created}, nil
+		})
+		leaseTracked = action != nil
+		createErr = acquireErr
+	}
 	// 即使 lease 创建失败也要真实调用 MCP，但最终不会把旧持久凭据误当为 campaign lease PASS。
 	result, callErr := c.delegate.CallTool(ctx, name, arguments)
 	var readbackErr, sidecarErr error
@@ -112,7 +136,11 @@ func (c *CredentialToolCaller) CallTool(ctx context.Context, name string, argume
 	var deleteErr error
 	if metadata.ID != "" {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		deleteErr = c.deleteLease(cleanupCtx, metadata)
+		if c.cleanup == nil || !leaseTracked {
+			deleteErr = c.deleteLease(cleanupCtx, metadata)
+		} else {
+			deleteErr = c.cleanup.ReleaseTracked(cleanupCtx, "credential-lease", leaseResourceID)
+		}
 		cancel()
 	}
 	joined := errors.Join(createErr, callErr, readbackErr, sidecarErr, deleteErr)
@@ -176,6 +204,10 @@ func (c *CredentialToolCaller) deleteLease(ctx context.Context, expected debugcr
 		return fmt.Errorf("delete credential lease: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		// 精确 lease ID 已不存在时 cleanup 已达到目标；这也保证 released journal 失败后的重试幂等。
+		return nil
+	}
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxCredentialResponseBytes))
 		return fmt.Errorf("delete credential lease returned HTTP %d", response.StatusCode)
@@ -188,6 +220,18 @@ func (c *CredentialToolCaller) deleteLease(ctx context.Context, expected debugcr
 		return fmt.Errorf("deleted credential lease identity mismatch")
 	}
 	return nil
+}
+
+type credentialLeaseCleanupAction struct {
+	actor    *CredentialToolCaller
+	id       string
+	metadata debugcredential.Metadata
+}
+
+func (a *credentialLeaseCleanupAction) Kind() string { return "credential-lease" }
+func (a *credentialLeaseCleanupAction) ID() string   { return a.id }
+func (a *credentialLeaseCleanupAction) Release(ctx context.Context) error {
+	return a.actor.deleteLease(ctx, a.metadata)
 }
 
 func (c *CredentialToolCaller) verifyMCPReadback(result ToolCallResult) error {

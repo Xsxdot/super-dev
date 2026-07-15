@@ -16,6 +16,9 @@ artifacts/
 # source inputs; hiding them makes clean-clone validation non-reproducible.
 !validation/windows-real/pipeline/artifacts/
 !validation/windows-real/pipeline/artifacts/**
+# Cross-platform strict bundles consume the same immutable A/B fixtures.
+!validation/runtime/pipeline/artifacts/
+!validation/runtime/pipeline/artifacts/**
 *.profraw
 *.profdata
 desktop/dist/

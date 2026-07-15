@@ -53,6 +53,7 @@ type FoundationRuntimeSettings struct {
 		BrowserDebugOpen  bool `json:"browser_debug_open"`
 		CodeDebugOpen     bool `json:"code_debug_open"`
 		CodeDebugEvaluate bool `json:"code_debug_evaluate"`
+		GraceMinutes      int  `json:"grace_minutes"`
 	} `json:"approval"`
 	DebugBrowser struct {
 		DefaultBrowserID string `json:"default_browser_id"`

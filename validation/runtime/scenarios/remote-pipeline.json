@@ -1099,7 +1099,7 @@
       "id": "pipeline-cleanup-on-abort",
       "tool": "deploy_project_pipeline",
       "coverage": "supporting",
-      "run_if": "variable_set:pipeline_run_a_complete&&variable_unset:pipeline_run_cleanup",
+      "run_if": "variable_set:pipeline_abort_cleanup_safe&&variable_unset:pipeline_run_cleanup",
       "arguments": {
         "project_name": "{{project_name}}",
         "pipeline_id": "{{pipeline_id}}",

@@ -60,9 +60,12 @@ func TestCredentialCallerCreatesReadsAuthenticatesAndDeletesLease(t *testing.T) 
 	sink := &bytes.Buffer{}
 	redactor := NewRedactingWriter(sink)
 	delegate := &credentialDelegate{secret: secret}
+	journal, err := OpenCleanupJournal(filepath.Join(t.TempDir(), "cleanup.jsonl"), "campaign-1", time.Now)
+	require.NoError(t, err)
+	cleanup := NewCleanupStack(journal)
 	caller, err := NewCredentialToolCaller(delegate, CredentialActorOptions{
 		AgentURL: agent.URL, AuthSidecarURL: sidecar.URL, CampaignID: "campaign-1",
-		CredentialValue: secret, HTTPClient: agent.Client(), Redactor: redactor,
+		CredentialValue: secret, HTTPClient: agent.Client(), Redactor: redactor, Cleanup: cleanup,
 	})
 	require.NoError(t, err)
 
@@ -72,6 +75,8 @@ func TestCredentialCallerCreatesReadsAuthenticatesAndDeletesLease(t *testing.T) 
 	require.True(t, leaseCreated)
 	require.True(t, sidecarAuthenticated)
 	require.True(t, leaseDeleted)
+	require.True(t, journal.Snapshot().Complete)
+	require.NoError(t, journal.Close())
 	_, err = redactor.Write([]byte("before " + secret + " after"))
 	require.NoError(t, err)
 	require.NoError(t, redactor.Close())

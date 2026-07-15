@@ -33,6 +33,17 @@ may create campaign-owned state in the clone and under
 `/srv/superdev-runtime-validation/<campaign-id>`, but it must not create, update,
 delete, or relabel the borrowed Host/Agent/Tunnel records.
 
+The cleanup journal records both lifecycle-owning roots and every MCP write
+call. A write receives `intent` before the call and `acquired` after application
+success, but it is not marked `released` merely because the call returned.
+Projects, sessions, browser/debug children, and other nested Agent state are
+transitively owned by the disposable clone/process roots; their write entries
+are released only after those roots and the remote pipeline guard are clean.
+Credential leases additionally have their own exact create/delete action. The
+borrowed Host/Agent/transport projection is read live before the first business
+mutation and again before process-tree cleanup, and both safe projection digests
+must match.
+
 The local control plane deliberately uses loopback with authentication and TLS
 disabled. This is acceptable only because the machine and profile are dedicated,
 the Agent binds to `127.0.0.1`, the profile permissions are restricted, and the
@@ -83,8 +94,10 @@ out-of-band `expected_remote_identity` and `is_self=false` evidence.
 
 Do not add token hashes, certificate paths, keys, passwords, cookies, or other
 credentials to that file. `settings.json` must keep all mutation approvals on,
-disable the grace shortcut, explicitly allow the read-only browser evaluate
-probe, and point to a target-native Chromium-compatible executable:
+keep `grace_minutes` inside the product-valid range, explicitly allow the
+read-only browser evaluate probe, and point to a target-native
+Chromium-compatible executable. The runner never requests `grant_grace`, so the
+configured grace duration is inert for this campaign:
 
 ```json
 {

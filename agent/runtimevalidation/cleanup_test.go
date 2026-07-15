@@ -45,6 +45,27 @@ func TestCleanupStackKeepsFailedReleaseAsResidual(t *testing.T) {
 	require.Equal(t, []Residual{{Kind: "pipeline", ID: "run-1", Detail: "still running"}}, result.Residuals)
 }
 
+func TestCleanupStackRetainsActionWhenAcquiredJournalWriteFails(t *testing.T) {
+	t.Parallel()
+
+	journal, err := OpenCleanupJournal(filepath.Join(t.TempDir(), "journal.jsonl"), "campaign-1", time.Now)
+	require.NoError(t, err)
+	stack := NewCleanupStack(journal)
+	released := false
+	action, err := stack.Acquire("process", "agent", nil, func() (CleanupAction, error) {
+		// intent 已 fsync；关闭 writer 精确注入 mutation 成功后的 acquired 持久化失败。
+		require.NoError(t, journal.Close())
+		return &fakeCleanupAction{kind: "process", id: "agent", release: func() error { released = true; return nil }}, nil
+	})
+	require.Error(t, err)
+	require.NotNil(t, action)
+
+	result := stack.Cleanup(context.Background())
+	require.True(t, released)
+	require.False(t, result.JournalComplete)
+	require.NotEmpty(t, result.Residuals)
+}
+
 type fakeCleanupAction struct {
 	kind    string
 	id      string

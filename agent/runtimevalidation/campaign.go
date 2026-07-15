@@ -47,16 +47,18 @@ type StrictCampaignResult struct {
 }
 
 type activeCampaignFacts struct {
-	liveTools  []string
-	coverage   CoverageReport
-	toolResult ToolCampaignResult
-	languages  []LanguageResult
-	cleanup    CleanupResult
-	journal    JournalSnapshot
-	borrowed   BorrowedAttestation
-	processLog string
-	checks     []CheckResult
-	runErr     error
+	liveTools      []string
+	coverage       CoverageReport
+	toolResult     ToolCampaignResult
+	languages      []LanguageResult
+	cleanup        CleanupResult
+	journal        JournalSnapshot
+	borrowed       BorrowedAttestation
+	borrowedBefore BorrowedLiveProjection
+	borrowedAfter  BorrowedLiveProjection
+	processLog     string
+	checks         []CheckResult
+	runErr         error
 }
 
 // RunStrictCampaign 执行一次 target-native strict campaign 并写 authoritative report。
@@ -172,7 +174,8 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 		Evidence: map[string]any{
 			"bundle.json": bundle, "host.json": host, "tool-campaign.json": facts.toolResult,
 			"languages.json": facts.languages, "cleanup.json": facts.cleanup, "journal.json": facts.journal,
-			"borrowed-attestation.json": facts.borrowed, "process-log.json": map[string]any{"redacted": facts.processLog},
+			"borrowed-attestation.json": facts.borrowed, "borrowed-live-before.json": facts.borrowedBefore,
+			"borrowed-live-after.json": facts.borrowedAfter, "process-log.json": map[string]any{"redacted": facts.processLog},
 		},
 		ForbiddenSecrets: []string{options.CredentialValue},
 	})
@@ -202,7 +205,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	facts.borrowed = BorrowedAttestation{
 		RemoteHostID: input.RemoteHostID, ExpectedRemoteIdentity: input.ExpectedRemoteIdentity,
-		FoundationDigestBefore: foundationBefore,
+		FoundationDigestBefore: foundationBefore, GovernanceAttestationDigest: governanceDigest,
 	}
 	cloneRoot := filepath.Join(stateRoot, "campaigns", campaignID, "profile")
 	workRoot := filepath.Join(stateRoot, "campaigns", campaignID, "work")
@@ -221,11 +224,29 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	stack := NewCleanupStack(journal)
 	pipelineStarted, pipelineCleaned := false, false
+	var mcpProcess *MCPProcess
+	var agentURL string
 	defer func() {
+		if facts.borrowed.LiveTopologyDigestBefore != "" && mcpProcess != nil && agentURL != "" {
+			attestationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			projection, digest, topologyErr := VerifyBorrowedLiveTopology(attestationCtx, mcpProcess, agentURL, input, nil)
+			cancel()
+			if topologyErr != nil {
+				facts.runErr = errors.Join(facts.runErr, topologyErr)
+				facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-after", "borrowed_live_topology_after_failed", topologyErr))
+			} else {
+				facts.borrowedAfter = projection
+				facts.borrowed.LiveTopologyDigestAfter = digest
+				facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-after", Status: StatusPass})
+			}
+		}
 		foundationAfter, digestErr := DigestPath(input.FoundationPath)
-		borrowedStable := digestErr == nil && facts.borrowed.FoundationDigestBefore == foundationAfter
+		liveTopologyStable := facts.borrowed.LiveTopologyDigestBefore != "" &&
+			facts.borrowed.LiveTopologyDigestBefore == facts.borrowed.LiveTopologyDigestAfter
+		borrowedStable := digestErr == nil && facts.borrowed.FoundationDigestBefore == foundationAfter && liveTopologyStable
 		facts.borrowed.FoundationDigestAfter = foundationAfter
-		facts.borrowed.BorrowedTopologyDigest = governanceDigest
+		facts.borrowed.BorrowedTopologyDigest = facts.borrowed.LiveTopologyDigestBefore
+		facts.borrowed.RemoteNodeConfirmedNonSelf = liveTopologyStable
 		pipelineTerminal := !pipelineStarted || pipelineCleaned
 		remoteAbsent := !pipelineStarted || pipelineCleaned
 		stack.SetTerminalFacts(pipelineTerminal, remoteAbsent, borrowedStable, false)
@@ -302,7 +323,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		facts.runErr = err
 		return facts
 	}
-	agentURL := fmt.Sprintf("http://127.0.0.1:%d", agentPort)
+	agentURL = fmt.Sprintf("http://127.0.0.1:%d", agentPort)
 	agentBinary := filepath.Join(options.BundleRoot, "bin", "superdev-agent"+options.Target.ExecutableSuffix())
 	var agentProcess *ManagedProcess
 	_, err = stack.Acquire("process", "agent", map[string]any{"state": "stopped"}, func() (CleanupAction, error) {
@@ -328,7 +349,6 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	facts.checks = append(facts.checks, CheckResult{ID: "agent-ready", Status: StatusPass})
 
 	mcpBinary := filepath.Join(options.BundleRoot, "bin", "superdev-mcp"+options.Target.ExecutableSuffix())
-	var mcpProcess *MCPProcess
 	_, err = stack.Acquire("process", "mcp", map[string]any{"state": "stopped"}, func() (CleanupAction, error) {
 		process, startErr := StartMCPProcess(ctx, MCPProcessSpec{Executable: mcpBinary, Directory: workRoot, AgentURL: agentURL, Stderr: redactor})
 		mcpProcess = process
@@ -345,6 +365,13 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		return facts
 	}
 	facts.checks = append(facts.checks, CheckResult{ID: "mcp-initialize", Status: StatusPass})
+	facts.borrowedBefore, facts.borrowed.LiveTopologyDigestBefore, err = VerifyBorrowedLiveTopology(ctx, mcpProcess, agentURL, input, nil)
+	if err != nil {
+		facts.runErr = err
+		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-before", "borrowed_live_topology_before_failed", err))
+		return facts
+	}
+	facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-before", Status: StatusPass})
 
 	sidecarURL, err := startAuthSidecar(ctx, stack, options.BundleRoot, workRoot, campaignID, options.CredentialValue, redactor)
 	if err != nil {
@@ -359,23 +386,46 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		facts.runErr = err
 		return facts
 	}
-	credentialCaller, err := NewCredentialToolCaller(approvalCaller, CredentialActorOptions{
-		AgentURL: agentURL, AuthSidecarURL: sidecarURL, CampaignID: campaignID,
-		CredentialValue: options.CredentialValue, Redactor: redactor,
-	})
-	if err != nil {
-		facts.runErr = err
-		return facts
-	}
 	variables, err := campaignVariables(options.BundleRoot, projectRoot, input, campaignID, ports, fixtures)
 	if err != nil {
 		facts.runErr = err
 		return facts
 	}
-	providerRunner := NewProviderRunner(approvalCaller, NewOSCommandExecutor(redactor), nil)
+	_, err = stack.Acquire("remote-pipeline", campaignID, map[string]any{"remote_root": remoteRoot}, func() (CleanupAction, error) {
+		return &remotePipelineGuardAction{id: campaignID, started: func() bool { return pipelineStarted }, cleaned: func() bool { return pipelineCleaned }}, nil
+	})
+	if err != nil {
+		facts.runErr = err
+		facts.checks = append(facts.checks, failedCampaignCheck("remote-pipeline-guard", "remote_pipeline_guard_failed", err))
+		return facts
+	}
+	mutationCaller, err := NewMutationJournalToolCaller(approvalCaller, stack, func(tool string, _ map[string]any, _ ToolCallResult) {
+		if tool == "deploy_project_pipeline" {
+			pipelineStarted = true
+			variables["pipeline_abort_cleanup_safe"] = ""
+		}
+	})
+	if err != nil {
+		facts.runErr = err
+		return facts
+	}
+	credentialCaller, err := NewCredentialToolCaller(mutationCaller, CredentialActorOptions{
+		AgentURL: agentURL, AuthSidecarURL: sidecarURL, CampaignID: campaignID,
+		CredentialValue: options.CredentialValue, Redactor: redactor, Cleanup: stack,
+	})
+	if err != nil {
+		facts.runErr = err
+		return facts
+	}
+	providerRunner := NewProviderRunner(mutationCaller, NewOSCommandExecutor(redactor), nil)
 	executor := NewToolExecutor(mcpProcess, credentialCaller)
 	facts.toolResult = executor.Run(ctx, ToolCampaignRequest{
-		CampaignID: campaignID, Scenarios: scenarios, Variables: variables, Journal: journal,
+		CampaignID: campaignID, Scenarios: scenarios, Variables: variables,
+		OnStepPassed: func(scenarioID, stepID string, currentVariables map[string]any) {
+			if scenarioID == "remote-pipeline" && containsString([]string{"pipeline-wait-a", "pipeline-wait-b", "pipeline-wait-rollback-a"}, stepID) {
+				currentVariables["pipeline_abort_cleanup_safe"] = true
+			}
+		},
 		AfterBootstrap: func(callbackCtx context.Context, values map[string]any) error {
 			projectID := strings.TrimSpace(fmt.Sprint(values["project_id"]))
 			adapters := cloneStringMap(input.Adapters)
@@ -389,13 +439,11 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	})
 	facts.liveTools = facts.toolResult.LiveTools
 	facts.coverage = facts.toolResult.Coverage
-	facts.borrowed.RemoteNodeConfirmedNonSelf = remoteIdentityConfirmed(facts.toolResult)
-	if facts.borrowed.RemoteNodeConfirmedNonSelf {
-		facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-identity", Status: StatusPass})
+	if remoteIdentityConfirmed(facts.toolResult) {
+		facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-scenario", Status: StatusPass})
 	} else {
-		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-identity", "borrowed_live_identity_unconfirmed", fmt.Errorf("live list_hosts did not confirm the governed non-self node identity")))
+		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-scenario", "borrowed_live_scenario_unconfirmed", fmt.Errorf("manifest list_hosts scenario did not confirm the governed non-self node identity")))
 	}
-	pipelineStarted = !emptyManifestValue(facts.toolResult.Variables["pipeline_run_a"])
 	// 提交 cleanup run 不等于远端已清理；只有终态和受控脚本 absence 日志都通过，才允许删除 active marker。
 	pipelineCleaned = pipelineCleanupConfirmed(facts.toolResult)
 	if facts.toolResult.Status != StatusPass {
@@ -498,6 +546,7 @@ func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campa
 		"expected_remote_identity": input.ExpectedRemoteIdentity,
 		"linux_root":               strings.ReplaceAll(input.RemoteRootTemplate, "{campaign_id}", campaignID),
 		"pipeline_id":              "runtime-validation-remote", "remote_pipeline_config": remotePipeline,
+		"pipeline_abort_cleanup_safe": "",
 		"bootstrap_pipeline_config": map[string]any{
 			"id": "bootstrap-validation", "name": "Runtime Validation Bootstrap", "services": []any{},
 			"pipeline": map[string]any{"build": []any{map[string]any{"name": "Validate", "type": "local_command", "with": map[string]any{"cmd": "echo runtime-validation"}}}},
@@ -726,4 +775,22 @@ func scenarioStepsPassed(result ToolCampaignResult, scenarioID string, required 
 		}
 	}
 	return true
+}
+
+type remotePipelineGuardAction struct {
+	id      string
+	started func() bool
+	cleaned func() bool
+}
+
+func (a *remotePipelineGuardAction) Kind() string { return "remote-pipeline" }
+func (a *remotePipelineGuardAction) ID() string   { return a.id }
+func (a *remotePipelineGuardAction) Release(context.Context) error {
+	if a.started == nil || !a.started() {
+		return nil
+	}
+	if a.cleaned != nil && a.cleaned() {
+		return nil
+	}
+	return fmt.Errorf("remote pipeline started without confirmed terminal cleanup and root absence")
 }

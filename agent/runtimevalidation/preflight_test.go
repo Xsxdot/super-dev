@@ -39,6 +39,19 @@ func TestRunReadOnlyPreflightBlocksBeforeMarkerWhenAdapterIsMissing(t *testing.T
 	require.NoFileExists(t, filepath.Join(FoundationStateRoot(input.FoundationPath, input.ProfileID), activeMarkerFilename))
 }
 
+func TestRunReadOnlyPreflightRequiresProductValidGraceWithoutUsingIt(t *testing.T) {
+	bundleRoot, input := createPreflightEnvironment(t)
+	var settings map[string]any
+	require.NoError(t, readJSONFile(filepath.Join(input.FoundationPath, "settings.json"), &settings))
+	settings["approval"].(map[string]any)["grace_minutes"] = 0
+	writeJSONFile(t, filepath.Join(input.FoundationPath, "settings.json"), settings)
+
+	result := RunReadOnlyPreflight(context.Background(), bundleRoot, input, Target{OS: "linux", Architecture: "amd64"}, &recordingPreflightCommands{})
+
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Equal(t, "browser_or_debug_policy_unavailable", result.Cause.Code)
+}
+
 type recordingPreflightCommands struct {
 	calls int
 }
@@ -83,7 +96,7 @@ func createPreflightEnvironment(t *testing.T) (string, RuntimeInput) {
 	writeJSONFile(t, filepath.Join(foundation, "settings.json"), map[string]any{
 		"approval": map[string]any{
 			"config_upsert": true, "pipeline_upsert": true, "pipeline_run": true, "template_import": true,
-			"browser_debug_open": true, "code_debug_open": true, "code_debug_evaluate": true,
+			"browser_debug_open": true, "code_debug_open": true, "code_debug_evaluate": true, "grace_minutes": 15,
 		},
 		"debug_browser": map[string]any{
 			"default_browser_id": "validation-chromium", "profile_mode": "ephemeral", "allow_evaluate": true,

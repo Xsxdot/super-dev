@@ -44,13 +44,17 @@ type ProcessSpec struct {
 
 // ManagedProcess 是 runner 拥有的真实进程及其平台进程树控制器。
 type ManagedProcess struct {
-	name       string
-	cmd        *exec.Cmd
-	controller processTreeController
-	done       chan struct{}
-	waitMu     sync.Mutex
-	waitErr    error
-	closeOnce  sync.Once
+	name             string
+	cmd              *exec.Cmd
+	controller       processTreeController
+	done             chan struct{}
+	waitMu           sync.Mutex
+	waitErr          error
+	closeMu          sync.Mutex
+	terminateSent    bool
+	killSent         bool
+	controllerClosed bool
+	terminalCloseErr error
 }
 
 // StartManagedProcess 校验并启动一个 target-native 子进程。
@@ -119,50 +123,92 @@ func (p *ManagedProcess) Close(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
-	var closeErr error
-	p.closeOnce.Do(func() {
-		log := logger.GetLogger().WithEntryName("RuntimeValidationProcess").WithFields(map[string]any{
-			"process": p.name, "pid": p.PID(), "tree_id": p.controller.ID(),
-		})
-		select {
-		case <-p.done:
-			closeErr = p.controller.Close()
-			log.Info("runtime validation 子进程已在 cleanup 前退出")
-			return
-		default:
-		}
-		log.Info("开始关闭 runtime validation 子进程树")
-		if err := p.controller.Terminate(); err != nil && !processAlreadyGone(err) {
-			log.WithErr(err).Error("发送子进程树终止信号失败")
-			closeErr = err
-		}
-		timer := time.NewTimer(processGracePeriod)
-		defer timer.Stop()
-		select {
-		case <-p.done:
-		case <-ctx.Done():
-			_ = p.controller.Kill()
-			closeErr = ctx.Err()
-		case <-timer.C:
-			if err := p.controller.Kill(); err != nil && !processAlreadyGone(err) && closeErr == nil {
-				closeErr = err
-			}
-			select {
-			case <-p.done:
-			case <-ctx.Done():
-				closeErr = ctx.Err()
-			}
-		}
-		if err := p.controller.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
-		if closeErr != nil {
-			log.WithErr(closeErr).Error("runtime validation 子进程树关闭不完整")
-			return
-		}
-		log.Info("runtime validation 子进程树已关闭")
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	if p.controllerClosed {
+		return p.terminalCloseErr
+	}
+	log := logger.GetLogger().WithEntryName("RuntimeValidationProcess").WithFields(map[string]any{
+		"process": p.name, "pid": p.PID(), "tree_id": p.controller.ID(),
 	})
-	return closeErr
+	closeErr := error(nil)
+	select {
+	case <-p.done:
+		log.Info("runtime validation 子进程已在 cleanup 前退出")
+	default:
+		log.Info("开始关闭 runtime validation 子进程树")
+		if !p.terminateSent {
+			if err := p.controller.Terminate(); err != nil && !processAlreadyGone(err) {
+				log.WithErr(err).Error("发送子进程树终止信号失败")
+				closeErr = err
+			} else {
+				p.terminateSent = true
+			}
+		}
+		if err := p.waitForTermination(ctx); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	select {
+	case <-p.done:
+		// 只有真实观察到 Wait 完成后才关闭 controller；失败重试会重新验证该事实。
+	default:
+		if closeErr == nil {
+			closeErr = fmt.Errorf("process tree exit was not confirmed")
+		}
+		log.WithErr(closeErr).Error("runtime validation 子进程树关闭不完整")
+		return closeErr
+	}
+	if err := p.controller.Close(); err != nil {
+		closeErr = errors.Join(closeErr, err)
+	}
+	p.controllerClosed = true
+	p.terminalCloseErr = closeErr
+	if closeErr != nil {
+		log.WithErr(closeErr).Error("runtime validation 子进程树关闭不完整")
+		return closeErr
+	}
+	log.Info("runtime validation 子进程树已关闭")
+	return nil
+}
+
+func (p *ManagedProcess) waitForTermination(ctx context.Context) error {
+	if p.killSent {
+		select {
+		case <-p.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	timer := time.NewTimer(processGracePeriod)
+	defer timer.Stop()
+	select {
+	case <-p.done:
+		return nil
+	case <-ctx.Done():
+		if err := p.controller.Kill(); err != nil && !processAlreadyGone(err) {
+			return errors.Join(ctx.Err(), err)
+		}
+		p.killSent = true
+		select {
+		case <-p.done:
+			return nil
+		default:
+			return ctx.Err()
+		}
+	case <-timer.C:
+		if err := p.controller.Kill(); err != nil && !processAlreadyGone(err) {
+			return err
+		}
+		p.killSent = true
+		select {
+		case <-p.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // AllocateLoopbackPort 向 OS 请求并释放一个当前可用的 IPv4 loopback 动态端口。
