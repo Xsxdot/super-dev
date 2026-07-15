@@ -26,6 +26,7 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 
 	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
 	var detailReads atomic.Int32
+	var auditReads atomic.Int32
 	var postRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
@@ -42,10 +43,13 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 			})
 		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
 			require.Equal(t, "code_debug.evaluate", request.URL.Query().Get("kind"))
+			require.Equal(t, fixture.createdAt, request.URL.Query().Get("since"))
 			require.Equal(t, "0", request.URL.Query().Get("limit"))
-			_ = json.NewEncoder(w).Encode(map[string]any{"events": []any{
-				fixture.auditEvent("executed", "approval-1"),
-			}})
+			events := []any{}
+			if auditReads.Add(1) >= 2 {
+				events = append(events, fixture.auditEvent("executed", "approval-1"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
 		case request.Method == http.MethodPost:
 			postRequests.Add(1)
 			http.Error(w, "runtime validation must not approve for the user", http.StatusForbidden)
@@ -67,6 +71,7 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 	require.False(t, result.IsError)
 	require.Zero(t, postRequests.Load())
 	require.Equal(t, 2, delegate.calls)
+	require.Equal(t, int32(2), auditReads.Load())
 	require.Equal(t, 0, delegate.firstArguments["approval_wait_seconds"])
 	require.Equal(t, "one-time-token", delegate.lastArguments["approval_token"])
 }
@@ -122,7 +127,7 @@ func TestApprovalActorRejectsGraceAuditAfterApprovedRetry(t *testing.T) {
 
 	_, err = actor.CallTool(context.Background(), "debug_evaluate", map[string]any{})
 	require.ErrorContains(t, err, "forbidden grace action")
-	require.Equal(t, 2, delegate.calls)
+	require.Equal(t, 1, delegate.calls)
 }
 
 func TestApprovalActorRejectsMissingTokenConsumptionAudit(t *testing.T) {
@@ -233,18 +238,22 @@ func TestApprovalActorRejectsDuplicatePendingForSameOperationTarget(t *testing.T
 }
 
 type approvalFixture struct {
+	createdAt string
 	expiresAt string
 }
 
 func newApprovalFixture(expiresAt time.Time) approvalFixture {
-	return approvalFixture{expiresAt: expiresAt.Format(time.RFC3339Nano)}
+	return approvalFixture{
+		createdAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+		expiresAt: expiresAt.Format(time.RFC3339Nano),
+	}
 }
 
 func (f approvalFixture) plan() map[string]any {
 	return map[string]any{
 		"id": "plan-1", "kind": "code_debug.evaluate", "fingerprint": "fingerprint-1",
 		"target":     map[string]any{"deployment_id": "dep-1", "debug_session_id": "debug-1"},
-		"expires_at": f.expiresAt,
+		"created_at": f.createdAt, "expires_at": f.expiresAt,
 	}
 }
 

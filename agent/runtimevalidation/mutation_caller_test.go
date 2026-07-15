@@ -6,6 +6,7 @@ package runtimevalidation
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,10 +58,36 @@ func TestMutationJournalToolCallerLeavesFailedCallIntentUnreleased(t *testing.T)
 	require.NoError(t, journal.Close())
 }
 
+func TestMutationJournalToolCallerAcquiresAppliedErrorForCleanup(t *testing.T) {
+	journalPath := filepath.Join(t.TempDir(), "journal.jsonl")
+	journal, err := OpenCleanupJournal(journalPath, "campaign-1", time.Now)
+	require.NoError(t, err)
+	stack := NewCleanupStack(journal)
+	committed := false
+	proofErr := errors.New("post-commit audit proof failed")
+	caller, err := NewMutationJournalToolCaller(mutationCallerDelegate{err: markMutationApplied(proofErr)}, stack, func(string, map[string]any, ToolCallResult) {
+		committed = true
+	})
+	require.NoError(t, err)
+
+	_, err = caller.CallTool(context.Background(), "start_service", nil)
+	require.ErrorIs(t, err, proofErr)
+	require.True(t, committed)
+	raw, err := os.ReadFile(journalPath)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"phase":"acquired"`)
+
+	stack.SetTerminalFacts(true, true, true, false)
+	result := stack.Cleanup(context.Background())
+	require.True(t, result.JournalComplete)
+	require.NoError(t, journal.Close())
+}
+
 type mutationCallerDelegate struct {
 	isError bool
+	err     error
 }
 
 func (d mutationCallerDelegate) CallTool(context.Context, string, map[string]any) (ToolCallResult, error) {
-	return ToolCallResult{IsError: d.isError, StructuredContent: map[string]any{"ok": !d.isError}}, nil
+	return ToolCallResult{IsError: d.isError, StructuredContent: map[string]any{"ok": !d.isError}}, d.err
 }

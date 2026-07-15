@@ -133,7 +133,7 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 		// strict campaign 中的受控写工具必须先返回 approval_required。
 		// 首次直接成功意味着审批策略被关闭或命中了 grace，两者都不能作为验收通路。
 		if approvalAware && !result.IsError && RawMessageMap(result.StructuredContent)["ok"] != false {
-			return result, fmt.Errorf("approval-aware MCP tool %s completed without approval_required", name)
+			return result, markMutationApplied(fmt.Errorf("approval-aware MCP tool %s completed without approval_required", name))
 		}
 		return result, nil
 	}
@@ -153,6 +153,10 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	if err != nil {
 		return result, err
 	}
+	// 审批 POST 会先写 grace_granted 审计再返回；必须在业务重试前拦截，避免“产生副作用后才报错”。
+	if err := c.rejectForbiddenGrace(ctx, required); err != nil {
+		return result, err
+	}
 	retryArguments := cloneMap(delegatedArguments)
 	retryArguments["approval_token"] = detail.Token
 	log.Info("真人审批 identity 已精确匹配，重试原 MCP tools/call")
@@ -164,40 +168,74 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 		return retried, fmt.Errorf("approved MCP tool %s still returned an application error", name)
 	}
 	if err := c.verifyTokenConsumedWithoutGrace(ctx, required); err != nil {
-		return retried, err
+		// 业务重试已成功；后置审计证明失败时仍必须让外层 journal 接管 cleanup。
+		return retried, markMutationApplied(err)
 	}
 	log.Info("operation approval 一次性 token 已消费")
 	return retried, nil
 }
 
+func (c *ApprovalToolCaller) rejectForbiddenGrace(ctx context.Context, expected approvalIdentity) error {
+	events, err := c.listMatchingOperationAudit(ctx, expected)
+	if err != nil {
+		return err
+	}
+	return rejectForbiddenGraceEvents(events, expected)
+}
+
 func (c *ApprovalToolCaller) verifyTokenConsumedWithoutGrace(ctx context.Context, expected approvalIdentity) error {
+	events, err := c.listMatchingOperationAudit(ctx, expected)
+	if err != nil {
+		return err
+	}
+	if err := rejectForbiddenGraceEvents(events, expected); err != nil {
+		return err
+	}
+	executed := 0
+	for _, event := range events {
+		if strings.TrimSpace(fmt.Sprint(event["action"])) != operation.AuditExecuted {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(event["approval_id"])) != expected.ID {
+			continue
+		}
+		executed++
+	}
+	if executed != 1 {
+		return fmt.Errorf("operation approval %s one-time token consumption audit count is %d, want 1", expected.ID, executed)
+	}
+	return nil
+}
+
+func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, expected approvalIdentity) ([]map[string]any, error) {
 	endpoint := *c.baseURL
 	endpoint.Path = "/api/operation-audit"
 	query := endpoint.Query()
 	query.Set("kind", expected.Kind)
+	query.Set("since", expected.PlanCreatedAt.Format(time.RFC3339Nano))
 	query.Set("limit", "0")
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("list operation audit after approved retry: %w", err)
+		return nil, fmt.Errorf("list operation audit for approval verification: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
-		return fmt.Errorf("list operation audit after approved retry returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("list operation audit for approval verification returned HTTP %d", response.StatusCode)
 	}
 	var payload struct {
 		Events []map[string]any `json:"events"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
-		return fmt.Errorf("decode operation audit after approved retry: %w", err)
+		return nil, fmt.Errorf("decode operation audit for approval verification: %w", err)
 	}
 
-	executed := 0
+	matched := make([]map[string]any, 0, len(payload.Events))
 	for _, event := range payload.Events {
 		plan := RawMessageMap(event["plan"])
 		if strings.TrimSpace(fmt.Sprint(event["kind"])) != expected.Kind ||
@@ -207,24 +245,22 @@ func (c *ApprovalToolCaller) verifyTokenConsumedWithoutGrace(ctx context.Context
 		}
 		target, targetErr := normalizeApprovalTarget(plan["target"])
 		if targetErr != nil {
-			return fmt.Errorf("operation audit for approval %s has incomplete target identity", expected.ID)
+			return nil, fmt.Errorf("operation audit for approval %s has incomplete target identity", expected.ID)
 		}
 		if target != expected.NormalizedTarget {
 			continue
 		}
-		action := strings.TrimSpace(fmt.Sprint(event["action"]))
-		switch action {
-		case operation.AuditGraceGranted, operation.AuditApprovedByGrace:
-			return fmt.Errorf("operation approval %s used forbidden grace action %s", expected.ID, action)
-		case operation.AuditExecuted:
-			if strings.TrimSpace(fmt.Sprint(event["approval_id"])) != expected.ID {
-				return fmt.Errorf("operation approval %s execution audit has a different approval identity", expected.ID)
-			}
-			executed++
-		}
+		matched = append(matched, event)
 	}
-	if executed != 1 {
-		return fmt.Errorf("operation approval %s one-time token consumption audit count is %d, want 1", expected.ID, executed)
+	return matched, nil
+}
+
+func rejectForbiddenGraceEvents(events []map[string]any, expected approvalIdentity) error {
+	for _, event := range events {
+		action := strings.TrimSpace(fmt.Sprint(event["action"]))
+		if action == operation.AuditGraceGranted || action == operation.AuditApprovedByGrace {
+			return fmt.Errorf("operation approval %s used forbidden grace action %s", expected.ID, action)
+		}
 	}
 	return nil
 }
@@ -235,6 +271,7 @@ type approvalIdentity struct {
 	Kind             string
 	Fingerprint      string
 	NormalizedTarget string
+	PlanCreatedAt    time.Time
 	PlanExpiresAt    time.Time
 	ExpiresAt        time.Time
 	Status           string
@@ -422,6 +459,10 @@ func approvalIdentityFromMaps(approval map[string]any, plan map[string]any) (app
 		Kind: strings.TrimSpace(fmt.Sprint(plan["kind"])), Fingerprint: strings.TrimSpace(fmt.Sprint(plan["fingerprint"])),
 		NormalizedTarget: target, Status: strings.TrimSpace(fmt.Sprint(approval["status"])),
 	}
+	identity.PlanCreatedAt, err = parseApprovalTime(plan["created_at"])
+	if err != nil {
+		return identity, fmt.Errorf("parse operation plan creation time: %w", err)
+	}
 	identity.PlanExpiresAt, err = parseApprovalTime(plan["expires_at"])
 	if err != nil {
 		return identity, fmt.Errorf("parse operation plan expiry: %w", err)
@@ -461,7 +502,8 @@ func parseApprovalTime(value any) (time.Time, error) {
 
 func matchApprovalPlan(expected, actual approvalIdentity) error {
 	if expected.PlanID != actual.PlanID || expected.Kind != actual.Kind || expected.Fingerprint != actual.Fingerprint ||
-		expected.NormalizedTarget != actual.NormalizedTarget || !expected.PlanExpiresAt.Equal(actual.PlanExpiresAt) {
+		expected.NormalizedTarget != actual.NormalizedTarget || !expected.PlanCreatedAt.Equal(actual.PlanCreatedAt) ||
+		!expected.PlanExpiresAt.Equal(actual.PlanExpiresAt) {
 		return fmt.Errorf("operation approval plan identity drift for plan %s", expected.PlanID)
 	}
 	return nil

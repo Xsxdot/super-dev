@@ -12,6 +12,7 @@ package runtimevalidation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -51,21 +52,41 @@ func (c *MutationJournalToolCaller) CallTool(ctx context.Context, name string, a
 		return ToolCallResult{}, err
 	}
 	result, err := c.delegate.CallTool(ctx, name, arguments)
-	if err != nil {
+	committed := mutationWasApplied(err)
+	if err != nil && !committed {
 		return result, err
 	}
 	ok := applicationOK(result)
 	if result.IsError || (ok != nil && !*ok) {
-		return result, nil
+		return result, err
 	}
 	// callback 必须在 acquired fsync 前发生；即使磁盘随后失败，远程 pipeline 等副作用也不能从 cleanup guard 消失。
 	if c.onCommitted != nil {
 		c.onCommitted(name, cloneMap(arguments), result)
 	}
-	if err := c.cleanup.AcquireMutation(id); err != nil {
-		return result, err
+	if acquireErr := c.cleanup.AcquireMutation(id); acquireErr != nil {
+		return result, errors.Join(err, acquireErr)
 	}
-	return result, nil
+	return result, err
+}
+
+type mutationAppliedError struct {
+	cause error
+}
+
+func (e *mutationAppliedError) Error() string { return e.cause.Error() }
+func (e *mutationAppliedError) Unwrap() error { return e.cause }
+
+func markMutationApplied(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &mutationAppliedError{cause: err}
+}
+
+func mutationWasApplied(err error) bool {
+	var applied *mutationAppliedError
+	return errors.As(err, &applied)
 }
 
 func (c *MutationJournalToolCaller) nextID(tool string) string {
