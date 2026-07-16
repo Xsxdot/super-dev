@@ -17,10 +17,14 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
-// Plan is the executable pipeline grouped by phase.
+// Plan 描述按阶段分组并完成变量解析的可执行 pipeline。
+//
+// 边界：
+//   - 只包含预览和执行共用的确定性计划，不包含运行期状态
+//   - JSON 字段保持 API/MCP 的小写合同，禁止泄漏 Go 字段名
 type Plan struct {
-	Phases    map[model.PipelinePhase][]model.Step
-	Variables map[string]string
+	Phases    map[model.PipelinePhase][]model.Step `json:"phases"`
+	Variables map[string]string                    `json:"variables"`
 }
 
 // Target is where a plugin task executes. Empty HostID means local/global.
