@@ -12,6 +12,7 @@ package runtimevalidation
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -82,6 +83,44 @@ func TestProviderServiceConfigUsesPreflightedAdapterCommand(t *testing.T) {
 	require.Equal(t, "/prepared/adapters/dlv", codeDebug["adapter_command"])
 }
 
+func TestProviderGoUsesCampaignOwnedBuildCacheAcrossBuildRuntimeAndDebug(t *testing.T) {
+	t.Parallel()
+
+	projectRoot := t.TempDir()
+	tools := &fakeProviderTools{}
+	commands := &recordingProviderCommands{}
+	runner := NewProviderRunner(tools, commands, fakeProviderHTTP{})
+	result := runner.Run(context.Background(), ProviderRequest{
+		CampaignID: "campaign-1", ProjectID: "project-1", ProjectRoot: projectRoot,
+		Platform: "darwin", Fixture: validFixture("go"), Port: 20101,
+	})
+
+	require.Equal(t, StatusPass, result.RuntimeStatus)
+	require.Equal(t, StatusPass, result.DebugStatus)
+	require.Len(t, commands.requests, 2)
+	cacheRoot := filepath.Join(projectRoot, ".runtime-validation-cache", "go-build")
+	for _, request := range commands.requests {
+		require.Equal(t, cacheRoot, request.Env["GOCACHE"], request.Name)
+	}
+	require.DirExists(t, cacheRoot)
+
+	var validatedEnv map[string]string
+	var configuredEnv map[string]string
+	for _, call := range tools.calls {
+		switch call.name {
+		case "validate_service_runtime":
+			validatedEnv = call.arguments["env"].(map[string]string)
+		case "preview_config_change":
+			service := call.arguments["service"].(map[string]any)
+			deployment := service["deployments"].([]any)[0].(map[string]any)
+			runtime := deployment["runtime"].(map[string]any)
+			configuredEnv = runtime["env"].(map[string]string)
+		}
+	}
+	require.Equal(t, cacheRoot, validatedEnv["GOCACHE"])
+	require.Equal(t, cacheRoot, configuredEnv["GOCACHE"])
+}
+
 type providerCall struct {
 	name      string
 	arguments map[string]any
@@ -126,6 +165,15 @@ func (f *fakeProviderTools) CallTool(_ context.Context, name string, arguments m
 type fakeProviderCommands struct{}
 
 func (fakeProviderCommands) Run(context.Context, CommandRunRequest) error { return nil }
+
+type recordingProviderCommands struct {
+	requests []CommandRunRequest
+}
+
+func (r *recordingProviderCommands) Run(_ context.Context, request CommandRunRequest) error {
+	r.requests = append(r.requests, request)
+	return nil
+}
 
 type fakeProviderHTTP struct{}
 

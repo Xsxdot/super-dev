@@ -183,6 +183,9 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	}
 	fixtureRoot := filepath.Join(request.ProjectRoot, "fixtures", request.Fixture.Provider)
 	env := providerEnvironment(request)
+	if err := prepareProviderEnvironment(request, env); err != nil {
+		return failProviderFrom(&result, 0, StatusFail, "provider_environment_prepare_failed", err.Error())
+	}
 	if err := r.commands.Run(ctx, CommandRunRequest{Name: request.Fixture.Provider + "-preflight", Command: platform.Preflight, Directory: fixtureRoot, Env: env}); err != nil {
 		return failProviderFrom(&result, 0, StatusBlocked, "runtime_toolchain_unavailable", err.Error())
 	}
@@ -508,7 +511,29 @@ func providerEnvironment(request ProviderRequest) map[string]string {
 	for key, value := range request.Fixture.Runtime.Env {
 		env[key] = strings.ReplaceAll(strings.ReplaceAll(value, "${PORT}", strconv.Itoa(request.Port)), "${CAMPAIGN_ID}", request.CampaignID)
 	}
+	if request.Fixture.Provider == "go" && strings.TrimSpace(request.ProjectRoot) != "" {
+		// Go 默认缓存位于用户目录；strict campaign 必须把 build、runtime 和 Delve
+		// 统一约束到随 campaign workdir 一起清理的目录，避免读写宿主机持久状态。
+		env["GOCACHE"] = filepath.Join(request.ProjectRoot, ".runtime-validation-cache", "go-build")
+	}
 	return env
+}
+
+func prepareProviderEnvironment(request ProviderRequest, env map[string]string) error {
+	cacheRoot := strings.TrimSpace(env["GOCACHE"])
+	if request.Fixture.Provider != "go" || cacheRoot == "" {
+		return nil
+	}
+	log := logger.GetLogger().WithEntryName("RuntimeValidationProviderEnvironment").WithFields(map[string]any{
+		"campaign_id": request.CampaignID, "provider": request.Fixture.Provider, "cache_root": cacheRoot,
+	})
+	log.Info("开始准备 campaign-owned provider cache")
+	if err := os.MkdirAll(cacheRoot, 0o700); err != nil {
+		log.WithErr(err).Error("准备 campaign-owned provider cache 失败")
+		return fmt.Errorf("prepare campaign-owned Go cache: %w", err)
+	}
+	log.Info("campaign-owned provider cache 准备完成")
+	return nil
 }
 
 func providerServiceID(provider string) string    { return "runtime-validation-" + provider }
