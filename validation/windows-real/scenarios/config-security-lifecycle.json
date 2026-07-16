@@ -198,7 +198,7 @@
       "coverage": "supporting",
       "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "running"}]},
-      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.id"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {
@@ -215,7 +215,7 @@
       "coverage": "supporting",
       "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "running"}]},
-      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.id"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {
@@ -232,7 +232,7 @@
       "coverage": "supporting",
       "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "stopped"}]},
-      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.id"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {

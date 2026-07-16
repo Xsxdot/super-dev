@@ -156,6 +156,10 @@ func TestRepositoryLifecyclePollsExactDeploymentIdentity(t *testing.T) {
 			require.Equal(t, "diagnose_service", step.Tool, step.ID)
 			require.Equal(t, "{{go_deployment_id}}", step.Arguments["deployment_id"], step.ID)
 			require.Equal(t, "structuredContent.data.status", step.Expect.Assertions[0].Path, step.ID)
+			require.Equal(t, []string{
+				"structuredContent.data.status",
+				"structuredContent.data.target.deployment.id",
+			}, step.Evidence.Record, step.ID)
 			delete(wantSteps, step.ID)
 		}
 	}
