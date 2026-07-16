@@ -146,6 +146,73 @@
       }
     },
     {
+      "id": "browser-start-go",
+      "tool": "start_service",
+      "coverage": "supporting",
+      "_comment": "配置与日志场景都按各自边界停止 fixture；浏览器场景必须显式恢复同一受管 deployment，不能把历史运行状态当作前提。",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "start"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-wait-go-running",
+      "tool": "diagnose_service",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}"
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.status",
+            "operator": "eq",
+            "value": "running"
+          },
+          {
+            "path": "structuredContent.data.target.deployment.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.status",
+          "structuredContent.data.target.deployment.id"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
       "id": "browser-open-session",
       "tool": "open_browser_debug_session",
       "coverage": "primary",
@@ -817,6 +884,37 @@
         "forbid": [
           "authorization",
           "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-stop-go-on-abort",
+      "tool": "stop_service",
+      "coverage": "supporting",
+      "run_if": "variable_set:project_id&&primary_step_not_passed:browser-close-session",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
           "approval_token"
         ]
       }

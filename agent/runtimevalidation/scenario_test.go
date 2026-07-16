@@ -197,6 +197,41 @@ func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 	require.NotContains(t, auditStep.Evidence.Forbid, "token")
 }
 
+func TestRepositoryBrowserScenarioStartsFixtureBeforeOpeningSession(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	for _, scenario := range scenarios {
+		if scenario.ID != "browser-debug" {
+			continue
+		}
+		stepIndex := map[string]int{}
+		for index, step := range scenario.Steps {
+			stepIndex[step.ID] = index
+		}
+		require.Contains(t, stepIndex, "browser-start-go")
+		require.Contains(t, stepIndex, "browser-wait-go-running")
+		require.Contains(t, stepIndex, "browser-open-session")
+		require.Less(t, stepIndex["browser-start-go"], stepIndex["browser-open-session"])
+		require.Less(t, stepIndex["browser-wait-go-running"], stepIndex["browser-open-session"])
+		require.Equal(t, "start_service", scenario.Steps[stepIndex["browser-start-go"]].Tool)
+		require.Equal(t, CoverageSupporting, scenario.Steps[stepIndex["browser-start-go"]].Coverage)
+		require.Equal(t, "diagnose_service", scenario.Steps[stepIndex["browser-wait-go-running"]].Tool)
+		require.Equal(t, "{{go_deployment_id}}", scenario.Steps[stepIndex["browser-wait-go-running"]].Arguments["deployment_id"])
+
+		cleanupByID := map[string]ScenarioStep{}
+		for _, step := range scenario.Cleanup {
+			cleanupByID[step.ID] = step
+		}
+		stop := cleanupByID["browser-stop-go-on-abort"]
+		require.Equal(t, "stop_service", stop.Tool)
+		require.Equal(t, "variable_set:project_id&&primary_step_not_passed:browser-close-session", stop.RunIf)
+		return
+	}
+	t.Fatal("browser-debug scenario is absent")
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,
