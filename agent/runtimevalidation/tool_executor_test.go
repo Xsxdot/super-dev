@@ -35,6 +35,44 @@ func TestToolExecutorCoverageDriftStopsBeforeBusinessMutation(t *testing.T) {
 	require.Equal(t, StatusNotRun, result.PrimaryRows[0].Status)
 }
 
+func TestRenderManifestValueRecursivelyRendersExactObjectVariable(t *testing.T) {
+	t.Parallel()
+
+	variables := map[string]any{
+		"pipeline_id": "runtime-validation-remote",
+		"campaign_id": "campaign-1",
+		"host_id":     "host-1",
+		"pipeline": map[string]any{
+			"id":   "{{pipeline_id}}",
+			"name": "Runtime Validation {{campaign_id}}",
+			"hosts": []any{
+				"{{host_id}}",
+			},
+		},
+	}
+
+	rendered, err := renderManifestValue("{{pipeline}}", variables)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"id":   "runtime-validation-remote",
+		"name": "Runtime Validation campaign-1",
+		"hosts": []any{
+			"host-1",
+		},
+	}, rendered)
+}
+
+func TestRenderManifestValueRejectsCyclicVariable(t *testing.T) {
+	t.Parallel()
+
+	_, err := renderManifestValue("{{pipeline}}", map[string]any{
+		"pipeline": map[string]any{"id": "{{pipeline}}"},
+	})
+
+	require.ErrorContains(t, err, "cyclic runtime variable pipeline")
+}
+
 func TestToolExecutorBootstrapsProjectBeforeCallbackAndRemainingTopology(t *testing.T) {
 	t.Parallel()
 

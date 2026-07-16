@@ -579,15 +579,17 @@ func evaluateAssertion(root map[string]any, assertion Assertion, variables map[s
 }
 
 func renderManifestValue(value any, variables map[string]any) (any, error) {
+	return renderManifestValueWithVariables(value, variables, map[string]bool{})
+}
+
+func renderManifestValueWithVariables(value any, variables map[string]any, resolving map[string]bool) (any, error) {
 	switch typed := value.(type) {
 	case string:
 		if strings.HasPrefix(typed, "{{") && strings.HasSuffix(typed, "}}") && strings.Count(typed, "{{") == 1 {
 			name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(typed, "{{"), "}}"))
-			resolved, ok := variables[name]
-			if !ok {
-				return nil, fmt.Errorf("runtime variable %s is missing", name)
-			}
-			return resolved, nil
+			// 精确占位符可以承载完整对象；替换后继续递归渲染对象内部字段，
+			// 使从 bundle 加载的 pipeline 配置仍绑定本次 campaign identity。
+			return resolveManifestVariable(name, variables, resolving)
 		}
 		result := typed
 		for {
@@ -601,9 +603,9 @@ func renderManifestValue(value any, variables map[string]any) (any, error) {
 			}
 			end += start + 2
 			name := strings.TrimSpace(result[start+2 : end])
-			resolved, ok := variables[name]
-			if !ok {
-				return nil, fmt.Errorf("runtime variable %s is missing", name)
+			resolved, err := resolveManifestVariable(name, variables, resolving)
+			if err != nil {
+				return nil, err
 			}
 			result = result[:start] + fmt.Sprint(resolved) + result[end+2:]
 		}
@@ -611,7 +613,7 @@ func renderManifestValue(value any, variables map[string]any) (any, error) {
 	case map[string]any:
 		result := make(map[string]any, len(typed))
 		for key, nested := range typed {
-			rendered, err := renderManifestValue(nested, variables)
+			rendered, err := renderManifestValueWithVariables(nested, variables, resolving)
 			if err != nil {
 				return nil, err
 			}
@@ -621,7 +623,7 @@ func renderManifestValue(value any, variables map[string]any) (any, error) {
 	case []any:
 		result := make([]any, len(typed))
 		for index, nested := range typed {
-			rendered, err := renderManifestValue(nested, variables)
+			rendered, err := renderManifestValueWithVariables(nested, variables, resolving)
 			if err != nil {
 				return nil, err
 			}
@@ -631,6 +633,19 @@ func renderManifestValue(value any, variables map[string]any) (any, error) {
 	default:
 		return value, nil
 	}
+}
+
+func resolveManifestVariable(name string, variables map[string]any, resolving map[string]bool) (any, error) {
+	resolved, ok := variables[name]
+	if !ok {
+		return nil, fmt.Errorf("runtime variable %s is missing", name)
+	}
+	if resolving[name] {
+		return nil, fmt.Errorf("cyclic runtime variable %s", name)
+	}
+	resolving[name] = true
+	defer delete(resolving, name)
+	return renderManifestValueWithVariables(resolved, variables, resolving)
 }
 
 func lookupManifestPath(root any, path string) (any, bool) {
