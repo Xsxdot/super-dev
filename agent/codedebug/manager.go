@@ -325,21 +325,23 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
 	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
+	if cancelRequestSub != nil {
+		defer cancelRequestSub()
+	}
 	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
-	}
-	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
-	if cancelRequestSub != nil {
-		defer cancelRequestSub()
 	}
 	runtimeDAP := dap
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
 		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "launch", func(handshakeCtx context.Context) error {
-			return launchAndConfigure(handshakeCtx, rootDAP, provider.LaunchArguments(cfg))
+			return launchAndConfigureWithEvents(handshakeCtx, rootDAP, provider.LaunchArguments(cfg), eventSub)
 		})
 		if err != nil {
 			_ = rootDAP.Close()
@@ -347,7 +349,7 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 			return Runtime{}, err
 		}
 	} else {
-		if err := launchAndConfigure(ctx, rootDAP, provider.LaunchArguments(cfg)); err != nil {
+		if err := launchAndConfigureWithEvents(ctx, rootDAP, provider.LaunchArguments(cfg), eventSub); err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(closeProcess)
 			return Runtime{}, err
@@ -631,21 +633,23 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
 	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
+	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
+	if cancelRequestSub != nil {
+		defer cancelRequestSub()
+	}
 	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
-	}
-	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
-	if cancelRequestSub != nil {
-		defer cancelRequestSub()
 	}
 	runtimeDAP := dap
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
 		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "attach", func(handshakeCtx context.Context) error {
-			return attachAndConfigure(handshakeCtx, rootDAP, attachArgs(cfg))
+			return attachAndConfigureWithEvents(handshakeCtx, rootDAP, attachArgs(cfg), eventSub)
 		})
 		if err != nil {
 			_ = rootDAP.Close()
@@ -653,7 +657,7 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 			return Runtime{}, err
 		}
 	} else {
-		if err := attachAndConfigure(ctx, rootDAP, attachArgs(cfg)); err != nil {
+		if err := attachAndConfigureWithEvents(ctx, rootDAP, attachArgs(cfg), eventSub); err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(process.Close)
 			return Runtime{}, err
@@ -729,11 +733,13 @@ func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, pro
 	if err != nil {
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: cfg.Provider}, err)
 	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
 	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		return Runtime{}, err
 	}
-	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
+	if err := attachAndConfigureWithEvents(ctx, dap, attachArgs(cfg), eventSub); err != nil {
 		_ = dap.Close()
 		return Runtime{}, err
 	}
@@ -1215,6 +1221,10 @@ func (m *Manager) Evaluate(ctx context.Context, sessionID, expression string, fr
 func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
 	sub, cancelSub := dap.Subscribe()
 	defer cancelSub()
+	return attachAndConfigureWithEvents(ctx, dap, args, sub)
+}
+
+func attachAndConfigureWithEvents(ctx context.Context, dap DAP, args map[string]any, sub <-chan map[string]any) error {
 	attachCtx, cancelAttach := context.WithCancel(ctx)
 	defer cancelAttach()
 	attachErr := make(chan error, 1)
@@ -1306,6 +1316,10 @@ func awaitAttachResultBeforeConfiguration(ctx context.Context, attachErr <-chan 
 func launchAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
 	sub, cancelSub := dap.Subscribe()
 	defer cancelSub()
+	return launchAndConfigureWithEvents(ctx, dap, args, sub)
+}
+
+func launchAndConfigureWithEvents(ctx context.Context, dap DAP, args map[string]any, sub <-chan map[string]any) error {
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
 	defer cancelLaunch()
 	launchErr := make(chan error, 1)
@@ -1469,25 +1483,29 @@ func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, reque
 			if err != nil {
 				return nil, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: model.CodeDebugProviderNode}, err)
 			}
+			childEvents, cancelChildEvents := child.Subscribe()
 			if _, err := child.Initialize(ctx); err != nil {
+				cancelChildEvents()
 				_ = child.Close()
 				return nil, err
 			}
-			if err := runJSDebugChildRequest(ctx, child, childRequest, childArgs); err != nil {
+			if err := runJSDebugChildRequest(ctx, child, childRequest, childArgs, childEvents); err != nil {
+				cancelChildEvents()
 				_ = child.Close()
 				return nil, err
 			}
+			cancelChildEvents()
 			return child, nil
 		}
 	}
 }
 
-func runJSDebugChildRequest(ctx context.Context, child DAP, request string, args map[string]any) error {
+func runJSDebugChildRequest(ctx context.Context, child DAP, request string, args map[string]any, events <-chan map[string]any) error {
 	switch strings.TrimSpace(request) {
 	case "launch":
-		return launchAndConfigure(ctx, child, args)
+		return launchAndConfigureWithEvents(ctx, child, args, events)
 	case "", "attach":
-		return attachAndConfigure(ctx, child, args)
+		return attachAndConfigureWithEvents(ctx, child, args, events)
 	default:
 		return fmt.Errorf("unsupported js-debug child request %q", request)
 	}

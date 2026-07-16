@@ -92,11 +92,11 @@ func TestManagerOpenUsesJSDebugChildSessionFromLaunchStartDebugging(t *testing.T
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "server.js"), []byte("let n = 0\nsetInterval(() => { n += 1 }, 500)\n"), 0o644))
 	rootDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
 		launchWaitsForConfigurationDone: true,
-		emitInitializedOnLaunch:         true,
 		emitStartDebuggingAfterLaunch:   true,
 	}
-	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	childDAP := &fakeDAP{emitInitializedOnInitialize: true, attachWaitsForConfigurationDone: true}
 	dialCount := 0
 	mgr := NewManager(ManagerOptions{
 		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
@@ -542,6 +542,51 @@ func TestAttachRuntimeHandlesStartDebuggingBeforeRootAttachResponse(t *testing.T
 	assert.Equal(t, 2, dialCount)
 	assert.True(t, rootDAP.respondedStartDebugging)
 	assert.Equal(t, "pending-node-target", childDAP.attachPendingTargetID)
+}
+
+func TestAttachRuntimePreservesInitializedEventEmittedDuringInitialize(t *testing.T) {
+	rootDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
+		attachWaitsForConfigurationDone: true,
+		emitStartDebuggingAfterAttach:   true,
+	}
+	childDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
+		attachWaitsForConfigurationDone: true,
+	}
+	dialCount := 0
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9005, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41009, nil },
+	})
+	root := t.TempDir()
+	cfg := LaunchConfig{
+		Target:     Target{ProjectID: "p1", RootPath: root, DeploymentID: "dep-node-initialize-event"},
+		Provider:   model.CodeDebugProviderNode,
+		WorkingDir: root,
+		TargetPort: 9229,
+	}
+	provider := NewNodeProvider("/tmp/dapDebugServer.js")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := mgr.attachRuntimeWithConfig(ctx, cfg, provider, 1234, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, 1234)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, dialCount)
+	assert.Equal(t, 1, rootDAP.configurationDoneCalls)
+	assert.Equal(t, 1, childDAP.configurationDoneCalls)
 }
 
 func TestResolveLeaseAttachesRunningService(t *testing.T) {
@@ -1837,6 +1882,7 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 
 type fakeDAP struct {
 	mu                                     sync.Mutex
+	emitInitializedOnInitialize            bool
 	breakpointsSource                      string
 	breakpointsLines                       [][]int
 	breakpointsResult                      map[string]any
@@ -1884,7 +1930,12 @@ type fakeDAP struct {
 	waitForStoppedCalls                    int
 }
 
-func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
+func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) {
+	if f.emitInitializedOnInitialize {
+		f.emit(map[string]any{"event": "initialized", "body": map[string]any{}})
+	}
+	return map[string]any{}, nil
+}
 func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
 	f.mu.Lock()
 	f.launchCalls++
@@ -1894,6 +1945,9 @@ func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
 	waitForConfigurationDone := f.launchWaitsForConfigurationDone
 	if waitForConfigurationDone && f.configurationDoneCh == nil {
 		f.configurationDoneCh = make(chan struct{})
+		if f.configurationDoneClosed {
+			close(f.configurationDoneCh)
+		}
 	}
 	ch := f.configurationDoneCh
 	emitInitialized := f.emitInitializedOnLaunch
@@ -1953,6 +2007,9 @@ func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 	waitForConfigurationDone := f.attachWaitsForConfigurationDone
 	if waitForConfigurationDone && f.configurationDoneCh == nil {
 		f.configurationDoneCh = make(chan struct{})
+		if f.configurationDoneClosed {
+			close(f.configurationDoneCh)
+		}
 	}
 	ch := f.configurationDoneCh
 	emitInitialized := f.emitInitializedOnAttach
@@ -1997,8 +2054,8 @@ func (f *fakeDAP) ConfigurationDone(ctx context.Context) error {
 	f.configurationDoneCalls++
 	if f.configurationDoneCh != nil && !f.configurationDoneClosed {
 		close(f.configurationDoneCh)
-		f.configurationDoneClosed = true
 	}
+	f.configurationDoneClosed = true
 	staysPending := f.configurationDoneResponseStaysPending
 	f.mu.Unlock()
 	if staysPending {
