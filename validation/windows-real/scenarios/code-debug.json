@@ -322,7 +322,6 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
           "structuredContent.data.result.lease_created",
           "structuredContent.data.result.resolved_source",
           "structuredContent.data.result.breakpoints"
@@ -370,7 +369,7 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
           "structuredContent.data.result.stackFrames"
         ],
         "redact": [],
@@ -416,7 +415,7 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
           "structuredContent.data.result.scopes"
         ],
         "redact": [],
@@ -461,7 +460,7 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
           "structuredContent.data.result.variables"
         ],
         "redact": [],
@@ -494,10 +493,7 @@
         "record": [
           "structuredContent.ok",
           "structuredContent.summary",
-          "structuredContent.code",
-          "structuredContent.message",
-          "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id"
+          "structuredContent.data.result.deployment_id"
         ],
         "redact": [
           "request.arguments.expression",
@@ -663,7 +659,7 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
           "structuredContent.data.result.resolved_source",
           "structuredContent.data.result.breakpoints"
         ],
@@ -914,7 +910,7 @@
         "record": [
           "structuredContent.summary",
           "structuredContent.data.result.deployment_id",
-          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.lease_created",
           "structuredContent.data.result.resolved_source",
           "structuredContent.data.result.breakpoints"
         ],

@@ -223,6 +223,43 @@ func TestRepositoryCodeDebugMatchesVariableObjectsByStableName(t *testing.T) {
 	require.Empty(t, wantSteps)
 }
 
+func TestRepositoryCodeDebugEvidenceOnlyRequiresStableSuccessFields(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	for _, scenario := range scenarios {
+		if scenario.ID != "code-debug" {
+			continue
+		}
+		breakpointSteps := 0
+		readSteps := 0
+		evaluateSteps := 0
+		for _, step := range append(scenario.Steps, scenario.Cleanup...) {
+			switch step.Tool {
+			case "set_debug_breakpoints":
+				breakpointSteps++
+				require.NotContains(t, step.Evidence.Record, "structuredContent.data.result.session_id", step.ID)
+				require.Contains(t, step.Evidence.Record, "structuredContent.data.result.lease_created", step.ID)
+			case "debug_stack_trace", "debug_scopes", "debug_variables":
+				readSteps++
+				require.NotContains(t, step.Evidence.Record, "structuredContent.data.result.session_id", step.ID)
+				require.Contains(t, step.Evidence.Record, "structuredContent.data.result.lease_created", step.ID)
+			case "debug_evaluate":
+				evaluateSteps++
+				require.NotContains(t, step.Evidence.Record, "structuredContent.code", step.ID)
+				require.NotContains(t, step.Evidence.Record, "structuredContent.message", step.ID)
+				require.NotContains(t, step.Evidence.Record, "structuredContent.data.result.session_id", step.ID)
+			}
+		}
+		require.Equal(t, 3, breakpointSteps)
+		require.Equal(t, 3, readSteps)
+		require.Equal(t, 1, evaluateSteps)
+		return
+	}
+	t.Fatal("code-debug scenario is absent")
+}
+
 func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 	t.Parallel()
 

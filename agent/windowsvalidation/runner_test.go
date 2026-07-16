@@ -663,6 +663,46 @@ func TestCodeDebugScenarioMatchesVariableObjectsByStableName(t *testing.T) {
 	}
 }
 
+func TestCodeDebugScenarioEvidenceOnlyRequiresStableSuccessFields(t *testing.T) {
+	t.Parallel()
+	source, err := LoadPackageSource(filepath.Join("..", "..", "validation", "windows-real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario, found := scenarioByID(source.Scenarios, "code-debug")
+	if !found {
+		t.Fatal("code-debug scenario is missing")
+	}
+	breakpointSteps := 0
+	readSteps := 0
+	evaluateSteps := 0
+	for _, step := range append(scenario.Steps, scenario.Cleanup...) {
+		records := strings.Join(step.Evidence.Record, "\n")
+		switch step.Tool {
+		case "set_debug_breakpoints":
+			breakpointSteps++
+			if strings.Contains(records, "structuredContent.data.result.session_id") || !strings.Contains(records, "structuredContent.data.result.lease_created") {
+				t.Errorf("%s evidence records unstable fields: %v", step.ID, step.Evidence.Record)
+			}
+		case "debug_stack_trace", "debug_scopes", "debug_variables":
+			readSteps++
+			if strings.Contains(records, "structuredContent.data.result.session_id") || !strings.Contains(records, "structuredContent.data.result.lease_created") {
+				t.Errorf("%s evidence records unstable fields: %v", step.ID, step.Evidence.Record)
+			}
+		case "debug_evaluate":
+			evaluateSteps++
+			for _, unstable := range []string{"structuredContent.code", "structuredContent.message", "structuredContent.data.result.session_id"} {
+				if strings.Contains(records, unstable) {
+					t.Errorf("%s evidence records success-absent field %s", step.ID, unstable)
+				}
+			}
+		}
+	}
+	if breakpointSteps != 3 || readSteps != 3 || evaluateSteps != 1 {
+		t.Fatalf("evidence step counts breakpoints=%d reads=%d evaluate=%d", breakpointSteps, readSteps, evaluateSteps)
+	}
+}
+
 func TestProviderCodeDebugConfigNeverFallsBackAfterMissingAdmittedBinding(t *testing.T) {
 	t.Parallel()
 	config, err := providerCodeDebugConfig("python", map[string]providerAdapterBinding{})
