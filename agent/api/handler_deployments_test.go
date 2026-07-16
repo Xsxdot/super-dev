@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
+	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/process"
@@ -218,6 +219,62 @@ func TestDeploymentRuntimeEndpoint_RunsRemoteStopAfterApproval(t *testing.T) {
 	assert.Equal(t, "stopped", ok["status"])
 	require.Len(t, runner.requests, 1)
 	assert.Equal(t, remoteexec.CommandRequest{Command: "systemctl stop api", WorkDir: ""}, runner.requests[0])
+}
+
+func TestStopDeploymentRuntimeStopsManagedProcessAfterAttachedDebugger(t *testing.T) {
+	var mainPID, pgid int
+	debugManager := codedebug.NewManager(codedebug.ManagerOptions{
+		AdapterLaunch: func(context.Context, codedebug.AdapterCommand) (codedebug.AdapterProcess, error) {
+			return codedebug.AdapterProcess{PID: 1, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (codedebug.DAP, error) { return &fakeCodeDebugDAP{}, nil },
+		ReservePort: func() (int, error) { return 39002, nil },
+		RunningProcess: func(string) (int, int, bool) {
+			return mainPID, pgid, mainPID > 0
+		},
+	})
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: debugManager})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	project := codeDebugAPIProject(t.TempDir())
+	service := project.Services[0]
+	dep := service.Deployments[0]
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	mgr := app.getOrCreateManager(project.ID)
+	require.NoError(t, mgr.StartProcess(dep.ID, process.ProcessSpec{
+		Argv: []string{os.Args[0], "-test.run=^TestAttachedDebugStopProcess$"},
+		Env:  map[string]string{"SUPERDEV_ATTACHED_DEBUG_STOP_PROCESS": "1"},
+	}))
+	t.Cleanup(func() { mgr.Stop(dep.ID) })
+	mainPID = mgr.PID(dep.ID)
+	pgid = mgr.DeploymentPGID(dep.ID)
+	require.NotZero(t, mainPID)
+	require.NotZero(t, pgid)
+
+	_, created, err := app.codeDebug.ResolveLease(context.Background(), project, service, dep, "")
+	require.NoError(t, err)
+	require.True(t, created)
+	runtime, ok := app.codeDebug.RuntimeStatus(dep.ID)
+	require.True(t, ok)
+	require.Equal(t, "attached", runtime.Origin)
+
+	require.NoError(t, app.stopDeploymentRuntime(context.Background(), project.ID, dep))
+	assert.False(t, mgr.IsDeploymentActive(dep.ID), "stop_service must stop the managed target after detaching its debugger")
+	_, ok = app.codeDebug.RuntimeStatus(dep.ID)
+	assert.False(t, ok)
+}
+
+func TestAttachedDebugStopProcess(t *testing.T) {
+	if os.Getenv("SUPERDEV_ATTACHED_DEBUG_STOP_PROCESS") != "1" {
+		return
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func TestDeploymentRuntimeEndpoint_RunsRemoteStopOnSingleHostAfterApproval(t *testing.T) {

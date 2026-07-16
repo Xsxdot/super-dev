@@ -355,30 +355,42 @@ func (a *App) stopDeploymentRuntime(ctx context.Context, projectID string, dep m
 		a.emitControlEvent(dep.ID, "stop", "succeeded", "")
 		return nil
 	}
-	if runtime, ok := a.codeDebug.RuntimeStatus(dep.ID); ok && runtime.Alive {
+	attachedDebuggerStopped := false
+	if debugRuntime, ok := a.codeDebug.RuntimeStatus(dep.ID); ok && debugRuntime.Alive {
 		a.emitControlEvent(dep.ID, "stop", "executing", "debug runtime")
 		if err := a.codeDebug.StopRuntime(dep.ID); err != nil {
 			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
 			return err
 		}
-		a.pidStore.Remove(dep.ID)
-		if err := a.pidStore.Flush(); err != nil {
-			a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
-			return err
+		if debugRuntime.Origin != "attached" {
+			a.pidStore.Remove(dep.ID)
+			if err := a.pidStore.Flush(); err != nil {
+				a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
+				return err
+			}
+			a.emitControlEvent(dep.ID, "stop", "succeeded", "debug runtime")
+			return nil
 		}
-		a.emitControlEvent(dep.ID, "stop", "succeeded", "debug runtime")
-		return nil
+		// attached runtime 只拥有 adapter/DAP 连接；StopRuntime 会 detach，
+		// 但普通受管进程仍由 process.Manager 持有，必须继续走标准停止路径。
+		attachedDebuggerStopped = true
 	}
 	a.reconcileLocalDeployment(projectID, dep.ID)
 	mgr := a.getOrCreateManager(projectID)
-	a.emitControlEvent(dep.ID, "stop", "executing", "")
+	if !attachedDebuggerStopped {
+		a.emitControlEvent(dep.ID, "stop", "executing", "")
+	}
 	mgr.StopDeployment(dep.ID)
 	a.pidStore.Remove(dep.ID)
 	if err := a.pidStore.Flush(); err != nil {
 		a.emitControlEvent(dep.ID, "stop", "failed", err.Error())
 		return err
 	}
-	a.emitControlEvent(dep.ID, "stop", "succeeded", "")
+	detail := ""
+	if attachedDebuggerStopped {
+		detail = "attached debug runtime and managed process"
+	}
+	a.emitControlEvent(dep.ID, "stop", "succeeded", detail)
 	return nil
 }
 
