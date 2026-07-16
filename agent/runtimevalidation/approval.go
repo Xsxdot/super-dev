@@ -4,10 +4,12 @@
 //   - 识别 MCP approval_required，并注册精确、短期的 operation identity allowlist
 //   - 复核 plan ID、fingerprint、kind、规范化 target 与双重过期时间
 //   - 只为 exact match 调用正式 approve 接口，领取 token 并核验它被唯一消费
+//   - 创建不进入 allowlist 的 pending 读探针，验证未知审批始终保持未批准
 //
 // 边界：
 //   - 不批准 allowlist 外的 pending，不调用 reject，不开启 grace window
 //   - 不接受未知、过期、重复 pending 或 identity 漂移，不持久化 approval token
+//   - pending 读探针不执行对应业务 mutation，并随 disposable profile 一起删除
 package runtimevalidation
 
 import (
@@ -48,6 +50,7 @@ type ApprovalToolCaller struct {
 	http       *http.Client
 	mu         sync.Mutex
 	registered map[string]approvalIdentity
+	readProbes map[string]approvalIdentity
 }
 
 // DefaultRuntimeValidationApprovalKinds 返回 strict campaign 允许复核的 tool/operation 对。
@@ -105,8 +108,80 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 	}
 	return &ApprovalToolCaller{
 		delegate: delegate, baseURL: parsed, campaign: options.CampaignID, allowed: allowed,
-		http: client, registered: map[string]approvalIdentity{},
+		http: client, registered: map[string]approvalIdentity{}, readProbes: map[string]approvalIdentity{},
 	}, nil
+}
+
+// PreparePendingReadProbe 通过真实 MCP 受审批调用创建一个不进入 allowlist 的 pending 读探针。
+//
+// 参数：
+//   - ctx: campaign 上下文，用于取消真实 MCP 与 Agent 查询
+//   - name: 会稳定产生 approval_required 的受审批 MCP 工具名
+//   - arguments: 指向 campaign-owned 唯一目标的工具参数
+//
+// 返回：
+//   - 保持 pending 的 approval ID，供 list/get 工具执行成功路径验证
+//   - 工具、identity、TTL 或重复目标不满足严格合同时的错误
+//
+// 注意：该方法刻意绕过自动批准分支，只创建审批历史而不执行对应业务 mutation；
+// 后续即使同一 pending 再次进入 CallTool，也会被 readProbes 硬门拒绝批准。
+func (c *ApprovalToolCaller) PreparePendingReadProbe(ctx context.Context, name string, arguments map[string]any) (string, error) {
+	allowedKinds, approvalAware := c.allowed[name]
+	if !approvalAware {
+		return "", fmt.Errorf("approval read probe tool %s is not allowlisted", name)
+	}
+	delegatedArguments := cloneMap(arguments)
+	delete(delegatedArguments, "approval_token")
+	delegatedArguments["approval_wait_seconds"] = 0
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "tool": name,
+	})
+	log.Info("开始创建不进入 allowlist 的 pending approval 读探针")
+	result, err := c.delegate.CallTool(ctx, name, delegatedArguments)
+	if err != nil {
+		log.WithErr(err).Error("pending approval 读探针 MCP 调用失败")
+		return "", err
+	}
+	required, ok := parseApprovalRequired(result)
+	if !ok {
+		if result.IsError || RawMessageMap(result.StructuredContent)["ok"] == false {
+			return "", toolApplicationError(name, result)
+		}
+		return "", fmt.Errorf("approval read probe tool %s completed without approval_required", name)
+	}
+	if _, allowed := allowedKinds[required.Kind]; !allowed {
+		return "", fmt.Errorf("approval read probe tool/kind is not allowlisted: %s/%s", name, required.Kind)
+	}
+	if err := validateTransientApprovalIdentity(required, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	detail, err := c.getApproval(ctx, required.ID)
+	if err != nil {
+		return "", err
+	}
+	if err := matchApprovalIdentity(required, detail); err != nil {
+		return "", err
+	}
+	if detail.Status != "pending" {
+		return "", fmt.Errorf("operation approval %s read probe is not pending", required.ID)
+	}
+	if err := c.rejectDuplicatePending(ctx, required); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.registered[required.ID]; exists {
+		return "", fmt.Errorf("operation approval %s is already registered in the campaign allowlist", required.ID)
+	}
+	if _, exists := c.readProbes[required.ID]; exists {
+		return "", fmt.Errorf("operation approval %s is already a pending read probe", required.ID)
+	}
+	c.readProbes[required.ID] = required
+	log.WithFields(map[string]any{
+		"approval_id": required.ID, "plan_id": required.PlanID, "operation_kind": required.Kind,
+		"fingerprint": required.Fingerprint,
+	}).Info("pending approval 读探针已创建并保持在 allowlist 外")
+	return required.ID, nil
 }
 
 // CallTool 执行原 MCP 调用；仅为已登记的精确 identity 自动批准并携带一次性 token 重试。
@@ -424,6 +499,22 @@ func parseApprovalRequired(result ToolCallResult) (approvalIdentity, bool) {
 }
 
 func (c *ApprovalToolCaller) registerTransientAllowlist(identity approvalIdentity, now time.Time) error {
+	if err := validateTransientApprovalIdentity(identity, now); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, readProbe := c.readProbes[identity.ID]; readProbe {
+		return fmt.Errorf("approval %s is a pending read probe and cannot enter the campaign allowlist", identity.ID)
+	}
+	if _, exists := c.registered[identity.ID]; exists {
+		return fmt.Errorf("approval %s was already registered by this campaign", identity.ID)
+	}
+	c.registered[identity.ID] = identity
+	return nil
+}
+
+func validateTransientApprovalIdentity(identity approvalIdentity, now time.Time) error {
 	if identity.Status != "pending" {
 		return fmt.Errorf("approval %s is not a new pending request", identity.ID)
 	}
@@ -433,12 +524,6 @@ func (c *ApprovalToolCaller) registerTransientAllowlist(identity approvalIdentit
 	if identity.PlanExpiresAt.After(now.Add(maxRuntimeApprovalTTL)) || identity.ExpiresAt.After(now.Add(maxRuntimeApprovalTTL)) {
 		return fmt.Errorf("approval %s exceeds the %s short-lived allowlist TTL", identity.ID, maxRuntimeApprovalTTL)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.registered[identity.ID]; exists {
-		return fmt.Errorf("approval %s was already registered by this campaign", identity.ID)
-	}
-	c.registered[identity.ID] = identity
 	return nil
 }
 

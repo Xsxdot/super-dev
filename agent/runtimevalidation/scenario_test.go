@@ -166,6 +166,32 @@ func TestRepositoryLifecyclePollsExactDeploymentIdentity(t *testing.T) {
 	require.Empty(t, wantSteps)
 }
 
+func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	var listStep, getStep ScenarioStep
+	for _, scenario := range scenarios {
+		if scenario.ID != "config-security-lifecycle" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			switch step.ID {
+			case "list-operation-approvals":
+				listStep = step
+			case "get-operation-approval":
+				getStep = step
+			}
+		}
+	}
+	require.Equal(t, "pending", listStep.Arguments["status"])
+	require.Equal(t, "{{approval_probe_id}}", getStep.Arguments["approval_id"])
+	require.Len(t, getStep.Expect.Assertions, 2)
+	require.Equal(t, "structuredContent.data.approval.status", getStep.Expect.Assertions[1].Path)
+	require.Equal(t, "pending", getStep.Expect.Assertions[1].Value)
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,

@@ -444,7 +444,27 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 				Fixtures: fixtures, Ports: ports, AdapterPaths: adapters,
 				AdapterCommands: cloneStringMap(adapterCommands), Cleanup: stack,
 			})
-			return validateProviderMatrixPass(facts.languages)
+			if err := validateProviderMatrixPass(facts.languages); err != nil {
+				return err
+			}
+			// list/get 审批工具需要一个尚未消费的真实记录。使用独立 pipeline target 只创建 pending，
+			// 不登记 allowlist、不执行配置写入，从而同时证明 actor 不会批准未知 pending。
+			approvalProbePipeline := RawMessageMap(values["bootstrap_pipeline_config"])
+			if len(approvalProbePipeline) == 0 {
+				return fmt.Errorf("bootstrap pipeline config is required for approval read probe")
+			}
+			approvalProbePipeline["id"] = "approval-read-probe"
+			approvalProbePipeline["name"] = "Runtime Validation Approval Read Probe"
+			approvalID, err := approvalCaller.PreparePendingReadProbe(callbackCtx, "upsert_project_pipeline", map[string]any{
+				"project_id": projectID,
+				"root_path":  values["project_root"],
+				"pipeline":   approvalProbePipeline,
+			})
+			if err != nil {
+				return err
+			}
+			values["approval_probe_id"] = approvalID
+			return nil
 		},
 	})
 	facts.liveTools = facts.toolResult.LiveTools

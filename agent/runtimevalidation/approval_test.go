@@ -139,6 +139,42 @@ func TestApprovalActorLeavesUnknownPendingUnapproved(t *testing.T) {
 	require.Equal(t, 2, delegate.calls)
 }
 
+func TestApprovalActorPendingReadProbeCannotEnterApprovalAllowlist(t *testing.T) {
+	t.Parallel()
+
+	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
+	var postRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"approval": fixture.approval("pending")})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
+		case request.Method == http.MethodPost:
+			postRequests.Add(1)
+			t.Fatal("pending read probe must never be approved")
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	delegate := &pendingApprovalDelegate{fixture: fixture}
+	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
+		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
+	})
+	require.NoError(t, err)
+
+	approvalID, err := actor.PreparePendingReadProbe(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+	require.Equal(t, "approval-1", approvalID)
+
+	_, err = actor.CallTool(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.ErrorContains(t, err, "pending read probe")
+	require.Equal(t, 2, delegate.calls)
+	require.Equal(t, int32(0), postRequests.Load())
+}
+
 func TestApprovalActorRejectsMutationThatBypassesApproval(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +403,18 @@ type approvalDelegate struct {
 
 type directSuccessApprovalDelegate struct {
 	arguments map[string]any
+}
+
+type pendingApprovalDelegate struct {
+	fixture approvalFixture
+	calls   int
+}
+
+func (d *pendingApprovalDelegate) CallTool(_ context.Context, _ string, _ map[string]any) (ToolCallResult, error) {
+	d.calls++
+	return ToolCallResult{IsError: true, StructuredContent: map[string]any{
+		"ok": false, "code": "approval_required", "approval": d.fixture.approval("pending"), "plan": d.fixture.plan(),
+	}}, nil
 }
 
 func (d *directSuccessApprovalDelegate) CallTool(_ context.Context, _ string, arguments map[string]any) (ToolCallResult, error) {

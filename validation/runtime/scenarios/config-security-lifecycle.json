@@ -39,6 +39,11 @@
       "required": true,
       "description": "Disposable pipeline used only to verify config seams."
     },
+    "approval_probe_id": {
+      "required": false,
+      "default": "",
+      "description": "Campaign-owned pending approval that must remain outside the auto-approval allowlist."
+    },
     "go_port": {
       "required": true,
       "description": "Runner 分配给 Go fixture 的动态 loopback 端口。"
@@ -792,6 +797,7 @@
       "coverage": "primary",
       "arguments": {
         "project_id": "{{project_id}}",
+        "status": "pending",
         "limit": 50
       },
       "expect": {
@@ -801,6 +807,14 @@
             "path": "structuredContent.data.count",
             "operator": "gt",
             "value": 0
+          },
+          {
+            "path": "structuredContent.data.approvals",
+            "operator": "contains_item",
+            "value": {
+              "id": "{{approval_probe_id}}",
+              "status": "pending"
+            }
           }
         ]
       },
@@ -814,9 +828,6 @@
         "forbid": [
           "approval_token"
         ]
-      },
-      "capture": {
-        "approval_id": "structuredContent.data.approvals.0.id"
       }
     },
     {
@@ -824,7 +835,7 @@
       "tool": "get_operation_approval",
       "coverage": "primary",
       "arguments": {
-        "approval_id": "{{approval_id}}"
+        "approval_id": "{{approval_probe_id}}"
       },
       "expect": {
         "outcome": "success",
@@ -832,7 +843,12 @@
           {
             "path": "structuredContent.data.approval.id",
             "operator": "eq",
-            "variable": "approval_id"
+            "variable": "approval_probe_id"
+          },
+          {
+            "path": "structuredContent.data.approval.status",
+            "operator": "eq",
+            "value": "pending"
           }
         ]
       },

@@ -11,7 +11,8 @@
     "go_service_name": {"required": false, "default": "go-validation", "description": "Stable campaign Go service name."},
     "go_deployment_id": {"required": false, "default": "go-validation-dev", "description": "Stable campaign Go deployment id."},
     "go_readiness_url": {"required": false, "default": "http://127.0.0.1:18190/ready", "description": "Go fixture readiness URL."},
-    "bootstrap_pipeline_config": {"required": true, "description": "Disposable pipeline used only to verify config seams."}
+    "bootstrap_pipeline_config": {"required": true, "description": "Disposable pipeline used only to verify config seams."},
+    "approval_probe_id": {"required": false, "default": "", "description": "Campaign-owned pending approval that must remain outside the auto-approval allowlist."}
   },
   "steps": [
     {
@@ -239,17 +240,16 @@
       "id": "list-operation-approvals",
       "tool": "list_operation_approvals",
       "coverage": "primary",
-      "arguments": {"project_id": "{{project_id}}", "limit": 50},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}]},
-      "evidence": {"record": ["structuredContent.data.approvals"], "redact": ["structuredContent.data.approvals.*.token"], "forbid": ["approval_token"]},
-      "capture": {"approval_id": "structuredContent.data.approvals.0.id"}
+      "arguments": {"project_id": "{{project_id}}", "status": "pending", "limit": 50},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}, {"path": "structuredContent.data.approvals", "operator": "contains_item", "value": {"id": "{{approval_probe_id}}", "status": "pending"}}]},
+      "evidence": {"record": ["structuredContent.data.approvals"], "redact": ["structuredContent.data.approvals.*.token"], "forbid": ["approval_token"]}
     },
     {
       "id": "get-operation-approval",
       "tool": "get_operation_approval",
       "coverage": "primary",
-      "arguments": {"approval_id": "{{approval_id}}"},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.approval.id", "operator": "eq", "variable": "approval_id"}]},
+      "arguments": {"approval_id": "{{approval_probe_id}}"},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.approval.id", "operator": "eq", "variable": "approval_probe_id"}, {"path": "structuredContent.data.approval.status", "operator": "eq", "value": "pending"}]},
       "evidence": {"record": ["structuredContent.data.approval.id", "structuredContent.data.approval.status"], "redact": ["structuredContent.data.approval_token"], "forbid": ["approval_token"]}
     },
     {
