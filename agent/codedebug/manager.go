@@ -334,23 +334,23 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
-	if err := launchAndConfigure(ctx, dap, provider.LaunchArguments(cfg)); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(closeProcess)
-		return Runtime{}, err
-	}
 	runtimeDAP := dap
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
-		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "launch", func(handshakeCtx context.Context) error {
+			return launchAndConfigure(handshakeCtx, rootDAP, provider.LaunchArguments(cfg))
+		})
 		if err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(closeProcess)
 			return Runtime{}, err
 		}
-		if childDAP != nil {
-			runtimeDAP = childDAP
+	} else {
+		if err := launchAndConfigure(ctx, rootDAP, provider.LaunchArguments(cfg)); err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(closeProcess)
+			return Runtime{}, err
 		}
 	}
 	now := m.now().UTC()
@@ -640,23 +640,23 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
-	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(process.Close)
-		return Runtime{}, err
-	}
 	runtimeDAP := dap
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
-		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "attach", func(handshakeCtx context.Context) error {
+			return attachAndConfigure(handshakeCtx, rootDAP, attachArgs(cfg))
+		})
 		if err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(process.Close)
 			return Runtime{}, err
 		}
-		if childDAP != nil {
-			runtimeDAP = childDAP
+	} else {
+		if err := attachAndConfigure(ctx, rootDAP, attachArgs(cfg)); err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(process.Close)
+			return Runtime{}, err
 		}
 	}
 	now := m.now().UTC()
@@ -1369,6 +1369,72 @@ func subscribeJSDebugRequests(provider Provider, dap DAP) (<-chan map[string]any
 		return nil, nil
 	}
 	return reverse.SubscribeRequests()
+}
+
+type jsDebugChildHandshakeResult struct {
+	dap DAP
+	err error
+}
+
+func (m *Manager) runJSDebugRootAndChildHandshake(
+	ctx context.Context,
+	root DAP,
+	requests <-chan map[string]any,
+	adapterPort int,
+	phase string,
+	rootHandshake func(context.Context) error,
+) (DAP, error) {
+	// js-debug 可以在根 launch/attach 返回之前发 startDebugging，并等待客户端建立子会话。
+	// 两段握手必须并发推进，否则根响应与反向请求会形成循环等待。
+	handshakeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rootResult := make(chan error, 1)
+	childResult := make(chan jsDebugChildHandshakeResult, 1)
+	log := logger.GetLogger().WithEntryName("CodeDebugJSDebugHandshake").WithFields(map[string]any{
+		"adapter_port": adapterPort,
+		"phase":        phase,
+	})
+	log.Info("js-debug 根会话与子会话握手开始")
+	go func() {
+		rootResult <- rootHandshake(handshakeCtx)
+	}()
+	go func() {
+		child, err := m.attachJSDebugChildSession(handshakeCtx, root, requests, adapterPort)
+		childResult <- jsDebugChildHandshakeResult{dap: child, err: err}
+	}()
+
+	var rootDone bool
+	var childDone bool
+	var childSessionEstablished bool
+	runtimeDAP := root
+	for !rootDone || !childDone {
+		select {
+		case err := <-rootResult:
+			rootDone = true
+			if err != nil {
+				cancel()
+				log.WithErr(err).Error("js-debug 根会话握手失败")
+				return nil, err
+			}
+		case result := <-childResult:
+			childDone = true
+			if result.err != nil {
+				cancel()
+				log.WithErr(result.err).Error("js-debug 子会话握手失败")
+				return nil, result.err
+			}
+			if result.dap != nil {
+				runtimeDAP = result.dap
+				childSessionEstablished = true
+			}
+		case <-ctx.Done():
+			cancel()
+			log.WithErr(ctx.Err()).Error("js-debug 根会话与子会话握手超时")
+			return nil, ctx.Err()
+		}
+	}
+	log.WithField("child_session", childSessionEstablished).Info("js-debug 根会话与子会话握手完成")
+	return runtimeDAP, nil
 }
 
 func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, requests <-chan map[string]any, adapterPort int) (DAP, error) {
