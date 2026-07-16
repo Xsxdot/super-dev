@@ -70,6 +70,19 @@ func TestValidateFoundationRejectsIncompatibleOperationStoreSchema(t *testing.T)
 	}
 }
 
+func TestValidateFoundationRejectsIncompatibleDebugSessionStoreSchema(t *testing.T) {
+	t.Parallel()
+
+	foundation := createValidFoundation(t)
+	// debugsession.FileStore 从创建起就使用对象状态；空数组无法被真实 Agent 加载。
+	writeJSONFile(t, filepath.Join(foundation, "debug-sessions.json"), []any{})
+
+	result, err := ValidateFoundation(foundation, "profile-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Equal(t, "foundation_state_schema_invalid", result.Cause.Code)
+}
+
 func createValidFoundation(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -85,7 +98,7 @@ func createValidFoundation(t *testing.T) string {
 	writeJSONFile(t, filepath.Join(root, "settings.json"), map[string]any{"debug_browser": map[string]any{"allow_evaluate": true}})
 	writeJSONFile(t, filepath.Join(root, "projects.json"), []string{})
 	writeJSONFile(t, filepath.Join(root, "pids.json"), map[string]any{})
-	writeJSONFile(t, filepath.Join(root, "debug-sessions.json"), []any{})
+	writeJSONFile(t, filepath.Join(root, "debug-sessions.json"), map[string]any{"sessions": []any{}, "events": []any{}})
 	writeJSONFile(t, filepath.Join(root, "operation-approvals.json"), map[string]any{"approvals": []any{}})
 	writeJSONFile(t, filepath.Join(root, "operation-grace.json"), map[string]any{"grants": []any{}})
 	writeJSONFile(t, filepath.Join(root, "hosts.json"), []map[string]any{{"id": "remote-linux", "is_self": false}})

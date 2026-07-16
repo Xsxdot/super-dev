@@ -126,7 +126,7 @@ func ValidateFoundation(root, expectedProfileID string) (CheckResult, error) {
 	for _, state := range []struct {
 		path string
 		name string
-	}{{"projects.json", "projects"}, {"pids.json", "managed pids"}, {"debug-sessions.json", "debug sessions"}} {
+	}{{"projects.json", "projects"}, {"pids.json", "managed pids"}} {
 		empty, err := optionalJSONContainerEmpty(filepath.Join(root, state.path))
 		if err != nil {
 			return CheckResult{}, err
@@ -135,12 +135,21 @@ func ValidateFoundation(root, expectedProfileID string) (CheckResult, error) {
 			return blocked("foundation_not_topology_only", state.name+" must be empty in a topology-only foundation")
 		}
 	}
+	// debugsession.FileStore 的磁盘合同是包含 sessions/events 数组的对象；
+	// 仅判断“容器为空”会误放行无法被 Agent 加载的 [] 基线。
+	debugSessionsEmpty, err := optionalNamedJSONArraysEmpty(filepath.Join(root, "debug-sessions.json"), "sessions", "events")
+	if err != nil {
+		return blocked("foundation_state_schema_invalid", err.Error())
+	}
+	if !debugSessionsEmpty {
+		return blocked("foundation_not_topology_only", "debug sessions must be empty in a topology-only foundation")
+	}
 	for _, state := range []struct {
 		path string
 		key  string
 		name string
 	}{{"operation-approvals.json", "approvals", "operation approvals"}, {"operation-grace.json", "grants", "operation grace"}} {
-		empty, err := optionalNamedJSONArrayEmpty(filepath.Join(root, state.path), state.key)
+		empty, err := optionalNamedJSONArraysEmpty(filepath.Join(root, state.path), state.key)
 		if err != nil {
 			return blocked("foundation_state_schema_invalid", err.Error())
 		}
@@ -248,7 +257,7 @@ func optionalJSONContainerEmpty(path string) (bool, error) {
 	}
 }
 
-func optionalNamedJSONArrayEmpty(path, key string) (bool, error) {
+func optionalNamedJSONArraysEmpty(path string, keys ...string) (bool, error) {
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return true, nil
@@ -260,20 +269,29 @@ func optionalNamedJSONArrayEmpty(path, key string) (bool, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return false, fmt.Errorf("foundation state %s must use the current object schema: %w", path, err)
 	}
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
 	for field := range state {
-		if field != key {
+		if _, ok := allowed[field]; !ok {
 			return false, fmt.Errorf("foundation state %s contains unknown field %q", path, field)
 		}
 	}
-	entriesRaw, ok := state[key]
-	if !ok || strings.TrimSpace(string(entriesRaw)) == "null" {
-		return true, nil
+	for _, key := range keys {
+		entriesRaw, ok := state[key]
+		if !ok || strings.TrimSpace(string(entriesRaw)) == "null" {
+			continue
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(entriesRaw, &entries); err != nil {
+			return false, fmt.Errorf("foundation state %s field %q must be an array: %w", path, key, err)
+		}
+		if len(entries) > 0 {
+			return false, nil
+		}
 	}
-	var entries []json.RawMessage
-	if err := json.Unmarshal(entriesRaw, &entries); err != nil {
-		return false, fmt.Errorf("foundation state %s field %q must be an array: %w", path, key, err)
-	}
-	return len(entries) == 0, nil
+	return true, nil
 }
 
 func optionalDirectoryEmpty(path string) (bool, error) {
