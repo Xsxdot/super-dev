@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -121,6 +122,22 @@ func TestProviderGoUsesCampaignOwnedBuildCacheAcrossBuildRuntimeAndDebug(t *test
 	require.Equal(t, cacheRoot, configuredEnv["GOCACHE"])
 }
 
+func TestProviderWaitsForAsynchronousRuntimeReadiness(t *testing.T) {
+	t.Parallel()
+
+	tools := &fakeProviderTools{}
+	http := &transientReadinessProviderHTTP{remainingFailures: 2}
+	runner := NewProviderRunner(tools, fakeProviderCommands{}, http)
+	result := runner.Run(context.Background(), ProviderRequest{
+		CampaignID: "campaign-1", ProjectID: "project-1", ProjectRoot: t.TempDir(),
+		Platform: "darwin", Fixture: validFixture("cpp"), Port: 20101,
+	})
+
+	require.Equal(t, StatusPass, result.RuntimeStatus)
+	require.Equal(t, StatusPass, result.DebugStatus)
+	require.Equal(t, 3, http.readinessAttempts())
+}
+
 type providerCall struct {
 	name      string
 	arguments map[string]any
@@ -178,3 +195,29 @@ func (r *recordingProviderCommands) Run(_ context.Context, request CommandRunReq
 type fakeProviderHTTP struct{}
 
 func (fakeProviderHTTP) Probe(context.Context, HTTPProbeRequest) error { return nil }
+
+type transientReadinessProviderHTTP struct {
+	mu                sync.Mutex
+	remainingFailures int
+	attempts          int
+}
+
+func (p *transientReadinessProviderHTTP) Probe(_ context.Context, request HTTPProbeRequest) error {
+	if request.Probe.Path != "/healthz" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.attempts++
+	if p.remainingFailures > 0 {
+		p.remainingFailures--
+		return fmt.Errorf("runtime is still starting")
+	}
+	return nil
+}
+
+func (p *transientReadinessProviderHTTP) readinessAttempts() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attempts
+}

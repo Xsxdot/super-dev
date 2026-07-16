@@ -95,6 +95,7 @@ type CommandExecutor interface {
 type HTTPProbeRequest struct {
 	URL   string
 	Probe HTTPProbe
+	Quiet bool
 }
 
 // HTTPProber 执行 readiness、正常或受控错误 HTTP probe。
@@ -207,7 +208,7 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	setProviderPhase(&result, 2, StatusPass, Cause{})
 
 	baseURL := "http://127.0.0.1:" + strconv.Itoa(request.Port)
-	if err := r.http.Probe(ctx, HTTPProbeRequest{URL: baseURL + request.Fixture.Readiness.Path, Probe: request.Fixture.Readiness}); err != nil {
+	if err := r.waitForReadiness(ctx, request, baseURL); err != nil {
 		_ = r.stopService(ctx, request, runtimeKey, &result)
 		return failProviderFrom(&result, 3, StatusFail, "runtime_readiness_failed", err.Error())
 	}
@@ -363,10 +364,14 @@ func (p *DefaultHTTPProber) Probe(ctx context.Context, request HTTPProbeRequest)
 		return err
 	}
 	log := logger.GetLogger().WithEntryName("RuntimeValidationProviderHTTP").WithFields(map[string]any{"method": request.Probe.Method, "url": request.URL, "expected_status": request.Probe.ExpectedStatus})
-	log.Info("开始调用 fixture loopback HTTP probe")
+	if !request.Quiet {
+		log.Info("开始调用 fixture loopback HTTP probe")
+	}
 	response, err := client.Do(httpRequest)
 	if err != nil {
-		log.WithErr(err).Error("fixture loopback HTTP probe 失败")
+		if !request.Quiet {
+			log.WithErr(err).Error("fixture loopback HTTP probe 失败")
+		}
 		return err
 	}
 	defer response.Body.Close()
@@ -384,8 +389,44 @@ func (p *DefaultHTTPProber) Probe(ctx context.Context, request HTTPProbeRequest)
 			}
 		}
 	}
-	log.WithField("status", response.StatusCode).Info("fixture loopback HTTP probe 成功")
+	if !request.Quiet {
+		log.WithField("status", response.StatusCode).Info("fixture loopback HTTP probe 成功")
+	}
 	return nil
+}
+
+func (r *ProviderRunner) waitForReadiness(ctx context.Context, request ProviderRequest, baseURL string) error {
+	const (
+		readinessTimeout      = 30 * time.Second
+		readinessPollInterval = 100 * time.Millisecond
+	)
+	probe := HTTPProbeRequest{
+		URL: baseURL + request.Fixture.Readiness.Path, Probe: request.Fixture.Readiness, Quiet: true,
+	}
+	log := logger.GetLogger().WithEntryName("RuntimeValidationProviderReadiness").WithFields(map[string]any{
+		"campaign_id": request.CampaignID, "provider": request.Fixture.Provider,
+		"url": probe.URL, "timeout": readinessTimeout,
+	})
+	log.Info("开始等待异步 runtime readiness")
+	readinessCtx, cancel := context.WithTimeout(ctx, readinessTimeout)
+	defer cancel()
+	var lastErr error
+	for attempts := 1; ; attempts++ {
+		if err := r.http.Probe(readinessCtx, probe); err == nil {
+			log.WithField("attempts", attempts).Info("异步 runtime readiness 已确认")
+			return nil
+		} else {
+			lastErr = err
+		}
+		timer := time.NewTimer(readinessPollInterval)
+		select {
+		case <-readinessCtx.Done():
+			timer.Stop()
+			log.WithErr(lastErr).WithField("attempts", attempts).Error("等待异步 runtime readiness 失败")
+			return fmt.Errorf("wait for runtime readiness after %d attempts: %v; last probe: %w", attempts, readinessCtx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
 }
 
 func (r *ProviderRunner) configureProvider(ctx context.Context, request ProviderRequest, service map[string]any, result *LanguageResult) error {
