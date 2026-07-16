@@ -188,12 +188,19 @@ func TestApprovalActorFinalizesPendingReadProbeAsRejectedTerminalDelta(t *testin
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
-			status := "pending"
 			if rejected.Load() {
-				status = "rejected"
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": "approval_rejected"})
+				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"approval": fixture.approval(status)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"approval": fixture.approval("pending")})
 		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			if rejected.Load() {
+				require.Equal(t, "rejected", request.URL.Query().Get("status"))
+				_ = json.NewEncoder(w).Encode([]any{fixture.approval("rejected")})
+				return
+			}
+			require.Equal(t, "pending", request.URL.Query().Get("status"))
 			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
 		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/reject":
 			var decision map[string]any

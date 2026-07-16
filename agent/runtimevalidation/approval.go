@@ -228,15 +228,9 @@ func (c *ApprovalToolCaller) FinalizePendingReadProbes(ctx context.Context) (App
 	})
 	log.Info("开始终态化 allowlist 外的 pending approval 读探针")
 	for _, expected := range probes {
-		if err := c.rejectPendingReadProbe(ctx, expected); err != nil {
-			log.WithErr(err).WithField("approval_id", expected.ID).Error("pending approval 读探针终态化失败")
-			return evidence, err
-		}
-		terminal, err := c.getApproval(ctx, expected.ID)
+		terminal, err := c.rejectPendingReadProbe(ctx, expected)
 		if err != nil {
-			return evidence, err
-		}
-		if err := matchApprovalIdentity(expected, terminal); err != nil {
+			log.WithErr(err).WithField("approval_id", expected.ID).Error("pending approval 读探针终态化失败")
 			return evidence, err
 		}
 		if terminal.Status != operation.ApprovalRejected || terminal.Token != "" {
@@ -443,29 +437,29 @@ func (c *ApprovalToolCaller) approveOperation(ctx context.Context, expected appr
 	return nil
 }
 
-func (c *ApprovalToolCaller) rejectPendingReadProbe(ctx context.Context, expected approvalIdentity) error {
+func (c *ApprovalToolCaller) rejectPendingReadProbe(ctx context.Context, expected approvalIdentity) (approvalIdentity, error) {
 	detail, err := c.getApproval(ctx, expected.ID)
 	if err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	if err := matchApprovalIdentity(expected, detail); err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	if detail.Status != operation.ApprovalPending {
-		return fmt.Errorf("approval read probe %s is not pending before rejection", expected.ID)
+		return approvalIdentity{}, fmt.Errorf("approval read probe %s is not pending before rejection", expected.ID)
 	}
 	body, err := json.Marshal(map[string]any{
 		"decided_by": "runtime-validation:" + c.campaign,
 		"note":       "terminalize unallowlisted runtime validation read probe",
 	})
 	if err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	endpoint := *c.baseURL
 	endpoint.Path = "/api/operation-approvals/" + url.PathEscape(expected.ID) + "/reject"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
@@ -476,31 +470,87 @@ func (c *ApprovalToolCaller) rejectPendingReadProbe(ctx context.Context, expecte
 	response, err := c.http.Do(request)
 	if err != nil {
 		log.WithErr(err).Error("调用正式 operation reject 接口失败")
-		return fmt.Errorf("reject pending approval read probe: %w", err)
+		return approvalIdentity{}, fmt.Errorf("reject pending approval read probe: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
 		err := fmt.Errorf("reject pending approval read probe returned HTTP %d", response.StatusCode)
 		log.WithErr(err).Error("正式 operation reject 接口拒绝请求")
-		return err
+		return approvalIdentity{}, err
 	}
 	var payload map[string]any
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
-		return fmt.Errorf("decode rejected approval read probe: %w", err)
+		return approvalIdentity{}, fmt.Errorf("decode rejected approval read probe: %w", err)
 	}
 	rejected, err := approvalIdentityFromMaps(payload, RawMessageMap(payload["plan"]))
 	if err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	if err := matchApprovalIdentity(expected, rejected); err != nil {
-		return err
+		return approvalIdentity{}, err
 	}
 	if rejected.Status != operation.ApprovalRejected {
-		return fmt.Errorf("approval read probe %s returned status %s after reject", expected.ID, rejected.Status)
+		return approvalIdentity{}, fmt.Errorf("approval read probe %s returned status %s after reject", expected.ID, rejected.Status)
+	}
+	confirmed, err := c.findApprovalByStatus(ctx, expected, operation.ApprovalRejected)
+	if err != nil {
+		return approvalIdentity{}, err
 	}
 	log.Info("allowlist 外的 pending approval 读探针已通过正式接口拒绝")
-	return nil
+	return confirmed, nil
+}
+
+func (c *ApprovalToolCaller) findApprovalByStatus(ctx context.Context, expected approvalIdentity, status string) (approvalIdentity, error) {
+	endpoint := *c.baseURL
+	endpoint.Path = "/api/operation-approvals"
+	query := endpoint.Query()
+	query.Set("status", status)
+	query.Set("limit", "0")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return approvalIdentity{}, err
+	}
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": expected.ID, "status": status,
+	})
+	log.Info("开始从 approval 列表确认只读探针持久终态")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return approvalIdentity{}, fmt.Errorf("list %s approvals for terminal verification: %w", status, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
+		return approvalIdentity{}, fmt.Errorf("list %s approvals for terminal verification returned HTTP %d", status, response.StatusCode)
+	}
+	var approvals []map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&approvals); err != nil {
+		return approvalIdentity{}, fmt.Errorf("decode %s approvals for terminal verification: %w", status, err)
+	}
+	matches := make([]approvalIdentity, 0, 1)
+	for _, raw := range approvals {
+		if strings.TrimSpace(fmt.Sprint(raw["id"])) != expected.ID {
+			continue
+		}
+		candidate, err := approvalIdentityFromMaps(raw, RawMessageMap(raw["plan"]))
+		if err != nil {
+			return approvalIdentity{}, err
+		}
+		if err := matchApprovalIdentity(expected, candidate); err != nil {
+			return approvalIdentity{}, err
+		}
+		if candidate.Status != status {
+			return approvalIdentity{}, fmt.Errorf("approval read probe %s listed with status %s", expected.ID, candidate.Status)
+		}
+		matches = append(matches, candidate)
+	}
+	if len(matches) != 1 {
+		return approvalIdentity{}, fmt.Errorf("approval read probe %s terminal list match count is %d, want 1", expected.ID, len(matches))
+	}
+	log.Info("只读探针持久终态已从 approval 列表确认")
+	return matches[0], nil
 }
 
 func (c *ApprovalToolCaller) rejectForbiddenGrace(ctx context.Context, expected approvalIdentity) error {
