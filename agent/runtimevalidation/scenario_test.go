@@ -186,6 +186,7 @@ func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 		}
 	}
 	require.Equal(t, "pending", listStep.Arguments["status"])
+	require.NotContains(t, listStep.Arguments, "project_id")
 	require.Equal(t, "{{approval_probe_id}}", getStep.Arguments["approval_id"])
 	require.Len(t, getStep.Expect.Assertions, 2)
 	require.Equal(t, "structuredContent.data.approval.status", getStep.Expect.Assertions[1].Path)

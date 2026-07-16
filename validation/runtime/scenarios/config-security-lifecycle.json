@@ -796,7 +796,6 @@
       "tool": "list_operation_approvals",
       "coverage": "primary",
       "arguments": {
-        "project_id": "{{project_id}}",
         "status": "pending",
         "limit": 50
       },

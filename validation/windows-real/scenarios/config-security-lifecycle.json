@@ -240,7 +240,7 @@
       "id": "list-operation-approvals",
       "tool": "list_operation_approvals",
       "coverage": "primary",
-      "arguments": {"project_id": "{{project_id}}", "status": "pending", "limit": 50},
+      "arguments": {"status": "pending", "limit": 50},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}, {"path": "structuredContent.data.approvals", "operator": "contains_item", "value": {"id": "{{approval_probe_id}}", "status": "pending"}}]},
       "evidence": {"record": ["structuredContent.data.approvals"], "redact": ["structuredContent.data.approvals.*.token"], "forbid": ["approval_token"]}
     },
