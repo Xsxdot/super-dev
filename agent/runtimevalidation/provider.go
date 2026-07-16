@@ -54,28 +54,30 @@ type LanguageResult struct {
 
 // ProviderMatrixRequest 提交七语言共享的 campaign/project/platform 和动态端口。
 type ProviderMatrixRequest struct {
-	CampaignID    string
-	ProjectID     string
-	ProjectRoot   string
-	Platform      string
-	Fixtures      []Fixture
-	Ports         map[string]int
-	AdapterPaths  map[string]string
-	ApprovalToken string
-	Cleanup       *CleanupStack
+	CampaignID      string
+	ProjectID       string
+	ProjectRoot     string
+	Platform        string
+	Fixtures        []Fixture
+	Ports           map[string]int
+	AdapterPaths    map[string]string
+	AdapterCommands map[string]string
+	ApprovalToken   string
+	Cleanup         *CleanupStack
 }
 
 // ProviderRequest 提交一个语言 provider 的 strict runtime/debug 输入。
 type ProviderRequest struct {
-	CampaignID    string
-	ProjectID     string
-	ProjectRoot   string
-	Platform      string
-	Fixture       Fixture
-	Port          int
-	AdapterPath   string
-	ApprovalToken string
-	Cleanup       *CleanupStack
+	CampaignID     string
+	ProjectID      string
+	ProjectRoot    string
+	Platform       string
+	Fixture        Fixture
+	Port           int
+	AdapterPath    string
+	AdapterCommand string
+	ApprovalToken  string
+	Cleanup        *CleanupStack
 }
 
 // CommandRunRequest 描述一个 fixture preflight/build 外部调用。
@@ -105,10 +107,11 @@ type HTTPProber interface {
 
 // ProviderRunner 协调 MCP、target-native build 与 loopback HTTP probe。
 type ProviderRunner struct {
-	tools             ToolCaller
-	commands          CommandExecutor
-	http              HTTPProber
-	debugTriggerDelay time.Duration
+	tools                ToolCaller
+	commands             CommandExecutor
+	http                 HTTPProber
+	debugTriggerDelay    time.Duration
+	debugTriggerInterval time.Duration
 }
 
 // NewProviderRunner 创建参数化 provider runner。
@@ -127,7 +130,10 @@ func NewProviderRunner(tools ToolCaller, commands CommandExecutor, prober HTTPPr
 	if prober == nil {
 		prober = &DefaultHTTPProber{Client: &http.Client{Timeout: 10 * time.Second}}
 	}
-	return &ProviderRunner{tools: tools, commands: commands, http: prober, debugTriggerDelay: 100 * time.Millisecond}
+	return &ProviderRunner{
+		tools: tools, commands: commands, http: prober,
+		debugTriggerDelay: 100 * time.Millisecond, debugTriggerInterval: 250 * time.Millisecond,
+	}
 }
 
 // RunMatrix 依次执行七语言 fixtures，并为缺失 provider 产生显式 FAIL result。
@@ -146,10 +152,15 @@ func (r *ProviderRunner) RunMatrix(ctx context.Context, request ProviderMatrixRe
 	results := make([]LanguageResult, 0, len(fixtures))
 	for _, fixture := range fixtures {
 		adapterPath := request.AdapterPaths[fixture.Debug.AdapterResource]
+		adapterCommand := request.AdapterCommands[fixture.Debug.AdapterResource]
+		if adapterCommand == "" {
+			adapterCommand = adapterPath
+		}
 		results = append(results, r.Run(ctx, ProviderRequest{
 			CampaignID: request.CampaignID, ProjectID: request.ProjectID, ProjectRoot: request.ProjectRoot,
 			Platform: request.Platform, Fixture: fixture, Port: request.Ports[fixture.Provider],
-			AdapterPath: adapterPath, ApprovalToken: request.ApprovalToken, Cleanup: request.Cleanup,
+			AdapterPath: adapterPath, AdapterCommand: adapterCommand,
+			ApprovalToken: request.ApprovalToken, Cleanup: request.Cleanup,
 		}))
 	}
 	return results
@@ -208,7 +219,7 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	setProviderPhase(&result, 2, StatusPass, Cause{})
 
 	baseURL := "http://127.0.0.1:" + strconv.Itoa(request.Port)
-	if err := r.waitForReadiness(ctx, request, baseURL); err != nil {
+	if err := r.waitForReadiness(ctx, request, baseURL, "runtime"); err != nil {
 		_ = r.stopService(ctx, request, runtimeKey, &result)
 		return failProviderFrom(&result, 3, StatusFail, "runtime_readiness_failed", err.Error())
 	}
@@ -238,6 +249,12 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	if err := r.startService(ctx, request, debugKey, &result); err != nil {
 		return failProviderDebug(&result, 7, "debug_runtime_start_failed", err.Error())
 	}
+	// debug 使用 stop 后重新拉起的新进程；runtime 阶段的 readiness 不能证明新 PID 已监听。
+	// 在 attach 前重新等待，避免 adapter 与业务进程启动时序竞争。
+	if err := r.waitForReadiness(ctx, request, baseURL, "debug"); err != nil {
+		_ = r.stopService(ctx, request, debugKey, &result)
+		return failProviderDebug(&result, 7, "debug_runtime_readiness_failed", err.Error())
+	}
 	setProviderPhase(&result, 7, StatusPass, Cause{})
 
 	variableNames := make([]string, 0, len(request.Fixture.Debug.ExpectedVariables))
@@ -245,34 +262,26 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 		variableNames = append(variableNames, name)
 	}
 	sort.Strings(variableNames)
-	triggerDone := make(chan error, 1)
+	triggerCtx, cancelTrigger := context.WithCancel(ctx)
+	triggerDone := make(chan debugTriggerResult, 1)
 	go func() {
-		if r.debugTriggerDelay > 0 {
-			timer := time.NewTimer(r.debugTriggerDelay)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				triggerDone <- ctx.Err()
-				return
-			case <-timer.C:
-			}
-		}
-		triggerDone <- r.http.Probe(ctx, HTTPProbeRequest{URL: baseURL + request.Fixture.NormalProbe.Path, Probe: request.Fixture.NormalProbe})
+		triggerDone <- r.pumpDebugTrigger(triggerCtx, request, baseURL)
 	}()
 	debugResult, err := r.callSupporting(ctx, request, &result, "debug.breakpoint", "debug_capture_at", map[string]any{
 		"deployment_id": providerDeploymentID(request.Fixture.Provider), "source": request.Fixture.Debug.Source,
 		"line": request.Fixture.Debug.Line, "timeout_ms": 30000, "max_variables": len(variableNames) + 8,
 		"variable_names": variableNames, "approval_wait_seconds": 300,
 	})
-	triggerErr := <-triggerDone
+	cancelTrigger()
+	triggerResult := <-triggerDone
 	if err != nil {
 		_ = r.stopService(ctx, request, debugKey, &result)
 		return failProviderDebug(&result, 8, "debug_breakpoint_failed", err.Error())
 	}
-	if triggerErr != nil {
-		_ = r.stopService(ctx, request, debugKey, &result)
-		return failProviderDebug(&result, 8, "debug_trigger_failed", triggerErr.Error())
-	}
+	logger.GetLogger().WithEntryName("RuntimeValidationProviderDebugTrigger").WithFields(map[string]any{
+		"campaign_id": request.CampaignID, "provider": request.Fixture.Provider,
+		"attempts": triggerResult.Attempts, "completed_responses": triggerResult.CompletedResponses,
+	}).Info("断点触发请求循环已随 capture 结果停止")
 	data := structuredData(debugResult)
 	sessionID, _ := data["session_id"].(string)
 	threadID := integerValue(data["thread_id"])
@@ -300,6 +309,58 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	result.DebugStatus = StatusPass
 	log.WithFields(map[string]any{"runtime_status": result.RuntimeStatus, "debug_status": result.DebugStatus}).Info("语言 runtime/debug provider 执行完成")
 	return result
+}
+
+type debugTriggerResult struct {
+	Attempts           int
+	CompletedResponses int
+	LastError          error
+}
+
+// pumpDebugTrigger 在 debug_capture_at 设置断点期间重复触发 fixture 请求。
+//
+// 首次请求可能早于 adapter 完成 attach/setBreakpoints，因此成功响应不能视为已触发断点；
+// 循环持续到 capture 返回并取消 context。命中断点的请求会阻塞，取消后由后续 debug_continue 恢复服务端 handler。
+func (r *ProviderRunner) pumpDebugTrigger(ctx context.Context, request ProviderRequest, baseURL string) debugTriggerResult {
+	result := debugTriggerResult{}
+	log := logger.GetLogger().WithEntryName("RuntimeValidationProviderDebugTrigger").WithFields(map[string]any{
+		"campaign_id": request.CampaignID, "provider": request.Fixture.Provider,
+	})
+	log.Info("开始循环触发 fixture 断点请求")
+	if r.debugTriggerDelay > 0 {
+		timer := time.NewTimer(r.debugTriggerDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return result
+		case <-timer.C:
+		}
+	}
+	interval := r.debugTriggerInterval
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	for {
+		result.Attempts++
+		err := r.http.Probe(ctx, HTTPProbeRequest{
+			URL: baseURL + request.Fixture.NormalProbe.Path, Probe: request.Fixture.NormalProbe, Quiet: true,
+		})
+		if err == nil {
+			result.CompletedResponses++
+		} else {
+			result.LastError = err
+		}
+		if ctx.Err() != nil {
+			return result
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return result
+		case <-timer.C:
+		}
+	}
 }
 
 // OSCommandExecutor 使用 ManagedProcess 执行 target-native preflight/build，并把输出交给脱敏 sink。
@@ -395,7 +456,7 @@ func (p *DefaultHTTPProber) Probe(ctx context.Context, request HTTPProbeRequest)
 	return nil
 }
 
-func (r *ProviderRunner) waitForReadiness(ctx context.Context, request ProviderRequest, baseURL string) error {
+func (r *ProviderRunner) waitForReadiness(ctx context.Context, request ProviderRequest, baseURL, phase string) error {
 	const (
 		readinessTimeout      = 30 * time.Second
 		readinessPollInterval = 100 * time.Millisecond
@@ -405,15 +466,15 @@ func (r *ProviderRunner) waitForReadiness(ctx context.Context, request ProviderR
 	}
 	log := logger.GetLogger().WithEntryName("RuntimeValidationProviderReadiness").WithFields(map[string]any{
 		"campaign_id": request.CampaignID, "provider": request.Fixture.Provider,
-		"url": probe.URL, "timeout": readinessTimeout,
+		"phase": phase, "url": probe.URL, "timeout": readinessTimeout.String(),
 	})
-	log.Info("开始等待异步 runtime readiness")
+	log.Info("开始等待异步 provider readiness")
 	readinessCtx, cancel := context.WithTimeout(ctx, readinessTimeout)
 	defer cancel()
 	var lastErr error
 	for attempts := 1; ; attempts++ {
 		if err := r.http.Probe(readinessCtx, probe); err == nil {
-			log.WithField("attempts", attempts).Info("异步 runtime readiness 已确认")
+			log.WithField("attempts", attempts).Info("异步 provider readiness 已确认")
 			return nil
 		} else {
 			lastErr = err
@@ -422,8 +483,8 @@ func (r *ProviderRunner) waitForReadiness(ctx context.Context, request ProviderR
 		select {
 		case <-readinessCtx.Done():
 			timer.Stop()
-			log.WithErr(lastErr).WithField("attempts", attempts).Error("等待异步 runtime readiness 失败")
-			return fmt.Errorf("wait for runtime readiness after %d attempts: %v; last probe: %w", attempts, readinessCtx.Err(), lastErr)
+			log.WithErr(lastErr).WithField("attempts", attempts).Error("等待异步 provider readiness 失败")
+			return fmt.Errorf("wait for %s readiness after %d attempts: %v; last probe: %w", phase, attempts, readinessCtx.Err(), lastErr)
 		case <-timer.C:
 		}
 	}
@@ -520,6 +581,10 @@ func (r *ProviderRunner) callSupporting(ctx context.Context, request ProviderReq
 }
 
 func providerServiceConfig(request ProviderRequest, platform FixturePlatform) map[string]any {
+	adapterCommand := request.AdapterCommand
+	if adapterCommand == "" {
+		adapterCommand = request.AdapterPath
+	}
 	return map[string]any{
 		"id": providerServiceID(request.Fixture.Provider), "name": "runtime-validation-" + request.Fixture.Provider,
 		"language": request.Fixture.Provider, "required": true, "order": 1,
@@ -534,7 +599,7 @@ func providerServiceConfig(request ProviderRequest, platform FixturePlatform) ma
 				"type": "http", "target": "http://127.0.0.1:" + strconv.Itoa(request.Port) + request.Fixture.Readiness.Path, "timeout_seconds": 30,
 			},
 			// adapter_command 绑定 active marker 前已检查的 target-native launcher，禁止运行期回退 PATH 或下载。
-			"code_debug": map[string]any{"policy": "auto", "adapter_command": request.AdapterPath},
+			"code_debug": map[string]any{"policy": "auto", "adapter_command": adapterCommand},
 		}},
 	}
 }

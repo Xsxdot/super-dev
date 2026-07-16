@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -90,6 +91,64 @@ func RunReadOnlyPreflight(ctx context.Context, bundleRoot string, input RuntimeI
 	}
 	log.WithFields(map[string]any{"provider_count": len(fixtures), "reserved_port_probe_count": len(fixtures) + 3}).Info("active marker 前的只读依赖预检通过")
 	return CheckResult{ID: "read-only-preflight", Status: StatusPass}
+}
+
+// ResolveProviderAdapterCommands 固化 preflight 已验证的 target-native adapter launcher。
+//
+// 参数：
+//   - bundleRoot: 已校验 bundle，用于读取七语言 fixture
+//   - input: 系统 adapter 的绝对路径
+//   - target: 当前原生 target
+//
+// 返回：
+//   - 以 fixture adapter_resource 为键的实际可执行 launcher
+//   - launcher 缺失、不可执行或 fixture 无目标平台时的错误
+//
+// 注意：Node 的 adapter resource 是 bundle 内 JS 文件，但 adapter_command 必须是解释它的
+// Node executable；两者不能共用一个路径，否则会把非可执行 JS 当作进程入口。
+func ResolveProviderAdapterCommands(bundleRoot string, input RuntimeInput, target Target) (map[string]string, error) {
+	fixtures, err := LoadFixtures(filepath.Join(bundleRoot, "validation", "fixtures"))
+	if err != nil {
+		return nil, err
+	}
+	commands := make(map[string]string, len(fixtures))
+	for _, fixture := range fixtures {
+		resource := fixture.Debug.AdapterResource
+		if resource != "resources/js-debug" {
+			command := input.Adapters[resource]
+			if err := validateNativeAdapter(command, target.OS, false); err != nil {
+				return nil, fmt.Errorf("resolve %s adapter command: %w", fixture.Provider, err)
+			}
+			commands[resource] = command
+			continue
+		}
+		platform, ok := fixture.Platforms[target.OS]
+		if !ok {
+			return nil, fmt.Errorf("resolve node adapter command: target platform %s is absent", target.OS)
+		}
+		command, err := exec.LookPath(platform.Preflight.Executable)
+		if err != nil {
+			return nil, fmt.Errorf("resolve node adapter command: %w", err)
+		}
+		if !filepath.IsAbs(command) {
+			command, err = filepath.Abs(command)
+			if err != nil {
+				return nil, fmt.Errorf("normalize node adapter command: %w", err)
+			}
+		}
+		// PATH 中的 Node 通常是包管理器 symlink；固化其最终 regular file，既保留常规
+		// 工具链布局，又防止 campaign 运行中通过替换 symlink 改写 adapter launcher。
+		command, err = filepath.EvalSymlinks(command)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize node adapter command: %w", err)
+		}
+		if err := validateNativeAdapter(command, target.OS, false); err != nil {
+			return nil, fmt.Errorf("validate node adapter command: %w", err)
+		}
+		commands[resource] = command
+	}
+	logger.GetLogger().WithEntryName("RuntimeValidationPreflight").WithField("binding_count", len(commands)).Info("target-native adapter launcher 已固化")
+	return commands, nil
 }
 
 func validateNativeAdapter(path, targetOS string, script bool) error {

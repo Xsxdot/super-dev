@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +85,23 @@ func TestProviderServiceConfigUsesPreflightedAdapterCommand(t *testing.T) {
 	require.Equal(t, "/prepared/adapters/dlv", codeDebug["adapter_command"])
 }
 
+func TestProviderNodeServiceConfigSeparatesLauncherFromBundledScript(t *testing.T) {
+	t.Parallel()
+
+	fixture := validFixture("node")
+	request := ProviderRequest{
+		Fixture: fixture, Port: 20101,
+		AdapterPath: "/bundle/js-debug/src/dapDebugServer.js", AdapterCommand: "/toolchain/bin/node",
+	}
+	service := providerServiceConfig(request, fixture.Platforms["darwin"])
+	deployments := service["deployments"].([]any)
+	deployment := deployments[0].(map[string]any)
+	codeDebug := deployment["code_debug"].(map[string]any)
+
+	require.Equal(t, "/toolchain/bin/node", codeDebug["adapter_command"])
+	require.NotEqual(t, request.AdapterPath, codeDebug["adapter_command"])
+}
+
 func TestProviderGoUsesCampaignOwnedBuildCacheAcrossBuildRuntimeAndDebug(t *testing.T) {
 	t.Parallel()
 
@@ -126,7 +144,7 @@ func TestProviderWaitsForAsynchronousRuntimeReadiness(t *testing.T) {
 	t.Parallel()
 
 	tools := &fakeProviderTools{}
-	http := &transientReadinessProviderHTTP{remainingFailures: 2}
+	http := &transientReadinessProviderHTTP{remainingFailures: 2, resetFailures: 2}
 	runner := NewProviderRunner(tools, fakeProviderCommands{}, http)
 	result := runner.Run(context.Background(), ProviderRequest{
 		CampaignID: "campaign-1", ProjectID: "project-1", ProjectRoot: t.TempDir(),
@@ -135,7 +153,26 @@ func TestProviderWaitsForAsynchronousRuntimeReadiness(t *testing.T) {
 
 	require.Equal(t, StatusPass, result.RuntimeStatus)
 	require.Equal(t, StatusPass, result.DebugStatus)
-	require.Equal(t, 3, http.readinessAttempts())
+	require.Equal(t, 6, http.readinessAttempts())
+}
+
+func TestProviderRetriesDebugTriggerUntilBreakpointIsArmed(t *testing.T) {
+	t.Parallel()
+
+	breakpointTriggered := make(chan struct{})
+	tools := &delayedDebugProviderTools{breakpointTriggered: breakpointTriggered}
+	http := &repeatedDebugTriggerHTTP{breakpointTriggered: breakpointTriggered, requiredAttempts: 3}
+	runner := NewProviderRunner(tools, fakeProviderCommands{}, http)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := runner.Run(ctx, ProviderRequest{
+		CampaignID: "campaign-1", ProjectID: "project-1", ProjectRoot: t.TempDir(),
+		Platform: "darwin", Fixture: validFixture("python"), Port: 20101,
+	})
+
+	require.Equal(t, StatusPass, result.RuntimeStatus)
+	require.Equal(t, StatusPass, result.DebugStatus)
+	require.GreaterOrEqual(t, http.debugTriggerAttempts(), 3)
 }
 
 type providerCall struct {
@@ -199,10 +236,17 @@ func (fakeProviderHTTP) Probe(context.Context, HTTPProbeRequest) error { return 
 type transientReadinessProviderHTTP struct {
 	mu                sync.Mutex
 	remainingFailures int
+	resetFailures     int
 	attempts          int
 }
 
 func (p *transientReadinessProviderHTTP) Probe(_ context.Context, request HTTPProbeRequest) error {
+	if request.Probe.Path == "/api/probe?mode=error" {
+		p.mu.Lock()
+		p.remainingFailures = p.resetFailures
+		p.mu.Unlock()
+		return nil
+	}
 	if request.Probe.Path != "/healthz" {
 		return nil
 	}
@@ -217,6 +261,60 @@ func (p *transientReadinessProviderHTTP) Probe(_ context.Context, request HTTPPr
 }
 
 func (p *transientReadinessProviderHTTP) readinessAttempts() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attempts
+}
+
+type delayedDebugProviderTools struct {
+	fakeProviderTools
+	breakpointTriggered <-chan struct{}
+}
+
+func (f *delayedDebugProviderTools) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
+	if name == "debug_capture_at" {
+		select {
+		case <-ctx.Done():
+			return ToolCallResult{}, ctx.Err()
+		case <-f.breakpointTriggered:
+		}
+	}
+	return f.fakeProviderTools.CallTool(ctx, name, arguments)
+}
+
+type repeatedDebugTriggerHTTP struct {
+	mu                  sync.Mutex
+	breakpointTriggered chan struct{}
+	requiredAttempts    int
+	debugReady          bool
+	attempts            int
+	once                sync.Once
+}
+
+func (p *repeatedDebugTriggerHTTP) Probe(_ context.Context, request HTTPProbeRequest) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if request.Probe.Path == "/api/probe?mode=error" {
+		p.debugReady = false
+		p.attempts = 0
+		return nil
+	}
+	if request.Probe.Path == "/healthz" {
+		if !p.debugReady {
+			p.debugReady = true
+		}
+		return nil
+	}
+	if p.debugReady && request.Probe.Path == "/api/probe" {
+		p.attempts++
+		if p.attempts >= p.requiredAttempts {
+			p.once.Do(func() { close(p.breakpointTriggered) })
+		}
+	}
+	return nil
+}
+
+func (p *repeatedDebugTriggerHTTP) debugTriggerAttempts() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.attempts

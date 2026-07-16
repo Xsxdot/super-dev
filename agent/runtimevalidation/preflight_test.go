@@ -52,6 +52,30 @@ func TestRunReadOnlyPreflightRequiresProductValidGraceWithoutUsingIt(t *testing.
 	require.Equal(t, "browser_or_debug_policy_unavailable", result.Cause.Code)
 }
 
+func TestResolveProviderAdapterCommandsBindsNodeExecutableNotBundledScript(t *testing.T) {
+	bundleRoot, input := createPreflightEnvironment(t)
+	nodeRoot := t.TempDir()
+	nodeExecutable := filepath.Join(nodeRoot, "node-real")
+	nodeCommand := filepath.Join(nodeRoot, "node")
+	require.NoError(t, os.WriteFile(nodeExecutable, []byte("native node"), 0o700))
+	require.NoError(t, os.Symlink(nodeExecutable, nodeCommand))
+	fixture := validFixture("node")
+	fixture.Debug.AdapterResource = "resources/js-debug"
+	platform := fixture.Platforms["linux"]
+	platform.Preflight.Executable = nodeCommand
+	fixture.Platforms["linux"] = platform
+	writeJSONFile(t, filepath.Join(bundleRoot, "validation", "fixtures", "node", "fixture.json"), fixture)
+
+	commands, err := ResolveProviderAdapterCommands(bundleRoot, input, Target{OS: "linux", Architecture: "amd64"})
+
+	require.NoError(t, err)
+	canonicalNode, err := filepath.EvalSymlinks(nodeExecutable)
+	require.NoError(t, err)
+	require.Equal(t, canonicalNode, commands["resources/js-debug"])
+	require.NotEqual(t, filepath.Join(bundleRoot, "resources", "js-debug", "src", "dapDebugServer.js"), commands["resources/js-debug"])
+	require.Equal(t, input.Adapters["dlv"], commands["dlv"])
+}
+
 type recordingPreflightCommands struct {
 	calls int
 }

@@ -147,8 +147,16 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 	if dependencyCheck.Status != StatusPass {
 		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
 	}
+	adapterCommands, err := ResolveProviderAdapterCommands(options.BundleRoot, input, options.Target)
+	if err != nil {
+		checks = append(checks, CheckResult{ID: "provider-adapter-bindings", Status: StatusBlocked, Cause: Cause{
+			Code: "debug_adapter_binding_unavailable", Message: err.Error(), Source: "provider-adapter-bindings",
+		}})
+		return writePreflightSummary(reportRoot, summary, checks, options.CredentialValue)
+	}
+	checks = append(checks, CheckResult{ID: "provider-adapter-bindings", Status: StatusPass})
 	log.WithFields(map[string]any{"campaign_id": campaignID, "bundle_digest": bundle.ManifestSHA256}).Info("runtime validation preflight 通过，进入 active campaign")
-	facts := runActiveCampaign(ctx, options, input, campaignID, stateRoot, bundle.ManifestSHA256, governanceDigest, checks)
+	facts := runActiveCampaign(ctx, options, input, campaignID, stateRoot, bundle.ManifestSHA256, governanceDigest, adapterCommands, checks)
 	summary.LiveTools = facts.liveTools
 	summary.Coverage = facts.coverage
 	summary.PrimaryEvidence = facts.toolResult.PrimaryEvidence
@@ -185,7 +193,7 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 	return StrictCampaignResult{Summary: written, ReportRoot: reportRoot}, nil
 }
 
-func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input RuntimeInput, campaignID, stateRoot, bundleDigest, governanceDigest string, checks []CheckResult) (facts activeCampaignFacts) {
+func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input RuntimeInput, campaignID, stateRoot, bundleDigest, governanceDigest string, adapterCommands map[string]string, checks []CheckResult) (facts activeCampaignFacts) {
 	facts.checks = append([]CheckResult{}, checks...)
 	logBuffer := &bytes.Buffer{}
 	redactor := NewRedactingWriter(logBuffer)
@@ -432,7 +440,8 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 			adapters["resources/js-debug"] = filepath.Join(cloneRoot, "js-debug", "src", "dapDebugServer.js")
 			facts.languages = providerRunner.RunMatrix(callbackCtx, ProviderMatrixRequest{
 				CampaignID: campaignID, ProjectID: projectID, ProjectRoot: projectRoot, Platform: options.Target.OS,
-				Fixtures: fixtures, Ports: ports, AdapterPaths: adapters, Cleanup: stack,
+				Fixtures: fixtures, Ports: ports, AdapterPaths: adapters,
+				AdapterCommands: cloneStringMap(adapterCommands), Cleanup: stack,
 			})
 			return validateProviderMatrixPass(facts.languages)
 		},
