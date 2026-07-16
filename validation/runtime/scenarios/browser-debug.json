@@ -587,8 +587,7 @@
           "structuredContent.data.snapshot.session_id",
           "structuredContent.data.snapshot.url",
           "structuredContent.data.snapshot.title",
-          "structuredContent.data.snapshot.text",
-          "structuredContent.data.snapshot.elements"
+          "structuredContent.data.snapshot.text"
         ],
         "redact": [
           "structuredContent.data.snapshot.focused"
@@ -755,8 +754,6 @@
         "record": [
           "structuredContent.ok",
           "structuredContent.summary",
-          "structuredContent.code",
-          "structuredContent.message",
           "structuredContent.data.result.session_id"
         ],
         "redact": [

@@ -232,6 +232,37 @@ func TestRepositoryBrowserScenarioStartsFixtureBeforeOpeningSession(t *testing.T
 	t.Fatal("browser-debug scenario is absent")
 }
 
+func TestRepositoryBrowserEvidenceOnlyRequiresSuccessPayloadFields(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	for _, scenario := range scenarios {
+		if scenario.ID != "browser-debug" {
+			continue
+		}
+		foundSnapshot := false
+		foundEvaluate := false
+		for _, step := range scenario.Steps {
+			switch step.ID {
+			case "browser-snapshot-result":
+				foundSnapshot = true
+				require.Contains(t, step.Evidence.Record, "structuredContent.data.snapshot.text")
+				require.NotContains(t, step.Evidence.Record, "structuredContent.data.snapshot.elements")
+			case "browser-evaluate-policy":
+				foundEvaluate = true
+				require.Contains(t, step.Evidence.Record, "structuredContent.data.result.session_id")
+				require.NotContains(t, step.Evidence.Record, "structuredContent.code")
+				require.NotContains(t, step.Evidence.Record, "structuredContent.message")
+			}
+		}
+		require.True(t, foundSnapshot, "browser-snapshot-result step is absent")
+		require.True(t, foundEvaluate, "browser-evaluate-policy step is absent")
+		return
+	}
+	t.Fatal("browser-debug scenario is absent")
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,
