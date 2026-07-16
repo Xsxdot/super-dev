@@ -191,8 +191,10 @@
           },
           {
             "path": "structuredContent.data.variables",
-            "operator": "contains",
-            "value": "validationMarker"
+            "operator": "contains_item",
+            "value": {
+              "name": "validationMarker"
+            }
           }
         ]
       },
@@ -257,8 +259,10 @@
           },
           {
             "path": "structuredContent.data.variables",
-            "operator": "contains",
-            "value": "validationMarker"
+            "operator": "contains_item",
+            "value": {
+              "name": "validationMarker"
+            }
           }
         ]
       },
@@ -446,8 +450,10 @@
           },
           {
             "path": "structuredContent.data.result.variables",
-            "operator": "contains",
-            "value": "validationMarker"
+            "operator": "contains_item",
+            "value": {
+              "name": "validationMarker"
+            }
           }
         ]
       },

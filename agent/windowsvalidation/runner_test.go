@@ -632,6 +632,37 @@ func TestCodeDebugScenarioObservesExactGoDeploymentIdentity(t *testing.T) {
 	}
 }
 
+func TestCodeDebugScenarioMatchesVariableObjectsByStableName(t *testing.T) {
+	t.Parallel()
+	source, err := LoadPackageSource(filepath.Join("..", "..", "validation", "windows-real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario, found := scenarioByID(source.Scenarios, "code-debug")
+	if !found {
+		t.Fatal("code-debug scenario is missing")
+	}
+	wantSteps := map[string]bool{
+		"code-capture-at":     true,
+		"code-inspect-paused": true,
+		"code-variables":      true,
+	}
+	for _, step := range scenario.Steps {
+		if !wantSteps[step.ID] {
+			continue
+		}
+		assertion := step.Expect.Assertions[len(step.Expect.Assertions)-1]
+		value, _ := assertion.Value.(map[string]any)
+		if assertion.Operator != "contains_item" || value["name"] != "validationMarker" {
+			t.Errorf("%s variable assertion = %#v", step.ID, assertion)
+		}
+		delete(wantSteps, step.ID)
+	}
+	if len(wantSteps) != 0 {
+		t.Fatalf("missing stable variable assertions: %v", wantSteps)
+	}
+}
+
 func TestProviderCodeDebugConfigNeverFallsBackAfterMissingAdmittedBinding(t *testing.T) {
 	t.Parallel()
 	config, err := providerCodeDebugConfig("python", map[string]providerAdapterBinding{})

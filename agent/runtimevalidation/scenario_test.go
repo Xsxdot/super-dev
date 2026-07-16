@@ -196,6 +196,33 @@ func TestRepositoryCodeDebugObservesExactGoDeploymentIdentity(t *testing.T) {
 	require.Empty(t, wantSteps)
 }
 
+func TestRepositoryCodeDebugMatchesVariableObjectsByStableName(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	wantSteps := map[string]bool{
+		"code-capture-at":     true,
+		"code-inspect-paused": true,
+		"code-variables":      true,
+	}
+	for _, scenario := range scenarios {
+		if scenario.ID != "code-debug" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if !wantSteps[step.ID] {
+				continue
+			}
+			variablesAssertion := step.Expect.Assertions[len(step.Expect.Assertions)-1]
+			require.Equal(t, "contains_item", variablesAssertion.Operator, step.ID)
+			require.Equal(t, map[string]any{"name": "fixtureMarker"}, variablesAssertion.Value, step.ID)
+			delete(wantSteps, step.ID)
+		}
+	}
+	require.Empty(t, wantSteps)
+}
+
 func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 	t.Parallel()
 
