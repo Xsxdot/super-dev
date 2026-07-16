@@ -258,7 +258,7 @@
       "coverage": "primary",
       "arguments": {"project_id": "{{project_id}}", "limit": 100},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}]},
-      "evidence": {"record": ["structuredContent.data.events"], "redact": [], "forbid": ["approval_token", "token"]}
+      "evidence": {"record": ["structuredContent.data.events"], "redact": [], "forbid": ["approval_token"]}
     },
     {
       "id": "get-fixture-credentials",

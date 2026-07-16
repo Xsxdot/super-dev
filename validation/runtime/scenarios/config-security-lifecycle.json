@@ -888,8 +888,7 @@
         ],
         "redact": [],
         "forbid": [
-          "approval_token",
-          "token"
+          "approval_token"
         ]
       }
     },

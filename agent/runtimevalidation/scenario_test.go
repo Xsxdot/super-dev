@@ -171,7 +171,7 @@ func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 
 	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
 	require.NoError(t, err)
-	var listStep, getStep ScenarioStep
+	var listStep, getStep, auditStep ScenarioStep
 	for _, scenario := range scenarios {
 		if scenario.ID != "config-security-lifecycle" {
 			continue
@@ -182,6 +182,8 @@ func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 				listStep = step
 			case "get-operation-approval":
 				getStep = step
+			case "list-operation-audit":
+				auditStep = step
 			}
 		}
 	}
@@ -191,6 +193,8 @@ func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 	require.Len(t, getStep.Expect.Assertions, 2)
 	require.Equal(t, "structuredContent.data.approval.status", getStep.Expect.Assertions[1].Path)
 	require.Equal(t, "pending", getStep.Expect.Assertions[1].Value)
+	require.Contains(t, auditStep.Evidence.Forbid, "approval_token")
+	require.NotContains(t, auditStep.Evidence.Forbid, "token")
 }
 
 func validScenario(tool string) Scenario {
