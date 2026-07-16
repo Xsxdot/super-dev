@@ -102,7 +102,7 @@ func TestProviderNodeServiceConfigSeparatesLauncherFromBundledScript(t *testing.
 	require.NotEqual(t, request.AdapterPath, codeDebug["adapter_command"])
 }
 
-func TestProviderNodeAcceptsJSDebugZeroThreadIdentity(t *testing.T) {
+func TestProviderNodeAcceptsJSDebugZeroThreadAndFrameIdentity(t *testing.T) {
 	t.Parallel()
 
 	tools := &fakeProviderTools{}
@@ -255,11 +255,13 @@ func (f *fakeProviderTools) CallTool(_ context.Context, name string, arguments m
 			variables = append(variables, map[string]any{"name": name, "value": value})
 		}
 		threadID := 1
+		frameID := 1
 		if deploymentID, _ := arguments["deployment_id"].(string); deploymentID == providerDeploymentID("node") {
-			// js-debug 的 reverse-request child session 使用 0 作为合法 thread identity。
+			// js-debug 的 reverse-request child session 使用 0 作为合法 thread/frame identity。
 			threadID = 0
+			frameID = 0
 		}
-		data = map[string]any{"ok": true, "data": map[string]any{"session_id": "debug-1", "thread_id": threadID, "frame_id": 1, "variables": variables}}
+		data = map[string]any{"ok": true, "data": map[string]any{"session_id": "debug-1", "thread_id": threadID, "frame_id": frameID, "variables": variables}}
 	}
 	return ToolCallResult{StructuredContent: data}, nil
 }

@@ -288,12 +288,18 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	threadID := integerValue(data["thread_id"])
 	frameID := integerValue(data["frame_id"])
 	threadIdentityValid := threadID > 0
-	if request.Fixture.Debug.Provider == "node" && threadID == 0 && numericIdentity(data["thread_id"]) {
-		// js-debug reverse-request child session 使用 0 作为合法 thread identity；
+	frameIdentityValid := frameID > 0
+	if request.Fixture.Debug.Provider == "node" {
+		// js-debug reverse-request child session 使用 0 作为合法 thread/frame identity；
 		// presence + numeric type 仍能区分合同缺字段和真实的 zero identity。
-		threadIdentityValid = true
+		if threadID == 0 && numericIdentity(data["thread_id"]) {
+			threadIdentityValid = true
+		}
+		if frameID == 0 && numericIdentity(data["frame_id"]) {
+			frameIdentityValid = true
+		}
 	}
-	if sessionID == "" || !threadIdentityValid || frameID <= 0 {
+	if sessionID == "" || !threadIdentityValid || !frameIdentityValid {
 		_ = r.stopService(ctx, request, debugKey, &result)
 		return failProviderDebug(&result, 8, "debug_breakpoint_evidence_incomplete", "debug_capture_at did not return session/thread/frame identity")
 	}

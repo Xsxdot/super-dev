@@ -76,6 +76,15 @@ func TestCPPFixtureEnablesImmediateManagedRestartOnSamePort(t *testing.T) {
 	require.Contains(t, string(raw), "setsockopt")
 }
 
+func TestCPPFixtureRetriesAcceptInterruptedByDebugger(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "fixtures", "cpp", "src", "main.cpp"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "WSAGetLastError() == WSAEINTR")
+	require.Contains(t, string(raw), "errno == EINTR")
+}
+
 func TestKotlinBreakpointMarkerIsRetainedInObservableBytecode(t *testing.T) {
 	t.Parallel()
 

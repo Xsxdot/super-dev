@@ -34,5 +34,5 @@
   "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "cpp" } },
   "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
   "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
-  "debug": { "provider": "native", "adapter_resource": "lldb-dap", "source": "src/main.cpp", "line": 55, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "cpp" } }
+  "debug": { "provider": "native", "adapter_resource": "lldb-dap", "source": "src/main.cpp", "line": 56, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "cpp" } }
 }

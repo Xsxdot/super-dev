@@ -78,7 +78,7 @@ func (s *Server) debugStepOutTool(ctx context.Context, args json.RawMessage) (Ca
 func (s *Server) debugThreadActionTool(ctx context.Context, args json.RawMessage, action string, message string) (CallToolResult, error) {
 	var req struct {
 		DeploymentID string `json:"deployment_id"`
-		ThreadID     int    `json:"thread_id"`
+		ThreadID     *int   `json:"thread_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
@@ -87,10 +87,10 @@ func (s *Server) debugThreadActionTool(ctx context.Context, args json.RawMessage
 	if req.DeploymentID == "" {
 		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
-	if req.ThreadID <= 0 {
+	if req.ThreadID == nil || *req.ThreadID < 0 {
 		return toolError("invalid_arguments", "thread_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, action, map[string]any{"thread_id": req.ThreadID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, action, map[string]any{"thread_id": *req.ThreadID})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -100,7 +100,7 @@ func (s *Server) debugThreadActionTool(ctx context.Context, args json.RawMessage
 func (s *Server) debugStackTraceTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
 		DeploymentID string `json:"deployment_id"`
-		ThreadID     int    `json:"thread_id"`
+		ThreadID     *int   `json:"thread_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
@@ -109,10 +109,10 @@ func (s *Server) debugStackTraceTool(ctx context.Context, args json.RawMessage) 
 	if req.DeploymentID == "" {
 		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
-	if req.ThreadID <= 0 {
+	if req.ThreadID == nil || *req.ThreadID < 0 {
 		return toolError("invalid_arguments", "thread_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "stack", map[string]any{"thread_id": req.ThreadID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "stack", map[string]any{"thread_id": *req.ThreadID})
 	if err != nil {
 		return clientToolError(err), nil
 	}
@@ -122,7 +122,7 @@ func (s *Server) debugStackTraceTool(ctx context.Context, args json.RawMessage) 
 func (s *Server) debugScopesTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 	var req struct {
 		DeploymentID string `json:"deployment_id"`
-		FrameID      int    `json:"frame_id"`
+		FrameID      *int   `json:"frame_id"`
 	}
 	if err := decodeToolArgs(args, &req); err != nil {
 		return toolError("invalid_arguments", err.Error(), nil), nil
@@ -131,10 +131,10 @@ func (s *Server) debugScopesTool(ctx context.Context, args json.RawMessage) (Cal
 	if req.DeploymentID == "" {
 		return toolError("invalid_arguments", "deployment_id is required", nil), nil
 	}
-	if req.FrameID <= 0 {
+	if req.FrameID == nil || *req.FrameID < 0 {
 		return toolError("invalid_arguments", "frame_id is required", nil), nil
 	}
-	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "scopes", map[string]any{"frame_id": req.FrameID})
+	result, err := s.client.CodeDebugAction(ctx, req.DeploymentID, "scopes", map[string]any{"frame_id": *req.FrameID})
 	if err != nil {
 		return clientToolError(err), nil
 	}

@@ -85,6 +85,20 @@ type Provider interface {
 	UsesReverseRequestChildSession() bool
 }
 
+// capturePausePolicy 允许不支持无显式线程暂停的 adapter 声明 capture 时直接下断点。
+// 未实现该能力的 provider 沿用先暂停再设断点的稳定路径；js-debug 的 reverse child
+// session 也天然属于直接下断点路径。
+type capturePausePolicy interface {
+	pauseBeforeCapture() bool
+}
+
+func shouldPauseBeforeCapture(provider Provider) bool {
+	if policy, ok := provider.(capturePausePolicy); ok {
+		return policy.pauseBeforeCapture()
+	}
+	return !provider.UsesReverseRequestChildSession()
+}
+
 // GoProvider 构建 Delve DAP adapter 配置。
 type GoProvider struct{ Command string }
 
@@ -452,6 +466,8 @@ func (JVMDebugProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 
 // AttachCapability 返回 JVM 附加档位：java-debug/JDT LS DAP server 连接 JDWP 端口。
 func (JVMDebugProvider) AttachCapability() AttachMode { return AttachModeListen }
+
+func (JVMDebugProvider) pauseBeforeCapture() bool { return false }
 
 // AttachArguments 构造 java-debug attach 参数：连 JDWP server 端口。
 func (JVMDebugProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {

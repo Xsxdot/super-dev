@@ -1350,11 +1350,18 @@ func TestCaptureAtNodeSkipsInitialPauseAndWaitsForBreakpoint(t *testing.T) {
 		autoStoppedOnSetBreakpoints: true,
 		setBreakpointsThreadID:      0,
 		stackResult: map[string]any{
-			"stackFrames": []map[string]any{{
-				"id":     11,
-				"line":   5,
-				"source": map[string]any{"path": source},
-			}},
+			"stackFrames": []map[string]any{
+				{
+					"id":     0,
+					"line":   5,
+					"source": map[string]any{"path": source},
+				},
+				{
+					"id":     1,
+					"line":   507,
+					"source": map[string]any{"path": "<node_internals>/events"},
+				},
+			},
 		},
 		scopesResult: map[string]any{
 			"scopes": []map[string]any{{"variablesReference": 7}},
@@ -1380,7 +1387,48 @@ func TestCaptureAtNodeSkipsInitialPauseAndWaitsForBreakpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, dap.pauseCalls)
 	assert.Equal(t, 0, dap.continueCalls)
+	assert.Equal(t, 0, result["frame_id"], "js-debug 的首帧 0 是合法 DAP identity")
 	assert.Equal(t, map[string]any{"threadId": 0}, result["stopped"])
+}
+
+func TestCaptureAtJVMSkipsThreadlessPauseAndWaitsForBreakpoint(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "FixtureServer.kt")
+	dap := &fakeDAP{
+		autoStoppedOnSetBreakpoints: true,
+		setBreakpointsThreadID:      17,
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     11,
+				"line":   25,
+				"source": map[string]any{"path": source},
+			}},
+		},
+		scopesResult: map[string]any{
+			"scopes": []map[string]any{{"variablesReference": 7}},
+		},
+		variablesResult: map[string]any{
+			"variables": []map[string]any{{"name": "fixtureMarker", "value": "breakpoint-visible"}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+	mgr.mu.Lock()
+	mgr.runtimes[session.DeploymentID].Provider = model.CodeDebugProviderJVM
+	mgr.sessions[session.ID].Provider = model.CodeDebugProviderJVM
+	mgr.mu.Unlock()
+
+	result, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+		SessionID: session.ID,
+		Source:    "FixtureServer.kt",
+		Line:      25,
+		ThreadID:  0,
+		Timeout:   time.Second,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, dap.pauseCalls)
+	assert.Equal(t, 0, dap.continueCalls)
+	assert.Equal(t, map[string]any{"threadId": 17}, result["stopped"])
 }
 
 func TestCaptureAtReportsUnverifiedBreakpoint(t *testing.T) {

@@ -3,6 +3,7 @@
 // 职责：暴露 readiness、正常/受控错误 probe，并保留稳定局部变量。
 // 边界：不访问 SuperDev API，不持久化数据，也不拥有 MCP coverage。
 
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -95,7 +96,15 @@ int main() {
     if (listen(server, 8) == SOCKET_ERROR) return 5;
     while (true) {
         const socket_handle client = accept(server, nullptr, nullptr);
-        if (client == INVALID_SOCKET) break;
+        if (client == INVALID_SOCKET) {
+#ifdef _WIN32
+            // debugger 暂停可能中断阻塞中的 accept；这不是服务退出条件。
+            if (WSAGetLastError() == WSAEINTR) continue;
+#else
+            if (errno == EINTR) continue;
+#endif
+            break;
+        }
         handle(client);
         close_socket(client);
     }

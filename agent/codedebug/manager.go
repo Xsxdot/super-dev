@@ -1481,9 +1481,10 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	// 仅 js-debug 拓扑需要跳过 pause 并复用已有暂停态；以能力查询代替语言硬编码。
-	reverseRequestCapture := runtimeProvider.UsesReverseRequestChildSession()
-	reverseRequestWasPaused := reverseRequestCapture && runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
+	// fwcd Kotlin DAP 与 js-debug 都不接受没有真实线程 identity 的主动 pause；
+	// 由 provider 能力决定是否先暂停，避免把 adapter 差异硬编码成语言分支。
+	pauseBeforeCapture := shouldPauseBeforeCapture(runtimeProvider)
+	wasPaused := runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
 	waitCtx := ctx
 	timeout := req.Timeout
 	if timeout == 0 && req.TimeoutMS > 0 {
@@ -1495,7 +1496,7 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		defer cancel()
 	}
 	pausedByCapture := false
-	if !reverseRequestCapture {
+	if pauseBeforeCapture {
 		pausedByCapture, err = m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
 		if err != nil {
 			return nil, err
@@ -1522,11 +1523,9 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
 	}
-	if !reverseRequestCapture {
-		if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
-			return nil, err
-		}
-	} else if reverseRequestWasPaused {
+	// 只有本次 capture 主动暂停，或进入 capture 前已经暂停，才需要 continue。
+	// 对正在运行且不支持 threadless pause 的 adapter，断点设置后直接等待命中。
+	if pausedByCapture || wasPaused {
 		threadID := runtime.debugStore.get().ThreadID
 		if threadID == 0 {
 			threadID = req.ThreadID
@@ -2158,11 +2157,23 @@ func validatePositiveLine(line int) error {
 
 func firstFrameID(stack map[string]any) int {
 	for _, frame := range asMapSlice(stack["stackFrames"]) {
-		if id := intFromAny(frame["id"]); id != 0 {
+		if id, ok := dapNumericIdentity(frame["id"]); ok {
 			return id
 		}
 	}
 	return 0
+}
+
+func dapNumericIdentity(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case float64:
+		converted := int(typed)
+		return converted, typed == float64(converted)
+	default:
+		return 0, false
+	}
 }
 
 func asMapSlice(value any) []map[string]any {
