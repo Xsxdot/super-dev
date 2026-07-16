@@ -102,6 +102,49 @@ func TestProviderNodeServiceConfigSeparatesLauncherFromBundledScript(t *testing.
 	require.NotEqual(t, request.AdapterPath, codeDebug["adapter_command"])
 }
 
+func TestProviderNodeCaptureRequestsStableMainThreadIdentity(t *testing.T) {
+	t.Parallel()
+
+	tools := &fakeProviderTools{}
+	runner := NewProviderRunner(tools, fakeProviderCommands{}, fakeProviderHTTP{})
+	result := runner.Run(context.Background(), ProviderRequest{
+		CampaignID: "campaign-1", ProjectID: "project-1", ProjectRoot: t.TempDir(),
+		Platform: "darwin", Fixture: validFixture("node"), Port: 20101,
+	})
+
+	require.Equal(t, StatusPass, result.DebugStatus)
+	for _, call := range tools.calls {
+		if call.name == "debug_capture_at" {
+			require.Equal(t, 1, call.arguments["thread_id"])
+			return
+		}
+	}
+	t.Fatal("debug_capture_at was not called")
+}
+
+func TestValidateDebugVariablesAcceptsQuotedDAPStrings(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{`"breakpoint-visible"`, `'breakpoint-visible'`, "breakpoint-visible"} {
+		require.NoError(t, validateDebugVariables([]any{
+			map[string]any{"name": "fixture_marker", "value": value},
+		}, map[string]any{"fixture_marker": "breakpoint-visible"}), value)
+	}
+}
+
+func TestToolApplicationErrorPreservesStructuredCause(t *testing.T) {
+	t.Parallel()
+
+	err := toolApplicationError("debug_capture_at", ToolCallResult{IsError: true, StructuredContent: map[string]any{
+		"ok": false, "code": "adapter_handshake_failed", "message": "failed to attach target",
+		"data": map[string]any{"cause_code": "connection_refused"},
+	}})
+
+	require.ErrorContains(t, err, "adapter_handshake_failed")
+	require.ErrorContains(t, err, "failed to attach target")
+	require.ErrorContains(t, err, "connection_refused")
+}
+
 func TestProviderGoUsesCampaignOwnedBuildCacheAcrossBuildRuntimeAndDebug(t *testing.T) {
 	t.Parallel()
 

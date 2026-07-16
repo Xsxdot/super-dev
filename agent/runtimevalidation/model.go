@@ -11,7 +11,11 @@
 //   - 不允许 mock、策略拒绝或交叉编译结果冒充 strict PASS
 package runtimevalidation
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 const (
 	// ScenarioSchemaVersion 是 runtime validation 场景当前唯一接受的 schema 版本。
@@ -225,4 +229,23 @@ func RawMessageMap(value any) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+func toolApplicationError(tool string, result ToolCallResult) error {
+	payload := RawMessageMap(result.StructuredContent)
+	parts := make([]string, 0, 3)
+	if code := strings.TrimSpace(fmt.Sprint(payload["code"])); code != "" && code != "<nil>" {
+		parts = append(parts, "code="+code)
+	}
+	if message := strings.TrimSpace(fmt.Sprint(payload["message"])); message != "" && message != "<nil>" {
+		parts = append(parts, "message="+message)
+	}
+	data := RawMessageMap(payload["data"])
+	if causeCode := strings.TrimSpace(fmt.Sprint(data["cause_code"])); causeCode != "" && causeCode != "<nil>" {
+		parts = append(parts, "cause_code="+causeCode)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "structured cause unavailable")
+	}
+	return fmt.Errorf("tool %s application error: %s", tool, strings.Join(parts, "; "))
 }

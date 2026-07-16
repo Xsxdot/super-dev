@@ -67,6 +67,15 @@ func TestRepositoryRuntimeFixturesAndScenariosSatisfySharedContracts(t *testing.
 	}
 }
 
+func TestCPPFixtureEnablesImmediateManagedRestartOnSamePort(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "fixtures", "cpp", "src", "main.cpp"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "SO_REUSEADDR")
+	require.Contains(t, string(raw), "setsockopt")
+}
+
 func TestLoadFixturesRequiresExactlySevenProviders(t *testing.T) {
 	t.Parallel()
 

@@ -267,11 +267,17 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	go func() {
 		triggerDone <- r.pumpDebugTrigger(triggerCtx, request, baseURL)
 	}()
-	debugResult, err := r.callSupporting(ctx, request, &result, "debug.breakpoint", "debug_capture_at", map[string]any{
+	debugArguments := map[string]any{
 		"deployment_id": providerDeploymentID(request.Fixture.Provider), "source": request.Fixture.Debug.Source,
 		"line": request.Fixture.Debug.Line, "timeout_ms": 30000, "max_variables": len(variableNames) + 8,
 		"variable_names": variableNames, "approval_wait_seconds": 300,
-	})
+	}
+	if request.Fixture.Debug.Provider == "node" {
+		// js-debug 的 stopped event 可能省略 threadId；validation fixture 只有主线程，
+		// 显式传 1 让复合 capture 返回可审计的稳定 thread identity。
+		debugArguments["thread_id"] = 1
+	}
+	debugResult, err := r.callSupporting(ctx, request, &result, "debug.breakpoint", "debug_capture_at", debugArguments)
 	cancelTrigger()
 	triggerResult := <-triggerDone
 	if err != nil {
@@ -569,7 +575,9 @@ func (r *ProviderRunner) callSupporting(ctx context.Context, request ProviderReq
 	}
 	structured := RawMessageMap(response.StructuredContent)
 	if response.IsError || structured["ok"] == false {
-		return response, fmt.Errorf("provider tool %s returned application error", tool)
+		applicationErr := toolApplicationError(tool, response)
+		log.WithErr(applicationErr).Error("provider supporting MCP 返回应用错误")
+		return response, applicationErr
 	}
 	result.SupportingCalls = append(result.SupportingCalls, ToolEvidence{
 		CampaignID: request.CampaignID, ScenarioID: "provider:" + request.Fixture.Provider,
@@ -730,11 +738,37 @@ func validateDebugVariables(raw any, expected map[string]any) error {
 		if !ok {
 			return fmt.Errorf("debug variable %s is missing", name)
 		}
-		if fmt.Sprint(actual) != fmt.Sprint(wanted) {
+		if !debugVariableValueEqual(actual, wanted) {
 			return fmt.Errorf("debug variable %s=%v, want %v", name, actual, wanted)
 		}
 	}
 	return nil
+}
+
+func debugVariableValueEqual(actual, wanted any) bool {
+	wantedString, stringExpected := wanted.(string)
+	actualString, stringObserved := actual.(string)
+	if !stringExpected || !stringObserved {
+		return fmt.Sprint(actual) == fmt.Sprint(wanted)
+	}
+	if actualString == wantedString {
+		return true
+	}
+	if len(actualString) < 2 {
+		return false
+	}
+	quote := actualString[0]
+	if actualString[len(actualString)-1] != quote || (quote != '\'' && quote != '"') {
+		return false
+	}
+	if actualString[1:len(actualString)-1] == wantedString {
+		return true
+	}
+	if quote == '"' {
+		unquoted, err := strconv.Unquote(actualString)
+		return err == nil && unquoted == wantedString
+	}
+	return false
 }
 
 func cloneMap(input map[string]any) map[string]any {

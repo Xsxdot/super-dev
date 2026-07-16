@@ -167,7 +167,7 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 		return retried, retryErr
 	}
 	if retried.IsError || RawMessageMap(retried.StructuredContent)["ok"] == false {
-		return retried, fmt.Errorf("approved MCP tool %s still returned an application error", name)
+		return retried, toolApplicationError(name, retried)
 	}
 	if err := c.verifyTokenConsumedWithoutGrace(ctx, required); err != nil {
 		// 业务重试已成功；后置审计证明失败时仍必须让外层 journal 接管 cleanup。

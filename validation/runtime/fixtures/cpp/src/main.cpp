@@ -73,6 +73,15 @@ int main() {
     const int port = std::stoi(raw_port);
     const socket_handle server = socket(AF_INET, SOCK_STREAM, 0);
     if (server == INVALID_SOCKET) return 3;
+    // managed runtime 会在同一动态端口上执行 stop→start；允许立即重绑，避免
+    // 上一连接的 TIME_WAIT 把 debug 阶段误判为服务未就绪。
+    const int reuse_address = 1;
+#ifdef _WIN32
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&reuse_address), sizeof(reuse_address)) == SOCKET_ERROR) return 6;
+#else
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse_address, sizeof(reuse_address)) == SOCKET_ERROR) return 6;
+#endif
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(static_cast<unsigned short>(port));
