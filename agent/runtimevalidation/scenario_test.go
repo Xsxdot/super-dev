@@ -116,6 +116,25 @@ func TestRemotePipelineBindsGovernanceIdentityToLiveHost(t *testing.T) {
 	require.Equal(t, "{{expected_remote_identity}}", assertionValue["node_id"])
 }
 
+func TestRepositoryPreviewExecutionRecordsReturnedPreviewPath(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	var record []string
+	for _, scenario := range scenarios {
+		if scenario.ID != "config-security-lifecycle" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if step.ID == "preview-go-execution" {
+				record = step.Evidence.Record
+			}
+		}
+	}
+	require.Equal(t, []string{"structuredContent.data.preview"}, record)
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,

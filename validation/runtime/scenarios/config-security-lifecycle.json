@@ -429,11 +429,9 @@
       },
       "evidence": {
         "record": [
-          "structuredContent.data.plan.preview"
+          "structuredContent.data.preview"
         ],
-        "redact": [
-          "structuredContent.data.plan.env"
-        ],
+        "redact": [],
         "forbid": [
           "fixture_auth_value"
         ]

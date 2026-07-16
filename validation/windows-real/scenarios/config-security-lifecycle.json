@@ -121,7 +121,7 @@
       "coverage": "primary",
       "arguments": {"language": "go", "project_root": "{{project_root}}", "cwd": "fixtures/go", "env": {"FIXTURE_PORT": "18190", "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"}, "config": "{{go_runtime_config}}"},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.valid", "operator": "eq", "value": true}]},
-      "evidence": {"record": ["structuredContent.data.diagnostics", "structuredContent.data.normalized"], "redact": ["structuredContent.data.normalized.env"], "forbid": ["fixture_auth_value"]}
+      "evidence": {"record": ["structuredContent.data.diagnostics", "request.arguments.config"], "redact": [], "forbid": ["fixture_auth_value"]}
     },
     {
       "id": "preview-go-execution",
@@ -129,7 +129,7 @@
       "coverage": "primary",
       "arguments": {"language": "go", "project_root": "{{project_root}}", "cwd": "fixtures/go", "env": {"FIXTURE_PORT": "18190", "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"}, "config": "{{go_runtime_config}}", "intent": "start_dev", "artifact_dir": "{{project_root}}\\artifacts\\go"},
       "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.preview", "operator": "not_empty"}]},
-      "evidence": {"record": ["structuredContent.data.plan.preview"], "redact": ["structuredContent.data.plan.env"], "forbid": ["fixture_auth_value"]}
+      "evidence": {"record": ["structuredContent.data.preview"], "redact": [], "forbid": ["fixture_auth_value"]}
     },
     {
       "id": "upsert-go-service",
