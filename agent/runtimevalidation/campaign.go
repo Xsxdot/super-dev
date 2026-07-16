@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -547,7 +548,9 @@ func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campa
 	projectName := campaignID
 	variables := map[string]any{
 		"campaign_id": campaignID, "run_id": campaignID, "project_name": projectName, "go_project_name": projectName,
-		"project_root": projectRoot, "go_port": goPort, "go_readiness_url": fmt.Sprintf("http://127.0.0.1:%d/healthz", goPort),
+		// go_port 会被 exact placeholder 直接填入 map[string]string 类型的 env；
+		// 在变量源头固化为十进制字符串，避免 JSON-RPC 解码把数字拒为 invalid_arguments。
+		"project_root": projectRoot, "go_port": strconv.Itoa(goPort), "go_readiness_url": fmt.Sprintf("http://127.0.0.1:%d/healthz", goPort),
 		"go_artifact_dir": filepath.Join(projectRoot, "fixtures", "go"), "go_deployment_id": "go-validation-dev",
 		"go_source_path": goFixture.Debug.Source, "go_breakpoint_line": goFixture.Debug.Line,
 		"go_adapter_command": input.Adapters["dlv"], "browser_target_url": fmt.Sprintf("http://127.0.0.1:%d", goPort),

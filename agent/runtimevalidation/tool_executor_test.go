@@ -145,6 +145,28 @@ func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
 	require.Equal(t, []string{"first_tool"}, transport.calls)
 }
 
+func TestToolExecutorPreservesStructuredApplicationError(t *testing.T) {
+	t.Parallel()
+
+	step := executorStep("validate", "validate_service_runtime", CoveragePrimary, "structuredContent.data.valid", true)
+	transport := &fakeLiveTools{
+		tools: []string{"validate_service_runtime"},
+		responses: map[string]ToolCallResult{"validate_service_runtime": {
+			IsError: true,
+			StructuredContent: map[string]any{
+				"ok": false, "code": "invalid_arguments", "message": "env values must be strings",
+			},
+		}},
+	}
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{executorScenario("config-security-lifecycle", []ScenarioStep{step})},
+	})
+
+	require.Equal(t, StatusFail, result.Status)
+	require.ErrorContains(t, fmt.Errorf("%s", result.Cause.Message), "invalid_arguments")
+	require.ErrorContains(t, fmt.Errorf("%s", result.Cause.Message), "env values must be strings")
+}
+
 func TestToolExecutorKeepsResolvablePrimaryEvidenceWhenBootstrapCallbackFails(t *testing.T) {
 	t.Parallel()
 

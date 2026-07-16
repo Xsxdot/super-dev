@@ -326,7 +326,7 @@ func (e *ToolExecutor) executeStep(ctx context.Context, request ToolCampaignRequ
 		}
 	}
 	if err != nil {
-		log.WithFields(map[string]any{"attempt_count": attempts, "duration_ms": time.Since(started).Milliseconds(), "cause_code": "tool_step_failed"}).Error("live MCP tools/call 或业务断言失败")
+		log.WithErr(err).WithFields(map[string]any{"attempt_count": attempts, "duration_ms": time.Since(started).Milliseconds(), "cause_code": "tool_step_failed"}).Error("live MCP tools/call 或业务断言失败")
 		return failedStep(request.CampaignID, scenarioID, step, StatusFail, "tool_step_failed", err, attempts, assertionResults)
 	}
 	root := RawMessageMap(response)
@@ -466,7 +466,9 @@ func correlatedResourceID(arguments, response map[string]any, campaignID string)
 
 func evaluateToolStep(step ScenarioStep, response ToolCallResult, variables map[string]any) ([]AssertionResult, error) {
 	if response.IsError {
-		return nil, fmt.Errorf("tool %s returned isError=true", step.Tool)
+		// MCP application error 的稳定 code/message 是定位 manifest 与真实工具契约漂移的关键证据；
+		// 只报告 isError 会把可修复的输入问题伪装成无来源的场景失败。
+		return nil, toolApplicationError(step.Tool, response)
 	}
 	structured := RawMessageMap(response.StructuredContent)
 	if ok, exists := structured["ok"]; exists && ok != true {

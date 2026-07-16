@@ -394,11 +394,9 @@
       "evidence": {
         "record": [
           "structuredContent.data.diagnostics",
-          "structuredContent.data.normalized"
+          "request.arguments.config"
         ],
-        "redact": [
-          "structuredContent.data.normalized.env"
-        ],
+        "redact": [],
         "forbid": [
           "fixture_auth_value"
         ]
