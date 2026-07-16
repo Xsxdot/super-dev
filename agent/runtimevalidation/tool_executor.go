@@ -260,7 +260,9 @@ func (e *ToolExecutor) executeScenario(ctx context.Context, request ToolCampaign
 	}
 	for _, step := range scenario.Cleanup {
 		if !shouldRunCleanup(step.RunIf, request.Variables, passed) {
-			execution.Cleanup = append(execution.Cleanup, notRunStep(request.CampaignID, scenario.ID+"-cleanup", step, Cause{Code: "cleanup_guard_false", Message: "cleanup guard did not match", Source: scenario.ID}))
+			// cleanup guard 描述互斥补偿分支，不是“因上游失败而无法执行”的 NOT_RUN。
+			// 未命中的分支不生成 outcome 行，避免 strict PASS 证据中混入不可判绿状态。
+			log.WithFields(map[string]any{"cleanup_step": step.ID, "run_if": step.RunIf}).Info("cleanup guard 未命中，不生成 strict outcome 行")
 			continue
 		}
 		cleanupTimeout := 5 * time.Minute

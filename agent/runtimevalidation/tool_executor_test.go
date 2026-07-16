@@ -160,7 +160,7 @@ func TestToolExecutorDefersBootstrapCleanupUntilScenarioRemainder(t *testing.T) 
 	require.Equal(t, []string{"probe_project_config", "get_project"}, callsAtBootstrap)
 	require.Equal(t, []string{"probe_project_config", "get_project", "upsert_service", "stop_service"}, transport.calls)
 	require.Len(t, result.Scenarios, 1)
-	require.Equal(t, StatusNotRun, result.Scenarios[0].Cleanup[0].Status)
+	require.Empty(t, result.Scenarios[0].Cleanup, "guard=false cleanup must not create a NOT_RUN row in a strict PASS campaign")
 }
 
 func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
