@@ -11,21 +11,21 @@
   "platforms": {
     "windows": {
       "preflight": { "executable": "kotlinc.bat", "arguments": ["-version"] },
-      "build": { "executable": "kotlinc.bat", "arguments": ["src/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
+      "build": { "executable": "kotlinc.bat", "arguments": ["src/main/kotlin/superdev/fixture/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
       "run": { "executable": "java.exe", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "fixture.jar", "superdev.fixture.FixtureServerKt"] },
       "executable": "fixture.jar",
       "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServerKt" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
     },
     "darwin": {
       "preflight": { "executable": "kotlinc", "arguments": ["-version"] },
-      "build": { "executable": "kotlinc", "arguments": ["src/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
+      "build": { "executable": "kotlinc", "arguments": ["src/main/kotlin/superdev/fixture/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
       "run": { "executable": "java", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "fixture.jar", "superdev.fixture.FixtureServerKt"] },
       "executable": "fixture.jar",
       "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServerKt" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
     },
     "linux": {
       "preflight": { "executable": "kotlinc", "arguments": ["-version"] },
-      "build": { "executable": "kotlinc", "arguments": ["src/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
+      "build": { "executable": "kotlinc", "arguments": ["src/main/kotlin/superdev/fixture/FixtureServer.kt", "-include-runtime", "-d", "fixture.jar"] },
       "run": { "executable": "java", "arguments": ["--add-modules", "jdk.httpserver", "-cp", "fixture.jar", "superdev.fixture.FixtureServerKt"] },
       "executable": "fixture.jar",
       "probes": [{ "type": "module", "module": "superdev.fixture.FixtureServerKt" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
@@ -34,5 +34,5 @@
   "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "kotlin" } },
   "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
   "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
-  "debug": { "provider": "jvm", "adapter_resource": "jvm-dap-wrapper", "source": "src/FixtureServer.kt", "line": 25, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "kotlin" } }
+  "debug": { "provider": "jvm", "adapter_resource": "kotlin-dap-wrapper", "source": "src/main/kotlin/superdev/fixture/FixtureServer.kt", "line": 25, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "kotlin" } }
 }

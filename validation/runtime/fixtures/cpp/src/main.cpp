@@ -13,6 +13,7 @@
 #include <ws2tcpip.h>
 using socket_handle = SOCKET;
 #else
+#include <csignal>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -67,6 +68,10 @@ int main() {
 #ifdef _WIN32
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 1;
+#else
+    // 调试 capture 取消某个在途 HTTP probe 时，对端可能先关闭 socket。
+    // 忽略 SIGPIPE 让 send 以错误返回，而不是让整个 fixture 被系统信号终止。
+    std::signal(SIGPIPE, SIG_IGN);
 #endif
     const char* raw_port = std::getenv("FIXTURE_PORT");
     if (raw_port == nullptr) return 2;

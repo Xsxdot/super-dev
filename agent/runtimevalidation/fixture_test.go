@@ -79,7 +79,7 @@ func TestCPPFixtureEnablesImmediateManagedRestartOnSamePort(t *testing.T) {
 func TestKotlinBreakpointMarkerIsRetainedInObservableBytecode(t *testing.T) {
 	t.Parallel()
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "fixtures", "kotlin", "src", "FixtureServer.kt"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "fixtures", "kotlin", "src", "main", "kotlin", "superdev", "fixture", "FixtureServer.kt"))
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "val markerLength = fixtureMarker.length // SUPERDEV_FIXTURE_BREAKPOINT")
 	require.Contains(t, string(raw), `\"marker_length\":$markerLength`)

@@ -11,21 +11,21 @@
   "platforms": {
     "windows": {
       "preflight": { "executable": "go", "arguments": ["version"] },
-      "build": { "executable": "go", "arguments": ["build", "-o", "fixture.exe", "."] },
+      "build": { "executable": "go", "arguments": ["build", "-gcflags=all=-N -l", "-o", "fixture.exe", "."] },
       "run": { "executable": "fixture.exe" },
       "executable": "fixture.exe",
       "probes": [{ "type": "executable", "path": "fixture.exe" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
     },
     "darwin": {
       "preflight": { "executable": "go", "arguments": ["version"] },
-      "build": { "executable": "go", "arguments": ["build", "-o", "fixture", "."] },
+      "build": { "executable": "go", "arguments": ["build", "-gcflags=all=-N -l", "-o", "fixture", "."] },
       "run": { "executable": "./fixture" },
       "executable": "fixture",
       "probes": [{ "type": "executable", "path": "fixture" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
     },
     "linux": {
       "preflight": { "executable": "go", "arguments": ["version"] },
-      "build": { "executable": "go", "arguments": ["build", "-o", "fixture", "."] },
+      "build": { "executable": "go", "arguments": ["build", "-gcflags=all=-N -l", "-o", "fixture", "."] },
       "run": { "executable": "./fixture" },
       "executable": "fixture",
       "probes": [{ "type": "executable", "path": "fixture" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
@@ -34,5 +34,5 @@
   "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "go" } },
   "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
   "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
-  "debug": { "provider": "go", "adapter_resource": "dlv", "source": "main.go", "line": 77, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "go" } }
+  "debug": { "provider": "go", "adapter_resource": "dlv", "source": "main.go", "line": 78, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "go" } }
 }

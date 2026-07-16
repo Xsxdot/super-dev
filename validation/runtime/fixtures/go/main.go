@@ -74,7 +74,8 @@ func observeFixtureState() (string, int, string) {
 	fixtureMarker := "breakpoint-visible"
 	fixtureCount := 42
 	fixtureProvider := "go"
-	_ = fixtureMarker // SUPERDEV_FIXTURE_BREAKPOINT
+	// 使用运行期等价的零增量，保证断点行有真实机器指令且三个局部变量同时存活。
+	fixtureCount += len(fixtureMarker) - len("breakpoint-visible") // SUPERDEV_FIXTURE_BREAKPOINT
 	return fixtureMarker, fixtureCount, fixtureProvider
 }
 

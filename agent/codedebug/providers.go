@@ -463,7 +463,11 @@ func (JVMDebugProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any 
 		"request":  "attach",
 		"hostName": "127.0.0.1",
 		"port":     port,
+		"timeout":  10000,
 		"cwd":      cfg.WorkingDir,
+		// Kotlin DAP 以 projectRoot 解析源码与 classpath；Java DAP 会忽略该扩展字段。
+		// 同一 JVM provider 因此可以诚实连接两种 adapter，而无需伪造 Kotlin 的 Java 源码。
+		"projectRoot": cfg.WorkingDir,
 	}
 }
 

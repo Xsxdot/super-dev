@@ -387,6 +387,32 @@ func TestAttachRuntimeCompletesWhenAttachWaitsForConfigurationDone(t *testing.T)
 	assert.Equal(t, 1, dap.configurationDoneCalls)
 }
 
+func TestAttachRuntimeCompletesWhenConfigurationDoneResponseStaysPending(t *testing.T) {
+	dap := &fakeDAP{
+		attachWaitsForConfigurationDone:       true,
+		emitInitializedOnAttach:               true,
+		configurationDoneResponseStaysPending: true,
+	}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9002, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41006, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.Command = "./server"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	rt, err := mgr.AttachRuntime(ctx, project, service, dep, attachTarget{processID: 4321})
+
+	require.NoError(t, err)
+	assert.Equal(t, "attached", rt.Origin)
+	assert.Equal(t, 1, dap.attachCalls)
+	assert.Equal(t, 1, dap.configurationDoneCalls)
+}
+
 func TestAttachRuntimeUsesJSDebugChildSessionFromStartDebugging(t *testing.T) {
 	rootDAP := &fakeDAP{
 		attachWaitsForConfigurationDone: true,
@@ -1676,47 +1702,48 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 }
 
 type fakeDAP struct {
-	mu                              sync.Mutex
-	breakpointsSource               string
-	breakpointsLines                [][]int
-	breakpointsResult               map[string]any
-	stackResult                     map[string]any
-	scopesResult                    map[string]any
-	variablesResult                 map[string]any
-	evaluateResult                  map[string]any
-	subs                            []chan map[string]any
-	waitForStoppedViaSubscribe      bool
-	pauseCalls                      int
-	pauseThreadID                   int
-	pauseErr                        error
-	autoStoppedOnPause              bool
-	continueCalls                   int
-	continueThreadID                int
-	continueErr                     error
-	autoStoppedOnContinue           bool
-	autoStoppedOnSetBreakpoints     bool
-	setBreakpointsThreadID          int
-	disconnectCalls                 int
-	detachCalls                     int
-	attachCalls                     int
-	attachProcessID                 int
-	attachConnectPort               int
-	attachProgram                   string
-	attachPendingTargetID           string
-	launchCalls                     int
-	launchPendingTargetID           string
-	launchWaitsForConfigurationDone bool
-	emitInitializedOnLaunch         bool
-	emitStartDebuggingAfterLaunch   bool
-	attachWaitsForConfigurationDone bool
-	emitInitializedOnAttach         bool
-	emitStartDebuggingAfterAttach   bool
-	requestSubs                     []chan map[string]any
-	respondedStartDebugging         bool
-	configurationDoneCh             chan struct{}
-	configurationDoneClosed         bool
-	configurationDoneCalls          int
-	waitForStoppedCalls             int
+	mu                                    sync.Mutex
+	breakpointsSource                     string
+	breakpointsLines                      [][]int
+	breakpointsResult                     map[string]any
+	stackResult                           map[string]any
+	scopesResult                          map[string]any
+	variablesResult                       map[string]any
+	evaluateResult                        map[string]any
+	subs                                  []chan map[string]any
+	waitForStoppedViaSubscribe            bool
+	pauseCalls                            int
+	pauseThreadID                         int
+	pauseErr                              error
+	autoStoppedOnPause                    bool
+	continueCalls                         int
+	continueThreadID                      int
+	continueErr                           error
+	autoStoppedOnContinue                 bool
+	autoStoppedOnSetBreakpoints           bool
+	setBreakpointsThreadID                int
+	disconnectCalls                       int
+	detachCalls                           int
+	attachCalls                           int
+	attachProcessID                       int
+	attachConnectPort                     int
+	attachProgram                         string
+	attachPendingTargetID                 string
+	launchCalls                           int
+	launchPendingTargetID                 string
+	launchWaitsForConfigurationDone       bool
+	emitInitializedOnLaunch               bool
+	emitStartDebuggingAfterLaunch         bool
+	attachWaitsForConfigurationDone       bool
+	emitInitializedOnAttach               bool
+	emitStartDebuggingAfterAttach         bool
+	requestSubs                           []chan map[string]any
+	respondedStartDebugging               bool
+	configurationDoneCh                   chan struct{}
+	configurationDoneClosed               bool
+	configurationDoneCalls                int
+	configurationDoneResponseStaysPending bool
+	waitForStoppedCalls                   int
 }
 
 func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
@@ -1801,13 +1828,18 @@ func (f *fakeDAP) Detach(context.Context) error {
 	f.detachCalls++
 	return nil
 }
-func (f *fakeDAP) ConfigurationDone(context.Context) error {
+func (f *fakeDAP) ConfigurationDone(ctx context.Context) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.configurationDoneCalls++
 	if f.configurationDoneCh != nil && !f.configurationDoneClosed {
 		close(f.configurationDoneCh)
 		f.configurationDoneClosed = true
+	}
+	staysPending := f.configurationDoneResponseStaysPending
+	f.mu.Unlock()
+	if staysPending {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	return nil
 }

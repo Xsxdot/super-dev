@@ -1221,42 +1221,67 @@ func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error
 	go func() {
 		attachErr <- dap.Attach(attachCtx, args)
 	}()
-	configurationDone := false
-	sendConfigurationDone := func() error {
-		if configurationDone {
-			return nil
+	configurationStarted := false
+	configurationCompleted := false
+	var configurationErr <-chan error
+	var cancelConfiguration context.CancelFunc
+	startConfigurationDone := func() {
+		if configurationStarted {
+			return
 		}
-		// js-debug 在 attach 后先发 initialized，并等 configurationDone 后才回 attach response。
-		// 旧 adapter 通常先回 attach；两种时序都在这里归一。
-		if err := dap.ConfigurationDone(ctx); err != nil {
-			cancelAttach()
-			return err
-		}
-		configurationDone = true
-		return nil
+		configurationStarted = true
+		configurationCtx, cancel := context.WithCancel(ctx)
+		cancelConfiguration = cancel
+		result := make(chan error, 1)
+		configurationErr = result
+		go func() {
+			result <- dap.ConfigurationDone(configurationCtx)
+		}()
 	}
+	defer func() {
+		if cancelConfiguration != nil {
+			cancelConfiguration()
+		}
+	}()
 	for {
 		select {
 		case err := <-attachErr:
 			if err != nil {
 				return err
 			}
-			return sendConfigurationDone()
+			if !configurationStarted {
+				// 一些旧 adapter 先返回 attach 且不发 initialized；这种时序仍同步确认响应。
+				return dap.ConfigurationDone(ctx)
+			}
+			if !configurationCompleted {
+				select {
+				case err := <-configurationErr:
+					if err != nil {
+						return err
+					}
+					configurationCompleted = true
+				default:
+					// fwcd Kotlin DAP 0.4.4 用 configurationDone 的 pending future 作为
+					// attach 栅栏，attach 成功后也不会完成该响应；成功的 attach 已证明
+					// 请求被消费，此处取消本地等待，不能让真实 adapter 永久卡住。
+					logger.GetLogger().WithEntryName("CodeDebugDAPHandshake").WithField("phase", "attach").Info("attach 已完成，configurationDone 响应保持 pending")
+				}
+			}
+			return nil
+		case err := <-configurationErr:
+			if err != nil {
+				cancelAttach()
+				return err
+			}
+			configurationCompleted = true
+			configurationErr = nil
 		case event, ok := <-sub:
 			if !ok {
 				sub = nil
 				continue
 			}
 			if isDAPInitializedEvent(event) {
-				if err, done := awaitAttachResultBeforeConfiguration(ctx, attachErr); done {
-					if err != nil {
-						return err
-					}
-					return sendConfigurationDone()
-				}
-				if err := sendConfigurationDone(); err != nil {
-					return err
-				}
+				startConfigurationDone()
 			}
 		case <-ctx.Done():
 			cancelAttach()

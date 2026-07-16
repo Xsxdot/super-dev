@@ -144,6 +144,8 @@ func TestJVMDebugProviderConnectsJdwpPort(t *testing.T) {
 	assert.Equal(t, 5005, args["port"])
 	assert.Equal(t, "attach", args["request"])
 	assert.Equal(t, "127.0.0.1", args["hostName"])
+	assert.Equal(t, 10000, args["timeout"])
+	assert.Equal(t, "/repo", args["projectRoot"])
 }
 
 func TestJVMDebugProviderUsesPATHWrapperWhenNoConfiguredCommand(t *testing.T) {

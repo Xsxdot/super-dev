@@ -19,7 +19,8 @@ const server = http.createServer((request, response) => {
     const fixtureMarker = 'breakpoint-visible';
     const fixtureCount = 42;
     const fixtureProvider = 'node';
-    void fixtureMarker; // SUPERDEV_FIXTURE_BREAKPOINT
+    // 响应头是可观察副作用，避免 V8 把仅用于断点的常量表达式折叠掉。
+    response.setHeader('x-runtime-validation-marker', fixtureMarker); // SUPERDEV_FIXTURE_BREAKPOINT
     const controlledError = new URL(request.url, 'http://127.0.0.1').searchParams.get('mode') === 'error';
     return writeJSON(response, controlledError ? 500 : 200, {
       ok: !controlledError,

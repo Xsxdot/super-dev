@@ -24,12 +24,17 @@ fn handle(mut stream: TcpStream) {
         return;
     }
     if request.starts_with("POST /api/probe") {
-        let fixture_marker = "breakpoint-visible";
-        let fixture_count = 42;
-        let fixture_provider = "rust";
-        std::hint::black_box(fixture_marker); // SUPERDEV_FIXTURE_BREAKPOINT
+        // LLDB 对 Rust &str 的顶层 value 只暴露类型和地址；使用稳定整数合同，
+        // 仍真实验证三个局部变量，同时避免把 debugger 展示格式误当业务值。
+        let fixture_marker = 101_i32;
+        let fixture_count = 42_i32;
+        let fixture_provider = 7_i32;
+        std::hint::black_box((fixture_marker, fixture_count, fixture_provider)); // SUPERDEV_FIXTURE_BREAKPOINT
         let controlled_error = request.starts_with("POST /api/probe?mode=error ");
-        let body = format!("{{\"ok\":{},\"provider\":\"{}\",\"count\":{}}}", !controlled_error, fixture_provider, fixture_count);
+        let body = format!(
+            "{{\"ok\":{},\"provider\":\"rust\",\"count\":{}}}",
+            !controlled_error, fixture_count
+        );
         write_response(&mut stream, if controlled_error { 500 } else { 200 }, &body);
         return;
     }
@@ -37,7 +42,15 @@ fn handle(mut stream: TcpStream) {
 }
 
 fn write_response(stream: &mut TcpStream, status: u16, body: &str) {
-    let reason = if status == 200 { "OK" } else if status == 500 { "Internal Server Error" } else { "Not Found" };
+    let reason = if status == 200 {
+        "OK"
+    } else if status == 500 {
+        "Internal Server Error"
+    } else {
+        "Not Found"
+    };
     let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-    stream.write_all(response.as_bytes()).expect("write fixture response");
+    stream
+        .write_all(response.as_bytes())
+        .expect("write fixture response");
 }
