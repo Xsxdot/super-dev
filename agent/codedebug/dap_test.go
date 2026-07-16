@@ -167,6 +167,42 @@ func TestDAPClientAttachSendsRequest(t *testing.T) {
 	assert.Equal(t, float64(1234), args["processId"])
 }
 
+func TestDAPClientSetBreakpointsSendsCompleteSourceDescriptor(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	done := make(chan map[string]any, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		require.NoError(t, acceptErr)
+		defer conn.Close()
+
+		msg := readDAPMessageForTest(t, conn)
+		done <- msg
+		writeDAPMessageForTest(t, conn, map[string]any{
+			"type":        "response",
+			"seq":         1,
+			"request_seq": msg["seq"],
+			"success":     true,
+			"command":     "setBreakpoints",
+			"body":        map[string]any{"breakpoints": []any{}},
+		})
+	}()
+
+	client, err := DialDAP(context.Background(), ln.Addr().String(), 2*time.Second)
+	require.NoError(t, err)
+	defer client.Close()
+
+	_, err = client.SetBreakpoints(context.Background(), "/tmp/src/FixtureServer.kt", []int{25})
+	require.NoError(t, err)
+	args := (<-done)["arguments"].(map[string]any)
+	source := args["source"].(map[string]any)
+	assert.Equal(t, "FixtureServer.kt", source["name"])
+	assert.Equal(t, "/tmp/src/FixtureServer.kt", source["path"])
+	assert.Equal(t, false, args["sourceModified"])
+}
+
 func TestDAPClientDetachDoesNotTerminateDebuggee(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
