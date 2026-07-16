@@ -102,7 +102,7 @@ func TestProviderNodeServiceConfigSeparatesLauncherFromBundledScript(t *testing.
 	require.NotEqual(t, request.AdapterPath, codeDebug["adapter_command"])
 }
 
-func TestProviderNodeCaptureRequestsStableMainThreadIdentity(t *testing.T) {
+func TestProviderNodeAcceptsJSDebugZeroThreadIdentity(t *testing.T) {
 	t.Parallel()
 
 	tools := &fakeProviderTools{}
@@ -115,7 +115,7 @@ func TestProviderNodeCaptureRequestsStableMainThreadIdentity(t *testing.T) {
 	require.Equal(t, StatusPass, result.DebugStatus)
 	for _, call := range tools.calls {
 		if call.name == "debug_capture_at" {
-			require.Equal(t, 1, call.arguments["thread_id"])
+			require.NotContains(t, call.arguments, "thread_id")
 			return
 		}
 	}
@@ -254,7 +254,12 @@ func (f *fakeProviderTools) CallTool(_ context.Context, name string, arguments m
 			}
 			variables = append(variables, map[string]any{"name": name, "value": value})
 		}
-		data = map[string]any{"ok": true, "data": map[string]any{"session_id": "debug-1", "thread_id": 1, "frame_id": 1, "variables": variables}}
+		threadID := 1
+		if deploymentID, _ := arguments["deployment_id"].(string); deploymentID == providerDeploymentID("node") {
+			// js-debug 的 reverse-request child session 使用 0 作为合法 thread identity。
+			threadID = 0
+		}
+		data = map[string]any{"ok": true, "data": map[string]any{"session_id": "debug-1", "thread_id": threadID, "frame_id": 1, "variables": variables}}
 	}
 	return ToolCallResult{StructuredContent: data}, nil
 }

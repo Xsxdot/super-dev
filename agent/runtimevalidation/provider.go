@@ -272,11 +272,6 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 		"line": request.Fixture.Debug.Line, "timeout_ms": 30000, "max_variables": len(variableNames) + 8,
 		"variable_names": variableNames, "approval_wait_seconds": 300,
 	}
-	if request.Fixture.Debug.Provider == "node" {
-		// js-debug 的 stopped event 可能省略 threadId；validation fixture 只有主线程，
-		// 显式传 1 让复合 capture 返回可审计的稳定 thread identity。
-		debugArguments["thread_id"] = 1
-	}
 	debugResult, err := r.callSupporting(ctx, request, &result, "debug.breakpoint", "debug_capture_at", debugArguments)
 	cancelTrigger()
 	triggerResult := <-triggerDone
@@ -292,7 +287,13 @@ func (r *ProviderRunner) Run(ctx context.Context, request ProviderRequest) Langu
 	sessionID, _ := data["session_id"].(string)
 	threadID := integerValue(data["thread_id"])
 	frameID := integerValue(data["frame_id"])
-	if sessionID == "" || threadID <= 0 || frameID <= 0 {
+	threadIdentityValid := threadID > 0
+	if request.Fixture.Debug.Provider == "node" && threadID == 0 && numericIdentity(data["thread_id"]) {
+		// js-debug reverse-request child session 使用 0 作为合法 thread identity；
+		// presence + numeric type 仍能区分合同缺字段和真实的 zero identity。
+		threadIdentityValid = true
+	}
+	if sessionID == "" || !threadIdentityValid || frameID <= 0 {
 		_ = r.stopService(ctx, request, debugKey, &result)
 		return failProviderDebug(&result, 8, "debug_breakpoint_evidence_incomplete", "debug_capture_at did not return session/thread/frame identity")
 	}
@@ -716,6 +717,20 @@ func integerValue(value any) int {
 		return int(result)
 	default:
 		return 0
+	}
+}
+
+func numericIdentity(value any) bool {
+	switch typed := value.(type) {
+	case float64:
+		return typed == float64(int(typed))
+	case int:
+		return true
+	case json.Number:
+		_, err := typed.Int64()
+		return err == nil
+	default:
+		return false
 	}
 }
 

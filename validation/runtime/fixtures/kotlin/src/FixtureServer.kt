@@ -22,10 +22,10 @@ private fun probe(exchange: HttpExchange) {
     val fixtureMarker = "breakpoint-visible"
     val fixtureCount = 42
     val fixtureProvider = "kotlin"
-    fixtureMarker.length // SUPERDEV_FIXTURE_BREAKPOINT
+    val markerLength = fixtureMarker.length // SUPERDEV_FIXTURE_BREAKPOINT
     val controlledError = exchange.requestURI.query == "mode=error"
     val status = if (controlledError) 500 else 200
-    write(exchange, status, "{\"ok\":${!controlledError},\"provider\":\"$fixtureProvider\",\"count\":$fixtureCount}")
+    write(exchange, status, "{\"ok\":${!controlledError},\"provider\":\"$fixtureProvider\",\"count\":$fixtureCount,\"marker_length\":$markerLength}")
 }
 
 private fun write(exchange: HttpExchange, status: Int, body: String) {
