@@ -4,6 +4,7 @@
 //   - 锁定 actor 只接受 allowlist tool/kind 与完整 plan identity
 //   - 锁定 actor 通过正式 Agent 审批接口批准 exact match，且 grant_grace=false
 //   - 锁定过期、重复 pending 与任何身份漂移都 fail closed
+//   - 锁定只读 pending 探针不被批准，并在导出前精确拒绝为终态
 //
 // 边界：
 //   - 测试 server 只模拟正式 HTTP 合同，不绕过 ToolCaller
@@ -173,6 +174,61 @@ func TestApprovalActorPendingReadProbeCannotEnterApprovalAllowlist(t *testing.T)
 	require.ErrorContains(t, err, "pending read probe")
 	require.Equal(t, 2, delegate.calls)
 	require.Equal(t, int32(0), postRequests.Load())
+}
+
+func TestApprovalActorFinalizesPendingReadProbeAsRejectedTerminalDelta(t *testing.T) {
+	t.Parallel()
+
+	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
+	var rejected atomic.Bool
+	var rejectRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
+			status := "pending"
+			if rejected.Load() {
+				status = "rejected"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"approval": fixture.approval(status)})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/reject":
+			var decision map[string]any
+			require.NoError(t, json.NewDecoder(request.Body).Decode(&decision))
+			require.Equal(t, "runtime-validation:campaign-1", decision["decided_by"])
+			rejectRequests.Add(1)
+			rejected.Store(true)
+			_ = json.NewEncoder(w).Encode(fixture.approval("rejected"))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			t.Fatal("pending read probe must be rejected, never approved")
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
+			_ = json.NewEncoder(w).Encode(map[string]any{"events": []any{
+				fixture.auditEvent("approval_required", "approval-1"),
+				fixture.auditEvent("rejected", "approval-1"),
+			}})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	actor, err := NewApprovalToolCaller(&pendingApprovalDelegate{fixture: fixture}, ApprovalActorOptions{
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
+		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
+	})
+	require.NoError(t, err)
+	_, err = actor.PreparePendingReadProbe(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+
+	evidence, err := actor.FinalizePendingReadProbes(context.Background())
+	require.NoError(t, err)
+	require.True(t, evidence.Complete)
+	require.Equal(t, "campaign-1", evidence.CampaignID)
+	require.Len(t, evidence.Probes, 1)
+	require.Equal(t, "approval-1", evidence.Probes[0].ApprovalID)
+	require.Equal(t, "rejected", evidence.Probes[0].Status)
+	require.Equal(t, []string{"approval_required", "rejected"}, evidence.Probes[0].AuditActions)
+	require.Equal(t, int32(1), rejectRequests.Load())
 }
 
 func TestApprovalActorRejectsMutationThatBypassesApproval(t *testing.T) {

@@ -48,18 +48,19 @@ type StrictCampaignResult struct {
 }
 
 type activeCampaignFacts struct {
-	liveTools      []string
-	coverage       CoverageReport
-	toolResult     ToolCampaignResult
-	languages      []LanguageResult
-	cleanup        CleanupResult
-	journal        JournalSnapshot
-	borrowed       BorrowedAttestation
-	borrowedBefore BorrowedLiveProjection
-	borrowedAfter  BorrowedLiveProjection
-	processLog     string
-	checks         []CheckResult
-	runErr         error
+	liveTools        []string
+	coverage         CoverageReport
+	toolResult       ToolCampaignResult
+	languages        []LanguageResult
+	cleanup          CleanupResult
+	journal          JournalSnapshot
+	borrowed         BorrowedAttestation
+	borrowedBefore   BorrowedLiveProjection
+	borrowedAfter    BorrowedLiveProjection
+	approvalTerminal ApprovalTerminalEvidence
+	processLog       string
+	checks           []CheckResult
+	runErr           error
 }
 
 // RunStrictCampaign 执行一次 target-native strict campaign 并写 authoritative report。
@@ -183,6 +184,7 @@ func RunStrictCampaign(ctx context.Context, options StrictCampaignOptions) (Stri
 		Evidence: map[string]any{
 			"bundle.json": bundle, "host.json": host, "tool-campaign.json": facts.toolResult,
 			"languages.json": facts.languages, "cleanup.json": facts.cleanup, "journal.json": facts.journal,
+			"approval-terminal.json":    facts.approvalTerminal,
 			"borrowed-attestation.json": facts.borrowed, "borrowed-live-before.json": facts.borrowedBefore,
 			"borrowed-live-after.json": facts.borrowedAfter, "process-log.json": map[string]any{"redacted": facts.processLog},
 		},
@@ -448,7 +450,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 				return err
 			}
 			// list/get 审批工具需要一个尚未消费的真实记录。使用从未落盘的独立 project target
-			// 只创建 pending，不登记 allowlist、不执行配置写入，也不会与主项目后续审批重合。
+			// 只创建 pending，不登记 allowlist、不执行配置写入；场景结束后会精确 reject 为终态。
 			approvalProbeRoot := filepath.Join(projectRoot, ".approval-read-probe")
 			approvalID, err := approvalCaller.PreparePendingReadProbe(callbackCtx, "upsert_project_config", map[string]any{
 				"kind":      "config.project.upsert",
@@ -470,13 +472,31 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	})
 	facts.liveTools = facts.toolResult.LiveTools
 	facts.coverage = facts.toolResult.Coverage
+	pipelineCleaned = pipelineCleanupConfirmed(facts.toolResult)
+	terminalCtx, terminalCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	facts.approvalTerminal, err = approvalCaller.FinalizePendingReadProbes(terminalCtx)
+	terminalCancel()
+	if err != nil {
+		facts.runErr = errors.Join(facts.runErr, err)
+		facts.checks = append(facts.checks, failedCampaignCheck("approval-terminal-delta", "approval_terminal_delta_failed", err))
+		return facts
+	}
+	if facts.toolResult.Status == StatusPass {
+		expectedProbeID := strings.TrimSpace(fmt.Sprint(facts.toolResult.Variables["approval_probe_id"]))
+		if expectedProbeID == "" || len(facts.approvalTerminal.Probes) != 1 || facts.approvalTerminal.Probes[0].ApprovalID != expectedProbeID {
+			err = fmt.Errorf("approval terminal delta does not contain the single campaign read probe")
+			facts.runErr = errors.Join(facts.runErr, err)
+			facts.checks = append(facts.checks, failedCampaignCheck("approval-terminal-delta", "approval_terminal_delta_incomplete", err))
+			return facts
+		}
+	}
+	facts.checks = append(facts.checks, CheckResult{ID: "approval-terminal-delta", Status: StatusPass})
 	if remoteIdentityConfirmed(facts.toolResult) {
 		facts.checks = append(facts.checks, CheckResult{ID: "borrowed-live-scenario", Status: StatusPass})
 	} else {
 		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-scenario", "borrowed_live_scenario_unconfirmed", fmt.Errorf("manifest list_hosts scenario did not confirm the governed non-self node identity")))
 	}
 	// 提交 cleanup run 不等于远端已清理；只有终态和受控脚本 absence 日志都通过，才允许删除 active marker。
-	pipelineCleaned = pipelineCleanupConfirmed(facts.toolResult)
 	if facts.toolResult.Status != StatusPass {
 		facts.runErr = fmt.Errorf("live tool campaign %s: %s", facts.toolResult.Status, facts.toolResult.Cause.Code)
 		facts.checks = append(facts.checks, CheckResult{ID: "live-tools", Status: StatusFail, Cause: facts.toolResult.Cause})

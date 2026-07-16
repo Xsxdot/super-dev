@@ -5,9 +5,10 @@
 //   - 复核 plan ID、fingerprint、kind、规范化 target 与双重过期时间
 //   - 只为 exact match 调用正式 approve 接口，领取 token 并核验它被唯一消费
 //   - 创建不进入 allowlist 的 pending 读探针，验证未知审批始终保持未批准
+//   - 在 list/get 场景后仅拒绝该 campaign 自建探针，并导出 terminal audit delta
 //
 // 边界：
-//   - 不批准 allowlist 外的 pending，不调用 reject，不开启 grace window
+//   - 不批准 allowlist 外的 pending；reject 只作用于本 actor 自建的只读探针
 //   - 不接受未知、过期、重复 pending 或 identity 漂移，不持久化 approval token
 //   - pending 读探针不执行对应业务 mutation，并随 disposable profile 一起删除
 package runtimevalidation
@@ -20,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,24 @@ type ApprovalActorOptions struct {
 	CampaignID   string
 	AllowedKinds map[string][]string
 	HTTPClient   *http.Client
+}
+
+// ApprovalTerminalEvidence 证明 campaign 创建的只读审批探针已在 Agent 关闭前进入终态。
+type ApprovalTerminalEvidence struct {
+	CampaignID string                          `json:"campaign_id"`
+	Complete   bool                            `json:"complete"`
+	Probes     []ApprovalProbeTerminalEvidence `json:"probes"`
+}
+
+// ApprovalProbeTerminalEvidence 记录一个不在自动批准 allowlist 内的探针终态与审计动作。
+type ApprovalProbeTerminalEvidence struct {
+	ApprovalID   string   `json:"approval_id"`
+	PlanID       string   `json:"plan_id"`
+	Kind         string   `json:"kind"`
+	Fingerprint  string   `json:"fingerprint"`
+	TargetSHA256 string   `json:"target_sha256"`
+	Status       string   `json:"status"`
+	AuditActions []string `json:"audit_actions"`
 }
 
 // ApprovalToolCaller 为需要审批的 MCP 调用执行 exact-match 自动批准并完成一次 token 重试。
@@ -124,7 +144,8 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 //   - 工具、identity、TTL 或重复目标不满足严格合同时的错误
 //
 // 注意：该方法刻意绕过自动批准分支，只创建审批历史而不执行对应业务 mutation；
-// 后续即使同一 pending 再次进入 CallTool，也会被 readProbes 硬门拒绝批准。
+// 后续即使同一 pending 再次进入 CallTool，也会被 readProbes 硬门拒绝批准；
+// list/get 场景结束后由 FinalizePendingReadProbes 精确拒绝并验证终态审计。
 func (c *ApprovalToolCaller) PreparePendingReadProbe(ctx context.Context, name string, arguments map[string]any) (string, error) {
 	allowedKinds, approvalAware := c.allowed[name]
 	if !approvalAware {
@@ -182,6 +203,69 @@ func (c *ApprovalToolCaller) PreparePendingReadProbe(ctx context.Context, name s
 		"fingerprint": required.Fingerprint,
 	}).Info("pending approval 读探针已创建并保持在 allowlist 外")
 	return required.ID, nil
+}
+
+// FinalizePendingReadProbes 通过正式 reject 接口终态化所有不在 allowlist 内的只读审批探针。
+//
+// 返回：
+//   - 仅含非敏感 identity 摘要与 terminal audit action 的证据
+//   - identity 漂移、非 pending/rejected 状态或审计不唯一时的错误
+//
+// 注意：该方法永不批准或执行探针操作；它只在 list/get 场景结束后把未知 pending
+// 收口为 rejected，从而同时满足“不审批未知请求”和“导出前全部审批记录终态”。
+func (c *ApprovalToolCaller) FinalizePendingReadProbes(ctx context.Context) (ApprovalTerminalEvidence, error) {
+	evidence := ApprovalTerminalEvidence{CampaignID: c.campaign}
+	c.mu.Lock()
+	probes := make([]approvalIdentity, 0, len(c.readProbes))
+	for _, probe := range c.readProbes {
+		probes = append(probes, probe)
+	}
+	c.mu.Unlock()
+	sort.Slice(probes, func(i, j int) bool { return probes[i].ID < probes[j].ID })
+
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "probe_count": len(probes),
+	})
+	log.Info("开始终态化 allowlist 外的 pending approval 读探针")
+	for _, expected := range probes {
+		if err := c.rejectPendingReadProbe(ctx, expected); err != nil {
+			log.WithErr(err).WithField("approval_id", expected.ID).Error("pending approval 读探针终态化失败")
+			return evidence, err
+		}
+		terminal, err := c.getApproval(ctx, expected.ID)
+		if err != nil {
+			return evidence, err
+		}
+		if err := matchApprovalIdentity(expected, terminal); err != nil {
+			return evidence, err
+		}
+		if terminal.Status != operation.ApprovalRejected || terminal.Token != "" {
+			return evidence, fmt.Errorf("approval read probe %s terminal status is %s", expected.ID, terminal.Status)
+		}
+		events, err := c.listMatchingOperationAudit(ctx, expected)
+		if err != nil {
+			return evidence, err
+		}
+		actions := make([]string, 0, len(events))
+		for _, event := range events {
+			if strings.TrimSpace(fmt.Sprint(event["approval_id"])) != expected.ID {
+				continue
+			}
+			actions = append(actions, strings.TrimSpace(fmt.Sprint(event["action"])))
+		}
+		sort.Strings(actions)
+		if len(actions) != 2 || actions[0] != operation.AuditApprovalRequired || actions[1] != operation.AuditRejected {
+			return evidence, fmt.Errorf("approval read probe %s terminal audit actions are %v", expected.ID, actions)
+		}
+		evidence.Probes = append(evidence.Probes, ApprovalProbeTerminalEvidence{
+			ApprovalID: expected.ID, PlanID: expected.PlanID, Kind: expected.Kind,
+			Fingerprint: expected.Fingerprint, TargetSHA256: DigestBytes([]byte(expected.NormalizedTarget)),
+			Status: terminal.Status, AuditActions: actions,
+		})
+	}
+	evidence.Complete = true
+	log.Info("allowlist 外的 pending approval 读探针已全部拒绝并验证终态审计")
+	return evidence, nil
 }
 
 // CallTool 执行原 MCP 调用；仅为已登记的精确 identity 自动批准并携带一次性 token 重试。
@@ -356,6 +440,66 @@ func (c *ApprovalToolCaller) approveOperation(ctx context.Context, expected appr
 	return nil
 }
 
+func (c *ApprovalToolCaller) rejectPendingReadProbe(ctx context.Context, expected approvalIdentity) error {
+	detail, err := c.getApproval(ctx, expected.ID)
+	if err != nil {
+		return err
+	}
+	if err := matchApprovalIdentity(expected, detail); err != nil {
+		return err
+	}
+	if detail.Status != operation.ApprovalPending {
+		return fmt.Errorf("approval read probe %s is not pending before rejection", expected.ID)
+	}
+	body, err := json.Marshal(map[string]any{
+		"decided_by": "runtime-validation:" + c.campaign,
+		"note":       "terminalize unallowlisted runtime validation read probe",
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := *c.baseURL
+	endpoint.Path = "/api/operation-approvals/" + url.PathEscape(expected.ID) + "/reject"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": expected.ID, "plan_id": expected.PlanID,
+		"operation_kind": expected.Kind, "fingerprint": expected.Fingerprint,
+	})
+	log.Info("开始调用正式 operation reject 接口终态化只读探针")
+	response, err := c.http.Do(request)
+	if err != nil {
+		log.WithErr(err).Error("调用正式 operation reject 接口失败")
+		return fmt.Errorf("reject pending approval read probe: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
+		err := fmt.Errorf("reject pending approval read probe returned HTTP %d", response.StatusCode)
+		log.WithErr(err).Error("正式 operation reject 接口拒绝请求")
+		return err
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
+		return fmt.Errorf("decode rejected approval read probe: %w", err)
+	}
+	rejected, err := approvalIdentityFromMaps(payload, RawMessageMap(payload["plan"]))
+	if err != nil {
+		return err
+	}
+	if err := matchApprovalIdentity(expected, rejected); err != nil {
+		return err
+	}
+	if rejected.Status != operation.ApprovalRejected {
+		return fmt.Errorf("approval read probe %s returned status %s after reject", expected.ID, rejected.Status)
+	}
+	log.Info("allowlist 外的 pending approval 读探针已通过正式接口拒绝")
+	return nil
+}
+
 func (c *ApprovalToolCaller) rejectForbiddenGrace(ctx context.Context, expected approvalIdentity) error {
 	events, err := c.listMatchingOperationAudit(ctx, expected)
 	if err != nil {
@@ -428,6 +572,7 @@ func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, exp
 	for _, event := range payload.Events {
 		plan := RawMessageMap(event["plan"])
 		if strings.TrimSpace(fmt.Sprint(event["kind"])) != expected.Kind ||
+			strings.TrimSpace(fmt.Sprint(plan["id"])) != expected.PlanID ||
 			strings.TrimSpace(fmt.Sprint(plan["kind"])) != expected.Kind ||
 			strings.TrimSpace(fmt.Sprint(plan["fingerprint"])) != expected.Fingerprint {
 			continue
@@ -616,7 +761,9 @@ func decodeApprovalIdentity(reader io.Reader) (approvalIdentity, error) {
 	if err != nil {
 		return identity, err
 	}
-	identity.Token = strings.TrimSpace(fmt.Sprint(payload["approval_token"]))
+	if token, exists := payload["approval_token"]; exists && token != nil {
+		identity.Token = strings.TrimSpace(fmt.Sprint(token))
+	}
 	return identity, nil
 }
 
