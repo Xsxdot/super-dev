@@ -30,7 +30,7 @@ type MutationJournalToolCaller struct {
 // NewMutationJournalToolCaller 创建 mutation journal 包装器。
 //
 // 参数：
-//   - delegate: 已包含真人审批 actor 的真实 MCP caller
+//   - delegate: 已包含 exact-match 自动审批 actor 的真实 MCP caller
 //   - cleanup: 当前 campaign 的统一 cleanup stack/journal
 //   - onCommitted: 可选的外部副作用即时回调，先于 acquired fsync 执行
 //

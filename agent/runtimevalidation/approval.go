@@ -1,16 +1,17 @@
-// approval.go 在正式 Agent HTTP 门禁上消费真人批准的一次性 token。
+// approval.go 在正式 Agent HTTP 门禁上执行受控无人值守审批并消费一次性 token。
 //
 // 职责：
 //   - 识别 MCP approval_required，并注册精确、短期的 operation identity allowlist
 //   - 复核 plan ID、fingerprint、kind、规范化 target 与双重过期时间
-//   - 等待用户在正式 SuperDev 审批面批准后领取 token，并核验它被唯一消费
+//   - 只为 exact match 调用正式 approve 接口，领取 token 并核验它被唯一消费
 //
 // 边界：
-//   - 不代替用户调用 approve/reject，不开启 grace window
+//   - 不批准 allowlist 外的 pending，不调用 reject，不开启 grace window
 //   - 不接受未知、过期、重复 pending 或 identity 漂移，不持久化 approval token
 package runtimevalidation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,7 +29,6 @@ import (
 const (
 	maxApprovalResponseBytes = 128 * 1024
 	maxRuntimeApprovalTTL    = 15 * time.Minute
-	defaultApprovalPoll      = 250 * time.Millisecond
 )
 
 // ApprovalActorOptions 配置 foundation Agent origin、campaign 身份与 tool/kind allowlist。
@@ -37,24 +37,22 @@ type ApprovalActorOptions struct {
 	CampaignID   string
 	AllowedKinds map[string][]string
 	HTTPClient   *http.Client
-	PollInterval time.Duration
 }
 
-// ApprovalToolCaller 为需要审批的 MCP 调用复核真人批准并执行一次重试。
+// ApprovalToolCaller 为需要审批的 MCP 调用执行 exact-match 自动批准并完成一次 token 重试。
 type ApprovalToolCaller struct {
-	delegate     ToolCaller
-	baseURL      *url.URL
-	campaign     string
-	allowed      map[string]map[string]struct{}
-	http         *http.Client
-	pollInterval time.Duration
-	mu           sync.Mutex
-	registered   map[string]struct{}
+	delegate   ToolCaller
+	baseURL    *url.URL
+	campaign   string
+	allowed    map[string]map[string]struct{}
+	http       *http.Client
+	mu         sync.Mutex
+	registered map[string]approvalIdentity
 }
 
 // DefaultRuntimeValidationApprovalKinds 返回 strict campaign 允许复核的 tool/operation 对。
 //
-// 注意：这是匹配白名单，不是跳过真人审批的权限列表。
+// 注意：只有 MCP 返回 approval_required 且 identity 精确匹配时，actor 才能使用此白名单自动批准。
 func DefaultRuntimeValidationApprovalKinds() map[string][]string {
 	return map[string][]string{
 		"apply_config_change":        {"config.project.upsert", "config.service.upsert", "config.pipeline.upsert"},
@@ -105,17 +103,13 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 			}
 		}
 	}
-	pollInterval := options.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = defaultApprovalPoll
-	}
 	return &ApprovalToolCaller{
 		delegate: delegate, baseURL: parsed, campaign: options.CampaignID, allowed: allowed,
-		http: client, pollInterval: pollInterval, registered: map[string]struct{}{},
+		http: client, registered: map[string]approvalIdentity{},
 	}, nil
 }
 
-// CallTool 执行原 MCP 调用；仅在精确 identity 获得真人批准后携带一次性 token 重试。
+// CallTool 执行原 MCP 调用；仅为已登记的精确 identity 自动批准并携带一次性 token 重试。
 func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolCallResult, error) {
 	delegatedArguments := arguments
 	allowedKinds, approvalAware := c.allowed[name]
@@ -130,9 +124,15 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 	}
 	required, ok := parseApprovalRequired(result)
 	if !ok {
-		// strict campaign 中的受控写工具必须先返回 approval_required。
-		// 首次直接成功意味着审批策略被关闭或命中了 grace，两者都不能作为验收通路。
 		if approvalAware && !result.IsError && RawMessageMap(result.StructuredContent)["ok"] != false {
+			// 本地 dev runtime 控制由产品策略明确判为低风险；它可以直接成功，
+			// 但配置、调试和 pipeline 等固定必审操作直接成功仍表示策略或 grace 漂移。
+			if runtimeControlMaySkipApproval(name) {
+				logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+					"campaign_id": c.campaign, "tool": name,
+				}).Info("低风险本地 runtime 操作无需 pending approval，直接沿用 MCP 成功结果")
+				return result, nil
+			}
 			return result, markMutationApplied(fmt.Errorf("approval-aware MCP tool %s completed without approval_required", name))
 		}
 		return result, nil
@@ -148,18 +148,20 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 		"campaign_id": c.campaign, "tool": name, "approval_id": required.ID,
 		"plan_id": required.PlanID, "operation_kind": required.Kind, "fingerprint": required.Fingerprint,
 	})
-	log.Info("已注册短期精确 approval allowlist，等待用户在正式审批面确认")
-	detail, err := c.waitForHumanApproval(ctx, required)
+	log.Info("已注册短期精确 approval allowlist，准备调用正式审批接口")
+	detail, err := c.approveRegisteredPending(ctx, required.ID)
 	if err != nil {
+		log.WithErr(err).Error("短期精确 approval 自动审批失败")
 		return result, err
 	}
-	// 审批 POST 会先写 grace_granted 审计再返回；必须在业务重试前拦截，避免“产生副作用后才报错”。
+	// 即使请求明确 grant_grace=false，也要在业务重试前复核审计，防止服务端行为漂移。
 	if err := c.rejectForbiddenGrace(ctx, required); err != nil {
+		log.WithErr(err).Error("自动审批出现禁止的 grace 审计")
 		return result, err
 	}
 	retryArguments := cloneMap(delegatedArguments)
 	retryArguments["approval_token"] = detail.Token
-	log.Info("真人审批 identity 已精确匹配，重试原 MCP tools/call")
+	log.Info("自动审批 identity 已精确匹配，重试原 MCP tools/call")
 	retried, retryErr := c.delegate.CallTool(ctx, name, retryArguments)
 	if retryErr != nil {
 		return retried, retryErr
@@ -171,8 +173,112 @@ func (c *ApprovalToolCaller) CallTool(ctx context.Context, name string, argument
 		// 业务重试已成功；后置审计证明失败时仍必须让外层 journal 接管 cleanup。
 		return retried, markMutationApplied(err)
 	}
-	log.Info("operation approval 一次性 token 已消费")
+	log.Info("自动 operation approval 一次性 token 已消费")
 	return retried, nil
+}
+
+func runtimeControlMaySkipApproval(tool string) bool {
+	switch tool {
+	case "start_service", "stop_service", "restart_service":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *ApprovalToolCaller) approveRegisteredPending(ctx context.Context, approvalID string) (approvalIdentity, error) {
+	c.mu.Lock()
+	expected, registered := c.registered[approvalID]
+	c.mu.Unlock()
+	if !registered {
+		return approvalIdentity{}, fmt.Errorf("operation approval %s is not registered in the campaign allowlist", approvalID)
+	}
+	detail, err := c.getApproval(ctx, expected.ID)
+	if err != nil {
+		return approvalIdentity{}, err
+	}
+	if err := matchApprovalIdentity(expected, detail); err != nil {
+		return approvalIdentity{}, err
+	}
+	if detail.Status != "pending" {
+		return approvalIdentity{}, fmt.Errorf("operation approval %s is not a new pending request", expected.ID)
+	}
+	if err := c.rejectDuplicatePending(ctx, expected); err != nil {
+		return approvalIdentity{}, err
+	}
+	if err := c.approveOperation(ctx, expected); err != nil {
+		return approvalIdentity{}, err
+	}
+	approved, err := c.getApproval(ctx, expected.ID)
+	if err != nil {
+		return approvalIdentity{}, err
+	}
+	if err := matchApprovalIdentity(expected, approved); err != nil {
+		return approvalIdentity{}, err
+	}
+	if approved.Status != "approved" || strings.TrimSpace(approved.Token) == "" {
+		return approvalIdentity{}, fmt.Errorf("automatically approved operation %s did not issue a one-time token", expected.ID)
+	}
+	return approved, nil
+}
+
+func (c *ApprovalToolCaller) approveOperation(ctx context.Context, expected approvalIdentity) error {
+	body, err := json.Marshal(map[string]any{
+		"decided_by":  "runtime-validation:" + c.campaign,
+		"note":        "strict runtime validation exact allowlist actor",
+		"grant_grace": false,
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := *c.baseURL
+	endpoint.Path = "/api/operation-approvals/" + url.PathEscape(expected.ID) + "/approve"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": expected.ID, "plan_id": expected.PlanID,
+		"operation_kind": expected.Kind, "fingerprint": expected.Fingerprint,
+	})
+	log.Info("开始调用正式 operation approve 接口")
+	response, err := c.http.Do(request)
+	if err != nil {
+		log.WithErr(err).Error("调用正式 operation approve 接口失败")
+		return fmt.Errorf("approve allowlisted operation: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
+		err := fmt.Errorf("approve allowlisted operation returned HTTP %d", response.StatusCode)
+		log.WithErr(err).Error("正式 operation approve 接口拒绝请求")
+		return err
+	}
+	var payload struct {
+		Approval       map[string]any `json:"approval"`
+		GraceGranted   bool           `json:"grace_granted"`
+		GraceExpiresAt any            `json:"grace_expires_at"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
+		log.WithErr(err).Error("解析正式 operation approve 响应失败")
+		return fmt.Errorf("decode allowlisted operation approval: %w", err)
+	}
+	approved, err := approvalIdentityFromMaps(payload.Approval, RawMessageMap(payload.Approval["plan"]))
+	if err != nil {
+		return fmt.Errorf("decode approved operation identity: %w", err)
+	}
+	if err := matchApprovalIdentity(expected, approved); err != nil {
+		return err
+	}
+	if approved.Status != "approved" {
+		return fmt.Errorf("operation approval %s returned status %s after approve", expected.ID, approved.Status)
+	}
+	if payload.GraceGranted || payload.GraceExpiresAt != nil {
+		return fmt.Errorf("operation approval %s unexpectedly granted grace", expected.ID)
+	}
+	log.Info("正式 operation approve 接口已精确批准且未开启 grace")
+	return nil
 }
 
 func (c *ApprovalToolCaller) rejectForbiddenGrace(ctx context.Context, expected approvalIdentity) error {
@@ -208,6 +314,9 @@ func (c *ApprovalToolCaller) verifyTokenConsumedWithoutGrace(ctx context.Context
 }
 
 func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, expected approvalIdentity) ([]map[string]any, error) {
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": expected.ID, "operation_kind": expected.Kind,
+	})
 	endpoint := *c.baseURL
 	endpoint.Path = "/api/operation-audit"
 	query := endpoint.Query()
@@ -219,19 +328,24 @@ func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, exp
 	if err != nil {
 		return nil, err
 	}
+	log.Info("开始读取 operation approval 审计")
 	response, err := c.http.Do(request)
 	if err != nil {
+		log.WithErr(err).Error("读取 operation approval 审计失败")
 		return nil, fmt.Errorf("list operation audit for approval verification: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
-		return nil, fmt.Errorf("list operation audit for approval verification returned HTTP %d", response.StatusCode)
+		err := fmt.Errorf("list operation audit for approval verification returned HTTP %d", response.StatusCode)
+		log.WithErr(err).Error("operation approval 审计接口返回非成功状态")
+		return nil, err
 	}
 	var payload struct {
 		Events []map[string]any `json:"events"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&payload); err != nil {
+		log.WithErr(err).Error("解析 operation approval 审计失败")
 		return nil, fmt.Errorf("decode operation audit for approval verification: %w", err)
 	}
 
@@ -252,6 +366,7 @@ func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, exp
 		}
 		matched = append(matched, event)
 	}
+	log.WithFields(map[string]any{"event_count": len(payload.Events), "matched_count": len(matched)}).Info("operation approval 审计读取完成")
 	return matched, nil
 }
 
@@ -323,82 +438,46 @@ func (c *ApprovalToolCaller) registerTransientAllowlist(identity approvalIdentit
 	if _, exists := c.registered[identity.ID]; exists {
 		return fmt.Errorf("approval %s was already registered by this campaign", identity.ID)
 	}
-	c.registered[identity.ID] = struct{}{}
+	c.registered[identity.ID] = identity
 	return nil
 }
 
-func (c *ApprovalToolCaller) waitForHumanApproval(ctx context.Context, expected approvalIdentity) (approvalIdentity, error) {
-	detail, err := c.getApproval(ctx, expected.ID)
-	if err != nil {
-		return approvalIdentity{}, err
-	}
-	if err := matchApprovalIdentity(expected, detail); err != nil {
-		return approvalIdentity{}, err
-	}
-	if detail.Status == "pending" {
-		if err := c.rejectDuplicatePending(ctx, expected); err != nil {
-			return approvalIdentity{}, err
-		}
-	}
-
-	deadline := expected.PlanExpiresAt
-	if expected.ExpiresAt.Before(deadline) {
-		deadline = expected.ExpiresAt
-	}
-	for {
-		switch detail.Status {
-		case "approved":
-			if strings.TrimSpace(detail.Token) == "" {
-				return approvalIdentity{}, fmt.Errorf("approved operation %s did not issue a one-time token", expected.ID)
-			}
-			return detail, nil
-		case "pending":
-			// pending 只表示用户尚未决策；actor 自己绝不能调用 approve 接口。
-		case "rejected", "expired", "used":
-			return approvalIdentity{}, fmt.Errorf("operation approval %s reached terminal status %s", expected.ID, detail.Status)
-		default:
-			return approvalIdentity{}, fmt.Errorf("operation approval %s returned unknown status %q", expected.ID, detail.Status)
-		}
-		if !time.Now().UTC().Before(deadline) {
-			return approvalIdentity{}, fmt.Errorf("operation approval %s expired while waiting for human decision", expected.ID)
-		}
-		timer := time.NewTimer(c.pollInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return approvalIdentity{}, ctx.Err()
-		case <-timer.C:
-		}
-		detail, err = c.getApproval(ctx, expected.ID)
-		if err != nil {
-			return approvalIdentity{}, err
-		}
-		if err := matchApprovalIdentity(expected, detail); err != nil {
-			return approvalIdentity{}, err
-		}
-	}
-}
-
 func (c *ApprovalToolCaller) getApproval(ctx context.Context, id string) (approvalIdentity, error) {
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": id,
+	})
 	endpoint := *c.baseURL
 	endpoint.Path = "/api/operation-approvals/" + url.PathEscape(id)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return approvalIdentity{}, err
 	}
+	log.Info("开始读取 operation approval detail")
 	response, err := c.http.Do(request)
 	if err != nil {
+		log.WithErr(err).Error("读取 operation approval detail 失败")
 		return approvalIdentity{}, fmt.Errorf("get operation approval: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
-		return approvalIdentity{}, fmt.Errorf("get operation approval returned HTTP %d", response.StatusCode)
+		err := fmt.Errorf("get operation approval returned HTTP %d", response.StatusCode)
+		log.WithErr(err).Error("operation approval detail 接口返回非成功状态")
+		return approvalIdentity{}, err
 	}
-	return decodeApprovalIdentity(response.Body)
+	detail, err := decodeApprovalIdentity(response.Body)
+	if err != nil {
+		log.WithErr(err).Error("解析 operation approval detail 失败")
+		return approvalIdentity{}, err
+	}
+	log.WithField("status", detail.Status).Info("operation approval detail 读取完成")
+	return detail, nil
 }
 
 func (c *ApprovalToolCaller) rejectDuplicatePending(ctx context.Context, expected approvalIdentity) error {
+	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
+		"campaign_id": c.campaign, "approval_id": expected.ID, "operation_kind": expected.Kind,
+	})
 	endpoint := *c.baseURL
 	endpoint.Path = "/api/operation-approvals"
 	query := endpoint.Query()
@@ -409,17 +488,22 @@ func (c *ApprovalToolCaller) rejectDuplicatePending(ctx context.Context, expecte
 	if err != nil {
 		return err
 	}
+	log.Info("开始读取 pending operation approvals 以排除重复目标")
 	response, err := c.http.Do(request)
 	if err != nil {
+		log.WithErr(err).Error("读取 pending operation approvals 失败")
 		return fmt.Errorf("list pending operation approvals: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxApprovalResponseBytes))
-		return fmt.Errorf("list pending operation approvals returned HTTP %d", response.StatusCode)
+		err := fmt.Errorf("list pending operation approvals returned HTTP %d", response.StatusCode)
+		log.WithErr(err).Error("pending operation approvals 接口返回非成功状态")
+		return err
 	}
 	var approvals []map[string]any
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxApprovalResponseBytes)).Decode(&approvals); err != nil {
+		log.WithErr(err).Error("解析 pending operation approvals 失败")
 		return fmt.Errorf("decode pending operation approvals: %w", err)
 	}
 	for _, raw := range approvals {
@@ -428,9 +512,11 @@ func (c *ApprovalToolCaller) rejectDuplicatePending(ctx context.Context, expecte
 			return fmt.Errorf("pending operation approval metadata is incomplete: %w", decodeErr)
 		}
 		if candidate.ID != expected.ID && candidate.Kind == expected.Kind && candidate.NormalizedTarget == expected.NormalizedTarget {
+			log.WithField("pending_count", len(approvals)).Error("发现相同 kind 与目标的重复 pending approval")
 			return fmt.Errorf("duplicate pending approvals for operation kind %s and the same normalized target", expected.Kind)
 		}
 	}
+	log.WithField("pending_count", len(approvals)).Info("pending operation approvals 重复目标检查完成")
 	return nil
 }
 

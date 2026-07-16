@@ -1,8 +1,8 @@
-// approval_test.go 验证真人审批边界与短期精确 allowlist。
+// approval_test.go 验证无人值守审批 actor 与短期精确 allowlist。
 //
 // 职责：
 //   - 锁定 actor 只接受 allowlist tool/kind 与完整 plan identity
-//   - 锁定 actor 不代替用户批准，只等待正式 Agent 发放一次性 token
+//   - 锁定 actor 通过正式 Agent 审批接口批准 exact match，且 grant_grace=false
 //   - 锁定过期、重复 pending 与任何身份漂移都 fail closed
 //
 // 边界：
@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
+func TestApprovalActorApprovesExactAllowlistedPendingAndRetries(t *testing.T) {
 	t.Parallel()
 
 	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
-	var detailReads atomic.Int32
+	var approved atomic.Bool
 	var auditReads atomic.Int32
 	var postRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -35,24 +35,31 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
 		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
 			status, token := "pending", ""
-			if detailReads.Add(1) >= 2 {
+			if approved.Load() {
 				status, token = "approved", "one-time-token"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"approval": fixture.approval(status), "approval_token": token,
 			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			postRequests.Add(1)
+			var decision map[string]any
+			require.NoError(t, json.NewDecoder(request.Body).Decode(&decision))
+			require.Equal(t, "runtime-validation:campaign-1", decision["decided_by"])
+			require.Equal(t, false, decision["grant_grace"])
+			approved.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval("approved"), "grace_granted": false,
+			})
 		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
 			require.Equal(t, "code_debug.evaluate", request.URL.Query().Get("kind"))
 			require.Equal(t, fixture.createdAt, request.URL.Query().Get("since"))
 			require.Equal(t, "0", request.URL.Query().Get("limit"))
-			events := []any{}
+			events := []any{fixture.auditEvent("approved", "approval-1")}
 			if auditReads.Add(1) >= 2 {
 				events = append(events, fixture.auditEvent("executed", "approval-1"))
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
-		case request.Method == http.MethodPost:
-			postRequests.Add(1)
-			http.Error(w, "runtime validation must not approve for the user", http.StatusForbidden)
 		default:
 			http.NotFound(w, request)
 		}
@@ -61,19 +68,75 @@ func TestApprovalActorWaitsForExactHumanApprovalAndRetries(t *testing.T) {
 
 	delegate := &approvalDelegate{fixture: fixture}
 	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
-		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(), PollInterval: time.Millisecond,
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
 		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
 	})
 	require.NoError(t, err)
 
-	result, err := actor.CallTool(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	result, err := actor.CallTool(ctx, "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	require.Zero(t, postRequests.Load())
+	require.Equal(t, int32(1), postRequests.Load())
 	require.Equal(t, 2, delegate.calls)
 	require.Equal(t, int32(2), auditReads.Load())
 	require.Equal(t, 0, delegate.firstArguments["approval_wait_seconds"])
 	require.Equal(t, "one-time-token", delegate.lastArguments["approval_token"])
+}
+
+func TestApprovalActorLeavesUnknownPendingUnapproved(t *testing.T) {
+	t.Parallel()
+
+	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
+	unknown := fixture.approval("pending")
+	unknown["id"] = "approval-unknown"
+	unknownPlan := unknown["plan"].(map[string]any)
+	unknownPlan["id"] = "plan-unknown"
+	unknownPlan["fingerprint"] = "fingerprint-unknown"
+	unknownPlan["target"] = map[string]any{"deployment_id": "dep-unknown", "debug_session_id": "debug-unknown"}
+	var approved atomic.Bool
+	var auditReads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending"), unknown})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
+			status, token := "pending", ""
+			if approved.Load() {
+				status, token = "approved", "one-time-token"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval(status), "approval_token": token,
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			approved.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval("approved"), "grace_granted": false,
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-unknown/approve":
+			t.Fatal("unknown pending approval must never be approved")
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
+			events := []any{fixture.auditEvent("approved", "approval-1")}
+			if auditReads.Add(1) >= 2 {
+				events = append(events, fixture.auditEvent("executed", "approval-1"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	delegate := &approvalDelegate{fixture: fixture}
+	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
+		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
+	})
+	require.NoError(t, err)
+
+	_, err = actor.CallTool(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+	require.Equal(t, 2, delegate.calls)
 }
 
 func TestApprovalActorRejectsMutationThatBypassesApproval(t *testing.T) {
@@ -91,24 +154,45 @@ func TestApprovalActorRejectsMutationThatBypassesApproval(t *testing.T) {
 	require.Equal(t, 0, delegate.arguments["approval_wait_seconds"])
 }
 
+func TestApprovalActorAllowsLowRiskRuntimeMutationWithoutPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	delegate := &directSuccessApprovalDelegate{}
+	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
+		AgentURL: "http://127.0.0.1:57018", CampaignID: "campaign-1",
+		AllowedKinds: map[string][]string{"start_service": {"runtime.start"}},
+	})
+	require.NoError(t, err)
+
+	result, err := actor.CallTool(context.Background(), "start_service", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.Equal(t, 0, delegate.arguments["approval_wait_seconds"])
+}
+
 func TestApprovalActorRejectsGraceAuditAfterApprovedRetry(t *testing.T) {
 	t.Parallel()
 
 	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
-	var detailReads atomic.Int32
+	var approved atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/operation-approvals":
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
 			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
-		case "/api/operation-approvals/approval-1":
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
 			status, token := "pending", ""
-			if detailReads.Add(1) >= 2 {
+			if approved.Load() {
 				status, token = "approved", "one-time-token"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"approval": fixture.approval(status), "approval_token": token,
 			})
-		case "/api/operation-audit":
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			approved.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval("approved"), "grace_granted": false,
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
 			_ = json.NewEncoder(w).Encode(map[string]any{"events": []any{
 				fixture.auditEvent("approved_by_grace", ""),
 				fixture.auditEvent("grace_granted", "approval-1"),
@@ -120,7 +204,7 @@ func TestApprovalActorRejectsGraceAuditAfterApprovedRetry(t *testing.T) {
 	t.Cleanup(server.Close)
 	delegate := &approvalDelegate{fixture: fixture}
 	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
-		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(), PollInterval: time.Millisecond,
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
 		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
 	})
 	require.NoError(t, err)
@@ -134,20 +218,25 @@ func TestApprovalActorRejectsMissingTokenConsumptionAudit(t *testing.T) {
 	t.Parallel()
 
 	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
-	var detailReads atomic.Int32
+	var approved atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/operation-approvals":
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
 			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
-		case "/api/operation-approvals/approval-1":
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
 			status, token := "pending", ""
-			if detailReads.Add(1) >= 2 {
+			if approved.Load() {
 				status, token = "approved", "one-time-token"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"approval": fixture.approval(status), "approval_token": token,
 			})
-		case "/api/operation-audit":
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			approved.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval("approved"), "grace_granted": false,
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
 			_ = json.NewEncoder(w).Encode(map[string]any{"events": []any{}})
 		default:
 			http.NotFound(w, request)
@@ -156,7 +245,7 @@ func TestApprovalActorRejectsMissingTokenConsumptionAudit(t *testing.T) {
 	t.Cleanup(server.Close)
 	delegate := &approvalDelegate{fixture: fixture}
 	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
-		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(), PollInterval: time.Millisecond,
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
 		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
 	})
 	require.NoError(t, err)

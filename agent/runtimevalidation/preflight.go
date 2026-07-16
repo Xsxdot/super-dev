@@ -149,7 +149,7 @@ func validateFoundationBrowserAndApproval(foundationRoot, targetOS string) error
 		!approval.BrowserDebugOpen || !approval.CodeDebugOpen || !approval.CodeDebugEvaluate {
 		return fmt.Errorf("all runtime validation mutation approval policies must remain enabled")
 	}
-	// grace_minutes 是产品必填范围；validation actor 从不申请 grace，所有 mutation 仍逐次匹配真人批准 identity。
+	// grace_minutes 是产品必填范围；validation actor 始终提交 grant_grace=false，必审 mutation 仍逐次匹配短期精确 identity。
 	if approval.GraceMinutes < 1 || approval.GraceMinutes > 120 {
 		return fmt.Errorf("approval grace_minutes must remain within the product-valid range 1..120")
 	}
