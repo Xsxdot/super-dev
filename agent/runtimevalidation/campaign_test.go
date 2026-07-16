@@ -27,6 +27,7 @@ func TestCampaignVariablesRenderEnvironmentPortAsString(t *testing.T) {
 	pipelineRoot := filepath.Join(bundleRoot, "validation", "pipeline")
 	require.NoError(t, os.MkdirAll(pipelineRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "project-pipeline.json"), []byte(`{"id":"runtime-validation"}`), 0o600))
+	writeRemotePipelineTestSources(t, bundleRoot)
 	variables, err := campaignVariables(bundleRoot, t.TempDir(), RuntimeInput{Adapters: map[string]string{"dlv": "/tmp/dlv"}}, "campaign-1", map[string]int{"go": 18190}, []Fixture{{Provider: "go"}})
 	require.NoError(t, err)
 	require.Equal(t, "18190", variables["go_port"])

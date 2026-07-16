@@ -60,17 +60,29 @@ steps:
         set -eu;
         campaign='${vars.campaign_id}';
         root='${vars.remote_root}';
-        mode='${vars.root_mode}';
+        root_mode='${vars.root_mode}';
         expected="/srv/superdev-runtime-validation/$campaign";
         printf '%s\n' "$campaign" | grep -Eq '^rv-(darwin|linux|windows)-(amd64|arm64)-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$' || exit 41;
         test "$root" = "$expected";
         test ! -L /srv/superdev-runtime-validation;
-        case "$mode" in
-          create) test ! -e "$root" ;;
-          existing) test -d "$root"; test -f "$root/.campaign-owner"; test "$(cat "$root/.campaign-owner")" = "$campaign" ;;
+        case "$root_mode" in
+          create)
+            test ! -e "$root";
+            test ! -L "$root";
+            root_state=absent
+            ;;
+          existing)
+            test -d "$root";
+            test ! -L "$root";
+            test -f "$root/.campaign-owner";
+            test ! -L "$root/.campaign-owner";
+            test "$(wc -l <"$root/.campaign-owner")" -eq 1;
+            test "$(cat "$root/.campaign-owner")" = "$campaign";
+            root_state=owned
+            ;;
           *) exit 44 ;;
         esac;
-        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"preflight_root","campaign_id":"%s"}\n' "$campaign"
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"preflight_root","root_mode":"%s","root_state":"%s","campaign_id":"%s"}\n' "$root_mode" "$root_state" "$campaign"
   - name: Initialize Campaign Root
     type: remote_command
     roles: ["${vars.role}"]
@@ -82,20 +94,43 @@ steps:
         set -eu;
         campaign='${vars.campaign_id}';
         root='${vars.remote_root}';
-        mode='${vars.root_mode}';
-        test "$root" = "/srv/superdev-runtime-validation/$campaign";
-        if [ "$mode" = create ]; then
-          mkdir -p /srv/superdev-runtime-validation;
-          test ! -L /srv/superdev-runtime-validation;
-          mkdir "$root";
-          printf '%s\n' "$campaign" >"$root/.campaign-owner";
-          chmod 0600 "$root/.campaign-owner";
-        fi;
-        test "$(cat "$root/.campaign-owner")" = "$campaign";
+        root_mode='${vars.root_mode}';
+        version='${vars.version}';
+        expected="/srv/superdev-runtime-validation/$campaign";
+        printf '%s\n' "$campaign" | grep -Eq '^rv-(darwin|linux|windows)-(amd64|arm64)-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$' || exit 41;
+        case "$version" in ''|*[!A-Za-z0-9._-]*) exit 42 ;; esac;
+        test "$root" = "$expected";
+        test ! -L /srv/superdev-runtime-validation;
+        case "$root_mode" in
+          create)
+            test ! -e "$root";
+            test ! -L "$root";
+            mkdir -p /srv/superdev-runtime-validation;
+            test ! -L /srv/superdev-runtime-validation;
+            mkdir "$root";
+            printf '%s\n' "$campaign" >"$root/.campaign-owner";
+            chmod 0600 "$root/.campaign-owner"
+            ;;
+          existing)
+            test -d "$root";
+            test ! -L "$root";
+            test -f "$root/.campaign-owner";
+            test ! -L "$root/.campaign-owner";
+            test "$(wc -l <"$root/.campaign-owner")" -eq 1;
+            test "$(cat "$root/.campaign-owner")" = "$campaign"
+            ;;
+          *) exit 44 ;;
+        esac;
         mkdir -p "$root/releases" "$root/temp" "$root/logs";
         test ! -L "$root/releases";
         test ! -L "$root/temp";
-        test ! -L "$root/logs"
+        test ! -L "$root/logs";
+        artifact="$root/temp/release-$campaign-$version.tar.gz";
+        checksum="$root/temp/release-$campaign-$version.sha256";
+        test ! -L "$artifact";
+        test ! -L "$checksum";
+        rm -f -- "$artifact" "$checksum";
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"initialize_root","outcome":"success","campaign_id":"%s"}\n' "$campaign"
   - name: Transfer Artifact
     type: transfer
     roles: ["${vars.role}"]
@@ -124,15 +159,26 @@ steps:
         campaign='${vars.campaign_id}';
         root='${vars.remote_root}';
         version='${vars.version}';
-        test "$root" = "/srv/superdev-runtime-validation/$campaign";
+        expected_root="/srv/superdev-runtime-validation/$campaign";
+        test "$root" = "$expected_root";
+        test ! -L /srv/superdev-runtime-validation;
+        test ! -L "$root";
+        test -f "$root/.campaign-owner";
+        test "$(wc -l <"$root/.campaign-owner")" -eq 1;
         test "$(cat "$root/.campaign-owner")" = "$campaign";
+        test -d "$root/temp";
+        test ! -L "$root/temp";
         artifact="$root/temp/release-$campaign-$version.tar.gz";
         checksum="$root/temp/release-$campaign-$version.sha256";
+        test -f "$artifact";
+        test ! -L "$artifact";
+        test -f "$checksum";
+        test ! -L "$checksum";
         expected="$(cat "$checksum")";
         printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$';
         actual="$(sha256sum "$artifact" | awk '{print $1}')";
         test "$actual" = "$expected";
-        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"verify_transfer_digest","campaign_id":"%s","version":"%s","sha256":"%s"}\n' "$campaign" "$version" "$actual"
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"verify_transfer_digest","outcome":"success","campaign_id":"%s","version":"%s","sha256":"%s"}\n' "$campaign" "$version" "$actual"
   - name: Extract Artifact
     type: remote_command
     roles: ["${vars.role}"]
@@ -145,15 +191,30 @@ steps:
         campaign='${vars.campaign_id}';
         root='${vars.remote_root}';
         version='${vars.version}';
-        case "$version" in ''|*[!A-Za-z0-9._-]*) exit 43 ;; esac;
-        test "$root" = "/srv/superdev-runtime-validation/$campaign";
+        expected="/srv/superdev-runtime-validation/$campaign";
+        test "$root" = "$expected";
+        test ! -L /srv/superdev-runtime-validation;
+        test -f "$root/.campaign-owner";
+        test ! -L "$root/.campaign-owner";
+        test ! -L "$root";
+        test "$(wc -l <"$root/.campaign-owner")" -eq 1;
         test "$(cat "$root/.campaign-owner")" = "$campaign";
+        test -d "$root/releases";
+        test ! -L "$root/releases";
+        test -d "$root/temp";
+        test ! -L "$root/temp";
+        case "$version" in ''|*[!A-Za-z0-9._-]*) exit 43 ;; esac;
         release="$root/releases/$version";
         test ! -L "$release";
+        artifact="$root/temp/release-$campaign-$version.tar.gz";
+        test -f "$artifact";
+        test ! -L "$artifact";
         rm -rf -- "$release";
         mkdir -p "$release";
-        tar -xzf "$root/temp/release-$campaign-$version.tar.gz" -C "$release";
-        chmod 0700 "$release/remote-release.sh"
+        tar -xzf "$artifact" -C "$release";
+        test -f "$release/remote-release.sh";
+        chmod 0700 "$release/remote-release.sh";
+        printf '{"level":"info","component":"runtime-validation-pipeline","stage":"extract_artifact","outcome":"success","version":"%s"}\n' "$version"
   - name: Activate Artifact
     type: remote_command
     roles: ["${vars.role}"]

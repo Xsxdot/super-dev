@@ -9,6 +9,7 @@
 package runtimevalidation
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -114,6 +115,51 @@ func TestRemotePipelineBindsGovernanceIdentityToLiveHost(t *testing.T) {
 		}
 	}
 	require.Equal(t, "{{expected_remote_identity}}", assertionValue["node_id"])
+}
+
+func TestRepositoryRemotePipelineUsesPreparedArtifactPaths(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	want := map[string]string{
+		"pipeline-config-validate":  "a",
+		"pipeline-deploy-a":         "a",
+		"pipeline-deploy-b":         "b",
+		"pipeline-rollback-a":       "a",
+		"pipeline-cleanup":          "a",
+		"pipeline-cleanup-on-abort": "a",
+	}
+	for _, scenario := range scenarios {
+		if scenario.ID != "remote-pipeline" {
+			continue
+		}
+		for _, step := range append(scenario.Steps, scenario.Cleanup...) {
+			version, ok := want[step.ID]
+			if !ok {
+				continue
+			}
+			variables, ok := step.Arguments["variables"].(map[string]any)
+			require.True(t, ok, step.ID)
+			require.Equal(t, "{{pipeline_artifact_path_"+version+"}}", variables["artifact_path"], step.ID)
+			require.Equal(t, "{{pipeline_artifact_checksum_path_"+version+"}}", variables["artifact_checksum_path"], step.ID)
+			require.NotContains(t, variables, "artifact_source", step.ID)
+			require.NotContains(t, variables, "remote_release_script", step.ID)
+			delete(want, step.ID)
+		}
+	}
+	require.Empty(t, want)
+}
+
+func TestRepositoryRemotePipelineTemplateEmitsStrictOracleLogs(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "pipeline", "templates", "remote-validation-deploy.yaml"))
+	require.NoError(t, err)
+	text := string(raw)
+	require.Contains(t, text, `"stage":"preflight_root","root_mode":"%s","root_state":"%s"`)
+	require.Contains(t, text, `"stage":"verify_transfer_digest","outcome":"success"`)
+	require.Contains(t, text, `test "$(wc -l <"$root/.campaign-owner")" -eq 1`)
 }
 
 func TestRepositoryPreviewExecutionRecordsReturnedPreviewPath(t *testing.T) {

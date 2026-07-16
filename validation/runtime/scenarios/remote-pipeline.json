@@ -58,6 +58,26 @@
       "secret": false,
       "description": "由 driver 从 pipeline/project-pipeline.json 加载并延迟渲染的 ProjectPipeline object。"
     },
+    "pipeline_artifact_path_a": {
+      "required": true,
+      "secret": false,
+      "description": "runner 在 campaign 工作区准备的 A 版扁平 tar.gz 绝对路径。"
+    },
+    "pipeline_artifact_checksum_path_a": {
+      "required": true,
+      "secret": false,
+      "description": "A 版 tar.gz 的小写 SHA-256 sidecar 绝对路径。"
+    },
+    "pipeline_artifact_path_b": {
+      "required": true,
+      "secret": false,
+      "description": "runner 在 campaign 工作区准备的 B 版扁平 tar.gz 绝对路径。"
+    },
+    "pipeline_artifact_checksum_path_b": {
+      "required": true,
+      "secret": false,
+      "description": "B 版 tar.gz 的小写 SHA-256 sidecar 绝对路径。"
+    },
     "artifact_version_a": {
       "required": false,
       "default": "A",
@@ -293,8 +313,8 @@
           "version": "{{artifact_version_a}}",
           "action": "deploy",
           "root_mode": "create",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_a}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_a}}"
         }
       },
       "expect": {
@@ -335,8 +355,8 @@
         "redact": [
           "structuredContent.data.plan.variables.workspace",
           "structuredContent.data.plan.variables.artifact",
-          "structuredContent.data.plan.variables.artifact_source",
-          "structuredContent.data.plan.variables.remote_release_script",
+          "structuredContent.data.plan.variables.artifact_path",
+          "structuredContent.data.plan.variables.artifact_checksum_path",
           "structuredContent.data.run.step_runs.*.tasks.*.host_address",
           "structuredContent.data.run.step_runs.*.tasks.*.host_name"
         ],
@@ -365,8 +385,8 @@
           "version": "{{artifact_version_a}}",
           "action": "deploy",
           "root_mode": "create",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_a}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_a}}"
         },
         "approval_wait_seconds": "{{approval_wait_seconds}}",
         "debug_session_id": "{{debug_session_id}}"
@@ -538,8 +558,8 @@
           "version": "{{artifact_version_b}}",
           "action": "deploy",
           "root_mode": "existing",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-b",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_b}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_b}}"
         },
         "approval_wait_seconds": "{{approval_wait_seconds}}",
         "debug_session_id": "{{debug_session_id}}"
@@ -750,8 +770,8 @@
         "variables": {
           "action": "deploy",
           "root_mode": "existing",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_a}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_a}}"
         },
         "approval_wait_seconds": "{{approval_wait_seconds}}",
         "debug_session_id": "{{debug_session_id}}"
@@ -920,8 +940,8 @@
         "variables": {
           "action": "cleanup",
           "root_mode": "existing",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_a}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_a}}"
         },
         "approval_wait_seconds": "{{approval_wait_seconds}}",
         "debug_session_id": "{{debug_session_id}}"
@@ -1111,8 +1131,8 @@
         "variables": {
           "action": "cleanup",
           "root_mode": "existing",
-          "artifact_source": "{{package_root}}/pipeline/artifacts/version-a",
-          "remote_release_script": "{{package_root}}/pipeline/scripts/remote-release.sh"
+          "artifact_path": "{{pipeline_artifact_path_a}}",
+          "artifact_checksum_path": "{{pipeline_artifact_checksum_path_a}}"
         },
         "approval_wait_seconds": "{{approval_wait_seconds}}",
         "debug_session_id": "{{debug_session_id}}"

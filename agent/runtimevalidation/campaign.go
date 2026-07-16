@@ -565,6 +565,10 @@ func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campa
 	if goFixture.Provider == "" {
 		return nil, fmt.Errorf("Go fixture is required")
 	}
+	pipelineArtifacts, err := prepareRemotePipelineArtifacts(bundleRoot, projectRoot, campaignID)
+	if err != nil {
+		return nil, err
+	}
 	goPort := ports["go"]
 	projectName := campaignID
 	variables := map[string]any{
@@ -579,7 +583,11 @@ func campaignVariables(bundleRoot, projectRoot string, input RuntimeInput, campa
 		"expected_remote_identity": input.ExpectedRemoteIdentity,
 		"linux_root":               strings.ReplaceAll(input.RemoteRootTemplate, "{campaign_id}", campaignID),
 		"pipeline_id":              "runtime-validation-remote", "remote_pipeline_config": remotePipeline,
-		"pipeline_abort_cleanup_safe": "",
+		"pipeline_artifact_path_a":          pipelineArtifacts["A"].Path,
+		"pipeline_artifact_checksum_path_a": pipelineArtifacts["A"].ChecksumPath,
+		"pipeline_artifact_path_b":          pipelineArtifacts["B"].Path,
+		"pipeline_artifact_checksum_path_b": pipelineArtifacts["B"].ChecksumPath,
+		"pipeline_abort_cleanup_safe":       "",
 		"bootstrap_pipeline_config": map[string]any{
 			"id": "bootstrap-validation", "name": "Runtime Validation Bootstrap", "services": []any{},
 			"pipeline": map[string]any{"build": []any{map[string]any{"name": "Validate", "type": "local_command", "with": map[string]any{"cmd": "echo runtime-validation"}}}},
