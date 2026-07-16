@@ -56,42 +56,42 @@
   "steps": [
     {
       "id": "code-runtime-before",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
-      "_comment": "使用正式 MCP 读取受管进程 PID，而不是 tasklist/进程库；campaign 在此阶段保证项目内只有 Go 主服务。",
+      "_comment": "使用正式 MCP 按 deployment ID 读取受管进程 PID，而不是依赖 list_services 的非合同排序或直读进程库。",
       "arguments": {
-        "project_name": "{{go_project_name}}"
+        "project_name": "{{go_project_name}}",
+        "deployment_id": "{{go_deployment_id}}"
       },
       "expect": {
         "outcome": "success",
         "assertions": [
           {
-            "path": "structuredContent.data.services.0.deployments.0.id",
+            "path": "structuredContent.data.target.deployment.id",
             "operator": "eq",
             "variable": "go_deployment_id"
           },
           {
-            "path": "structuredContent.data.services.0.deployments.0.status",
+            "path": "structuredContent.data.status",
             "operator": "eq",
             "value": "running"
           },
           {
-            "path": "structuredContent.data.services.0.deployments.0.pid",
+            "path": "structuredContent.data.runtime_summary.pid",
             "operator": "gt",
             "value": 0
           }
         ]
       },
       "capture": {
-        "code_runtime_pid_before": "structuredContent.data.services.0.deployments.0.pid"
+        "code_runtime_pid_before": "structuredContent.data.runtime_summary.pid"
       },
       "evidence": {
         "record": [
           "structuredContent.summary",
-          "structuredContent.data.services.0.id",
-          "structuredContent.data.services.0.deployments.0.id",
-          "structuredContent.data.services.0.deployments.0.status",
-          "structuredContent.data.services.0.deployments.0.pid"
+          "structuredContent.data.target.deployment.id",
+          "structuredContent.data.status",
+          "structuredContent.data.runtime_summary.pid"
         ],
         "redact": [],
         "forbid": [
@@ -795,26 +795,27 @@
     },
     {
       "id": "code-runtime-after",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
       "arguments": {
-        "project_name": "{{go_project_name}}"
+        "project_name": "{{go_project_name}}",
+        "deployment_id": "{{go_deployment_id}}"
       },
       "expect": {
         "outcome": "success",
         "assertions": [
           {
-            "path": "structuredContent.data.services.0.deployments.0.id",
+            "path": "structuredContent.data.target.deployment.id",
             "operator": "eq",
             "variable": "go_deployment_id"
           },
           {
-            "path": "structuredContent.data.services.0.deployments.0.status",
+            "path": "structuredContent.data.status",
             "operator": "eq",
             "value": "running"
           },
           {
-            "path": "structuredContent.data.services.0.deployments.0.pid",
+            "path": "structuredContent.data.runtime_summary.pid",
             "operator": "eq",
             "variable": "code_runtime_pid_before"
           }
@@ -823,9 +824,9 @@
       "evidence": {
         "record": [
           "structuredContent.summary",
-          "structuredContent.data.services.0.deployments.0.id",
-          "structuredContent.data.services.0.deployments.0.status",
-          "structuredContent.data.services.0.deployments.0.pid"
+          "structuredContent.data.target.deployment.id",
+          "structuredContent.data.status",
+          "structuredContent.data.runtime_summary.pid"
         ],
         "redact": [],
         "forbid": [
@@ -996,11 +997,12 @@
     },
     {
       "id": "wait-go-stopped-after-code",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
       "run_if": "variable_set:project_id",
       "arguments": {
-        "project_id": "{{project_id}}"
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}"
       },
       "poll": {
         "interval_ms": 1000,
@@ -1010,7 +1012,12 @@
         "outcome": "success",
         "assertions": [
           {
-            "path": "structuredContent.data.services.0.deployments.0.status",
+            "path": "structuredContent.data.target.deployment.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.status",
             "operator": "eq",
             "value": "stopped"
           }
@@ -1018,8 +1025,9 @@
       },
       "evidence": {
         "record": [
-          "structuredContent.data.services.0.deployments.0.status",
-          "structuredContent.data.services.0.deployments.0.pid"
+          "structuredContent.data.target.deployment.id",
+          "structuredContent.data.status",
+          "structuredContent.data.runtime_summary.pid"
         ],
         "redact": [],
         "forbid": []

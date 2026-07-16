@@ -596,6 +596,42 @@ func TestPrimaryGoServiceUpsertUsesAdmittedAdapterPath(t *testing.T) {
 	}
 }
 
+func TestCodeDebugScenarioObservesExactGoDeploymentIdentity(t *testing.T) {
+	t.Parallel()
+	source, err := LoadPackageSource(filepath.Join("..", "..", "validation", "windows-real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario, found := scenarioByID(source.Scenarios, "code-debug")
+	if !found {
+		t.Fatal("code-debug scenario is missing")
+	}
+	wantSteps := map[string]string{
+		"code-runtime-before":        "running",
+		"code-runtime-after":         "running",
+		"wait-go-stopped-after-code": "stopped",
+	}
+	for _, step := range append(scenario.Steps, scenario.Cleanup...) {
+		wantStatus, wanted := wantSteps[step.ID]
+		if !wanted {
+			continue
+		}
+		if step.Tool != "diagnose_service" {
+			t.Errorf("%s tool = %q, want diagnose_service", step.ID, step.Tool)
+		}
+		if got := step.Arguments["deployment_id"]; got != "{{go_deployment_id}}" {
+			t.Errorf("%s deployment_id = %v", step.ID, got)
+		}
+		if len(step.Expect.Assertions) < 2 || step.Expect.Assertions[0].Path != "structuredContent.data.target.deployment.id" || step.Expect.Assertions[1].Path != "structuredContent.data.status" || step.Expect.Assertions[1].Value != wantStatus {
+			t.Errorf("%s assertions = %#v", step.ID, step.Expect.Assertions)
+		}
+		delete(wantSteps, step.ID)
+	}
+	if len(wantSteps) != 0 {
+		t.Fatalf("missing exact deployment observation steps: %v", wantSteps)
+	}
+}
+
 func TestProviderCodeDebugConfigNeverFallsBackAfterMissingAdmittedBinding(t *testing.T) {
 	t.Parallel()
 	config, err := providerCodeDebugConfig("python", map[string]providerAdapterBinding{})

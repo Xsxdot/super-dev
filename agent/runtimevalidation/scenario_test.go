@@ -166,6 +166,36 @@ func TestRepositoryLifecyclePollsExactDeploymentIdentity(t *testing.T) {
 	require.Empty(t, wantSteps)
 }
 
+func TestRepositoryCodeDebugObservesExactGoDeploymentIdentity(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	wantSteps := map[string]string{
+		"code-runtime-before":        "running",
+		"code-runtime-after":         "running",
+		"wait-go-stopped-after-code": "stopped",
+	}
+	for _, scenario := range scenarios {
+		if scenario.ID != "code-debug" {
+			continue
+		}
+		for _, step := range append(scenario.Steps, scenario.Cleanup...) {
+			wantStatus, wanted := wantSteps[step.ID]
+			if !wanted {
+				continue
+			}
+			require.Equal(t, "diagnose_service", step.Tool, step.ID)
+			require.Equal(t, "{{go_deployment_id}}", step.Arguments["deployment_id"], step.ID)
+			require.Equal(t, "structuredContent.data.target.deployment.id", step.Expect.Assertions[0].Path, step.ID)
+			require.Equal(t, "structuredContent.data.status", step.Expect.Assertions[1].Path, step.ID)
+			require.Equal(t, wantStatus, step.Expect.Assertions[1].Value, step.ID)
+			delete(wantSteps, step.ID)
+		}
+	}
+	require.Empty(t, wantSteps)
+}
+
 func TestRepositoryApprovalReadUsesUnapprovedPendingProbe(t *testing.T) {
 	t.Parallel()
 
