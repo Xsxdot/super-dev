@@ -149,6 +149,9 @@ func (e *ToolExecutor) Run(ctx context.Context, request ToolCampaignRequest) Too
 		if boundary >= 0 {
 			prefix := scenario
 			prefix.Steps = append([]ScenarioStep{}, scenario.Steps[:boundary+1]...)
+			// bootstrap 只是完整场景的前缀，不是场景终点。若继承 cleanup，
+			// 会在 remainder 创建资源前提前回收，并在 remainder 结束后重复执行。
+			prefix.Cleanup = nil
 			bootstrapRemainder = append([]ScenarioStep{}, scenario.Steps[boundary+1:]...)
 			execution := e.executeScenario(ctx, request, prefix, passed)
 			bootstrapScenario = &execution

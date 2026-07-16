@@ -84,6 +84,47 @@ func TestToolExecutorBootstrapsProjectBeforeCallbackAndRemainingTopology(t *test
 	}
 }
 
+func TestToolExecutorDefersBootstrapCleanupUntilScenarioRemainder(t *testing.T) {
+	t.Parallel()
+
+	bootstrap := executorScenario("config-security-lifecycle", []ScenarioStep{
+		executorStep("probe-project", "probe_project_config", CoveragePrimary, "structuredContent.data.root", "/tmp/project"),
+		{
+			ID: "resolve-project", Tool: "get_project", Coverage: CoverageSupporting,
+			Expect:  StepExpectation{Outcome: ExpectedOutcomeSuccess, Assertions: []Assertion{{Path: "structuredContent.data.id", Operator: "not_empty"}}},
+			Capture: map[string]string{"project_id": "structuredContent.data.id"},
+		},
+		executorStep("upsert-go-service", "upsert_service", CoveragePrimary, "structuredContent.data.action", "upsert"),
+		executorStep("stop-go-service", "stop_service", CoveragePrimary, "structuredContent.data.action", "stop"),
+	})
+	cleanup := executorStep("ensure-go-stopped", "stop_service", CoverageSupporting, "structuredContent.data.action", "stop")
+	cleanup.RunIf = "variable_set:project_id&&primary_step_not_passed:stop-go-service"
+	bootstrap.Cleanup = []ScenarioStep{cleanup}
+	transport := &fakeLiveTools{
+		tools: []string{"probe_project_config", "upsert_service", "stop_service"},
+		responses: map[string]ToolCallResult{
+			"probe_project_config": successToolResult(map[string]any{"root": "/tmp/project"}),
+			"get_project":          successToolResult(map[string]any{"id": "project-42"}),
+			"upsert_service":       successToolResult(map[string]any{"action": "upsert"}),
+			"stop_service":         successToolResult(map[string]any{"action": "stop"}),
+		},
+	}
+	var callsAtBootstrap []string
+	result := NewToolExecutor(transport, transport).Run(context.Background(), ToolCampaignRequest{
+		CampaignID: "campaign-1", Scenarios: []Scenario{bootstrap},
+		AfterBootstrap: func(context.Context, map[string]any) error {
+			callsAtBootstrap = append([]string{}, transport.calls...)
+			return nil
+		},
+	})
+
+	require.Equal(t, StatusPass, result.Status)
+	require.Equal(t, []string{"probe_project_config", "get_project"}, callsAtBootstrap)
+	require.Equal(t, []string{"probe_project_config", "get_project", "upsert_service", "stop_service"}, transport.calls)
+	require.Len(t, result.Scenarios, 1)
+	require.Equal(t, StatusNotRun, result.Scenarios[0].Cleanup[0].Status)
+}
+
 func TestToolExecutorFailureStillProducesEveryPrimaryRow(t *testing.T) {
 	t.Parallel()
 
