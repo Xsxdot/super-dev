@@ -370,12 +370,30 @@ func buildRecordedEvidence(root map[string]any, contract EvidenceContract, varia
 		redactEvidencePath(redacted, strings.Split(path, "."))
 	}
 	paths := make(map[string]any, len(contract.Record))
-	for _, path := range contract.Record {
-		value, found := lookupManifestPath(redacted, path)
-		if !found {
-			return nil, fmt.Errorf("record path %s was not found after redaction", path)
+	for _, selector := range contract.Record {
+		lookupRoot := any(redacted)
+		path := selector
+		hashOnly := strings.HasPrefix(selector, "sha256:")
+		if hashOnly {
+			// 摘要必须在删除原字段前计算，但持久结果只保留 digest；截图等大字段不会进入 evidence。
+			path = strings.TrimPrefix(selector, "sha256:")
+			lookupRoot = root
 		}
-		paths[path] = value
+		value, found := lookupManifestPath(lookupRoot, path)
+		if !found {
+			phase := "after redaction"
+			if hashOnly {
+				phase = "before redaction"
+			}
+			return nil, fmt.Errorf("record path %s was not found %s", selector, phase)
+		}
+		if hashOnly {
+			value, err = digestRecordedEvidenceValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("digest record path %s: %w", selector, err)
+			}
+		}
+		paths[selector] = value
 	}
 	recorded := map[string]any{"paths": paths}
 	raw, err := json.Marshal(recorded)
@@ -394,6 +412,23 @@ func buildRecordedEvidence(root map[string]any, contract EvidenceContract, varia
 		}
 	}
 	return recorded, nil
+}
+
+func digestRecordedEvidenceValue(value any) (string, error) {
+	var raw []byte
+	switch typed := value.(type) {
+	case string:
+		raw = []byte(typed)
+	case []byte:
+		raw = typed
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		raw = encoded
+	}
+	return DigestBytes(raw), nil
 }
 
 func cloneJSONMap(input map[string]any) (map[string]any, error) {

@@ -774,7 +774,7 @@
       "id": "browser-screenshot-safe-page",
       "tool": "browser_screenshot",
       "coverage": "primary",
-      "_comment": "截图发生在只含非敏感 campaign marker 的 fixture 页面。驱动器验证 PNG，并只持久化 MIME、字节数和 SHA-256；base64 正文会在 response.json 写入前替换。",
+      "_comment": "截图发生在只含非敏感 campaign marker 的 fixture 页面。驱动器验证 PNG，证据只持久化 MIME 和 base64 payload 的 SHA-256；base64 正文不会进入报告。",
       "arguments": {
         "session_id": "{{browser_session_id}}",
         "full_page": false

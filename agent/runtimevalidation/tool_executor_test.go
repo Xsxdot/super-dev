@@ -226,6 +226,30 @@ func TestToolExecutorPersistsOnlySelectedRedactedCorrelatedEvidence(t *testing.T
 	require.Equal(t, "evidence/tool-campaign.json#/scenarios/0/steps/0/recorded_evidence", result.PrimaryEvidence[0].EvidenceRef)
 }
 
+func TestBuildRecordedEvidenceHashesFieldBeforeRedaction(t *testing.T) {
+	t.Parallel()
+
+	root := map[string]any{
+		"structuredContent": map[string]any{
+			"data": map[string]any{
+				"screenshot": map[string]any{"data_base64": "cG5nLWJ5dGVz"},
+			},
+		},
+	}
+	contract := EvidenceContract{
+		Record: []string{"sha256:structuredContent.data.screenshot.data_base64"},
+		Redact: []string{"structuredContent.data.screenshot.data_base64"},
+	}
+
+	recorded, err := buildRecordedEvidence(root, contract, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"paths": map[string]any{
+		"sha256:structuredContent.data.screenshot.data_base64": DigestBytes([]byte("cG5nLWJ5dGVz")),
+	}}, recorded)
+	require.NotContains(t, fmt.Sprint(recorded), "cG5nLWJ5dGVz")
+}
+
 func TestToolExecutorReportsCommittedMutationBeforeEvidenceFailure(t *testing.T) {
 	t.Parallel()
 

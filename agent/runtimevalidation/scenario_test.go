@@ -243,6 +243,7 @@ func TestRepositoryBrowserEvidenceOnlyRequiresSuccessPayloadFields(t *testing.T)
 		}
 		foundSnapshot := false
 		foundEvaluate := false
+		foundScreenshot := false
 		for _, step := range scenario.Steps {
 			switch step.ID {
 			case "browser-snapshot-result":
@@ -254,10 +255,16 @@ func TestRepositoryBrowserEvidenceOnlyRequiresSuccessPayloadFields(t *testing.T)
 				require.Contains(t, step.Evidence.Record, "structuredContent.data.result.session_id")
 				require.NotContains(t, step.Evidence.Record, "structuredContent.code")
 				require.NotContains(t, step.Evidence.Record, "structuredContent.message")
+			case "browser-screenshot-safe-page":
+				foundScreenshot = true
+				require.Contains(t, step.Evidence.Record, "sha256:structuredContent.data.screenshot.data_base64")
+				require.Contains(t, step.Evidence.Redact, "structuredContent.data.screenshot.data_base64")
+				require.NotContains(t, step.Evidence.Record, "structuredContent.data.screenshot.data_base64")
 			}
 		}
 		require.True(t, foundSnapshot, "browser-snapshot-result step is absent")
 		require.True(t, foundEvaluate, "browser-evaluate-policy step is absent")
+		require.True(t, foundScreenshot, "browser-screenshot-safe-page step is absent")
 		return
 	}
 	t.Fatal("browser-debug scenario is absent")
