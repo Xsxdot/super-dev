@@ -239,6 +239,48 @@ func TestManagerDebuggerSnapshotMissing(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestThreadStepActionsWaitForStoppedEvent(t *testing.T) {
+	for _, action := range []string{"step_over", "step_in", "step_out"} {
+		t.Run(action, func(t *testing.T) {
+			dap := &fakeDAP{}
+			mgr, session := openManagerTestSession(t, t.TempDir(), dap)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			type result struct {
+				value map[string]any
+				err   error
+			}
+			resultCh := make(chan result, 1)
+
+			go func() {
+				value, err := mgr.ThreadAction(ctx, session.ID, action, 7)
+				resultCh <- result{value: value, err: err}
+			}()
+
+			deadline := time.After(500 * time.Millisecond)
+			for dap.subscriberCount() < 2 {
+				select {
+				case got := <-resultCh:
+					t.Fatalf("%s returned before the asynchronous stopped event: result=%v err=%v", action, got.value, got.err)
+				case <-deadline:
+					t.Fatalf("%s did not subscribe for the asynchronous stopped event", action)
+				case <-time.After(time.Millisecond):
+				}
+			}
+
+			dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": 7}})
+			select {
+			case got := <-resultCh:
+				require.NoError(t, got.err)
+				assert.Equal(t, action, got.value["action"])
+				assert.Equal(t, 7, got.value["thread_id"])
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("%s did not return after the asynchronous stopped event", action)
+			}
+		})
+	}
+}
+
 func TestContinueRuntimeContinuesDeploymentDAP(t *testing.T) {
 	dap := &fakeDAP{}
 	mgr, session := openManagerTestSession(t, t.TempDir(), dap)

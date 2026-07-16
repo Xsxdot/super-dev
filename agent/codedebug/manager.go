@@ -1123,12 +1123,40 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 	return result, nil
 }
 
-// ThreadAction 执行 continue/pause/step 动作。
+// ThreadAction 执行 continue、pause 或 step 动作。
+//
+// 参数：
+//   - ctx: 控制 DAP 请求及异步 step 完成等待的上下文
+//   - sessionID: 目标代码调试 session
+//   - action: continue、pause、step_over、step_in 或 step_out
+//   - threadID: 目标 DAP 线程 ID
+//
+// 返回：
+//   - 已完成动作的 session、action 与 thread identity
+//   - session、action、DAP 请求或异步完成等待错误
+//
+// 注意：
+//   - step 请求的 DAP response 只表示 adapter 已接收命令；必须等到后续 stopped
+//     event 才能向调用方宣告完成，否则紧接的下一条 step 会撞上运行中的 debuggee。
 func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, threadID int) (map[string]any, error) {
 	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
+	actionLog := logger.GetLogger().WithEntryName("CodeDebugThreadAction").WithFields(map[string]any{
+		"session_id": sessionID,
+		"action":     action,
+		"thread_id":  threadID,
+	})
+	waitForStop := action == "step_over" || action == "step_in" || action == "step_out"
+	var stoppedSub <-chan map[string]any
+	var cancelStopped func()
+	if waitForStop {
+		// 先订阅再发 step，避免 adapter 在 response 前后立即送出的 stopped event 丢失。
+		stoppedSub, cancelStopped = runtime.dap.Subscribe()
+		defer cancelStopped()
+	}
+	actionLog.Info("开始执行代码调试线程动作")
 	switch action {
 	case "continue":
 		err = runtime.dap.Continue(ctx, threadID)
@@ -1144,7 +1172,21 @@ func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, th
 		return nil, ErrConfigInvalid
 	}
 	if err != nil {
+		actionLog.WithErr(err).Error("代码调试线程动作 DAP 请求失败")
 		return nil, err
+	}
+	if waitForStop {
+		stopped, waitErr := waitForStoppedEvent(ctx, stoppedSub)
+		if waitErr != nil {
+			actionLog.WithErr(waitErr).Error("等待代码调试 step 完成事件失败")
+			return nil, fmt.Errorf("wait for %s stopped event: %w", action, waitErr)
+		}
+		if stoppedThreadID := intFromAny(stopped["threadId"]); stoppedThreadID > 0 {
+			threadID = stoppedThreadID
+		}
+		actionLog.WithField("stopped_thread_id", threadID).Info("代码调试 step 已由 stopped event 确认完成")
+	} else {
+		actionLog.Info("代码调试线程动作 DAP 请求完成")
 	}
 	return map[string]any{"session_id": sessionID, "action": action, "thread_id": threadID}, nil
 }
