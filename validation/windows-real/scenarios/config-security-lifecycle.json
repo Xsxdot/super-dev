@@ -194,11 +194,11 @@
     },
     {
       "id": "wait-go-running",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
-      "arguments": {"project_id": "{{project_id}}"},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.services.0.deployments.0.status", "operator": "eq", "value": "running"}]},
-      "evidence": {"record": ["structuredContent.data.services.0.deployments.0.status", "structuredContent.data.services.0.deployments.0.pid"], "redact": [], "forbid": []},
+      "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "running"}]},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {
@@ -211,11 +211,11 @@
     },
     {
       "id": "wait-go-restarted",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
-      "arguments": {"project_id": "{{project_id}}"},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.services.0.deployments.0.status", "operator": "eq", "value": "running"}]},
-      "evidence": {"record": ["structuredContent.data.services.0.deployments.0.status", "structuredContent.data.services.0.deployments.0.pid"], "redact": [], "forbid": []},
+      "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "running"}]},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {
@@ -228,11 +228,11 @@
     },
     {
       "id": "wait-go-stopped",
-      "tool": "list_services",
+      "tool": "diagnose_service",
       "coverage": "supporting",
-      "arguments": {"project_id": "{{project_id}}"},
-      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.services.0.deployments.0.status", "operator": "eq", "value": "stopped"}]},
-      "evidence": {"record": ["structuredContent.data.services.0.deployments.0.status", "structuredContent.data.services.0.deployments.0.pid"], "redact": [], "forbid": []},
+      "arguments": {"project_id": "{{project_id}}", "deployment_id": "{{go_deployment_id}}"},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.status", "operator": "eq", "value": "stopped"}]},
+      "evidence": {"record": ["structuredContent.data.status", "structuredContent.data.target.deployment.pid"], "redact": [], "forbid": []},
       "poll": {"interval_seconds": 1, "timeout_seconds": 60}
     },
     {

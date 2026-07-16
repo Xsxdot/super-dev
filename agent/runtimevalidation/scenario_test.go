@@ -135,6 +135,33 @@ func TestRepositoryPreviewExecutionRecordsReturnedPreviewPath(t *testing.T) {
 	require.Equal(t, []string{"structuredContent.data.preview"}, record)
 }
 
+func TestRepositoryLifecyclePollsExactDeploymentIdentity(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
+	require.NoError(t, err)
+	wantSteps := map[string]bool{
+		"wait-go-running":   true,
+		"wait-go-restarted": true,
+		"wait-go-stopped":   true,
+	}
+	for _, scenario := range scenarios {
+		if scenario.ID != "config-security-lifecycle" {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if !wantSteps[step.ID] {
+				continue
+			}
+			require.Equal(t, "diagnose_service", step.Tool, step.ID)
+			require.Equal(t, "{{go_deployment_id}}", step.Arguments["deployment_id"], step.ID)
+			require.Equal(t, "structuredContent.data.status", step.Expect.Assertions[0].Path, step.ID)
+			delete(wantSteps, step.ID)
+		}
+	}
+	require.Empty(t, wantSteps)
+}
+
 func validScenario(tool string) Scenario {
 	return Scenario{
 		SchemaVersion: ScenarioSchemaVersion,
