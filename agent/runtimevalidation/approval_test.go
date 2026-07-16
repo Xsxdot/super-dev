@@ -58,7 +58,10 @@ func TestApprovalActorApprovesExactAllowlistedPendingAndRetries(t *testing.T) {
 			require.Equal(t, "0", request.URL.Query().Get("limit"))
 			events := []any{fixture.auditEvent("approved", "approval-1")}
 			if auditReads.Add(1) >= 2 {
-				events = append(events, fixture.auditEvent("executed", "approval-1"))
+				executed := fixture.auditEvent("executed", "approval-1")
+				// Retry 重新 preview 时会生成新 plan ID；一次性 token 仍由 approval ID、fingerprint 与 target 绑定。
+				executed["plan"].(map[string]any)["id"] = "retry-plan-1"
+				events = append(events, executed)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
 		default:

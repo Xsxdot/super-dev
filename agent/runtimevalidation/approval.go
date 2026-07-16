@@ -251,6 +251,9 @@ func (c *ApprovalToolCaller) FinalizePendingReadProbes(ctx context.Context) (App
 			if strings.TrimSpace(fmt.Sprint(event["approval_id"])) != expected.ID {
 				continue
 			}
+			if strings.TrimSpace(fmt.Sprint(RawMessageMap(event["plan"])["id"])) != expected.PlanID {
+				return evidence, fmt.Errorf("approval read probe %s terminal audit plan identity drift", expected.ID)
+			}
 			actions = append(actions, strings.TrimSpace(fmt.Sprint(event["action"])))
 		}
 		sort.Strings(actions)
@@ -572,7 +575,6 @@ func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, exp
 	for _, event := range payload.Events {
 		plan := RawMessageMap(event["plan"])
 		if strings.TrimSpace(fmt.Sprint(event["kind"])) != expected.Kind ||
-			strings.TrimSpace(fmt.Sprint(plan["id"])) != expected.PlanID ||
 			strings.TrimSpace(fmt.Sprint(plan["kind"])) != expected.Kind ||
 			strings.TrimSpace(fmt.Sprint(plan["fingerprint"])) != expected.Fingerprint {
 			continue
