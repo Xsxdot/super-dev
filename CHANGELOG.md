@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Removed non-functional Search filter/Open/Copy controls and heuristic trace-path claims, leaving the real project-log search, time-aligned service context, and pin workflow; remote installation now also rejects Windows ARM before upload when no matching agent binary is packaged.
 - Unified Windows validation steps, scenarios, providers, installer lifecycle, tool coverage, report sections, and summaries on one fact-and-evidence-derived result contract, so unattempted work is no longer reported as failure or success and post-assertion responses remain auditable.
 - Made the packaged Windows validation Runbook directly executable with stock Windows PowerShell 5.1 by preserving UTF-8 script bytes, avoiding automatic-variable parameter collisions, and keeping structured output readable without loaders or source rewriting.
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.

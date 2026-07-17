@@ -40,10 +40,6 @@ const visibleResults = computed(() => {
   return tab.value.results.filter(entry => !hidden.has(entry.deployment_id))
 })
 
-const filterChips = computed(() => [
-  { label: t('search.filters.all'), active: true },
-])
-
 watch(tab, (localValue) => {
   input.value = localValue?.query ?? ''
 }, { immediate: true })
@@ -131,22 +127,10 @@ function goToRelativeHit(offset: number) {
         >
           ›
         </button>
-        <div class="filter-chips" aria-label="search filters">
-          <button
-            v-for="chip in filterChips"
-            :key="chip.label"
-            class="filter-chip"
-            :class="{ active: chip.active }"
-            data-test="search-filter-chip"
-            type="button"
-          >
-            {{ chip.label }}
-          </button>
-        </div>
       </div>
     </div>
     <div v-if="tab.status === 'empty'" class="search-empty">
-      <div class="search-brand">Trace Search</div>
+      <div class="search-brand">{{ t('search.emptyTitle') }}</div>
     </div>
     <div v-else-if="tab.status === 'loading'" class="search-state">{{ t('search.loading') }}</div>
     <div v-else-if="tab.status === 'emptyResults'" class="search-state">{{ t('search.emptyResults') }}</div>
@@ -267,33 +251,6 @@ function goToRelativeHit(offset: number) {
 .nav-hit:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-.filter-chips {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  overflow: hidden;
-}
-.filter-chip {
-  height: 27px;
-  border: 1px solid var(--border-secondary);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--text-tertiary);
-  padding: 0 9px;
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.filter-chip.active {
-  color: #58a6ff;
-  border-color: rgba(88, 166, 255, 0.38);
-  background: rgba(88, 166, 255, 0.09);
-}
-.filter-chip:hover:not(:disabled) {
-  color: var(--text-secondary);
-  background: var(--bg-overlay);
 }
 .search-empty,
 .search-state {

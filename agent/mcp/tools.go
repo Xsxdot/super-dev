@@ -1292,7 +1292,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "list_code_debug_targets",
 				Title:       "List code debug targets",
-				Description: "List local managed language runtime deployments that can use last-resort code debugging. Node targets are experimental.",
+				Description: "List local managed language runtime deployments that can use last-resort code debugging. Node and JVM (Java/Kotlin) targets are experimental.",
 				InputSchema: emptyInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},

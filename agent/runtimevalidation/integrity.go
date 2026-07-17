@@ -61,7 +61,7 @@ func CreateBundleManifest(root string, target Target) (BundleManifest, error) {
 	if !supportedTarget(target) {
 		return BundleManifest{}, fmt.Errorf("unsupported bundle target %s/%s", target.OS, target.Architecture)
 	}
-	files, err := scanBundlePayload(root)
+	files, err := scanBundlePayload(root, target)
 	if err != nil {
 		return BundleManifest{}, err
 	}
@@ -133,7 +133,7 @@ func VerifyBundle(root string, expectedTarget Target) (BundleReceipt, error) {
 	if manifest.Target != expectedTarget {
 		return BundleReceipt{}, fmt.Errorf("bundle target %s does not match expected %s", manifest.Target.String(), expectedTarget.String())
 	}
-	actualFiles, err := scanBundlePayload(root)
+	actualFiles, err := scanBundlePayload(root, manifest.Target)
 	if err != nil {
 		return BundleReceipt{}, err
 	}
@@ -142,7 +142,11 @@ func VerifyBundle(root string, expectedTarget Target) (BundleReceipt, error) {
 	}
 	for index := range manifest.Files {
 		if actualFiles[index] != manifest.Files[index] {
-			return BundleReceipt{}, fmt.Errorf("bundle payload drift at %s", manifest.Files[index].Path)
+			expected, actual := manifest.Files[index], actualFiles[index]
+			return BundleReceipt{}, fmt.Errorf(
+				"bundle payload drift at %s: expected mode=%s size=%d sha256=%s, actual mode=%s size=%d sha256=%s",
+				expected.Path, expected.Mode, expected.Size, expected.SHA256, actual.Mode, actual.Size, actual.SHA256,
+			)
 		}
 	}
 	receipt := BundleReceipt{Target: manifest.Target, ManifestSHA256: actualManifestDigest, FileCount: len(manifest.Files)}
@@ -167,7 +171,7 @@ func validateBundleManifest(manifest BundleManifest) error {
 	return nil
 }
 
-func scanBundlePayload(root string) ([]BundleFileIdentity, error) {
+func scanBundlePayload(root string, target Target) ([]BundleFileIdentity, error) {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("bundle root is not a directory")
@@ -205,7 +209,13 @@ func scanBundlePayload(root string) ([]BundleFileIdentity, error) {
 		if err != nil {
 			return err
 		}
-		files = append(files, BundleFileIdentity{Path: relative, Mode: fmt.Sprintf("%04o", info.Mode().Perm()), Size: info.Size(), SHA256: digest})
+		mode := info.Mode().Perm()
+		// Windows 的 Go 文件系统不表达 POSIX executable bits，ZIP 解压后的普通文件统一为 0666。
+		// manifest 必须按目标平台规范化，否则在 Unix builder 生成的 0644/0755 会造成真机伪漂移。
+		if target.OS == "windows" {
+			mode = 0o666
+		}
+		files = append(files, BundleFileIdentity{Path: relative, Mode: fmt.Sprintf("%04o", mode), Size: info.Size(), SHA256: digest})
 		return nil
 	})
 	if err != nil {

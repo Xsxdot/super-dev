@@ -48,6 +48,11 @@ func TestNormalizePlatformRejectsUnsupported(t *testing.T) {
 	_, err = NormalizePlatform("Linux", "riscv64")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported arch")
+
+	_, err = NormalizePlatform("Windows_NT", "ARM64")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "windows/arm64")
+	assert.Contains(t, err.Error(), "not packaged")
 }
 
 func TestResolveBinary(t *testing.T) {

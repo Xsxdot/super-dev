@@ -226,29 +226,41 @@ func TestListTargetsUnknownLanguage(t *testing.T) {
 	}
 }
 
-func TestListTargetsMarksNodeAsExperimental(t *testing.T) {
-	root := t.TempDir()
-	projects := []model.Project{{
-		ID: "p1", Name: "demo", RootPath: root,
-		Environments: []model.Environment{{Name: "dev", IsDev: true}},
-		Services: []model.Service{{
-			ID: "svc-web", Name: "web", Language: model.LanguageNode,
-			Deployments: []model.Deployment{{
-				ID: "dep-web-dev", EnvName: "dev", Location: model.LocationLocal, ControlMode: model.ControlModeManaged,
-				Runtime: &model.RuntimeConfig{
-					Type:   model.RuntimeTypeLanguage,
-					CWD:    ".",
-					Config: map[string]any{"program": "server.js"},
-				},
-			}},
-		}},
-	}}
+func TestListTargetsMarksExperimentalProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		language model.ServiceLanguage
+		program  string
+		provider model.CodeDebugProvider
+	}{
+		{name: "node", language: model.LanguageNode, program: "server.js", provider: model.CodeDebugProviderNode},
+		{name: "jvm", language: model.LanguageJava, program: "com.example.Main", provider: model.CodeDebugProviderJVM},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projects := []model.Project{{
+				ID: "p1", Name: "demo", RootPath: t.TempDir(),
+				Environments: []model.Environment{{Name: "dev", IsDev: true}},
+				Services: []model.Service{{
+					ID: "svc", Name: "service", Language: test.language,
+					Deployments: []model.Deployment{{
+						ID: "dep-dev", EnvName: "dev", Location: model.LocationLocal, ControlMode: model.ControlModeManaged,
+						Runtime: &model.RuntimeConfig{
+							Type:   model.RuntimeTypeLanguage,
+							CWD:    ".",
+							Config: map[string]any{"program": test.program},
+						},
+					}},
+				}},
+			}}
 
-	targets := ListTargets(projects)
+			targets := ListTargets(projects)
 
-	require.Len(t, targets, 1)
-	assert.Equal(t, model.CodeDebugProviderNode, targets[0].Provider)
-	assert.True(t, targets[0].Experimental)
+			require.Len(t, targets, 1)
+			assert.Equal(t, test.provider, targets[0].Provider)
+			assert.True(t, targets[0].Experimental)
+		})
+	}
 }
 
 // JVM 与 Node 同属「需自备/配置 adapter」的实验性档位；Go/Python/Native 开箱即用，非实验性。

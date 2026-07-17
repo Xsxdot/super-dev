@@ -30,6 +30,16 @@ func TestListCodeDebugTargetsToolMarksNodeExperimental(t *testing.T) {
 	assert.Contains(t, result.Content[0]["text"], "experimental")
 }
 
+func TestListCodeDebugTargetsDescriptionMarksNodeAndJVMExperimental(t *testing.T) {
+	server := NewServer(&fakeAgentClient{})
+	tool, ok := server.tools["list_code_debug_targets"]
+	require.True(t, ok)
+
+	assert.Contains(t, tool.Tool.Description, "Node")
+	assert.Contains(t, tool.Tool.Description, "JVM")
+	assert.Contains(t, tool.Tool.Description, "experimental")
+}
+
 func TestSetDebugBreakpointsToolForwardsRequest(t *testing.T) {
 	client := &fakeAgentClient{codeDebugActionResult: map[string]any{"ok": true}}
 	server := NewServer(client)

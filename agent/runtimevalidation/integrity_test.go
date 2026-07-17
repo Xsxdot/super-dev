@@ -30,6 +30,25 @@ func TestBundleIntegrityAcceptsPathsWithSpaces(t *testing.T) {
 	require.FileExists(t, filepath.Join(root, "bundle-manifest.sha256"))
 }
 
+func TestWindowsBundleIntegrityCanonicalizesNativeFileMode(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("docs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "runner.exe"), []byte("runner"), 0o755))
+	target := Target{OS: "windows", Architecture: "amd64"}
+	manifest, err := CreateBundleManifest(root, target)
+	require.NoError(t, err)
+	for _, file := range manifest.Files {
+		require.Equal(t, "0666", file.Mode, file.Path)
+	}
+	_, err = WriteBundleManifest(root, manifest)
+	require.NoError(t, err)
+	_, err = VerifyBundle(root, target)
+	require.NoError(t, err)
+}
+
 func TestBundleIntegrityRejectsMissingExtraHashModeAndTargetDrift(t *testing.T) {
 	for _, test := range []struct {
 		name   string

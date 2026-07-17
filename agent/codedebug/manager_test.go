@@ -1763,6 +1763,40 @@ func TestDefaultAdapterLaunchKeepsProcessAfterCallerContextCancel(t *testing.T) 
 	assert.NoError(t, signalProcessZero(process.PID))
 }
 
+func TestCloseAdapterProcessTreatsNaturalExitAsAlreadyClosed(t *testing.T) {
+	waitDone := make(chan struct{})
+	close(waitDone)
+	killCalls := 0
+
+	err := closeAdapterProcess(waitDone, func() error {
+		killCalls++
+		return errors.New("TerminateProcess: Access is denied")
+	})
+
+	require.NoError(t, err)
+	assert.Zero(t, killCalls, "an already-reaped adapter must not be killed by a reusable PID")
+}
+
+func TestCloseAdapterProcessAcceptsExitRacingWithKillError(t *testing.T) {
+	waitDone := make(chan struct{})
+
+	err := closeAdapterProcess(waitDone, func() error {
+		close(waitDone)
+		return errors.New("TerminateProcess: Access is denied")
+	})
+
+	require.NoError(t, err)
+}
+
+func TestCloseAdapterProcessPreservesLiveKillError(t *testing.T) {
+	waitDone := make(chan struct{})
+	want := errors.New("live adapter termination denied")
+
+	err := closeAdapterProcess(waitDone, func() error { return want })
+
+	require.ErrorIs(t, err, want)
+}
+
 func TestManagerOpenWrapsDialFailureAsStableConnectionError(t *testing.T) {
 	root := t.TempDir()
 	closed := false

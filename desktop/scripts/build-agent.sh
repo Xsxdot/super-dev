@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # 每次桌面端启动前都刷新本机 sidecar，避免 stale 二进制通过 mtime 缓存被误用。
+#
+# 职责：
+#   - 编译本机 Tauri externalBin sidecar 与可选的 remote-install 资源二进制
+#   - 在设置 APPLE_SIGNING_IDENTITY 时，为 agent-install 内的 darwin Mach-O 补 Developer ID 签名
+#     （Tauri 只签 Contents/MacOS，不会签 Resources，否则公证会 Invalid）
+#
+# 边界：
+#   - 不负责最终 .app 打包与公证提交（由 tauri build 完成）
+#   - 不签 linux/windows 远程安装包（Apple 公证只校验 Mach-O）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -112,6 +121,51 @@ prepare_js_debug() {
   printf '%s\n' "$JS_DEBUG_VERSION" > "$JS_DEBUG_RESOURCE_DIR/.superdev-version"
 }
 
+# 为 agent-install 中的 darwin 远程安装二进制补签 Developer ID。
+# 原因：Tauri 只会签 Contents/MacOS 下的 externalBin；Resources 内的 Mach-O 仍会进入公证扫描。
+# 未签 / 仅 ad-hoc / 无 hardened runtime / 无 timestamp 都会导致 notarize status=Invalid。
+sign_darwin_remote_install_agents() {
+  local identity="${APPLE_SIGNING_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    echo "build-agent: APPLE_SIGNING_IDENTITY unset; skip signing agent-install darwin binaries"
+    return 0
+  fi
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "build-agent: codesign not found but APPLE_SIGNING_IDENTITY is set" >&2
+    exit 1
+  fi
+  if [[ ! -d "$RESOURCE_DIR" ]]; then
+    echo "build-agent: agent-install dir missing; nothing to sign: $RESOURCE_DIR"
+    return 0
+  fi
+
+  local signed=0
+  local bin
+  # 只签 macOS 目标：Apple 公证只校验 Mach-O，linux/windows 安装包保持未签。
+  for bin in "$RESOURCE_DIR"/superdev-agent-darwin-*; do
+    if [[ ! -f "$bin" ]]; then
+      continue
+    fi
+    echo "build-agent: codesigning remote install agent -> $bin"
+    # --options runtime = hardened runtime；--timestamp = 安全时间戳；二者均为公证硬性要求。
+    if ! codesign --force --options runtime --timestamp --sign "$identity" "$bin"; then
+      echo "build-agent: codesign failed for $bin (identity=$identity)" >&2
+      exit 1
+    fi
+    if ! codesign --verify --verbose=2 "$bin"; then
+      echo "build-agent: codesign verify failed for $bin" >&2
+      exit 1
+    fi
+    signed=$((signed + 1))
+  done
+
+  if [[ "$signed" -eq 0 ]]; then
+    echo "build-agent: APPLE_SIGNING_IDENTITY set but no superdev-agent-darwin-* binaries under $RESOURCE_DIR" >&2
+    exit 1
+  fi
+  echo "build-agent: signed $signed agent-install darwin binary(ies) with identity=$identity"
+}
+
 GO_BIN="${GO_BIN:-}"
 if [[ -z "$GO_BIN" ]]; then
   if command -v go >/dev/null 2>&1; then
@@ -173,4 +227,7 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
       (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
     fi
   done
+  # 即使二进制因 mtime 缓存未重编，也必须在本机 release/公证路径上重新签一遍，
+  # 避免沿用上次 ad-hoc/无 timestamp 的签名导致公证 Invalid。
+  sign_darwin_remote_install_agents
 fi

@@ -174,7 +174,15 @@ func stageRuntimeValidationAssets(options BundleBuildOptions, target Target, roo
 		"targets.txt", "runtime-input.example.json", "remote-governance-attestation.example.json",
 		"run-validation.sh", "run-validation.cmd", "README.md",
 	} {
-		if _, err := copyResource(filepath.Join(options.RuntimeAssetsRoot, name), filepath.Join(root, name)); err != nil {
+		source := filepath.Join(options.RuntimeAssetsRoot, name)
+		destination := filepath.Join(root, name)
+		if name == "run-validation.cmd" && target.OS == "windows" {
+			if err := stageWindowsCommandWrapper(source, destination); err != nil {
+				return fmt.Errorf("stage Windows bundle root asset %s: %w", name, err)
+			}
+			continue
+		}
+		if _, err := copyResource(source, destination); err != nil {
 			return fmt.Errorf("copy bundle root asset %s: %w", name, err)
 		}
 	}
@@ -189,6 +197,41 @@ func stageRuntimeValidationAssets(options BundleBuildOptions, target Target, roo
 	return atomicWriteJSON(filepath.Join(root, "VERSION.json"), bundleVersion{
 		SchemaVersion: 1, Kind: "superdev.runtime-validation.version", Version: version, Target: target,
 	}, 0o644)
+}
+
+func stageWindowsCommandWrapper(source, destination string) error {
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read Windows command wrapper: %w", err)
+	}
+	normalized, err := normalizeWindowsCommandWrapper(raw)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("stat Windows command wrapper: %w", err)
+	}
+	if err := atomicWriteBytes(destination, normalized, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write Windows command wrapper: %w", err)
+	}
+	logger.GetLogger().WithEntryName("RuntimeValidationBuilder").WithFields(map[string]any{
+		"asset": "run-validation.cmd", "encoding": "ASCII", "line_endings": "CRLF",
+	}).Info("Windows runtime validation 启动包装器已规范化")
+	return nil
+}
+
+func normalizeWindowsCommandWrapper(raw []byte) ([]byte, error) {
+	// cmd.exe 在非 UTF-8 系统代码页下会把 UTF-8 注释拆成可执行片段；wrapper 因此必须保持纯 ASCII。
+	for index, value := range raw {
+		if value > 0x7f {
+			return nil, fmt.Errorf("Windows command wrapper must be ASCII: byte %d is non-ASCII", index)
+		}
+	}
+	// Git 工作区通常保存 LF；Windows bundle 必须在打包时确定性转换，不能依赖 checkout 配置。
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return []byte(strings.ReplaceAll(text, "\n", "\r\n")), nil
 }
 
 func createBundleArchive(root, destination string, useZip bool) error {

@@ -2191,18 +2191,57 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 		}
 		return AdapterProcess{}, NewAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
+	waitDone := make(chan struct{})
 	go func() {
 		_ = c.Wait()
+		close(waitDone)
 	}()
+	var closeOnce sync.Once
+	var closeErr error
 	return AdapterProcess{
 		PID: c.Process.Pid,
 		Close: func() error {
-			if c.Process != nil {
-				return killAdapterProcessTree(c.Process.Pid)
-			}
-			return nil
+			closeOnce.Do(func() {
+				if c.Process == nil {
+					return
+				}
+				closeErr = closeAdapterProcess(waitDone, func() error {
+					return killAdapterProcessTree(c.Process.Pid)
+				})
+			})
+			return closeErr
 		},
 	}, nil
+}
+
+// closeAdapterProcess 关闭 adapter，同时区分真实终止失败和自然退出竞态。
+//
+// Windows adapter 在 DAP detach 后可能先自行退出；Wait 会回收其进程句柄，随后再
+// TerminateProcess 会返回 Access is denied。只有同一 exec.Cmd 的 Wait 已完成时才把
+// 该错误视为“已经关闭”，仍存活的 adapter 的 kill 错误必须原样返回。
+func closeAdapterProcess(waitDone <-chan struct{}, kill func() error) error {
+	select {
+	case <-waitDone:
+		log.Printf("[codedebug] adapter already exited before close")
+		return nil
+	default:
+	}
+
+	err := kill()
+	if err == nil {
+		return nil
+	}
+
+	// kill 与自然退出可在同一调度窗口发生；给 Wait 一个很短的有界窗口完成句柄回收。
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-waitDone:
+		log.Printf("[codedebug] adapter exited while close raced with kill: %v", err)
+		return nil
+	case <-timer.C:
+		return err
+	}
 }
 
 func ensureAdapterError(code string, cmd AdapterCommand, err error) error {

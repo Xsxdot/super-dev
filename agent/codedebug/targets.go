@@ -83,7 +83,7 @@ func ListTargets(projects []model.Project, opts ...TargetListOption) []Target {
 					EnvName:           dep.EnvName,
 					Language:          service.Language,
 					Provider:          provider,
-					Experimental:      provider == model.CodeDebugProviderNode,
+					Experimental:      providerIsExperimental(provider),
 					Command:           debugDeploymentCommand(dep),
 					WorkDir:           debugDeploymentWorkDir(dep),
 					CanOpen:           reason == "",

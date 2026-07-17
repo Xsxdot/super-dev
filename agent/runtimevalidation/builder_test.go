@@ -27,7 +27,7 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(agentRoot), filepath.Join(runtimeRoot, "fixtures", "go"), filepath.Join(runtimeRoot, "scenarios"),
 		filepath.Join(runtimeRoot, "pipeline"), jsDebugRoot,
-		filepath.Join(driversRoot, "linux-amd64", "package"),
+		filepath.Join(driversRoot, "windows-amd64", "package"),
 	} {
 		require.NoError(t, os.MkdirAll(path, 0o755))
 	}
@@ -40,14 +40,14 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 		filepath.Join(runtimeRoot, "runtime-input.example.json"):                 "{}",
 		filepath.Join(runtimeRoot, "remote-governance-attestation.example.json"): "{}",
 		filepath.Join(runtimeRoot, "run-validation.sh"):                          "#!/bin/sh\n",
-		filepath.Join(runtimeRoot, "run-validation.cmd"):                         "@echo off\r\n",
+		filepath.Join(runtimeRoot, "run-validation.cmd"):                         "@echo off\nrem Portable Windows wrapper.\n",
 		filepath.Join(runtimeRoot, "README.md"):                                  "# Validation\n",
 		filepath.Join(jsDebugRoot, "dapDebugServer.js"):                          "js",
-		filepath.Join(driversRoot, "linux-amd64", "node"):                        "native node",
-		filepath.Join(driversRoot, "linux-amd64", "package", "cli.js"):           "native package",
+		filepath.Join(driversRoot, "windows-amd64", "node.exe"):                  "native node",
+		filepath.Join(driversRoot, "windows-amd64", "package", "cli.js"):         "native package",
 	} {
 		mode := os.FileMode(0o600)
-		if filepath.Base(path) == "node" {
+		if filepath.Base(path) == "node.exe" {
 			mode = 0o700
 		}
 		require.NoError(t, os.WriteFile(path, []byte(content), mode))
@@ -57,17 +57,37 @@ func TestStageRuntimeValidationAssetsUsesPortableRootLayout(t *testing.T) {
 	err := stageRuntimeValidationAssets(BundleBuildOptions{
 		AgentRoot: agentRoot, RuntimeAssetsRoot: runtimeRoot, JSDebugRoot: jsDebugRoot,
 		PlaywrightDriversRoot: driversRoot,
-	}, Target{OS: "linux", Architecture: "amd64"}, root)
+	}, Target{OS: "windows", Architecture: "amd64"}, root)
 	require.NoError(t, err)
 
 	for _, relative := range []string{
 		"validation/fixtures/go/fixture.json", "validation/scenarios/identity.json", "validation/pipeline/project-pipeline.json",
-		"resources/js-debug/dapDebugServer.js", "resources/playwright-driver/node", "resources/playwright-driver/package/cli.js", "targets.txt", "VERSION.json",
+		"resources/js-debug/dapDebugServer.js", "resources/playwright-driver/node.exe", "resources/playwright-driver/package/cli.js", "targets.txt", "VERSION.json",
 		"runtime-input.example.json", "run-validation.sh", "run-validation.cmd", "README.md",
 	} {
 		require.FileExists(t, filepath.Join(root, filepath.FromSlash(relative)), relative)
 	}
 	require.NoDirExists(t, filepath.Join(root, "assets"))
+	wrapper, err := os.ReadFile(filepath.Join(root, "run-validation.cmd"))
+	require.NoError(t, err)
+	require.Equal(t, "@echo off\r\nrem Portable Windows wrapper.\r\n", string(wrapper))
+}
+
+func TestNormalizeWindowsCommandWrapperRejectsNonASCII(t *testing.T) {
+	t.Parallel()
+
+	_, err := normalizeWindowsCommandWrapper([]byte("@echo off\nrem 职责\n"))
+	require.ErrorContains(t, err, "ASCII")
+}
+
+func TestWindowsCommandWrapperStripsTrailingDirectorySeparatorBeforeArgument(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "validation", "runtime", "run-validation.cmd"))
+	require.NoError(t, err)
+	wrapper := string(raw)
+	require.Contains(t, wrapper, `set "BUNDLE_ROOT=%BUNDLE_ROOT:~0,-1%"`)
+	require.Contains(t, wrapper, `"%BUNDLE_ROOT%\bin\runtime-validation.exe" --bundle-root "%BUNDLE_ROOT%"`)
 }
 
 func TestStageRuntimeValidationAssetsRejectsIncompletePlaywrightDriver(t *testing.T) {
