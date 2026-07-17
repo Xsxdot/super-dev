@@ -212,11 +212,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # App Store Connect API Key 只能以文件路径传给 notarytool / Tauri。
+      # 注意：不要在 step if 里直接引用 secrets（会导致 workflow 校验失败）；在 shell 内判断是否为空。
       - name: Write App Store Connect API key
-        if: ${{ secrets.APPLE_API_KEY_CONTENT != '' }}
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
+          if [[ -z "${APPLE_API_KEY_CONTENT}" ]]; then
+            echo "APPLE_API_KEY_CONTENT unset; skip writing API key (notarization may be skipped)"
+            exit 0
+          fi
           key_path="${RUNNER_TEMP}/AuthKey.p8"
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$key_path"
           chmod 600 "$key_path"
