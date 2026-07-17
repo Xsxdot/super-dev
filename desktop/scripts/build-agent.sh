@@ -201,7 +201,12 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
     exit 1
   fi
   targets=()
-  while read -r goos goarch extra; do
+  # Windows checkout 可能把 LF 合同变成 CRLF；GOARCH 尾部的 \r 会让 go 报
+  # unsupported GOOS/GOARCH pair（日志里 \r 还常被吞掉，看起来像合法的 darwin/amd64）。
+  while IFS=$' \t\r\n' read -r goos goarch extra || [[ -n "${goos:-}" ]]; do
+    goos="${goos//$'\r'/}"
+    goarch="${goarch//$'\r'/}"
+    extra="${extra//$'\r'/}"
     if [[ -z "${goos:-}" || "$goos" == \#* ]]; then
       continue
     fi
@@ -223,8 +228,9 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
     fi
     remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch$suffix"
     if needs_build "$remote_out"; then
-      echo "build-agent: compiling remote agent -> $remote_out"
-      (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
+      echo "build-agent: compiling remote agent -> $remote_out (GOOS=$goos GOARCH=$goarch)"
+      # CGO_ENABLED=0：远程安装二进制必须可从任意宿主交叉编译，不依赖本机 C 工具链。
+      (cd "$AGENT_SRC" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
     fi
   done
   # 即使二进制因 mtime 缓存未重编，也必须在本机 release/公证路径上重新签一遍，

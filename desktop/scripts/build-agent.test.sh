@@ -66,7 +66,15 @@ if [[ "$out" == "" ]]; then
   echo "fake go: missing -o" >&2
   exit 1
 fi
+# 锁住 Windows CRLF 合同回归：GOOS/GOARCH 不得夹带 CR。
+if [[ "${GOOS:-}" == *$'\r'* || "${GOARCH:-}" == *$'\r'* ]]; then
+  echo "fake go: GOOS/GOARCH contain CR (GOOS=${GOOS@Q} GOARCH=${GOARCH@Q})" >&2
+  exit 1
+fi
 printf '%s\n' "$out" >> "$log"
+if [[ -n "${GOOS:-}" || -n "${GOARCH:-}" ]]; then
+  printf 'env %s/%s -> %s\n' "${GOOS:-host}" "${GOARCH:-host}" "$out" >> "$log"
+fi
 mkdir -p "$(dirname "$out")"
 if [[ "${BUILD_AGENT_TEST_ATOMIC_COPY:-0}" == "1" && "$out" == *superdev-mcp-* ]]; then
   printf '%1048576s' '' | tr ' ' 'N' > "$out"
@@ -283,6 +291,24 @@ BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
 if grep -q '/agent-install/' "$BUILD_AGENT_TEST_LOG"; then
   echo "expected remote install binaries to be skipped when fake GNU stat marks them newer" >&2
   cat "$BUILD_AGENT_TEST_LOG" >&2
+  exit 1
+fi
+
+# Windows checkout 常把 targets.txt 变成 CRLF；必须仍能交叉编译且 GOARCH 不含 \r。
+printf 'darwin amd64\r\ndarwin arm64\r\nlinux amd64\r\nlinux arm64\r\nwindows amd64\r\n' \
+  > "$TMP_DIR/validation/runtime/targets.txt"
+rm -rf "$TMP_DIR/desktop/src-tauri/resources/agent-install"
+: > "$BUILD_AGENT_TEST_LOG"
+BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
+for pair in "darwin/amd64" "darwin/arm64" "linux/amd64" "linux/arm64" "windows/amd64"; do
+  if ! grep -q "env ${pair} -> " "$BUILD_AGENT_TEST_LOG"; then
+    echo "expected remote build for $pair with CRLF targets.txt" >&2
+    cat "$BUILD_AGENT_TEST_LOG" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$TMP_DIR/desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe" ]]; then
+  echo "expected windows remote agent binary after CRLF targets parse" >&2
   exit 1
 fi
 
