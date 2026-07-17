@@ -157,9 +157,12 @@ func TestPackagedAuthSidecarBuildsAndKeepsSecretOutOfResponses(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(source), "subtle.ConstantTimeCompare")
 	require.NotContains(t, string(source), `"credential": credential`)
+	// GOCACHE 必须用 t.TempDir()，不能写死 /private/tmp：
+	// 该路径只在 macOS 存在，Linux CI runner 上会 mkdir /private 失败。
+	goCache := filepath.Join(t.TempDir(), "go-cache")
 	command := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "auth-sidecar"), ".")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE=/private/tmp/super-debug-runtimevalidation-go-cache")
+	command.Env = append(os.Environ(), "GOCACHE="+goCache)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
