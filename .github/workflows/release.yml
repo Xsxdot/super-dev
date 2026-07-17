@@ -278,9 +278,38 @@ jobs:
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
+      # job-level env 会把未配置的 secret 变成空字符串；Rust/notarytool 把 Ok("") 当成
+      # “已设置 Apple ID”，从而走用户名密码公证并 401，忽略 API Key。这里强制清理。
       - name: Build Tauri macOS packages
         working-directory: desktop
-        run: pnpm tauri build
+        run: |
+          set -euo pipefail
+          # 空 Apple ID 认证必须 unset（不能 export 成 ""）
+          if [[ -z "${APPLE_ID:-}" ]]; then
+            unset APPLE_ID || true
+            unset APPLE_PASSWORD || true
+            echo "Apple ID auth unset; prefer App Store Connect API key for notarization"
+          fi
+          if [[ -n "${APPLE_API_KEY:-}" ]]; then
+            if [[ -z "${APPLE_API_KEY_PATH:-}" || ! -f "${APPLE_API_KEY_PATH}" ]]; then
+              echo "APPLE_API_KEY set but APPLE_API_KEY_PATH missing or not a file: ${APPLE_API_KEY_PATH:-<empty>}" >&2
+              exit 1
+            fi
+            if [[ -z "${APPLE_API_ISSUER:-}" ]]; then
+              echo "APPLE_API_KEY set but APPLE_API_ISSUER empty" >&2
+              exit 1
+            fi
+            # 只确认私钥文件头形态，不打印密钥正文
+            if ! head -n 1 "${APPLE_API_KEY_PATH}" | grep -q 'BEGIN PRIVATE KEY'; then
+              echo "APPLE_API_KEY_PATH does not look like a .p8 private key" >&2
+              exit 1
+            fi
+            echo "Notarization auth: API key file ready (issuer+key+path present)"
+          else
+            echo "APPLE_API_KEY unset; notarization may use Apple ID or be skipped"
+          fi
+          # 避免子进程继承空的 Apple ID 变量
+          env -u APPLE_ID -u APPLE_PASSWORD pnpm tauri build
 
       - name: Upload macOS desktop release assets
         uses: actions/upload-artifact@v4
