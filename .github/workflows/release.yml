@@ -165,9 +165,23 @@ jobs:
             desktop/src-tauri/target/release/bundle/**/*.deb
             desktop/src-tauri/target/release/bundle/**/*.rpm
 
+  # macOS 签名/公证依赖仓库 Secrets（见 docs/release.md / 维护者说明）：
+  # APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+  # 以及公证三件套（推荐 API Key：APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_CONTENT）。
+  # 未配置时仍会产出未签名包；配置后会签 agent-install 内 darwin 二进制、.app，并提交公证。
   desktop-macos:
     name: Desktop macOS package
     runs-on: macos-latest
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # 备选：Apple ID + App 专用密码（与 API Key 二选一即可）
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Check out repository
@@ -197,6 +211,19 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      # App Store Connect API Key 只能以文件路径传给 notarytool / Tauri。
+      - name: Write App Store Connect API key
+        if: ${{ secrets.APPLE_API_KEY_CONTENT != '' }}
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          key_path="${RUNNER_TEMP}/AuthKey.p8"
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
+          echo "Wrote App Store Connect API key for notarization"
+
+      # 必须带 APPLE_SIGNING_IDENTITY：build-agent 会签 Resources/agent-install 下的 darwin Mach-O。
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
