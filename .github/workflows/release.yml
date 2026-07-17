@@ -227,6 +227,53 @@ jobs:
           echo "APPLE_API_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
           echo "Wrote App Store Connect API key for notarization"
 
+      # build-agent 在 tauri build 之前就会 codesign agent-install 内的 darwin 二进制，
+      # 因此必须先把 .p12 导入 CI 临时钥匙串；仅设置 APPLE_CERTIFICATE 环境变量不够
+      # （Tauri 自己的导入发生在更晚的 pnpm tauri build 阶段）。
+      - name: Import Apple Developer Certificate
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+              echo "APPLE_SIGNING_IDENTITY is set but APPLE_CERTIFICATE/PASSWORD missing" >&2
+              exit 1
+            fi
+            echo "APPLE_CERTIFICATE unset; skip keychain import (unsigned macOS build)"
+            exit 0
+          fi
+
+          cert_path="${RUNNER_TEMP}/certificate.p12"
+          keychain_path="${RUNNER_TEMP}/superdev-build.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          # Secrets 存的是 openssl base64 -A 的单行内容
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$keychain_path"
+          # 让 codesign 能在无 UI 提示下使用私钥
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | sed 's/"//g')
+
+          echo "Imported certificate; codesigning identities:"
+          security find-identity -v -p codesigning "$keychain_path"
+
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            if ! security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null; then
+              echo "APPLE_SIGNING_IDENTITY not found in imported keychain: $APPLE_SIGNING_IDENTITY" >&2
+              exit 1
+            fi
+          fi
+          rm -f "$cert_path"
+          echo "Apple Developer certificate ready for build-agent and tauri build"
+
       # 必须带 APPLE_SIGNING_IDENTITY：build-agent 会签 Resources/agent-install 下的 darwin Mach-O。
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
