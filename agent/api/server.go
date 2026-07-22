@@ -225,7 +225,9 @@ type App struct {
 	hostAgentInstaller HostAgentInstaller
 	// removeAgentConfig 把卸载编排与 Agent 配置删除边界隔开，便于验证部分失败后的安全重试。
 	// 实现走 remoteNodeMutations.RemoveAgent，保证配置删除后旧 tunnel 运行态失效并完成审计。
-	removeAgentConfig           func(ctx context.Context, hostID string) error
+	removeAgentConfig func(ctx context.Context, hostID string) error
+	// detachAgentConfig 是 Detach 场景的配置删除边界，审计触发器与卸载区分。
+	detachAgentConfig           func(ctx context.Context, hostID string) error
 	agentLifecycleGate          *hostOperationGate
 	runtimeMetricsSampler       metrics.MetricsSampler
 	runtimeStatusRequestTimeout time.Duration
@@ -541,6 +543,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		},
 	))
 	app.removeAgentConfig = app.remoteNodeMutations.RemoveAgent
+	app.detachAgentConfig = app.remoteNodeMutations.DetachAgentConfig
 	cleaner := newLogCleaner(s, cleanupConfig{
 		RetentionDays: settings.LogRetentionDays,
 		MaxBytes:      settings.LogMaxBytes,

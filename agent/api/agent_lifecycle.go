@@ -76,8 +76,9 @@ func (a *App) uninstallAgent(ctx context.Context, hostID string, removeData bool
 	if !found {
 		// 配置不存在有两种来历：上次卸载在 config_remove 阶段半途失败（留下未终态
 		// 审计计划，重试必须补偿并回报成功），或 Agent 从未配置/已 Detach（远端可能
-		// 仍在运行，绝不允许据此宣称远端卸载成功）。用是否补偿了待恢复审计来区分。
-		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID)
+		// 仍在运行，绝不允许据此宣称远端卸载成功）。只补偿卸载自身留下的计划；
+		// Detach 留下的计划不属于远端卸载成功。
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, tunnelInvalidationTriggerAgentRemoved)
 		if recErr != nil {
 			log.WithErr(recErr).WithFields(fields).Error("Agent 配置侧清理恢复失败")
 			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: recErr}
@@ -139,8 +140,9 @@ func (a *App) detachAgent(ctx context.Context, hostID string, reason agentDetach
 		return &agentDetachError{Err: err}
 	} else if !found {
 		// 上次 Detach 可能在配置已删、审计未终态时失败；此时重试必须完成审计补偿。
+		// Detach 只宣称"Controller 配置已移除"，因此卸载或 Detach 留下的待补偿计划都可恢复。
 		// 无待补偿计划时才视为 Agent 本就不存在。
-		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID)
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, "")
 		if recErr != nil {
 			log.WithErr(recErr).WithFields(fields).Error("Agent Detach 审计补偿失败")
 			return &agentDetachError{Err: recErr}
@@ -150,13 +152,13 @@ func (a *App) detachAgent(ctx context.Context, hostID string, reason agentDetach
 			log.WithErr(err).WithFields(fields).Error("待 Detach 的 Controller Agent 配置不存在")
 			return &agentDetachError{Err: err}
 		}
-		log.WithFields(fields).Info("上次 Detach 的审计补偿已完成")
+		log.WithFields(fields).Info("上次配置删除的审计补偿已完成")
 		return nil
 	}
 
 	// Detach 是远端卸载失败后的逃生操作，只能删除 Controller 配置，不能调用 Installer。
 	log.WithFields(fields).Info("开始移除 Detach 对应的 Controller Agent 配置")
-	if err := a.removeAgentConfig(ctx, hostID); err != nil {
+	if err := a.detachAgentConfig(ctx, hostID); err != nil {
 		log.WithErr(err).WithFields(fields).Error("Agent Detach 移除 Controller 配置失败")
 		return &agentDetachError{Err: err}
 	}

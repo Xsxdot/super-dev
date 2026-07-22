@@ -258,6 +258,9 @@ func tunnelInvalidationRecoveryMatches(event operation.AuditEvent, recovery tunn
 	if auditString(event.Data, "target_kind") != recovery.TargetKind || auditString(event.Data, "mutation") != recovery.Mutation {
 		return false
 	}
+	if recovery.Trigger != "" && auditString(event.Data, "trigger") != recovery.Trigger {
+		return false
+	}
 	if recovery.Mutation == tunnelInvalidationMutationUpdate {
 		return auditString(event.Data, "expected_revision") == recovery.ExpectedRevision
 	}

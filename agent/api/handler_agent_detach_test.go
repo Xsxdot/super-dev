@@ -67,7 +67,7 @@ func TestDetachAgentRetainsConfigWhenControllerRemovalFails(t *testing.T) {
 	  "config":{"listen_port":57019},
 	  "security":{"tls":{"mode":"auto"}}
 	`)
-	app.removeAgentConfig = func(context.Context, string) error { return errors.New("fixture agents.json write failure") }
+	app.detachAgentConfig = func(context.Context, string) error { return errors.New("fixture agents.json write failure") }
 
 	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
 
@@ -221,6 +221,47 @@ func TestDetachAgentRetryAfterAuditFailureCompletesRecovery(t *testing.T) {
 	auditStore.setFailExecuted(false)
 	second := detach()
 	require.Equal(t, http.StatusOK, second.Code, "修复审计存储后重试 Detach 必须成功")
+	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
+}
+
+// TestUninstallDoesNotRecoverDetachPartialFailure 验证 Detach 的部分失败（配置已删、
+// 审计未终态）不会被随后的 Uninstall 误报为远端卸载成功：Uninstall 必须报错、
+// 不执行远端卸载、也不吞掉 Detach 的计划，该计划只能由 Detach 重试完成。
+func TestUninstallDoesNotRecoverDetachPartialFailure(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+
+	detachFirst := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
+	require.Equal(t, http.StatusInternalServerError, detachFirst.Code)
+	require.Equal(t, 0, fake.uninstallCalls, "Detach 不连接远端 Host")
+
+	auditStore.setFailExecuted(false)
+	uninstall := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+	require.Equal(t, http.StatusBadGateway, uninstall.Code, "Detach 的部分失败不得被 Uninstall 报成卸载成功")
+	assert.NotContains(t, uninstall.Body.String(), "already uninstalled")
+	assert.Equal(t, 0, fake.uninstallCalls, "配置来自 Detach 时不得执行远端卸载")
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 1, "Detach 的审计计划必须保持未终态，等待 Detach 重试完成")
+	assert.Equal(t, operation.AuditPrepared, events[0].Action)
+
+	detachRetry := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
+	require.Equal(t, http.StatusOK, detachRetry.Code)
 	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
 	require.NoError(t, err)
 	require.Len(t, events, 2)

@@ -34,10 +34,13 @@ const (
 	tunnelInvalidationTriggerHostRemoved  = "host_removed"
 	tunnelInvalidationTriggerAgentChanged = "agent_tunnel_target_changed"
 	tunnelInvalidationTriggerAgentRemoved = "agent_removed"
-	tunnelInvalidationTargetHost          = "host"
-	tunnelInvalidationTargetAgent         = "agent"
-	tunnelInvalidationMutationUpdate      = "update"
-	tunnelInvalidationMutationDelete      = "delete"
+	// tunnelInvalidationTriggerAgentDetached 标记 Detach 触发的配置删除；
+	// 与 Uninstall 的 agent_removed 区分，避免跨入口把 Detach 恢复误报为远端卸载成功。
+	tunnelInvalidationTriggerAgentDetached = "agent_detached"
+	tunnelInvalidationTargetHost           = "host"
+	tunnelInvalidationTargetAgent          = "agent"
+	tunnelInvalidationMutationUpdate       = "update"
+	tunnelInvalidationMutationDelete       = "delete"
 )
 
 type remoteNodeHostStore interface {
@@ -73,6 +76,9 @@ type tunnelRuntimeInvalidationRecovery struct {
 	Mutation         string
 	ExpectedRevision string
 	Persisted        bool
+	// Trigger 非空时仅匹配该触发器留下的审计计划；为空匹配任意触发器。
+	// 用于区分同一配置删除来自 Uninstall 还是 Detach。
+	Trigger string
 }
 
 type tunnelRuntimeInvalidationResult struct {
@@ -101,9 +107,11 @@ type remoteNodeMutationService interface {
 	RemoveHost(context.Context, string) error
 	UpsertAgent(context.Context, model.Agent) (model.Agent, error)
 	RemoveAgent(context.Context, string) error
-	// RecoverPendingAgentRemoval 仅在存在未终态的 Agent 删除审计计划时完成补偿并返回 true；
-	// 用于把"卸载半途失败的重试"与"Agent 本就不存在/已 Detach"区分开。
-	RecoverPendingAgentRemoval(context.Context, string) (bool, error)
+	// DetachAgentConfig 移除 Detach 场景的 Agent 配置，审计触发器与 Uninstall 区分。
+	DetachAgentConfig(context.Context, string) error
+	// RecoverPendingAgentRemoval 仅补偿指定触发器留下的未终态 Agent 删除审计计划；
+	// trigger 为空时补偿任意触发器的计划。返回 true 表示本次调用完成了补偿。
+	RecoverPendingAgentRemoval(ctx context.Context, hostID, trigger string) (bool, error)
 }
 
 type remoteNodeMutationApplication struct {
@@ -380,11 +388,22 @@ func (a *remoteNodeMutationApplication) UpsertAgent(ctx context.Context, agent m
 }
 
 func (a *remoteNodeMutationApplication) RemoveAgent(ctx context.Context, hostID string) error {
+	return a.removeAgentWithTrigger(ctx, hostID, tunnelInvalidationTriggerAgentRemoved)
+}
+
+// DetachAgentConfig 移除 Detach 场景下的 Agent 连接配置，审计触发器与 Uninstall 区分，
+// 保证恢复逻辑不会把 Detach 的部分失败当成远端卸载已完成。
+func (a *remoteNodeMutationApplication) DetachAgentConfig(ctx context.Context, hostID string) error {
+	return a.removeAgentWithTrigger(ctx, hostID, tunnelInvalidationTriggerAgentDetached)
+}
+
+func (a *remoteNodeMutationApplication) removeAgentWithTrigger(ctx context.Context, hostID, trigger string) error {
 	unlock := a.mutationMu.lock(hostID)
 	defer unlock()
 	log := logger.GetLogger().WithEntryName("RemoteNodeMutation").WithFields(map[string]any{
 		"operation": "remove_agent",
 		"host_id":   hostID,
+		"trigger":   trigger,
 	})
 	log.Info("开始删除 Agent 连接配置")
 	existing, found, err := a.agents.AgentByHostID(hostID)
@@ -418,7 +437,7 @@ func (a *remoteNodeMutationApplication) RemoveAgent(ctx context.Context, hostID 
 
 	result, applyErr := a.invalidator.Apply(ctx, tunnelRuntimeInvalidation{
 		HostID:        hostID,
-		Trigger:       tunnelInvalidationTriggerAgentRemoved,
+		Trigger:       trigger,
 		ChangedFields: []string{"agent_tunnel_config"},
 		TargetKind:    tunnelInvalidationTargetAgent,
 		Mutation:      tunnelInvalidationMutationDelete,
@@ -583,23 +602,37 @@ func (a *remoteNodeMutationApplication) recoverDeleteInvalidation(ctx context.Co
 	return classifyTunnelInvalidationRecoveryError(result, err)
 }
 
-// RecoverPendingAgentRemoval 仅补偿此前未终态的 Agent 删除审计计划。
+// RecoverPendingAgentRemoval 仅补偿指定触发器留下的未终态 Agent 删除审计计划；
+// trigger 为空时补偿任意触发器的计划。
 //
 // 返回 true 表示本次调用实际完成了一个半途失败的删除补偿；遇到已完成计划或
 // 无匹配计划时返回 false，调用方不得据此宣称远端卸载已执行。
-func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID string) (bool, error) {
+func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID, trigger string) (bool, error) {
 	unlock := a.mutationMu.lock(hostID)
 	defer unlock()
+	log := logger.GetLogger().WithEntryName("RemoteNodeMutation").WithFields(map[string]any{
+		"operation": "recover_pending_agent_removal",
+		"host_id":   hostID,
+		"trigger":   trigger,
+	})
+	log.Info("开始检查并恢复 Agent 删除的待完成审计")
 	result, err := a.invalidator.Recover(ctx, tunnelRuntimeInvalidationRecovery{
 		HostID:     hostID,
 		TargetKind: tunnelInvalidationTargetAgent,
 		Mutation:   tunnelInvalidationMutationDelete,
 		Persisted:  true,
+		Trigger:    trigger,
 	})
 	if err != nil {
+		log.WithErr(classifyTunnelInvalidationRecoveryError(result, err)).Error("恢复 Agent 删除的待完成审计失败")
 		return false, classifyTunnelInvalidationRecoveryError(result, err)
 	}
-	return result.RecoveredPending, nil
+	if !result.RecoveredPending {
+		log.Info("无待恢复的 Agent 删除审计计划")
+		return false, nil
+	}
+	log.Info("Agent 删除的待完成审计已补偿完成")
+	return true, nil
 }
 
 func changedHostTunnelTargetFields(before, after model.Host) []string {
