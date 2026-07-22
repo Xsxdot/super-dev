@@ -473,7 +473,8 @@ func remoteNodeMutationTestAgent(port int) model.Agent {
 }
 
 // TestAgentRemovalRecoveryModeFailsClosedOnInvalidMode 验证恢复匹配模式非法取值时
-// fail-closed：auditTrigger 返回错误，RecoverPendingAgentRemoval 拒绝执行而非放宽匹配。
+// fail-closed：auditTrigger 返回错误，且 RecoverPendingAgentRemoval 在触碰 invalidator
+// 与审计存储之前就拒绝执行，不产生任何恢复副作用。
 func TestAgentRemovalRecoveryModeFailsClosedOnInvalidMode(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -498,10 +499,12 @@ func TestAgentRemovalRecoveryModeFailsClosedOnInvalidMode(t *testing.T) {
 		})
 	}
 
-	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
-	require.NoError(t, err)
-	defer app.Close()
-	recovered, err := app.remoteNodeMutations.RecoverPendingAgentRemoval(context.Background(), "h1", agentRemovalRecoveryMode(255))
+	invalidator := &recordingTunnelInvalidator{}
+	app := newRemoteNodeMutationApplication(&fakeRemoteNodeHostStore{}, &fakeRemoteNodeAgentStore{}, apiassembler.NewHostAssembler(), invalidator)
+	recovered, err := app.RecoverPendingAgentRemoval(context.Background(), "h1", agentRemovalRecoveryMode(255))
 	require.Error(t, err)
 	assert.False(t, recovered)
+	assert.Empty(t, invalidator.recoveries, "非法模式不得触发 Recover 调用")
+	assert.Empty(t, invalidator.invalidations, "非法模式不得触发 Apply 调用")
+	assert.Empty(t, invalidator.hostIDs, "非法模式不得触碰 tunnel 状态查询")
 }
