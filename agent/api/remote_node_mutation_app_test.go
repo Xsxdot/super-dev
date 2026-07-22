@@ -471,3 +471,37 @@ func remoteNodeMutationTestAgent(port int) model.Agent {
 		}}},
 	}
 }
+
+// TestAgentRemovalRecoveryModeFailsClosedOnInvalidMode 验证恢复匹配模式非法取值时
+// fail-closed：auditTrigger 返回错误，RecoverPendingAgentRemoval 拒绝执行而非放宽匹配。
+func TestAgentRemovalRecoveryModeFailsClosedOnInvalidMode(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      agentRemovalRecoveryMode
+		want      string
+		wantError bool
+	}{
+		{name: "uninstall only", mode: agentRemovalRecoveryUninstallOnly, want: tunnelInvalidationTriggerAgentRemoved},
+		{name: "any origin", mode: agentRemovalRecoveryAnyOrigin, want: ""},
+		{name: "invalid negative", mode: agentRemovalRecoveryMode(-1), wantError: true},
+		{name: "invalid overflow", mode: agentRemovalRecoveryMode(255), wantError: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.mode.auditTrigger()
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+	recovered, err := app.remoteNodeMutations.RecoverPendingAgentRemoval(context.Background(), "h1", agentRemovalRecoveryMode(255))
+	require.Error(t, err)
+	assert.False(t, recovered)
+}

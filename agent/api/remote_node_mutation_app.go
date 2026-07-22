@@ -107,10 +107,34 @@ type remoteNodeMutationService interface {
 	RemoveHost(context.Context, string) error
 	UpsertAgent(context.Context, model.Agent) (model.Agent, error)
 	RemoveAgent(context.Context, string) error
-	// DetachAgentConfig 移除 Detach 场景的 Agent 配置，审计触发器与 Uninstall 区分。
+	// DetachAgentConfig 移除 Detach 场景下指定 Host 的 Agent 连接配置。
+	//
+	// 参数：
+	//   - ctx: 请求上下文，传给 tunnel 失效协调
+	//   - hostID: 待移除配置的 Host ID
+	//
+	// 返回：
+	//   - nil 表示配置已移除（或本就不存在，幂等成功）
+	//   - error 表示配置删除或审计链路失败；配置可能已删但审计未终态，可安全重试
+	//
+	// 注意：
+	//   - 审计触发器为 agent_detached，与 Uninstall 的 agent_removed 严格区分
+	//   - 不连接远端 Host，不代表远端 Agent 已停止
 	DetachAgentConfig(context.Context, string) error
-	// RecoverPendingAgentRemoval 补偿 mode 认可来源的未终态 Agent 删除审计计划；
-	// 返回 true 表示本次调用完成了补偿。
+	// RecoverPendingAgentRemoval 补偿指定 Host 上未终态的 Agent 配置删除审计计划。
+	//
+	// 参数：
+	//   - ctx: 请求上下文，传给审计存储与 tunnel 失效协调
+	//   - hostID: 待检查的 Host ID
+	//   - mode: 认可的删除来源（仅 Uninstall，或任意来源）；非法取值 fail-closed 返回错误
+	//
+	// 返回：
+	//   - true 表示本次调用实际补偿了一个未终态计划
+	//   - false 表示无匹配计划或计划已终态；调用方不得据此宣称远端卸载已执行
+	//   - error 表示 mode 取值非法、审计读取或补偿写入失败
+	//
+	// 注意：
+	//   - 不创建、不修改 Agent 配置记录，只完成遗留审计
 	RecoverPendingAgentRemoval(ctx context.Context, hostID string, mode agentRemovalRecoveryMode) (bool, error)
 }
 
@@ -633,11 +657,22 @@ const (
 )
 
 // auditTrigger 返回该模式匹配的审计触发器；空串表示匹配任意来源。
-func (m agentRemovalRecoveryMode) auditTrigger() string {
-	if m == agentRemovalRecoveryUninstallOnly {
-		return tunnelInvalidationTriggerAgentRemoved
+//
+// 参数：
+//   - m: 受限的恢复匹配模式
+//
+// 返回：
+//   - 匹配的审计触发器（agent_removed）或空串（任意来源）
+//   - error 表示模式取值非法；未知模式必须 fail-closed，不得按 AnyOrigin 放行
+func (m agentRemovalRecoveryMode) auditTrigger() (string, error) {
+	switch m {
+	case agentRemovalRecoveryUninstallOnly:
+		return tunnelInvalidationTriggerAgentRemoved, nil
+	case agentRemovalRecoveryAnyOrigin:
+		return "", nil
+	default:
+		return "", fmt.Errorf("agentRemovalRecoveryMode 取值非法: %d", int(m))
 	}
-	return ""
 }
 
 // RecoverPendingAgentRemoval 补偿指定 Host 上未终态的 Agent 配置删除审计计划。
@@ -654,18 +689,27 @@ func (m agentRemovalRecoveryMode) auditTrigger() string {
 // 返回：
 //   - true 表示本次调用实际补偿了一个未终态计划
 //   - false 表示无匹配计划或计划已终态；调用方不得据此宣称远端卸载已执行
-//   - error 表示审计读取或补偿写入失败
+//   - error 表示 mode 取值非法、审计读取或补偿写入失败
 //
 // 注意：
 //   - 与 Agent 配置写操作共用同一 Host 互斥锁
 //   - 不创建、不修改 Agent 配置记录，只完成遗留审计
 func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID string, mode agentRemovalRecoveryMode) (bool, error) {
+	trigger, modeErr := mode.auditTrigger()
+	if modeErr != nil {
+		// 模式非法时 fail-closed：宁可拒绝恢复，也不能放宽匹配范围误补偿他源计划。
+		logger.GetLogger().WithEntryName("RemoteNodeMutation").WithFields(map[string]any{
+			"operation": "recover_pending_agent_removal",
+			"host_id":   hostID,
+		}).WithErr(modeErr).Error("拒绝非法恢复匹配模式")
+		return false, modeErr
+	}
 	unlock := a.mutationMu.lock(hostID)
 	defer unlock()
 	log := logger.GetLogger().WithEntryName("RemoteNodeMutation").WithFields(map[string]any{
 		"operation": "recover_pending_agent_removal",
 		"host_id":   hostID,
-		"trigger":   mode.auditTrigger(),
+		"trigger":   trigger,
 	})
 	log.Info("开始检查并恢复 Agent 删除的待完成审计")
 	result, err := a.invalidator.Recover(ctx, tunnelRuntimeInvalidationRecovery{
@@ -673,7 +717,7 @@ func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.C
 		TargetKind: tunnelInvalidationTargetAgent,
 		Mutation:   tunnelInvalidationMutationDelete,
 		Persisted:  true,
-		Trigger:    mode.auditTrigger(),
+		Trigger:    trigger,
 	})
 	if err != nil {
 		log.WithErr(classifyTunnelInvalidationRecoveryError(result, err)).Error("恢复 Agent 删除的待完成审计失败")
