@@ -31,6 +31,9 @@ jobs:
         working-directory: agent
         run: go test ./...
 
+      - name: Run Unix manual uninstall contract tests
+        run: bash scripts/uninstall-agent.test.sh
+
   agent-windows:
     name: Go agent (Windows)
     runs-on: windows-latest
@@ -113,6 +116,10 @@ jobs:
           if-no-files-found: error
           path: ${{ runner.temp }}/runtime-validation-package-contracts
 
+      - name: Run Windows manual uninstall contract tests
+        shell: pwsh
+        run: ./scripts/uninstall-agent.windows.test.ps1
+
   desktop:
     name: Desktop web checks
     runs-on: ubuntu-latest
@@ -192,6 +199,8 @@ jobs:
           if-no-files-found: error
           path: |
             scripts/install-agent.sh
+            scripts/uninstall-agent.sh
+            scripts/uninstall-agent.ps1
             desktop/src-tauri/resources/agent-install/superdev-agent-*
 
       - name: Build Tauri Linux packages

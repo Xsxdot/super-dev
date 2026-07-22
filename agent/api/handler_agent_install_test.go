@@ -23,13 +23,17 @@ import (
 )
 
 type fakeAgentInstaller struct {
-	host         model.Host
-	restartHost  model.Host
-	updateHost   model.Host
-	opts         installer.ServiceOptions
-	calls        int
-	restartCalls int
-	updateCalls  int
+	host           model.Host
+	uninstallHost  model.Host
+	restartHost    model.Host
+	updateHost     model.Host
+	opts           installer.ServiceOptions
+	calls          int
+	uninstallCalls int
+	removeData     bool
+	uninstallErr   error
+	restartCalls   int
+	updateCalls    int
 }
 
 func (f *fakeAgentInstaller) Install(ctx context.Context, host model.Host, opts installer.ServiceOptions) (installer.Result, error) {
@@ -43,6 +47,16 @@ func (f *fakeAgentInstaller) Restart(ctx context.Context, host model.Host) (inst
 	f.restartCalls++
 	f.restartHost = host
 	return installer.RestartResult{OK: true, HostID: host.ID, Platform: "linux", Message: "restarted"}, nil
+}
+
+func (f *fakeAgentInstaller) Uninstall(ctx context.Context, host model.Host, removeData bool) (installer.UninstallResult, error) {
+	f.uninstallCalls++
+	f.uninstallHost = host
+	f.removeData = removeData
+	if f.uninstallErr != nil {
+		return installer.UninstallResult{}, f.uninstallErr
+	}
+	return installer.UninstallResult{OK: true, HostID: host.ID, RemovedData: removeData, Message: "Agent uninstalled"}, nil
 }
 
 func (f *fakeAgentInstaller) UpdateBinary(ctx context.Context, host model.Host) (installer.UpdateResult, error) {

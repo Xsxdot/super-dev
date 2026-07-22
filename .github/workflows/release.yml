@@ -44,6 +44,7 @@ jobs:
         run: |
           mkdir -p release-assets/agent
           cp scripts/install-agent.sh release-assets/agent/
+          cp scripts/uninstall-agent.sh scripts/uninstall-agent.ps1 release-assets/agent/
           cp desktop/src-tauri/resources/agent-install/superdev-agent-* release-assets/agent/
 
       - name: Upload agent release assets

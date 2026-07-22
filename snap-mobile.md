@@ -1,0 +1,267 @@
+- generic [ref=f2e3]:
+  - banner [ref=f2e4]:
+    - generic [ref=f2e5]:
+      - link "SuperDev home" [ref=f2e6] [cursor=pointer]:
+        - /url: "#top"
+        - generic [ref=f2e7]: SuperDev
+      - generic [ref=f2e8]:
+        - generic "Language" [ref=f2e9]:
+          - button "EN" [ref=f2e10] [cursor=pointer]
+          - generic [ref=f2e11]: /
+          - button "中" [active] [ref=f2e12] [cursor=pointer]
+        - button "Toggle navigation" [ref=f2e13] [cursor=pointer]
+  - main [ref=f2e16]:
+    - region [ref=f2e382]:
+      - generic [ref=f2e18]:
+        - paragraph [ref=f2e19]: SuperDev · runtime workbench
+        - heading "让 Agent 像人一样 排查真实问题" [level=1] [ref=f2e383]:
+          - generic [ref=f2e22]: 让 Agent 像人一样
+          - strong [ref=f2e23]: 排查真实问题
+        - paragraph [ref=f2e24]: 统一看见本地与远端的项目、服务、日志与部署；日志不够时查看真实进程，改完后自己打开浏览器验证。所有真实写操作可预检、可审批、可审计。
+        - generic [ref=f2e25]:
+          - link "查看快速开始" [ref=f2e384] [cursor=pointer]:
+            - /url: "#install"
+          - link "看真实排障实录" [ref=f2e385] [cursor=pointer]:
+            - /url: "#troubleshooting"
+        - generic [ref=f2e30]:
+          - generic [ref=f2e386]: 本地优先
+          - generic [ref=f2e34]: MCP-ready
+          - generic [ref=f2e389]: macOS + Windows 桌面端
+      - generic "payments-api · production" [ref=f2e40]:
+        - generic [ref=f2e41]: 实时追踪中
+        - generic [ref=f2e48]:
+          - generic [ref=f2e49]:
+            - generic [ref=f2e50]:
+              - strong [ref=f2e51]: payments-api · production
+              - generic [ref=f2e52]: 实时 · 跟随最新
+            - generic [ref=f2e53]: 搜索服务或日志
+          - table "payments-api live logs" [ref=f2e57]:
+            - row "12:21:45.872 ERROR POST /api/payments 500" [ref=f2e58]:
+              - generic [ref=f2e59]: 12:21:45.872
+              - generic [ref=f2e60]: ERROR
+              - generic [ref=f2e61]: POST /api/payments 500
+            - 'row "12:21:45.892 ERROR charge failed: insufficient_balance" [ref=f2e62]':
+              - generic [ref=f2e63]: 12:21:45.892
+              - generic [ref=f2e64]: ERROR
+              - generic [ref=f2e65]: "charge failed: insufficient_balance"
+            - row "12:21:45.893 INFO stack=service/charge.go:58" [ref=f2e66]:
+              - generic [ref=f2e67]: 12:21:45.893
+              - generic [ref=f2e68]: INFO
+              - generic [ref=f2e69]: stack=service/charge.go:58
+            - row "12:21:45.893 INFO request end status=500" [ref=f2e70]:
+              - generic [ref=f2e71]: 12:21:45.893
+              - generic [ref=f2e72]: INFO
+              - generic [ref=f2e73]: request end status=500
+            - row "12:21:46.106 INFO service heartbeat" [ref=f2e74]:
+              - generic [ref=f2e75]: 12:21:46.106
+              - generic [ref=f2e76]: INFO
+              - generic [ref=f2e77]: service heartbeat
+            - row "12:21:47.106 INFO service heartbeat" [ref=f2e78]:
+              - generic [ref=f2e79]: 12:21:47.106
+              - generic [ref=f2e80]: INFO
+              - generic [ref=f2e81]: service heartbeat
+          - generic [ref=f2e82]:
+            - generic [ref=f2e83]: 实时 · 展示当前请求上下文
+            - generic [ref=f2e84]: payments-api RUNNING
+    - region "Before and after SuperDev" [ref=f2e86]:
+      - generic [ref=f2e87]:
+        - generic [ref=f2e392]:
+          - generic [ref=f2e396]:
+            - strong [ref=f2e397]: 手工复制日志
+            - generic [ref=f2e398]: 多窗口切换，日志丢行，上下文缺失
+          - generic [ref=f2e404]:
+            - strong [ref=f2e405]: Agent 直接读取实时与历史日志
+            - generic [ref=f2e406]: 同一条可搜索日志流，随时展开上下文
+        - generic [ref=f2e407]:
+          - generic [ref=f2e411]:
+            - strong [ref=f2e412]: Agent 另起影子服务
+            - generic [ref=f2e413]: 不同端口、不同配置、不同运行态
+          - generic [ref=f2e419]:
+            - strong [ref=f2e420]: Agent 与桌面端共享同一运行态
+            - generic [ref=f2e421]: 同一进程、同一配置、同一份证据
+        - generic [ref=f2e422]:
+          - generic [ref=f2e426]:
+            - strong [ref=f2e427]: 修复后仍靠人工验证
+            - generic [ref=f2e428]: 手工访问、截图、来回传递结果
+          - generic [ref=f2e434]:
+            - strong [ref=f2e435]: Agent 用浏览器与 Network 自己验结果
+            - generic [ref=f2e436]: 自动导航、检查并返回可复现证据
+    - region [ref=f2e437]:
+      - generic [ref=f2e134]:
+        - paragraph [ref=f2e135]: 完整工作台
+        - heading "一套工作台，覆盖从运行到交付" [level=2] [ref=f2e438]
+        - paragraph [ref=f2e137]: 排障是最能体现价值的主线；同一份运行态事实也承载项目管理、日志诊断与交付路径。
+      - generic [ref=f2e138]:
+        - article [ref=f2e439]:
+          - heading "统一管理所有项目" [level=3] [ref=f2e443]
+          - paragraph [ref=f2e444]: 把项目和环境连接到本地与远端真正运行的服务，而不是维护另一套影子状态。
+          - list [ref=f2e445]:
+            - listitem [ref=f2e446]: 本地与远端主机
+            - listitem [ref=f2e447]: process / launchd / systemd / Docker
+            - listitem [ref=f2e448]: 受管控制与仅监控模式
+            - listitem [ref=f2e449]: 统一的服务与部署模型
+        - article [ref=f2e450]:
+          - heading "实时日志、历史与搜索" [level=3] [ref=f2e454]
+          - paragraph [ref=f2e455]: 桌面端和 Agent 读取同一条日志流，从命中行直接回到完整上下文。
+          - list [ref=f2e456]:
+            - listitem [ref=f2e457]: 跨服务搜索与上下文定位
+            - listitem [ref=f2e458]: 规则过滤与分栏面板
+            - listitem [ref=f2e459]: 书签区间与同步录制
+            - listitem [ref=f2e460]: 重复折叠与历史回看
+        - article [ref=f2e461]:
+          - heading "断点与浏览器验证" [level=3] [ref=f2e465]
+          - paragraph [ref=f2e466]: 先看日志；证据不足时附加到同一受管进程，再用浏览器验证结果。
+          - list [ref=f2e467]:
+            - listitem [ref=f2e468]: 调用栈、作用域与变量
+            - listitem [ref=f2e469]: 不另起进程，不替换 PID
+            - listitem [ref=f2e470]: 导航、点击、输入与截图
+            - listitem [ref=f2e471]: Console 与 Network 检查
+        - article [ref=f2e472]:
+          - heading "Pipeline、产物与入口" [level=3] [ref=f2e476]
+          - paragraph [ref=f2e477]: 沿用团队可信的交付路径，从可校验 DAG 到可回滚版本和长期入口。
+          - list [ref=f2e478]:
+            - listitem [ref=f2e479]: 模板、变量与产物
+            - listitem [ref=f2e480]: 运行历史与日志回放
+            - listitem [ref=f2e481]: release/current 回滚
+            - listitem [ref=f2e482]: DNS、反向代理与 HTTPS
+    - region [ref=f2e483]:
+      - generic [ref=f2e184]:
+        - paragraph [ref=f2e185]: 核心展示
+        - heading "一次真实排障实录" [level=2] [ref=f2e484]
+        - paragraph [ref=f2e187]: 从用户描述的问题一路追到浏览器证据。点击任一步，查看该阶段完整现场。
+      - generic [ref=f2e188]:
+        - generic [ref=f2e189]:
+          - button "自动推进中" [pressed] [ref=f2e485] [cursor=pointer]
+          - generic [ref=f2e194]: 01 / 06
+        - generic [ref=f2e195]:
+          - tablist "一次真实排障实录" [ref=f2e486]:
+            - tab "1 用户提出问题" [selected] [ref=f2e487] [cursor=pointer]:
+              - generic [ref=f2e198]: "1"
+              - strong [ref=f2e199]: 用户提出问题
+            - tab "2 查看服务与日志" [ref=f2e488] [cursor=pointer]:
+              - generic [ref=f2e201]: "2"
+              - strong [ref=f2e202]: 查看服务与日志
+            - tab "3 日志不足时查断点" [ref=f2e489] [cursor=pointer]:
+              - generic [ref=f2e204]: "3"
+              - strong [ref=f2e205]: 日志不足时查断点
+            - tab "4 Agent 在仓库中修改代码" [ref=f2e490] [cursor=pointer]:
+              - generic [ref=f2e207]: "4"
+              - strong [ref=f2e208]: Agent 在仓库中修改代码
+            - tab "5 审批运行态重启" [ref=f2e491] [cursor=pointer]:
+              - generic [ref=f2e210]: "5"
+              - strong [ref=f2e211]: 审批运行态重启
+            - tab "6 浏览器与 Network 验证 200" [ref=f2e492] [cursor=pointer]:
+              - generic [ref=f2e213]: "6"
+              - strong [ref=f2e214]: 浏览器与 Network 验证 200
+          - tabpanel [ref=f2e651]:
+            - generic [ref=f2e652]:
+              - generic [ref=f2e653]:
+                - generic [ref=f2e654]: 当前阶段 1
+                - heading "从用户真实遇到的现象开始" [level=3] [ref=f2e655]
+                - paragraph [ref=f2e656]: 问题由用户提出；SuperDev 不会虚构告警或自动触发事故。
+              - generic [ref=f2e657]:
+                - generic [ref=f2e658]
+                - generic [ref=f2e660]
+                - generic [ref=f2e662]
+            - generic [ref=f2e666]:
+              - generic [ref=f2e667]:
+                - generic [ref=f2e668]: USER 10:20:13
+                - blockquote [ref=f2e669]: 一笔 ¥698 的有效支付请求 POST /api/payments 返回 500，账户余额是 ¥1,280。请排查并验证修复结果。
+              - generic [ref=f2e670]:
+                - paragraph [ref=f2e671]: 验收目标
+                - list [ref=f2e672]
+              - generic [ref=f2e682]:
+                - generic [ref=f2e683]: AGENT 10:20:15
+                - paragraph [ref=f2e684]: 我会先查看现有服务状态和日志；只有日志解释不了数值差异时，才使用断点。
+            - generic [ref=f2e685]:
+              - button "上一步" [ref=f2e686] [cursor=pointer]
+              - button "下一步" [ref=f2e691] [cursor=pointer]
+    - region "SuperDev safety principle" [ref=f2e257]:
+      - generic [ref=f2e258]:
+        - paragraph [ref=f2e259]:
+          - text: 安全门在
+          - strong [ref=f2e260]: local agent
+          - text: 层强制执行，而不是靠提示词约束 Agent。
+        - generic [ref=f2e261]: 边界与真实操作运行在同一层，不能通过换一段提示词或换一个客户端绕过。
+    - region [ref=f2e558]:
+      - generic [ref=f2e263]:
+        - paragraph [ref=f2e264]: 硬边界
+        - heading "真实操作有边界" [level=2] [ref=f2e559]
+        - paragraph [ref=f2e266]: 每个写操作都走同一条强制路径：读操作保持高效，真实变更始终明确且可复核。
+      - generic [ref=f2e267]:
+        - article [ref=f2e560]:
+          - heading "预检 Preview" [level=3] [ref=f2e564]
+          - paragraph [ref=f2e565]: 执行前看到目标、参数、影响范围和风险，明确将要改变什么。
+        - article [ref=f2e566]:
+          - heading "用户审批 Approve" [level=3] [ref=f2e570]
+          - paragraph [ref=f2e571]: 受保护的运行态写操作等待明确决定；没有批准，就没有变更。
+        - article [ref=f2e572]:
+          - heading "一次性令牌 One-time Token" [level=3] [ref=f2e576]
+          - paragraph [ref=f2e577]: 短期令牌只绑定已批准的具体操作，不能换目标或重复使用。
+          - code [ref=f2e579]: "token: sd_eyJhbGciOiJIUzI1Ni... scope: restart_service expires_in: 60"
+        - article [ref=f2e580]:
+          - heading "审计记录 Audit" [level=3] [ref=f2e584]
+          - paragraph [ref=f2e585]: 预检、批准、执行、结果和上下文在操作结束后仍然可追溯。
+          - generic [ref=f2e586]:
+            - code [ref=f2e587]: 10:24:05 preview restart_service
+            - code [ref=f2e588]: 10:24:06 approved user@macOS
+            - code [ref=f2e589]: 10:24:18 success pid=9488
+      - paragraph [ref=f2e298]: 所有安全约束都由 local agent 强制执行；没有静默写入，也不依赖提示词自觉。
+    - region [ref=f2e590]:
+      - generic [ref=f2e302]:
+        - paragraph [ref=f2e303]: 采用前的关键问题
+        - heading "开发者应该先问清楚这些" [level=2] [ref=f2e591]
+      - generic [ref=f2e305]:
+        - group [ref=f2e592]:
+          - generic "Agent 已经能跑 shell、tail 日志，为什么还需要 SuperDev？" [ref=f2e593] [cursor=pointer]
+        - group [ref=f2e596]:
+          - generic "运行态数据会发到云端吗？" [ref=f2e597] [cursor=pointer]
+        - group [ref=f2e600]:
+          - generic "Agent 能直接操作生产环境吗？" [ref=f2e601] [cursor=pointer]
+        - group [ref=f2e604]:
+          - generic "现在如何安装，支持哪些平台？" [ref=f2e605] [cursor=pointer]
+    - region [ref=f2e608]:
+      - generic [ref=f2e323]:
+        - paragraph [ref=f2e324]: 安装与信任
+        - heading "本地优先，透明可控，开源共建" [level=2] [ref=f2e609]
+        - paragraph [ref=f2e326]: 安装桌面端，连接支持 MCP 的 Agent，把运行态边界留在你控制的基础设施上。
+      - generic [ref=f2e327]:
+        - article [ref=f2e610]:
+          - heading "本地优先" [level=3] [ref=f2e614]
+          - paragraph [ref=f2e615]: 桌面端与 MCP 客户端共享 local agent；核心运行态工作流不依赖托管控制面。
+        - article [ref=f2e616]:
+          - heading "调试语言支持" [level=3] [ref=f2e620]
+          - paragraph [ref=f2e621]: 默认支持 Go、Python、Rust、C/C++；配置适配器后实验性支持 Node、Java/Kotlin。
+        - article [ref=f2e622]:
+          - heading "桌面安装包" [level=3] [ref=f2e626]
+          - paragraph [ref=f2e627]: 从 GitHub Releases 下载 macOS 与 Windows 原生桌面安装包。
+          - generic [ref=f2e628]:
+            - link "macOS" [ref=f2e629] [cursor=pointer]:
+              - /url: https://github.com/Xsxdot/super-dev/releases
+            - link "Windows" [ref=f2e632] [cursor=pointer]:
+              - /url: https://github.com/Xsxdot/super-dev/releases
+        - article [ref=f2e635]:
+          - heading "开源与源码构建" [level=3] [ref=f2e639]
+          - paragraph [ref=f2e640]: 采用 MIT License，可检查全部源码、阅读构建文档并从源码运行完整工作台。
+          - generic [ref=f2e641]:
+            - link "GitHub" [ref=f2e642] [cursor=pointer]:
+              - /url: https://github.com/Xsxdot/super-dev
+            - link "构建文档" [ref=f2e645] [cursor=pointer]:
+              - /url: https://github.com/Xsxdot/super-dev#development
+      - generic [ref=f2e366]:
+        - link "打开 GitHub Releases" [ref=f2e648] [cursor=pointer]:
+          - /url: https://github.com/Xsxdot/super-dev/releases
+        - link "查看源码" [ref=f2e649] [cursor=pointer]:
+          - /url: https://github.com/Xsxdot/super-dev
+  - contentinfo [ref=f2e373]:
+    - link "SuperDev home" [ref=f2e374] [cursor=pointer]:
+      - /url: "#top"
+      - generic [ref=f2e375]: SuperDev
+    - generic [ref=f2e376]: © 2026 SuperDev · MIT License
+    - navigation "Footer navigation" [ref=f2e377]:
+      - link "GitHub" [ref=f2e378] [cursor=pointer]:
+        - /url: https://github.com/Xsxdot/super-dev
+      - link "文档" [ref=f2e650] [cursor=pointer]:
+        - /url: https://docs.gosuper.dev/
+      - link "Security" [ref=f2e380] [cursor=pointer]:
+        - /url: https://github.com/Xsxdot/super-dev/blob/main/SECURITY.md

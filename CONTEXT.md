@@ -20,6 +20,22 @@ _Avoid_: Sandbox Revision, Git Commit, File Timestamp
 Project 的一个具体代码工作副本；主工作树和 Git worktree 都是 Workspace。
 _Avoid_: Project Instance, Project Copy
 
+**Remote Workspace Replica**:
+一个 Workspace 在特定 Remote Node 上供多个 Runtime Instance 共享使用的代码副本；它不拥有独立的 Project 或 Workspace Identity。
+_Avoid_: Remote Project, Deployment Directory, Independent Workspace
+
+**Remote Workspace Preparation**:
+在 Remote Node 上通过被引用的 Project Pipeline 为一个 Remote Workspace Replica 准备目标代码的共享过程；它按 Workspace 与 Remote Node 定位，不属于单个 Deployment。
+_Avoid_: Deployment Sync, Per-service Upload, Runtime Start Command
+
+**Remote Workspace Preparation Pipeline**:
+被 Remote Workspace Preparation 引用的普通 Project Pipeline；它自由组合现有命令、归档、传输与检查步骤，而不对应一套 SuperDev 内建同步策略。
+_Avoid_: Sync Mode, Built-in Git Strategy, Preparation-only Engine
+
+**Remote Workspace Preparation Operation**:
+一次显式、可观察且可审计的 Remote Workspace Preparation Pipeline 执行；它可单独运行，也可作为用户明确选择的“准备并重启”组合动作的第一阶段。
+_Avoid_: Runtime Restart, Background Sync, Implicit Pull
+
 **Workspace Identity**:
 由 Controller Agent 在本机注册表中分配并持久化的 Workspace 稳定身份；版本控制信息只用于路径移动后的重新关联。
 _Avoid_: Root Path, Branch Name, Git Commit
@@ -281,6 +297,30 @@ _Avoid_: Coding Agent, SuperDev Agent
 **SuperDev Agent**:
 提供 SuperDev 编排、观察和调试能力的节点进程。
 _Avoid_: Coding Agent
+
+**Agent Uninstall**:
+先卸载远端 SuperDev Agent、成功后再移除 Controller 中 Agent 管理配置的正常移除操作；失败时保留配置作为可恢复的管理入口。
+_Avoid_: Remove Agent Config, Delete Agent, Decommission
+
+**Agent Child Process**:
+由 SuperDev Agent 直接启动且生命周期从属于该 Agent 的 Runtime 或采集进程。
+_Avoid_: Managed Deployment, systemd Service, Docker Container
+
+**Independent Host Runtime**:
+生命周期不从属于 SuperDev Agent、由 Host 运行基座独立持有的 Runtime。
+_Avoid_: Agent Child Process, RuntimeTypeExternal, Agent-owned Process
+
+**Agent Detach**:
+在无法完成 Agent Uninstall 时，仅移除 Controller 中 Agent 管理配置的风险兜底；它不代表远端 Agent 已被删除。
+_Avoid_: Agent Uninstall, Clean Removal
+
+**Remote Agent Data**:
+由远端 SuperDev Agent 持久化、可在 Agent Uninstall 后继续保留的节点状态、日志与历史数据。
+_Avoid_: Agent Binary, Controller Agent Config, Disposable Cache
+
+**Agent Data Purge**:
+在 Agent Uninstall 中经用户显式选择，删除 Remote Agent Data 的不可恢复操作。
+_Avoid_: Default Uninstall, Cache Cleanup, Agent Detach
 
 **Controller Agent**:
 运行在开发主机上、拥有 Workspace 与 Sandbox 生命周期并向 Sandbox Node 下发期望状态的 SuperDev Agent。

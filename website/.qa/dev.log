@@ -1,0 +1,15 @@
+
+> superdev-website@0.2.1 dev /Users/xushixin/workspace/super-debug/website
+> vitepress dev --host 127.0.0.1 --port 7100
+
+
+  vitepress v1.6.4
+
+  ➜  Local:   http://127.0.0.1:7100/
+10:51:58 AM [vitepress] hmr update /.vitepress/theme/components/Home.vue
+10:56:17 AM [vitepress] page reload .vitepress/dist/404.html
+10:56:17 AM [vitepress] page reload .vitepress/dist/index.html
+10:56:17 AM [vitepress] page reload .vitepress/dist/zh/index.html
+10:56:17 AM [vitepress] page reload .vitepress/dist/404.html
+10:56:17 AM [vitepress] page reload .vitepress/dist/index.html
+10:56:17 AM [vitepress] page reload .vitepress/dist/zh/index.html

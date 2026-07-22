@@ -18,7 +18,7 @@ import { useAgentsStore } from '@/stores/agents'
 import { useNodeStore } from '@/stores/node'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { AgentDTO, Host, NodeStatus } from '@/api/agent'
+import { AgentAPIError, type AgentDTO, type Host, type NodeStatus } from '@/api/agent'
 
 vi.mock('@/components/Settings/AgentBulkUpdateModal.vue', () => ({
   default: {
@@ -118,6 +118,7 @@ afterEach(() => {
     wrapper.unmount()
   }
   document.body.innerHTML = ''
+  vi.unstubAllGlobals()
 })
 
 describe('AgentManagerTab', () => {
@@ -304,5 +305,181 @@ describe('AgentManagerTab', () => {
 
     expect(agents.checkAgent).toHaveBeenCalledWith('h1')
     expect(wrapper.find('[data-test="agent-panel"]').exists()).toBe(false)
+  })
+
+  it('defaults to preserving Agent data while explaining the uninstall impact', async () => {
+    const { wrapper, agents } = await mountPage([agent({
+      runtime: { installed: true, health: 'healthy', reachable: true },
+    })], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      removed_data: false,
+      message: 'Agent uninstalled',
+    })
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    const uninstallButton = bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')
+    expect(uninstallButton?.textContent).toContain('卸载 Agent')
+    uninstallButton?.click()
+    await wrapper.vm.$nextTick()
+
+    const modal = wrapper.find('[data-test="agent-uninstall-modal"]')
+    expect(modal.exists()).toBe(true)
+    expect(modal.text()).toContain('Agent 自身及其直接启动的子进程可能停止')
+    expect(modal.text()).toContain('其他 systemd 服务和 Docker 容器会继续运行')
+    expect(modal.text()).toContain('默认保留远端 Agent 数据和日志')
+    expect((modal.find('[data-test="agent-uninstall-purge"]').element as HTMLInputElement).checked).toBe(false)
+
+    await modal.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(agents.uninstallAgent).toHaveBeenCalledWith('h1', false))
+  })
+
+  it('requires typing the Host name before purging Agent data and logs', async () => {
+    const { wrapper, agents } = await mountPage([agent()], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      removed_data: true,
+      message: 'Agent uninstalled',
+    })
+
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+
+    const modal = wrapper.find('[data-test="agent-uninstall-modal"]')
+    await modal.find('[data-test="agent-uninstall-purge"]').setValue(true)
+    expect(modal.text()).toContain('永久删除')
+    expect(modal.find('[data-test="agent-uninstall-confirm"]').attributes('disabled')).toBeDefined()
+
+    await modal.find('[data-test="agent-uninstall-confirm-name"]').setValue('h1')
+    expect(modal.find('[data-test="agent-uninstall-confirm"]').attributes('disabled')).toBeDefined()
+    await modal.find('[data-test="agent-uninstall-confirm-name"]').setValue('ali-01')
+    expect(modal.find('[data-test="agent-uninstall-confirm"]').attributes('disabled')).toBeUndefined()
+
+    await modal.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(agents.uninstallAgent).toHaveBeenCalledWith('h1', true))
+  })
+
+  it.each([
+    { stage: 'remote_uninstall', status: 502, expected: '远端 Agent 卸载失败' },
+    { stage: 'config_remove', status: 500, expected: '远端 Agent 已卸载，但 Controller 配置移除失败' },
+  ])('shows the $stage recovery stage to the user', async ({ stage, status, expected }) => {
+    const { wrapper, agents } = await mountPage([agent()], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockRejectedValue(new AgentAPIError('fixture failure', status, {
+      error: 'fixture failure',
+      stage,
+    }))
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain(expected))
+  })
+
+  it('reveals version-matched manual scripts only after automatic remote uninstall fails', async () => {
+    const { wrapper, agents } = await mountPage([agent()], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockRejectedValue(new AgentAPIError('ssh unavailable', 502, {
+      error: 'ssh unavailable',
+      stage: 'remote_uninstall',
+    }))
+
+    expect(wrapper.find('[data-test="agent-manual-uninstall"]').exists()).toBe(false)
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.find('[data-test="agent-manual-uninstall"]').exists()).toBe(true))
+    const guidance = wrapper.find('[data-test="agent-manual-uninstall"]')
+    expect(guidance.text()).toContain('Agent 配置已保留')
+    expect(guidance.text()).toContain('sh uninstall-agent.sh')
+    expect(guidance.text()).toContain('powershell -ExecutionPolicy Bypass -File .\\uninstall-agent.ps1')
+    expect(guidance.find('[data-test="agent-uninstall-script-shell"]').attributes('href')).toBe(
+      'http://127.0.0.1:57018/api/agent-uninstall-scripts/uninstall-agent.sh',
+    )
+    expect(guidance.find('[data-test="agent-uninstall-script-powershell"]').attributes('href')).toBe(
+      'http://127.0.0.1:57018/api/agent-uninstall-scripts/uninstall-agent.ps1',
+    )
+    expect(agents.agents).toHaveLength(1)
+  })
+
+  it('offers Controller-only detach only after manual guidance and requires a second risk confirmation', async () => {
+    const { wrapper, agents } = await mountPage([agent()], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockRejectedValue(new AgentAPIError('ssh unavailable', 502, {
+      error: 'ssh unavailable',
+      stage: 'remote_uninstall',
+    }))
+    const detach = vi.spyOn(agents, 'detachAgent').mockResolvedValue({ status: 'detached', host_id: 'h1' })
+
+    expect(wrapper.find('[data-test="agent-detach-unavailable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="agent-detach-modal"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-test="agent-manual-uninstall"]').exists()).toBe(true))
+
+    const fallback = wrapper.find('[data-test="agent-detach-unavailable"]')
+    expect(fallback.text()).toContain('无法完成手动卸载')
+    await fallback.trigger('click')
+
+    const modal = wrapper.find('[data-test="agent-detach-modal"]')
+    expect(modal.text()).toContain('远端 Agent 及其直接启动的子进程可能仍在运行')
+    expect(modal.text()).toContain('不会卸载远端 Agent')
+    expect(detach).not.toHaveBeenCalled()
+
+    await modal.find('[data-test="agent-detach-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledWith('h1', 'manual_uninstall_failed'))
+    expect(wrapper.find('[data-test="agent-manual-uninstall"]').exists()).toBe(false)
+  })
+
+  it('keeps one Host manual fallback visible when another Host uninstalls successfully', async () => {
+    const h1 = agent({ host_id: 'h1', host_name: 'ali-01' })
+    const h2 = agent({ host_id: 'h2', host_name: 'us-02' })
+    const { wrapper, agents } = await mountPage([h1, h2], [], [hostForManager('h1'), hostForManager('h2')])
+    vi.spyOn(agents, 'uninstallAgent').mockImplementation(async (hostId) => {
+      if (hostId === 'h1') {
+        throw new AgentAPIError('ssh unavailable', 502, {
+          error: 'ssh unavailable',
+          stage: 'remote_uninstall',
+        })
+      }
+      agents.agents = agents.agents.filter(item => item.host_id !== hostId)
+      return { ok: true, host_id: hostId, removed_data: false, message: 'Agent uninstalled' }
+    })
+
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-test="agent-manual-uninstall"]').text()).toContain('ali-01'))
+
+    await wrapper.find('[data-test="agent-more-h2"]').trigger('click')
+    bodyMenu('h2').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h2"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(agents.uninstallAgent).toHaveBeenCalledWith('h2', false))
+
+    expect(wrapper.find('[data-test="agent-manual-uninstall"]').text()).toContain('ali-01')
+    expect(wrapper.find('[data-test="agent-detach-unavailable"]').exists()).toBe(true)
+  })
+
+  it('does not suggest manual uninstall when only Controller config removal failed', async () => {
+    const { wrapper, agents } = await mountPage([agent()], [], [hostForManager('h1')])
+    vi.spyOn(agents, 'uninstallAgent').mockRejectedValue(new AgentAPIError('store unavailable', 500, {
+      error: 'store unavailable',
+      stage: 'config_remove',
+    }))
+
+    await wrapper.find('[data-test="agent-more-h1"]').trigger('click')
+    bodyMenu('h1').querySelector<HTMLElement>('[data-test="agent-menu-uninstall-h1"]')?.click()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="agent-uninstall-confirm"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Controller 配置移除失败'))
+    expect(wrapper.find('[data-test="agent-manual-uninstall"]').exists()).toBe(false)
   })
 })

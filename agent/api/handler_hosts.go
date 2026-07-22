@@ -103,11 +103,26 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
 func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
-	if err := a.remoteNodeMutations.RemoveHost(r.Context(), r.PathValue("id")); err != nil {
-		if writeRemoteNodeMutationPartialError(w, err) {
-			return
+	hostID := r.PathValue("id")
+	if deleteErr := a.removeHostSafely(r.Context(), hostID); deleteErr != nil {
+		switch deleteErr.Code {
+		case "operation_in_progress":
+			data := map[string]string{"host_id": hostID, "operation": "delete_host"}
+			if deleteErr.Conflict != nil {
+				data["active_operation"] = deleteErr.Conflict.ActiveOperation
+			}
+			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "another agent lifecycle operation is in progress", data)
+		case hostDeleteCodeAgentConfigured:
+			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "uninstall or detach the Agent before deleting the Host", map[string]string{
+				"host_id": hostID,
+			})
+		default:
+			// Host 配置已删除但 tunnel 失效审计未完成时，按部分失败语义返回 503。
+			if writeRemoteNodeMutationPartialError(w, deleteErr.Err) {
+				return
+			}
+			jsonError(w, http.StatusInternalServerError, deleteErr.Err.Error())
 		}
-		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})

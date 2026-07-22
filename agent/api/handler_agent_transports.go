@@ -51,12 +51,19 @@ func (a *App) testAgentTransport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "provision")
+	if !ok {
+		return
+	}
+	defer release()
+
 	var req agentProvisionRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	target, entry, ok := a.agentTransportEntryByIndex(w, r.PathValue("host_id"), req.Index)
+	target, entry, ok := a.agentTransportEntryByIndex(w, hostID, req.Index)
 	if !ok {
 		return
 	}

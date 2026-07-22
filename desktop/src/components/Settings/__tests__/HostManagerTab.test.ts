@@ -9,11 +9,11 @@
  *   - 不访问真实 agent HTTP 或 WebSocket 接口
  *   - 不测试 Agent 配置 modal
  */
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
-import { api, type Host } from '@/api/agent'
+import { AgentAPIError, api, type Host } from '@/api/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 
@@ -62,6 +62,11 @@ describe('HostManagerTab', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     mockedApi.listHosts.mockResolvedValue([])
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('空态展示提示文案', async () => {
@@ -113,5 +118,23 @@ describe('HostManagerTab', () => {
     expect(wrapper.find('[data-test="host-agent-summary"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="host-install-agent"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="host-refresh-agent-h1"]').exists()).toBe(false)
+  })
+
+  it('keeps a Host visible when Agent configuration blocks deletion', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [host()]
+    mockedApi.deleteHost.mockRejectedValue(new AgentAPIError(
+      'uninstall or detach the Agent before deleting the Host',
+      409,
+      { code: 'agent_configured' },
+    ))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-delete"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('uninstall or detach the Agent'))
+    expect(store.hosts).toHaveLength(1)
+    expect(wrapper.find('[data-test="host-row"]').exists()).toBe(true)
   })
 })

@@ -21,6 +21,7 @@ mkdir -p \
   "$TMP_DIR/desktop/src-tauri/target/debug" \
   "$TMP_DIR/validation/runtime" \
   "$TMP_DIR/agent" \
+  "$TMP_DIR/scripts" \
   "$TMP_DIR/bin"
 cp "$ROOT/scripts/build-agent.sh" "$TMP_DIR/desktop/scripts/build-agent.sh"
 cat > "$TMP_DIR/validation/runtime/targets.txt" <<'EOF'
@@ -30,6 +31,8 @@ linux amd64
 linux arm64
 windows amd64
 EOF
+printf 'shell uninstall fixture\n' > "$TMP_DIR/scripts/uninstall-agent.sh"
+printf 'powershell uninstall fixture\n' > "$TMP_DIR/scripts/uninstall-agent.ps1"
 
 cat > "$TMP_DIR/agent/main.go" <<'EOF'
 package main
@@ -311,6 +314,14 @@ if [[ ! -f "$TMP_DIR/desktop/src-tauri/resources/agent-install/superdev-agent-wi
   echo "expected windows remote agent binary after CRLF targets parse" >&2
   exit 1
 fi
+# 卸载脚本必须随每次 remote install 构建重新打包（CRLF 重建后仍在）。
+for script in uninstall-agent.sh uninstall-agent.ps1; do
+  bundled="$TMP_DIR/desktop/src-tauri/resources/agent-install/$script"
+  if [[ ! -s "$bundled" ]]; then
+    echo "expected manual uninstall script to be bundled: $bundled" >&2
+    exit 1
+  fi
+done
 
 js_debug_server="$TMP_DIR/desktop/src-tauri/resources/js-debug/src/dapDebugServer.js"
 if [[ ! -f "$js_debug_server" ]]; then

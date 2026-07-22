@@ -25,7 +25,8 @@ vi.mock('@/api/agent', async () => {
       createAgent: vi.fn(),
       updateAgentTransport: vi.fn(),
       updateAgentConfig: vi.fn(),
-      deleteAgent: vi.fn(),
+      uninstallAgent: vi.fn(),
+      detachAgent: vi.fn(),
       checkAgent: vi.fn(),
       installAgent: vi.fn(),
       getAgentUpdateTarget: vi.fn(),
@@ -131,16 +132,49 @@ describe('agents store', () => {
     expect(api.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh' })
   })
 
-  it('deletes agent config through first-class agent api', async () => {
-    vi.mocked(api.deleteAgent).mockResolvedValue(undefined)
+  it('uninstalls the remote agent before removing it from local state', async () => {
+    vi.mocked(api.uninstallAgent).mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      removed_data: false,
+      message: 'Agent uninstalled',
+    })
     const store = useAgentsStore()
     store.agents = [agent('h1'), agent('h2')]
 
-    await store.deleteAgent('h1')
+    await store.uninstallAgent('h1')
 
-    expect(api.deleteAgent).toHaveBeenCalledWith('h1')
+    expect(api.uninstallAgent).toHaveBeenCalledWith('h1', { remove_data: false })
     expect(store.agentOf('h1')).toBeUndefined()
     expect(store.agentOf('h2')?.host_id).toBe('h2')
+  })
+
+  it('forwards explicit Agent data purge to the uninstall API', async () => {
+    vi.mocked(api.uninstallAgent).mockResolvedValue({
+      ok: true,
+      host_id: 'h1',
+      removed_data: true,
+      message: 'Agent uninstalled',
+    })
+    const store = useAgentsStore()
+    store.agents = [agent('h1')]
+
+    await store.uninstallAgent('h1', true)
+
+    expect(api.uninstallAgent).toHaveBeenCalledWith('h1', { remove_data: true })
+    expect(store.agentOf('h1')).toBeUndefined()
+  })
+
+  it('detaches only the Controller config through the explicit detach API', async () => {
+    vi.mocked(api.detachAgent).mockResolvedValue({ status: 'detached', host_id: 'h1' })
+    const store = useAgentsStore()
+    store.agents = [agent('h1'), agent('h2')]
+
+    await store.detachAgent('h1', 'manual_uninstall_failed')
+
+    expect(api.detachAgent).toHaveBeenCalledWith('h1', { reason: 'manual_uninstall_failed' })
+    expect(store.agentOf('h1')).toBeUndefined()
+    expect(store.agentOf('h2')).toBeDefined()
   })
 
   it('loads update target metadata and updates agent binary through the api', async () => {

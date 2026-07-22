@@ -15,9 +15,12 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   api,
+  type AgentDetachReason,
+  type AgentDetachResponse,
   type AgentConfigUpdatePayload,
   type AgentCreatePayload,
   type AgentInstallPayload,
+  type AgentUninstallResponse,
   type AgentDTO,
   type AgentInstallCommandPayload,
   type AgentProvisionPayload,
@@ -89,9 +92,16 @@ export const useAgentsStore = defineStore('agents', () => {
     return api.updateAgentBinary(hostId)
   }
 
-  async function deleteAgent(hostId: string) {
-    await api.deleteAgent(hostId)
+  async function uninstallAgent(hostId: string, removeData = false): Promise<AgentUninstallResponse> {
+    const result = await api.uninstallAgent(hostId, { remove_data: removeData })
     agents.value = agents.value.filter(agent => agent.host_id !== hostId)
+    return result
+  }
+
+  async function detachAgent(hostId: string, reason: AgentDetachReason): Promise<AgentDetachResponse> {
+    const result = await api.detachAgent(hostId, { reason })
+    agents.value = agents.value.filter(agent => agent.host_id !== hostId)
+    return result
   }
 
   async function generateInstallCommand(hostId: string, payload: AgentInstallCommandPayload) {
@@ -133,7 +143,8 @@ export const useAgentsStore = defineStore('agents', () => {
     restartAgent,
     getAgentUpdateTarget,
     updateAgentBinary,
-    deleteAgent,
+    uninstallAgent,
+    detachAgent,
     generateInstallCommand,
     testTransport,
     provisionAgent,

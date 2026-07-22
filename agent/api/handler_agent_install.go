@@ -47,7 +47,14 @@ type agentUpdateBinaryResponse struct {
 
 // installAgent 处理 POST /api/agents/{host_id}/install。
 func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
-	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "install")
+	if !ok {
+		return
+	}
+	defer release()
+
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -111,7 +118,14 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 
 // restartAgent 处理 POST /api/agents/{host_id}/restart。
 func (a *App) restartAgent(w http.ResponseWriter, r *http.Request) {
-	host, _, found, err := a.agentByHostID(r.PathValue("host_id"))
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "restart")
+	if !ok {
+		return
+	}
+	defer release()
+
+	host, _, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -147,7 +161,14 @@ func (a *App) getAgentUpdateTarget(w http.ResponseWriter, r *http.Request) {
 
 // updateAgentBinary 处理 POST /api/agents/{host_id}/update-binary。
 func (a *App) updateAgentBinary(w http.ResponseWriter, r *http.Request) {
-	host, agent, found, err := a.agentByHostID(r.PathValue("host_id"))
+	hostID := r.PathValue("host_id")
+	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "update_binary")
+	if !ok {
+		return
+	}
+	defer release()
+
+	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
