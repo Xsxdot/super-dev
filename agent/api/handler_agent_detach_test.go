@@ -268,3 +268,44 @@ func TestUninstallDoesNotRecoverDetachPartialFailure(t *testing.T) {
 	assert.Equal(t, operation.AuditExecuted, events[0].Action)
 	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
 }
+
+// TestDetachRecoversUninstallPartialFailure 验证反向交叉路径：Uninstall 在 config_remove
+// 阶段部分失败（配置已删、审计未终态）后，Detach 作为逃生操作可以完成同一份审计计划并
+// 返回成功——Detach 只宣称"Controller 配置已移除"，两种来源的计划它都有权补偿。
+func TestDetachRecoversUninstallPartialFailure(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+
+	uninstall := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+	require.Equal(t, http.StatusInternalServerError, uninstall.Code)
+	assert.Contains(t, uninstall.Body.String(), `"stage":"config_remove"`)
+	assert.Equal(t, 1, fake.uninstallCalls, "远端卸载已执行过一次")
+	_, found, err := app.agentStore.AgentByHostID(hostID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, operation.AuditPrepared, events[0].Action)
+
+	auditStore.setFailExecuted(false)
+	detach := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
+	require.Equal(t, http.StatusOK, detach.Code, "Detach 应能补偿 Uninstall 留下的未终态计划")
+	assert.Equal(t, 1, fake.uninstallCalls, "Detach 不连接远端 Host")
+	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
+}

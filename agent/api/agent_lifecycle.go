@@ -78,7 +78,7 @@ func (a *App) uninstallAgent(ctx context.Context, hostID string, removeData bool
 		// 审计计划，重试必须补偿并回报成功），或 Agent 从未配置/已 Detach（远端可能
 		// 仍在运行，绝不允许据此宣称远端卸载成功）。只补偿卸载自身留下的计划；
 		// Detach 留下的计划不属于远端卸载成功。
-		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, tunnelInvalidationTriggerAgentRemoved)
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, agentRemovalRecoveryUninstallOnly)
 		if recErr != nil {
 			log.WithErr(recErr).WithFields(fields).Error("Agent 配置侧清理恢复失败")
 			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: recErr}
@@ -142,7 +142,7 @@ func (a *App) detachAgent(ctx context.Context, hostID string, reason agentDetach
 		// 上次 Detach 可能在配置已删、审计未终态时失败；此时重试必须完成审计补偿。
 		// Detach 只宣称"Controller 配置已移除"，因此卸载或 Detach 留下的待补偿计划都可恢复。
 		// 无待补偿计划时才视为 Agent 本就不存在。
-		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, "")
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID, agentRemovalRecoveryAnyOrigin)
 		if recErr != nil {
 			log.WithErr(recErr).WithFields(fields).Error("Agent Detach 审计补偿失败")
 			return &agentDetachError{Err: recErr}

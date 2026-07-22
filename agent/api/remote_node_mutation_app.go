@@ -109,9 +109,9 @@ type remoteNodeMutationService interface {
 	RemoveAgent(context.Context, string) error
 	// DetachAgentConfig 移除 Detach 场景的 Agent 配置，审计触发器与 Uninstall 区分。
 	DetachAgentConfig(context.Context, string) error
-	// RecoverPendingAgentRemoval 仅补偿指定触发器留下的未终态 Agent 删除审计计划；
-	// trigger 为空时补偿任意触发器的计划。返回 true 表示本次调用完成了补偿。
-	RecoverPendingAgentRemoval(ctx context.Context, hostID, trigger string) (bool, error)
+	// RecoverPendingAgentRemoval 补偿 mode 认可来源的未终态 Agent 删除审计计划；
+	// 返回 true 表示本次调用完成了补偿。
+	RecoverPendingAgentRemoval(ctx context.Context, hostID string, mode agentRemovalRecoveryMode) (bool, error)
 }
 
 type remoteNodeMutationApplication struct {
@@ -391,8 +391,23 @@ func (a *remoteNodeMutationApplication) RemoveAgent(ctx context.Context, hostID 
 	return a.removeAgentWithTrigger(ctx, hostID, tunnelInvalidationTriggerAgentRemoved)
 }
 
-// DetachAgentConfig 移除 Detach 场景下的 Agent 连接配置，审计触发器与 Uninstall 区分，
-// 保证恢复逻辑不会把 Detach 的部分失败当成远端卸载已完成。
+// DetachAgentConfig 移除 Detach 场景下指定 Host 的 Agent 连接配置。
+//
+// 职责：
+//   - 与 Uninstall 共用同一配置删除实现，但以 agent_detached 触发器写入审计
+//   - 保持删除来源可区分，恢复逻辑不会把 Detach 的部分失败当成远端卸载已完成
+//
+// 参数：
+//   - ctx: 请求上下文，传给 tunnel 失效协调
+//   - hostID: 待移除配置的 Host ID
+//
+// 返回：
+//   - nil 表示配置已移除（或本就不存在，幂等成功）
+//   - error 表示配置删除或审计链路失败；配置可能已删但审计未终态，可安全重试
+//
+// 注意：
+//   - 不连接远端 Host，不代表远端 Agent、启动项或子进程已停止
+//   - 配置删除后旧 tunnel 运行态会失效并完成审计
 func (a *remoteNodeMutationApplication) DetachAgentConfig(ctx context.Context, hostID string) error {
 	return a.removeAgentWithTrigger(ctx, hostID, tunnelInvalidationTriggerAgentDetached)
 }
@@ -602,18 +617,55 @@ func (a *remoteNodeMutationApplication) recoverDeleteInvalidation(ctx context.Co
 	return classifyTunnelInvalidationRecoveryError(result, err)
 }
 
-// RecoverPendingAgentRemoval 仅补偿指定触发器留下的未终态 Agent 删除审计计划；
-// trigger 为空时补偿任意触发器的计划。
+// agentRemovalRecoveryMode 声明恢复探测认可的 Agent 配置删除来源。
 //
-// 返回 true 表示本次调用实际完成了一个半途失败的删除补偿；遇到已完成计划或
-// 无匹配计划时返回 false，调用方不得据此宣称远端卸载已执行。
-func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID, trigger string) (bool, error) {
+// 同一"配置已删除"可能来自 Uninstall 或 Detach，但只有 Uninstall 的部分失败
+// 才允许被报成"远端卸载已成功"；调用方必须显式选择匹配范围。
+type agentRemovalRecoveryMode int
+
+const (
+	// agentRemovalRecoveryUninstallOnly 仅补偿 Uninstall（agent_removed）留下的计划；
+	// Detach 留下的计划不匹配，避免把未执行远端卸载的状态报成卸载成功。
+	agentRemovalRecoveryUninstallOnly agentRemovalRecoveryMode = iota
+	// agentRemovalRecoveryAnyOrigin 补偿任意来源（Uninstall 或 Detach）的计划；
+	// 仅适用于成功语义只覆盖"Controller 配置已移除"的调用方（Detach）。
+	agentRemovalRecoveryAnyOrigin
+)
+
+// auditTrigger 返回该模式匹配的审计触发器；空串表示匹配任意来源。
+func (m agentRemovalRecoveryMode) auditTrigger() string {
+	if m == agentRemovalRecoveryUninstallOnly {
+		return tunnelInvalidationTriggerAgentRemoved
+	}
+	return ""
+}
+
+// RecoverPendingAgentRemoval 补偿指定 Host 上未终态的 Agent 配置删除审计计划。
+//
+// 职责：
+//   - 发现同 Host、Agent 删除类、且来源被 mode 认可的 prepared 计划并完成补偿
+//   - 返回本次调用是否实际完成了补偿，供调用方区分"半途失败的重试"与"配置本就不存在"
+//
+// 参数：
+//   - ctx: 请求上下文，传给审计存储与 tunnel 失效协调
+//   - hostID: 待检查的 Host ID
+//   - mode: 认可的删除来源（仅 Uninstall，或任意来源）
+//
+// 返回：
+//   - true 表示本次调用实际补偿了一个未终态计划
+//   - false 表示无匹配计划或计划已终态；调用方不得据此宣称远端卸载已执行
+//   - error 表示审计读取或补偿写入失败
+//
+// 注意：
+//   - 与 Agent 配置写操作共用同一 Host 互斥锁
+//   - 不创建、不修改 Agent 配置记录，只完成遗留审计
+func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID string, mode agentRemovalRecoveryMode) (bool, error) {
 	unlock := a.mutationMu.lock(hostID)
 	defer unlock()
 	log := logger.GetLogger().WithEntryName("RemoteNodeMutation").WithFields(map[string]any{
 		"operation": "recover_pending_agent_removal",
 		"host_id":   hostID,
-		"trigger":   trigger,
+		"trigger":   mode.auditTrigger(),
 	})
 	log.Info("开始检查并恢复 Agent 删除的待完成审计")
 	result, err := a.invalidator.Recover(ctx, tunnelRuntimeInvalidationRecovery{
@@ -621,7 +673,7 @@ func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.C
 		TargetKind: tunnelInvalidationTargetAgent,
 		Mutation:   tunnelInvalidationMutationDelete,
 		Persisted:  true,
-		Trigger:    trigger,
+		Trigger:    mode.auditTrigger(),
 	})
 	if err != nil {
 		log.WithErr(classifyTunnelInvalidationRecoveryError(result, err)).Error("恢复 Agent 删除的待完成审计失败")
