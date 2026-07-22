@@ -21,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 type blockingAgentInstaller struct {
@@ -46,6 +48,8 @@ func (b *blockingAgentInstaller) UpdateBinary(_ context.Context, host model.Host
 	return installer.UpdateResult{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "updated"}, nil
 }
 
+// TestUninstallAgentRemovesConfigAfterRemoteSuccessAndPreservesHost 验证远端卸载成功后
+// 才移除 Controller Agent 配置，且默认保留远端数据与 Host 记录。
 func TestUninstallAgentRemovesConfigAfterRemoteSuccessAndPreservesHost(t *testing.T) {
 	fake := &fakeAgentInstaller{}
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
@@ -75,6 +79,8 @@ func TestUninstallAgentRemovesConfigAfterRemoteSuccessAndPreservesHost(t *testin
 	assert.True(t, hostFound)
 }
 
+// TestUninstallAgentPurgesRemoteDataOnlyWhenExplicitlyRequested 验证只有显式选择
+// remove_data 时才清除远端 Agent 数据。
 func TestUninstallAgentPurgesRemoteDataOnlyWhenExplicitlyRequested(t *testing.T) {
 	fake := &fakeAgentInstaller{}
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
@@ -94,6 +100,8 @@ func TestUninstallAgentPurgesRemoteDataOnlyWhenExplicitlyRequested(t *testing.T)
 	assert.Contains(t, resp.Body.String(), `"removed_data":true`)
 }
 
+// TestUninstallAgentRetainsConfigForEveryRemoteFailureStage 验证远端卸载的任一平台阶段
+// 失败都保留 Controller 配置，便于修复后安全重试。
 func TestUninstallAgentRetainsConfigForEveryRemoteFailureStage(t *testing.T) {
 	stages := []string{"connect", "detect_platform", "uninstall_systemd", "uninstall_launchd", "uninstall_windows_task"}
 	for _, stage := range stages {
@@ -121,6 +129,8 @@ func TestUninstallAgentRetainsConfigForEveryRemoteFailureStage(t *testing.T) {
 	}
 }
 
+// TestUninstallAgentReportsConfigRemoveFailureAndRetryCompletes 验证远端卸载成功但
+// Controller 配置移除失败时报告 config_remove，且重试可幂等完成。
 func TestUninstallAgentReportsConfigRemoveFailureAndRetryCompletes(t *testing.T) {
 	fake := &fakeAgentInstaller{}
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
@@ -164,6 +174,8 @@ func TestUninstallAgentReportsConfigRemoveFailureAndRetryCompletes(t *testing.T)
 	assert.True(t, hostFound)
 }
 
+// TestAgentLifecycleOperationsRejectSameHostConflictWithoutBlockingOtherHosts 验证同一
+// Host 的生命周期操作互斥返回 409，且不影响其他 Host 的操作。
 func TestAgentLifecycleOperationsRejectSameHostConflictWithoutBlockingOtherHosts(t *testing.T) {
 	fake := &blockingAgentInstaller{
 		uninstallStarted: make(chan struct{}),
@@ -221,4 +233,49 @@ func TestAgentLifecycleOperationsRejectSameHostConflictWithoutBlockingOtherHosts
 
 	close(fake.releaseUninstall)
 	require.Equal(t, http.StatusOK, (<-uninstallResult).Code)
+}
+
+// TestUninstallAgentRetryAfterConfigRemoveAuditFailureCompletesRecovery 验证
+// config_remove 阶段"配置已删、executed 审计未持久化"的部分失败后，重试卸载
+// 不再被挡在 remote_uninstall，而是幂等完成同一份审计计划并返回成功。
+func TestUninstallAgentRetryAfterConfigRemoveAuditFailureCompletesRecovery(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+
+	uninstall := func() *httptest.ResponseRecorder {
+		return httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+	}
+
+	first := uninstall()
+	require.Equal(t, http.StatusInternalServerError, first.Code)
+	assert.Contains(t, first.Body.String(), `"stage":"config_remove"`)
+	// 部分失败的真实状态：配置已删、审计只到 prepared；重试必须能从这个状态恢复。
+	_, found, err := app.agentStore.AgentByHostID(hostID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, operation.AuditPrepared, events[0].Action)
+
+	auditStore.setFailExecuted(false)
+	second := uninstall()
+	require.Equal(t, http.StatusOK, second.Code)
+	assert.Equal(t, 1, fake.uninstallCalls, "配置已删除时重试不应再次执行远端卸载")
+	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
 }

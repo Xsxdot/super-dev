@@ -74,9 +74,15 @@ func (a *App) uninstallAgent(ctx context.Context, hostID string, removeData bool
 		return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageRemote, Err: err}
 	}
 	if !found {
-		err := fmt.Errorf("agent not configured")
-		log.WithErr(err).WithFields(fields).Error("Agent 卸载目标不存在")
-		return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageRemote, Err: err}
+		// 上次卸载可能已在 config_remove 阶段删除了配置，只留下待恢复的 tunnel 失效审计。
+		// 幂等重试必须完成同一份审计计划并回报成功，而不是把已完成的卸载当成失败。
+		log.WithFields(fields).Info("Agent 配置已不存在，按幂等重试完成配置侧清理")
+		if err := a.removeAgentConfig(ctx, hostID); err != nil {
+			log.WithErr(err).WithFields(fields).Error("Agent 配置侧清理恢复失败")
+			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: err}
+		}
+		log.WithFields(fields).Info("Agent 配置侧清理已幂等完成")
+		return installer.UninstallResult{OK: true, HostID: hostID, Message: "agent already uninstalled"}, nil
 	}
 
 	log.WithFields(fields).Info("开始调用 SSH Installer 卸载远端 Agent")

@@ -20,6 +20,8 @@ import (
 	"github.com/xsxdot/super-dev/agent/internal/buildinfo"
 )
 
+// TestAgentManualUninstallScriptsAreServedFromBundledVersionedResources 验证手动卸载脚本
+// 从随 Controller 打包的版本化资源目录返回，并附带版本头与下载文件名。
 func TestAgentManualUninstallScriptsAreServedFromBundledVersionedResources(t *testing.T) {
 	resourceDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(resourceDir, "uninstall-agent.sh"), []byte("shell fixture\n"), 0o755))
@@ -49,6 +51,8 @@ func TestAgentManualUninstallScriptsAreServedFromBundledVersionedResources(t *te
 	}
 }
 
+// TestAgentManualUninstallScriptRouteRejectsUnownedFiles 验证路由只暴露白名单内的
+// Agent 自有脚本，拒绝任意路径与其他文件。
 func TestAgentManualUninstallScriptRouteRejectsUnownedFiles(t *testing.T) {
 	resourceDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(resourceDir, "security.json"), []byte("secret"), 0o600))
