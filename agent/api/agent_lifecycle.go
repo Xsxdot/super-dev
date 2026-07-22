@@ -74,14 +74,20 @@ func (a *App) uninstallAgent(ctx context.Context, hostID string, removeData bool
 		return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageRemote, Err: err}
 	}
 	if !found {
-		// 上次卸载可能已在 config_remove 阶段删除了配置，只留下待恢复的 tunnel 失效审计。
-		// 幂等重试必须完成同一份审计计划并回报成功，而不是把已完成的卸载当成失败。
-		log.WithFields(fields).Info("Agent 配置已不存在，按幂等重试完成配置侧清理")
-		if err := a.removeAgentConfig(ctx, hostID); err != nil {
-			log.WithErr(err).WithFields(fields).Error("Agent 配置侧清理恢复失败")
-			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: err}
+		// 配置不存在有两种来历：上次卸载在 config_remove 阶段半途失败（留下未终态
+		// 审计计划，重试必须补偿并回报成功），或 Agent 从未配置/已 Detach（远端可能
+		// 仍在运行，绝不允许据此宣称远端卸载成功）。用是否补偿了待恢复审计来区分。
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID)
+		if recErr != nil {
+			log.WithErr(recErr).WithFields(fields).Error("Agent 配置侧清理恢复失败")
+			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: recErr}
 		}
-		log.WithFields(fields).Info("Agent 配置侧清理已幂等完成")
+		if !recovered {
+			err := fmt.Errorf("agent not configured")
+			log.WithErr(err).WithFields(fields).Error("Agent 卸载目标不存在")
+			return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageRemote, Err: err}
+		}
+		log.WithFields(fields).Info("上次卸载的配置侧清理已幂等补偿完成")
 		return installer.UninstallResult{OK: true, HostID: hostID, Message: "agent already uninstalled"}, nil
 	}
 
@@ -132,9 +138,20 @@ func (a *App) detachAgent(ctx context.Context, hostID string, reason agentDetach
 		log.WithErr(err).WithFields(fields).Error("读取待 Detach 的 Controller Agent 配置失败")
 		return &agentDetachError{Err: err}
 	} else if !found {
-		err := fmt.Errorf("agent not configured")
-		log.WithErr(err).WithFields(fields).Error("待 Detach 的 Controller Agent 配置不存在")
-		return &agentDetachError{Err: err}
+		// 上次 Detach 可能在配置已删、审计未终态时失败；此时重试必须完成审计补偿。
+		// 无待补偿计划时才视为 Agent 本就不存在。
+		recovered, recErr := a.remoteNodeMutations.RecoverPendingAgentRemoval(ctx, hostID)
+		if recErr != nil {
+			log.WithErr(recErr).WithFields(fields).Error("Agent Detach 审计补偿失败")
+			return &agentDetachError{Err: recErr}
+		}
+		if !recovered {
+			err := fmt.Errorf("agent not configured")
+			log.WithErr(err).WithFields(fields).Error("待 Detach 的 Controller Agent 配置不存在")
+			return &agentDetachError{Err: err}
+		}
+		log.WithFields(fields).Info("上次 Detach 的审计补偿已完成")
+		return nil
 	}
 
 	// Detach 是远端卸载失败后的逃生操作，只能删除 Controller 配置，不能调用 Installer。

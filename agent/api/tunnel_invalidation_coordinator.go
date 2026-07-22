@@ -194,6 +194,7 @@ func (i *auditedTunnelRuntimeInvalidator) Recover(ctx context.Context, recovery 
 			return result, fmt.Errorf("恢复 tunnel 失效 executed 审计: %w", err)
 		}
 		result.AuditCompleted = true
+		result.RecoveredPending = true
 		log.Info("tunnel 失效补偿与 executed 审计完成")
 	}
 	if !matchedPrepared {

@@ -30,20 +30,24 @@ type blockingAgentInstaller struct {
 	releaseUninstall chan struct{}
 }
 
+// Install 立即成功返回；本 fake 只为卸载生命周期测试占位，不模拟安装行为。
 func (b *blockingAgentInstaller) Install(_ context.Context, host model.Host, _ installer.ServiceOptions) (installer.Result, error) {
 	return installer.Result{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "installed"}, nil
 }
 
+// Uninstall 阻塞在 releaseUninstall 上，用于验证同 Host 生命周期操作的互斥门。
 func (b *blockingAgentInstaller) Uninstall(_ context.Context, host model.Host, removeData bool) (installer.UninstallResult, error) {
 	close(b.uninstallStarted)
 	<-b.releaseUninstall
 	return installer.UninstallResult{OK: true, HostID: host.ID, RemovedData: removeData, Message: "Agent uninstalled"}, nil
 }
 
+// Restart 立即成功返回；本 fake 只为互斥门用例提供可调用的重启桩。
 func (b *blockingAgentInstaller) Restart(_ context.Context, host model.Host) (installer.RestartResult, error) {
 	return installer.RestartResult{OK: true, HostID: host.ID, Platform: "linux", Message: "restarted"}, nil
 }
 
+// UpdateBinary 立即成功返回；本 fake 只为互斥门用例提供可调用的更新桩。
 func (b *blockingAgentInstaller) UpdateBinary(_ context.Context, host model.Host) (installer.UpdateResult, error) {
 	return installer.UpdateResult{OK: true, HostID: host.ID, Platform: "linux/amd64", Message: "updated"}, nil
 }
@@ -278,4 +282,30 @@ func TestUninstallAgentRetryAfterConfigRemoveAuditFailureCompletesRecovery(t *te
 	require.Len(t, events, 2)
 	assert.Equal(t, operation.AuditExecuted, events[0].Action)
 	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
+}
+
+// TestUninstallAgentAfterDetachDoesNotReportRemoteUninstall 验证 Detach 只移除 Controller
+// 配置后，Uninstall 不得把"配置不存在"误报为远端卸载成功：必须返回错误且不再调用远端卸载。
+func TestUninstallAgentAfterDetachDoesNotReportRemoteUninstall(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+
+	detachResp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
+	require.Equal(t, http.StatusOK, detachResp.Code)
+	require.Equal(t, 0, fake.uninstallCalls, "Detach 不连接远端 Host")
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+	require.Equal(t, http.StatusBadGateway, resp.Code, "Detach 后 Uninstall 不得返回卸载成功")
+	assert.Contains(t, resp.Body.String(), `"stage":"remote_uninstall"`)
+	assert.NotContains(t, resp.Body.String(), "already uninstalled")
+	assert.Equal(t, 0, fake.uninstallCalls, "配置不存在时不得执行远端卸载")
 }

@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost 验证受信 Desktop Origin 的 Detach 只删除 Controller 配置。
@@ -183,4 +185,45 @@ func TestHostDeleteRequiresAgentUninstallOrDetach(t *testing.T) {
 			assert.False(t, hostFound)
 		})
 	}
+}
+
+// TestDetachAgentRetryAfterAuditFailureCompletesRecovery 验证 Detach 在配置已删、
+// executed 审计未持久化时返回 500 后，重试能进入底层恢复逻辑完成同一份审计计划。
+func TestDetachAgentRetryAfterAuditFailureCompletesRecovery(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	app.tunnels = tunnel.NewManager(successTunnelDialer{})
+	auditStore := &recoverableTunnelInvalidationAuditStore{failExecuted: true}
+	app.operationAudit = auditStore
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+
+	detach := func() *httptest.ResponseRecorder {
+		return httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
+	}
+
+	first := detach()
+	require.Equal(t, http.StatusInternalServerError, first.Code)
+	_, found, err := app.agentStore.AgentByHostID(hostID)
+	require.NoError(t, err)
+	assert.False(t, found, "配置已删、审计未终态是 Detach 的部分失败状态")
+	events, err := auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, operation.AuditPrepared, events[0].Action)
+
+	auditStore.setFailExecuted(false)
+	second := detach()
+	require.Equal(t, http.StatusOK, second.Code, "修复审计存储后重试 Detach 必须成功")
+	events, err = auditStore.List(context.Background(), operation.AuditFilter{Kind: operation.OperationTunnelInvalidate})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, operation.AuditExecuted, events[0].Action)
+	assert.Equal(t, events[1].Plan.ID, events[0].Plan.ID)
 }

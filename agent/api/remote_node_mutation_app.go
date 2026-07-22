@@ -80,6 +80,9 @@ type tunnelRuntimeInvalidationResult struct {
 	Persisted         bool
 	TunnelInvalidated bool
 	AuditCompleted    bool
+	// RecoveredPending 表示本次 Recover 实际补偿了一个此前未终态的 prepared 计划；
+	// 仅遇到已完成计划或无匹配计划时为 false，用于区分"卸载半途失败"与"配置本就不存在"。
+	RecoveredPending bool
 }
 
 type hostMutationLock struct {
@@ -98,6 +101,9 @@ type remoteNodeMutationService interface {
 	RemoveHost(context.Context, string) error
 	UpsertAgent(context.Context, model.Agent) (model.Agent, error)
 	RemoveAgent(context.Context, string) error
+	// RecoverPendingAgentRemoval 仅在存在未终态的 Agent 删除审计计划时完成补偿并返回 true；
+	// 用于把"卸载半途失败的重试"与"Agent 本就不存在/已 Detach"区分开。
+	RecoverPendingAgentRemoval(context.Context, string) (bool, error)
 }
 
 type remoteNodeMutationApplication struct {
@@ -575,6 +581,25 @@ func (a *remoteNodeMutationApplication) recoverDeleteInvalidation(ctx context.Co
 		Persisted:  persisted,
 	})
 	return classifyTunnelInvalidationRecoveryError(result, err)
+}
+
+// RecoverPendingAgentRemoval 仅补偿此前未终态的 Agent 删除审计计划。
+//
+// 返回 true 表示本次调用实际完成了一个半途失败的删除补偿；遇到已完成计划或
+// 无匹配计划时返回 false，调用方不得据此宣称远端卸载已执行。
+func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.Context, hostID string) (bool, error) {
+	unlock := a.mutationMu.lock(hostID)
+	defer unlock()
+	result, err := a.invalidator.Recover(ctx, tunnelRuntimeInvalidationRecovery{
+		HostID:     hostID,
+		TargetKind: tunnelInvalidationTargetAgent,
+		Mutation:   tunnelInvalidationMutationDelete,
+		Persisted:  true,
+	})
+	if err != nil {
+		return false, classifyTunnelInvalidationRecoveryError(result, err)
+	}
+	return result.RecoveredPending, nil
 }
 
 func changedHostTunnelTargetFields(before, after model.Host) []string {
