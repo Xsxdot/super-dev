@@ -125,8 +125,8 @@ describe('McpManagerTab', () => {
     expect(wrapper.text()).toContain('claude-code')
   })
 
-  it('renders seven production connectors from registry data without a whitelist', async () => {
-    const seven = [
+  it('renders eight production connectors from registry data without a whitelist', async () => {
+    const eight = [
       summary('claude-code', true, false),
       summary('codex', true, true),
       summary('cursor', false, false),
@@ -134,9 +134,10 @@ describe('McpManagerTab', () => {
       summary('openclaw', false, false),
       summary('hermes', true, false),
       summary('kimi-code', false, false),
+      summary('grok', true, false),
     ].map((item, index) => {
-      const names = ['Claude Code', 'Codex', 'Cursor', 'OpenCode', 'OpenClaw', 'Hermes', 'Kimi Code']
-      const levels = ['full', 'full', 'full', 'standard', 'standard', 'full', 'standard'] as const
+      const names = ['Claude Code', 'Codex', 'Cursor', 'OpenCode', 'OpenClaw', 'Hermes', 'Kimi Code', 'Grok']
+      const levels = ['full', 'full', 'full', 'standard', 'standard', 'full', 'standard', 'full'] as const
       item.descriptor.display_name = names[index]
       item.descriptor.support_level = levels[index]
       if (levels[index] === 'standard') {
@@ -148,15 +149,18 @@ describe('McpManagerTab', () => {
       }
       return item
     })
-    vi.mocked(api.listAgentConnectors).mockResolvedValue(seven)
+    expect(eight).toHaveLength(8)
+    vi.mocked(api.listAgentConnectors).mockResolvedValue(eight)
     const wrapper = await mountTab()
 
     // Detected connectors visible; labels come from descriptor.display_name.
     expect(wrapper.text()).toContain('Claude Code')
     expect(wrapper.text()).toContain('OpenCode')
     expect(wrapper.text()).toContain('Hermes')
+    expect(wrapper.text()).toContain('Grok')
     expect(wrapper.find('[data-test="mcp-support-level-opencode"]').text()).toBe('standard')
     expect(wrapper.find('[data-test="mcp-support-level-hermes"]').text()).toBe('full')
+    expect(wrapper.find('[data-test="mcp-support-level-grok"]').text()).toBe('full')
     expect(wrapper.find('[data-test="mcp-install-opencode"]').exists()).toBe(true)
 
     await wrapper.find('[data-test="mcp-toggle-other-builtins"]').trigger('click')

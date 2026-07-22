@@ -94,8 +94,8 @@ See / Inspect / Operate is what AI does. Two things make it trustworthy and cont
 
 ### Zero-touch onboarding
 
-- Choose any detected built-in Connector on first launch. Seven verified built-ins are available: **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **OpenClaw**, **Hermes**, and **Kimi Code**.
-  - **Full** support (Claude Code, Codex, Cursor, Hermes): automatic MCP + Skill + Session Hook.
+- Choose any detected built-in Connector on first launch. Eight verified built-ins are available: **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **OpenClaw**, **Hermes**, **Kimi Code**, and **Grok**.
+  - **Full** support (Claude Code, Codex, Cursor, Hermes, Grok): automatic MCP + Skill + Session Hook.
   - **Standard** support (OpenCode, OpenClaw, Kimi Code): automatic MCP + Skill, with a manual Session Hook step.
   - Unknown compatible local Agents can still use Connector/manual materials without a hard-coded whitelist.
   - **Pi is deferred** from this wave and is not registered as a built-in Connector.

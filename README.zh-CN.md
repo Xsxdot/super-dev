@@ -95,7 +95,10 @@ AI 改完前端，自己验证：导航、点击、输入、截图、读 console
 
 ### 零操作 onboarding
 
-- 首次打开引导页选择检测到的内置 Connector。目前 Claude Code、Codex、Cursor 已验证支持自动接入；其他支持本地 MCP 的 Agent 可按标准 stdio 指引手动接入。
+- 首次打开引导页选择检测到的内置 Connector。目前已验证八个内置：Claude Code、Codex、Cursor、OpenCode、OpenClaw、Hermes、Kimi Code、Grok。
+  - **完整集成**（Claude Code、Codex、Cursor、Hermes、Grok）：自动 MCP + Skill + Session Hook。
+  - **标准集成**（OpenCode、OpenClaw、Kimi Code）：自动 MCP + Skill，Session Hook 需手动。
+  - 其他支持本地 stdio MCP 的 Agent 可按标准指引手动接入。
 - 云端或隔离沙箱 Agent 无法访问本机 `127.0.0.1` endpoint；它们需要未来带鉴权的 Remote MCP Gateway，界面不会误导用户复制本机配置。
 - 一键安装 MCP 连接和 SuperDev 使用指南 skill。
 - 自动落地 `superdev-sample` 示例项目。

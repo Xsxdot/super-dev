@@ -4,7 +4,7 @@
  * 职责：
  *   - 在 Vite 开发环境且显式带 onboardingPreview=1 时提供固定检测与安装结果
  *   - 让同一 Vue 页面可在没有 Tauri runtime 的浏览器中完成视觉和交互验收
- *   - 覆盖七个生产内置 Connector 的 detected / undetected 两条 UI 路径
+ *   - 覆盖八个生产内置 Connector 的 detected / undetected 两条 UI 路径
  *
  * 边界：
  *   - 生产构建永不启用，不持久化设置，也不读写真实 Agent 配置
@@ -45,8 +45,8 @@ type PreviewConnector = {
 }
 
 /**
- * 七个生产内置 ID 的确定性夹具。
- * detected: Claude Code / Codex / OpenCode / Hermes
+ * 八个生产内置 ID 的确定性夹具。
+ * detected: Claude Code / Codex / OpenCode / Hermes / Grok
  * undetected: Cursor / OpenClaw / Kimi Code
  */
 const PREVIEW_CONNECTORS: PreviewConnector[] = [
@@ -57,9 +57,10 @@ const PREVIEW_CONNECTORS: PreviewConnector[] = [
   { id: 'openclaw', name: 'OpenClaw', supportLevel: 'standard', hookSupport: 'manual', detected: false },
   { id: 'hermes', name: 'Hermes', supportLevel: 'full', hookSupport: 'automatic', detected: true, detectionPath: '/usr/local/bin/hermes' },
   { id: 'kimi-code', name: 'Kimi Code', supportLevel: 'standard', hookSupport: 'manual', detected: false },
+  { id: 'grok', name: 'Grok', supportLevel: 'full', hookSupport: 'automatic', detected: true, detectionPath: '/usr/local/bin/grok' },
 ]
 
-/** previewConnectorSummaries 返回七个生产 Connector 的确定性摘要。 */
+/** previewConnectorSummaries 返回八个生产 Connector 的确定性摘要。 */
 export function previewConnectorSummaries(): AgentConnectorSummary[] {
   const operations: ConnectorOperation[] = ['detect', 'install', 'update', 'status', 'uninstall', 'verify']
   return PREVIEW_CONNECTORS.map((item) => ({

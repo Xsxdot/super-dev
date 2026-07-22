@@ -4,6 +4,7 @@
 // 边界：不执行未知命令或网络请求；实际文件写入继续复用 mcp_install 既有安全原语。
 
 mod common;
+mod grok;
 mod hermes;
 mod kimi_code;
 mod openclaw;
@@ -975,7 +976,7 @@ impl StandardJsonConnector {
     }
 }
 
-/// builtin 返回七个生产内置连接器，注册表负责并发门控。
+/// builtin 返回八个生产内置连接器，注册表负责并发门控。
 ///
 /// 注册顺序是 deterministic first-launch 展示的一部分；连接器 ID 仍是开放字符串。
 pub fn builtin() -> Vec<Arc<dyn AgentConnector>> {
@@ -988,6 +989,7 @@ pub fn builtin() -> Vec<Arc<dyn AgentConnector>> {
         Arc::new(openclaw::OpenClawConnector::new()),
         Arc::new(hermes::HermesConnector::new()),
         Arc::new(kimi_code::KimiCodeConnector::new()),
+        Arc::new(grok::GrokConnector::new()),
     ];
     tracing::debug!(
         connector_count = connectors.len(),
@@ -1120,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_registers_seven_connectors_in_stable_order_with_derived_levels() {
+    fn builtin_registers_eight_connectors_in_stable_order_with_derived_levels() {
         assert_eq!(
             builtin()
                 .iter()
@@ -1139,6 +1141,7 @@ mod tests {
                 ("openclaw", Some(SupportLevel::Standard)),
                 ("hermes", Some(SupportLevel::Full)),
                 ("kimi-code", Some(SupportLevel::Standard)),
+                ("grok", Some(SupportLevel::Full)),
             ]
         );
     }

@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Added a deterministic, portable Windows 10 22H2 x64 (build 19045) validation package that can be built on macOS, copied to a dedicated Windows host, and used to verify the frozen MSI/NSIS installers, all 75 packaged MCP tools, seven language providers, browser/code debugging, remote pipeline behavior, redacted evidence, and cleanup without claiming Windows results during packaging.
 - Added campaign-owned, project/service-scoped debug credential leases that remain only in Agent process memory, expire automatically, and let Windows validation exercise the existing credential tool without persisting or evidencing the human-entered value.
 - Added safe remote Agent uninstall that preserves Agent data by default, supports explicit data purge, provides version-matched manual Shell and PowerShell scripts, and offers configuration-only detach only as a warned fallback.
+- Added a built-in **Grok** Agent Connector (Full): detect Grok CLI, install SuperDev MCP via `grok mcp` (`--scope user`), install Skill under `~/.grok/skills/superdev`, and install an owned SessionStart hook file under `~/.grok/hooks/` (Grok SessionStart is passive; guidance is Skill-first).
 
 ### Fixed
 
