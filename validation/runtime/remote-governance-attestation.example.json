@@ -1,0 +1,6 @@
+{
+  "remote_host_id": "REPLACE_WITH_NON_SELF_LINUX_HOST_ID",
+  "expected_remote_identity": "REPLACE_WITH_OUT_OF_BAND_IDENTITY",
+  "dedicated_resettable": true,
+  "is_self": false
+}

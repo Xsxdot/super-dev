@@ -1,0 +1,97 @@
+{
+  "schema_version": 4,
+  "kind": "superdev.windows-validation.campaign-report",
+  "campaign_id": "WINDOWS_RUN_ONLY",
+  "target": "Windows 10 22H2 x64 (build 19045)",
+  "result": {
+    "phase_status": "NOT_RUN|BLOCKED|PASS|FAIL",
+    "attempted": false,
+    "succeeded": false,
+    "evidence": []
+  },
+  "functional_result": {
+    "phase_status": "NOT_RUN|BLOCKED|PASS|FAIL",
+    "attempted": false,
+    "succeeded": false,
+    "evidence": []
+  },
+  "lane": "msi_smoke|nsis_core|core_only",
+  "installer": {
+    "format": "msi|nsis|core_only",
+    "artifact_verified": false,
+    "installer_executed": false,
+    "artifact": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "install": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "start": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "stop": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "uninstall": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "lifecycle": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []},
+    "result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}
+  },
+  "installer_checks": [],
+  "environment_preinstall": {
+    "record": {
+      "schema_version": "superdev.windows-environment-preinstall/v2",
+      "kind": "windows_environment_preinstall",
+      "stable_runtime_input_sha256": "64-lowercase-hex",
+      "stable_plan_sha256": "64-lowercase-hex",
+      "request": {"mode": "pre_install|diagnostic", "collection_stage": "pre_install", "expected_plan_digest": "64-lowercase-hex"},
+      "decision": {"admitted": false, "result": {"phase_status": "NOT_RUN|BLOCKED|PASS|FAIL", "attempted": false, "succeeded": false, "evidence": []}},
+      "manifest_digest": "64-lowercase-hex",
+      "installer_checks": [],
+      "result": {"phase_status": "NOT_RUN|BLOCKED|PASS|FAIL", "attempted": false, "succeeded": false, "evidence": []}
+    },
+    "plan": {"schema_version": "superdev.windows-environment-plan/v1", "kind": "windows_environment_plan"},
+    "manifest": {"schema_version": "superdev.windows-environment-manifest/v2", "kind": "windows_environment_manifest", "collection_stage": "pre_install", "prerequisites": []}
+  },
+  "environment_plan": {"schema_version": "superdev.windows-environment-plan/v1", "kind": "windows_environment_plan"},
+  "environment_manifest": {"schema_version": "superdev.windows-environment-manifest/v2", "kind": "windows_environment_manifest", "collection_stage": "post_install", "previous_manifest_sha256": "A-manifest-64-lowercase-hex", "prerequisites": []},
+  "environment_comparison": {"schema_version": "superdev.windows-environment-manifest-comparison/v1", "kind": "windows_environment_manifest_comparison", "previous_manifest_sha256": "A-manifest-64-lowercase-hex", "current_manifest_sha256": "B-manifest-64-lowercase-hex", "drifts": []},
+  "environment_comparison_persistence": {"phase_status": "NOT_RUN|BLOCKED|PASS|FAIL", "attempted": false, "succeeded": false, "evidence": []},
+  "environment_admission_request": {"mode": "final|diagnostic", "collection_stage": "post_install", "expected_plan_digest": "B-plan-64-lowercase-hex"},
+  "environment_admission": {"admitted": false, "result": {"phase_status": "NOT_RUN|BLOCKED|PASS|FAIL", "attempted": false, "succeeded": false, "evidence": []}},
+  "runtime_attestation": {
+    "server_name": "",
+    "server_version": "",
+    "protocol_version": "",
+    "tool_names": [],
+    "provider_names": [],
+    "sidecars": [],
+    "result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}
+  },
+  "prerequisites": [],
+  "operations": [],
+  "validation_catalog": {
+    "scenarios": [
+      {
+        "id": "frozen-scenario-id",
+        "title": "frozen title",
+        "steps": [{"step_id": "frozen-step-id", "tool": "frozen_tool", "coverage": "primary|supporting"}],
+        "cleanup": [{"step_id": "frozen-cleanup-id", "tool": "frozen_cleanup_tool", "coverage": "supporting"}]
+      }
+    ],
+    "coverage": [{"tool": "frozen_tool", "scenario_id": "frozen-scenario-id", "step_id": "frozen-step-id"}]
+  },
+  "providers": [],
+  "tool_rows": [],
+  "scenarios": [],
+  "sections": {
+    "msi_installer": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "nsis_installer": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "environment": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "core": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "providers": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "mcp_tools": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "pipeline": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}},
+    "cleanup": {"result": {"phase_status": "NOT_RUN", "attempted": false, "succeeded": false, "evidence": []}}
+  },
+  "cleanup": {
+    "prepared_baseline_sha256": "64-lowercase-hex",
+    "execution_facts": {
+      "attempted": false,
+      "succeeded": false,
+      "not_run_reason": "run Cleanup-Validation.ps1 to compare and restore the prepared baseline"
+    },
+    "baseline_comparison": {"matched": false, "checks": []}
+  }
+}

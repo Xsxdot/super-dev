@@ -465,6 +465,15 @@ func (t *TunnelTransport) wsDialerFor(tlsSpec model.AgentTLSSpec) (*websocket.Di
 }
 
 // TunnelTargetFromNodeTarget 将 Host SSH 与 Agent tunnel 配置合成为 tunnel.Manager 目标。
+//
+// 参数：
+//   - target: Host 持久化配置与 Agent transport/runtime 的组合目标
+//
+// 返回：
+//   - 含认证秘密、可信 host-key pin、远端 Agent 端口和本地端口偏好的 tunnel 目标
+//
+// 注意：
+//   - 本函数不提供默认 pin；旧 Host 缺 pin 时由 Manager fail closed
 func TunnelTargetFromNodeTarget(target NodeTarget) tunnel.Target {
 	params, _ := target.Agent.TunnelParams()
 	remotePort := model.DefaultRemoteAgentPort
@@ -476,14 +485,15 @@ func TunnelTargetFromNodeTarget(target NodeTarget) tunnel.Target {
 		sshPort = model.DefaultSSHPort
 	}
 	return tunnel.Target{
-		HostID:          target.Host.ID,
-		SSHHost:         target.Host.SSHHost,
-		SSHPort:         sshPort,
-		SSHUser:         target.Host.SSHUser,
-		SSHPassword:     target.Host.SSHPassword,
-		SSHPrivateKey:   target.Host.SSHPrivateKey,
-		RemoteAgentPort: remotePort,
-		LocalPort:       target.Agent.Runtime.LocalPort,
+		HostID:                target.Host.ID,
+		SSHHost:               target.Host.SSHHost,
+		SSHPort:               sshPort,
+		SSHUser:               target.Host.SSHUser,
+		SSHPassword:           target.Host.SSHPassword,
+		SSHPrivateKey:         target.Host.SSHPrivateKey,
+		SSHHostKeyFingerprint: target.Host.SSHHostKeyFingerprint,
+		RemoteAgentPort:       remotePort,
+		LocalPort:             target.Agent.Runtime.LocalPort,
 	}
 }
 

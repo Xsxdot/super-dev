@@ -53,6 +53,64 @@ jobs:
           if-no-files-found: error
           path: release-assets/agent/*
 
+  runtime-validation-package-tools:
+    # Release gating verifies distributable tooling, not the five native runs.
+    # Authoritative native evidence is retained separately as
+    # runtime-validation-native-summary-<target> by the validation operator.
+    name: Runtime validation packaging tools (not native PASS)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Verify runtime validation package contracts
+        working-directory: agent
+        run: go test ./runtimevalidation/... ./cmd/runtime-validation/... ./cmd/build-runtime-validation/...
+
+      - name: Build cross-platform packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="release-assets/runtime-validation-package-tools"
+          mkdir -p "$output"
+          while read -r goos goarch extra; do
+            if [[ -z "${goos:-}" || "$goos" == \#* ]]; then
+              continue
+            fi
+            if [[ -z "${goarch:-}" || -n "${extra:-}" ]]; then
+              echo "invalid target contract row: $goos ${goarch:-} ${extra:-}" >&2
+              exit 1
+            fi
+            suffix=""
+            if [[ "$goos" == "windows" ]]; then
+              suffix=".exe"
+            fi
+            for command in runtime-validation build-runtime-validation; do
+              (
+                cd agent
+                GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+                  go build -trimpath -o "../$output/$command-$goos-$goarch$suffix" "./cmd/$command"
+              )
+            done
+          done < validation/runtime/targets.txt
+          cp validation/runtime/targets.txt "$output/targets.txt"
+          cp validation/runtime/README.md "$output/README.md"
+          printf '%s\n' 'Packaging tools only. Build receipts may say package_verified; no file in this artifact is native target PASS evidence.' > "$output/SCOPE.txt"
+
+      - name: Upload runtime validation package tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-runtime-validation-package-tools
+          if-no-files-found: error
+          path: release-assets/runtime-validation-package-tools/*
+
   desktop-linux:
     name: Desktop Linux package
     runs-on: ubuntu-latest
@@ -107,9 +165,23 @@ jobs:
             desktop/src-tauri/target/release/bundle/**/*.deb
             desktop/src-tauri/target/release/bundle/**/*.rpm
 
+  # macOS 签名/公证依赖仓库 Secrets（见 docs/release.md / 维护者说明）：
+  # APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+  # 以及公证三件套（推荐 API Key：APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_CONTENT）。
+  # 未配置时仍会产出未签名包；配置后会签 agent-install 内 darwin 二进制、.app，并提交公证。
   desktop-macos:
     name: Desktop macOS package
     runs-on: macos-latest
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # 备选：Apple ID + App 专用密码（与 API Key 二选一即可）
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Check out repository
@@ -139,12 +211,105 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      # App Store Connect API Key 只能以文件路径传给 notarytool / Tauri。
+      # 注意：不要在 step if 里直接引用 secrets（会导致 workflow 校验失败）；在 shell 内判断是否为空。
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          if [[ -z "${APPLE_API_KEY_CONTENT}" ]]; then
+            echo "APPLE_API_KEY_CONTENT unset; skip writing API key (notarization may be skipped)"
+            exit 0
+          fi
+          key_path="${RUNNER_TEMP}/AuthKey.p8"
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
+          echo "Wrote App Store Connect API key for notarization"
+
+      # build-agent 在 tauri build 之前就会 codesign agent-install 内的 darwin 二进制，
+      # 因此必须先把 .p12 导入 CI 临时钥匙串；仅设置 APPLE_CERTIFICATE 环境变量不够
+      # （Tauri 自己的导入发生在更晚的 pnpm tauri build 阶段）。
+      - name: Import Apple Developer Certificate
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+              echo "APPLE_SIGNING_IDENTITY is set but APPLE_CERTIFICATE/PASSWORD missing" >&2
+              exit 1
+            fi
+            echo "APPLE_CERTIFICATE unset; skip keychain import (unsigned macOS build)"
+            exit 0
+          fi
+
+          cert_path="${RUNNER_TEMP}/certificate.p12"
+          keychain_path="${RUNNER_TEMP}/superdev-build.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          # Secrets 存的是 openssl base64 -A 的单行内容
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$keychain_path"
+          # 让 codesign 能在无 UI 提示下使用私钥
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | sed 's/"//g')
+
+          echo "Imported certificate; codesigning identities:"
+          security find-identity -v -p codesigning "$keychain_path"
+
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            if ! security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null; then
+              echo "APPLE_SIGNING_IDENTITY not found in imported keychain: $APPLE_SIGNING_IDENTITY" >&2
+              exit 1
+            fi
+          fi
+          rm -f "$cert_path"
+          echo "Apple Developer certificate ready for build-agent and tauri build"
+
+      # 必须带 APPLE_SIGNING_IDENTITY：build-agent 会签 Resources/agent-install 下的 darwin Mach-O。
       - name: Build remote agents and sidecars
         run: BUILD_REMOTE_INSTALL=1 bash desktop/scripts/build-agent.sh
 
+      # job-level env 会把未配置的 secret 变成空字符串；Rust/notarytool 把 Ok("") 当成
+      # “已设置 Apple ID”，从而走用户名密码公证并 401，忽略 API Key。这里强制清理。
       - name: Build Tauri macOS packages
         working-directory: desktop
-        run: pnpm tauri build
+        run: |
+          set -euo pipefail
+          # 空 Apple ID 认证必须 unset（不能 export 成 ""）
+          if [[ -z "${APPLE_ID:-}" ]]; then
+            unset APPLE_ID || true
+            unset APPLE_PASSWORD || true
+            echo "Apple ID auth unset; prefer App Store Connect API key for notarization"
+          fi
+          if [[ -n "${APPLE_API_KEY:-}" ]]; then
+            if [[ -z "${APPLE_API_KEY_PATH:-}" || ! -f "${APPLE_API_KEY_PATH}" ]]; then
+              echo "APPLE_API_KEY set but APPLE_API_KEY_PATH missing or not a file: ${APPLE_API_KEY_PATH:-<empty>}" >&2
+              exit 1
+            fi
+            if [[ -z "${APPLE_API_ISSUER:-}" ]]; then
+              echo "APPLE_API_KEY set but APPLE_API_ISSUER empty" >&2
+              exit 1
+            fi
+            # 只确认私钥文件头形态，不打印密钥正文
+            if ! head -n 1 "${APPLE_API_KEY_PATH}" | grep -q 'BEGIN PRIVATE KEY'; then
+              echo "APPLE_API_KEY_PATH does not look like a .p8 private key" >&2
+              exit 1
+            fi
+            echo "Notarization auth: API key file ready (issuer+key+path present)"
+          else
+            echo "APPLE_API_KEY unset; notarization may use Apple ID or be skipped"
+          fi
+          # 避免子进程继承空的 Apple ID 变量
+          env -u APPLE_ID -u APPLE_PASSWORD pnpm tauri build
 
       - name: Upload macOS desktop release assets
         uses: actions/upload-artifact@v4
@@ -209,6 +374,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - agent-binaries
+      - runtime-validation-package-tools
       - desktop-linux
       - desktop-macos
       - desktop-windows

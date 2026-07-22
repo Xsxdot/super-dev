@@ -10,7 +10,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +50,83 @@ func TestDetectDebugBrowsersReturnsConfiguredCandidates(t *testing.T) {
 	require.Len(t, browsers, 1)
 	assert.Equal(t, "chrome", browsers[0].ID)
 	assert.True(t, browsers[0].Available)
+}
+
+func TestFreshProfileRequiresDetectedBrowsersPersistedBeforeDefaultOpen(t *testing.T) {
+	readiness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(readiness.Close)
+	browserDirectory := t.TempDir()
+	chromePath := filepath.Join(browserDirectory, "chrome.exe")
+	edgePath := filepath.Join(browserDirectory, "msedge.exe")
+	require.NoError(t, os.WriteFile(chromePath, []byte("browser"), 0o755))
+	require.NoError(t, os.WriteFile(edgePath, []byte("browser"), 0o755))
+
+	app, err := NewApp(AppConfig{
+		DataDir: t.TempDir(),
+		DebugBrowserCandidates: []browserdebug.BrowserCandidate{
+			{ID: "chrome", Name: "Google Chrome", ExecutablePath: chromePath},
+			{ID: "edge", Name: "Microsoft Edge", ExecutablePath: edgePath},
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	project := browserDebugAPIProject()
+	project.Services[0].Deployments[0].Web.URL = readiness.URL
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	launchedBrowserID := ""
+	app.browserDebug = browserdebug.NewManager(browserdebug.ManagerOptions{
+		Launch: func(_ context.Context, req browserdebug.LaunchRequest) (browserdebug.LaunchResult, error) {
+			launchedBrowserID = req.Browser.ID
+			return browserLaunchResultForTest(), nil
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	configured := getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers", http.StatusOK)
+	assert.Empty(t, configured, "fresh lane must not treat detected browsers as persisted product configuration")
+	freshOpen := postJSONForRawTest(t, srv.URL+"/api/browser-sessions", map[string]any{"deployment_id": "dep-admin-dev"}, http.StatusBadRequest)
+	assert.Equal(t, "debug browser is not configured", freshOpen["error"])
+
+	detected := getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers/detected", http.StatusOK)
+	require.Len(t, detected, 2)
+	settingsPayload, err := json.Marshal(map[string]any{
+		"debug_browser": map[string]any{
+			"default_browser_id": "edge",
+			"browsers": []map[string]any{
+				{"id": detected[0].ID, "name": detected[0].Name, "executable_path": detected[0].ExecutablePath},
+				{"id": detected[1].ID, "name": detected[1].Name, "executable_path": detected[1].ExecutablePath},
+			},
+		},
+	})
+	require.NoError(t, err)
+	settingsRequest, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(settingsPayload))
+	require.NoError(t, err)
+	settingsRequest.Header.Set("Content-Type", "application/json")
+	settingsResponse, err := http.DefaultClient.Do(settingsRequest)
+	require.NoError(t, err)
+	defer settingsResponse.Body.Close()
+	require.Equal(t, http.StatusOK, settingsResponse.StatusCode)
+	var saved config.AgentSettings
+	require.NoError(t, json.NewDecoder(settingsResponse.Body).Decode(&saved))
+	assert.Equal(t, "edge", saved.DebugBrowser.DefaultBrowserID)
+
+	configured = getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers", http.StatusOK)
+	require.Len(t, configured, 2)
+	assert.True(t, configured[0].Available)
+	assert.True(t, configured[1].Available)
+
+	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
+	session := postJSONWithHeadersForTest[browserdebug.Session](t, srv.URL+"/api/browser-sessions", map[string]any{
+		"deployment_id": "dep-admin-dev",
+	}, map[string]string{"X-SuperDev-Approval-Token": token}, http.StatusOK)
+	assert.Equal(t, "edge", launchedBrowserID)
+	assert.Equal(t, "edge", session.BrowserID)
 }
 
 func TestListBrowserTargetsReturnsLocalWebDeployment(t *testing.T) {

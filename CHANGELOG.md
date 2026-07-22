@@ -6,8 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Added package-verified cross-platform runtime validation bundles and a strict target-native campaign runner covering the full live MCP surface, seven language runtime/debug providers, human operation approvals, one-time credential login, borrowed remote pipelines, redacted evidence, and fail-closed cleanup on five supported targets.
+- Added a deterministic, portable Windows 10 22H2 x64 (build 19045) validation package that can be built on macOS, copied to a dedicated Windows host, and used to verify the frozen MSI/NSIS installers, all 75 packaged MCP tools, seven language providers, browser/code debugging, remote pipeline behavior, redacted evidence, and cleanup without claiming Windows results during packaging.
+- Added campaign-owned, project/service-scoped debug credential leases that remain only in Agent process memory, expire automatically, and let Windows validation exercise the existing credential tool without persisting or evidencing the human-entered value.
+
 ### Fixed
 
+- Removed non-functional Search filter/Open/Copy controls and heuristic trace-path claims, leaving the real project-log search, time-aligned service context, and pin workflow; remote installation now also rejects Windows ARM before upload when no matching agent binary is packaged.
+- Unified Windows validation steps, scenarios, providers, installer lifecycle, tool coverage, report sections, and summaries on one fact-and-evidence-derived result contract, so unattempted work is no longer reported as failure or success and post-assertion responses remain auditable.
+- Made the packaged Windows validation Runbook directly executable with stock Windows PowerShell 5.1 by preserving UTF-8 script bytes, avoiding automatic-variable parameter collisions, and keeping structured output readable without loaders or source rewriting.
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.
 
 ## [0.2.0] - 2026-06-17

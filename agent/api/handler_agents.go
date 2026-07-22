@@ -94,8 +94,11 @@ func (a *App) createAgent(w http.ResponseWriter, r *http.Request) {
 		Config:    dto.Config,
 		Security:  dto.Security,
 	}
-	saved, err := a.agentStore.UpsertAgent(agent)
+	saved, err := a.remoteNodeMutations.UpsertAgent(r.Context(), agent)
 	if err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -128,8 +131,11 @@ func (a *App) updateAgentTransport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agent.Transport = dto.Transport
-	saved, err := a.agentStore.UpsertAgent(agent)
+	saved, err := a.remoteNodeMutations.UpsertAgent(r.Context(), agent)
 	if err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -156,8 +162,11 @@ func (a *App) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
 	agent.Config = dto.Config
 	agent.Security = dto.Security
 	agent.Secret = secret
-	saved, err := a.agentStore.UpsertAgent(agent)
+	saved, err := a.remoteNodeMutations.UpsertAgent(r.Context(), agent)
 	if err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -174,7 +183,10 @@ func (a *App) deleteAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "host not found")
 		return
 	}
-	if err := a.agentStore.RemoveAgent(hostID); err != nil {
+	if err := a.remoteNodeMutations.RemoveAgent(r.Context(), hostID); err != nil {
+		if writeRemoteNodeMutationPartialError(w, err) {
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -78,6 +78,11 @@ func NormalizePlatform(osName, machine string) (Platform, error) {
 	default:
 		return Platform{}, fmt.Errorf("unsupported arch %q", strings.TrimSpace(machine))
 	}
+	// 桌面包当前只携带 Windows amd64 远程 Agent。这里提前拒绝 arm64，
+	// 避免平台探测先宣称支持，随后才以“二进制缺失”的模糊错误失败。
+	if osValue == "windows" && arch == "arm64" {
+		return Platform{}, fmt.Errorf("unsupported platform windows/arm64: remote agent binary is not packaged")
+	}
 
 	return Platform{OS: osValue, Arch: arch}, nil
 }

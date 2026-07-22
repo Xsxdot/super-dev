@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-real-validation.frozen-build",
+  "status": "source_and_artifacts_frozen_runtime_attestation_pending",
+  "target": {
+    "label": "Windows 10 22H2 x64 (build 19045)",
+    "os": "Windows 10",
+    "display_version": "22H2",
+    "current_build": "19045",
+    "architecture": "x64",
+    "execution_user": "standard_user",
+    "elevation_boundary": "installer_uac_only"
+  },
+  "build": {
+    "git_commit": "e3cc94fe7ba3e53ca1b46a24d730bebc173e5cdb",
+    "product_version": "0.2.1",
+    "workflow": {
+      "name": "Manual Build Desktop Clients",
+      "run_id": 29250104348,
+      "url": "https://github.com/Xsxdot/super-dev/actions/runs/29250104348",
+      "conclusion": "success"
+    }
+  },
+  "installers": [
+    {
+      "filename": "SuperDev_0.2.1_x64-setup.exe",
+      "format": "nsis",
+      "validation_role": "primary_full_suite",
+      "uninstaller_filename": "uninstall.exe",
+      "size_bytes": 80355213,
+      "sha256": "cdb950afb388c147b057f173fcfdb3281d7b7526b19921d21a17f5d22c3bb0cd"
+    },
+    {
+      "filename": "SuperDev_0.2.1_x64_en-US.msi",
+      "format": "msi",
+      "validation_role": "install_launch_sidecar_mcp_uninstall_smoke",
+      "size_bytes": 93888512,
+      "sha256": "5c01dc9eaca3d61f094b82820e93ab546ecb77e4f99d56eebdb5a0e3f8fe1a48"
+    }
+  ],
+  "source_surface": {
+    "normalization": "UTF-8 compact JSON array; values sorted by Unicode code point; no trailing newline before SHA-256",
+    "language_runtime_providers": {
+      "count": 7,
+      "canonical_json_sha256": "2db6b05920735dfda73febf2f7df776f59cf93e2be8e190958dd88922d5758f3",
+      "names": ["cpp", "go", "java", "kotlin", "node", "python", "rust"]
+    },
+    "mcp_tools": {
+      "count": 75,
+      "canonical_json_sha256": "0070f711712272bb788ae52e4ae4d8db1a472f40293b549c264aa9855840474c",
+      "names": [
+        "analyze_trace_logs",
+        "append_debug_session_note",
+        "append_log_analysis_to_session",
+        "apply_config_change",
+        "browser_click",
+        "browser_console_logs",
+        "browser_evaluate",
+        "browser_navigate",
+        "browser_network_requests",
+        "browser_press_key",
+        "browser_reload",
+        "browser_screenshot",
+        "browser_select_option",
+        "browser_set_viewport",
+        "browser_snapshot",
+        "browser_type",
+        "browser_wait_for_selector",
+        "close_browser_debug_session",
+        "close_debug_session",
+        "create_debug_session",
+        "debug_capture_at",
+        "debug_continue",
+        "debug_evaluate",
+        "debug_inspect",
+        "debug_pause",
+        "debug_scopes",
+        "debug_stack_trace",
+        "debug_step_in",
+        "debug_step_out",
+        "debug_step_over",
+        "debug_variables",
+        "deploy_project_pipeline",
+        "describe_language_runtime_schema",
+        "diagnose_service",
+        "follow_logs",
+        "get_debug_credentials",
+        "get_debug_session",
+        "get_log_context",
+        "get_operation_approval",
+        "get_project",
+        "get_project_config",
+        "get_runtime_snapshot",
+        "import_pipeline_template",
+        "list_browser_targets",
+        "list_code_debug_targets",
+        "list_debug_browsers",
+        "list_debug_sessions",
+        "list_hosts",
+        "list_language_runtime_providers",
+        "list_operation_approvals",
+        "list_operation_audit",
+        "list_pipeline_artifacts",
+        "list_pipeline_runs",
+        "list_projects",
+        "list_services",
+        "open_browser_debug_session",
+        "preview_config_change",
+        "preview_operation",
+        "preview_pipeline_template",
+        "preview_service_execution",
+        "probe_project_config",
+        "read_pipeline_run_logs",
+        "restart_service",
+        "search_logs",
+        "set_debug_breakpoints",
+        "start_service",
+        "stop_service",
+        "suggest_service_runtime",
+        "summarize_error_window",
+        "tail_logs",
+        "upsert_project_config",
+        "upsert_project_pipeline",
+        "upsert_service",
+        "validate_project_pipeline",
+        "validate_service_runtime"
+      ]
+    }
+  },
+  "runtime_attestation": {
+    "status": "pending_windows_install",
+    "rule": "Runtime tool/provider sets must equal source_surface and initialize serverInfo.version must equal 0.2.1 before functional steps."
+  },
+  "known_baseline_exceptions": [
+    {
+      "id": "ci-go-agent-timezone-assertions",
+      "workflow_run_id": 29250096059,
+      "conclusion": "failure",
+      "failed_tests": [
+        "TestRemoteAgentBackend_ContextReturnsDeploymentEntries",
+        "TestRemoteAgentBackend_ContextFallsBackToLogsForOldRemote"
+      ],
+      "observed_cause": "The tests expected time.Local while the returned timestamps were UTC.",
+      "final_verdict_rule": "Every report must surface this finding separately; Windows validation neither fixes nor waives it."
+    }
+  ]
+}

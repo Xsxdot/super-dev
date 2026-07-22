@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -211,6 +212,19 @@ func (d *Dispatcher) runSubscriptions(ctx context.Context, out chan<- []NodeStat
 					if !ok {
 						return
 					}
+					if batchHasUnreachableHost(target.Host.ID, batch) {
+						// 状态流失败与普通请求失败必须遵守同一 transport chain；否则 direct 首项故障会永久阻断可用的 tunnel 后备链路。
+						if err := d.reselect(ctx, target); err != nil {
+							logger.GetLogger().WithEntryName("NodeTransportDispatcher").WithFields(map[string]any{
+								"host_id": target.Host.ID, "selected_index": idx, "error": err,
+							}).Error("节点状态流不可达且 transport chain 无可用链路")
+						} else if nextIndex, exists := d.routeIndex(target.Host.ID); exists && nextIndex != idx {
+							logger.GetLogger().WithEntryName("NodeTransportDispatcher").WithFields(map[string]any{
+								"host_id": target.Host.ID, "previous_index": idx, "selected_index": nextIndex,
+							}).Info("节点状态流不可达，已切换 transport chain")
+							continue
+						}
+					}
 					if !recoveredOnThisWatcher && d.recoverChainHeadOnStatus(ctx, target, batch) {
 						recoveredOnThisWatcher = true
 					}
@@ -303,6 +317,15 @@ func (d *Dispatcher) recoverChainHeadOnStatus(ctx context.Context, target NodeTa
 func batchHasReachableHost(hostID string, batch []NodeStatus) bool {
 	for _, status := range batch {
 		if status.HostID == hostID && status.Reachable {
+			return true
+		}
+	}
+	return false
+}
+
+func batchHasUnreachableHost(hostID string, batch []NodeStatus) bool {
+	for _, status := range batch {
+		if status.HostID == hostID && !status.Reachable {
 			return true
 		}
 	}

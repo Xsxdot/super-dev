@@ -1,0 +1,14 @@
+{
+  "schema_version": "superdev.windows-remote-governance-attestation/v1",
+  "kind": "windows_remote_governance_attestation",
+  "evidence_origin": "human_attestation",
+  "campaign_id": "REPLACE_WITH_EXACT_CAMPAIGN_ID",
+  "host_id": "REPLACE_WITH_FRESH_LIST_HOSTS_NON_SELF_ID",
+  "machine_id_sha256": "REPLACE_WITH_API_MACHINE_ID_SHA256",
+  "dedicated_resettable": true,
+  "no_production_or_personal_workloads": true,
+  "security_credential_rotation_allowed": true,
+  "trusted_host_key_fingerprint_source": "out_of_band_operator_verified",
+  "host_key_identity_sha256": "REPLACE_WITH_VERIFIED_TUNNEL_HOST_KEY_IDENTITY_SHA256",
+  "attested_at_utc": "REPLACE_WITH_RFC3339_UTC"
+}

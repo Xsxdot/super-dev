@@ -191,6 +191,42 @@ func TestDispatcherSubscribeNodesSwitchesWhenRouteChanges(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestDispatcherSubscribeNodesFallsBackWhenSelectedStatusStreamIsUnreachable(t *testing.T) {
+	direct := newStatusRecordingTransport("direct")
+	tunnel := newStatusRecordingTransport("tunnel")
+	direct.err = nodetransport.ErrHostUnreachable
+	targets := []nodetransport.NodeTarget{targetWithChain("h1",
+		model.TransportEntry{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.8:57017"}},
+		model.TransportEntry{Type: model.TransportTypeTunnel, Tunnel: &model.TunnelParams{RemoteAgentPort: 57017}},
+	)}
+	dispatcher := nodetransport.NewDispatcher(targetSource(targets...), map[model.TransportType]nodetransport.NodeTransport{
+		model.TransportTypeDirect: direct,
+		model.TransportTypeTunnel: tunnel,
+	})
+	dispatcher.SetProbeTimeoutForTest(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, stop := dispatcher.SubscribeNodes(ctx)
+	defer stop()
+	direct.emit("h1", model.AgentHealthUnreachable)
+
+	require.Eventually(t, func() bool {
+		route, ok := dispatcher.RouteSnapshotForTest("h1")
+		return ok && route.SelectedType == model.TransportTypeTunnel
+	}, time.Second, 10*time.Millisecond)
+	tunnel.emit("h1", model.AgentHealthHealthy)
+
+	require.Eventually(t, func() bool {
+		select {
+		case batch := <-ch:
+			return len(batch) == 1 && batch[0].Reachable && batch[0].Route != nil && batch[0].Route.SelectedType == model.TransportTypeTunnel
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestDispatcherSubscribeNodesRecoversChainHeadOnReachableStatus(t *testing.T) {
 	direct := newStatusRecordingTransport("direct")
 	tunnel := newStatusRecordingTransport("tunnel")

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -58,13 +59,20 @@ func TestRemoteCommandExitErrorIncludesCommand(t *testing.T) {
 }
 
 func TestSSHExecutorRunRemoteDrainsStdoutAndStderrBeforeReturn(t *testing.T) {
-	addr := startSSHExecServer(t, 0)
+	addr, hostKeyFingerprint := startSSHExecServer(t, 0)
 	host, portText, err := net.SplitHostPort(addr)
 	require.NoError(t, err)
 	port, err := strconv.Atoi(portText)
 	require.NoError(t, err)
 	ex := NewSSHExecutor(func(hostID string) (model.Host, bool) {
-		return model.Host{ID: hostID, SSHHost: host, SSHPort: port, SSHUser: "ops", SSHPassword: "pw"}, true
+		return model.Host{
+			ID:                    hostID,
+			SSHHost:               host,
+			SSHPort:               port,
+			SSHUser:               "ops",
+			SSHPassword:           "pw",
+			SSHHostKeyFingerprint: hostKeyFingerprint,
+		}, true
 	})
 
 	var mu sync.Mutex
@@ -86,6 +94,48 @@ func TestSSHExecutorRunRemoteDrainsStdoutAndStderrBeforeReturn(t *testing.T) {
 	}, got)
 }
 
+func TestSSHExecutorRejectsMismatchedHostKey(t *testing.T) {
+	addr, _ := startSSHExecServer(t, 0)
+	host, portText, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	executor := NewSSHExecutor(func(hostID string) (model.Host, bool) {
+		return model.Host{
+			ID:                    hostID,
+			SSHHost:               host,
+			SSHPort:               port,
+			SSHUser:               "ops",
+			SSHPassword:           "pw",
+			SSHHostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		}, true
+	})
+
+	err = executor.RunRemote(context.Background(), Target{HostID: "h1"}, "printf remote", "", func(string, string) {})
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), host)
+}
+
+func TestSSHExecutorRejectsMissingHostKeyBeforeDial(t *testing.T) {
+	executor := NewSSHExecutor(func(hostID string) (model.Host, bool) {
+		return model.Host{
+			ID:          hostID,
+			SSHHost:     "203.0.113.10",
+			SSHPort:     22,
+			SSHUser:     "ops",
+			SSHPassword: "pw",
+		}, true
+	})
+
+	err := executor.RunRemote(context.Background(), Target{HostID: "h1"}, "printf remote", "", func(string, string) {})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, tunnel.ErrHostKeyFingerprintRequired)
+	assert.Equal(t, "ssh_host_key_pin_required", tunnel.PublicError(err))
+	assert.NotContains(t, err.Error(), "203.0.113.10")
+}
+
 func TestPrepareTransferSourcePackagesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644))
@@ -105,7 +155,7 @@ func TestSSHExecutorRealRun(t *testing.T) {
 	}
 }
 
-func startSSHExecServer(t *testing.T, exitStatus uint32) string {
+func startSSHExecServer(t *testing.T, exitStatus uint32) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -126,7 +176,7 @@ func startSSHExecServer(t *testing.T, exitStatus uint32) string {
 		_ = ln.Close()
 	})
 	go serveSSHExec(ln, cfg, exitStatus)
-	return ln.Addr().String()
+	return ln.Addr().String(), ssh.FingerprintSHA256(signer.PublicKey())
 }
 
 func serveSSHExec(ln net.Listener, cfg *ssh.ServerConfig, exitStatus uint32) {

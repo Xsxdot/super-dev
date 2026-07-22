@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.fixture",
+  "id": "node",
+  "provider": "node",
+  "working_dir": ".",
+  "runtime": {
+    "config": { "program": "src/server.js" },
+    "env": { "FIXTURE_PORT": "${PORT}", "FIXTURE_CAMPAIGN_ID": "${CAMPAIGN_ID}" }
+  },
+  "platforms": {
+    "windows": {
+      "preflight": { "executable": "node.exe", "arguments": ["--version"] },
+      "build": { "executable": "node.exe", "arguments": ["--check", "src/server.js"] },
+      "run": { "executable": "node.exe", "arguments": ["src/server.js"] },
+      "executable": "src/server.js",
+      "probes": [{ "type": "file", "path": "src/server.js" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "darwin": {
+      "preflight": { "executable": "node", "arguments": ["--version"] },
+      "build": { "executable": "node", "arguments": ["--check", "src/server.js"] },
+      "run": { "executable": "node", "arguments": ["src/server.js"] },
+      "executable": "src/server.js",
+      "probes": [{ "type": "file", "path": "src/server.js" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "linux": {
+      "preflight": { "executable": "node", "arguments": ["--version"] },
+      "build": { "executable": "node", "arguments": ["--check", "src/server.js"] },
+      "run": { "executable": "node", "arguments": ["src/server.js"] },
+      "executable": "src/server.js",
+      "probes": [{ "type": "file", "path": "src/server.js" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    }
+  },
+  "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "node" } },
+  "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
+  "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
+  "debug": { "provider": "node", "adapter_resource": "resources/js-debug", "source": "src/server.js", "line": 23, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixtureMarker": "breakpoint-visible", "fixtureCount": 42, "fixtureProvider": "node" } }
+}

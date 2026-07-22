@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "kind": "superdev.runtime-validation.remote-artifact",
+  "responsibility": "Identify immutable runtime validation payload B and its expected digest.",
+  "boundary": "Contains no campaign, host, transport, credential, or approval state.",
+  "version": "B",
+  "payload": {
+    "path": "payload.txt",
+    "size": 47,
+    "sha256": "4a230671d50228e7902c342826a5efe3687c00c9d6c08ba7f2c52b366f5d2df4"
+  }
+}

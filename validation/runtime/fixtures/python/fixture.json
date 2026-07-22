@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.fixture",
+  "id": "python",
+  "provider": "python",
+  "working_dir": ".",
+  "runtime": {
+    "config": { "program": "src/server.py" },
+    "env": { "FIXTURE_PORT": "${PORT}", "FIXTURE_CAMPAIGN_ID": "${CAMPAIGN_ID}" }
+  },
+  "platforms": {
+    "windows": {
+      "preflight": { "executable": "python.exe", "arguments": ["--version"] },
+      "build": { "executable": "python.exe", "arguments": ["-m", "py_compile", "src/server.py"] },
+      "run": { "executable": "python.exe", "arguments": ["src/server.py"] },
+      "executable": "src/server.py",
+      "probes": [{ "type": "file", "path": "src/server.py" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "darwin": {
+      "preflight": { "executable": "python3", "arguments": ["--version"] },
+      "build": { "executable": "python3", "arguments": ["-m", "py_compile", "src/server.py"] },
+      "run": { "executable": "python3", "arguments": ["src/server.py"] },
+      "executable": "src/server.py",
+      "probes": [{ "type": "file", "path": "src/server.py" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "linux": {
+      "preflight": { "executable": "python3", "arguments": ["--version"] },
+      "build": { "executable": "python3", "arguments": ["-m", "py_compile", "src/server.py"] },
+      "run": { "executable": "python3", "arguments": ["src/server.py"] },
+      "executable": "src/server.py",
+      "probes": [{ "type": "file", "path": "src/server.py" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    }
+  },
+  "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "python" } },
+  "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
+  "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
+  "debug": { "provider": "python", "adapter_resource": "debugpy", "source": "src/server.py", "line": 30, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "python" } }
+}

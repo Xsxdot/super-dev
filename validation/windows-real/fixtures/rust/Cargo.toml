@@ -1,0 +1,11 @@
+# Rust fixture package definition.
+# Responsibility: freeze an external-dependency-free binary with development debug information.
+# Boundary: it does not define SuperDev runtime or MCP behavior.
+[package]
+name = "superdev-windows-rust-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+debug = 2
+opt-level = 0

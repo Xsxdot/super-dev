@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
@@ -37,13 +38,15 @@ func tunnelStateLabel(s tunnel.Status) string {
 }
 
 type tunnelStatusDTO struct {
-	HostID         string `json:"host_id"`
-	State          string `json:"state,omitempty"`
-	LocalPort      int    `json:"local_port,omitempty"`
-	Error          string `json:"error,omitempty"`
-	Agent          string `json:"agent,omitempty"`
-	AgentVersion   string `json:"agent_version,omitempty"`
-	AgentCheckedAt string `json:"agent_checked_at,omitempty"`
+	HostID                string `json:"host_id"`
+	State                 string `json:"state,omitempty"`
+	LocalPort             int    `json:"local_port,omitempty"`
+	Error                 string `json:"error,omitempty"`
+	Agent                 string `json:"agent,omitempty"`
+	AgentVersion          string `json:"agent_version,omitempty"`
+	AgentCheckedAt        string `json:"agent_checked_at,omitempty"`
+	HostKeyVerified       *bool  `json:"host_key_verified,omitempty"`
+	HostKeyIdentitySHA256 string `json:"host_key_identity_sha256,omitempty"`
 }
 
 func agentInfoDTO(info agenthealth.Info) (string, string, string) {
@@ -54,10 +57,17 @@ func agentInfoDTO(info agenthealth.Info) (string, string, string) {
 	return string(info.Status), info.Version, checkedAt
 }
 
+func tunnelHostKeyDTO(evidence tunnel.HostKeyEvidence) (*bool, string) {
+	verified := evidence.Verified
+	return &verified, evidence.IdentitySHA256
+}
+
 // listTunnels 处理 GET /api/tunnels。
 func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
+	log := logger.GetLogger().WithEntryName("TunnelAPI").WithField("operation", "list")
 	hosts, err := a.remoteStore.ListHosts()
 	if err != nil {
+		log.WithErr(err).Error("读取 tunnel 安全状态失败")
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -68,37 +78,58 @@ func (a *App) listTunnels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(a.agentHealth.Info(h.ID))
+		hostKeyVerified, hostKeyIdentity := tunnelHostKeyDTO(a.tunnels.HostKeyEvidenceOf(h.ID))
 		out = append(out, tunnelStatusDTO{
-			HostID:         h.ID,
-			State:          tunnelStateLabel(st),
-			LocalPort:      a.tunnels.LocalPort(h.ID),
-			Error:          a.tunnels.ErrorOf(h.ID),
-			Agent:          agentStatus,
-			AgentVersion:   agentVersion,
-			AgentCheckedAt: agentCheckedAt,
+			HostID:                h.ID,
+			State:                 tunnelStateLabel(st),
+			LocalPort:             a.tunnels.LocalPort(h.ID),
+			Error:                 a.tunnels.ErrorOf(h.ID),
+			Agent:                 agentStatus,
+			AgentVersion:          agentVersion,
+			AgentCheckedAt:        agentCheckedAt,
+			HostKeyVerified:       hostKeyVerified,
+			HostKeyIdentitySHA256: hostKeyIdentity,
 		})
 	}
+	log.WithField("tunnel_count", len(out)).Debug("Tunnel 安全状态读取完成")
 	jsonOK(w, out)
 }
 
 // connectTunnel 处理 POST /api/tunnels/{host_id}。
 func (a *App) connectTunnel(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
+	log := logger.GetLogger().WithEntryName("TunnelAPI").WithFields(map[string]any{"operation": "connect", "host_id": hostID})
+	log.Info("开始建立 SSH tunnel")
 	host, agent, found, err := a.agentByHostID(hostID)
 	if err != nil {
+		log.WithErr(err).Error("读取 tunnel 目标失败")
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !found {
+		log.Error("建立 tunnel 被拒绝：Agent 未配置")
 		jsonError(w, http.StatusNotFound, "agent not configured")
 		return
 	}
 	port, err := a.tunnels.EnsureConnected(nodetransport.TunnelTargetFromNodeTarget(nodetransport.NodeTarget{Host: host, Agent: agent}))
 	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		causeCode := tunnel.PublicError(err)
+		log.WithField("cause_code", causeCode).Error("SSH tunnel 建立失败")
+		jsonError(w, http.StatusBadGateway, causeCode)
 		return
 	}
-	jsonOK(w, tunnelStatusDTO{HostID: hostID, State: "open", LocalPort: port})
+	hostKeyVerified, hostKeyIdentity := tunnelHostKeyDTO(a.tunnels.HostKeyEvidenceOf(hostID))
+	log.WithFields(map[string]any{
+		"host_key_verified":        *hostKeyVerified,
+		"host_key_identity_sha256": hostKeyIdentity,
+	}).Info("SSH tunnel 建立完成")
+	jsonOK(w, tunnelStatusDTO{
+		HostID:                hostID,
+		State:                 "open",
+		LocalPort:             port,
+		HostKeyVerified:       hostKeyVerified,
+		HostKeyIdentitySHA256: hostKeyIdentity,
+	})
 }
 
 // disconnectTunnel 处理 DELETE /api/tunnels/{host_id}。
@@ -130,14 +161,17 @@ func (a *App) wsTunnels(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			agentStatus, agentVersion, agentCheckedAt := agentInfoDTO(a.agentHealth.Info(ev.HostID))
+			hostKeyVerified, hostKeyIdentity := tunnelHostKeyDTO(a.tunnels.HostKeyEvidenceOf(ev.HostID))
 			dto := tunnelStatusDTO{
-				HostID:         ev.HostID,
-				State:          tunnelStateLabel(ev.Status),
-				LocalPort:      a.tunnels.LocalPort(ev.HostID),
-				Error:          ev.Err,
-				Agent:          agentStatus,
-				AgentVersion:   agentVersion,
-				AgentCheckedAt: agentCheckedAt,
+				HostID:                ev.HostID,
+				State:                 tunnelStateLabel(ev.Status),
+				LocalPort:             a.tunnels.LocalPort(ev.HostID),
+				Error:                 ev.Err,
+				Agent:                 agentStatus,
+				AgentVersion:          agentVersion,
+				AgentCheckedAt:        agentCheckedAt,
+				HostKeyVerified:       hostKeyVerified,
+				HostKeyIdentitySHA256: hostKeyIdentity,
 			}
 			if err := conn.WriteJSON(dto); err != nil {
 				return

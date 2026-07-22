@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.scenario",
+  "id": "identity-observation",
+  "title": "Cross-platform packaged MCP identity and observation validation",
+  "requires": [
+    "runtime_identity_attested"
+  ],
+  "variables": {
+    "baseline_project_name": {
+      "required": false,
+      "default": "superdev-sample",
+      "description": "Installed Desktop seeds this project before the campaign project is created."
+    }
+  },
+  "steps": [
+    {
+      "id": "list-projects",
+      "tool": "list_projects",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.projects",
+          "structuredContent.data.count"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      },
+      "capture": {
+        "baseline_project_name": "structuredContent.data.projects.0.name"
+      }
+    },
+    {
+      "id": "get-project",
+      "tool": "get_project",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{baseline_project_name}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.project.name",
+            "operator": "eq",
+            "variable": "baseline_project_name"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.project"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      }
+    },
+    {
+      "id": "list-hosts",
+      "tool": "list_hosts",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [
+          "structuredContent.data.hosts.*.address"
+        ],
+        "forbid": [
+          "token",
+          "password",
+          "private_key"
+        ]
+      }
+    },
+    {
+      "id": "runtime-snapshot",
+      "tool": "get_runtime_snapshot",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.project_count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      }
+    },
+    {
+      "id": "list-services",
+      "tool": "list_services",
+      "coverage": "primary",
+      "arguments": {
+        "project_name": "{{baseline_project_name}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.services",
+          "structuredContent.data.count"
+        ],
+        "redact": [],
+        "forbid": [
+          "debug_credentials"
+        ]
+      }
+    }
+  ],
+  "cleanup": []
+}

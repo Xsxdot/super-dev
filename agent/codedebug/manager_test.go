@@ -92,11 +92,11 @@ func TestManagerOpenUsesJSDebugChildSessionFromLaunchStartDebugging(t *testing.T
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "server.js"), []byte("let n = 0\nsetInterval(() => { n += 1 }, 500)\n"), 0o644))
 	rootDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
 		launchWaitsForConfigurationDone: true,
-		emitInitializedOnLaunch:         true,
 		emitStartDebuggingAfterLaunch:   true,
 	}
-	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	childDAP := &fakeDAP{emitInitializedOnInitialize: true, attachWaitsForConfigurationDone: true}
 	dialCount := 0
 	mgr := NewManager(ManagerOptions{
 		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
@@ -133,6 +133,50 @@ func TestManagerOpenUsesJSDebugChildSessionFromLaunchStartDebugging(t *testing.T
 	mgr.mu.Unlock()
 	require.NotNil(t, record)
 	assert.Same(t, childDAP, record.dap)
+}
+
+func TestManagerOpenHandlesStartDebuggingBeforeRootLaunchResponse(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "server.js"), []byte("setInterval(() => {}, 500)\n"), 0o644))
+	rootDAP := &fakeDAP{
+		launchWaitsForConfigurationDone:        true,
+		emitInitializedOnLaunch:                true,
+		emitStartDebuggingBeforeLaunchResponse: true,
+	}
+	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	dialCount := 0
+	mgr := NewManager(ManagerOptions{
+		JSDebugServerPath: "/data/js-debug/src/dapDebugServer.js",
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9007, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41013, nil },
+	})
+	project, service, dep := managerTestTarget(root)
+	service.Language = model.LanguageNode
+	dep.Runtime = &model.RuntimeConfig{
+		Type:   model.RuntimeTypeLanguage,
+		CWD:    ".",
+		Config: map[string]any{"program": "server.js"},
+	}
+	service.Deployments = []model.Deployment{dep}
+	project.Services = []model.Service{service}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := mgr.Open(ctx, project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, dialCount)
+	assert.True(t, rootDAP.respondedStartDebugging)
+	assert.Equal(t, "pending-node-target", childDAP.launchPendingTargetID)
 }
 
 func TestManagerOpenConsumesInitialStopWhenStopOnEntry(t *testing.T) {
@@ -193,6 +237,48 @@ func TestManagerDebuggerSnapshotMissing(t *testing.T) {
 	_, ok := mgr.DebuggerSnapshot("nonexistent")
 
 	assert.False(t, ok)
+}
+
+func TestThreadStepActionsWaitForStoppedEvent(t *testing.T) {
+	for _, action := range []string{"step_over", "step_in", "step_out"} {
+		t.Run(action, func(t *testing.T) {
+			dap := &fakeDAP{}
+			mgr, session := openManagerTestSession(t, t.TempDir(), dap)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			type result struct {
+				value map[string]any
+				err   error
+			}
+			resultCh := make(chan result, 1)
+
+			go func() {
+				value, err := mgr.ThreadAction(ctx, session.ID, action, 7)
+				resultCh <- result{value: value, err: err}
+			}()
+
+			deadline := time.After(500 * time.Millisecond)
+			for dap.subscriberCount() < 2 {
+				select {
+				case got := <-resultCh:
+					t.Fatalf("%s returned before the asynchronous stopped event: result=%v err=%v", action, got.value, got.err)
+				case <-deadline:
+					t.Fatalf("%s did not subscribe for the asynchronous stopped event", action)
+				case <-time.After(time.Millisecond):
+				}
+			}
+
+			dap.emit(map[string]any{"event": "stopped", "body": map[string]any{"threadId": 7}})
+			select {
+			case got := <-resultCh:
+				require.NoError(t, got.err)
+				assert.Equal(t, action, got.value["action"])
+				assert.Equal(t, 7, got.value["thread_id"])
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("%s did not return after the asynchronous stopped event", action)
+			}
+		})
+	}
 }
 
 func TestContinueRuntimeContinuesDeploymentDAP(t *testing.T) {
@@ -387,6 +473,32 @@ func TestAttachRuntimeCompletesWhenAttachWaitsForConfigurationDone(t *testing.T)
 	assert.Equal(t, 1, dap.configurationDoneCalls)
 }
 
+func TestAttachRuntimeCompletesWhenConfigurationDoneResponseStaysPending(t *testing.T) {
+	dap := &fakeDAP{
+		attachWaitsForConfigurationDone:       true,
+		emitInitializedOnAttach:               true,
+		configurationDoneResponseStaysPending: true,
+	}
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9002, Close: func() error { return nil }}, nil
+		},
+		Dial:        func(context.Context, string, time.Duration) (DAP, error) { return dap, nil },
+		ReservePort: func() (int, error) { return 41006, nil },
+	})
+	project, service, dep := managerTestTarget(t.TempDir())
+	dep.Command = "./server"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	rt, err := mgr.AttachRuntime(ctx, project, service, dep, attachTarget{processID: 4321})
+
+	require.NoError(t, err)
+	assert.Equal(t, "attached", rt.Origin)
+	assert.Equal(t, 1, dap.attachCalls)
+	assert.Equal(t, 1, dap.configurationDoneCalls)
+}
+
 func TestAttachRuntimeUsesJSDebugChildSessionFromStartDebugging(t *testing.T) {
 	rootDAP := &fakeDAP{
 		attachWaitsForConfigurationDone: true,
@@ -430,6 +542,93 @@ func TestAttachRuntimeUsesJSDebugChildSessionFromStartDebugging(t *testing.T) {
 	mgr.mu.Unlock()
 	require.NotNil(t, record)
 	assert.Same(t, childDAP, record.dap)
+}
+
+func TestAttachRuntimeHandlesStartDebuggingBeforeRootAttachResponse(t *testing.T) {
+	rootDAP := &fakeDAP{
+		attachWaitsForConfigurationDone:        true,
+		emitInitializedOnAttach:                true,
+		emitStartDebuggingBeforeAttachResponse: true,
+	}
+	childDAP := &fakeDAP{attachWaitsForConfigurationDone: true, emitInitializedOnAttach: true}
+	dialCount := 0
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9004, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41008, nil },
+	})
+	root := t.TempDir()
+	cfg := LaunchConfig{
+		Target:     Target{ProjectID: "p1", RootPath: root, DeploymentID: "dep-node-early-child"},
+		Provider:   model.CodeDebugProviderNode,
+		WorkingDir: root,
+		TargetPort: 9229,
+	}
+	provider := NewNodeProvider("/tmp/dapDebugServer.js")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := mgr.attachRuntimeWithConfig(ctx, cfg, provider, 1234, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, 1234)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, dialCount)
+	assert.True(t, rootDAP.respondedStartDebugging)
+	assert.Equal(t, "pending-node-target", childDAP.attachPendingTargetID)
+}
+
+func TestAttachRuntimePreservesInitializedEventEmittedDuringInitialize(t *testing.T) {
+	rootDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
+		attachWaitsForConfigurationDone: true,
+		emitStartDebuggingAfterAttach:   true,
+	}
+	childDAP := &fakeDAP{
+		emitInitializedOnInitialize:     true,
+		attachWaitsForConfigurationDone: true,
+	}
+	dialCount := 0
+	mgr := NewManager(ManagerOptions{
+		AdapterLaunch: func(context.Context, AdapterCommand) (AdapterProcess, error) {
+			return AdapterProcess{PID: 9005, Close: func() error { return nil }}, nil
+		},
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCount++
+			if dialCount == 1 {
+				return rootDAP, nil
+			}
+			return childDAP, nil
+		},
+		ReservePort: func() (int, error) { return 41009, nil },
+	})
+	root := t.TempDir()
+	cfg := LaunchConfig{
+		Target:     Target{ProjectID: "p1", RootPath: root, DeploymentID: "dep-node-initialize-event"},
+		Provider:   model.CodeDebugProviderNode,
+		WorkingDir: root,
+		TargetPort: 9229,
+	}
+	provider := NewNodeProvider("/tmp/dapDebugServer.js")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := mgr.attachRuntimeWithConfig(ctx, cfg, provider, 1234, func(cfg LaunchConfig) map[string]any {
+		return provider.AttachArguments(cfg, 1234)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, dialCount)
+	assert.Equal(t, 1, rootDAP.configurationDoneCalls)
+	assert.Equal(t, 1, childDAP.configurationDoneCalls)
 }
 
 func TestResolveLeaseAttachesRunningService(t *testing.T) {
@@ -1324,11 +1523,18 @@ func TestCaptureAtNodeSkipsInitialPauseAndWaitsForBreakpoint(t *testing.T) {
 		autoStoppedOnSetBreakpoints: true,
 		setBreakpointsThreadID:      0,
 		stackResult: map[string]any{
-			"stackFrames": []map[string]any{{
-				"id":     11,
-				"line":   5,
-				"source": map[string]any{"path": source},
-			}},
+			"stackFrames": []map[string]any{
+				{
+					"id":     0,
+					"line":   5,
+					"source": map[string]any{"path": source},
+				},
+				{
+					"id":     1,
+					"line":   507,
+					"source": map[string]any{"path": "<node_internals>/events"},
+				},
+			},
 		},
 		scopesResult: map[string]any{
 			"scopes": []map[string]any{{"variablesReference": 7}},
@@ -1354,7 +1560,48 @@ func TestCaptureAtNodeSkipsInitialPauseAndWaitsForBreakpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, dap.pauseCalls)
 	assert.Equal(t, 0, dap.continueCalls)
+	assert.Equal(t, 0, result["frame_id"], "js-debug 的首帧 0 是合法 DAP identity")
 	assert.Equal(t, map[string]any{"threadId": 0}, result["stopped"])
+}
+
+func TestCaptureAtJVMSkipsThreadlessPauseAndWaitsForBreakpoint(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "FixtureServer.kt")
+	dap := &fakeDAP{
+		autoStoppedOnSetBreakpoints: true,
+		setBreakpointsThreadID:      17,
+		stackResult: map[string]any{
+			"stackFrames": []map[string]any{{
+				"id":     11,
+				"line":   25,
+				"source": map[string]any{"path": source},
+			}},
+		},
+		scopesResult: map[string]any{
+			"scopes": []map[string]any{{"variablesReference": 7}},
+		},
+		variablesResult: map[string]any{
+			"variables": []map[string]any{{"name": "fixtureMarker", "value": "breakpoint-visible"}},
+		},
+	}
+	mgr, session := openManagerTestSession(t, root, dap)
+	mgr.mu.Lock()
+	mgr.runtimes[session.DeploymentID].Provider = model.CodeDebugProviderJVM
+	mgr.sessions[session.ID].Provider = model.CodeDebugProviderJVM
+	mgr.mu.Unlock()
+
+	result, err := mgr.CaptureAt(context.Background(), CaptureAtRequest{
+		SessionID: session.ID,
+		Source:    "FixtureServer.kt",
+		Line:      25,
+		ThreadID:  0,
+		Timeout:   time.Second,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, dap.pauseCalls)
+	assert.Equal(t, 0, dap.continueCalls)
+	assert.Equal(t, map[string]any{"threadId": 17}, result["stopped"])
 }
 
 func TestCaptureAtReportsUnverifiedBreakpoint(t *testing.T) {
@@ -1471,6 +1718,33 @@ func TestDefaultAdapterLaunchMissingCommandReturnsStableUnavailableError(t *test
 	assert.Contains(t, strings.ToLower(info.Hint), "install")
 }
 
+func TestManagerExplicitAdapterStartFailureDoesNotFallBack(t *testing.T) {
+	root := t.TempDir()
+	explicit := filepath.Join(root, "Program Files", "Delve", "dlv.exe")
+	dialCalled := false
+	mgr := NewManager(ManagerOptions{
+		ReservePort: func() (int, error) { return 39001, nil },
+		Dial: func(context.Context, string, time.Duration) (DAP, error) {
+			dialCalled = true
+			return nil, errors.New("dial must not run after adapter start failure")
+		},
+	})
+	project, service, dep := managerTestTarget(root)
+	dep.CodeDebug.AdapterCommand = explicit
+
+	_, err := mgr.Open(context.Background(), project, service, dep, OpenRequest{DeploymentID: dep.ID})
+
+	require.ErrorIs(t, err, ErrAdapterUnavailable)
+	info, ok := AdapterErrorDetails(err)
+	require.True(t, ok)
+	assert.Equal(t, CodeAdapterUnavailable, info.Code)
+	assert.Equal(t, AdapterCauseNotFound, info.CauseCode)
+	assert.Equal(t, AdapterCommandSourceExplicit, info.Source)
+	assert.Equal(t, "dlv.exe", info.Executable)
+	assert.NotContains(t, info.Command, root, "error context must not leak the absolute install path")
+	assert.False(t, dialCalled, "an explicit launch failure must stop instead of falling through to another candidate")
+}
+
 func TestDefaultAdapterLaunchKeepsProcessAfterCallerContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	process, err := defaultAdapterLaunch(ctx, AdapterCommand{
@@ -1487,6 +1761,40 @@ func TestDefaultAdapterLaunchKeepsProcessAfterCallerContextCancel(t *testing.T) 
 	time.Sleep(100 * time.Millisecond)
 
 	assert.NoError(t, signalProcessZero(process.PID))
+}
+
+func TestCloseAdapterProcessTreatsNaturalExitAsAlreadyClosed(t *testing.T) {
+	waitDone := make(chan struct{})
+	close(waitDone)
+	killCalls := 0
+
+	err := closeAdapterProcess(waitDone, func() error {
+		killCalls++
+		return errors.New("TerminateProcess: Access is denied")
+	})
+
+	require.NoError(t, err)
+	assert.Zero(t, killCalls, "an already-reaped adapter must not be killed by a reusable PID")
+}
+
+func TestCloseAdapterProcessAcceptsExitRacingWithKillError(t *testing.T) {
+	waitDone := make(chan struct{})
+
+	err := closeAdapterProcess(waitDone, func() error {
+		close(waitDone)
+		return errors.New("TerminateProcess: Access is denied")
+	})
+
+	require.NoError(t, err)
+}
+
+func TestCloseAdapterProcessPreservesLiveKillError(t *testing.T) {
+	waitDone := make(chan struct{})
+	want := errors.New("live adapter termination denied")
+
+	err := closeAdapterProcess(waitDone, func() error { return want })
+
+	require.ErrorIs(t, err, want)
 }
 
 func TestManagerOpenWrapsDialFailureAsStableConnectionError(t *testing.T) {
@@ -1649,50 +1957,61 @@ func managerTestTarget(root string) (model.Project, model.Service, model.Deploym
 }
 
 type fakeDAP struct {
-	mu                              sync.Mutex
-	breakpointsSource               string
-	breakpointsLines                [][]int
-	breakpointsResult               map[string]any
-	stackResult                     map[string]any
-	scopesResult                    map[string]any
-	variablesResult                 map[string]any
-	evaluateResult                  map[string]any
-	subs                            []chan map[string]any
-	waitForStoppedViaSubscribe      bool
-	pauseCalls                      int
-	pauseThreadID                   int
-	pauseErr                        error
-	autoStoppedOnPause              bool
-	continueCalls                   int
-	continueThreadID                int
-	continueErr                     error
-	autoStoppedOnContinue           bool
-	autoStoppedOnSetBreakpoints     bool
-	setBreakpointsThreadID          int
-	disconnectCalls                 int
-	detachCalls                     int
-	attachCalls                     int
-	attachProcessID                 int
-	attachConnectPort               int
-	attachProgram                   string
-	attachPendingTargetID           string
-	launchCalls                     int
-	launchPendingTargetID           string
-	launchWaitsForConfigurationDone bool
-	emitInitializedOnLaunch         bool
-	emitStartDebuggingAfterLaunch   bool
-	attachWaitsForConfigurationDone bool
-	emitInitializedOnAttach         bool
-	emitStartDebuggingAfterAttach   bool
-	requestSubs                     []chan map[string]any
-	respondedStartDebugging         bool
-	configurationDoneCh             chan struct{}
-	configurationDoneClosed         bool
-	configurationDoneCalls          int
-	waitForStoppedCalls             int
+	mu                                     sync.Mutex
+	emitInitializedOnInitialize            bool
+	breakpointsSource                      string
+	breakpointsLines                       [][]int
+	breakpointsResult                      map[string]any
+	stackResult                            map[string]any
+	scopesResult                           map[string]any
+	variablesResult                        map[string]any
+	evaluateResult                         map[string]any
+	subs                                   []chan map[string]any
+	waitForStoppedViaSubscribe             bool
+	pauseCalls                             int
+	pauseThreadID                          int
+	pauseErr                               error
+	autoStoppedOnPause                     bool
+	continueCalls                          int
+	continueThreadID                       int
+	continueErr                            error
+	autoStoppedOnContinue                  bool
+	autoStoppedOnSetBreakpoints            bool
+	setBreakpointsThreadID                 int
+	disconnectCalls                        int
+	detachCalls                            int
+	attachCalls                            int
+	attachProcessID                        int
+	attachConnectPort                      int
+	attachProgram                          string
+	attachPendingTargetID                  string
+	launchCalls                            int
+	launchPendingTargetID                  string
+	launchWaitsForConfigurationDone        bool
+	emitInitializedOnLaunch                bool
+	emitStartDebuggingAfterLaunch          bool
+	emitStartDebuggingBeforeLaunchResponse bool
+	attachWaitsForConfigurationDone        bool
+	emitInitializedOnAttach                bool
+	emitStartDebuggingAfterAttach          bool
+	emitStartDebuggingBeforeAttachResponse bool
+	requestSubs                            []chan map[string]any
+	respondedStartDebugging                bool
+	startDebuggingResponseCh               chan struct{}
+	startDebuggingResponseClosed           bool
+	configurationDoneCh                    chan struct{}
+	configurationDoneClosed                bool
+	configurationDoneCalls                 int
+	configurationDoneResponseStaysPending  bool
+	waitForStoppedCalls                    int
 }
 
-func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) { return map[string]any{}, nil }
+func (f *fakeDAP) Initialize(context.Context) (map[string]any, error) {
+	if f.emitInitializedOnInitialize {
+		f.emit(map[string]any{"event": "initialized", "body": map[string]any{}})
+	}
+	return map[string]any{}, nil
+}
 func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
 	f.mu.Lock()
 	f.launchCalls++
@@ -1702,10 +2021,18 @@ func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
 	waitForConfigurationDone := f.launchWaitsForConfigurationDone
 	if waitForConfigurationDone && f.configurationDoneCh == nil {
 		f.configurationDoneCh = make(chan struct{})
+		if f.configurationDoneClosed {
+			close(f.configurationDoneCh)
+		}
 	}
 	ch := f.configurationDoneCh
 	emitInitialized := f.emitInitializedOnLaunch
 	emitStartDebugging := f.emitStartDebuggingAfterLaunch
+	emitStartDebuggingBeforeResponse := f.emitStartDebuggingBeforeLaunchResponse
+	if emitStartDebuggingBeforeResponse && f.startDebuggingResponseCh == nil {
+		f.startDebuggingResponseCh = make(chan struct{})
+	}
+	startDebuggingResponseCh := f.startDebuggingResponseCh
 	f.mu.Unlock()
 	if emitInitialized {
 		f.emit(map[string]any{"event": "initialized", "body": map[string]any{}})
@@ -1713,6 +2040,14 @@ func (f *fakeDAP) Launch(ctx context.Context, args map[string]any) error {
 	if waitForConfigurationDone {
 		select {
 		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if emitStartDebuggingBeforeResponse {
+		f.emitStartDebuggingRequest("launch")
+		select {
+		case <-startDebuggingResponseCh:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1748,10 +2083,18 @@ func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 	waitForConfigurationDone := f.attachWaitsForConfigurationDone
 	if waitForConfigurationDone && f.configurationDoneCh == nil {
 		f.configurationDoneCh = make(chan struct{})
+		if f.configurationDoneClosed {
+			close(f.configurationDoneCh)
+		}
 	}
 	ch := f.configurationDoneCh
 	emitInitialized := f.emitInitializedOnAttach
 	emitStartDebugging := f.emitStartDebuggingAfterAttach
+	emitStartDebuggingBeforeResponse := f.emitStartDebuggingBeforeAttachResponse
+	if emitStartDebuggingBeforeResponse && f.startDebuggingResponseCh == nil {
+		f.startDebuggingResponseCh = make(chan struct{})
+	}
+	startDebuggingResponseCh := f.startDebuggingResponseCh
 	f.mu.Unlock()
 	if emitInitialized {
 		f.emit(map[string]any{"event": "initialized", "body": map[string]any{}})
@@ -1759,6 +2102,14 @@ func (f *fakeDAP) Attach(ctx context.Context, args map[string]any) error {
 	if waitForConfigurationDone {
 		select {
 		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if emitStartDebuggingBeforeResponse {
+		f.emitStartDebuggingRequest("attach")
+		select {
+		case <-startDebuggingResponseCh:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1774,13 +2125,18 @@ func (f *fakeDAP) Detach(context.Context) error {
 	f.detachCalls++
 	return nil
 }
-func (f *fakeDAP) ConfigurationDone(context.Context) error {
+func (f *fakeDAP) ConfigurationDone(ctx context.Context) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.configurationDoneCalls++
 	if f.configurationDoneCh != nil && !f.configurationDoneClosed {
 		close(f.configurationDoneCh)
-		f.configurationDoneClosed = true
+	}
+	f.configurationDoneClosed = true
+	staysPending := f.configurationDoneResponseStaysPending
+	f.mu.Unlock()
+	if staysPending {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	return nil
 }
@@ -1934,6 +2290,10 @@ func (f *fakeDAP) RespondToRequest(_ context.Context, request map[string]any, su
 	defer f.mu.Unlock()
 	if command, _ := request["command"].(string); command == "startDebugging" && success {
 		f.respondedStartDebugging = true
+		if f.startDebuggingResponseCh != nil && !f.startDebuggingResponseClosed {
+			close(f.startDebuggingResponseCh)
+			f.startDebuggingResponseClosed = true
+		}
 	}
 	return nil
 }

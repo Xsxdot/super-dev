@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/remoteobservation"
 )
 
 const nodeStatusReportInterval = 5 * time.Second
@@ -95,13 +96,11 @@ func (a *App) wsNodeStatus(w http.ResponseWriter, r *http.Request) {
 	if hostID == "" {
 		hostID = a.identity.NodeID
 	}
-	if hostName == "" {
-		hostName = a.identity.DisplayName
-	}
 	if hostID == "" {
 		hostID = uuid.NewString()
 	}
 	if hostName == "" {
+		// identity.DisplayName 可能来自操作系统 hostname，不能作为安全系统身份的隐式退化。
 		hostName = hostID
 	}
 
@@ -118,6 +117,11 @@ func (a *App) wsNodeStatus(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) nodeStatusSnapshot(ctx context.Context, hostID, hostName string) nodetransport.NodeStatus {
 	now := time.Now().UTC()
+	var systemFacts *remoteobservation.SystemFacts
+	if a.remoteObservation != nil {
+		facts := a.remoteObservation.LocalSystemFacts(ctx)
+		systemFacts = &facts
+	}
 	return nodetransport.NodeStatus{
 		HostID:    hostID,
 		Name:      hostName,
@@ -130,6 +134,7 @@ func (a *App) nodeStatusSnapshot(ctx context.Context, hostID, hostName string) n
 		},
 		Deployments: a.managedRuntimeInstances(ctx, hostID, hostName),
 		Managed:     a.managedDeploymentStatusSnapshot(),
+		System:      systemFacts,
 		UpdatedAt:   now,
 	}
 }
@@ -168,9 +173,9 @@ func (a *App) managedProjectsSnapshot() []model.Project {
 
 func (a *App) managedDeploymentStatusSnapshot() *model.ManagedDeploymentStatus {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	status := a.managedStatus
+	a.mu.RUnlock()
+	status.ActiveCollectorCount = remoteobservation.CountActiveCollectors(a.collector.List())
 	if status.Collectors == nil {
 		status.Collectors = []model.ManagedCollectorStatus{}
 	}

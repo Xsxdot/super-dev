@@ -35,7 +35,7 @@ type logSourceDTO struct {
 type remoteViewResponse struct {
 	LogSource logSourceDTO      `json:"log_source"`
 	Groups    []remoteViewGroup `json:"groups"`
-	Hosts     []hostDTO         `json:"hosts"`
+	Hosts     []hostViewDTO     `json:"hosts"`
 }
 
 // remoteView 处理 GET /api/remote/view?log_source_id=xxx。
@@ -78,10 +78,10 @@ func (a *App) remoteView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 只返回 LogSource 关联的 Host
-	relatedHosts := make([]hostDTO, 0, len(ls.HostIDs))
+	relatedHosts := make([]hostViewDTO, 0, len(ls.HostIDs))
 	for _, hid := range ls.HostIDs {
 		if h, ok := hostByID[hid]; ok {
-			relatedHosts = append(relatedHosts, toHostDTO(h))
+			relatedHosts = append(relatedHosts, a.hostAssembler.ToView(h))
 		}
 	}
 

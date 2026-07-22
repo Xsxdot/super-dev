@@ -76,10 +76,13 @@ func NewApprovalFileStore(path string) *ApprovalFileStore {
 //
 // 参数：
 //   - path: 审计事件 JSON 文件完整路径
-//   - limit: 本机文件最多保留的最新事件数，非正数时使用默认值
+//   - limit: 本机文件最多保留的可裁剪事件数，非正数时使用默认值
 //
 // 返回：
 //   - 基于本机文件的审计 Store
+//
+// 注意：
+//   - 未写入 executed/failed 终态的 prepared 事件不参与裁剪，因此极端故障下总数可暂时超过 limit
 func NewAuditFileStore(path string, limit int) *AuditFileStore {
 	if limit <= 0 {
 		limit = 5000
@@ -584,10 +587,45 @@ func trimAuditEvents(events []AuditEvent, limit int) []AuditEvent {
 	if limit <= 0 || len(events) <= limit {
 		return events
 	}
-	sort.SliceStable(events, func(i, j int) bool {
-		return events[i].CreatedAt.Before(events[j].CreatedAt)
+
+	terminalPlanIDs := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		if event.Plan.ID == "" {
+			continue
+		}
+		if event.Action == AuditExecuted || event.Action == AuditFailed {
+			terminalPlanIDs[event.Plan.ID] = struct{}{}
+		}
+	}
+
+	sorted := append([]AuditEvent(nil), events...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
 	})
-	return append([]AuditEvent(nil), events[len(events)-limit:]...)
+	pending := make([]AuditEvent, 0)
+	trimmable := make([]AuditEvent, 0, len(sorted))
+	for _, event := range sorted {
+		_, terminal := terminalPlanIDs[event.Plan.ID]
+		if event.Action == AuditPrepared && event.Plan.ID != "" && !terminal {
+			// prepared 是 tunnel 失效补偿的 durable outbox；没有终态前不能被普通保留上限淘汰。
+			pending = append(pending, event)
+			continue
+		}
+		trimmable = append(trimmable, event)
+	}
+
+	remaining := limit - len(pending)
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(trimmable) > remaining {
+		trimmable = trimmable[len(trimmable)-remaining:]
+	}
+	kept := append(pending, trimmable...)
+	sort.SliceStable(kept, func(i, j int) bool {
+		return kept[i].CreatedAt.Before(kept[j].CreatedAt)
+	})
+	return kept
 }
 
 func (s *ApprovalFileStore) load() (approvalState, error) {

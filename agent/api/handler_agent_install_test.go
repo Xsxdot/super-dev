@@ -59,6 +59,7 @@ func createInstallTestHost(t *testing.T, app *App) string {
 	  "ssh_port":22,
 	  "ssh_user":"root",
 	  "ssh_private_key":"KEY",
+	  "ssh_host_key_fingerprint":"SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
 	  "tags":[]
 	}`))
 	require.Equal(t, http.StatusOK, hostResp.Code)
@@ -92,6 +93,7 @@ func TestInstallAgentPushesOverSSHWithLoopbackBindForTunnelOnlyChain(t *testing.
 	assert.Equal(t, 1, fake.calls)
 	assert.Equal(t, hostID, fake.host.ID)
 	assert.Equal(t, "10.0.0.8", fake.host.SSHHost)
+	assert.Equal(t, "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A", fake.host.SSHHostKeyFingerprint)
 	assert.Equal(t, model.LoopbackBindAddress, fake.opts.BindAddress)
 	assert.Equal(t, 57019, fake.opts.Port)
 	assert.True(t, fake.opts.RequireAuth)

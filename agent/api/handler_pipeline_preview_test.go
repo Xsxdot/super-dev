@@ -76,6 +76,10 @@ pipelines:
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), `"deployment_id":"project:preview-project-pipeline:pipeline:deploy-dev:env:dev"`)
 	assert.Contains(t, rr.Body.String(), `"host_id":"h1"`)
+	assert.Contains(t, rr.Body.String(), `"variables":`)
+	assert.NotContains(t, rr.Body.String(), `"Variables":`)
+	assert.Contains(t, rr.Body.String(), `"phases":`)
+	assert.NotContains(t, rr.Body.String(), `"Phases":`)
 }
 
 func TestPreviewProjectPipelineRejectsMissingPluginParameter(t *testing.T) {

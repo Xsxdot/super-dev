@@ -44,6 +44,7 @@ describe('SearchPage i18n', () => {
       'Enter traceID, orderID, or error keyword...',
     )
     expect(wrapper.find('[data-test="search-submit"]').text()).toBe('Search')
+    expect(wrapper.find('.search-brand').text()).toBe('Log Search')
   })
 
   it('结果态渲染多服务搜索命令栏', () => {
@@ -92,8 +93,6 @@ describe('SearchPage i18n', () => {
     expect(wrapper.find('[data-test="search-hit-count"]').text()).toBe('2 / 76 hits')
     expect(wrapper.find('[data-test="search-prev-hit"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="search-next-hit"]').exists()).toBe(true)
-    const chips = wrapper.findAll('[data-test="search-filter-chip"]')
-    expect(chips.map(chip => chip.text())).toEqual(['All'])
-    expect(chips[0].attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="search-filter-chip"]').exists()).toBe(false)
   })
 })

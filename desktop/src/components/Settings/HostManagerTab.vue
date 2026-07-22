@@ -39,16 +39,19 @@ onMounted(async () => {
 })
 
 function openCreate() {
+  error.value = null
   editing.value = null
   formVisible.value = true
 }
 
 function openEdit(host: Host) {
+  error.value = null
   editing.value = host
   formVisible.value = true
 }
 
 async function handleSubmit(payload: HostCreatePayload) {
+  error.value = null
   try {
     if (editing.value) {
       await store.updateHost(editing.value.id, payload)
@@ -138,6 +141,7 @@ function sshLabel(host: Host): string {
     <HostFormModal
       :visible="formVisible"
       :initial="editing"
+      :error="error"
       @submit="handleSubmit"
       @cancel="formVisible = false"
     />

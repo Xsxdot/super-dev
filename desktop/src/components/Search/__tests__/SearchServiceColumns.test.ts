@@ -624,7 +624,7 @@ describe('SearchServiceColumns', () => {
     expect(tab.selectedLogId).toBe('40')
   })
 
-  it('两服务上下文渲染 trace header、同步列、minimap 和选中详情', () => {
+  it('两服务上下文渲染时间对齐标题、同步列、minimap 和选中详情', () => {
     const api = service('sample-api-demo', 'sample-api-demo')
     const worker = service('sample-worker-demo', 'sample-worker-demo')
     useAgentStore().projects = [project([api, worker])]
@@ -653,14 +653,16 @@ describe('SearchServiceColumns', () => {
       props: { tabId: tab.id },
     })
 
-    expect(wrapper.find('[data-test="trace-context-title"]').text()).toContain('trace-8f21')
+    expect(wrapper.find('[data-test="time-aligned-context-title"]').text()).toContain('trace-8f21')
     expect(wrapper.findAll('[data-test="context-minimap-tick"]').length).toBeGreaterThan(0)
     expect(wrapper.findAll('.columns .column-header')).toHaveLength(2)
     expect(wrapper.findAll('.columns .column-header')[0].text()).toContain('sample-api-demo')
     expect(wrapper.findAll('.columns .column-header')[1].text()).toContain('sample-worker-demo')
     expect(wrapper.find('[data-test="selected-hit-service"]').text()).toContain('sample-api-demo')
     expect(wrapper.find('[data-test="selected-hit-level"]').text()).toContain('ERROR')
-    expect(wrapper.find('[data-test="cross-service-path"]').text()).toContain('API request received')
+    expect(wrapper.find('[data-test="cross-service-path"]').exists()).toBe(false)
+    expect(wrapper.findAll('.context-action')).toHaveLength(1)
+    expect(wrapper.find('.context-action').text()).toMatch(/Pin|固定/)
     expect(wrapper.find('[data-test="nearby-signals"]').text()).toContain('WARN')
     expect(wrapper.find('[data-test="nearby-signals"]').text()).toContain('ERROR')
   })

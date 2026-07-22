@@ -50,7 +50,7 @@ func TestHTTPAgentClientListHosts(t *testing.T) {
 		assert.Equal(t, "/api/hosts", r.URL.Path)
 		_ = json.NewEncoder(w).Encode([]HostReference{
 			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
-			{ID: "host-uuid-1", Name: "prod-a", PrivateIP: "10.0.0.1", Tags: []string{"prod"}},
+			{ID: "host-uuid-1", Name: "prod-a", Tags: []string{"prod"}},
 		})
 	}))
 	defer srv.Close()
@@ -415,10 +415,19 @@ func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 			"code":  "approval_required",
 			"error": "approval required",
 			"plan": map[string]any{
-				"id": "op_1", "kind": "runtime.restart", "requires_approval": true, "fingerprint": "fp_1",
+				"id": "op_1", "kind": "code_debug.evaluate", "requires_approval": true, "fingerprint": "fp_1",
+				"target": map[string]any{
+					"project_id": "project-1", "deployment_id": "dep-1", "host_id": "host-1", "debug_session_id": "dbg-1",
+				},
 			},
 			"approval": map[string]any{
 				"id": "opa_1", "status": "pending",
+				"plan": map[string]any{
+					"id": "op_1", "kind": "code_debug.evaluate", "requires_approval": true, "fingerprint": "fp_1",
+					"target": map[string]any{
+						"project_id": "project-1", "deployment_id": "dep-1", "host_id": "host-1", "debug_session_id": "dbg-1",
+					},
+				},
 			},
 		})
 	}))
@@ -431,7 +440,11 @@ func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 	require.ErrorAs(t, err, &agentErr)
 	assert.Equal(t, "approval_required", agentErr.Code)
 	assert.Equal(t, "op_1", agentErr.Plan.ID)
+	assert.Equal(t, "host-1", agentErr.Plan.Target.HostID)
+	assert.Equal(t, "dbg-1", agentErr.Plan.Target.DebugSessionID)
 	assert.Equal(t, "opa_1", agentErr.Approval.ID)
+	assert.Equal(t, "host-1", agentErr.Approval.Plan.Target.HostID)
+	assert.Equal(t, "dbg-1", agentErr.Approval.Plan.Target.DebugSessionID)
 }
 
 func jsonOKForMCPClientTest(w http.ResponseWriter, v any) {

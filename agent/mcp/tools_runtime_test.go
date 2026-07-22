@@ -600,7 +600,7 @@ func TestListServicesIncludesMergedDebugCredentialHints(t *testing.T) {
 func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
 	client := &fakeAgentClient{
 		hosts: []HostReference{
-			{ID: "host-uuid-1", Name: "prod-a", PrivateIP: "10.0.0.1", Tags: []string{"prod"}},
+			{ID: "host-uuid-1", Name: "prod-a", Tags: []string{"prod"}},
 			{ID: "superdev-local", Name: "MacBook-Pro.local", IsSelf: true, NodeID: "superdev-local"},
 		},
 	}
@@ -623,6 +623,9 @@ func TestListHostsToolReturnsCanonicalHostIDs(t *testing.T) {
 	assert.Contains(t, data["host_id_contract"], "hosts[].id")
 	assert.Contains(t, data["host_id_contract"], "is_self=false")
 	assert.Contains(t, data["host_id_contract"], "never use hosts[].name")
+	safePayload, err := json.Marshal(data)
+	require.NoError(t, err)
+	assert.NotContains(t, string(safePayload), "10.0.0.1")
 }
 
 func TestStopServiceDoesNotRunWhenTargetIsAmbiguous(t *testing.T) {

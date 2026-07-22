@@ -716,7 +716,9 @@ func codeDebugThreadActionInputSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"deployment_id": map[string]any{"type": "string"},
-			"thread_id":     map[string]any{"type": "integer", "minimum": 1},
+			// js-debug reverse child session 以 0 作为真实 thread identity；DAP identity
+			// 是非负整数，不能在 MCP schema 层把合法值提前拒绝。
+			"thread_id": map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"deployment_id", "thread_id"},
 	}
@@ -732,7 +734,7 @@ func codeDebugScopesInputSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"deployment_id": map[string]any{"type": "string"},
-			"frame_id":      map[string]any{"type": "integer", "minimum": 1},
+			"frame_id":      map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"deployment_id", "frame_id"},
 	}
@@ -1290,7 +1292,7 @@ func defaultTools(s *Server) []registeredTool {
 			Tool: Tool{
 				Name:        "list_code_debug_targets",
 				Title:       "List code debug targets",
-				Description: "List local managed language runtime deployments that can use last-resort code debugging. Node targets are experimental.",
+				Description: "List local managed language runtime deployments that can use last-resort code debugging. Node and JVM (Java/Kotlin) targets are experimental.",
 				InputSchema: emptyInputSchema(),
 				Annotations: map[string]any{"readOnlyHint": true},
 			},

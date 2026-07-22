@@ -1,0 +1,8 @@
+# Rust fixture dependency lock.
+# Responsibility: make cargo build --locked deterministic even though the fixture has no third-party crates.
+# Boundary: generated Windows binaries are not committed here.
+version = 4
+
+[[package]]
+name = "superdev-windows-rust-fixture"
+version = "0.1.0"

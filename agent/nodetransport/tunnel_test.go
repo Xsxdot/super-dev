@@ -19,10 +19,15 @@ import (
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
+const (
+	testHostKeyFingerprint = "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A"
+	testHostKeyIdentity    = "2b8d2037d26edc9d429d8cd7e3d043c09d5f0bea6c2d3b63c35769c6ab8f2d68"
+)
+
 type fakeDialer struct{ port int }
 
 func (f fakeDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
-	return tunnel.NewFakeConn(f.port), nil
+	return tunnel.NewFakeVerifiedConn(f.port, testHostKeyIdentity), nil
 }
 
 type recordingDialer struct {
@@ -32,7 +37,7 @@ type recordingDialer struct {
 
 func (d *recordingDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	d.target = target
-	return tunnel.NewFakeConn(d.port), nil
+	return tunnel.NewFakeVerifiedConn(d.port, testHostKeyIdentity), nil
 }
 
 type sequenceDialer struct {
@@ -46,12 +51,15 @@ func (d *sequenceDialer) Dial(target tunnel.Target) (*tunnel.Conn, error) {
 	if idx >= len(d.ports) {
 		idx = len(d.ports) - 1
 	}
-	return tunnel.NewFakeConn(d.ports[idx]), nil
+	return tunnel.NewFakeVerifiedConn(d.ports[idx], testHostKeyIdentity), nil
 }
 
 func tunnelNode(id, name string) nodetransport.NodeTarget {
 	return nodetransport.NodeTarget{
-		Host: model.Host{ID: id, Name: name, SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root"},
+		Host: model.Host{
+			ID: id, Name: name, SSHHost: "10.0.0.8", SSHPort: 22, SSHUser: "root",
+			SSHHostKeyFingerprint: testHostKeyFingerprint,
+		},
 		Agent: model.Agent{
 			HostID: id,
 			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
@@ -72,7 +80,10 @@ func TestTunnelTransportUsesHostSSHAndAgentRemotePort(t *testing.T) {
 	mgr := tunnel.NewManager(dialer)
 	defer mgr.Close()
 	target := nodetransport.NodeTarget{
-		Host: model.Host{ID: "h1", Name: "ali", SSHHost: "10.0.0.8", SSHPort: 2222, SSHUser: "root", SSHPrivateKey: "KEY"},
+		Host: model.Host{
+			ID: "h1", Name: "ali", SSHHost: "10.0.0.8", SSHPort: 2222, SSHUser: "root", SSHPrivateKey: "KEY",
+			SSHHostKeyFingerprint: testHostKeyFingerprint,
+		},
 		Agent: model.Agent{
 			HostID: "h1",
 			Transport: model.TransportConfig{Chain: []model.TransportEntry{{
@@ -95,6 +106,7 @@ func TestTunnelTransportUsesHostSSHAndAgentRemotePort(t *testing.T) {
 	assert.Equal(t, 2222, dialer.target.SSHPort)
 	assert.Equal(t, "root", dialer.target.SSHUser)
 	assert.Equal(t, "KEY", dialer.target.SSHPrivateKey)
+	assert.Equal(t, testHostKeyFingerprint, dialer.target.SSHHostKeyFingerprint)
 	assert.Equal(t, 57018, dialer.target.RemoteAgentPort)
 }
 

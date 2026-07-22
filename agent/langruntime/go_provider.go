@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -224,11 +225,22 @@ func (GoProvider) BuildPlan(_ context.Context, input BuildPlanInput) (ExecutionP
 	}
 }
 
-// goArtifactName 从 program 包路径推导产物文件名（basename，"." → 模块目录名占位 "app"）。
+// goArtifactName 从 program 包路径推导当前平台的产物文件名。
 func goArtifactName(program string) string {
+	return goArtifactNameForOS(program, runtime.GOOS)
+}
+
+// goArtifactNameForOS 从 program 包路径推导目标平台的产物文件名。
+//
+// Windows 的 go build 会为 -o 路径自动补 .exe；执行计划必须使用同一个实际文件名，
+// 否则构建成功后会尝试启动不存在的无后缀路径。
+func goArtifactNameForOS(program, goos string) string {
 	base := filepath.Base(strings.TrimSpace(program))
 	if base == "" || base == "." || base == "/" {
-		return "app"
+		base = "app"
+	}
+	if goos == "windows" && !strings.EqualFold(filepath.Ext(base), ".exe") {
+		base += ".exe"
 	}
 	return base
 }

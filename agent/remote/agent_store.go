@@ -217,31 +217,35 @@ func (s *AgentStore) loadLegacyHosts() ([]legacyHostRecord, error) {
 }
 
 type legacyHostRecord struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	PublicIP      string             `json:"public_ip,omitempty"`
-	PrivateIP     string             `json:"private_ip,omitempty"`
-	Tags          []string           `json:"tags"`
-	SSHHost       string             `json:"ssh_host,omitempty"`
-	SSHPort       int                `json:"ssh_port,omitempty"`
-	SSHUser       string             `json:"ssh_user,omitempty"`
-	SSHPassword   string             `json:"ssh_password,omitempty"`
-	SSHPrivateKey string             `json:"ssh_private_key,omitempty"`
-	Agent         *legacyAgentRecord `json:"agent,omitempty"`
+	ID                                string             `json:"id"`
+	Name                              string             `json:"name"`
+	PublicIP                          string             `json:"public_ip,omitempty"`
+	PrivateIP                         string             `json:"private_ip,omitempty"`
+	Tags                              []string           `json:"tags"`
+	SSHHost                           string             `json:"ssh_host,omitempty"`
+	SSHPort                           int                `json:"ssh_port,omitempty"`
+	SSHUser                           string             `json:"ssh_user,omitempty"`
+	SSHPassword                       string             `json:"ssh_password,omitempty"`
+	SSHPrivateKey                     string             `json:"ssh_private_key,omitempty"`
+	SSHHostKeyFingerprint             string             `json:"ssh_host_key_fingerprint,omitempty"`
+	PendingTunnelInvalidationRevision string             `json:"pending_tunnel_invalidation_revision,omitempty"`
+	Agent                             *legacyAgentRecord `json:"agent,omitempty"`
 }
 
 func (h legacyHostRecord) toHost() model.Host {
 	return model.Host{
-		ID:            h.ID,
-		Name:          h.Name,
-		PublicIP:      h.PublicIP,
-		PrivateIP:     h.PrivateIP,
-		Tags:          h.Tags,
-		SSHHost:       h.SSHHost,
-		SSHPort:       h.SSHPort,
-		SSHUser:       h.SSHUser,
-		SSHPassword:   h.SSHPassword,
-		SSHPrivateKey: h.SSHPrivateKey,
+		ID:                                h.ID,
+		Name:                              h.Name,
+		PublicIP:                          h.PublicIP,
+		PrivateIP:                         h.PrivateIP,
+		Tags:                              h.Tags,
+		SSHHost:                           h.SSHHost,
+		SSHPort:                           h.SSHPort,
+		SSHUser:                           h.SSHUser,
+		SSHPassword:                       h.SSHPassword,
+		SSHPrivateKey:                     h.SSHPrivateKey,
+		SSHHostKeyFingerprint:             h.SSHHostKeyFingerprint,
+		PendingTunnelInvalidationRevision: h.PendingTunnelInvalidationRevision,
 	}
 }
 
@@ -256,6 +260,8 @@ func (h *legacyHostRecord) applyHost(host model.Host) {
 	h.SSHUser = host.SSHUser
 	h.SSHPassword = host.SSHPassword
 	h.SSHPrivateKey = host.SSHPrivateKey
+	h.SSHHostKeyFingerprint = host.SSHHostKeyFingerprint
+	h.PendingTunnelInvalidationRevision = host.PendingTunnelInvalidationRevision
 	h.Agent = nil
 }
 

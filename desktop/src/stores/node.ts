@@ -164,6 +164,7 @@ function nodeToManagedStatus(node: NodeStatus): HostManagedDeploymentStatus {
     host_name: node.name,
     desired_deployment_count: node.managed?.deployment_count ?? deployments.length,
     desired_collector_count: node.managed?.collector_count ?? 0,
+    active_collector_count: node.managed?.active_collector_count ?? 0,
     tunnel_connected: node.reachable,
     remote: node.reachable ? node.managed : undefined,
     error: node.error || (node.reachable ? undefined : 'node unreachable'),

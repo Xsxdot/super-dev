@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.fixture",
+  "id": "cpp",
+  "provider": "cpp",
+  "working_dir": ".",
+  "runtime": {
+    "config": { "program": "fixture" },
+    "env": { "FIXTURE_PORT": "${PORT}", "FIXTURE_CAMPAIGN_ID": "${CAMPAIGN_ID}" }
+  },
+  "platforms": {
+    "windows": {
+      "preflight": { "executable": "clang-cl.exe", "arguments": ["--version"] },
+      "build": { "executable": "clang-cl.exe", "arguments": ["/Zi", "/EHsc", "/Fe:fixture.exe", "src/main.cpp", "ws2_32.lib"] },
+      "run": { "executable": "fixture.exe" },
+      "executable": "fixture.exe",
+      "probes": [{ "type": "executable", "path": "fixture.exe" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "darwin": {
+      "preflight": { "executable": "c++", "arguments": ["--version"] },
+      "build": { "executable": "c++", "arguments": ["-g", "-std=c++17", "-o", "fixture", "src/main.cpp"] },
+      "run": { "executable": "./fixture" },
+      "executable": "fixture",
+      "probes": [{ "type": "executable", "path": "fixture" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    },
+    "linux": {
+      "preflight": { "executable": "c++", "arguments": ["--version"] },
+      "build": { "executable": "c++", "arguments": ["-g", "-std=c++17", "-o", "fixture", "src/main.cpp"] },
+      "run": { "executable": "./fixture" },
+      "executable": "fixture",
+      "probes": [{ "type": "executable", "path": "fixture" }, { "type": "tcp", "port_variable": "FIXTURE_PORT" }]
+    }
+  },
+  "readiness": { "type": "http", "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": { "ready": true, "provider": "cpp" } },
+  "normal_probe": { "type": "http", "method": "POST", "path": "/api/probe", "expected_status": 200 },
+  "controlled_error_probe": { "type": "http", "method": "POST", "path": "/api/probe?mode=error", "expected_status": 500 },
+  "debug": { "provider": "native", "adapter_resource": "lldb-dap", "source": "src/main.cpp", "line": 56, "marker": "SUPERDEV_FIXTURE_BREAKPOINT", "expected_variables": { "fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "cpp" } }
+}

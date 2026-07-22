@@ -649,7 +649,10 @@ func writeCodeDebugError(w http.ResponseWriter, err error) {
 			status = http.StatusBadRequest
 		}
 		jsonCodeError(w, status, info.Code, err.Error(), map[string]any{
+			"cause_code":       string(info.CauseCode),
 			"provider":         string(info.Provider),
+			"source":           string(info.Source),
+			"executable":       info.Executable,
 			"command":          info.Command,
 			"remediation_hint": info.Hint,
 		})

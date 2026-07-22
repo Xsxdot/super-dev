@@ -1,0 +1,84 @@
+{
+  "id": "{{pipeline_id}}",
+  "name": "Windows Remote Validation {{campaign_id}}",
+  "artifact_kind": "file",
+  "variables": {
+    "artifact": "${artifacts}/windows-remote-validation-${campaign_id}-${version}.tar.gz",
+    "artifact_checksum": "${workspace}/.superdev-validation/${campaign_id}/checksums/${version}.sha256",
+    "action": "deploy",
+    "campaign_id": "{{campaign_id}}",
+    "remote_root": "{{linux_root}}",
+    "root_mode": "create"
+  },
+  "roles": {
+    "linux_validation_target": {
+      "hosts": [
+        "{{linux_host_id}}"
+      ]
+    }
+  },
+  "sync_mode": "transfer",
+  "pipeline": {
+    "build": [
+      {
+        "name": "Package Validation Artifact",
+        "type": "archive_package",
+        "run_if": "\"${action}\" != \"cleanup\"",
+        "with": {
+          "artifact": "${artifact}",
+          "format": "tar.gz",
+          "files": [
+            {
+              "from": "${artifact_source}/manifest.json",
+              "to": "manifest.json"
+            },
+            {
+              "from": "${artifact_source}/version.txt",
+              "to": "version.txt"
+            },
+            {
+              "from": "${artifact_source}/payload.txt",
+              "to": "payload.txt"
+            },
+            {
+              "from": "${remote_release_script}",
+              "to": "remote-release.sh"
+            }
+          ]
+        }
+      },
+      {
+        "name": "Compute Validation Artifact SHA256",
+        "type": "local_command",
+        "needs": [
+          "Package Validation Artifact"
+        ],
+        "run_if": "\"${action}\" != \"cleanup\"",
+        "with": {
+          "cmd": "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"try { $artifact = Join-Path $env:ARTIFACTS 'windows-remote-validation-${campaign_id}-${version}.tar.gz'; $checksum = Join-Path $env:WORKSPACE '.superdev-validation\\${campaign_id}\\checksums\\${version}.sha256'; New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetDirectoryName($checksum)) | Out-Null; $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant(); [System.IO.File]::WriteAllText($checksum, $hash, [System.Text.Encoding]::ASCII); [ordered]@{level='info';component='windows-remote-pipeline';stage='compute_artifact_digest';outcome='success';campaign_id='${campaign_id}';version='${version}';sha256=$hash} | ConvertTo-Json -Compress } catch { [ordered]@{level='error';component='windows-remote-pipeline';stage='compute_artifact_digest';outcome='failed';campaign_id='${campaign_id}';version='${version}'} | ConvertTo-Json -Compress; exit 1 }\""
+        }
+      }
+    ],
+    "deploy": [
+      {
+        "name": "Deploy Validation Artifact",
+        "type": "include",
+        "with": {
+          "template": "user://windows-remote-validation-deploy",
+          "version": "1.0.0",
+          "digest": "{{imported_template_digest}}",
+          "vars": {
+            "role": "linux_validation_target",
+            "artifact": "${artifact}",
+            "artifact_checksum": "${artifact_checksum}",
+            "campaign_id": "${campaign_id}",
+            "remote_root": "${remote_root}",
+            "root_mode": "${root_mode}",
+            "version": "${version}",
+            "action": "${action}"
+          }
+        }
+      }
+    ]
+  }
+}

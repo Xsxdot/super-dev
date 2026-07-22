@@ -1,0 +1,920 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.scenario",
+  "id": "browser-debug",
+  "title": "Cross-platform packaged MCP browser debug validation",
+  "_comment": "职责：通过已安装的 superdev-mcp.exe 验证真实浏览器发现、会话和页面控制。边界：不直连 Playwright/CDP，不把截图正文、输入明文、Cookie 或授权头写入证据。",
+  "requires": [
+    "native_target_match",
+    "packaged_superdev_mcp",
+    "chromium_available",
+    "campaign_go_fixture_ready",
+    "debug_browser_allow_evaluate"
+  ],
+  "variables": {
+    "run_id": {
+      "required": true,
+      "secret": false,
+      "description": "当前验证 campaign 的唯一标识。"
+    },
+    "go_deployment_id": {
+      "required": true,
+      "secret": false,
+      "description": "Go 主夹具的受管 deployment ID。"
+    },
+    "browser_target_url": {
+      "required": true,
+      "secret": false,
+      "description": "Go 主夹具由 SuperDev web entrypoint 暴露的同源页面 URL。"
+    },
+    "browser_ready_selector": {
+      "required": false,
+      "default": "[data-testid='validation-ready']",
+      "secret": false,
+      "description": "由 Go fixture 合同提供的稳定就绪选择器。"
+    },
+    "browser_input_selector": {
+      "required": false,
+      "default": "[data-testid='validation-input']",
+      "secret": false,
+      "description": "仅接收 campaign marker，不接收任何凭据的输入框。"
+    },
+    "browser_select_selector": {
+      "required": false,
+      "default": "[data-testid='validation-select']",
+      "secret": false,
+      "description": "由 Go fixture 合同提供的稳定 select 选择器。"
+    },
+    "browser_submit_selector": {
+      "required": false,
+      "default": "[data-testid='validation-submit']",
+      "secret": false,
+      "description": "触发受控 console 与 network 活动的稳定按钮选择器。"
+    },
+    "browser_result_selector": {
+      "required": false,
+      "default": "[data-testid='validation-result']",
+      "secret": false,
+      "description": "显示本次 campaign marker 的稳定结果选择器。"
+    },
+    "browser_evaluate_expression": {
+      "required": false,
+      "default": "document.querySelector('[data-testid=validation-ready]')?.getAttribute('data-state')",
+      "secret": false,
+      "description": "一次性、只读、无副作用的 evaluate 表达式；证据只保存摘要和结果类型。"
+    }
+  },
+  "steps": [
+    {
+      "id": "browser-list-browsers",
+      "tool": "list_debug_browsers",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.browsers",
+            "operator": "contains_item",
+            "value": {
+              "available": true
+            }
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.count",
+          "structuredContent.data.browsers"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-list-targets",
+      "tool": "list_browser_targets",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.targets",
+            "operator": "contains_item",
+            "value": {
+              "deployment_id": "{{go_deployment_id}}",
+              "base_url": "{{browser_target_url}}"
+            }
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.count",
+          "structuredContent.data.targets"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-start-go",
+      "tool": "start_service",
+      "coverage": "supporting",
+      "_comment": "配置与日志场景都按各自边界停止 fixture；浏览器场景必须显式恢复同一受管 deployment，不能把历史运行状态当作前提。",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "start"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-wait-go-running",
+      "tool": "diagnose_service",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}"
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 60000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.status",
+            "operator": "eq",
+            "value": "running"
+          },
+          {
+            "path": "structuredContent.data.target.deployment.id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.status",
+          "structuredContent.data.target.deployment.id"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "browser-open-session",
+      "tool": "open_browser_debug_session",
+      "coverage": "primary",
+      "_comment": "不传 browser_id，强制产品按 settings 中的 default_browser_id 解析；前一步证明配置里至少存在可用浏览器，驱动器不能猜测可执行文件路径。",
+      "arguments": {
+        "deployment_id": "{{go_deployment_id}}",
+        "path": "/",
+        "open_devtools": false,
+        "viewport_width": 1280,
+        "viewport_height": 720,
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.session.deployment_id",
+            "operator": "eq",
+            "variable": "go_deployment_id"
+          },
+          {
+            "path": "structuredContent.data.session.session_id",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.session.target_url",
+            "operator": "contains",
+            "variable": "browser_target_url"
+          }
+        ]
+      },
+      "capture": {
+        "browser_session_id": "structuredContent.data.session.session_id"
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.session.session_id",
+          "structuredContent.data.session.deployment_id",
+          "structuredContent.data.session.target_url",
+          "structuredContent.data.session.browser_id",
+          "structuredContent.data.session.debug_port"
+        ],
+        "redact": [
+          "structuredContent.data.session.browser_ws",
+          "structuredContent.data.session.page_ws",
+          "structuredContent.data.session.devtools_url"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token",
+          "browser_ws",
+          "page_ws"
+        ]
+      }
+    },
+    {
+      "id": "browser-set-viewport",
+      "tool": "browser_set_viewport",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "width": 1024,
+        "height": 768
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.width",
+            "operator": "eq",
+            "value": 1024
+          },
+          {
+            "path": "structuredContent.data.result.height",
+            "operator": "eq",
+            "value": 768
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.width",
+          "structuredContent.data.result.height"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-navigate",
+      "tool": "browser_navigate",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "path": "/?run_id={{run_id}}",
+        "wait_until": "domcontentloaded"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.url",
+            "operator": "contains",
+            "variable": "run_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.url",
+          "structuredContent.data.result.title"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-wait-ready",
+      "tool": "browser_wait_for_selector",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_ready_selector}}",
+        "state": "visible",
+        "timeout_ms": 15000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.matched",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.matched",
+          "structuredContent.data.result.text"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-type-marker",
+      "tool": "browser_type",
+      "coverage": "primary",
+      "_comment": "输入只包含非敏感 run_id，但仍不把 text 明文复制到证据，借此验证统一输入脱敏边界。",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_input_selector}}",
+        "text": "runtime-validation-{{run_id}}",
+        "fill": true
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.ok"
+        ],
+        "redact": [
+          "request.arguments.text"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-select-platform",
+      "tool": "browser_select_option",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_select_selector}}",
+        "value": "runtime"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.ok"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-click-submit",
+      "tool": "browser_click",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_submit_selector}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.ok"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-press-enter",
+      "tool": "browser_press_key",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_input_selector}}",
+        "key": "Enter"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.ok"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-snapshot-result",
+      "tool": "browser_snapshot",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "selector": "{{browser_result_selector}}",
+        "max_text": 2048,
+        "max_elements": 25
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.snapshot.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.snapshot.text",
+            "operator": "contains",
+            "variable": "run_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.snapshot.session_id",
+          "structuredContent.data.snapshot.url",
+          "structuredContent.data.snapshot.title",
+          "structuredContent.data.snapshot.text"
+        ],
+        "redact": [
+          "structuredContent.data.snapshot.focused"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-reload",
+      "tool": "browser_reload",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "wait_until": "domcontentloaded"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.url",
+            "operator": "contains",
+            "variable": "run_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.url",
+          "structuredContent.data.result.title"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-console-logs",
+      "tool": "browser_console_logs",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "level": "info",
+        "limit": 50
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.logs",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.result.logs",
+            "operator": "contains",
+            "variable": "run_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.logs"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "browser-network-requests",
+      "tool": "browser_network_requests",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "filter": "api/probe",
+        "limit": 50
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.requests",
+            "operator": "not_empty"
+          },
+          {
+            "path": "structuredContent.data.result.requests",
+            "operator": "contains",
+            "variable": "run_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id",
+          "structuredContent.data.result.requests"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "browser-evaluate-policy",
+      "tool": "browser_evaluate",
+      "coverage": "primary",
+      "_comment": "专用 validation profile 明确设置 allow_evaluate=true，因此主路径必须成功；策略拒绝只可作为 secondary diagnosis，不能升级为 PASS。表达式与返回值始终脱敏。",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "expression": "{{browser_evaluate_expression}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.result.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.result.result",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.ok",
+          "structuredContent.summary",
+          "structuredContent.data.result.session_id"
+        ],
+        "redact": [
+          "request.arguments.expression",
+          "structuredContent.data.result.result"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token",
+          "bearer ",
+          "document.querySelector"
+        ]
+      }
+    },
+    {
+      "id": "browser-screenshot-safe-page",
+      "tool": "browser_screenshot",
+      "coverage": "primary",
+      "_comment": "截图发生在只含非敏感 campaign marker 的 fixture 页面。驱动器验证 PNG，证据只持久化 MIME 和 base64 payload 的 SHA-256；base64 正文不会进入报告。",
+      "arguments": {
+        "session_id": "{{browser_session_id}}",
+        "full_page": false
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.screenshot.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          },
+          {
+            "path": "structuredContent.data.screenshot.mime_type",
+            "operator": "eq",
+            "value": "image/png"
+          },
+          {
+            "path": "structuredContent.data.screenshot.data_base64",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.screenshot.session_id",
+          "structuredContent.data.screenshot.mime_type",
+          "sha256:structuredContent.data.screenshot.data_base64"
+        ],
+        "redact": [
+          "structuredContent.data.screenshot.data_base64"
+        ],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "set-cookie",
+          "approval_token",
+          "bearer "
+        ]
+      }
+    },
+    {
+      "id": "browser-close-session",
+      "tool": "close_browser_debug_session",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{browser_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          },
+          {
+            "path": "structuredContent.data.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.session_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "browser-close-session-on-abort",
+      "tool": "close_browser_debug_session",
+      "coverage": "supporting",
+      "run_if": "variable_set:browser_session_id&&primary_step_not_passed:browser-close-session",
+      "arguments": {
+        "session_id": "{{browser_session_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.session_id",
+            "operator": "eq",
+            "variable": "browser_session_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.summary",
+          "structuredContent.data.session_id"
+        ],
+        "redact": [],
+        "forbid": [
+          "authorization",
+          "cookie",
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "browser-stop-go-on-abort",
+      "tool": "stop_service",
+      "coverage": "supporting",
+      "run_if": "variable_set:project_id&&primary_step_not_passed:browser-close-session",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target",
+          "structuredContent.data.action"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    }
+  ]
+}

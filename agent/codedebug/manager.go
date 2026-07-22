@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/execenv"
 	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -313,13 +315,9 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		return Runtime{}, err
 	}
 	cfg.AdapterPort = port
-	cmd, err := provider.AdapterCommand(cfg)
+	cmd, process, err := m.resolveAndLaunchAdapter(ctx, cfg, provider)
 	if err != nil {
 		return Runtime{}, err
-	}
-	process, err := m.launch(ctx, cmd)
-	if err != nil {
-		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
 	closeProcess := process.Close
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
@@ -327,16 +325,13 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
 	}
-	if _, err := dap.Initialize(ctx); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(closeProcess)
-		return Runtime{}, err
-	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
 	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
-	if err := launchAndConfigure(ctx, dap, provider.LaunchArguments(cfg)); err != nil {
+	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(closeProcess)
 		return Runtime{}, err
@@ -345,14 +340,19 @@ func (m *Manager) startRuntimeFromConfig(ctx context.Context, cfg LaunchConfig, 
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
-		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "launch", func(handshakeCtx context.Context) error {
+			return launchAndConfigureWithEvents(handshakeCtx, rootDAP, provider.LaunchArguments(cfg), eventSub)
+		})
 		if err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(closeProcess)
 			return Runtime{}, err
 		}
-		if childDAP != nil {
-			runtimeDAP = childDAP
+	} else {
+		if err := launchAndConfigureWithEvents(ctx, rootDAP, provider.LaunchArguments(cfg), eventSub); err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(closeProcess)
+			return Runtime{}, err
 		}
 	}
 	now := m.now().UTC()
@@ -624,29 +624,22 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 		return Runtime{}, err
 	}
 	cfg.AdapterPort = port
-	cmd, err := provider.AdapterCommand(cfg)
+	cmd, process, err := m.resolveAndLaunchAdapter(ctx, cfg, provider)
 	if err != nil {
 		return Runtime{}, err
-	}
-	process, err := m.launch(ctx, cmd)
-	if err != nil {
-		return Runtime{}, ensureAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
 	if err != nil {
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, cmd, err)
 	}
-	if _, err := dap.Initialize(ctx); err != nil {
-		_ = dap.Close()
-		_ = closeProcessIfPresent(process.Close)
-		return Runtime{}, err
-	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
 	requestSub, cancelRequestSub := subscribeJSDebugRequests(provider, dap)
 	if cancelRequestSub != nil {
 		defer cancelRequestSub()
 	}
-	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
+	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		_ = closeProcessIfPresent(process.Close)
 		return Runtime{}, err
@@ -655,14 +648,19 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 	rootDAP := dap
 	// 仅 js-debug 拓扑需要 spawn child session；以能力查询代替语言硬编码，新语言无需改本文件。
 	if provider.UsesReverseRequestChildSession() {
-		childDAP, err := m.attachJSDebugChildSession(ctx, rootDAP, requestSub, port)
+		runtimeDAP, err = m.runJSDebugRootAndChildHandshake(ctx, rootDAP, requestSub, port, "attach", func(handshakeCtx context.Context) error {
+			return attachAndConfigureWithEvents(handshakeCtx, rootDAP, attachArgs(cfg), eventSub)
+		})
 		if err != nil {
 			_ = rootDAP.Close()
 			_ = closeProcessIfPresent(process.Close)
 			return Runtime{}, err
 		}
-		if childDAP != nil {
-			runtimeDAP = childDAP
+	} else {
+		if err := attachAndConfigureWithEvents(ctx, rootDAP, attachArgs(cfg), eventSub); err != nil {
+			_ = rootDAP.Close()
+			_ = closeProcessIfPresent(process.Close)
+			return Runtime{}, err
 		}
 	}
 	now := m.now().UTC()
@@ -723,15 +721,25 @@ func (m *Manager) attachRuntimeWithConfig(ctx context.Context, cfg LaunchConfig,
 //   - 不 reserve 端口、不 spawn adapter（debuggee 自身即 DAP 服务，如 debugpy --listen）
 //   - dial 的是 targetPort 本身；close 时只断开 DAP，绝不杀 debuggee（普通 dev 进程）
 func (m *Manager) attachRuntimeDirect(ctx context.Context, cfg LaunchConfig, provider Provider, targetPort int, processID int, attachArgs func(LaunchConfig) map[string]any) (Runtime, error) {
+	// debuggee 已直接暴露 DAP 协议时没有 executable 可解析；记录 not_applicable，避免
+	// 观察端把“没有 adapter start 日志”误判成漏执行或 silent fallback。
+	logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithFields(map[string]any{
+		"provider":      cfg.Provider,
+		"deployment_id": cfg.Target.DeploymentID,
+		"source":        AdapterCommandSourceNotApplicable,
+		"target_port":   targetPort,
+	}).Info("direct DAP attach does not require an external adapter")
 	dap, err := m.dialAdapter(ctx, fmt.Sprintf("127.0.0.1:%d", targetPort), 5*time.Second)
 	if err != nil {
 		return Runtime{}, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: cfg.Provider}, err)
 	}
+	eventSub, cancelEventSub := dap.Subscribe()
+	defer cancelEventSub()
 	if _, err := dap.Initialize(ctx); err != nil {
 		_ = dap.Close()
 		return Runtime{}, err
 	}
-	if err := attachAndConfigure(ctx, dap, attachArgs(cfg)); err != nil {
+	if err := attachAndConfigureWithEvents(ctx, dap, attachArgs(cfg), eventSub); err != nil {
 		_ = dap.Close()
 		return Runtime{}, err
 	}
@@ -1115,12 +1123,40 @@ func (m *Manager) SetBreakpoints(ctx context.Context, sessionID, source string, 
 	return result, nil
 }
 
-// ThreadAction 执行 continue/pause/step 动作。
+// ThreadAction 执行 continue、pause 或 step 动作。
+//
+// 参数：
+//   - ctx: 控制 DAP 请求及异步 step 完成等待的上下文
+//   - sessionID: 目标代码调试 session
+//   - action: continue、pause、step_over、step_in 或 step_out
+//   - threadID: 目标 DAP 线程 ID
+//
+// 返回：
+//   - 已完成动作的 session、action 与 thread identity
+//   - session、action、DAP 请求或异步完成等待错误
+//
+// 注意：
+//   - step 请求的 DAP response 只表示 adapter 已接收命令；必须等到后续 stopped
+//     event 才能向调用方宣告完成，否则紧接的下一条 step 会撞上运行中的 debuggee。
 func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, threadID int) (map[string]any, error) {
 	_, runtime, err := m.sessionRuntime(sessionID)
 	if err != nil {
 		return nil, err
 	}
+	actionLog := logger.GetLogger().WithEntryName("CodeDebugThreadAction").WithFields(map[string]any{
+		"session_id": sessionID,
+		"action":     action,
+		"thread_id":  threadID,
+	})
+	waitForStop := action == "step_over" || action == "step_in" || action == "step_out"
+	var stoppedSub <-chan map[string]any
+	var cancelStopped func()
+	if waitForStop {
+		// 先订阅再发 step，避免 adapter 在 response 前后立即送出的 stopped event 丢失。
+		stoppedSub, cancelStopped = runtime.dap.Subscribe()
+		defer cancelStopped()
+	}
+	actionLog.Info("开始执行代码调试线程动作")
 	switch action {
 	case "continue":
 		err = runtime.dap.Continue(ctx, threadID)
@@ -1136,7 +1172,21 @@ func (m *Manager) ThreadAction(ctx context.Context, sessionID, action string, th
 		return nil, ErrConfigInvalid
 	}
 	if err != nil {
+		actionLog.WithErr(err).Error("代码调试线程动作 DAP 请求失败")
 		return nil, err
+	}
+	if waitForStop {
+		stopped, waitErr := waitForStoppedEvent(ctx, stoppedSub)
+		if waitErr != nil {
+			actionLog.WithErr(waitErr).Error("等待代码调试 step 完成事件失败")
+			return nil, fmt.Errorf("wait for %s stopped event: %w", action, waitErr)
+		}
+		if stoppedThreadID := intFromAny(stopped["threadId"]); stoppedThreadID > 0 {
+			threadID = stoppedThreadID
+		}
+		actionLog.WithField("stopped_thread_id", threadID).Info("代码调试 step 已由 stopped event 确认完成")
+	} else {
+		actionLog.Info("代码调试线程动作 DAP 请求完成")
 	}
 	return map[string]any{"session_id": sessionID, "action": action, "thread_id": threadID}, nil
 }
@@ -1213,48 +1263,77 @@ func (m *Manager) Evaluate(ctx context.Context, sessionID, expression string, fr
 func attachAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
 	sub, cancelSub := dap.Subscribe()
 	defer cancelSub()
+	return attachAndConfigureWithEvents(ctx, dap, args, sub)
+}
+
+func attachAndConfigureWithEvents(ctx context.Context, dap DAP, args map[string]any, sub <-chan map[string]any) error {
 	attachCtx, cancelAttach := context.WithCancel(ctx)
 	defer cancelAttach()
 	attachErr := make(chan error, 1)
 	go func() {
 		attachErr <- dap.Attach(attachCtx, args)
 	}()
-	configurationDone := false
-	sendConfigurationDone := func() error {
-		if configurationDone {
-			return nil
+	configurationStarted := false
+	configurationCompleted := false
+	var configurationErr <-chan error
+	var cancelConfiguration context.CancelFunc
+	startConfigurationDone := func() {
+		if configurationStarted {
+			return
 		}
-		// js-debug 在 attach 后先发 initialized，并等 configurationDone 后才回 attach response。
-		// 旧 adapter 通常先回 attach；两种时序都在这里归一。
-		if err := dap.ConfigurationDone(ctx); err != nil {
-			cancelAttach()
-			return err
-		}
-		configurationDone = true
-		return nil
+		configurationStarted = true
+		configurationCtx, cancel := context.WithCancel(ctx)
+		cancelConfiguration = cancel
+		result := make(chan error, 1)
+		configurationErr = result
+		go func() {
+			result <- dap.ConfigurationDone(configurationCtx)
+		}()
 	}
+	defer func() {
+		if cancelConfiguration != nil {
+			cancelConfiguration()
+		}
+	}()
 	for {
 		select {
 		case err := <-attachErr:
 			if err != nil {
 				return err
 			}
-			return sendConfigurationDone()
+			if !configurationStarted {
+				// 一些旧 adapter 先返回 attach 且不发 initialized；这种时序仍同步确认响应。
+				return dap.ConfigurationDone(ctx)
+			}
+			if !configurationCompleted {
+				select {
+				case err := <-configurationErr:
+					if err != nil {
+						return err
+					}
+					configurationCompleted = true
+				default:
+					// fwcd Kotlin DAP 0.4.4 用 configurationDone 的 pending future 作为
+					// attach 栅栏，attach 成功后也不会完成该响应；成功的 attach 已证明
+					// 请求被消费，此处取消本地等待，不能让真实 adapter 永久卡住。
+					logger.GetLogger().WithEntryName("CodeDebugDAPHandshake").WithField("phase", "attach").Info("attach 已完成，configurationDone 响应保持 pending")
+				}
+			}
+			return nil
+		case err := <-configurationErr:
+			if err != nil {
+				cancelAttach()
+				return err
+			}
+			configurationCompleted = true
+			configurationErr = nil
 		case event, ok := <-sub:
 			if !ok {
 				sub = nil
 				continue
 			}
 			if isDAPInitializedEvent(event) {
-				if err, done := awaitAttachResultBeforeConfiguration(ctx, attachErr); done {
-					if err != nil {
-						return err
-					}
-					return sendConfigurationDone()
-				}
-				if err := sendConfigurationDone(); err != nil {
-					return err
-				}
+				startConfigurationDone()
 			}
 		case <-ctx.Done():
 			cancelAttach()
@@ -1279,6 +1358,10 @@ func awaitAttachResultBeforeConfiguration(ctx context.Context, attachErr <-chan 
 func launchAndConfigure(ctx context.Context, dap DAP, args map[string]any) error {
 	sub, cancelSub := dap.Subscribe()
 	defer cancelSub()
+	return launchAndConfigureWithEvents(ctx, dap, args, sub)
+}
+
+func launchAndConfigureWithEvents(ctx context.Context, dap DAP, args map[string]any, sub <-chan map[string]any) error {
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
 	defer cancelLaunch()
 	launchErr := make(chan error, 1)
@@ -1344,6 +1427,72 @@ func subscribeJSDebugRequests(provider Provider, dap DAP) (<-chan map[string]any
 	return reverse.SubscribeRequests()
 }
 
+type jsDebugChildHandshakeResult struct {
+	dap DAP
+	err error
+}
+
+func (m *Manager) runJSDebugRootAndChildHandshake(
+	ctx context.Context,
+	root DAP,
+	requests <-chan map[string]any,
+	adapterPort int,
+	phase string,
+	rootHandshake func(context.Context) error,
+) (DAP, error) {
+	// js-debug 可以在根 launch/attach 返回之前发 startDebugging，并等待客户端建立子会话。
+	// 两段握手必须并发推进，否则根响应与反向请求会形成循环等待。
+	handshakeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rootResult := make(chan error, 1)
+	childResult := make(chan jsDebugChildHandshakeResult, 1)
+	log := logger.GetLogger().WithEntryName("CodeDebugJSDebugHandshake").WithFields(map[string]any{
+		"adapter_port": adapterPort,
+		"phase":        phase,
+	})
+	log.Info("js-debug 根会话与子会话握手开始")
+	go func() {
+		rootResult <- rootHandshake(handshakeCtx)
+	}()
+	go func() {
+		child, err := m.attachJSDebugChildSession(handshakeCtx, root, requests, adapterPort)
+		childResult <- jsDebugChildHandshakeResult{dap: child, err: err}
+	}()
+
+	var rootDone bool
+	var childDone bool
+	var childSessionEstablished bool
+	runtimeDAP := root
+	for !rootDone || !childDone {
+		select {
+		case err := <-rootResult:
+			rootDone = true
+			if err != nil {
+				cancel()
+				log.WithErr(err).Error("js-debug 根会话握手失败")
+				return nil, err
+			}
+		case result := <-childResult:
+			childDone = true
+			if result.err != nil {
+				cancel()
+				log.WithErr(result.err).Error("js-debug 子会话握手失败")
+				return nil, result.err
+			}
+			if result.dap != nil {
+				runtimeDAP = result.dap
+				childSessionEstablished = true
+			}
+		case <-ctx.Done():
+			cancel()
+			log.WithErr(ctx.Err()).Error("js-debug 根会话与子会话握手超时")
+			return nil, ctx.Err()
+		}
+	}
+	log.WithField("child_session", childSessionEstablished).Info("js-debug 根会话与子会话握手完成")
+	return runtimeDAP, nil
+}
+
 func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, requests <-chan map[string]any, adapterPort int) (DAP, error) {
 	if requests == nil {
 		return nil, nil
@@ -1376,25 +1525,29 @@ func (m *Manager) attachJSDebugChildSession(ctx context.Context, root DAP, reque
 			if err != nil {
 				return nil, ensureAdapterError(CodeDAPConnectionFailed, AdapterCommand{Provider: model.CodeDebugProviderNode}, err)
 			}
+			childEvents, cancelChildEvents := child.Subscribe()
 			if _, err := child.Initialize(ctx); err != nil {
+				cancelChildEvents()
 				_ = child.Close()
 				return nil, err
 			}
-			if err := runJSDebugChildRequest(ctx, child, childRequest, childArgs); err != nil {
+			if err := runJSDebugChildRequest(ctx, child, childRequest, childArgs, childEvents); err != nil {
+				cancelChildEvents()
 				_ = child.Close()
 				return nil, err
 			}
+			cancelChildEvents()
 			return child, nil
 		}
 	}
 }
 
-func runJSDebugChildRequest(ctx context.Context, child DAP, request string, args map[string]any) error {
+func runJSDebugChildRequest(ctx context.Context, child DAP, request string, args map[string]any, events <-chan map[string]any) error {
 	switch strings.TrimSpace(request) {
 	case "launch":
-		return launchAndConfigure(ctx, child, args)
+		return launchAndConfigureWithEvents(ctx, child, args, events)
 	case "", "attach":
-		return attachAndConfigure(ctx, child, args)
+		return attachAndConfigureWithEvents(ctx, child, args, events)
 	default:
 		return fmt.Errorf("unsupported js-debug child request %q", request)
 	}
@@ -1454,9 +1607,10 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	// 仅 js-debug 拓扑需要跳过 pause 并复用已有暂停态；以能力查询代替语言硬编码。
-	reverseRequestCapture := runtimeProvider.UsesReverseRequestChildSession()
-	reverseRequestWasPaused := reverseRequestCapture && runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
+	// fwcd Kotlin DAP 与 js-debug 都不接受没有真实线程 identity 的主动 pause；
+	// 由 provider 能力决定是否先暂停，避免把 adapter 差异硬编码成语言分支。
+	pauseBeforeCapture := shouldPauseBeforeCapture(runtimeProvider)
+	wasPaused := runtime.debugStore != nil && runtime.debugStore.get().State == "paused"
 	waitCtx := ctx
 	timeout := req.Timeout
 	if timeout == 0 && req.TimeoutMS > 0 {
@@ -1468,7 +1622,7 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		defer cancel()
 	}
 	pausedByCapture := false
-	if !reverseRequestCapture {
+	if pauseBeforeCapture {
 		pausedByCapture, err = m.pauseForCaptureIfRunning(waitCtx, req.SessionID, req.ThreadID)
 		if err != nil {
 			return nil, err
@@ -1495,11 +1649,9 @@ func (m *Manager) CaptureAt(ctx context.Context, req CaptureAtRequest) (map[stri
 		m.resumeCapturePause(req.SessionID, req.ThreadID, pausedByCapture)
 		return nil, err
 	}
-	if !reverseRequestCapture {
-		if err := m.threadContinue(ctx, req.SessionID, req.ThreadID); err != nil && !isAlreadyRunningDAPError(err) {
-			return nil, err
-		}
-	} else if reverseRequestWasPaused {
+	// 只有本次 capture 主动暂停，或进入 capture 前已经暂停，才需要 continue。
+	// 对正在运行且不支持 threadless pause 的 adapter，断点设置后直接等待命中。
+	if pausedByCapture || wasPaused {
 		threadID := runtime.debugStore.get().ThreadID
 		if threadID == 0 {
 			threadID = req.ThreadID
@@ -1938,12 +2090,61 @@ func (m *Manager) providerFor(provider model.CodeDebugProvider) (Provider, error
 	}
 }
 
+// resolveAndLaunchAdapter 解析并启动一次外部 DAP adapter。
+//
+// 参数：
+//   - ctx: 控制启动阶段取消
+//   - cfg: deployment 的 adapter 配置、环境和工作目录
+//   - provider: 生成语言固定参数并调用统一 executable resolver 的 provider
+//
+// 返回：
+//   - 已解析的命令与进程句柄
+//   - 解析或启动失败时返回保留 provider、source 和 executable identity 的稳定错误
+//
+// 注意：
+//   - 一旦 resolver 选中候选，启动失败必须原样返回；这里绝不尝试低优先级候选。
+func (m *Manager) resolveAndLaunchAdapter(ctx context.Context, cfg LaunchConfig, provider Provider) (AdapterCommand, AdapterProcess, error) {
+	cmd, err := provider.AdapterCommand(cfg)
+	if err != nil {
+		fields := map[string]any{
+			"provider":      cfg.Provider,
+			"deployment_id": cfg.Target.DeploymentID,
+		}
+		if info, ok := AdapterErrorDetails(err); ok {
+			fields["cause_code"] = info.CauseCode
+		}
+		logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithErr(err).WithFields(fields).Error("debug adapter command resolution failed")
+		return AdapterCommand{}, AdapterProcess{}, err
+	}
+	log := logger.GetLogger().WithEntryName("CodeDebugAdapterLaunch").WithFields(map[string]any{
+		"provider":            cmd.Provider,
+		"deployment_id":       cfg.Target.DeploymentID,
+		"source":              cmd.Source,
+		"executable_identity": adapterExecutableIdentity(cmd.Name),
+	})
+	log.Info("debug adapter process starting")
+	process, err := m.launch(ctx, cmd)
+	if err != nil {
+		stableErr := ensureAdapterError(CodeAdapterStartFailed, cmd, err)
+		causeCode := AdapterCauseStartFailed
+		if info, ok := AdapterErrorDetails(stableErr); ok {
+			causeCode = info.CauseCode
+		}
+		// Error() 继续只暴露稳定 code/source/executable；底层 cause 仅以不可逆分类进入日志，
+		// 既能区分安装缺失与权限问题，也不会把绝对路径、参数或环境变量写入日志。
+		log.WithErr(stableErr).WithField("cause_code", causeCode).Error("debug adapter process start failed")
+		return cmd, AdapterProcess{}, stableErr
+	}
+	log.WithField("pid", process.PID).Info("debug adapter process started")
+	return cmd, process, nil
+}
+
 // providerIsExperimental 报告该调试 provider 是否为实验性档位。
 //
 // 实验性 = 不开箱即用、需用户自备 / 配置 adapter 才能调试：
 //   - Node：依赖打包的 js-debug，且 script 模式 attach 行为仍在收敛
 //   - JVM：官方 java-debug 是 JDT LS plugin，没有 standalone adapter，
-//     必须由用户把 JDT LS/java-debug 启动器配进 code_debug.adapter_command
+//     必须由用户显式配置或在 PATH 提供符合端口合同的 jvm-dap-wrapper
 //
 // 以能力归类代替语言硬编码：新增「需自备 adapter」的语言只需在此登记，
 // list_code_debug_targets 不必再叠 == ProviderX 判断。
@@ -1985,23 +2186,62 @@ func defaultAdapterLaunch(ctx context.Context, cmd AdapterCommand) (AdapterProce
 	// 整组回收，否则残留孤儿（2026-07-07 实测三件套残留 24 小时）。
 	setAdapterProcessGroup(c)
 	if err := c.Start(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return AdapterProcess{}, NewAdapterError(CodeAdapterUnavailable, cmd, err)
 		}
 		return AdapterProcess{}, NewAdapterError(CodeAdapterStartFailed, cmd, err)
 	}
+	waitDone := make(chan struct{})
 	go func() {
 		_ = c.Wait()
+		close(waitDone)
 	}()
+	var closeOnce sync.Once
+	var closeErr error
 	return AdapterProcess{
 		PID: c.Process.Pid,
 		Close: func() error {
-			if c.Process != nil {
-				return killAdapterProcessTree(c.Process.Pid)
-			}
-			return nil
+			closeOnce.Do(func() {
+				if c.Process == nil {
+					return
+				}
+				closeErr = closeAdapterProcess(waitDone, func() error {
+					return killAdapterProcessTree(c.Process.Pid)
+				})
+			})
+			return closeErr
 		},
 	}, nil
+}
+
+// closeAdapterProcess 关闭 adapter，同时区分真实终止失败和自然退出竞态。
+//
+// Windows adapter 在 DAP detach 后可能先自行退出；Wait 会回收其进程句柄，随后再
+// TerminateProcess 会返回 Access is denied。只有同一 exec.Cmd 的 Wait 已完成时才把
+// 该错误视为“已经关闭”，仍存活的 adapter 的 kill 错误必须原样返回。
+func closeAdapterProcess(waitDone <-chan struct{}, kill func() error) error {
+	select {
+	case <-waitDone:
+		log.Printf("[codedebug] adapter already exited before close")
+		return nil
+	default:
+	}
+
+	err := kill()
+	if err == nil {
+		return nil
+	}
+
+	// kill 与自然退出可在同一调度窗口发生；给 Wait 一个很短的有界窗口完成句柄回收。
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-waitDone:
+		log.Printf("[codedebug] adapter exited while close raced with kill: %v", err)
+		return nil
+	case <-timer.C:
+		return err
+	}
 }
 
 func ensureAdapterError(code string, cmd AdapterCommand, err error) error {
@@ -2082,11 +2322,23 @@ func validatePositiveLine(line int) error {
 
 func firstFrameID(stack map[string]any) int {
 	for _, frame := range asMapSlice(stack["stackFrames"]) {
-		if id := intFromAny(frame["id"]); id != 0 {
+		if id, ok := dapNumericIdentity(frame["id"]); ok {
 			return id
 		}
 	}
 	return 0
+}
+
+func dapNumericIdentity(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case float64:
+		converted := int(typed)
+		return converted, typed == float64(converted)
+	default:
+		return 0, false
+	}
 }
 
 func asMapSlice(value any) []map[string]any {

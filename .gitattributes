@@ -1,0 +1,4 @@
+# Shared platform contracts must stay LF so Windows checkouts do not inject \r into GOOS/GOARCH.
+validation/runtime/targets.txt text eol=lf
+validation/runtime/*.sh text eol=lf
+validation/runtime/*.cmd text eol=crlf

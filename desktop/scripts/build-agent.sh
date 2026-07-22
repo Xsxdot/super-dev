@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # 每次桌面端启动前都刷新本机 sidecar，避免 stale 二进制通过 mtime 缓存被误用。
+#
+# 职责：
+#   - 编译本机 Tauri externalBin sidecar 与可选的 remote-install 资源二进制
+#   - 在设置 APPLE_SIGNING_IDENTITY 时，为 agent-install 内的 darwin Mach-O 补 Developer ID 签名
+#     （Tauri 只签 Contents/MacOS，不会签 Resources，否则公证会 Invalid）
+#
+# 边界：
+#   - 不负责最终 .app 打包与公证提交（由 tauri build 完成）
+#   - 不签 linux/windows 远程安装包（Apple 公证只校验 Mach-O）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,6 +16,7 @@ AGENT_SRC="$ROOT/../agent"
 OUT_DIR="$ROOT/src-tauri/binaries"
 RESOURCE_ROOT="$ROOT/src-tauri/resources"
 RESOURCE_DIR="$RESOURCE_ROOT/agent-install"
+REMOTE_TARGETS_FILE="$ROOT/../validation/runtime/targets.txt"
 JS_DEBUG_VERSION="${JS_DEBUG_VERSION:-1.117.0}"
 JS_DEBUG_RESOURCE_DIR="$RESOURCE_ROOT/js-debug"
 JS_DEBUG_CACHE_DIR="$ROOT/src-tauri/target/js-debug-cache"
@@ -61,8 +71,21 @@ sync_dev_sidecar() {
   local src="$1"
   local name="$2"
   mkdir -p "$DEV_OUT_DIR"
-  cp "$src" "$DEV_OUT_DIR/$name"
-  chmod +x "$DEV_OUT_DIR/$name"
+  (
+    local tmp
+    tmp="$(mktemp "$DEV_OUT_DIR/.${name}.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+
+    # The destination may be executed by a long-lived coding agent. Build the
+    # complete replacement on the same filesystem, then rename it into place so
+    # readers observe either the old inode or the complete new inode, never a
+    # truncated executable.
+    cp "$src" "$tmp"
+    chmod +x "$tmp"
+
+    # If sidecar signing is added, sign and verify "$tmp" here before publish.
+    mv -f "$tmp" "$DEV_OUT_DIR/$name"
+  )
 }
 
 prepare_js_debug() {
@@ -98,6 +121,51 @@ prepare_js_debug() {
   printf '%s\n' "$JS_DEBUG_VERSION" > "$JS_DEBUG_RESOURCE_DIR/.superdev-version"
 }
 
+# 为 agent-install 中的 darwin 远程安装二进制补签 Developer ID。
+# 原因：Tauri 只会签 Contents/MacOS 下的 externalBin；Resources 内的 Mach-O 仍会进入公证扫描。
+# 未签 / 仅 ad-hoc / 无 hardened runtime / 无 timestamp 都会导致 notarize status=Invalid。
+sign_darwin_remote_install_agents() {
+  local identity="${APPLE_SIGNING_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    echo "build-agent: APPLE_SIGNING_IDENTITY unset; skip signing agent-install darwin binaries"
+    return 0
+  fi
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "build-agent: codesign not found but APPLE_SIGNING_IDENTITY is set" >&2
+    exit 1
+  fi
+  if [[ ! -d "$RESOURCE_DIR" ]]; then
+    echo "build-agent: agent-install dir missing; nothing to sign: $RESOURCE_DIR"
+    return 0
+  fi
+
+  local signed=0
+  local bin
+  # 只签 macOS 目标：Apple 公证只校验 Mach-O，linux/windows 安装包保持未签。
+  for bin in "$RESOURCE_DIR"/superdev-agent-darwin-*; do
+    if [[ ! -f "$bin" ]]; then
+      continue
+    fi
+    echo "build-agent: codesigning remote install agent -> $bin"
+    # --options runtime = hardened runtime；--timestamp = 安全时间戳；二者均为公证硬性要求。
+    if ! codesign --force --options runtime --timestamp --sign "$identity" "$bin"; then
+      echo "build-agent: codesign failed for $bin (identity=$identity)" >&2
+      exit 1
+    fi
+    if ! codesign --verify --verbose=2 "$bin"; then
+      echo "build-agent: codesign verify failed for $bin" >&2
+      exit 1
+    fi
+    signed=$((signed + 1))
+  done
+
+  if [[ "$signed" -eq 0 ]]; then
+    echo "build-agent: APPLE_SIGNING_IDENTITY set but no superdev-agent-darwin-* binaries under $RESOURCE_DIR" >&2
+    exit 1
+  fi
+  echo "build-agent: signed $signed agent-install darwin binary(ies) with identity=$identity"
+}
+
 GO_BIN="${GO_BIN:-}"
 if [[ -z "$GO_BIN" ]]; then
   if command -v go >/dev/null 2>&1; then
@@ -128,13 +196,30 @@ prepare_js_debug
 
 if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
   mkdir -p "$RESOURCE_DIR"
-  targets=(
-    "darwin amd64"
-    "darwin arm64"
-    "linux amd64"
-    "linux arm64"
-    "windows amd64"
-  )
+  if [[ ! -f "$REMOTE_TARGETS_FILE" ]]; then
+    echo "build-agent: shared target contract not found at $REMOTE_TARGETS_FILE" >&2
+    exit 1
+  fi
+  targets=()
+  # Windows checkout 可能把 LF 合同变成 CRLF；GOARCH 尾部的 \r 会让 go 报
+  # unsupported GOOS/GOARCH pair（日志里 \r 还常被吞掉，看起来像合法的 darwin/amd64）。
+  while IFS=$' \t\r\n' read -r goos goarch extra || [[ -n "${goos:-}" ]]; do
+    goos="${goos//$'\r'/}"
+    goarch="${goarch//$'\r'/}"
+    extra="${extra//$'\r'/}"
+    if [[ -z "${goos:-}" || "$goos" == \#* ]]; then
+      continue
+    fi
+    if [[ -z "${goarch:-}" || -n "${extra:-}" ]]; then
+      echo "build-agent: invalid target contract row: $goos ${goarch:-} ${extra:-}" >&2
+      exit 1
+    fi
+    targets+=("$goos $goarch")
+  done < "$REMOTE_TARGETS_FILE"
+  if [[ "${#targets[@]}" -eq 0 ]]; then
+    echo "build-agent: shared target contract is empty" >&2
+    exit 1
+  fi
   for target in "${targets[@]}"; do
     read -r goos goarch <<<"$target"
     suffix=""
@@ -143,8 +228,12 @@ if [[ "$BUILD_REMOTE_INSTALL" == "1" ]]; then
     fi
     remote_out="$RESOURCE_DIR/superdev-agent-$goos-$goarch$suffix"
     if needs_build "$remote_out"; then
-      echo "build-agent: compiling remote agent -> $remote_out"
-      (cd "$AGENT_SRC" && GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
+      echo "build-agent: compiling remote agent -> $remote_out (GOOS=$goos GOARCH=$goarch)"
+      # CGO_ENABLED=0：远程安装二进制必须可从任意宿主交叉编译，不依赖本机 C 工具链。
+      (cd "$AGENT_SRC" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" "$GO_BIN" build -o "$remote_out" .)
     fi
   done
+  # 即使二进制因 mtime 缓存未重编，也必须在本机 release/公证路径上重新签一遍，
+  # 避免沿用上次 ad-hoc/无 timestamp 的签名导致公证 Invalid。
+  sign_darwin_remote_install_agents
 fi

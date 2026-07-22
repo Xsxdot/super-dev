@@ -821,3 +821,19 @@ func TestMergeDebugCredentialsServiceOverridesProject(t *testing.T) {
 func TestMergeDebugCredentialsNilSafe(t *testing.T) {
 	assert.Empty(t, model.MergeDebugCredentials(nil, nil))
 }
+
+func TestMergeDebugCredentialLayersUsesDocumentedPrecedence(t *testing.T) {
+	merged := model.MergeDebugCredentialLayers(
+		model.DebugCredentialLayer{Source: "project", Credentials: []model.DebugCredential{{Name: "shared", Value: "project"}, {Name: "project-only", Value: "keep"}}},
+		model.DebugCredentialLayer{Source: "ephemeral_project", Credentials: []model.DebugCredential{{Name: "shared", Value: "project-lease"}}},
+		model.DebugCredentialLayer{Source: "service", Credentials: []model.DebugCredential{{Name: "shared", Value: "service"}}},
+		model.DebugCredentialLayer{Source: "ephemeral_service", Credentials: []model.DebugCredential{{Name: "shared", Value: "service-lease"}}},
+	)
+
+	require.Len(t, merged, 2)
+	assert.Equal(t, "service-lease", merged[0].Value)
+	assert.Equal(t, "ephemeral_service", merged[0].Source)
+	assert.True(t, merged[0].ValuePresent)
+	assert.Equal(t, "project-only", merged[1].Name)
+	assert.Equal(t, "keep", merged[1].Value)
+}

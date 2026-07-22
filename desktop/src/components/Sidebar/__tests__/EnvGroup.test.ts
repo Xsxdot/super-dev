@@ -66,6 +66,7 @@ function makeNode(hostId: string, name: string, deploymentId: string, health: He
     managed: {
       deployment_count: 1,
       collector_count: 1,
+      active_collector_count: running ? 1 : 0,
       collectors: [{
         deployment_id: deploymentId,
         desired: true,
@@ -87,8 +88,9 @@ describe('EnvGroup', () => {
       host_id: 'h1',
       desired_deployment_count: 0,
       desired_collector_count: 0,
+      active_collector_count: 0,
       tunnel_connected: true,
-      remote: { deployment_count: 0, collector_count: 0, collectors: [] },
+      remote: { deployment_count: 0, collector_count: 0, active_collector_count: 0, collectors: [] },
     })
   })
   it('is_dev=true 时初始展开，显示 service 行', () => {
@@ -261,10 +263,12 @@ describe('EnvGroup', () => {
       host_name: 'prod-a',
       desired_deployment_count: 1,
       desired_collector_count: 1,
+      active_collector_count: 1,
       tunnel_connected: true,
       remote: {
         deployment_count: 1,
         collector_count: 1,
+        active_collector_count: 1,
         collectors: [{
           deployment_id: 'dep-svc-1',
           desired: true,
@@ -428,10 +432,12 @@ describe('EnvGroup', () => {
       host_name: hostId,
       desired_deployment_count: 1,
       desired_collector_count: 1,
+      active_collector_count: hostId === 'h1' ? 1 : 0,
       tunnel_connected: true,
       remote: {
         deployment_count: 1,
         collector_count: 1,
+        active_collector_count: hostId === 'h1' ? 1 : 0,
         collectors: [{
           deployment_id: 'dep-svc-1',
           desired: true,

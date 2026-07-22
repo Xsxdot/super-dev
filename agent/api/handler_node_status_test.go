@@ -26,12 +26,39 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/noderegistry"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/remoteobservation"
 )
 
 type nodeStatusSampler struct{}
 
 func (nodeStatusSampler) Sample(ctx context.Context, target metrics.SampleTarget) (model.InstanceMetrics, error) {
 	return model.InstanceMetrics{Health: model.HealthRunning, Base: target.Base}, nil
+}
+
+func TestListHostsIncludesRemoteAgentNodeIdentity(t *testing.T) {
+	registry := noderegistry.New(nil, noderegistry.Options{})
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeRegistryOverride: registry})
+	require.NoError(t, err)
+	defer app.Close()
+
+	created := httptestDo(t, app, http.MethodPost, "/api/hosts", bytes.NewBufferString(`{
+	  "id":"remote-linux",
+	  "name":"remote-linux",
+	  "tags":["superdev-validation-dedicated-resettable"]
+	}`))
+	require.Equal(t, http.StatusOK, created.Code)
+	registry.ApplyForTest([]nodetransport.NodeStatus{{
+		HostID: "remote-linux", Reachable: true,
+		System: &remoteobservation.SystemFacts{AgentNodeID: "agent-node-01"},
+	}})
+
+	response := httptestDo(t, app, http.MethodGet, "/api/hosts", nil)
+	require.Equal(t, http.StatusOK, response.Code)
+	var hosts []hostViewDTO
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&hosts))
+	require.Len(t, hosts, 2)
+	assert.False(t, hosts[1].IsSelf)
+	assert.Equal(t, "agent-node-01", hosts[1].NodeID)
 }
 
 func TestWsNodeStatusReportsManagedRuntimeAndCollectors(t *testing.T) {

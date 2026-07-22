@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "kind": "superdev.windows-validation.remote-artifact",
+  "responsibility": "Identify immutable validation payload A and its expected digest.",
+  "boundary": "Contains no campaign, host, transport, credential, or approval state.",
+  "version": "A",
+  "payload": {
+    "path": "payload.txt",
+    "size": 47,
+    "sha256": "69003f5d12cad80fa9fca4b3e7f3877114712fd191ae6c09d1ec232b759ca5ac"
+  }
+}

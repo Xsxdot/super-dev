@@ -19,9 +19,17 @@ mkdir -p \
   "$TMP_DIR/desktop/src-tauri/binaries" \
   "$TMP_DIR/desktop/src-tauri/resources/js-debug" \
   "$TMP_DIR/desktop/src-tauri/target/debug" \
+  "$TMP_DIR/validation/runtime" \
   "$TMP_DIR/agent" \
   "$TMP_DIR/bin"
 cp "$ROOT/scripts/build-agent.sh" "$TMP_DIR/desktop/scripts/build-agent.sh"
+cat > "$TMP_DIR/validation/runtime/targets.txt" <<'EOF'
+darwin amd64
+darwin arm64
+linux amd64
+linux arm64
+windows amd64
+EOF
 
 cat > "$TMP_DIR/agent/main.go" <<'EOF'
 package main
@@ -58,11 +66,48 @@ if [[ "$out" == "" ]]; then
   echo "fake go: missing -o" >&2
   exit 1
 fi
+# 锁住 Windows CRLF 合同回归：GOOS/GOARCH 不得夹带 CR。
+if [[ "${GOOS:-}" == *$'\r'* || "${GOARCH:-}" == *$'\r'* ]]; then
+  echo "fake go: GOOS/GOARCH contain CR (GOOS=${GOOS@Q} GOARCH=${GOARCH@Q})" >&2
+  exit 1
+fi
 printf '%s\n' "$out" >> "$log"
+if [[ -n "${GOOS:-}" || -n "${GOARCH:-}" ]]; then
+  printf 'env %s/%s -> %s\n' "${GOOS:-host}" "${GOARCH:-host}" "$out" >> "$log"
+fi
 mkdir -p "$(dirname "$out")"
-printf 'fake binary\n' > "$out"
+if [[ "${BUILD_AGENT_TEST_ATOMIC_COPY:-0}" == "1" && "$out" == *superdev-mcp-* ]]; then
+  printf '%1048576s' '' | tr ' ' 'N' > "$out"
+else
+  printf 'fake binary\n' > "$out"
+fi
 EOF
 chmod +x "$TMP_DIR/bin/go"
+
+cat > "$TMP_DIR/bin/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${BUILD_AGENT_TEST_ATOMIC_COPY:-0}" == "1" && "$#" -eq 2 && "$1" == */binaries/superdev-mcp-* && "$2" == */target/debug/*superdev-mcp* ]]; then
+  src="$1"
+  dest="$2"
+  : > "$dest"
+  size="$(wc -c < "$src")"
+  block=0
+  while (( block * 4096 < size )); do
+    dd if="$src" bs=4096 skip="$block" count=1 2>/dev/null >> "$dest"
+    if [[ "${BUILD_AGENT_TEST_COPY_FAIL:-0}" == "1" ]]; then
+      exit 23
+    fi
+    block=$((block + 1))
+    sleep 0.002
+  done
+  exit 0
+fi
+
+exec /bin/cp "$@"
+EOF
+chmod +x "$TMP_DIR/bin/cp"
 
 cat > "$TMP_DIR/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -162,6 +207,64 @@ for name in superdev-agent superdev-mcp superdev-sample; do
   fi
 done
 
+# Slow the MCP copy down and continuously inspect the published path. Atomic
+# staging guarantees every observation is either the complete old executable
+# or the complete new executable; a direct cp exposes truncated intermediate
+# lengths and fails this check deterministically.
+atomic_target="$TMP_DIR/desktop/src-tauri/target/debug/superdev-mcp"
+atomic_old="$TMP_DIR/atomic-old"
+atomic_new="$TMP_DIR/atomic-new"
+printf '%1048576s' '' | tr ' ' 'O' > "$atomic_old"
+printf '%1048576s' '' | tr ' ' 'N' > "$atomic_new"
+/bin/cp "$atomic_old" "$atomic_target"
+
+BUILD_AGENT_TEST_ATOMIC_COPY=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh" &
+atomic_pid=$!
+atomic_invalid=0
+atomic_samples=0
+while kill -0 "$atomic_pid" 2>/dev/null; do
+  if ! cmp -s "$atomic_target" "$atomic_old" && ! cmp -s "$atomic_target" "$atomic_new"; then
+    atomic_invalid=1
+    break
+  fi
+  atomic_samples=$((atomic_samples + 1))
+  sleep 0.002
+done
+if ! wait "$atomic_pid"; then
+  echo "expected atomic staging build to succeed" >&2
+  exit 1
+fi
+if [[ "$atomic_invalid" == "1" || "$atomic_samples" -eq 0 ]]; then
+  echo "published MCP sidecar exposed a partial copy" >&2
+  exit 1
+fi
+if ! cmp -s "$atomic_target" "$atomic_new"; then
+  echo "expected complete new MCP sidecar after atomic publish" >&2
+  exit 1
+fi
+if compgen -G "$TMP_DIR/desktop/src-tauri/target/debug/.superdev-mcp.*" >/dev/null; then
+  echo "expected successful atomic publish to leave no MCP temp file" >&2
+  exit 1
+fi
+
+# A failed copy must preserve the prior published inode and clean its temporary
+# file. This is the failure mode that previously left Codex launching a corrupt
+# executable.
+printf 'protected old MCP\n' > "$atomic_target"
+if BUILD_AGENT_TEST_ATOMIC_COPY=1 BUILD_AGENT_TEST_COPY_FAIL=1 \
+  bash "$TMP_DIR/desktop/scripts/build-agent.sh"; then
+  echo "expected injected MCP copy failure" >&2
+  exit 1
+fi
+if [[ "$(cat "$atomic_target")" != "protected old MCP" ]]; then
+  echo "failed MCP staging replaced or truncated the published sidecar" >&2
+  exit 1
+fi
+if compgen -G "$TMP_DIR/desktop/src-tauri/target/debug/.superdev-mcp.*" >/dev/null; then
+  echo "failed MCP staging left a temporary sidecar behind" >&2
+  exit 1
+fi
+
 : > "$BUILD_AGENT_TEST_LOG"
 BUILD_AGENT_TEST_TARGET="x86_64-pc-windows-msvc" bash "$TMP_DIR/desktop/scripts/build-agent.sh"
 
@@ -188,6 +291,24 @@ BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
 if grep -q '/agent-install/' "$BUILD_AGENT_TEST_LOG"; then
   echo "expected remote install binaries to be skipped when fake GNU stat marks them newer" >&2
   cat "$BUILD_AGENT_TEST_LOG" >&2
+  exit 1
+fi
+
+# Windows checkout 常把 targets.txt 变成 CRLF；必须仍能交叉编译且 GOARCH 不含 \r。
+printf 'darwin amd64\r\ndarwin arm64\r\nlinux amd64\r\nlinux arm64\r\nwindows amd64\r\n' \
+  > "$TMP_DIR/validation/runtime/targets.txt"
+rm -rf "$TMP_DIR/desktop/src-tauri/resources/agent-install"
+: > "$BUILD_AGENT_TEST_LOG"
+BUILD_REMOTE_INSTALL=1 bash "$TMP_DIR/desktop/scripts/build-agent.sh"
+for pair in "darwin/amd64" "darwin/arm64" "linux/amd64" "linux/arm64" "windows/amd64"; do
+  if ! grep -q "env ${pair} -> " "$BUILD_AGENT_TEST_LOG"; then
+    echo "expected remote build for $pair with CRLF targets.txt" >&2
+    cat "$BUILD_AGENT_TEST_LOG" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$TMP_DIR/desktop/src-tauri/resources/agent-install/superdev-agent-windows-amd64.exe" ]]; then
+  echo "expected windows remote agent binary after CRLF targets parse" >&2
   exit 1
 fi
 

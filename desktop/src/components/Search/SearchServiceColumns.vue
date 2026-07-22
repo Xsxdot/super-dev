@@ -126,27 +126,6 @@ const nearbySignals = computed(() => {
   return [...deduped.values()].slice(0, 4)
 })
 
-const crossServicePath = computed(() => {
-  const labels: string[] = []
-  for (const entry of allContextEntries.value) {
-    const message = entry.message.toLocaleLowerCase()
-    const service = serviceName(entry.deployment_id).toLocaleLowerCase()
-    if (labels.length === 0 && (message.includes('request') || service.includes('api'))) {
-      labels.push('API request received')
-    }
-    if (message.includes('publish') || message.includes('queue') || message.includes('job')) {
-      if (!labels.includes('job published')) labels.push('job published')
-    }
-    if (entry.level === 'WARN' || message.includes('retry') || message.includes('latency')) {
-      if (!labels.includes('worker retry')) labels.push('worker retry')
-    }
-    if (entry.level === 'ERROR' || message.includes('timeout')) {
-      if (!labels.includes('API timeout')) labels.push('API timeout')
-    }
-  }
-  return labels.length ? labels.slice(0, 4) : ['Select a hit to inspect context']
-})
-
 function columnTemplateFor(serviceIds: string[]): string {
   const columnCount = serviceIds.length
   const frozenWidths = serviceIds.map(serviceId => frozenColumnWidthByService.value[serviceId])
@@ -490,19 +469,17 @@ onBeforeUnmount(() => {
       <header class="context-header">
         <div class="context-title-block">
           <div class="context-eyebrow">{{ t('search.context.eyebrow') }}</div>
-          <div class="context-title" data-test="trace-context-title">
+          <div class="context-title" data-test="time-aligned-context-title">
             {{ t('search.context.title') }} · {{ searchQuery || 'search' }}
           </div>
         </div>
         <div class="context-actions">
           <span class="context-meta">{{ t('search.serviceCount', { count: visibleServiceIds.length }) }}</span>
           <button class="context-action" type="button" @click="pinSelectedService">{{ t('search.pin') }}</button>
-          <button class="context-action" type="button">{{ t('search.context.openLive') }}</button>
-          <button class="context-action" type="button">{{ t('search.context.copy') }}</button>
         </div>
       </header>
 
-      <div class="context-minimap" aria-label="trace timeline">
+      <div class="context-minimap" :aria-label="t('search.context.timelineLabel')">
         <span
           v-for="entry in minimapEntries"
           :key="entry.id"
@@ -712,7 +689,7 @@ onBeforeUnmount(() => {
         <strong data-test="selected-hit-service">{{ selectedServiceName }}</strong>
       </div>
       <div class="inspector-kv">
-        <span>{{ t('search.context.trace') }}</span>
+        <span>{{ t('search.context.query') }}</span>
         <strong>{{ searchQuery || '-' }}</strong>
       </div>
       <div class="inspector-kv">
@@ -728,13 +705,6 @@ onBeforeUnmount(() => {
       <div class="inspector-kv">
         <span>{{ t('search.context.time') }}</span>
         <strong>{{ shortTimeLabel(selectedEntry) }}</strong>
-      </div>
-
-      <div class="inspector-section" data-test="cross-service-path">
-        <div class="section-title">{{ t('search.context.crossServicePath') }}</div>
-        <ol class="path-list">
-          <li v-for="item in crossServicePath" :key="item">{{ item }}</li>
-        </ol>
       </div>
 
       <div class="inspector-section" data-test="nearby-signals">
@@ -1120,16 +1090,6 @@ onBeforeUnmount(() => {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0;
-}
-.path-list {
-  margin: 0;
-  padding: 0 0 0 16px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.8;
-}
-.path-list li::marker {
-  color: #58a6ff;
 }
 .signal-row {
   display: grid;

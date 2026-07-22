@@ -51,7 +51,15 @@ func httptestDoWithHeader(t *testing.T, app *App, method, path string, body io.R
 }
 
 func testTunnelHost(id, name, sshHost, user string) model.Host {
-	return model.Host{ID: id, Name: name, Tags: []string{}, SSHHost: sshHost, SSHPort: model.DefaultSSHPort, SSHUser: user}
+	return model.Host{
+		ID:                    id,
+		Name:                  name,
+		Tags:                  []string{},
+		SSHHost:               sshHost,
+		SSHPort:               model.DefaultSSHPort,
+		SSHUser:               user,
+		SSHHostKeyFingerprint: "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
+	}
 }
 
 type testNodeTransport struct {

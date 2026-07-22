@@ -138,7 +138,12 @@ function disabledRow(
 }
 
 function hasSSHConfig(host: Host): boolean {
-  return Boolean(host.ssh_host?.trim() && host.ssh_user?.trim() && (host.ssh_private_key?.trim() || host.ssh_password?.trim()))
+  return Boolean(
+    host.ssh_host?.trim()
+    && host.ssh_user?.trim()
+    && host.ssh_credential_configured
+    && host.ssh_host_key_fingerprint_configured,
+  )
 }
 
 function parseVersion(value: string | undefined): [number, number, number] | null {

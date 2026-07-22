@@ -13,6 +13,8 @@ package browserdebug
 
 import (
 	"os"
+	"path"
+	"runtime"
 	"strings"
 	"time"
 
@@ -47,10 +49,28 @@ func executableAvailable(path string) bool {
 		return false
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
+	if err != nil {
 		return false
 	}
-	return info.Mode()&0o111 != 0
+	return executableFileAvailableForOS(runtime.GOOS, path, info.Mode())
+}
+
+func executableFileAvailableForOS(goos, executablePath string, mode os.FileMode) bool {
+	if !mode.IsRegular() {
+		return false
+	}
+	if goos == "windows" {
+		// Windows 的 Stat 不承载 Unix execute bit；按 Go os/exec 的默认 PATHEXT
+		// 合同识别普通可执行文件，避免把常规 0666 的 chrome.exe 判成不可用。
+		normalized := strings.ReplaceAll(strings.TrimSpace(executablePath), `\`, "/")
+		switch strings.ToLower(path.Ext(normalized)) {
+		case ".com", ".exe", ".bat", ".cmd":
+			return true
+		default:
+			return false
+		}
+	}
+	return mode.Perm()&0o111 != 0
 }
 
 // Target 描述一个可被浏览器打开的本机前端 deployment。

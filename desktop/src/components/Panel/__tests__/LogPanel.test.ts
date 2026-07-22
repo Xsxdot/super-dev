@@ -830,10 +830,12 @@ describe('LogPanel', () => {
       host_name: hostId,
       desired_deployment_count: 1,
       desired_collector_count: 1,
+      active_collector_count: 1,
       tunnel_connected: true,
       remote: {
         deployment_count: 1,
         collector_count: 1,
+        active_collector_count: 1,
         collectors: [{
           deployment_id: 'dep-api',
           desired: true,

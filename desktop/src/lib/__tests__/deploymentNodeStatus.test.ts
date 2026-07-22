@@ -36,10 +36,12 @@ function statusOf(hostId: string, running: boolean): HostManagedDeploymentStatus
     host_name: hostId,
     desired_deployment_count: 1,
     desired_collector_count: 1,
+    active_collector_count: running ? 1 : 0,
     tunnel_connected: true,
     remote: {
       deployment_count: 1,
       collector_count: 1,
+      active_collector_count: running ? 1 : 0,
       collectors: [{
         deployment_id: 'dep-api',
         desired: true,

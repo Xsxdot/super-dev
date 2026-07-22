@@ -1,0 +1,42 @@
+{
+  "responsibility": "Describe the Rust Fixture Protocol v1 MSVC binary and lldb-dap debug gate.",
+  "boundary": "This descriptor contributes provider evidence only and owns zero MCP tool verdict rows.",
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.fixture",
+  "id": "rust",
+  "contract_version": "v1",
+  "provider": "rust",
+  "cwd": "fixtures/rust",
+  "build": {"windows_command": "build.cmd", "prerequisites": ["Rust 1.97.0 x86_64-pc-windows-msvc", "VS 2022 Build Tools 17.14"], "windows_entry": "build.cmd", "working_directory": ".", "success_exit_code": 0},
+  "run": {"windows_command": "run.cmd", "port": 18175, "windows_entry": "run.cmd", "working_directory": ".", "default_port": 18175, "clean_stop": ["CTRL_C", "CTRL_BREAK"]},
+  "readiness": {"url": "http://127.0.0.1:18175/healthz", "status": 200, "method": "GET", "path": "/healthz", "expected_status": 200, "expected_fields": {"ready": true, "contract_version": "v1", "provider": "rust"}},
+  "probe": {"method": "POST", "path": "/api/probe", "authentication": "bearer_campaign_id", "normal_status": 200, "controlled_error_status": 500},
+  "language_runtime": {
+    "cwd": ".",
+    "config": {"program": "target\\x86_64-pc-windows-msvc\\debug\\superdev-windows-rust-fixture.exe"}
+  },
+  "runtime": {
+    "config": {"program": "target\\x86_64-pc-windows-msvc\\debug\\superdev-windows-rust-fixture.exe"},
+    "env": {"FIXTURE_PORT": "18175", "FIXTURE_CAMPAIGN_ID": "{{campaign_id}}"}
+  },
+  "debug": {
+    "strategy": "attach-pid",
+    "adapter": "native",
+    "preflight": ["preflight.cmd", "debug"],
+    "adapter_command_contract": "lldb-dap --connection listen://127.0.0.1:<port>",
+    "source": "src/main.rs",
+    "line": 283,
+    "variables": ["fixture_marker", "fixture_count", "fixture_provider"],
+    "prerequisites": ["lldb-dap 22.1.3 exact listen handshake", "PDB/debug info from MSVC target"],
+    "marker": "SUPERDEV_FIXTURE_BREAKPOINT",
+    "expected_non_secret_variables": {"fixture_marker": "breakpoint-visible", "fixture_count": 42, "fixture_provider": "rust"},
+    "missing_adapter_verdict": "BLOCKED"
+  },
+  "prerequisites": [
+    {"name": "Rust", "version": "1.97.0", "target": "x86_64-pc-windows-msvc", "required_for": ["build", "run"]},
+    {"name": "VS 2022 C++ Build Tools", "version": "17.14", "required_for": ["link"]},
+    {"name": "lldb-dap", "version": "22.1.3", "required_for": ["debug"], "missing_verdict": "BLOCKED"}
+  ],
+  "contract": {"normal_path": "/api/probe", "error_path": "/api/probe", "auth_header": "Authorization", "auth_value_env": "FIXTURE_CAMPAIGN_ID", "auth_scheme": "bearer_campaign_id", "authorization_template": "Bearer superdev-validation-{campaign_id}"},
+  "coverage": {"provider_report": true, "mcp_tool_rows": []}
+}

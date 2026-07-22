@@ -47,6 +47,10 @@ func (s *Server) getDebugCredentialsTool(ctx context.Context, args json.RawMessa
 	if err != nil {
 		return clientToolError(err), nil
 	}
+	for i := range creds {
+		// value_present 是唯一允许进入验证证据的值事实；由明文响应当场派生，不能依赖客户端是否填充。
+		creds[i].ValuePresent = creds[i].Value != ""
+	}
 
 	return toolSuccess(
 		fmt.Sprintf("%d debug credential(s)", len(creds)),

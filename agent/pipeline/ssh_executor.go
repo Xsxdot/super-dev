@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 	"golang.org/x/crypto/ssh"
@@ -45,20 +46,26 @@ func NewSSHExecutor(lookup HostLookup) *SSHExecutor {
 // dial 按 hostID 解析 host 信息并建立 SSH 客户端连接。
 // 复用 tunnel.BuildClientConfig 的认证装配逻辑（密码 + 私钥均由其处理）。
 func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
+	log := logger.GetLogger().WithEntryName("PipelineSSHExecutor").WithField("host_id", target.HostID)
+	log.Info("开始建立 pipeline SSH 连接")
 	host, ok := s.lookup(target.HostID)
 	if !ok {
+		log.Error("建立 pipeline SSH 连接失败：Host 不存在")
 		return nil, fmt.Errorf("unknown host %q", target.HostID)
 	}
 
 	creds, err := tunnel.CredentialsFromHost(host)
 	if err != nil {
+		log.WithErr(err).Error("读取 pipeline SSH 凭据失败")
 		return nil, fmt.Errorf("read private key: %w", err)
 	}
 	cfg, err := tunnel.BuildClientConfig(creds)
 	if err != nil {
+		log.WithField("cause_code", tunnel.PublicError(err)).Error("构造 pipeline SSH 安全配置失败")
 		return nil, err
 	}
 	if host.SSHHost == "" {
+		log.Error("建立 pipeline SSH 连接失败：SSH Host 缺失")
 		return nil, fmt.Errorf("host %q ssh host is required", target.HostID)
 	}
 	port := host.SSHPort
@@ -66,7 +73,13 @@ func (s *SSHExecutor) dial(target Target) (*ssh.Client, error) {
 		port = model.DefaultSSHPort
 	}
 	addr := net.JoinHostPort(host.SSHHost, strconv.Itoa(port))
-	return ssh.Dial("tcp", addr, cfg)
+	client, err := tunnel.DialSSHClient(addr, cfg)
+	if err != nil {
+		log.WithField("cause_code", tunnel.PublicError(err)).Error("pipeline SSH 握手失败")
+		return nil, err
+	}
+	log.Info("pipeline SSH 连接建立完成")
+	return client, nil
 }
 
 // RunRemote 在远程 host 执行命令，命令非零退出会作为错误返回。

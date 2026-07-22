@@ -102,20 +102,22 @@ func TestHostPublicPrivateIPRoundTrip(t *testing.T) {
 	assert.Equal(t, "10.0.0.10", hosts[1].PrivateIP)
 }
 
-func TestHostCRUDPersistsSSHCredentialFieldsWithoutAgent(t *testing.T) {
+func TestHostCRUDPersistsSSHCredentialsButReturnsSafeView(t *testing.T) {
 	srv, dataDir := newTestApp(t)
 	legacySSHHost := "ssh" + "_host"
 	legacySSHPassword := "ssh" + "_password"
 	legacySSHPrivateKey := "ssh" + "_private_key"
 	legacySSHKeyPath := "ssh" + "_key_path"
+	sshHostKeyFingerprint := "ssh" + "_host_key_fingerprint"
 
 	body, _ := json.Marshal(map[string]any{
-		"name":              "edge",
-		legacySSHHost:       "ssh.example.com",
-		"ssh" + "_port":     22,
-		"ssh" + "_user":     "deploy",
-		legacySSHPassword:   "secret-password",
-		legacySSHPrivateKey: "PRIVATE-KEY",
+		"name":                "edge",
+		legacySSHHost:         "ssh.example.com",
+		"ssh" + "_port":       22,
+		"ssh" + "_user":       "deploy",
+		legacySSHPassword:     "secret-password",
+		legacySSHPrivateKey:   "PRIVATE-KEY",
+		sshHostKeyFingerprint: "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
 	})
 	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
@@ -124,10 +126,17 @@ func TestHostCRUDPersistsSSHCredentialFieldsWithoutAgent(t *testing.T) {
 
 	createdBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(createdBody), legacySSHHost)
-	assert.Contains(t, string(createdBody), legacySSHPassword)
-	assert.Contains(t, string(createdBody), legacySSHPrivateKey)
-	assert.NotContains(t, string(createdBody), legacySSHKeyPath)
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(createdBody, &created))
+	assert.Equal(t, "ssh.example.com", created[legacySSHHost])
+	assert.NotContains(t, created, legacySSHPassword)
+	assert.NotContains(t, created, legacySSHPrivateKey)
+	assert.NotContains(t, created, legacySSHKeyPath)
+	assert.NotContains(t, created, sshHostKeyFingerprint)
+	assert.Equal(t, true, created["ssh_credential_configured"])
+	assert.Equal(t, true, created["ssh_password_configured"])
+	assert.Equal(t, true, created["ssh_private_key_configured"])
+	assert.Equal(t, true, created["ssh_host_key_fingerprint_configured"])
 
 	listResp, err := http.Get(srv.URL + "/api/hosts")
 	require.NoError(t, err)
@@ -136,10 +145,16 @@ func TestHostCRUDPersistsSSHCredentialFieldsWithoutAgent(t *testing.T) {
 
 	listBody, err := io.ReadAll(listResp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(listBody), legacySSHHost)
-	assert.Contains(t, string(listBody), legacySSHPassword)
-	assert.Contains(t, string(listBody), legacySSHPrivateKey)
-	assert.NotContains(t, string(listBody), legacySSHKeyPath)
+	var listed []map[string]any
+	require.NoError(t, json.Unmarshal(listBody, &listed))
+	require.Len(t, listed, 2)
+	assert.Equal(t, "ssh.example.com", listed[1][legacySSHHost])
+	assert.NotContains(t, listed[1], legacySSHPassword)
+	assert.NotContains(t, listed[1], legacySSHPrivateKey)
+	assert.NotContains(t, listed[1], legacySSHKeyPath)
+	assert.NotContains(t, listed[1], sshHostKeyFingerprint)
+	assert.Equal(t, true, listed[1]["ssh_credential_configured"])
+	assert.Equal(t, true, listed[1]["ssh_host_key_fingerprint_configured"])
 
 	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
 	require.NoError(t, err)
@@ -148,7 +163,165 @@ func TestHostCRUDPersistsSSHCredentialFieldsWithoutAgent(t *testing.T) {
 	require.Len(t, saved, 1)
 	assert.NotContains(t, saved[0], "agent")
 	assert.Equal(t, "ssh.example.com", saved[0][legacySSHHost])
+	assert.Equal(t, "secret-password", saved[0][legacySSHPassword])
 	assert.Equal(t, "PRIVATE-KEY", saved[0][legacySSHPrivateKey])
+	assert.Equal(t, "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A", saved[0][sshHostKeyFingerprint])
+}
+
+func TestUpdateHostBlankCredentialFieldsPreserveStoredSecretsAndPin(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+	createBody := bytes.NewBufferString(`{
+		"name":"edge",
+		"ssh_host":"ssh.example.com",
+		"ssh_user":"deploy",
+		"ssh_password":"secret-password",
+		"ssh_private_key":"PRIVATE-KEY",
+		"ssh_host_key_fingerprint":"SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A"
+	}`)
+	createResp, err := http.Post(srv.URL+"/api/hosts", "application/json", createBody)
+	require.NoError(t, err)
+	defer createResp.Body.Close()
+	require.Equal(t, http.StatusOK, createResp.StatusCode)
+	var created hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&created))
+
+	updateBody := bytes.NewBufferString(`{
+		"name":"edge-renamed",
+		"ssh_host":"ssh.example.com",
+		"ssh_user":"deploy",
+		"ssh_password":"",
+		"ssh_private_key":"",
+		"ssh_host_key_fingerprint":""
+	}`)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/hosts/"+created.ID, updateBody)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	updateResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer updateResp.Body.Close()
+	require.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
+	require.NoError(t, err)
+	var saved []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.Len(t, saved, 1)
+	assert.Equal(t, "edge-renamed", saved[0]["name"])
+	assert.Equal(t, "secret-password", saved[0]["ssh_password"])
+	assert.Equal(t, "PRIVATE-KEY", saved[0]["ssh_private_key"])
+	assert.Equal(t, "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A", saved[0]["ssh_host_key_fingerprint"])
+}
+
+func TestUpdateHostExplicitClearRemovesStoredSecretsAndPin(t *testing.T) {
+	srv, dataDir := newTestApp(t)
+	createResp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewBufferString(`{
+		"name":"edge",
+		"ssh_host":"ssh.example.com",
+		"ssh_user":"deploy",
+		"ssh_password":"secret-password",
+		"ssh_private_key":"PRIVATE-KEY",
+		"ssh_host_key_fingerprint":"SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A"
+	}`))
+	require.NoError(t, err)
+	defer createResp.Body.Close()
+	require.Equal(t, http.StatusOK, createResp.StatusCode)
+	var created hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&created))
+
+	updateBody := bytes.NewBufferString(`{
+		"name":"edge",
+		"ssh_host":"ssh.example.com",
+		"ssh_user":"deploy",
+		"clear_ssh_password":true,
+		"clear_ssh_private_key":true,
+		"clear_ssh_host_key_fingerprint":true
+	}`)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/hosts/"+created.ID, updateBody)
+	require.NoError(t, err)
+	updateResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer updateResp.Body.Close()
+	require.Equal(t, http.StatusOK, updateResp.StatusCode)
+	var view map[string]any
+	require.NoError(t, json.NewDecoder(updateResp.Body).Decode(&view))
+	assert.Equal(t, false, view["ssh_credential_configured"])
+	assert.Equal(t, false, view["ssh_host_key_fingerprint_configured"])
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "hosts.json"))
+	require.NoError(t, err)
+	var saved []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.Len(t, saved, 1)
+	assert.NotContains(t, saved[0], "ssh_password")
+	assert.NotContains(t, saved[0], "ssh_private_key")
+	assert.NotContains(t, saved[0], "ssh_host_key_fingerprint")
+}
+
+func TestCreateHostRejectsNonCanonicalHostKeyFingerprints(t *testing.T) {
+	tests := map[string]string{
+		"legacy MD5":             "MD5:aa:bb:cc:dd",
+		"invalid digest":         "SHA256:not-base64",
+		"wrong case":             "sha256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
+		"padded base64":          "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A=",
+		"surrounding whitespace": " SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A ",
+	}
+	for name, fingerprint := range tests {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := newTestApp(t)
+			body, err := json.Marshal(map[string]any{
+				"name":                     "edge",
+				"ssh_host_key_fingerprint": fingerprint,
+			})
+			require.NoError(t, err)
+
+			resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+func TestUpdateHostRejectsClearAndReplacementConflicts(t *testing.T) {
+	tests := map[string]map[string]any{
+		"password": {
+			"clear_ssh_password": true,
+			"ssh_password":       "replacement",
+		},
+		"private key": {
+			"clear_ssh_private_key": true,
+			"ssh_private_key":       "replacement",
+		},
+		"private key path": {
+			"clear_ssh_private_key": true,
+			"ssh_key_path":          "/tmp/replacement",
+		},
+		"host key fingerprint": {
+			"clear_ssh_host_key_fingerprint": true,
+			"ssh_host_key_fingerprint":       "SHA256:NeZJ8Xqm8k2RJoaxC7XMjjoXdw5R8TNigSr9hkWjK7A",
+		},
+	}
+	for name, mutation := range tests {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := newTestApp(t)
+			createResp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewBufferString(`{"name":"edge","tags":[]}`))
+			require.NoError(t, err)
+			defer createResp.Body.Close()
+			require.Equal(t, http.StatusOK, createResp.StatusCode)
+			var created hostDTOWithSelf
+			require.NoError(t, json.NewDecoder(createResp.Body).Decode(&created))
+
+			mutation["name"] = "edge"
+			body, err := json.Marshal(mutation)
+			require.NoError(t, err)
+			req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/hosts/"+created.ID, bytes.NewReader(body))
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
 }
 
 func TestAgentAPIPersistsAgentsJSONWhileHostStaysMachineOnly(t *testing.T) {

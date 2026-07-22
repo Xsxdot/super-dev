@@ -49,15 +49,13 @@ type LogContextResponse struct {
 // 注意：
 //   - ID 是配置 deployment.host_ids 时唯一可使用的稳定标识
 //   - Name 仅用于展示和人工识别，不允许写入 host_ids
-//   - 不包含 SSH 密码、私钥等敏感字段
+//   - 不包含地址、SSH 密码、私钥、raw host-key fingerprint 等敏感字段
 type HostReference struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	PublicIP  string   `json:"public_ip,omitempty"`
-	PrivateIP string   `json:"private_ip,omitempty"`
-	Tags      []string `json:"tags"`
-	IsSelf    bool     `json:"is_self"`
-	NodeID    string   `json:"node_id,omitempty"`
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Tags   []string `json:"tags"`
+	IsSelf bool     `json:"is_self"`
+	NodeID string   `json:"node_id,omitempty"`
 }
 
 // PipelineTemplateSummary 是模板导入接口返回的模板摘要。
@@ -415,10 +413,12 @@ type OperationTarget struct {
 	ServiceID       string `json:"service_id,omitempty"`
 	ServiceName     string `json:"service_name,omitempty"`
 	DeploymentID    string `json:"deployment_id,omitempty"`
+	HostID          string `json:"host_id,omitempty"`
 	TemplatePath    string `json:"template_path,omitempty"`
 	TemplateDigest  string `json:"template_digest,omitempty"`
 	PipelineID      string `json:"pipeline_id,omitempty"`
 	ArtifactVersion string `json:"artifact_version,omitempty"`
+	DebugSessionID  string `json:"debug_session_id,omitempty"`
 }
 
 // OperationCheck 描述 operation preflight 中的一条检查项。

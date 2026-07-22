@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -424,8 +425,11 @@ func (c *DAPClient) SetBreakpoints(ctx context.Context, source string, lines []i
 		points = append(points, map[string]any{"line": line})
 	}
 	return c.Request(ctx, "setBreakpoints", map[string]any{
-		"source":      map[string]any{"path": source},
-		"breakpoints": points,
+		// DAP Source.name 虽为可选字段，但 fwcd Kotlin Debug Adapter 0.4.4
+		// 将它映射到非空 Kotlin String；补齐 basename 才能跨 adapter 工作。
+		"source":         map[string]any{"name": filepath.Base(source), "path": source},
+		"breakpoints":    points,
+		"sourceModified": false,
 	})
 }
 

@@ -21,18 +21,34 @@ import (
 type AdapterCommand struct {
 	Provider model.CodeDebugProvider
 	Name     string
+	Source   AdapterCommandSource
 	Args     []string
 	Env      map[string]string
 	WorkDir  string
+	safeArgs []string
 }
 
-// Summary 返回不包含环境变量的 adapter 命令摘要。
+// Summary 返回不包含环境变量、绝对路径或用户自定义参数的 adapter 命令摘要。
+//
+// 返回：
+//   - 只含 executable identity 与 provider 标记为安全的固定协议参数的摘要
+//
+// 注意：
+//   - 摘要用于错误和日志上下文，不可替代实际 Args 启动进程。
 func (c AdapterCommand) Summary() string {
 	parts := []string{}
 	if strings.TrimSpace(c.Name) != "" {
-		parts = append(parts, strings.TrimSpace(c.Name))
+		parts = append(parts, adapterExecutableIdentity(c.Name))
 	}
-	for _, arg := range c.Args {
+	summaryArgs := c.safeArgs
+	if summaryArgs == nil {
+		for _, arg := range c.Args {
+			if safeAdapterSummaryArg(arg) {
+				summaryArgs = append(summaryArgs, arg)
+			}
+		}
+	}
+	for _, arg := range summaryArgs {
 		if strings.TrimSpace(arg) != "" {
 			parts = append(parts, strings.TrimSpace(arg))
 		}
@@ -42,6 +58,17 @@ func (c AdapterCommand) Summary() string {
 		return summary[:240] + "..."
 	}
 	return summary
+}
+
+func safeAdapterSummaryArg(arg string) bool {
+	// 外部调用方可能只构造 AdapterCommand 而没有 package 内的 safeArgs；这里只允许
+	// 固定协议关键字进入摘要，绝不猜测自由参数是否包含 token、路径或用户数据。
+	switch strings.TrimSpace(arg) {
+	case "dap", "-m", "debugpy.adapter", "--connection", "<port>":
+		return true
+	default:
+		return false
+	}
 }
 
 // Provider 定义语言调试 provider 需要提供的 adapter 与 launch 配置。
@@ -58,23 +85,63 @@ type Provider interface {
 	UsesReverseRequestChildSession() bool
 }
 
+// capturePausePolicy 允许不支持无显式线程暂停的 adapter 声明 capture 时直接下断点。
+// 未实现该能力的 provider 沿用先暂停再设断点的稳定路径；js-debug 的 reverse child
+// session 也天然属于直接下断点路径。
+type capturePausePolicy interface {
+	pauseBeforeCapture() bool
+}
+
+func shouldPauseBeforeCapture(provider Provider) bool {
+	if policy, ok := provider.(capturePausePolicy); ok {
+		return policy.pauseBeforeCapture()
+	}
+	return !provider.UsesReverseRequestChildSession()
+}
+
 // GoProvider 构建 Delve DAP adapter 配置。
-type GoProvider struct{}
+type GoProvider struct{ Command string }
 
 // NewGoProvider 创建 Go 代码调试 provider。
-func NewGoProvider() GoProvider { return GoProvider{} }
+//
+// 参数：
+//   - command: 可选的打包/构造器默认 Delve executable
+//
+// 返回：
+//   - 使用显式配置 > 构造器默认 > PATH `dlv` 合同的 GoProvider
+//
+// 注意：
+//   - 省略 command 时保持现有 PATH fallback 行为。
+func NewGoProvider(command ...string) GoProvider {
+	defaultCommand := ""
+	if len(command) > 0 {
+		defaultCommand = strings.TrimSpace(command[0])
+	}
+	return GoProvider{Command: defaultCommand}
+}
 
 // AdapterCommand 返回 Delve DAP 启动命令。
-func (GoProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
+func (p GoProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
 	}
+	executable, err := ResolveAdapterExecutable(AdapterResolutionRequest{
+		Provider:        model.CodeDebugProviderGo,
+		ExplicitCommand: cfg.AdapterCommand,
+		ProviderDefault: p.Command,
+		PATHFallback:    "dlv",
+	})
+	if err != nil {
+		return AdapterCommand{}, err
+	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderGo,
-		Name:     "dlv",
+		Name:     executable.Name,
+		Source:   executable.Source,
 		Args:     []string{"dap", "--listen=127.0.0.1:" + strconv.Itoa(cfg.AdapterPort)},
 		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
+		safeArgs: []string{"dap"},
 	}, nil
 }
 
@@ -110,11 +177,14 @@ func (GoProvider) UsesReverseRequestChildSession() bool { return false }
 type PythonProvider struct{ Python string }
 
 // NewPythonProvider 创建 Python 代码调试 provider。
+//
+// 参数：
+//   - python: provider 默认 Python executable；空值表示只使用 PATH `python3` fallback
+//
+// 返回：
+//   - 使用统一 executable 优先级并保留 debugpy 固定参数的 PythonProvider
 func NewPythonProvider(python string) PythonProvider {
-	if python == "" {
-		python = "python3"
-	}
-	return PythonProvider{Python: python}
+	return PythonProvider{Python: strings.TrimSpace(python)}
 }
 
 // AdapterCommand 返回 debugpy.adapter 启动命令。
@@ -122,12 +192,23 @@ func (p PythonProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error)
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
 	}
+	executable, err := ResolveAdapterExecutable(AdapterResolutionRequest{
+		Provider:        model.CodeDebugProviderPython,
+		ExplicitCommand: cfg.AdapterCommand,
+		ProviderDefault: p.Python,
+		PATHFallback:    "python3",
+	})
+	if err != nil {
+		return AdapterCommand{}, err
+	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderPython,
-		Name:     p.Python,
+		Name:     executable.Name,
+		Source:   executable.Source,
 		Args:     []string{"-m", "debugpy.adapter", "--host", "127.0.0.1", "--port", strconv.Itoa(cfg.AdapterPort)},
 		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
+		safeArgs: []string{"-m", "debugpy.adapter"},
 	}, nil
 }
 
@@ -164,19 +245,29 @@ func (PythonProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 func (PythonProvider) UsesReverseRequestChildSession() bool { return false }
 
 // NodeProvider 用打包的 @vscode/js-debug standalone DAP server 调试 Node。
-type NodeProvider struct{ ServerPath string }
+type NodeProvider struct {
+	ServerPath string
+	Command    string
+}
 
 // NewNodeProvider 创建 Node 代码调试 provider。
 //
 // 参数：
 //   - serverPath: 指向打包的 dapDebugServer.js；为空表示 js-debug 未落地
+//   - command: 可选的打包/注入 Node executable；未提供时才回退 PATH 上的 node
 //
 // 返回：
 //   - NodeProvider 实例
 //
 // 注意：
 //   - serverPath 为空时 AdapterCommand 会返回 adapter unavailable
-func NewNodeProvider(serverPath string) NodeProvider { return NodeProvider{ServerPath: serverPath} }
+func NewNodeProvider(serverPath string, command ...string) NodeProvider {
+	defaultCommand := ""
+	if len(command) > 0 {
+		defaultCommand = strings.TrimSpace(command[0])
+	}
+	return NodeProvider{ServerPath: serverPath, Command: defaultCommand}
+}
 
 // AdapterCommand 返回 js-debug standalone DAP server 启动命令。
 func (p NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
@@ -190,12 +281,23 @@ func (p NodeProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
 	}
+	executable, err := ResolveAdapterExecutable(AdapterResolutionRequest{
+		Provider:        model.CodeDebugProviderNode,
+		ExplicitCommand: cfg.AdapterCommand,
+		ProviderDefault: p.Command,
+		PATHFallback:    "node",
+	})
+	if err != nil {
+		return AdapterCommand{}, err
+	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderNode,
-		Name:     "node",
+		Name:     executable.Name,
+		Source:   executable.Source,
 		Args:     []string{p.ServerPath, strconv.Itoa(cfg.AdapterPort), "127.0.0.1"},
 		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
+		safeArgs: []string{adapterExecutableIdentity(p.ServerPath)},
 	}, nil
 }
 
@@ -242,7 +344,7 @@ func (NodeProvider) UsesReverseRequestChildSession() bool { return true }
 // 进程枚举走 tasklist/Win32_Process 近似进程树）。
 //
 // 注意：
-//   - Path 非空时使用构造器注入路径；否则允许 deployment 的 adapter_command 覆盖
+//   - deployment 的 adapter_command 始终优先于 Path 构造器默认
 //   - 两者都为空时才回退系统 PATH 上的 lldb-dap，为以后打包 CodeLLDB 留口子
 type NativeDebugProvider struct{ Path string }
 
@@ -256,21 +358,25 @@ func (p NativeDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, e
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
 	}
-	command := strings.TrimSpace(p.Path)
-	if command == "" {
-		command = strings.TrimSpace(cfg.AdapterCommand)
-	}
-	if command == "" {
-		command = "lldb-dap"
+	executable, err := ResolveAdapterExecutable(AdapterResolutionRequest{
+		Provider:        model.CodeDebugProviderNative,
+		ExplicitCommand: cfg.AdapterCommand,
+		ProviderDefault: p.Path,
+		PATHFallback:    "lldb-dap",
+	})
+	if err != nil {
+		return AdapterCommand{}, err
 	}
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderNative,
-		Name:     command,
+		Name:     executable.Name,
+		Source:   executable.Source,
 		// lldb-dap 的 TCP server 形态用 --connection listen://host:port；
 		// --port 不是 Xcode/LLVM 当前发布版支持的参数，使用它会让 adapter 直接退出。
-		Args:    []string{"--connection", "listen://127.0.0.1:" + strconv.Itoa(cfg.AdapterPort)},
-		Env:     copyEnv(cfg.Env),
-		WorkDir: cfg.WorkingDir,
+		Args:     []string{"--connection", "listen://127.0.0.1:" + strconv.Itoa(cfg.AdapterPort)},
+		Env:      copyEnv(cfg.Env),
+		WorkDir:  cfg.WorkingDir,
+		safeArgs: []string{"--connection"},
 	}, nil
 }
 
@@ -307,29 +413,30 @@ func (NativeDebugProvider) UsesReverseRequestChildSession() bool { return false 
 //
 // 注意：
 //   - 当前官方 java-debug 是 JDT LS plugin，不是可直接 java -cp 启动的 standalone adapter
-//   - command 为空时允许 cfg.AdapterCommand 注入一个 wrapper；wrapper 需启动 DAP server 并监听传入端口
+//   - wrapper 解析遵循显式配置 > 构造器默认 > PATH `jvm-dap-wrapper`
+//   - wrapper 需启动 DAP server 并监听传入端口，候选名不代表机器上已满足该能力
 type JVMDebugProvider struct{ Command string }
 
-// NewJVMDebugProvider 创建 JVM 调试 provider；command 为空时依赖 LaunchConfig.AdapterCommand。
+const jvmDAPWrapperPATHFallback = "jvm-dap-wrapper"
+
+// NewJVMDebugProvider 创建 JVM 调试 provider；command 作为 provider 默认，显式配置仍优先。
 func NewJVMDebugProvider(command string) JVMDebugProvider {
 	return JVMDebugProvider{Command: strings.TrimSpace(command)}
 }
 
 // AdapterCommand 启动外部 JVM DAP server wrapper。
 func (p JVMDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, error) {
-	command := strings.TrimSpace(p.Command)
-	if command == "" {
-		command = strings.TrimSpace(cfg.AdapterCommand)
-	}
-	if command == "" {
-		return AdapterCommand{}, NewAdapterError(
-			CodeAdapterUnavailable,
-			AdapterCommand{Provider: model.CodeDebugProviderJVM},
-			ErrAdapterUnavailable,
-		)
-	}
 	if cfg.AdapterPort == 0 {
 		return AdapterCommand{}, ErrConfigInvalid
+	}
+	executable, err := ResolveAdapterExecutable(AdapterResolutionRequest{
+		Provider:        model.CodeDebugProviderJVM,
+		ExplicitCommand: cfg.AdapterCommand,
+		ProviderDefault: p.Command,
+		PATHFallback:    jvmDAPWrapperPATHFallback,
+	})
+	if err != nil {
+		return AdapterCommand{}, err
 	}
 	args := append([]string{}, cfg.AdapterArgs...)
 	// java-debug 现行交付形态依赖 JDT LS 启动 DAP server；这里把端口交给用户 wrapper，
@@ -337,10 +444,13 @@ func (p JVMDebugProvider) AdapterCommand(cfg LaunchConfig) (AdapterCommand, erro
 	args = append(args, strconv.Itoa(cfg.AdapterPort))
 	return AdapterCommand{
 		Provider: model.CodeDebugProviderJVM,
-		Name:     command,
+		Name:     executable.Name,
+		Source:   executable.Source,
 		Args:     args,
 		Env:      copyEnv(cfg.Env),
 		WorkDir:  cfg.WorkingDir,
+		// AdapterArgs 属于 deployment 自定义输入，可能携带 token；错误摘要只暴露端口合同。
+		safeArgs: []string{"<port>"},
 	}, nil
 }
 
@@ -357,6 +467,8 @@ func (JVMDebugProvider) LaunchArguments(cfg LaunchConfig) map[string]any {
 // AttachCapability 返回 JVM 附加档位：java-debug/JDT LS DAP server 连接 JDWP 端口。
 func (JVMDebugProvider) AttachCapability() AttachMode { return AttachModeListen }
 
+func (JVMDebugProvider) pauseBeforeCapture() bool { return false }
+
 // AttachArguments 构造 java-debug attach 参数：连 JDWP server 端口。
 func (JVMDebugProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any {
 	port := cfg.TargetPort
@@ -367,7 +479,11 @@ func (JVMDebugProvider) AttachArguments(cfg LaunchConfig, _ int) map[string]any 
 		"request":  "attach",
 		"hostName": "127.0.0.1",
 		"port":     port,
+		"timeout":  10000,
 		"cwd":      cfg.WorkingDir,
+		// Kotlin DAP 以 projectRoot 解析源码与 classpath；Java DAP 会忽略该扩展字段。
+		// 同一 JVM provider 因此可以诚实连接两种 adapter，而无需伪造 Kotlin 的 Java 源码。
+		"projectRoot": cfg.WorkingDir,
 	}
 }
 

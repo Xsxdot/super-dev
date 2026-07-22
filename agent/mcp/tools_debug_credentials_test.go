@@ -38,6 +38,7 @@ func TestGetDebugCredentialsToolReturnsPlaintext(t *testing.T) {
 	require.Len(t, credentials, 1)
 	assert.Equal(t, "test_login", credentials[0].Name)
 	assert.Equal(t, "p", credentials[0].Value)
+	assert.True(t, credentials[0].ValuePresent)
 	assert.Equal(t, "project", credentials[0].Source)
 	assert.Equal(t, "p1", client.lastDebugCredentialsQuery.Get("project_id"))
 }

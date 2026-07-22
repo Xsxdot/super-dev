@@ -1,0 +1,556 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.runtime-validation.scenario",
+  "id": "logs-diagnostics",
+  "title": "Go runtime logs, diagnosis, and local diagnostic records",
+  "requires": [
+    "config-security-lifecycle",
+    "go_fixture_exercised"
+  ],
+  "variables": {
+    "project_id": {
+      "required": true,
+      "description": "Campaign project id."
+    },
+    "project_name": {
+      "required": true,
+      "description": "Campaign project name."
+    },
+    "go_deployment_id": {
+      "required": true,
+      "description": "Go fixture deployment id."
+    },
+    "go_error_trace_id": {
+      "required": false,
+      "default": "go-error-trace",
+      "description": "Stable controlled-error trace id."
+    }
+  },
+  "steps": [
+    {
+      "id": "start-go-for-logs",
+      "tool": "start_service",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "start"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.target"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      }
+    },
+    {
+      "id": "tail-go-logs",
+      "tool": "tail_logs",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "limit": 100,
+        "apply_project_rules": false
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.entries",
+          "structuredContent.data.next",
+          "structuredContent.data.scan_truncated"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "follow-go-logs",
+      "tool": "follow_logs",
+      "coverage": "primary",
+      "_comment": "Go fixture 每 5 秒由自身 probe 产生带 go-error-trace 的受控 ERROR；follow 只筛 ERROR，而后端每次最多读取 200 条全级别日志，因此历史页不会直接填满结果。6500ms 窗口和 polls > 1 共同证明实际进入后续轮询并跨过至少一次新 ERROR 触发。",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "limit": 200,
+        "level": "ERROR",
+        "duration_ms": 6500,
+        "poll_interval_ms": 250,
+        "apply_project_rules": false
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.polls",
+            "operator": "gt",
+            "value": 1
+          },
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          },
+          {
+            "path": "structuredContent.data.duration_ms",
+            "operator": "eq",
+            "value": 6500
+          },
+          {
+            "path": "structuredContent.data.poll_interval_ms",
+            "operator": "eq",
+            "value": 250
+          },
+          {
+            "path": "structuredContent.data.entries",
+            "operator": "contains",
+            "value": "go-error-trace"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.entries",
+          "structuredContent.data.count",
+          "structuredContent.data.duration_ms",
+          "structuredContent.data.poll_interval_ms",
+          "structuredContent.data.polls"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "search-controlled-error",
+      "tool": "search_logs",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "q": "{{go_error_trace_id}}",
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.entries",
+          "structuredContent.data.total"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      },
+      "capture": {
+        "go_error_log_id": "structuredContent.data.entries.0.id"
+      },
+      "poll": {
+        "interval_ms": 1000,
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "get-controlled-error-context",
+      "tool": "get_log_context",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "id": "{{go_error_log_id}}",
+        "before_ms": 5000,
+        "after_ms": 5000,
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "diagnose-go-service",
+      "tool": "diagnose_service",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "analyze-go-trace",
+      "tool": "analyze_trace_logs",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "trace_id": "{{go_error_trace_id}}",
+        "limit": 100,
+        "before_ms": 5000,
+        "after_ms": 5000
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "summarize-error-window",
+      "tool": "summarize_error_window",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "since": "10m",
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.ok",
+            "operator": "eq",
+            "value": true
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "create-diagnostic-session",
+      "tool": "create_debug_session",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "title": "Runtime validation {{run_id}}",
+        "question": "Can the packaged MCP persist controlled trace evidence?"
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.session.id",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.session",
+          "structuredContent.data.event"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "capture": {
+        "debug_session_id": "structuredContent.data.session.id"
+      }
+    },
+    {
+      "id": "append-trace-analysis",
+      "tool": "append_log_analysis_to_session",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{debug_session_id}}",
+        "analysis_type": "trace",
+        "project_id": "{{project_id}}",
+        "trace_id": "{{go_error_trace_id}}",
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.event.id",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.event",
+          "structuredContent.data.analysis_type"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "append-diagnostic-note",
+      "tool": "append_debug_session_note",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{debug_session_id}}",
+        "type": "observation",
+        "actor": "assistant",
+        "summary": "Controlled Go error was observed through packaged MCP.",
+        "data": {
+          "trace_id": "{{go_error_trace_id}}",
+          "campaign_id": "{{run_id}}"
+        }
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.event.id",
+            "operator": "not_empty"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.event"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "list-diagnostic-sessions",
+      "tool": "list_debug_sessions",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "status": "open",
+        "limit": 20
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.count",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.sessions"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    },
+    {
+      "id": "get-diagnostic-session",
+      "tool": "get_debug_session",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{debug_session_id}}",
+        "limit": 100
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.session.id",
+            "operator": "eq",
+            "variable": "debug_session_id"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.session",
+          "structuredContent.data.events"
+        ],
+        "redact": [],
+        "forbid": [
+          "fixture_auth_value",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "close-diagnostic-session",
+      "tool": "close_debug_session",
+      "coverage": "primary",
+      "arguments": {
+        "session_id": "{{debug_session_id}}",
+        "summary": "Runtime package log and diagnosis scenario completed."
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.session.status",
+            "operator": "eq",
+            "value": "closed"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent.data.session"
+        ],
+        "redact": [],
+        "forbid": []
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "close-diagnostic-session-on-failure",
+      "tool": "close_debug_session",
+      "coverage": "supporting",
+      "arguments": {
+        "session_id": "{{debug_session_id}}",
+        "summary": "Scenario cleanup after failure."
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.session.status",
+            "operator": "eq",
+            "value": "closed"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent"
+        ],
+        "redact": [],
+        "forbid": []
+      },
+      "run_if": "variable_set:debug_session_id&&primary_step_not_passed:close-diagnostic-session"
+    },
+    {
+      "id": "stop-go-after-logs",
+      "tool": "stop_service",
+      "coverage": "supporting",
+      "arguments": {
+        "project_id": "{{project_id}}",
+        "deployment_id": "{{go_deployment_id}}",
+        "approval_wait_seconds": 300
+      },
+      "expect": {
+        "outcome": "success",
+        "assertions": [
+          {
+            "path": "structuredContent.data.action",
+            "operator": "eq",
+            "value": "stop"
+          }
+        ]
+      },
+      "evidence": {
+        "record": [
+          "structuredContent"
+        ],
+        "redact": [],
+        "forbid": [
+          "approval_token"
+        ]
+      },
+      "run_if": "variable_set:project_id"
+    }
+  ]
+}
