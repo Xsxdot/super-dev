@@ -48,7 +48,7 @@ jobs:
           cp desktop/src-tauri/resources/agent-install/superdev-agent-* release-assets/agent/
 
       - name: Upload agent release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-agent-binaries
           if-no-files-found: error
@@ -157,7 +157,7 @@ jobs:
         run: pnpm tauri build
 
       - name: Upload Linux desktop release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-desktop-linux
           if-no-files-found: error
@@ -313,7 +313,7 @@ jobs:
           env -u APPLE_ID -u APPLE_PASSWORD pnpm tauri build
 
       - name: Upload macOS desktop release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-desktop-macos
           if-no-files-found: error
@@ -362,7 +362,7 @@ jobs:
         run: pnpm tauri build
 
       - name: Upload Windows desktop release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-desktop-windows
           if-no-files-found: error

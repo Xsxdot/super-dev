@@ -193,7 +193,7 @@ jobs:
         run: cargo test mcp_install::connectors -- --nocapture
 
       - name: Upload remote agent binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: superdev-agent-binaries
           if-no-files-found: error
@@ -208,7 +208,7 @@ jobs:
         run: pnpm tauri build
 
       - name: Upload Linux desktop packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: superdev-desktop-linux
           if-no-files-found: error
@@ -258,7 +258,7 @@ jobs:
         run: pnpm tauri build
 
       - name: Upload macOS desktop packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: superdev-desktop-macos
           if-no-files-found: error
@@ -318,7 +318,7 @@ jobs:
         run: pnpm tauri build
 
       - name: Upload Windows desktop packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: superdev-desktop-windows
           if-no-files-found: error
