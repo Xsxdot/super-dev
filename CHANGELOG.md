@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-23
+
 ### Added
 
 - Added package-verified cross-platform runtime validation bundles and a strict target-native campaign runner covering the full live MCP surface, seven language runtime/debug providers, human operation approvals, one-time credential login, borrowed remote pipelines, redacted evidence, and fail-closed cleanup on five supported targets.
@@ -14,12 +16,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Added safe remote Agent uninstall that preserves Agent data by default, supports explicit data purge, provides version-matched manual Shell and PowerShell scripts, and offers configuration-only detach only as a warned fallback.
 - Added a built-in **Grok** Agent Connector (Full): detect Grok CLI, install SuperDev MCP via `grok mcp` (`--scope user`), install Skill under `~/.grok/skills/superdev`, and install an owned SessionStart hook file under `~/.grok/hooks/` (Grok SessionStart is passive; guidance is Skill-first).
 
+### Changed
+
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.2`.
+
 ### Fixed
 
 - Removed non-functional Search filter/Open/Copy controls and heuristic trace-path claims, leaving the real project-log search, time-aligned service context, and pin workflow; remote installation now also rejects Windows ARM before upload when no matching agent binary is packaged.
 - Unified Windows validation steps, scenarios, providers, installer lifecycle, tool coverage, report sections, and summaries on one fact-and-evidence-derived result contract, so unattempted work is no longer reported as failure or success and post-assertion responses remain auditable.
 - Made the packaged Windows validation Runbook directly executable with stock Windows PowerShell 5.1 by preserving UTF-8 script bytes, avoiding automatic-variable parameter collisions, and keeping structured output readable without loaders or source rewriting.
 - Prevented runtime log panels from reusing virtual-scroll state across workspace tabs or deployment source changes, and delegated bottom reconciliation to TanStack Virtual to avoid large blank gaps below visible logs.
+- Made remote Agent uninstall retry idempotent after a partial `config_remove` failure, and stopped reporting configuration-only detach as a remote uninstall.
+- Kept detach provenance out of uninstall recovery paths, and fail closed on invalid agent-removal recovery modes so rejected recoveries perform no tunnel invalidation, apply, or status side effects.
+- Hardened Grok connector finish logging, shell quoting, DTO shaping, and error codes for clearer install/uninstall diagnosis.
+
+## [0.2.1] - 2026-07-17
+
+### Changed
+
+- Enabled signed and notarized macOS desktop release packaging in CI via App Store Connect API key and certificate import for agent-install binaries.
+
+### Fixed
+
+- Used a portable `GOCACHE` path in auth sidecar package contract tests so Linux CI no longer depends on the macOS-only `/private/tmp` path.
+- Hardened Windows runtime packaging contracts and related validation evidence/approval lifecycle fixes for more reliable release gating.
 
 ## [0.2.0] - 2026-06-17
 
