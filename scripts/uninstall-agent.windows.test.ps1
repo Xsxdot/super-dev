@@ -16,10 +16,10 @@ $Script = Join-Path $Root 'scripts\uninstall-agent.ps1'
 $Fixture = Join-Path ([System.IO.Path]::GetTempPath()) ("superdev-uninstall-" + [guid]::NewGuid())
 $env:SUPERDEV_UNINSTALL_TESTING = '1'
 $env:SUPERDEV_UNINSTALL_FIXTURE_ROOT = $Fixture
-$script:TaskExists = $true
-$script:TaskAction = 'C:\ProgramData\SuperDev\Agent\superdev-agent.exe'
-$script:CommandLog = [System.Collections.Generic.List[string]]::new()
-$script:FailTaskStop = $false
+$global:TaskExists = $true
+$global:TaskAction = 'C:\ProgramData\SuperDev\Agent\superdev-agent.exe'
+$global:CommandLog = [System.Collections.Generic.List[string]]::new()
+$global:FailTaskStop = $false
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -27,26 +27,26 @@ function Assert-True([bool]$Condition, [string]$Message) {
 
 function Get-ScheduledTask {
     param([string]$TaskName, [object]$ErrorAction)
-    $script:CommandLog.Add("Get-ScheduledTask $TaskName")
-    if (-not $script:TaskExists) { return $null }
-    return [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = $script:TaskAction }) }
+    $global:CommandLog.Add("Get-ScheduledTask $TaskName")
+    if (-not $global:TaskExists) { return $null }
+    return [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = $global:TaskAction }) }
 }
 
 function Stop-ScheduledTask {
     param([string]$TaskName, [object]$ErrorAction)
-    $script:CommandLog.Add("Stop-ScheduledTask $TaskName")
-    if ($script:FailTaskStop) { throw 'fixture Scheduled Task stop failure' }
+    $global:CommandLog.Add("Stop-ScheduledTask $TaskName")
+    if ($global:FailTaskStop) { throw 'fixture Scheduled Task stop failure' }
 }
 
 function Unregister-ScheduledTask {
     param([string]$TaskName, [switch]$Confirm, [object]$ErrorAction)
-    $script:CommandLog.Add("Unregister-ScheduledTask $TaskName")
-    $script:TaskExists = $false
+    $global:CommandLog.Add("Unregister-ScheduledTask $TaskName")
+    $global:TaskExists = $false
 }
 
 function Get-Process {
     param([string]$Name, [object]$ErrorAction)
-    $script:CommandLog.Add("Get-Process $Name")
+    $global:CommandLog.Add("Get-Process $Name")
     return $null
 }
 
@@ -61,27 +61,27 @@ try {
     Assert-True (($output -join "`n") -match 'level=INFO stage=complete') 'Windows output lacks complete stage'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $AgentRoot 'superdev-agent.exe'))) 'Windows binary was not removed'
     Assert-True (Test-Path -LiteralPath (Join-Path $AgentRoot 'data\security.json')) 'Windows data was removed by default'
-    Assert-True ($script:CommandLog.Contains('Stop-ScheduledTask SuperDevAgent')) 'Agent Scheduled Task was not stopped'
-    Assert-True ($script:CommandLog.Contains('Unregister-ScheduledTask SuperDevAgent')) 'Agent Scheduled Task was not removed'
-    Assert-True (-not (($script:CommandLog -join "`n") -match 'Docker')) 'Windows cleanup addressed Docker'
+    Assert-True ($global:CommandLog.Contains('Stop-ScheduledTask SuperDevAgent')) 'Agent Scheduled Task was not stopped'
+    Assert-True ($global:CommandLog.Contains('Unregister-ScheduledTask SuperDevAgent')) 'Agent Scheduled Task was not removed'
+    Assert-True (-not (($global:CommandLog -join "`n") -match 'Docker')) 'Windows cleanup addressed Docker'
 
     & $Script | Out-Null
     & $Script -Purge | Out-Null
     Assert-True (-not (Test-Path -LiteralPath $AgentRoot)) 'Windows purge did not remove Agent root'
 
-    $script:TaskExists = $true
-    $script:TaskAction = 'C:\ProgramData\SuperDev\Agent\superdev-agent.exe'
-    $script:FailTaskStop = $true
+    $global:TaskExists = $true
+    $global:TaskAction = 'C:\ProgramData\SuperDev\Agent\superdev-agent.exe'
+    $global:FailTaskStop = $true
     $failureOutput = [System.Collections.Generic.List[string]]::new()
     $failed = $false
     try { & $Script | ForEach-Object { $failureOutput.Add([string]$_) } } catch { $failed = $true }
     Assert-True $failed 'Scheduled Task stop failure must fail the script'
     Assert-True (($failureOutput -join "`n") -match 'level=ERROR stage=windows_task') 'Scheduled Task failure lacks its cleanup stage'
     Assert-True (-not (($failureOutput -join "`n") -match 'level=ERROR stage=detect')) 'Scheduled Task failure was mislabeled as detection failure'
-    $script:FailTaskStop = $false
+    $global:FailTaskStop = $false
 
-    $script:TaskExists = $true
-    $script:TaskAction = 'C:\Custom\superdev-agent.exe'
+    $global:TaskExists = $true
+    $global:TaskAction = 'C:\Custom\superdev-agent.exe'
     New-Item -ItemType Directory -Force -Path $AgentRoot | Out-Null
     Set-Content -LiteralPath (Join-Path $AgentRoot 'superdev-agent.exe') -Value 'fixture'
     $failed = $false

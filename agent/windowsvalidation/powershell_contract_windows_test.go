@@ -237,8 +237,9 @@ func assertWindowsPowerShell51TranscriptReadable(t *testing.T, packageRoot strin
 $ErrorActionPreference = 'Stop'
 Start-Transcript -LiteralPath $env:SUPERDEV_TEST_TRANSCRIPT -Force | Out-Null
 try {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId w10x64-abcdef0-20260714T000000Z-abcdee -CampaignRoot $env:SUPERDEV_TEST_CAMPAIGNS -ResultsRoot $env:SUPERDEV_TEST_RESULTS -BackupDirectory $env:SUPERDEV_TEST_MISSING_BACKUP -RestoreUserState
+    $childOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1 -CampaignId w10x64-abcdef0-20260714T000000Z-abcdee -CampaignRoot $env:SUPERDEV_TEST_CAMPAIGNS -ResultsRoot $env:SUPERDEV_TEST_RESULTS -BackupDirectory $env:SUPERDEV_TEST_MISSING_BACKUP -RestoreUserState 2>&1 | Out-String
     $scriptExitCode = $LASTEXITCODE
+    Write-Output $childOutput
 } finally {
     Stop-Transcript | Out-Null
 }

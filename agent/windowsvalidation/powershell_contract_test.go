@@ -34,7 +34,7 @@ func TestFinalArchivePreservesPowerShellEntrypointBytesAndRunbookContract(t *tes
 	sourceRoot := filepath.Clean(filepath.Join("..", "..", "validation", "windows-real"))
 	allScripts := append(append([]string{}, windowsPowerShellEntrypoints...), windowsPowerShellInternalHelpers...)
 	for _, name := range allScripts {
-		entryName := "superdev-windows-validation/" + name
+		entryName := "superdev-windows-validation/" + filepath.ToSlash(name)
 		content, ok := entries[entryName]
 		if !ok {
 			t.Fatalf("archive is missing %s", entryName)
