@@ -2,3 +2,6 @@
 validation/runtime/targets.txt text eol=lf
 validation/runtime/*.sh text eol=lf
 validation/runtime/*.cmd text eol=crlf
+# windows-real assets are byte-hashed and pattern-matched by contract tests, so they must stay LF on every checkout.
+validation/windows-real/** text eol=lf
+validation/windows-real/**/*.cmd text eol=crlf

@@ -20,7 +20,8 @@ if ($FixtureRoot -and $env:SUPERDEV_UNINSTALL_TESTING -ne '1') {
 }
 
 $CanonicalAgentRoot = 'C:\ProgramData\SuperDev\Agent'
-$CanonicalBinary = Join-Path $CanonicalAgentRoot 'superdev-agent.exe'
+# String join, not Join-Path: contract tests stub this comparison on non-Windows pwsh lanes where drive C: does not exist.
+$CanonicalBinary = $CanonicalAgentRoot + '\superdev-agent.exe'
 $AgentRoot = if ($FixtureRoot) {
     Join-Path $FixtureRoot 'C\ProgramData\SuperDev\Agent'
 } else {

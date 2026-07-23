@@ -127,7 +127,7 @@ func TestRemoteAgentBackend_SearchReturnsMatches(t *testing.T) {
 }
 
 func TestRemoteAgentBackend_ContextReturnsDeploymentEntries(t *testing.T) {
-	now := time.Now().Truncate(time.Millisecond)
+	now := time.Now().UTC().Truncate(time.Millisecond)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/logs/context", r.URL.Path)
 		assert.Equal(t, "svc-1", r.URL.Query().Get("deployment"))
@@ -164,7 +164,7 @@ func TestRemoteAgentBackend_ContextReturnsDeploymentEntries(t *testing.T) {
 }
 
 func TestRemoteAgentBackend_ContextFallsBackToLogsForOldRemote(t *testing.T) {
-	now := time.Now().Truncate(time.Millisecond)
+	now := time.Now().UTC().Truncate(time.Millisecond)
 	var sawContext bool
 	var sawLogs bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
