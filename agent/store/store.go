@@ -151,6 +151,13 @@ func New(path string) (*Store, error) {
 	}
 	// 限制最大连接数为 1，将写操作串行化，防止 SQLite 并发写冲突。
 	db.SetMaxOpenConns(1)
+	// SetMaxOpenConns(1) 只能串行化本实例内部连接；同一文件被其他实例（如后台日志清理、
+	// CLI、另一个测试连接）持有写锁时，零等待的默认行为会直接报 SQLITE_BUSY。
+	// busy_timeout 让短暂跨实例锁竞争转为等待而非失败。单连接池保证该 PRAGMA 作用于唯一连接。
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
+	}
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
