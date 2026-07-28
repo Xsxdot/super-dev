@@ -110,7 +110,9 @@ describe('HostManagerTab', () => {
       ssh_private_key: 'PRIVATE KEY CONTENT',
       ssh_host_key_fingerprint: 'SHA256:abc123',
     }))
-    expect(spy.mock.calls[0][0]).not.toHaveProperty('ssh_key_path')
+    // 该用例走的是「粘贴私钥内容」路径，未选择导入文件，
+    // 因此 payload 不应携带 ssh_key_path（导入路径与粘贴内容互斥，见 HostFormModal.buildPayload）。
+    expect(spy.mock.calls[0][0].ssh_key_path ?? '').toBe('')
   })
 
   it('does not render Agent summary or Agent actions inside Host management', async () => {
