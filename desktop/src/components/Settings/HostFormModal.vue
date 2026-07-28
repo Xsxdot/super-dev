@@ -57,8 +57,17 @@ async function importLocalKey() {
   keyScanError.value = ''
   keyCandidates.value = []
   keyScanned.value = false
+  // 记录发起扫描时弹窗正在编辑的 Host 身份，与 runScan 的 scannedHostId 同理：
+  // 扫描结果只对「发起扫描时正在编辑的那个 Host」有意义。若飞行中用户切换了编辑对象
+  // （hydration watcher 已经 clearKeyPath 过一次），旧 Host 扫到的候选/路径绝不能
+  // 在新 Host 的表单里落地——这是本文件第四次出现同一类 stale-async 漏洞，必须用
+  // 与 runScan 一致的写法防住：成功和失败两条路径都要在写状态前校验身份未变。
+  const scannedHostId = props.initial?.id
   try {
     const keys = await store.listSshKeys()
+    // 飞行中编辑对象已切换：不再写入任何状态（包括不把 spinner 状态留在这台新 Host 上），
+    // 直接返回，交由 finally 统一收尾。
+    if (props.initial?.id !== scannedHostId) return
     keyScanned.value = true
     // 唯一候选直接填入，省掉一次无意义的点击；多个候选才需要用户裁决。
     if (keys.length === 1) {
@@ -67,6 +76,7 @@ async function importLocalKey() {
     }
     keyCandidates.value = keys
   } catch (err) {
+    if (props.initial?.id !== scannedHostId) return
     keyScanError.value = err instanceof Error ? err.message : t('settings.hostForm.keyScanFailed')
   } finally {
     keyScanning.value = false
@@ -420,18 +430,21 @@ function saveWithoutFingerprint() {
               {{ t('settings.hostForm.noPrivateKey') }}
             </div>
 
-            <ul v-if="keyCandidates.length > 0" class="key-list" data-test="host-form-key-candidates">
-              <li
-                v-for="key in keyCandidates"
-                :key="key.path"
-                data-test="host-form-key-row"
-                @click="chooseKey(key)"
-              >
-                <span class="key-name">{{ key.name }}</span>
-                <span class="key-meta">{{ key.type }}</span>
-                <span v-if="key.encrypted" class="key-meta">{{ t('settings.hostForm.keyEncryptedHint') }}</span>
-              </li>
-            </ul>
+            <template v-if="keyCandidates.length > 0">
+              <span class="settings-field-label">{{ t('settings.hostForm.keyFileTitle') }}</span>
+              <ul class="key-list" data-test="host-form-key-candidates">
+                <li
+                  v-for="key in keyCandidates"
+                  :key="key.path"
+                  data-test="host-form-key-row"
+                  @click="chooseKey(key)"
+                >
+                  <span class="key-name">{{ key.name }}</span>
+                  <span class="key-meta">{{ key.type }}</span>
+                  <span v-if="key.encrypted" class="key-meta">{{ t('settings.hostForm.keyEncryptedHint') }}</span>
+                </li>
+              </ul>
+            </template>
 
             <div v-if="selectedKey" class="key-selected">
               <span class="settings-field-label">{{ t('settings.hostForm.sshKeyPath') }}</span>

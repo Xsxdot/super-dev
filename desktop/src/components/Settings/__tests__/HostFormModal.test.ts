@@ -551,4 +551,49 @@ describe('HostFormModal', () => {
     const textarea = wrapper.find('[data-test="host-form-ssh-private-key"]')
     expect((textarea.element as HTMLTextAreaElement).disabled).toBe(false)
   })
+
+  // 安全回归（第四处 stale-async 漏洞）：编辑弹窗从 Host A 切到 Host B 时，若 Host A 发起的
+  // listSshKeys() 请求飞行中才返回，其结果绝不能落到 Host B 的表单里——与 runScan 的
+  // scannedHostId 校验是同一类保护，importLocalKey 之前缺失了这道校验。
+  it('切换编辑对象后，飞行中的扫描结果不得落到新 Host 上', async () => {
+    setActivePinia(createPinia())
+    const store = useRemoteStore()
+    let release!: (v: SshKey[]) => void
+    vi.spyOn(store, 'listSshKeys').mockReturnValue(
+      new Promise<SshKey[]>(res => { release = res }),
+    )
+
+    const hostA: Host = {
+      id: 'host-a',
+      name: 'host-a',
+      tags: [],
+      ssh_host: '10.0.0.10',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+    const hostB: Host = {
+      id: 'host-b',
+      name: 'host-b',
+      tags: [],
+      ssh_host: '10.0.0.20',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+
+    const wrapper = mount(HostFormModal, {
+      props: { visible: true, initial: hostA },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await wrapper.setProps({ initial: hostB })
+    await flushPromises()
+    release([{ path: '~/.ssh/id_rsa', name: 'id_rsa', type: 'openssh', encrypted: false }])
+    await flushPromises()
+
+    // Host A 的采集结果绝不能出现在 Host B 的表单里
+    expect(wrapper.find('[data-test="host-form-key-path"]').exists()).toBe(false)
+  })
 })
