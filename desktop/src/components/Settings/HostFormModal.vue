@@ -41,6 +41,16 @@ const scannedFingerprint = ref('')
 const scanErrorMessage = ref('')
 const manualEntryOpen = ref(false)
 
+// 采集状态重置曾经在 cancelScan/saveWithoutFingerprint/trustAndSave/地址 watcher
+// 四处各自内联实现，导致新增的失效点（如切换编辑对象的 hydration watcher）很容易
+// 被漏掉——这正是本文件曾经出现过一次真实漏洞的原因。所有需要作废采集状态的地方
+// 必须调用这唯一入口，不再各自写重置逻辑。
+function resetScan() {
+  scanPhase.value = 'idle'
+  scannedFingerprint.value = ''
+  scanErrorMessage.value = ''
+}
+
 // 已配置指纹的 Host 不再自动采集：换指纹必须走「主机已重装」的重采流程，
 // 避免把唯一的安全确认点稀释成一次普通保存。
 const needsScan = computed(() => {
@@ -58,9 +68,7 @@ watch(
     if (scanPhase.value === 'idle') return
     // scanning 阶段也要作废：若不重置，飞行中请求返回时会把「旧地址采到的指纹」
     // 套用到「新地址」上，与 confirm/failed 阶段是同一个漏洞，只是时间点更早。
-    scanPhase.value = 'idle'
-    scannedFingerprint.value = ''
-    scanErrorMessage.value = ''
+    resetScan()
   },
 )
 
@@ -99,6 +107,11 @@ watch(
   () => [props.visible, props.initial] as const,
   ([visible, initial]) => {
     if (!visible) return
+    // 切换弹窗正在编辑的 Host 会让任何已采集的指纹立即失效——即使新旧 Host 的
+    // ssh_host 文本恰好相同（同地址多主机在故障机群里完全可能出现）。地址 watcher
+    // 只在地址「文本变化」时触发，识别不了「同地址换了身份」这种切换，所以这里必须
+    // 独立重置，否则确认卡片会在 Host B 的上下文里残留 Host A 采集到的指纹。
+    resetScan()
     if (initial) {
       form.value = {
         name: initial.name,
@@ -160,15 +173,24 @@ async function runScan() {
   // 记录发起采集时的地址，用于在异步返回时判断地址是否已被用户改动（见下方 identity 校验）。
   const scannedHost = form.value.ssh_host
   const scannedPort = Number(form.value.ssh_port) || 22
+  // 同时记录发起采集时弹窗正在编辑的 Host 身份。地址/端口的 watcher 只能识别「文本变了」，
+  // 识别不了「同地址换了一台 Host」——这正是第三处 stale-async 漏洞的成因。新建 Host 时
+  // props.initial 恒为 undefined，undefined === undefined 判定为「未切换」，创建流程的采集
+  // 不受影响；这里显式写出比较逻辑而非依赖巧合，避免以后重构悄悄破坏这个前提。
+  const scannedHostId = props.initial?.id
   try {
     const result = await store.scanHostKey({ ssh_host: scannedHost, ssh_port: scannedPort })
     // 飞行中地址已变：上面的 watcher 早已把 scanPhase 重置为 idle，此时绝不能
     // 用旧地址的采集结果把它又推回 confirm，否则会出现「新地址配旧指纹」的漏洞。
     if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
+    // 飞行中编辑对象已切换（同地址换了 Host）：hydration watcher 已经 resetScan，
+    // 此时绝不能把上一台 Host 采到的指纹又推回 confirm，否则会把 A 的指纹展示在 B 的确认卡片里。
+    if (props.initial?.id !== scannedHostId) return
     scannedFingerprint.value = result.fingerprint
     scanPhase.value = 'confirm'
   } catch (err) {
     if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
+    if (props.initial?.id !== scannedHostId) return
     // 采集失败绝不降级为「跳过指纹直接保存」——必须由用户显式选择后续动作，
     // 否则「未采集」与「采集出错」会被混淆，用户会以为已经配好。
     scanErrorMessage.value = err instanceof Error ? err.message : String(err)
@@ -178,12 +200,11 @@ async function runScan() {
 
 function trustAndSave() {
   emit('submit', buildPayload(scannedFingerprint.value))
-  scanPhase.value = 'idle'
+  resetScan()
 }
 
 function cancelScan() {
-  scanPhase.value = 'idle'
-  scannedFingerprint.value = ''
+  resetScan()
 }
 
 function openManualEntry() {
@@ -193,7 +214,7 @@ function openManualEntry() {
 
 function saveWithoutFingerprint() {
   emit('submit', buildPayload(''))
-  scanPhase.value = 'idle'
+  resetScan()
 }
 </script>
 

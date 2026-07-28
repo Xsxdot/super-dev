@@ -388,4 +388,64 @@ describe('HostFormModal', () => {
     })
     expect(wrapper.find('[data-test="host-form-clear-ssh-host-key-fingerprint"]').exists()).toBe(false)
   })
+
+  // 安全回归（第三处 stale-async 漏洞）：两台无指纹的 Host 共享同一个 ssh_host（故障机群里
+  // 完全可能出现），编辑弹窗从 Host A 切到 Host B 时，地址 watcher 因文本未变不会触发，
+  // 必须靠 hydration watcher 独立 resetScan() 才能作废 A 采到的指纹，否则确认卡片会在
+  // B 的上下文里展示 A 的指纹，确认后就把 B 错误地钉在 A 的 host key 上。
+  it('discards an in-flight scan result when the edited host is switched to a same-address host', async () => {
+    let resolveScanA: (value: { fingerprint: string }) => void
+    const scanHostKey = vi.fn().mockImplementation(() => new Promise(resolve => { resolveScanA = resolve }))
+    setActivePinia(createPinia())
+    const store = useRemoteStore()
+    vi.spyOn(store, 'scanHostKey').mockImplementation(scanHostKey)
+
+    const hostA: Host = {
+      id: 'host-a',
+      name: 'host-a',
+      tags: [],
+      ssh_host: '10.0.0.10',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+    const hostB: Host = {
+      id: 'host-b',
+      name: 'host-b',
+      tags: [],
+      ssh_host: '10.0.0.10',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+
+    const wrapper = mount(HostFormModal, {
+      props: { visible: true, initial: hostA },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    // 在编辑 Host A 时发起采集，请求挂起未返回。
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    expect(wrapper.find('[data-test="host-form-scanning"]').exists()).toBe(true)
+
+    // 用户切到编辑 Host B（同地址、同端口，文本层面地址 watcher 看不出变化）。
+    await wrapper.setProps({ initial: hostB })
+    expect(wrapper.find('[data-test="host-form-scanning"]').exists()).toBe(false)
+
+    // A 的旧请求这时才返回指纹，不应把界面推回 confirm，也不能把它算作 B 的确认。
+    resolveScanA!({ fingerprint: 'SHA256:stale-for-host-a' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(false)
+    expect(wrapper.emitted('submit')).toBeFalsy()
+
+    // 再次点击保存应该为 B 重新发起一次全新采集，而不是复用 A 的结果。
+    scanHostKey.mockResolvedValueOnce({ fingerprint: 'SHA256:for-host-b' })
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
+
+    const submitted = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(submitted.ssh_host_key_fingerprint).toBe('SHA256:for-host-b')
+  })
 })
