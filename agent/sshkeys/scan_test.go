@@ -3,6 +3,7 @@ package sshkeys
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,7 @@ func TestScanSelectsOnlyPrivateKeys(t *testing.T) {
 	if len(got) != 1 || got[0] != "id_rsa" {
 		t.Fatalf("expected only id_rsa, got %v", got)
 	}
+	// t.TempDir() 不在 home 下，所以路径应该是绝对路径，不是 ~/ 前缀。
 	if keys[0].Path != filepath.Join(dir, "id_rsa") {
 		t.Fatalf("unexpected path %q", keys[0].Path)
 	}
@@ -65,8 +67,8 @@ func TestScanDetectsNonConventionalName(t *testing.T) {
 	if len(keys) != 1 || keys[0].Name != "id_ed25519_work" {
 		t.Fatalf("expected id_ed25519_work, got %v", names(keys))
 	}
-	if keys[0].Type != "ed25519" {
-		t.Fatalf("expected type ed25519, got %q", keys[0].Type)
+	if keys[0].Type != "openssh" {
+		t.Fatalf("expected type openssh, got %q", keys[0].Type)
 	}
 }
 
@@ -177,5 +179,36 @@ func TestScanSortsByName(t *testing.T) {
 	got := names(keys)
 	if len(got) != 2 || got[0] != "a_key" || got[1] != "b_key" {
 		t.Fatalf("expected sorted by name, got %v", got)
+	}
+}
+
+// 路径在 home 下时，应返回 ~/ 前缀形式。这样前端展示干净，
+// 保存时原样回传，后端 expandHome 处理展开，链路自洽。
+func TestScanReturnsHomePrefixedPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home dir: %v", err)
+	}
+
+	// 在 home 下创建临时目录用于扫描，避免污染用户的真实 ~/.ssh。
+	testSubdir := filepath.Join(home, ".ssh_scan_test_temp")
+	if err := os.MkdirAll(testSubdir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", testSubdir, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(testSubdir) })
+
+	writeFile(t, testSubdir, "id_test", rsaHeader+"AAAA\n")
+
+	keys, err := Scan(testSubdir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", len(keys))
+	}
+
+	// Path 必须以 ~/ 开头，不能是绝对路径。
+	if !strings.HasPrefix(keys[0].Path, "~/") {
+		t.Fatalf("expected path to start with ~/, got %q", keys[0].Path)
 	}
 }

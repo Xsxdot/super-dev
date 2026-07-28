@@ -151,8 +151,18 @@ func inspect(path, name string) (Key, bool, error) {
 	if !ok {
 		return Key{}, false, nil
 	}
+
+	// 如果路径在用户 home 下，转换为 ~/ 前缀形式。
+	// 后端 ReadPrivateKey 与 expandHome 均已处理展开，前端展示也更干净。
+	// 保存时前端原样回传 ~/ 形式，链路自洽。
+	displayPath := path
+	home, err := os.UserHomeDir()
+	if err == nil && strings.HasPrefix(path, home+string(filepath.Separator)) {
+		displayPath = "~" + path[len(home):]
+	}
+
 	return Key{
-		Path:      path,
+		Path:      displayPath,
 		Name:      name,
 		Type:      keyType(begin),
 		Encrypted: isEncrypted(head, begin),
@@ -178,7 +188,10 @@ func beginLine(head []byte) (string, bool) {
 
 // keyType 由 BEGIN 行推断密钥类型，无法识别时返回 "unknown"。
 // PKCS8 格式（BEGIN PRIVATE KEY / BEGIN ENCRYPTED PRIVATE KEY）
-// 不在 BEGIN 行标记算法，故无法推断其密钥类型，这是该格式的已知限制。
+// 和 OpenSSH v1 格式（BEGIN OPENSSH PRIVATE KEY）不在 BEGIN 行标记算法，
+// 故无法推断其密钥类型，这是这些格式的已知限制。
+// OpenSSH 格式虽然内部可能是 RSA、ECDSA 或 ed25519，但 BEGIN 行无法区分，
+// 所以返回 "openssh" 表示格式而非算法，由调用方或用户确认实际算法。
 func keyType(begin string) string {
 	switch {
 	case strings.Contains(begin, "RSA"):
@@ -188,8 +201,7 @@ func keyType(begin string) string {
 	case strings.Contains(begin, "DSA"):
 		return "dsa"
 	case strings.Contains(begin, "OPENSSH"):
-		// OpenSSH 新格式不在 BEGIN 行区分算法，绝大多数为 ed25519。
-		return "ed25519"
+		return "openssh"
 	default:
 		return "unknown"
 	}
