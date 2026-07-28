@@ -354,7 +354,9 @@ const (
 //   - 不感知是否安装 Agent
 //   - 不保存 agent token、TLS 或 transport chain
 //   - SSHPrivateKey 保存密钥内容，SSHKeyPath 仅可作为 API 导入入口
-//   - SSHHostKeyFingerprint 只能由可信外部来源预置，不承载 TOFU 发现结果
+//   - SSHHostKeyFingerprint 可能来自人工预置，也可能来自首次连接时的自动采集；
+//     系统有意不区分两种来源（若日后需要「生产机必须人工预置」这类策略，
+//     须先补来源字段，无法从现有数据推断）
 type Host struct {
 	ID                    string   `json:"id"`
 	Name                  string   `json:"name"`
