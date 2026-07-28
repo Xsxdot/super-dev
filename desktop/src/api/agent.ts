@@ -992,6 +992,14 @@ export interface ProjectPipelinePreviewRequest {
   variables?: Record<string, string>
 }
 
+/** SshKey 是 agent 在本机 ~/.ssh 扫描到的一个私钥候选。 */
+export interface SshKey {
+  path: string
+  name: string
+  type: string
+  encrypted: boolean
+}
+
 export interface SshConfigEntry {
   host: string
   hostname: string
@@ -1668,6 +1676,8 @@ export const api = {
 
   // 远程监听：SSH config 导入
   listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),
+  // 远程监听：本机私钥扫描（只返回路径与元信息，不含密钥内容）
+  listSshKeys: () => request<SshKey[]>('/api/ssh-keys'),
 
   // 远程监听：LogSource CRUD
   listLogSources: () => request<LogSource[]>('/api/log-sources'),
