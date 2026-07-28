@@ -177,6 +177,8 @@ func beginLine(head []byte) (string, bool) {
 }
 
 // keyType 由 BEGIN 行推断密钥类型，无法识别时返回 "unknown"。
+// PKCS8 格式（BEGIN PRIVATE KEY / BEGIN ENCRYPTED PRIVATE KEY）
+// 不在 BEGIN 行标记算法，故无法推断其密钥类型，这是该格式的已知限制。
 func keyType(begin string) string {
 	switch {
 	case strings.Contains(begin, "RSA"):
@@ -195,11 +197,16 @@ func keyType(begin string) string {
 
 // isEncrypted 判定私钥是否带 passphrase。
 //
-// 两种格式各有标记：传统 PEM 用 Proc-Type: 4,ENCRYPTED；
-// OpenSSH 新格式在 base64 体内记录 KDF 名，none 表示未加密。
+// 三种格式各有标记：传统 PEM 用 Proc-Type: 4,ENCRYPTED；PKCS8 在 BEGIN 行
+// 直接标记加密；OpenSSH 新格式在 base64 体内记录 KDF 名，none 表示未加密。
 // 带 passphrase 的密钥 agent 建隧道时会失败，故提前标注供 UI 提示。
 func isEncrypted(head []byte, begin string) bool {
 	if bytes.Contains(head, []byte("Proc-Type: 4,ENCRYPTED")) {
+		return true
+	}
+	// PKCS8 加密私钥在 BEGIN 行直接标记加密，不依赖 Proc-Type 头。
+	// 这是判定该格式加密状态的唯一标记。
+	if strings.Contains(begin, "ENCRYPTED PRIVATE KEY") {
 		return true
 	}
 	if !strings.Contains(begin, "OPENSSH") {

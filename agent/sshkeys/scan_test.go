@@ -83,6 +83,41 @@ func TestScanDetectsEncryptedKeys(t *testing.T) {
 	}
 }
 
+// PKCS8 加密私钥在 BEGIN 行标记加密，没有 Proc-Type 头，
+// 必须单独识别，否则 UI 会把需要 passphrase 的密钥显示为可直接使用。
+func TestScanDetectsPKCS8EncryptedKey(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_pkcs8", "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHzBJBgkqhkiG9w0BBQ0wPDAb\n-----END ENCRYPTED PRIVATE KEY-----\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", names(keys))
+	}
+	if !keys[0].Encrypted {
+		t.Fatal("PKCS8 encrypted key must be reported as encrypted")
+	}
+}
+
+// PKCS8 未加密私钥用普通 BEGIN 行，必须不标记为加密。
+func TestScanDetectsPKCS8PlainKey(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_plain", "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQ\n-----END PRIVATE KEY-----\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", names(keys))
+	}
+	if keys[0].Encrypted {
+		t.Fatal("plain PKCS8 key must not be reported as encrypted")
+	}
+}
+
 // 目录不存在是首次使用的正常场景，不应报错。
 func TestScanMissingDirReturnsEmpty(t *testing.T) {
 	keys, err := Scan(filepath.Join(t.TempDir(), "nope"))
