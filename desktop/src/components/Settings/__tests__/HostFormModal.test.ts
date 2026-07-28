@@ -14,21 +14,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HostFormModal from '@/components/Settings/HostFormModal.vue'
-import type { Host, ScanHostKeyResult } from '@/api/agent'
+import type { Host, ScanHostKeyResult, SshKey } from '@/api/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 
-// mountForm 统一挂载 HostFormModal 并按需 spy store.scanHostKey，
+// mountForm 统一挂载 HostFormModal 并按需 spy store.scanHostKey / store.listSshKeys，
 // 复用既有测试文件的 Pinia + installTestI18n 约定（见 HostManagerTab.test.ts）。
 // ScanHostKeyFn 与 store.scanHostKey 的签名保持一致；用裸 ReturnType<typeof vi.fn> 会退化成
 // Procedure|Constructable，mockImplementation 在 vue-tsc -b 的严格构建下拒绝该类型。
 type ScanHostKeyFn = (payload: { ssh_host: string; ssh_port: number }) => Promise<ScanHostKeyResult>
+type ListSshKeysFn = () => Promise<SshKey[]>
 
-function mountForm(options: { scanHostKey?: ScanHostKeyFn; initial?: Partial<Host> | null } = {}) {
+function mountForm(options: {
+  scanHostKey?: ScanHostKeyFn
+  listSshKeys?: ListSshKeysFn
+  initial?: Partial<Host> | null
+} = {}) {
   setActivePinia(createPinia())
   const store = useRemoteStore()
   if (options.scanHostKey) {
     vi.spyOn(store, 'scanHostKey').mockImplementation(options.scanHostKey)
+  }
+  if (options.listSshKeys) {
+    vi.spyOn(store, 'listSshKeys').mockImplementation(options.listSshKeys)
   }
   return mount(HostFormModal, {
     props: {
@@ -451,5 +459,141 @@ describe('HostFormModal', () => {
 
     const submitted = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
     expect(submitted.ssh_host_key_fingerprint).toBe('SHA256:for-host-b')
+  })
+
+  const rsaKey: SshKey = { path: '~/.ssh/id_rsa', name: 'id_rsa', type: 'rsa', encrypted: false }
+  const edKey: SshKey = { path: '~/.ssh/id_ed25519', name: 'id_ed25519', type: 'ed25519', encrypted: false }
+
+  it('扫描到唯一私钥时直接填入路径', async () => {
+    const wrapper = mountForm({ listSshKeys: vi.fn().mockResolvedValue([rsaKey]) })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-key-path"]').text()).toContain('~/.ssh/id_rsa')
+    // 唯一候选无需再让用户选择
+    expect(wrapper.find('[data-test="host-form-key-candidates"]').exists()).toBe(false)
+  })
+
+  it('扫描到多个私钥时展开候选列表供选择', async () => {
+    const wrapper = mountForm({ listSshKeys: vi.fn().mockResolvedValue([rsaKey, edKey]) })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-test="host-form-key-row"]')
+    expect(rows.length).toBe(2)
+    expect(wrapper.find('[data-test="host-form-key-path"]').exists()).toBe(false)
+
+    await rows[1].trigger('click')
+    expect(wrapper.find('[data-test="host-form-key-path"]').text()).toContain('~/.ssh/id_ed25519')
+  })
+
+  it('未扫描到私钥时提示为空', async () => {
+    const wrapper = mountForm({ listSshKeys: vi.fn().mockResolvedValue([]) })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-key-empty"]').exists()).toBe(true)
+  })
+
+  it('扫描失败时内联报错且不影响保存', async () => {
+    const wrapper = mountForm({
+      listSshKeys: vi.fn().mockRejectedValue(new Error('permission denied')),
+      scanHostKey: vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' }),
+    })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-key-error"]').exists()).toBe(true)
+    // 表单其余部分仍可正常提交
+    await wrapper.find('[data-test="host-form-name"]').setValue('host-test')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
+    expect(wrapper.emitted('submit')).toBeTruthy()
+  })
+
+  it('选择导入路径后清空并禁用私钥文本框', async () => {
+    const wrapper = mountForm({
+      listSshKeys: vi.fn().mockResolvedValue([rsaKey]),
+      scanHostKey: vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' }),
+    })
+
+    // 先粘贴内容，再导入路径——导入应当接管，避免两个来源同时生效。
+    await wrapper.find('[data-test="host-form-ssh-private-key"]').setValue('PASTED CONTENT')
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+
+    const textarea = wrapper.find('[data-test="host-form-ssh-private-key"]')
+    expect((textarea.element as HTMLTextAreaElement).disabled).toBe(true)
+
+    await wrapper.find('[data-test="host-form-name"]').setValue('host-test')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
+
+    const payload = wrapper.emitted('submit')![0][0] as Record<string, unknown>
+    expect(payload.ssh_key_path).toBe('~/.ssh/id_rsa')
+    expect(payload.ssh_private_key).toBe('')
+  })
+
+  it('清除导入路径后恢复私钥文本框', async () => {
+    const wrapper = mountForm({ listSshKeys: vi.fn().mockResolvedValue([rsaKey]) })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-clear-key-path"]').trigger('click')
+
+    expect(wrapper.find('[data-test="host-form-key-path"]').exists()).toBe(false)
+    const textarea = wrapper.find('[data-test="host-form-ssh-private-key"]')
+    expect((textarea.element as HTMLTextAreaElement).disabled).toBe(false)
+  })
+
+  // 安全回归（第四处 stale-async 漏洞）：编辑弹窗从 Host A 切到 Host B 时，若 Host A 发起的
+  // listSshKeys() 请求飞行中才返回，其结果绝不能落到 Host B 的表单里——与 runScan 的
+  // scannedHostId 校验是同一类保护，importLocalKey 之前缺失了这道校验。
+  it('切换编辑对象后，飞行中的扫描结果不得落到新 Host 上', async () => {
+    setActivePinia(createPinia())
+    const store = useRemoteStore()
+    let release!: (v: SshKey[]) => void
+    vi.spyOn(store, 'listSshKeys').mockReturnValue(
+      new Promise<SshKey[]>(res => { release = res }),
+    )
+
+    const hostA: Host = {
+      id: 'host-a',
+      name: 'host-a',
+      tags: [],
+      ssh_host: '10.0.0.10',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+    const hostB: Host = {
+      id: 'host-b',
+      name: 'host-b',
+      tags: [],
+      ssh_host: '10.0.0.20',
+      ssh_port: 22,
+      ssh_user: 'root',
+      ssh_host_key_fingerprint_configured: false,
+    }
+
+    const wrapper = mount(HostFormModal, {
+      props: { visible: true, initial: hostA },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    await wrapper.find('[data-test="host-form-import-key"]').trigger('click')
+    await wrapper.setProps({ initial: hostB })
+    await flushPromises()
+    release([{ path: '~/.ssh/id_rsa', name: 'id_rsa', type: 'openssh', encrypted: false }])
+    await flushPromises()
+
+    // Host A 的采集结果绝不能出现在 Host B 的表单里
+    expect(wrapper.find('[data-test="host-form-key-path"]').exists()).toBe(false)
   })
 })

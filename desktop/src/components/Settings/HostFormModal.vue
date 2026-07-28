@@ -4,6 +4,7 @@ HostFormModal：单 Host 身份信息新建与编辑表单。
 职责：
   - 收集 Host 展示名、入口地址元数据、SSH 登录信息和 tag 字段
   - 在 Host 尚无 host key 指纹时，保存前自动采集并要求用户显式确认
+  - 提供「从本机 ~/.ssh 一键导入私钥路径」入口，与手填私钥内容互斥归一
   - 将 Host payload 交由父组件保存
 
 边界：
@@ -15,7 +16,7 @@ HostFormModal：单 Host 身份信息新建与编辑表单。
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n/useAppI18n'
-import type { Host, HostCreatePayload } from '@/api/agent'
+import type { Host, HostCreatePayload, SshKey } from '@/api/agent'
 import { useRemoteStore } from '@/stores/remote'
 import TagInput from './TagInput.vue'
 
@@ -40,6 +41,62 @@ const scanPhase = ref<ScanPhase>('idle')
 const scannedFingerprint = ref('')
 const scanErrorMessage = ref('')
 const manualEntryOpen = ref(false)
+
+// 私钥导入区状态。keyPath 一旦有值即接管私钥来源，textarea 会被清空并禁用——
+// 后端 importHostPrivateKey 是后置覆盖，两个来源同时给会让用户以为粘贴的内容生效了。
+const keyScanning = ref(false)
+const keyScanError = ref('')
+const keyCandidates = ref<SshKey[]>([])
+const keyScanned = ref(false)
+
+// 已选中的候选，用于展示类型与 passphrase 提示；路径本身存在 form.ssh_key_path。
+const selectedKey = ref<SshKey | null>(null)
+
+async function importLocalKey() {
+  keyScanning.value = true
+  keyScanError.value = ''
+  keyCandidates.value = []
+  keyScanned.value = false
+  // 记录发起扫描时弹窗正在编辑的 Host 身份，与 runScan 的 scannedHostId 同理：
+  // 扫描结果只对「发起扫描时正在编辑的那个 Host」有意义。若飞行中用户切换了编辑对象
+  // （hydration watcher 已经 clearKeyPath 过一次），旧 Host 扫到的候选/路径绝不能
+  // 在新 Host 的表单里落地——这是本文件第四次出现同一类 stale-async 漏洞，必须用
+  // 与 runScan 一致的写法防住：成功和失败两条路径都要在写状态前校验身份未变。
+  const scannedHostId = props.initial?.id
+  try {
+    const keys = await store.listSshKeys()
+    // 飞行中编辑对象已切换：不再写入任何状态（包括不把 spinner 状态留在这台新 Host 上），
+    // 直接返回，交由 finally 统一收尾。
+    if (props.initial?.id !== scannedHostId) return
+    keyScanned.value = true
+    // 唯一候选直接填入，省掉一次无意义的点击；多个候选才需要用户裁决。
+    if (keys.length === 1) {
+      chooseKey(keys[0])
+      return
+    }
+    keyCandidates.value = keys
+  } catch (err) {
+    if (props.initial?.id !== scannedHostId) return
+    keyScanError.value = err instanceof Error ? err.message : t('settings.hostForm.keyScanFailed')
+  } finally {
+    keyScanning.value = false
+  }
+}
+
+function chooseKey(key: SshKey) {
+  selectedKey.value = key
+  form.value.ssh_key_path = key.path
+  // 导入路径与粘贴内容互斥：清空 textarea，避免提交时两个来源冲突。
+  form.value.ssh_private_key = ''
+  keyCandidates.value = []
+}
+
+function clearKeyPath() {
+  selectedKey.value = null
+  form.value.ssh_key_path = ''
+  keyCandidates.value = []
+  keyScanned.value = false
+}
 
 // 采集状态重置曾经在 cancelScan/saveWithoutFingerprint/trustAndSave/地址 watcher
 // 四处各自内联实现，导致新增的失效点（如切换编辑对象的 hydration watcher）很容易
@@ -80,6 +137,7 @@ const tunnelInvalidationPending = computed(() => {
     || form.value.ssh_user !== (initial.ssh_user ?? 'root')
     || Boolean(form.value.ssh_password?.trim())
     || Boolean(form.value.ssh_private_key?.trim())
+    || Boolean(form.value.ssh_key_path?.trim())
     || Boolean(form.value.ssh_host_key_fingerprint?.trim())
     || form.value.clear_ssh_password === true
     || form.value.clear_ssh_private_key === true
@@ -95,6 +153,7 @@ function emptyForm(): HostCreatePayload {
     ssh_user: 'root',
     ssh_password: '',
     ssh_private_key: '',
+    ssh_key_path: '',
     ssh_host_key_fingerprint: '',
     clear_ssh_password: false,
     clear_ssh_private_key: false,
@@ -112,6 +171,9 @@ watch(
     // 只在地址「文本变化」时触发，识别不了「同地址换了身份」这种切换，所以这里必须
     // 独立重置，否则确认卡片会在 Host B 的上下文里残留 Host A 采集到的指纹。
     resetScan()
+    // 切换弹窗正在编辑的 Host 也必须作废上一台 Host 已选中的导入路径，理由与
+    // resetScan 相同：否则确认卡片/私钥框会在新 Host 的上下文里残留旧 Host 的导入选择。
+    clearKeyPath()
     if (initial) {
       form.value = {
         name: initial.name,
@@ -123,6 +185,7 @@ watch(
         // Host read view 永不回显秘密或 pin；空值由后端解释为保留既有配置。
         ssh_password: '',
         ssh_private_key: '',
+        ssh_key_path: '',
         ssh_host_key_fingerprint: '',
         clear_ssh_password: false,
         clear_ssh_private_key: false,
@@ -149,7 +212,11 @@ function buildPayload(fingerprint: string): HostCreatePayload {
     ssh_port: Number(form.value.ssh_port) || 22,
     ssh_user: form.value.ssh_user,
     ssh_password: form.value.clear_ssh_password ? '' : form.value.ssh_password,
-    ssh_private_key: form.value.clear_ssh_private_key ? '' : form.value.ssh_private_key,
+    // ssh_private_key 与 ssh_key_path 互斥：后端 importHostPrivateKey 是后置覆盖，
+    // 若两者都非空，路径会静默吞掉粘贴内容，用户却以为粘贴的内容生效了。
+    // 在这唯一的提交边界归一化，而不是分散在交互路径里各自处理。
+    ssh_private_key: form.value.clear_ssh_private_key || form.value.ssh_key_path ? '' : form.value.ssh_private_key,
+    ssh_key_path: form.value.clear_ssh_private_key ? '' : (form.value.ssh_key_path ?? ''),
     ssh_host_key_fingerprint: fingerprint,
     clear_ssh_password: form.value.clear_ssh_password,
     clear_ssh_private_key: form.value.clear_ssh_private_key,
@@ -343,11 +410,62 @@ function saveWithoutFingerprint() {
 
         <div class="settings-field">
           <label class="settings-field-label">{{ t('settings.hostForm.sshPrivateKey') }}</label>
+
+          <div class="key-import">
+            <button
+              type="button"
+              class="settings-btn settings-btn-text"
+              :disabled="keyScanning"
+              data-test="host-form-import-key"
+              @click="importLocalKey"
+            >
+              {{ keyScanning ? t('settings.hostForm.reading') : t('settings.hostForm.importLocalKey') }}
+            </button>
+
+            <div v-if="keyScanError" class="settings-alert settings-alert-danger" data-test="host-form-key-error">
+              {{ keyScanError }}
+            </div>
+
+            <div v-if="keyScanned && !selectedKey && keyCandidates.length === 0 && !keyScanError" class="settings-field-hint" data-test="host-form-key-empty">
+              {{ t('settings.hostForm.noPrivateKey') }}
+            </div>
+
+            <template v-if="keyCandidates.length > 0">
+              <span class="settings-field-label">{{ t('settings.hostForm.keyFileTitle') }}</span>
+              <ul class="key-list" data-test="host-form-key-candidates">
+                <li
+                  v-for="key in keyCandidates"
+                  :key="key.path"
+                  data-test="host-form-key-row"
+                  @click="chooseKey(key)"
+                >
+                  <span class="key-name">{{ key.name }}</span>
+                  <span class="key-meta">{{ key.type }}</span>
+                  <span v-if="key.encrypted" class="key-meta">{{ t('settings.hostForm.keyEncryptedHint') }}</span>
+                </li>
+              </ul>
+            </template>
+
+            <div v-if="selectedKey" class="key-selected">
+              <span class="settings-field-label">{{ t('settings.hostForm.sshKeyPath') }}</span>
+              <code class="mono-input" data-test="host-form-key-path">{{ selectedKey.path }}</code>
+              <span v-if="selectedKey.encrypted" class="settings-field-hint">{{ t('settings.hostForm.keyEncryptedHint') }}</span>
+              <button
+                type="button"
+                class="settings-btn settings-btn-text"
+                data-test="host-form-clear-key-path"
+                @click="clearKeyPath"
+              >
+                {{ t('settings.hostForm.clearImportedKeyPath') }}
+              </button>
+            </div>
+          </div>
+
           <textarea
             v-model="form.ssh_private_key"
             class="settings-input key-box"
-            :disabled="form.clear_ssh_private_key"
-            :placeholder="initial?.ssh_private_key_configured ? t('settings.hostForm.storedSecretHint') : ''"
+            :disabled="form.clear_ssh_private_key || Boolean(form.ssh_key_path)"
+            :placeholder="form.ssh_key_path ? t('settings.hostForm.keyStoredHint') : (initial?.ssh_private_key_configured ? t('settings.hostForm.keyStoredPlaceholder') : '')"
             data-test="host-form-ssh-private-key"
           />
           <label v-if="initial?.ssh_private_key_configured" class="credential-clear">
@@ -398,6 +516,41 @@ function saveWithoutFingerprint() {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
+}
+.key-import {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.key-list {
+  max-height: 180px;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border-secondary);
+}
+.key-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-secondary);
+  cursor: pointer;
+}
+.key-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+.key-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.key-selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
 }
 </style>

@@ -1,0 +1,214 @@
+package sshkeys
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const rsaHeader = "-----BEGIN RSA PRIVATE KEY-----\n"
+const opensshHeader = "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func names(keys []Key) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k.Name)
+	}
+	return out
+}
+
+func TestScanSelectsOnlyPrivateKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_rsa", rsaHeader+"AAAA\n-----END RSA PRIVATE KEY-----\n")
+	writeFile(t, dir, "id_rsa.pub", "ssh-rsa AAAA user@host\n")
+	writeFile(t, dir, "known_hosts", "github.com ssh-rsa AAAA\n")
+	writeFile(t, dir, "known_hosts.old", "github.com ssh-rsa AAAA\n")
+	writeFile(t, dir, "config", "Host foo\n  HostName 10.0.0.1\n")
+	writeFile(t, dir, "authorized_keys", "ssh-rsa AAAA user@host\n")
+	writeFile(t, dir, "agent", "not a key at all\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	got := names(keys)
+	if len(got) != 1 || got[0] != "id_rsa" {
+		t.Fatalf("expected only id_rsa, got %v", got)
+	}
+	// t.TempDir() 不在 home 下，所以路径应该是绝对路径，不是 ~/ 前缀。
+	if keys[0].Path != filepath.Join(dir, "id_rsa") {
+		t.Fatalf("unexpected path %q", keys[0].Path)
+	}
+	if keys[0].Type != "rsa" {
+		t.Fatalf("expected type rsa, got %q", keys[0].Type)
+	}
+	if keys[0].Encrypted {
+		t.Fatal("plain key must not be reported as encrypted")
+	}
+}
+
+// 非常规命名也必须被识别：判据是内容而非文件名。
+func TestScanDetectsNonConventionalName(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_ed25519_work", opensshHeader+"AAAA\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 || keys[0].Name != "id_ed25519_work" {
+		t.Fatalf("expected id_ed25519_work, got %v", names(keys))
+	}
+	if keys[0].Type != "openssh" {
+		t.Fatalf("expected type openssh, got %q", keys[0].Type)
+	}
+}
+
+func TestScanDetectsEncryptedKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "legacy", rsaHeader+"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABC\n\nAAAA\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 || !keys[0].Encrypted {
+		t.Fatalf("expected encrypted legacy key, got %+v", keys)
+	}
+}
+
+// PKCS8 加密私钥在 BEGIN 行标记加密，没有 Proc-Type 头，
+// 必须单独识别，否则 UI 会把需要 passphrase 的密钥显示为可直接使用。
+func TestScanDetectsPKCS8EncryptedKey(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_pkcs8", "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHzBJBgkqhkiG9w0BBQ0wPDAb\n-----END ENCRYPTED PRIVATE KEY-----\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", names(keys))
+	}
+	if !keys[0].Encrypted {
+		t.Fatal("PKCS8 encrypted key must be reported as encrypted")
+	}
+}
+
+// PKCS8 未加密私钥用普通 BEGIN 行，必须不标记为加密。
+func TestScanDetectsPKCS8PlainKey(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_plain", "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQ\n-----END PRIVATE KEY-----\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", names(keys))
+	}
+	if keys[0].Encrypted {
+		t.Fatal("plain PKCS8 key must not be reported as encrypted")
+	}
+}
+
+// 目录不存在是首次使用的正常场景，不应报错。
+func TestScanMissingDirReturnsEmpty(t *testing.T) {
+	keys, err := Scan(filepath.Join(t.TempDir(), "nope"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected empty, got %v", names(keys))
+	}
+}
+
+// 单个坏文件不能让整个列表不可用。
+func TestScanSkipsUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "id_rsa", rsaHeader+"AAAA\n")
+	writeFile(t, dir, "secret", rsaHeader+"AAAA\n")
+	if err := os.Chmod(filepath.Join(dir, "secret"), 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "secret"), 0o600) })
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 || keys[0].Name != "id_rsa" {
+		t.Fatalf("expected only id_rsa to survive, got %v", names(keys))
+	}
+}
+
+func TestScanSkipsOversizeFile(t *testing.T) {
+	dir := t.TempDir()
+	big := make([]byte, maxKeyFileSize+1)
+	copy(big, rsaHeader)
+	if err := os.WriteFile(filepath.Join(dir, "huge"), big, 0o600); err != nil {
+		t.Fatalf("write huge: %v", err)
+	}
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected oversize file skipped, got %v", names(keys))
+	}
+}
+
+func TestScanSortsByName(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "b_key", rsaHeader+"AAAA\n")
+	writeFile(t, dir, "a_key", rsaHeader+"AAAA\n")
+
+	keys, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	got := names(keys)
+	if len(got) != 2 || got[0] != "a_key" || got[1] != "b_key" {
+		t.Fatalf("expected sorted by name, got %v", got)
+	}
+}
+
+// 路径在 home 下时，应返回 ~/ 前缀形式。这样前端展示干净，
+// 保存时原样回传，后端 expandHome 处理展开，链路自洽。
+func TestScanReturnsHomePrefixedPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home dir: %v", err)
+	}
+
+	// 在 home 下创建临时目录用于扫描，避免污染用户的真实 ~/.ssh。
+	testSubdir := filepath.Join(home, ".ssh_scan_test_temp")
+	if err := os.MkdirAll(testSubdir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", testSubdir, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(testSubdir) })
+
+	writeFile(t, testSubdir, "id_test", rsaHeader+"AAAA\n")
+
+	keys, err := Scan(testSubdir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %v", len(keys))
+	}
+
+	// Path 必须以 ~/ 开头，不能是绝对路径。
+	if !strings.HasPrefix(keys[0].Path, "~/") {
+		t.Fatalf("expected path to start with ~/, got %q", keys[0].Path)
+	}
+}

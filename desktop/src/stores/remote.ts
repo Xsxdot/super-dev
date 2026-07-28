@@ -62,6 +62,11 @@ export const useRemoteStore = defineStore('remote', () => {
     return api.scanHostKey(payload)
   }
 
+  // 只读透传：扫描本机 ~/.ssh 私钥候选，供 Host 表单一键导入。
+  async function listSshKeys() {
+    return api.listSshKeys()
+  }
+
   async function deleteHost(id: string) {
     await api.deleteHost(id)
     hosts.value = hosts.value.filter(host => host.id !== id)
@@ -208,6 +213,7 @@ export const useRemoteStore = defineStore('remote', () => {
     createHost,
     updateHost,
     scanHostKey,
+    listSshKeys,
     deleteHost,
     getHostManagedDeploymentStatus,
     refreshManagedStatuses,

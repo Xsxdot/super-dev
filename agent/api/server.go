@@ -853,6 +853,7 @@ func (a *App) Handler() http.Handler {
 
 	// SSH config 导入
 	mux.HandleFunc("GET /api/ssh-config/hosts", a.listSSHConfigHosts)
+	mux.HandleFunc("GET /api/ssh-keys", a.listSSHKeys)
 
 	// 隧道管理
 	mux.HandleFunc("GET /api/tunnels", a.listTunnels)
