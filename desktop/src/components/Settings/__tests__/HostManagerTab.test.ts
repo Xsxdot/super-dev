@@ -10,7 +10,7 @@
  *   - 不测试 Agent 配置 modal
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HostManagerTab from '@/components/Settings/HostManagerTab.vue'
 import { AgentAPIError, api, type Host } from '@/api/agent'
@@ -89,6 +89,8 @@ describe('HostManagerTab', () => {
     const wrapper = await mountHostManager()
     const store = useRemoteStore()
     const spy = vi.spyOn(store, 'createHost').mockResolvedValue(host())
+    // 新建 Host 尚无指纹，保存会先触发采集卡片；这里 mock 采集结果并确认后再校验落库 payload。
+    vi.spyOn(store, 'scanHostKey').mockResolvedValue({ fingerprint: 'SHA256:abc123' })
 
     await wrapper.find('[data-test="host-add"]').trigger('click')
     await wrapper.find('[data-test="host-form-name"]').setValue('host-test')
@@ -97,6 +99,8 @@ describe('HostManagerTab', () => {
     await wrapper.find('[data-test="host-form-ssh-user"]').setValue('root')
     await wrapper.find('[data-test="host-form-ssh-private-key"]').setValue('PRIVATE KEY CONTENT')
     await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
 
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({
       name: 'host-test',
@@ -104,6 +108,7 @@ describe('HostManagerTab', () => {
       ssh_host: '10.0.0.10',
       ssh_user: 'root',
       ssh_private_key: 'PRIVATE KEY CONTENT',
+      ssh_host_key_fingerprint: 'SHA256:abc123',
     }))
     expect(spy.mock.calls[0][0]).not.toHaveProperty('ssh_key_path')
   })
