@@ -19,6 +19,7 @@ import (
 	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/remote"
+	"github.com/xsxdot/super-dev/agent/tunnel"
 )
 
 // listHosts 处理 GET /api/hosts，在列表头部插入本机节点（is_self=true），
@@ -141,4 +142,61 @@ func (a *App) hostView(host model.Host) hostViewDTO {
 	// Host.id 是持久化选择键；NodeID 必须来自同一 Host 的 live system facts，不能从名称或连接地址推断。
 	view.NodeID = strings.TrimSpace(status.System.AgentNodeID)
 	return view
+}
+
+// scanHostKeyRequest 是 POST /api/hosts/scan-host-key 的请求体。
+type scanHostKeyRequest struct {
+	SSHHost string `json:"ssh_host"`
+	SSHPort int    `json:"ssh_port"`
+}
+
+// scanHostKeyResponse 是采集成功时的响应体。
+type scanHostKeyResponse struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+// scanHostKey 处理 POST /api/hosts/scan-host-key，只读采集目标主机 host key 指纹。
+//
+// 注意：
+//   - 只读探测，不写入任何存储；信任决策由前端用户显式确认后经 Host 写入接口完成
+//   - 接受任意 host:port 并发起外连，属 SSRF 面；与其他 host 管理接口同处
+//     本地已认证入口之后，且只返回公钥摘要，不额外设审批门
+func (a *App) scanHostKey(w http.ResponseWriter, r *http.Request) {
+	log := logger.GetLogger().WithEntryName("SSHHostKey").WithField("operation", "scan")
+	var req scanHostKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.WithErr(err).Error("host key 采集请求体解析失败")
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	host := strings.TrimSpace(req.SSHHost)
+	if host == "" {
+		log.Error("host key 采集请求缺少 ssh_host")
+		jsonError(w, http.StatusBadRequest, "ssh_host is required")
+		return
+	}
+	port := req.SSHPort
+	if port <= 0 {
+		port = 22
+	}
+	log = log.WithFields(map[string]any{"scan_addr": host, "scan_port": port})
+	log.Info("收到 host key 采集请求")
+
+	fingerprint, err := tunnel.ScanHostKeyFingerprint(r.Context(), host, port)
+	if err != nil {
+		code := tunnel.ScanErrorCode(err)
+		log.WithFields(map[string]any{"scan_error_code": code}).
+			WithErr(err).Error("host key 采集请求失败")
+		status := http.StatusBadGateway
+		if code == "ssh_host_key_pin_invalid" {
+			status = http.StatusBadRequest
+		}
+		jsonWrite(w, status, map[string]string{
+			"error": err.Error(),
+			"code":  code,
+		})
+		return
+	}
+	log.Info("host key 采集请求成功")
+	jsonOK(w, scanHostKeyResponse{Fingerprint: fingerprint})
 }

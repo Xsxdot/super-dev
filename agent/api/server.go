@@ -819,6 +819,7 @@ func (a *App) Handler() http.Handler {
 	// 远程主机管理
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
+	mux.HandleFunc("POST /api/hosts/scan-host-key", a.scanHostKey)
 	mux.HandleFunc("PUT /api/hosts/{id}", a.updateHost)
 	mux.HandleFunc("GET /api/agents", a.listAgents)
 	mux.HandleFunc("POST /api/agents", a.createAgent)
