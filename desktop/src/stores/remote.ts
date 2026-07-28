@@ -57,6 +57,11 @@ export const useRemoteStore = defineStore('remote', () => {
     return updated
   }
 
+  // 只读采集，不改动 store 内的 hosts 状态：信任决策由用户确认后经 create/updateHost 落库。
+  async function scanHostKey(payload: { ssh_host: string; ssh_port: number }) {
+    return api.scanHostKey(payload)
+  }
+
   async function deleteHost(id: string) {
     await api.deleteHost(id)
     hosts.value = hosts.value.filter(host => host.id !== id)
@@ -202,6 +207,7 @@ export const useRemoteStore = defineStore('remote', () => {
     loadHosts,
     createHost,
     updateHost,
+    scanHostKey,
     deleteHost,
     getHostManagedDeploymentStatus,
     refreshManagedStatuses,

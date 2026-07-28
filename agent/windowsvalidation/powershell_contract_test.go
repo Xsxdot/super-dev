@@ -596,7 +596,15 @@ func TestRunbookRemoteGovernanceProjectionIsStockPowerShell51AndSafe(t *testing.
 	if strings.Count(snippet, "Invoke-RestMethod") != 2 {
 		t.Fatalf("remote governance projection must perform exactly two fixed read-only requests")
 	}
-	for _, marker := range []string{"SSH Host Key 指纹", "带外可信运维清单", "禁止把首次连接"} {
+	// 本项目已从「手填指纹当信任根」切换为「保存时自动采集、操作者显式确认」的 capture-and-confirm
+	// 契约；手填只是主机不可直连时的兜底路径。这里断言 Runbook 措辞已同步反映新契约，
+	// 而不是继续要求它描述已废弃的「必须手填带外指纹」流程。
+	for _, marker := range []string{
+		"SSH Host Key 指纹",
+		"Desktop 会自动对目标地址发起一次只读",
+		"要求操作者显式点击确认后才写入配置",
+		"仅当目标主机在采集阶段不可达、无法直连时，才退回手填入口",
+	} {
 		if !strings.Contains(text, marker) {
 			t.Errorf("Runbook fresh Host bootstrap is missing host-key trust marker %q", marker)
 		}

@@ -6,12 +6,14 @@
 //
 // 边界：
 //   - 不执行命令、不传输文件、不模拟生产 SSH 授权策略
+//   - 只提供「全放行」与「全拒绝」两种认证策略，用于覆盖采集与连接两类合同
 //   - 不被产品运行路径导入
 package sshtest
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net"
 	"testing"
 
@@ -39,6 +41,34 @@ type Server struct {
 //   - server 不支持 session、命令或文件传输
 func Start(t testing.TB) Server {
 	t.Helper()
+	return start(t, &ssh.ServerConfig{NoClientAuth: true})
+}
+
+// StartRejectingAuth 启动拒绝一切认证方式的本机 SSH server。
+//
+// 参数：
+//   - t: 注册 cleanup 与报告初始化错误的测试句柄
+//
+// 返回：
+//   - 与 Start 相同结构的地址与 fingerprint
+//
+// 注意：
+//   - 用于验证「host key 采集不依赖认证」这一边界：客户端拿不到任何
+//     可用认证方式，但仍应能在 HostKeyCallback 阶段取到 host key
+func StartRejectingAuth(t testing.TB) Server {
+	t.Helper()
+	return start(t, &ssh.ServerConfig{
+		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			return nil, errors.New("password auth rejected by test server")
+		},
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, errors.New("public key auth rejected by test server")
+		},
+	})
+}
+
+func start(t testing.TB, config *ssh.ServerConfig) Server {
+	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate SSH test host key: %v", err)
@@ -47,7 +77,6 @@ func Start(t testing.TB) Server {
 	if err != nil {
 		t.Fatalf("create SSH test signer: %v", err)
 	}
-	config := &ssh.ServerConfig{NoClientAuth: true}
 	config.AddHostKey(signer)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
