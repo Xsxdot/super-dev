@@ -197,7 +197,7 @@ async function confirmRescan() {
                 data-test="host-rescan"
                 @click="openRescan(host)"
               >
-                {{ t('settings.hostForm.rescanTitle') }}
+                {{ t('settings.hostForm.rescanAction') }}
               </button>
               <button class="settings-btn settings-btn-text" data-test="host-edit" @click="openEdit(host)">{{ t('common.edit') }}</button>
               <button class="settings-btn settings-btn-text settings-btn-danger" data-test="host-delete" @click="handleDelete(host)">{{ t('common.delete') }}</button>

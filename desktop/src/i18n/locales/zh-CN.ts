@@ -585,6 +585,7 @@ export default {
       scanRetry: '重试',
       scanManualEntry: '手动填写',
       saveWithoutFingerprint: '暂不采集，先保存主机',
+      rescanAction: '重新采集指纹',
       rescanTitle: '主机已重装，重新采集指纹',
       rescanOldFingerprint: '当前已信任的指纹',
       rescanNewFingerprint: '本次采集到的指纹',

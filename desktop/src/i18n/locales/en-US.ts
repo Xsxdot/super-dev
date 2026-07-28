@@ -585,6 +585,7 @@ export default {
       scanRetry: 'Retry',
       scanManualEntry: 'Enter manually',
       saveWithoutFingerprint: 'Save host without a fingerprint',
+      rescanAction: 'Recapture fingerprint',
       rescanTitle: 'Host reinstalled — capture a new fingerprint',
       rescanOldFingerprint: 'Currently trusted fingerprint',
       rescanNewFingerprint: 'Newly captured fingerprint',
