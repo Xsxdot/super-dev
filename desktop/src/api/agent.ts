@@ -1357,6 +1357,11 @@ export interface HostCreatePayload {
 
 export type HostUpdatePayload = Partial<HostCreatePayload>
 
+/** ScanHostKeyResult 是主机 SSH host key 采集接口的成功响应。 */
+export interface ScanHostKeyResult {
+  fingerprint: string
+}
+
 export interface LogSourceCreatePayload {
   name: string
   type: LogSourceType
@@ -1647,6 +1652,11 @@ export const api = {
 
   // 远程监听：Host CRUD
   listHosts: () => request<Host[]>('/api/hosts'),
+  scanHostKey: (payload: { ssh_host: string; ssh_port: number }) =>
+    request<ScanHostKeyResult>('/api/hosts/scan-host-key', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   createHost: (payload: HostCreatePayload) =>
     request<Host>('/api/hosts', { method: 'POST', body: JSON.stringify(payload) }),
   updateHost: (id: string, payload: HostUpdatePayload) =>
