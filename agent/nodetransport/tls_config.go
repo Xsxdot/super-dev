@@ -82,5 +82,17 @@ func tlsSpecForRequest(agent model.Agent, req NodeRequest) model.AgentTLSSpec {
 	if req.TLSOverride != nil {
 		return *req.TLSOverride
 	}
+	// tls.mode=auto 只表示「provision 时打算启用 TLS」，证书是在 provision
+	// 成功那一刻才由 agent 自签生成的。尚未 provisioned 时远端仍是明文监听，
+	// 此处若按 auto 走 https，每个请求都会握手失败 → tunnel.Do 调用
+	// markTunnelFailure 拆隧道 → 重连 → 再失败，形成隧道重连风暴，把同期
+	// 在途的 provision 请求一并打断（表现为 provision 报 EOF，重试也照样被打断）。
+	//
+	// 只收敛 auto：manual 模式的证书由外部预先配置，与 provision 生命周期无关，
+	// 不能因为尚未 provisioned 就退回明文。
+	if agent.Security.TLS.Mode == model.AgentTLSModeAuto &&
+		agent.Security.ProvisionState != model.AgentProvisionStateProvisioned {
+		return model.AgentTLSSpec{Mode: model.AgentTLSModeOff}
+	}
 	return agent.Security.TLS
 }

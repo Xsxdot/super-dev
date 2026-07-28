@@ -57,11 +57,15 @@ type State struct {
 	RequireAuth        bool   `json:"require_auth"`
 	ProvisionState     string `json:"provision_state"`
 	BootstrapTokenHash string `json:"bootstrap_token_hash,omitempty"`
-	TokenHash          string `json:"token_hash,omitempty"`
-	TLSMode            string `json:"tls_mode,omitempty"`
-	CACert             string `json:"ca_cert,omitempty"`
-	ServerCert         string `json:"server_cert,omitempty"`
-	ServerKey          string `json:"server_key,omitempty"`
+	// ConsumedBootstrapHash 记录已完成 provision 所消耗的 bootstrap token hash。
+	// bootstrap hash 在 provision 时被焚毁，仅凭它无法区分「同一次安装的普通重启」
+	// 与「重装下发了新 token」；保留已消耗值可让前者维持 provisioned 状态。
+	ConsumedBootstrapHash string `json:"consumed_bootstrap_hash,omitempty"`
+	TokenHash             string `json:"token_hash,omitempty"`
+	TLSMode               string `json:"tls_mode,omitempty"`
+	CACert                string `json:"ca_cert,omitempty"`
+	ServerCert            string `json:"server_cert,omitempty"`
+	ServerKey             string `json:"server_key,omitempty"`
 }
 
 // ProvisionRequest 是 bootstrap 自举时写入长期安全配置的请求。
@@ -152,6 +156,8 @@ func (s *Store) Provision(bootstrap string, req ProvisionRequest) (ProvisionResp
 	s.state.RequireAuth = true
 	s.state.ProvisionState = ProvisionStateProvisioned
 	s.state.TokenHash = tokenHash
+	// 焚毁 bootstrap 但记下它的 hash，供后续重启判定「是否同一次安装」。
+	s.state.ConsumedBootstrapHash = s.state.BootstrapTokenHash
 	s.state.BootstrapTokenHash = ""
 	if req.TLSMode == "" {
 		req.TLSMode = TLSModeOff
@@ -187,6 +193,22 @@ func (s *Store) load(opts Options) error {
 		if err := json.Unmarshal(data, &s.state); err != nil {
 			return err
 		}
+		// 磁盘已有状态时仍要尊重启动参数下发的新 bootstrap token：
+		// 重装会把新 token 写进 systemd unit / launchd plist，但旧 security.json
+		// 里的 provision_state 可能已是 provisioned 且 bootstrap hash 已被焚毁，
+		// 无条件信任磁盘会让 agent 永久拒绝新 token（表现为 provision 一直 401），
+		// 重装也无法自愈。能传 --bootstrap-token 的调用方已具备 root 级控制权，
+		// 以它为准重置不构成提权面。
+		//
+		// 升级影响（有意接受）：本版本之前写下的 provisioned 状态没有
+		// consumed_bootstrap_hash，升级后首次带 token 启动会被判为新 token 而重置为
+		// pending-bootstrap，需桌面端重新下发一次安全配置。这里不做「把当前 token
+		// 认作已消耗」的兼容补齐——在两个 hash 都为空时，「旧版本已 provision」与
+		// 「重装下发了新 token」在数据上完全无法区分，补齐会让真正的重装被静默吞掉，
+		// 也就是本次要修的卡死本身。宁可多一次显式 provision，不可再次不可自愈。
+		if s.adoptBootstrapTokenLocked(opts.BootstrapToken) {
+			return s.saveLocked()
+		}
 		return nil
 	}
 	if !os.IsNotExist(err) {
@@ -199,6 +221,40 @@ func (s *Store) load(opts Options) error {
 		s.state.BootstrapTokenHash = hash(opts.BootstrapToken)
 	}
 	return s.saveLocked()
+}
+
+// adoptBootstrapTokenLocked 在启动参数携带新 bootstrap token 时重置为待自举状态。
+//
+// 参数：
+//   - token: 启动参数传入的一次性 bootstrap token，空串表示本次启动未下发
+//
+// 返回：
+//   - 是否修改了内存状态（true 时调用方需落盘）
+//
+// 注意：
+//   - token 命中未消耗的 bootstrap hash（尚未 provision，普通重启）时保持不变
+//   - token 命中已消耗的 bootstrap hash（同一次安装已 provision 后重启）时保持不变，
+//     否则每次进程重启都会把已完成的 provision 打回 pending 并丢失长期 token
+//   - 只有 token 两者都不匹配（确实是新一次安装下发的新 token）才重置
+//   - 重置会清空 TLS 材料与长期 token hash，使 agent 退回明文监听等待重新 provision
+func (s *Store) adoptBootstrapTokenLocked(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	if verifyHash(s.state.BootstrapTokenHash, token) || verifyHash(s.state.ConsumedBootstrapHash, token) {
+		return false
+	}
+	s.state.RequireAuth = true
+	s.state.ProvisionState = ProvisionStatePendingBootstrap
+	s.state.BootstrapTokenHash = hash(token)
+	s.state.ConsumedBootstrapHash = ""
+	s.state.TokenHash = ""
+	s.state.TLSMode = ""
+	s.state.CACert = ""
+	s.state.ServerCert = ""
+	s.state.ServerKey = ""
+	return true
 }
 
 func (s *Store) saveLocked() error {

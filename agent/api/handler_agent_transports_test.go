@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,6 +225,114 @@ func TestProvisionAgentUsesPlainHTTPBeforeAutoTLSIsProvisioned(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.Code)
 	assert.True(t, provisionCalled)
 	assert.Contains(t, resp.Body.String(), `"restart_required":true`)
+}
+
+// 真机故障复现：agent 侧 provision 成功（状态已改、bootstrap 已焚毁），
+// 但响应在回程丢失（隧道被 restart_required 触发的重启打断 → EOF）。
+// 桌面端必须已经把长期 token 落盘，重试时复用同一个 token 命中 agent 的幂等分支；
+// 否则重试会换一个新 token，只能拿到 bootstrap 已焚毁的 401，陷入死循环。
+func TestProvisionAgentReusesPersistedTokenAfterLostResponse(t *testing.T) {
+	var mu sync.Mutex
+	var attempts int
+	var seenTokens []string
+	var provisionedToken string
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/security/provision" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Token string `json:"token"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+
+		mu.Lock()
+		attempts++
+		current := attempts
+		seenTokens = append(seenTokens, body.Token)
+		if current == 1 {
+			// 第一次：agent 侧成功落库并焚毁 bootstrap，但响应丢失。
+			provisionedToken = body.Token
+		}
+		alreadyProvisioned := provisionedToken != "" && body.Token == provisionedToken
+		mu.Unlock()
+
+		if current == 1 {
+			// 模拟隧道在响应回程中断：直接劫持连接关掉，客户端得到 EOF。
+			conn, _, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			_ = conn.Close()
+			return
+		}
+		if !alreadyProvisioned {
+			// token 变了 → bootstrap 已焚毁，agent 只能拒绝。这就是死循环。
+			jsonError(w, http.StatusUnauthorized, "bootstrap token rejected")
+			return
+		}
+		// 幂等分支：同一个 token 重放，返回与首次相同的结果。
+		jsonOK(w, map[string]any{
+			"provision_state":  "provisioned",
+			"tls_mode":         "auto",
+			"ca_cert":          "PEM",
+			"restart_required": true,
+		})
+	}))
+	defer remote.Close()
+
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "sing-box-01"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: strings.TrimPrefix(remote.URL, "http://")}},
+		}},
+		Security: model.AgentSecurity{
+			ProvisionState: model.AgentProvisionStatePendingBootstrap,
+			TLS:            model.AgentTLSSpec{Mode: model.AgentTLSModeAuto},
+		},
+	})
+	require.NoError(t, err)
+	app.rememberAgentInstallToken(agentInstallTokenRecord{
+		HostID:         host.ID,
+		BootstrapToken: "bootstrap",
+		ExpiresAt:      time.Now().Add(time.Minute),
+	})
+
+	// 第一次：响应丢失，桌面端看到传输层错误。
+	first := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+	assert.Equal(t, http.StatusBadGateway, first.Code)
+
+	// 关键断言：即便响应丢了，长期 token 也必须已经落盘。
+	stored, ok, err := app.agentStore.AgentByHostID(host.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotEmpty(t, stored.Secret.Token, "长期 token 必须在发请求前落盘，否则重试无法命中幂等分支")
+	// 此时还不能声称已完成下发，否则 UI 谎报成功、后续请求还会误用 TLS。
+	assert.Equal(t, model.AgentProvisionStatePendingBootstrap, stored.Security.ProvisionState)
+	assert.False(t, stored.Security.TokenConfigured)
+
+	// 第二次：重试必须复用同一 token 并成功恢复。
+	second := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/provision", bytes.NewBufferString(`{"index":0,"tls_mode":"auto"}`))
+	require.Equal(t, http.StatusOK, second.Code)
+	assert.Contains(t, second.Body.String(), `"restart_required":true`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, seenTokens, 2)
+	assert.Equal(t, seenTokens[0], seenTokens[1], "重试必须复用同一个长期 token")
+
+	final, ok, err := app.agentStore.AgentByHostID(host.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, model.AgentProvisionStateProvisioned, final.Security.ProvisionState)
+	assert.True(t, final.Security.TokenConfigured)
+	assert.Equal(t, seenTokens[0], final.Secret.Token)
+	assert.Equal(t, "PEM", final.Security.TLS.CACert)
 }
 
 func TestProvisionAgentIncludesRemoteProvisionErrorBody(t *testing.T) {

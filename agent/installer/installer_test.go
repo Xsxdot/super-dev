@@ -212,6 +212,96 @@ func TestInstallerResetsSecurityStateWhenBootstrappingLinuxAgent(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, remote.commands, "sudo -n rm -f '/var/lib/superdev-agent/security.json'")
+	// 必须先停服务再删状态：顺序反了的话仍在运行的旧 agent 会把 provisioned
+	// 重新落盘，重装下发的新 bootstrap token 永久失效（真机上复现过）。
+	assertCommandOrder(t, remote.commands,
+		"sudo -n systemctl stop superdev-agent.service || true",
+		"sudo -n rm -f '/var/lib/superdev-agent/security.json'")
+}
+
+func TestInstallerStopsServiceBeforeResettingSecurityOnDarwin(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-darwin-arm64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{outputs: []string{"Darwin\n", "arm64\n"}}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), model.Host{ID: "h1"}, ServiceOptions{
+		Port:           57017,
+		RequireAuth:    true,
+		BootstrapToken: "fresh-bootstrap",
+	})
+
+	require.NoError(t, err)
+	assertCommandOrder(t, remote.commands,
+		"sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true",
+		"sudo -n rm -f '/Library/Application Support/SuperDev/Agent/security.json'")
+}
+
+func TestInstallerStopsTaskBeforeResettingSecurityOnWindows(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-windows-amd64.exe")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{outputs: []string{
+		"Microsoft Windows [Version 10.0.20348.2402]\n",
+		"AMD64\n",
+		`C:\Users\dev\AppData\Local\Temp`,
+	}}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), installerTestHost("win1", "10.0.0.3", "dev", 22, 57019), ServiceOptions{
+		BindAddress:    "0.0.0.0",
+		Port:           57019,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+	})
+
+	require.NoError(t, err)
+	assertCommandOrder(t, remote.commands,
+		`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
+		`cmd /c del /F /Q "C:\ProgramData\SuperDev\Agent\data\security.json" 2>NUL`)
+}
+
+// 未下发 bootstrap token（如仅更新二进制）时不重置状态，也就不该多停一次服务。
+func TestInstallerSkipsStopWhenNotResettingSecurity(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{outputs: []string{"Linux\n", "x86_64\n"}}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), model.Host{ID: "h1"}, ServiceOptions{
+		Port: 57017,
+	})
+
+	require.NoError(t, err)
+	assert.NotContains(t, remote.commands, "sudo -n systemctl stop superdev-agent.service || true")
+	assert.NotContains(t, remote.commands, "sudo -n rm -f '/var/lib/superdev-agent/security.json'")
+}
+
+// assertCommandOrder 断言 earlier 在 later 之前执行，两者都必须出现。
+func assertCommandOrder(t *testing.T, commands []string, earlier string, later string) {
+	t.Helper()
+	earlierIdx := indexOfCommand(commands, earlier)
+	laterIdx := indexOfCommand(commands, later)
+	require.GreaterOrEqual(t, earlierIdx, 0, "expected command not executed: %s", earlier)
+	require.GreaterOrEqual(t, laterIdx, 0, "expected command not executed: %s", later)
+	assert.Less(t, earlierIdx, laterIdx, "%q must run before %q", earlier, later)
+}
+
+func indexOfCommand(commands []string, target string) int {
+	for i, cmd := range commands {
+		if cmd == target {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestInstallerUpdatesLinuxAgentBinaryWithoutResettingSecurityOrService(t *testing.T) {

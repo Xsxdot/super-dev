@@ -3,6 +3,7 @@
 // 职责：
 //   - 对单个 chain entry 执行短探活并返回分类结果
 //   - 使用 generated-command 保存的 bootstrap token 下发长期 token
+//   - 在 bootstrap token 缺失或过期时给出可操作的引导错误
 //   - 把本地长期 token 和 TLS 状态写回 AgentStore
 //
 // 边界：
@@ -13,10 +14,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -67,9 +70,18 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// bootstrap token 仅存在于进程内存（安全上不落盘明文），因此桌面端重启、
+	// token 过期都会让它消失。此时必须引导用户重新执行安装以下发新 token，
+	// 否则请求会带空 Authorization 打到 agent，只能拿到含义不明的 401。
 	record, found := a.latestInstallTokenForHost(target.Host.ID)
-	if !found || record.BootstrapToken == "" {
-		jsonError(w, http.StatusConflict, "bootstrap token unavailable; regenerate install command and reinstall agent")
+	if !found || strings.TrimSpace(record.BootstrapToken) == "" {
+		log.Printf("[SuperDev] provision aborted host=%s reason=bootstrap_token_missing", target.Host.ID)
+		jsonError(w, http.StatusConflict, "bootstrap token unavailable (desktop restarted or install token expired); click Install and Start again to push a fresh token")
+		return
+	}
+	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(time.Now().UTC()) {
+		log.Printf("[SuperDev] provision aborted host=%s reason=bootstrap_token_expired expires_at=%s", target.Host.ID, record.ExpiresAt.Format(time.RFC3339))
+		jsonError(w, http.StatusConflict, "bootstrap token expired; click Install and Start again to push a fresh token")
 		return
 	}
 	agent := target.Agent
@@ -79,6 +91,19 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 		longToken, err = security.GenerateToken()
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// 发请求前先把长期 token 落盘：agent 侧 Provision 是不可逆写操作
+		// （改状态 + 焚毁 bootstrap token），只要响应在回程丢失（隧道被
+		// restart_required 触发的重启打断就会产生 EOF），agent 已经前进而
+		// 桌面端一无所知，重试时又生成一个新 token —— 永远命不中 agent 的
+		// 幂等分支，只能拿到 bootstrap 已焚毁的 401，陷入死循环。
+		// 先落盘后，重试会复用同一个 token，直接命中幂等分支恢复。
+		var persistErr error
+		agent, persistErr = a.persistProvisioningToken(r.Context(), agent, longToken)
+		if persistErr != nil {
+			log.Printf("[SuperDev] provision aborted host=%s reason=persist_token_failed err=%v", target.Host.ID, persistErr)
+			jsonError(w, http.StatusInternalServerError, persistErr.Error())
 			return
 		}
 	}
@@ -96,12 +121,18 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 		Body:        bytes.NewReader(body),
 	})
 	if err != nil {
+		// 传输层失败（如隧道被 agent 重启打断产生的 EOF）此前完全没有日志，
+		// 只能靠前端弹出的一行报文反推，这里补上 transport 与 TLS 上下文。
+		log.Printf("[SuperDev] provision transport failed host=%s transport=%s tls_override=%t err=%v",
+			target.Host.ID, entry.Type, bootstrapProvisionTLSOverride(agent) != nil, err)
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		jsonError(w, http.StatusBadGateway, remoteProvisionErrorMessage(resp.StatusCode, resp.Body))
+		message := remoteProvisionErrorMessage(resp.StatusCode, resp.Body)
+		log.Printf("[SuperDev] provision rejected by agent host=%s status=%d detail=%s", target.Host.ID, resp.StatusCode, message)
+		jsonError(w, http.StatusBadGateway, message)
 		return
 	}
 	var provisionResp security.ProvisionResponse
@@ -125,7 +156,34 @@ func (a *App) provisionAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	log.Printf("[SuperDev] provision succeeded host=%s transport=%s tls_mode=%s restart_required=%t",
+		target.Host.ID, entry.Type, agent.Security.TLS.Mode, provisionResp.RestartRequired)
 	jsonOK(w, map[string]any{"status": "provisioned", "restart_required": provisionResp.RestartRequired})
+}
+
+// persistProvisioningToken 在发起 provision 前先把长期 token 落盘。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - agent: 当前 Agent 配置（token 为空）
+//   - longToken: 本次准备下发的长期 token
+//
+// 返回：
+//   - 已写入 token 的 Agent 配置
+//   - 持久化错误
+//
+// 注意：
+//   - 只写 Secret.Token，不把 ProvisionState 提前改成 provisioned：
+//     此刻远端是否成功尚未可知，提前置位会让 UI 谎报成功，也会让
+//     bootstrapProvisionTLSOverride 误判而改用 TLS 发下一次请求
+//   - TokenConfigured 同样保持不变，它表示「已确认下发成功」
+func (a *App) persistProvisioningToken(ctx context.Context, agent model.Agent, longToken string) (model.Agent, error) {
+	agent.Secret.Token = longToken
+	saved, err := a.remoteNodeMutations.UpsertAgent(ctx, agent)
+	if err != nil {
+		return agent, err
+	}
+	return saved, nil
 }
 
 func (a *App) agentTransportEntryByIndex(w http.ResponseWriter, hostID string, index int) (nodetransport.NodeTarget, *model.TransportEntry, bool) {

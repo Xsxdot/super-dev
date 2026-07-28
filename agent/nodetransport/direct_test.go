@@ -202,6 +202,49 @@ func TestDirectTransportUsesCustomCACert(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
+// 真机故障复现：agent 记录 tls.mode=auto 但尚未 provisioned，此时远端仍是明文监听。
+// 若按 auto 走 https，每个请求都握手失败 → tunnel 侧会 markTunnelFailure 拆隧道 →
+// 重连 → 再失败，形成重连风暴，把同期在途的 provision 请求打断成 EOF。
+func TestTransportUsesPlainHTTPWhenAutoTLSNotYetProvisioned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	target := directTarget("h1", "direct", strings.TrimPrefix(srv.URL, "http://"))
+	target.Agent.Security = model.AgentSecurity{
+		ProvisionState: model.AgentProvisionStatePendingBootstrap,
+		TLS:            model.AgentTLSSpec{Mode: model.AgentTLSModeAuto},
+	}
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+// provision 完成后必须真正启用 TLS，不能因为上面的兜底而永远退回明文。
+func TestTransportUsesTLSOnceProvisioned(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+	target := directTarget("h1", "direct", strings.TrimPrefix(srv.URL, "https://"))
+	target.Agent.Security = model.AgentSecurity{
+		ProvisionState: model.AgentProvisionStateProvisioned,
+		TLS:            model.AgentTLSSpec{Mode: model.AgentTLSModeAuto, CACert: caPEM},
+	}
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
+
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/exec/health"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
 func TestDirectTransportRequestTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)

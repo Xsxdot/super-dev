@@ -498,6 +498,10 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "linux":
 		commands := []string{
 			"sudo -n mkdir -p /var/lib/superdev-agent",
+			// 必须先停服务再删 security.json：旧 agent 仍在运行时删除，
+			// 它随后任何一次状态落盘都会把 provisioned 状态写回来，
+			// 重装下发的新 bootstrap token 就永远无法生效（provision 一直 401）。
+			stopServiceBeforeResetCommand("sudo -n systemctl stop superdev-agent.service || true", opts),
 			resetSecurityStateCommand("sudo -n ", "/var/lib/superdev-agent/security.json", opts),
 			"cat > /tmp/superdev-agent.service <<'EOF'\n" + LinuxSystemdUnit(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/superdev-agent.service /etc/systemd/system/superdev-agent.service",
@@ -516,6 +520,8 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 	case "darwin":
 		commands := []string{
 			"sudo -n mkdir -p '/Library/Application Support/SuperDev/Agent'",
+			// 同 linux：先 bootout 停掉旧 agent，再删状态，避免它把 provisioned 写回来。
+			stopServiceBeforeResetCommand("sudo -n launchctl bootout system /Library/LaunchDaemons/dev.superdev.agent.plist || true", opts),
 			resetSecurityStateCommand("sudo -n ", "/Library/Application Support/SuperDev/Agent/security.json", opts),
 			"cat > /tmp/dev.superdev.agent.plist <<'EOF'\n" + MacOSLaunchDaemonPlist(opts) + "EOF",
 			"sudo -n install -m 0644 /tmp/dev.superdev.agent.plist /Library/LaunchDaemons/dev.superdev.agent.plist",
@@ -574,8 +580,10 @@ func installWindowsScheduledTask(ctx context.Context, remote Remote, remoteTmp s
 		return err
 	}
 	commands := []string{
-		windowsResetSecurityStateCommand(opts),
+		// 先停任务再删状态：顺序反了的话，仍在运行的旧 agent 会把 provisioned
+		// 状态重新落盘，重装下发的新 bootstrap token 就永远不会生效。
 		`cmd /c schtasks /End /TN SuperDevAgent 2>NUL || exit /b 0`,
+		windowsResetSecurityStateCommand(opts),
 		`cmd /c schtasks /Create /TN SuperDevAgent /SC ONSTART /RU SYSTEM /TR ` + windowsQuote(windowsAgentCommand(opts)) + ` /F`,
 		`cmd /c schtasks /Run /TN SuperDevAgent`,
 	}
@@ -615,6 +623,26 @@ func updateMacOSUserLaunchAgentBinary(ctx context.Context, remote Remote, remote
 		return stageErr("replace_binary", err)
 	}
 	return nil
+}
+
+// stopServiceBeforeResetCommand 在需要重置安全状态时先停掉正在运行的旧 agent。
+//
+// 参数：
+//   - stopCommand: 平台对应的停服务命令（自带 `|| true`，服务不存在时不算失败）
+//   - opts: 本次安装参数，仅在下发了 bootstrap token 时才需要重置
+//
+// 返回：
+//   - 需要执行的停服务命令；无需重置时返回空串，由调用方跳过
+//
+// 注意：
+//   - 必须与 resetSecurityStateCommand 使用同一个触发条件，二者要么都执行要么都不执行
+//   - 不停服务就删 security.json 会被仍在运行的旧 agent 重新写回，
+//     导致重装下发的新 bootstrap token 永久失效
+func stopServiceBeforeResetCommand(stopCommand string, opts ServiceOptions) string {
+	if strings.TrimSpace(opts.BootstrapToken) == "" {
+		return ""
+	}
+	return stopCommand
 }
 
 func resetSecurityStateCommand(prefix string, securityPath string, opts ServiceOptions) string {
@@ -1154,6 +1182,8 @@ func installMacOSUserLaunchAgent(ctx context.Context, remote Remote, remoteTmp s
 	plist := MacOSUserLaunchAgentPlist(opts, paths.binary, paths.dataDir, paths.stdoutLog, paths.stderrLog)
 	commands := []string{
 		"mkdir -p " + shellQuote(paths.binDir) + " " + shellQuote(paths.dataDir) + " " + shellQuote(paths.launchAgentsDir) + " " + shellQuote(paths.logsDir),
+		// 同 system 布局：先停旧 agent 再删状态，否则它会把 provisioned 写回来。
+		stopServiceBeforeResetCommand("launchctl bootout gui/"+uid+" "+shellQuote(paths.plist)+" || true", opts),
 		resetSecurityStateCommand("", path.Join(paths.dataDir, "security.json"), opts),
 		"install -m 0755 " + remoteTmp + " " + shellQuote(paths.binary),
 		"cat > " + shellQuote(paths.plist) + " <<'EOF'\n" + plist + "EOF",
