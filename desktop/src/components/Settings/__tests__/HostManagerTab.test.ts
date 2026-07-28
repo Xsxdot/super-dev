@@ -142,4 +142,87 @@ describe('HostManagerTab', () => {
     expect(store.hosts).toHaveLength(1)
     expect(wrapper.find('[data-test="host-row"]').exists()).toBe(true)
   })
+
+  it('flags hosts that have no fingerprint', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h1', name: 'ali-01', ssh_host: '10.0.0.10', ssh_host_key_fingerprint_configured: false }),
+      host({ id: 'h2', name: 'jp', ssh_host: '10.0.0.11', ssh_host_key_fingerprint_configured: true }),
+    ]
+    await wrapper.vm.$nextTick()
+
+    const warnings = wrapper.findAll('[data-test="host-fingerprint-missing"]')
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('does not flag a host with no SSH address configured at all', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h1', name: 'no-ssh', ssh_host: undefined, ssh_host_key_fingerprint_configured: false }),
+    ]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="host-fingerprint-missing"]').exists()).toBe(false)
+  })
+
+  it('shows the rescan action only for hosts that already have a fingerprint', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h1', name: 'ali-01', ssh_host_key_fingerprint_configured: false }),
+      host({ id: 'h2', name: 'jp', ssh_host_key_fingerprint_configured: true }),
+    ]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('[data-test="host-rescan"]')).toHaveLength(1)
+  })
+
+  it('requires explicit confirmation before trusting a rescanned fingerprint', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h2', name: 'jp', ssh_host: '10.0.0.11', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+    ]
+    const scanHostKey = vi.spyOn(store, 'scanHostKey').mockResolvedValue({ fingerprint: 'SHA256:new999' })
+    const updateHost = vi.spyOn(store, 'updateHost').mockResolvedValue(host())
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-rescan"]').trigger('click')
+    await flushPromises()
+
+    expect(scanHostKey).toHaveBeenCalledWith({ ssh_host: '10.0.0.11', ssh_port: 22 })
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:new999')
+    expect(updateHost).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-test="host-rescan-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHost).toHaveBeenCalledWith('h2', expect.objectContaining({
+      ssh_host_key_fingerprint: 'SHA256:new999',
+    }))
+  })
+
+  it('surfaces a scan failure in the rescan dialog and keeps confirm disabled', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h2', name: 'jp', ssh_host: '10.0.0.11', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+    ]
+    vi.spyOn(store, 'scanHostKey').mockRejectedValue(new AgentAPIError('scan failed', 502, { code: 'scan_failed' }))
+    const updateHost = vi.spyOn(store, 'updateHost')
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-rescan"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-rescan-error"]').text()).toContain('scan failed')
+    const confirmButton = wrapper.find('[data-test="host-rescan-confirm"]')
+    expect((confirmButton.element as HTMLButtonElement).disabled).toBe(true)
+
+    await confirmButton.trigger('click')
+    await flushPromises()
+    expect(updateHost).not.toHaveBeenCalled()
+  })
 })
