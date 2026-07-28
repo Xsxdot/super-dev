@@ -14,4 +14,4 @@ package buildinfo
 // 注意：
 //   - 发布前必须与仓库根目录 VERSION 保持一致
 //   - scripts/check-version.mjs 会校验该值，防止打包元数据与 sidecar 版本不一致
-const Version = "0.2.2"
+const Version = "0.2.3"

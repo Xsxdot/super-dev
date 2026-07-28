@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-28
+
+### Added
+
+- Added trust-on-first-use SSH host key verification: saving a Host now scans for its host key fingerprint, shows it for explicit confirmation, and never silently degrades a failed scan into an empty fingerprint. Hosts missing a fingerprint are surfaced in the Host list, and a rescan flow covers hosts that were legitimately reinstalled.
+- Added one-click local SSH key import to the Host form, backed by a read-only endpoint that scans local SSH private key candidates by content, reports paths under the home directory in `~`-prefixed form, and flags encrypted keys (including PKCS8) without attempting to decrypt them.
+
+### Changed
+
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.3`.
+
+### Fixed
+
+- Prevented four classes of stale-async result leaking across Hosts: an in-flight host key or local key scan that resolved after the edit target changed could pair one Host's fingerprint or imported key path with another Host's form, including for two fingerprint-less Hosts sharing one address.
+- Invalidated a captured fingerprint when the address or port is edited while the confirm card is open, so a fingerprint scanned from one host can no longer be pinned against a different address.
+- Waited out transient SQLite lock contention when opening the store, so a second instance opening the same file while the background log cleaner holds a write lock no longer fails migration with `SQLITE_BUSY`.
+- Repaired cross-platform CI failures: UTC-independent log context timestamps, LF-pinned `validation/windows-real` payloads so hashes and PowerShell contract matching survive Windows checkout, slash-separated zip entry resolution, relayed nested cleanup output, and uninstall contract stubs that run on non-Windows pwsh lanes.
+- Repaired two type defects that broke the production `vue-tsc -b` build but passed the looser development `--noEmit` check.
+- Relabeled the Host list rescan button as a standing action rather than a claim that the host was reinstalled, since it renders purely on the presence of a pinned fingerprint.
+
 ## [0.2.2] - 2026-07-23
 
 ### Added
