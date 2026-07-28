@@ -260,6 +260,78 @@ describe('HostFormModal', () => {
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
+  // 安全回归：确认卡片展示期间改动地址，指纹必须作废，不能把旧地址的指纹绑定到新地址
+  it('invalidates the confirm card when the ssh_host is edited afterwards', async () => {
+    const scanHostKey = vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' })
+    const wrapper = mountForm({ scanHostKey })
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.10')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.20')
+
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(false)
+    // trust 按钮已随卡片一起消失，无法再点击提交出旧指纹。
+    expect(wrapper.find('[data-test="host-form-scan-trust"]').exists()).toBe(false)
+    expect(wrapper.emitted('submit')).toBeFalsy()
+  })
+
+  // 同上，端口变化也必须作废确认卡片
+  it('invalidates the confirm card when the ssh_port is edited afterwards', async () => {
+    const scanHostKey = vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' })
+    const wrapper = mountForm({ scanHostKey })
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.10')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="host-form-ssh-port"]').setValue('2222')
+
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(false)
+    expect(wrapper.emitted('submit')).toBeFalsy()
+  })
+
+  // 安全回归：失败卡片展示期间改动地址，也必须作废（不能残留旧地址的错误状态）
+  it('invalidates the failed card when the ssh_host is edited afterwards', async () => {
+    const scanHostKey = vi.fn().mockRejectedValue(new Error('unreachable'))
+    const wrapper = mountForm({ scanHostKey })
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.10')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-form-scan-failed"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.20')
+
+    expect(wrapper.find('[data-test="host-form-scan-failed"]').exists()).toBe(false)
+  })
+
+  // 安全回归：飞行中的采集请求返回时，若地址已被改动，结果必须被丢弃，不能把
+  // 旧地址的采集结果（无论成功或失败）套用到新地址上。
+  it('discards an in-flight scan result if the address changed before it resolved', async () => {
+    let resolveScan: (value: { fingerprint: string }) => void
+    const scanHostKey = vi.fn().mockImplementation(() => new Promise(resolve => { resolveScan = resolve }))
+    const wrapper = mountForm({ scanHostKey })
+
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.10')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    expect(wrapper.find('[data-test="host-form-scanning"]').exists()).toBe(true)
+
+    // 采集还在飞行中时改地址：watcher 立刻把 scanPhase 重置回 idle。
+    await wrapper.find('[data-test="host-form-ssh-host"]').setValue('10.0.0.20')
+    expect(wrapper.find('[data-test="host-form-scanning"]').exists()).toBe(false)
+
+    // 旧请求这时才返回旧地址的指纹，不应该把界面又推回 confirm。
+    resolveScan!({ fingerprint: 'SHA256:stale-for-old-address' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-scan-confirm"]').exists()).toBe(false)
+    expect(wrapper.emitted('submit')).toBeFalsy()
+  })
+
   // 采集失败展开手填
   it('reveals manual entry when the scan fails', async () => {
     const scanHostKey = vi.fn().mockRejectedValue(Object.assign(new Error('unreachable'), { code: 'ssh_host_unreachable' }))

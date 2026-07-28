@@ -48,6 +48,22 @@ const needsScan = computed(() => {
   return !form.value.ssh_host_key_fingerprint?.trim()
 })
 
+// 指纹只对采集它时的那个地址有意义：确认卡片/失败卡片展示期间如果用户又改了
+// ssh_host 或 ssh_port，之前采集到的指纹就不再对应当前地址了，必须作废重采，
+// 否则会出现"确认卡片显示地址 B，却把地址 A 的指纹存进去"的安全漏洞——
+// 这正是本功能要防止的失败模式，不能用禁用输入框的方式规避（用户打错地址应该能改）。
+watch(
+  () => [form.value.ssh_host, form.value.ssh_port] as const,
+  () => {
+    if (scanPhase.value === 'idle') return
+    // scanning 阶段也要作废：若不重置，飞行中请求返回时会把「旧地址采到的指纹」
+    // 套用到「新地址」上，与 confirm/failed 阶段是同一个漏洞，只是时间点更早。
+    scanPhase.value = 'idle'
+    scannedFingerprint.value = ''
+    scanErrorMessage.value = ''
+  },
+)
+
 const tunnelInvalidationPending = computed(() => {
   const initial = props.initial
   if (!initial) return false
@@ -141,14 +157,18 @@ async function submit() {
 async function runScan() {
   scanPhase.value = 'scanning'
   scanErrorMessage.value = ''
+  // 记录发起采集时的地址，用于在异步返回时判断地址是否已被用户改动（见下方 identity 校验）。
+  const scannedHost = form.value.ssh_host
+  const scannedPort = Number(form.value.ssh_port) || 22
   try {
-    const result = await store.scanHostKey({
-      ssh_host: form.value.ssh_host,
-      ssh_port: Number(form.value.ssh_port) || 22,
-    })
+    const result = await store.scanHostKey({ ssh_host: scannedHost, ssh_port: scannedPort })
+    // 飞行中地址已变：上面的 watcher 早已把 scanPhase 重置为 idle，此时绝不能
+    // 用旧地址的采集结果把它又推回 confirm，否则会出现「新地址配旧指纹」的漏洞。
+    if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
     scannedFingerprint.value = result.fingerprint
     scanPhase.value = 'confirm'
   } catch (err) {
+    if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
     // 采集失败绝不降级为「跳过指纹直接保存」——必须由用户显式选择后续动作，
     // 否则「未采集」与「采集出错」会被混淆，用户会以为已经配好。
     scanErrorMessage.value = err instanceof Error ? err.message : String(err)
