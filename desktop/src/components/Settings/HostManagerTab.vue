@@ -95,13 +95,21 @@ async function openRescan(host: Host) {
   rescanTarget.value = host
   rescanFingerprint.value = ''
   rescanError.value = ''
+  // 记录发起采集时的目标 host id，用于在异步返回时判断弹窗是否仍在展示同一台主机
+  // （见下方成功/失败分支的 identity 校验）。
+  const scannedHostId = host.id
   try {
     const result = await store.scanHostKey({
       ssh_host: host.ssh_host ?? '',
       ssh_port: host.ssh_port || 22,
     })
+    // 采集到的指纹只对发起采集的那台主机有意义：飞行期间用户若关闭弹窗改采别的
+    // host，此时绝不能把 A 的指纹套用到 B 的弹窗上，否则会把错误的指纹当作「用户已确认」
+    // 写入 B——这正是 fail-closed 设计要防止的失败模式，且发生得悄无声息。
+    if (rescanTarget.value?.id !== scannedHostId) return
     rescanFingerprint.value = result.fingerprint
   } catch (err) {
+    if (rescanTarget.value?.id !== scannedHostId) return
     rescanError.value = err instanceof Error ? err.message : String(err)
   }
 }

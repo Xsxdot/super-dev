@@ -225,4 +225,86 @@ describe('HostManagerTab', () => {
     await flushPromises()
     expect(updateHost).not.toHaveBeenCalled()
   })
+
+  // 安全回归：A 主机的采集请求仍在飞行中时，用户关闭弹窗改采 B 主机；
+  // A 的结果姗姗来迟时绝不能被套用到 B 的弹窗上，否则会把错误的指纹当作
+  // 「用户已确认」写入 B——这正是 fail-closed 设计要防止的失败模式。
+  it('discards a late-arriving scan result from a different host', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'hA', name: 'host-a', ssh_host: '10.0.0.10', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+      host({ id: 'hB', name: 'host-b', ssh_host: '10.0.0.20', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+    ]
+    let resolveScanA: (value: { fingerprint: string }) => void
+    const scanHostKey = vi.spyOn(store, 'scanHostKey').mockImplementationOnce(
+      () => new Promise(resolve => { resolveScanA = resolve }),
+    )
+    const updateHost = vi.spyOn(store, 'updateHost').mockResolvedValue(host())
+    await wrapper.vm.$nextTick()
+
+    const rescanButtons = wrapper.findAll('[data-test="host-rescan"]')
+    // 先在 A 上发起采集，此时请求挂起未返回。
+    await rescanButtons[0].trigger('click')
+    await flushPromises()
+
+    // 关闭弹窗（点击遮罩层触发 @click.self），再在 B 上发起采集。
+    await wrapper.find('.settings-modal-backdrop').trigger('click')
+    scanHostKey.mockResolvedValueOnce({ fingerprint: 'SHA256:for-b' })
+    await wrapper.findAll('[data-test="host-rescan"]')[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:for-b')
+
+    // A 的旧请求这时才返回，不应覆盖 B 正在展示的指纹。
+    resolveScanA!({ fingerprint: 'SHA256:stale-for-a' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:for-b')
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).not.toContain('SHA256:stale-for-a')
+
+    await wrapper.find('[data-test="host-rescan-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHost).toHaveBeenCalledWith('hB', expect.objectContaining({
+      ssh_host_key_fingerprint: 'SHA256:for-b',
+    }))
+    expect(updateHost).not.toHaveBeenCalledWith('hA', expect.anything())
+    expect(updateHost).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      ssh_host_key_fingerprint: 'SHA256:stale-for-a',
+    }))
+  })
+
+  // 安全回归：A 主机采集失败的响应姗姗来迟时，也不能把错误状态套用到 B 的弹窗上
+  // （否则用户会在 B 的弹窗里看到一个与 B 无关的错误信息，造成混淆）。
+  it('discards a late-arriving scan failure from a different host', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'hA', name: 'host-a', ssh_host: '10.0.0.10', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+      host({ id: 'hB', name: 'host-b', ssh_host: '10.0.0.20', ssh_port: 22, ssh_host_key_fingerprint_configured: true }),
+    ]
+    let rejectScanA: (err: Error) => void
+    const scanHostKey = vi.spyOn(store, 'scanHostKey').mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectScanA = reject }),
+    )
+    await wrapper.vm.$nextTick()
+
+    const rescanButtons = wrapper.findAll('[data-test="host-rescan"]')
+    await rescanButtons[0].trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.settings-modal-backdrop').trigger('click')
+    scanHostKey.mockResolvedValueOnce({ fingerprint: 'SHA256:for-b' })
+    await wrapper.findAll('[data-test="host-rescan"]')[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:for-b')
+
+    rejectScanA!(new Error('unreachable'))
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-rescan-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:for-b')
+  })
 })
