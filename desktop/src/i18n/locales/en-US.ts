@@ -559,6 +559,10 @@ export default {
     },
     hostForm: {
       keyFileTitle: 'Select SSH private key file',
+      importLocalKey: 'Import from ~/.ssh',
+      keyScanFailed: 'Failed to scan local private keys',
+      keyEncryptedHint: 'This key has a passphrase; the agent may not be able to use it directly',
+      clearImportedKeyPath: 'Clear imported path',
       noPrivateKey: 'No private key file found in ~/.ssh/',
       passwordHint: 'Leave blank to use a key',
       remoteAgentPort: 'Remote Agent port',

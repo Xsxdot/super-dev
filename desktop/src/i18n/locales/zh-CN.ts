@@ -559,6 +559,10 @@ export default {
     },
     hostForm: {
       keyFileTitle: '选择 SSH 私钥文件',
+      importLocalKey: '从 ~/.ssh 导入',
+      keyScanFailed: '扫描本机私钥失败',
+      keyEncryptedHint: '该私钥带 passphrase，agent 可能无法直接使用',
+      clearImportedKeyPath: '清除导入路径',
       noPrivateKey: '未在 ~/.ssh/ 找到私钥文件',
       passwordHint: '留空则用密钥',
       remoteAgentPort: '远端 Agent 端口',
