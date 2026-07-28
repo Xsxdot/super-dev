@@ -14,13 +14,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HostFormModal from '@/components/Settings/HostFormModal.vue'
-import type { Host } from '@/api/agent'
+import type { Host, ScanHostKeyResult } from '@/api/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { installTestI18n } from '@/test-utils/i18n'
 
 // mountForm 统一挂载 HostFormModal 并按需 spy store.scanHostKey，
 // 复用既有测试文件的 Pinia + installTestI18n 约定（见 HostManagerTab.test.ts）。
-function mountForm(options: { scanHostKey?: ReturnType<typeof vi.fn>; initial?: Partial<Host> | null } = {}) {
+// ScanHostKeyFn 与 store.scanHostKey 的签名保持一致；用裸 ReturnType<typeof vi.fn> 会退化成
+// Procedure|Constructable，mockImplementation 在 vue-tsc -b 的严格构建下拒绝该类型。
+type ScanHostKeyFn = (payload: { ssh_host: string; ssh_port: number }) => Promise<ScanHostKeyResult>
+
+function mountForm(options: { scanHostKey?: ScanHostKeyFn; initial?: Partial<Host> | null } = {}) {
   setActivePinia(createPinia())
   const store = useRemoteStore()
   if (options.scanHostKey) {

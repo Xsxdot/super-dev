@@ -171,7 +171,10 @@ async function runScan() {
   scanPhase.value = 'scanning'
   scanErrorMessage.value = ''
   // 记录发起采集时的地址，用于在异步返回时判断地址是否已被用户改动（见下方 identity 校验）。
-  const scannedHost = form.value.ssh_host
+  // 归一成空串而非保留 undefined：ssh_host 在表单 payload 上是可选字段，但采集接口要求
+  // string；在这里统一，下方三处 identity 比较才是在同一种表示上做的，不会因 undefined
+  // 与 '' 的差异产生假阳性「地址已变」。
+  const scannedHost = form.value.ssh_host ?? ''
   const scannedPort = Number(form.value.ssh_port) || 22
   // 同时记录发起采集时弹窗正在编辑的 Host 身份。地址/端口的 watcher 只能识别「文本变了」，
   // 识别不了「同地址换了一台 Host」——这正是第三处 stale-async 漏洞的成因。新建 Host 时
@@ -182,14 +185,14 @@ async function runScan() {
     const result = await store.scanHostKey({ ssh_host: scannedHost, ssh_port: scannedPort })
     // 飞行中地址已变：上面的 watcher 早已把 scanPhase 重置为 idle，此时绝不能
     // 用旧地址的采集结果把它又推回 confirm，否则会出现「新地址配旧指纹」的漏洞。
-    if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
+    if ((form.value.ssh_host ?? '') !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
     // 飞行中编辑对象已切换（同地址换了 Host）：hydration watcher 已经 resetScan，
     // 此时绝不能把上一台 Host 采到的指纹又推回 confirm，否则会把 A 的指纹展示在 B 的确认卡片里。
     if (props.initial?.id !== scannedHostId) return
     scannedFingerprint.value = result.fingerprint
     scanPhase.value = 'confirm'
   } catch (err) {
-    if (form.value.ssh_host !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
+    if ((form.value.ssh_host ?? '') !== scannedHost || (Number(form.value.ssh_port) || 22) !== scannedPort) return
     if (props.initial?.id !== scannedHostId) return
     // 采集失败绝不降级为「跳过指纹直接保存」——必须由用户显式选择后续动作，
     // 否则「未采集」与「采集出错」会被混淆，用户会以为已经配好。
