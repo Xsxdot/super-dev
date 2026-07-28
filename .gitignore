@@ -48,11 +48,22 @@ specs/
 # Local markdown issue tracker
 .scratch/
 
+# Official website workspace (local-only, not for the repo)
+website/
+
 # Private business/strategy docs (not for the open-source repo)
 docs/MONETIZATION.md
 
+# Launch/marketing copy workspace (local-only, not product source)
+launch/
+
+# One-off real-machine runtime validation scratch (not product source)
+agent/.tmp-runtime-validation-*/
+
 # Generated remote agent install artifacts
 desktop/src-tauri/resources/agent-install/superdev-agent-*
+desktop/src-tauri/resources/agent-install/uninstall-agent.sh
+desktop/src-tauri/resources/agent-install/uninstall-agent.ps1
 desktop/src-tauri/resources/js-debug/*
 !desktop/src-tauri/resources/js-debug/.gitkeep
 
