@@ -237,11 +237,12 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	return dep
 }
 
-// withRuntimeEnv 返回 rt 的浅拷贝，其中真正生效的环境变量载体被整体换成 env。
+// withRuntimeEnv 返回 rt 的浅拷贝，其中真正生效的环境变量载体被 patch 叠加更新
+// （patch 提及的键覆盖，未提及的既有键保留），而非整体替换。
 //
 // 参数：
 //   - rt: 现有 runtime（nil 表示该 deployment 没有 runtime 层，直接返回 nil）
-//   - env: patch 声明的新环境变量全集
+//   - env: patch 声明的新环境变量（局部集合，未必是全集）
 //
 // 返回：
 //   - 新的 RuntimeConfig 指针，调用方原有对象不被就地修改
@@ -252,6 +253,9 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 //   - 写哪个载体跟着 EffectiveEnv 的优先级走：Env 非 nil 时它整体遮蔽 EnvVars，
 //     此时把值写进 EnvVars 等于白写；Env 为 nil 时也不能顺手新建 Env，那会把
 //     原本生效的整个 EnvVars 一次性遮蔽掉。
+//   - 叠加保留未提及键：runtime 载体里可能有只存在于机器层(local.yaml)的密钥，
+//     patch 若整体替换该载体，未提及的密钥会从内存里消失，随后空的 local.yaml
+//     被删掉，唯一副本永久丢失。故用 overlayEnv 叠加而非 copyEnv 替换。
 //   - 被遮蔽载体里的同名键要一并清掉：它不生效，但仍以明文躺在 project.yaml
 //     里，留着就是一个永远不会被轮换的陈旧密钥副本。
 func withRuntimeEnv(rt *model.RuntimeConfig, env map[string]string) *model.RuntimeConfig {
@@ -260,12 +264,33 @@ func withRuntimeEnv(rt *model.RuntimeConfig, env map[string]string) *model.Runti
 	}
 	cp := *rt
 	if cp.Env != nil {
-		cp.Env = copyEnv(env)
+		cp.Env = overlayEnv(rt.Env, env) // 叠加：patch 未提及的既有键（含仅存机器层的密钥）保留
 		cp.EnvVars = withoutKeys(rt.EnvVars, env)
 		return &cp
 	}
-	cp.EnvVars = copyEnv(env)
+	cp.EnvVars = overlayEnv(rt.EnvVars, env) // 同上：叠加而非替换
 	return &cp
+}
+
+// overlayEnv 返回 base 叠加 patch 的新 map：patch 覆盖同名键，base 中 patch 未
+// 提及的键原样保留。base 与 patch 均为 nil 时返回 nil（不凭空造空 map）。
+//
+// 为什么必须叠加而非整体替换：runtime 载体里可能有只存在于机器层（local.yaml）
+// 的密钥——它们是这些值在世界上的唯一副本。局部 env patch 若整体替换该载体，
+// patch 没提到的密钥就会从内存里消失，splitOwnership 随后把空的 local.yaml 删掉，
+// 唯一副本永久丢失。叠加保证：patch 声明的键更新（消除陈旧遮蔽），未声明的键留存。
+func overlayEnv(base, patch map[string]string) map[string]string {
+	if base == nil && patch == nil {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(patch))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range patch {
+		out[k] = v
+	}
+	return out
 }
 
 // copyEnv 返回 m 的副本；nil 原样返回 nil（不凭空造出一个空 map）。

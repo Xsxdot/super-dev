@@ -643,3 +643,36 @@ func TestApplyChangeSyncsEnvIntoRuntimeCarrier(t *testing.T) {
 	assert.NotSame(t, original, dep.Runtime, "runtime 必须是拷贝")
 	assert.Equal(t, "old-key-value", original.Env["OPENAI_API_KEY"], "原 runtime 不被就地改写")
 }
+
+// TestApplyChangePreservesUnmentionedRuntimeEnvKeys 钉住局部 env patch 不会抹掉
+// runtime 载体里 patch 没提到的键——尤其是只存在于机器层(local.yaml)的密钥。
+//
+// 回归背景：早先修复波让 withRuntimeEnv 整体替换 runtime 载体，patch 只提 LOG_LEVEL
+// 时，只存在于该载体的 OPENAI_API_KEY 被抹掉，保存时空的 local.yaml 被删，密钥唯一
+// 副本永久丢失（无报错、MCP 返回成功）。
+func TestApplyChangePreservesUnmentionedRuntimeEnvKeys(t *testing.T) {
+	project := sampleProject()
+	// OPENAI_API_KEY 只在 runtime 载体里（模拟机器层合并进来、patch 不会提及的密钥）；
+	// LOG_LEVEL 是这次 patch 要改的普通键。
+	project.Services[0].Deployments[0].Runtime = &model.RuntimeConfig{
+		Type:    model.RuntimeTypeLanguage,
+		EnvVars: map[string]string{"OPENAI_API_KEY": "local-only-secret", "LOG_LEVEL": "info"},
+	}
+
+	updated, err := Apply(project, ChangeRequest{
+		Kind:      KindServiceUpsert,
+		ProjectID: "p1",
+		Service: &ServicePatch{
+			ID:          "svc-worker",
+			Deployments: []DeploymentPatch{{ID: "dep-worker-dev", Env: map[string]string{"LOG_LEVEL": "debug"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	dep := updated.Services[0].Deployments[0]
+	require.NotNil(t, dep.Runtime)
+	eff := dep.Runtime.EffectiveEnv()
+	assert.Equal(t, "debug", eff["LOG_LEVEL"], "patch 提到的键要更新")
+	assert.Equal(t, "local-only-secret", eff["OPENAI_API_KEY"],
+		"patch 没提到的机器层密钥必须原样保留，否则唯一副本会被 splitOwnership 连空 local.yaml 一起删掉")
+}
