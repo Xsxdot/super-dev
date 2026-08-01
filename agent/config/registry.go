@@ -12,6 +12,7 @@ package config
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,10 +40,20 @@ func NewRegistry(path string) *Registry {
 //
 // 返回：
 //   - 项目路径数组，如果注册表为空则返回空切片
+//
+// 注意：
+//   - load 失败（如 registry.json 损坏）在此处按空列表宽容处理，不向上返回
+//     错误——启动路径 loadRegisteredProjects 没有合适的失败出口，硬失败会
+//     让 agent 直接起不来。但必须打日志：否则"注册表是真的空"和"注册表读
+//     不出来"这两种在启动日志里看起来完全一样，会被误判成用户没添加过项目。
 func (r *Registry) List() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	paths, _ := r.load()
+	paths, err := r.load()
+	if err != nil {
+		log.Printf("[SuperDev] config: registry load failed, treating as empty path=%s err=%v", r.path, err)
+		return nil
+	}
 	return paths
 }
 
