@@ -142,7 +142,11 @@ func BuildMigrationPlan(rootPath string) (MigrationPlan, error) {
 // 决定「未被人显式处置的疑似项默认去本机层」，若两处各自重写一份正则匹配
 // 逻辑，改动只同步一边迟早会分叉出行为不一致的 bug。
 func scanSuspects(p model.Project) []SuspectEntry {
-	var out []SuspectEntry
+	// 用 []SuspectEntry{} 而非 var out []SuspectEntry：干净项目（没有疑似密钥）
+	// 是最常见的一档结果，nil 切片经 encoding/json 编码成 "null"，desktop 端
+	// 一旦对 suspects 做 .map(...) 之类操作就会崩——必须让「零结果」也序列化成
+	// 空数组 "[]"，而不是空值 "null"。
+	out := []SuspectEntry{}
 
 	for _, key := range sortedKeys(p.Variables) {
 		val := p.Variables[key]
@@ -208,7 +212,9 @@ func sortedKeys(m map[string]string) []string {
 // 后结果确实会变」的原值——RelativizePath 对 root 外部的绝对路径按设计
 // 原样保留，那类路径不该出现在「将变化」的清单里误导用户。
 func collectRelativizedPaths(p model.Project, rootPath string) []string {
-	var out []string
+	// 同 scanSuspects：干净项目（没有需要相对化的绝对路径）也要序列化成 "[]"
+	// 而非 "null"，与 uiStateEnvs 已有的空切片约定保持一致。
+	out := []string{}
 	collect := func(path string) {
 		if path == "" || !filepath.IsAbs(path) {
 			return
@@ -260,7 +266,10 @@ var addedGitignoreLines = []string{".superdev/local.yaml", ".superdev/config.yam
 func gitignoreDiff(rootPath string) GitignoreChange {
 	existing := gitignoreLineSet(rootPath)
 
-	change := GitignoreChange{}
+	// RemoveLines/AddLines 显式初始化为空切片而非 nil：.gitignore 已经是目标
+	// 状态（该撤的整目录忽略已经没有，该加的机器层/备份行已经都在）是完全
+	// 正常的一档结果，此时两个字段都不该序列化成 "null"。
+	change := GitignoreChange{RemoveLines: []string{}, AddLines: []string{}}
 	for _, line := range legacyGitignoreLines {
 		if existing[line] {
 			change.RemoveLines = append(change.RemoveLines, line)
