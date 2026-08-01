@@ -211,6 +211,25 @@ func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
+	// 重扫共享层：这条正是「改个键名就把密钥送进入库文件」的现场——归属按键名
+	// 匹配，改名后旧名从 local.yaml 消失、新名带着同一个明文落进 project.yaml。
+	// Save 不阻止它（「不挡」），但内存态必须立刻带上新的告警，否则 desktop 的
+	// 横幅要等到 agent 重启才亮，「只亮」就等于没亮。
+	refreshSharedSecretWarnings(loader, &project)
+	project.ConfigStaleLegacy = loader.HasStaleLegacy()
+	a.mu.Lock()
+	for i := range a.projects {
+		if a.projects[i].ID != project.ID {
+			continue
+		}
+		// 只回写两个运行时探测字段，不整份替换：这段代码在锁外做了磁盘 I/O，
+		// 期间别的请求可能已经改过 a.projects[i] 的其他部分。
+		a.projects[i].SharedSecretWarnings = project.SharedSecretWarnings
+		a.projects[i].ConfigStaleLegacy = project.ConfigStaleLegacy
+		break
+	}
+	a.mu.Unlock()
+
 	envAINoteCount, envAuthHintCount := 0, 0
 	for _, env := range project.Environments {
 		if env.AINote != "" {

@@ -174,6 +174,51 @@ func MergeDebugCredentialLayers(layers ...DebugCredentialLayer) []MergedDebugCre
 	return out
 }
 
+// 疑似密钥的作用域取值。前两个是可处置作用域（机器层 local.yaml 有对应
+// schema，人可以把值按到本机层）；pipeline 开头的几个是只告警作用域——
+// 机器层没有流水线的表达能力，能做的只有把「它会随 git 提交出去」讲清楚。
+const (
+	// SuspectScopeVariables 是项目级 variables。
+	SuspectScopeVariables = "variables"
+	// SuspectScopeEnvVars 是某个 service 在某个 env 下的环境变量（三载体合并视图）。
+	SuspectScopeEnvVars = "env_vars"
+	// SuspectScopePipelineVariables 是项目级流水线的 variables。
+	SuspectScopePipelineVariables = "pipeline_variables"
+	// SuspectScopePipelineEnvVariables 是流水线在某环境下覆盖的 variables。
+	SuspectScopePipelineEnvVariables = "pipeline_env_variables"
+	// SuspectScopePipelineStepVariables 是流水线 DAG 自身的 variables。
+	SuspectScopePipelineStepVariables = "pipeline_dag_variables"
+	// SuspectScopePipelineStepWith 是流水线某个 step 的插件私有参数 with。
+	SuspectScopePipelineStepWith = "pipeline_step_with"
+	// SuspectScopePipelineSyncCommand 是流水线的 sync_command（远端自取代码的命令）。
+	SuspectScopePipelineSyncCommand = "pipeline_sync_command"
+)
+
+// SuspectEntry 是一条疑似密钥线索：可能来自项目级 variables、某个 service 在
+// 某个 env 下的 env_vars，也可能来自流水线里的自由文本载体。Masked 是脱敏后
+// 的值，绝不携带明文——扫描「不挡、只亮」，去留由人决定，但它本身不能变成
+// 泄露渠道。
+//
+// 定义在 model 而非 config 包：Project 要随手带上共享层的告警清单
+// （SharedSecretWarnings），而 config 依赖 model，反向依赖会成环。
+type SuspectEntry struct {
+	Scope   string `json:"scope"`
+	Service string `json:"service,omitempty"` // env_vars 时为服务名
+	Env     string `json:"env,omitempty"`
+	Key     string `json:"key"`
+	Masked  string `json:"masked_value"`
+	Reason  string `json:"reason"`
+	// Pipeline 是 pipeline_* 作用域下的流水线 ID/名称。
+	Pipeline string `json:"pipeline,omitempty"`
+	// Detail 是 pipeline_step_with 下的步骤定位（phase/step 名），用于让人在
+	// 一份几十步的流水线里找得到这一条到底在哪。
+	Detail string `json:"detail,omitempty"`
+	// WarnOnly 表示该条只能告警、无法处置：机器层 local.yaml 对流水线没有任何
+	// schema 表达，用户即便想把它按到本机层也无处可放。迁移对话框据此不给这类
+	// 条目渲染去向单选，ApplyMigration 也不会搬动它们。
+	WarnOnly bool `json:"warn_only,omitempty"`
+}
+
 // Project 表示一个开发项目，包含多个服务定义。
 //
 // Environments 定义该项目的运行环境列表，每个 Service 的 Deployment
@@ -184,8 +229,20 @@ type Project struct {
 	RootPath string `json:"root_path"            yaml:"-"`
 	// ConfigFormat 是运行时探测的配置格式（"legacy" | "split"），不持久化，
 	// 每次 Loader.Load 重新填充。desktop 用它决定是否显示迁移横幅。
-	ConfigFormat string            `json:"config_format,omitempty" yaml:"-"`
-	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
+	ConfigFormat string `json:"config_format,omitempty" yaml:"-"`
+	// ConfigStaleLegacy 表示该项目在 split 格式下仍并存着一份被忽略的
+	// .superdev/config.yaml。运行时探测，不持久化。
+	// 典型现场：队友迁移后提交了 project.yaml，本机 pull 下来时旁边还留着自己
+	// 那份 gitignore 的 config.yaml——split 胜出，本机的路径与密钥被整份忽略，
+	// 服务起不来却没有任何提示。config_format 此时报的是 "split"，横幅不会触发，
+	// 所以必须有一个独立的标记把这个状态显式亮出来。
+	ConfigStaleLegacy bool `json:"config_stale_legacy,omitempty" yaml:"-"`
+	// SharedSecretWarnings 是共享层（project.yaml，入库文件）里被判定为疑似密钥
+	// 的条目（值已脱敏）。运行时扫描，不持久化。
+	// 「不挡、只亮」：它只负责把「这些值会随 git 提交出去」摆到人眼前，既不阻止
+	// 保存也不改变写入内容，去留仍由人决定。
+	SharedSecretWarnings []SuspectEntry    `json:"shared_secret_warnings,omitempty" yaml:"-"`
+	Variables            map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments []Environment     `json:"environments,omitempty"`
 	Services     []Service         `json:"services"             yaml:"services"`
 	// AINote 是 AI 可见的非敏感项目说明，会出现在普通配置和运行快照中。

@@ -27,10 +27,29 @@ import (
 var ErrAlreadyMigrated = errors.New("project already uses split config format")
 
 // suspectKeyRe 命中常见密钥类键名（大小写不敏感）。
-var suspectKeyRe = regexp.MustCompile(`(?i)(secret|token|passwd|password|api[-_]?key|access[-_]?key|private[-_]?key|credential)`)
+//
+// 判定刻意宽松。这是唯一一次问人「这个值要不要入库」的机会，两类错误的代价
+// 完全不对称：误报一条，人多点一次单选；漏报一条，明文密钥进 git 且撤不回。
+// 因此 pass/pwd/dsn/salt/auth 这些会顺带命中 PASSPHRASE、AUTHOR 之类无害键名
+// 的宽泛词也照收——宁可亮多了。
+//
+// `[-_]key$` 单列一条：MYSQL_KEY、STRIPE_KEY、SIGNING_KEY、ENCRYPTION_KEY 这些
+// 最常见的写法都不带 api/access/private 前缀，只靠 api[-_]?key 一族全都漏掉。
+var suspectKeyRe = regexp.MustCompile(`(?i)(secret|token|credential|password|passwd|pass|pwd|api[-_]?key|access[-_]?key|private[-_]?key|[-_]key$|dsn|salt|auth)`)
 
 // suspectValRe 命中常见密钥值前缀（sk-/pk_/ghp_/xoxb- 等发行商格式）。
 var suspectValRe = regexp.MustCompile(`^(sk|pk|ghp|gho|xox[a-z]|glpat|AKIA)[-_A-Za-z0-9]`)
+
+// suspectURLCredRe 命中把凭据内嵌进 URL 的写法：scheme://user:pass@host。
+// DATABASE_URL=postgres://admin:s3cr3tpw@db:5432/app 这类键名毫无密钥特征、
+// 值也没有发行商前缀，只有从结构上认出「URL 里带了口令」才拦得住。
+//
+// 刻意不加 ^ 锚点：这种 URL 最常见的位置恰恰是嵌在一条命令中间
+// （sync_command: git clone https://x-access-token:ghp_xxx@github.com/...），
+// 锚在开头等于把最该抓的一档全放过。
+// user 段不允许出现 /、空白、@、:，因此 http://localhost:8080/path 这类普通
+// URL（端口后面跟的是 / 而不是 @）不会被误判。
+var suspectURLCredRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://[^/\s:@]+:[^/\s@]+@`)
 
 // maskValue 保留前 4 字符用于辨认，其余打星；短值全星。
 func maskValue(v string) string {
@@ -52,17 +71,10 @@ type MigrationPlan struct {
 	RelativizedPaths []string        `json:"relativized_paths"` // 将被转相对的绝对路径清单（预览展示）
 }
 
-// SuspectEntry 是一条疑似密钥线索：可能来自项目级 variables，也可能来自
-// 某个 service 在某个 env 下的 env_vars。Masked 是脱敏后的值，绝不携带
-// 明文——迁移「不挡、只亮」，去留由人决定，但预览本身不能变成泄露渠道。
-type SuspectEntry struct {
-	Scope   string `json:"scope"`             // "variables" | "env_vars"
-	Service string `json:"service,omitempty"` // env_vars 时为服务名
-	Env     string `json:"env,omitempty"`
-	Key     string `json:"key"`
-	Masked  string `json:"masked_value"`
-	Reason  string `json:"reason"`
-}
+// SuspectEntry 是一条疑似密钥线索，定义在 model 包（Project 要携带共享层的
+// 告警清单，config → model 是单向依赖）。这里保留别名，让既有的
+// config.SuspectEntry 引用与 JSON 形态都不变。
+type SuspectEntry = model.SuspectEntry
 
 // GitignoreChange 描述迁移会对项目根 .gitignore 做的增删建议（diff 而非
 // 重写）：撤掉对整个 .superdev/ 目录的忽略（共享层要入库），改为只忽略
@@ -149,7 +161,10 @@ const dispositionShared = "shared"
 //     或某一步的 I/O 失败（错误消息带 "migration step N" 步骤上下文）
 //
 // 执行顺序（崩溃安全：project.yaml 落盘是格式翻转点，翻转前的中间产物
-// 均可安全重跑；翻转后 config.yaml 残留只触发 DetectFormat 告警不破坏）：
+// 均可安全重跑；翻转后 config.yaml 残留只触发 DetectFormat 告警与
+// Project.ConfigStaleLegacy 标记，不破坏加载。两层文件都走 writeFileAtomic
+// 的「临时文件 + 原子改名」，磁盘上不会出现半截 project.yaml / local.yaml，
+// 因此进程在写盘中途被杀也只是回到上一个完整状态）：
 //  1. 校验：legacy 存在且未迁移（否则 ErrNotFound / ErrAlreadyMigrated）
 //  2. Load legacy → 按 decisions 拆出 localYAML（未决疑似项默认 local）
 //  3. saveLocal 写机器层
@@ -206,11 +221,11 @@ func ApplyMigration(rootPath string, decisions []MigrationDecision, uiStore *UIS
 	// 副本：splitOwnership 会照步骤 3 落下的 local.yaml 把归机器层的键剥离，
 	// 剥离逻辑因此只有一份（Save 与迁移共用），不会两处分叉。
 	if err := loader.saveSplitWithRules(project, rules); err != nil {
-		// 写失败可能留下一个半截的 project.yaml，而 DetectFormat 一旦看见它就
-		// 认定 split，于是旁边那份完好的 config.yaml 再也不会被读——项目从"迁移
-		// 失败"恶化成"根本加载不了"。删掉残骸即可让格式回落到 legacy，重跑迁移。
-		// 这只堵得住返回错误的这条路径，堵不住进程在写盘中途被杀（那仍是已知
-		// 限制，见 doc comment 的崩溃安全说明）。
+		// 写失败可能留下一个 project.yaml，而 DetectFormat 一旦看见它就认定
+		// split，于是旁边那份完好的 config.yaml 再也不会被读——项目从"迁移失败"
+		// 恶化成"根本加载不了"。删掉残骸即可让格式回落到 legacy，重跑迁移。
+		// 落盘本身已是原子改名（writeFileAtomic），半截文件不再可能出现；这里
+		// 兜的是"文件完整但流程失败"（例如随后的 saveLocal 报错）这一档。
 		if rmErr := os.Remove(loader.projectPath()); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			log.Printf("[SuperDev] config: migration failed to clean up partial project.yaml: %v", rmErr)
 		}
@@ -256,6 +271,11 @@ func buildLocalLayer(p model.Project, decisions []MigrationDecision) localYAML {
 	// 集合必须逐条对得上，否则会出现「预览没提示、迁移却把它搬走了」。
 	suspects := map[string]bool{}
 	for _, s := range scanSuspects(p) {
+		// WarnOnly 的条目（流水线里的疑似密钥）机器层没有 schema 承接，只亮
+		// 不搬；放进 suspects 会让它们看起来「可处置」，实际什么也搬不了。
+		if s.WarnOnly {
+			continue
+		}
 		suspects[decisionKey(s.Scope, s.Service, s.Env, s.Key)] = true
 	}
 	dispositions := map[string]string{}
@@ -269,7 +289,7 @@ func buildLocalLayer(p model.Project, decisions []MigrationDecision) localYAML {
 
 	lf := localYAML{}
 	for key, val := range p.Variables {
-		if !goesLocal("variables", "", "", key) {
+		if !goesLocal(model.SuspectScopeVariables, "", "", key) {
 			continue
 		}
 		if lf.Variables == nil {
@@ -284,7 +304,7 @@ func buildLocalLayer(p model.Project, decisions []MigrationDecision) localYAML {
 			// 按 dep.Env 取值会取不到，密钥就只被剥离、没被保存——直接丢数据。
 			// 视图给出的是迁移前实际生效的那个值。
 			for key, val := range deploymentEnvView(dep) {
-				if !goesLocal("env_vars", svc.Name, dep.EnvName, key) {
+				if !goesLocal(model.SuspectScopeEnvVars, svc.Name, dep.EnvName, key) {
 					continue
 				}
 				// overrideKey 与 mergeLocal/splitOwnership 用的是同一个函数，
@@ -322,10 +342,11 @@ func localKeyCount(lf localYAML) int {
 	return n
 }
 
-// scanSuspects 扫描 p.Variables 与各 service 每个 deployment 的 Env，返回
-// 疑似密钥清单（值已脱敏）。debug_credentials 不在扫描范围内——那是刻意
-// 公开的测试凭据，属共享层，去留已由用户在别处裁决，不属于「疑似密钥」
-// 的问题域。
+// scanSuspects 扫描 p.Variables、各 service 每个 deployment 的三载体环境变量
+// 视图，以及项目级流水线里的自由文本载体，返回疑似密钥清单（值已脱敏）。
+// 流水线来源的条目一律 WarnOnly=true——机器层对它们没有表达能力，只亮不搬。
+// debug_credentials 不在扫描范围内——那是刻意公开的测试凭据，属共享层，去留
+// 已由用户在别处裁决，不属于「疑似密钥」的问题域。
 //
 // 独立成可复用的内部函数：Task 7 的 ApplyMigration 需要用同一份扫描结果
 // 决定「未被人显式处置的疑似项默认去本机层」，若两处各自重写一份正则匹配
@@ -341,7 +362,7 @@ func scanSuspects(p model.Project) []SuspectEntry {
 		val := p.Variables[key]
 		if reason, ok := suspectReason(key, val); ok {
 			out = append(out, SuspectEntry{
-				Scope:  "variables",
+				Scope:  model.SuspectScopeVariables,
 				Key:    key,
 				Masked: maskValue(val),
 				Reason: reason,
@@ -359,7 +380,7 @@ func scanSuspects(p model.Project) []SuspectEntry {
 				val := view[key]
 				if reason, ok := suspectReason(key, val); ok {
 					out = append(out, SuspectEntry{
-						Scope:   "env_vars",
+						Scope:   model.SuspectScopeEnvVars,
 						Service: svc.Name,
 						Env:     dep.EnvName,
 						Key:     key,
@@ -371,18 +392,106 @@ func scanSuspects(p model.Project) []SuspectEntry {
 		}
 	}
 
+	out = append(out, scanPipelineSuspects(p.Pipelines)...)
+	return out
+}
+
+// scanPipelineSuspects 扫描项目级流水线里的自由文本载体，返回只告警
+// （WarnOnly）的疑似密钥清单。
+//
+// 参数：
+//   - pipelines: 项目级流水线定义
+//
+// 返回：
+//   - 疑似密钥条目（值已脱敏），全部 WarnOnly=true
+//
+// 注意：
+//   - 流水线的 variables / environments[].variables / pipeline.variables /
+//     step.with / sync_command 都是自由格式，原样序列化进入库的 project.yaml，
+//     而机器层 local.yaml 对它们没有任何 schema 表达。所以这里只能亮不能搬：
+//     用户想把 docker login 口令或 git URL 里的 token 挪走，得自己改成变量引用
+//     或换用凭据机制，工具替他决定不了。
+//   - 遍历顺序全部走排序键，预览列表在两次调用之间必须稳定。
+func scanPipelineSuspects(pipelines []model.ProjectPipeline) []SuspectEntry {
+	out := []SuspectEntry{}
+	for _, pp := range pipelines {
+		id := pp.ID
+		if id == "" {
+			id = pp.Name
+		}
+		add := func(scope, env, detail, key, val string) {
+			reason, ok := suspectReason(key, val)
+			if !ok {
+				return
+			}
+			out = append(out, SuspectEntry{
+				Scope:    scope,
+				Env:      env,
+				Detail:   detail,
+				Pipeline: id,
+				Key:      key,
+				Masked:   maskValue(val),
+				Reason:   reason,
+				WarnOnly: true,
+			})
+		}
+
+		for _, key := range sortedKeys(pp.Variables) {
+			add(model.SuspectScopePipelineVariables, "", "", key, pp.Variables[key])
+		}
+		for _, envName := range sortedEnvNames(pp.Environments) {
+			envVars := pp.Environments[envName].Variables
+			for _, key := range sortedKeys(envVars) {
+				add(model.SuspectScopePipelineEnvVariables, envName, "", key, envVars[key])
+			}
+		}
+		for _, key := range sortedKeys(pp.Pipeline.Variables) {
+			add(model.SuspectScopePipelineStepVariables, "", "", key, pp.Pipeline.Variables[key])
+		}
+		// sync_command 没有键名，只能靠值判定——远端自取代码的命令里塞
+		// https://user:token@github.com/... 是最常见的一种。
+		add(model.SuspectScopePipelineSyncCommand, "", "", "sync_command", pp.SyncCommand)
+
+		for _, phase := range []struct {
+			name  string
+			steps []model.Step
+		}{
+			{"build", pp.Pipeline.Build},
+			{"deploy", pp.Pipeline.Deploy},
+			{"finally", pp.Pipeline.Finally},
+		} {
+			for _, step := range phase.steps {
+				detail := phase.name + "/" + step.Name
+				// step.With 是插件私有参数（map[string]any），只看顶层字符串值：
+				// docker login 的口令、remote_cmd 里的 git URL 都是这一层。
+				for _, key := range sortedAnyKeys(step.With) {
+					val, isString := step.With[key].(string)
+					if !isString {
+						continue
+					}
+					add(model.SuspectScopePipelineStepWith, "", detail, key, val)
+				}
+			}
+		}
+	}
 	return out
 }
 
 // suspectReason 判断 key/val 是否疑似密钥，命中时给出人可读的判定理由。
 // 键名优先判断：键名命中比值前缀命中更常见也更可靠，两者都命中时理由取
-// 键名侧的判定。
+// 键名侧的判定。空值直接放行——没有值就没有可泄露的东西。
 func suspectReason(key, val string) (string, bool) {
+	if val == "" {
+		return "", false
+	}
 	if suspectKeyRe.MatchString(key) {
 		return "键名疑似密钥", true
 	}
 	if suspectValRe.MatchString(val) {
 		return "值前缀疑似密钥", true
+	}
+	if suspectURLCredRe.MatchString(val) {
+		return "值内嵌 URL 凭据", true
 	}
 	return "", false
 }
@@ -391,6 +500,26 @@ func suspectReason(key, val string) (string, bool) {
 // 迁移预览这种要展示给人看、且要在两次调用间保持稳定的列表，顺序抖动会让
 // 人怀疑扫描结果本身是不是也不稳定。
 func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedAnyKeys 同 sortedKeys，用于 step.With 这种 map[string]interface{}。
+func sortedAnyKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedEnvNames 同 sortedKeys，用于流水线的 environments 映射。
+func sortedEnvNames(m map[string]model.PipelineEnvironment) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

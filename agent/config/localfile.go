@@ -166,7 +166,9 @@ func saveLocal(rootPath string, lf localYAML) error {
 		return fmt.Errorf("marshal local.yaml: %w", err)
 	}
 	// 0600：机器层是密钥的家，权限从紧。
-	return os.WriteFile(path, data, 0o600)
+	// 与 project.yaml 同样走原子写：机器层是这些值在世界上的唯一副本，写到一半
+	// 断电留下半截文件，丢的是没有任何地方能再取回来的东西。
+	return writeFileAtomic(path, data, 0o600)
 }
 
 // mergeLocal 把机器层覆盖并入 Project（Load 编排的最后一步）。
@@ -249,7 +251,8 @@ func mergeRuntimeEnv(rt *model.RuntimeConfig, env map[string]string) {
 // 返回：
 //   - sharedProject: 应写入 project.yaml 的内容（local 拥有的键已剥除）
 //   - updatedLocal: 应写入 local.yaml 的内容（local 键携带 p 中的最新值；
-//     p 中已删除的 local 键同步删除）
+//     p 中已删除的 local 键同步删除；整条匹配不上任何 deployment 的覆盖原样
+//     保留，见 carryOverOrphans）
 //
 // 注意：本切面 Save 不产生新的 local 归属——归属只由迁移/编排创建；
 // working_dir/env_file 覆盖存在时，其最新值写回 local，共享层保持存量。
@@ -274,6 +277,10 @@ func splitOwnership(p model.Project, lf localYAML, storedShared map[string]inter
 	}
 
 	if len(lf.Deployments) > 0 {
+		// matched 记录本次真的在合并态里找到了对应 deployment 的 override key。
+		// 剩下的（服务被改名/删除、env 被改名，或者队友 git pull 改了共享层的
+		// 服务名）必须原样留在机器层——见循环之后的 carryOverOrphans。
+		matched := map[string]bool{}
 		sharedServices := make([]model.Service, len(p.Services))
 		copy(sharedServices, p.Services)
 		for si := range sharedServices {
@@ -287,6 +294,7 @@ func splitOwnership(p model.Project, lf localYAML, storedShared map[string]inter
 				if !ok {
 					continue
 				}
+				matched[key] = true
 				var newOverride depOverrideYAML
 				if o.WorkingDir != "" {
 					newOverride.WorkingDir = RelativizePath(dep.WorkDir, p.RootPath)
@@ -332,6 +340,38 @@ func splitOwnership(p model.Project, lf localYAML, storedShared map[string]inter
 			svc.Deployments = deps
 		}
 		shared.Services = sharedServices
+		carryOverOrphans(lf, matched, &updated)
 	}
 	return shared, updated
+}
+
+// carryOverOrphans 把本次 Save 没能在合并态里匹配到 deployment 的机器层覆盖
+// 原样搬进 updated，保证它们不会因为一次无关的保存就消失。
+//
+// 参数：
+//   - lf: 当前 local.yaml
+//   - matched: 本次真的匹配到 deployment 的 override key 集合
+//   - updated: 待写回的机器层内容（原地追加）
+//
+// 注意：
+//   - 触发条件全是日常操作：服务被改名或删除、deployment 的 env 被改名，甚至
+//     只是 git pull 了队友对共享层服务名的一次修改。而 local.yaml 按设计就是
+//     这些值在世界上的唯一副本——「因为队友改了个服务名，所以删掉你唯一那份
+//     密钥」不是一个可以接受的结果，一行没人会读的日志也不构成用户同意。
+//   - 代价只是一条永远匹配不上的陈旧条目：mergeLocal 找不到对应 deployment
+//     就跳过，不会有任何行为影响，人看见了自己删掉即可。
+//   - 项目级 Variables 不需要同样处理：mergeLocal 无条件把它们并进合并态，
+//     所以它们永远在 p.Variables 里，不存在「匹配不上」这一档。
+func carryOverOrphans(lf localYAML, matched map[string]bool, updated *localYAML) {
+	for key, o := range lf.Deployments {
+		if matched[key] {
+			continue
+		}
+		if updated.Deployments == nil {
+			updated.Deployments = map[string]depOverrideYAML{}
+		}
+		updated.Deployments[key] = o
+		// 只报键名与数量，不报值：这里躺着的正是密钥本身。
+		log.Printf("[SuperDev] config: local.yaml override %q has no matching deployment in the current config, preserved as-is (envVars=%d) — service renamed/removed?", key, len(o.EnvVars))
+	}
 }

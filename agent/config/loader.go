@@ -61,7 +61,7 @@ const (
 func (l *Loader) DetectFormat() Format {
 	if _, err := os.Stat(l.projectPath()); err == nil {
 		if _, err := os.Stat(l.legacyPath()); err == nil {
-			log.Printf("[SuperDev] config: both project.yaml and config.yaml exist at %s, split wins (config.yaml is stale)", l.rootPath)
+			log.Printf("[SuperDev] config: both project.yaml and config.yaml exist at %s, split wins (config.yaml is stale and its values are NOT in effect)", l.rootPath)
 		}
 		return FormatSplit
 	}
@@ -69,6 +69,27 @@ func (l *Loader) DetectFormat() Format {
 		return FormatLegacy
 	}
 	return FormatSplit
+}
+
+// HasStaleLegacy 判断该项目是否处于「两份主配置并存」的状态：project.yaml 存在
+// （split 胜出）的同时旁边还留着一份 .superdev/config.yaml。
+//
+// 返回：
+//   - true 表示 config.yaml 的内容被整份忽略，其中的本机路径与密钥都不生效
+//
+// 注意：
+//   - 这个状态是团队协作的常态而非异常——队友迁移后提交了 project.yaml，本机
+//     pull 下来时旁边还压着自己那份 gitignore 的 config.yaml。此时
+//     DetectFormat 返回 split，迁移横幅不会触发，用户拿到的现象只有「服务起
+//     不来」，必须有一个独立的判定把它显式亮出来。
+//   - 只做存在性判断，不读内容：残留文件是不是真的有值不影响结论，只要它还在
+//     就说明用户以为在生效的那份配置其实没在生效。
+func (l *Loader) HasStaleLegacy() bool {
+	if _, err := os.Stat(l.projectPath()); err != nil {
+		return false
+	}
+	_, err := os.Stat(l.legacyPath())
+	return err == nil
 }
 
 // projectPath 返回 split 格式共享层文件（project.yaml）的绝对路径。
@@ -103,12 +124,58 @@ func (l *Loader) activePath() string {
 // 返回错误，不静默丢弃用户的本机覆盖（如 API Key）。
 func (l *Loader) Load() (model.Project, error) {
 	format := l.DetectFormat()
-	data, err := os.ReadFile(l.activePath())
+	project, envSelected, err := l.readMainConfig(l.activePath())
+	if err != nil {
+		return model.Project{}, err
+	}
+	project.ConfigFormat = string(format)
+
+	if format == FormatSplit {
+		// 扫描必须在 mergeLocal 之前：此刻 project 里装的正是 project.yaml 的内容，
+		// 也就是会随 git 提交出去的那一份。合并完机器层再扫，本机层的密钥会被
+		// 一并算成「共享层告警」，用户看到的清单就不再对应任何一个真实文件。
+		project.SharedSecretWarnings = scanSuspects(project)
+		logSharedSecretWarnings(l.projectPath(), project.SharedSecretWarnings)
+		project.ConfigStaleLegacy = l.HasStaleLegacy()
+
+		lf, err := loadLocal(l.rootPath)
+		if err != nil {
+			// 机器层损坏必须让调用方感知，不能静默丢失用户的本机覆盖（如 API Key）。
+			return model.Project{}, fmt.Errorf("load local.yaml: %w", err)
+		}
+		mergeLocal(&project, lf)
+		log.Printf("[SuperDev] config: loaded %s format=split services=%d localOverrides=%d staleLegacy=%t sharedSecretWarnings=%d", l.rootPath, len(project.Services), len(lf.Deployments), project.ConfigStaleLegacy, len(project.SharedSecretWarnings))
+	} else {
+		// legacy 格式下 env_selected_service_ids 仍是配置文件的一等字段，迁移前行为不变。
+		project.EnvSelectedServiceIDs = envSelected
+	}
+
+	backfillServiceLanguages(&project)
+	return project, nil
+}
+
+// readMainConfig 读取并反序列化一份主配置文件（legacy 的 config.yaml 或 split
+// 的 project.yaml），产出尚未合并机器层的 Project。
+//
+// 参数：
+//   - path: 主配置文件绝对路径
+//
+// 返回：
+//   - model.Project：该文件本身描述的内容（不含 local.yaml 覆盖、不含 ConfigFormat）
+//   - map[string][]string：文件里的 env_selected_service_ids（split 格式下由调用方丢弃）
+//   - error：ErrNotFound（文件不存在）或读取/解析错误
+//
+// 注意：
+//   - 单独抽出来是因为「只要共享层那一份、不要合并态」有第二个消费方：
+//     ScanSharedLayer 扫的正是会随 git 提交出去的那份内容，合并完机器层再扫，
+//     本机层的密钥会被算成共享层告警，清单就不再对应任何一个真实文件。
+func (l *Loader) readMainConfig(path string) (model.Project, map[string][]string, error) {
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return model.Project{}, ErrNotFound
+		return model.Project{}, nil, ErrNotFound
 	}
 	if err != nil {
-		return model.Project{}, fmt.Errorf("read config: %w", err)
+		return model.Project{}, nil, fmt.Errorf("read config: %w", err)
 	}
 
 	var raw struct {
@@ -124,16 +191,15 @@ func (l *Loader) Load() (model.Project, error) {
 		EnvSelectedServiceIDs map[string][]string     `yaml:"env_selected_service_ids"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return model.Project{}, fmt.Errorf("parse config: %w", err)
+		return model.Project{}, nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	envs := envsFromYAML(raw.Environments)
 	services := make([]model.Service, len(raw.Services))
 	for i, s := range raw.Services {
 		services[i] = serviceFromYAML(s, l.rootPath)
 	}
 
-	project := model.Project{
+	return model.Project{
 		ID:               raw.ID,
 		Name:             raw.Name,
 		RootPath:         l.rootPath,
@@ -141,27 +207,38 @@ func (l *Loader) Load() (model.Project, error) {
 		AuthHint:         raw.AuthHint,
 		Variables:        raw.Variables,
 		DebugCredentials: raw.DebugCredentials,
-		Environments:     envs,
+		Environments:     envsFromYAML(raw.Environments),
 		Services:         services,
 		Pipelines:        raw.Pipelines,
-		ConfigFormat:     string(format),
-	}
+	}, raw.EnvSelectedServiceIDs, nil
+}
 
-	if format == FormatSplit {
-		lf, err := loadLocal(l.rootPath)
-		if err != nil {
-			// 机器层损坏必须让调用方感知，不能静默丢失用户的本机覆盖（如 API Key）。
-			return model.Project{}, fmt.Errorf("load local.yaml: %w", err)
-		}
-		mergeLocal(&project, lf)
-		log.Printf("[SuperDev] config: loaded %s format=split services=%d localOverrides=%d", l.rootPath, len(project.Services), len(lf.Deployments))
-	} else {
-		// legacy 格式下 env_selected_service_ids 仍是配置文件的一等字段，迁移前行为不变。
-		project.EnvSelectedServiceIDs = raw.EnvSelectedServiceIDs
+// ScanSharedLayer 扫描磁盘上的共享层（project.yaml）里有哪些疑似密钥。
+//
+// 返回：
+//   - []model.SuspectEntry：疑似密钥清单，值已脱敏；legacy 格式或文件不存在时为 nil
+//   - error：读取/解析 project.yaml 失败
+//
+// 注意：
+//   - 存在的理由是 Save 之后刷新内存态。Save 只返回 error，而 desktop 的横幅读
+//     的是内存里那份 Project——不重新扫一遍，用户改名把密钥送进入库文件之后，
+//     告警要等到 agent 重启才出现，「只亮」就等于没亮。
+//   - 只扫共享层，不碰 local.yaml：机器层的值不入库，报进来只会制造噪音。
+//   - legacy 格式返回 nil：config.yaml 本就被 gitignore，不存在「随 git 提交
+//     出去」这个问题，迁移前行为不变。
+func (l *Loader) ScanSharedLayer() ([]model.SuspectEntry, error) {
+	if l.DetectFormat() != FormatSplit {
+		return nil, nil
 	}
-
-	backfillServiceLanguages(&project)
-	return project, nil
+	project, _, err := l.readMainConfig(l.projectPath())
+	if errors.Is(err, ErrNotFound) {
+		// 全新目录：DetectFormat 判 split 但 project.yaml 还没被写出来，无内容可扫。
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanSuspects(project), nil
 }
 
 // Save 将 Project 序列化写回配置文件。
@@ -285,6 +362,12 @@ func (l *Loader) saveSplitProject(p model.Project, logRules interface{}) error {
 	// 对象，这里只做序列化，绝不能原地修改 shared。
 	shared, updated := splitOwnership(p, lf, nil)
 
+	// 「不挡、只亮」：扫一遍即将写进共享层的内容，把疑似密钥留痕。绝不改写入
+	// 内容、绝不阻止保存——只是把「这些值下一次 git commit 就出去了」讲出来。
+	// 这条日志是 Save 路径上唯一的安全网：归属只由迁移/编排创建，普通编辑
+	// （改名、新增键）完全可以把一个密钥送进入库文件而不经过任何提示。
+	logSharedSecretWarnings(l.projectPath(), scanSuspects(shared))
+
 	raw := buildRawConfig(shared, l.rootPath, false)
 	if logRules != nil {
 		raw["log_rules"] = logRules
@@ -294,13 +377,88 @@ func (l *Loader) saveSplitProject(p model.Project, logRules interface{}) error {
 	if err != nil {
 		return fmt.Errorf("marshal project.yaml: %w", err)
 	}
-	if err := os.WriteFile(l.projectPath(), data, 0o644); err != nil {
+	if err := writeFileAtomic(l.projectPath(), data, 0o644); err != nil {
 		return err
 	}
 	if err := saveLocal(l.rootPath, updated); err != nil {
 		return fmt.Errorf("save local.yaml: %w", err)
 	}
 	log.Printf("[SuperDev] config: saved %s format=split services=%d localOverrides=%d", l.projectPath(), len(shared.Services), len(updated.Deployments))
+	return nil
+}
+
+// logSharedSecretWarnings 把共享层（入库文件）里扫到的疑似密钥逐条写进日志。
+//
+// 参数：
+//   - path: 共享层文件路径，只为让日志能定位到具体项目
+//   - warnings: scanSuspects 的产出（值已脱敏）
+//
+// 注意：
+//   - 只打脱敏值。日志本身也会被复制、上报、贴进 issue，日志里出现明文密钥
+//     等于把一个泄露渠道换成了另一个。
+//   - 一条都没扫到时不打日志：成功路径不静默指的是「做了事要留痕」，而这里
+//     什么都没发生，每次保存都刷一行 "0 warnings" 只会淹没真正的告警。
+func logSharedSecretWarnings(path string, warnings []model.SuspectEntry) {
+	if len(warnings) == 0 {
+		return
+	}
+	log.Printf("[SuperDev] config: %s (committed to git) carries %d suspected secret(s)", path, len(warnings))
+	for _, w := range warnings {
+		log.Printf("[SuperDev] config: suspected secret in shared layer scope=%s service=%s env=%s pipeline=%s detail=%s key=%s masked=%s reason=%s",
+			w.Scope, w.Service, w.Env, w.Pipeline, w.Detail, w.Key, w.Masked, w.Reason)
+	}
+}
+
+// writeFileAtomic 以「写临时文件 + 原子改名」的方式落盘，替代 os.WriteFile。
+//
+// 参数：
+//   - path: 目标文件绝对路径
+//   - data: 完整文件内容
+//   - perm: 目标文件权限
+//
+// 返回：
+//   - error：创建/写入临时文件或改名失败（失败时会尽力清掉临时文件）
+//
+// 注意：
+//   - os.WriteFile 走的是 O_TRUNC + 逐段写：进程在写盘中途被杀或断电，磁盘上
+//     留下的是一个半截文件。对 project.yaml 而言这尤其致命——DetectFormat
+//     看见它就判 split，旁边那份完好的 config.yaml 从此再也不会被读，项目从
+//     "保存失败" 恶化成 "根本加载不了"。
+//   - os.Rename 在同一目录内是原子的：读者要么看到旧的完整文件，要么看到新的
+//     完整文件，不存在中间态。临时文件与目标同目录正是为了保证这一点（跨文件
+//     系统的 rename 会退化成拷贝，原子性也就没了）。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", path, err)
+	}
+	tmp := f.Name()
+	// 任一步失败都要清掉临时文件，否则 .superdev 目录会被失败重试逐渐堆满垃圾。
+	cleanup := func(cause error) error {
+		f.Close()
+		if rmErr := os.Remove(tmp); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			log.Printf("[SuperDev] config: failed to clean up temp file %s: %v", tmp, rmErr)
+		}
+		return cause
+	}
+	if _, err := f.Write(data); err != nil {
+		return cleanup(fmt.Errorf("write temp file for %s: %w", path, err))
+	}
+	// CreateTemp 固定用 0600 建文件，必须显式改成目标权限，否则 project.yaml
+	// 会从 0644 悄悄变成 0600（共享层是给人读、给 git 管的文件）。
+	if err := f.Chmod(perm); err != nil {
+		return cleanup(fmt.Errorf("chmod temp file for %s: %w", path, err))
+	}
+	if err := f.Close(); err != nil {
+		return cleanup(fmt.Errorf("close temp file for %s: %w", path, err))
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		if rmErr := os.Remove(tmp); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			log.Printf("[SuperDev] config: failed to clean up temp file %s: %v", tmp, rmErr)
+		}
+		return fmt.Errorf("rename temp file to %s: %w", path, err)
+	}
 	return nil
 }
 

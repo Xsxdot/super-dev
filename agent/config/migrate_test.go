@@ -330,6 +330,137 @@ services:
 	assert.Equal(t, "effective-token", rt.EffectiveEnv()["API_TOKEN"], "并回的是迁移前实际生效的那个值")
 }
 
+// commonSecretShapesFixture 收集的是「最常见、却全部漏网」的一批密钥写法：
+// 键名不含 secret/token，也不带 api/access/private 前缀，值也没有发行商前缀。
+// 迁移是唯一一次问人「这个值要不要入库」的机会，这些形状漏掉一个，就是一个
+// 明文密钥进 git 且撤不回。
+const commonSecretShapesFixture = `
+name: shapes
+variables:
+  MYSQL_PWD: mysqlpwdvalue
+  DB_PASS: dbpassvalue
+  ENCRYPTION_KEY: encryptionkeyvalue
+  SIGNING_KEY: signingkeyvalue
+  STRIPE_KEY: stripekeyvalue
+  DATABASE_URL: postgres://admin:s3cr3tpwvalue@db:5432/app
+  PUBLIC_URL: http://localhost:8080/health
+services:
+  - id: svc-1
+    name: server
+    deployments:
+      - env: dev
+        location: local
+        command: go run .
+        env_vars:
+          PORT: "9100"
+          REDIS_DSN: redis://user:redisdsnpwvalue@127.0.0.1:6379/0
+`
+
+// TestSuspectScanCoversCommonSecretKeyShapes 钉住扫描器的召回率。断言逐条列出
+// 键名而不是只数个数：漏掉哪一种形状，失败信息就必须直接说出是哪一种。
+func TestSuspectScanCoversCommonSecretKeyShapes(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, commonSecretShapesFixture)
+
+	plan, err := config.BuildMigrationPlan(dir)
+	assert.NoError(t, err)
+
+	flagged := map[string]string{}
+	for _, s := range plan.Suspects {
+		flagged[s.Key] = s.Reason
+	}
+	for _, key := range []string{"MYSQL_PWD", "DB_PASS", "ENCRYPTION_KEY", "SIGNING_KEY", "STRIPE_KEY", "DATABASE_URL", "REDIS_DSN"} {
+		assert.Contains(t, flagged, key, "常见密钥形状必须被亮出来：%s", key)
+	}
+	assert.Equal(t, "值内嵌 URL 凭据", flagged["DATABASE_URL"], "URL 内嵌口令靠值判定，不靠键名")
+	assert.NotContains(t, flagged, "PORT", "普通变量不误报")
+	assert.NotContains(t, flagged, "PUBLIC_URL", "带端口和路径的普通 URL 不误报")
+
+	// 落到文件字节上：未处置的疑似项按安全默认全部去机器层，一个明文都不许留
+	// 在入库文件里。只断言 plan 的 Go 值不够——真正会被 commit 的是这些字节。
+	assert.NoError(t, config.ApplyMigration(dir, nil, config.NewUIStateStore(t.TempDir())))
+	proj := readSuperdevFile(t, dir, "project.yaml")
+	loc := readSuperdevFile(t, dir, "local.yaml")
+	for _, secret := range []string{
+		"mysqlpwdvalue", "dbpassvalue", "encryptionkeyvalue", "signingkeyvalue",
+		"stripekeyvalue", "s3cr3tpwvalue", "redisdsnpwvalue",
+	} {
+		assert.NotContains(t, proj, secret, "入库文件不得携带明文：%s", secret)
+		assert.Contains(t, loc, secret, "明文必须落到机器层：%s", secret)
+	}
+	assert.Contains(t, proj, "http://localhost:8080/health", "非密钥变量留共享层")
+}
+
+// pipelineSecretFixture 把密钥放进流水线的五个自由文本载体。这些字段全部原样
+// 序列化进入库的 project.yaml，而机器层 local.yaml 对它们没有任何 schema
+// 表达——扫不到就等于用户从没被告知过。
+const pipelineSecretFixture = `
+name: pl
+services:
+  - id: svc-1
+    name: server
+    deployments:
+      - env: dev
+        location: local
+        command: go run .
+pipelines:
+  - id: release
+    name: release
+    sync_mode: remote_cmd
+    sync_command: git clone https://x-access-token:ghp_synccmdtokenvalue@github.com/acme/app.git
+    variables:
+      DEPLOY_TOKEN: ghp_pipelinetokenvalue
+    environments:
+      prod:
+        variables:
+          REGISTRY_PASSWORD: registrypassvalue
+    pipeline:
+      variables:
+        DAG_API_KEY: dagapikeyvalue
+      build:
+        - name: docker-login
+          type: shell
+          with:
+            docker_password: dockerpassvalue
+            timeout: 30
+`
+
+// TestPipelineSecretsAreSurfacedAsWarnOnly 钉住 pipelines 这个此前完全不被扫描
+// 的明文载体：预览必须逐条亮出来（脱敏、warn_only），但迁移不搬动它们——机器层
+// 没地方放，能做的只有讲清楚「这些会随 git 提交出去」。
+func TestPipelineSecretsAreSurfacedAsWarnOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, pipelineSecretFixture)
+
+	plan, err := config.BuildMigrationPlan(dir)
+	assert.NoError(t, err)
+
+	byKey := map[string]config.SuspectEntry{}
+	for _, s := range plan.Suspects {
+		byKey[s.Key] = s
+	}
+	for _, key := range []string{"DEPLOY_TOKEN", "REGISTRY_PASSWORD", "DAG_API_KEY", "docker_password", "sync_command"} {
+		entry, found := byKey[key]
+		assert.True(t, found, "流水线里的疑似密钥必须进预览：%s", key)
+		assert.True(t, entry.WarnOnly, "流水线条目只能告警、不可处置：%s", key)
+		assert.Equal(t, "release", entry.Pipeline, "必须指出是哪条流水线：%s", key)
+	}
+	assert.Equal(t, "build/docker-login", byKey["docker_password"].Detail, "step 条目要能定位到具体步骤")
+	assert.Equal(t, "prod", byKey["REGISTRY_PASSWORD"].Env, "环境覆盖条目要带上环境名")
+	assert.NotContains(t, byKey["timeout"].Key, "timeout", "非字符串/非密钥的 with 参数不误报")
+	for _, s := range plan.Suspects {
+		assert.NotContains(t, s.Masked, "ghp_pipelinetokenvalue", "预览必须脱敏")
+		assert.NotContains(t, s.Masked, "dockerpassvalue")
+	}
+
+	// warn-only 意味着「不挡」：迁移照常成功，值原样留在共享层。
+	assert.NoError(t, config.ApplyMigration(dir, nil, config.NewUIStateStore(t.TempDir())))
+	proj := readSuperdevFile(t, dir, "project.yaml")
+	assert.Contains(t, proj, "ghp_pipelinetokenvalue", "流水线的值不被搬走（机器层无处安放），只被亮出来")
+	_, err = os.Stat(filepath.Join(dir, ".superdev", "local.yaml"))
+	assert.True(t, os.IsNotExist(err), "没有可处置的疑似项时不该凭空生成机器层文件")
+}
+
 // gitignoreLines 把项目根 .gitignore 读成行列表（去掉尾部空行），供做
 // 「某一行是否存在」的精确断言——子串断言在这里会漏判。
 func gitignoreLines(t *testing.T, dir string) []string {

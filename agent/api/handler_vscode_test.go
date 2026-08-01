@@ -642,3 +642,57 @@ func findServiceByNameForSetupTest(services []model.Service, name string) *model
 	}
 	return nil
 }
+
+// TestPutProjectSetup_SurfacesSharedLayerSecretWarning 钉住「不挡、只亮」在真实
+// HTTP 路径上的落地：用户把一个密钥写进项目变量并保存，配置照常落盘（不挡），
+// 但响应与随后的 GET /api/projects 都必须带上脱敏后的共享层告警（只亮）。
+//
+// 这条覆盖的是 Save 路径而不是 Load 路径。归属只由迁移/编排创建，普通编辑
+// （改名、新增键）完全可以把一个密钥送进要 commit 的 project.yaml；
+// 不在 Save 之后重扫，告警要等到 agent 重启才出现，横幅等于没有。
+func TestPutProjectSetup_SurfacesSharedLayerSecretWarning(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".superdev"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".superdev", "project.yaml"),
+		[]byte("name: shapes\nservices: []\n"), 0o644))
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	require.Empty(t, created.SharedSecretWarnings, "前置条件：干净项目没有告警")
+
+	setupBody, err := json.Marshal(map[string]any{
+		"environments": []map[string]any{{"name": "dev", "is_dev": true, "order": 0}},
+		"services":     []map[string]any{},
+		"variables":    map[string]string{"STRIPE_KEY": "stripe-live-secretvalue"},
+	})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/projects/"+created.ID+"/setup", bytes.NewReader(setupBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode, "「不挡」：保存不因疑似密钥被拒绝")
+
+	var updated model.Project
+	require.NoError(t, json.NewDecoder(putResp.Body).Decode(&updated))
+	require.Len(t, updated.SharedSecretWarnings, 1, "「只亮」：响应必须带上共享层告警")
+	assert.Equal(t, "STRIPE_KEY", updated.SharedSecretWarnings[0].Key)
+	assert.NotContains(t, updated.SharedSecretWarnings[0].Masked, "stripe-live-secretvalue", "告警只带脱敏值")
+
+	// desktop 的横幅读的是 listProjects 返回的内存态，必须一起刷新。
+	listResp, err := http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
+	require.Len(t, projects, 1)
+	require.Len(t, projects[0].SharedSecretWarnings, 1, "内存态必须同步刷新，否则横幅要等重启才亮")
+}

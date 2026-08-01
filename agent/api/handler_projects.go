@@ -28,10 +28,11 @@ import (
 //
 // 参数：
 //   - loader: 已绑定目标项目 rootPath 的 Loader
-//   - p: 待落盘并回填 ConfigFormat 的 Project；Save 成功后原地写入 p.ConfigFormat
+//   - p: 待落盘并回填运行时探测字段的 Project；Save 成功后原地写入
+//     p.ConfigFormat 与 p.ConfigStaleLegacy
 //
 // 返回：
-//   - Save 失败时返回错误，此时不修改 p.ConfigFormat
+//   - Save 失败时返回错误，此时不修改 p 的任何字段
 //
 // 注意：
 //   - 必须先 Save 再探测格式——对全新目录（既无 config.yaml 也无 project.yaml）
@@ -48,7 +49,34 @@ func saveProjectAndBackfillFormat(loader *config.Loader, p *model.Project) error
 		return err
 	}
 	p.ConfigFormat = string(loader.DetectFormat())
+	// ConfigStaleLegacy 与 ConfigFormat 同源同时机：两者都只有落盘之后才谈得上
+	// 探测，而 desktop 是拿这一个响应决定要不要亮「旁边那份 config.yaml 没在
+	// 生效」的横幅的。只回填其中一个，就会出现 config_format 已经翻新、残留
+	// 提示却停在上一次的值。
+	p.ConfigStaleLegacy = loader.HasStaleLegacy()
+	refreshSharedSecretWarnings(loader, p)
 	return nil
+}
+
+// refreshSharedSecretWarnings 用磁盘上共享层的最新内容刷新 p.SharedSecretWarnings。
+//
+// 参数：
+//   - loader: 已绑定目标项目 rootPath 的 Loader
+//   - p: 刚落盘完成的 Project；原地写入扫描结果
+//
+// 注意：
+//   - 必须在 Save 之后调用。desktop 的告警横幅读的是内存里那份 Project，而
+//     listProjects 返回的就是内存态——不重新扫，用户把密钥改名送进入库文件之后
+//     告警要等到 agent 重启才出现，「只亮」就等于没亮。
+//   - 扫描失败不阻断保存（配置已经落盘成功，告警只是提示），但必须留日志：
+//     一个静默失效的安全提示比没有提示更糟，至少要在日志里能查到它没跑成。
+func refreshSharedSecretWarnings(loader *config.Loader, p *model.Project) {
+	warnings, err := loader.ScanSharedLayer()
+	if err != nil {
+		log.Printf("[SuperDev] config: failed to rescan shared layer for secret warnings project=%s err=%v", p.RootPath, err)
+		return
+	}
+	p.SharedSecretWarnings = warnings
 }
 
 // jsonOK 将 v 序列化为 JSON 并以 200 状态码响应。

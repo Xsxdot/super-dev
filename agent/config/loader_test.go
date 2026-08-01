@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/configchange"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -1167,4 +1168,236 @@ func TestSplitLogRules(t *testing.T) {
 	// log_rules 必须落在 project.yaml（共享层），不产生 config.yaml
 	_, statErr := os.Stat(filepath.Join(dir, ".superdev", "config.yaml"))
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+// splitFixtureProjectYAML 是一份最小的共享层：一个服务、一个 dev deployment，
+// 没有任何密钥。各条 split 相关的用例在它之上叠自己的机器层。
+const splitFixtureProjectYAML = `
+name: demo
+services:
+  - id: svc-1
+    name: api
+    deployments:
+      - env: dev
+        location: local
+        command: go run .
+        env_vars: {PORT: "9100"}
+`
+
+// TestSaveSurfacesSecretHeadingIntoSharedLayerOnRename 钉住「改个键名就把密钥
+// 搬进入库文件」这条静默路径。
+//
+// 归属按键名匹配：把机器层拥有的 OPENAI_API_KEY 改名成 OPENAI_KEY，旧名从
+// local.yaml 消失，新名带着同一个明文落进要 commit 的 project.yaml，全程无
+// 提示。本切面刻意不改变写入内容（「不挡」——真要禁止就得先有「留在本机」
+// 开关，那是下一刀），要钉住的是「只亮」：这个值必须以脱敏形态出现在
+// Project.SharedSecretWarnings 里，让人看得见。
+func TestSaveSurfacesSecretHeadingIntoSharedLayerOnRename(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", splitFixtureProjectYAML)
+	mustWriteSuperdev(t, dir, "local.yaml", "variables:\n  OPENAI_API_KEY: sk-live-renamevalue\n")
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+	require.Equal(t, "sk-live-renamevalue", p.Variables["OPENAI_API_KEY"], "前置条件：机器层的值已并入合并态")
+
+	// 用户在配置编辑器里把键名改掉，其余一切照旧。
+	delete(p.Variables, "OPENAI_API_KEY")
+	p.Variables["OPENAI_KEY"] = "sk-live-renamevalue"
+	require.NoError(t, loader.Save(p))
+
+	// 现状（本切面不改）：改名后的密钥确实落进了入库文件。断言它而不是回避它
+	// ——这是被显式接受的行为边界，哪天有人"顺手"改掉，这条会立刻亮红提醒
+	// 需要重新评估配套的告警是否还成立。
+	proj, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(proj), "sk-live-renamevalue", "「不挡」：Save 不改写入内容")
+
+	// 「只亮」：重新加载时必须把它作为共享层告警亮出来，且只带脱敏值。
+	reloaded, err := loader.Load()
+	require.NoError(t, err)
+	var warned bool
+	for _, w := range reloaded.SharedSecretWarnings {
+		if w.Key != "OPENAI_KEY" {
+			continue
+		}
+		warned = true
+		assert.NotContains(t, w.Masked, "sk-live-renamevalue", "告警本身不能变成泄露渠道")
+		assert.False(t, w.WarnOnly, "variables 是可处置作用域")
+	}
+	assert.True(t, warned, "落进入库文件的疑似密钥必须被亮出来，否则用户永远不会知道")
+}
+
+// TestLoadDoesNotWarnAboutLocalLayerSecrets 是上一条的对照：机器层里的密钥
+// 不入库，不该出现在共享层告警里。扫描时机一旦挪到 mergeLocal 之后，这条会
+// 立刻失败——那种告警清单不对应任何一个真实文件，只会训练用户忽略告警。
+func TestLoadDoesNotWarnAboutLocalLayerSecrets(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", splitFixtureProjectYAML)
+	mustWriteSuperdev(t, dir, "local.yaml", "variables:\n  OPENAI_API_KEY: sk-live-localonly\n")
+
+	p, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	assert.Empty(t, p.SharedSecretWarnings, "机器层的密钥不入库，不该报共享层告警")
+}
+
+// TestLoadFlagsStaleLegacyConfig 钉住团队协作里最容易静默失败的一档：队友迁移
+// 后提交了 project.yaml，本机 pull 下来时旁边还压着自己那份 gitignore 的
+// config.yaml。split 胜出，本机的路径与密钥被整份忽略，而 config_format 报的
+// 是 "split"，迁移横幅不触发——用户拿到的现象只有「服务起不来」。
+func TestLoadFlagsStaleLegacyConfig(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", splitFixtureProjectYAML)
+	mustWriteSuperdev(t, dir, "config.yaml", "name: demo\nservices: []\n")
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "split", p.ConfigFormat, "split 仍然胜出，格式判定不变")
+	assert.True(t, p.ConfigStaleLegacy, "并存的 config.yaml 已被忽略，必须显式亮出来")
+	assert.True(t, loader.HasStaleLegacy())
+
+	// 只有 project.yaml 的正常项目不许误报，否则横幅会常驻、失去意义。
+	clean := t.TempDir()
+	mustWriteSuperdev(t, clean, "project.yaml", splitFixtureProjectYAML)
+	cleanLoader := config.NewLoader(clean)
+	cp, err := cleanLoader.Load()
+	require.NoError(t, err)
+	assert.False(t, cp.ConfigStaleLegacy)
+	assert.False(t, cleanLoader.HasStaleLegacy())
+}
+
+// TestSaveReplacesProjectYAMLAtomically 钉住格式翻转点的崩溃安全。
+//
+// 崩溃本身没法在单测里制造，但「就地截断重写」与「写临时文件再原子改名」有一个
+// 确定性的可观测差别：前者沿用同一个 inode，后者用新文件顶掉旧的。用硬链接把
+// 旧 inode 单独攥在手上——就地写会让链接一起变成新内容，原子改名则让它保持旧
+// 内容。链接内容没变，就证明磁盘上从来没出现过半截的 project.yaml。
+func TestSaveReplacesProjectYAMLAtomically(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", splitFixtureProjectYAML)
+
+	superdev := filepath.Join(dir, ".superdev")
+	witness := filepath.Join(dir, "witness.yaml")
+	require.NoError(t, os.Link(filepath.Join(superdev, "project.yaml"), witness))
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+	p.Name = "renamed"
+	require.NoError(t, loader.Save(p))
+
+	proj, err := os.ReadFile(filepath.Join(superdev, "project.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(proj), "renamed", "新内容确实写出去了")
+
+	held, err := os.ReadFile(witness)
+	require.NoError(t, err)
+	assert.NotContains(t, string(held), "renamed", "旧 inode 未被就地改写 —— 落盘走的是原子改名")
+
+	// 权限不能因为改走临时文件而从 0644 缩到 CreateTemp 默认的 0600：共享层是
+	// 给人读、给 git 管的文件。
+	info, err := os.Stat(filepath.Join(superdev, "project.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	// 临时文件不许残留，否则 .superdev 会被反复保存堆满垃圾。
+	entries, err := os.ReadDir(superdev)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp-", "临时文件必须清干净：%s", e.Name())
+	}
+}
+
+// TestSavePreservesOrphanedLocalOverrides 钉住一条真正的数据丢失：机器层里
+// 匹配不上任何 deployment 的覆盖，会在下一次无关保存时被静默删掉。
+//
+// 触发条件全是日常操作——服务改名/删除、env 改名，甚至只是 git pull 了队友
+// 对共享层服务名的一次修改。而 local.yaml 按设计就是这些值在世界上的唯一副本。
+func TestSavePreservesOrphanedLocalOverrides(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", splitFixtureProjectYAML)
+	mustWriteSuperdev(t, dir, "local.yaml", `
+deployments:
+  svc-1/dev:
+    env_vars: {LIVE_SECRET: live-secret-value}
+  worker/dev:
+    env_vars: {ORPHAN_SECRET: orphan-secret-value}
+`)
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+	// 一次完全无关的保存：只改项目名，碰都没碰 worker。
+	p.Name = "renamed"
+	require.NoError(t, loader.Save(p))
+
+	loc, err := os.ReadFile(filepath.Join(dir, ".superdev", "local.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(loc), "orphan-secret-value", "匹配不上的机器层覆盖必须原样保留 —— 那是这个值唯一的副本")
+	assert.Contains(t, string(loc), "live-secret-value", "正常匹配的覆盖照旧写回")
+
+	proj, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(proj), "orphan-secret-value", "保留不等于搬进入库文件")
+	assert.NotContains(t, string(proj), "live-secret-value")
+}
+
+// TestConfigChangeEnvEditReachesLocalLayer 是 finding 4 的端到端版本：MCP
+// apply_config_change 改一个归机器层的环境变量，改动必须真的落到 local.yaml 的
+// 字节里，而不是被 runtime 载体里的陈旧值原样盖回去（那种失败没有报错、没有
+// 日志，工具照样返回 200，用户以为改成功了）。
+//
+// 跨包用例刻意放在 config 侧：只有走完 configchange.Apply → Loader.Save 这一整条
+// 链路，"两个文件都没变"这个现象才复现得出来；只在 configchange 里断 Go 值，
+// 分层落盘那一半就没人验。
+func TestConfigChangeEnvEditReachesLocalLayer(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", `
+name: demo
+services:
+  - id: svc-1
+    name: api
+    deployments:
+      - id: dep-1
+        env: dev
+        location: local
+        runtime:
+          type: language
+          cwd: server
+          env: {LOG_LEVEL: debug}
+`)
+	mustWriteSuperdev(t, dir, "local.yaml", "deployments:\n  svc-1/dev:\n    env_vars: {OPENAI_API_KEY: old-key-value}\n")
+
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	require.NoError(t, err)
+	require.Equal(t, "old-key-value", p.Services[0].Deployments[0].Runtime.EffectiveEnv()["OPENAI_API_KEY"],
+		"前置条件：机器层的值已并回 runtime 生效载体")
+
+	updated, err := configchange.Apply(p, configchange.ChangeRequest{
+		Kind:      configchange.KindServiceUpsert,
+		ProjectID: p.ID,
+		Service: &configchange.ServicePatch{
+			ID: "svc-1",
+			Deployments: []configchange.DeploymentPatch{{
+				ID:  "dep-1",
+				Env: map[string]string{"OPENAI_API_KEY": "NEW-key-value", "LOG_LEVEL": "debug"},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, loader.Save(updated))
+
+	loc, err := os.ReadFile(filepath.Join(dir, ".superdev", "local.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(loc), "NEW-key-value", "编辑必须真的落盘")
+	assert.NotContains(t, string(loc), "old-key-value", "旧值不该同时留着")
+
+	proj, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(proj), "NEW-key-value", "归机器层的键不因为被编辑就跑进入库文件")
+	assert.NotContains(t, string(proj), "old-key-value")
+	assert.Contains(t, string(proj), "debug", "共享层的普通变量照常留在共享层")
 }
