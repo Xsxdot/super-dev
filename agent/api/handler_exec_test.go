@@ -156,6 +156,26 @@ func servePipeHTTP(app *App, serverConn net.Conn, done chan<- error) {
 	done <- nil
 }
 
+// pipeResponseWriter 是给 net.Pipe() 手搓的极简 http.ResponseWriter，
+// 只为让 websocket.NewClient 能在内存管道上完成一次真实的 HTTP Upgrade 握手。
+//
+// 陷阱（务必先读再复用）：本 responder 只能安全表达"被 Hijack 的成功响应"。
+// WriteHeader/Write 从不设置 Content-Length，也从不在写完后关闭 w.conn——
+// 对于成功的 Upgrade（Hijack 接管连接后自行按 WS 帧协议收发，天然没有
+// "response body 长度"这个问题）这没关系；但任何**未被 Hijack**的响应
+// （例如 withSecurity 401/403 走 jsonError 写一个普通 JSON body）会让客户端
+// 在没有 Content-Length、没有 chunked、连接又不关闭的情况下一直等 EOF——
+// 永久阻塞，且没有超时会主动报错。
+//
+// 后果：想用 dialAppWebSocket/pipeResponseWriter 断言"握手被拒绝"（4xx/401/403）
+// 的测试会当场卡死，且现象和普通的鉴权失败测试完全不一样，排查成本很高
+// （这正是本文件曾经踩过的坑：鉴权改成常开后，未带凭据的握手请求命中这条路径
+// 导致测试永久 hang，而不是失败）。
+//
+// 使用约束：调用方必须确保请求能拿到有效凭据、真正走到 Upgrade+Hijack 成功
+// 分支（参见 dialAppWebSocket 对 Authorization 头的显式注入）；如果确实需要
+// 断言拒绝路径，必须先扩展本 responder 补上 Content-Length 或写完后关闭
+// w.conn，不能假设它能安全表达非 Hijack 响应。
 type pipeResponseWriter struct {
 	conn     net.Conn
 	reader   *bufio.Reader
