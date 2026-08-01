@@ -467,21 +467,22 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	// 改名本身也要落盘：目录项的更新同样缓存在内存里，不 fsync 父目录，断电后
 	// 可能回退到「改名从未发生」——旧的完整文件还在，新写入的内容却丢了。POSIX 上
-	// 对目录 fsync 即持久化其目录项；部分平台该操作是 no-op 并返回 nil，也无妨。
-	// 失败返回而非仅记日志：让调用方知道这次写入的持久性未被确认（安全优先）。
-	dirFile, err := os.Open(dir)
-	if err != nil {
-		log.Printf("[SuperDev] config: failed to open dir %s for fsync after writing %s: %v", dir, path, err)
-		return fmt.Errorf("open dir for fsync %s: %w", dir, err)
-	}
-	if err := dirFile.Sync(); err != nil {
-		dirFile.Close()
-		log.Printf("[SuperDev] config: failed to fsync dir %s after writing %s: %v", dir, path, err)
-		return fmt.Errorf("fsync dir %s after writing %s: %w", dir, path, err)
-	}
-	if err := dirFile.Close(); err != nil {
-		log.Printf("[SuperDev] config: failed to close dir %s after fsync: %v", dir, err)
-		return fmt.Errorf("close dir after fsync %s: %w", dir, err)
+	// 对目录 fsync 即持久化其目录项。
+	//
+	// 这一步是尽力而为、失败只记日志不返回错误：走到这里 rename 已成功、文件内容
+	// 也已 fsync，原子性（读者永不见半截文件）已然成立——目录 fsync 只是额外保证
+	// rename 这个动作在断电后也不回退，是锦上添花而非正确性前提。而 Windows 对目录
+	// 句柄 Sync 会直接失败（FlushFileBuffers 拒绝目录句柄），若因此返回错误，就会把
+	// 一次已经成功落地的写入报成失败，触发调用方误判「保存失败」。故失败降级为日志。
+	if dirFile, err := os.Open(dir); err != nil {
+		log.Printf("[SuperDev] config: skip dir fsync, cannot open %s after writing %s: %v", dir, path, err)
+	} else {
+		if err := dirFile.Sync(); err != nil {
+			log.Printf("[SuperDev] config: dir fsync of %s after writing %s not confirmed: %v", dir, path, err)
+		}
+		if err := dirFile.Close(); err != nil {
+			log.Printf("[SuperDev] config: failed to close dir %s after fsync: %v", dir, err)
+		}
 	}
 	return nil
 }
