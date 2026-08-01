@@ -907,6 +907,63 @@ func TestSaveAndReloadPreservesDebugCredentials(t *testing.T) {
 	assert.Equal(t, "svc-key", loaded.Services[0].DebugCredentials[0].Value)
 }
 
+// writeConfig 把 yaml 内容写入 dir/.superdev/config.yaml。
+func writeConfig(t *testing.T, dir, content string) {
+	t.Helper()
+	sub := filepath.Join(dir, ".superdev")
+	assert.NoError(t, os.MkdirAll(sub, 0o755))
+	assert.NoError(t, os.WriteFile(filepath.Join(sub, "config.yaml"), []byte(content), 0o644))
+}
+
+func TestSaveKeepsRelativePaths(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+name: demo
+services:
+  - name: api
+    deployments:
+      - env: dev
+        location: local
+        command: go run .
+        working_dir: server
+        env_file: server/.env
+`)
+	loader := config.NewLoader(dir)
+	p, err := loader.Load()
+	assert.NoError(t, err)
+	// load 解析为绝对
+	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].Deployments[0].WorkDir)
+	assert.Equal(t, filepath.Join(dir, "server", ".env"), p.Services[0].Deployments[0].EnvFile)
+
+	// save 后文件里必须仍是相对路径（修固化 bug）
+	assert.NoError(t, loader.Save(p))
+	raw, _ := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	assert.Contains(t, string(raw), "working_dir: server\n")
+	assert.Contains(t, string(raw), "env_file: server/.env\n")
+	assert.NotContains(t, string(raw), dir, "配置文件中不得出现项目根绝对路径")
+}
+
+func TestSaveRelativizesRuntimePaths(t *testing.T) {
+	dir := t.TempDir()
+	p := model.Project{
+		Name: "demo", RootPath: dir,
+		Services: []model.Service{{Name: "api", Deployments: []model.Deployment{{
+			EnvName: "dev", Location: model.LocationLocal,
+			WorkDir: filepath.Join(dir, "server"),
+			Runtime: &model.RuntimeConfig{Type: model.RuntimeTypeLanguage,
+				WorkingDir: filepath.Join(dir, "server"),
+				EnvFile:    filepath.Join(dir, ".env"),
+				CWD:        filepath.Join(dir, "server")},
+		}}}},
+	}
+	loader := config.NewLoader(dir)
+	assert.NoError(t, loader.Save(p))
+	// 内存中的 Runtime 不得被 save 顺手改掉（拷贝而非原地相对化）
+	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].Deployments[0].Runtime.WorkingDir)
+	raw, _ := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	assert.NotContains(t, string(raw), dir)
+}
+
 func TestLoadAINotesAndAuthHints(t *testing.T) {
 	dir := t.TempDir()
 	superdevDir := filepath.Join(dir, ".superdev")

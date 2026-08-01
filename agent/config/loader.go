@@ -14,6 +14,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -111,7 +112,7 @@ func (l *Loader) Save(p model.Project) error {
 
 	raw := map[string]interface{}{
 		"name":     p.Name,
-		"services": servicesToYAML(p.Services),
+		"services": servicesToYAML(p.Services, l.rootPath),
 	}
 	if len(p.Variables) > 0 {
 		raw["variables"] = p.Variables
@@ -146,7 +147,11 @@ func (l *Loader) Save(p model.Project) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(l.configPath(), data, 0o644)
+	if err := os.WriteFile(l.configPath(), data, 0o644); err != nil {
+		return err
+	}
+	log.Printf("[SuperDev] config: saved %s services=%d", l.configPath(), len(p.Services))
+	return nil
 }
 
 // LoadLogRules 从配置文件中读取 log_rules 列表。
@@ -356,6 +361,8 @@ func languageRuntimeCommandHint(rt *model.RuntimeConfig) string {
 }
 
 // deploymentsFromYAML 将 yaml deployments 列表转为 model.Deployment 列表。
+//
+// 路径字段：文件存相对，内存持绝对（EnvFile 与 WorkDir 同规则）。
 func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployment {
 	out := make([]model.Deployment, len(raw))
 	for i, d := range raw {
@@ -370,7 +377,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			ControlMode:  model.ControlMode(d.ControlMode),
 			Command:      d.Command,
 			WorkDir:      resolveWorkDir(d.WorkingDir, rootPath),
-			EnvFile:      d.EnvFile,
+			EnvFile:      resolveWorkDir(d.EnvFile, rootPath),
 			Env:          d.EnvVars,
 			HostIDs:      d.Hosts,
 			LogType:      model.LogSourceType(d.LogType),
@@ -395,7 +402,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 				dep.WorkDir = resolveWorkDir(dep.Runtime.WorkingDir, rootPath)
 			}
 			if dep.EnvFile == "" {
-				dep.EnvFile = dep.Runtime.EnvFile
+				dep.EnvFile = resolveWorkDir(dep.Runtime.EnvFile, rootPath)
 			}
 			if dep.Env == nil {
 				dep.Env = dep.Runtime.EnvVars
@@ -418,7 +425,8 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 }
 
 // servicesToYAML 将 model.Service 切片转换为可序列化的 serviceYAML 切片。
-func servicesToYAML(services []model.Service) []serviceYAML {
+// rootPath 用于把内存中的绝对路径字段相对化后再落盘。
+func servicesToYAML(services []model.Service, rootPath string) []serviceYAML {
 	out := make([]serviceYAML, len(services))
 	for i, s := range services {
 		out[i] = serviceYAML{
@@ -430,14 +438,16 @@ func servicesToYAML(services []model.Service) []serviceYAML {
 			AuthHint:         s.AuthHint,
 			Language:         string(s.Language),
 			DebugCredentials: s.DebugCredentials,
-			Deployments:      deploymentsToYAML(s.Deployments),
+			Deployments:      deploymentsToYAML(s.Deployments, rootPath),
 		}
 	}
 	return out
 }
 
 // deploymentsToYAML 将 model.Deployment 切片转为 deploymentYAML 切片。
-func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
+// WorkDir/EnvFile/Runtime 中的路径字段会相对 rootPath 转为相对路径再写出，
+// 避免机器特定的绝对路径固化进配置文件（root 外的绝对路径原样保留）。
+func deploymentsToYAML(deps []model.Deployment, rootPath string) []deploymentYAML {
 	if len(deps) == 0 {
 		return nil
 	}
@@ -453,14 +463,14 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 			Location:     loc,
 			ControlMode:  string(d.ControlMode),
 			Command:      d.Command,
-			WorkingDir:   d.WorkDir,
-			EnvFile:      d.EnvFile,
+			WorkingDir:   RelativizePath(d.WorkDir, rootPath),
+			EnvFile:      RelativizePath(d.EnvFile, rootPath),
 			EnvVars:      d.Env,
 			Hosts:        d.HostIDs,
 			LogType:      string(d.LogType),
 			LogTarget:    d.LogTarget,
 			ExtraArgs:    d.ExtraArgs,
-			Runtime:      d.Runtime,
+			Runtime:      relativizeRuntime(d.Runtime, rootPath),
 			Logs:         d.Logs,
 			Web:          d.Web,
 			CodeDebug:    d.CodeDebug,
@@ -473,6 +483,19 @@ func deploymentsToYAML(deps []model.Deployment) []deploymentYAML {
 		}
 	}
 	return out
+}
+
+// relativizeRuntime 返回路径字段相对化后的 Runtime 浅拷贝。
+// 必须拷贝：Save 不得原地修改调用方仍持有的内存对象。
+func relativizeRuntime(rt *model.RuntimeConfig, rootPath string) *model.RuntimeConfig {
+	if rt == nil {
+		return nil
+	}
+	cp := *rt
+	cp.WorkingDir = RelativizePath(cp.WorkingDir, rootPath)
+	cp.EnvFile = RelativizePath(cp.EnvFile, rootPath)
+	cp.CWD = RelativizePath(cp.CWD, rootPath)
+	return &cp
 }
 
 // envsToYAML 将 model.Environment 切片转为可序列化的 envYAML 切片。
