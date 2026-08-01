@@ -575,6 +575,14 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			StopCommand:  d.StopCommand,
 		}
 		if dep.Runtime != nil {
+			// Runtime 自己的三个路径字段也要解析回绝对，与 save 侧的
+			// relativizeRuntime 严格对称。消费侧（codedebug 的
+			// debugDeploymentWorkDir、api/handler_deployments）是直接读
+			// Runtime.WorkingDir / EffectiveCWD() 的，只补下面的 dep.WorkDir
+			// 而把 Runtime 留成相对，它们会以 agent 自身的工作目录为基准解析。
+			dep.Runtime.WorkingDir = resolveWorkDir(dep.Runtime.WorkingDir, rootPath)
+			dep.Runtime.EnvFile = resolveWorkDir(dep.Runtime.EnvFile, rootPath)
+			dep.Runtime.CWD = resolveWorkDir(dep.Runtime.CWD, rootPath)
 			if dep.Command == "" {
 				dep.Command = dep.Runtime.Command
 			}

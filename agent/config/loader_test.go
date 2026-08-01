@@ -416,8 +416,12 @@ services:
 	rt := project.Services[0].Deployments[0].Runtime
 	require.NotNil(t, rt)
 	assert.Equal(t, model.RuntimeTypeLanguage, rt.Type)
-	assert.Equal(t, "./server", rt.CWD)
+	// 路径字段存相对、内存持绝对（与 relativizeRuntime 对称）。这条断言原先期望
+	// 逐字回显 "./server"——那是 relativizeRuntime 出现之前「两侧都不转换」的旧
+	// 契约；save 侧开始相对化之后，load 侧不解析就成了单向漂移。
+	assert.Equal(t, filepath.Join(dir, "server"), rt.CWD)
 	assert.Equal(t, map[string]string{"ENABLE": "true"}, rt.Env)
+	// Config 里的 provider 私有字段不属于路径相对化的范围，两侧都不转换，逐字保留。
 	assert.Equal(t, "./cmd/server", rt.Config["program"])
 }
 
@@ -968,6 +972,43 @@ func TestSaveRelativizesRuntimePaths(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), dir)
+}
+
+// TestLoadResolvesRuntimePathsToAbsolute 是 TestSaveRelativizesRuntimePaths 的
+// 对称另一半。save 侧把 Runtime 的三个路径字段相对化写盘，load 侧就必须把它们
+// 解析回绝对——消费侧（codedebug 的 debugDeploymentWorkDir、handler_deployments）
+// 是直接读 Runtime.WorkingDir / EffectiveCWD() 的，只补 dep.WorkDir 不补 Runtime
+// 会让它们拿到相对路径，进而以 agent 自身工作目录为基准解析。
+func TestLoadResolvesRuntimePathsToAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+name: demo
+services:
+  - name: api
+    deployments:
+      - env: dev
+        location: local
+        runtime:
+          type: language
+          working_dir: server
+          env_file: server/.env
+          cwd: server/cmd
+`)
+	p, err := config.NewLoader(dir).Load()
+	require.NoError(t, err)
+	rt := p.Services[0].Deployments[0].Runtime
+	require.NotNil(t, rt)
+	assert.Equal(t, filepath.Join(dir, "server"), rt.WorkingDir)
+	assert.Equal(t, filepath.Join(dir, "server", ".env"), rt.EnvFile)
+	assert.Equal(t, filepath.Join(dir, "server", "cmd"), rt.CWD)
+	assert.Equal(t, filepath.Join(dir, "server", "cmd"), rt.EffectiveCWD())
+
+	// 解析回绝对之后再存回去仍须是相对，不能把绝对路径固化进配置文件。
+	require.NoError(t, config.NewLoader(dir).Save(p))
+	raw, err := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), dir, "配置文件中不得出现项目根绝对路径")
+	assert.Contains(t, string(raw), "cwd: server/cmd")
 }
 
 func TestLoadAINotesAndAuthHints(t *testing.T) {

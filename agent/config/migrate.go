@@ -206,6 +206,14 @@ func ApplyMigration(rootPath string, decisions []MigrationDecision, uiStore *UIS
 	// 副本：splitOwnership 会照步骤 3 落下的 local.yaml 把归机器层的键剥离，
 	// 剥离逻辑因此只有一份（Save 与迁移共用），不会两处分叉。
 	if err := loader.saveSplitWithRules(project, rules); err != nil {
+		// 写失败可能留下一个半截的 project.yaml，而 DetectFormat 一旦看见它就
+		// 认定 split，于是旁边那份完好的 config.yaml 再也不会被读——项目从"迁移
+		// 失败"恶化成"根本加载不了"。删掉残骸即可让格式回落到 legacy，重跑迁移。
+		// 这只堵得住返回错误的这条路径，堵不住进程在写盘中途被杀（那仍是已知
+		// 限制，见 doc comment 的崩溃安全说明）。
+		if rmErr := os.Remove(loader.projectPath()); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			log.Printf("[SuperDev] config: migration failed to clean up partial project.yaml: %v", rmErr)
+		}
 		return fmt.Errorf("migration step 5 (write project.yaml): %w", err)
 	}
 	log.Printf("[SuperDev] config: migration wrote project.yaml services=%d", len(project.Services))
@@ -272,7 +280,10 @@ func buildLocalLayer(p model.Project, decisions []MigrationDecision) localYAML {
 
 	for _, svc := range p.Services {
 		for _, dep := range svc.Deployments {
-			for key, val := range dep.Env {
+			// 与 scanSuspects 用同一张视图：疑似项可能只存在于 runtime 块里，
+			// 按 dep.Env 取值会取不到，密钥就只被剥离、没被保存——直接丢数据。
+			// 视图给出的是迁移前实际生效的那个值。
+			for key, val := range deploymentEnvView(dep) {
 				if !goesLocal("env_vars", svc.Name, dep.EnvName, key) {
 					continue
 				}
@@ -340,8 +351,12 @@ func scanSuspects(p model.Project) []SuspectEntry {
 
 	for _, svc := range p.Services {
 		for _, dep := range svc.Deployments {
-			for _, key := range sortedKeys(dep.Env) {
-				val := dep.Env[key]
+			// 走三载体合并视图而非裸 dep.Env：runtime.env / runtime.env_vars 里的
+			// 键同样会以明文进入 project.yaml，扫不到就等于用户从没被告知，也就
+			// 没机会把它按到本机层。视图按键去重，同一个键只亮一条。
+			view := deploymentEnvView(dep)
+			for _, key := range sortedKeys(view) {
+				val := view[key]
 				if reason, ok := suspectReason(key, val); ok {
 					out = append(out, SuspectEntry{
 						Scope:   "env_vars",

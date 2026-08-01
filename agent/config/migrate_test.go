@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,10 +168,13 @@ func TestApplyMigration(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = os.Stat(filepath.Join(dir, ".superdev", "config.yaml"))
 	assert.True(t, os.IsNotExist(err))
-	gi, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	assert.NotContains(t, string(gi), ".superdev/\n.superdev", "整目录忽略行已移除")
-	assert.Contains(t, string(gi), ".superdev/local.yaml")
-	assert.Contains(t, string(gi), "node_modules/", "无关行原样保留")
+	// 按行断言而非子串断言：整目录忽略行是否真的被移除，是这一步唯一要紧的事
+	// ——`.superdev/` 还在，project.yaml 就永远进不了 git，整个分层特性直接失效。
+	lines := gitignoreLines(t, dir)
+	assert.NotContains(t, lines, ".superdev/", "整目录忽略行已移除")
+	assert.Contains(t, lines, ".superdev/local.yaml")
+	assert.Contains(t, lines, ".superdev/config.yaml.bak")
+	assert.Contains(t, lines, "node_modules/", "无关行原样保留")
 
 	// 5. 迁移后 Load 语义等价：合并态与迁移前一致
 	p, err := config.NewLoader(dir).Load()
@@ -196,6 +200,158 @@ func TestApplyMigrationSharedDisposition(t *testing.T) {
 	assert.NoError(t, config.ApplyMigration(dir, decisions, uiStore))
 	proj, _ := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
 	assert.Contains(t, string(proj), "real-secret-value", "用户明选 shared 则尊重")
+}
+
+// runtimeEnvVarsFixture 把密钥放在 runtime.env_vars 且不给顶层 env_vars。
+// 这种写法下 deploymentsFromYAML 会让 dep.Env 直接别名到 Runtime.EnvVars，
+// 两者是同一个 map——共享层若只清 dep.Env，明文仍会随 runtime 块入库。
+const runtimeEnvVarsFixture = `
+name: rt
+services:
+  - id: svc-1
+    name: server
+    deployments:
+      - env: dev
+        location: local
+        runtime:
+          type: language
+          cwd: server
+          env_vars:
+            OPENAI_API_KEY: sk-abc123def456
+            PORT: "9100"
+`
+
+// runtimeEnvFixture 把密钥放在 runtime.env——language runtime 下真正生效的
+// 环境变量载体（EffectiveEnv 优先于 EnvVars），且它从未被别名进 dep.Env。
+const runtimeEnvFixture = `
+name: rt
+services:
+  - id: svc-1
+    name: server
+    deployments:
+      - env: dev
+        location: local
+        runtime:
+          type: language
+          cwd: server
+          env:
+            DB_PASSWORD: hunter2-plaintext
+            LOG_LEVEL: debug
+`
+
+func TestApplyMigrationMovesRuntimeEnvVarsSecretOutOfSharedLayer(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, runtimeEnvVarsFixture)
+	uiStore := config.NewUIStateStore(t.TempDir())
+
+	// decisions 为空：全部未决，按安全默认去本机层。
+	assert.NoError(t, config.ApplyMigration(dir, nil, uiStore))
+
+	proj := readSuperdevFile(t, dir, "project.yaml")
+	assert.NotContains(t, proj, "sk-abc123def456", "runtime.env_vars 里的密钥不得留在入库文件")
+	assert.Contains(t, proj, "9100", "非密钥留共享层")
+	loc := readSuperdevFile(t, dir, "local.yaml")
+	assert.Contains(t, loc, "sk-abc123def456", "密钥入机器层")
+
+	// 语义等价：真正拉起进程的一侧读的是 Runtime.EffectiveEnv()，密钥必须在那里
+	// 可见——只并回 dep.Env 等于让服务丢了这个变量。
+	p, err := config.NewLoader(dir).Load()
+	assert.NoError(t, err)
+	rt := p.Services[0].Deployments[0].Runtime
+	assert.NotNil(t, rt)
+	assert.Equal(t, "sk-abc123def456", rt.EffectiveEnv()["OPENAI_API_KEY"], "机器层密钥必须并回 runtime 生效载体")
+	assert.Equal(t, "9100", rt.EffectiveEnv()["PORT"], "共享层非密钥变量不受影响")
+	assert.Equal(t, "sk-abc123def456", p.Services[0].Deployments[0].Env["OPENAI_API_KEY"])
+}
+
+func TestApplyMigrationMovesRuntimeEnvSecretOutOfSharedLayer(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, runtimeEnvFixture)
+
+	// 预览必须先看见它——用户对没被亮出来的键无从做处置决定。
+	plan, err := config.BuildMigrationPlan(dir)
+	assert.NoError(t, err)
+	suspectKeys := map[string]bool{}
+	for _, s := range plan.Suspects {
+		suspectKeys[s.Key] = true
+		assert.NotContains(t, s.Masked, "hunter2-plaintext", "预览必须脱敏")
+	}
+	assert.True(t, suspectKeys["DB_PASSWORD"], "runtime.env 里的疑似密钥必须进预览清单")
+
+	uiStore := config.NewUIStateStore(t.TempDir())
+	assert.NoError(t, config.ApplyMigration(dir, nil, uiStore))
+
+	proj := readSuperdevFile(t, dir, "project.yaml")
+	assert.NotContains(t, proj, "hunter2-plaintext", "runtime.env 里的密钥不得留在入库文件")
+	assert.Contains(t, proj, "debug", "非密钥留共享层")
+	loc := readSuperdevFile(t, dir, "local.yaml")
+	assert.Contains(t, loc, "hunter2-plaintext", "密钥入机器层")
+
+	p, err := config.NewLoader(dir).Load()
+	assert.NoError(t, err)
+	rt := p.Services[0].Deployments[0].Runtime
+	assert.NotNil(t, rt)
+	assert.Equal(t, "hunter2-plaintext", rt.EffectiveEnv()["DB_PASSWORD"], "机器层密钥必须并回 runtime 生效载体")
+	assert.Equal(t, "debug", rt.EffectiveEnv()["LOG_LEVEL"], "共享层非密钥变量不受影响")
+}
+
+// TestApplyMigrationStripsSecretFromEveryEnvCarrier 盯的是最隐蔽的一种泄露：
+// 同一个键同时躺在 runtime.env 与 runtime.env_vars 里。只清生效的那一个，
+// 剥空后的 map 会被 yaml omitempty 整个省略，下次 Load 时 EffectiveEnv()
+// 回落到另一个载体，把陈旧的明文密钥又复活出来——而且是在入库文件里。
+func TestApplyMigrationStripsSecretFromEveryEnvCarrier(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+name: rt
+services:
+  - id: svc-1
+    name: server
+    deployments:
+      - env: dev
+        location: local
+        runtime:
+          type: language
+          env:
+            API_TOKEN: effective-token
+          env_vars:
+            API_TOKEN: shadowed-token
+`)
+	uiStore := config.NewUIStateStore(t.TempDir())
+	assert.NoError(t, config.ApplyMigration(dir, nil, uiStore))
+
+	proj := readSuperdevFile(t, dir, "project.yaml")
+	assert.NotContains(t, proj, "effective-token", "生效载体里的密钥必须剥离")
+	assert.NotContains(t, proj, "shadowed-token", "被遮蔽载体里的明文同样会入库，必须一并剥离")
+
+	p, err := config.NewLoader(dir).Load()
+	assert.NoError(t, err)
+	rt := p.Services[0].Deployments[0].Runtime
+	assert.NotNil(t, rt)
+	assert.Equal(t, "effective-token", rt.EffectiveEnv()["API_TOKEN"], "并回的是迁移前实际生效的那个值")
+}
+
+// gitignoreLines 把项目根 .gitignore 读成行列表（去掉尾部空行），供做
+// 「某一行是否存在」的精确断言——子串断言在这里会漏判。
+func gitignoreLines(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NoError(t, err)
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// readSuperdevFile 读取 dir/.superdev/<name> 并返回字符串内容。
+func readSuperdevFile(t *testing.T, dir, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, ".superdev", name))
+	assert.NoError(t, err)
+	return string(data)
 }
 
 // mustWriteFile 写入任意绝对路径文件（不局限于 .superdev/ 目录），仿
